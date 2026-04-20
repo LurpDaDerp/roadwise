@@ -1,6 +1,7 @@
 // App.js
 import React, { useRef, useEffect } from 'react';
 import { AppState, useColorScheme, Dimensions, View } from 'react-native';
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   NavigationContainer,
@@ -24,6 +25,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { useContext } from 'react';
 import { ThemeContext } from './context/ThemeContext';
 import { DriveProvider } from './context/DriveContext'
+import { ErrorBoundary } from './theme';
 
 import { Provider as PaperProvider } from 'react-native-paper';
 
@@ -70,9 +72,6 @@ function AppNavigation() {
   }, []);
 
   React.useEffect(() => {
-    const subReceived = Notifications.addNotificationReceivedListener((notification) => {
-    });
-
     const subResponse = Notifications.addNotificationResponseReceivedListener((response) => {
       if (navigationRef.isReady()) {
         const emergencyUid =
@@ -81,14 +80,11 @@ function AppNavigation() {
         const route = navigationRef.current?.getCurrentRoute();
         if (route?.name !== "Drive" && route?.name !== "SettingsMain") {
           navigationRef.navigate("LocationScreen", { emergencyUid });
-        } else if (route?.name === "Drive") {
-
         }
       }
     });
 
     return () => {
-      subReceived.remove();
       subResponse.remove();
     };
   }, []);
@@ -177,12 +173,14 @@ export default function App() {
   }, []);
 
   return (
-    <DriveProvider>
-      <ThemeProvider>
-        <PaperProvider>
-          <AppNavigation />
-        </PaperProvider>
-      </ThemeProvider>
-    </DriveProvider>
+    <ErrorBoundary>
+      <DriveProvider>
+        <ThemeProvider>
+          <PaperProvider>
+            <AppNavigation />
+          </PaperProvider>
+        </ThemeProvider>
+      </DriveProvider>
+    </ErrorBoundary>
   );
 }

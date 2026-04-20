@@ -24,7 +24,7 @@ export async function getUsername(uid) {
     return docSnap.data().username || "guest";
   } else {
     await setDoc(docRef, { username: uid });
-    return 0;
+    return "guest";
   }
 }
 
@@ -173,23 +173,6 @@ export async function clearUserDrives(uid) {
     }
   } catch (error) {
     console.error("Error clearing user drives:", error);
-  }
-}
-
-export async function getHereKey(key) {
-  const docRef = doc(db, "apikeys", key); 
-  const docSnap = await getDoc(docRef);
-  return docSnap.exists() ? docSnap.data().value : null;
-}
-
-export async function getChatGPTKey() {
-  try {
-    const docRef = doc(db, "apikeys", "CHATGPT");
-    const docSnap = await getDoc(docRef);
-    return docSnap.exists() ? docSnap.data().value : null;
-  } catch (error) {
-    console.error("Error retrieving ChatGPT API key:", error);
-    return null;
   }
 }
 

@@ -1,51 +1,47 @@
-import React, { useState, useCallback, useRef, useContext } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
   View,
   Text,
   StyleSheet,
   ImageBackground,
-  TouchableOpacity,
-  Dimensions,
-  Animated, 
-  Easing
+  Pressable,
+  Animated,
+  Easing,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ThemeContext } from '../context/ThemeContext';
+import {
+  Screen,
+  Section,
+  Card,
+  Eyebrow,
+  AutoFitText,
+  useTheme,
+} from '../theme';
 
-const { width, height } = Dimensions.get('window');
-const getStorageKey = (uid) => `totalPoints_${uid}`;
+const CATEGORIES = [
+  { label: 'Food & Drink',          img: require('../assets/foodback.jpg'), route: 'FoodRewards',          icon: 'restaurant-outline' },
+  { label: 'Shopping',              img: require('../assets/shopback.jpg'), route: 'ShoppingRewards',      icon: 'bag-handle-outline' },
+  { label: 'Games & Entertainment', img: require('../assets/gameback.jpg'), route: 'GamesRewards',         icon: 'game-controller-outline' },
+  { label: 'Subscriptions',         img: require('../assets/subback.jpg'), route: 'SubscriptionsRewards', icon: 'repeat-outline' },
+];
 
-export default function RewardsScreen({ route, navigation }) {
+export default function RewardsScreen({ navigation }) {
   const [totalPoints, setTotalPoints] = useState(0);
   const contentOpacity = useRef(new Animated.Value(0)).current;
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-  const gradientColors = isDark
-    ? ['#43127cff', '#0f0f0fff'] 
-    : ['#d1c4ff', '#f5f5f5']; 
-  const titleColor = isDark ? '#fff' : '#000';
-  const subtitleColor = isDark ? '#ddd' : '#444';
-  const textShadowColor = isDark ? '#ffffff' : '#00000050';
-  const borderColor = isDark ? '#fff' : '#00000085';
-  const overlayColor = isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.2)';
-  const imageOverlayColor = isDark ? 'rgba(0,0,0,0.4)' : 'rgba(0, 0, 0, 0.19)';
-
-  const fadeInContent = useCallback(() => {
-    Animated.timing(contentOpacity, {
-      toValue: 1,
-      duration: 300,
-      easing: Easing.out(Easing.poly(3)),
-      useNativeDriver: true,
-    }).start();
-  }, [contentOpacity]);
+  const t = useTheme();
 
   useFocusEffect(
     useCallback(() => {
       contentOpacity.setValue(0);
-      fadeInContent();
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.out(Easing.poly(3)),
+        useNativeDriver: true,
+      }).start();
+
       let isActive = true;
       (async () => {
         try {
@@ -60,120 +56,167 @@ export default function RewardsScreen({ route, navigation }) {
   );
 
   return (
-    <LinearGradient
-      colors={gradientColors}
-      style={styles.background}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-    >
-      <Animated.View style={[styles.fadeIn, { opacity: contentOpacity }]}>
-        <View style={[styles.overlay, { backgroundColor: overlayColor }]}>
-          <Text style={[styles.title, { color: titleColor }]}>Rewards</Text>
-          <Text style={[styles.subtitle, { color: subtitleColor }]}>
-            Redeem points for prizes!
+    <Screen>
+      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+        <View style={{ marginTop: 24, marginBottom: 24 }}>
+          <Eyebrow>Rewards</Eyebrow>
+          <Text style={[t.typography.title, { color: t.colors.text, marginTop: 8 }]}>
+            Redeem points for prizes
           </Text>
+        </View>
 
-          <Text style={[styles.points, { color: titleColor, textShadowColor }]}>
-            {totalPoints.toFixed(0)} Points
-          </Text>
-
-          <View style={styles.grid}>
-            {[
-              { label: 'Food & Drink', img: require('../assets/foodback.jpg'), route: 'FoodRewards' },
-              { label: 'Shopping', img: require('../assets/shopback.jpg'), route: 'ShoppingRewards' },
-              { label: 'Games & Entertainment', img: require('../assets/gameback.jpg'), route: 'GamesRewards' },
-              { label: 'Subscriptions', img: require('../assets/subback.jpg'), route: 'SubscriptionsRewards' },
-            ].map((item, idx) => (
-              <TouchableOpacity
-                key={idx}
-                style={[styles.button, { borderColor }]}
-                onPress={() => navigation.navigate(item.route)}
+        <Card style={styles.balanceCard} padded={false}>
+          <View
+            style={{
+              padding: 20,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <View>
+              <Text style={[t.typography.micro, { color: t.colors.textMuted }]}>
+                Available balance
+              </Text>
+              <AutoFitText
+                style={[
+                  t.typography.numeric,
+                  { color: t.colors.text, marginTop: 6, fontSize: 44, lineHeight: 48 },
+                ]}
               >
-                <ImageBackground
-                  source={item.img}
-                  style={styles.buttonBackground}
-                  imageStyle={styles.buttonImage}
-                >
-                  <View style={[styles.imageOverlay, { backgroundColor: imageOverlayColor }]} />
-                  <Text style={styles.buttonText}>{item.label}</Text>
-                </ImageBackground>
-              </TouchableOpacity>
+                {totalPoints.toFixed(0)}
+              </AutoFitText>
+              <Text
+                style={[
+                  t.typography.caption,
+                  { color: t.colors.accent, marginTop: 2 },
+                ]}
+              >
+                points
+              </Text>
+            </View>
+            <View
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 28,
+                backgroundColor: t.colors.accentFaint,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons name="gift-outline" size={28} color={t.colors.accent} />
+            </View>
+          </View>
+          <View
+            style={{
+              height: 1,
+              backgroundColor: t.colors.divider,
+            }}
+          />
+          <View
+            style={{
+              paddingHorizontal: 20,
+              paddingVertical: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <Ionicons name="information-circle-outline" size={16} color={t.colors.textMuted} />
+            <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>
+              Drive safely to earn more points.
+            </Text>
+          </View>
+        </Card>
+
+        <Section label="Categories" style={{ marginTop: 28 }}>
+          <View style={{ gap: 12 }}>
+            {CATEGORIES.map((item) => (
+              <CategoryCard
+                key={item.route}
+                item={item}
+                onPress={() => navigation.navigate(item.route)}
+              />
             ))}
           </View>
-        </View>
+        </Section>
       </Animated.View>
-    </LinearGradient>
+    </Screen>
+  );
+}
+
+function CategoryCard({ item, onPress }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      android_ripple={{ color: t.colors.accentFaint }}
+      style={({ pressed }) => [
+        {
+          borderRadius: t.radius.lg,
+          overflow: 'hidden',
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.colors.border,
+          transform: pressed ? [{ scale: 0.99 }] : undefined,
+          ...t.elevation.card,
+        },
+      ]}
+    >
+      <ImageBackground
+        source={item.img}
+        style={{ height: 96, justifyContent: 'center' }}
+        imageStyle={{ borderRadius: t.radius.lg }}
+      >
+        <View
+          style={{
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: t.isDark ? 'rgba(6,10,12,0.55)' : 'rgba(0,0,0,0.25)',
+          }}
+        />
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 20,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: 'rgba(255,255,255,0.15)',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons name={item.icon} size={18} color="#fff" />
+            </View>
+            <Text
+              style={{
+                color: '#fff',
+                fontSize: 17,
+                fontWeight: '700',
+                letterSpacing: -0.2,
+                textShadowColor: 'rgba(0,0,0,0.6)',
+                textShadowRadius: 4,
+              }}
+            >
+              {item.label}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#fff" />
+        </View>
+      </ImageBackground>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  background: { flex: 1 },
-  overlay: {
-    flex: 1,
-    paddingTop: height / (667 / 70),
-    paddingHorizontal: width / (375 / 24),
-    alignItems: 'center',
-  },
-  fadeIn: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    marginTop: 0,
-    paddingBottom: 20,
-    alignSelf: 'center',
-  },
-  subtitle: {
-    fontSize: 20,
-    marginBottom: height / (667 / 12),
-    textAlign: 'center',
-  },
-  points: {
-    fontSize: width / (375 / 24),
-    fontWeight: '600',
-    marginBottom: height / (667 / 36),
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: width / (375 / 10),
-  },
-  grid: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  button: {
-    width: width * 0.9,
-    height: height / (667 / 75),
-    borderRadius: width / (375 / 18),
-    borderWidth: 2,
+  balanceCard: {
     overflow: 'hidden',
-    marginBottom: height / (667 / 10),
-  },
-  buttonBackground: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: '100%',
-    height: '100%',
-  },
-  buttonImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-    borderRadius: width / (375 / 15),
-  },
-  buttonText: {
-    fontSize: width / (375 / 18),
-    color: 'white',
-    fontWeight: '600',
-    textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.7)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: width / (375 / 2),
-    paddingHorizontal: width / (375 / 8),
-  },
-  imageOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: width / (375 / 16),
   },
 });

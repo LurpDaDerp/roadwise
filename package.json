@@ -25,6 +25,7 @@
     "@react-navigation/stack": "^7.4.7",
     "@supabase/supabase-js": "^2.55.0",
     "axios": "^1.11.0",
+    "baseline-browser-mapping": "^2.10.20",
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
     "expo": "~53.0.23",

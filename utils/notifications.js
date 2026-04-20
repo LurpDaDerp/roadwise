@@ -1,18 +1,8 @@
 // notifications.js
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { db, auth } from "./firebase";
-import { doc, updateDoc, setDoc } from "firebase/firestore";
-import { Alert } from "react-native";
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+import { doc, updateDoc } from "firebase/firestore";
 
 export async function requestNotificationPermissions() {
   const { status } = await Notifications.requestPermissionsAsync();
@@ -31,7 +21,7 @@ export async function registerForPushNotificationsAsync() {
   }
 
   if (finalStatus !== "granted") {
-    alert("Failed to get push token for push notifications!");
+    console.warn("Push notifications permission not granted.");
     return null;
   }
 

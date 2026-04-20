@@ -20,17 +20,19 @@ import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../utils/firebase';
 import { getFirestore, doc, updateDoc, increment, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { saveTrustedContacts, getTrustedContacts, saveDriveMetrics, getHereKey, startDriving, stopDriving } from '../utils/firestore';
+import { saveTrustedContacts, getTrustedContacts, saveDriveMetrics, startDriving, stopDriving } from '../utils/firestore';
+import { fetchHereRevGeocode } from '../utils/here';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { useContext } from 'react';
 import { ThemeContext } from '../context/ThemeContext';
+import { useTheme, SafeGradient, AutoFitText } from '../theme';
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import { scheduleDistractedNotification, scheduleFirstDistractedNotification, requestNotificationPermissions, scheduleBackgroundNotification } from '../utils/notifications';
+import { scheduleDistractedNotification, scheduleFirstDistractedNotification, requestNotificationPermissions } from '../utils/notifications';
 import { format } from 'date-fns';
 import { useDrive } from '../context/DriveContext';
 import * as Speech from 'expo-speech';
-import { LinearGradient } from "expo-linear-gradient";
+const LinearGradient = SafeGradient;
 import { fetchWeather, getWeatherIconName } from '../utils/weather';
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { getRoadConditionSummary } from "../utils/gptApi";
@@ -336,7 +338,6 @@ export default function DriveScreen({ route }) {
   const [distractedUI, setDistractedUI] = useState(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [trustedContacts, setTrustedContacts] = useState([]);
-  const [HERE_API_KEY, setHereKey] = useState();
   const hasStartedDriving = useRef(false);
   const [audioSpeedUpdatesEnabled, setAudioSpeedUpdatesEnabled] = useState(true);
   const [isEmergencyActive, setIsEmergencyActive] = useState(false);
@@ -364,20 +365,21 @@ export default function DriveScreen({ route }) {
   const { setDriveJustCompleted } = useDrive();
   const { resolvedTheme } = useContext(ThemeContext);
   const isDarkMode = resolvedTheme === 'dark';
-  const modalBackgroundColor = isDarkMode ? '#222' : '#fff'; 
-  const titleTextColor = isDarkMode ? '#fff' : '#000'; 
-  const contentTextColor = isDarkMode ? '#eee' : '#000';     
-  const buttonBackgroundColor = isDarkMode ? '#444' : '#000'; 
-  const buttonTextColor = isDarkMode ? '#fff' : '#fff';   
-  const backgroundColor = isDarkMode ? '#131313ff' : '#fff';
-  const titleColor = isDarkMode ? '#fff' : '#000';
-  const textColor = isDarkMode ? '#fff' : '#000';
-  const moduleBackground = isDarkMode ? '#272727ff' : '#ffffffff';
-  const altTextColor = isDarkMode ? '#aaa' : '#555';
-  const textOutline = isDarkMode? 'rgba(255, 255, 255, 0.47)' : '#0000008e';
-  const buttonColor = isDarkMode ? `rgba(92, 55, 255, 1)` : `rgba(99, 71, 255, 1)`;
-  const gradientTop = isDarkMode ? "#000000ff" : "#f1f1f1ff"; 
-  const gradientBottom = isDarkMode ? "#1a1a1aff" : "#ffffffff"; 
+  const t = useTheme();
+  const modalBackgroundColor = t.colors.surface;
+  const titleTextColor = t.colors.text;
+  const contentTextColor = t.colors.text;
+  const buttonBackgroundColor = isDarkMode ? '#2a2f36' : '#111418';
+  const buttonTextColor = '#fff';
+  const backgroundColor = t.colors.bg;
+  const titleColor = t.colors.text;
+  const textColor = t.colors.text;
+  const moduleBackground = t.colors.surface;
+  const altTextColor = t.colors.textMuted;
+  const textOutline = isDarkMode ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.45)';
+  const buttonColor = t.colors.accent;
+  const gradientTop = t.colors.gradientTop;
+  const gradientBottom = t.colors.gradientBottom;
   const [streak, setStreak] = useState(0);
   const soundRef = useRef(null);
   const driveStartTime = useRef(Date.now());
@@ -441,13 +443,13 @@ export default function DriveScreen({ route }) {
 
   //finalize drive function
   const finalizeDrive = async () => {
-    
+
     if (driveFinalizedRef.current) return;
     driveFinalizedRef.current = true;
 
-    stopDriving(user.uid);
-    
     if (!user) return;
+
+    stopDriving(user.uid);
 
     const driveDurationMs = Date.now() - driveStartTime.current;
     const droveLongEnough = driveDurationMs >= 60 * 1000;
@@ -573,14 +575,8 @@ export default function DriveScreen({ route }) {
         setTrustedContacts(contacts);
       };
 
-      const loadAPIKey = async () => {
-        const key = await getHereKey("HERE_API_KEY");
-        setHereKey(key);
-      };
-      
-      loadAPIKey();
       loadContacts();
-      
+
     }, [])
   );
 
@@ -745,8 +741,6 @@ export default function DriveScreen({ route }) {
 
   //location and speed tracking + speed limit logic
   useEffect(() => {
-
-    if (!HERE_API_KEY) return;
 
     (async () => {
       await loadSpeedLimitCache();
@@ -934,7 +928,7 @@ export default function DriveScreen({ route }) {
       stopPointEarning();
       fillFinalSegmentIfAny();
     };
-  }, [unit, HERE_API_KEY]);
+  }, [unit]);
 
   //get weather summary from gpt
   useEffect(() => {
@@ -1022,22 +1016,17 @@ export default function DriveScreen({ route }) {
   //fetch speed limit from HERE API
   const fetchSpeedLimit = async (lat, lon) => {
     try {
-      const url = `https://revgeocode.search.hereapi.com/v1/revgeocode?at=${lat},${lon}&lang=en-US&showNavAttributes=speedLimits&apikey=${HERE_API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      const item = data?.items?.[0];
+      const items = await fetchHereRevGeocode(lat, lon);
+      const item = items?.[0];
       const street = item?.address?.street || item?.address?.label || '[Unknown Street]';
       const speedObj = item?.navigationAttributes?.speedLimits?.[0];
 
       if (!speedObj?.maxSpeed || !speedObj?.speedUnit) {
-        console.warn(`No speed limit info returned. Street: ${street}`);
         return null;
       }
       const raw = speedObj.maxSpeed;
       const unitSrc = String(speedObj.speedUnit).toLowerCase();
       const valueKph = unitSrc === 'mph' ? raw * 1.60934 : raw;
-      console.log(valueKph + " " + street); 
       return { valueKph, street };
     } catch (err) {
       console.error('Failed to fetch speed limit via reverse geocode:', err);
@@ -1270,7 +1259,7 @@ export default function DriveScreen({ route }) {
               style={[styles.modalOption, {backgroundColor: '#ff3b30', color: '#fff'}]}
               onPress={() => {
                 setShowEmergencyModal(false);
-                callNumber(911);
+                callNumber('911');
                 Alert.alert('🚨 Calling emergency services...');
               }}
             >
@@ -1278,32 +1267,32 @@ export default function DriveScreen({ route }) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modalOption, { backgroundColor: '#8528ffff' }]}
+              style={[styles.modalOption, { backgroundColor: t.colors.accent }]}
               onPress={() => {
                 setShowEmergencyModal(false);
                 notifyGroupEmergency();
               }}
             >
-              <Text style={[styles.modalOptionText, { color: '#ffffffff' }]}>Notify Group</Text>
+              <Text style={[styles.modalOptionText, { color: t.colors.accentText }]}>Notify Group</Text>
             </TouchableOpacity>
 
             {trustedContacts.map((contact, index) => (
               <TouchableOpacity
                 key={index}
-                style={[styles.modalOption, { backgroundColor: '#00b9d1', color: '#fff' }]}
+                style={[styles.modalOption, { backgroundColor: t.colors.accentFaint, borderWidth: 1, borderColor: t.colors.accent }]}
                 onPress={() => callNumber(contact.phone)}
               >
-                <Text style={styles.modalOptionText}>
+                <Text style={[styles.modalOptionText, { color: t.colors.accent }]}>
                   Call {contact.name || 'Unnamed'}
                 </Text>
               </TouchableOpacity>
             ))}
 
             <TouchableOpacity
-              style={[styles.modalOption, { backgroundColor: '#ccc' }]}
+              style={[styles.modalOption, { backgroundColor: t.colors.divider }]}
               onPress={() => setShowEmergencyModal(false)}
             >
-              <Text style={[styles.modalOptionText, { color: '#333' }]}>Cancel</Text>
+              <Text style={[styles.modalOptionText, { color: t.colors.text }]}>Cancel</Text>
             </TouchableOpacity>
             
           </View>
@@ -1372,81 +1361,66 @@ export default function DriveScreen({ route }) {
         <View style={styles.container}>
           
           <View style={[styles.topRow]}>
-            <LinearGradient
-              colors={["#3000dbff", "#ad09eeff"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.gradientBorder, {marginRight: 7.5}]}
-            >
-            <View style={[styles.module, { backgroundColor: moduleBackground}]}>
-              <Text style={[styles.moduleLabel, { color: altTextColor, marginBottom: -8 }]}>Speed</Text>
-              <Text
-                style={[
-                  styles.moduleValue,
-                  { color: interpolateColor(speed, currentLimit), textShadowColor: textOutline, marginBottom: -8 },
-                ]}
-              >
-                {Math.round(speed)} 
-              </Text>
-              <Text
-                style={[
-                  styles.moduleLabel,
-                  { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
-                ]}
-              >
-                {unit.toUpperCase()}
-              </Text>
+            <View style={[styles.cardWrap, { marginRight: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+              <View style={[styles.module]}>
+                <Text style={[styles.moduleLabel, { color: altTextColor, marginBottom: -8 }]}>Speed</Text>
+                <AutoFitText
+                  style={[
+                    styles.moduleValue,
+                    { color: interpolateColor(speed, currentLimit), textShadowColor: textOutline, marginBottom: -8 },
+                  ]}
+                >
+                  {Math.round(speed)}
+                </AutoFitText>
+                <Text
+                  style={[
+                    styles.moduleLabel,
+                    { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
+                  ]}
+                >
+                  {unit.toUpperCase()}
+                </Text>
+              </View>
             </View>
-            </LinearGradient>
-            
-            <LinearGradient
-              colors={["#3000dbff", "#ad09eeff"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.gradientBorder, {marginLeft: 7.5}]}
-            >
-            <View style={[styles.module, { backgroundColor: moduleBackground}]}>
-              <Animated.View
-                pointerEvents="none"
-                style={{
-                  ...StyleSheet.absoluteFillObject,
-                  backgroundColor: "#ff0000c2",
-                  borderRadius: 12, 
-                  opacity: pulseOverlayAnim,
-                }}
-              />
-              <Text style={[styles.moduleLabel, { color: altTextColor, marginBottom: -8 }]}>Limit</Text>
-              
-              <Text
-                style={[
-                  styles.moduleValue,
-                  { color: textColor, textShadowColor: textOutline, marginBottom: -8 },
-                ]}
-              >
-                {Math.round(currentLimit)}
-              </Text>
-              <Text
-                style={[
-                  styles.moduleLabel,
-                  { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
-                ]}
-              >
-                {unit.toUpperCase()}
-              </Text>
+
+            <View style={[styles.cardWrap, { marginLeft: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+              <View style={[styles.module]}>
+                <Animated.View
+                  pointerEvents="none"
+                  style={{
+                    ...StyleSheet.absoluteFillObject,
+                    backgroundColor: "#ff0000c2",
+                    borderRadius: t.radius.lg,
+                    opacity: pulseOverlayAnim,
+                  }}
+                />
+                <Text style={[styles.moduleLabel, { color: altTextColor, marginBottom: -8 }]}>Limit</Text>
+
+                <AutoFitText
+                  style={[
+                    styles.moduleValue,
+                    { color: textColor, textShadowColor: textOutline, marginBottom: -8 },
+                  ]}
+                >
+                  {Math.round(currentLimit)}
+                </AutoFitText>
+                <Text
+                  style={[
+                    styles.moduleLabel,
+                    { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
+                  ]}
+                >
+                  {unit.toUpperCase()}
+                </Text>
+              </View>
             </View>
-            </LinearGradient>
           </View>
 
-          <LinearGradient
-            colors={["#3000dbff", "#ad09eeff"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.gradientBorderWide}
-          >
-          <View style={[styles.moduleWideRow, { backgroundColor: moduleBackground }]}>
+          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+          <View style={[styles.moduleWideRow]}>
             <View style={styles.subModule}>
               <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>Points</Text>
-              <Text
+              <AutoFitText
                 style={[
                   styles.moduleValue,
                   {
@@ -1457,21 +1431,21 @@ export default function DriveScreen({ route }) {
                 ]}
               >
                 {displayedPoints}
-              </Text>
+              </AutoFitText>
             </View>
 
             <View style={styles.subModule}>
               <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>
                 Distractions
               </Text>
-              <Text
+              <AutoFitText
                 style={[
                   styles.moduleValue,
                   { color: textColor, textShadowColor: textOutline, fontSize: 45 },
                 ]}
               >
                 {distractedCount}
-              </Text>
+              </AutoFitText>
             </View>
             <View style={styles.subModule}>
               <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>Streak</Text>
@@ -1481,18 +1455,18 @@ export default function DriveScreen({ route }) {
                 style={{ width: 32, height: 32, marginRight: 2, marginTop: 6 }}
                 resizeMode="contain"
               />
-              <Text
+              <AutoFitText
                 style={[
                   styles.moduleValue,
                   { color: textColor, textShadowColor: textOutline, fontSize: 45 - 5*(Math.abs(streak).toString().length - 1) },
                 ]}
               >
                 {distractedUI ? 0 : streak ?? 0}
-              </Text>
+              </AutoFitText>
               </View>
             </View>
           </View>
-          </LinearGradient>
+          </View>
 
           <TouchableOpacity
             onPress={async () => {
@@ -1502,7 +1476,7 @@ export default function DriveScreen({ route }) {
             style={styles.completeButtonWrapper}
           >
             <LinearGradient
-              colors={["#3000dbff", "#ad09eeff"]} 
+              colors={[t.colors.accent, t.colors.accentMuted]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.completeButton}
@@ -1519,13 +1493,8 @@ export default function DriveScreen({ route }) {
             </LinearGradient>
           </TouchableOpacity>
 
-          <LinearGradient
-            colors={["#3000dbff", "#ad09eeff"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.gradientBorderWide}
-          >
-          <View style={[styles.moduleWideRow, { backgroundColor: moduleBackground }]}>
+          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+          <View style={[styles.moduleWideRow]}>
             
             
               {!weather ? (
@@ -1599,10 +1568,10 @@ export default function DriveScreen({ route }) {
                 </View>
               )}
             </View>
-            
-          </LinearGradient>
-          
-          
+
+          </View>
+
+
 
           <View style={{ flex: 1 }} />
 
@@ -1696,6 +1665,22 @@ const styles = StyleSheet.create({
     marginTop: 15,
     padding: 3,
     borderRadius: 18,
+  },
+
+  cardWrap: {
+    flex: 1,
+    height: 175,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+  },
+
+  cardWrapWide: {
+    marginTop: 15,
+    width: "100%",
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
   },
   
   topRow: {

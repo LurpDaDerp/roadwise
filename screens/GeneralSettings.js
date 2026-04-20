@@ -1,14 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, Dimensions, ImageBackground, Switch, ScrollView
-} from 'react-native';
+import React, { useState, useEffect, useContext } from 'react';
+import { View, Text, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
-import { useContext } from 'react';
 import { ThemeContext } from '../context/ThemeContext';
-
-
-const { width, height } = Dimensions.get('window');
+import { Screen, Section, Card, ScreenHeader, useTheme } from '../theme';
 
 const STORAGE_KEYS = {
   appTheme: '@appTheme',
@@ -17,17 +12,8 @@ const STORAGE_KEYS = {
 
 export default function GeneralSettings() {
   const { theme, updateTheme } = useContext(ThemeContext);
-  const [exampleToggle, setExampleToggle] = useState(false);
-
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-
-  const backgroundColor = isDark ? '#0e0e0eff' : '#fff';
-  const titleColor = isDark ? '#fff' : '#000';
-  const textColor = isDark ? '#fff' : '#000';
-  const moduleBackground = isDark ? '#222' : '#ebebebff';
-  const altTextColor = isDark ? '#aaa' : '#555';
-  const inputbackground = isDark? '#353535ff' : '#a7a7a78e';
+  const [, setExampleToggle] = useState(false);
+  const t = useTheme();
 
   const themeSegments = ['Light', 'Dark', 'System'];
 
@@ -35,85 +21,63 @@ export default function GeneralSettings() {
     (async () => {
       try {
         const storedTheme = await AsyncStorage.getItem(STORAGE_KEYS.appTheme);
-        if (storedTheme && themeSegments.map(s => s.toLowerCase()).includes(storedTheme)) {
+        if (storedTheme && themeSegments.map((s) => s.toLowerCase()).includes(storedTheme)) {
           updateTheme(storedTheme);
         }
-
         const storedToggle = await AsyncStorage.getItem(STORAGE_KEYS.exampleToggle);
         if (storedToggle !== null) setExampleToggle(storedToggle === 'true');
       } catch (e) {
-        console.warn('⚠️ Failed to load settings:', e);
+        console.warn('Failed to load settings:', e);
       }
     })();
   }, []);
 
-  
-
   const onThemeChange = async (index) => {
-    const selected = themeSegments[index].toLowerCase();
-    updateTheme(selected); 
-  };
-
-  const toggleExample = async (value) => {
-    setExampleToggle(value);
-    await AsyncStorage.setItem(STORAGE_KEYS.exampleToggle, value.toString());
+    updateTheme(themeSegments[index].toLowerCase());
   };
 
   return (
-    <ScrollView style={[styles.background, {backgroundColor: backgroundColor}]}>
-      <View style={styles.overlay}>
-        <Text style={[styles.title, {color: titleColor}]}>General Settings</Text>
+    <Screen>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <ScreenHeader
+          eyebrow="Settings · General"
+          title="General"
+          subtitle="Appearance and interface options."
+        />
 
-        <View style={styles.settingRow}>
-          <Text style={[styles.settingLabel, {color: textColor}]}>Appearance</Text>
-          <SegmentedControl
-            values={themeSegments}
-            selectedIndex={themeSegments.indexOf(theme.charAt(0).toUpperCase() + theme.slice(1))}
-            onChange={(event) => onThemeChange(event.nativeEvent.selectedSegmentIndex)}
-            style={styles.segmentedControl}
-          />
-        </View>
+        <Section label="Appearance">
+          <Card>
+            <Text
+              style={[
+                t.typography.subheading,
+                { color: t.colors.text, marginBottom: 6 },
+              ]}
+            >
+              Theme
+            </Text>
+            <Text
+              style={[
+                t.typography.caption,
+                { color: t.colors.textMuted, marginBottom: 16 },
+              ]}
+            >
+              Controls light or dark mode across the app.
+            </Text>
+            <SegmentedControl
+              values={themeSegments}
+              selectedIndex={themeSegments.indexOf(
+                (theme || 'system').charAt(0).toUpperCase() + (theme || 'system').slice(1)
+              )}
+              onChange={(event) => onThemeChange(event.nativeEvent.selectedSegmentIndex)}
+              appearance={t.isDark ? 'dark' : 'light'}
+              tintColor={t.colors.accent}
+              style={{ height: 40 }}
+            />
+          </Card>
+        </Section>
 
-        {/* <View style={styles.settingRowToggle}>
-          <Text style={[styles.settingLabel, {color: textColor}]}>Example Toggle</Text>
-          <Switch
-            value={exampleToggle}
-            onValueChange={toggleExample}
-            trackColor={{ false: '#767577', true: '#86ff7d' }}
-            thumbColor={exampleToggle ? '#ffffff' : '#f4f3f4'}
-          />
-        </View> */}
-
-
-      </View>
-    </ScrollView>
+        <View style={{ height: 24 }} />
+      </ScrollView>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  background: { flex: 1 },
-  overlay: { flex: 1, padding: width / (375 / 24), backgroundColor: 'rgba(0, 0, 0, 0)' },
-  title: {
-    fontSize: width / (375 / 32),
-    fontWeight: 'bold',
-    marginTop: height / (667 / 60),
-    marginBottom: height / (667 / 32),
-    alignSelf: 'center',
-  },
-  settingRow: {
-    marginBottom: width / (375 / 16),
-  },
-  settingRowToggle: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: width / (375 / 16),
-  },
-  settingLabel: {
-    fontSize: width / (375 / 16),
-    marginBottom: 12,
-  },
-  segmentedControl: {
-    height: 40,
-  },
-});

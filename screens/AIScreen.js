@@ -1,32 +1,39 @@
-import React, { useState, useEffect, useContext, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Dimensions,
-  ScrollView, 
-  TouchableOpacity,
+  ScrollView,
   Alert,
+  Pressable,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { LineChart } from 'react-native-chart-kit';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
-import { ThemeContext } from '../context/ThemeContext';
-import { getDriveMetrics, getAllDriveMetrics } from '../utils/firestore';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../utils/firebase';
-import { getAIFeedback } from '../utils/gptApi';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { onAuthStateChanged } from 'firebase/auth';
 
-const { width, height } = Dimensions.get('window');
+import { auth } from '../utils/firebase';
+import { getAllDriveMetrics } from '../utils/firestore';
+import {
+  Screen,
+  Section,
+  Card,
+  ScreenHeader,
+  Button,
+  AutoFitText,
+  useTheme,
+} from '../theme';
+
+const { width } = Dimensions.get('window');
 
 function aggregateDistractionsByTimeframe(drives, timeframe) {
   const toLocalDayKey = (date) => {
     const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   };
 
@@ -37,13 +44,11 @@ function aggregateDistractionsByTimeframe(drives, timeframe) {
   if (timeframe === 1) {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-
     for (let h = 0; h < 24; h++) {
       const hour = new Date(start);
       hour.setHours(start.getHours() + h);
-
       const hourTotal = drives
-        .filter(item => {
+        .filter((item) => {
           const dt = item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp);
           return (
             dt.getFullYear() === hour.getFullYear() &&
@@ -53,19 +58,16 @@ function aggregateDistractionsByTimeframe(drives, timeframe) {
           );
         })
         .reduce((sum, item) => sum + Number(item.distracted || 0), 0);
-
       data.push(hourTotal);
-
       if (h % 4 === 0) {
         const hr = hour.getHours();
         const hr12 = hr % 12 === 0 ? 12 : hr % 12;
-        const ampm = hr < 12 ? "AM" : "PM";
+        const ampm = hr < 12 ? 'AM' : 'PM';
         labels.push(`${hr12} ${ampm}`);
       } else {
-        labels.push("");
+        labels.push('');
       }
     }
-
     return { labels, data };
   }
 
@@ -76,31 +78,28 @@ function aggregateDistractionsByTimeframe(drives, timeframe) {
   const totalsByDay = {};
   for (const item of drives) {
     const dt = item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp);
-    if (dt < start || dt > now) continue; 
+    if (dt < start || dt > now) continue;
     const key = toLocalDayKey(dt);
     totalsByDay[key] = (totalsByDay[key] || 0) + Number(item.distracted || 0);
   }
 
-  const labelInterval = timeframe <= 7 ? 1 : 5; 
+  const labelInterval = timeframe <= 7 ? 1 : 5;
   for (let i = 0; i < timeframe; i++) {
     const day = new Date(start);
     day.setDate(start.getDate() + i);
-
     const key = toLocalDayKey(day);
     const value = totalsByDay[key] !== undefined ? totalsByDay[key] : 0;
     data.push(value);
-
     const month = day.getMonth() + 1;
     const dayNum = day.getDate();
-    labels.push(i % labelInterval === 0 ? `${month}/${dayNum}` : "");
+    labels.push(i % labelInterval === 0 ? `${month}/${dayNum}` : '');
   }
-
 
   return { labels, data };
 }
 
 function normalizeInput(stats) {
-  const { generatedAt, ...rest } = stats; 
+  const { generatedAt, ...rest } = stats;
   return rest;
 }
 
@@ -108,41 +107,37 @@ function formatTotalDuration(seconds) {
   const minutes = Math.round(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
-
   if (hours > 0 && remainingMinutes > 0) {
-    return `${hours} hour${hours > 1 ? 's' : ''} ${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`;
-  } else if (hours > 0 && remainingMinutes === 0) {
-    return `${hours} hour${hours > 1 ? 's' : ''}`;
-  } else {
-    return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    return `${hours}h ${remainingMinutes}m`;
+  } else if (hours > 0) {
+    return `${hours}h`;
   }
+  return `${minutes}m`;
 }
 
 function interpolateColor(percent) {
   const p = Math.min(Math.max(percent, 0), 100) / 100;
-
-  const start = { r: 0, g: 255, b: 0 };
-  const mid   = { r: 255, g: 255, b: 0 }; 
-  const end   = { r: 255, g: 0, b: 0 };   
-
+  const start = { r: 0, g: 200, b: 120 };
+  const mid = { r: 240, g: 180, b: 60 };
+  const end = { r: 230, g: 80, b: 80 };
   let r, g, b;
-
   if (p < 0.5) {
-    const t = p / 0.5;
-    r = Math.round(start.r + (mid.r - start.r) * t);
-    g = Math.round(start.g + (mid.g - start.g) * t);
-    b = Math.round(start.b + (mid.b - start.b) * t);
+    const k = p / 0.5;
+    r = Math.round(start.r + (mid.r - start.r) * k);
+    g = Math.round(start.g + (mid.g - start.g) * k);
+    b = Math.round(start.b + (mid.b - start.b) * k);
   } else {
-    const t = (p - 0.5) / 0.5;
-    r = Math.round(mid.r + (end.r - mid.r) * t);
-    g = Math.round(mid.g + (end.g - mid.g) * t);
-    b = Math.round(mid.b + (end.b - mid.b) * t);
+    const k = (p - 0.5) / 0.5;
+    r = Math.round(mid.r + (end.r - mid.r) * k);
+    g = Math.round(mid.g + (end.g - mid.g) * k);
+    b = Math.round(mid.b + (end.b - mid.b) * k);
   }
-
   return `rgb(${r},${g},${b})`;
 }
 
-export default function AIScreen({ route, navigation }) {
+export default function AIScreen({ navigation }) {
+  const t = useTheme();
+
   const [timeframe, setTimeframe] = useState(7);
   const [gridLines, setGridLines] = useState(7);
   const [drives, setDrives] = useState([]);
@@ -153,60 +148,38 @@ export default function AIScreen({ route, navigation }) {
     suddenStops: 0,
     avgSpeed: 0,
     totalDistance: 0,
+    totalDuration: '0m',
     speedingEvents: 0,
   });
 
   const [unit, setUnit] = useState('mph');
   const metersToMiles = (m) => m * 0.000621371;
 
-  const [feedbackLabel, setFeedbackLabel] = useState("✦");
-
+  const [feedbackLabel, setFeedbackLabel] = useState('Get personalized feedback');
   const [percentDistracted, setPercentDistracted] = useState(0);
-  const [percentColor, setPercentColor] = useState(interpolateColor(0));
   const [distractedCount, setDistractedCount] = useState(0);
   const [undistractedCount, setUndistractedCount] = useState(0);
 
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-
-  const backgroundColor = isDark ? '#161616ff' : '#fff';
-  const chartBackground = isDark ? '#000' : '#eeeeeeff';
-  const titleColor = isDark ? '#fff' : '#000';
-  const textColor = isDark ? '#fff' : '#000';
-  const moduleBackground = isDark ? '#333' : '#eeeeeeff';
-  const altTextColor = isDark ? '#aaa' : '#555';
-  const chartLineColor = isDark ? `rgba(132, 87, 255, 0.5)` : `rgba(38, 0, 255, 0.5)`;
-  const buttonColor = isDark ? `rgba(108, 55, 255, 1)` : `rgba(99, 71, 255, 1)`;
-  const percentTextShadowColor = isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.35)';
-
+  const percentColor = interpolateColor(percentDistracted);
 
   useFocusEffect(
-    React.useCallback(() => {
+    useCallback(() => {
       (async () => {
         try {
           const storedUnit = await AsyncStorage.getItem('@speedUnit');
           if (storedUnit === 'mph' || storedUnit === 'kph') setUnit(storedUnit);
-        } catch (err) {
-          console.warn('⚠️ Failed to load settings:', err);
-        }
+        } catch {}
       })();
     }, [])
   );
 
   useLayoutEffect(() => {
-    navigation.getParent()?.setOptions({
-      tabBarStyle: { display: 'none' },
-    });
-
+    navigation.getParent()?.setOptions({ tabBarStyle: { display: 'none' } });
     return () => {
-      navigation.getParent()?.setOptions({
-        tabBarStyle: {
-          display: 'flex',
-        },
-      });
+      navigation.getParent()?.setOptions({ tabBarStyle: { display: 'flex' } });
     };
   }, [navigation]);
-  
+
   const generateStatsJSON = () => {
     let totalSpeedingMargin = 0;
     let totalSuddenAccels = 0;
@@ -220,14 +193,14 @@ export default function AIScreen({ route, navigation }) {
     const now = new Date();
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    start.setDate(now.getDate() - 29); 
+    start.setDate(now.getDate() - 29);
 
-    const drivesToUse = drives.filter(drive => {
+    const drivesToUse = drives.filter((drive) => {
       const dt = drive.timestamp?.toDate ? drive.timestamp.toDate() : new Date(drive.timestamp);
       return dt >= start && dt <= now;
     });
 
-    drivesToUse.forEach(drive => {
+    drivesToUse.forEach((drive) => {
       const duration = drive.duration || 0;
       totalWeightedSpeed += (drive.avgSpeed || 0) * duration;
       totalSpeedingMargin += (drive.avgSpeedingMargin || 0) * duration;
@@ -241,7 +214,8 @@ export default function AIScreen({ route, navigation }) {
 
     const totalDrives = drivesToUse.length;
     const undistractedCountVal = totalDrives - distractedCountVal;
-    const percent = totalDrives > 0 ? Math.round((distractedCountVal / totalDrives) * 10000) / 100 : 0;
+    const percent =
+      totalDrives > 0 ? Math.round((distractedCountVal / totalDrives) * 10000) / 100 : 0;
 
     return {
       totalPhoneDistractions: distractedCountVal,
@@ -254,13 +228,10 @@ export default function AIScreen({ route, navigation }) {
       suddenAccelerations: totalSuddenAccels,
       speedingEvents: totalSpeedingEvents,
       totalDistance: (totalDistance * 0.000621371).toFixed(1),
-      totalDuration, 
+      totalDuration,
       generatedAt: new Date().toISOString(),
     };
   };
-
-
-
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -271,7 +242,6 @@ export default function AIScreen({ route, navigation }) {
 
   useEffect(() => {
     if (!uid) return;
-
     const fetchMetrics = async () => {
       const metrics = await getAllDriveMetrics(uid);
       setDrives(metrics);
@@ -283,13 +253,12 @@ export default function AIScreen({ route, navigation }) {
           suddenStops: 0,
           avgSpeed: 0,
           totalDistance: 0,
-          totalDuration: "0 minutes",
-          speedingEvents: 0, 
+          totalDuration: '0m',
+          speedingEvents: 0,
         });
         setDistractedCount(0);
         setUndistractedCount(0);
         setPercentDistracted(0);
-        setPercentColor(interpolateColor(0));
         return;
       }
 
@@ -298,7 +267,7 @@ export default function AIScreen({ route, navigation }) {
       start.setHours(0, 0, 0, 0);
       start.setDate(now.getDate() - (timeframe - 1));
 
-      const drivesToUse = metrics.filter(drive => {
+      const drivesToUse = metrics.filter((drive) => {
         const dt = drive.timestamp?.toDate ? drive.timestamp.toDate() : new Date(drive.timestamp);
         return dt >= start && dt <= now;
       });
@@ -312,7 +281,7 @@ export default function AIScreen({ route, navigation }) {
       let distractedCountVal = 0;
       let totalSpeedingEvents = 0;
 
-      drivesToUse.forEach(drive => {
+      drivesToUse.forEach((drive) => {
         const duration = drive.duration || 0;
         totalWeightedSpeed += (drive.avgSpeed || 0) * duration;
         totalSpeedingMargin += (drive.avgSpeedingMargin || 0) * duration;
@@ -326,7 +295,8 @@ export default function AIScreen({ route, navigation }) {
 
       const totalDrives = drivesToUse.length;
       const undistractedCountVal = totalDrives - distractedCountVal;
-      const percent = totalDrives > 0 ? Math.round((distractedCountVal / totalDrives) * 10000) / 100 : 0;
+      const percent =
+        totalDrives > 0 ? Math.round((distractedCountVal / totalDrives) * 10000) / 100 : 0;
       totalDistance = metersToMiles(totalDistance);
 
       setStats({
@@ -336,18 +306,16 @@ export default function AIScreen({ route, navigation }) {
         avgSpeed: totalDuration > 0 ? (totalWeightedSpeed / totalDuration).toFixed(1) : 0,
         totalDistance: totalDistance.toFixed(1),
         totalDuration: formatTotalDuration(totalDuration),
-        speedingEvents: totalSpeedingEvents, 
+        speedingEvents: totalSpeedingEvents,
       });
 
       setDistractedCount(distractedCountVal);
       setUndistractedCount(undistractedCountVal);
       setPercentDistracted(percent);
-      setPercentColor(interpolateColor(percent));
     };
 
     fetchMetrics();
   }, [uid, timeframe]);
-
 
   useFocusEffect(
     useCallback(() => {
@@ -355,237 +323,222 @@ export default function AIScreen({ route, navigation }) {
         const normalizedInput = normalizeInput(generateStatsJSON());
         let cache = [];
         try {
-          const storedCache = await AsyncStorage.getItem("feedbackCache");
+          const storedCache = await AsyncStorage.getItem('feedbackCache');
           if (storedCache) cache = JSON.parse(storedCache);
         } catch {}
         const match = cache.find(
-          entry => JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
+          (entry) => JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
         );
-        setFeedbackLabel(match ? "✦ View Feedback" : "✦ Get Personalized Feedback");
+        setFeedbackLabel(match ? 'View personalized feedback' : 'Get personalized feedback');
       };
       fetchFeedbackLabel();
     }, [drives, timeframe])
   );
 
-
   const { labels, data } = aggregateDistractionsByTimeframe(drives, timeframe);
   const maxDistractions = data.length > 0 ? Math.max(...data) : 1;
-  const segments = Math.min(maxDistractions, 10);
+  const segments = Math.max(1, Math.min(maxDistractions, 6));
 
-  const StatBox = ({ label, value, textColor: valueColor }) => (
-    <View style={{
-      backgroundColor: moduleBackground,
-      borderRadius: 10,
-      padding: 10,
-      alignItems: 'center',
-      flex: 1,
-      marginHorizontal: 4,
-    }}>
-      <Text style={{
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: valueColor || textColor,
-      }}>{value}</Text>
-      <Text style={{
-        fontSize: 12,
-        color: altTextColor,
-        textAlign: 'center',
-        marginTop: 4,
-      }}>{label}</Text>
-    </View>
-  );
+  const onFeedbackPress = () => {
+    const statsJSON = generateStatsJSON();
+    const totalDistance = Number(statsJSON?.totalDistance || 0);
+    const duration = Number(statsJSON?.totalDuration || 0);
+    if (totalDistance < 10 || duration < 500) {
+      Alert.alert('Not enough data', 'Please complete a few more drives to get feedback.');
+      return;
+    }
+    navigation.navigate('AIFeedback', { statsJSON });
+  };
+
+  const unitLabel = unit === 'kph' ? 'kph' : 'mph';
 
   return (
-    <View style={{ flex: 1, backgroundColor: backgroundColor, padding: width / (375/10), paddingTop: height / (667/70)}}>
-      <Text style={{ 
-        fontSize: 28, 
-        fontWeight: "bold", 
-        fontFamily: "Arial Rounded MT Bold",
-        textAlign: "center", 
-        color: titleColor,
-        marginTop: height/50,
-        marginBottom: 10,
-      }}>
-        My Driver Report</Text>
-      
-      
-
+    <Screen>
       <ScrollView
-        style={{ flex: 1, backgroundColor: backgroundColor, padding: width / (375/10) }}
-        contentContainerStyle={{ paddingBottom: height / (667/40) }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 32 }}
       >
-      
-      <TouchableOpacity
-        onPress={() => {
-          const statsJSON = generateStatsJSON();
-
-          const { generatedAt, averageSpeed, ...values } = statsJSON;
-
-          const totalDistance = Number(values?.totalDistance || 0);
-          const duration = Number(values?.totalDuration || 0);
-
-          if (totalDistance < 10 || duration < 500) {
-            console.log(totalDistance + " " + duration);
-            Alert.alert(
-              "Not enough data",
-              "Please complete a few more drives to get feedback."
-            );
-            return;
-          }
-
-          navigation.navigate("AIFeedback", { statsJSON });
-        }}
-        style={{
-          borderRadius: 10,
-          overflow: 'hidden', 
-          marginHorizontal: 5,
-          marginTop: 10,
-          marginBottom: 20,
-        }}
-      >
-        <LinearGradient
-          colors={['#a300e4ff', '#2a00c0ff']} 
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{
-            paddingVertical: 12,
-            alignItems: 'center',
-          }}
-        >
-          <Text style={{ fontSize: 16, fontWeight: 'bold', color: "#fff" }}>
-            {feedbackLabel}
-          </Text>
-        </LinearGradient>
-      </TouchableOpacity>
-
-      <SegmentedControl
-        values={['1D', '7D', '30D']}
-        selectedIndex={timeframe === 1 ? 0 : timeframe === 7 ? 1 : 2}
-        onChange={(event) => {
-          const index = event.nativeEvent.selectedSegmentIndex;
-          if (index === 0) {
-            setTimeframe(1);
-            setGridLines(4);
-          } else if (index === 1) {
-            setTimeframe(7);
-            setGridLines(1);
-          } else {
-            setTimeframe(30);
-            setGridLines(5);
-          }
-        }}
-        style={{ marginBottom: 10, marginTop: 10, marginHorizontal: 5 }}
-      />
-
-      
-
-      <Text style={{ 
-        fontSize: 18, 
-        fontWeight: "bold", 
-        textAlign: "center", 
-        color: titleColor,
-        marginTop: 8,
-        marginBottom: 8 
-      }}>
-        Phone Distractions
-      </Text>
-
-      {labels.length > 0 ? (
-        <LineChart
-          data={{ labels, datasets: [{ data }] }}
-          width={width * 7/8}
-          height={height/3}
-          fromZero
-          yAxisLabel=""
-          yAxisInterval={gridLines}
-          segments={segments} 
-          chartConfig={{
-            backgroundGradientFrom: chartBackground, 
-            backgroundGradientTo: chartBackground, 
-            decimalPlaces: 0,
-            color: (opacity = 1) => chartLineColor,
-            labelColor: (opacity = 1) => textColor,
-            style: { borderRadius: 8 },
-            propsForDots: ({ value }) => ({
-              r: value !== undefined && value !== null ? "4" : "0",
-              strokeWidth: value !== undefined && value !== null ? "2" : "0",
-              stroke: "#5900ffff",
-            }),
-            propsForBackgroundLines: { stroke: "#444" },
-          }}
-          bezier
-          style={{ marginVertical: 8, borderRadius: 8 }}
+        <ScreenHeader
+          eyebrow="Insights"
+          title="Driver report"
+          subtitle="Patterns in your recent drives."
         />
-      ) : (
-        <Text style={{ color: altTextColor, textAlign: 'center', marginTop: 20 }}>No data for selected timeframe.</Text>
-      )}
 
+        <Section>
+          <Button
+            title={feedbackLabel}
+            onPress={onFeedbackPress}
+            icon={<Ionicons name="sparkles" size={18} color={t.colors.accentText} />}
+          />
+        </Section>
 
-      <View style={styles.statsRow}>
-        <StatBox label="Distracted Drives" value={distractedCount} />
-        <StatBox label="Undistracted Drives" value={undistractedCount} />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox
-          label="of Drives are Distracted"
-          value={
-            <Text
-              style={{
-                color: percentColor,
-                fontWeight: 'bold',
-                textShadowColor: percentTextShadowColor,
-                textShadowOffset: { width: 0, height: 0 },
-                textShadowRadius: 4,
+        <Section label="Timeframe">
+          <Card>
+            <SegmentedControl
+              values={['1D', '7D', '30D']}
+              selectedIndex={timeframe === 1 ? 0 : timeframe === 7 ? 1 : 2}
+              onChange={(event) => {
+                const index = event.nativeEvent.selectedSegmentIndex;
+                if (index === 0) {
+                  setTimeframe(1);
+                  setGridLines(4);
+                } else if (index === 1) {
+                  setTimeframe(7);
+                  setGridLines(1);
+                } else {
+                  setTimeframe(30);
+                  setGridLines(5);
+                }
               }}
-            >
-              {percentDistracted}%
-            </Text>
-          }
-        />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox label="Speeding Events" value={stats.speedingEvents} />
-        <StatBox label="Avg Speeding Margin" value={`${stats.avgSpeedingMargin} mph`} />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox label="Avg Speed" value={`${stats.avgSpeed} mph`} />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox label="Sudden Stops" value={stats.suddenStops} />
-        <StatBox label="Sudden Accelerations" value={stats.suddenAccelerations} />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox label="Total Distance" value={`${stats.totalDistance} mi`} />
-      </View>
-      <View style={styles.statsRow}>
-        <StatBox label="Total Time Driving" value={`${stats.totalDuration}`} />
-      </View>
+              appearance={t.isDark ? 'dark' : 'light'}
+              tintColor={t.colors.accent}
+              style={{ height: 40 }}
+            />
+          </Card>
+        </Section>
 
-      <TouchableOpacity
-        style={{
-          backgroundColor: buttonColor, 
-          paddingVertical: 12,
-          marginHorizontal: 5,
-          borderRadius: 10,
-          marginTop: 20,
-          alignItems: 'center',
-        }}
-        onPress={() => navigation.navigate('MyDrives')}
+        <Section label="Phone distractions">
+          <Card>
+            {labels.length > 0 ? (
+              <LineChart
+                data={{ labels, datasets: [{ data }] }}
+                width={width - 80}
+                height={220}
+                fromZero
+                yAxisInterval={gridLines}
+                segments={segments}
+                chartConfig={{
+                  backgroundGradientFrom: t.colors.surface,
+                  backgroundGradientTo: t.colors.surface,
+                  decimalPlaces: 0,
+                  color: () => t.colors.accent,
+                  labelColor: () => t.colors.textMuted,
+                  style: { borderRadius: t.radius.md },
+                  propsForDots: ({ value }) => ({
+                    r: value !== undefined && value !== null ? '4' : '0',
+                    strokeWidth: value !== undefined && value !== null ? '2' : '0',
+                    stroke: t.colors.accent,
+                    fill: t.colors.surface,
+                  }),
+                  propsForBackgroundLines: { stroke: t.colors.divider },
+                }}
+                bezier
+                style={{
+                  marginVertical: 4,
+                  borderRadius: t.radius.md,
+                  paddingRight: 0,
+                }}
+              />
+            ) : (
+              <Text
+                style={[t.typography.caption, { color: t.colors.textMuted, textAlign: 'center' }]}
+              >
+                No data for selected timeframe.
+              </Text>
+            )}
+          </Card>
+        </Section>
+
+        <Section label="Focus">
+          <Card>
+            <View style={{ flexDirection: 'row' }}>
+              <StatCell t={t} label="Distracted drives" value={String(distractedCount)} />
+              <Div t={t} />
+              <StatCell
+                t={t}
+                label="Focused drives"
+                value={String(undistractedCount)}
+                color={t.colors.accent}
+              />
+              <Div t={t} />
+              <StatCell
+                t={t}
+                label="Distracted %"
+                value={`${percentDistracted}%`}
+                color={percentColor}
+              />
+            </View>
+          </Card>
+        </Section>
+
+        <Section label="Driving dynamics">
+          <Card padded={false}>
+            <MetricRow t={t} label="Speeding events" value={stats.speedingEvents} first />
+            <MetricRow
+              t={t}
+              label="Avg speeding margin"
+              value={`${stats.avgSpeedingMargin} ${unitLabel}`}
+            />
+            <MetricRow t={t} label="Avg speed" value={`${stats.avgSpeed} ${unitLabel}`} />
+            <MetricRow t={t} label="Sudden stops" value={stats.suddenStops} />
+            <MetricRow t={t} label="Sudden accelerations" value={stats.suddenAccelerations} />
+            <MetricRow t={t} label="Total distance" value={`${stats.totalDistance} mi`} />
+            <MetricRow t={t} label="Total time driving" value={stats.totalDuration} />
+          </Card>
+        </Section>
+
+        <Section>
+          <Button
+            title="View all drives"
+            variant="ghost"
+            icon={<Ionicons name="list-outline" size={18} color={t.colors.text} />}
+            onPress={() => navigation.navigate('MyDrives')}
+          />
+        </Section>
+      </ScrollView>
+    </Screen>
+  );
+}
+
+function StatCell({ t, label, value, color }) {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }}>
+      <Text
+        style={[
+          t.typography.micro,
+          {
+            color: t.colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 1.1,
+            marginBottom: 6,
+            textAlign: 'center',
+          },
+        ]}
       >
-        <Text style={{ fontSize: 16, fontWeight: 'bold', color: "#fff" }}>
-          View All Drives
-        </Text>
-      </TouchableOpacity>
+        {label}
+      </Text>
+      <AutoFitText style={[t.typography.numeric, { color: color || t.colors.text }]}>{value}</AutoFitText>
+    </View>
+  );
+}
 
-            </ScrollView>
-          </View>
-        );
-      }
+function Div({ t }) {
+  return (
+    <View
+      style={{
+        width: StyleSheet.hairlineWidth,
+        backgroundColor: t.colors.divider,
+        marginVertical: 4,
+      }}
+    />
+  );
+}
 
-const styles = StyleSheet.create({
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 12,
-  },
-});
+function MetricRow({ t, label, value, first }) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+        borderTopColor: t.colors.divider,
+      }}
+    >
+      <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>{label}</Text>
+      <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>{String(value)}</Text>
+    </View>
+  );
+}

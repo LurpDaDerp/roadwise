@@ -1,102 +1,91 @@
-import React, { useState, useCallback, useContext, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
   FlatList,
   StyleSheet,
-  Dimensions,
-  TouchableOpacity,
   Alert,
-  ImageBackground,
-  Animated,
-  ActivityIndicator
+  Modal,
+  Pressable,
+  ScrollView,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { ThemeContext } from '../context/ThemeContext';
 
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
 import { getUserDrives, clearUserDrives } from '../utils/firestore';
 import { auth } from '../utils/firebase';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Modal } from 'react-native';
+import {
+  Screen,
+  Section,
+  Card,
+  ScreenHeader,
+  Button,
+  AutoFitText,
+  useTheme,
+} from '../theme';
 
-const firestore = getFirestore();
-
-const { width, height } = Dimensions.get('window');
+const LOAD_BATCH = 10;
 
 function interpolateColor(percent) {
   const p = Math.min(Math.max(percent, 0), 75) / 75;
-
-  const start = { r: 12, g: 250, b: 0 };
-  const end = { r: 250, g: 0, b: 0 };
-
+  const start = { r: 12, g: 200, b: 120 };
+  const end = { r: 230, g: 80, b: 80 };
   const r = Math.round(start.r + (end.r - start.r) * p);
   const g = Math.round(start.g + (end.g - start.g) * p);
   const b = Math.round(start.b + (end.b - start.b) * p);
-
   return `rgb(${r},${g},${b})`;
 }
 
+const formatDuration = (seconds) => {
+  const minutes = Math.round(seconds / 60);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const min = minutes - hours * 60;
+    return `${hours} hr ${min} min`;
+  }
+  return `${minutes} min`;
+};
+
+const formatDistance = (meters) => {
+  const miles = meters / 1609.34;
+  if (miles < 0.1) return `${Math.round(meters * 3.28084)} ft`;
+  return `${miles.toFixed(1)} mi`;
+};
+
 export default function MyDrivesScreen() {
+  const t = useTheme();
   const [drives, setDrives] = useState([]);
-  const navigation = useNavigation();
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-
-  const LOAD_BATCH = 10; 
   const [visibleCount, setVisibleCount] = useState(LOAD_BATCH);
-
-  const titleColor = isDark ? "#fff" : "#000";
-  const dateColor = isDark ? '#fff' : '#000';
-  const detailColor = isDark ? '#aaa' : '#353535ff';
-  const textColor = isDark ? '#ffffffff' : '#252525ff';
-  const distractedColor = '#cc0000';
-  const focusedColor = isDark ? 'lightgreen' : 'green';
-  const moduleBackground = isDark ? '#1b1b1baf' : '#e6e6e698';
-  const modalBackground = isDark ? '#1b1b1bff' : '#e6e6e6ff';
-  const statBackground = isDark ? '#2b2b2bff' : '#d1d1d1ff';
-  const sheetGradientBottom = isDark ? "#380864ff" : "#f1f1f1ff"; 
-  const sheetGradientTop = isDark ? "#070222ff" : "#cab6ffff"; 
   const [selectedDrive, setSelectedDrive] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
-
-  const customFadeAnim = useRef(new Animated.Value(0)).current;
-  
-  const [loading, setLoading] = useState(true);
-
   const loadDrives = async () => {
     const user = auth.currentUser;
-    const uid = user.uid;
     if (!user) return setDrives([]);
-    const fetched = await getUserDrives(uid);
+    const fetched = await getUserDrives(user.uid);
     setDrives(fetched);
     setVisibleCount(LOAD_BATCH);
   };
 
-  const distractedCount = drives.filter(d => d.distracted).length;
-  const undistractedCount = drives.length - distractedCount;
+  useFocusEffect(
+    useCallback(() => {
+      loadDrives();
+    }, [])
+  );
+
+  const distractedCount = drives.filter((d) => d.distracted).length;
+  const focusedCount = drives.length - distractedCount;
   const percentDistracted =
     drives.length > 0
       ? Math.round((distractedCount / drives.length) * 10000) / 100
       : null;
-  const percentColor = percentDistracted !== null 
-    ? interpolateColor(percentDistracted) 
-    : '#888'; 
+  const percentColor =
+    percentDistracted !== null ? interpolateColor(percentDistracted) : t.colors.textMuted;
 
-  useFocusEffect(
-    useCallback(() => {
-      loadDrives();
-      setLoading(false);
-    }, [])
-  );
-
-  const clearDriveHistory = async () => {
+  const clearDriveHistory = () => {
     Alert.alert(
-      'Clear Drive History',
-      'Are you sure you want to clear all drive history? This action cannot be undone.',
+      'Clear drive history',
+      'Are you sure you want to clear all drive history? This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -105,10 +94,7 @@ export default function MyDrivesScreen() {
           onPress: async () => {
             try {
               const user = auth.currentUser;
-              if (!user) {
-                console.warn('No user logged in, cannot clear drives.');
-                return;
-              }
+              if (!user) return;
               await clearUserDrives(user.uid);
               setDrives([]);
             } catch (e) {
@@ -121,389 +107,314 @@ export default function MyDrivesScreen() {
     );
   };
 
-
-
-  const formatDuration = (seconds) => {
-    const minutes = Math.round(seconds/60);
-    let formatted = minutes + " min";
-    if (minutes >= 60) {
-      const hours = Math.floor(minutes/60);
-      const min = minutes - (hours*60);
-      formatted = hours + " hr " + min + " min";
-    }
-    return formatted;
-  }
-
-  const formatDistance = (meters) => {
-    const miles = meters / 1609.34;
-    let formatted = miles.toFixed(1) + " mi";
-
-    if (miles < 0.1) {
-      const feet = meters * 3.28084;
-      formatted = Math.round(feet) + " ft";
-    }
-
-    return formatted;
+  const renderItem = ({ item, index }) => {
+    const isFirst = index === 0;
+    const date = new Date(item.timestamp);
+    return (
+      <Pressable
+        onPress={() => {
+          setSelectedDrive(item);
+          setShowModal(true);
+        }}
+        style={({ pressed }) => ({
+          opacity: pressed ? 0.7 : 1,
+          paddingVertical: 14,
+          paddingHorizontal: 18,
+          borderTopWidth: isFirst ? 0 : StyleSheet.hairlineWidth,
+          borderTopColor: t.colors.divider,
+          flexDirection: 'row',
+          alignItems: 'center',
+        })}
+      >
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: item.distracted ? t.colors.dangerFaint : t.colors.accentFaint,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 14,
+          }}
+        >
+          <Ionicons
+            name={item.distracted ? 'alert-circle-outline' : 'checkmark-circle-outline'}
+            size={20}
+            color={item.distracted ? t.colors.danger : t.colors.accent}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>
+            {date.toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })}{' '}
+            ·{' '}
+            {date.toLocaleTimeString(undefined, {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true,
+            })}
+          </Text>
+          <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>
+            {formatDuration(item.duration)} · {item.points} pts
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={t.colors.textSubtle} />
+      </Pressable>
+    );
   };
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      onPress={() => {
-        setSelectedDrive(item);
-        setShowModal(true);
-      }}
-    >
-      <View style={[styles.item, { backgroundColor: moduleBackground }]}>
-        <Text style={[styles.date, { color: dateColor }]}>
-          {new Date(item.timestamp).toLocaleString(undefined, {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true,
-          })}
-        </Text>
-        <Text style={[styles.detail, { color: detailColor }]}>
-          Points: {item.points}
-        </Text>
-        <Text style={[styles.detail, { color: detailColor }]}>
-          Duration: {formatDuration(item.duration) ?? 'N/A'}
-        </Text>
-        <Text
-          style={[
-            styles.detail,
-            { color: item.distracted ? distractedColor : focusedColor },
-          ]}
-        >
-          {item.distracted ? 'Distracted' : 'Focused'}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
-
-
   return (
-    <>
+    <Screen>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <ScreenHeader
+          eyebrow="Drives"
+          title="My drives"
+          subtitle="Every trip, logged and scored."
+        />
 
-      <LinearGradient
-        colors={[sheetGradientBottom, sheetGradientTop]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={styles.background}
-      >
-        <View style={styles.overlay}>
-          <Text style={[styles.title, {color: titleColor}]}>My Drives</Text>
+        <Section label="Summary">
+          <Card>
+            <View style={{ flexDirection: 'row' }}>
+              <StatCell t={t} label="Drives" value={String(drives.length)} />
+              <Divider t={t} />
+              <StatCell
+                t={t}
+                label="Focused"
+                value={String(focusedCount)}
+                color={t.colors.accent}
+              />
+              <Divider t={t} />
+              <StatCell
+                t={t}
+                label="Distracted"
+                value={
+                  percentDistracted !== null ? `${percentDistracted.toFixed(0)}%` : '—'
+                }
+                color={percentColor}
+              />
+            </View>
+          </Card>
+        </Section>
 
-          <FlatList
-            style={styles.list}
-            data={drives.slice(0, visibleCount)}
-            keyExtractor={(_, index) => index.toString()}
-            renderItem={renderItem}
-            ListEmptyComponent={<View style={styles.emptyContainer}>
-              <Text style={styles.empty}>No drives yet.</Text>
-            </View>}
-            ListFooterComponent={
-              visibleCount < drives.length ? (
-                <TouchableOpacity
+        <Section label="History">
+          <Card padded={false}>
+            {drives.length === 0 ? (
+              <View style={{ paddingVertical: 36, paddingHorizontal: 20, alignItems: 'center' }}>
+                <View
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 24,
+                    backgroundColor: t.colors.accentFaint,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 12,
+                  }}
+                >
+                  <Ionicons name="car-outline" size={22} color={t.colors.accent} />
+                </View>
+                <Text
+                  style={[t.typography.subheading, { color: t.colors.text, marginBottom: 4 }]}
+                >
+                  No drives yet
+                </Text>
+                <Text
                   style={[
-                    styles.loadMoreButton,
+                    t.typography.caption,
+                    { color: t.colors.textMuted, textAlign: 'center', maxWidth: 260 },
+                  ]}
+                >
+                  Start a drive from the dashboard to begin earning points.
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={drives.slice(0, visibleCount)}
+                keyExtractor={(_, i) => i.toString()}
+                scrollEnabled={false}
+                renderItem={renderItem}
+              />
+            )}
+          </Card>
+
+          {visibleCount < drives.length && (
+            <View style={{ marginTop: 12 }}>
+              <Button
+                title="Load more"
+                variant="ghost"
+                onPress={() => setVisibleCount((p) => p + LOAD_BATCH)}
+              />
+            </View>
+          )}
+        </Section>
+
+        {drives.length > 0 && (
+          <Section>
+            <Button
+              title="Clear drive history"
+              variant="danger"
+              icon={<Ionicons name="trash-outline" size={18} color="#fff" />}
+              onPress={clearDriveHistory}
+            />
+          </Section>
+        )}
+
+        <View style={{ height: 32 }} />
+      </ScrollView>
+
+      <Modal
+        visible={showModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowModal(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 24,
+          }}
+        >
+          <Card style={{ width: '100%', maxWidth: 460 }}>
+            {selectedDrive && (
+              <>
+                <Text
+                  style={[
+                    t.typography.micro,
                     {
-                      backgroundColor: '#d3d3d323',
-                      marginBottom: 20,
-                      marginTop: 10,
-                      paddingHorizontal: 90,
+                      color: t.colors.textMuted,
+                      textTransform: 'uppercase',
+                      letterSpacing: 1.2,
+                      marginBottom: 6,
                     },
                   ]}
-                  onPress={() => setVisibleCount(prev => prev + LOAD_BATCH)}
                 >
-                  <Text style={styles.loadMoreButtonText}>Load More</Text>
-                </TouchableOpacity>
-              ) : null
-            }
-          />
+                  Drive details
+                </Text>
+                <Text style={[t.typography.heading, { color: t.colors.text }]}>
+                  {new Date(selectedDrive.timestamp).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true,
+                  })}
+                </Text>
+                <Text
+                  style={[
+                    t.typography.bodyStrong,
+                    {
+                      color: selectedDrive.distracted ? t.colors.danger : t.colors.accent,
+                      marginTop: 6,
+                      marginBottom: 18,
+                    },
+                  ]}
+                >
+                  {selectedDrive.distracted ? 'Distracted drive' : 'Focused drive'}
+                </Text>
 
-          <TouchableOpacity onPress={clearDriveHistory} style={[styles.trashButton, {backgroundColor: moduleBackground}]}>
-            <Ionicons name="trash-outline" size={30} color={titleColor} />
-          </TouchableOpacity>
-        </View>
-        <Modal
-          visible={showModal}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={() => setShowModal(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, { backgroundColor: modalBackground }]}>
-              {selectedDrive && (
-                <>
-                  <View style={styles.modalHeader}>
-                    <Text style={[styles.modalTitle, { color: titleColor }]}>Drive Details</Text>
-                    <Text style={[styles.modalDate, { color: detailColor }]}>
-                      {new Date(selectedDrive.timestamp).toLocaleString()}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.driveType,
-                        { color: selectedDrive.distracted ? distractedColor : focusedColor },
-                      ]}
-                    >
-                      {selectedDrive.distracted ? "Distracted Drive" : "Focused Drive"}
-                    </Text>
-                  </View>
+                <ModalStat t={t} label="Distractions" value={selectedDrive.distracted ?? 0} first />
+                <ModalStat t={t} label="Sudden stops" value={selectedDrive.suddenStops ?? 0} />
+                <ModalStat
+                  t={t}
+                  label="Sudden accelerations"
+                  value={selectedDrive.suddenAccelerations ?? 0}
+                />
+                <ModalStat
+                  t={t}
+                  label="Speeding events"
+                  value={selectedDrive.speedingEvents ?? 0}
+                />
+                <ModalStat t={t} label="Points" value={selectedDrive.points} accent />
+                <ModalStat
+                  t={t}
+                  label="Distance"
+                  value={formatDistance(selectedDrive.totalDistance)}
+                />
+                <ModalStat t={t} label="Duration" value={formatDuration(selectedDrive.duration)} />
+                <ModalStat
+                  t={t}
+                  label="Avg speed"
+                  value={
+                    selectedDrive.avgSpeed?.toFixed
+                      ? `${selectedDrive.avgSpeed.toFixed(1)}`
+                      : 'N/A'
+                  }
+                />
+              </>
+            )}
 
-                  <View style={styles.statsContainer}>
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Distractions</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.distracted}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Sudden Stops</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.suddenStops ?? 0}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Sudden Accelerations</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.suddenAccelerations ?? 0}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Speeding Events</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.speedingEvents ?? 0}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Points</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.points}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Distance</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {formatDistance(selectedDrive.totalDistance)}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Duration</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {formatDuration(selectedDrive.duration)}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.statBox, {backgroundColor: statBackground}]}>
-                      <Text style={[styles.statLabel, {color: detailColor}]}>Average Speed</Text>
-                      <Text style={[styles.statValue, { color: textColor }]}>
-                        {selectedDrive.avgSpeed?.toFixed?.(1) ?? "N/A"}
-                      </Text>
-                    </View>
-                  </View>
-                </>
-              )}
-
-              <TouchableOpacity
-                onPress={() => setShowModal(false)}
-                style={[styles.closeButton, { backgroundColor: "#444" }]}
-              >
-                <Text style={styles.closeButtonText}>Close</Text>
-              </TouchableOpacity>
+            <View style={{ marginTop: 20 }}>
+              <Button title="Close" variant="ghost" onPress={() => setShowModal(false)} />
             </View>
-          </View>
-
-        </Modal>
-      </LinearGradient>
-    </>
+          </Card>
+        </View>
+      </Modal>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  background: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-  },
-  overlay: {
-    flex: 1,
-    paddingTop: width/25,
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
-  },
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#111',
-  },
-  statsButton: {
-    position: 'absolute',
-    top: height/10,
-    right: width/15,
-  },
-  list: {
-    marginBottom: height/300,
-    padding: 24,
-    borderRadius: 10,
-  },
-  title: {
-    fontSize: width/12,
-    fontWeight: 'bold',
-    marginTop: height/12,
-    marginBottom: height/50,
-    alignSelf: 'center',
-  },
-  item: {
-    marginBottom: height / 66.7,    
-    padding: width / 25,        
-    borderRadius: width / 37.5,    
-  },
-  date: { 
-    fontSize: 16,        
-    marginBottom: height / 133.4,     
-  },
-  detail: { 
-    fontSize: 14,    
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    height: height * 0.6,
-  },
-  empty: {
-    color: "#aaa",
-    fontSize: 20,
-    textAlign: "center",
-  },
-  trashButton: {
-    position: 'absolute',
-    bottom: height/25,
-    right: width/16,
-    padding: 8,         
-    borderRadius: 30,   
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
-    borderWidth: 2,
-    borderColor: "#ff4444ff",
-  },
-  loadMoreButton: {
-    width: "100%",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignSelf: 'center',
-    marginTop: height / (667/20),
-    marginBottom: height / (667/16),
-    marginTop: height / 13.3, 
-  },
-  loadMoreButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    alignSelf: "center"
-  },
-    modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '85%',
-    padding: 20,
-    borderRadius: 12,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  modalText: {
-    fontSize: 16,
-    marginVertical: 4,
-  },
-  closeButton: {
-    marginTop: 20,
-    padding: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  closeButtonText: {
-    fontSize: 16,
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    width: "90%",
-    borderRadius: 20,
-    padding: 20,
-  },
-  modalHeader: {
-    marginBottom: 15,
-  },
-  modalTitle: {
-    fontSize: 26,
-    fontWeight: "bold",
-  },
-  modalDate: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  driveType: {
-    marginTop: 8,
-    fontWeight: "600",
-    fontSize: 16,
-  },
-  statsContainer: {
-    marginTop: 10,
-  },
-  statBox: {
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: 8,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  statLabel: {
-    fontSize: 15,
-    color: "#888",
-  },
-  statValue: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  closeButton: {
-    marginTop: 20,
-    alignSelf: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 30,
-    borderRadius: 10,
-  },
-  closeButtonText: {
-    color: "white",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-});
+function StatCell({ t, label, value, color }) {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', paddingVertical: 6 }}>
+      <Text
+        style={[
+          t.typography.micro,
+          {
+            color: t.colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 1.1,
+            marginBottom: 6,
+          },
+        ]}
+      >
+        {label}
+      </Text>
+      <AutoFitText style={[t.typography.numeric, { color: color || t.colors.text }]}>
+        {value}
+      </AutoFitText>
+    </View>
+  );
+}
+
+function Divider({ t }) {
+  return (
+    <View
+      style={{
+        width: StyleSheet.hairlineWidth,
+        backgroundColor: t.colors.divider,
+        marginVertical: 4,
+      }}
+    />
+  );
+}
+
+function ModalStat({ t, label, value, first, accent }) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+        borderTopColor: t.colors.divider,
+      }}
+    >
+      <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>{label}</Text>
+      <Text
+        style={[
+          t.typography.bodyStrong,
+          { color: accent ? t.colors.accent : t.colors.text },
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}

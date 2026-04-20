@@ -12,5 +12,8 @@
       ],
       "predeploy": []
     }
-  ]
+  ],
+  "firestore": {
+    "rules": "firestore.rules"
+  }
 }

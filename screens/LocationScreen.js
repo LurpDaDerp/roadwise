@@ -3,16 +3,17 @@ import { StyleSheet, View, Text, TouchableOpacity, TextInput, ActivityIndicator,
 import MapView, { Marker, AnimatedRegion } from "react-native-maps";
 import * as Location from "expo-location";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayRemove, arrayUnion, onSnapshot, deleteField, collection, getDocs, query, where } from "firebase/firestore";
-import { getHereKey } from "../utils/firestore";
+import { fetchHereAutocomplete } from "../utils/here";
 import { auth } from '../utils/firebase';
 import { ThemeContext } from "../context/ThemeContext";
+import { useTheme, SafeGradient, AutoFitText } from "../theme";
 import BottomSheet, { BottomSheetView, BottomSheetSectionList } from "@gorhom/bottom-sheet";
-import { LinearGradient } from 'expo-linear-gradient';
+const LinearGradient = SafeGradient;
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import debounce from "lodash.debounce";
 import { Ionicons } from "@expo/vector-icons";
-import { startLocationUpdates, stopLocationUpdates } from "../utils/LocationService";
+import { startLocationUpdates, stopLocationUpdates, updateCachedGroupId } from "../utils/LocationService";
 import * as Clipboard from "expo-clipboard"; 
 import * as Notifications from "expo-notifications";
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,6 +21,42 @@ import { Image, Modal } from "react-native";
 
 const db = getFirestore();
 const { width, height } = Dimensions.get('window');
+
+function PulseRing() {
+  const scale = useRef(new Animated.Value(0.2)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.parallel([
+        Animated.sequence([
+          Animated.timing(scale, { toValue: 2.5, duration: 1000, useNativeDriver: true }),
+          Animated.timing(scale, { toValue: 0.2, duration: 0, useNativeDriver: true }),
+        ]),
+        Animated.sequence([
+          Animated.timing(opacity, { toValue: 0, duration: 1000, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1, duration: 0, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [scale, opacity]);
+
+  return (
+    <Animated.View
+      style={{
+        position: "absolute",
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: "rgba(255, 58, 48, 0.77)",
+        transform: [{ scale }],
+        opacity,
+      }}
+    />
+  );
+}
 
 function normalizeAddress(addr) {
   if (!addr) return "";
@@ -275,7 +312,6 @@ export default function LocationScreen() {
   const [isMemberModalVisible, setMemberModalVisible] = useState(false);
   const [locations, setLocations] = useState([]);
   const [editingLocation, setEditingLocation] = useState(null);
-  const [HERE_API_KEY, setHereKey] = useState();
   const [addressSuggestions, setAddressSuggestions] = useState([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
@@ -303,74 +339,190 @@ export default function LocationScreen() {
     })
   ).current;
 
-  const PulseRing = () => {
-    const scale = useRef(new Animated.Value(0.2)).current;
-    const opacity = useRef(new Animated.Value(1)).current;
-
-    useEffect(() => {
-      const loop = Animated.loop(
-        Animated.parallel([
-          Animated.sequence([
-            Animated.timing(scale, {
-              toValue: 2.5,
-              duration: 1000,
-              useNativeDriver: true,
-            }),
-            Animated.timing(scale, {
-              toValue: 0.2,
-              duration: 0,
-              useNativeDriver: true,
-            }),
-          ]),
-          Animated.sequence([
-            Animated.timing(opacity, {
-              toValue: 0,
-              duration: 1000,
-              useNativeDriver: true,
-            }),
-            Animated.timing(opacity, {
-              toValue: 1,
-              duration: 0,
-              useNativeDriver: true,
-            }),
-          ]),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    }, [scale, opacity]);
-
-    return (
-      <Animated.View
-        style={{
-          position: "absolute",
-          width: 80,
-          height: 80,
-          borderRadius: 40,
-          backgroundColor: "rgba(255, 58, 48, 0.77)",
-          transform: [{ scale }],
-          opacity,
-        }}
-      />
-    );
-  };
-
-
   const bottomSheetRef = useRef(null);
   const snapPoints = useMemo(() => ["15%", "40%", "90%"], []);
 
+  const memberKeyExtractor = useCallback((item, index) => {
+    if (item.uid) return `member-${item.uid}`;
+    if (item.address) return `loc-${item.name}-${item.address}`;
+    return `idx-${index}`;
+  }, []);
+
+  const renderMemberItem = useCallback(({ item }) => (
+    <TouchableOpacity
+      style={{ marginBottom: 10, flexDirection: "row", alignItems: "center" }}
+      onPress={() => openMemberModal(item)}
+    >
+      {item.photoURL ? (
+        <LinearGradient
+          colors={["#00b386", "#0d3d33"]}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            marginRight: 8,
+            justifyContent: "center",
+            alignItems: "center",
+            overflow: "hidden",
+          }}
+        >
+          <Image
+            source={{ uri: item.photoURL }}
+            style={{ width: "100%", height: "100%", borderRadius: 20 }}
+          />
+        </LinearGradient>
+      ) : (
+        <LinearGradient
+          colors={["#00b386", "#0d3d33"]}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            marginRight: 8,
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "bold" }}>
+            {item.name[0]?.toUpperCase()}
+          </Text>
+        </LinearGradient>
+      )}
+
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
+          <Text style={{ color: textColor, marginRight: 6 }}>
+            {item.name} {item.uid === user?.uid ? "(You)" : ""}
+          </Text>
+
+          {item.emergency && (
+            <View
+              style={{
+                backgroundColor: "#ff3b30",
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 10,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 12 }}>
+                Emergency
+              </Text>
+            </View>
+          )}
+          {item.isDriving && (
+            <View
+              style={{
+                backgroundColor: "green",
+                paddingHorizontal: 6,
+                paddingVertical: 2,
+                borderRadius: 10,
+              }}
+            >
+              <Text style={{ color: "white", fontSize: 12 }}>
+                Driving ({((item.coords?.speed ?? 0) * 2.23694).toFixed(1)} mph)
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {item.coords && (
+          <Text style={{ color: altTextColor, fontSize: 12, marginTop: 3 }}>
+            {item.uid === user?.uid
+              ? (myDisplayedAddress || "Unknown")
+              : (item.displayName ? item.displayName : item.address || "Unknown")}
+          </Text>
+        )}
+      </View>
+
+      {item.coords && (
+        <TouchableOpacity
+          onPress={() => {
+            bottomSheetRef.current?.snapToIndex(0);
+            mapRef.current?.animateToRegion(
+              {
+                latitude: item.coords.latitude,
+                longitude: item.coords.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              },
+              500
+            );
+          }}
+          style={{
+            padding: 6,
+            borderRadius: 20,
+            backgroundColor: item.coords?.emergency ? '#ff3b30' : moduleBackground,
+            marginLeft: 10,
+          }}
+        >
+          <Ionicons
+            name={item.coords?.emergency ? 'location-sharp' : 'location-outline'}
+            size={20}
+            color={item.coords?.emergency ? '#ffffff' : textColor}
+          />
+        </TouchableOpacity>
+      )}
+    </TouchableOpacity>
+  ), [textColor, altTextColor, moduleBackground, user?.uid, myDisplayedAddress]);
+
+  const renderLocationItem = useCallback(({ item }) =>
+    item.placeholder ? (
+      <Text style={{ color: altTextColor, fontStyle: "italic", marginTop: 8 }}>
+        No locations yet. Click the button below to add a location.
+      </Text>
+    ) : (
+      <TouchableOpacity
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: 10,
+          backgroundColor: moduleBackground,
+          borderRadius: 8,
+          marginBottom: 8,
+          minHeight: 70,
+        }}
+        onPress={() => {
+          setNewLocationName(item.name);
+          setNewLocationAddress(item.address);
+          setEditingLocation(item);
+          addLocationSheetRef.current?.expand();
+        }}
+      >
+        <View style={{ flexShrink: 1 }}>
+          <Text style={{ color: titleColor, fontWeight: "bold" }}>
+            {item.name}
+          </Text>
+          <Text style={{ color: altTextColor, fontSize: 12, marginRight: 5, marginTop: 3 }}>
+            {item.address}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={24} color={altTextColor} />
+      </TouchableOpacity>
+    ), [titleColor, altTextColor, moduleBackground]);
+
+  const sectionList = useMemo(() => ([
+    { title: "Members", data: members, renderItem: renderMemberItem },
+    {
+      title: "Locations",
+      data: locations.length ? locations : [{ placeholder: true }],
+      renderItem: renderLocationItem,
+    },
+  ]), [members, locations, renderMemberItem, renderLocationItem]);
+
   const { resolvedTheme } = useContext(ThemeContext);
   const isDark = resolvedTheme === "dark";
+  const t = useTheme();
 
-  const backgroundColor = isDark ? "#070707cc" : "#ffffffcc";
-  const bottomSheetBackground = isDark ? "#131313ff" : "#ffffff"; 
-  const moduleBackground = isDark ? '#2c2c2cff' : '#ddddddff';
-  const titleColor = isDark ? "#fff" : "#000";
-  const textColor = isDark ? "#fff" : "#000";
-  const altTextColor = isDark ? '#aaa' : '#555';
-  const buttonColor = isDark ? `rgba(56, 118, 252, 1)` : `rgba(69, 146, 235, 1)`;
-  const sheetGradientTop = isDark ? "#1f1f1fe1" : "#ffffffcc"; 
-  const sheetGradientBottom = isDark ? "#0d061be1" : "#c0c0c0d0"; 
+  const backgroundColor = isDark ? "rgba(7,10,12,0.8)" : "rgba(247,249,251,0.85)";
+  const bottomSheetBackground = t.colors.surface;
+  const moduleBackground = t.colors.surfaceRaised || t.colors.surface;
+  const titleColor = t.colors.text;
+  const textColor = t.colors.text;
+  const altTextColor = t.colors.textMuted;
+  const buttonColor = t.colors.accent;
+  const sheetGradientTop = t.colors.gradientTop;
+  const sheetGradientBottom = t.colors.gradientBottom;
 
   const user = auth.currentUser;
 
@@ -485,26 +637,47 @@ export default function LocationScreen() {
   }
 
   useEffect(() => {
-    const subscription = Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.Highest,
-        distanceInterval: 1,
-        timeInterval: 1000,
-      },
-      (loc) => {
-        const { latitude, longitude } = loc.coords;
-        setLocation({ latitude, longitude });
+    let sub = null;
+    let cancelled = false;
+    let runningAnim = null;
 
-        myAnimatedCoord.timing({
-          latitude,
-          longitude,
-          duration: 1000,
-          useNativeDriver: false,
-        }).start();
+    (async () => {
+      try {
+        const created = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 5,
+            timeInterval: 2000,
+          },
+          (loc) => {
+            if (cancelled) return;
+            const { latitude, longitude } = loc.coords;
+            setLocation({ latitude, longitude });
+
+            runningAnim = myAnimatedCoord.timing({
+              latitude,
+              longitude,
+              duration: 1000,
+              useNativeDriver: false,
+            });
+            runningAnim.start();
+          }
+        );
+        if (cancelled) {
+          created?.remove?.();
+        } else {
+          sub = created;
+        }
+      } catch (err) {
+        console.warn("watchPositionAsync failed:", err);
       }
-    );
+    })();
 
-    return () => subscription.then((sub) => sub.remove());
+    return () => {
+      cancelled = true;
+      runningAnim?.stop?.();
+      sub?.remove?.();
+    };
   }, []);
 
 
@@ -661,7 +834,7 @@ export default function LocationScreen() {
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
           {
             headers: {
-              "User-Agent": "RoadCash/1.0 (lurpdaderp@gmail.com)",
+              "User-Agent": "RoadCash/1.0 (contact@roadcash.app)",
               "Accept": "application/json",
             },
           }
@@ -723,14 +896,18 @@ export default function LocationScreen() {
       normalizedAddress: normalizeAddress(loc.address),
     }));
 
+    let cancelled = false;
     getAddressForUser(
       user.uid,
       { location },
       locations,
       normalizedSavedLocations
     ).then((result) => {
+      if (cancelled) return;
       setMyDisplayedAddress(result.displayName || result.address || "Unknown");
     });
+
+    return () => { cancelled = true; };
   }, [location, locations]);
 
 
@@ -749,197 +926,214 @@ export default function LocationScreen() {
   useFocusEffect(
     useCallback(() => {
       purgeOldGeocodeCache();
-      const loadAPIKey = async () => {
-        const key = await getHereKey("HERE_API_KEY");
-        setHereKey(key);
-      };
-      
-      loadAPIKey();
     }, [])
   );
 
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!groupId) return;
+  useEffect(() => {
+    if (!groupId) return;
 
-      const groupRef = doc(db, "groups", groupId);
+    let cancelled = false;
+    const groupRef = doc(db, "groups", groupId);
+    const pendingAddressFetches = new Set();
 
-      const unsubGroup = onSnapshot(groupRef, async (groupSnap) => {
-        if (!groupSnap.exists()) return;
+    const commitMembers = (memberLocations) => {
+      const memberIds = Object.keys(memberLocations);
+      setMembers((prev) => {
+        const prevMap = new Map(prev.map((m) => [m.uid, m]));
+        let changed = false;
 
-        const groupData = groupSnap.data();
-        const memberLocations = groupData.memberLocations || {};
-        const savedLocations = groupData.savedLocations || [];
-        const memberIds = Object.keys(memberLocations);
-        setGroupName(groupData.groupName || "");
-        setLocations(groupData.savedLocations || []);
+        memberIds.forEach((uid) => {
+          const coords = memberLocations[uid] || {};
+          const profile = memberProfilesRef.current?.[uid];
+          const prevItem = prevMap.get(uid);
+          const name = profile?.name ?? prevItem?.name ?? coords?.username ?? "Member";
+          const photoURL = profile?.photoURL ?? prevItem?.photoURL ?? coords?.photoURL ?? null;
 
-        const missing = memberIds.filter(id => !memberProfilesRef.current[id]);
-        if (missing.length > 0) {
-          await fetchProfilesOnce(missing);
-        }
+          const nextLat = coords?.latitude ?? prevItem?.coords?.latitude ?? null;
+          const nextLng = coords?.longitude ?? prevItem?.coords?.longitude ?? null;
+          const nextSpeed = coords?.speed ?? prevItem?.coords?.speed ?? 0;
+          const nextUpdatedAt = coords?.updatedAt ?? prevItem?.coords?.updatedAt ?? null;
+          const nextEmergency = coords?.emergency ?? prevItem?.coords?.emergency ?? false;
+          const nextIsDriving = (nextSpeed ?? 0) > 10;
 
-        const normalizedSavedLocations = savedLocations.map((loc) => ({
-          ...loc,
-          normalizedAddress: normalizeAddress(loc.address),
-        }));
-
-
-        const updates = await Promise.all(
-          Object.entries(memberLocations).map(async ([uid, coords]) => {
-            let address;
-
-            if (coords?.latitude != null && coords?.longitude != null) {
-              const last = lastLocations.current?.[uid];
-              let shouldFetch = false;
-
-              if (!last) shouldFetch = true;
-              else {
-                const dist = getDistance(
-                  last.latitude,
-                  last.longitude,
-                  coords.latitude,
-                  coords.longitude
-                );
-                if (dist >= 10) shouldFetch = true;
-              }
-
-              if (shouldFetch) {
-                (lastLocations.current || (lastLocations.current = {}))[uid] = {
-                  latitude: coords.latitude,
-                  longitude: coords.longitude,
-                };
-                address = await getAddressForUser(
-                  uid,
-                  { location: coords },
-                  savedLocations,
-                  normalizedSavedLocations
-                );
-              }
-            }
-
-            return { uid, coords, address };
-          })
-        );
-
-
-        setMembers((prev) => {
-          const prevMap = new Map(prev.map((m) => [m.uid, m]));
-          updates.forEach(({ uid, coords, address }) => {
-            const profile = memberProfilesRef.current?.[uid];
-            const name = profile?.name ?? coords?.username ?? "Member";
-            const photoURL = profile?.photoURL ?? coords?.photoURL ?? null;
-
-            const prevItem = prevMap.get(uid);
-
-            let renderCoord = prevItem?.renderCoord;
-            if (
-              coords?.latitude != null &&
-              coords?.longitude != null &&
-              (!renderCoord ||
-                renderCoord.latitude !== coords.latitude ||
-                renderCoord.longitude !== coords.longitude)
-            ) {
-              renderCoord = { latitude: coords.latitude, longitude: coords.longitude };
-            }
-
-            const mergedCoords = {
-              latitude: coords?.latitude ?? prevItem?.coords?.latitude ?? null,
-              longitude: coords?.longitude ?? prevItem?.coords?.longitude ?? null,
-              speed: coords?.speed ?? prevItem?.coords?.speed ?? 0,
-              updatedAt: coords?.updatedAt ?? prevItem?.coords?.updatedAt ?? null,
-              emergency: coords?.emergency ?? prevItem?.coords?.emergency ?? false,
-            };
-
-            prevMap.set(uid, {
-              uid,
-              name,
-              photoURL,
-              coords: mergedCoords, 
-              renderCoord,
-              isDriving: (mergedCoords.speed ?? 0) > 10,
-              emergency: mergedCoords.emergency,
-              displayName: address?.displayName ?? prevItem?.displayName ?? null,
-              address: address?.address ?? prevItem?.address ?? null,
-            });
-
-          });
-
-          for (const oldUid of Array.from(prevMap.keys())) {
-            if (!memberIds.includes(oldUid)) prevMap.delete(oldUid);
+          let renderCoord = prevItem?.renderCoord;
+          if (
+            nextLat != null && nextLng != null &&
+            (!renderCoord || renderCoord.latitude !== nextLat || renderCoord.longitude !== nextLng)
+          ) {
+            renderCoord = { latitude: nextLat, longitude: nextLng };
           }
-          return Array.from(prevMap.values());
+
+          if (
+            prevItem &&
+            prevItem.name === name &&
+            prevItem.photoURL === photoURL &&
+            prevItem.coords?.latitude === nextLat &&
+            prevItem.coords?.longitude === nextLng &&
+            prevItem.coords?.speed === nextSpeed &&
+            prevItem.coords?.updatedAt === nextUpdatedAt &&
+            prevItem.coords?.emergency === nextEmergency &&
+            prevItem.isDriving === nextIsDriving &&
+            prevItem.emergency === nextEmergency &&
+            prevItem.renderCoord === renderCoord
+          ) {
+            return;
+          }
+
+          changed = true;
+          prevMap.set(uid, {
+            uid,
+            name,
+            photoURL,
+            coords: {
+              latitude: nextLat,
+              longitude: nextLng,
+              speed: nextSpeed,
+              updatedAt: nextUpdatedAt,
+              emergency: nextEmergency,
+            },
+            renderCoord,
+            isDriving: nextIsDriving,
+            emergency: nextEmergency,
+            displayName: prevItem?.displayName ?? null,
+            address: prevItem?.address ?? null,
+          });
         });
 
-        if (initialLoad) setInitialLoad(false);
+        for (const oldUid of Array.from(prevMap.keys())) {
+          if (!memberIds.includes(oldUid)) {
+            prevMap.delete(oldUid);
+            changed = true;
+          }
+        }
+
+        if (!changed) return prev;
+        return Array.from(prevMap.values());
+      });
+    };
+
+    const updateMemberAddress = (uid, address) => {
+      if (cancelled) return;
+      setMembers((prev) => {
+        let changed = false;
+        const next = prev.map((m) => {
+          if (m.uid !== uid) return m;
+          const nextDisplayName = address?.displayName ?? m.displayName ?? null;
+          const nextAddress = address?.address ?? m.address ?? null;
+          if (m.displayName === nextDisplayName && m.address === nextAddress) return m;
+          changed = true;
+          return { ...m, displayName: nextDisplayName, address: nextAddress };
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    const unsubGroup = onSnapshot(groupRef, (groupSnap) => {
+      if (cancelled || !groupSnap.exists()) return;
+
+      const groupData = groupSnap.data();
+      const memberLocations = groupData.memberLocations || {};
+      const savedLocations = groupData.savedLocations || [];
+
+      setGroupName(groupData.groupName || "");
+      setLocations(savedLocations);
+
+      commitMembers(memberLocations);
+
+      const memberIds = Object.keys(memberLocations);
+      const missingProfiles = memberIds.filter((id) => !memberProfilesRef.current[id]);
+      if (missingProfiles.length > 0) {
+        fetchProfilesOnce(missingProfiles).then(() => {
+          if (!cancelled) commitMembers(memberLocations);
+        });
+      }
+
+      const normalizedSavedLocations = savedLocations.map((loc) => ({
+        ...loc,
+        normalizedAddress: normalizeAddress(loc.address),
+      }));
+
+      memberIds.forEach((uid) => {
+        const coords = memberLocations[uid];
+        if (coords?.latitude == null || coords?.longitude == null) return;
+
+        const last = lastLocations.current?.[uid];
+        let shouldFetch = !last;
+        if (last) {
+          const dist = getDistance(last.latitude, last.longitude, coords.latitude, coords.longitude);
+          if (dist >= 10) shouldFetch = true;
+        }
+        if (!shouldFetch) return;
+
+        const fetchKey = `${uid}:${coords.latitude.toFixed(5)}:${coords.longitude.toFixed(5)}`;
+        if (pendingAddressFetches.has(fetchKey)) return;
+        pendingAddressFetches.add(fetchKey);
+
+        (lastLocations.current || (lastLocations.current = {}))[uid] = {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        };
+
+        getAddressForUser(uid, { location: coords }, savedLocations, normalizedSavedLocations)
+          .then((address) => updateMemberAddress(uid, address))
+          .catch(() => {})
+          .finally(() => pendingAddressFetches.delete(fetchKey));
       });
 
-      return () => {
-        return unsubGroup();
-      };
-      
-    }, [groupId])
-  );
+      if (initialLoad && !cancelled) setInitialLoad(false);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubGroup();
+    };
+  }, [groupId]);
 
 
 
   //group management logic
   useEffect(() => {
+    let cancelled = false;
+
     const checkGroup = async () => {
       if (!user) return;
 
       const userRef = doc(db, "users", user.uid);
       const snapshot = await getDoc(userRef);
+      if (cancelled) return;
 
-      if (snapshot.exists() && snapshot.data().groupId) {
-        setGroupId(snapshot.data().groupId);
-      } 
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setUserData(data);
+        if (data.groupId) setGroupId(data.groupId);
+      }
       setLoading(false);
-
     };
-    
+
     checkGroup();
 
-    contentOpacity.setValue(0); 
+    contentOpacity.setValue(0);
     fadeInContent();
 
-  }, []);
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      const userRef = doc(db, "users", user.uid);
-      const docSnap = await getDoc(userRef);
-      if (docSnap.exists()) {
-        setUserData(docSnap.data());
-      }
-    };
-
-    fetchUser();
+    return () => { cancelled = true; };
   }, []);
 
 
   const fetchAddressSuggestions = useCallback(async (query) => {
-    if (!query.trim() || !HERE_API_KEY) {
+    if (!query.trim()) {
       setAddressSuggestions([]);
       return;
     }
 
     setIsFetchingSuggestions(true);
     try {
-      const res = await fetch(
-        `https://autocomplete.search.hereapi.com/v1/autocomplete?q=${encodeURIComponent(query)}&apiKey=${HERE_API_KEY}`
-      );
-      const data = await res.json();
-      if (data.items) {
-        setAddressSuggestions(data.items);
-      }
-    } catch (err) {
-      console.error("HERE API error:", err);
+      const items = await fetchHereAutocomplete(query);
+      setAddressSuggestions(items);
     } finally {
       setIsFetchingSuggestions(false);
     }
-  }, [HERE_API_KEY]); 
+  }, []);
 
   const debouncedFetch = useMemo(
     () => debounce(fetchAddressSuggestions, 500),
@@ -963,9 +1157,10 @@ export default function LocationScreen() {
     const newGroupId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const userRef = doc(db, "users", user.uid);
 
-    startLocationUpdates();
-
     await setDoc(userRef, { groupId: newGroupId }, { merge: true });
+    await updateCachedGroupId(user.uid, newGroupId);
+
+    startLocationUpdates();
 
     setGroupId(newGroupId);
     setIsCreating(false);
@@ -986,6 +1181,7 @@ export default function LocationScreen() {
     const userRef = doc(db, "users", user.uid);
 
     await setDoc(userRef, { groupId: gid }, { merge: true });
+    await updateCachedGroupId(user.uid, gid);
 
     startLocationUpdates();
 
@@ -1051,6 +1247,7 @@ export default function LocationScreen() {
     const groupRef = doc(db, "groups", groupId);
 
     await setDoc(userRef, { groupId: null }, { merge: true });
+    await updateCachedGroupId(user.uid, null);
 
     await updateDoc(groupRef, {
       [`memberLocations.${user.uid}`]: deleteField(),
@@ -1058,7 +1255,7 @@ export default function LocationScreen() {
 
     setGroupId(null);
 
-    stopLocationUpdates(); 
+    stopLocationUpdates();
   };
 
   const fillAddressFromOnscreen = async () => {
@@ -1106,17 +1303,15 @@ export default function LocationScreen() {
   const nameInputRef = useRef(null);
   const addressInputRef = useRef(null);
 
-  const background = (props) => {
-    return (
-      <LinearGradient
-        colors={[sheetGradientTop, sheetGradientBottom]}
-        style={[
-          { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-          props.style,
-        ]}
-      />
-    );
-  };
+  const background = useCallback((props) => (
+    <LinearGradient
+      colors={[sheetGradientTop, sheetGradientBottom]}
+      style={[
+        { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+        props.style,
+      ]}
+    />
+  ), [sheetGradientTop, sheetGradientBottom]);
 
   if (loading) {
     return (
@@ -1246,74 +1441,201 @@ export default function LocationScreen() {
 
 
         {!groupId && !isCreating && (
-          <LinearGradient
-            colors={['#140536ff', '#37128fff', '#450074ff']} 
-            style={styles.joinPanel}
-          >
-            <Text style={[styles.starttitle, { color: "#fff" }]}>
-              RoadWise Groups
+          <View style={[styles.joinPanelNew, { backgroundColor: t.colors.bg }]}>
+            <Text
+              style={[
+                t.typography.micro,
+                { color: t.colors.accent, marginBottom: 10 },
+              ]}
+            >
+              Family Safety
+            </Text>
+            <Text style={[t.typography.title, { color: titleColor, marginBottom: 8 }]}>
+              RoadCash Groups
+            </Text>
+            <Text
+              style={[
+                t.typography.body,
+                { color: altTextColor, marginBottom: 24, maxWidth: 320 },
+              ]}
+            >
+              Stay connected with the drivers who matter. Create a group, or join one with a code.
             </Text>
 
-            <Text style={[styles.startsubtitle, { color: "#fff" }]}>
-              Join or Create a Group
-            </Text>
-
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: buttonColor }]}
-              onPress={handleStartCreateGroup}
+            <View
+              style={{
+                width: "100%",
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radius.lg,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: t.colors.border,
+                padding: 20,
+                marginBottom: 16,
+              }}
             >
-              <Text style={styles.buttonText}>Create Group</Text>
-            </TouchableOpacity>
+              <Text
+                style={[
+                  t.typography.micro,
+                  {
+                    color: t.colors.textMuted,
+                    textTransform: "uppercase",
+                    letterSpacing: 1.1,
+                    marginBottom: 12,
+                  },
+                ]}
+              >
+                Create new
+              </Text>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: buttonColor,
+                  paddingVertical: 14,
+                  borderRadius: t.radius.md,
+                  alignItems: "center",
+                }}
+                onPress={handleStartCreateGroup}
+              >
+                <Text style={{ color: t.colors.accentText, fontWeight: "700", fontSize: 15 }}>
+                  Create group
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-            <Text style={[styles.orText, { color: "#fff" }]}>OR</Text>
-
-            <TextInput
-              style={[styles.input, { color: textColor }]}
-              placeholder="Enter group code"
-              value={joinCode}
-              autoCapitalize="characters"
-              onChangeText={(text) => setJoinCode(text.toUpperCase())}
-            />
-
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: buttonColor }]}
-              onPress={handleJoinGroup}
+            <View
+              style={{
+                width: "100%",
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radius.lg,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: t.colors.border,
+                padding: 20,
+              }}
             >
-              <Text style={styles.buttonText}>Join Group</Text>
-            </TouchableOpacity>
-          </LinearGradient>
+              <Text
+                style={[
+                  t.typography.micro,
+                  {
+                    color: t.colors.textMuted,
+                    textTransform: "uppercase",
+                    letterSpacing: 1.1,
+                    marginBottom: 12,
+                  },
+                ]}
+              >
+                Join existing
+              </Text>
+              <TextInput
+                style={{
+                  backgroundColor: t.colors.surfaceAlt,
+                  borderWidth: 1,
+                  borderColor: t.colors.border,
+                  borderRadius: t.radius.md,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  color: textColor,
+                  fontSize: 15,
+                  letterSpacing: 2,
+                  marginBottom: 12,
+                }}
+                placeholder="GROUP CODE"
+                placeholderTextColor={t.colors.textSubtle}
+                value={joinCode}
+                autoCapitalize="characters"
+                onChangeText={(text) => setJoinCode(text.toUpperCase())}
+              />
+              <TouchableOpacity
+                style={{
+                  backgroundColor: "transparent",
+                  borderWidth: 1,
+                  borderColor: t.colors.borderStrong,
+                  paddingVertical: 14,
+                  borderRadius: t.radius.md,
+                  alignItems: "center",
+                }}
+                onPress={handleJoinGroup}
+              >
+                <Text style={{ color: t.colors.text, fontWeight: "700", fontSize: 15 }}>
+                  Join group
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         )}
 
         {!groupId && isCreating && (
-          <LinearGradient
-            colors={['#140536ff', '#37128fff', '#450074ff']} 
-            style={styles.joinPanel}
-          >
-            <Text style={[styles.title, { color: "#fff" }]}>
-              Enter a Group Name
+          <View style={[styles.joinPanelNew, { backgroundColor: t.colors.bg }]}>
+            <Text
+              style={[
+                t.typography.micro,
+                { color: t.colors.accent, marginBottom: 10 },
+              ]}
+            >
+              New group
+            </Text>
+            <Text style={[t.typography.title, { color: titleColor, marginBottom: 24 }]}>
+              Name your group
             </Text>
 
-            <TextInput
-              style={[styles.input, { color: textColor }]}
-              placeholder="Group name"
-              value={groupName}
-              onChangeText={setGroupName}
-            />
-
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: buttonColor }]}
-              onPress={handleConfirmCreateGroup}
+            <View
+              style={{
+                width: "100%",
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radius.lg,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: t.colors.border,
+                padding: 20,
+              }}
             >
-              <Text style={styles.buttonText}>Confirm</Text>
-            </TouchableOpacity>
+              <TextInput
+                style={{
+                  backgroundColor: t.colors.surfaceAlt,
+                  borderWidth: 1,
+                  borderColor: t.colors.border,
+                  borderRadius: t.radius.md,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  color: textColor,
+                  fontSize: 15,
+                  marginBottom: 14,
+                }}
+                placeholder="Group name"
+                placeholderTextColor={t.colors.textSubtle}
+                value={groupName}
+                onChangeText={setGroupName}
+              />
 
-            <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={() => setIsCreating(false)}
-            >
-              <Text style={styles.buttonText}>Cancel</Text>
-            </TouchableOpacity>
-          </LinearGradient>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: buttonColor,
+                  paddingVertical: 14,
+                  borderRadius: t.radius.md,
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+                onPress={handleConfirmCreateGroup}
+              >
+                <Text style={{ color: t.colors.accentText, fontWeight: "700", fontSize: 15 }}>
+                  Confirm
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  backgroundColor: "transparent",
+                  borderWidth: 1,
+                  borderColor: t.colors.borderStrong,
+                  paddingVertical: 14,
+                  borderRadius: t.radius.md,
+                  alignItems: "center",
+                }}
+                onPress={() => setIsCreating(false)}
+              >
+                <Text style={{ color: t.colors.text, fontWeight: "700", fontSize: 15 }}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         )}
 
         {groupId && (
@@ -1323,10 +1645,9 @@ export default function LocationScreen() {
             snapPoints={snapPoints}
             backgroundComponent={background}
             handleIndicatorStyle={{ backgroundColor: altTextColor }}
-            handleStyle={{ 
-                height: 40, 
-                backgroundColor: "#cccccc0", 
-                borderRadius: 10 
+            handleStyle={{
+                height: 32,
+                backgroundColor: "transparent",
             }}
           >
               {initialLoad ? (
@@ -1335,204 +1656,73 @@ export default function LocationScreen() {
                 </View>
               ) : (
               <BottomSheetSectionList
-                stickySectionHeadersEnabled={false} 
+                stickySectionHeadersEnabled={false}
                 contentContainerStyle={{ paddingHorizontal: 24 }}
-                sections={[
-                 {
-                    title: "Members",
-                    data: members,
-                    renderItem: ({ item }) => (
-                      <TouchableOpacity
-                        style={{ marginBottom: 10, flexDirection: "row", alignItems: "center" }}
-                        onPress={() => openMemberModal(item)}
-                      >
-                        
-                        {item.photoURL ? (
-                          <LinearGradient
-                            colors={["#838383ff", "#252525ff"]}
-                            style={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: 20,
-                              marginRight: 8,
-                              justifyContent: "center",
-                              alignItems: "center",
-                              overflow: "hidden", // clip child image
-                            }}
-                          >
-                            <Image
-                              source={{ uri: item.photoURL }}
-                              style={{
-                                width: "100%",
-                                height: "100%",
-                                borderRadius: 20,
-                              }}
-                            />
-                          </LinearGradient>
-                        ) : (
-                          <LinearGradient
-                            colors={["#838383ff", "#252525ff"]}
-                            style={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: 20,
-                              marginRight: 8,
-                              justifyContent: "center",
-                              alignItems: "center",
-                            }}
-                          >
-                            <Text style={{ color: "white", fontWeight: "bold" }}>
-                              {item.name[0]?.toUpperCase()}
-                            </Text>
-                          </LinearGradient>
-                        )}
-
-
-                        <View style={{ flex: 1 }}>
-                          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
-                            <Text style={{ color: textColor, marginRight: 6 }}>
-                              {item.name} {item.uid === user.uid ? "(You)" : ""} 
-                            </Text>
-
-                            {item.emergency && (
-                              <View
-                                style={{
-                                  backgroundColor: "#ff3b30",
-                                  paddingHorizontal: 8,
-                                  paddingVertical: 2,
-                                  borderRadius: 10,
-                                }}
-                              >
-                                <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 12 }}>
-                                  Emergency
-                                </Text>
-                              </View>
-                            )}
-                            {item.isDriving && (
-                              <View
-                                style={{
-                                  backgroundColor: "green",
-                                  paddingHorizontal: 6,
-                                  paddingVertical: 2,
-                                  borderRadius: 10,
-                                }}
-                              >
-                                <Text style={{ color: "white", fontSize: 12 }}>Driving ({((item.coords?.speed ?? 0) * 2.23694).toFixed(1)} mph)</Text>
-                              </View>
-                            )}
-                            
-                          </View>
-
-                          {item.coords && (
-                            <Text style={{ color: altTextColor, fontSize: 12, marginTop: 3 }}>
-                              {item.uid === user.uid
-                                ? (myDisplayedAddress || "Unknown")
-                                : (item.displayName ? item.displayName : item.address || "Unknown")}
-                            </Text>
-                          )}
-                        </View>
-
-                        {item.coords && (
-                          <TouchableOpacity
-                            onPress={() => {
-                              bottomSheetRef.current?.snapToIndex(0);
-                              mapRef.current?.animateToRegion(
-                                {
-                                  latitude: item.coords.latitude,
-                                  longitude: item.coords.longitude,
-                                  latitudeDelta: 0.01,
-                                  longitudeDelta: 0.01,
-                                },
-                                500
-                              );
-                            }}
-                            style={{
-                              padding: 6,
-                              borderRadius: 20,
-                              backgroundColor: item.coords?.emergency ? '#ff3b30' : moduleBackground,
-                              marginLeft: 10,
-                            }}
-                          >
-                            <Ionicons
-                              name={item.coords?.emergency ? 'location-sharp' : 'location-outline'}
-                              size={20}
-                              color={item.coords?.emergency ? '#ffffff' : textColor}
-                            />
-                          </TouchableOpacity>
-                        )}
-
-                      </TouchableOpacity>
-                    ),
-                  },
-
-                  {
-                    title: "Locations",
-                    data: locations.length ? locations : [{ placeholder: true }],
-                      renderItem: ({ item }) =>
-                        item.placeholder ? (
-                          <Text style={{ color: altTextColor, fontStyle: "italic", marginTop: 8 }}>
-                            No locations yet. Click the button below to add a location.
-                          </Text>
-                        ) : (
-                          <TouchableOpacity
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              padding: 10,
-                              backgroundColor: moduleBackground,
-                              borderRadius: 8,
-                              marginBottom: 8,
-                              minHeight: 70,
-                            }}
-                            onPress={() => {
-                              setNewLocationName(item.name);
-                              setNewLocationAddress(item.address);
-                              setEditingLocation(item);
-                              openAddLocationSheet();
-                            }}
-                          >
-                            <View style={{ flexShrink: 1 }}>
-                              <Text style={{ color: titleColor, fontWeight: "bold" }}>
-                                {item.name}
-                              </Text>
-                              <Text style={{ color: altTextColor, fontSize: 12, marginRight: 5, marginTop: 3 }}>
-                                {item.address}
-                              </Text>
-                            </View>
-
-                            <Ionicons name="chevron-forward" size={24} color={altTextColor} />
-                          </TouchableOpacity>
-                        ),
-                    },
-                  ]}
-                keyExtractor={(item, index) => {
-                  if (item.uid) return `member-${item.uid}`;
-                  if (item.address) return `loc-${item.name}-${item.address}`;
-                  return `idx-${index}`;
-                }}
+                sections={sectionList}
+                keyExtractor={memberKeyExtractor}
+                removeClippedSubviews
+                initialNumToRender={8}
+                maxToRenderPerBatch={8}
+                windowSize={5}
                 renderSectionHeader={({ section: { title } }) => (
-                  <Text style={[styles.subtitle, { color: titleColor, marginTop: 20 }]}>
+                  <Text
+                    style={[
+                      t.typography.micro,
+                      {
+                        color: t.colors.accent,
+                        marginTop: 22,
+                        marginBottom: 10,
+                        letterSpacing: 1.2,
+                      },
+                    ]}
+                  >
                     {title}
                   </Text>
                 )}
                 ListHeaderComponent={
-                  <Text style={[styles.title, { color: titleColor, marginTop: 10, marginBottom: 5 }]}>{groupName}</Text>
+                  <View style={{ marginTop: 4, marginBottom: 4 }}>
+                    <Text
+                      style={[
+                        t.typography.micro,
+                        { color: t.colors.accent, marginBottom: 6 },
+                      ]}
+                    >
+                      Group
+                    </Text>
+                    <Text style={[t.typography.title, { color: titleColor }]}>
+                      {groupName}
+                    </Text>
+                  </View>
                 }
                 ListFooterComponent={
-                  <View style={{ marginTop: 0 }}>
+                  <View style={{ marginTop: 24, marginBottom: 32 }}>
                     <TouchableOpacity
-                      style={[styles.button, { backgroundColor: buttonColor, marginTop: 10, width: "100%", marginBottom: 40 }]}
+                      style={{
+                        backgroundColor: buttonColor,
+                        paddingVertical: 14,
+                        borderRadius: t.radius.md,
+                        alignItems: "center",
+                        marginBottom: 12,
+                      }}
                       onPress={openAddLocationSheet}
                     >
-                      <Text style={styles.buttonText}>Add a Location</Text>
+                      <Text style={{ color: t.colors.accentText, fontWeight: "700", fontSize: 15 }}>
+                        Add a location
+                      </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.button, { backgroundColor: "#ff2929ff", width: "100%", marginBottom: 20 }]}
+                      style={{
+                        backgroundColor: t.colors.danger,
+                        paddingVertical: 14,
+                        borderRadius: t.radius.md,
+                        alignItems: "center",
+                      }}
                       onPress={confirmLeaveGroup}
                     >
-                      <Text style={styles.buttonText}>Leave Group</Text>
+                      <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
+                        Leave group
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 }
@@ -1738,13 +1928,24 @@ const styles = StyleSheet.create({
 
   joinPanel: {
     position: "absolute",
-    top: 0,  
+    top: 0,
     left: 0,
     right: 0,
     height: "100%",
     paddingHorizontal: width / 30,
     paddingVertical: height / 6,
     alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  joinPanelNew: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 24,
+    paddingTop: height / 8,
+    alignItems: "flex-start",
     justifyContent: "flex-start",
   },
 

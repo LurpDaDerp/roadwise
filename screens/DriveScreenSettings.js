@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useContext } from 'react';
-import {
-  View, Text, StyleSheet, Dimensions, Switch, ScrollView,
-} from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, Switch, ScrollView, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
-import { ThemeContext } from '../context/ThemeContext';
-
-const { width, height } = Dimensions.get('window');
+import {
+  Screen,
+  Section,
+  Card,
+  ScreenHeader,
+  useTheme,
+} from '../theme';
 
 const STORAGE_KEYS = {
   speedUnit: '@speedUnit',
@@ -19,14 +21,7 @@ const STORAGE_KEYS = {
 };
 
 export default function DriveScreenSettings() {
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-
-  const backgroundColor = isDark ? '#0e0e0eff' : '#fff';
-  const titleColor = isDark ? '#fff' : '#000';
-  const textColor = isDark ? '#fff' : '#000';
-  const moduleBackground = isDark ? '#222' : '#ebebebff';
-  const altTextColor = isDark ? '#aaa' : '#555';
+  const t = useTheme();
 
   const [speedUnit, setSpeedUnit] = useState('mph');
   const [warningsEnabled, setWarningsEnabled] = useState(true);
@@ -39,29 +34,22 @@ export default function DriveScreenSettings() {
   useEffect(() => {
     (async () => {
       try {
-        const storedUnit = await AsyncStorage.getItem(STORAGE_KEYS.speedUnit);
-        if (storedUnit === 'mph' || storedUnit === 'kph') setSpeedUnit(storedUnit);
-
-        const storedWarnings = await AsyncStorage.getItem(STORAGE_KEYS.warningsEnabled);
-        if (storedWarnings !== null) setWarningsEnabled(storedWarnings === 'true');
-
-        const storedShowCurrentSpeed = await AsyncStorage.getItem(STORAGE_KEYS.showCurrentSpeed);
-        if (storedShowCurrentSpeed !== null) setShowCurrentSpeed(storedShowCurrentSpeed === 'true');
-
-        const storedShowSpeedLimit = await AsyncStorage.getItem(STORAGE_KEYS.showSpeedLimit);
-        if (storedShowSpeedLimit !== null) setShowSpeedLimit(storedShowSpeedLimit === 'true');
-
-        const storedDisplayMode = await AsyncStorage.getItem(STORAGE_KEYS.displayTotalPoints);
-        if (storedDisplayMode !== null) setDisplayTotalPoints(storedDisplayMode === 'true');
-
-        const storedDistracted = await AsyncStorage.getItem(STORAGE_KEYS.distractedNotificationsEnabled);
-        if (storedDistracted !== null) setDistractedNotificationsEnabled(storedDistracted === 'true');
-
-        const storedAudioSpeedUpdates = await AsyncStorage.getItem(STORAGE_KEYS.audioSpeedUpdatesEnabled);
-        if (storedAudioSpeedUpdates !== null) setAudioSpeedUpdatesEnabled(storedAudioSpeedUpdates === 'true');
-
-      } catch (e) {
-        console.warn('⚠️ Failed to load settings:', e);
+        const u = await AsyncStorage.getItem(STORAGE_KEYS.speedUnit);
+        if (u === 'mph' || u === 'kph') setSpeedUnit(u);
+        const a = await AsyncStorage.getItem(STORAGE_KEYS.warningsEnabled);
+        if (a !== null) setWarningsEnabled(a === 'true');
+        const b = await AsyncStorage.getItem(STORAGE_KEYS.showCurrentSpeed);
+        if (b !== null) setShowCurrentSpeed(b === 'true');
+        const c = await AsyncStorage.getItem(STORAGE_KEYS.showSpeedLimit);
+        if (c !== null) setShowSpeedLimit(c === 'true');
+        const d = await AsyncStorage.getItem(STORAGE_KEYS.displayTotalPoints);
+        if (d !== null) setDisplayTotalPoints(d === 'true');
+        const e = await AsyncStorage.getItem(STORAGE_KEYS.distractedNotificationsEnabled);
+        if (e !== null) setDistractedNotificationsEnabled(e === 'true');
+        const f = await AsyncStorage.getItem(STORAGE_KEYS.audioSpeedUpdatesEnabled);
+        if (f !== null) setAudioSpeedUpdatesEnabled(f === 'true');
+      } catch (err) {
+        console.warn('Failed to load settings:', err);
       }
     })();
   }, []);
@@ -72,77 +60,82 @@ export default function DriveScreenSettings() {
     await AsyncStorage.setItem(STORAGE_KEYS.speedUnit, value);
   };
 
+  const toggles = [
+    { label: 'Show current speed',            desc: 'Large speedometer during drives.', state: showCurrentSpeed,                  setter: setShowCurrentSpeed,                  key: STORAGE_KEYS.showCurrentSpeed },
+    { label: 'Show speed limit',              desc: 'Posted limit for the current road.', state: showSpeedLimit,                   setter: setShowSpeedLimit,                    key: STORAGE_KEYS.showSpeedLimit },
+    { label: 'Audio speed limit updates',     desc: 'Spoken limit changes.', state: audioSpeedUpdatesEnabled,                      setter: setAudioSpeedUpdatesEnabled,          key: STORAGE_KEYS.audioSpeedUpdatesEnabled },
+    { label: 'Speeding warnings',             desc: 'Alert when you exceed the limit.', state: warningsEnabled,                    setter: setWarningsEnabled,                   key: STORAGE_KEYS.warningsEnabled },
+    { label: 'Distracted notifications',      desc: 'Warn when app is not focused.', state: distractedNotificationsEnabled,        setter: setDistractedNotificationsEnabled,    key: STORAGE_KEYS.distractedNotificationsEnabled },
+    { label: 'Show total points',             desc: 'Replace drive points with lifetime total.', state: displayTotalPoints,    setter: setDisplayTotalPoints,                key: STORAGE_KEYS.displayTotalPoints },
+  ];
+
   return (
-    <ScrollView style={[styles.background, { backgroundColor }]}>
-      <View style={[styles.overlay, { backgroundColor }]}>
-        <Text style={[styles.title, { color: titleColor }]}>Drive Settings</Text>
+    <Screen>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <ScreenHeader
+          eyebrow="Settings · Driving"
+          title="Driving"
+          subtitle="How RoadCash behaves while you drive."
+        />
 
-        <View style={styles.settingRow}>
-          <Text style={[styles.settingLabel, { color: textColor }]}>Speed Units</Text>
-          <SegmentedControl
-            values={['MPH', 'KPH']}
-            selectedIndex={speedUnit === 'mph' ? 0 : 1}
-            onChange={(event) => onSpeedUnitChange(event.nativeEvent.selectedSegmentIndex)}
-            style={styles.segmentedControl}
-          />
-        </View>
-
-        {[
-          { label: 'Show Current Speed', state: showCurrentSpeed, setter: (v) => setShowCurrentSpeed(v), key: STORAGE_KEYS.showCurrentSpeed },
-          { label: 'Show Speed Limit', state: showSpeedLimit, setter: (v) => setShowSpeedLimit(v), key: STORAGE_KEYS.showSpeedLimit },
-          { label: 'Audio Speed Limit Updates', state: audioSpeedUpdatesEnabled, setter: (v) => setAudioSpeedUpdatesEnabled(v), key: STORAGE_KEYS.audioSpeedUpdatesEnabled },
-          { label: 'Speeding Warnings', state: warningsEnabled, setter: (v) => setWarningsEnabled(v), key: STORAGE_KEYS.warningsEnabled },
-          { label: 'Distracted Notifications', state: distractedNotificationsEnabled, setter: (v) => setDistractedNotificationsEnabled(v), key: STORAGE_KEYS.distractedNotificationsEnabled },
-          { label: 'Show Total Points', state: displayTotalPoints, setter: (v) => setDisplayTotalPoints(v), key: STORAGE_KEYS.displayTotalPoints },
-        ].map(({ label, state, setter, key }) => (
-          <View key={label} style={styles.settingRowToggle}>
-            <Text style={[styles.settingLabel, { color: textColor }]}>{label}</Text>
-            <Switch
-              value={state}
-              onValueChange={async (value) => {
-                setter(value);
-                await AsyncStorage.setItem(key, value.toString());
-              }}
-              trackColor={{ false: '#767577', true: '#86ff7d' }}
-              thumbColor={state ? '#ffffff' : '#f4f3f4'}
+        <Section label="Units">
+          <Card>
+            <Text style={[t.typography.subheading, { color: t.colors.text, marginBottom: 4 }]}>
+              Speed units
+            </Text>
+            <Text style={[t.typography.caption, { color: t.colors.textMuted, marginBottom: 16 }]}>
+              Used everywhere speed appears.
+            </Text>
+            <SegmentedControl
+              values={['MPH', 'KPH']}
+              selectedIndex={speedUnit === 'mph' ? 0 : 1}
+              onChange={(e) => onSpeedUnitChange(e.nativeEvent.selectedSegmentIndex)}
+              appearance={t.isDark ? 'dark' : 'light'}
+              tintColor={t.colors.accent}
+              style={{ height: 40 }}
             />
-          </View>
-        ))}
+          </Card>
+        </Section>
 
-      </View>
-    </ScrollView>
+        <Section label="In-drive display">
+          <Card padded={false}>
+            {toggles.map((row, i) => (
+              <View
+                key={row.key}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingVertical: 14,
+                  paddingHorizontal: 18,
+                  borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth,
+                  borderTopColor: t.colors.divider,
+                }}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>
+                    {row.label}
+                  </Text>
+                  <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>
+                    {row.desc}
+                  </Text>
+                </View>
+                <Switch
+                  value={row.state}
+                  onValueChange={async (v) => {
+                    row.setter(v);
+                    await AsyncStorage.setItem(row.key, v.toString());
+                  }}
+                  trackColor={{ false: t.isDark ? '#3a3f46' : '#c9cfd6', true: t.colors.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={t.isDark ? '#3a3f46' : '#c9cfd6'}
+                />
+              </View>
+            ))}
+          </Card>
+        </Section>
+
+        <View style={{ height: 24 }} />
+      </ScrollView>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  background: {
-    flex: 1,
-  },
-  overlay: {
-    flex: 1,
-    padding: width / (375 / 24),
-  },
-  title: {
-    fontSize: width / (375 / 32),
-    fontWeight: 'bold',
-    marginTop: height / (667 / 60),
-    marginBottom: height / (667 / 32),
-    alignSelf: 'center',
-  },
-  settingRow: {
-    marginBottom: width / (375 / 16),
-  },
-  settingRowToggle: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: width / (375 / 16),
-  },
-  settingLabel: {
-    fontSize: width / (375 / 16),
-    marginBottom: 12,
-  },
-  segmentedControl: {
-    height: 40,
-  },
-});

@@ -2,12 +2,32 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth } from '../utils/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
 const db = getFirestore();
 const LOCATION_TASK_NAME = 'BACKGROUND_LOCATION_TASK';
+const GROUP_ID_STORAGE_KEY = 'cachedGroupId';
+
+const MIN_DISTANCE_METERS = 25;
+const MIN_TIME_SECONDS = 20;
+const MIN_SPEED_MPS = 1;
+
+async function getCachedGroupId(uid) {
+  const stored = await AsyncStorage.getItem(`${GROUP_ID_STORAGE_KEY}_${uid}`);
+  if (stored !== null) return stored === '__null__' ? null : stored;
+  const userSnap = await getDoc(doc(db, 'users', uid));
+  const groupId = userSnap.exists() ? (userSnap.data().groupId ?? null) : null;
+  await AsyncStorage.setItem(`${GROUP_ID_STORAGE_KEY}_${uid}`, groupId ?? '__null__');
+  return groupId;
+}
+
+export async function updateCachedGroupId(uid, groupId) {
+  if (!uid) return;
+  await AsyncStorage.setItem(`${GROUP_ID_STORAGE_KEY}_${uid}`, groupId ?? '__null__');
+}
 
 function getDistance(loc1, loc2) {
   const R = 6371e3;
@@ -28,15 +48,13 @@ function getDistance(loc1, loc2) {
 let lastLocation = null;
 let lastUpdateTime = 0;
 
-let groupIdCache = { value: null, ts: 0 };
-const GROUP_CACHE_TTL_MS = 60_000; 
-
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) return console.error(error);
   if (!data?.locations?.length) return;
 
   const location = data.locations[0].coords;
   const now = Date.now();
+  const speed = location.speed ?? 0;
 
   let distanceMoved = 0;
   if (lastLocation) {
@@ -46,42 +64,40 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   const timeElapsed = (now - lastUpdateTime) / 1000;
   const isFirstUpdate = !lastLocation;
 
-  if (isFirstUpdate || (distanceMoved >= 10 && timeElapsed >= 10)) {
-    lastLocation = location;
-    lastUpdateTime = now;
-    try {
-      const user = auth.currentUser;
-      if (user) {
-        let groupId = groupIdCache.value;
-        const stale = !groupId || (now - groupIdCache.ts) > GROUP_CACHE_TTL_MS;
+  const shouldWrite =
+    isFirstUpdate ||
+    (distanceMoved >= MIN_DISTANCE_METERS &&
+      timeElapsed >= MIN_TIME_SECONDS &&
+      speed >= MIN_SPEED_MPS);
 
-        if (stale) {
-          const userSnap = await getDoc(doc(db, 'users', user.uid));
-          groupId = userSnap.exists() ? userSnap.data().groupId : null;
-          groupIdCache = { value: groupId, ts: now };
-        }
+  if (!shouldWrite) return;
 
-        if (groupId) {
-          const groupRef = doc(db, 'groups', groupId);
-            await setDoc(
-              groupRef,
-              {
-                memberLocations: {
-                  [user.uid]: {
-                    latitude: location.latitude,
-                    longitude: location.longitude,
-                    speed: location.speed ?? 0,
-                    updatedAt: new Date(),
-                  },
-                },
-              },
-              { merge: true }
-            );
-        }
-      }
-    } catch (err) {
-      console.error('Error updating location:', err);
-    }
+  lastLocation = location;
+  lastUpdateTime = now;
+  try {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    const groupId = await getCachedGroupId(user.uid);
+    if (!groupId) return;
+
+    const groupRef = doc(db, 'groups', groupId);
+    await setDoc(
+      groupRef,
+      {
+        memberLocations: {
+          [user.uid]: {
+            latitude: location.latitude,
+            longitude: location.longitude,
+            speed,
+            updatedAt: new Date(),
+          },
+        },
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.error('Error updating location:', err);
   }
 });
 
@@ -136,8 +152,7 @@ export async function startLocationUpdates() {
     const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
     const coords = current.coords;
 
-    const userSnap = await getDoc(doc(db, 'users', user.uid));
-    const groupId = userSnap.exists() ? userSnap.data().groupId : null;
+    const groupId = await getCachedGroupId(user.uid);
 
     if (groupId) {
       const groupRef = doc(db, 'groups', groupId);
@@ -181,5 +196,8 @@ export async function startLocationUpdates() {
 }
 
 export async function stopLocationUpdates() {
-  await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+  if (hasStarted) {
+    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  }
 }

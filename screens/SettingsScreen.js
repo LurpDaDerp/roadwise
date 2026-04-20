@@ -1,98 +1,95 @@
-import React, { useRef, useCallback, useContext } from 'react';
-import {
-  View, Text, StyleSheet, ImageBackground, TouchableOpacity, FlatList, Dimensions, Animated, Easing,
-} from 'react-native';
+import React, { useRef, useCallback } from 'react';
+import { View, Text, Pressable, Animated, Easing, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { ThemeContext } from '../context/ThemeContext';
+import {
+  Screen,
+  Section,
+  Card,
+  ScreenHeader,
+  useTheme,
+} from '../theme';
 
 const CATEGORIES = [
-  { title: 'General', route: 'GeneralSettings' },
-  { title: 'Safety', route: 'SafetySettings' },
-  { title: 'Driving', route: 'DriveScreenSettings' },
-  { title: 'Account', route: 'AccountSettings' },
+  { title: 'General',  subtitle: 'Appearance & preferences', route: 'GeneralSettings',     icon: 'options-outline' },
+  { title: 'Safety',   subtitle: 'Trusted contacts & alerts', route: 'SafetySettings',     icon: 'shield-checkmark-outline' },
+  { title: 'Driving',  subtitle: 'Drive tracking behavior',   route: 'DriveScreenSettings', icon: 'speedometer-outline' },
+  { title: 'Account',  subtitle: 'Profile, photo, password',  route: 'AccountSettings',    icon: 'person-outline' },
 ];
-
-const { width, height } = Dimensions.get('window');
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
   const contentOpacity = useRef(new Animated.Value(0)).current;
-
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === 'dark';
-  
-  const backgroundColor = isDark ? '#0e0e0eff' : '#fff';
-  const titleColor = isDark ? '#fff' : '#000';
-  const textColor = isDark ? '#fff' : '#000';
-  const moduleBackground = isDark ? '#222' : '#ebebebff';
-  const arrowColor = isDark ? '#ffffffff' : '#444444ff';
-
-  const fadeInContent = useCallback(() => {
-    Animated.timing(contentOpacity, {
-      toValue: 1,
-      duration: 300,
-      easing: Easing.out(Easing.poly(3)),
-      useNativeDriver: true,
-    }).start();
-  }, [contentOpacity]);
+  const t = useTheme();
 
   useFocusEffect(
     useCallback(() => {
-      contentOpacity.setValue(0); // reset opacity
-      fadeInContent(); // animate fade-in
-    }, [fadeInContent])
+      contentOpacity.setValue(0);
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.out(Easing.poly(3)),
+        useNativeDriver: true,
+      }).start();
+    }, [contentOpacity])
   );
 
   return (
-    <View style={[styles.background, {backgroundColor: backgroundColor}]}>
-      <Animated.View style={[styles.overlay, { opacity: contentOpacity }]}>
-        <Text style={[styles.title, {color: titleColor}]}>Settings</Text>
+    <Screen>
+      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+        <ScreenHeader eyebrow="Menu" title="Settings" subtitle="Tune RoadCash to fit you." />
 
-        <FlatList
-          data={CATEGORIES}
-          keyExtractor={(item) => item.title}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.optionRow, {backgroundColor: moduleBackground}]}
-              onPress={() => navigation.navigate(item.route)}
-            >
-              <Text style={[styles.optionText, {color: textColor}]}>{item.title}</Text>
-              <Ionicons name="chevron-forward" size={24} color={arrowColor} />
-            </TouchableOpacity>
-          )}
-        />
+        <Section label="Categories">
+          <Card padded={false}>
+            {CATEGORIES.map((item, i) => (
+              <Pressable
+                key={item.route}
+                onPress={() => navigation.navigate(item.route)}
+                android_ripple={{ color: t.colors.accentFaint }}
+                style={({ pressed }) => [
+                  {
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 16,
+                    paddingHorizontal: 18,
+                    borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth,
+                    borderTopColor: t.colors.divider,
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}
+              >
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 12,
+                    backgroundColor: t.colors.accentFaint,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 14,
+                  }}
+                >
+                  <Ionicons name={item.icon} size={20} color={t.colors.accent} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[t.typography.subheading, { color: t.colors.text }]}>
+                    {item.title}
+                  </Text>
+                  <Text
+                    style={[
+                      t.typography.caption,
+                      { color: t.colors.textMuted, marginTop: 2 },
+                    ]}
+                  >
+                    {item.subtitle}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={t.colors.textSubtle} />
+              </Pressable>
+            ))}
+          </Card>
+        </Section>
       </Animated.View>
-    </View>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  background: { flex: 1 },
-  overlay: { 
-    flex: 1, 
-    padding: 0.07 * width, 
-  },
-  title: {
-    fontSize: width / (375 / 32),
-    fontWeight: 'bold',
-    color: '#fff',
-    marginTop: height / (667 / 45),
-    marginBottom: height / (667 / 32),
-    alignSelf: 'center',
-  },
-  optionRow: {
-    paddingVertical: 18,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.17)',
-    marginBottom: 12,
-    borderRadius: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  optionText: { 
-    fontSize: 16, 
-    color: '#fff' 
-  },
-});
