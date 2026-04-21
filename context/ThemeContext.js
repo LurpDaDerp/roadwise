@@ -37,10 +37,6 @@ export const ThemeProvider = ({ children }) => {
     return () => subscription.remove();
   }, [theme]);
 
-  useEffect(() => {
-  }, [colorScheme]);
-
-
   const updateTheme = async (newTheme) => {
     setTheme(newTheme);
     await AsyncStorage.setItem('@appTheme', newTheme);

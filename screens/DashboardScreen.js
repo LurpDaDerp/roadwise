@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   Animated,
   Pressable,
@@ -13,9 +12,8 @@ import {
   Easing,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { BlurView } from 'expo-blur';
 import { Snackbar } from 'react-native-paper';
 import ConfettiCannon from 'react-native-confetti-cannon';
 
@@ -70,23 +68,6 @@ export function invalidateDashboardUserCache() {
   userDocCache.ts = 0;
 }
 
-const fireImages = {
-  gray: require('../assets/streaks/gray.png'),
-  orange: require('../assets/streaks/orange.png'),
-  green: require('../assets/streaks/green.png'),
-  purple: require('../assets/streaks/purple.png'),
-  pink: require('../assets/streaks/pink.png'),
-  blue: require('../assets/streaks/blue.png'),
-};
-
-function getFireImage(streak) {
-  if (streak === 0) return fireImages.gray;
-  if (streak <= 10) return fireImages.orange;
-  if (streak <= 25) return fireImages.green;
-  if (streak <= 50) return fireImages.purple;
-  if (streak <= 100) return fireImages.pink;
-  return fireImages.blue;
-}
 
 function interpolateColor(percent) {
   const p = Math.min(Math.max(percent, 0), 100) / 100;
@@ -444,11 +425,18 @@ export default function DashboardScreen({ route }) {
                     borderRadius: 999,
                   }}
                 >
-                  <Image
-                    source={getFireImage(streak)}
-                    style={{ width: 20, height: 20, marginRight: 3 }}
+                  <MaterialCommunityIcons
+                    name="fire"
+                    size={26}
+                    color={
+                      streak <= 0 ? (t.colors.textSubtle || t.colors.textMuted)
+                      : streak <= 10 ? t.colors.accentMuted
+                      : streak <= 25 ? t.colors.accent
+                      : streak <= 50 ? t.colors.warning
+                      : streak <= 100 ? t.colors.danger
+                      : t.colors.danger
+                    }
                   />
-                  {/* Changed to AutoFitText and added paddingRight: 4 to fix the clipping */}
                   <AutoFitText 
                     style={[
                       t.typography.numeric, 

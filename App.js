@@ -11,8 +11,7 @@ import {
   createNavigationContainerRef
 } from '@react-navigation/native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
-import { MaterialIcons } from '@expo/vector-icons'; 
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 
 import StackNavigator from './navigation/StackNavigator';
 import SettingsStackNavigator from './navigation/SettingsStackNavigator';

@@ -6,9 +6,6 @@ import { auth } from '../utils/firebase';
 
 import DashboardScreen from '../screens/DashboardScreen';
 import DriveScreen from '../screens/DriveScreen';
-import RewardsStackNavigator from './RewardsStackNavigator';
-import RewardsScreen  from '../screens/RewardsScreen';
-import LeaderboardScreen from '../screens/LeaderboardScreen';
 import SettingsStackNavigator from './SettingsStackNavigator';
 import LoginScreen from '../screens/LoginScreen';
 import SignUpScreen from '../screens/SignUpScreen';

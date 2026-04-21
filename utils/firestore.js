@@ -1,4 +1,4 @@
-import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, orderBy, where, Timestamp, query, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, orderBy, where, query, deleteDoc, serverTimestamp } from "firebase/firestore";
 import { db } from './firebase';
 
 export async function getUserPoints(uid) {

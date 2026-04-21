@@ -11,7 +11,6 @@ import {
   Dimensions,
   TouchableOpacity,
   Linking,
-  Image, 
   ActivityIndicator
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -41,24 +40,6 @@ import { getRoadConditionSummary } from "../utils/gptApi";
 const db = getFirestore();
 
 const { width, height } = Dimensions.get('window');
-
-const fireImages = {
-  gray: require('../assets/streaks/gray.png'),
-  orange: require('../assets/streaks/orange.png'),
-  green: require('../assets/streaks/green.png'),
-  purple: require('../assets/streaks/purple.png'),
-  pink: require('../assets/streaks/pink.png'),
-  blue: require('../assets/streaks/blue.png'),
-};
-
-function getFireImage(streak) {
-  if (streak === 0) return fireImages.gray;
-  else if (streak <= 10) return fireImages.orange;
-  else if (streak <= 25) return fireImages.green;
-  else if (streak <= 50) return fireImages.purple;
-  else if (streak <= 100) return fireImages.pink;
-  else return fireImages.blue;
-}
 
 const weatherCodeMap = {
   0: { label: "Clear sky", icon: "weather-sunny" },

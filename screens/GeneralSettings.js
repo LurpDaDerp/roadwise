@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useEffect, useContext } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SegmentedControl from '@react-native-segmented-control/segmented-control';
@@ -7,12 +7,10 @@ import { Screen, Section, Card, ScreenHeader, useTheme } from '../theme';
 
 const STORAGE_KEYS = {
   appTheme: '@appTheme',
-  exampleToggle: '@exampleToggle',
 };
 
 export default function GeneralSettings() {
   const { theme, updateTheme } = useContext(ThemeContext);
-  const [, setExampleToggle] = useState(false);
   const t = useTheme();
 
   const themeSegments = ['Light', 'Dark', 'System'];
@@ -24,8 +22,6 @@ export default function GeneralSettings() {
         if (storedTheme && themeSegments.map((s) => s.toLowerCase()).includes(storedTheme)) {
           updateTheme(storedTheme);
         }
-        const storedToggle = await AsyncStorage.getItem(STORAGE_KEYS.exampleToggle);
-        if (storedToggle !== null) setExampleToggle(storedToggle === 'true');
       } catch (e) {
         console.warn('Failed to load settings:', e);
       }

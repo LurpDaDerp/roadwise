@@ -1,5 +1,4 @@
-import React, { useRef } from 'react';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import SettingsScreen from '../screens/SettingsScreen';
 import DriveScreenSettings from '../screens/DriveScreenSettings';
