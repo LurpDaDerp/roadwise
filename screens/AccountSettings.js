@@ -181,9 +181,10 @@ export default function AccountSettings({ route }) {
   }
 
   return (
-    <Screen>
+    <Screen hasHeader>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ScreenHeader
+          align="right"
           eyebrow="Settings · Account"
           title="Account"
           subtitle="Your profile and sign-in details."

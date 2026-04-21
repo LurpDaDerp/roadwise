@@ -105,12 +105,13 @@ export default function SafetySettings() {
   };
 
   return (
-    <Screen>
+    <Screen hasHeader>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ScreenHeader
+          align="right"
           eyebrow="Settings · Safety"
           title="Safety"
-          subtitle="People we'll reach during an emergency."
+          subtitle="Handle your safety preferences."
         />
 
         <Section label="Trusted Contacts">
@@ -223,10 +224,11 @@ export default function SafetySettings() {
         <View
           style={{
             flex: 1,
-            justifyContent: 'center',
+            justifyContent: 'flex-start',
             alignItems: 'center',
             backgroundColor: 'rgba(0,0,0,0.55)',
             padding: 24,
+            paddingTop: 120
           }}
         >
           <Card style={{ width: '100%', maxWidth: 420 }}>
@@ -239,13 +241,13 @@ export default function SafetySettings() {
                 { color: t.colors.textMuted, marginBottom: 20 },
               ]}
             >
-              They'll be reachable for RoadCash emergency alerts.
+              They'll be reachable for RoadWise emergency alerts.
             </Text>
 
             <Field label="Name">
               <TextInput
                 style={inputStyle}
-                placeholder="Jane Doe"
+                placeholder="Name"
                 placeholderTextColor={t.colors.textSubtle}
                 value={newContact.name}
                 onChangeText={(text) => setNewContact({ ...newContact, name: text })}

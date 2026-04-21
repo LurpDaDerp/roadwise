@@ -124,7 +124,6 @@ export default function DashboardScreen({ route }) {
   const [displayedPoints, setDisplayedPoints] = useState(0);
   const animatedDrives = useRef(new Animated.Value(0)).current;
   const [displayedDrives, setDisplayedDrives] = useState(0);
-  const contentOpacity = useRef(new Animated.Value(0)).current;
 
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const [snackbarColor, setSnackBarColor] = useState();
@@ -229,25 +228,9 @@ export default function DashboardScreen({ route }) {
     return unsubscribe;
   }, [animatedPoints, animatePoints, animatedDrives]);
 
-  const fadeOutContent = () =>
-    new Promise((resolve) => {
-      Animated.timing(contentOpacity, {
-        toValue: 0,
-        duration: 200,
-        easing: Easing.out(Easing.poly(3)),
-        useNativeDriver: true,
-      }).start(() => resolve());
-    });
-
   useFocusEffect(
     useCallback(() => {
       setLoading(false);
-      contentOpacity.setValue(0);
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
     }, [user])
   );
 
@@ -423,7 +406,7 @@ export default function DashboardScreen({ route }) {
 
   return (
     <Screen>
-      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+      <View style={{ flex: 1 }}>
         {loading && (
           <View
             style={{
@@ -457,24 +440,27 @@ export default function DashboardScreen({ route }) {
                     backgroundColor: t.colors.surface,
                     borderWidth: StyleSheet.hairlineWidth,
                     borderColor: t.colors.border,
-                    paddingVertical: 6,
-                    paddingHorizontal: 12,
+                    paddingHorizontal: 10,
                     borderRadius: 999,
                   }}
                 >
                   <Image
                     source={getFireImage(streak)}
-                    style={{ width: 20, height: 20, marginRight: 6 }}
+                    style={{ width: 20, height: 20, marginRight: 3 }}
                   />
-                  <Text style={[t.typography.numeric, { color: t.colors.text, fontSize: 16 }]}>
+                  {/* Changed to AutoFitText and added paddingRight: 4 to fix the clipping */}
+                  <AutoFitText 
+                    style={[
+                      t.typography.numeric, 
+                      { color: t.colors.text, fontSize: 20, paddingRight: 3 }
+                    ]}
+                  >
                     {streak}
-                  </Text>
+                  </AutoFitText>
                 </View>
               ) : (
                 <Pressable
-                  onPress={() =>
-                    fadeOutContent().then(() => navigation.navigate('Login'))
-                  }
+                  onPress={() => navigation.navigate('Login')}
                   style={{
                     paddingVertical: 8,
                     paddingHorizontal: 14,
@@ -490,9 +476,7 @@ export default function DashboardScreen({ route }) {
 
           <Section>
             <Pressable
-              onPress={() =>
-                fadeOutContent().then(() => navigation.navigate('Drive', { totalPoints }))
-              }
+              onPress={() => navigation.navigate('Drive', { totalPoints })}
               style={({ pressed }) => ({
                 borderRadius: t.radius.lg,
                 overflow: 'hidden',
@@ -626,9 +610,7 @@ export default function DashboardScreen({ route }) {
                     title="Get safety score"
                     variant="soft"
                     icon={<Ionicons name="sparkles" size={16} color={t.colors.accent} />}
-                    onPress={() =>
-                      fadeOutContent().then(() => navigation.navigate('AIScreen'))
-                    }
+                    onPress={() => navigation.navigate('AIScreen')}
                   />
                 </View>
               )}
@@ -639,7 +621,7 @@ export default function DashboardScreen({ route }) {
             <Button
               title="View full driver report"
               icon={<Ionicons name="sparkles" size={18} color={t.colors.accentText} />}
-              onPress={() => fadeOutContent().then(() => navigation.navigate('AIScreen'))}
+              onPress={() => navigation.navigate('AIScreen')}
             />
           </Section>
 
@@ -648,7 +630,7 @@ export default function DashboardScreen({ route }) {
               title="My group"
               variant="ghost"
               icon={<Ionicons name="people-outline" size={18} color={t.colors.text} />}
-              onPress={() => fadeOutContent().then(() => navigation.navigate('LocationScreen'))}
+              onPress={() => navigation.navigate('LocationScreen')}
             />
           </Section>
 
@@ -684,14 +666,14 @@ export default function DashboardScreen({ route }) {
             />
           )}
         </ScrollView>
-      </Animated.View>
+      </View>
     </Screen>
   );
 }
 
 function StatCell({ t, label, value, accent }) {
   return (
-    <View style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }}>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent:'center', paddingVertical: 4, paddingHorizontal: 6 }}>
       <Text
         style={[
           t.typography.micro,
@@ -708,7 +690,7 @@ function StatCell({ t, label, value, accent }) {
       <AutoFitText
         style={[
           t.typography.numeric,
-          { color: accent ? t.colors.accent : t.colors.text },
+          { color: accent ? t.colors.accent : t.colors.text }
         ]}
       >
         {value}

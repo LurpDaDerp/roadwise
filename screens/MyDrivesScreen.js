@@ -170,6 +170,7 @@ export default function MyDrivesScreen() {
     <Screen>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ScreenHeader
+          align="right"
           eyebrow="Drives"
           title="My drives"
           subtitle="Every trip, logged and scored."

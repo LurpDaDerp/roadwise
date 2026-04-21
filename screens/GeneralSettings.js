@@ -37,9 +37,10 @@ export default function GeneralSettings() {
   };
 
   return (
-    <Screen>
+    <Screen hasHeader>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ScreenHeader
+          align="right"
           eyebrow="Settings · General"
           title="General"
           subtitle="Appearance and interface options."

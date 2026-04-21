@@ -1,7 +1,7 @@
-import React, { useRef, useCallback } from 'react';
-import { View, Text, Pressable, Animated, Easing, StyleSheet } from 'react-native';
+import React from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import {
   Screen,
   Section,
@@ -19,25 +19,12 @@ const CATEGORIES = [
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
-  const contentOpacity = useRef(new Animated.Value(0)).current;
   const t = useTheme();
-
-  useFocusEffect(
-    useCallback(() => {
-      contentOpacity.setValue(0);
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.poly(3)),
-        useNativeDriver: true,
-      }).start();
-    }, [contentOpacity])
-  );
 
   return (
     <Screen>
-      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
-        <ScreenHeader eyebrow="Menu" title="Settings" subtitle="Tune RoadCash to fit you." />
+      <View style={{ flex: 1 }}>
+        <ScreenHeader eyebrow="Menu" title="Settings" subtitle="Tune RoadWise to fit you." />
 
         <Section label="Categories">
           <Card padded={false}>
@@ -89,7 +76,7 @@ export default function SettingsScreen() {
             ))}
           </Card>
         </Section>
-      </Animated.View>
+      </View>
     </Screen>
   );
 }

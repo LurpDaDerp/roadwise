@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -7,8 +7,7 @@ import {
   StyleSheet,
   ImageBackground,
   Pressable,
-  Animated,
-  Easing,
+  ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -29,19 +28,10 @@ const CATEGORIES = [
 
 export default function RewardsScreen({ navigation }) {
   const [totalPoints, setTotalPoints] = useState(0);
-  const contentOpacity = useRef(new Animated.Value(0)).current;
   const t = useTheme();
 
   useFocusEffect(
     useCallback(() => {
-      contentOpacity.setValue(0);
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.poly(3)),
-        useNativeDriver: true,
-      }).start();
-
       let isActive = true;
       (async () => {
         try {
@@ -57,8 +47,8 @@ export default function RewardsScreen({ navigation }) {
 
   return (
     <Screen>
-      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
-        <View style={{ marginTop: 24, marginBottom: 24 }}>
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+        <View style={{ marginTop: 0, marginBottom: 24 }}>
           <Eyebrow>Rewards</Eyebrow>
           <Text style={[t.typography.title, { color: t.colors.text, marginTop: 8 }]}>
             Redeem points for prizes
@@ -141,7 +131,7 @@ export default function RewardsScreen({ navigation }) {
             ))}
           </View>
         </Section>
-      </Animated.View>
+      </ScrollView>
     </Screen>
   );
 }

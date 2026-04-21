@@ -90,40 +90,53 @@ export function getWeatherInfo(code) {
   );
 }
 
-function getVisibilityColor(visibilityMeters) {
-  const miles = visibilityMeters / 1609; 
-  if (miles < 0.25) return "red"; 
-  if (miles < 1) return "orange"; 
-  if (miles >= 2) return "limegreen";
-  return "yellow";
-}
-
-function getPrecipitationColor(valueInInches) {
-  if (valueInInches < 0.1) return "limegreen"; 
-  if (valueInInches < 0.2) return "yellow";
-  if (valueInInches < 0.4) return "orange"; 
-  return "red"; 
-}
-
-function getRoadBorderColor(score) {
-  switch (score) {
-    case 5: return "limegreen";  
-    case 4: return "#85ce0fff"; 
-    case 3: return "yellow"; 
-    case 2: return "orangered"; 
-    case 1: return "red";
-    default: return "#888";  
+// Theme-aligned severity palette: safe (accent/teal) → caution (warning/amber) → alert (danger/red)
+function severityColor(level, t) {
+  // level: 0 safe, 1 caution-light, 2 caution, 3 alert, 4 severe
+  switch (level) {
+    case 0: return t.colors.accent;
+    case 1: return t.colors.accentMuted;
+    case 2: return t.colors.warning;
+    case 3: return t.colors.danger;
+    case 4: return t.colors.danger;
+    default: return t.colors.textMuted;
   }
 }
 
-function getRoadEmoji(score) {
+function getVisibilityColor(visibilityMeters, t) {
+  const miles = visibilityMeters / 1609;
+  if (miles < 0.25) return severityColor(3, t);
+  if (miles < 1)    return severityColor(2, t);
+  if (miles >= 2)   return severityColor(0, t);
+  return severityColor(2, t);
+}
+
+function getPrecipitationColor(valueInInches, t) {
+  if (valueInInches < 0.1) return severityColor(0, t);
+  if (valueInInches < 0.2) return severityColor(1, t);
+  if (valueInInches < 0.4) return severityColor(2, t);
+  return severityColor(3, t);
+}
+
+function getRoadBorderColor(score, t) {
   switch (score) {
-    case 5: return "";
-    case 4: return ""; 
-    case 3: return "⚠️"; 
-    case 2: return "❗"; 
-    case 1: return "‼️"; 
-    default: return "❓"; 
+    case 5: return severityColor(0, t);
+    case 4: return severityColor(1, t);
+    case 3: return severityColor(2, t);
+    case 2: return severityColor(3, t);
+    case 1: return severityColor(3, t);
+    default: return t?.colors?.divider || "#888";
+  }
+}
+
+function getRoadIcon(score) {
+  switch (score) {
+    case 5: return { name: "shield-check", level: 0 };
+    case 4: return { name: "shield-check-outline", level: 1 };
+    case 3: return { name: "alert-outline", level: 2 };
+    case 2: return { name: "alert", level: 3 };
+    case 1: return { name: "alert-octagon", level: 3 };
+    default: return { name: "help-circle-outline", level: -1 };
   }
 }
 
@@ -231,29 +244,37 @@ async function fillCachePolyline(points, valueKph, street){
   await saveSpeedLimitCache();
 }
 
-function interpolateColor(speed, limit) {
-  if (!isFinite(limit) || limit <= 0) return "rgb(0,230,0)";
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  const v = h.length === 3
+    ? h.split('').map(c => c + c).join('')
+    : h.length === 8 ? h.slice(0, 6) : h;
+  const n = parseInt(v, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
 
-  const percent = Math.max(0, Math.min(1, (speed - limit) / (limit * 0.4)));
+function mix(a, b, t) {
+  return {
+    r: Math.round(a.r + (b.r - a.r) * t),
+    g: Math.round(a.g + (b.g - a.g) * t),
+    b: Math.round(a.b + (b.b - a.b) * t),
+  };
+}
 
-  const green  = { r: 0,   g: 200, b: 0 };
-  const yellow = { r: 255, g: 255, b: 0 };
-  const red    = { r: 255, g: 0,   b: 0 };
+function interpolateColor(speed, limit, themeColors) {
+  const safe   = themeColors ? hexToRgb(themeColors.accent)  : { r: 0,   g: 179, b: 134 };
+  const warn   = themeColors ? hexToRgb(themeColors.warning) : { r: 230, g: 160, b: 30 };
+  const alert  = themeColors ? hexToRgb(themeColors.danger)  : { r: 224, g: 46,  b: 36 };
 
-  let r, g, b;
-  if (percent <= 0.5) {
-    const t = percent / 0.5;
-    r = Math.round(green.r  + (yellow.r - green.r) * t);
-    g = Math.round(green.g  + (yellow.g - green.g) * t);
-    b = Math.round(green.b  + (yellow.b - green.b) * t);
-  } else {
-    const t = (percent - 0.5) / 0.5;
-    r = Math.round(yellow.r + (red.r - yellow.r) * t);
-    g = Math.round(yellow.g + (red.g - yellow.g) * t);
-    b = Math.round(yellow.b + (red.b - yellow.b) * t);
+  if (!isFinite(limit) || limit <= 0) {
+    return `rgb(${safe.r},${safe.g},${safe.b})`;
   }
 
-  return `rgb(${r},${g},${b})`;
+  const percent = Math.max(0, Math.min(1, (speed - limit) / (limit * 0.4)));
+  const c = percent <= 0.5
+    ? mix(safe, warn, percent / 0.5)
+    : mix(warn, alert, (percent - 0.5) / 0.5);
+  return `rgb(${c.r},${c.g},${c.b})`;
 }
 
 function isRoadSlippery(weather) {
@@ -270,13 +291,14 @@ function isRoadSlippery(weather) {
   return false;
 }
 
-function getAirQualityColor(aqi) {
-  if (aqi <= 50) return "limegreen";
-  if (aqi <= 100) return "yellow";
-  if (aqi <= 150) return "orange"; 
-  if (aqi <= 200) return "red";
-  if (aqi <= 300) return "purple"; 
-  return "maroon";  
+function getAirQualityColor(aqi, t) {
+  if (aqi == null) return t?.colors?.textMuted || "#888";
+  if (aqi <= 50)  return severityColor(0, t);
+  if (aqi <= 100) return severityColor(1, t);
+  if (aqi <= 150) return severityColor(2, t);
+  if (aqi <= 200) return severityColor(3, t);
+  if (aqi <= 300) return severityColor(3, t);
+  return severityColor(4, t);
 }
 
 function getAirQualityLabel(aqi) {
@@ -369,14 +391,16 @@ export default function DriveScreen({ route }) {
   const modalBackgroundColor = t.colors.surface;
   const titleTextColor = t.colors.text;
   const contentTextColor = t.colors.text;
-  const buttonBackgroundColor = isDarkMode ? '#2a2f36' : '#111418';
-  const buttonTextColor = '#fff';
+  const buttonBackgroundColor = t.colors.accent;
+  const buttonTextColor = t.colors.accentText;
   const backgroundColor = t.colors.bg;
   const titleColor = t.colors.text;
   const textColor = t.colors.text;
-  const moduleBackground = t.colors.surface;
+  const moduleBackground = isDarkMode
+    ? (t.colors.surfaceRaised || t.colors.surface)
+    : t.colors.bgElevated;
   const altTextColor = t.colors.textMuted;
-  const textOutline = isDarkMode ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.45)';
+  const textOutline = 'transparent';
   const buttonColor = t.colors.accent;
   const gradientTop = t.colors.gradientTop;
   const gradientBottom = t.colors.gradientBottom;
@@ -1227,14 +1251,16 @@ export default function DriveScreen({ route }) {
     <>
       {showSpeedModal && (
         <Animated.View style={[styles.modalOverlay, { opacity: fadeAnim }]} pointerEvents="box-none">
-          <View style={[styles.modalContent, { backgroundColor: modalBackgroundColor }]} pointerEvents="auto">
-            <Text style={[styles.modalTitle, { color: titleTextColor }]}>⚠️ You are Speeding!</Text>
-            <Text style={[styles.modalText, { color: contentTextColor }]}>
+          <View style={[styles.modalContent, { backgroundColor: modalBackgroundColor, borderRadius: t.radius.xl, borderWidth: StyleSheet.hairlineWidth, borderColor: t.colors.border }]} pointerEvents="auto">
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <MaterialCommunityIcons name="speedometer" size={22} color={t.colors.danger} style={{ marginRight: 8 }} />
+              <Text style={[t.typography.heading, { color: titleTextColor }]}>You are speeding</Text>
+            </View>
+            <Text style={[t.typography.body, { color: altTextColor, textAlign: 'center', marginBottom: 18 }]}>
               Please slow down.
             </Text>
-
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: buttonBackgroundColor }]}
+              style={[styles.modalButton, { backgroundColor: buttonBackgroundColor, borderRadius: t.radius.md, paddingHorizontal: 24 }]}
               onPress={() => {
                 Animated.timing(fadeAnim, {
                   toValue: 0,
@@ -1245,6 +1271,7 @@ export default function DriveScreen({ route }) {
                 });
               }}
             >
+              <Text style={[t.typography.bodyStrong, { color: buttonTextColor }]}>Dismiss</Text>
             </TouchableOpacity>
           </View>
         </Animated.View>
@@ -1252,49 +1279,54 @@ export default function DriveScreen({ route }) {
 
       {showEmergencyModal && (
         <View style={styles.modalOverlay} pointerEvents="box-none">
-          <View style={[styles.modalContent, { backgroundColor: modalBackgroundColor }]} pointerEvents="auto">
-            <Text style={[styles.modalTitle, { color: titleTextColor }]}>Emergency Options</Text>
+          <View style={[styles.modalContent, { backgroundColor: modalBackgroundColor, borderRadius: t.radius.xl, borderWidth: StyleSheet.hairlineWidth, borderColor: t.colors.border, alignItems: 'stretch' }]} pointerEvents="auto">
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16, justifyContent: 'center' }}>
+              <MaterialCommunityIcons name="alert-octagon" size={22} color={t.colors.danger} style={{ marginRight: 8 }} />
+              <Text style={[t.typography.heading, { color: titleTextColor }]}>Emergency options</Text>
+            </View>
 
             <TouchableOpacity
-              style={[styles.modalOption, {backgroundColor: '#ff3b30', color: '#fff'}]}
+              style={[styles.modalOption, { backgroundColor: t.colors.danger, borderRadius: t.radius.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}
               onPress={() => {
                 setShowEmergencyModal(false);
                 callNumber('911');
-                Alert.alert('🚨 Calling emergency services...');
+                Alert.alert('Calling emergency services…');
               }}
             >
-              <Text style={styles.modalOptionText}>Call Emergency Services</Text>
+              <MaterialCommunityIcons name="phone-alert" size={18} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={[t.typography.bodyStrong, { color: '#fff' }]}>Call emergency services</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modalOption, { backgroundColor: t.colors.accent }]}
+              style={[styles.modalOption, { backgroundColor: t.colors.accent, borderRadius: t.radius.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}
               onPress={() => {
                 setShowEmergencyModal(false);
                 notifyGroupEmergency();
               }}
             >
-              <Text style={[styles.modalOptionText, { color: t.colors.accentText }]}>Notify Group</Text>
+              <MaterialCommunityIcons name="account-group" size={18} color={t.colors.accentText} style={{ marginRight: 8 }} />
+              <Text style={[t.typography.bodyStrong, { color: t.colors.accentText }]}>Notify group</Text>
             </TouchableOpacity>
 
             {trustedContacts.map((contact, index) => (
               <TouchableOpacity
                 key={index}
-                style={[styles.modalOption, { backgroundColor: t.colors.accentFaint, borderWidth: 1, borderColor: t.colors.accent }]}
+                style={[styles.modalOption, { backgroundColor: t.colors.accentFaint, borderWidth: StyleSheet.hairlineWidth, borderColor: t.colors.accent, borderRadius: t.radius.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}
                 onPress={() => callNumber(contact.phone)}
               >
-                <Text style={[styles.modalOptionText, { color: t.colors.accent }]}>
+                <MaterialCommunityIcons name="phone" size={18} color={t.colors.accent} style={{ marginRight: 8 }} />
+                <Text style={[t.typography.bodyStrong, { color: t.colors.accent }]}>
                   Call {contact.name || 'Unnamed'}
                 </Text>
               </TouchableOpacity>
             ))}
 
             <TouchableOpacity
-              style={[styles.modalOption, { backgroundColor: t.colors.divider }]}
+              style={[styles.modalOption, { backgroundColor: 'transparent', borderWidth: StyleSheet.hairlineWidth, borderColor: t.colors.border, borderRadius: t.radius.md }]}
               onPress={() => setShowEmergencyModal(false)}
             >
-              <Text style={[styles.modalOptionText, { color: t.colors.text }]}>Cancel</Text>
+              <Text style={[t.typography.bodyStrong, { color: t.colors.text, textAlign: 'center' }]}>Cancel</Text>
             </TouchableOpacity>
-            
           </View>
         </View>
       )}
@@ -1315,41 +1347,60 @@ export default function DriveScreen({ route }) {
           width: "100%"
         }}>
         <TouchableOpacity
-          style={[styles.emergencyButton, {backgroundColor: "#ff00006e", borderColor: "#ff0000ff", borderWidth: 3}]}
+          style={[styles.emergencyButton, { backgroundColor: t.colors.danger, borderRadius: t.radius.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}
           onPress={() => setShowEmergencyModal(true)}
         >
-          <Text style={[styles.emergencyButtonText, {color: "#fff"}]}>Emergency</Text>
+          <MaterialCommunityIcons name="alert-octagon" size={18} color="#fff" style={{ marginRight: 6 }} />
+          <Text style={[t.typography.bodyStrong, { color: '#fff' }]}>Emergency</Text>
         </TouchableOpacity>
 
         <View style={[
           styles.module,
           {
             flex: 1,
-            borderWidth: 3,
-            borderColor: getRoadBorderColor(roadSummary?.score),
+            borderLeftWidth: 4,
+            borderLeftColor: getRoadBorderColor(roadSummary?.score, t),
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: t.colors.border,
             backgroundColor: moduleBackground,
-            padding: 8, 
-            marginLeft: 20,
-            borderRadius: 20, 
+            padding: 12,
+            marginLeft: 14,
+            borderRadius: t.radius.lg,
             minHeight: 60,
-            justifyContent: "center"
+            flexDirection: 'row',
+            alignItems: 'center',
           }
         ]}>
-          <Text style={[styles.weatherText, { fontSize: 16, fontWeight: "600", color: textColor, textAlign: "center" }]}>
-            {roadSummary ? `${getRoadEmoji(roadSummary.score)} ${roadSummary.summary}` : "Loading Summary..."}
-          </Text>
+          {roadSummary ? (
+            <>
+              <MaterialCommunityIcons
+                name={getRoadIcon(roadSummary.score).name}
+                size={20}
+                color={getRoadBorderColor(roadSummary.score, t)}
+                style={{ marginRight: 8 }}
+              />
+              <Text style={[t.typography.caption, { color: textColor, flex: 1, fontWeight: '600' }]} numberOfLines={2}>
+                {roadSummary.summary}
+              </Text>
+            </>
+          ) : (
+            <Text style={[t.typography.caption, { color: altTextColor, flex: 1 }]}>Loading summary…</Text>
+          )}
         </View>
 
         </View>
 
         {isEmergencyActive && (
-          <View style={styles.emergencyBanner}>
-            <Text style={styles.emergencyBannerText}>Emergency Activated</Text>
+          <View style={[styles.emergencyBanner, { backgroundColor: t.colors.danger }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <MaterialCommunityIcons name="alert-octagon" size={18} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={[t.typography.bodyStrong, { color: '#fff' }]}>Emergency activated</Text>
+            </View>
             <TouchableOpacity
-              style={styles.emergencyBannerButton}
+              style={[styles.emergencyBannerButton, { backgroundColor: '#fff', borderRadius: t.radius.sm }]}
               onPress={cancelGroupEmergency}
             >
-              <Text style={styles.emergencyBannerButtonText}>Cancel</Text>
+              <Text style={[t.typography.bodyStrong, { color: t.colors.danger }]}>Cancel</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1361,13 +1412,13 @@ export default function DriveScreen({ route }) {
         <View style={styles.container}>
           
           <View style={[styles.topRow]}>
-            <View style={[styles.cardWrap, { marginRight: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+            <View style={[styles.cardWrap, { marginRight: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground, borderRadius: t.radius.xl }]}>
               <View style={[styles.module]}>
                 <Text style={[styles.moduleLabel, { color: altTextColor, marginBottom: -8 }]}>Speed</Text>
                 <AutoFitText
                   style={[
                     styles.moduleValue,
-                    { color: interpolateColor(speed, currentLimit), textShadowColor: textOutline, marginBottom: -8 },
+                    { color: interpolateColor(speed, currentLimit, t.colors), marginBottom: -8 },
                   ]}
                 >
                   {Math.round(speed)}
@@ -1375,7 +1426,7 @@ export default function DriveScreen({ route }) {
                 <Text
                   style={[
                     styles.moduleLabel,
-                    { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
+                    { color: altTextColor, fontSize: 20 },
                   ]}
                 >
                   {unit.toUpperCase()}
@@ -1383,14 +1434,14 @@ export default function DriveScreen({ route }) {
               </View>
             </View>
 
-            <View style={[styles.cardWrap, { marginLeft: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+            <View style={[styles.cardWrap, { marginLeft: 7.5, borderColor: t.colors.border, backgroundColor: moduleBackground, borderRadius: t.radius.xl }]}>
               <View style={[styles.module]}>
                 <Animated.View
                   pointerEvents="none"
                   style={{
                     ...StyleSheet.absoluteFillObject,
-                    backgroundColor: "#ff0000c2",
-                    borderRadius: t.radius.lg,
+                    backgroundColor: t.colors.danger,
+                    borderRadius: t.radius.xl,
                     opacity: pulseOverlayAnim,
                   }}
                 />
@@ -1399,7 +1450,7 @@ export default function DriveScreen({ route }) {
                 <AutoFitText
                   style={[
                     styles.moduleValue,
-                    { color: textColor, textShadowColor: textOutline, marginBottom: -8 },
+                    { color: textColor, marginBottom: -8 },
                   ]}
                 >
                   {Math.round(currentLimit)}
@@ -1407,7 +1458,7 @@ export default function DriveScreen({ route }) {
                 <Text
                   style={[
                     styles.moduleLabel,
-                    { color: altTextColor, textShadowColor: textOutline, fontSize: 20 },
+                    { color: altTextColor, fontSize: 20 },
                   ]}
                 >
                   {unit.toUpperCase()}
@@ -1416,7 +1467,7 @@ export default function DriveScreen({ route }) {
             </View>
           </View>
 
-          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground, borderRadius: t.radius.xl }]}>
           <View style={[styles.moduleWideRow]}>
             <View style={styles.subModule}>
               <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>Points</Text>
@@ -1424,8 +1475,7 @@ export default function DriveScreen({ route }) {
                 style={[
                   styles.moduleValue,
                   {
-                    color: distractedUI ? '#b00000' : textColor,
-                    textShadowColor: textOutline,
+                    color: distractedUI ? t.colors.danger : t.colors.accent,
                     fontSize: 45,
                   },
                 ]}
@@ -1441,7 +1491,7 @@ export default function DriveScreen({ route }) {
               <AutoFitText
                 style={[
                   styles.moduleValue,
-                  { color: textColor, textShadowColor: textOutline, fontSize: 45 },
+                  { color: distractedCount > 0 ? t.colors.warning : textColor, fontSize: 45 },
                 ]}
               >
                 {distractedCount}
@@ -1450,15 +1500,27 @@ export default function DriveScreen({ route }) {
             <View style={styles.subModule}>
               <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>Streak</Text>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 2*(Math.abs(streak).toString().length - 1) }}>
-              <Image
-                source={getFireImage(distractedUI ? 0 : streak)}
-                style={{ width: 32, height: 32, marginRight: 2, marginTop: 6 }}
-                resizeMode="contain"
-              />
+                {(() => {
+                  const active = distractedUI ? 0 : (streak ?? 0);
+                  const flameColor = active <= 0
+                    ? t.colors.textSubtle || t.colors.textMuted
+                    : active < 3 ? t.colors.accentMuted
+                    : active < 7 ? t.colors.accent
+                    : active < 15 ? t.colors.warning
+                    : t.colors.danger;
+                  return (
+                    <MaterialCommunityIcons
+                      name="fire"
+                      size={34}
+                      color={flameColor}
+                      style={{ marginRight: 4, marginTop: 4 }}
+                    />
+                  );
+                })()}
               <AutoFitText
                 style={[
                   styles.moduleValue,
-                  { color: textColor, textShadowColor: textOutline, fontSize: 45 - 5*(Math.abs(streak).toString().length - 1) },
+                  { color: textColor, fontSize: 45 - 5*(Math.abs(streak).toString().length - 1) },
                 ]}
               >
                 {distractedUI ? 0 : streak ?? 0}
@@ -1493,72 +1555,81 @@ export default function DriveScreen({ route }) {
             </LinearGradient>
           </TouchableOpacity>
 
-          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground }]}>
+          <View style={[styles.cardWrapWide, { borderColor: t.colors.border, backgroundColor: moduleBackground, borderRadius: t.radius.xl }]}>
           <View style={[styles.moduleWideRow]}>
-            
-            
+
+
               {!weather ? (
                 <View style={[styles.module, {height: 175, justifyContent: "center"}]}>
                 <View style={styles.loadingBox}>
-                  <ActivityIndicator size="small" color="#fff" marginBottom={15} />
-                  <Text style={[styles.loadingText, {color: altTextColor}]}>Loading weather data...</Text>
+                  <ActivityIndicator size="small" color={t.colors.accent} style={{ marginBottom: 15 }} />
+                  <Text style={[t.typography.caption, {color: altTextColor}]}>Loading weather data…</Text>
                 </View>
                 </View>
               ) : (
                 <View style={[styles.module, {flexDirection: "row", height: 220, justifyContent: "center"}]}>
                 <View style={{ alignItems: "center", marginRight: 24, marginLeft: -10 }}>
-                  <MaterialCommunityIcons
-                    name={getWeatherInfo(weather.current.weathercode).icon}
-                    size={160}
-                    color={textColor}
-                    style={{ marginBottom: 4 }}
-                  />
-                  <Text style={[styles.weatherText, {color: textColor, fontSize: 24}]}>
+                  <View style={{
+                    width: 150,
+                    height: 150,
+                    borderRadius: 75,
+                    backgroundColor: t.colors.accentFaint,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 4,
+                  }}>
+                    <MaterialCommunityIcons
+                      name={getWeatherInfo(weather.current.weathercode).icon}
+                      size={110}
+                      color={t.colors.accent}
+                    />
+                  </View>
+                  <Text style={[t.typography.bodyStrong, {color: textColor, fontSize: 20, marginTop: 4}]}>
                     {getWeatherInfo(weather.current.weathercode).label || "Unknown"}
                   </Text>
-                  <Text style={[styles.weatherText, {color: altTextColor, fontSize: 20}]}>
+                  <Text style={[t.typography.caption, {color: altTextColor, fontSize: 16}]}>
                     {Math.round(weather.current.temperature_2m)}°F
                   </Text>
                 </View>
 
                 <View style={{ flex: 1, alignItems: "center" }}>
                   <View style={{ alignItems: "center", marginBottom: 8 }}>
-                    <Text style={[styles.weatherText, { fontSize: 24, color: getVisibilityColor(weather.current.visibility) }]}>
+                    <Text style={[t.typography.bodyStrong, { fontSize: 22, color: getVisibilityColor(weather.current.visibility, t) }]}>
                       {Math.round(weather.current.visibility / 1609)} mi
                     </Text>
-                    <Text style={[styles.weatherText, { fontSize: 14, color: altTextColor }]}>
+                    <Text style={[t.typography.micro, { color: altTextColor, textTransform: 'uppercase', letterSpacing: 1 }]}>
                       Visibility
                     </Text>
                   </View>
 
                   <View style={{ alignItems: "center", marginBottom: 8 }}>
-                    <Text style={[styles.weatherText, { fontSize: 24, color: getPrecipitationColor(weather.current.precipitation) }]}>
+                    <Text style={[t.typography.bodyStrong, { fontSize: 22, color: getPrecipitationColor(weather.current.precipitation, t) }]}>
                       {weather.current.precipitation.toFixed(1)} in
                     </Text>
-                    <Text style={[styles.weatherText, { fontSize: 14, color: altTextColor }]}>
+                    <Text style={[t.typography.micro, { color: altTextColor, textTransform: 'uppercase', letterSpacing: 1 }]}>
                       Precipitation
                     </Text>
                   </View>
 
                   <View style={{ alignItems: "center", marginBottom: 8 }}>
-                    <Text style={[styles.weatherText, { fontSize: 24, color: textColor }]}>
+                    <Text style={[t.typography.bodyStrong, { fontSize: 22, color: textColor }]}>
                       {weather.current.precipitation_probability}%
                     </Text>
-                    <Text style={[styles.weatherText, { fontSize: 14, color: altTextColor }]}>
+                    <Text style={[t.typography.micro, { color: altTextColor, textTransform: 'uppercase', letterSpacing: 1 }]}>
                       Chance of Rain
                     </Text>
                   </View>
                   <View style={{ alignItems: "center", marginBottom: 8 }}>
                     <Text style={[
-                      styles.weatherText,
-                      { fontSize: 24, color: getAirQualityColor(weather.airQuality?.current?.us_aqi) }
+                      t.typography.bodyStrong,
+                      { fontSize: 22, color: getAirQualityColor(weather.airQuality?.current?.us_aqi, t) }
                     ]}>
-                      {weather.airQuality?.current?.us_aqi ?? "--"} 
+                      {weather.airQuality?.current?.us_aqi ?? "--"}
                     </Text>
-                    <Text style={[styles.weatherText, { fontSize: 12, color: getAirQualityColor(weather.airQuality?.current?.us_aqi) }]}>
+                    <Text style={[t.typography.caption, { fontSize: 11, color: getAirQualityColor(weather.airQuality?.current?.us_aqi, t) }]}>
                       {getAirQualityLabel(weather.airQuality?.current?.us_aqi)}
                     </Text>
-                    <Text style={[styles.weatherText, { fontSize: 14, color: altTextColor }]}>
+                    <Text style={[t.typography.micro, { color: altTextColor, textTransform: 'uppercase', letterSpacing: 1 }]}>
                       Air Quality
                     </Text>
                   </View>
@@ -1591,11 +1662,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0)',
   },
   emergencyButton: {
-    paddingVertical: 18,
+    paddingVertical: 14,
     paddingHorizontal: 12,
-    borderRadius: 20,
+    borderRadius: 16,
     zIndex: 1000,
-    elevation: 10,
+    elevation: 6,
     width: "35%"
   },
 
@@ -1618,10 +1689,9 @@ const styles = StyleSheet.create({
   },
 
   modalContent: {
-    width: '80%',
-    backgroundColor: '#fff',
+    width: '86%',
     borderRadius: 20,
-    padding: (width / 375) * 20,
+    padding: (width / 375) * 22,
     alignItems: 'center',
     elevation: 10,
   },
@@ -1635,20 +1705,18 @@ const styles = StyleSheet.create({
 
   modalOption: {
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     marginTop: 10,
     width: '100%',
   },
 
   modalText: {
     fontSize: 16,
-    color: '#333',
     textAlign: 'center',
     marginBottom: 0,
   },
 
   modalOptionText: {
-    color: '#fff',
     fontWeight: 'bold',
     fontSize: 16,
     textAlign: 'center',
@@ -1698,16 +1766,16 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   moduleLabel: {
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: "600",
-    color: "#bbb",
+    letterSpacing: 0.3,
   },
 
   moduleValue: {
-    fontSize: 75,
-    fontWeight: "bold",
-    color: "#fff",
-    marginTop: 5,
+    fontSize: 72,
+    fontWeight: "800",
+    marginTop: 4,
+    letterSpacing: -1,
   },
 
   weatherText: {
@@ -1724,8 +1792,7 @@ const styles = StyleSheet.create({
 
   completeButton: {
     width: "100%",
-    backgroundColor: "#0000007c",
-    paddingVertical: 15,
+    paddingVertical: 16,
     borderRadius: 20,
     marginTop: 15,
     alignItems: "center",
@@ -1733,9 +1800,10 @@ const styles = StyleSheet.create({
   },
 
   completeButtonText: {
-    fontSize: 22,
-    fontWeight: "bold",
+    fontSize: 20,
+    fontWeight: "700",
     color: "#fff",
+    letterSpacing: 0.3,
   },
 
   moduleWideRow: {
@@ -1780,27 +1848,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ff3b30',
-    paddingVertical: 20,
+    paddingVertical: 16,
     paddingHorizontal: 16,
     zIndex: 2000,
     elevation: 20,
   },
-  emergencyBannerText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
   emergencyBannerButton: {
-    backgroundColor: '#fff',
     paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: 6,
-  },
-  emergencyBannerButtonText: {
-    color: '#ff3b30',
-    fontWeight: 'bold',
-    fontSize: 14,
   },
 
   container: {
@@ -1858,13 +1913,9 @@ const styles = StyleSheet.create({
   },
   speedText: {
     fontSize: (width / 375) * 48,
-    fontWeight: 'bold',
-    fontFamily: 'Arial Rounded MT Bold',
-    color: '#fff',
-    textShadowColor: '#000',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: (width / 375) * 4,
-    marginBottom: (height / 667) *0,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    marginBottom: 0,
   },
   warningOverlay: {
     position: 'absolute',

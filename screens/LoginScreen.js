@@ -40,7 +40,7 @@ export default function LoginScreen() {
   }, [navigation]);
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: '1048529675719-q78r5e76ulmhm7a4c779lk8711ir88cdapps.googleusercontent.com',
+    clientId: '68093599355-ps82c8m515nrpsont9mhgl2bv7k85b49.apps.googleusercontent.com',
   });
 
   useEffect(() => {
@@ -99,7 +99,7 @@ export default function LoginScreen() {
         <View style={{ marginTop: 48, marginBottom: 40 }}>
           <Eyebrow>Welcome back</Eyebrow>
           <Text style={[t.typography.display, { color: t.colors.text, marginTop: 10 }]}>
-            RoadCash
+            RoadWise
           </Text>
           <Text style={[t.typography.body, { color: t.colors.textMuted, marginTop: 8 }]}>
             Sign in to track drives, earn points, and redeem rewards.
@@ -143,7 +143,7 @@ export default function LoginScreen() {
 
         <View style={styles.footerRow}>
           <Text style={[t.typography.body, { color: t.colors.textMuted }]}>
-            New to RoadCash?
+            New to RoadWise?
           </Text>
           <Text
             onPress={() => navigation.navigate('SignUp')}

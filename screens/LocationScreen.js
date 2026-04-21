@@ -315,7 +315,6 @@ export default function LocationScreen() {
   const [addressSuggestions, setAddressSuggestions] = useState([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
-  const contentOpacity = useRef(new Animated.Value(0)).current;
   const mapRef = useRef(null);
   const lastLocations = useRef({});
   const [myDisplayedAddress, setMyDisplayedAddress] = useState(null);
@@ -348,63 +347,92 @@ export default function LocationScreen() {
     return `idx-${index}`;
   }, []);
 
+  const { resolvedTheme } = useContext(ThemeContext);
+  const isDark = resolvedTheme === "dark";
+  const t = useTheme();
+
+  const backgroundColor = isDark ? "rgba(7,10,12,0.8)" : "rgba(247,249,251,0.85)";
+  const bottomSheetBackground = t.colors.surface;
+  // In light mode the sheet gradient is a pale gray, so use pure-white cards for lift;
+  // in dark mode keep the raised charcoal tone for contrast against the black sheet.
+  const moduleBackground = isDark
+    ? (t.colors.surfaceRaised || t.colors.surface)
+    : t.colors.bgElevated;
+  const titleColor = t.colors.text;
+  const textColor = t.colors.text;
+  const altTextColor = t.colors.textMuted;
+  const buttonColor = t.colors.accent;
+  const sheetGradientTop = t.colors.gradientTop;
+  const sheetGradientBottom = t.colors.gradientBottom;
+
+  const user = auth.currentUser;
+
   const renderMemberItem = useCallback(({ item }) => (
     <TouchableOpacity
-      style={{ marginBottom: 10, flexDirection: "row", alignItems: "center" }}
+      style={{
+        marginBottom: 8,
+        flexDirection: "row",
+        alignItems: "center",
+        padding: 12,
+        backgroundColor: moduleBackground,
+        borderRadius: t.radius.md,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: t.colors.border,
+      }}
       onPress={() => openMemberModal(item)}
     >
       {item.photoURL ? (
-        <LinearGradient
-          colors={["#00b386", "#0d3d33"]}
+        <View
           style={{
             width: 40,
             height: 40,
             borderRadius: 20,
-            marginRight: 8,
+            marginRight: 10,
             justifyContent: "center",
             alignItems: "center",
             overflow: "hidden",
+            backgroundColor: t.colors.accentFaint,
           }}
         >
           <Image
             source={{ uri: item.photoURL }}
             style={{ width: "100%", height: "100%", borderRadius: 20 }}
           />
-        </LinearGradient>
+        </View>
       ) : (
-        <LinearGradient
-          colors={["#00b386", "#0d3d33"]}
+        <View
           style={{
             width: 40,
             height: 40,
             borderRadius: 20,
-            marginRight: 8,
+            marginRight: 10,
             justifyContent: "center",
             alignItems: "center",
+            backgroundColor: t.colors.accentFaint,
           }}
         >
-          <Text style={{ color: "white", fontWeight: "bold" }}>
+          <Text style={{ color: t.colors.accent, fontWeight: "700" }}>
             {item.name[0]?.toUpperCase()}
           </Text>
-        </LinearGradient>
+        </View>
       )}
 
       <View style={{ flex: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
-          <Text style={{ color: textColor, marginRight: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <Text style={[t.typography.bodyStrong, { color: textColor }]}>
             {item.name} {item.uid === user?.uid ? "(You)" : ""}
           </Text>
 
           {item.emergency && (
             <View
               style={{
-                backgroundColor: "#ff3b30",
+                backgroundColor: t.colors.danger,
                 paddingHorizontal: 8,
                 paddingVertical: 2,
-                borderRadius: 10,
+                borderRadius: t.radius.sm,
               }}
             >
-              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 12 }}>
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 11 }}>
                 Emergency
               </Text>
             </View>
@@ -412,21 +440,21 @@ export default function LocationScreen() {
           {item.isDriving && (
             <View
               style={{
-                backgroundColor: "green",
-                paddingHorizontal: 6,
+                backgroundColor: t.colors.accentFaint,
+                paddingHorizontal: 8,
                 paddingVertical: 2,
-                borderRadius: 10,
+                borderRadius: t.radius.sm,
               }}
             >
-              <Text style={{ color: "white", fontSize: 12 }}>
-                Driving ({((item.coords?.speed ?? 0) * 2.23694).toFixed(1)} mph)
+              <Text style={{ color: t.colors.accent, fontSize: 11, fontWeight: "700" }}>
+                Driving · {((item.coords?.speed ?? 0) * 2.23694).toFixed(0)} mph
               </Text>
             </View>
           )}
         </View>
 
         {item.coords && (
-          <Text style={{ color: altTextColor, fontSize: 12, marginTop: 3 }}>
+          <Text style={[t.typography.caption, { color: altTextColor, marginTop: 3 }]}>
             {item.uid === user?.uid
               ? (myDisplayedAddress || "Unknown")
               : (item.displayName ? item.displayName : item.address || "Unknown")}
@@ -449,38 +477,55 @@ export default function LocationScreen() {
             );
           }}
           style={{
-            padding: 6,
-            borderRadius: 20,
-            backgroundColor: item.coords?.emergency ? '#ff3b30' : moduleBackground,
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: item.coords?.emergency ? t.colors.danger : t.colors.accentFaint,
             marginLeft: 10,
           }}
         >
           <Ionicons
             name={item.coords?.emergency ? 'location-sharp' : 'location-outline'}
-            size={20}
-            color={item.coords?.emergency ? '#ffffff' : textColor}
+            size={18}
+            color={item.coords?.emergency ? '#ffffff' : t.colors.accent}
           />
         </TouchableOpacity>
       )}
     </TouchableOpacity>
-  ), [textColor, altTextColor, moduleBackground, user?.uid, myDisplayedAddress]);
+  ), [textColor, altTextColor, moduleBackground, t, user?.uid, myDisplayedAddress]);
 
   const renderLocationItem = useCallback(({ item }) =>
     item.placeholder ? (
-      <Text style={{ color: altTextColor, fontStyle: "italic", marginTop: 8 }}>
-        No locations yet. Click the button below to add a location.
-      </Text>
+      <View
+        style={{
+          padding: 14,
+          backgroundColor: moduleBackground,
+          borderRadius: t.radius.md,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.colors.border,
+          marginTop: 4,
+        }}
+      >
+        <Text style={[t.typography.caption, { color: altTextColor, fontStyle: "italic" }]}>
+          No locations yet. Click the button below to add a location.
+        </Text>
+      </View>
     ) : (
       <TouchableOpacity
         style={{
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: 10,
+          paddingVertical: 12,
+          paddingHorizontal: 14,
           backgroundColor: moduleBackground,
-          borderRadius: 8,
+          borderRadius: t.radius.md,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.colors.border,
           marginBottom: 8,
-          minHeight: 70,
+          minHeight: 64,
         }}
         onPress={() => {
           setNewLocationName(item.name);
@@ -489,17 +534,30 @@ export default function LocationScreen() {
           addLocationSheetRef.current?.expand();
         }}
       >
-        <View style={{ flexShrink: 1 }}>
-          <Text style={{ color: titleColor, fontWeight: "bold" }}>
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: t.colors.accentFaint,
+            marginRight: 12,
+          }}
+        >
+          <Ionicons name="bookmark-outline" size={18} color={t.colors.accent} />
+        </View>
+        <View style={{ flexShrink: 1, flex: 1 }}>
+          <Text style={[t.typography.bodyStrong, { color: titleColor }]}>
             {item.name}
           </Text>
-          <Text style={{ color: altTextColor, fontSize: 12, marginRight: 5, marginTop: 3 }}>
+          <Text style={[t.typography.caption, { color: altTextColor, marginTop: 3 }]} numberOfLines={1}>
             {item.address}
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={24} color={altTextColor} />
+        <Ionicons name="chevron-forward" size={20} color={t.colors.textSubtle} />
       </TouchableOpacity>
-    ), [titleColor, altTextColor, moduleBackground]);
+    ), [titleColor, altTextColor, moduleBackground, t]);
 
   const sectionList = useMemo(() => ([
     { title: "Members", data: members, renderItem: renderMemberItem },
@@ -509,22 +567,6 @@ export default function LocationScreen() {
       renderItem: renderLocationItem,
     },
   ]), [members, locations, renderMemberItem, renderLocationItem]);
-
-  const { resolvedTheme } = useContext(ThemeContext);
-  const isDark = resolvedTheme === "dark";
-  const t = useTheme();
-
-  const backgroundColor = isDark ? "rgba(7,10,12,0.8)" : "rgba(247,249,251,0.85)";
-  const bottomSheetBackground = t.colors.surface;
-  const moduleBackground = t.colors.surfaceRaised || t.colors.surface;
-  const titleColor = t.colors.text;
-  const textColor = t.colors.text;
-  const altTextColor = t.colors.textMuted;
-  const buttonColor = t.colors.accent;
-  const sheetGradientTop = t.colors.gradientTop;
-  const sheetGradientBottom = t.colors.gradientBottom;
-
-  const user = auth.currentUser;
 
   const [newLocationName, setNewLocationName] = useState("");
   const [newLocationAddress, setNewLocationAddress] = useState("");
@@ -913,16 +955,6 @@ export default function LocationScreen() {
 
 
 
-  const fadeInContent = useCallback(() => { 
-    contentOpacity.setValue(0);
-    Animated.timing(contentOpacity, {
-      toValue: 1,
-      duration: 1000,
-      easing: Easing.out(Easing.poly(3)),
-      useNativeDriver: true,
-    }).start();
-  }, [contentOpacity]);
-
   useFocusEffect(
     useCallback(() => {
       purgeOldGeocodeCache();
@@ -1112,9 +1144,6 @@ export default function LocationScreen() {
     };
 
     checkGroup();
-
-    contentOpacity.setValue(0);
-    fadeInContent();
 
     return () => { cancelled = true; };
   }, []);
@@ -1323,7 +1352,7 @@ export default function LocationScreen() {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-    <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+    <View style={{ flex: 1 }}>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View style={styles.container}>
         {location && (
@@ -1451,7 +1480,7 @@ export default function LocationScreen() {
               Family Safety
             </Text>
             <Text style={[t.typography.title, { color: titleColor, marginBottom: 8 }]}>
-              RoadCash Groups
+              RoadWise Groups
             </Text>
             <Text
               style={[
@@ -1739,55 +1768,93 @@ export default function LocationScreen() {
                 >
                   <View style={{
                     flex: 1,
-                    backgroundColor: "rgba(0,0,0,0.5)",
+                    backgroundColor: isDark ? "rgba(0,0,0,0.65)" : "rgba(15,20,25,0.45)",
                     justifyContent: "center",
                     alignItems: "center",
+                    paddingHorizontal: 24,
                   }}>
                     <View style={{
                       backgroundColor: bottomSheetBackground,
-                      padding: 20,
-                      borderRadius: 12,
-                      width: "85%"
+                      padding: 22,
+                      borderRadius: t.radius.lg,
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: t.colors.border,
+                      width: "100%",
+                      maxWidth: 420,
+                      ...t.elevation.card,
                     }}>
-                      <Text style={{ fontSize: 20, fontWeight: "bold", color: titleColor }}>
+                      <Text style={[t.typography.micro, { color: t.colors.accent, marginBottom: 6 }]}>
+                        Member
+                      </Text>
+                      <Text style={[t.typography.title, { color: titleColor }]}>
                         {selectedMember.name}
                       </Text>
 
                       {selectedMember.coords && (
-                        <>
-                          <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12, marginBottom: 8 }}>
-                            <Text style={{ color: textColor, flex: 1, fontSize: 15 }}>
-                              Location: {selectedMember.address}
+                        <View style={{ marginTop: 18, gap: 12 }}>
+                          <View>
+                            <Text style={[t.typography.micro, { color: altTextColor, marginBottom: 4 }]}>
+                              Location
                             </Text>
-                            {selectedMember.address && (
-                              <TouchableOpacity onPress={() => copyToClipboard(selectedMember.address)}>
-                                <Ionicons name="copy-outline" size={22} color={textColor} style={{ marginLeft: 8, marginRight: 12 }} />
-                              </TouchableOpacity>
-                            )}
+                            <View style={{ flexDirection: "row", alignItems: "center" }}>
+                              <Text style={[t.typography.body, { color: textColor, flex: 1 }]}>
+                                {selectedMember.address || "Unknown"}
+                              </Text>
+                              {selectedMember.address && (
+                                <TouchableOpacity
+                                  onPress={() => copyToClipboard(selectedMember.address)}
+                                  style={{
+                                    width: 34,
+                                    height: 34,
+                                    borderRadius: 17,
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    backgroundColor: t.colors.accentFaint,
+                                    marginLeft: 10,
+                                  }}
+                                >
+                                  <Ionicons name="copy-outline" size={16} color={t.colors.accent} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
                           </View>
-                          <Text style={{ color: textColor, marginBottom: 8, fontSize: 15 }}>
-                            Last Updated:{" "}
-                            {selectedMember.coords.updatedAt
-                              ? new Date(selectedMember.coords.updatedAt.seconds * 1000).toLocaleString()
-                              : "N/A"}
-                          </Text>
-                          <Text style={{ color: textColor, marginBottom: 8, fontSize: 15 }}>
-                            Speed: {((selectedMember.coords.speed ?? 0) * 2.23694).toFixed(0)} mph
-                          </Text>
-                        </>
+
+                          <View style={{ flexDirection: "row", gap: 12 }}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[t.typography.micro, { color: altTextColor, marginBottom: 4 }]}>
+                                Last updated
+                              </Text>
+                              <Text style={[t.typography.body, { color: textColor }]}>
+                                {selectedMember.coords.updatedAt
+                                  ? new Date(selectedMember.coords.updatedAt.seconds * 1000).toLocaleTimeString()
+                                  : "N/A"}
+                              </Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[t.typography.micro, { color: altTextColor, marginBottom: 4 }]}>
+                                Speed
+                              </Text>
+                              <Text style={[t.typography.body, { color: textColor }]}>
+                                {((selectedMember.coords.speed ?? 0) * 2.23694).toFixed(0)} mph
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
                       )}
 
                       <TouchableOpacity
                         onPress={closeMemberModal}
                         style={{
-                          marginTop: 20,
+                          marginTop: 22,
                           backgroundColor: buttonColor,
-                          paddingVertical: 10,
-                          borderRadius: 8,
+                          paddingVertical: 14,
+                          borderRadius: t.radius.md,
                           alignItems: "center",
                         }}
                       >
-                        <Text style={{ color: "white", fontWeight: "bold" }}>Close</Text>
+                        <Text style={{ color: t.colors.accentText, fontWeight: "700", fontSize: 15 }}>
+                          Close
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -1805,12 +1872,21 @@ export default function LocationScreen() {
           backgroundStyle={{ backgroundColor: bottomSheetBackground }}
           handleIndicatorStyle={{ backgroundColor: altTextColor }}
           handleComponent={null}
-          enablePanDownToClose={false}  
-          enableContentPanningGesture={false} 
+          enablePanDownToClose={false}
+          enableContentPanningGesture={false}
           enableHandlePanningGesture={false}
         >
-          <BottomSheetView style={{ flex: 1, padding: 20 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <BottomSheetView style={{ flex: 1, paddingHorizontal: 24, paddingTop: 20, paddingBottom: 24 }}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                paddingBottom: 14,
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: t.colors.divider,
+              }}
+            >
               <TouchableOpacity onPress={() => {
                 nameInputRef.current?.blur();
                 addressInputRef.current?.blur();
@@ -1821,35 +1897,59 @@ export default function LocationScreen() {
                 setAddressSuggestions([]);
               }}
               >
-                <Text style={{ color: buttonColor, fontSize: 16 }}>Cancel</Text>
+                <Text style={{ color: altTextColor, fontSize: 15, fontWeight: "500" }}>Cancel</Text>
               </TouchableOpacity>
+              <Text style={[t.typography.bodyStrong, { color: titleColor }]}>
+                {editingLocation ? "Edit location" : "Add location"}
+              </Text>
               <TouchableOpacity onPress= {() => {
                 nameInputRef.current?.blur();
                 addressInputRef.current?.blur();
                 Keyboard.dismiss();
                 handleSaveLocation();
               }}
-              
               >
-                <Text style={{ color: buttonColor, fontWeight: "bold", fontSize: 16 }}>Save</Text>
+                <Text style={{ color: buttonColor, fontWeight: "700", fontSize: 15 }}>Save</Text>
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.label, { color: textColor, marginTop: 30, fontWeight: "bold", fontSize: 20 }]}>Location Name</Text>
+            <Text style={[t.typography.micro, { color: altTextColor, marginTop: 24, marginBottom: 8, letterSpacing: 1.1, textTransform: "uppercase" }]}>
+              Location name
+            </Text>
             <TextInput
-              style={[styles.input, { color: textColor, width: "100%", textAlign: "left", borderColor: altTextColor  }]}
+              style={{
+                backgroundColor: t.colors.surfaceAlt,
+                borderWidth: 1,
+                borderColor: t.colors.border,
+                borderRadius: t.radius.md,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: textColor,
+                fontSize: 15,
+              }}
               placeholder="e.g. Home, Office"
-              placeholderTextColor={altTextColor}
+              placeholderTextColor={t.colors.textSubtle}
               value={newLocationName}
               onChangeText={setNewLocationName}
               ref={nameInputRef}
             />
 
-            <Text style={[styles.label, { color: textColor, marginTop: 20, fontWeight: "bold", fontSize: 20 }]}>Address</Text>
+            <Text style={[t.typography.micro, { color: altTextColor, marginTop: 18, marginBottom: 8, letterSpacing: 1.1, textTransform: "uppercase" }]}>
+              Address
+            </Text>
             <TextInput
-              style={[styles.input, { color: textColor, width: "100%", textAlign: "left", borderColor: altTextColor }]}
-              placeholder="Address"
-              placeholderTextColor={altTextColor}
+              style={{
+                backgroundColor: t.colors.surfaceAlt,
+                borderWidth: 1,
+                borderColor: t.colors.border,
+                borderRadius: t.radius.md,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: textColor,
+                fontSize: 15,
+              }}
+              placeholder="Start typing an address..."
+              placeholderTextColor={t.colors.textSubtle}
               value={newLocationAddress}
               ref={addressInputRef}
               onChangeText={(text) => {
@@ -1859,37 +1959,48 @@ export default function LocationScreen() {
             />
             <TouchableOpacity
               onPress={fillAddressFromOnscreen}
-              style={{ marginTop: 8, alignSelf: "flex-start" }}
+              style={{ marginTop: 10, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6 }}
             >
-              <Text style={{ color: buttonColor, textDecorationLine: "underline" }}>
+              <Ionicons name="locate-outline" size={14} color={buttonColor} />
+              <Text style={{ color: buttonColor, fontSize: 13, fontWeight: "600" }}>
                 Use my current location
               </Text>
             </TouchableOpacity>
             {isFetchingSuggestions && (
-              <ActivityIndicator size="small" color={titleColor} style={{ marginTop: 10 }} />
+              <ActivityIndicator size="small" color={t.colors.accent} style={{ marginTop: 12 }} />
             )}
 
             {addressSuggestions.length > 0 && (
               <ScrollView
                 style={{
                   maxHeight: height/3,
-                  marginTop: 10,
-                  borderWidth: 1,
-                  borderColor: "#8080805e",
-                  borderRadius: 8,
-                  backgroundColor: isDark ? "#0c0c0cff" : "#fff",
+                  marginTop: 12,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: t.colors.border,
+                  borderRadius: t.radius.md,
+                  backgroundColor: t.colors.surfaceAlt,
                 }}
               >
                 {addressSuggestions.map((s, idx) => (
                   <TouchableOpacity
                     key={idx}
-                    style={{ padding: 10, borderBottomWidth: 1, borderBottomColor: "#8080805e" }}
+                    style={{
+                      padding: 12,
+                      borderBottomWidth: idx === addressSuggestions.length - 1 ? 0 : StyleSheet.hairlineWidth,
+                      borderBottomColor: t.colors.divider,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
                     onPress={() => {
-                      setNewLocationAddress(s.address.label || s.title); 
-                      setAddressSuggestions([]); 
+                      setNewLocationAddress(s.address.label || s.title);
+                      setAddressSuggestions([]);
                     }}
                   >
-                    <Text style={{ color: textColor }}>{s.address.label || s.title}</Text>
+                    <Ionicons name="location-outline" size={14} color={altTextColor} />
+                    <Text style={[t.typography.body, { color: textColor, flex: 1 }]} numberOfLines={2}>
+                      {s.address.label || s.title}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -1902,14 +2013,14 @@ export default function LocationScreen() {
               <TouchableOpacity
                 style={{
                   marginTop: 20,
-                  backgroundColor: "#ff2626ff",
-                  paddingVertical: 12,
-                  borderRadius: 10,
+                  backgroundColor: t.colors.danger,
+                  paddingVertical: 14,
+                  borderRadius: t.radius.md,
                   alignItems: "center",
                 }}
                 onPress={handleDeleteLocation}
               >
-                <Text style={{ color: "white", fontWeight: "bold" }}>Delete Location</Text>
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>Delete location</Text>
               </TouchableOpacity>
             )}
           </BottomSheetView>
@@ -1917,7 +2028,7 @@ export default function LocationScreen() {
 
       </View>
     </GestureHandlerRootView>
-    </Animated.View>
+    </View>
     </TouchableWithoutFeedback>
   );
 }
@@ -1925,18 +2036,6 @@ export default function LocationScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-
-  joinPanel: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: "100%",
-    paddingHorizontal: width / 30,
-    paddingVertical: height / 6,
-    alignItems: "center",
-    justifyContent: "flex-start",
-  },
   joinPanelNew: {
     position: "absolute",
     top: 0,
@@ -1948,44 +2047,5 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "flex-start",
   },
-
-  title: { fontSize: 28, fontWeight: "bold", marginBottom: 15, marginTop: -10 },
-  subtitle: { fontSize: 20, fontWeight: "bold", marginBottom: 10, marginTop: 5 },
-
-  starttitle: { fontSize: 32, fontWeight: "bold", fontFamily: "Arial Rounded MT Bold", marginBottom: 25 },
-  startsubtitle: { fontSize: 20, fontWeight: "bold", fontFamily: "Arial Rounded MT Bold", marginBottom: 10, marginTop: 5 },
-  orText: { marginVertical: 10, fontSize: 16 },
-
-  button: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    marginTop: 10,
-    width: "90%",
-    alignItems: "center",
-    alignSelf: "center"
-  },
-  buttonText: { color: "white", fontWeight: "bold" },
-
-  cancelButton: {
-    backgroundColor: "#686868ff",
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    marginTop: 10,
-    width: "90%",
-    alignItems: "center",
-  },
-
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 10,
-    padding: 10,
-    width: "90%",
-    marginTop: 10,
-    textAlign: "center",
-  },
-
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 });

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   Dimensions,
-  Animated,
 } from 'react-native';
 import LottieView from 'lottie-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -54,7 +53,6 @@ export default function AIFeedbackScreen({ route }) {
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
   const [loadingMessage, setLoadingMessage] = useState('Analyzing data...');
-  const fadeAnim = useState(new Animated.Value(0))[0];
 
   useEffect(() => {
     if (feedback !== null) return;
@@ -136,11 +134,6 @@ export default function AIFeedbackScreen({ route }) {
         if (!controller.signal.aborted) {
           setLoading(false);
           clearTimeout(timeoutId);
-          Animated.timing(fadeAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }).start();
         }
       }
     };
@@ -213,7 +206,7 @@ export default function AIFeedbackScreen({ route }) {
   };
 
   return (
-    <Screen>
+    <Screen hasHeader>
       {loading ? (
         <View
           style={{
@@ -242,9 +235,10 @@ export default function AIFeedbackScreen({ route }) {
           </Text>
         </View>
       ) : (
-        <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <View style={{ flex: 1 }}>
           <ScrollView showsVerticalScrollIndicator={false}>
             <ScreenHeader
+              align="right"
               eyebrow="Insights · Feedback"
               title="Your feedback"
               subtitle="A personalized read on your recent drives."
@@ -340,7 +334,7 @@ export default function AIFeedbackScreen({ route }) {
               </>
             )}
           </ScrollView>
-        </Animated.View>
+        </View>
       )}
     </Screen>
   );

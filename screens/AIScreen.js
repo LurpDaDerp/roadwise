@@ -359,9 +359,10 @@ export default function AIScreen({ navigation }) {
         contentContainerStyle={{ paddingBottom: 32 }}
       >
         <ScreenHeader
+          align="right"
           eyebrow="Insights"
           title="Driver report"
-          subtitle="Patterns in your recent drives."
+          subtitle="Patterns from your recent drives."
         />
 
         <Section>

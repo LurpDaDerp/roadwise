@@ -5,21 +5,40 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from './useTheme';
 import { AutoFitText } from './AutoFitText';
 
 // Screen — full-bleed themed background + safe padding.
 // Uses a solid background to avoid LinearGradient null-colors crashes
 // during native stack transitions.
-export function Screen({ children, style, padded = true }) {
+// `hasHeader` — set true when a navigation header sits above (adds extra clearance
+// so the page title never collides with the back chevron/status bar).
+export function Screen({ children, style, padded = true, hasHeader = false }) {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
+
+  const baseTop =
+    insets.top > 0
+      ? insets.top
+      : Platform.OS === 'android'
+      ? StatusBar.currentHeight || 24
+      : 20;
+
+  const topPadding = padded ? baseTop + (hasHeader ? t.spacing[7] : t.spacing[4]) : 0;
+
   return (
     <View style={{ flex: 1, backgroundColor: t.colors?.bg || '#000' }}>
       <View
         style={[
           { flex: 1 },
-          padded && { paddingHorizontal: t.spacing[5], paddingTop: t.spacing[6] },
+          padded && {
+            paddingHorizontal: t.spacing[5],
+            paddingTop: topPadding,
+          },
           style,
         ]}
       >
@@ -319,8 +338,11 @@ export function Pill({ label, tone = 'neutral', style }) {
 }
 
 // ScreenHeader — page title + optional subtitle, used at top of Screen.
-export function ScreenHeader({ eyebrow, title, subtitle, right, style }) {
+// `align` — 'left' (default) or 'right' (use on screens with a back button
+// to keep the heading clear of the nav chevron).
+export function ScreenHeader({ eyebrow, title, subtitle, right, style, align = 'left' }) {
   const t = useTheme();
+  const isRight = align === 'right';
   return (
     <View
       style={[
@@ -333,18 +355,27 @@ export function ScreenHeader({ eyebrow, title, subtitle, right, style }) {
         style,
       ]}
     >
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, alignItems: isRight ? 'flex-end' : 'flex-start' }}>
         {!!eyebrow && (
           <Eyebrow style={{ marginBottom: 8 }}>{eyebrow}</Eyebrow>
         )}
-        <Text style={[t.typography.title, { color: t.colors.text }]}>
+        <Text
+          style={[
+            t.typography.title,
+            { color: t.colors.text, textAlign: isRight ? 'right' : 'left' },
+          ]}
+        >
           {title}
         </Text>
         {!!subtitle && (
           <Text
             style={[
               t.typography.body,
-              { color: t.colors.textMuted, marginTop: 4 },
+              {
+                color: t.colors.textMuted,
+                marginTop: 4,
+                textAlign: isRight ? 'right' : 'left',
+              },
             ]}
           >
             {subtitle}

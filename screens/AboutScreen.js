@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -6,15 +6,11 @@ import {
   ImageBackground,
   ScrollView,
   StatusBar,
-  Animated,
-  Easing,
   Platform,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { useTheme, Eyebrow } from '../theme';
 
 export default function AboutScreen({ imageUri }) {
-  const contentOpacity = useRef(new Animated.Value(0)).current;
   const t = useTheme();
 
   const bgSource = imageUri ? { uri: imageUri } : require('../assets/aboutback.jpg');
@@ -26,18 +22,6 @@ export default function AboutScreen({ imageUri }) {
       'Nearly one life is lost every single day in the U.S. due to phone-related distractions',
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      contentOpacity.setValue(0);
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 400,
-        easing: Easing.out(Easing.poly(3)),
-        useNativeDriver: true,
-      }).start();
-    }, [contentOpacity])
-  );
-
   return (
     <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
@@ -48,7 +32,7 @@ export default function AboutScreen({ imageUri }) {
             { backgroundColor: 'rgba(6,10,12,0.66)' },
           ]}
         />
-        <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+        <View style={{ flex: 1 }}>
           <ScrollView
             contentContainerStyle={{
               paddingTop:
@@ -70,7 +54,7 @@ export default function AboutScreen({ imageUri }) {
                 marginBottom: 24,
               }}
             >
-              Every drive, focused.
+              Building a Safer Journey.
             </Text>
 
             <Text style={styles.lead}>
@@ -117,7 +101,7 @@ export default function AboutScreen({ imageUri }) {
               This isn't just about numbers. It's about people. Families who never got to say goodbye, friends who never made it home. I built this app to help drivers stay focused and remove the small but deadly temptations of their phones. If this app helps prevent even one crash, it will have been worth the work.
             </Text>
           </ScrollView>
-        </Animated.View>
+        </View>
       </ImageBackground>
     </View>
   );

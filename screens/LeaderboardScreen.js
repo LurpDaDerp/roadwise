@@ -1,12 +1,10 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ActivityIndicator,
   ScrollView,
-  Animated,
-  Easing,
 } from 'react-native';
 import {
   collection,
@@ -20,7 +18,6 @@ import {
   where,
 } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 
 import { auth, db } from '../utils/firebase';
 import {
@@ -41,20 +38,6 @@ export default function LeaderboardScreen() {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUserPlacement, setCurrentUserPlacement] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  const contentOpacity = useRef(new Animated.Value(0)).current;
-
-  useFocusEffect(
-    useCallback(() => {
-      contentOpacity.setValue(0);
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 350,
-        easing: Easing.out(Easing.poly(3)),
-        useNativeDriver: true,
-      }).start();
-    }, [contentOpacity])
-  );
 
   useEffect(() => {
     const fetchLeaderboard = async () => {
@@ -121,12 +104,12 @@ export default function LeaderboardScreen() {
 
   return (
     <Screen>
-      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+      <View style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false}>
           <ScreenHeader
             eyebrow="Community"
             title="Leaderboard"
-            subtitle="Top focused drivers, ranked by points."
+            subtitle="The safest drivers."
           />
 
           <Section label={`Top ${USERS_SHOWN}`}>
@@ -179,7 +162,7 @@ export default function LeaderboardScreen() {
 
           <View style={{ height: 32 }} />
         </ScrollView>
-      </Animated.View>
+      </View>
     </Screen>
   );
 }
@@ -231,7 +214,11 @@ function Row({ t, rank, name, points, isCurrentUser, medal, first }) {
           </Text>
         )}
       </View>
-      <View style={{ flex: 1 }}>
+      
+      {/* FIX 1: Added paddingRight here.
+        This prevents the name container from pushing too hard against the points container.
+      */}
+      <View style={{ flex: 1, paddingRight: 16 }}>
         <Text
           style={[
             t.typography.bodyStrong,
@@ -242,10 +229,19 @@ function Row({ t, rank, name, points, isCurrentUser, medal, first }) {
           {name}
         </Text>
       </View>
+
       <AutoFitText
         style={[
           t.typography.numeric,
-          { color: isCurrentUser ? t.colors.accent : t.colors.text, fontSize: 16 },
+          { 
+            color: isCurrentUser ? t.colors.accent : t.colors.text, 
+            fontSize: 16,
+            /* FIX 2: Added paddingRight here. 
+              This forces the internal bounding box of the text to be slightly larger,
+              preventing the right edge of the font glyph from being clipped.
+            */
+            paddingRight: 4 
+          },
         ]}
       >
         {points.toLocaleString()}

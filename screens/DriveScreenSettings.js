@@ -70,12 +70,13 @@ export default function DriveScreenSettings() {
   ];
 
   return (
-    <Screen>
+    <Screen hasHeader>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ScreenHeader
+          align="right"
           eyebrow="Settings · Driving"
           title="Driving"
-          subtitle="How RoadCash behaves while you drive."
+          subtitle="Customize your driving experience."
         />
 
         <Section label="Units">

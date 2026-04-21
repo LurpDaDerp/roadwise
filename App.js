@@ -28,6 +28,7 @@ import { DriveProvider } from './context/DriveContext'
 import { ErrorBoundary } from './theme';
 
 import { Provider as PaperProvider } from 'react-native-paper';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import * as Notifications from 'expo-notifications';
 import RewardsScreen from './screens/RewardsScreen';
@@ -174,13 +175,15 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <DriveProvider>
-        <ThemeProvider>
-          <PaperProvider>
-            <AppNavigation />
-          </PaperProvider>
-        </ThemeProvider>
-      </DriveProvider>
+      <SafeAreaProvider>
+        <DriveProvider>
+          <ThemeProvider>
+            <PaperProvider>
+              <AppNavigation />
+            </PaperProvider>
+          </ThemeProvider>
+        </DriveProvider>
+      </SafeAreaProvider>
     </ErrorBoundary>
   );
 }
