@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//c/Users/lurpd/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown/skills/**)"
-    ]
-  }
-}
