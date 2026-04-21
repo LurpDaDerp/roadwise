@@ -385,7 +385,6 @@ export default function DriveScreen({ route }) {
   const buttonColor = t.colors.accent;
   const gradientTop = t.colors.gradientTop;
   const gradientBottom = t.colors.gradientBottom;
-  const [streak, setStreak] = useState(0);
   const soundRef = useRef(null);
   const driveStartTime = useRef(Date.now());
   const totalSpeedSum = useRef(0);
@@ -506,7 +505,6 @@ export default function DriveScreen({ route }) {
         }
 
         await setDoc(userDocRef, { drivingStreak: newStreak }, { merge: true });
-        setStreak(newStreak);
         await AsyncStorage.setItem('@streakThisDrive', '1');
       }
     } catch (e) {
@@ -523,27 +521,6 @@ export default function DriveScreen({ route }) {
     setDriveJustCompleted(true);
   };
        
-  useFocusEffect(
-    React.useCallback(() => {
-      const fetchStreak = async () => {
-        const uid = auth.currentUser?.uid;
-        if (!uid) return;
-
-        try {
-          const userDocRef = doc(db, "users", uid);
-          const userSnap = await getDoc(userDocRef);
-          if (userSnap.exists() && userSnap.data().drivingStreak) {
-            setStreak(userSnap.data().drivingStreak);
-          }
-        } catch (err) {
-          console.warn("⚠️ Failed to fetch streak:", err);
-        }
-      };
-
-      fetchStreak();
-    }, [])
-  );
-
   useEffect(() => {
     if (!hasStartedDriving.current && speedRef.current >= speedThreshold) {
       hasStartedDriving.current = true;
@@ -1477,36 +1454,6 @@ export default function DriveScreen({ route }) {
               >
                 {distractedCount}
               </AutoFitText>
-            </View>
-            <View style={styles.subModule}>
-              <Text style={[styles.moduleLabel, { color: altTextColor, fontSize: 18 }]}>Streak</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 2*(Math.abs(streak).toString().length - 1) }}>
-                {(() => {
-                  const active = distractedUI ? 0 : (streak ?? 0);
-                  const flameColor = active <= 0
-                    ? t.colors.textSubtle || t.colors.textMuted
-                    : active < 3 ? t.colors.accentMuted
-                    : active < 7 ? t.colors.accent
-                    : active < 15 ? t.colors.warning
-                    : t.colors.danger;
-                  return (
-                    <MaterialCommunityIcons
-                      name="fire"
-                      size={34}
-                      color={flameColor}
-                      style={{ marginRight: 4, marginTop: 4 }}
-                    />
-                  );
-                })()}
-              <AutoFitText
-                style={[
-                  styles.moduleValue,
-                  { color: textColor, fontSize: 45 - 5*(Math.abs(streak).toString().length - 1) },
-                ]}
-              >
-                {distractedUI ? 0 : streak ?? 0}
-              </AutoFitText>
-              </View>
             </View>
           </View>
           </View>

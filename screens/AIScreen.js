@@ -376,7 +376,7 @@ export default function AIScreen({ navigation }) {
         <Section label="Timeframe">
           <Card>
             <SegmentedControl
-              values={['1D', '7D', '30D']}
+              values={['Day', 'Week', 'Month']}
               selectedIndex={timeframe === 1 ? 0 : timeframe === 7 ? 1 : 2}
               onChange={(event) => {
                 const index = event.nativeEvent.selectedSegmentIndex;

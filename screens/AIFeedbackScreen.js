@@ -19,6 +19,7 @@ import {
   ScreenHeader,
   SafeGradient as LinearGradient,
   useTheme,
+  AutoFitText
 } from '../theme';
 
 const { width } = Dimensions.get('window');
