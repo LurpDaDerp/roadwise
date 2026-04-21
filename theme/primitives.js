@@ -203,10 +203,10 @@ export function Button({
           justifyContent: 'center',
           flexDirection: 'row',
           gap: 8,
-          width: fullWidth ? '100%' : undefined,
           opacity: disabled ? 0.5 : pressed ? 0.88 : 1,
-          transform: pressed ? [{ scale: 0.995 }] : undefined,
         },
+        fullWidth && { width: '100%' },
+        pressed && { transform: [{ scale: 0.995 }] },
         style,
       ]}
     >

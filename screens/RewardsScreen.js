@@ -158,9 +158,9 @@ function CategoryCard({ item, onPress }) {
           overflow: 'hidden',
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: t.colors.border,
-          transform: pressed ? [{ scale: 0.99 }] : undefined,
           ...t.elevation.card,
         },
+        pressed && { transform: [{ scale: 0.99 }] },
       ]}
     >
       <ImageBackground
