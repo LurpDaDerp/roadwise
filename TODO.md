@@ -1,8 +1,9 @@
 ## Urgent!!!
 1) fix google sign in 
-2) optimize location updates to stop cooking backend
-3) optimize firestore data organization for less reads and better security
-4) put firebase project access details in env file
+2) optimize speed limit/geocoding api calls
+3) optimize location updates to stop cooking backend
+4) optimize firestore data organization for less reads and better security
+5) put firebase project access details in env file
 
 ## Important
 1) put in driving distraction model (in progress)
