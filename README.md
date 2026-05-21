@@ -1,4 +1,4 @@
-# RoadWise 🚗
+# RoadWise 
 
 **AI-powered app that detects distracted or unsafe driving and rewards safe driving behavior to eliminate driver distractions.**
 
@@ -22,7 +22,7 @@ RoadWise is a mobile application that encourages safer driving by:
 2. **Tracking Driving Metrics** - Records comprehensive driving data including speed, location, and driving patterns
 3. **Rewarding Safe Behavior** - Awards points for safe, focused drives that can be redeemed for real rewards
 4. **AI-Powered Insights** - Provides personalized driver reports and safety scores to help users improve
-5. **Building Streaks** - Gamifies safe driving through streak tracking and achievement systems
+5. **Rewards System** - Gamifies safe driving through streak tracking and achievement systems
 6. **Family Safety** - Includes group tracking and emergency features for family members
 
 ## Key Features
@@ -47,7 +47,7 @@ RoadWise is a mobile application that encourages safer driving by:
 - **Distraction Detection** - Monitors for phone use and app switching
 - **Automatic Session Management** - Resets sessions after 10+ minutes of inactivity
 
-### 🎁 Rewards & Redemption
+### 🎁 Rewards & Redemption (WIP)
 - **Multiple Categories**:
   - 🍔 Food & Drink
   - 🛍️ Shopping
@@ -68,7 +68,7 @@ RoadWise is a mobile application that encourages safer driving by:
 - **Personalized Recommendations** - Actionable insights to improve driving habits
 - **Behavior Analysis** - Machine learning-based detection of driving anomalies
 
-### 👨‍👩‍👧‍👦 Family Safety Features
+### 👨‍👩‍👧‍👦 Family Safety Features (WIP)
 - **Group Tracking** - Create or join family groups
 - **Location Sharing** - Share real-time location with group members
 - **Emergency Alerts** - Quick SOS notifications to family
@@ -95,18 +95,6 @@ RoadWise is a mobile application that encourages safer driving by:
 - **Drive Completion Notifications** - Notifications when drives are completed
 - **Permission Management** - Granular control over notification preferences
 
-### 🌓 Theme Support
-- **Dark Mode** - Full dark theme support
-- **Light Mode** - Full light theme support
-- **System Preference** - Automatically follows device theme settings
-
-### ⚙️ Settings & Personalization
-- **User Preferences** - Customize app experience
-- **Notification Settings** - Control alert preferences and frequency
-- **Speed Unit Selection** - Choose between mph and kph
-- **Theme Selection** - Choose your preferred visual theme
-- **Account Management** - Manage authentication and profile
-
 ---
 
-**Drive Safe, Earn Rewards. RoadWise: Making roads safer, one drive at a time.** 🛣️✨
+Thanks for checking this out!
