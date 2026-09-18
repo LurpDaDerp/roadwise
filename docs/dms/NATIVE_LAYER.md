@@ -396,6 +396,14 @@ Applied after an independent review of this branch; none of them has been throug
   can already report seeds `targetRotation`; it usually cannot, which costs a few wrongly rotated
   frames at start — they carry no usable face and the engine's in-frame checks drop them).
 
+* **Post-review builds (2026-09-18, commit 6fbcc48 + 7e0e04c):** iOS development build
+  `b42bc5b0-af5e-4d91-8571-26ff3495233e` — FINISHED (the session-queue functions, the interruption
+  observers and the status-timer rework compiled).  Android `e334cbc2-…` ERRORED on Gradle dependency
+  resolution only (an explicit `compileOnly androidx.lifecycle:lifecycle-livedata-core:2.6.2` pin
+  conflicted with camera-core's transitive 2.1.0 under consistent resolution); the pin was removed in
+  7e0e04c (`Observer` / `LiveData` come from camera-core's own API dependency) and the build
+  resubmitted — its outcome is in the final report.
+
 ## 8. Deliberate omissions
 
 * **Mirror pair.** The promoted recipe runs the mesh on the frame and its horizontal flip and
