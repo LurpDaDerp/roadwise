@@ -14,6 +14,13 @@ Thumbs.db
 .export-opt-*/
 .export-*.log
 .npm-*.log
+.doctor.log
+.prebuild.log
+.rules.log
+.funclint.log
+.funcinstall.log
+.npmci.log
+.eas-*.log
 .git/
 .env
 .env.local
