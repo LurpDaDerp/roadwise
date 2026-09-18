@@ -4,7 +4,9 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, View, Text, Easing } from 'react-native';
 import { useTheme, AutoFitText } from '../../theme';
 
-export function SpeedLimitSign({ limit, unit, isDefault, speeding, size = 92 }) {
+export const SpeedLimitSign = React.memo(function SpeedLimitSign({
+  limit, unit, isDefault, speeding, size = 92,
+}) {
   const t = useTheme();
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -57,6 +59,6 @@ export function SpeedLimitSign({ limit, unit, isDefault, speeding, size = 92 }) 
       )}
     </Animated.View>
   );
-}
+});
 
 export default SpeedLimitSign;

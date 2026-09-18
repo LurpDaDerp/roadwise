@@ -1,6 +1,6 @@
 // SpeedHero — the one thing the driver glances at: current speed at ~120 pt,
 // colour by margin over the limit, the limit sign beside it.
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text } from 'react-native';
 import { useTheme, AutoFitText } from '../../theme';
 import { SpeedLimitSign } from './SpeedLimitSign';
@@ -24,9 +24,12 @@ export function speedColor(speed, limit, colors) {
   return `rgb(${c.r},${c.g},${c.b})`;
 }
 
-export function SpeedHero({ speed, limit, unit, isSpeeding, limitIsDefault, showLimit = true, gpsStatus }) {
+export const SpeedHero = React.memo(function SpeedHero({
+  speed, limit, unit, isSpeeding, limitIsDefault, showLimit = true, gpsStatus,
+}) {
   const t = useTheme();
-  const color = speedColor(speed, limit, t.colors);
+  // Six hex parses and two channel mixes; the inputs only change when the speed does.
+  const color = useMemo(() => speedColor(speed, limit, t.colors), [speed, limit, t.colors]);
   const unitLabel = unit === 'kph' ? 'km/h' : 'mph';
   const searching = gpsStatus === 'searching';
   return (
@@ -47,6 +50,6 @@ export function SpeedHero({ speed, limit, unit, isSpeeding, limitIsDefault, show
       )}
     </View>
   );
-}
+});
 
 export default SpeedHero;

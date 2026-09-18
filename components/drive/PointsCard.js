@@ -1,10 +1,12 @@
 // PointsCard — points this drive (or lifetime total) with the focus shield.
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, View, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AutoFitText, Card } from '../../theme';
 
-export function PointsCard({ points, label = 'Points this drive', state = 'focused', pausedReason }) {
+export const PointsCard = React.memo(function PointsCard({
+  points, label = 'Points this drive', state = 'focused', pausedReason,
+}) {
   const t = useTheme();
   const bump = useRef(new Animated.Value(1)).current;
   const prev = useRef(points);
@@ -16,13 +18,16 @@ export function PointsCard({ points, label = 'Points this drive', state = 'focus
     prev.current = points;
   }, [points, bump]);
 
-  const states = {
-    focused: { icon: 'shield-checkmark', color: t.colors.accent, bg: t.colors.accentFaint, text: 'Focused' },
-    paused: { icon: 'pause-circle', color: t.colors.warning, bg: t.colors.warningFaint, text: pausedReason || 'Paused' },
-    distracted: { icon: 'shield-half', color: t.colors.danger, bg: t.colors.dangerFaint, text: 'Distracted · streak lost' },
-    idle: { icon: 'shield-outline', color: t.colors.textSubtle, bg: t.colors.surfaceAlt, text: 'Start moving to earn' },
-  };
-  const s = states[state] || states.focused;
+  const s = useMemo(() => {
+    const states = {
+      focused: { icon: 'shield-checkmark', color: t.colors.accent, bg: t.colors.accentFaint, text: 'Focused' },
+      paused: { icon: 'pause-circle', color: t.colors.warning, bg: t.colors.warningFaint, text: pausedReason || 'Paused' },
+      distracted: { icon: 'shield-half', color: t.colors.danger, bg: t.colors.dangerFaint, text: 'Distracted · streak lost' },
+      idle: { icon: 'shield-outline', color: t.colors.textSubtle, bg: t.colors.surfaceAlt, text: 'Start moving to earn' },
+    };
+    return states[state] || states.focused;
+  }, [state, pausedReason, t.colors]);
+  const shown = useMemo(() => Number(points).toLocaleString(), [points]);
   return (
     <Card padded={false} style={{ paddingVertical: 14, paddingHorizontal: 18 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -30,7 +35,7 @@ export function PointsCard({ points, label = 'Points this drive', state = 'focus
           <Text style={[t.typography.micro, { color: t.colors.textMuted, marginBottom: 2 }]}>{label}</Text>
           <Animated.View style={{ transform: [{ scale: bump }], alignSelf: 'flex-start' }}>
             <AutoFitText style={[t.typography.numeric, { color: state === 'distracted' ? t.colors.danger : t.colors.accent, fontSize: 48, lineHeight: 54 }]}>
-              {Number(points).toLocaleString()}
+              {shown}
             </AutoFitText>
           </Animated.View>
         </View>
@@ -46,6 +51,6 @@ export function PointsCard({ points, label = 'Points this drive', state = 'focus
       </View>
     </Card>
   );
-}
+});
 
 export default PointsCard;

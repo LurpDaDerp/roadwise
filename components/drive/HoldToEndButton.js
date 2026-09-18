@@ -7,7 +7,9 @@ import { useTheme } from '../../theme';
 
 const HOLD_MS = 1200;
 
-export function HoldToEndButton({ onComplete, label = 'Hold to end drive', disabled }) {
+export const HoldToEndButton = React.memo(function HoldToEndButton({
+  onComplete, label = 'Hold to end drive', disabled,
+}) {
   const t = useTheme();
   const fill = useRef(new Animated.Value(0)).current;
   const timer = useRef(null);
@@ -74,6 +76,6 @@ export function HoldToEndButton({ onComplete, label = 'Hold to end drive', disab
       </View>
     </Pressable>
   );
-}
+});
 
 export default HoldToEndButton;

@@ -1,12 +1,40 @@
 // DriveTopBar — SOS (left), monitoring status pill (centre, [MP-1]), elapsed time (right).
-import React from 'react';
-import { View, Text, Pressable } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
 import { MonitoringStatusPill } from '../monitoring/MonitoringStatusPill';
 import { formatClock } from '../../utils/format';
 
-export function DriveTopBar({ onSos, monitoring, monitoringEnabled, showMonitoring = true, elapsed, onPillPress }) {
+/**
+ * The drive clock owns its own 1 Hz timer so the tick re-renders 40 characters of text and
+ * nothing else. It used to live in useDriveSession as a piece of state, which re-rendered the
+ * whole drive screen - speed hero, points card, conditions strip, alert slot - once a second.
+ */
+const ElapsedClock = React.memo(function ElapsedClock({ startedAt, running = true }) {
+  const t = useTheme();
+  const [elapsed, setElapsed] = useState(() =>
+    startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0);
+
+  useEffect(() => {
+    if (!startedAt || !running) return undefined;
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt, running]);
+
+  const text = formatClock(elapsed);
+  return (
+    <View style={styles.clock} accessibilityLabel={`Elapsed ${text}`}>
+      <Text style={[styles.clockText, { color: t.colors.text }]}>{text}</Text>
+    </View>
+  );
+});
+
+export const DriveTopBar = React.memo(function DriveTopBar({
+  onSos, monitoring, monitoringEnabled, showMonitoring = true, startedAt, running = true, onPillPress,
+}) {
   const t = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -45,11 +73,14 @@ export function DriveTopBar({ onSos, monitoring, monitoringEnabled, showMonitori
         <View />
       )}
 
-      <View style={{ minWidth: 64, alignItems: 'flex-end' }} accessibilityLabel={`Elapsed ${formatClock(elapsed)}`}>
-        <Text style={{ color: t.colors.text, fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatClock(elapsed)}</Text>
-      </View>
+      <ElapsedClock startedAt={startedAt} running={running} />
     </View>
   );
-}
+});
+
+const styles = StyleSheet.create({
+  clock: { minWidth: 64, alignItems: 'flex-end' },
+  clockText: { fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
+});
 
 export default DriveTopBar;

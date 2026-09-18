@@ -45,7 +45,7 @@ function BigAction({ icon, label, sub, tone, onPress, t, busy, disabled }) {
   );
 }
 
-export function EmergencySheet({ visible, onClose, contacts = [], onCall911, onNotifyGroup, onCallContact, isEmergencyActive, onCancelEmergency, hasGroup, busy = false }) {
+export const EmergencySheet = React.memo(function EmergencySheet({ visible, onClose, contacts = [], onCall911, onNotifyGroup, onCallContact, isEmergencyActive, onCancelEmergency, hasGroup, busy = false }) {
   const t = useTheme();
   return (
     <Sheet visible={visible} onClose={busy ? () => {} : onClose} eyebrow="Emergency" title="Need help?" align="bottom">
@@ -79,6 +79,6 @@ export function EmergencySheet({ visible, onClose, contacts = [], onCall911, onN
       </View>
     </Sheet>
   );
-}
+});
 
 export default EmergencySheet;

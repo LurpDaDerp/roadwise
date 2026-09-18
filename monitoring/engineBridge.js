@@ -127,6 +127,14 @@ const NEVER_ACKNOWLEDGEABLE = new Set([
   ALERT_TYPE.NO_FACE,        // engine DRIVER_NOT_VISIBLE
 ]);
 
+/**
+ * WARNINGS_DESIGN §4: may the driver dismiss this alert type at all?  The UI asks before it
+ * offers an acknowledgement control, so a closed-eye alert never grows a "Got it" button.
+ */
+function isAcknowledgeable(alertType) {
+  return Boolean(alertType) && !NEVER_ACKNOWLEDGEABLE.has(alertType);
+}
+
 /** `LONG_GLANCE@7.5` -> `LONG_GLANCE`; the alert types never contain `@`. */
 function typeOfEpisodeId(id) {
   if (typeof id !== 'string') return null;
@@ -847,6 +855,7 @@ module.exports = {
   MonitoringBridge,
   EVENT_TO_ALERT,
   NEVER_ACKNOWLEDGEABLE,
+  isAcknowledgeable,
   fallbackAlertType,
   severityOf,
   DROWSINESS_HISTORY_MAX,

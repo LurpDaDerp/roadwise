@@ -29,7 +29,9 @@ function describe(status, calibration, enabled) {
   }
 }
 
-export function MonitoringStatusPill({ status, calibration, enabled, onPress, style }) {
+export const MonitoringStatusPill = React.memo(function MonitoringStatusPill({
+  status, calibration, enabled, onPress, style,
+}) {
   const t = useTheme();
   const d = describe(status, calibration, enabled);
   const tones = {
@@ -64,10 +66,12 @@ export function MonitoringStatusPill({ status, calibration, enabled, onPress, st
   );
   if (!onPress) return inner;
   return (
-    <Pressable onPress={onPress} hitSlop={8} style={({ pressed }) => [pressed && { opacity: 0.8 }]}>
+    <Pressable onPress={onPress} hitSlop={8} style={pressedStyle}>
       {inner}
     </Pressable>
   );
-}
+});
+
+const pressedStyle = ({ pressed }) => (pressed ? { opacity: 0.8 } : null);
 
 export default MonitoringStatusPill;

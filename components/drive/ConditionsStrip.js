@@ -6,7 +6,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme, Card } from '../../theme';
 import { getWeatherInfo, roadScoreToTone, roadScoreIcon } from '../../utils/driveConditions';
 
-export function ConditionsStrip({ weather, roadSummary }) {
+// Memoised: the weather changes at most every 5 minutes, so it must not re-render with the speed.
+export const ConditionsStrip = React.memo(function ConditionsStrip({ weather, roadSummary }) {
   const t = useTheme();
   const info = weather?.current ? getWeatherInfo(weather.current.weathercode) : null;
   const tone = roadScoreToTone(roadSummary?.score);
@@ -30,6 +31,6 @@ export function ConditionsStrip({ weather, roadSummary }) {
       </View>
     </Card>
   );
-}
+});
 
 export default ConditionsStrip;

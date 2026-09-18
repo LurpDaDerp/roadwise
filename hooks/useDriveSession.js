@@ -13,6 +13,9 @@
 //     (points stop for the rest of the drive, streak resets); 2 min away = drive ends.
 //   • Drive record only saved when points > 0.
 //
+// `getFinalizeExtra` may be async (the drive screen awaits the monitoring engine's final
+// snapshot in it); both the hold-to-end and the auto-end path await it.
+//
 // New: [MP-4] monitoring metrics stored in the record, [MP-5] `pausePoints`
 // suspends the timer while a CRITICAL monitoring alert is active, top speed and
 // real phone-usage seconds are recorded, a per-drive score is computed.
@@ -20,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import * as Speech from 'expo-speech';
+import { speak, stopSpeech, SPEECH_PRIORITY } from '../utils/speech';
 import { auth } from '../utils/firebase';
 import { finalizeDriveWrite, flushPendingDriveWrites, getPendingDriveCount, startDriving, stopDriving } from '../utils/firestore';
 import { scheduleDistractedNotification, scheduleFirstDistractedNotification } from '../utils/notifications';
@@ -74,7 +77,7 @@ export function useDriveSession({
   notifyDriveComplete = true,
   pausePoints = false,
   onAutoEnd,
-  getFinalizeExtra, // () => extra merged into finalize() on auto-end ([MP-4] survives the 2-minute timeout)
+  getFinalizeExtra, // () => extra (may be a promise) merged into finalize() on auto-end ([MP-4] survives the 2-minute timeout)
 } = {}) {
 
   // ---- render state -------------------------------------------------------
@@ -473,8 +476,8 @@ export function useDriveSession({
     const rounded = Math.round(toDisplayUnits(limitKph, unit));
     if (prevSpokenLimit.current === rounded) return;
     prevSpokenLimit.current = rounded;
-    Speech.stop();
-    Speech.speak(`Speed limit ${rounded}`, { language: 'en', pitch: 0.9, rate: 0.95 });
+    // INFO priority: this must never cut off a monitoring alert (utils/speech.js).
+    speak(`Speed limit ${rounded}`, { priority: SPEECH_PRIORITY.INFO });
   }, [limitKph, limitSource, unit, audioSpeedUpdatesEnabled, active]);
 
   // ---- speeding alert (2.5 s sustained) -----------------------------------
@@ -530,7 +533,11 @@ export function useDriveSession({
               } catch {}
             }
           }
-          const extra = (() => { try { return getFinalizeExtraRef.current?.() || {}; } catch { return {}; } })();
+          // Awaited: the screen's getFinalizeExtra flushes the monitoring engine's final state
+          // before the record is built, so an auto-ended drive carries the same numbers a
+          // hold-to-end one does.
+          let extra = {};
+          try { extra = (await getFinalizeExtraRef.current?.()) || {}; } catch { extra = {}; }
           const summary = await finalize({ ...extra, autoEnded: true });
           onAutoEndRef.current?.(summary);
         }, AUTO_END_MS);
@@ -599,7 +606,7 @@ export function useDriveSession({
   const finalizeOnce = async (extra = {}) => {
     stopPointEarning();
     stopLocationWatch();
-    Speech.stop();
+    stopSpeech();
 
     const user = auth.currentUser;
     // Independent of everything below. If the finalization batch fails, isDriving must

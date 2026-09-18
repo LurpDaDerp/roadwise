@@ -233,16 +233,23 @@ function useDemoMonitoring({ running, enabled, onAlert }) {
     return () => clearInterval(id);
   }, [running]);
 
+  // Same API as the engine path so the screen never has to branch; the demo's numbers are
+  // deliberately never written to a drive record.
+  const finalMetrics = useCallback(
+    async () => ({ metrics, calibrationState: calibration.state }),
+    [metrics, calibration.state]
+  );
+
   return useMemo(
-    () => ({ status, calibration, activeAlert, drowsiness, metrics, recalibrate, acknowledgeAlert }),
-    [status, calibration, activeAlert, drowsiness, metrics, recalibrate, acknowledgeAlert]
+    () => ({ status, calibration, activeAlert, drowsiness, metrics, recalibrate, acknowledgeAlert, finalMetrics }),
+    [status, calibration, activeAlert, drowsiness, metrics, recalibrate, acknowledgeAlert, finalMetrics]
   );
 }
 
 // ============================================================================
 // The real path: camera + gaze model + rule engine, through the bridge.
 // ============================================================================
-function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) {
+function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh, speedAt }) {
   const [state, setState] = useState(() => ({ ...OFF_STATE, metrics: { ...emptyMonitoringMetrics(), engine: null } }));
 
   // --- refs: everything on the frame path -------------------------------------------
@@ -265,6 +272,12 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
   const subsRef = useRef([]);
   const speedRef = useRef(null);
   speedRef.current = speedKmh;
+  // When that speed was measured (ms epoch). The 4 Hz tick used to re-feed the same value into
+  // the speed gate on every tick, which refreshed the gate's freshness clock and made its 10 s
+  // staleness rule unreachable: a phone that lost GPS kept the last speed for the whole drive.
+  const speedAtRef = useRef(null);
+  speedAtRef.current = speedAt;
+  const lastSpeedAtRef = useRef(null);
   const settingsRef = useRef(settings || {});
   settingsRef.current = settings || {};
   const onAlertRef = useRef(onAlert);
@@ -684,6 +697,7 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       lastAlertIdRef.current = null;
       detailRef.current = null;
       speedGateRef.current.reset();
+      lastSpeedAtRef.current = null;
       cadenceRef.current.reset();
       orientationRef.current = { samples: [], startT: null, checked: false };
       // an explicit drive start clears a previous denial and the automatic-restart backoff
@@ -777,9 +791,18 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       ticks += 1;
       const wall = nowS();
 
-      // vehicle speed (§8): the gate smooths it and holds "moving" through a crawl
+      // vehicle speed (§8): the gate smooths it and holds "moving" through a crawl. Each fix is
+      // fed ONCE - a repeat of the same measurement must not look like a fresh one.
       const raw = speedRef.current;
-      if (raw !== null && raw !== undefined && Number.isFinite(raw)) speedGateRef.current.onFixKmh(wall, raw);
+      const at = speedAtRef.current;
+      if (raw !== null && raw !== undefined && Number.isFinite(raw)) {
+        if (!Number.isFinite(at)) {
+          speedGateRef.current.onFixKmh(wall, raw);        // caller gives no timestamp: as before
+        } else if (at !== lastSpeedAtRef.current) {
+          lastSpeedAtRef.current = at;
+          speedGateRef.current.onFixKmh(wall, raw);
+        }
+      }
       const gate = speedGateRef.current.read(wall);
       if (monitorRef.current) safe(() => monitorRef.current.setVehicleSpeed(gate.kmh));
 
@@ -862,6 +885,32 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     setState((prev) => ({ ...prev, calibration: snap.calibration, activeAlert: snap.activeAlert }));
   }, []);
 
+  /**
+   * Stop the camera, publish the last engine state and hand back the numbers for the drive
+   * record. The screen awaits this BEFORE finalising: the 4 Hz publish and the post-stop
+   * snapshot both land after `driveActive` flips, so a record built from the last rendered
+   * `metrics` was up to a second short and missed the final episode entirely.
+   * Safe to call more than once - every start/stop runs on one serialised chain.
+   */
+  const finalMetrics = useCallback(async () => {
+    await stop({ persist: true });
+    const snap = bridgeRef.current.snapshot();
+    const engine = bridgeRef.current.engineDetail();
+    detailRef.current = engine;
+    const metrics = { ...snap.metrics, engine };
+    if (mountedRef.current) {
+      setState((prev) => ({
+        ...prev,
+        status: snap.status,
+        calibration: snap.calibration,
+        activeAlert: snap.activeAlert,
+        drowsiness: snap.drowsiness,
+        metrics,
+      }));
+    }
+    return { metrics, calibrationState: snap.calibration.state };
+  }, [stop]);
+
   const acknowledgeAlert = useCallback((id) => {
     if (!id) return;
     bridgeRef.current.acknowledge(id);
@@ -879,8 +928,9 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       metrics: state.metrics,
       recalibrate,
       acknowledgeAlert,
+      finalMetrics,
     }),
-    [state, recalibrate, acknowledgeAlert]
+    [state, recalibrate, acknowledgeAlert, finalMetrics]
   );
 }
 
@@ -893,9 +943,12 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
  *   onAlert      called once per new alert
  *   demo         run the scripted mock instead of the camera
  *   speedKmh     the app's GPS speed in km/h, or null when it is unknown (DETECTION §8)
+ *   speedAt      when that speed was measured (ms epoch); optional, but without it the speed
+ *                gate cannot tell a fresh fix from a repeat of the last one
  */
 export function useDriverMonitoring({
   enabled = false, driveActive = false, settings, onAlert, demo = false, speedKmh = null,
+  speedAt = null,
 } = {}) {
   const running = Boolean(enabled && driveActive);
 
@@ -907,6 +960,7 @@ export function useDriverMonitoring({
     settings,
     onAlert,
     speedKmh,
+    speedAt,
   });
   const source = demo ? demoState : engineState;
 
@@ -919,6 +973,7 @@ export function useDriverMonitoring({
       metrics: source.metrics,
       recalibrate: source.recalibrate,
       acknowledgeAlert: source.acknowledgeAlert,
+      finalMetrics: source.finalMetrics,
       // The native module renders no preview (DETECTION_DESIGN §3: no preview by default).
       // `settings.showPreview` is accepted and ignored; CameraPlacementGuide falls back to its
       // illustration.
