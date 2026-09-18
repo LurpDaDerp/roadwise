@@ -399,10 +399,22 @@ firebase deploy --only firestore:rules
 firebase deploy --only firestore:indexes
 ```
 
-> Deploy the rules and the new app build close together. Old installs write `pushToken` on
-> every launch and `trustedContacts` when the safety screen is saved; both are refused by
-> the new rules. The writes are already inside try/catch so nothing crashes, but an old
-> install will stop refreshing its push token until it updates.
+> **Deploy the rules and the new app build close together.** What an un-updated install can
+> and cannot still do once the rules are live:
+>
+> | Old-build action | After the new rules |
+> |---|---|
+> | Sharing its location to a group it is already in | **works** (the write shape is still valid) |
+> | Reading its own group, seeing members, emergencies | **works** |
+> | Saving/removing shared places | **works** |
+> | Refreshing its push token | refused — the token stops updating until the app updates |
+> | Saving trusted contacts | refused |
+> | Joining a group | refused — it reads the group first, which a non-member may no longer do |
+> | Creating a group | refused — it never wrote a valid group document |
+> | Signing up | already broken before this change (F2); now it works only on the new build |
+>
+> Every one of those writes is already inside a try/catch, so nothing crashes — the actions
+> just fail. Ship the build with the rules, and consider a forced-update prompt.
 
 ### 4. Set the function secrets (if not already set)
 ```
