@@ -10,7 +10,6 @@ import { useAuthContext } from '../context/AuthContext';
 import { useSettings } from '../context/SettingsContext';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
 import { registerForPushNotificationsAsync } from '../utils/notifications';
-import { CameraPlacementGuide } from '../components/monitoring/CameraPlacementGuide';
 import { MONITORING_AVAILABLE } from '../monitoring/settings';
 
 const { width } = Dimensions.get('window');
@@ -137,16 +136,15 @@ export default function OnboardingScreen() {
             </Card>
           </ScrollView>
 
-          {/* 3 — Mount + monitoring */}
+          {/* 3 — Monitoring (no placement or calibration step) */}
           <ScrollView style={pageStyle} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
             <Eyebrow style={{ marginTop: 16 }}>Driver monitoring</Eyebrow>
-            <Text style={[t.typography.title, { color: t.colors.text, marginTop: 8 }]}>Mount your phone</Text>
+            <Text style={[t.typography.title, { color: t.colors.text, marginTop: 8 }]}>Driver monitoring</Text>
             <Text style={[t.typography.body, { color: t.colors.textMuted, marginTop: 8, marginBottom: 18 }]}>
-              With monitoring on, the front camera watches for eyes off the road and drowsiness. Nothing is recorded or uploaded.
+              Put your phone in any dash or windshield mount. The front camera works out where the road is on its own while you drive, then watches for eyes off the road and drowsiness. No setup, and nothing is recorded or uploaded.
             </Text>
             <Card>
-              <CameraPlacementGuide driverSide={settings.monitoringDriverSide} onDriverSideChange={(v) => update('monitoringDriverSide', v)} />
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>Enable driver monitoring</Text>
                   <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>

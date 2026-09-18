@@ -4,18 +4,17 @@ import React from 'react';
 import { View, Text, Pressable } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
-import { CALIBRATION_STATE, MONITOR_STATUS } from '../../monitoring/types';
+import { MONITOR_STATUS } from '../../monitoring/types';
 
 function describe(status, calibration, enabled) {
   if (!enabled) return { label: 'Monitoring off', icon: 'videocam-off-outline', tone: 'neutral' };
   switch (status) {
     case MONITOR_STATUS.STARTING:
       return { label: 'Starting camera', icon: 'videocam-outline', tone: 'neutral' };
+    // The forward reference is learned silently from normal driving (and re-learned after the
+    // phone moves), so calibrating / provisional / lost all read as plain "Monitoring".
     case MONITOR_STATUS.CALIBRATING:
-      return { label: `Calibrating ${Math.round((calibration?.progress || 0) * 100)}%`, icon: 'scan-outline', tone: 'info' };
     case MONITOR_STATUS.ACTIVE:
-      if (calibration?.state === CALIBRATION_STATE.PROVISIONAL) return { label: 'Monitoring · refining', icon: 'eye-outline', tone: 'accent' };
-      if (calibration?.state === CALIBRATION_STATE.LOST) return { label: 'Recalibrating', icon: 'scan-outline', tone: 'warning' };
       return { label: 'Monitoring', icon: 'eye-outline', tone: 'accent' };
     case MONITOR_STATUS.NO_FACE:
       return { label: 'Driver not visible', icon: 'videocam-off-outline', tone: 'warning' };

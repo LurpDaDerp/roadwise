@@ -35,7 +35,6 @@ import { useAlertAudio, useAlertSounds } from '../monitoring/alertAudio';
 import { ALERT_SEVERITY, alertCopy } from '../monitoring/types';
 import { isAcknowledgeable } from '../monitoring/engineBridge';
 import { monitoringSettingsFrom, MONITORING_AVAILABLE } from '../monitoring/settings';
-import { CalibrationGate, shouldShowCalibrationGate } from '../components/monitoring/CalibrationGate';
 import { AlertBanner } from '../components/monitoring/AlertBanner';
 import { CriticalOverlay } from '../components/monitoring/CriticalOverlay';
 import { SpeedHero, PointsCard, ConditionsStrip, HoldToEndButton, EmergencySheet, DriveTopBar } from '../components/drive';
@@ -340,8 +339,6 @@ export default function DriveScreen({ navigation, route }) {
   const closeSos = useCallback(() => setSosOpen(false), []);
   const onTopBarLayout = useCallback((e) => setTopBarHeight(e.nativeEvent.layout.height), []);
   const onEndButtonLayout = useCallback((e) => setEndButtonHeight(e.nativeEvent.layout.height), []);
-  const recalibrate = monitoring.recalibrate;
-  const onPillPress = monitoringEnabled ? recalibrate : undefined;
   const call911 = useCallback(() => {
     setSosOpen(false);
     callNumber('911');
@@ -370,7 +367,6 @@ export default function DriveScreen({ navigation, route }) {
     ? 'idle'
     : 'focused';
   const shownPoints = settings.displayTotalPoints ? frozenTotal ?? lifetimePoints + session.points : session.points;
-  const showCalibration = monitoringEnabled && shouldShowCalibrationGate(monitoring.calibration) && !bannerAlert;
   const overlayAlert = useMemo(
     () => (!sosOpen && monitoring.activeAlert
       ? { ...monitoring.activeAlert, icon: alertCopy(monitoring.activeAlert.type).icon }
@@ -399,15 +395,13 @@ export default function DriveScreen({ navigation, route }) {
           showMonitoring={MONITORING_AVAILABLE || demo}
           startedAt={session.startedAt}
           running={!ended}
-          onPillPress={onPillPress}
         />
       </View>
 
-      {/* MONITORING MOUNT POINT [MP-2]: alert slot (calibration gate or INFO/WARNING banner) */}
+      {/* MONITORING MOUNT POINT [MP-2]: alert slot. The forward reference is learned silently
+          while driving (no calibration step, no banner); only real alerts appear here. */}
       <View style={styles.alertSlot}>
-        {showCalibration ? (
-          <CalibrationGate calibration={monitoring.calibration} onRecalibrate={recalibrate} compact />
-        ) : bannerAlert ? (
+        {bannerAlert ? (
           <AlertBanner alert={bannerAlert} onDismiss={bannerOnDismiss} />
         ) : session.gpsStatus === 'denied' ? (
           <Banner tone="danger" icon="navigate" title="Location is off" body="Enable location to track this drive" />

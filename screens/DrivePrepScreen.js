@@ -1,7 +1,7 @@
 // DrivePrepScreen — "everything ready" before the explicit Start:
-// permissions with fix actions, camera placement (when monitoring is on),
-// the per-drive monitoring toggle, and one big Start button.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+// permissions with fix actions, the per-drive monitoring toggle, and one big
+// Start button. No placement or calibration step: the phone just goes in its mount.
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, ScrollView, AppState, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Location from 'expo-location';
@@ -10,9 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Screen, ScreenHeader, Section, Card, Button, ListRow, Toggle, Chip, Banner, useTheme } from '../theme';
 import { useSettings } from '../context/SettingsContext';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
-import { CameraPlacementGuide } from '../components/monitoring/CameraPlacementGuide';
-import { useDriverMonitoring } from '../monitoring/useDriverMonitoring';
-import { monitoringSettingsFrom, MONITORING_AVAILABLE } from '../monitoring/settings';
+import { MONITORING_AVAILABLE } from '../monitoring/settings';
 import * as Notifications from 'expo-notifications';
 import { registerForPushNotificationsAsync } from '../utils/notifications';
 
@@ -25,16 +23,12 @@ function StatusChip({ status, required }) {
 
 export default function DrivePrepScreen({ navigation }) {
   const t = useTheme();
-  const { settings, update } = useSettings();
+  const { settings } = useSettings();
   const perms = usePermissions();
   // Per-drive choice only: it seeds from the global setting but never writes it back.
   const [monitoringOn, setMonitoringOn] = useState(MONITORING_AVAILABLE && !!settings.monitoringEnabled);
   const [gps, setGps] = useState('checking'); // 'checking' | 'ok' | 'weak' | 'off'
   const [starting, setStarting] = useState(false);
-
-  // The monitoring branch may expose a live preview for the placement guide.
-  const monitoringSettings = useMemo(() => monitoringSettingsFrom(settings), [settings]);
-  const monitoring = useDriverMonitoring({ enabled: false, driveActive: false, settings: monitoringSettings });
 
   useEffect(() => setMonitoringOn(MONITORING_AVAILABLE && !!settings.monitoringEnabled), [settings.monitoringEnabled]);
 
@@ -121,7 +115,7 @@ export default function DrivePrepScreen({ navigation }) {
         <ScreenHeader
           eyebrow="Before you go"
           title="Ready to drive?"
-          subtitle="Mount the phone, then start. RoadWise does the rest."
+          subtitle="Put the phone in its mount and go. RoadWise does the rest."
           right={
             <View style={{ paddingBottom: 4 }}>
               <Button title="Not now" variant="ghost" fullWidth={false} onPress={() => navigation.goBack()} style={{ paddingVertical: 8 }} />
@@ -178,22 +172,6 @@ export default function DrivePrepScreen({ navigation }) {
             )}
           </Card>
         </Section>
-
-        {MONITORING_AVAILABLE && monitoringOn && (
-          <Section label="Mount your phone">
-            <Card>
-              <CameraPlacementGuide
-                driverSide={settings.monitoringDriverSide}
-                onDriverSideChange={(v) => update('monitoringDriverSide', v)}
-                preview={monitoring.previewComponent}
-                compact
-              />
-              {!cameraOk && (
-                <Banner tone="warning" title="Monitoring will stay off" body="Allow camera access above to use it on this drive." style={{ marginTop: 12 }} />
-              )}
-            </Card>
-          </Section>
-        )}
 
         <Section label="This drive">
           <Card padded={false}>

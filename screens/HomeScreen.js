@@ -111,7 +111,7 @@ export default function HomeScreen({ navigation }) {
         {isNew ? (
           <Section label="Your first drive">
             <Card padded={false}>
-              <ListRow first icon="phone-portrait-outline" title="Mount the phone" subtitle="Dash or windshield, screen facing you." />
+              <ListRow first icon="phone-portrait-outline" title="Phone in its mount" subtitle="Any dash or windshield mount. No setup." />
               <ListRow icon="play-outline" title="Tap Start drive" subtitle="Points begin once you are moving." />
               <ListRow icon="eye-outline" title="Leave it alone" subtitle="Picking up the phone resets your streak." />
               <ListRow icon="gift-outline" title="Earn and compete" subtitle="Points, badges and the leaderboard live in Rewards." />

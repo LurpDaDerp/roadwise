@@ -86,7 +86,7 @@ export default function AboutScreen() {
               title="Replay onboarding"
               subtitle="Walk through the setup and permissions again."
               onPress={() =>
-                Alert.alert('Replay onboarding?', 'You will go through the welcome, permission and mounting steps again. Nothing is deleted.', [
+                Alert.alert('Replay onboarding?', 'You will go through the welcome and permission steps again. Nothing is deleted.', [
                   { text: 'Cancel', style: 'cancel' },
                   { text: 'Replay', onPress: resetOnboarding },
                 ])

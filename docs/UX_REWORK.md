@@ -336,3 +336,13 @@ the drive screen.
 | Settings | `screens/{SettingsScreen,AccountSettings,DriveScreenSettings,MonitoringSettings,NotificationSettings,SafetySettings,AboutScreen}.js` |
 | Auth / first run | `screens/{WelcomeScreen,LoginScreen,SignUpScreen,OnboardingScreen}.js` |
 | Retired | `DashboardScreen`, `MyDrivesScreen`, `AIScreen`, `LocationScreen`, `GeneralSettings`, `FoodRewardsScreen`, `ShoppingRewardsScreen`, `GamesRewardsScreen`, `SubscriptionsRewardsScreen`, `_ComingSoon`, `StackNavigator`, `SettingsStackNavigator`, `RewardsStackNavigator`, `context/DriveContext` |
+
+## No-setup monitoring (2026-09-18)
+
+The driver never calibrates and gets no placement instructions: the phone goes in any dash or
+windshield mount and the drive starts. The forward reference is learned silently from normal
+driving (and re-learned if the phone moves); the reference from the last drive is reused, so
+repeat drives settle within seconds. Removed: the in-drive calibration banner (`CalibrationGate`,
+deleted), the pill's "Calibrating N%" / "Recalibrating" states and its tap-to-recalibrate, the
+"Mount your phone" guide in DrivePrep and Onboarding. Kept: "Driver not visible" when the camera
+cannot see a face, and the seat side in Settings > Driver monitoring (default left).
