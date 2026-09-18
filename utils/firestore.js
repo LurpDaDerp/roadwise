@@ -355,7 +355,8 @@ export async function ensureUserProfile(user, { username = null } = {}) {
     drivingStreak: existing?.drivingStreak ?? 0,
     totalDrives: existing?.totalDrives ?? 0,
     photoURL: existing?.photoURL ?? user.photoURL ?? null,
-    groupId: existing?.groupId ?? null,
+    // groupId is NOT written here: it lives in users/{uid}/private/info and the rules
+    // refuse any write that puts it back on the public profile (legacyOnlyRemoved).
     isDriving: false,
     createdAt: existing?.createdAt ?? serverTimestamp(),
   };

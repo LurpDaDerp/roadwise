@@ -21,29 +21,23 @@ import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as Speech from 'expo-speech';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../utils/firebase';
-import { saveDriveMetrics, startDriving, stopDriving, addUserPoints } from '../utils/firestore';
+import { auth } from '../utils/firebase';
+import { finalizeDriveWrite, flushPendingDriveWrites, getPendingDriveCount, startDriving, stopDriving } from '../utils/firestore';
 import { scheduleDistractedNotification, scheduleFirstDistractedNotification } from '../utils/notifications';
 import { fetchWeather } from '../utils/weather';
 import { getRoadConditionSummary } from '../utils/gptApi';
+import { invalidateInsightsCache } from '../utils/driveCache';
 import {
   loadSpeedLimitCache,
-  saveSpeedLimitCache,
-  getCachedLimit,
-  setCachedLimit,
+  flushSpeedLimitCache,
+  lookupCachedSpeedLimit,
+  getSpeedLimit,
   fillCachePolyline,
-  fetchSpeedLimit,
+  toDisplayUnits,
   haversineM,
   bearingDeg,
-  getDistanceMeters,
-  kphToUnit,
-  MIN_SEG_TO_FILL_M,
-  HEADING_TOL_DEG,
-  MAX_SEG_LEN_M,
-  FETCH_MIN_INTERVAL_MS,
-  FETCH_MIN_DISTANCE_M,
-} from '../utils/speedLimit';
+  distanceMeters,
+} from '../utils/speedLimits';
 import { isRoadSlippery, hasSignificantChange, localRoadSummary, getWeatherInfo } from '../utils/driveConditions';
 import { scoreDrive } from '../utils/driveScore';
 import { speedFromMps } from '../utils/format';
@@ -57,9 +51,14 @@ const BRAKE_THRESHOLD = -3.0;
 const SPEEDING_GRACE_MS = 2500;
 const PHONE_GRACE_MS = 5000;
 const AUTO_END_MS = 2 * 60 * 1000;
-
-let lastSpeedLimitFetchTime = 0;
-let lastSpeedLimitFetchCoords = null;
+// Polyline back-fill geometry (the cache itself lives in utils/speedLimits).
+const MIN_SEG_TO_FILL_M = 120;
+const HEADING_TOL_DEG = 20;
+const MAX_SEG_LEN_M = 4000;
+// Weather: conditions do not change on a 10 s / 100 m timescale, and each poll can
+// trigger an OpenAI road-condition summary.
+const WEATHER_MIN_INTERVAL_S = 300;
+const WEATHER_MIN_DISTANCE_M = 1000;
 
 export function useDriveSession({
   active = true,
@@ -85,6 +84,7 @@ export function useDriveSession({
   const [roadSummary, setRoadSummary] = useState(null);
   const [gpsStatus, setGpsStatus] = useState('searching'); // 'searching' | 'ok' | 'denied' | 'error'
   const [distance, setDistance] = useState(0);
+  const [pendingDrives, setPendingDrives] = useState(0); // finished drives waiting to upload
   const [isSpeeding, setIsSpeeding] = useState(false);
   const [speedingAlertOn, setSpeedingAlertOn] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -150,7 +150,24 @@ export function useDriveSession({
 
   const defaultLimitKph = DEFAULT_SPEED_LIMIT_MPH * 1.60934;
   const effectiveLimitKph = () => limitKphRef.current ?? defaultLimitKph;
-  const limitInUnit = () => kphToUnit(effectiveLimitKph(), unitRef.current);
+  const limitInUnit = () => toDisplayUnits(effectiveLimitKph(), unitRef.current);
+
+  // ---- pending uploads: retry at drive start, show what is still waiting -----
+  useEffect(() => {
+    if (!active) return undefined;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return undefined;
+    let alive = true;
+    (async () => {
+      try {
+        await flushPendingDriveWrites(uid);
+        if (alive) setPendingDrives(await getPendingDriveCount(uid));
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [active]);
 
   // ---- elapsed ticker ------------------------------------------------------
   useEffect(() => {
@@ -245,8 +262,9 @@ export function useDriveSession({
       if (seg.length >= 2 && prevKph != null) {
         const a = seg[0];
         const b = seg[seg.length - 1];
-        if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) await fillCachePolyline(seg, prevKph, prevFetchedStreet.current);
+        if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) fillCachePolyline(seg, prevKph, prevFetchedStreet.current);
       }
+      await flushSpeedLimitCache();
     } catch (e) {
       console.warn('Final segment fill failed:', e);
     }
@@ -286,51 +304,44 @@ export function useDriveSession({
 
     // Distance.
     if (lastLocation.current) {
-      totalDistance.current += getDistanceMeters(lastLocation.current.latitude, lastLocation.current.longitude, lat, lon);
+      totalDistance.current += distanceMeters(lastLocation.current.latitude, lastLocation.current.longitude, lat, lon);
     }
     lastLocation.current = { latitude: lat, longitude: lon };
     setDistance(totalDistance.current);
 
-    // Speed limit: cache first, then a throttled HERE lookup.
-    const cached = getCachedLimit(lat, lon);
-    if (cached) {
-      limitKphRef.current = cached.valueKph;
-      setLimitKph(cached.valueKph);
+    // Speed limit: the cache first (street-aware — a grid cell can straddle two
+    // roads), then utils/speedLimits decides whether HERE may be asked (it owns the
+    // 15 s / 250 m throttle and the per-cell in-flight collapse).
+    const expectedStreet = prevFetchedStreet.current ?? null;
+    const cachedLimit = lookupCachedSpeedLimit(lat, lon, { expectedStreet });
+    if (cachedLimit) {
+      limitKphRef.current = cachedLimit.valueKph;
+      setLimitKph(cachedLimit.valueKph);
       setLimitSource('cache');
       if (prevFetchedLimit.current == null) {
-        prevFetchedLimit.current = cached.valueKph;
-        prevFetchedStreet.current = cached.street ?? undefined;
+        prevFetchedLimit.current = cachedLimit.valueKph;
+        prevFetchedStreet.current = cachedLimit.street ?? undefined;
       }
-    } else {
-      const now = Date.now();
-      const distSinceLastFetch = lastSpeedLimitFetchCoords
-        ? getDistanceMeters(lastSpeedLimitFetchCoords.latitude, lastSpeedLimitFetchCoords.longitude, lat, lon)
-        : Infinity;
-      if (showSpeedLimitRef.current && now - lastSpeedLimitFetchTime > FETCH_MIN_INTERVAL_MS && distSinceLastFetch >= FETCH_MIN_DISTANCE_M) {
-        lastSpeedLimitFetchTime = now;
-        lastSpeedLimitFetchCoords = { latitude: lat, longitude: lon };
-        const result = await fetchSpeedLimit(lat, lon);
-        if (result && result.valueKph != null) {
-          const { valueKph, street } = result;
-          const prevKph = prevFetchedLimit.current;
-          const prevStreet = prevFetchedStreet.current;
-          const changedLimit = prevKph != null && Math.abs(prevKph - valueKph) >= 0.5;
-          const changedStreet = prevStreet && street && prevStreet !== street;
-          if ((changedLimit || changedStreet) && currentSeg.current.length >= 2) {
-            const a = currentSeg.current[0];
-            const b = currentSeg.current[currentSeg.current.length - 1];
-            if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) await fillCachePolyline(currentSeg.current, prevKph, prevStreet);
-            currentSeg.current = [{ latitude: lat, longitude: lon }];
-            segHeading.current = null;
-          }
-          setCachedLimit(lat, lon, valueKph, street);
-          await saveSpeedLimitCache();
-          limitKphRef.current = valueKph;
-          setLimitKph(valueKph);
-          setLimitSource('fetched');
-          prevFetchedLimit.current = valueKph;
-          prevFetchedStreet.current = street;
+    } else if (showSpeedLimitRef.current) {
+      const result = await getSpeedLimit(lat, lon, { expectedStreet });
+      if (result && result.valueKph != null) {
+        const { valueKph, street } = result;
+        const prevKph = prevFetchedLimit.current;
+        const prevStreet = prevFetchedStreet.current;
+        const changedLimit = prevKph != null && Math.abs(prevKph - valueKph) >= 0.5;
+        const changedStreet = prevStreet && street && prevStreet !== street;
+        if ((changedLimit || changedStreet) && currentSeg.current.length >= 2) {
+          const a = currentSeg.current[0];
+          const b = currentSeg.current[currentSeg.current.length - 1];
+          if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) fillCachePolyline(currentSeg.current, prevKph, prevStreet);
+          currentSeg.current = [{ latitude: lat, longitude: lon }];
+          segHeading.current = null;
         }
+        limitKphRef.current = valueKph;
+        setLimitKph(valueKph);
+        setLimitSource(result.cached ? 'cache' : 'fetched');
+        prevFetchedLimit.current = valueKph;
+        prevFetchedStreet.current = street;
       }
     }
 
@@ -370,18 +381,19 @@ export function useDriveSession({
     const nowAccel = Date.now();
     const dt = (nowAccel - lastAccelTime.current) / 1000;
     const prevMS = lastSpeedMS.current ?? rawSpeed;
-    const accel = dt > 0 ? (rawSpeed - prevMS) / dt : 0;
+    // Ignore implausible intervals (first sample, or a long gap while backgrounded).
+    const accel = dt > 0.2 && dt < 10 ? (rawSpeed - prevMS) / dt : 0;
     if (accel > ACCEL_THRESHOLD) suddenAccels.current += 1;
     if (accel < BRAKE_THRESHOLD) suddenStops.current += 1;
     lastSpeedMS.current = rawSpeed;
     lastAccelTime.current = nowAccel;
 
-    // Weather (≥ 10 s and ≥ 100 m since the last fetch).
+    // Weather (≥ 5 min and ≥ 1 km since the last fetch).
     const elapsedW = (nowAccel - lastWeatherFetch.current) / 1000;
     const distW = lastWeatherCoords.current
-      ? getDistanceMeters(lastWeatherCoords.current.latitude, lastWeatherCoords.current.longitude, lat, lon)
+      ? distanceMeters(lastWeatherCoords.current.latitude, lastWeatherCoords.current.longitude, lat, lon)
       : Infinity;
-    if (elapsedW >= 10 && distW >= 100) {
+    if (elapsedW >= WEATHER_MIN_INTERVAL_S && distW >= WEATHER_MIN_DISTANCE_M) {
       lastWeatherFetch.current = nowAccel;
       lastWeatherCoords.current = { latitude: lat, longitude: lon };
       try {
@@ -423,7 +435,7 @@ export function useDriveSession({
   // ---- spoken speed-limit changes -----------------------------------------
   useEffect(() => {
     if (!active || !audioSpeedUpdatesEnabled || limitKph == null || limitSource === 'default') return;
-    const rounded = Math.round(kphToUnit(limitKph, unit));
+    const rounded = Math.round(toDisplayUnits(limitKph, unit));
     if (prevSpokenLimit.current === rounded) return;
     prevSpokenLimit.current = rounded;
     Speech.stop();
@@ -545,6 +557,11 @@ export function useDriveSession({
     locationSub.current = null;
     Speech.stop();
 
+    const user = auth.currentUser;
+    // Independent of everything below. If the finalization batch fails, isDriving must
+    // still be cleared or the user shows as driving to their group forever.
+    if (user) stopDriving(user.uid);
+
     const durationSec = Math.round((Date.now() - startTime.current) / 1000);
     const pts = pointsRef.current;
     const u = unitRef.current;
@@ -566,6 +583,8 @@ export function useDriveSession({
 
     const w = weatherRef.current;
     const rs = roadSummaryRef.current;
+    // The drive record. `timestamp` is set by finalizeDriveWrite (serverTimestamp,
+    // required by the rules), so it is deliberately absent here.
     const base = {
       points: pts,
       duration: durationSec,
@@ -599,37 +618,51 @@ export function useDriveSession({
     const { score, breakdown } = scoreDrive(base);
     const metrics = { ...base, score, scoreBreakdown: breakdown };
 
-    let previousStreak = 0;
+    // One atomic write for the drive record, the points, the streak and the drive
+    // count (utils/firestore.js#finalizeDriveWrite); a failed commit is queued in
+    // AsyncStorage and retried on the next launch and the next drive start.
+    const previousStreak = Number(extra.previousStreak) || 0;
     let newStreak = null;
     let saved = false;
-    const user = auth.currentUser;
-    if (user) {
-      stopDriving(user.uid);
-      if (pts > 0) {
-        try {
-          await fillFinalSegmentIfAny();
-          await saveDriveMetrics(user.uid, { ...metrics, timestamp: new Date().toISOString() });
-          saved = true;
-        } catch (e) {
-          console.warn('Failed to save drive history:', e);
+    let queued = false;
+    let totalPoints = null;
+    let driveId = null;
+    if (user && pts > 0) {
+      try {
+        await fillFinalSegmentIfAny();
+      } catch {}
+      try {
+        const result = await finalizeDriveWrite(user.uid, { metrics, pointsEarned: pts, wasDistracted });
+        if (result) {
+          driveId = result.driveId;
+          queued = !!result.queued;
+          totalPoints = result.totalPoints;
+          saved = true; // committed, or held for retry
+          newStreak = typeof result.streak === 'number' ? result.streak : wasDistracted ? 0 : previousStreak + 1;
+          if (queued) {
+            try {
+              setPendingDrives(await getPendingDriveCount(user.uid));
+            } catch {}
+          } else {
+            invalidateInsightsCache();
+          }
         }
-        try {
-          const userRef = doc(db, 'users', user.uid);
-          const snap = await getDoc(userRef);
-          previousStreak = snap.exists() && snap.data().drivingStreak ? Number(snap.data().drivingStreak) : 0;
-          newStreak = wasDistracted ? 0 : previousStreak + 1;
-          await setDoc(userRef, { drivingStreak: newStreak }, { merge: true });
-        } catch (e) {
-          console.warn('Failed to update drive streak:', e);
-        }
-        await addUserPoints(user.uid, pts);
+      } catch (e) {
+        console.warn('Failed to save the completed drive:', e);
       }
+    } else {
+      try {
+        await flushSpeedLimitCache();
+      } catch {}
     }
 
     const summary = {
       ...metrics,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toISOString(), // display only; the record's timestamp is server time
       saved,
+      queued,
+      driveId,
+      totalPoints,
       previousStreak,
       newStreak: newStreak ?? previousStreak,
       streakChanged: newStreak !== null,
@@ -639,7 +672,7 @@ export function useDriveSession({
 
   // ---- derived -------------------------------------------------------------
   const speed = speedFromMps(rawSpeedMps, unit);
-  const limit = kphToUnit(limitKph ?? defaultLimitKph, unit);
+  const limit = toDisplayUnits(limitKph ?? defaultLimitKph, unit);
   const limitIsDefault = limitKph == null;
   const distanceMeters = distance;
 
@@ -693,6 +726,7 @@ export function useDriveSession({
     weather,
     roadSummary,
     gpsStatus,
+    pendingDrives,
     finalize,
   };
 }

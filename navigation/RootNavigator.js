@@ -14,6 +14,7 @@ import { useTheme } from '../theme';
 import { useAuthContext } from '../context/AuthContext';
 import { ensureLocationSharing } from '../utils/LocationService';
 import { registerForPushNotificationsAsync } from '../utils/notifications';
+import { flushPendingDriveWrites } from '../utils/firestore';
 import { useSettings } from '../context/SettingsContext';
 
 import MainTabs from './MainTabs';
@@ -41,6 +42,13 @@ export default function RootNavigator() {
   const t = useTheme();
   const { user, initializing, onboarded, groupId } = useAuthContext();
   const { settings, ready: settingsReady } = useSettings();
+
+  // Upload anything a previous session finished but could not send (the queue is
+  // also drained when a drive starts, in useDriveSession).
+  useEffect(() => {
+    if (!user?.uid) return;
+    flushPendingDriveWrites(user.uid).catch(() => {});
+  }, [user?.uid]);
 
   // Family location sharing resumes for group members only when "Always"
   // location is already granted — never prompt at cold start; create / join

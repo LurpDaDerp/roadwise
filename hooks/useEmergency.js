@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Linking } from 'react-native';
 import * as Location from 'expo-location';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../utils/firebase';
-import { getTrustedContacts } from '../utils/firestore';
+import { auth } from '../utils/firebase';
+import { getTrustedContacts, getGroupIdForUser } from '../utils/firestore';
+import { getGroup, setEmergency } from '../utils/groups';
 
 export function callNumber(phone) {
   if (!phone) {
@@ -55,11 +55,10 @@ export function useEmergency(uidParam) {
     // Hydrate the emergency flag so the sheet offers "I'm safe" when it is already set.
     (async () => {
       try {
-        const userSnap = await getDoc(doc(db, 'users', uid));
-        const groupId = userSnap.exists() ? userSnap.data().groupId : null;
+        const groupId = await getGroupIdForUser(uid);
         if (!groupId) return;
-        const groupSnap = await getDoc(doc(db, 'groups', groupId));
-        const flag = groupSnap.exists() ? !!groupSnap.data()?.memberLocations?.[uid]?.emergency : false;
+        const group = await getGroup(groupId);
+        const flag = !!group?.memberLocations?.[uid]?.emergency;
         if (!cancelled) setIsEmergencyActive(flag);
       } catch {}
     })();
@@ -73,22 +72,16 @@ export function useEmergency(uidParam) {
     if (!uid) return false;
     setBusy(true);
     try {
-      const userSnap = await getDoc(doc(db, 'users', uid));
-      const groupId = userSnap.exists() ? userSnap.data().groupId : null;
+      const groupId = await getGroupIdForUser(uid);
       if (!groupId) {
         Alert.alert('Not in a group', 'Join a family group from the Family tab to send emergency alerts.');
         return false;
       }
-      const groupRef = doc(db, 'groups', groupId);
+      // Pins the position when a fix is available; the write only ever touches this
+      // member's own memberLocations entry (utils/groups.js#setEmergency).
       const fix = await getFixWithTimeout(6000);
-      const { latitude, longitude, speed } = fix?.coords || {};
-      await updateDoc(groupRef, {
-        [`memberLocations.${uid}.latitude`]: latitude ?? null,
-        [`memberLocations.${uid}.longitude`]: longitude ?? null,
-        [`memberLocations.${uid}.speed`]: speed ?? 0,
-        [`memberLocations.${uid}.updatedAt`]: new Date(),
-        [`memberLocations.${uid}.emergency`]: true,
-      });
+      const ok = await setEmergency(uid, groupId, true, fix?.coords || null);
+      if (!ok) throw new Error('emergency write failed');
       setIsEmergencyActive(true);
       return true;
     } catch (err) {
@@ -105,10 +98,10 @@ export function useEmergency(uidParam) {
     if (!uid) return false;
     setBusy(true);
     try {
-      const userSnap = await getDoc(doc(db, 'users', uid));
-      const groupId = userSnap.exists() ? userSnap.data().groupId : null;
+      const groupId = await getGroupIdForUser(uid);
       if (groupId) {
-        await updateDoc(doc(db, 'groups', groupId), { [`memberLocations.${uid}.emergency`]: false });
+        const ok = await setEmergency(uid, groupId, false);
+        if (!ok) throw new Error('emergency write failed');
       }
       setIsEmergencyActive(false);
       return true;

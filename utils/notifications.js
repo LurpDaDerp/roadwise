@@ -2,7 +2,8 @@
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
-import { auth } from "./firebase";
+import { doc, deleteDoc, updateDoc, deleteField } from "firebase/firestore";
+import { auth, db } from "./firebase";
 import { savePushToken } from "./firestore";
 
 export async function requestNotificationPermissions() {
@@ -70,14 +71,20 @@ export async function scheduleFirstDistractedNotification() {
 
 
 // Added by the UX rework: forget this device's push token when the user turns
-// family-emergency pushes off (Settings › Notifications). The Cloud Function
-// skips users without a pushToken.
+// family-emergency pushes off (Settings › Notifications). The token lives in
+// users/{uid}/private/push; the Cloud Function (functions/lib/push.js) skips a
+// member whose private document is missing AND whose legacy public field is
+// absent, so both are removed. Deleting the legacy field is the one write the
+// rules still allow on it.
 export async function clearPushToken() {
   const uid = auth.currentUser?.uid;
   if (!uid) return;
   try {
-    await updateDoc(doc(db, "users", uid), { pushToken: null });
+    await deleteDoc(doc(db, "users", uid, "private", "push"));
   } catch (err) {
     console.error("Error clearing push token:", err);
   }
+  try {
+    await updateDoc(doc(db, "users", uid), { pushToken: deleteField() });
+  } catch {}
 }

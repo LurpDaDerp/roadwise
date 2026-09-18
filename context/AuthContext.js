@@ -5,6 +5,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth, db } from '../utils/firebase';
+import { getGroupIdForUser } from '../utils/firestore';
 import { KEYS } from '../utils/storageKeys';
 
 const AuthContext = createContext(null);
@@ -15,6 +16,9 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [onboarded, setOnboarded] = useState(null); // null = unknown
+  // The group id lives in users/{uid}/private/info (it is the join code). Three-valued:
+  // a string, null (confirmed no group) or undefined (not read yet / read failed).
+  const [groupId, setGroupId] = useState(undefined);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -24,6 +28,7 @@ export function AuthProvider({ children }) {
         setProfile(null);
         setProfileLoaded(false);
         setOnboarded(null);
+        setGroupId(undefined);
       }
     });
     return () => unsub();
@@ -64,6 +69,20 @@ export function AuthProvider({ children }) {
     };
   }, [user?.uid]);
 
+  const refreshGroupId = useCallback(async () => {
+    if (!user?.uid) return undefined;
+    const id = await getGroupIdForUser(user.uid);
+    setGroupId(id);
+    return id;
+  }, [user?.uid]);
+
+  // Optimistic update after create / join / leave (utils/groups.js has already committed).
+  const setGroupIdLocal = useCallback((id) => setGroupId(id), []);
+
+  useEffect(() => {
+    if (user?.uid) refreshGroupId();
+  }, [user?.uid, refreshGroupId]);
+
   const completeOnboarding = useCallback(async () => {
     if (!user?.uid) return;
     setOnboarded(true);
@@ -90,13 +109,15 @@ export function AuthProvider({ children }) {
       username: profile?.username || null,
       points: Number(profile?.points) || 0,
       streak: Number(profile?.drivingStreak) || 0,
-      groupId: profile?.groupId || null,
+      groupId,
+      refreshGroupId,
+      setGroupIdLocal,
       photoURL: profile?.photoURL || null,
       onboarded,
       completeOnboarding,
       resetOnboarding,
     }),
-    [user, initializing, profile, profileLoaded, onboarded, completeOnboarding, resetOnboarding]
+    [user, initializing, profile, profileLoaded, groupId, refreshGroupId, setGroupIdLocal, onboarded, completeOnboarding, resetOnboarding]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
