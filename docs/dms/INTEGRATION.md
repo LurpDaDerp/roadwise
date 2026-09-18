@@ -42,10 +42,9 @@ the bridge does not synthesise it.
 
 ### Copied verbatim (so imports resolve and the tests run here)
 
-`monitoring/settings.js`, `monitoring/summary.js`, `monitoring/alertAudio.js`, `monitoring/index.js`
-— byte-identical to the UX branch as of the copy.  Do not edit them on this branch; take the UX
-branch's version at merge time (they are still moving: `MONITORING_AVAILABLE` and the per-alert
-`audio` modality both landed after the first copy).
+`monitoring/settings.js`, `monitoring/summary.js`, `monitoring/alertAudio.js` — byte-identical to
+the UX branch as of the copy.  (`monitoring/index.js`, the barrel, was deleted on
+`app-optimization`: nothing imported it.  `alertAudio.js` was rewritten there too — see §4.)
 
 **One line must change at merge**, and it belongs to the UX branch, not here:
 
@@ -103,6 +102,8 @@ const monitoring = useDriverMonitoring({
   onAlert,       // (alert) => void, once per new alert
   demo,          // true = the scripted mock, no camera
   speedKmh,      // NEW: number (km/h) | null when the speed is unknown
+  speedAt,       // NEW: when that speed was measured (ms epoch); without it the speed gate
+                 //      cannot tell a fresh fix from a repeat and never goes stale
 });
 // → { status, calibration, activeAlert, drowsiness, metrics,
 //     recalibrate, acknowledgeAlert, previewComponent, settings }
@@ -123,7 +124,12 @@ Behaviour notes:
   `CALIBRATION_STATE.LOST` until the engine re-validates.
 * **`acknowledgeAlert(id)`** ends that episode, suppresses its re-raise and calls the engine's
   `acknowledge()` (30 s per type, at most 3 per 120 s; the closed-eye family and NO_FACE can never be
-  acknowledged — W §4).  The UX `CriticalOverlay` has no buttons, so this is only used by a banner.
+  acknowledged — W §4).  Since `app-optimization` the drive screen wires it to `AlertBanner`'s large
+  "Got it" control for every alert `engineBridge.isAcknowledgeable()` allows, and — because the
+  CRITICAL overlay deliberately has no controls — offers it for 8 s after a CRITICAL clears.
+* **`finalMetrics()`** (added on `app-optimization`) stops the camera, publishes the engine's last
+  state and resolves to `{metrics, calibrationState}`.  The drive screen awaits it before
+  finalising, so the record is not built from a snapshot up to a second old.
 * **`metrics.engine`** is an extra key (updated once a second) holding the D §10 diagnostics:
   monitored / face / calibrated seconds, fps, thermal pauses, calibration times, per-class glance
   counts, max PERCLOS, the intrinsics source, the parity result.  `buildMonitoringRecord` drops it
@@ -232,9 +238,12 @@ a glance away from the road that persists 3 s past its limit without the driver 
 looking away to look somewhere else.  The cognitive-stare event does exist — it is
 `GAZE_CONCENTRATION`, now mapped to the new `FIXED_GAZE` (INFO only).
 
-`sound` is metadata for a future extension of `alertAudio.js`; nothing reads it today (the app plays
-one tone and distinguishes alerts by the spoken phrase).  The four WAVs are already in
-`assets/sounds/dms/`.
+`sound` is read by `alertAudio.js` since `app-optimization`: `useAlertSounds()` builds the four
+WAVs in `assets/sounds/dms/` into expo-audio players (a STATIC `require` map — nothing referenced
+them before, so Metro never bundled them and they could not have played) and `playCue` picks the
+tone the alert type names, keeping the INFO-silent / WARNING-once / CRITICAL-repeating policy.
+An alert whose `sound` is `null` plays no tone; one with no `sound` key (speeding, phone use)
+falls back to the generic tone the screen passes in.
 
 ---
 
@@ -303,7 +312,10 @@ the same shape as the mock.
 ## 6. Settings and storage keys
 
 The UX branch's keys are unchanged (`@monitoring.enabled`, `.voiceAlerts`, `.toneAlerts`,
-`.hapticAlerts`, `.sensitivity`, `.driverSide`, `.showPreview`).  This branch adds exactly one
+`.hapticAlerts`, `.sensitivity`, `.driverSide`).  `@monitoring.showPreview` was dropped from the
+settings SPEC on `app-optimization` — `previewComponent` is always `null`, so the toggle could
+never do anything; the stored key is still readable for whenever a preview exists.  This branch
+adds exactly one
 AsyncStorage key of its own:
 
 | Key | Written | Read | Contents |
