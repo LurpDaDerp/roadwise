@@ -1,0 +1,9 @@
+# Binary model and audio assets must never go through CRLF conversion.
+*.onnx binary
+*.ort binary
+*.task binary
+*.tflite binary
+*.wav binary
+*.mp3 binary
+*.npy binary
+*.npz binary
