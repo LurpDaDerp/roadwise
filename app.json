@@ -58,9 +58,6 @@
       ],
       "package": "com.lurp.safedrive"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
     "extra": {
       "eas": {
         "projectId": "eb9c484d-45ef-4125-b146-3132b49af806"
@@ -72,7 +69,12 @@
     "plugins": [
       "expo-audio",
       "expo-apple-authentication",
-      "expo-location",
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ],
       "expo-notifications",
       "expo-asset",
       "expo-font",

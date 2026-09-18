@@ -1,9 +1,10 @@
 // useEmergency — the in-drive SOS actions (moved out of DriveScreen).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Linking } from 'react-native';
 import * as Location from 'expo-location';
 import { auth } from '../utils/firebase';
-import { getTrustedContacts, getGroupIdForUser } from '../utils/firestore';
+import { getTrustedContacts } from '../utils/firestore';
+import { getCachedGroupId } from '../utils/groupCache';
 import { getGroup, setEmergency } from '../utils/groups';
 
 export function callNumber(phone) {
@@ -55,8 +56,8 @@ export function useEmergency(uidParam) {
     // Hydrate the emergency flag so the sheet offers "I'm safe" when it is already set.
     (async () => {
       try {
-        const groupId = await getGroupIdForUser(uid);
-        if (!groupId) return;
+        const groupId = await getCachedGroupId(uid);
+        if (!groupId) return;                    // null = no group, undefined = read failed
         const group = await getGroup(groupId);
         const flag = !!group?.memberLocations?.[uid]?.emergency;
         if (!cancelled) setIsEmergencyActive(flag);
@@ -72,7 +73,11 @@ export function useEmergency(uidParam) {
     if (!uid) return false;
     setBusy(true);
     try {
-      const groupId = await getGroupIdForUser(uid);
+      // getCachedGroupId is three-valued: a group id, null (definitely no group) or undefined
+      // (the read failed). Telling someone in an emergency that they are "not in a group" because
+      // Firestore was unreachable is the worst possible failure mode.
+      const groupId = await getCachedGroupId(uid);
+      if (groupId === undefined) throw new Error('group lookup failed');
       if (!groupId) {
         Alert.alert('Not in a group', 'Join a family group from the Family tab to send emergency alerts.');
         return false;
@@ -98,7 +103,10 @@ export function useEmergency(uidParam) {
     if (!uid) return false;
     setBusy(true);
     try {
-      const groupId = await getGroupIdForUser(uid);
+      // A failed group lookup must NOT report a cleared alert: the drive screen's "Couldn't
+      // clear your SOS" retry exists precisely for this case.
+      const groupId = await getCachedGroupId(uid);
+      if (groupId === undefined) throw new Error('group lookup failed');
       if (groupId) {
         const ok = await setEmergency(uid, groupId, false);
         if (!ok) throw new Error('emergency write failed');
@@ -114,7 +122,13 @@ export function useEmergency(uidParam) {
     }
   }, []);
 
-  return { trustedContacts, isEmergencyActive, busy, notifyGroup, cancelGroupEmergency, callNumber };
+  // Memoised: DriveScreen builds `clearSosBounded` -> `endDrive` -> the hold-to-end button's
+  // prop out of this object, so a fresh identity on every render re-created that whole chain on
+  // every GPS fix and defeated any memoisation below it.
+  return useMemo(
+    () => ({ trustedContacts, isEmergencyActive, busy, notifyGroup, cancelGroupEmergency, callNumber }),
+    [trustedContacts, isEmergencyActive, busy, notifyGroup, cancelGroupEmergency]
+  );
 }
 
 export default useEmergency;

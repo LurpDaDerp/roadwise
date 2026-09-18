@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -37,15 +37,17 @@ export const ThemeProvider = ({ children }) => {
     return () => subscription.remove();
   }, [theme]);
 
-  const updateTheme = async (newTheme) => {
+  const updateTheme = useCallback(async (newTheme) => {
     setTheme(newTheme);
     await AsyncStorage.setItem('@appTheme', newTheme);
-  };
+  }, []);
 
-
-  return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme: colorScheme, updateTheme }}>
-      {children}
-    </ThemeContext.Provider>
+  // Memoised: every component in the app reads the theme, so an object literal here invalidated
+  // the whole tree's context on any provider render.
+  const value = useMemo(
+    () => ({ theme, resolvedTheme: colorScheme, updateTheme }),
+    [theme, colorScheme, updateTheme]
   );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 };

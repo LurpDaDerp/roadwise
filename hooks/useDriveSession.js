@@ -59,6 +59,10 @@ const MAX_SEG_LEN_M = 4000;
 // trigger an OpenAI road-condition summary.
 const WEATHER_MIN_INTERVAL_S = 300;
 const WEATHER_MIN_DISTANCE_M = 1000;
+// A fix older than this is "no signal": the speed display and the monitoring speed gate must
+// not keep believing the last one (docs/dms/DETECTION_DESIGN.md §8 uses the same 10 s).
+const FIX_STALE_MS = 10_000;
+const FIX_STALE_CHECK_MS = 5_000;
 
 export function useDriveSession({
   active = true,
@@ -78,12 +82,14 @@ export function useDriveSession({
   const [limitKph, setLimitKph] = useState(null);
   const [limitSource, setLimitSource] = useState('default'); // 'default' | 'cache' | 'fetched'
   const [points, setPoints] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
+  // The elapsed seconds are NOT state here: a 1 Hz setState re-rendered the whole drive screen
+  // (speed hero, points card, conditions strip, emergency sheet) to move one clock. The screen
+  // gets `startedAt` and ticks the clock inside the leaf that shows it.
+  const [lastFixAt, setLastFixAt] = useState(null);
   const [phone, setPhone] = useState({ pickups: 0, distracted: false, awayNow: false });
   const [weather, setWeather] = useState(null);
   const [roadSummary, setRoadSummary] = useState(null);
   const [gpsStatus, setGpsStatus] = useState('searching'); // 'searching' | 'ok' | 'denied' | 'error'
-  const [distance, setDistance] = useState(0);
   const [pendingDrives, setPendingDrives] = useState(0); // finished drives waiting to upload
   const [isSpeeding, setIsSpeeding] = useState(false);
   const [speedingAlertOn, setSpeedingAlertOn] = useState(false);
@@ -109,6 +115,7 @@ export function useDriveSession({
   const locationSub = useRef(null);
   const pointTimer = useRef(null);
   const lastLocation = useRef(null);
+  const lastFixAtRef = useRef(null);
   const totalDistance = useRef(0);
   const maxSpeedRef = useRef(0);
   const totalSpeedSum = useRef(0);
@@ -169,10 +176,18 @@ export function useDriveSession({
     };
   }, [active]);
 
-  // ---- elapsed ticker ------------------------------------------------------
+  // ---- GPS staleness --------------------------------------------------------
+  // `gpsStatus` used to latch on 'ok' at the first fix and never come back, so a lost signal
+  // looked like a standing still at the last speed - and the monitoring speed gate (which is
+  // fed only while the status is 'ok') would have kept a stale speed for the rest of the drive.
+  // A 5 s check is enough for a 10 s staleness rule and, in the normal case, changes no state
+  // and therefore renders nothing.
   useEffect(() => {
     if (!active) return undefined;
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startTime.current) / 1000)), 1000);
+    const id = setInterval(() => {
+      const last = lastFixAtRef.current;
+      if (last !== null && Date.now() - last > FIX_STALE_MS) setGpsStatus('searching');
+    }, FIX_STALE_CHECK_MS);
     return () => clearInterval(id);
   }, [active]);
 
@@ -222,36 +237,54 @@ export function useDriveSession({
   }, [active, startPointEarning, stopPointEarning]);
 
   // ---- location watch ------------------------------------------------------
+  // The watch is started and stopped imperatively (rather than only by the effect) because it is
+  // also torn down while the app is in the background: `handleLocation` already discarded those
+  // fixes, but on Android the FusedLocationProvider request stayed registered at
+  // PRIORITY_HIGH_ACCURACY / 1 s for up to the two-minute auto-end window, burning the GPS for
+  // data nothing reads. Every start is stamped with a generation so a slow `watchPositionAsync`
+  // cannot install a subscription that a newer stop already cancelled.
+  const watchGenRef = useRef(0);
+
+  const stopLocationWatch = useCallback(() => {
+    watchGenRef.current += 1;
+    locationSub.current?.remove?.();
+    locationSub.current = null;
+  }, []);
+
+  const startLocationWatch = useCallback(async () => {
+    if (locationSub.current) return;
+    const gen = (watchGenRef.current += 1);
+    await loadSpeedLimitCache();
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (gen !== watchGenRef.current) return;
+    if (status !== 'granted') {
+      setGpsStatus('denied');
+      return;
+    }
+    try {
+      const sub = await Location.watchPositionAsync(
+        // `distanceInterval: 0`: the consumers are a 1 Hz speedometer, the 2.5 s points tick and
+        // the acceleration estimate, which needs evenly spaced samples (a 10 m filter starved it
+        // at crawling speed and silently zeroed every hard-brake reading). The speed-limit lookup
+        // owns its own 15 s / 250 m throttle, so this costs no extra network.
+        { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
+        (loc) => {
+          if (gen !== watchGenRef.current) return;
+          handleLocation(loc);
+        }
+      );
+      if (gen !== watchGenRef.current) sub.remove();
+      else locationSub.current = sub;
+    } catch (e) {
+      console.warn('watchPositionAsync failed:', e);
+      setGpsStatus('error');
+    }
+  }, []);
+
   useEffect(() => {
     if (!active) return undefined;
-    let cancelled = false;
-    (async () => {
-      await loadSpeedLimitCache();
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setGpsStatus('denied');
-        return;
-      }
-      try {
-        const sub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 10 },
-          (loc) => {
-            if (cancelled) return;
-            handleLocation(loc);
-          }
-        );
-        if (cancelled) sub.remove();
-        else locationSub.current = sub;
-      } catch (e) {
-        console.warn('watchPositionAsync failed:', e);
-        setGpsStatus('error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-      locationSub.current?.remove?.();
-      locationSub.current = null;
-    };
+    startLocationWatch();
+    return () => stopLocationWatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -275,6 +308,9 @@ export function useDriveSession({
     const lat = loc.coords.latitude;
     const lon = loc.coords.longitude;
     const rawSpeed = Math.max(0, loc.coords.speed ?? 0);
+    const fixAt = Date.now();
+    lastFixAtRef.current = fixAt;
+    setLastFixAt(fixAt);
     setGpsStatus('ok');
 
     // Segment tracking for the polyline back-fill.
@@ -307,7 +343,6 @@ export function useDriveSession({
       totalDistance.current += distanceMeters(lastLocation.current.latitude, lastLocation.current.longitude, lat, lon);
     }
     lastLocation.current = { latitude: lat, longitude: lon };
-    setDistance(totalDistance.current);
 
     // Speed limit: the cache first (street-aware — a grid cell can straddle two
     // roads), then utils/speedLimits decides whether HERE may be asked (it owns the
@@ -468,6 +503,9 @@ export function useDriveSession({
       appActiveRef.current = nowActive;
 
       if (wasActive && !nowActive) {
+        // Nothing reads a background fix (see the guard at the top of handleLocation), so stop
+        // paying for it. The drive itself keeps running: the auto-end timer below is independent.
+        stopLocationWatch();
         unfocusedAt.current = Date.now();
         setPhone((p) => ({ ...p, awayNow: true }));
         if (hasStartedRef.current) {
@@ -496,6 +534,13 @@ export function useDriveSession({
           const summary = await finalize({ ...extra, autoEnded: true });
           onAutoEndRef.current?.(summary);
         }, AUTO_END_MS);
+      }
+
+      if (nowActive) {
+        if (!finalizedRef.current) startLocationWatch();
+        // A fix cannot have arrived while the watch was down; do not let the staleness check
+        // fire on the gap itself before the first new fix lands.
+        lastFixAtRef.current = Date.now();
       }
 
       if (nowActive && unfocusedAt.current) {
@@ -553,8 +598,7 @@ export function useDriveSession({
 
   const finalizeOnce = async (extra = {}) => {
     stopPointEarning();
-    locationSub.current?.remove?.();
-    locationSub.current = null;
+    stopLocationWatch();
     Speech.stop();
 
     const user = auth.currentUser;
@@ -674,7 +718,6 @@ export function useDriveSession({
   const speed = speedFromMps(rawSpeedMps, unit);
   const limit = toDisplayUnits(limitKph ?? defaultLimitKph, unit);
   const limitIsDefault = limitKph == null;
-  const distanceMeters = distance;
 
   const speedingAlert = useMemo(
     () =>
@@ -710,25 +753,36 @@ export function useDriveSession({
     [phone.distracted]
   );
 
-  return {
-    speed,
-    limit,
-    limitIsDefault,
-    limitSource,
-    isSpeeding,
-    speedingAlert,
-    phoneAlert,
-    points,
-    elapsed,
-    distanceMeters,
-    hasStarted,
-    phone,
-    weather,
-    roadSummary,
-    gpsStatus,
-    pendingDrives,
-    finalize,
-  };
+  // Memoised: the screen passes `session.*` into children and builds callbacks from it, so a new
+  // object on every render would defeat every React.memo below it and re-create `endDrive` on
+  // each GPS fix.
+  return useMemo(
+    () => ({
+      speed,
+      limit,
+      limitIsDefault,
+      limitSource,
+      isSpeeding,
+      speedingAlert,
+      phoneAlert,
+      points,
+      // The drive's start time, not a ticking second count: the clock is rendered by a leaf that
+      // owns its own 1 Hz timer, so the rest of the screen no longer re-renders once a second.
+      startedAt: startTime.current,
+      // When the last usable fix arrived (ms epoch), so the monitoring speed gate can tell a
+      // genuinely fresh speed from a repeat of the last one.
+      lastFixAt,
+      hasStarted,
+      phone,
+      weather,
+      roadSummary,
+      gpsStatus,
+      pendingDrives,
+      finalize,
+    }),
+    [speed, limit, limitIsDefault, limitSource, isSpeeding, speedingAlert, phoneAlert, points,
+     lastFixAt, hasStarted, phone, weather, roadSummary, gpsStatus, pendingDrives, finalize]
+  );
 }
 
 export default useDriveSession;
