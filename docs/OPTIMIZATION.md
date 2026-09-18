@@ -195,15 +195,15 @@ Measured with `npx expo export` (ios) before and after:
 
 | ios | before | after | |
 |---|---|---|---|
-| Hermes bundle | 7,829,221 B | 7,675,994 B | −2.0 % |
+| Hermes bundle | 7,829,221 B | 7,676,734 B | −1.9 % |
 | assets | 4,405,471 B | 2,263,500 B | **−48.6 %** |
-| export total | 12,238,037 B | 9,942,007 B | **−18.8 %** |
+| export total | 12,238,037 B | 9,942,747 B | **−18.8 %** |
 
 | android | before | after | |
 |---|---|---|---|
-| Hermes bundle | 7,853,198 B | 7,698,274 B | −2.0 % |
+| Hermes bundle | 7,853,198 B | 7,698,998 B | −2.0 % |
 | assets | — | 2,262,006 B | |
-| export total | 12,260,464 B | 9,962,737 B | **−18.7 %** |
+| export total | 12,260,464 B | 9,963,461 B | **−18.7 %** |
 
 The EAS upload is 14.5 MB, down from ~32 MB before the orphan assets, the model reference
 copies and the removed dependencies.
@@ -272,6 +272,23 @@ rest of the work in the commit history.
 * **App Check on the callables.** Enabling `enforceAppCheck` rejects every call until the console
   and the native projects are configured. The steps are written up in `docs/BACKEND_AUDIT.md`
   instead.
+
+## 7a. Verification
+
+| check | result |
+|---|---|
+| `node --test "dms/tests/*.test.js"` | 141 / 141 |
+| `node --test "monitoring/__tests__/*.test.js" "hooks/__tests__/*.test.js"` | 77 / 77 (75 before, + the import-shadowing guard and the grid-cell agreement test) |
+| `node modules/dms-vision/scripts/check-bundle.js` | all model copies identical |
+| `node scripts/check-imports.js --unused` | OK (no shadowed imports, no unresolved imports, no undeclared or unused packages) |
+| `npm ci --dry-run` | clean |
+| `npx expo export` ios + android | both succeed; sizes above |
+| `npx expo-doctor` | 15 / 18 — the three failures are pre-existing and untouched by this branch: a transitive `@expo/metro-config` patch version, React Native Directory metadata for `react-native-chart-kit` / `react-native-confetti-cannon` / `firebase` / `lodash.debounce`, and Expo SDK patch drift (`expo@53.0.23` vs `~53.0.27` etc.). Upgrading the SDK is out of scope for an optimisation branch |
+| `cd functions && npm run lint` | clean |
+| `cd functions && npm run test:rules` | 69 / 69 (68 before, + the 25-member cap) |
+| `npx expo prebuild --platform android --no-install` | the manifest contains ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE and FOREGROUND_SERVICE_LOCATION (the `expo-location` plugin fix); `android/` deleted afterwards |
+| EAS development build, iOS | `05748bab-ab44-4d2d-9e96-26d9c5ff84d9` — **finished**, so the Swift capture-cadence and ONNX session-option changes compile and link |
+| EAS development build, Android | `60c7aa4c-7dbc-40a0-a636-9ffb0e192361` |
 
 ## 8. What the owner has to do
 
