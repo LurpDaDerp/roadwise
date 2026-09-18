@@ -117,6 +117,7 @@ A small pill in the drive screen header, always visible while monitoring is enab
 | CONFIRMED | "Watching" (+ a subtle eye icon) | teal |
 | eyes unreadable ≥ 10 s | "Eyes not visible — head-only" | amber |
 | drowsiness level DROWSY / SEVERE | "Drowsy" / "Very drowsy" replaces the label | purple / red |
+| 60-s PERCLOS ≥ 0.08 while the level is ALERT | "Consider a break soon" (display only, R §6: the DDWS advisory level) | purple outline |
 | camera moved | "Phone moved — re-learning" (5 s) then the learning ring | amber |
 | thermal / low-power throttle | "Reduced monitoring (hot / low power)" | grey |
 | thermal pause | "Monitoring paused — phone too hot" | grey |

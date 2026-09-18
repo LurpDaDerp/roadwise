@@ -2,7 +2,8 @@
 
 Status: design of record for the `driver-monitoring` branch (2026-09-18).  Companion documents:
 `WARNINGS_DESIGN.md` (what the driver sees and hears), `RESEARCH.md` (the sourced thresholds; cited
-below as R §n), `INTEGRATION.md` (the code contract), and the reference deployment stack the rule
+below as R §n — §1 angle table, §2 relations, §3 mirrors, §4 vertical, §5 bounds, §6 drowsiness,
+§7 false alarms, §8 phone deltas), `INTEGRATION.md` (the code contract), and the reference deployment stack the rule
 engine is ported from (`deployment-stack/docs/DESIGN.md`, `THRESHOLDS.md` — cited as T).
 
 The reference stack (Python, measured on 75 Look Both Ways sessions: 0.13 voiced false alerts per
@@ -118,7 +119,7 @@ normalized against (T §2: 0.75 for a generic webcam, 1.16 for the LBW cameras).
   (mm) with the active-array crop give `fx_px = f_mm / sensor_w_mm × L`; `LENS_INTRINSIC_CALIBRATION`
   when populated is used directly.
 * Fallback when the platform exposes nothing: hfov 70° (typical phone front cameras span
-  65–80°; R §7), i.e. `fx / L = 0.714`.
+  65–80°; `research/mobile_inference_options.md` §7), i.e. `fx / L = 0.714`.
 * The principal point is the frame centre (the network was trained with principal-point
   jitter; T §2).  Digital zoom must be off (zoom factor 1.0) or the intrinsics are wrong.
 * The source of the value (`intrinsics`, `fov`, `default`) is logged in the drive summary.
@@ -146,7 +147,7 @@ parity fixtures stay valid):
    neutral eyes for minutes, which the reference (built for a car whose speed it never knew)
    would admit as "the road"; the reference's long-mode jump would then need a further 60 s of
    driving to correct it.  Volvo's road-centre initialisation only runs above 70 km/h and Euro
-   NCAP allows a minute of driving at ≥ 10 km/h before measuring (R §6, T "Calibration"), so
+   NCAP allows a minute of driving at ≥ 10 km/h before measuring (R §7, T "Calibration"), so
    learning slowly while stationary and at full weight while moving keeps the stopped-at-a-light
    frames (same direction as driving) useful without letting a parked conversation bootstrap the
    reference.  The gaze histograms therefore carry "admitted driving seconds".
@@ -160,7 +161,7 @@ parity fixtures stay valid):
    because disagreement replaces the prior.  The prior is dropped after 30 days or when the app
    version changes the model.
 3. **No explicit onboarding task.**  The driver is never asked to look at targets while driving.
-   The decision follows Volvo's road-centre method and the measured reference (R §6: mode of the
+   The decision follows Volvo's road-centre method and the measured reference (R §2: mode of the
    gaze density, stable after ~2 min): an explicit "look here" step would either be done while
    stationary (where the mount's view of the road is the same direction anyway, so it adds
    nothing over admitting stationary frames at low weight) or while moving (unsafe).  What the
@@ -230,11 +231,11 @@ Thresholds (all T unless marked; R gives the sources behind T):
 | rule | value | source |
 |---|---|---|
 | forward view | ROAD_WIDE 22° × 14° ellipse | T (63 → 0.13 false alerts/h on attentive drivers); road-centre AOIs 6–10° radius plus the 6.4° model error (R §2, §7) |
-| cabin glance limit (`long_glance_s`) | 3.0 s | Euro NCAP long distraction 3–4 s; ADDW 3.5 s at ≥ 50 km/h; NHTSA risk onset 2 s (R §1, §2) |
+| cabin glance limit (`long_glance_s`) | 3.0 s | Euro NCAP long distraction 3–4 s; ADDW 3.5 s at ≥ 50 km/h; NHTSA risk onset 2 s (R §0, §1, §2) |
 | instrument glance (`long_glance_mirror_s`) | 4.0 s | driving-task target, AttenD 1-s allowance (R §3) |
-| lateral glance, speed unknown or < 30 km/h / moving | 12 s / 4 s | LBW side gaze ≥ 12 s only 0.26/h; NHTSA 12-s task budget; ADDW 6 s at 20–50 km/h (R §6) |
+| lateral glance, speed unknown or < 30 km/h / moving | 12 s / 4 s | LBW side gaze ≥ 12 s only 0.26/h; NHTSA 12-s task budget; ADDW 6 s at 20–50 km/h (R §1, §7) |
 | lateral alert needs head turn | mean head deviation ≥ 10° | T (every true LBW side look ≥ 24°; reference-error "glances" 3–8°) |
-| prolonged stare | limit + 3 s | Euro NCAP unresponsive (no return within 3 s of the warning) (R §1) |
+| prolonged stare | limit + 3 s | Euro NCAP unresponsive (no return within 3 s of the warning) (R §0) |
 | glance gap tolerance | 0.3 s | ADDW no reset on in-out-in (R §7) |
 | VATS | 10 s off road in 30 s; mirror dwells < 1 s ignored; lateral counted only when moving ≥ 30 km/h | Euro NCAP short distraction (R §1) |
 | AttenD buffer | 2 s, 1-s mirror/instrument delay, 0.1-s refill latency; displayed, not voiced | R §2 |
@@ -242,16 +243,16 @@ Thresholds (all T unless marked; R gives the sources behind T):
 | LOOK_DOWN / LOOK_UP | −12° (exit −9°) / +20° (exit +15°), 1-s median | T (no LBW driver holds −10.5° for 1 s) |
 | hard limits | driver side 75° / passenger side 65° (reference 60° / 60°), up < −30°, up > 30° | ADDW Area 1 ± 55° + margin and the cabin geometry, Area 3 30° down = NHTSA display maximum (R §5) |
 | head rules (eyes unreadable) | 35° turn / 20° down, logged at 2 s, voiced from 4 s | T |
-| closure hysteresis | openness < 0.3 enter, > 0.5 exit; P80 = openness < 0.2 | T, R (drowsiness) §1 |
-| blink / long blink | 60–500 ms / > 400 ms | R (drowsiness) §4 |
-| prolonged closure / microsleep / sleep / eyes closed | 0.5 s (silent), 1.0 s (silent pre-alarm), 1.5 s, 3 s, 6 s | Euro NCAP 1–2 s / ≥ 3 s / 6 s; Guardian 1.5 s (R §3) |
-| deep closure requirement | ≥ 50 % of the closure's frames ≥ 80 % closed | BERN microsleep criteria (R §3) |
-| PERCLOS DROWSY / SEVERE | 60-s ≥ 0.15 AND 180-s ≥ 0.10 / 60-s ≥ 0.30; valid after 30 s / 90 s | VTTI 15 % over 60 s; NSTSCE > 10 % over 150 s (R §2) |
-| yawn | MAR > 0.6 for 1.5–12 s; 3 in 10 min = FREQUENT_YAWNING, voiced only with other evidence | R §5 |
+| closure hysteresis | openness < 0.3 enter, > 0.5 exit; P80 = openness < 0.2 | T, R §6 |
+| blink / long blink | 60–500 ms / > 400 ms (phone: > 500 ms, §7a) | R §6 |
+| prolonged closure / microsleep / sleep / eyes closed | 0.5 s (silent), 1.0 s (silent pre-alarm), 1.5 s, 3 s, 6 s | Euro NCAP 1–2 s / ≥ 3 s / 6 s; Guardian 1.5 s (R §6) |
+| deep closure requirement | ≥ 50 % of the closure's frames ≥ 80 % closed | BERN microsleep criteria (R §6) |
+| PERCLOS DROWSY / SEVERE | 60-s ≥ 0.15 AND 180-s ≥ 0.10 / 60-s ≥ 0.30; valid after 30 s / 90 s | NSTSCE 25-UI-177 15 % over 60 s; NSTSCE 26-UI-182 > 10 % (R §6) |
+| yawn | MAR > 0.6 for 1.5–12 s; 3 in 10 min = FREQUENT_YAWNING, voiced only with other evidence | R §6 (no validated yawn-rate threshold exists) |
 | head nod | 15° drop within 1 s, back within 3 s, ≥ 0.3 s closed eyes | R §6 |
-| level recovery | one step down after 60 s below the exit thresholds | no official recovery duration exists (R §7) |
-| driver absent | event 5 s, voiced 10 s, repeat 30 s | Euro NCAP non-functional notification within 10 s (R §1) |
-| speed gate | < 10 km/h: only DRIVER_NOT_VISIBLE and the closure family are voiced | Euro NCAP warns from 20 km/h, learns below (R §6) |
+| level recovery | one step down after 60 s below the exit thresholds | no official recovery duration exists (R §6) |
+| driver absent | event 5 s, voiced 10 s, repeat 30 s | Euro NCAP non-functional notification within 10 s (R §7) |
+| speed gate | < 10 km/h: only DRIVER_NOT_VISIBLE and the closure family are voiced | Euro NCAP warns from 20 km/h, learns below (R §7) |
 | acknowledgement | 30 s per acknowledged type; ≤ 3 per 120 s; closed-eye family and DRIVER_NOT_VISIBLE never | Euro NCAP suppression after acknowledgement (R §7) |
 
 **Why the limits are per target class and not per angle.**  No standard defines a zone by angle
@@ -266,8 +267,27 @@ never a shorter limit than the regulatory 3.0–3.5 s.
 reference).  `relaxed` applies the regulatory upper bounds instead of the Euro NCAP values:
 `long_glance_s` 3.5 (ADDW at ≥ 50 km/h), `lateral_glance_moving_s` 6.0 (ADDW 20–50 km/h),
 `vats_offroad_s` 12.0.  Euro NCAP forbids user-adjustable sensitivity for a rated vehicle system;
-this is a consumer app, and the relaxed profile still sits inside the regulation (R §1).  No
+this is a consumer app, and the relaxed profile still sits inside the regulation (R §2).  No
 profile can turn the closed-eye rules off.
+
+### 7a. Drowsiness: phone-specific changes to the ported engine
+
+Each is a config field whose default reproduces the reference (so the parity fixtures hold) and
+whose app value follows R §6 / §8:
+
+| field | reference | app | why |
+|---|---|---|---|
+| `drowsiness.ear_open_freeze_s` | 0 (off) | 120 s | after 120 s of usable open-eye tracking the open baseline is floored at 0.9 × the median at that moment; the running median may still raise it.  Sleepy drivers stop fully opening their eyes, so a two-sided running baseline desensitises the detector as the driver deteriorates (Friedrichs & Yang; production practice freezes an alert baseline, US10740633B2).  `DRIVER_CHANGE` / `CAMERA_MOVED` reset it. |
+| `drowsiness.perclos_blink_exclude_s` | 0 (off) | 0.25 s | a closure that ends within 0.25 s is removed from the PERCLOS accumulators (60 s and 180 s) when it ends: PERCLOS is defined on slow closures, every reference implementation excludes blinks, and it removes the low-frame-rate inflation from normal blinking. |
+| `drowsiness.long_blink_s`, `slow_blink_mean_s` | 0.4 s | 0.5 s | Johns 2003 / Wilkinson 2013: drowsy blinks last > 500 ms; 0.4 s has no source. |
+| `drowsiness.blink_stats_min_fps` | 0 (off) | 15 | blink rate / mean duration / long share report 0 when the typical frame period exceeds 1/15 s (blink detection 51 % at 10 Hz): the 10-fps throttle modes never feed the score with biased blink statistics. |
+| `drowsiness.slow_blink_min_count`, `score_long_blink_share` | 5, 20 | 10, 30 | mean closure duration outperforms PERCLOS at minute resolution (AUC 0.82 vs 0.68); the share needs ≥ 10 blinks to be meaningful. |
+| PERCLOS 60-s ≥ 0.08 | — | display-only pill hint "Consider a break soon" (WARNINGS §5) | the DDWS field-trial advisory level. |
+
+Not adopted (R §8): head-roll rules, blink-rate scoring, yawn-triggered alerts, a 130-ms closure
+floor on a falling head pitch (the look-down guard and the deep-closure requirement cover it), a
+gaze-concentration drowsiness alarm (validated only on acted behaviour; sign reverses under real
+sleep deprivation).
 
 ## 8. Vehicle speed from the app's GPS
 
