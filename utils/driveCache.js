@@ -2,7 +2,7 @@
 //
 // The Insights panel's data: the last 30 days of drives (a server-side range query),
 // cached for 5 minutes and invalidated when a drive is finalized. This re-homes the
-// AIScreen refetch logic from the backend branch, which keyed on DriveContext (removed
+// AIScreen refetch logic from the backend branch, which keyed on a drive-completed context flag (removed
 // by the UX rework): finalize() invalidates, focus refetches when the copy is stale.
 import { getDriveMetrics } from './firestore';
 

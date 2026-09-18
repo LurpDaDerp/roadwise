@@ -257,33 +257,62 @@ New: `@monitoring.enabled` (false), `@monitoring.voiceAlerts` (true), `@monitori
 ('left'), `@monitoring.showPreview` (false), `@notify.driveComplete` (true), `@notify.familyEmergency`
 (true), `@onboarded_<uid>`.
 
-## 7. Firestore compatibility
-Reads/writes keep the current layout.
-- `users/{uid}`: `username`, `points`, `drivingStreak`, `photoURL`, `groupId`, `pushToken`,
-  `trustedContacts`, `isDriving`. Points are now added atomically at the end of a drive
-  (`addUserPoints` → `increment`).
-- `users/{uid}/drivemetrics/{auto}`: existing fields unchanged (`timestamp`, `points`, `duration`,
-  `distracted`, `avgSpeed`, `avgSpeedingMargin`, `suddenStops`, `suddenAccelerations`,
-  `phoneUsageTime` (now actually measured), `totalDistance`, `speedingEvents`). **New optional
-  fields**: `maxSpeed`, `unit`, `score`, `scoreBreakdown { focus, speed, smoothness }`,
-  `wasDistracted`, `distractionReasons: string[]`, `monitoring { enabled, eyesOffRoadSeconds,
-  alertCounts, alertsByType, drowsinessPeak, drowsinessHistory, calibrationQuality }`,
-  `eyesOffRoadSeconds` (flat copy for queries), `weather { code, temperature, summary, roadScore }`.
-- `groups/{id}`: `groupName`, `createdBy`, `createdAt` now written on creation; everything else as before.
+## 7. Firestore writes (after the backend merge) and the rule that admits each
+
+The data layer is the backend branch's (`utils/firestore.js`, `utils/groups.js`); every write
+below goes through it. Rules: `firestore.rules` (68/68 emulator tests on `main`).
+
+| Write (where in the UX code) | Path and fields | Admitting rule |
+|---|---|---|
+| End of drive — `useDriveSession.finalize` → `finalizeDriveWrite` (one batch) | `users/{uid}/drivemetrics/{clientId}`: the 11 original fields + `maxSpeed, unit, wasDistracted, distractionReasons[], autoEnded, score, scoreBreakdown{}, weather{}` (+ `monitoring{}`, `eyesOffRoadSeconds` only when `MONITORING_AVAILABLE`), `timestamp: serverTimestamp()` (≤ 30 keys) | `drivemetrics allow create: isSelf && validDrive()` — `timestamp == request.time`, `points` 0..20000, `duration ≥ 0`, `distracted` number, `totalDistance` number |
+| same batch | `users/{uid}`: `points: increment(pts)`, `drivingStreak: 0 \| increment(1)`, `totalDrives: increment(1)`, `lastDriveAt: serverTimestamp()`, `isDriving: false` | `users allow update`: keys ⊂ profileKeys, `validTypes`, `pointsMovementOk` (≥ current, ≤ +20000) |
+| Failed batch | AsyncStorage queue `pendingDriveFinalizations_<uid>`; retried by `flushPendingDriveWrites` on launch (`RootNavigator`) and on drive start (`useDriveSession`) | same rules on retry; existing record skipped |
+| `startDriving` / `stopDriving` (drive start / finalize, unconditional) | `users/{uid}.isDriving: bool` | `users allow update` (`isDriving is bool`) |
+| Sign-up — `claimUsername` (transaction) | `usernames/{lower}: {uid, username, createdAt}`; `users/{uid}: {username, usernameLower}` (merge) | `usernames allow create/update` (owner, ≤ 16, `lower() == name`); `users allow create/update` (profileKeys, `username ≤ 16`) |
+| Sign-up / Google — `ensureUserProfile` | `users/{uid}: {points, drivingStreak, totalDrives, photoURL, isDriving, createdAt}` (merge); `users/{uid}/private/info: {email, updatedAt}` | `users allow create/update` (**`groupId` removed from this write in the merge: `legacyOnlyRemoved` denies it**); `private allow write: isSelf` |
+| Rename — `AccountSettings` → `isUsernameAvailable` + `claimUsername` | as sign-up; old claim `usernames/{old}` deleted | `usernames allow delete` (owner) |
+| Photo — `AccountSettings` | `users/{uid}.photoURL: string` (merge) + `invalidateUserCache` | `users allow update` (`photoURL` string or null) |
+| Trusted contacts — `SafetySettings` → `saveTrustedContacts` | `users/{uid}/private/contacts: {contacts[], updatedAt}`; legacy `users/{uid}.trustedContacts` deleted | `private allow write`; `users allow update` + `legacyOnlyRemoved` (delete only) |
+| Push token — `registerForPushNotificationsAsync` → `savePushToken` | `users/{uid}/private/push: {token, platform, updatedAt}`; legacy `pushToken` deleted | `private allow write`; `legacyOnlyRemoved` |
+| Family emergencies OFF — `NotificationSettings` → `clearPushToken` | delete `users/{uid}/private/push`; `users/{uid}.pushToken: deleteField()` | `private allow write`; `legacyOnlyRemoved` (the Cloud Function reads the private doc first, then the legacy field, so both are removed) |
+| Group create — `useFamilyGroup.createGroup` → `groups.createGroup` (batch) | `groups/{code}: {groupName, createdBy, createdAt, members:[uid], memberLocations:{uid: 5 keys}, savedLocations:[]}`; `users/{uid}/private/info.groupId` | `groups allow create` (exact key set, `createdBy == uid`, `createdAt == request.time`, `members == [uid]`); `private allow write` |
+| Group join — `groups.joinGroup` (batch, no read first) | `groups/{code}`: `members: arrayUnion(uid)`, `memberLocations.{uid}: 5 keys`; `private/info.groupId` | `groups allow update` via `membersOnlyAddsSelf && !savedLocations` + `touchesOnlyOwnLocation` + `ownLocationValid` |
+| Group leave — `groups.leaveGroup` (batch) | `members: arrayRemove(uid)`, `memberLocations.{uid}: deleteField()`; `private/info.groupId: null` | `isMember && membersOnlyRemovesSelf` (exactly current minus self) |
+| Location sharing — `LocationService` → `groups.updateMemberLocation` | `memberLocations.{uid}.{latitude, longitude, speed, updatedAt}` (never `emergency`) | `isMember && membersUnchanged && touchesOnlyOwnLocation && ownLocationValid` |
+| SOS — `useEmergency` / `EmergencyBanner` → `groups.setEmergency` | `memberLocations.{uid}.emergency: bool` (+ coords when a fix is available) | same as above (`emergency is bool`) |
+| Saved places — `useFamilyGroup.savePlace/deletePlace` → `addSavedLocation` / `removeSavedLocation` | `groups/{id}.savedLocations: arrayUnion/arrayRemove({name, address, createdBy})` (≤ 100) | `isMember && membersUnchanged && savedLocationsValid` |
+| Clear history — `AccountSettings` → `clearUserDrives` | batched deletes of `drivemetrics/*`; `users/{uid}.totalDrives: 0` | `drivemetrics allow delete`; `users allow update` |
+| Leaderboard — `utils/leaderboard.js` | reads only: `users orderBy points desc limit N`, `getCountFromServer(where points > n)` | `users allow list/get: isSignedIn` |
+| Family members' names — `useFamilyGroup.fetchProfiles` | reads only: `users where __name__ in [≤10] limit(10)` | `users allow list` |
+| Group document — `useFamilyGroup` `onSnapshot`, `HomeScreen`/`AccountSettings` `getGroup`/`getGroupName` | reads only | `groups allow get: isMember` |
+
+Reads that changed with the merge: Home `getDriveHistoryPage(uid, { pageSize: 30 })`; Drives history
+`getDriveHistoryPage` (cursor + `hasMore`) + `getDriveCounts` (count queries); Insights
+`getDriveMetrics(uid, 30)` through `utils/driveCache.js` (5-minute TTL, invalidated when a drive is
+finalized); Drive detail `getDoc(users/{uid}/drivemetrics/{id})`; Rewards
+`getAllDriveMetrics(uid, { maxDrives: 200 })` + `getDriveCounts`; the group id everywhere via
+`getGroupIdForUser(uid)` (AuthContext, three-valued: string | null | undefined — a failed read is
+never treated as "no group").
 
 ## 8. `utils/` additions (existing functions untouched)
-- `utils/firestore.js`: `addUserPoints(uid, delta)` (atomic `increment`), `getRecentDrives(uid, count)`
-  (`limit` query), `getUserProfile(uid)`.
-- New files: `utils/speedLimit.js` (cache + HERE lookup, moved from DriveScreen), `utils/driveConditions.js`
+- `utils/firestore.js`: the backend branch's module, taken whole in the merge (the UX rework's
+  `addUserPoints`, `getRecentDrives` and `getUserProfile` were deleted in favour of
+  `finalizeDriveWrite`, `getDriveHistoryPage` and `getUserSummary`). One fix applied in the merge:
+  `ensureUserProfile` no longer writes `groupId` onto the public profile.
+- `utils/notifications.js`: `clearPushToken()` (private push doc + legacy field delete).
+  `utils/LocationService.js`: `ensureLocationSharing()` (single-flight start).
+- New files: `utils/driveCache.js` (Insights 30-day cache), `utils/driveConditions.js`
   (weather → road helpers, local fallback summary), `utils/driveScore.js` (per-drive score, tips, weekly
-  summary), `utils/achievements.js` (badges), `utils/geo.js` (Family geocoding + map style, moved from
-  LocationScreen), `utils/format.js` (formatters + `serializeDrive` for navigation params),
+  summary), `utils/achievements.js` (badges), `utils/geo.js` (the backend's shared geometry —
+  `distanceMeters`, `haversineM`, `bearingDeg`, `offsetPoint` — plus the Family geocoding helpers, the
+  Nominatim single-flight queue and the dark map style), `utils/format.js` (formatters + `serializeDrive`
+  for navigation params),
   `utils/storageKeys.js` (every AsyncStorage key), `utils/leaderboard.js` (`fetchLeaderboard`, the old
   leaderboard queries shared by Rewards and Leaderboard).
 
 ## 9. New dependency
 - `expo-keep-awake` (already a transitive dependency of `expo`, now direct so it resolves from app
-  code). No other dependency added.
+  code). `expo-crypto` arrived with the backend merge (group codes). No other dependency added.
 
 ## 10. Theme extensions (`theme/extras.js`, additive; `theme/primitives.js` untouched)
 `ListRow`, `Toggle`, `ToggleRow`, `EmptyState`, `Skeleton`, `SegmentedTabs`, `IconButton`,
