@@ -251,6 +251,48 @@ test('acknowledge ends the episode, suppresses it and tells the engine', () => {
   assert.strictEqual(b.snapshot().metrics.alertCounts.warning, 1);
 });
 
+test('the closed-eye family and NO_FACE can never be acknowledged (WARNINGS_DESIGN §4)', () => {
+  const calls = [];
+  const monitor = { acknowledge: (t) => calls.push(t), resetCalibration: () => {} };
+
+  // DRIVER_NOT_VISIBLE repeats every 30 s with the SAME t_start (the moment the face was lost),
+  // so a bridge-level acknowledgement would kill the whole absence instead of 30 s of it.
+  const b = makeBridge({ monitor });
+  b.update(withEvent(out(20, { face_present: false }),
+                     new Event(EventType.DRIVER_NOT_VISIBLE, 20, 10, 10, '', { audible: true })));
+  const id = b.snapshot().activeAlert.id;
+  assert.strictEqual(b.snapshot().activeAlert.type, ALERT_TYPE.NO_FACE);
+  b.acknowledge(id);
+  assert.strictEqual(b.snapshot().activeAlert.id, id, 'the NO_FACE banner stays');
+  assert.deepStrictEqual(calls, [], 'the engine arbiter is not told either');
+  b.update(withEvent(out(50, { face_present: false }),
+                     new Event(EventType.DRIVER_NOT_VISIBLE, 50, 10, 40, '', { audible: true })));
+  assert.strictEqual(b.snapshot().activeAlert.id, id, 'the 30 s repeat still reaches the driver');
+
+  // the closed-eye family: a siren the driver cannot dismiss
+  const closure = { glance_class: 'none', openness: 0.05 };
+  const c = makeBridge({ monitor });
+  c.update(withEvent(out(101, closure), new Event(EventType.EYES_CLOSED, 101, 98, 3)));
+  const closureId = c.snapshot().activeAlert.id;
+  c.acknowledge(closureId);
+  assert.strictEqual(c.snapshot().activeAlert.id, closureId, 'a closed-eye alert cannot be dismissed');
+
+  const m = makeBridge({ monitor });
+  m.update(withEvent(out(201, closure), new Event(EventType.MICROSLEEP, 201, 200, 1.5)));
+  const microId = m.snapshot().activeAlert.id;
+  m.acknowledge(microId);
+  assert.strictEqual(m.snapshot().activeAlert.id, microId, 'a microsleep alert cannot be dismissed');
+  assert.deepStrictEqual(calls, [], 'no acknowledgement reached the engine');
+
+  // ... and an ordinary WARNING is still acknowledgeable (this must not be a blanket block)
+  const g = makeBridge({ monitor });
+  g.update(withEvent(out(10, { glance_class: 'cabin', glance_s: 3.2 }),
+                     new Event(EventType.LONG_GLANCE, 10, 7, 3)));
+  g.acknowledge(g.snapshot().activeAlert.id);
+  assert.strictEqual(g.snapshot().activeAlert, null);
+  assert.deepStrictEqual(calls, [10]);
+});
+
 // ------------------------------------------------------------------ metrics
 test('eyes off the road counts the glance beyond its class allowance', () => {
   const b = makeBridge();

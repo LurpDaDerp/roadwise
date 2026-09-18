@@ -93,6 +93,26 @@ const DISTRACTION_ALERTS = new Set([
 /** One of these resets the streak on its own (DETECTION §11). */
 const STREAK_BREAKERS = new Set([ALERT_TYPE.PROLONGED_STARE, ALERT_TYPE.EYES_CLOSED]);
 
+/**
+ * The driver can never dismiss these (WARNINGS_DESIGN §4, T `ack_suppress_s`): the engine's own
+ * arbiter refuses to acknowledge `FAST_REPEAT_TYPES` and `DRIVER_NOT_VISIBLE` (dms/monitor.js
+ * `AlertArbiter.acknowledge`), and the bridge must not silence them either — every repeat of one
+ * absence or one closure carries the SAME `t_start`, so a single bridge-level acknowledgement
+ * would suppress the whole episode instead of 30 s of it.
+ */
+const NEVER_ACKNOWLEDGEABLE = new Set([
+  ALERT_TYPE.EYES_CLOSED,    // engine SLEEP + EYES_CLOSED
+  ALERT_TYPE.MICROSLEEP,
+  ALERT_TYPE.NO_FACE,        // engine DRIVER_NOT_VISIBLE
+]);
+
+/** `LONG_GLANCE@7.5` -> `LONG_GLANCE`; the alert types never contain `@`. */
+function typeOfEpisodeId(id) {
+  if (typeof id !== 'string') return null;
+  const at = id.lastIndexOf('@');
+  return at <= 0 ? null : id.slice(0, at);
+}
+
 // ---------------------------------------------------------------------------- timings
 const FORWARD_CLEAR_S = 1.0;      // Euro NCAP: 1 s of continuous forward gaze terminates
 const EYES_OPEN_CLEAR_S = 1.0;
@@ -630,6 +650,9 @@ class MonitoringBridge {
   /** The driver dismissed an alert: end the episode and tell the engine (30 s suppression). */
   acknowledge(id) {
     if (!id) return;
+    const episode = this.episodes.get(id);
+    const type = (episode && episode.type) || typeOfEpisodeId(id);
+    if (type !== null && NEVER_ACKNOWLEDGEABLE.has(type)) return;   // WARNINGS_DESIGN §4
     this.acknowledged.add(id);
     if (this.episodes.has(id)) {
       this.episodes.delete(id);
@@ -741,6 +764,7 @@ module.exports = {
   LINGERING_ALERTS,
   DISTRACTION_ALERTS,
   STREAK_BREAKERS,
+  NEVER_ACKNOWLEDGEABLE,
   severityOf,
   PERCLOS_ADVISORY_EVENT,
   EYES_OFF_ALLOWANCE,
