@@ -344,11 +344,15 @@ audio/location Android permissions twice — a pre-existing duplication, left un
 
 ```sh
 cd /mnt/c/Users/lurpd/Documents/dev/RoadCash-dms
-node --test "monitoring/__tests__/*.test.js" "hooks/__tests__/*.test.js"    # 63 tests
-node --test "dms/tests/*.test.js"                                           # the engine parity suite
+node --test "dms/tests/*.test.js"                                           # engine: 140 tests, 140 pass (~35 s)
+node --test "monitoring/__tests__/*.test.js" "hooks/__tests__/*.test.js"    # integration: 63 tests, 63 pass (~2 s)
+node modules/dms-vision/scripts/check-bundle.js                             # the three model copies are identical
 ```
 
-(Node 24 does not expand a bare directory after `--test`; use the glob form.  There is no jest,
+Verified on this machine with Node 24.19 (WSL); the same commands run under Windows Node 22 from
+`C:\Users\lurpd\Documents\dev\RoadCash-dms`.  `node --test dms/tests` (a bare directory argument)
+fails immediately under Node 24 ("test failed" on `dms/tests:1:1`) — always use the file-glob form
+above (or `cd dms && node --test`).  There is no jest,
 babel or TypeScript anywhere in these folders — every tested module is plain CommonJS with no React
 Native import.)
 
