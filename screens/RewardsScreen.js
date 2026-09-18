@@ -21,7 +21,8 @@ import {
   useTheme,
 } from '../theme';
 import { useAuthContext } from '../context/AuthContext';
-import { getAllDriveMetrics, getDriveCounts } from '../utils/firestore';
+import { getDriveCounts } from '../utils/firestore';
+import { getBadgeDrives } from '../utils/driveCache';
 import { computeBadges } from '../utils/achievements';
 import { fetchLeaderboard } from '../utils/leaderboard';
 import { BadgeGrid, LeaderboardPreview, RewardCategoryTile } from '../components/rewards';
@@ -71,7 +72,7 @@ export default function RewardsScreen({ navigation }) {
       (async () => {
         // Badges need recent history, not the whole collection: the newest 200 drives
         // plus a server count for the totals-based badges.
-        const [list, counts] = await Promise.all([getAllDriveMetrics(uid, { maxDrives: 200 }), getDriveCounts(uid)]);
+        const [list, counts] = await Promise.all([getBadgeDrives(uid), getDriveCounts(uid)]);
         if (!active) return;
         setDrives(Array.isArray(list) ? list : []);
         setTotalDrives(counts?.total ?? null);

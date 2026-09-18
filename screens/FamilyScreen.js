@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, Pressable, Alert, StyleSheet } from 'react-native';
 import MapView, { AnimatedRegion } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused, useRoute, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetSectionList, BottomSheetView } from '@gorhom/bottom-sheet';
 
@@ -46,6 +46,9 @@ export default function FamilyScreen() {
   const [placeSheetOpen, setPlaceSheetOpen] = useState(false);
   const [editingPlace, setEditingPlace] = useState(null);
   const [containerHeight, setContainerHeight] = useState(0);
+  // The tab stays mounted after the first visit, so everything that costs power - the GPS watch,
+  // the map's own location provider and the group subscription - is gated on focus.
+  const isFocused = useIsFocused();
 
   const mapRef = useRef(null);
   const sheetRef = useRef(null);
@@ -65,6 +68,7 @@ export default function FamilyScreen() {
     location,
     onBeforeStart: requestSharingPermissions,
     onGroupIdChange: setGroupIdLocal,
+    active: isFocused,
   });
   const { groupId, groupName, members, places, loaded } = family;
 
@@ -77,7 +81,13 @@ export default function FamilyScreen() {
   useFocusEffect(useCallback(() => { purgeOldGeocodeCache(); }, []));
 
   // ---- my position -------------------------------------------------------
+  // Only while this tab is on screen AND the user is in a group: without a group the map is not
+  // rendered at all (the create / join panel is), and a blurred tab has nothing to draw. This
+  // used to be a permanent 2 s GPS watch that also ran for the whole of every drive, on top of
+  // the drive screen's own watch. While the tab is away, the group keeps seeing this member
+  // through the background task (utils/LocationService.js), which is gated at 20 s / 25 m.
   useEffect(() => {
+    if (!isFocused || !groupId) return undefined;
     if (perms.location !== 'granted') return undefined;
     let sub = null;
     let anim = null;
@@ -85,7 +95,9 @@ export default function FamilyScreen() {
     (async () => {
       try {
         const created = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Balanced, distanceInterval: 5, timeInterval: 2000 },
+          // The consumers are a map dot (animated over 1 s) and a reverse geocode throttled to
+          // 10 s / 10 m, so 5 s / 10 m is as much as anything reads.
+          { accuracy: Location.Accuracy.Balanced, distanceInterval: 10, timeInterval: 5000 },
           (loc) => {
             if (cancelled) return;
             const { latitude, longitude } = loc.coords;
@@ -112,7 +124,7 @@ export default function FamilyScreen() {
       anim?.stop?.();
       sub?.remove?.();
     };
-  }, [perms.location, myCoord]);
+  }, [isFocused, groupId, perms.location, myCoord]);
 
   // ---- map actions -------------------------------------------------------
   const focusOn = useCallback((coords, duration = 500) => {
@@ -262,7 +274,9 @@ export default function FamilyScreen() {
           style={StyleSheet.absoluteFill}
           initialRegion={{ ...location, ...DELTA }}
           customMapStyle={t.isDark ? DARK_MAP_STYLE : []}
-          showsUserLocation
+          // `showsUserLocation` is a second, independent OS location consumer inside the map
+          // SDK: off while the tab is not on screen. Toggling the prop does not remount the map.
+          showsUserLocation={isFocused}
           showsMyLocationButton={false}
           toolbarEnabled={false}
         >

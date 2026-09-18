@@ -79,7 +79,15 @@ function buildMembers(prev, memberLocations, profiles) {
 // string | null | undefined = not known). Every write goes through utils/groups.js,
 // which is what the security rules were written against; onGroupIdChange lets the
 // caller update AuthContext optimistically after create / join / leave.
-export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, onGroupIdChange }) {
+/**
+ * `active` (default true) gates the live group subscription. The Family tab stays MOUNTED once
+ * visited (bottom tabs do not unmount), and every member's background location write delivers a
+ * snapshot that rebuilds the member list and can start a reverse geocode - network and JS
+ * wakeups, in an N-member group N x 3 per minute, for a screen nobody is looking at. The last
+ * snapshot is kept while inactive, so returning to the tab shows data immediately and the
+ * re-subscribe costs one document read.
+ */
+export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, onGroupIdChange, active = true }) {
   const [optimisticGroupId, setOptimisticGroupId] = useState(undefined);
   const groupId = optimisticGroupId !== undefined ? optimisticGroupId : profileGroupId;
   const setGroupId = useCallback(
@@ -93,6 +101,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, o
   const [members, setMembers] = useState([]);
   const [places, setPlaces] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const hasDataRef = useRef(false);
 
   const profilesRef = useRef({});
   const lastMemberCoordsRef = useRef({});
@@ -134,13 +143,16 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, o
 
   useEffect(() => {
     if (!groupId) {
+      hasDataRef.current = false;
       setMembers([]);
       setPlaces([]);
       setGroupName('');
       setLoaded(false);
       return undefined;
     }
-    setLoaded(false);
+    if (!active) return undefined;               // keep the last snapshot; just stop listening
+    // Only show the skeleton when there is nothing to show; a re-focus must not flash it.
+    if (!hasDataRef.current) setLoaded(false);
     let cancelled = false;
     const pending = new Set();
 
@@ -149,6 +161,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, o
       (snap) => {
         if (cancelled) return;
         setLoaded(true);
+        hasDataRef.current = true;
         if (!snap.exists()) return;
         const data = snap.data() || {};
         const memberLocations = data.memberLocations || {};
@@ -201,7 +214,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, o
       cancelled = true;
       unsub();
     };
-  }, [groupId, uid, fetchProfiles, setMemberAddress]);
+  }, [groupId, uid, active, fetchProfiles, setMemberAddress]);
 
   // My own address, from the live fix, at most every 10 s / 10 m.
   useEffect(() => {

@@ -2,9 +2,11 @@
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, deleteDoc, updateDoc, deleteField } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { savePushToken } from "./firestore";
+import { KEYS } from "./storageKeys";
 
 export async function requestNotificationPermissions() {
   const { status } = await Notifications.requestPermissionsAsync();
@@ -34,14 +36,32 @@ export async function registerForPushNotificationsAsync() {
     return null;
   }
 
+  const uid = auth.currentUser?.uid;
+
+  // An Expo push token changes about as often as the app is reinstalled, but this ran on every
+  // launch AND before every drive: one HTTP request to Expo plus a Firestore write plus a read.
+  // Remember what was last written for this account and skip all three when nothing changed.
+  let cached = null;
+  if (uid) {
+    try {
+      cached = await AsyncStorage.getItem(KEYS.pushTokenSent(uid));
+    } catch {
+      cached = null;
+    }
+  }
+
   const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
   const token = tokenData.data;
 
   // The token is stored under users/{uid}/private/push. It used to sit on the public user
   // document, where any signed-in account could read it and send that device a push.
-  const uid = auth.currentUser?.uid;
-  if (uid && token) {
+  if (uid && token && `${Platform.OS}:${token}` !== cached) {
     await savePushToken(uid, token, Platform.OS);
+    try {
+      await AsyncStorage.setItem(KEYS.pushTokenSent(uid), `${Platform.OS}:${token}`);
+    } catch {
+      // A failed cache write only costs one redundant save next launch.
+    }
   }
 
   return token;

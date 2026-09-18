@@ -25,11 +25,12 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { speak, stopSpeech, SPEECH_PRIORITY } from '../utils/speech';
 import { auth } from '../utils/firebase';
-import { finalizeDriveWrite, flushPendingDriveWrites, getPendingDriveCount, startDriving, stopDriving } from '../utils/firestore';
+import { finalizeDriveWrite, flushPendingDriveWrites, getPendingDriveCount, invalidateDriveCounts, startDriving, stopDriving } from '../utils/firestore';
 import { scheduleDistractedNotification, scheduleFirstDistractedNotification } from '../utils/notifications';
 import { fetchWeather } from '../utils/weather';
 import { getRoadConditionSummary } from '../utils/gptApi';
 import { invalidateInsightsCache } from '../utils/driveCache';
+import { invalidateLeaderboard } from '../utils/leaderboard';
 import {
   loadSpeedLimitCache,
   flushSpeedLimitCache,
@@ -696,6 +697,8 @@ export function useDriveSession({
             } catch {}
           } else {
             invalidateInsightsCache();
+            invalidateDriveCounts();
+            invalidateLeaderboard();
           }
         }
       } catch (e) {

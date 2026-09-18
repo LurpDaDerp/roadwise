@@ -28,6 +28,10 @@ export const KEYS = {
   safetyScore: 'safetyScore', // legacy, device-global (pre-rework)
   safetyScoreFor: (uid) => `@safetyScore_${uid}`,
   feedbackCache: 'feedbackCache',
+  weatherCache: '@weatherCache',
+  // The push token last written to Firestore, per account, so an unchanged token costs no
+  // network round trip and no write on every launch.
+  pushTokenSent: (uid) => `@pushToken_${uid}`,
   cachedProfileImage: 'cachedProfileImage',
   onboarded: (uid) => `@onboarded_${uid}`,
 };

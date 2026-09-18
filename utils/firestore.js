@@ -502,6 +502,10 @@ export async function getTrustedContacts(uid) {
   }
 }
 
+// The pre-migration public `pushToken` field is removed at most once per app run: it is gone
+// after the first save, and the check used to cost a user-document read on every call.
+const legacyPushFieldChecked = new Set();
+
 export async function savePushToken(uid, token, platform = null) {
   if (!uid || !token) return;
   try {
@@ -510,10 +514,13 @@ export async function savePushToken(uid, token, platform = null) {
       { token, platform, updatedAt: serverTimestamp() },
       { merge: true }
     );
-    const summary = await getUserSummary(uid);
-    if (summary && summary.pushToken !== undefined) {
-      await updateDoc(doc(db, "users", uid), { pushToken: deleteField() });
-      invalidateUserCache(uid);
+    if (!legacyPushFieldChecked.has(uid)) {
+      legacyPushFieldChecked.add(uid);
+      const summary = await getUserSummary(uid);
+      if (summary && summary.pushToken !== undefined) {
+        await updateDoc(doc(db, "users", uid), { pushToken: deleteField() });
+        invalidateUserCache(uid);
+      }
     }
   } catch (err) {
     console.error("Error saving push token:", err);
@@ -623,8 +630,22 @@ export async function getDriveHistoryPage(uid, { pageSize = 20, cursor = null } 
  * Drive totals for the history summary, answered by count queries so the screen never has
  * to hold every drive in memory to show three numbers.
  */
-export async function getDriveCounts(uid) {
+// Three count queries, run on EVERY Drives-tab focus and every Rewards-tab focus. The numbers
+// only move when a drive is finalized, which already invalidates this cache, so tab-flipping
+// costs nothing.
+const DRIVE_COUNTS_TTL_MS = 5 * 60 * 1000;
+let driveCountsCache = { uid: null, value: null, at: 0 };
+
+export function invalidateDriveCounts() {
+  driveCountsCache = { uid: null, value: null, at: 0 };
+}
+
+export async function getDriveCounts(uid, { force = false } = {}) {
   if (!uid) return { total: 0, distracted: 0, focused: 0 };
+  if (!force && driveCountsCache.uid === uid && driveCountsCache.value
+      && Date.now() - driveCountsCache.at < DRIVE_COUNTS_TTL_MS) {
+    return driveCountsCache.value;
+  }
   try {
     const ref = driveMetricsRef(uid);
     // `distracted` is a COUNT on records written by this build, but older records stored a
@@ -637,13 +658,17 @@ export async function getDriveCounts(uid) {
     ]);
     const total = totalSnap.data().count;
     const distracted = numericSnap.data().count + booleanSnap.data().count;
-    return {
+    const value = {
       total,
       distracted: Math.min(total, distracted),
       focused: Math.max(0, total - distracted),
     };
+    driveCountsCache = { uid, value, at: Date.now() };
+    return value;
   } catch (error) {
     console.error("Failed to count drive history:", error);
+    // A stale copy is better than three zeros on a flaky connection.
+    if (driveCountsCache.uid === uid && driveCountsCache.value) return driveCountsCache.value;
     return { total: 0, distracted: 0, focused: 0 };
   }
 }
