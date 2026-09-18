@@ -49,7 +49,15 @@ const CODE_LENGTH = 8;
  * characters. This uses the platform CSPRNG over a 32 character alphabet: 32^8 codes.
  */
 export function generateGroupCode() {
-  const bytes = Crypto.getRandomBytes(CODE_LENGTH);
+  let bytes;
+  try {
+    bytes = Crypto.getRandomBytes(CODE_LENGTH);
+  } catch (err) {
+    // Should not happen on a device, but a weak code beats no code at all.
+    console.warn("CSPRNG unavailable, falling back to Math.random for the group code:", err);
+    bytes = Array.from({ length: CODE_LENGTH }, () => Math.floor(Math.random() * 256));
+  }
+
   let code = "";
   for (let i = 0; i < CODE_LENGTH; i++) {
     code += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];

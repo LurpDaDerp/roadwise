@@ -26,12 +26,18 @@ const REQUIRED = [
 
 function warnAboutMissing() {
   const missing = REQUIRED.filter((name) => !process.env[name]);
-  if (missing.length > 0) {
-    console.warn(
-      `[app.config.js] Missing environment variables: ${missing.join(', ')}. ` +
-        'Copy .env.example to .env (local) or set them as EAS environment variables.'
-    );
-  }
+  if (missing.length === 0) return;
+
+  // The Expo CLI evaluates this file once to locate the project BEFORE it loads .env, so
+  // a complete miss on that first pass is expected and harmless. A partial miss always
+  // means something is genuinely unset.
+  const loadedSomething = Object.keys(process.env).some((k) => k.startsWith('EXPO_PUBLIC_'));
+  if (!loadedSomething) return;
+
+  console.warn(
+    `[app.config.js] Missing environment variables: ${missing.join(', ')}. ` +
+      'Copy .env.example to .env (local) or set them as EAS environment variables.'
+  );
 }
 
 // The Google iOS OAuth client requires the app to handle its reversed-client-id URL
@@ -64,18 +70,18 @@ module.exports = ({ config }) => {
     },
     extra: {
       ...config.extra,
-      firebaseApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? null,
-      firebaseAuthDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? null,
-      firebaseProjectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? null,
-      firebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ?? null,
-      firebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? null,
-      firebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? null,
-      firebaseMeasurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? null,
-      supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? null,
-      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? null,
-      googleWebClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? null,
-      googleIosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? null,
-      googleAndroidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? null,
+      firebaseApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || null,
+      firebaseAuthDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || null,
+      firebaseProjectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || null,
+      firebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || null,
+      firebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || null,
+      firebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID || null,
+      firebaseMeasurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID || null,
+      supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL || null,
+      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || null,
+      googleWebClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || null,
+      googleIosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || null,
+      googleAndroidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || null,
     },
   };
 };

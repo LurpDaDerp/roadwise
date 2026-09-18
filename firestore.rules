@@ -71,7 +71,10 @@ service cloud.firestore {
 
       allow update: if isSignedIn()
         && resource.data.uid == request.auth.uid
+        && claim().keys().hasOnly(['uid', 'username', 'createdAt'])
         && claim().uid == request.auth.uid
+        && claim().username is string
+        && claim().username.size() <= 16
         && claim().username.lower() == name;
 
       allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
@@ -96,31 +99,30 @@ service cloud.firestore {
       // (that is the migration), but never written again.
       function legacyKeys() { return ['pushToken', 'trustedContacts']; }
 
-      function notRewritingLegacy() {
-        return !('pushToken' in incoming()) && !('trustedContacts' in incoming());
+      // `request.resource.data` is the WHOLE resulting document, not the delta, so these
+      // checks are scoped to the keys a write actually touches. Checking the whole
+      // document instead would permanently lock out any account that still carries a
+      // legacy or unrecognised field.
+      function legacyOnlyRemoved(touched) {
+        return (!('pushToken' in touched) || !('pushToken' in incoming()))
+          && (!('trustedContacts' in touched) || !('trustedContacts' in incoming()));
       }
 
-      function validTypes() {
-        return (!('username' in incoming())
+      function validTypes(touched) {
+        return (!('username' in touched)
                 || (incoming().username is string && incoming().username.size() <= 16))
-          && (!('usernameLower' in incoming()) || incoming().usernameLower is string)
-          && (!('points' in incoming())
+          && (!('usernameLower' in touched) || incoming().usernameLower is string)
+          && (!('points' in touched)
                 || (incoming().points is number && incoming().points >= 0))
-          && (!('drivingStreak' in incoming())
+          && (!('drivingStreak' in touched)
                 || (incoming().drivingStreak is number && incoming().drivingStreak >= 0))
-          && (!('totalDrives' in incoming())
+          && (!('totalDrives' in touched)
                 || (incoming().totalDrives is number && incoming().totalDrives >= 0))
-          && (!('groupId' in incoming())
+          && (!('groupId' in touched)
                 || incoming().groupId == null || incoming().groupId is string)
-          && (!('isDriving' in incoming()) || incoming().isDriving is bool)
-          && (!('photoURL' in incoming())
+          && (!('isDriving' in touched) || incoming().isDriving is bool)
+          && (!('photoURL' in touched)
                 || incoming().photoURL == null || incoming().photoURL is string);
-      }
-
-      function validProfile() {
-        return incoming().keys().hasOnly(profileKeys().concat(legacyKeys()))
-          && notRewritingLegacy()
-          && validTypes();
       }
 
       // Points may only go up, and only by a plausible amount for one drive. This is a
@@ -138,10 +140,16 @@ service cloud.firestore {
       allow list: if isSignedIn();
 
       allow create: if isSelf(userId)
-        && validProfile()
+        && incoming().keys().hasOnly(profileKeys())
+        && validTypes(incoming().keys())
         && (!('points' in incoming()) || incoming().points <= 2000);
 
-      allow update: if isSelf(userId) && validProfile() && pointsMovementOk();
+      allow update: if isSelf(userId)
+        && changedKeys().hasOnly(profileKeys().concat(legacyKeys()))
+        && legacyOnlyRemoved(changedKeys())
+        && validTypes(changedKeys())
+        && pointsMovementOk();
+
       allow delete: if false;
 
       // Push token, trusted contacts, email, per-day API usage counters.
