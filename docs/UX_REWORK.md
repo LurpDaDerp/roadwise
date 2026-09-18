@@ -146,8 +146,11 @@ focus, skeleton rows while loading.
   Members and Saved places, member sheet, add/edit place sheet with HERE autocomplete and "Use my
   location". Leave group in the sheet footer.
 - Permissions: inline "Location sharing needs …" card with buttons instead of Alert + goBack.
-- Bug fixed: group creation writes `groupName`, `createdBy`, `createdAt` to `groups/{id}`.
-- Split into `components/family/*` and `utils/geo.js`.
+- Bug fixed: group creation writes `groupName`, `createdBy`, `createdAt` to `groups/{id}` before the
+  user's `groupId`.
+- Split into `components/family/*` (the `useFamilyGroup` hook owns the group subscription, member
+  merging, throttled geocoding and every Firestore write) and `utils/geo.js`. Background location and
+  notifications are requested when the user creates or joins, never on mount.
 
 ### Settings
 Grouped list: **Account** (avatar, username, email) · **Driving** (units, spoken limit, speeding
@@ -269,16 +272,38 @@ Reads/writes keep the current layout.
 - `groups/{id}`: `groupName`, `createdBy`, `createdAt` now written on creation; everything else as before.
 
 ## 8. `utils/` additions (existing functions untouched)
-- `utils/firestore.js`: `addUserPoints(uid, delta)`, `getRecentDrives(uid, count)`, `getUserProfile(uid)`.
-- New files: `utils/speedLimit.js`, `utils/driveConditions.js`, `utils/driveScore.js`,
-  `utils/achievements.js`, `utils/geo.js`, `utils/format.js`, `utils/storageKeys.js`.
+- `utils/firestore.js`: `addUserPoints(uid, delta)` (atomic `increment`), `getRecentDrives(uid, count)`
+  (`limit` query), `getUserProfile(uid)`.
+- New files: `utils/speedLimit.js` (cache + HERE lookup, moved from DriveScreen), `utils/driveConditions.js`
+  (weather → road helpers, local fallback summary), `utils/driveScore.js` (per-drive score, tips, weekly
+  summary), `utils/achievements.js` (badges), `utils/geo.js` (Family geocoding + map style, moved from
+  LocationScreen), `utils/format.js` (formatters + `serializeDrive` for navigation params),
+  `utils/storageKeys.js` (every AsyncStorage key), `utils/leaderboard.js` (`fetchLeaderboard`, the old
+  leaderboard queries shared by Rewards and Leaderboard).
 
 ## 9. New dependency
 - `expo-keep-awake` (already a transitive dependency of `expo`, now direct so it resolves from app
   code). No other dependency added.
 
-## 10. Theme extensions (`theme/primitives.js`, additive)
-`ListRow` (icon, title, subtitle, right, chevron), `Toggle` (themed Switch), `EmptyState`,
-`Skeleton`, `SegmentedTabs`, `IconButton`, `ProgressBar`, `Ring` (SVG score ring), `Sheet` (modal
-card), `Banner` (tone-coloured inline notice). Tokens gain `dangerFaint`, `warningFaint`,
-`successFaint` for chip backgrounds.
+## 10. Theme extensions (`theme/extras.js`, additive; `theme/primitives.js` untouched)
+`ListRow`, `Toggle`, `ToggleRow`, `EmptyState`, `Skeleton`, `SegmentedTabs`, `IconButton`,
+`ProgressBar`, `Ring` (SVG score ring) + `scoreColor`, `Banner`, `Sheet` (centre or bottom modal card),
+`Chip`, `StatCell`, `StatDivider`, `KeyValueRow`, `useCountUp`. Tokens gain `dangerFaint`,
+`warningFaint`, `successFaint`, `info`, `infoFaint` and the `glance` / `glanceLabel` type scale used by
+the drive screen.
+
+## 11. Implementation map (as built)
+
+| Area | Files |
+|---|---|
+| App shell | `App.js` (providers), `navigation/RootNavigator.js` (auth gate + full-screen drive group), `navigation/MainTabs.js` (5 tabs + 3 stacks) |
+| State | `context/AuthContext.js` (user + live profile + onboarding flag), `context/SettingsContext.js`, `context/ThemeContext.js` (unchanged); `hooks/useAuth.js` aliases AuthContext; `DriveContext` removed |
+| Drive flow | `screens/DrivePrepScreen.js`, `screens/DriveScreen.js`, `screens/DriveSummaryScreen.js`; engine `hooks/useDriveSession.js`; `hooks/useEmergency.js`; `hooks/usePermissions.js`; `components/drive/{DriveTopBar,SpeedHero,SpeedLimitSign,PointsCard,ConditionsStrip,HoldToEndButton,EmergencySheet}.js` |
+| Monitoring contract | `monitoring/{types,settings,summary,useDriverMonitoring,alertAudio,index}.js`; `components/monitoring/{MonitoringStatusPill,CalibrationGate,AlertBanner,CriticalOverlay,CameraPlacementGuide,MonitoringSummaryCard}.js` |
+| Home | `screens/HomeScreen.js`; `components/home/{StartDriveCard,StreakPill,RecentDriveRow}.js` |
+| Drives | `screens/DrivesScreen.js` (History / Insights), `screens/DriveDetailScreen.js`, `screens/AIFeedbackScreen.js`; `components/drives/{HistoryPanel,InsightsPanel,DriveRow,ScoreRing,TipsList,MetricGroup}.js` |
+| Rewards | `screens/RewardsScreen.js`, `screens/LeaderboardScreen.js`; `components/rewards/{BadgeGrid,LeaderboardPreview,RewardCategoryTile}.js` |
+| Family | `screens/FamilyScreen.js`; `components/family/{useFamilyGroup (data layer + all Firestore writes),JoinCreatePanel,GroupHeader,EmergencyBanner,PermissionBanners,MemberRow,MemberMarker,MemberSheet,SavedPlaceRow,AddPlaceSheet}.js` |
+| Settings | `screens/{SettingsScreen,AccountSettings,DriveScreenSettings,MonitoringSettings,NotificationSettings,SafetySettings,AboutScreen}.js` |
+| Auth / first run | `screens/{WelcomeScreen,LoginScreen,SignUpScreen,OnboardingScreen}.js` |
+| Retired | `DashboardScreen`, `MyDrivesScreen`, `AIScreen`, `LocationScreen`, `GeneralSettings`, `FoodRewardsScreen`, `ShoppingRewardsScreen`, `GamesRewardsScreen`, `SubscriptionsRewardsScreen`, `_ComingSoon`, `StackNavigator`, `SettingsStackNavigator`, `RewardsStackNavigator`, `context/DriveContext` |
