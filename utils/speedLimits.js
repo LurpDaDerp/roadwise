@@ -35,7 +35,9 @@ const GRID_RESOLUTION = 0.0005; // ~55 m
 // A ~55 m cell covers ~1/16 the area of the old ~220 m one, so the same amount of
 // travelled road needs proportionally more entries.
 const MAX_ENTRIES = 8000;
-const ENTRY_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+// 7 days, matching the server-side cache in functions/lib/here.js. A 60-day client TTL meant a
+// road whose limit changed kept serving the old value for weeks after the server had forgotten it.
+const ENTRY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 4000;
 
 // Network throttle: never more than one HERE lookup per 15 s, and never twice inside 250 m.

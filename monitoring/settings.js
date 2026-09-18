@@ -1,10 +1,9 @@
 // Driver-monitoring settings: defaults and the option lists shown in Settings.
 
-// MONITORING_AVAILABLE — false while monitoring/useDriverMonitoring.js is the
-// mock. The camera-based monitoring branch flips this to true when it replaces
-// the hook. While false: the toggles read "Coming soon", no camera permission
-// is requested, the status pill and calibration gate stay hidden, and no
-// monitoring data is written to drive records.
+// MONITORING_AVAILABLE — the kill switch for the whole camera feature. It is TRUE: the real
+// camera + gaze + rule-engine hook replaced the mock. Setting it back to false makes the
+// toggles read "Coming soon", asks for no camera permission, hides the status pill and the
+// calibration gate, and writes no monitoring data to drive records.
 export const MONITORING_AVAILABLE = true;
 export const MONITORING_DEFAULTS = Object.freeze({
   monitoringEnabled: false,
@@ -13,7 +12,9 @@ export const MONITORING_DEFAULTS = Object.freeze({
   monitoringHapticAlerts: true,
   monitoringSensitivity: 'medium', // 'low' | 'medium' | 'high'
   monitoringDriverSide: 'left',     // 'left' | 'right' — which side of the car the driver sits on
-  monitoringShowPreview: false,
+  // No monitoringShowPreview: the native module has no preview view, so the toggle was inert
+  // (docs/dms/INTEGRATION.md §3, previewComponent is always null). monitoringSettingsFrom()
+  // keeps reading the key so a stored value survives until a preview exists.
 });
 
 export const SENSITIVITY_OPTIONS = [

@@ -83,6 +83,7 @@ service cloud.firestore {
         && claim().keys().hasOnly(['uid', 'username', 'createdAt'])
         && claim().uid == request.auth.uid
         && claim().username is string
+        && claim().username.size() > 0
         && claim().username.size() <= 16
         && claim().username.lower() == name;
 
@@ -259,11 +260,16 @@ service cloud.firestore {
         return !changedKeys().hasAny(['members']);
       }
 
+      // A family group has no size cap anywhere else, so without this one member could be
+      // joined by an unbounded number of accounts: the group document grows toward the 1 MB
+      // limit (at which point nobody can write their location any more) and every emergency
+      // fans a push notification out to the whole list.
       function membersOnlyAddsSelf() {
         return changedKeys().hasAny(['members'])
           && incoming().members.hasAll(currentMembers())
           && incoming().members.hasOnly(currentMembers().concat([request.auth.uid]))
-          && request.auth.uid in incoming().members;
+          && request.auth.uid in incoming().members
+          && incoming().members.size() <= 25;
       }
 
       // The result must be EXACTLY the current membership minus the caller. Requiring only

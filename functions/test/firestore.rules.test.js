@@ -3,8 +3,7 @@
 /**
  * Security rules tests for firestore.rules.
  *
- * NOT EXECUTED in the environment these were written in: the Firestore emulator needs
- * Java 11+ and only Java 8 was available. Run them with:
+ * Run them with:
  *
  *   cd functions
  *   npm install
@@ -192,6 +191,28 @@ describe("groups", () => {
     await assertSucceeds(
       updateDoc(doc(as(MALLORY), "groups", GROUP), {
         members: [ALICE, BOB, MALLORY],
+        [`memberLocations.${MALLORY}`]: {
+          latitude: null, longitude: null, speed: 0, emergency: false,
+        },
+      }),
+    );
+  });
+
+  test("a group is capped at 25 members", async () => {
+    const full = [];
+    for (let i = 0; i < 25; i += 1) full.push(`member${i}`);
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "groups", GROUP), {
+        groupName: "Family",
+        createdBy: ALICE,
+        members: full,
+        memberLocations: {},
+        savedLocations: [],
+      });
+    });
+    await assertFails(
+      updateDoc(doc(as(MALLORY), "groups", GROUP), {
+        members: full.concat([MALLORY]),
         [`memberLocations.${MALLORY}`]: {
           latitude: null, longitude: null, speed: 0, emergency: false,
         },

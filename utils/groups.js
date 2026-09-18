@@ -233,19 +233,52 @@ export async function getGroupName(groupId) {
  * is deliberately absent: an app restart used to clear an active emergency because the
  * startup location push wrote `emergency: false` alongside the coordinates.
  */
+/** A Firestore rules rejection, whatever shape the SDK reports it in. */
+function isPermissionDenied(err) {
+  const code = err && (err.code || err.name);
+  if (typeof code === 'string' && code.includes('permission-denied')) return true;
+  const message = err && err.message ? String(err.message).toLowerCase() : '';
+  return message.includes('permission') || message.includes('insufficient permissions');
+}
+
 export async function updateMemberLocation(uid, groupId, { latitude, longitude, speed = 0 }) {
   if (!uid || !groupId) return false;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
 
+  const speedValue = Number.isFinite(speed) ? speed : 0;
   try {
     await updateDoc(doc(db, "groups", groupId), {
       [`memberLocations.${uid}.latitude`]: latitude,
       [`memberLocations.${uid}.longitude`]: longitude,
-      [`memberLocations.${uid}.speed`]: Number.isFinite(speed) ? speed : 0,
+      [`memberLocations.${uid}.speed`]: speedValue,
       [`memberLocations.${uid}.updatedAt`]: new Date(),
     });
     return true;
   } catch (err) {
+    // The rules check `hasOnly` on the RESULTING memberLocations.{uid} map, and a dotted-field
+    // update can only add or overwrite keys - it can never remove one. So a single stray key
+    // (an old client, a partial write) locks this member out of location sharing permanently,
+    // because every future dotted update still produces a map with the extra key in it.
+    // Rewriting the whole object with exactly the five allowed keys clears it in one write.
+    if (isPermissionDenied(err)) {
+      try {
+        const snapshot = await getDoc(doc(db, "groups", groupId));
+        const previous = snapshot.exists() ? snapshot.data()?.memberLocations?.[uid] : null;
+        await updateDoc(doc(db, "groups", groupId), {
+          [`memberLocations.${uid}`]: {
+            latitude,
+            longitude,
+            speed: speedValue,
+            updatedAt: new Date(),
+            emergency: Boolean(previous?.emergency),
+          },
+        });
+        return true;
+      } catch (retryErr) {
+        console.error("Error rewriting member location after a rejected update:", retryErr);
+        return false;
+      }
+    }
     console.error("Error updating member location:", err);
     return false;
   }

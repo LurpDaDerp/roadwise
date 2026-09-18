@@ -666,6 +666,34 @@ export async function saveDriveMetrics(uid, metrics) {
 const PENDING_DRIVES_KEY = "pendingDriveFinalizations";
 const MAX_PENDING_DRIVES = 25;
 
+/**
+ * How long a drive commit may take before it is treated as "did not get through".
+ *
+ * The Firestore web SDK accepts a write while offline and resolves `commit()` only when the
+ * SERVER acknowledges it - which, with no signal, is never. Without a bound, ending a drive hung
+ * on "Saving your drive…" with the end button disabled and the back gesture suppressed, the retry
+ * queue (which only ever sees rejections) never engaged, and a force-quit lost the write with the
+ * default in-memory cache. Eight seconds is far longer than a healthy commit and short enough
+ * that the driver is not left staring at a spinner.
+ */
+const DRIVE_COMMIT_TIMEOUT_MS = 8000;
+const SUMMARY_READ_TIMEOUT_MS = 5000;
+
+/** Rejects with a recognisable error when `promise` has not settled within `ms`. */
+function withDeadline(promise, ms, label) {
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms} ms`);
+      err.code = "deadline-exceeded";
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function pendingDrivesKey(uid) {
   return `${PENDING_DRIVES_KEY}_${uid}`;
 }
@@ -704,26 +732,56 @@ async function queuePendingDrive(uid, entry) {
   await writePendingDrives(uid, list);
 }
 
+function driveProfileUpdate(pointsEarned, wasDistracted) {
+  return {
+    points: increment(Number(pointsEarned) || 0),
+    drivingStreak: wasDistracted ? 0 : increment(1),
+    totalDrives: increment(1),
+    lastDriveAt: serverTimestamp(),
+    isDriving: false,
+  };
+}
+
+/** The fast path: one atomic batch, bounded so a dead network cannot hang the drive screen. */
 async function commitDriveBatch(uid, { driveId, metrics, pointsEarned, wasDistracted }) {
   const driveRef = doc(db, "users", uid, DRIVE_METRICS_COLLECTION, driveId);
   const userRef = doc(db, "users", uid);
 
   const batch = writeBatch(db);
   batch.set(driveRef, { ...metrics, timestamp: serverTimestamp() });
-  batch.set(
-    userRef,
-    {
-      points: increment(Number(pointsEarned) || 0),
-      drivingStreak: wasDistracted ? 0 : increment(1),
-      totalDrives: increment(1),
-      lastDriveAt: serverTimestamp(),
-      isDriving: false,
-    },
-    { merge: true }
-  );
+  batch.set(userRef, driveProfileUpdate(pointsEarned, wasDistracted), { merge: true });
 
-  await batch.commit();
+  await withDeadline(batch.commit(), DRIVE_COMMIT_TIMEOUT_MS, "drive commit");
   invalidateUserCache(uid);
+}
+
+/**
+ * The RETRY path: the existence check and the profile increments in ONE transaction.
+ *
+ * A queued drive may have been committed after all - the original `commit()` hit the deadline
+ * above but the SDK delivered it later. A `getDoc` cannot decide that safely: offline it answers
+ * from the local cache, which already has the pending write applied, so the entry would be
+ * dropped from the queue and the drive lost. A transaction always talks to the server, so it
+ * either proves the record is there (and re-applies nothing) or writes it exactly once.
+ *
+ * @returns {boolean} true when the record is on the server after this call.
+ */
+async function commitDriveTransaction(uid, { driveId, metrics, pointsEarned, wasDistracted }) {
+  const driveRef = doc(db, "users", uid, DRIVE_METRICS_COLLECTION, driveId);
+  const userRef = doc(db, "users", uid);
+
+  await withDeadline(
+    runTransaction(db, async (tx) => {
+      const existing = await tx.get(driveRef);
+      if (existing.exists()) return;                       // already landed: no double credit
+      tx.set(driveRef, { ...metrics, timestamp: serverTimestamp() });
+      tx.set(userRef, driveProfileUpdate(pointsEarned, wasDistracted), { merge: true });
+    }),
+    DRIVE_COMMIT_TIMEOUT_MS,
+    "drive retry"
+  );
+  invalidateUserCache(uid);
+  return true;
 }
 
 /**
@@ -759,12 +817,27 @@ export async function finalizeDriveWrite(uid, { metrics, pointsEarned = 0, wasDi
   try {
     await commitDriveBatch(uid, entry);
   } catch (err) {
+    // A deadline is the offline case, not a bug: queue it and let the summary say
+    // "saved on this device". The write may still land later; the retry path is a
+    // transaction precisely so that a late arrival cannot become double credit.
     console.error("Drive finalization failed; queued for retry:", err);
     await queuePendingDrive(uid, entry);
     return { driveId, totalPoints: null, streak: null, queued: true };
   }
 
-  const { status, data } = await readUserSummary(uid, { force: true });
+  // Bounded for the same reason as the commit: the summary screen waits on this.
+  let status = READ_ERROR;
+  let data = null;
+  try {
+    ({ status, data } = await withDeadline(
+      readUserSummary(uid, { force: true }),
+      SUMMARY_READ_TIMEOUT_MS,
+      "post-drive profile read"
+    ));
+  } catch (err) {
+    status = READ_ERROR;
+    data = null;
+  }
   const total = status === READ_OK ? Number(data?.points) || 0 : null;
   if (total !== null) await cachePointsIfHigher(uid, total);
 
@@ -794,14 +867,10 @@ export async function flushPendingDriveWrites(uid) {
 
   for (const entry of pending) {
     try {
-      const existing = await getDoc(
-        doc(db, "users", uid, DRIVE_METRICS_COLLECTION, entry.driveId)
-      );
-      if (existing.exists()) {
-        flushed++;
-        continue;
-      }
-      await commitDriveBatch(uid, entry);
+      // One transaction does the existence check and the write, so a record that landed after
+      // its original commit timed out is recognised on the SERVER rather than in a local cache
+      // that already shows the pending write.
+      await commitDriveTransaction(uid, entry);
       flushed++;
     } catch (err) {
       console.warn("Could not flush a pending drive; will retry later:", err);

@@ -39,7 +39,10 @@ const SPEC = {
   monitoringHapticAlerts: [KEYS.monitoringHapticAlerts, parseBool],
   monitoringSensitivity: [KEYS.monitoringSensitivity, (v) => (['low', 'medium', 'high'].includes(v) ? v : null)],
   monitoringDriverSide: [KEYS.monitoringDriverSide, (v) => (['left', 'right'].includes(v) ? v : null)],
-  monitoringShowPreview: [KEYS.monitoringShowPreview, parseBool],
+  // monitoringShowPreview is deliberately absent: the native module renders no preview
+  // (docs/dms/DETECTION_DESIGN.md §3 - running without one is most of the battery saving), so
+  // the setting could never do anything. monitoringSettingsFrom() still tolerates the missing
+  // key, and the stored value is left in AsyncStorage for whenever a preview exists.
 };
 
 function parseBool(v) {

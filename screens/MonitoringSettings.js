@@ -7,7 +7,6 @@
 //   monitoringHapticAlerts   — vibration on alerts
 //   monitoringSensitivity    — 'low' | 'medium' | 'high'  (SENSITIVITY_OPTIONS)
 //   monitoringDriverSide     — 'left' | 'right'           (DRIVER_SIDE_OPTIONS)
-//   monitoringShowPreview    — show the live camera preview during a drive
 // The monitoring branch reads them through monitoringSettingsFrom(settings).
 import React from 'react';
 import { View, Text, Pressable, ScrollView } from 'react-native';
@@ -208,13 +207,22 @@ export default function MonitoringSettings() {
                       <Text
                         style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}
                       >
-                        These apply to driver-monitoring alerts only. Info alerts are shown only, warnings play once, critical alerts repeat until they clear. Speeding alerts (tone and banner) and spoken speed limits are set under Driving.
+                        {opt.body}
                       </Text>
                     </View>
                   </Pressable>
                 );
               })}
             </View>
+            <Text
+              style={[
+                t.typography.caption,
+                { color: t.colors.textMuted, marginTop: 10, paddingHorizontal: 4 },
+              ]}
+            >
+              Sensitivity applies to driver-monitoring alerts only. Speeding alerts (tone and
+              banner) and spoken speed limits are set under Driving.
+            </Text>
           </Section>
 
           <Section label="Camera placement">
@@ -222,18 +230,6 @@ export default function MonitoringSettings() {
               <CameraPlacementGuide
                 driverSide={settings.monitoringDriverSide}
                 onDriverSideChange={(side) => update('monitoringDriverSide', side)}
-              />
-            </Card>
-            <View style={{ height: 12 }} />
-            <Card padded={false}>
-              <ToggleRow
-                first
-                icon="scan-outline"
-                title="Show camera preview while driving"
-                subtitle="A small live view so you can check the framing."
-                value={settings.monitoringShowPreview}
-                onValueChange={(v) => update('monitoringShowPreview', v)}
-                disabled={!enabled}
               />
             </Card>
           </Section>

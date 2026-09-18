@@ -20,6 +20,8 @@ export const KEYS = {
   monitoringHapticAlerts: '@monitoring.hapticAlerts',
   monitoringSensitivity: '@monitoring.sensitivity',
   monitoringDriverSide: '@monitoring.driverSide',
+  // Kept so a previously stored value is still readable; nothing writes it any more (the native
+  // module renders no preview, so the setting was inert).
   monitoringShowPreview: '@monitoring.showPreview',
   // Caches and flags
   speedLimitCache: '@speedLimitCache',
