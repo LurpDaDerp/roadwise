@@ -55,7 +55,8 @@
       },
       "permissions": [
         "android.permission.CAMERA"
-      ]
+      ],
+      "package": "com.lurp.safedrive"
     },
     "web": {
       "favicon": "./assets/favicon.png"
