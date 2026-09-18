@@ -454,26 +454,6 @@ export async function clearLegacyPublicGroupId(uid) {
   }
 }
 
-/** Write the group id to the private document and remove any legacy public copy. */
-export async function setGroupIdForUser(uid, groupId) {
-  if (!uid) return;
-  await setDoc(
-    privateDoc(uid, "info"),
-    { groupId: groupId ?? null, updatedAt: serverTimestamp() },
-    { merge: true }
-  );
-
-  const { status, data } = await readUserSummary(uid);
-  if (status === READ_OK && data && data.groupId !== undefined) {
-    try {
-      await updateDoc(doc(db, "users", uid), { groupId: deleteField() });
-      invalidateUserCache(uid);
-    } catch (err) {
-      console.warn("Could not remove the legacy public groupId:", err);
-    }
-  }
-}
-
 export async function savePrivateInfo(uid, info) {
   if (!uid) return;
   try {
