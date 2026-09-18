@@ -1,0 +1,175 @@
+// JoinCreatePanel — what the Family tab shows before the user is in a group:
+// what a group is for, a card to create one, a card to join one with a code,
+// and an explainer for the two permissions a group needs.
+import React, { useCallback, useState } from 'react';
+import { View, Text, TextInput, ScrollView, Pressable } from 'react-native';
+import { useTheme, Card, Eyebrow, Button, Field, useInputStyle, Chip, ListRow } from '../../theme';
+import { PERMISSION_COPY } from '../../hooks/usePermissions';
+
+const CODE_LENGTH = 6;
+
+function PermissionRow({ copy, status, onRequest, onOpenSettings, canAsk, first }) {
+  const t = useTheme();
+  const granted = status === 'granted';
+  const blocked = status === 'denied' && !canAsk;
+
+  let right = null;
+  if (granted) {
+    right = <Chip label="On" tone="success" icon="checkmark" />;
+  } else {
+    right = (
+      <Pressable
+        onPress={blocked ? onOpenSettings : onRequest}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`${copy.title}: ${blocked ? 'open settings' : 'allow'}`}
+        style={({ pressed }) => [pressed && { opacity: 0.7 }]}
+      >
+        <Text style={[t.typography.caption, { color: t.colors.accent, fontWeight: '700' }]}>
+          {blocked ? 'Settings' : 'Allow'}
+        </Text>
+      </Pressable>
+    );
+  }
+
+  return <ListRow first={first} icon={copy.icon} title={copy.title} subtitle={copy.body} right={right} />;
+}
+
+export function JoinCreatePanel({ permissions, onCreate, onJoin }) {
+  const t = useTheme();
+  const input = useInputStyle();
+
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [createError, setCreateError] = useState(null);
+  const [joinError, setJoinError] = useState(null);
+
+  const handleCreate = useCallback(async () => {
+    const trimmed = name.trim();
+    setJoinError(null);
+    if (!trimmed) {
+      setCreateError('Give your group a name.');
+      return;
+    }
+    setCreateError(null);
+    setCreating(true);
+    const result = await onCreate(trimmed);
+    setCreating(false);
+    if (result && result.ok === false) setCreateError(result.error || 'Could not create the group.');
+    else setName('');
+  }, [name, onCreate]);
+
+  const handleJoin = useCallback(async () => {
+    const trimmed = code.trim().toUpperCase();
+    setCreateError(null);
+    if (!trimmed) {
+      setJoinError('Enter the code you were sent.');
+      return;
+    }
+    if (trimmed.length !== CODE_LENGTH) {
+      setJoinError(`Group codes are ${CODE_LENGTH} characters.`);
+      return;
+    }
+    setJoinError(null);
+    setJoining(true);
+    const result = await onJoin(trimmed);
+    setJoining(false);
+    if (result && result.ok === false) setJoinError(result.error || 'Could not join that group.');
+    else setCode('');
+  }, [code, onJoin]);
+
+  const error = (message) =>
+    message ? (
+      <Text style={[t.typography.caption, { color: t.colors.danger, marginTop: 8 }]}>{message}</Text>
+    ) : null;
+
+  return (
+    <ScrollView
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <Eyebrow style={{ marginBottom: 8 }}>Family safety</Eyebrow>
+      <Text style={[t.typography.title, { color: t.colors.text, marginBottom: 8 }]}>
+        Keep your drivers in sight
+      </Text>
+      <Text style={[t.typography.body, { color: t.colors.textMuted, marginBottom: 20 }]}>
+        A family group puts everyone on one map. You can see where each other are, whether someone is
+        driving right now, and you get an alert the moment a member signals an emergency. Everyone in the
+        group shares the same code, and anyone can leave at any time.
+      </Text>
+
+      <Card style={{ marginBottom: 16 }}>
+        <Eyebrow tone="muted" style={{ marginBottom: 12 }}>Create a group</Eyebrow>
+        <Field label="Group name">
+          <TextInput
+            style={input}
+            placeholder="e.g. The Kims"
+            placeholderTextColor={t.colors.textSubtle}
+            value={name}
+            onChangeText={(v) => {
+              setName(v);
+              if (createError) setCreateError(null);
+            }}
+            returnKeyType="done"
+            onSubmitEditing={handleCreate}
+            accessibilityLabel="Group name"
+          />
+        </Field>
+        <Button title="Create group" onPress={handleCreate} loading={creating} disabled={joining} />
+        {error(createError)}
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <Eyebrow tone="muted" style={{ marginBottom: 12 }}>Join a group</Eyebrow>
+        <Field label="Group code" hint={`${CODE_LENGTH} characters, from whoever created the group`}>
+          <TextInput
+            style={[input, { letterSpacing: 4, fontWeight: '700' }]}
+            placeholder="ABC123"
+            placeholderTextColor={t.colors.textSubtle}
+            value={code}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={CODE_LENGTH}
+            onChangeText={(v) => {
+              setCode(v.toUpperCase());
+              if (joinError) setJoinError(null);
+            }}
+            returnKeyType="done"
+            onSubmitEditing={handleJoin}
+            accessibilityLabel="Group code"
+          />
+        </Field>
+        <Button title="Join group" variant="ghost" onPress={handleJoin} loading={joining} disabled={creating} />
+        {error(joinError)}
+      </Card>
+
+      <Card padded={false}>
+        <View style={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 4 }}>
+          <Eyebrow tone="muted">What a group needs</Eyebrow>
+          <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 6 }]}>
+            Asked for when you create or join. The group still works without them, with less to show.
+          </Text>
+        </View>
+        <PermissionRow
+          copy={PERMISSION_COPY.background}
+          status={permissions?.background}
+          canAsk={permissions?.canAskLocation !== false}
+          onRequest={permissions?.requestBackground}
+          onOpenSettings={permissions?.openSettings}
+        />
+        <PermissionRow
+          copy={PERMISSION_COPY.notifications}
+          status={permissions?.notifications}
+          canAsk={permissions?.canAskNotifications !== false}
+          onRequest={permissions?.requestNotifications}
+          onOpenSettings={permissions?.openSettings}
+        />
+      </Card>
+    </ScrollView>
+  );
+}
+
+export default JoinCreatePanel;
