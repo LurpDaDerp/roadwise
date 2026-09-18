@@ -35,7 +35,7 @@ import {
 import * as Crypto from "expo-crypto";
 
 import { db } from "./firebase";
-import { getUserSummary, invalidateUserCache } from "./firestore";
+import { getGroupIdForUser, setGroupIdForUser } from "./firestore";
 import { updateCachedGroupId } from "./groupCache";
 
 // Ambiguous characters (0/O, 1/I) are left out so a code can be read aloud and typed back.
@@ -79,11 +79,13 @@ function emptyLocation() {
   };
 }
 
-/** The caller's current group id, from the cached user document. */
+/**
+ * The caller's current group id, from their private profile document.
+ * Returns undefined when the lookup failed - see utils/groupCache.js.
+ */
 export async function getCurrentGroupId(uid) {
   if (!uid) return null;
-  const summary = await getUserSummary(uid);
-  return summary?.groupId ?? null;
+  return getGroupIdForUser(uid);
 }
 
 /**
@@ -95,7 +97,12 @@ export async function createGroup(uid, groupName) {
   const name = String(groupName ?? "").trim();
   if (!name) throw new Error("Please enter a group name.");
 
+  // Only the CREATE is retried. The previous version wrapped the group create and the
+  // profile write in one try, so a failing profile write sent the loop round again and
+  // left behind up to five orphan groups the user was a member of and could not see.
+  let createdGroupId = null;
   let lastError = null;
+
   for (let attempt = 0; attempt < 5; attempt++) {
     const groupId = generateGroupCode();
     try {
@@ -107,17 +114,43 @@ export async function createGroup(uid, groupName) {
         memberLocations: { [uid]: emptyLocation() },
         savedLocations: [],
       });
-
-      await setDoc(doc(db, "users", uid), { groupId }, { merge: true });
-      invalidateUserCache(uid);
-      await updateCachedGroupId(uid, groupId);
-      return groupId;
+      createdGroupId = groupId;
+      break;
     } catch (err) {
       lastError = err;
+      // A collision is the only reason to try another code. Anything else - denied,
+      // offline - will fail identically five times over, so say so instead.
+      if (err?.code !== "permission-denied" && err?.code !== "already-exists") {
+        console.error("Could not create group:", err);
+        throw new Error(
+          err?.code === "unavailable" ?
+            "You appear to be offline. Please try again when you have a connection." :
+            "Could not create the group. Please try again."
+        );
+      }
     }
   }
-  console.error("Could not create group:", lastError);
-  throw new Error("Could not create the group. Please try again.");
+
+  if (!createdGroupId) {
+    console.error("Could not create group after retries:", lastError);
+    throw new Error("Could not create the group. Please try again.");
+  }
+
+  // Written once, after the group exists. If this fails the group is still there and the
+  // user can retry by joining it with its own code, which the alert tells them.
+  try {
+    await setGroupIdForUser(uid, createdGroupId);
+  } catch (err) {
+    console.error("Group created but the profile could not be updated:", err);
+    await updateCachedGroupId(uid, createdGroupId);
+    throw new Error(
+      `Your group was created (code ${createdGroupId}) but could not be linked to your ` +
+        "profile. Join it with that code to finish."
+    );
+  }
+
+  await updateCachedGroupId(uid, createdGroupId);
+  return createdGroupId;
 }
 
 /**
@@ -146,8 +179,11 @@ export async function joinGroup(uid, code) {
     throw err;
   }
 
-  await setDoc(doc(db, "users", uid), { groupId }, { merge: true });
-  invalidateUserCache(uid);
+  // Ordering matters: membership on the group document is what the rules and the push
+  // fan-out read, so it is written first. If the profile write then fails the user is
+  // already a member and simply retrying the same code succeeds - the join write is
+  // idempotent (arrayUnion of a uid already present is a no-op).
+  await setGroupIdForUser(uid, groupId);
   await updateCachedGroupId(uid, groupId);
   return groupId;
 }
@@ -155,19 +191,17 @@ export async function joinGroup(uid, code) {
 export async function leaveGroup(uid, groupId) {
   if (!uid || !groupId) return;
 
-  await setDoc(doc(db, "users", uid), { groupId: null }, { merge: true });
-  invalidateUserCache(uid);
-  await updateCachedGroupId(uid, null);
+  // The group document is the source of truth for membership: it is what the rules check
+  // and what the emergency push fan-out reads. Detaching the profile first (as this used
+  // to) and only warning if the group write failed left the user still receiving and
+  // still broadcasting to a group the app believed they had left.
+  await updateDoc(doc(db, "groups", groupId), {
+    members: arrayRemove(uid),
+    [`memberLocations.${uid}`]: deleteField(),
+  });
 
-  try {
-    await updateDoc(doc(db, "groups", groupId), {
-      members: arrayRemove(uid),
-      [`memberLocations.${uid}`]: deleteField(),
-    });
-  } catch (err) {
-    // The profile is already detached, so the user is out of the group either way.
-    console.warn("Could not remove member entry from group:", err);
-  }
+  await setGroupIdForUser(uid, null);
+  await updateCachedGroupId(uid, null);
 }
 
 export async function getGroup(groupId) {

@@ -18,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getUserSummary,
+  getGroupIdForUser,
   invalidateUserCache,
   claimUsername,
   isUsernameAvailable,
@@ -70,8 +71,10 @@ export default function AccountSettings({ route }) {
           setUsername(data?.username || 'N/A');
           setPhotoURL(data?.photoURL || 'noImage');
 
-          if (data?.groupId) {
-            setGroupName((await getGroupName(data.groupId)) || 'Unknown');
+          // The group id lives in the owner-only private profile document now.
+          const currentGroupId = await getGroupIdForUser(uid);
+          if (currentGroupId) {
+            setGroupName((await getGroupName(currentGroupId)) || 'Unknown');
           } else {
             setGroupName('None');
           }

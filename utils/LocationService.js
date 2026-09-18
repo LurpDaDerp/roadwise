@@ -27,6 +27,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
 import { auth } from './firebase';
+import { haversineM } from './geo';
 import { getCachedGroupId, updateCachedGroupId, clearCachedGroupId } from './groupCache';
 import { updateMemberLocation } from './groups';
 
@@ -36,26 +37,18 @@ const LAST_FIX_STORAGE_KEY = 'locationService.lastFix';
 // Write gate. A member only needs to move on the map, not to stream a track.
 const MIN_DISTANCE_METERS = 25;
 const MIN_TIME_SECONDS = 20;
-const MIN_SPEED_MPS = 1;
+// Only used to SUPPRESS a write when the platform reports a trustworthy, genuinely small
+// speed. It is never used to require one: iOS reports -1 for "unknown", and some Android
+// fixes report null or 0 even while moving. Requiring `speed >= 1` meant a device that
+// never produced a valid speed wrote its first fix and then nothing, forever - which the
+// old module-global gate state hid, because a cold start reset it.
+const STATIONARY_SPEED_MPS = 1;
 // Hard floor that also applies to the first fix after a cold start, which used to bypass
 // the gate entirely.
 const MIN_WRITE_INTERVAL_MS = 15_000;
 
 // Re-exported so existing callers (screens/LocationScreen.js) keep working unchanged.
 export { updateCachedGroupId, clearCachedGroupId };
-
-function getDistance(loc1, loc2) {
-  const R = 6371e3;
-  const lat1 = (loc1.latitude * Math.PI) / 180;
-  const lat2 = (loc2.latitude * Math.PI) / 180;
-  const dLat = ((loc2.latitude - loc1.latitude) * Math.PI) / 180;
-  const dLon = ((loc2.longitude - loc1.longitude) * Math.PI) / 180;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 // In-memory copy of the persisted gate state, so the common case costs no storage read.
 let lastFix = null;
@@ -76,6 +69,12 @@ async function saveLastFix(fix) {
   } catch {}
 }
 
+/** A platform speed reading that can actually be believed. iOS uses -1 for unknown. */
+function knownSpeed(coords) {
+  const speed = coords?.speed;
+  return typeof speed === "number" && Number.isFinite(speed) && speed >= 0 ? speed : null;
+}
+
 /** Decide whether a fix is worth a Firestore write. Exported for testing/diagnostics. */
 export function shouldWriteLocation(previous, coords, now) {
   if (!previous) return true;
@@ -83,10 +82,16 @@ export function shouldWriteLocation(previous, coords, now) {
   const sinceLast = now - (previous.at ?? 0);
   if (sinceLast < MIN_WRITE_INTERVAL_MS) return false;
 
-  const moved = getDistance(previous, coords);
-  const speed = coords.speed ?? 0;
+  const moved = haversineM(previous, coords);
+  if (moved < MIN_DISTANCE_METERS) return false;
+  if (sinceLast / 1000 < MIN_TIME_SECONDS) return false;
 
-  return moved >= MIN_DISTANCE_METERS && sinceLast / 1000 >= MIN_TIME_SECONDS && speed >= MIN_SPEED_MPS;
+  // Movement is the real signal. Speed only gets a veto, and only when the platform
+  // actually gave us one: a believable near-zero speed over 25 m is GPS drift.
+  const speed = knownSpeed(coords);
+  if (speed !== null && speed < STATIONARY_SPEED_MPS) return false;
+
+  return true;
 }
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
@@ -109,8 +114,14 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (!user) return;
 
   const groupId = await getCachedGroupId(user.uid);
-  if (!groupId) {
-    // Nothing to share with: stop burning battery until the user joins a group again.
+  if (groupId === undefined) {
+    // The lookup failed - offline, an expired token, a rules denial. That is NOT the same
+    // as having no group, and unregistering the OS task here meant tracking stayed dead
+    // until the app was next opened by hand.
+    return;
+  }
+  if (groupId === null) {
+    // Confirmed: nothing to share with. Stop burning battery until they join again.
     await stopLocationUpdates();
     return;
   }
@@ -118,7 +129,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   const written = await updateMemberLocation(user.uid, groupId, {
     latitude: coords.latitude,
     longitude: coords.longitude,
-    speed: coords.speed ?? 0,
+    speed: knownSpeed(coords) ?? 0,
   });
 
   if (written) {
@@ -180,6 +191,10 @@ export async function startLocationUpdates({ requireGroup = true } = {}) {
   if (!user) return false;
 
   const groupId = await getCachedGroupId(user.uid);
+  if (groupId === undefined) {
+    // Could not determine membership; leave whatever is running alone and try again later.
+    return false;
+  }
   if (requireGroup && !groupId) {
     await stopLocationUpdates();
     return false;
@@ -203,7 +218,7 @@ export async function startLocationUpdates({ requireGroup = true } = {}) {
       const ok = await updateMemberLocation(user.uid, groupId, {
         latitude: current.coords.latitude,
         longitude: current.coords.longitude,
-        speed: current.coords.speed ?? 0,
+        speed: knownSpeed(current.coords) ?? 0,
       });
       if (ok) {
         await saveLastFix({

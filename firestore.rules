@@ -7,20 +7,29 @@ rules_version = '2';
 // Anyone can create an account, so "signed in" is not an authorization decision. The two
 // things that must never be readable by an arbitrary account are (a) a family's live
 // location and emergency state and (b) a user's private data: their Expo push token, their
-// trusted contacts' phone numbers and their email address.
+// trusted contacts' phone numbers, their email address, and WHICH GROUP THEY ARE IN.
+//
+// That last one matters because the group document id IS the join code. Leaving `groupId`
+// on a publicly readable profile meant anyone could list users, read a group id, and then
+// use the join rule below to add themselves to that family - the enumeration is the attack,
+// not the join rule. `groupId` now lives in users/{uid}/private/info and may only be
+// removed from the public profile, never written to it.
 //
 // Shape of the data this assumes
 // ------------------------------
-//   users/{uid}                        public profile  (username, points, streak, photo)
-//   users/{uid}/private/{doc}          owner only      (info, contacts, push, usage)
+//   users/{uid}                        public profile (username, points, streak, photo)
+//   users/{uid}/private/{doc}          owner only     (info incl. groupId, contacts, push, usage)
 //   users/{uid}/drivemetrics/{id}      owner only
 //   usernames/{lowercase}              uniqueness claim, existence is public
 //   groups/{groupId}                   members only
 //   apikeys/**, geocache/**            server only
 //
-// The user document is deliberately public-readable: the leaderboard ranks every user and
-// the group map shows other members' names and photos. That is only safe because nothing
-// private is stored on it any more - see users/{uid}/private below.
+// A note on `in`
+// --------------
+// `diff().affectedKeys()` returns a Set. The `in` operator is documented for List and Map,
+// not Set, so every key test against affectedKeys() uses hasAny/hasAll/hasOnly, which are
+// defined on both Set and List. A runtime evaluation error in a rule denies the request, so
+// an undocumented operator here would have failed every users/* and groups/* update.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -88,50 +97,58 @@ service cloud.firestore {
       function incoming() { return request.resource.data; }
       function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
 
+      // The complete public surface. Everything the leaderboard and the group member list
+      // need, and nothing else.
       function profileKeys() {
         return [
           'username', 'usernameLower', 'points', 'drivingStreak', 'totalDrives',
-          'photoURL', 'groupId', 'isDriving', 'createdAt', 'lastDriveAt'
+          'photoURL', 'isDriving', 'createdAt', 'lastDriveAt'
         ];
       }
 
-      // These two used to live here and held private data. They may still be DELETED
-      // (that is the migration), but never written again.
-      function legacyKeys() { return ['pushToken', 'trustedContacts']; }
+      // These lived here and should not have. They may still be DELETED (that is what the
+      // migration does), but never written again.
+      //   pushToken       - a bearer credential for pushing to that device
+      //   trustedContacts - third parties' names and phone numbers
+      //   groupId         - the group join code; see the header note
+      function legacyKeys() { return ['pushToken', 'trustedContacts', 'groupId']; }
 
       // `request.resource.data` is the WHOLE resulting document, not the delta, so these
       // checks are scoped to the keys a write actually touches. Checking the whole
       // document instead would permanently lock out any account that still carries a
       // legacy or unrecognised field.
       function legacyOnlyRemoved(touched) {
-        return (!('pushToken' in touched) || !('pushToken' in incoming()))
-          && (!('trustedContacts' in touched) || !('trustedContacts' in incoming()));
+        return (!touched.hasAny(['pushToken']) || !('pushToken' in incoming()))
+          && (!touched.hasAny(['trustedContacts']) || !('trustedContacts' in incoming()))
+          && (!touched.hasAny(['groupId']) || !('groupId' in incoming()));
       }
 
       function validTypes(touched) {
-        return (!('username' in touched)
+        return (!touched.hasAny(['username'])
                 || (incoming().username is string && incoming().username.size() <= 16))
-          && (!('usernameLower' in touched) || incoming().usernameLower is string)
-          && (!('points' in touched)
+          && (!touched.hasAny(['usernameLower']) || incoming().usernameLower is string)
+          && (!touched.hasAny(['points'])
                 || (incoming().points is number && incoming().points >= 0))
-          && (!('drivingStreak' in touched)
+          && (!touched.hasAny(['drivingStreak'])
                 || (incoming().drivingStreak is number && incoming().drivingStreak >= 0))
-          && (!('totalDrives' in touched)
+          && (!touched.hasAny(['totalDrives'])
                 || (incoming().totalDrives is number && incoming().totalDrives >= 0))
-          && (!('groupId' in touched)
-                || incoming().groupId == null || incoming().groupId is string)
-          && (!('isDriving' in touched) || incoming().isDriving is bool)
-          && (!('photoURL' in touched)
+          && (!touched.hasAny(['isDriving']) || incoming().isDriving is bool)
+          && (!touched.hasAny(['photoURL'])
                 || incoming().photoURL == null || incoming().photoURL is string);
       }
 
-      // Points may only go up, and only by a plausible amount for one drive. This is a
-      // speed bump, not an anti-cheat system: awarding points from a Cloud Function is the
-      // only way to make them authoritative (see docs/BACKEND_AUDIT.md).
+      // Points may only go up, and by no more than one very long drive's worth per write.
+      // Points accrue at roughly one per 2.5 s, so 20,000 is about fourteen hours of
+      // driving - unreachable in practice, while still bounding a single forged write.
+      // The same ceiling is used on the drive record so the two halves of the atomic
+      // finalization batch can never disagree and take the whole batch down with them.
+      // This is a speed bump, not an anti-cheat system: awarding points from a Cloud
+      // Function is the only way to make them authoritative (see docs/BACKEND_AUDIT.md).
       function pointsMovementOk() {
-        return !('points' in changedKeys())
+        return !changedKeys().hasAny(['points'])
           || (incoming().points >= resource.data.get('points', 0)
-              && incoming().points <= resource.data.get('points', 0) + 2000);
+              && incoming().points <= resource.data.get('points', 0) + 20000);
       }
 
       // The leaderboard reads every user's username and points; the group map reads other
@@ -142,7 +159,7 @@ service cloud.firestore {
       allow create: if isSelf(userId)
         && incoming().keys().hasOnly(profileKeys())
         && validTypes(incoming().keys())
-        && (!('points' in incoming()) || incoming().points <= 2000);
+        && (!('points' in incoming()) || incoming().points <= 20000);
 
       allow update: if isSelf(userId)
         && changedKeys().hasOnly(profileKeys().concat(legacyKeys()))
@@ -152,7 +169,7 @@ service cloud.firestore {
 
       allow delete: if false;
 
-      // Push token, trusted contacts, email, per-day API usage counters.
+      // groupId, email, trusted contacts, push token, per-day API usage counters.
       match /private/{docId} {
         allow read, write: if isSelf(userId);
       }
@@ -164,10 +181,11 @@ service cloud.firestore {
           return drive().keys().size() <= 30
             && drive().timestamp == request.time
             && (!('points' in drive())
-                  || (drive().points is number && drive().points >= 0 && drive().points <= 10000))
+                  || (drive().points is number && drive().points >= 0 && drive().points <= 20000))
             && (!('duration' in drive())
                   || (drive().duration is number && drive().duration >= 0))
-            && (!('distracted' in drive()) || drive().distracted is number)
+            && (!('distracted' in drive())
+                  || drive().distracted is number || drive().distracted is bool)
             && (!('totalDistance' in drive()) || drive().totalDistance is number);
         }
 
@@ -185,9 +203,10 @@ service cloud.firestore {
      * groups created before that field existed fall back to the keys of memberLocations
      * so existing families are not locked out.
      *
-     * Joining is the one write a non-member may make: adding exactly themselves. The
-     * client does not read the group first - it cannot - so an invalid code surfaces as
-     * not-found or permission-denied.
+     * Joining is the one write a non-member may make: adding exactly themselves. That is
+     * only safe because the join code is not discoverable - see the header note about
+     * groupId. The client does not read the group first (it cannot), so an invalid code
+     * surfaces as not-found or permission-denied.
      * ---------------------------------------------------------------- */
 
     match /groups/{groupId} {
@@ -206,13 +225,13 @@ service cloud.firestore {
       }
 
       function touchesOnlyOwnLocation() {
-        return !('memberLocations' in changedKeys())
+        return !changedKeys().hasAny(['memberLocations'])
           || incoming().memberLocations.diff(currentLocations())
                .affectedKeys().hasOnly([request.auth.uid]);
       }
 
       function ownLocationValid() {
-        return !('memberLocations' in changedKeys())
+        return !changedKeys().hasAny(['memberLocations'])
           || !(request.auth.uid in incoming().memberLocations)
           || (
             incoming().memberLocations[request.auth.uid].keys()
@@ -231,24 +250,24 @@ service cloud.firestore {
       }
 
       function membersUnchanged() {
-        return !('members' in changedKeys());
+        return !changedKeys().hasAny(['members']);
       }
 
       function membersOnlyAddsSelf() {
-        return 'members' in changedKeys()
+        return changedKeys().hasAny(['members'])
           && incoming().members.hasAll(currentMembers())
           && incoming().members.hasOnly(currentMembers().concat([request.auth.uid]))
           && request.auth.uid in incoming().members;
       }
 
       function membersOnlyRemovesSelf() {
-        return 'members' in changedKeys()
+        return changedKeys().hasAny(['members'])
           && currentMembers().hasAll(incoming().members)
           && !(request.auth.uid in incoming().members);
       }
 
       function savedLocationsValid() {
-        return !('savedLocations' in changedKeys())
+        return !changedKeys().hasAny(['savedLocations'])
           || (incoming().savedLocations is list && incoming().savedLocations.size() <= 100);
       }
 
@@ -277,7 +296,7 @@ service cloud.firestore {
           // A member updating their own position, the shared places, or leaving.
           (isMember() && (membersUnchanged() || membersOnlyRemovesSelf()))
           // Someone joining with a valid code: adds only themselves, nothing else.
-          || (membersOnlyAddsSelf() && !('savedLocations' in changedKeys()))
+          || (membersOnlyAddsSelf() && !changedKeys().hasAny(['savedLocations']))
         );
 
       allow delete: if false;

@@ -24,31 +24,53 @@ function chunk(list, size) {
   return out;
 }
 
-/** Push tokens for every member of a group except `excludeUid`. */
-async function tokensForGroup(groupId, excludeUid) {
-  const db = admin.firestore();
-  const userDocs = await db.collection("users").where("groupId", "==", groupId).get();
+/**
+ * The members of a group, taken from the group document itself.
+ *
+ * This used to be `users where groupId == <id>`, which required groupId to sit on the
+ * publicly readable profile - and that field is the group's join code, so anyone could
+ * list users, read a code and add themselves to that family. groupId is private now, so
+ * membership is read from the group document, which is where the security rules read it
+ * from too: one source of truth instead of two that can disagree.
+ */
+function memberUidsFromGroup(groupData, excludeUid) {
+  const fromArray = Array.isArray(groupData && groupData.members) ? groupData.members : [];
+  // Groups created before `members` existed are still described by their location map.
+  const fromLocations = Object.keys((groupData && groupData.memberLocations) || {});
 
-  const recipients = [];
-  userDocs.forEach((doc) => {
-    if (doc.id === excludeUid) return;
-    recipients.push({uid: doc.id, legacyToken: doc.data().pushToken || null});
-  });
+  const unique = new Set([...fromArray, ...fromLocations]);
+  unique.delete(excludeUid);
+  return Array.from(unique).filter((uid) => typeof uid === "string" && uid);
+}
+
+/** Push tokens for the given uids. */
+async function tokensForUids(uids) {
+  const db = admin.firestore();
 
   const resolved = await Promise.all(
-    recipients.map(async ({uid, legacyToken}) => {
+    uids.map(async (uid) => {
       try {
-        const snap = await db.doc(`users/${uid}/private/push`).get();
-        const token = snap.exists ? snap.data().token : null;
+        const [privateSnap, userSnap] = await Promise.all([
+          db.doc(`users/${uid}/private/push`).get(),
+          db.doc(`users/${uid}`).get(),
+        ]);
+        const token = privateSnap.exists ? privateSnap.data().token : null;
+        // Devices that have not updated yet still write the legacy public field.
+        const legacyToken = userSnap.exists ? userSnap.data().pushToken || null : null;
         return {uid, token: token || legacyToken};
       } catch (err) {
         console.error("Could not read push token for", uid, err);
-        return {uid, token: legacyToken};
+        return {uid, token: null};
       }
     }),
   );
 
   return resolved.filter((entry) => Boolean(entry.token));
+}
+
+/** Push tokens for every member of a group except `excludeUid`. */
+async function tokensForGroup(groupData, excludeUid) {
+  return tokensForUids(memberUidsFromGroup(groupData, excludeUid));
 }
 
 async function clearToken(uid) {
@@ -108,4 +130,9 @@ async function sendExpoPush(recipients, title, body, extraData = {}) {
   }
 }
 
-module.exports = {tokensForGroup, sendExpoPush};
+module.exports = {
+  tokensForGroup,
+  tokensForUids,
+  memberUidsFromGroup,
+  sendExpoPush,
+};

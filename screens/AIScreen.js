@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 
 import { auth } from '../utils/firebase';
 import { getDriveMetrics } from '../utils/firestore';
+import { useDrive } from '../context/DriveContext';
 import {
   Screen,
   Section,
@@ -135,8 +136,12 @@ function interpolateColor(percent) {
   return `rgb(${r},${g},${b})`;
 }
 
+const DRIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export default function AIScreen({ navigation }) {
   const t = useTheme();
+  const { driveJustCompleted, setDriveJustCompleted } = useDrive();
+  const drivesFetchedAt = useRef(0);
 
   const [timeframe, setTimeframe] = useState(7);
   const [gridLines, setGridLines] = useState(7);
@@ -240,19 +245,36 @@ export default function AIScreen({ navigation }) {
     return () => unsubscribe();
   }, []);
 
-  // The drive data is fetched once per account for the longest timeframe the screen can
-  // show (30 days) and filtered locally. It previously re-read the user's ENTIRE drive
-  // collection every time the Day/Week/Month control was touched.
+  // The drive data is fetched for the longest timeframe the screen can show (30 days) and
+  // filtered locally, instead of re-reading the user's ENTIRE drive collection every time
+  // the Day/Week/Month control is touched. Fetching only on [uid] went too far the other
+  // way - a drive finished after the first visit never appeared until the app restarted -
+  // so it also refetches when a drive completes and when the copy is older than 5 minutes.
+  const refreshDrives = useCallback(
+    async ({ force = false } = {}) => {
+      if (!uid) return;
+      if (!force && Date.now() - drivesFetchedAt.current < DRIVE_CACHE_TTL_MS) return;
+      const metrics = await getDriveMetrics(uid, 30);
+      drivesFetchedAt.current = Date.now();
+      setDrives(metrics);
+    },
+    [uid]
+  );
+
   useEffect(() => {
-    if (!uid) return;
-    let active = true;
-    getDriveMetrics(uid, 30).then((metrics) => {
-      if (active) setDrives(metrics);
-    });
-    return () => {
-      active = false;
-    };
-  }, [uid]);
+    refreshDrives({ force: true });
+  }, [refreshDrives]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (driveJustCompleted) {
+        setDriveJustCompleted(false);
+        refreshDrives({ force: true });
+      } else {
+        refreshDrives();
+      }
+    }, [refreshDrives, driveJustCompleted, setDriveJustCompleted])
+  );
 
   useEffect(() => {
     if (!uid) return;

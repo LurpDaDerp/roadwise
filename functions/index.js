@@ -85,7 +85,7 @@ exports.notifyOnEmergency = onDocumentUpdated("groups/{groupId}", async (event) 
       const userSnap = await admin.firestore().collection("users").doc(uid).get();
       const username = (userSnap.exists && userSnap.data().username) || "member";
 
-      const recipients = await push.tokensForGroup(groupId, uid);
+      const recipients = await push.tokensForGroup(after, uid);
       if (recipients.length === 0) continue;
 
       if (raised) {
@@ -178,7 +178,9 @@ exports.hereRevGeocode = onCall(
       throw new HttpsError("failed-precondition", "HERE key not configured.");
     }
 
-    const {items, source} = await here.reverseGeocode(uid, lat, lon, apiKey);
-    return {items, source};
+    const {items, source, street} = await here.reverseGeocode(uid, lat, lon, apiKey);
+    // `street` lets the client reject an answer that belongs to a different road from the
+    // one it is currently driving, which a shared grid cache can otherwise hand it.
+    return {items, source, street: street || null};
   },
 );

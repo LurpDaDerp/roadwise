@@ -1,6 +1,6 @@
 // App.js
 import React, { useRef, useEffect } from 'react';
-import { AppState, useColorScheme, Dimensions, View } from 'react-native';
+import { AppState, useColorScheme, Dimensions, View, Text, ScrollView } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -34,6 +34,8 @@ import RewardsScreen from './screens/RewardsScreen';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { startLocationUpdates } from './utils/LocationService';
+import { auth, configError } from './utils/firebase';
+import { flushPendingDriveWrites } from './utils/firestore';
 
 import { 
   requestNotificationPermissions, 
@@ -166,11 +168,41 @@ function AppNavigation() {
 
 
 
+/**
+ * Shown instead of the app when the build has no usable Firebase configuration. Without
+ * this the failure surfaced as a blank screen: the old code threw while utils/firebase.js
+ * was being imported, which is before React renders anything, so ErrorBoundary never saw
+ * it. A cloud build made without the EXPO_PUBLIC_* variables set lands here.
+ */
+function ConfigurationError({ message }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0b0e10', justifyContent: 'center' }}>
+      <ScrollView contentContainerStyle={{ padding: 28 }}>
+        <Text style={{ color: '#ff6b6b', fontSize: 20, fontWeight: '800', marginBottom: 14 }}>
+          RoadCash is not configured
+        </Text>
+        <Text style={{ color: '#e6edf3', fontSize: 14, lineHeight: 21 }}>{message}</Text>
+      </ScrollView>
+    </View>
+  );
+}
+
 export default function App() {
 
   useEffect(() => {
-    startLocationUpdates(); 
+    if (configError) return;
+    startLocationUpdates();
+
+    // Upload anything a previous session finished but could not send.
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (user) flushPendingDriveWrites(user.uid);
+    });
+    return unsubscribe;
   }, []);
+
+  if (configError) {
+    return <ConfigurationError message={configError} />;
+  }
 
   return (
     <ErrorBoundary>

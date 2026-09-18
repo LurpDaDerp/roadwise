@@ -23,7 +23,9 @@ import {
   getUserPoints,
   getTotalDrivesNumber,
   getUserSummary,
-  invalidateUserCache,
+  readUserSummary,
+  cachePointsIfHigher,
+  READ_OK,
   getPointsStorageKey,
 } from '../utils/firestore';
 
@@ -41,11 +43,8 @@ const { width, height } = Dimensions.get('window');
 
 const getStorageKey = getPointsStorageKey;
 
-// The per-screen user-document cache moved into utils/firestore so that every screen
-// shares one copy. Kept as a re-export so existing callers keep working.
-export function invalidateDashboardUserCache() {
-  invalidateUserCache();
-}
+// The per-screen user-document cache moved into utils/firestore so every screen shares
+// one copy; use invalidateUserCache() from there.
 
 
 function interpolateColor(percent) {
@@ -180,9 +179,8 @@ export default function DashboardScreen({ route }) {
           const firestorePoints = await getUserPoints(uid);
           if (firestorePoints == null || isNaN(firestorePoints)) {
             setTotalPoints(0);
-            await AsyncStorage.removeItem(getStorageKey(uid));
           } else {
-            await AsyncStorage.setItem(getStorageKey(uid), firestorePoints.toString());
+            await cachePointsIfHigher(uid, firestorePoints);
             setTotalPoints(firestorePoints);
             animatePoints(0, firestorePoints);
           }
@@ -226,9 +224,24 @@ export default function DashboardScreen({ route }) {
             await AsyncStorage.removeItem('@pointsThisDrive');
           }
 
-          const summary = await getUserSummary(user.uid, { force: hadPendingDrive !== null });
-          const total = Number(summary?.points) || 0;
-          await AsyncStorage.setItem(key, String(total));
+          const { status, data } = await readUserSummary(user.uid, {
+            force: hadPendingDrive !== null,
+          });
+
+          if (status !== READ_OK) {
+            // A failed read is not a zero balance. Show whatever was last known and leave
+            // the cache alone - writing 0 here is what made the rewards screen read 0.
+            const cached = await AsyncStorage.getItem(key);
+            const fallback = cached === null ? null : parseInt(cached, 10);
+            if (isActive && Number.isFinite(fallback)) {
+              setTotalPoints(fallback);
+              animatePoints(0, fallback);
+            }
+            return;
+          }
+
+          const total = Number(data?.points) || 0;
+          await cachePointsIfHigher(user.uid, total);
 
           if (isActive) {
             setTotalPoints(total);

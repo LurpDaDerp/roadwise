@@ -21,11 +21,20 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { distanceMeters, haversineM, bearingDeg, offsetPoint } from './geo';
 import { fetchHereRevGeocode } from './here';
 
-const STORAGE_KEY = '@speedLimitCache';
-const GRID_RESOLUTION = 0.002; // ~220 m
-const MAX_ENTRIES = 4000;
+// v2: the grid resolution changed, so v1 keys address different ground. A version in
+// the key drops the stale map in one go instead of leaving thousands of unreachable
+// entries to age out of an LRU they can never be hit in.
+const STORAGE_KEY = '@speedLimitCache.v2';
+// Matches the server-side cell size in functions/lib/here.js. A wide cell hands one
+// road's answer to the road beside it; ~55 m is narrower than the gap between parallel
+// streets in almost all grids.
+const GRID_RESOLUTION = 0.0005; // ~55 m
+// A ~55 m cell covers ~1/16 the area of the old ~220 m one, so the same amount of
+// travelled road needs proportionally more entries.
+const MAX_ENTRIES = 8000;
 const ENTRY_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
 const PERSIST_DEBOUNCE_MS = 4000;
 
@@ -37,7 +46,8 @@ const KPH_PER_MPH = 1.60934;
 const MPH_PER_KPH = 0.621371;
 
 // Polyline fill geometry.
-const FILL_STEP_M = 80;
+// Must be no larger than the cell size or the fill leaves gaps along the road.
+const FILL_STEP_M = 40;
 const FILL_WIDTH_M = 30;
 
 // Insertion order is LRU order: re-reading an entry moves it to the end.
@@ -46,52 +56,15 @@ let loaded = false;
 let persistTimer = null;
 let lastFetchAt = 0;
 let lastFetchCoords = null;
-let inFlight = null;
+// Keyed by cell: a single shared promise collapsed concurrent callers onto a request for
+// a completely different coordinate and handed them its answer.
+const inFlight = new Map();
 
 /* ---------------------------------------------------------------- *
- * Geometry helpers
+ * Geometry (re-exported from utils/geo so callers need one import)
  * ---------------------------------------------------------------- */
 
-const toRad = (d) => (d * Math.PI) / 180;
-const toDeg = (r) => (r * 180) / Math.PI;
-
-export function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-export function haversineM(a, b) {
-  return distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude);
-}
-
-export function bearingDeg(a, b) {
-  const lat1 = toRad(a.latitude);
-  const lat2 = toRad(b.latitude);
-  const dLon = toRad(b.longitude - a.longitude);
-  const y = Math.sin(dLon) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
-}
-
-export function offsetPoint(lat, lon, bearing, distM) {
-  const R = 6371000;
-  const br = toRad(bearing);
-  const lat1 = toRad(lat);
-  const lon1 = toRad(lon);
-  const dr = distM / R;
-  const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(br)
-  );
-  const lon2 =
-    lon1 +
-    Math.atan2(Math.sin(br) * Math.sin(dr) * Math.cos(lat1), Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2));
-  return { latitude: toDeg(lat2), longitude: toDeg(lon2) };
-}
+export { distanceMeters, haversineM, bearingDeg, offsetPoint };
 
 export function getGridKey(lat, lon) {
   return `${Math.round(lat / GRID_RESOLUTION)}_${Math.round(lon / GRID_RESOLUTION)}`;
@@ -140,9 +113,21 @@ function setEntry(key, entry) {
 }
 
 /** Load the persisted cache. Safe to call repeatedly; only the first call does work. */
+let loadPromise = null;
+
 export async function loadSpeedLimitCache() {
   if (loaded) return;
-  loaded = true;
+  // `loaded` used to be set before the await, so a second caller arriving during the read
+  // skipped the wait and saw an empty cache.
+  if (loadPromise) return loadPromise;
+  loadPromise = doLoadSpeedLimitCache().finally(() => {
+    loadPromise = null;
+  });
+  return loadPromise;
+}
+
+async function doLoadSpeedLimitCache() {
+  if (loaded) return;
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return;
@@ -158,6 +143,8 @@ export async function loadSpeedLimitCache() {
     evictIfNeeded();
   } catch (err) {
     console.warn('Failed to load the speed limit cache:', err);
+  } finally {
+    loaded = true;
   }
 }
 
@@ -182,8 +169,20 @@ function normalizeStoredEntry(val, now) {
  * Lookup
  * ---------------------------------------------------------------- */
 
-/** Cached limit for a position, or null. Never touches the network. */
-export function lookupCachedSpeedLimit(lat, lon) {
+function sameStreet(a, b) {
+  if (!a || !b) return true; // one side unknown: no evidence of a mismatch
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+/**
+ * Cached limit for a position, or null. Never touches the network.
+ *
+ * `expectedStreet` is the road the caller believes it is on. A grid cell can straddle a
+ * side street and an arterial road, and a cached answer for the wrong one is how a 25 mph
+ * limit ends up displayed on a highway; when both street names are known and they differ,
+ * the hit is refused and the caller falls through to a fresh lookup.
+ */
+export function lookupCachedSpeedLimit(lat, lon, { expectedStreet = null } = {}) {
   const key = getGridKey(lat, lon);
   const entry = cache.get(key);
   if (!entry) return null;
@@ -191,6 +190,7 @@ export function lookupCachedSpeedLimit(lat, lon) {
     cache.delete(key);
     return null;
   }
+  if (!sameStreet(entry.street, expectedStreet)) return null;
   setEntry(key, entry); // refresh LRU position
   return entry;
 }
@@ -211,24 +211,28 @@ function throttleAllows(lat, lon, now) {
  * to HERE (via the authenticated Cloud Function proxy) only when the cache misses and the
  * throttle allows it, so a stationary or slow-moving device never generates traffic.
  */
-export async function getSpeedLimit(lat, lon, { allowNetwork = true } = {}) {
+export async function getSpeedLimit(lat, lon, { allowNetwork = true, expectedStreet = null } = {}) {
   await loadSpeedLimitCache();
 
-  const cached = lookupCachedSpeedLimit(lat, lon);
+  const cached = lookupCachedSpeedLimit(lat, lon, { expectedStreet });
   if (cached) return { ...cached, cached: true };
 
   if (!allowNetwork) return null;
 
+  const cellKey = getGridKey(lat, lon);
+
+  // Collapse concurrent callers FOR THE SAME CELL onto one request. A single shared
+  // promise used to hand a caller the answer for wherever the first caller happened to be.
+  const existing = inFlight.get(cellKey);
+  if (existing) return existing;
+
   const now = Date.now();
   if (!throttleAllows(lat, lon, now)) return null;
-
-  // Collapse concurrent callers onto one request.
-  if (inFlight) return inFlight;
 
   lastFetchAt = now;
   lastFetchCoords = { latitude: lat, longitude: lon };
 
-  inFlight = (async () => {
+  const request = (async () => {
     try {
       const items = await fetchHereRevGeocode(lat, lon);
       const item = items?.[0];
@@ -241,7 +245,7 @@ export async function getSpeedLimit(lat, lon, { allowNetwork = true } = {}) {
       const unitSrc = String(speedObj.speedUnit).toLowerCase();
       const valueKph = unitSrc === 'mph' ? speedObj.maxSpeed * KPH_PER_MPH : speedObj.maxSpeed;
 
-      setEntry(getGridKey(lat, lon), { valueKph, timestamp: Date.now(), street });
+      setEntry(cellKey, { valueKph, timestamp: Date.now(), street });
       evictIfNeeded();
       schedulePersist();
 
@@ -250,11 +254,12 @@ export async function getSpeedLimit(lat, lon, { allowNetwork = true } = {}) {
       console.error('Speed limit lookup failed:', err);
       return null;
     } finally {
-      inFlight = null;
+      inFlight.delete(cellKey);
     }
   })();
 
-  return inFlight;
+  inFlight.set(cellKey, request);
+  return request;
 }
 
 /** Convert a cached kph value into the unit the UI is showing. */

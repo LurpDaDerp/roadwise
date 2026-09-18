@@ -53,16 +53,22 @@ export default function LoginScreen() {
   // does not belong to the client id the request was made with - which is why the previous
   // single-web-client-id version never came back with a result. The web client id is still
   // passed because it is the audience Firebase validates the id token against.
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: googleAuthConfig.webClientId ?? undefined,
-    iosClientId: googleAuthConfig.iosClientId ?? undefined,
-    androidClientId: googleAuthConfig.androidClientId ?? undefined,
-    webClientId: googleAuthConfig.webClientId ?? undefined,
-  });
+  const platformClientId =
+    Platform.OS === 'ios' ? googleAuthConfig.iosClientId : googleAuthConfig.androidClientId;
+  const googleConfigured = Boolean(googleAuthConfig.webClientId && platformClientId);
 
-  const googleConfigured = Boolean(
-    googleAuthConfig.webClientId &&
-      (Platform.OS === 'ios' ? googleAuthConfig.iosClientId : googleAuthConfig.androidClientId)
+  // The hook throws during render if it is given no usable client id at all, which would
+  // take the whole login screen down before the "not configured" notice could be shown.
+  // Passing a config only when one exists keeps the screen renderable either way.
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
+    googleConfigured
+      ? {
+          clientId: googleAuthConfig.webClientId,
+          iosClientId: googleAuthConfig.iosClientId ?? undefined,
+          androidClientId: googleAuthConfig.androidClientId ?? undefined,
+          webClientId: googleAuthConfig.webClientId,
+        }
+      : { clientId: 'unconfigured.apps.googleusercontent.com' }
   );
 
   useEffect(() => {

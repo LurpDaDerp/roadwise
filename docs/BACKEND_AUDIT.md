@@ -22,7 +22,15 @@ project — live coordinates, speed and emergency flags for every member of ever
 and you could also write to them: plant a fake position, clear somebody's emergency flag,
 or wipe `savedLocations`. This is the most serious finding in the codebase.
 
-**Fixed.** Groups are readable only by their members. Membership is the `members` array,
+**Fixed.** Groups are readable only by their members, **and the join code is no longer
+discoverable**. The group document id *is* the join code, and it was mirrored onto the
+world-readable `users/{uid}.groupId`; with `list` allowed on `users` for the leaderboard,
+anyone could enumerate every group code in the project and then use the join rule below to
+insert themselves into any family. `groupId` now lives in `users/{uid}/private/info`, the
+rules refuse to let it be written back onto the public profile (only deleted, which is what
+the migration does), and the emergency push fan-out reads membership from the group
+document's `members` array instead of `users where groupId ==`. The join rule is only safe
+because the code is now secret. Membership is the `members` array,
 with a fallback to the keys of `memberLocations` so groups created before that field
 existed are not locked out. Updates are constrained by field: a member may write only their
 own `memberLocations.<uid>` entry and the shared `savedLocations`; `groupName`, `createdBy`
@@ -54,7 +62,14 @@ Old rules allowed any shape of document on a user's own profile. A user could se
 whenever they liked.
 
 **Fixed.** Writes are type-checked, the key set is closed, points may only increase and only
-by ≤ 2000 in one write, and a drive record must carry a server timestamp.
+by ≤ 20,000 in one write, and a drive record must carry a server timestamp.
+
+> The ceiling was 2,000 in the first pass, which was a bug: points accrue at about one per
+> 2.5 s, so any drive over ~83 minutes exceeded it. Because the drive record and the profile
+> increment commit as one atomic batch, that would have failed **the whole batch** — the
+> drive, the points, the streak and the count — on exactly the long trips the app most wants
+> to reward. 20,000 is about fourteen hours of driving, and the same number is the ceiling on
+> the drive record's own `points` field so the two halves of the batch cannot disagree.
 
 > Honest limit: a rules-only points cap is a speed bump, not an anti-cheat system — a
 > determined client can still loop small increments. Making points authoritative means
@@ -287,6 +302,117 @@ whether any emergency flag actually changed before touching Firestore at all, an
 invocations exit immediately. Push sending also chunks to Expo's 100-message limit and
 deletes tokens Expo reports as `DeviceNotRegistered`.
 
+### S9 — `in` used against a Set in the rules
+`diff().affectedKeys()` returns a **Set**. The `in` operator is documented for List and Map
+only. A runtime evaluation error in a rule *denies* the request, so had the undocumented
+form not worked, every `users/*` and `groups/*` update in the app would have failed — and
+it would only have shown up after deployment. Every key test against `affectedKeys()` now
+uses `hasAny` / `hasAll` / `hasOnly`, which are defined on both Set and List. The genuine
+Map cases (`'points' in request.resource.data`) are left alone.
+
+### F13 — A failed read looked like an empty account
+`getUserSummary` returned `null` for both "no such document" and "the read failed"
+(offline, expired token, a rules denial). Three things then acted on that:
+
+* the dashboard wrote `0` into the local points cache, and the rewards screen read it back;
+* `getUserPoints` created a profile document, resetting `createdAt` on a real account;
+* `ensureUserProfile` re-provisioned an existing account with default values.
+
+**Fixed.** `readUserSummary()` returns `{ status: 'ok' | 'missing' | 'error' }`; only
+successful reads are cached, a failure serves a still-valid cached copy rather than
+inventing an empty one, nothing is created or cached on failure, and the points cache is
+never lowered by a read (points only ever go up, so a lower value is stale or wrong).
+
+### F14 — A background read failure switched location sharing off
+`getCachedGroupId` returned `null` both for "not in a group" and "could not find out". The
+background task treated the second as the first and called `stopLocationUpdates()`, which
+**unregisters the OS task** — so one failed read in the background (no signal, expired
+token) stopped location sharing until the app was next opened by hand.
+
+**Fixed.** The lookup is three-valued: a group id, `null` (confirmed no group), or
+`undefined` (lookup failed). Only a confirmed `null` stops tracking, and only a successful
+read is written to the cache.
+
+### F15 — A device that never reports a speed wrote once and then never again
+The write gate required `speed >= 1 m/s`. iOS reports `-1` for an unknown speed and some
+Android fixes report `null` or `0` while moving; `speed ?? 0` does not neutralise `-1`.
+Combined with the now-persisted gate state (which correctly stopped resetting on every cold
+start), such a device would write its first fix and then nothing, ever.
+
+**Fixed.** Movement is the requirement (≥ 25 m **and** ≥ 20 s). Speed only gets a veto, and
+only when the platform actually supplied a believable non-negative value — a near-zero
+speed over 25 m is GPS drift.
+
+### F16 — A failed profile write created up to five orphan groups
+`createGroup`'s retry loop wrapped both the group create *and* the `users.groupId` write, so
+a failure in the second sent the loop round again with a fresh code. Five attempts, five
+groups, all with the user as a member and none of them reachable from the app.
+
+**Fixed.** Only the create is retried, and only for the errors a retry can help
+(`permission-denied` from a code collision, `already-exists`); anything else fails once,
+honestly, with an offline-specific message. The profile is written once, afterwards, and if
+*that* fails the user is told the group's code so they can join it and finish.
+
+### F17 — `isDriving` stuck on when finalization failed
+`stopDriving` had become conditional on the finalization batch succeeding, so a failed
+upload left the user showing as driving to their group indefinitely. It is unconditional
+and fire-and-forget again.
+
+### F18 — Two sources of truth for membership, written in the wrong order
+`groups.members` and `users.groupId` were written separately, and `leaveGroup` detached the
+profile first and only *warned* if removing the member from the group failed — leaving the
+user still broadcasting to, and receiving alerts from, a group the app believed they had
+left.
+
+**Fixed.** The group document is the source of truth (it is what the rules and the push
+fan-out read). Leaving removes membership there first and only then detaches the profile,
+and a failure surfaces to the user instead of being swallowed. Joining writes membership
+first for the same reason; the join write is idempotent, so retrying the same code
+completes a half-finished join.
+
+### F19 — A finished drive that could not be uploaded was lost
+If the finalization batch failed — no signal at the end of a drive is the ordinary case —
+the drive, its points and its streak were gone, with a `console.warn` nobody sees.
+
+**Fixed.** The drive is queued in AsyncStorage under a client-chosen document id and
+retried on the next app launch and the next drive start. The id is chosen up front so a
+retry after a *lost response* overwrites the same record rather than creating a second one,
+and the retry checks whether the record already exists before re-applying the profile
+increments, so a lost response cannot become double credit. The drive screen shows how many
+drives are waiting instead of failing silently.
+
+### F20 — A missing environment variable produced a blank screen
+`utils/firebase.js` threw at module scope. That is before React renders anything, so
+`ErrorBoundary` never saw it and the user got nothing at all. A cloud build made without the
+`EXPO_PUBLIC_*` variables set fails exactly this way.
+
+**Fixed.** The configuration problem is reported, not thrown, and `App.js` renders a
+readable "RoadCash is not configured" screen listing the missing variable names.
+
+### F21 — Username rules admitted names that are not document ids
+`validateUsername` accepted `.`, `..` and all-punctuation names. Those are not legal
+Firestore document ids, so `claimUsername` threw — *after* the auth account had been
+created — and `SignUpScreen`'s cleanup only ran on the "taken" branch, leaving an orphan
+auth account with no profile.
+
+**Fixed.** A username must start with an alphanumeric; `.`, `..` and `/` are rejected up
+front, `isValidUsernameKey()` is checked before any claim is attempted, and the
+`deleteUser` cleanup moved into the generic catch so *any* failure after account creation
+is cleaned up.
+
+### P9 — The shared geocode cache could put a side street's limit on a highway
+The cache cell was ~220 m and keyed on whichever point the first caller happened to be at,
+with `limit=1` and a 60-day TTL, authoritative for every user. One lookup made on a side
+street became that street's speed limit for every driver on the arterial road beside it,
+for two months.
+
+**Fixed.** Cells are ~55 m (0.0005°), narrower than the gap between parallel roads in
+almost all street grids; the street name is stored on the cache entry and returned to the
+client, which refuses a hit whose street differs from the road it is currently on; and the
+TTL is 7 days. Entries carry an `expiresAt` field for a Firestore TTL policy — **that policy
+has to be created, it is not part of a rules or index deploy** (see §3 step 3b), otherwise
+`geocache` grows forever.
+
 ### Not changed, flagged
 * `screens/LocationScreen.js` reverse-geocodes member positions against
   **nominatim.openstreetmap.org** directly from the client, with a hard-coded 1 s sleep for
@@ -310,14 +436,15 @@ users/{uid}                                  PUBLIC profile (any signed-in user 
   drivingStreak      number
   totalDrives        number  (counter; avoids counting the drive collection)
   photoURL           string | null   (Supabase public URL)
-  groupId            string | null
   isDriving          bool    (written, currently unread)
   createdAt          timestamp
   lastDriveAt        timestamp
   [pushToken]        REMOVED - migrated to private/push
   [trustedContacts]  REMOVED - migrated to private/contacts
+  [groupId]          REMOVED - migrated to private/info; it is the group JOIN CODE and
+                     leaving it here let anyone enumerate every group in the project
 
-users/{uid}/private/info        { email, createdAt }            owner only
+users/{uid}/private/info        { groupId, email, createdAt }   owner only
 users/{uid}/private/contacts    { contacts: [{name, phone}] }   owner only
 users/{uid}/private/push        { token, platform, updatedAt }  owner only
 users/{uid}/private/usage       { day, counts:{…} }             owner-readable, function-written
@@ -342,6 +469,8 @@ groups/{groupId}                members only
   savedLocations  [{ name, address, createdBy }]   (<= 100)
 
 geocache/{cell}                 server only - shared HERE reverse-geocode cache
+  items, street, cachedAt, expiresAt   ~55 m cell, 7-day TTL (needs a TTL policy on
+                                       expiresAt - see the deploy steps)
 apikeys/**                      server only
 userinfo/{uid}                  RETIRED - migrated into users/{uid}/private/info
 ```
@@ -354,10 +483,10 @@ automatic single-field indexes — no composite index is required:
 |---|---|
 | `users orderBy points desc limit 50` | automatic |
 | `users where points > n` (count) | automatic |
-| `users where groupId == g` (function) | automatic |
+| `users where groupId == g` (migration script only) | automatic |
 | `users where __name__ in […]` | key index |
 | `drivemetrics orderBy timestamp` (asc/desc, with range) | field override, both orders |
-| `drivemetrics where distracted > 0` (count) | automatic |
+| `drivemetrics where distracted > 0` and `== true` (counts) | automatic |
 
 ---
 
@@ -384,10 +513,20 @@ set GOOGLE_CLOUD_PROJECT=roadcash-e05e1
 npm run migrate            # dry run - prints what it would do
 npm run migrate:apply      # writes
 ```
-It is idempotent, and it: creates `usernames/` claims for every existing user; moves
-`pushToken` and `trustedContacts` off the public document; moves `userinfo/{uid}` into
-`users/{uid}/private/info`; and adds `members` arrays to existing groups. It prints a warning
-for any duplicate username it finds — resolve those before deploying.
+It is idempotent, and it:
+
+* seeds `members` on existing groups from the **union** of `memberLocations` keys and
+  `users where groupId == <id>` — a member who joined but never had a position written
+  (declined permissions, never drove) would otherwise be locked out of their own group with
+  no way back from inside the app;
+* creates `usernames/` claims for every existing user, skipping with a warning any name that
+  cannot be a document id (`.`, `..`, anything containing `/`) rather than aborting;
+* moves `pushToken`, `trustedContacts` and `groupId` off the public profile;
+* moves `userinfo/{uid}` into `users/{uid}/private/info`.
+
+Groups are seeded **before** profiles are rewritten, because the seeding query reads the
+`groupId` field the profile step deletes. It prints a warning for any duplicate username it
+finds — resolve those before deploying.
 
 Get the service account key from Firebase console → Project settings → Service accounts →
 Generate new private key. Delete the file afterwards; do not commit it.
@@ -398,6 +537,24 @@ cd C:\Users\lurpd\Documents\dev\RoadCash-backend
 firebase deploy --only firestore:rules
 firebase deploy --only firestore:indexes
 ```
+
+### 3b. Create the TTL policy on the shared geocode cache
+`geocache` entries carry an `expiresAt` timestamp, but **nothing deletes them without a TTL
+policy** — that is a separate piece of configuration, not part of a rules or index deploy.
+Without it the collection grows forever.
+
+Console: Firestore → **TTL** → *Create policy* → collection group `geocache`, timestamp
+field `expiresAt`.
+
+Or with gcloud:
+```
+gcloud firestore fields ttls update expiresAt ^
+  --collection-group=geocache ^
+  --enable-ttl ^
+  --project=roadcash-e05e1
+```
+Deleting an expired document is billed as a delete, and deletion happens within 24 hours of
+the timestamp, not at it.
 
 > **Deploy the rules and the new app build close together.** What an un-updated install can
 > and cannot still do once the rules are live:
@@ -453,7 +610,16 @@ eas env:create --name EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID        --value "..." --en
 eas env:create --name EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID        --value "..." --environment production
 eas env:create --name EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID    --value "..." --environment production
 ```
-Repeat for `--environment preview` and `--environment development`. `EXPO_PUBLIC_*` values
+Or, in one command, push the local `.env` straight into an EAS environment:
+```
+eas env:push --environment production
+```
+Repeat for `--environment preview` and `--environment development`.
+
+**A cloud build made without these variables ships a non-working app.** It is not a build
+failure — the bundle compiles fine — and every Firebase call fails at runtime. Since
+F20 the app at least says so on screen instead of showing a blank one, but check
+`eas env:list` before a release build. `EXPO_PUBLIC_*` values
 are inlined into the bundle and are visible to anyone with the binary — that is expected for
 all twelve of these. If your EAS CLI predates `eas env`, the equivalent is
 `eas secret:create --scope project --name <NAME> --value "<value>"`.
@@ -584,15 +750,16 @@ needed. Every one:
 |---|---|
 | `screens/LoginScreen.js` | per-platform Google client ids, `maybeCompleteAuthSession()`, error/dismiss handling, `ensureUserProfile()` after sign-in, disabled state when unconfigured |
 | `screens/SignUpScreen.js` | username registry check + transactional claim, `ensureUserProfile()`, removed the `userinfo` write and the `users` uniqueness query |
-| `screens/AccountSettings.js` | one `getUserSummary()` read instead of two; `getGroupName()`; `claimUsername()` for rename; **removed the sign-out points write** |
-| `screens/DashboardScreen.js` | `getUserSummary()` replaces the local cache and two reads; points read from the server instead of being recomputed and written locally; `invalidateDashboardUserCache` kept as a re-export |
+| `screens/AccountSettings.js` | one `getUserSummary()` read instead of two; `getGroupIdForUser()` + `getGroupName()`; `claimUsername()` for rename; **removed the sign-out points write** |
+| `screens/DashboardScreen.js` | `readUserSummary()` replaces the local cache and two reads; points read from the server instead of being recomputed and written locally, and a failed read no longer caches 0; dead `invalidateDashboardUserCache` export removed |
 | `screens/MyDrivesScreen.js` | `getDriveHistoryPage()` + `getDriveCounts()`; "Load more" fetches a page; `keyExtractor` uses the document id |
-| `screens/AIScreen.js` | `getDriveMetrics(uid, 30)` once per account; aggregation split into its own effect |
+| `screens/AIScreen.js` | `getDriveMetrics(uid, 30)` with a 5-minute cache, refetched when a drive completes; aggregation split into its own effect |
 | `screens/RewardsScreen.js` | `getCachedTotalPoints(uid)` instead of the wrong AsyncStorage key |
-| `screens/DriveScreen.js` | `finalizeDriveWrite()`; speed-limit cache moved to `utils/speedLimits`; emergency via `utils/groups`; accel-sample ref; `startDriving` effect; weather cadence; dead `getAdaptiveGridKey` removed |
-| `screens/LocationScreen.js` | `createGroup` / `joinGroup` / `leaveGroup` / `addSavedLocation` / `removeSavedLocation`; `getUserSummary()`; explicit `limit(10)` on the profile `in` query |
+| `screens/DriveScreen.js` | `finalizeDriveWrite()` + pending-upload queue and banner; unconditional `stopDriving`; street-aware speed-limit lookup; speed-limit cache moved to `utils/speedLimits`; emergency via `utils/groups`; accel-sample ref; `startDriving` effect; weather cadence; dead `getAdaptiveGridKey` removed |
+| `screens/LocationScreen.js` | `createGroup` / `joinGroup` / `leaveGroup` / `addSavedLocation` / `removeSavedLocation`; `getGroupIdForUser()` for the now-private group id; leaving reports failure instead of detaching locally; shared `utils/geo` haversine; explicit `limit(10)` on the profile `in` query |
+| `App.js` | renders the configuration-error screen instead of dying at import time, and drains the pending-drive queue on launch |
 
-`App.js`, `hooks/`, `context/`, `navigation/` and `theme/` were **not** touched.
+`hooks/`, `context/`, `navigation/` and `theme/` were **not** touched.
 
 ### Backward compatibility
 Every function previously exported from `utils/` still exists with a compatible signature.
@@ -615,8 +782,10 @@ from `utils/LocationService` (re-exported from the new `utils/groupCache`).
 
 **NOT verified here — please check before/after deploying**
 * **The rules tests were not executed.** `functions/test/firestore.rules.test.js` is written
-  (39 cases across groups, users, private data, drive metrics, usernames and the server-only
-  collections) but the Firestore emulator needs Java 11+ and this environment has Java 8.
+  (61 cases across the group-code enumeration attack, groups, legacy groups with no
+  `members` array, emergencies, users and private data, sign-up and rename, the drive
+  finalization batch, usernames and the server-only collections) but the Firestore emulator
+  needs Java 11+ and this environment has Java 8.
   Run `cd functions && npm install && npm run test:rules` on Windows first. **Do not deploy
   the rules without running them** — a rules mistake either leaks data or locks users out,
   and neither is visible until it happens.

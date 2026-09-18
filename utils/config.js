@@ -59,17 +59,28 @@ const REQUIRED_FIREBASE_KEYS = [
   'appId',
 ];
 
-export function assertFirebaseConfig() {
-  const missing = REQUIRED_FIREBASE_KEYS.filter((key) => !firebaseConfig[key]);
-  if (missing.length === 0) return;
+export function missingFirebaseKeys() {
+  return REQUIRED_FIREBASE_KEYS.filter((key) => !firebaseConfig[key]);
+}
 
-  throw new Error(
-    `Firebase configuration is missing: ${missing.join(', ')}.\n` +
-      'Copy .env.example to .env and fill it in (values are in the Firebase console under ' +
-      'Project settings > Your apps > Web app), then restart the bundler with ' +
-      '`npx expo start --clear`. For EAS builds set the same names as EAS environment ' +
-      'variables - see docs/BACKEND_AUDIT.md.'
-  );
+export const CONFIG_HELP =
+  'Copy .env.example to .env and fill it in (values are in the Firebase console under ' +
+  'Project settings > Your apps > Web app), then restart the bundler with ' +
+  '`npx expo start --clear`. For EAS builds set the same names as EAS environment ' +
+  'variables - see docs/BACKEND_AUDIT.md.';
+
+/**
+ * Returns a human-readable message when the app cannot work, or null when it can.
+ *
+ * Deliberately NOT a throw. This module is imported (transitively) by every screen and by
+ * the background location task, so throwing here happened at module-evaluation time -
+ * before React rendered anything at all, which meant ErrorBoundary never saw it and the
+ * user got a blank screen instead of a message telling them what to fix.
+ */
+export function firebaseConfigError() {
+  const missing = missingFirebaseKeys();
+  if (missing.length === 0) return null;
+  return `Firebase configuration is missing: ${missing.join(', ')}.\n\n${CONFIG_HELP}`;
 }
 
 export function isSupabaseConfigured() {

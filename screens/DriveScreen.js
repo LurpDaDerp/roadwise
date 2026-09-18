@@ -21,6 +21,8 @@ import { auth } from '../utils/firebase';
 import {
   getTrustedContacts,
   finalizeDriveWrite,
+  flushPendingDriveWrites,
+  getPendingDriveCount,
   startDriving,
   stopDriving,
 } from '../utils/firestore';
@@ -32,10 +34,12 @@ import {
   getSpeedLimit,
   fillCachePolyline,
   toDisplayUnits,
+} from '../utils/speedLimits';
+import {
   haversineM,
   bearingDeg,
   distanceMeters as getDistanceFromLatLonInMeters,
-} from '../utils/speedLimits';
+} from '../utils/geo';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { useContext } from 'react';
@@ -259,6 +263,9 @@ export default function DriveScreen({ route }) {
   const hasStartedDriving = useRef(false);
   const [audioSpeedUpdatesEnabled, setAudioSpeedUpdatesEnabled] = useState(true);
   const [isEmergencyActive, setIsEmergencyActive] = useState(false);
+  // A finished drive that could not reach the server is held in AsyncStorage and retried;
+  // the user is told rather than the failure going into a console.warn nobody sees.
+  const [pendingDrives, setPendingDrives] = useState(0);
   const user = auth.currentUser;
   const speedRef = useRef(0);
   const speedingTimeoutRef = useRef(null);
@@ -372,6 +379,10 @@ export default function DriveScreen({ route }) {
 
     if (!user) return;
 
+    // Independent of everything below. If the finalization batch fails, `isDriving` must
+    // still be cleared or the user shows as driving to their group forever.
+    stopDriving(user.uid);
+
     const driveDurationMs = Date.now() - driveStartTime.current;
     const wasDistracted = isDistracted.current;
 
@@ -398,18 +409,26 @@ export default function DriveScreen({ route }) {
     if (pointsThisDrive > 0) {
       try {
         await fillFinalSegmentIfAny();
-        await finalizeDriveWrite(user.uid, {
+        const result = await finalizeDriveWrite(user.uid, {
           metrics: driveMetrics,
           pointsEarned: pointsThisDrive,
           wasDistracted,
         });
         await AsyncStorage.setItem('@streakThisDrive', '1');
         await AsyncStorage.setItem('@driveCompleteSnackbar', 'true');
+
+        if (result?.queued) {
+          setPendingDrives(await getPendingDriveCount(user.uid));
+          Alert.alert(
+            'Drive saved on this device',
+            'We could not reach the server. This drive and its points will be uploaded automatically next time you have a connection.'
+          );
+        }
       } catch (e) {
         console.warn('Failed to save the completed drive:', e);
+        setPendingDrives(await getPendingDriveCount(user.uid));
       }
     } else {
-      await stopDriving(user.uid);
       await flushSpeedLimitCache();
     }
 
@@ -512,6 +531,20 @@ export default function DriveScreen({ route }) {
       setDisplayedPoints(pointsThisDrive);
     }
   }, [pointsThisDrive, displayTotalPoints, startingPoints]);
+
+  // Drain anything a previous drive could not upload, and surface what is still waiting.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    let active = true;
+    (async () => {
+      await flushPendingDriveWrites(uid);
+      if (active) setPendingDrives(await getPendingDriveCount(uid));
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   //reset points and isDistracted on mount
   useEffect(() => {
@@ -694,7 +727,10 @@ export default function DriveScreen({ route }) {
 
           // Cache first; utils/speedLimits owns the grid, the persistence and the
           // request throttle, and only reaches HERE when the cache misses.
-          const cached = lookupCachedSpeedLimit(lat, lon);
+          // The road we believe we are on. A shared grid cell can straddle two roads, and
+          // an answer for the wrong one is how a side street's limit lands on a highway.
+          const expectedStreet = prevFetchedStreetRef.current ?? null;
+          const cached = lookupCachedSpeedLimit(lat, lon, { expectedStreet });
           if (cached) {
             setSpeedLimit(toDisplayUnits(cached.valueKph, unit));
 
@@ -703,7 +739,7 @@ export default function DriveScreen({ route }) {
               prevFetchedStreetRef.current = cached.street ?? undefined;
             }
           } else if (showSpeedLimit) {
-            const result = await getSpeedLimit(lat, lon);
+            const result = await getSpeedLimit(lat, lon, { expectedStreet });
             if (result && result.valueKph != null) {
               const { valueKph, street } = result;
 
@@ -1196,6 +1232,35 @@ export default function DriveScreen({ route }) {
         </View>
 
         </View>
+
+        {pendingDrives > 0 && (
+          <View
+            style={{
+              marginTop: 10,
+              marginHorizontal: 16,
+              paddingVertical: 10,
+              paddingHorizontal: 14,
+              borderRadius: t.radius.md,
+              backgroundColor: t.colors.accentFaint,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: t.colors.accent,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }}
+          >
+            <MaterialCommunityIcons
+              name="cloud-upload-outline"
+              size={18}
+              color={t.colors.accent}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={[t.typography.caption, { color: t.colors.text, flex: 1 }]}>
+              {pendingDrives === 1
+                ? 'A finished drive is waiting to upload. It will be saved when you are back online.'
+                : `${pendingDrives} finished drives are waiting to upload. They will be saved when you are back online.`}
+            </Text>
+          </View>
+        )}
 
         {isEmergencyActive && (
           <View style={[styles.emergencyBanner, { backgroundColor: t.colors.danger }]}>

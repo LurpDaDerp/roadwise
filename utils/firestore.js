@@ -54,46 +54,71 @@ const MAX_BATCH_OPS = 450;
  * ------------------------------------------------------------------ */
 
 const USER_DOC_TTL_MS = 30_000;
-const userDocCache = { uid: null, data: null, ts: 0 };
+const userDocCache = { uid: null, data: null, ts: 0, exists: false };
+
+// A read can end three ways, and conflating them causes real damage: "the document is not
+// there" justifies creating a profile and caching 0 points, "the read failed" (offline,
+// expired token, a rules denial) justifies neither. Callers that write anything as a
+// result of a read must use readUserSummary and check `status`.
+export const READ_OK = "ok";
+export const READ_MISSING = "missing";
+export const READ_ERROR = "error";
 
 export function invalidateUserCache(uid) {
   if (!uid || userDocCache.uid === uid) {
     userDocCache.uid = null;
     userDocCache.data = null;
     userDocCache.ts = 0;
+    userDocCache.exists = false;
   }
 }
 
-function cacheUserDoc(uid, data) {
+function cacheUserDoc(uid, data, exists) {
   userDocCache.uid = uid;
   userDocCache.data = data;
+  userDocCache.exists = exists;
   userDocCache.ts = Date.now();
-  return data;
 }
 
 /**
  * One read of `users/{uid}`, cached for 30 seconds.
- * Pass { force: true } straight after a write that must be reflected immediately.
+ * Returns { status, data }. Only successful reads are cached - a failure never evicts or
+ * overwrites a good cached value.
  */
-export async function getUserSummary(uid, { force = false } = {}) {
-  if (!uid) return null;
+export async function readUserSummary(uid, { force = false } = {}) {
+  if (!uid) return { status: READ_MISSING, data: null };
+
   const now = Date.now();
-  if (
-    !force &&
-    userDocCache.uid === uid &&
-    userDocCache.data &&
-    now - userDocCache.ts < USER_DOC_TTL_MS
-  ) {
-    return userDocCache.data;
+  if (!force && userDocCache.uid === uid && now - userDocCache.ts < USER_DOC_TTL_MS) {
+    return {
+      status: userDocCache.exists ? READ_OK : READ_MISSING,
+      data: userDocCache.data,
+    };
   }
 
   try {
     const snap = await getDoc(doc(db, "users", uid));
-    return cacheUserDoc(uid, snap.exists() ? { id: snap.id, ...snap.data() } : null);
+    const exists = snap.exists();
+    const data = exists ? { id: snap.id, ...snap.data() } : null;
+    cacheUserDoc(uid, data, exists);
+    return { status: exists ? READ_OK : READ_MISSING, data };
   } catch (err) {
     console.error("Failed to load user document:", err);
-    return null;
+    // Serve a still-valid cached copy rather than pretending the account is empty.
+    if (userDocCache.uid === uid && userDocCache.exists) {
+      return { status: READ_OK, data: userDocCache.data, stale: true };
+    }
+    return { status: READ_ERROR, data: null, error: err };
   }
+}
+
+/**
+ * Convenience wrapper: the document, or null if it is missing OR unreadable.
+ * Use readUserSummary instead anywhere the difference can cause a write.
+ */
+export async function getUserSummary(uid, options) {
+  const { data } = await readUserSummary(uid, options);
+  return data;
 }
 
 /** Merge-write to `users/{uid}` that keeps the cache honest. */
@@ -112,11 +137,14 @@ export function getPointsStorageKey(uid) {
 
 export async function getUserPoints(uid) {
   if (!uid) return 0;
-  const data = await getUserSummary(uid);
-  if (data) return Number(data.points) || 0;
+  const { status, data } = await readUserSummary(uid);
+  if (status === READ_OK) return Number(data.points) || 0;
 
-  // First run for this account: create the profile document without clobbering anything
-  // another code path may have written in the meantime.
+  // A failed read is not an empty account. Creating the profile here would reset
+  // createdAt on an existing one and cache a zero balance the user then sees.
+  if (status === READ_ERROR) return 0;
+
+  // Genuinely absent: first run for this account.
   await writeUserDoc(uid, { points: 0, createdAt: serverTimestamp() });
   return 0;
 }
@@ -137,10 +165,10 @@ export async function saveUserPoints(uid, points) {
 export async function getUsername(uid) {
   if (!uid) return "guest";
   const data = await getUserSummary(uid);
-  if (data) return data.username || "guest";
-
-  await writeUserDoc(uid, { username: uid, createdAt: serverTimestamp() });
-  return "guest";
+  return data?.username || "guest";
+  // No repair write here. The old version wrote `username: uid` when the document was
+  // absent, which produced a 28-character "username" and is now refused by the rules
+  // anyway. ensureUserProfile() is the one place that provisions an account.
 }
 
 export async function saveUserStreak(uid, streak) {
@@ -166,13 +194,31 @@ export async function getCachedTotalPoints(uid) {
     }
   } catch {}
 
-  const data = await getUserSummary(uid);
+  const { status, data } = await readUserSummary(uid);
+  if (status === READ_ERROR) return 0;
+
   const points = Number(data?.points) || 0;
-  try {
-    await AsyncStorage.setItem(getPointsStorageKey(uid), String(points));
-  } catch {}
+  await cachePointsIfHigher(uid, points);
   return points;
 }
+
+/**
+ * The local points cache is a display convenience, and points only ever go up, so a read
+ * that comes back lower than what is cached is either stale or wrong. Never lower it.
+ */
+async function cachePointsIfHigher(uid, points) {
+  if (!uid || !Number.isFinite(points)) return;
+  try {
+    const key = getPointsStorageKey(uid);
+    const stored = await AsyncStorage.getItem(key);
+    const previous = stored === null ? -1 : parseInt(stored, 10);
+    if (!Number.isFinite(previous) || points >= previous) {
+      await AsyncStorage.setItem(key, String(points));
+    }
+  } catch {}
+}
+
+export { cachePointsIfHigher };
 
 /* ------------------------------------------------------------------ *
  * Usernames
@@ -198,10 +244,26 @@ export function validateUsername(username) {
   if (trimmed.length > MAX_USERNAME_LENGTH) {
     return `Username cannot be longer than ${MAX_USERNAME_LENGTH} characters.`;
   }
-  if (!/^[A-Za-z0-9_.-]+$/.test(trimmed)) {
-    return "Usernames can only use letters, numbers, dots, dashes and underscores.";
+  // The lowercased name becomes a Firestore document id, so it must start with an
+  // alphanumeric and contain at least one. That rules out "." and ".." (which are not
+  // legal document ids at all) and all-punctuation names, which would otherwise fail
+  // deep inside claimUsername - after the auth account had already been created.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(trimmed)) {
+    return "Usernames must start with a letter or number, and can only use letters, numbers, dots, dashes and underscores.";
+  }
+  if (trimmed.includes("/")) {
+    return "Usernames cannot contain a slash.";
   }
   return null;
+}
+
+/** True when `username` can safely be used as a `usernames/{id}` document id. */
+export function isValidUsernameKey(username) {
+  const key = usernameKey(username);
+  if (!key || key.length > MAX_USERNAME_LENGTH) return false;
+  if (key === "." || key === "..") return false;
+  if (key.includes("/")) return false;
+  return /^[a-z0-9][a-z0-9_.-]*$/.test(key);
 }
 
 /**
@@ -210,7 +272,7 @@ export function validateUsername(username) {
  */
 export async function isUsernameAvailable(username, { forUid = null } = {}) {
   const key = usernameKey(username);
-  if (!key) return false;
+  if (!key || !isValidUsernameKey(username)) return false;
   try {
     const snap = await getDoc(doc(db, "usernames", key));
     if (!snap.exists()) return true;
@@ -231,7 +293,7 @@ export async function claimUsername(uid, username) {
   if (!uid) return false;
   const trimmed = normalizeUsername(username);
   const key = usernameKey(trimmed);
-  if (!key) return false;
+  if (!key || !isValidUsernameKey(trimmed)) return false;
 
   const userRef = doc(db, "users", uid);
   const claimRef = doc(db, "usernames", key);
@@ -279,7 +341,12 @@ export async function ensureUserProfile(user, { username = null } = {}) {
   if (!user?.uid) return null;
   const uid = user.uid;
 
-  const existing = await getUserSummary(uid, { force: true });
+  const { status, data: existing } = await readUserSummary(uid, { force: true });
+
+  // A failed read must not lead to provisioning: writing the defaults over a real account
+  // would try to reset its points (the rules would refuse, leaving a confusing error).
+  if (status === READ_ERROR) return null;
+
   // Fully provisioned already (a returning Google sign-in) - nothing to do.
   if (existing && existing.username && typeof existing.points === "number") return existing;
 
@@ -312,10 +379,11 @@ export async function ensureUserProfile(user, { username = null } = {}) {
 }
 
 async function suggestUsername(user) {
-  const base =
-    (user.displayName || user.email?.split("@")[0] || "driver")
-      .replace(/[^A-Za-z0-9_.-]/g, "")
-      .slice(0, 10) || "driver";
+  const cleaned = (user.displayName || user.email?.split("@")[0] || "driver")
+    .replace(/[^A-Za-z0-9_.-]/g, "")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .slice(0, 10);
+  const base = /^[A-Za-z0-9]/.test(cleaned) ? cleaned : "driver";
   for (let attempt = 0; attempt < 3; attempt++) {
     const candidate = attempt === 0 ? base : `${base}${Math.floor(Math.random() * 10000)}`;
     if (await isUsernameAvailable(candidate, { forUid: user.uid })) return candidate;
@@ -329,6 +397,56 @@ async function suggestUsername(user) {
 
 function privateDoc(uid, name) {
   return doc(db, "users", uid, "private", name);
+}
+
+/**
+ * The group id is the group's join code, and the group document id is that same code.
+ * While it sat on the publicly readable profile, anyone could list users, read a code and
+ * use the join rule to insert themselves into that family. It lives in the owner-only
+ * private document now.
+ *
+ * Returns the id, or `undefined` when the read FAILED (offline, expired token, denial).
+ * `null` means a confirmed "not in a group" - callers must not treat the two the same.
+ */
+export async function getGroupIdForUser(uid) {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(privateDoc(uid, "info"));
+    if (snap.exists()) {
+      const value = snap.data().groupId;
+      if (typeof value === "string" && value) return value;
+      if (value === null) return null;
+    }
+  } catch (err) {
+    console.warn("Could not read private profile info:", err);
+    return undefined;
+  }
+
+  // Accounts that have not been migrated yet still carry it on the public profile.
+  const { status, data } = await readUserSummary(uid);
+  if (status === READ_ERROR) return undefined;
+  const legacy = data?.groupId;
+  return typeof legacy === "string" && legacy ? legacy : null;
+}
+
+/** Write the group id to the private document and remove any legacy public copy. */
+export async function setGroupIdForUser(uid, groupId) {
+  if (!uid) return;
+  await setDoc(
+    privateDoc(uid, "info"),
+    { groupId: groupId ?? null, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+
+  const { status, data } = await readUserSummary(uid);
+  if (status === READ_OK && data && data.groupId !== undefined) {
+    try {
+      await updateDoc(doc(db, "users", uid), { groupId: deleteField() });
+      invalidateUserCache(uid);
+    } catch (err) {
+      console.warn("Could not remove the legacy public groupId:", err);
+    }
+  }
 }
 
 export async function savePrivateInfo(uid, info) {
@@ -503,13 +621,21 @@ export async function getDriveCounts(uid) {
   if (!uid) return { total: 0, distracted: 0, focused: 0 };
   try {
     const ref = driveMetricsRef(uid);
-    const [totalSnap, distractedSnap] = await Promise.all([
+    // `distracted` is a COUNT on records written by this build, but older records stored a
+    // boolean. Firestore compares across types by type order, so `> 0` misses `true`
+    // entirely; both shapes are counted and the totals added.
+    const [totalSnap, numericSnap, booleanSnap] = await Promise.all([
       getCountFromServer(ref),
       getCountFromServer(query(ref, where("distracted", ">", 0))),
+      getCountFromServer(query(ref, where("distracted", "==", true))),
     ]);
     const total = totalSnap.data().count;
-    const distracted = distractedSnap.data().count;
-    return { total, distracted, focused: Math.max(0, total - distracted) };
+    const distracted = numericSnap.data().count + booleanSnap.data().count;
+    return {
+      total,
+      distracted: Math.min(total, distracted),
+      focused: Math.max(0, total - distracted),
+    };
   } catch (error) {
     console.error("Failed to count drive history:", error);
     return { total: 0, distracted: 0, focused: 0 };
@@ -517,42 +643,63 @@ export async function getDriveCounts(uid) {
 }
 
 export async function saveDriveMetrics(uid, metrics) {
-  if (!uid) return null;
+  // Delegates so there is exactly one drive-write code path. Two nearly-identical ones
+  // drift, and the drifting half is the one that stops incrementing the counters.
+  const result = await finalizeDriveWrite(uid, {
+    metrics,
+    pointsEarned: Number(metrics?.points) || 0,
+    wasDistracted: Boolean(metrics?.distracted),
+  });
+  return result?.driveId ?? null;
+}
 
-  const payload = { ...metrics, timestamp: serverTimestamp() };
+/* ------------------------------------------------------------------ *
+ * Drive finalization
+ * ------------------------------------------------------------------ */
 
+const PENDING_DRIVES_KEY = "pendingDriveFinalizations";
+const MAX_PENDING_DRIVES = 25;
+
+function pendingDrivesKey(uid) {
+  return `${PENDING_DRIVES_KEY}_${uid}`;
+}
+
+async function readPendingDrives(uid) {
   try {
-    const ref = await addDoc(driveMetricsRef(uid), payload);
-    await writeUserDoc(uid, { totalDrives: increment(1), lastDriveAt: serverTimestamp() });
-    return ref.id;
-  } catch (err) {
-    try {
-      // The profile document has to exist before a subcollection write is allowed by rules.
-      await writeUserDoc(uid, { createdAt: serverTimestamp() });
-      const ref = await addDoc(driveMetricsRef(uid), payload);
-      await writeUserDoc(uid, { totalDrives: increment(1), lastDriveAt: serverTimestamp() });
-      return ref.id;
-    } catch (retryErr) {
-      console.error("Failed to save drive metrics (after init):", retryErr);
-      return null;
-    }
+    const raw = await AsyncStorage.getItem(pendingDrivesKey(uid));
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
   }
 }
 
-/**
- * The single write path used when a drive ends.
- *
- * Previously this was four independent round trips (save metrics, read the user document,
- * write the streak, and later a points write from the dashboard). Any of them could land
- * without the others, the streak read/modify/write raced with itself, and points only
- * reached the server if the user happened to open the dashboard afterwards. It is now one
- * atomic batch with server-side increments, so a killed app cannot lose or duplicate it.
- */
-export async function finalizeDriveWrite(uid, { metrics, pointsEarned = 0, wasDistracted = false }) {
-  if (!uid) return null;
+async function writePendingDrives(uid, list) {
+  try {
+    await AsyncStorage.setItem(
+      pendingDrivesKey(uid),
+      JSON.stringify(list.slice(-MAX_PENDING_DRIVES))
+    );
+  } catch (err) {
+    console.error("Could not persist the pending drive queue:", err);
+  }
+}
 
-  const points = Number(pointsEarned) || 0;
-  const driveRef = doc(driveMetricsRef(uid));
+/** How many finished drives are waiting to reach the server. */
+export async function getPendingDriveCount(uid) {
+  if (!uid) return 0;
+  return (await readPendingDrives(uid)).length;
+}
+
+async function queuePendingDrive(uid, entry) {
+  const list = await readPendingDrives(uid);
+  if (list.some((item) => item.driveId === entry.driveId)) return;
+  list.push(entry);
+  await writePendingDrives(uid, list);
+}
+
+async function commitDriveBatch(uid, { driveId, metrics, pointsEarned, wasDistracted }) {
+  const driveRef = doc(db, "users", uid, DRIVE_METRICS_COLLECTION, driveId);
   const userRef = doc(db, "users", uid);
 
   const batch = writeBatch(db);
@@ -560,7 +707,7 @@ export async function finalizeDriveWrite(uid, { metrics, pointsEarned = 0, wasDi
   batch.set(
     userRef,
     {
-      points: increment(points),
+      points: increment(Number(pointsEarned) || 0),
       drivingStreak: wasDistracted ? 0 : increment(1),
       totalDrives: increment(1),
       lastDriveAt: serverTimestamp(),
@@ -571,14 +718,93 @@ export async function finalizeDriveWrite(uid, { metrics, pointsEarned = 0, wasDi
 
   await batch.commit();
   invalidateUserCache(uid);
+}
 
-  const summary = await getUserSummary(uid, { force: true });
-  const total = Number(summary?.points) || 0;
+/**
+ * The single write path used when a drive ends.
+ *
+ * Previously this was four independent round trips (save metrics, read the user document,
+ * write the streak, and later a points write from the dashboard). Any of them could land
+ * without the others, the streak read/modify/write raced with itself, and points only
+ * reached the server if the user happened to open the dashboard afterwards. It is one
+ * atomic batch with server-side increments now, so a killed app cannot lose or duplicate
+ * one half of it.
+ *
+ * If the commit fails - no signal at the end of a drive is the common case - the drive is
+ * queued in AsyncStorage under a client-chosen document id and retried on the next app
+ * launch and the next drive start. The document id is chosen up front so a retry after a
+ * lost response overwrites the same record instead of creating a second one, and the
+ * retry checks for it before re-applying the profile increments.
+ *
+ * Returns { driveId, totalPoints, streak, queued }.
+ */
+export async function finalizeDriveWrite(uid, { metrics, pointsEarned = 0, wasDistracted = false }) {
+  if (!uid) return null;
+
+  const driveId = doc(driveMetricsRef(uid)).id;
+  const entry = {
+    driveId,
+    metrics,
+    pointsEarned: Number(pointsEarned) || 0,
+    wasDistracted: Boolean(wasDistracted),
+    queuedAt: Date.now(),
+  };
+
   try {
-    await AsyncStorage.setItem(getPointsStorageKey(uid), String(total));
-  } catch {}
+    await commitDriveBatch(uid, entry);
+  } catch (err) {
+    console.error("Drive finalization failed; queued for retry:", err);
+    await queuePendingDrive(uid, entry);
+    return { driveId, totalPoints: null, streak: null, queued: true };
+  }
 
-  return { driveId: driveRef.id, totalPoints: total, streak: summary?.drivingStreak ?? 0 };
+  const { status, data } = await readUserSummary(uid, { force: true });
+  const total = status === READ_OK ? Number(data?.points) || 0 : null;
+  if (total !== null) await cachePointsIfHigher(uid, total);
+
+  return {
+    driveId,
+    totalPoints: total,
+    streak: data?.drivingStreak ?? null,
+    queued: false,
+  };
+}
+
+/**
+ * Retry every queued drive. Safe to call on every launch and every drive start: a drive
+ * whose record already exists on the server is dropped from the queue without re-applying
+ * its points, so a lost response cannot become double credit.
+ *
+ * Returns { flushed, remaining }.
+ */
+export async function flushPendingDriveWrites(uid) {
+  if (!uid) return { flushed: 0, remaining: 0 };
+
+  const pending = await readPendingDrives(uid);
+  if (pending.length === 0) return { flushed: 0, remaining: 0 };
+
+  const remaining = [];
+  let flushed = 0;
+
+  for (const entry of pending) {
+    try {
+      const existing = await getDoc(
+        doc(db, "users", uid, DRIVE_METRICS_COLLECTION, entry.driveId)
+      );
+      if (existing.exists()) {
+        flushed++;
+        continue;
+      }
+      await commitDriveBatch(uid, entry);
+      flushed++;
+    } catch (err) {
+      console.warn("Could not flush a pending drive; will retry later:", err);
+      remaining.push(entry);
+    }
+  }
+
+  await writePendingDrives(uid, remaining);
+  return { flushed, remaining: remaining.length };
 }
 
 /**

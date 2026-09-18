@@ -21,17 +21,37 @@ const {
   assertFails,
   assertSucceeds,
 } = require("@firebase/rules-unit-testing");
+const {
+  doc,
+  collection,
+  getDoc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  orderBy,
+  limit,
+  where,
+  writeBatch,
+  serverTimestamp,
+  increment,
+  deleteField,
+} = require("firebase/firestore");
 
 const RULES_PATH = path.resolve(__dirname, "..", "..", "firestore.rules");
 
 const ALICE = "alice";
 const BOB = "bob";
 const MALLORY = "mallory";
+const GHOST = "ghost"; // in a legacy group, but never had a position written
 const GROUP = "FAMILY01";
+const LEGACY_GROUP = "OLDCODE1";
 
 let testEnv;
 
-jest.setTimeout(30000);
+jest.setTimeout(60000);
 
 beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
@@ -52,12 +72,19 @@ beforeEach(async () => {
   await testEnv.clearFirestore();
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    await db.doc(`users/${ALICE}`).set({username: "alice", points: 100, groupId: GROUP});
-    await db.doc(`users/${BOB}`).set({username: "bob", points: 50, groupId: GROUP});
-    await db.doc(`users/${MALLORY}`).set({username: "mallory", points: 0, groupId: null});
-    await db.doc(`users/${ALICE}/private/push`).set({token: "ExponentPushToken[x]"});
-    await db.doc(`users/${ALICE}/private/contacts`).set({contacts: [{name: "Mum", phone: "1"}]});
-    await db.doc(`groups/${GROUP}`).set({
+
+    await setDoc(doc(db, "users", ALICE), {username: "alice", points: 100});
+    await setDoc(doc(db, "users", BOB), {username: "bob", points: 50});
+    await setDoc(doc(db, "users", MALLORY), {username: "mallory", points: 0});
+    await setDoc(doc(db, "users", GHOST), {username: "ghost", points: 0});
+
+    await setDoc(doc(db, "users", ALICE, "private", "info"), {groupId: GROUP});
+    await setDoc(doc(db, "users", ALICE, "private", "push"), {token: "ExponentPushToken[x]"});
+    await setDoc(doc(db, "users", ALICE, "private", "contacts"), {
+      contacts: [{name: "Mum", phone: "1"}],
+    });
+
+    await setDoc(doc(db, "groups", GROUP), {
       groupName: "Family",
       createdBy: ALICE,
       members: [ALICE, BOB],
@@ -67,35 +94,83 @@ beforeEach(async () => {
       },
       savedLocations: [],
     });
-    await db.doc("usernames/alice").set({uid: ALICE, username: "alice"});
-    await db.doc("apikeys/here").set({key: "secret"});
-    await db.doc("geocache/1_2").set({items: []});
+
+    // A group from before `members` existed: membership is implied by memberLocations.
+    await setDoc(doc(db, "groups", LEGACY_GROUP), {
+      groupName: "Old Family",
+      createdBy: ALICE,
+      memberLocations: {
+        [ALICE]: {latitude: 5, longitude: 6, speed: 0, emergency: false},
+      },
+      savedLocations: [{name: "Home", address: "1 Road", createdBy: ALICE}],
+    });
+
+    await setDoc(doc(db, "usernames", "alice"), {uid: ALICE, username: "alice"});
+    await setDoc(doc(db, "apikeys", "here"), {key: "secret"});
+    await setDoc(doc(db, "geocache", "1_2"), {items: []});
   });
 });
 
 const as = (uid) => testEnv.authenticatedContext(uid).firestore();
 const anon = () => testEnv.unauthenticatedContext().firestore();
 
+/* ------------------------------------------------------------------ *
+ * The enumeration attack this data model exists to prevent
+ * ------------------------------------------------------------------ */
+
+describe("group code enumeration", () => {
+  test("a group id is not readable from anybody's public profile", async () => {
+    const snap = await getDoc(doc(as(MALLORY), "users", ALICE));
+    expect(snap.data().groupId).toBeUndefined();
+  });
+
+  test("a listing of users exposes no group ids", async () => {
+    const snap = await getDocs(
+      query(collection(as(MALLORY), "users"), orderBy("points", "desc"), limit(50)),
+    );
+    snap.forEach((d) => expect(d.data().groupId).toBeUndefined());
+  });
+
+  test("nobody can read another user's private profile to find their group", async () => {
+    await assertFails(getDoc(doc(as(MALLORY), "users", ALICE, "private", "info")));
+  });
+
+  test("groupId can no longer be written back onto a public profile", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), {groupId: GROUP}));
+  });
+
+  test("the legacy public groupId may still be deleted (the migration)", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "users", ALICE), {groupId: GROUP});
+    });
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), {groupId: deleteField()}));
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Groups
+ * ------------------------------------------------------------------ */
+
 describe("groups", () => {
   test("a member can read their group", async () => {
-    await assertSucceeds(as(ALICE).doc(`groups/${GROUP}`).get());
+    await assertSucceeds(getDoc(doc(as(ALICE), "groups", GROUP)));
   });
 
   test("a signed-in non-member cannot read a group", async () => {
-    await assertFails(as(MALLORY).doc(`groups/${GROUP}`).get());
+    await assertFails(getDoc(doc(as(MALLORY), "groups", GROUP)));
   });
 
   test("an anonymous user cannot read a group", async () => {
-    await assertFails(anon().doc(`groups/${GROUP}`).get());
+    await assertFails(getDoc(doc(anon(), "groups", GROUP)));
   });
 
   test("groups cannot be listed", async () => {
-    await assertFails(as(ALICE).collection("groups").get());
+    await assertFails(getDocs(collection(as(ALICE), "groups")));
   });
 
   test("a member can write their own location", async () => {
     await assertSucceeds(
-      as(ALICE).doc(`groups/${GROUP}`).update({
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
         [`memberLocations.${ALICE}.latitude`]: 10,
         [`memberLocations.${ALICE}.longitude`]: 20,
       }),
@@ -104,24 +179,19 @@ describe("groups", () => {
 
   test("a member cannot write another member's location", async () => {
     await assertFails(
-      as(ALICE).doc(`groups/${GROUP}`).update({
-        [`memberLocations.${BOB}.latitude`]: 10,
-      }),
+      updateDoc(doc(as(ALICE), "groups", GROUP), {[`memberLocations.${BOB}.latitude`]: 10}),
     );
   });
 
-  test("a member cannot rename the group", async () => {
-    await assertFails(as(ALICE).doc(`groups/${GROUP}`).update({groupName: "Hijacked"}));
+  test("a member cannot rename or delete the group", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "groups", GROUP), {groupName: "Hijacked"}));
+    await assertFails(deleteDoc(doc(as(ALICE), "groups", GROUP)));
   });
 
-  test("a member cannot delete the group", async () => {
-    await assertFails(as(ALICE).doc(`groups/${GROUP}`).delete());
-  });
-
-  test("a stranger with the code may join by adding only themselves", async () => {
+  test("a stranger who knows the code may join by adding only themselves", async () => {
     await assertSucceeds(
-      as(MALLORY).doc(`groups/${GROUP}`).update({
-        members: ["alice", "bob", MALLORY],
+      updateDoc(doc(as(MALLORY), "groups", GROUP), {
+        members: [ALICE, BOB, MALLORY],
         [`memberLocations.${MALLORY}`]: {
           latitude: null, longitude: null, speed: 0, emergency: false,
         },
@@ -131,36 +201,34 @@ describe("groups", () => {
 
   test("a stranger cannot join on someone else's behalf", async () => {
     await assertFails(
-      as(MALLORY).doc(`groups/${GROUP}`).update({
-        members: ["alice", "bob", "eve"],
-      }),
+      updateDoc(doc(as(MALLORY), "groups", GROUP), {members: [ALICE, BOB, "eve"]}),
     );
   });
 
   test("a stranger cannot remove existing members while joining", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "groups", GROUP), {members: [MALLORY]}));
+  });
+
+  test("a joiner cannot also change the shared places", async () => {
     await assertFails(
-      as(MALLORY).doc(`groups/${GROUP}`).update({members: [MALLORY]}),
+      updateDoc(doc(as(MALLORY), "groups", GROUP), {
+        members: [ALICE, BOB, MALLORY],
+        savedLocations: [{name: "x", address: "y", createdBy: MALLORY}],
+      }),
     );
   });
 
-  test("a member can leave", async () => {
-    await assertSucceeds(
-      as(BOB).doc(`groups/${GROUP}`).update({members: [ALICE]}),
-    );
-  });
-
-  test("a member cannot remove another member", async () => {
-    await assertFails(
-      as(ALICE).doc(`groups/${GROUP}`).update({members: [ALICE]}),
-    );
+  test("a member can leave; a member cannot remove someone else", async () => {
+    await assertSucceeds(updateDoc(doc(as(BOB), "groups", GROUP), {members: [ALICE]}));
+    await assertFails(updateDoc(doc(as(ALICE), "groups", GROUP), {members: [ALICE]}));
   });
 
   test("creating a group requires being its only member and its creator", async () => {
     await assertSucceeds(
-      as(MALLORY).doc("groups/NEWGROUP").set({
+      setDoc(doc(as(MALLORY), "groups", "NEWGROUP"), {
         groupName: "Mine",
         createdBy: MALLORY,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
         members: [MALLORY],
         memberLocations: {[MALLORY]: {latitude: null, longitude: null, speed: 0}},
         savedLocations: [],
@@ -170,81 +238,356 @@ describe("groups", () => {
 
   test("a group cannot be created on someone else's behalf", async () => {
     await assertFails(
-      as(MALLORY).doc("groups/OTHER").set({
+      setDoc(doc(as(MALLORY), "groups", "OTHER"), {
         groupName: "Theirs",
         createdBy: ALICE,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
         members: [ALICE],
         memberLocations: {},
         savedLocations: [],
       }),
     );
   });
+
+  test("a group cannot be created with a client-chosen creation time", async () => {
+    await assertFails(
+      setDoc(doc(as(MALLORY), "groups", "BADTIME"), {
+        groupName: "Mine",
+        createdBy: MALLORY,
+        createdAt: new Date(),
+        members: [MALLORY],
+        memberLocations: {[MALLORY]: {latitude: null, longitude: null, speed: 0}},
+        savedLocations: [],
+      }),
+    );
+  });
 });
+
+/* ------------------------------------------------------------------ *
+ * Legacy groups (no members array)
+ * ------------------------------------------------------------------ */
+
+describe("legacy groups without a members array", () => {
+  test("an implied member can still read it", async () => {
+    await assertSucceeds(getDoc(doc(as(ALICE), "groups", LEGACY_GROUP)));
+  });
+
+  test("a non-member still cannot", async () => {
+    await assertFails(getDoc(doc(as(MALLORY), "groups", LEGACY_GROUP)));
+    await assertFails(getDoc(doc(as(GHOST), "groups", LEGACY_GROUP)));
+  });
+
+  test("an implied member can write their location", async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "groups", LEGACY_GROUP), {
+        [`memberLocations.${ALICE}.latitude`]: 7,
+      }),
+    );
+  });
+
+  test("an implied member can edit the shared places", async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "groups", LEGACY_GROUP), {savedLocations: []}),
+    );
+  });
+
+  test("somebody with the code can join, creating the members array", async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(MALLORY), "groups", LEGACY_GROUP), {
+        members: [MALLORY],
+        [`memberLocations.${MALLORY}`]: {
+          latitude: null, longitude: null, speed: 0, emergency: false,
+        },
+      }),
+    );
+  });
+
+  test("an implied member can leave", async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "groups", LEGACY_GROUP), {
+        members: [],
+        [`memberLocations.${ALICE}`]: deleteField(),
+      }),
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Emergencies
+ * ------------------------------------------------------------------ */
+
+describe("emergency flag", () => {
+  test("a member can raise and clear their own emergency", async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${ALICE}.emergency`]: true,
+        [`memberLocations.${ALICE}.latitude`]: 12,
+        [`memberLocations.${ALICE}.longitude`]: 34,
+      }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${ALICE}.emergency`]: false,
+      }),
+    );
+  });
+
+  test("a member cannot clear somebody else's emergency", async () => {
+    await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${BOB}.emergency`]: false,
+      }),
+    );
+  });
+
+  test("a non-member cannot raise an emergency in a group", async () => {
+    await assertFails(
+      updateDoc(doc(as(MALLORY), "groups", GROUP), {
+        [`memberLocations.${MALLORY}.emergency`]: true,
+      }),
+    );
+  });
+
+  test("emergency must be a boolean and coordinates must be in range", async () => {
+    await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${ALICE}.emergency`]: "yes",
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${ALICE}.latitude`]: 999,
+      }),
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Users
+ * ------------------------------------------------------------------ */
 
 describe("users", () => {
   test("the leaderboard can read other users", async () => {
-    await assertSucceeds(as(MALLORY).doc(`users/${ALICE}`).get());
-    await assertSucceeds(as(MALLORY).collection("users").orderBy("points", "desc").limit(50).get());
+    await assertSucceeds(getDoc(doc(as(MALLORY), "users", ALICE)));
+    await assertSucceeds(
+      getDocs(query(collection(as(MALLORY), "users"), orderBy("points", "desc"), limit(50))),
+    );
+  });
+
+  test("the rank count query is allowed", async () => {
+    await assertSucceeds(
+      getDocs(query(collection(as(MALLORY), "users"), where("points", ">", 10))),
+    );
   });
 
   test("private data is owner-only", async () => {
-    await assertSucceeds(as(ALICE).doc(`users/${ALICE}/private/push`).get());
-    await assertFails(as(MALLORY).doc(`users/${ALICE}/private/push`).get());
-    await assertFails(as(MALLORY).doc(`users/${ALICE}/private/contacts`).get());
+    await assertSucceeds(getDoc(doc(as(ALICE), "users", ALICE, "private", "push")));
+    await assertFails(getDoc(doc(as(MALLORY), "users", ALICE, "private", "push")));
+    await assertFails(getDoc(doc(as(MALLORY), "users", ALICE, "private", "contacts")));
+    await assertFails(getDoc(doc(as(MALLORY), "users", ALICE, "private", "info")));
   });
 
   test("a user cannot write another user's profile", async () => {
-    await assertFails(as(MALLORY).doc(`users/${ALICE}`).update({points: 0}));
+    await assertFails(updateDoc(doc(as(MALLORY), "users", ALICE), {points: 0}));
   });
 
   test("a push token cannot be written back onto the public profile", async () => {
-    await assertFails(as(ALICE).doc(`users/${ALICE}`).update({pushToken: "ExponentPushToken[y]"}));
+    await assertFails(
+      updateDoc(doc(as(ALICE), "users", ALICE), {pushToken: "ExponentPushToken[y]"}),
+    );
   });
 
   test("trusted contacts cannot be written onto the public profile", async () => {
     await assertFails(
-      as(ALICE).doc(`users/${ALICE}`).update({trustedContacts: [{name: "x", phone: "1"}]}),
+      updateDoc(doc(as(ALICE), "users", ALICE), {trustedContacts: [{name: "x", phone: "1"}]}),
     );
   });
 
   test("the legacy private fields may be deleted", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await ctx.firestore().doc(`users/${ALICE}`).update({pushToken: "old"});
+      await updateDoc(doc(ctx.firestore(), "users", ALICE), {pushToken: "old"});
     });
-    const {deleteField} = require("firebase/firestore");
-    await assertSucceeds(
-      as(ALICE).doc(`users/${ALICE}`).update({pushToken: deleteField()}),
-    );
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), {pushToken: deleteField()}));
+  });
+
+  test("an account carrying a legacy field can still make ordinary writes", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "users", ALICE), {
+        pushToken: "old",
+        trustedContacts: [{name: "x", phone: "1"}],
+        groupId: GROUP,
+      });
+    });
+    // The whole resulting document still contains all three; only the touched key matters.
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), {points: 150}));
   });
 
   test("points cannot go down", async () => {
-    await assertFails(as(ALICE).doc(`users/${ALICE}`).update({points: 1}));
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), {points: 1}));
   });
 
   test("points cannot jump implausibly in one write", async () => {
-    await assertFails(as(ALICE).doc(`users/${ALICE}`).update({points: 1000000}));
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), {points: 1000000}));
   });
 
-  test("a normal drive award is allowed", async () => {
-    await assertSucceeds(as(ALICE).doc(`users/${ALICE}`).update({points: 140}));
+  test("a long drive's points are accepted", async () => {
+    // ~14 hours of driving at one point per 2.5 s. The old 2000 cap rejected anything
+    // past ~83 minutes and took the whole finalization batch down with it.
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), "users", ALICE), {points: increment(19000)}),
+    );
   });
 
   test("unknown fields are rejected", async () => {
-    await assertFails(as(ALICE).doc(`users/${ALICE}`).update({isAdmin: true}));
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), {isAdmin: true}));
   });
 
   test("a user document cannot be deleted", async () => {
-    await assertFails(as(ALICE).doc(`users/${ALICE}`).delete());
+    await assertFails(deleteDoc(doc(as(ALICE), "users", ALICE)));
   });
 });
 
-describe("drive metrics", () => {
-  const {serverTimestamp} = require("firebase/firestore");
+/* ------------------------------------------------------------------ *
+ * Sign-up and rename
+ * ------------------------------------------------------------------ */
+
+describe("sign-up and rename", () => {
+  const NEWBIE = "newbie";
+
+  test("a new account can claim a name and create its profile", async () => {
+    const db = as(NEWBIE);
+    await assertSucceeds(
+      setDoc(doc(db, "usernames", "newbie"), {
+        uid: NEWBIE,
+        username: "newbie",
+        createdAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(
+      setDoc(
+        doc(db, "users", NEWBIE),
+        {username: "newbie", usernameLower: "newbie"},
+        {merge: true},
+      ),
+    );
+    await assertSucceeds(
+      setDoc(
+        doc(db, "users", NEWBIE),
+        {
+          points: 0,
+          drivingStreak: 0,
+          totalDrives: 0,
+          photoURL: null,
+          isDriving: false,
+          createdAt: serverTimestamp(),
+        },
+        {merge: true},
+      ),
+    );
+    await assertSucceeds(
+      setDoc(doc(db, "users", NEWBIE, "private", "info"), {email: "a@b.c"}),
+    );
+  });
+
+  test("a rename updates the claim and the profile", async () => {
+    const db = as(ALICE);
+    await assertSucceeds(
+      setDoc(doc(db, "usernames", "alice2"), {
+        uid: ALICE,
+        username: "alice2",
+        createdAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(
+      setDoc(
+        doc(db, "users", ALICE),
+        {username: "alice2", usernameLower: "alice2"},
+        {merge: true},
+      ),
+    );
+    await assertSucceeds(deleteDoc(doc(db, "usernames", "alice")));
+  });
+
+  test("a username over the length limit is refused", async () => {
+    await assertFails(
+      setDoc(doc(as(MALLORY), "usernames", "a".repeat(17)), {
+        uid: MALLORY,
+        username: "a".repeat(17),
+        createdAt: serverTimestamp(),
+      }),
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Drive finalization
+ * ------------------------------------------------------------------ */
+
+describe("drive finalization", () => {
+  test("the drive record and the profile increments commit as one batch", async () => {
+    const db = as(ALICE);
+    const batch = writeBatch(db);
+
+    batch.set(doc(collection(db, "users", ALICE, "drivemetrics")), {
+      timestamp: serverTimestamp(),
+      points: 42,
+      duration: 900,
+      distracted: 0,
+      avgSpeed: 30,
+      avgSpeedingMargin: 0,
+      suddenStops: 1,
+      suddenAccelerations: 0,
+      phoneUsageTime: 0,
+      totalDistance: 12000,
+      speedingEvents: 0,
+    });
+    batch.set(
+      doc(db, "users", ALICE),
+      {
+        points: increment(42),
+        drivingStreak: increment(1),
+        totalDrives: increment(1),
+        lastDriveAt: serverTimestamp(),
+        isDriving: false,
+      },
+      {merge: true},
+    );
+
+    await assertSucceeds(batch.commit());
+  });
+
+  test("a distracted drive resets the streak in the same batch", async () => {
+    const db = as(ALICE);
+    const batch = writeBatch(db);
+    batch.set(doc(collection(db, "users", ALICE, "drivemetrics")), {
+      timestamp: serverTimestamp(),
+      points: 5,
+      duration: 120,
+      distracted: 3,
+    });
+    batch.set(
+      doc(db, "users", ALICE),
+      {points: increment(5), drivingStreak: 0, totalDrives: increment(1), isDriving: false},
+      {merge: true},
+    );
+    await assertSucceeds(batch.commit());
+  });
+
+  test("a batch whose profile half is invalid fails ENTIRELY", async () => {
+    const db = as(ALICE);
+    const batch = writeBatch(db);
+    batch.set(doc(collection(db, "users", ALICE, "drivemetrics")), {
+      timestamp: serverTimestamp(),
+      points: 10,
+      duration: 60,
+    });
+    batch.set(doc(db, "users", ALICE), {points: 9999999}, {merge: true});
+    await assertFails(batch.commit());
+  });
 
   test("a user can write their own drive with a server timestamp", async () => {
     await assertSucceeds(
-      as(ALICE).collection(`users/${ALICE}/drivemetrics`).add({
+      addDoc(collection(as(ALICE), "users", ALICE, "drivemetrics"), {
         timestamp: serverTimestamp(),
         points: 12,
         duration: 600,
@@ -254,9 +597,19 @@ describe("drive metrics", () => {
     );
   });
 
+  test("a legacy boolean `distracted` is still accepted", async () => {
+    await assertSucceeds(
+      addDoc(collection(as(ALICE), "users", ALICE, "drivemetrics"), {
+        timestamp: serverTimestamp(),
+        points: 3,
+        distracted: true,
+      }),
+    );
+  });
+
   test("a client-chosen timestamp is rejected", async () => {
     await assertFails(
-      as(ALICE).collection(`users/${ALICE}/drivemetrics`).add({
+      addDoc(collection(as(ALICE), "users", ALICE, "drivemetrics"), {
         timestamp: new Date(),
         points: 12,
         duration: 600,
@@ -265,9 +618,9 @@ describe("drive metrics", () => {
   });
 
   test("another user cannot read or write drive metrics", async () => {
-    await assertFails(as(MALLORY).collection(`users/${ALICE}/drivemetrics`).get());
+    await assertFails(getDocs(collection(as(MALLORY), "users", ALICE, "drivemetrics")));
     await assertFails(
-      as(MALLORY).collection(`users/${ALICE}/drivemetrics`).add({
+      addDoc(collection(as(MALLORY), "users", ALICE, "drivemetrics"), {
         timestamp: serverTimestamp(),
         points: 1,
       }),
@@ -275,74 +628,69 @@ describe("drive metrics", () => {
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * Usernames registry
+ * ------------------------------------------------------------------ */
+
 describe("usernames", () => {
   test("availability can be checked while signed out", async () => {
-    await assertSucceeds(anon().doc("usernames/alice").get());
+    await assertSucceeds(getDoc(doc(anon(), "usernames", "alice")));
   });
 
   test("the registry cannot be listed", async () => {
-    await assertFails(as(ALICE).collection("usernames").get());
+    await assertFails(getDocs(collection(as(ALICE), "usernames")));
   });
 
-  test("a user can claim a free name", async () => {
-    await assertSucceeds(
-      as(MALLORY).doc("usernames/mallory").set({
-        uid: MALLORY,
-        username: "mallory",
-        createdAt: new Date(),
-      }),
-    );
-  });
-
-  test("a claim must match the document id", async () => {
+  test("a claim must match the document id and the caller", async () => {
     await assertFails(
-      as(MALLORY).doc("usernames/mallory").set({
+      setDoc(doc(as(MALLORY), "usernames", "mallory"), {
         uid: MALLORY,
         username: "somebodyelse",
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
       }),
     );
-  });
-
-  test("a claim cannot be made for another uid", async () => {
     await assertFails(
-      as(MALLORY).doc("usernames/newname").set({
+      setDoc(doc(as(MALLORY), "usernames", "newname"), {
         uid: ALICE,
         username: "newname",
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
       }),
     );
   });
 
-  test("an existing claim cannot be stolen", async () => {
+  test("an existing claim cannot be stolen or deleted by others", async () => {
     await assertFails(
-      as(MALLORY).doc("usernames/alice").set({
+      setDoc(doc(as(MALLORY), "usernames", "alice"), {
         uid: MALLORY,
         username: "alice",
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
       }),
     );
-    await assertFails(as(MALLORY).doc("usernames/alice").delete());
+    await assertFails(deleteDoc(doc(as(MALLORY), "usernames", "alice")));
   });
 
   test("an owner can release their own claim", async () => {
-    await assertSucceeds(as(ALICE).doc("usernames/alice").delete());
+    await assertSucceeds(deleteDoc(doc(as(ALICE), "usernames", "alice")));
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * Server-only collections
+ * ------------------------------------------------------------------ */
+
 describe("server-only collections", () => {
   test("api keys are unreachable", async () => {
-    await assertFails(as(ALICE).doc("apikeys/here").get());
-    await assertFails(anon().doc("apikeys/here").get());
+    await assertFails(getDoc(doc(as(ALICE), "apikeys", "here")));
+    await assertFails(getDoc(doc(anon(), "apikeys", "here")));
   });
 
   test("the shared geocode cache is unreachable", async () => {
-    await assertFails(as(ALICE).doc("geocache/1_2").get());
-    await assertFails(as(ALICE).doc("geocache/1_2").set({items: []}));
+    await assertFails(getDoc(doc(as(ALICE), "geocache", "1_2")));
+    await assertFails(setDoc(doc(as(ALICE), "geocache", "1_2"), {items: []}));
   });
 
   test("unknown collections are denied", async () => {
-    await assertFails(as(ALICE).doc("userinfo/alice").get());
-    await assertFails(as(ALICE).doc("anythingelse/doc").set({a: 1}));
+    await assertFails(getDoc(doc(as(ALICE), "userinfo", "alice")));
+    await assertFails(setDoc(doc(as(ALICE), "anythingelse", "doc"), {a: 1}));
   });
 });

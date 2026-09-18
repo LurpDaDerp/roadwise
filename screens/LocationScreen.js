@@ -5,7 +5,8 @@ import * as Location from "expo-location";
 import { getFirestore, doc, onSnapshot, collection, getDocs, query, where, limit } from "firebase/firestore";
 import { fetchHereAutocomplete } from "../utils/here";
 import { auth } from '../utils/firebase';
-import { getUserSummary } from "../utils/firestore";
+import { getUserSummary, getGroupIdForUser } from "../utils/firestore";
+import { distanceMeters as getDistance } from "../utils/geo";
 import {
   createGroup,
   joinGroup,
@@ -228,22 +229,6 @@ function compareAddresses(addr1, addr2, threshold = 0.7) {
   const fractionMatched = matches / Math.min(tokens1.length, tokens2.length);
 
   return fractionMatched >= threshold;
-}
-
-function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3; // meters
-  const toRad = x => (x * Math.PI) / 180;
-
-  const φ1 = toRad(lat1);
-  const φ2 = toRad(lat2);
-  const Δφ = toRad(lat2 - lat1);
-  const Δλ = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(Δφ / 2) ** 2 +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 const CACHE_PREFIX = "addr_";
@@ -1129,13 +1114,16 @@ export default function LocationScreen() {
     const checkGroup = async () => {
       if (!user) return;
 
-      const data = await getUserSummary(user.uid);
+      // The group id is private now (it is the join code), so it comes from the owner-only
+      // profile document rather than the publicly readable one.
+      const [data, currentGroupId] = await Promise.all([
+        getUserSummary(user.uid),
+        getGroupIdForUser(user.uid),
+      ]);
       if (cancelled) return;
 
-      if (data) {
-        setUserData(data);
-        if (data.groupId) setGroupId(data.groupId);
-      }
+      if (data) setUserData(data);
+      if (currentGroupId) setGroupId(currentGroupId);
       setLoading(false);
     };
 
@@ -1250,7 +1238,16 @@ export default function LocationScreen() {
   const handleLeaveGroup = async () => {
     if (!groupId || !user) return;
 
-    await leaveGroup(user.uid, groupId);
+    try {
+      // Membership is removed from the group document first; if that fails the user is
+      // still in the group and must stay in it in the UI, or they would keep broadcasting
+      // their location to a group the app believes they left.
+      await leaveGroup(user.uid, groupId);
+    } catch (err) {
+      console.error("Could not leave the group:", err);
+      Alert.alert("Could not leave", "Please check your connection and try again.");
+      return;
+    }
 
     setGroupId(null);
     setMembers([]);
