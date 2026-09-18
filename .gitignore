@@ -2,13 +2,19 @@ node_modules/
 
 .expo/
 dist/
+.export-check/
 
 .firebase/
 
 GoogleService-Info.plist
+google-services.json
+
+# Environment files hold per-project client identifiers; .env.example is the template.
+.env
+.env.local
+.env.*.local
 
 .DS_Store
 Thumbs.db
 
 .claude/
-.expo/

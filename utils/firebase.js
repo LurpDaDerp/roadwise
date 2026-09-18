@@ -1,7 +1,8 @@
 // utils/firebase.js
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   initializeAuth,
+  getAuth,
   getReactNativePersistence,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
@@ -9,24 +10,25 @@ import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCZ6QB44EDzqaeOmBdaX8NxUtNITUivY8c",
-  authDomain: "roadcash-e05e1.firebaseapp.com",
-  projectId: "roadcash-e05e1",
-  storageBucket: "roadcash-e05e1.appspot.com",
-  messagingSenderId: "68093599355",
-  appId: "1:68093599355:web:218602c86a8cc6f43c0cde",
-  measurementId: "G-W5KBFD3WKZ",
-};
+import { firebaseConfig, assertFirebaseConfig } from "./config";
 
-const app = initializeApp(firebaseConfig);
+assertFirebaseConfig();
 
-const auth = initializeAuth(app, {
-  persistence: getReactNativePersistence(AsyncStorage),
-});
+// Guard against double initialization: Fast Refresh and the background location task can
+// both evaluate this module, and initializeAuth throws if called twice on the same app.
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+let auth;
+try {
+  auth = initializeAuth(app, {
+    persistence: getReactNativePersistence(AsyncStorage),
+  });
+} catch (err) {
+  auth = getAuth(app);
+}
 
 const db = getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
 
-export { auth, db, storage, functions };
+export { app, auth, db, storage, functions };

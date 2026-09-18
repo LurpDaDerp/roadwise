@@ -1,39 +1,283 @@
 rules_version = '2';
+
+// RoadCash Firestore security rules.
+//
+// Threat model
+// ------------
+// Anyone can create an account, so "signed in" is not an authorization decision. The two
+// things that must never be readable by an arbitrary account are (a) a family's live
+// location and emergency state and (b) a user's private data: their Expo push token, their
+// trusted contacts' phone numbers and their email address.
+//
+// Shape of the data this assumes
+// ------------------------------
+//   users/{uid}                        public profile  (username, points, streak, photo)
+//   users/{uid}/private/{doc}          owner only      (info, contacts, push, usage)
+//   users/{uid}/drivemetrics/{id}      owner only
+//   usernames/{lowercase}              uniqueness claim, existence is public
+//   groups/{groupId}                   members only
+//   apikeys/**, geocache/**            server only
+//
+// The user document is deliberately public-readable: the leaderboard ranks every user and
+// the group map shows other members' names and photos. That is only safe because nothing
+// private is stored on it any more - see users/{uid}/private below.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function isSignedIn() {
       return request.auth != null;
     }
-    
+
     function isSelf(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    /* ---------------------------------------------------------------- *
+     * Server-only collections
+     * ---------------------------------------------------------------- */
+
+    // API keys are Cloud Functions secrets; nothing client-side may touch this.
     match /apikeys/{document=**} {
       allow read, write: if false;
     }
 
+    // Shared reverse-geocode / speed-limit cache written by Cloud Functions only.
+    match /geocache/{cell} {
+      allow read, write: if false;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Username claims
+     *
+     * `get` is public because sign-up has to check a name before an account exists, and
+     * the only fact it exposes is whether a username is taken - which any sign-up form
+     * reveals anyway. Listing is denied so the registry cannot be enumerated.
+     * ---------------------------------------------------------------- */
+
+    match /usernames/{name} {
+      function claim() { return request.resource.data; }
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && claim().keys().hasOnly(['uid', 'username', 'createdAt'])
+        && claim().uid == request.auth.uid
+        && claim().username is string
+        && claim().username.size() > 0
+        && claim().username.size() <= 16
+        && claim().username.lower() == name;
+
+      allow update: if isSignedIn()
+        && resource.data.uid == request.auth.uid
+        && claim().uid == request.auth.uid
+        && claim().username.lower() == name;
+
+      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Users
+     * ---------------------------------------------------------------- */
 
     match /users/{userId} {
-      
-      allow read: if isSignedIn();
-      
-      allow write: if isSelf(userId);
+      function incoming() { return request.resource.data; }
+      function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
 
-      match /{sub=**} {
+      function profileKeys() {
+        return [
+          'username', 'usernameLower', 'points', 'drivingStreak', 'totalDrives',
+          'photoURL', 'groupId', 'isDriving', 'createdAt', 'lastDriveAt'
+        ];
+      }
+
+      // These two used to live here and held private data. They may still be DELETED
+      // (that is the migration), but never written again.
+      function legacyKeys() { return ['pushToken', 'trustedContacts']; }
+
+      function notRewritingLegacy() {
+        return !('pushToken' in incoming()) && !('trustedContacts' in incoming());
+      }
+
+      function validTypes() {
+        return (!('username' in incoming())
+                || (incoming().username is string && incoming().username.size() <= 16))
+          && (!('usernameLower' in incoming()) || incoming().usernameLower is string)
+          && (!('points' in incoming())
+                || (incoming().points is number && incoming().points >= 0))
+          && (!('drivingStreak' in incoming())
+                || (incoming().drivingStreak is number && incoming().drivingStreak >= 0))
+          && (!('totalDrives' in incoming())
+                || (incoming().totalDrives is number && incoming().totalDrives >= 0))
+          && (!('groupId' in incoming())
+                || incoming().groupId == null || incoming().groupId is string)
+          && (!('isDriving' in incoming()) || incoming().isDriving is bool)
+          && (!('photoURL' in incoming())
+                || incoming().photoURL == null || incoming().photoURL is string);
+      }
+
+      function validProfile() {
+        return incoming().keys().hasOnly(profileKeys().concat(legacyKeys()))
+          && notRewritingLegacy()
+          && validTypes();
+      }
+
+      // Points may only go up, and only by a plausible amount for one drive. This is a
+      // speed bump, not an anti-cheat system: awarding points from a Cloud Function is the
+      // only way to make them authoritative (see docs/BACKEND_AUDIT.md).
+      function pointsMovementOk() {
+        return !('points' in changedKeys())
+          || (incoming().points >= resource.data.get('points', 0)
+              && incoming().points <= resource.data.get('points', 0) + 2000);
+      }
+
+      // The leaderboard reads every user's username and points; the group map reads other
+      // members' username and photo. Both are list/get on this document.
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+
+      allow create: if isSelf(userId)
+        && validProfile()
+        && (!('points' in incoming()) || incoming().points <= 2000);
+
+      allow update: if isSelf(userId) && validProfile() && pointsMovementOk();
+      allow delete: if false;
+
+      // Push token, trusted contacts, email, per-day API usage counters.
+      match /private/{docId} {
         allow read, write: if isSelf(userId);
       }
-    }
 
-    match /groups/{groupId} {
-      
-      allow read, write: if isSignedIn();
-      
-      match /memberLocations/{locationUserId} {
-        allow read, write: if isSignedIn();
+      match /drivemetrics/{driveId} {
+        function drive() { return request.resource.data; }
+
+        function validDrive() {
+          return drive().keys().size() <= 30
+            && drive().timestamp == request.time
+            && (!('points' in drive())
+                  || (drive().points is number && drive().points >= 0 && drive().points <= 10000))
+            && (!('duration' in drive())
+                  || (drive().duration is number && drive().duration >= 0))
+            && (!('distracted' in drive()) || drive().distracted is number)
+            && (!('totalDistance' in drive()) || drive().totalDistance is number);
+        }
+
+        allow read: if isSelf(userId);
+        allow create: if isSelf(userId) && validDrive();
+        allow update: if false;
+        allow delete: if isSelf(userId);
       }
     }
+
+    /* ---------------------------------------------------------------- *
+     * Groups
+     *
+     * A group is readable only by its members. Membership is the `members` array;
+     * groups created before that field existed fall back to the keys of memberLocations
+     * so existing families are not locked out.
+     *
+     * Joining is the one write a non-member may make: adding exactly themselves. The
+     * client does not read the group first - it cannot - so an invalid code surfaces as
+     * not-found or permission-denied.
+     * ---------------------------------------------------------------- */
+
+    match /groups/{groupId} {
+      function incoming() { return request.resource.data; }
+      function currentMembers() { return resource.data.get('members', []); }
+      function currentLocations() { return resource.data.get('memberLocations', {}); }
+
+      function isMember() {
+        return isSignedIn()
+          && (request.auth.uid in currentMembers()
+              || request.auth.uid in currentLocations().keys());
+      }
+
+      function changedKeys() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+
+      function touchesOnlyOwnLocation() {
+        return !('memberLocations' in changedKeys())
+          || incoming().memberLocations.diff(currentLocations())
+               .affectedKeys().hasOnly([request.auth.uid]);
+      }
+
+      function ownLocationValid() {
+        return !('memberLocations' in changedKeys())
+          || !(request.auth.uid in incoming().memberLocations)
+          || (
+            incoming().memberLocations[request.auth.uid].keys()
+              .hasOnly(['latitude', 'longitude', 'speed', 'updatedAt', 'emergency'])
+            && (incoming().memberLocations[request.auth.uid].get('latitude', null) == null
+                || (incoming().memberLocations[request.auth.uid].latitude is number
+                    && incoming().memberLocations[request.auth.uid].latitude >= -90
+                    && incoming().memberLocations[request.auth.uid].latitude <= 90))
+            && (incoming().memberLocations[request.auth.uid].get('longitude', null) == null
+                || (incoming().memberLocations[request.auth.uid].longitude is number
+                    && incoming().memberLocations[request.auth.uid].longitude >= -180
+                    && incoming().memberLocations[request.auth.uid].longitude <= 180))
+            && (!('emergency' in incoming().memberLocations[request.auth.uid])
+                || incoming().memberLocations[request.auth.uid].emergency is bool)
+          );
+      }
+
+      function membersUnchanged() {
+        return !('members' in changedKeys());
+      }
+
+      function membersOnlyAddsSelf() {
+        return 'members' in changedKeys()
+          && incoming().members.hasAll(currentMembers())
+          && incoming().members.hasOnly(currentMembers().concat([request.auth.uid]))
+          && request.auth.uid in incoming().members;
+      }
+
+      function membersOnlyRemovesSelf() {
+        return 'members' in changedKeys()
+          && currentMembers().hasAll(incoming().members)
+          && !(request.auth.uid in incoming().members);
+      }
+
+      function savedLocationsValid() {
+        return !('savedLocations' in changedKeys())
+          || (incoming().savedLocations is list && incoming().savedLocations.size() <= 100);
+      }
+
+      allow get: if isMember();
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && incoming().keys().hasOnly(
+             ['groupName', 'createdBy', 'createdAt', 'members', 'memberLocations', 'savedLocations'])
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().members == [request.auth.uid]
+        && incoming().memberLocations.keys().hasOnly([request.auth.uid])
+        && incoming().savedLocations.size() == 0
+        && incoming().groupName is string
+        && incoming().groupName.size() > 0
+        && incoming().groupName.size() <= 40;
+
+      allow update: if isSignedIn()
+        // Immutable once created: name, owner, creation time.
+        && changedKeys().hasOnly(['members', 'memberLocations', 'savedLocations'])
+        && touchesOnlyOwnLocation()
+        && ownLocationValid()
+        && savedLocationsValid()
+        && (
+          // A member updating their own position, the shared places, or leaving.
+          (isMember() && (membersUnchanged() || membersOnlyRemovesSelf()))
+          // Someone joining with a valid code: adds only themselves, nothing else.
+          || (membersOnlyAddsSelf() && !('savedLocations' in changedKeys()))
+        );
+
+      allow delete: if false;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Everything else is denied.
+     * ---------------------------------------------------------------- */
 
     match /{document=**} {
       allow read, write: if false;
