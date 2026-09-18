@@ -326,3 +326,27 @@ test('createAppConfig sets exactly these options and stays valid', () => {
   assert.strictEqual(out.confidence, 'NONE');
   void Event;
 });
+
+test('validate() rejects an out-of-range phone option and accepts every default', () => {
+  const { validate, defaultConfig } = require('../config');
+  validate(defaultConfig());                                   // the reference defaults
+  validate(createAppConfig({}));                               // the app profile
+  const bad = [
+    { calibration: { stationary_weight: 1.4 } },
+    { calibration: { stationary_weight: -0.1 } },
+    { attention: { hard_left_driver_deg: 0.0 } },
+    { attention: { hard_left_passenger_deg: -65.0 } },
+    { drowsiness: { ear_open_freeze_s: -1.0 } },
+    { drowsiness: { ear_open_freeze_ratio: 0.0 } },
+    { drowsiness: { ear_open_freeze_ratio: 1.2 } },
+    { drowsiness: { perclos_blink_exclude_s: -0.25 } },
+    { drowsiness: { blink_stats_min_fps: -15.0 } },
+    { drowsiness: { perclos_advisory: 0.0 } },
+    { drowsiness: { perclos_advisory: 1.0 } },
+  ];
+  for (const patch of bad) {
+    assert.throws(() => validate(createConfig(patch)), /must be/, JSON.stringify(patch));
+  }
+  // null turns the asymmetric bound and the advisory off; that is the reference behaviour
+  validate(createConfig({ attention: { hard_left_driver_deg: null }, drowsiness: { perclos_advisory: null } }));
+});

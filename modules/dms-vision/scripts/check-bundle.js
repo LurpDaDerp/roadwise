@@ -18,8 +18,10 @@ const MODULE_DIR = path.resolve(__dirname, '..');
 const APP_DIR = path.resolve(MODULE_DIR, '..', '..');
 
 const FILES = ['face_landmarker.task', 'gaze_direct.onnx', 'gaze_direct.meta.json'];
+/** The copy every other one is compared against (and the one meta.json is read from). */
+const CANONICAL_LABEL = 'app assets';
 const LOCATIONS = [
-  { label: 'app assets', dir: path.join(APP_DIR, 'assets', 'models') },
+  { label: CANONICAL_LABEL, dir: path.join(APP_DIR, 'assets', 'models') },
   { label: 'ios bundle', dir: path.join(MODULE_DIR, 'ios', 'Resources') },
   { label: 'android assets', dir: path.join(MODULE_DIR, 'android', 'src', 'main', 'assets') },
 ];
@@ -43,7 +45,15 @@ for (const name of FILES) {
     perLocation.push({ label: location.label, file, digest: sha256(file) });
   }
   if (perLocation.length === 0) continue;
-  const reference = perLocation[0].digest;
+  // `assets/models/` is the canonical copy: the native bundles are copies OF it, so a mismatch
+  // must always be reported against it and never against whichever copy happened to be first.
+  const canonical = perLocation.find((entry) => entry.label === CANONICAL_LABEL);
+  if (!canonical) {
+    console.error(`MISSING  ${CANONICAL_LABEL} is the canonical copy of ${name}; nothing to compare against`);
+    failed = true;
+    continue;
+  }
+  const reference = canonical.digest;
   digests[name] = reference;
   for (const entry of perLocation) {
     const status = entry.digest === reference ? 'ok     ' : 'MISMATCH';
@@ -53,7 +63,8 @@ for (const name of FILES) {
 }
 
 // The meta file records the sha256 the deployment stack verified the ONNX graph against.
-const metaFile = path.join(LOCATIONS[0].dir, 'gaze_direct.meta.json');
+const canonicalDir = LOCATIONS.find((l) => l.label === CANONICAL_LABEL).dir;
+const metaFile = path.join(canonicalDir, 'gaze_direct.meta.json');
 if (fs.existsSync(metaFile)) {
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
   const declared = meta.onnx_sha256;

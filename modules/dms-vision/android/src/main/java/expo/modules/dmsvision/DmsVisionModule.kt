@@ -60,22 +60,25 @@ class DmsVisionModule : Module(), DmsVisionPipeline.FrameListener {
     OnDestroy {
       stopStatusTimer()
       unregisterThermalListener()
-      pipeline?.stop()
+      // Never block the main thread on a camera teardown (unbind + a MediaPipe graph close):
+      // OnDestroy runs on the main thread and stop() waits for the analysis thread to drain.
+      val current = pipeline
       pipeline = null
-      gaze.close()
+      Thread({
+        try {
+          current?.stop()
+        } catch (_: Exception) {
+          // ignore
+        }
+        gaze.close()
+      }, "DmsVisionTeardown").start()
     }
 
-    // Matches DETECTION_DESIGN section 3: "App state: inactive / background -> camera stopped".
-    // CameraX also unbinds by itself because the use case is bound to the activity lifecycle;
-    // stopping explicitly keeps the JS-visible state in sync.
-    OnActivityEntersBackground {
-      val current = pipeline
-      if (current != null && current.isRunning()) {
-        stopStatusTimer()
-        current.stop()
-        sendEvent("onStatus", statusPayload(stopped = true))
-      }
-    }
+    // NOTE (docs/dms/INTEGRATION.md §3): there is deliberately NO OnActivityEntersBackground
+    // handler.  The JS AppState listener is the single owner of the camera across app-state
+    // changes; with two owners the JS-visible state and the native session disagreed.  CameraX
+    // still unbinds by itself (the use case is bound to the activity lifecycle), and the
+    // CameraState observer reports that as an error the JS watchdog reacts to.
 
     Function("isAvailable") { true }
 

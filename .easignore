@@ -14,3 +14,13 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# ~14 MB of engine parity fixtures and the research notes: test data no app build ever loads.
+# onnx_parity.json (the once-per-run ONNX self-test, required by the hook) and
+# mirror_permutation_478.json are deliberately NOT excluded.
+dms/tests/fixtures/monitor_*.json
+dms/tests/fixtures/drowsiness_*.json
+dms/tests/fixtures/util_cases.json
+dms/tests/fixtures/gaze_inputs_*.json
+dms/tests/fixtures/features_cases.json
+docs/dms/research/

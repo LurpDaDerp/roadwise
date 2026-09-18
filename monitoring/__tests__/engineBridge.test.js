@@ -20,6 +20,7 @@ const { ALERT_SEVERITY, ALERT_TYPE, CALIBRATION_STATE, MONITOR_STATUS } = requir
 const {
   MonitoringBridge,
   EVENT_TO_ALERT,
+  fallbackAlertType,
   severityOf,
   DROWSINESS_HISTORY_MAX,
 } = require('../engineBridge');
@@ -579,4 +580,95 @@ test('a quiet synthetic drive stays silent end to end', () => {
   assert.strictEqual(m.alertCounts.warning, 0, `warnings ${JSON.stringify(m.alertsByType)}`);
   assert.strictEqual(m.alertCounts.critical, 0);
   assert.strictEqual(bridge.streakBreaking(), false);
+});
+
+// ------------------------------------------------------------------ the speed gate on INFO
+test('INFO alerts obey the engine speed gate while the vehicle is stationary', () => {
+  const { DriverMonitor } = require('../../dms/monitor');
+  const config = createAppConfig({});
+
+  const parked = new MonitoringBridge({ config, now: () => 1_000_000 });
+  parked.setSession('running');
+  const monitor = new DriverMonitor(config);
+  monitor.setVehicleSpeed(0);                       // stationary: the arbiter gates everything
+  parked.setMonitor(monitor);
+  parked.update(withEvent(out(20, { glance_class: 'cabin', glance_s: 1.0 }),
+    new Event(EventType.OFF_ROAD_GLANCE, 20, 65, 1.0), false));
+  assert.strictEqual(parked.snapshot().activeAlert, null, 'no banner while parked');
+  assert.strictEqual(parked.engineDetail().engineEpisodes[EventType.OFF_ROAD_GLANCE], 1,
+    'the engine episode is still counted as a diagnostic');
+
+  const moving = new MonitoringBridge({ config, now: () => 1_000_000 });
+  moving.setSession('running');
+  const monitor2 = new DriverMonitor(config);
+  monitor2.setVehicleSpeed(50);
+  moving.setMonitor(monitor2);
+  moving.update(withEvent(out(20, { glance_class: 'cabin', glance_s: 1.0 }),
+    new Event(EventType.OFF_ROAD_GLANCE, 20, 65, 1.0), false));
+  assert.strictEqual(moving.snapshot().activeAlert.type, ALERT_TYPE.OFF_ROAD_GLANCE);
+
+  // the closed-eye family is never gated (WARNINGS_DESIGN §2)
+  const closure = new MonitoringBridge({ config, now: () => 1_000_000 });
+  closure.setSession('running');
+  const monitor3 = new DriverMonitor(config);
+  monitor3.setVehicleSpeed(0);
+  closure.setMonitor(monitor3);
+  closure.update(withEvent(out(30, { openness: 0.05, glance_class: 'none' }),
+    new Event(EventType.MICROSLEEP, 30, 95, 1.6)));
+  assert.strictEqual(closure.snapshot().activeAlert.type, ALERT_TYPE.MICROSLEEP);
+});
+
+// ------------------------------------------------------------------ the mapping guard
+test('an unmapped WARNING / CRITICAL falls back to its family instead of being dropped', () => {
+  assert.strictEqual(fallbackAlertType(new Event(EventType.LONG_GLANCE, 1, 80, 3)), ALERT_TYPE.LONG_GLANCE);
+  assert.strictEqual(fallbackAlertType(new Event(EventType.EYES_CLOSED, 1, 100, 6)), ALERT_TYPE.EYES_CLOSED);
+  assert.strictEqual(fallbackAlertType(new Event(EventType.SEVERE_DROWSY, 1, 90, 0)), ALERT_TYPE.DROWSY);
+  // INFO stays unmapped: state and metrics only
+  assert.strictEqual(fallbackAlertType(new Event(EventType.OFF_ROAD_GLANCE, 1, 65, 1)), null);
+  assert.strictEqual(fallbackAlertType(new Event(EventType.HEAD_DOWN, 1, 60, 2, '', { audible: false })), null);
+
+  // a CRITICAL whose mapping disappeared still reaches the driver
+  const b = makeBridge();
+  const saved = EVENT_TO_ALERT[EventType.EYES_CLOSED];
+  delete EVENT_TO_ALERT[EventType.EYES_CLOSED];
+  try {
+    b.update(withEvent(out(50, { openness: 0.05, glance_class: 'none' }),
+      new Event(EventType.EYES_CLOSED, 50, 100, 6)));
+    assert.strictEqual(b.snapshot().activeAlert.severity, ALERT_SEVERITY.CRITICAL);
+  } finally {
+    EVENT_TO_ALERT[EventType.EYES_CLOSED] = saved;
+  }
+});
+
+// ------------------------------------------------------------------ frames stop
+test('expireAll ends every live episode without a frame, and a non-running session calls it', () => {
+  const b = makeBridge();
+  b.update(withEvent(out(10, { openness: 0.05, glance_class: 'none' }),
+    new Event(EventType.EYES_CLOSED, 10, 100, 6)));
+  assert.ok(b.snapshot().activeAlert, 'the overlay is live');
+  b.expireAll();
+  assert.strictEqual(b.snapshot().activeAlert, null, 'expireAll clears it');
+  assert.strictEqual(b.episodes.size, 0);
+
+  const c = makeBridge();
+  c.update(withEvent(out(10, { openness: 0.05, glance_class: 'none' }),
+    new Event(EventType.EYES_CLOSED, 10, 100, 6)));
+  c.setSession('starting');                        // the camera stalled / went to the background
+  assert.strictEqual(c.snapshot().activeAlert, null, 'a stalled camera cannot leave a siren up');
+  assert.strictEqual(c.snapshot().status, MONITOR_STATUS.STARTING);
+});
+
+// ------------------------------------------------------------------ re-render budget
+test('60 s of identical outputs bumps the version a bounded number of times', () => {
+  const b = makeBridge();
+  const first = out(0);
+  b.update(first);
+  const start = b.version;
+  for (let i = 1; i <= 1200; i++) {                // 60 s at 20 fps, nothing changes but `t`
+    b.update(out(i / 20));
+  }
+  const bumps = b.version - start;
+  // one drowsiness-history sample every 10 s (6) plus a little slack; NOT one per frame
+  assert.ok(bumps <= 12, `${bumps} version bumps in 60 s of identical frames`);
+  assert.ok(bumps >= 5, `${bumps} bumps: the 10 s history samples must still publish`);
 });

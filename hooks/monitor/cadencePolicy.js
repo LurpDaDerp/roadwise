@@ -77,7 +77,10 @@ function createCadencePolicy(options = {}) {
    *   batteryLevel  0..1 or null
    *   batteryCharging boolean|null
    * @returns {{targetFps:number, paused:boolean, reason:string, changed:boolean,
-   *            thermal:string, resume:boolean}}
+   *            thermal:string, resume:boolean, noFace:boolean}}
+   *   `noFace` is the CONDITION (no face for longer than `noFaceS`), not the winning reason: a
+   *   hot or stationary phone has no face too, and the native idle mode must follow the
+   *   condition rather than which throttle happened to name the pill.
    */
   function update(s) {
     const t = Number.isFinite(s.t) ? s.t : 0;
@@ -121,16 +124,20 @@ function createCadencePolicy(options = {}) {
       consider(cfg.reducedFps, 'lowBattery');
     }
     if (stationarySince !== null && t - stationarySince > cfg.stationaryS) consider(cfg.reducedFps, 'stationary');
-    if (lastFaceS !== null && t - lastFaceS > cfg.noFaceS) consider(cfg.idleFps, 'noFace');
+    const noFace = lastFaceS !== null && t - lastFaceS > cfg.noFaceS;
+    if (noFace) consider(cfg.idleFps, 'noFace');
 
     if (paused) {
       targetFps = 0;
       reason = 'thermalPause';
     }
 
-    const out = { targetFps, paused, reason, thermal, resume };
-    const changed = last === null || last.targetFps !== targetFps || last.paused !== paused || last.reason !== reason;
-    last = { targetFps, paused, reason };
+    const out = { targetFps, paused, reason, thermal, resume, noFace };
+    // `noFace` counts as a change so the hook always re-applies `setIdleMode` when the
+    // condition flips, even if another throttle already held the same frame rate.
+    const changed = last === null || last.targetFps !== targetFps || last.paused !== paused
+      || last.reason !== reason || last.noFace !== noFace;
+    last = { targetFps, paused, reason, noFace };
     out.changed = changed;
     return out;
   }

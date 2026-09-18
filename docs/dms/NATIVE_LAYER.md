@@ -45,7 +45,7 @@ module most likely to be silently wrong.
 | `t` | seconds since the first processed frame of the session, from the camera clock |
 | `focalScale` | `fx / uprightWidth`, principal point assumed at the frame centre |
 | `isMirrored` | true when the delivered image is a mirror of the scene; `image_right_is_driver_left = !isMirrored` |
-| `orientation` | `'portrait' \| 'portraitUpsideDown' \| 'landscapeLeft' \| 'landscapeRight'`, same strings on both platforms |
+| `orientation` | `'portrait' \| 'portraitUpsideDown' \| 'landscapeLeft' \| 'landscapeRight'`, the same PHYSICAL pose on both platforms (§2.3) |
 
 ### 2.1 Rotation: metadata in, landmarks out
 
@@ -131,6 +131,38 @@ ubiquitous recipe for an un-rotated back-camera buffer in portrait is `UIImage.O
 one-line fix if the harness says the table is wrong; the default table should then be corrected
 and the option dropped back to 0.
 
+**The offset corrects the rotation constant itself, so it applies to BOTH consumers of R** — the
+rotation handed to MediaPipe (`ImageProcessingOptions.rotationDegrees` / `MPImage.orientation`)
+and the landmark transform above. It is not a post-hoc fix-up of the landmarks: MediaPipe needs
+the CORRECT rotation to find the face at all, and the transform needs the same value to put the
+result upright. Both platforms do this (iOS composes `base + offset` once, before choosing the
+`MPImage.orientation` and before serialising the landmarks; Android adds it to
+`ImageInfo.rotationDegrees` once, before `setRotationDegrees` and before the transform). A value
+that only reached one of them would silently mean two different frames.
+
+### 2.3 The `orientation` string
+
+The string names the PHYSICAL pose of the device, not the buffer rotation R: R folds in the
+per-device sensor orientation (the same portrait mount reads R = 270 on a typical Android front
+camera and R = 90 on iOS), so keying anything off R would not survive a second device — and the
+string is the key of the persisted forward reference (`@monitorReference:front:{orientation}`,
+`INTEGRATION.md` §6), which must mean the same mount every time.
+
+| string | physical pose | iOS `UIDeviceOrientation` | Android `Surface.ROTATION_*` (from `OrientationEventListener`) | iOS R |
+|---|---|---|---|---|
+| `portrait` | upright, top edge up | `.portrait` | `ROTATION_0` | 90 |
+| `landscapeLeft` | turned 90° counter-clockwise (right edge up, home button right) | `.landscapeLeft` | `ROTATION_90` | 0 |
+| `portraitUpsideDown` | turned 180° | `.portraitUpsideDown` | `ROTATION_180` | 270 |
+| `landscapeRight` | turned 90° clockwise (left edge up, home button left) | `.landscapeRight` | `ROTATION_270` | 180 |
+
+The two platforms' spellings were checked against each other rather than assumed (this is the
+classic place for a handedness error, and `UIInterfaceOrientation.landscapeLeft` is the OPPOSITE
+pose from `UIDeviceOrientation.landscapeLeft`): Apple defines `UIDeviceOrientation.landscapeLeft`
+as "home button on the right", i.e. turned 90° counter-clockwise; CameraX's rotation guidance maps
+the sensor angle 225–315 ("right side at the top", also 90° counter-clockwise) to `ROTATION_90`,
+because the display rotation is the inverse of the device rotation. Same pose, same string. The
+device-facing harness of §6 V4 is what confirms it on hardware.
+
 ---
 
 ## 3. Camera configuration
@@ -149,11 +181,31 @@ and the option dropped back to 0.
 **Cadence.** A frame is accepted only if at least `1 / fps` has passed since the last accepted one
 (`targetFps`, default 20; `setIdleMode(true)` → 5) *and* no detection is in flight. MediaPipe's
 LIVE_STREAM mode documents that it may drop an input without emitting a result, so a 1 s watchdog
-clears the in-flight flag; both paths increment the `dropped` counter reported by `onStatus`.
+clears the in-flight flag; both paths increment the `dropped` counter reported by `onStatus`. The
+pending frame carries the timestamp handed to `detectAsync`, and a result that does not match it
+is dropped rather than paired with the metadata of the NEW pending frame (iOS compares the
+delegate's `timestampInMilliseconds`, Android the result's own `timestampMs()`).
 
-**Lifecycle.** iOS stops the session on `OnAppEntersBackground`; Android does too (CameraX would
-unbind anyway, since the use case is bound to the activity's lifecycle) and emits a final
-`onStatus`. `dms/monitor.js` is not reset — the reference gap logic applies.
+**Lifecycle.** Neither module has a background handler any more: the JS `AppState` listener is the
+single owner of the camera across app-state changes (`INTEGRATION.md` §3), because two owners left
+the JS-visible state and the native session disagreeing. The OS still takes the camera away by
+itself, and that is now REPORTED instead of hidden: iOS observes
+`AVCaptureSessionWasInterrupted` / `RuntimeError` / `InterruptionEnded` and emits `onError`
+(`CAMERA_INTERRUPTED`, `CAMERA_RUNTIME_ERROR`) plus an `onStatus` whose `running` is false;
+Android observes `CameraInfo.getCameraState()` and emits `onError` (`CAMERA_CLOSED`) when CameraX
+closes the camera with an error. The JS watchdog restarts the session when the app is active
+again. `dms/monitor.js` is not reset — the reference gap logic applies.
+
+`start()` and `stop()` are serialised on each side (iOS: both run on the pipeline's
+`sessionQueue` through `AsyncFunction(...).runOnQueue(_:)`, so neither nests a `sync` on it;
+Android: a `ReentrantLock` around both). Android's `stop()` drops the `landmarker` reference
+FIRST, so `analyze()`'s `?: return` short-circuits every new frame, then shuts the analysis
+executor down and waits up to 500 ms for the frame in flight to leave `analyze()`, and only then
+calls `close()`: MediaPipe's `TaskRunner.close()` is not synchronised against `detectAsync()`.
+`start()` creates the graph and the thread only AFTER the provider is obtained and releases both
+if anything below throws. Nothing blocks the main thread on teardown (both `OnDestroy`s dispatch
+the stop), and every wait is bounded (`bindToLifecycle` 2 s, `ProcessCameraProvider.getInstance`
+5 s).
 
 **Thermal.** `ProcessInfo.thermalState` plus `thermalStateDidChangeNotification` on iOS;
 `PowerManager.getCurrentThermalStatus()` plus `addThermalStatusListener` on Android API 29+,
@@ -197,6 +249,14 @@ coordinate system, a different frame from the delivered buffer); and the charact
 through `CameraManager` rather than CameraX's `Camera2CameraInfo`, which is an opt-in experimental
 interop API whose enforcement differs between Kotlin and Lint. `CameraSelector.DEFAULT_FRONT_CAMERA`
 resolves to the first front-facing id, which is the one this reads.
+
+`getIntrinsics()` reports `focalScale`, `isMirrored` and `orientation` as **null until the first
+frame has been processed**. Before that both platforms only have a placeholder (iOS has no buffer
+size yet, Android reports a 1 × 1 default), and the JS side builds the rule engine from these
+values: a latched placeholder runs the whole drive on the wrong focal length and, worse, on the
+wrong `image_right_is_driver_left`, which mirrors every asymmetric zone. The hook adopts the
+values from the frames instead and rebuilds the engine when one of them changes
+(`hooks/monitor/frameMeta.js`).
 
 Sanity check on device: `fx ≈ (W / 2) / tan(hfov / 2)`. For a 70–80° front camera on a 640 × 480
 buffer that is 380–460 px, and `focalScale` in portrait (`fx / 480`) is 0.79–0.96. The research
@@ -283,6 +343,7 @@ Ordered by how much damage a wrong answer does.
 | Claim | Confidence | If wrong |
 |---|---|---|
 | The iOS portrait rotation is 90° clockwise (§2.2) | medium | Faces come out sideways; the mesh degrades or fails. Fixed by `rotationOffsetDegrees`, no rebuild of the logic. |
+| `MPImage.orientation` behaves like the measured `rotation_degrees` path (§2.1, §2.2) | medium | **The probe that established "landmarks come back in the unrotated frame, `z` unscaled" ran through the PYTHON API's `rotation_degrees`, not through iOS's `MPImage.orientation`.** The iOS column of §2.2 is read from `MPPVisionTaskRunner.mm` (which turns the orientation into the same `NormalizedRect` rotation the other bindings apply), so the two are believed to be the same code path below the binding — but that equivalence is inferred, not measured. If it is wrong the landmarks are rotated twice or not at all, which V4 shows immediately, and `rotationOffsetDegrees` is the device-side escape hatch that fixes it without a rebuild of the logic. |
 | Both static frameworks (MediaPipe + ORT) link into one iOS binary | medium-high | V1 fails at link time. Fallback: TFLite (converted and measured exact) or a dynamic-framework Podfile. |
 | A local module's `resource_bundles` is findable at runtime | high | `DmsVisionBundle` searches four locations; if all fail, `start()` throws with a clear message and the fallback is `expo-asset` + a `file://` path. |
 | MediaPipe returns landmarks in the unrotated frame, `z` unscaled (§2.1) | **measured**, high | Would show as a sideways face (V4) or a systematically wrong depth column. The probe is reproducible with the research venv. |
@@ -314,6 +375,26 @@ Ordered by how much damage a wrong answer does.
   repository; builds are submitted with `EAS_NO_VCS=1`, which uploads the directory filtered by
   `.easignore` (it mirrors `.gitignore` plus the untracked `GoogleService-Info.plist` the iOS prebuild
   needs and minus `.env`).
+
+## 7b. Review fixes (2026-09-18, not yet compiled)
+
+Applied after an independent review of this branch; none of them has been through a build:
+
+* Android `stop()` no longer closes the MediaPipe graph under a live `detectAsync` (§3
+  Lifecycle), `start()` no longer leaks a graph and a thread when the bind throws, and both are
+  serialised by a lock with `@Volatile` fields.
+* Both result callbacks drop a result whose timestamp is not the pending frame's (§3 Cadence).
+* Both `getIntrinsics()` report null until the first processed frame (§4).
+* iOS: `start` / `stop` run on the session queue (`.runOnQueue`), the status timer is created,
+  resumed and cancelled on its own queue, the device-orientation notifications are balanced with
+  a flag across every stop path, session interruptions are observed, and the `focalScale` of a
+  `landmarkFrame: 'buffer'` frame is now `fx / bufferWidth` (it was reported in the upright frame
+  while the width and height were the buffer's — the harness's numbers only).
+* Android: the same `focalScale` fix, a bounded `ProcessCameraProvider.getInstance(...).get()`
+  and a bounded main-thread wait, a `CameraState` observer, no main-thread block in `OnDestroy`,
+  and the orientation listener is started before the use case is built (so a rotation the sensor
+  can already report seeds `targetRotation`; it usually cannot, which costs a few wrongly rotated
+  frames at start — they carry no usable face and the engine's in-frame checks drop them).
 
 ## 8. Deliberate omissions
 

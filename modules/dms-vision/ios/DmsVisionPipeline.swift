@@ -26,13 +26,17 @@ import UIKit
 internal protocol DmsVisionPipelineDelegate: AnyObject {
   func pipelineDidProduce(frame: [String: Any?])
   func pipelineDidFail(code: String, message: String)
+  /// The OS interrupted (false) or resumed (true) the session; JS decides what to do about it.
+  func pipelineDidChangeRunning(_ running: Bool)
 }
 
 internal final class DmsVisionPipeline: NSObject {
   weak var delegate: DmsVisionPipelineDelegate?
 
-  // Queues
-  private let sessionQueue = DispatchQueue(label: "com.roadcash.dmsvision.session")
+  // Queues.  `sessionQueue` is internal because the module's start / stop async functions are
+  // dispatched onto it (`.runOnQueue`), which is what keeps every session mutation serialised
+  // on one queue without a nested `sync`.
+  let sessionQueue = DispatchQueue(label: "com.roadcash.dmsvision.session")
   private let videoQueue = DispatchQueue(label: "com.roadcash.dmsvision.video")
 
   // Session objects (sessionQueue)
@@ -64,6 +68,10 @@ internal final class DmsVisionPipeline: NSObject {
   private var lastRotationDegrees = 90
   private var lastOrientationName = "portrait"
   private var lastIsMirrored = false
+  /// False until a frame has been accepted: before that the intrinsics, the mirror flag and the
+  /// orientation are placeholders and `intrinsicsReport()` reports null instead
+  /// (docs/dms/DETECTION_DESIGN.md §2, §4).
+  private var hasProcessedFrame = false
   private var landmarkerStorage: FaceLandmarker?
 
   /// Created on sessionQueue, read on videoQueue - hence the lock.
@@ -82,6 +90,9 @@ internal final class DmsVisionPipeline: NSObject {
 
   private struct PendingFrame {
     let t: Double
+    /// The timestamp handed to `detectAsync`; the result callback must carry the same one or it
+    /// belongs to a frame the in-flight watchdog already abandoned.
+    let timestampMs: Int
     let rotationDegrees: Int
     let orientationName: String
     let intrinsics: DmsIntrinsics
@@ -90,9 +101,19 @@ internal final class DmsVisionPipeline: NSObject {
     let image: MPImage
   }
 
+  /// Main thread only: keeps `beginGeneratingDeviceOrientationNotifications` balanced with its
+  /// `end...` across the several paths that stop the pipeline.
+  private var orientationNotificationsActive = false
+
   // MARK: - Lifecycle
 
-  func start(targetFps: Double, facing: String, landmarkFrame: String, rotationOffsetDegrees: Int) throws {
+  /// MUST be called on `sessionQueue` (the module dispatches its `start` there with
+  /// `.runOnQueue`), so nothing here may `sync` back onto that queue.
+  func startOnSessionQueue(targetFps: Double, facing: String, landmarkFrame: String,
+                           rotationOffsetDegrees: Int) throws {
+    #if DEBUG
+    dispatchPrecondition(condition: .onQueue(sessionQueue))
+    #endif
     guard facing == "front" else {
       throw DmsVisionException("only the front camera is supported (facing must be 'front')")
     }
@@ -113,48 +134,54 @@ internal final class DmsVisionPipeline: NSObject {
       self.inFlight = false
       self.pending = nil
     }
+    stateLock.lock()
+    hasProcessedFrame = false
+    stateLock.unlock()
 
     // UIDevice.orientation is only populated after begin...Notifications() and must be read on
     // the main thread, so it is cached here and consumed on videoQueue. Until the first
-    // notification arrives the cached default (portrait) applies.
+    // notification arrives the cached default (portrait) applies.  The flag keeps begin / end
+    // balanced across the several stop paths (a UIKit refcount, not a boolean).
     DispatchQueue.main.async {
-      UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-      NotificationCenter.default.addObserver(self,
-                                             selector: #selector(self.onDeviceOrientationChanged),
-                                             name: UIDevice.orientationDidChangeNotification,
-                                             object: nil)
+      if !self.orientationNotificationsActive {
+        self.orientationNotificationsActive = true
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(self.onDeviceOrientationChanged),
+                                               name: UIDevice.orientationDidChangeNotification,
+                                               object: nil)
+      }
       self.updateDeviceOrientation()
     }
 
-    var thrown: Error?
-    sessionQueue.sync {
-      do {
-        try self.configure()
-        self.captureSession?.startRunning()
-        self.stateLock.lock()
-        self.running = true
-        self.stateLock.unlock()
-      } catch {
-        thrown = error
-      }
-    }
-    if let thrown = thrown {
-      stop()
-      throw thrown
+    do {
+      try configure()
+      addSessionObservers()
+      captureSession?.startRunning()
+      stateLock.lock()
+      running = true
+      stateLock.unlock()
+    } catch {
+      stopOnSessionQueue()
+      throw error
     }
   }
 
-  func stop() {
+  /// MUST be called on `sessionQueue` (see `startOnSessionQueue`).
+  func stopOnSessionQueue() {
+    #if DEBUG
+    dispatchPrecondition(condition: .onQueue(sessionQueue))
+    #endif
     stateLock.lock()
     running = false
+    hasProcessedFrame = false
     stateLock.unlock()
 
-    sessionQueue.sync {
-      self.captureSession?.stopRunning()
-      self.captureSession = nil
-      self.videoOutput = nil
-      self.landmarker = nil
-    }
+    removeSessionObservers()
+    captureSession?.stopRunning()
+    captureSession = nil
+    videoOutput = nil
+    landmarker = nil
     videoQueue.sync {
       self.inFlight = false
       self.pending = nil
@@ -163,11 +190,65 @@ internal final class DmsVisionPipeline: NSObject {
       self.lastTimestampMs = -1
     }
     DispatchQueue.main.async {
-      NotificationCenter.default.removeObserver(self,
-                                                name: UIDevice.orientationDidChangeNotification,
-                                                object: nil)
-      UIDevice.current.endGeneratingDeviceOrientationNotifications()
+      if self.orientationNotificationsActive {
+        self.orientationNotificationsActive = false
+        NotificationCenter.default.removeObserver(self,
+                                                  name: UIDevice.orientationDidChangeNotification,
+                                                  object: nil)
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+      }
     }
+  }
+
+  // MARK: - Session interruptions (AVCaptureSession notifications)
+
+  /// The OS can take the camera away (a phone call, another app, the app leaving the
+  /// foreground).  AVFoundation does not tell JavaScript, so without these the session would be
+  /// dead while `running` still said true and the rules kept their last frame forever.
+  private func addSessionObservers() {
+    guard let session = captureSession else { return }
+    let center = NotificationCenter.default
+    center.addObserver(self, selector: #selector(onSessionRuntimeError),
+                       name: .AVCaptureSessionRuntimeError, object: session)
+    center.addObserver(self, selector: #selector(onSessionInterrupted),
+                       name: .AVCaptureSessionWasInterrupted, object: session)
+    center.addObserver(self, selector: #selector(onSessionInterruptionEnded),
+                       name: .AVCaptureSessionInterruptionEnded, object: session)
+  }
+
+  private func removeSessionObservers() {
+    guard let session = captureSession else { return }
+    let center = NotificationCenter.default
+    center.removeObserver(self, name: .AVCaptureSessionRuntimeError, object: session)
+    center.removeObserver(self, name: .AVCaptureSessionWasInterrupted, object: session)
+    center.removeObserver(self, name: .AVCaptureSessionInterruptionEnded, object: session)
+  }
+
+  @objc private func onSessionRuntimeError(_ note: Notification) {
+    let message = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription
+      ?? "the capture session failed"
+    markRunning(false)
+    delegate?.pipelineDidFail(code: "CAMERA_RUNTIME_ERROR", message: message)
+    delegate?.pipelineDidChangeRunning(false)
+  }
+
+  @objc private func onSessionInterrupted(_ note: Notification) {
+    let reason = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+    markRunning(false)
+    delegate?.pipelineDidFail(code: "CAMERA_INTERRUPTED", message: "interruption reason \(reason)")
+    delegate?.pipelineDidChangeRunning(false)
+  }
+
+  @objc private func onSessionInterruptionEnded(_ note: Notification) {
+    let stillRunning = captureSession?.isRunning ?? false
+    if stillRunning { markRunning(true) }
+    delegate?.pipelineDidChangeRunning(stillRunning)
+  }
+
+  private func markRunning(_ value: Bool) {
+    stateLock.lock()
+    running = value
+    stateLock.unlock()
   }
 
   var isRunning: Bool {
@@ -194,16 +275,25 @@ internal final class DmsVisionPipeline: NSObject {
     return out
   }
 
+  /// The camera as of the last PROCESSED frame.  Before there is one, `focalScale`,
+  /// `isMirrored` and `orientation` are null rather than a placeholder: the JS side builds the
+  /// rule engine from them and a latched placeholder mis-builds every zone
+  /// (docs/dms/DETECTION_DESIGN.md §2, §4).
   func intrinsicsReport() -> [String: Any] {
     stateLock.lock()
     let intrinsics = lastIntrinsics
     let rotation = lastRotationDegrees
     let orientation = lastOrientationName
     let mirrored = lastIsMirrored
+    let known = hasProcessedFrame
     stateLock.unlock()
     let upright = intrinsics.uprightSize(rotationDegrees: rotation)
+    // NSNull() crosses the bridge as JavaScript `null`; the JS wrapper passes it through.
+    let focalValue: Any = known ? intrinsics.focalScale(rotationDegrees: rotation) : NSNull()
+    let orientationValue: Any = known ? orientation : NSNull()
+    let mirroredValue: Any = known ? mirrored : NSNull()
     return [
-      "focalScale": intrinsics.focalScale(rotationDegrees: rotation),
+      "focalScale": focalValue,
       "intrinsicsSource": intrinsics.source,
       "fx": intrinsics.fx,
       "fy": intrinsics.fy,
@@ -214,8 +304,8 @@ internal final class DmsVisionPipeline: NSObject {
       "width": upright.width,
       "height": upright.height,
       "rotationDegrees": rotation,
-      "orientation": orientation,
-      "isMirrored": mirrored
+      "orientation": orientationValue,
+      "isMirrored": mirroredValue
     ]
   }
 
@@ -436,6 +526,7 @@ extension DmsVisionPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
 
     lastAcceptedSeconds = presentation
     pending = PendingFrame(t: t,
+                           timestampMs: timestampMs,
                            rotationDegrees: rotationDegrees,
                            orientationName: orientationName,
                            intrinsics: intrinsics,
@@ -449,6 +540,7 @@ extension DmsVisionPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
     lastRotationDegrees = rotationDegrees
     lastOrientationName = orientationName
     lastIsMirrored = mirrored
+    hasProcessedFrame = true            // the intrinsics report is real from here on
     stateLock.unlock()
 
     do {
@@ -479,6 +571,13 @@ extension DmsVisionPipeline: FaceLandmarkerLiveStreamDelegate {
         self.inFlight = false
         return
       }
+      // A result that does not carry the pending frame's timestamp is a late answer for a frame
+      // the 1 s in-flight watchdog already abandoned: pairing it with THIS frame's metadata
+      // would report the wrong rotation, intrinsics and time.
+      guard frame.timestampMs == timestampInMilliseconds else {
+        self.countDropped()
+        return
+      }
       self.pending = nil
       self.inFlight = false
 
@@ -500,7 +599,9 @@ extension DmsVisionPipeline: FaceLandmarkerLiveStreamDelegate {
         "facePresent": flattened != nil,
         "score": flattened != nil ? 1.0 : 0.0,
         "isMirrored": frame.isMirrored,
-        "focalScale": frame.intrinsics.focalScale(rotationDegrees: frame.rotationDegrees),
+        // `focalScale` is fx / reported width, so with landmarkFrame: 'buffer' (the harness) it
+        // must be measured in the BUFFER frame, exactly like the width and height above.
+        "focalScale": frame.intrinsics.focalScale(rotationDegrees: reportBuffer ? 0 : frame.rotationDegrees),
         "intrinsicsSource": frame.intrinsics.source,
         "orientation": frame.orientationName,
         "landmarks": NSNull()

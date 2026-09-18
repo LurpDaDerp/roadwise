@@ -36,6 +36,7 @@ import { createAppConfig } from '../dms/app_config';
 import { createSpeedGate } from '../hooks/monitor/speedGate';
 import { createCadencePolicy } from '../hooks/monitor/cadencePolicy';
 import { loadReference, saveReference, clearReference } from '../hooks/monitor/referenceStore';
+import { emptyFrameMeta, adoptFrameMeta } from '../hooks/monitor/frameMeta';
 
 // The local Expo module that owns the camera, MediaPipe and the ONNX runtime.
 // A missing or broken module must never break the drive screen.
@@ -47,9 +48,6 @@ try {
 } catch (err) {
   DmsVision = null;
 }
-
-// eslint-disable-next-line global-require
-const PARITY_FIXTURE = require('../dms/tests/fixtures/onnx_parity.json');
 
 // ---------------------------------------------------------------- mock (demo) constants
 const CALIBRATION_MS = 45_000;
@@ -69,6 +67,8 @@ const DETAIL_EVERY = 4;           // ... and the engine diagnostics once a secon
 const BATTERY_POLL_MS = 60_000;
 const THERMAL_POLL_MS = 10_000;
 const TARGET_FPS = 20;
+const FRAME_STALL_S = 5.0;        // no frame for this long while running = a stalled camera
+const AUTO_RESTART_S = 60.0;      // ... and at most one automatic restart attempt per minute
 const ORIENTATION_WINDOW_S = 3.0;
 const EYE_LINE_MAX_DEG = 35.0;
 const LEFT_EYE_OUTER = 33;        // MediaPipe outer eye corners in the upright frame
@@ -130,11 +130,14 @@ async function requestCameraPermission(module) {
 // The demo path: the UX mock's scripted sequence, unchanged.
 // ============================================================================
 function useDemoMonitoring({ running, enabled, onAlert }) {
+  // `engine: null` so both paths return the SAME metrics shape (the engine path adds the
+  // DETECTION_DESIGN §10 diagnostics there).
+  const demoMetrics = () => ({ ...emptyMonitoringMetrics(), engine: null });
   const [status, setStatus] = useState(MONITOR_STATUS.OFF);
   const [calibration, setCalibration] = useState({ state: CALIBRATION_STATE.OFF, progress: 0, quality: null });
   const [activeAlert, setActiveAlert] = useState(null);
   const [drowsiness, setDrowsiness] = useState({ level: 0, perclos: null });
-  const [metrics, setMetrics] = useState(emptyMonitoringMetrics);
+  const [metrics, setMetrics] = useState(demoMetrics);
 
   const startedAt = useRef(null);
   const calibrationStartedAt = useRef(null);
@@ -151,7 +154,7 @@ function useDemoMonitoring({ running, enabled, onAlert }) {
       calibrationStartedAt.current = Date.now();
       acknowledged.current = new Set();
       emitted.current = new Set();
-      setMetrics(emptyMonitoringMetrics());
+      setMetrics(demoMetrics());
       setActiveAlert(null);
       setDrowsiness({ level: 0, perclos: null });
       setStatus(MONITOR_STATUS.STARTING);
@@ -240,7 +243,7 @@ function useDemoMonitoring({ running, enabled, onAlert }) {
 // The real path: camera + gaze model + rule engine, through the bridge.
 // ============================================================================
 function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) {
-  const [state, setState] = useState(() => ({ ...OFF_STATE, metrics: emptyMonitoringMetrics() }));
+  const [state, setState] = useState(() => ({ ...OFF_STATE, metrics: { ...emptyMonitoringMetrics(), engine: null } }));
 
   // --- refs: everything on the frame path -------------------------------------------
   const bridgeRef = useRef(null);
@@ -268,10 +271,22 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
   onAlertRef.current = onAlert;
 
   const lastFrameTRef = useRef(null);
+  const lastFrameWallRef = useRef(null);     // wall clock of the last onFrame (the stall watchdog)
   const lastAlertIdRef = useRef(null);
-  const frameMetaRef = useRef({ focalScale: null, isMirrored: null, orientation: null, intrinsicsSource: 'default' });
+  const frameMetaRef = useRef(emptyFrameMeta());
   const orientationRef = useRef({ samples: [], startT: null, checked: false });
-  const nativeStatusRef = useRef({ thermal: 'nominal', lowPower: false, fps: 0, dropped: 0 });
+  const nativeStatusRef = useRef({ thermal: 'nominal', lowPower: false, fps: 0, dropped: 0, running: null });
+  // The AppState handler is the ONE owner of the camera across app-state changes (the native
+  // background hooks were removed): nothing may auto-start while the app is not in the
+  // foreground, and a denied permission is never retried on a timer.
+  const appActiveRef = useRef(AppState.currentState ? AppState.currentState === 'active' : true);
+  const permissionDeniedRef = useRef(false);
+  const nextAutoStartRef = useRef(0);        // wall seconds: the earliest automatic restart
+  // start()/stop() are serialised through this chain and stamped with a generation, so a start
+  // that resolves after a newer stop (StrictMode double-mount, a fast background) cannot claim
+  // the session (docs/dms/INTEGRATION.md §3).
+  const pendingOpRef = useRef(null);
+  const sessionGenRef = useRef(0);
   const powerRef = useRef({ level: null, charging: null });
   const modelRef = useRef({ sha: null });
   const selfTestRef = useRef(null);
@@ -376,18 +391,27 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
   // --- one camera frame ----------------------------------------------------------------
   const onFrame = useCallback((f) => {
     if (!runningRef.current || !f) return;
-    const monitor = monitorRef.current;
+    lastFrameWallRef.current = nowS();                // the stall watchdog's clock
+    // frames are flowing again after a stall (the watchdog put the session back to 'starting')
+    if (bridgeRef.current.session !== 'running') bridgeRef.current.setSession('running');
+    let monitor = monitorRef.current;
     if (!monitor || inFlightRef.current) return;      // never queue: drop the frame instead
 
+    // The camera metadata the rule engine is built from.  Both natives report null until a frame
+    // has been processed, and a value that later disagrees replaces the cached one: a latched
+    // placeholder focal scale or mirror flag silently mis-builds every zone (frameMeta.js).
     const meta = frameMetaRef.current;
-    if (Number.isFinite(f.focalScale) && meta.focalScale === null) meta.focalScale = f.focalScale;
-    if (typeof f.isMirrored === 'boolean' && meta.isMirrored === null) meta.isMirrored = f.isMirrored;
-    if (f.intrinsicsSource) meta.intrinsicsSource = f.intrinsicsSource;
-    if (f.orientation && meta.orientation !== f.orientation) {
-      const first = meta.orientation === null;
-      meta.orientation = f.orientation;
-      if (first) {
-        seedFromPrior(f.orientation);
+    const metaChange = adoptFrameMeta(meta, f);
+    if (metaChange.rebuild) {
+      bridgeRef.current.noteStatus({
+        intrinsicsSource: meta.intrinsicsSource,
+        focalScale: meta.focalScale,
+      });
+      monitor = buildMonitor(true) || monitor;        // carries the learned reference across
+    }
+    if (metaChange.orientationChanged) {
+      if (metaChange.firstOrientation) {
+        seedFromPrior(meta.orientation);
       } else {
         // the mount changed: re-validate the reference rather than forget it (§9)
         const cal = monitor.calibration;
@@ -425,19 +449,23 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     if (!DmsVision || typeof DmsVision.predictGaze !== 'function') return;
 
     inFlightRef.current = true;
+    // `.then(onOk, onErr)` and NOT `.then(onOk).catch(onErr)`: with a trailing catch, a throw
+    // inside `bridge.update` would step the engine a SECOND time for the same frame.
     DmsVision.predictGaze(inputs.cloud, inputs.context, inputs.validity)
-      .then((prediction) => {
-        if (!runningRef.current) return;
-        bridgeRef.current.update(monitor.finishFrame(frame, inputs, prediction));
-      })
-      .catch(() => {
-        bridgeRef.current.noteStatus({ error: true });
-        if (!runningRef.current) return;
-        // the head rules still run without a gaze vector
-        safe(() => bridgeRef.current.update(monitor.finishFrame(frame, inputs, null)));
-      })
+      .then(
+        (prediction) => {
+          if (!runningRef.current) return;
+          bridgeRef.current.update(monitor.finishFrame(frame, inputs, prediction));
+        },
+        () => {
+          bridgeRef.current.noteStatus({ error: true });
+          if (!runningRef.current) return;
+          // the head rules still run without a gaze vector
+          safe(() => bridgeRef.current.update(monitor.finishFrame(frame, inputs, null)));
+        }
+      )
       .then(() => { inFlightRef.current = false; }, () => { inFlightRef.current = false; });
-  }, [checkEyeLine, seedFromPrior]);
+  }, [buildMonitor, checkEyeLine, seedFromPrior]);
 
   // --- the native session ---------------------------------------------------------------
   const detachListeners = useCallback(() => {
@@ -458,6 +486,7 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
         const n = nativeStatusRef.current;
         if (s.thermal !== undefined) n.thermal = s.thermal;
         if (typeof s.lowPower === 'boolean') n.lowPower = s.lowPower;
+        if (typeof s.running === 'boolean') n.running = s.running;   // the stall watchdog reads it
         if (Number.isFinite(s.dropped)) n.dropped = s.dropped;
         if (Number.isFinite(s.fps)) {
           n.fps = s.fps;
@@ -479,7 +508,10 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     if (!DmsVision || typeof DmsVision.selfTest !== 'function' || selfTestRef.current !== null) return;
     selfTestRef.current = { pending: true, ok: null };
     try {
-      const result = await DmsVision.selfTest(PARITY_FIXTURE);
+      // Required lazily: the fixture is ~1 MB of JSON and only the once-per-run parity check
+      // reads it, so it must not be parsed while the drive screen mounts.
+      // eslint-disable-next-line global-require
+      const result = await DmsVision.selfTest(require('../dms/tests/fixtures/onnx_parity.json'));
       selfTestRef.current = {
         ok: Boolean(result && result.ok),
         maxAbsGaze: result ? result.maxAbsGaze : null,
@@ -494,44 +526,49 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     bridgeRef.current.noteStatus({ parity: selfTestRef.current });
   }, []);
 
-  const start = useCallback(async () => {
-    if (!DmsVision) {
-      bridgeRef.current.setSession('camera_error');
-      return;
-    }
-    if (runningRef.current || startingRef.current || !wantCameraRef.current) return;
-    if (!safe(() => DmsVision.isAvailable(), false)) {
-      bridgeRef.current.setSession('camera_error');
-      return;
-    }
-    startingRef.current = true;
-    bridgeRef.current.setSession('starting');
+  // Every start / stop runs on ONE chain, so a start can never overlap the stop before it (the
+  // StrictMode double-mount, and a background / foreground pair inside one native start).
+  const runExclusive = useCallback((fn) => {
+    const prior = pendingOpRef.current || Promise.resolve();
+    const next = prior.then(fn, fn);
+    pendingOpRef.current = next.catch(() => {});
+    return next;
+  }, []);
+
+  const startInner = useCallback(async () => {
     try {
+      if (!DmsVision) {
+        bridgeRef.current.setSession('camera_error');
+        return;
+      }
+      if (runningRef.current || !wantCameraRef.current) return;
+      if (!safe(() => DmsVision.isAvailable(), false)) {
+        bridgeRef.current.setSession('camera_error');
+        return;
+      }
+      // This session's generation: a stop (or a newer start) bumps it, and everything below
+      // checks it before claiming `runningRef`.
+      const gen = (sessionGenRef.current += 1);
+      bridgeRef.current.setSession('starting');
       const permission = await requestCameraPermission(DmsVision);
       bridgeRef.current.noteStatus({ permission });
-      if (!mountedRef.current || !wantCameraRef.current) return;
+      if (!mountedRef.current || !wantCameraRef.current || gen !== sessionGenRef.current) return;
       if (permission === 'denied') {
+        permissionDeniedRef.current = true;
         bridgeRef.current.setSession('permission_denied');
         return;
       }
+      permissionDeniedRef.current = false;
 
       if (modelRef.current.sha === null) {
         const info = safe(() => DmsVision.getModelInfo(), null);
         modelRef.current.sha = (info && (info.onnxSha256 || info.sha256 || info.sha || info.modelSha)) || null;
       }
-      // the intrinsics of the last frame: focal scale, their source and the mirror flag, so the
-      // rule engine is built with the right camera and the right driver-relative left / right
+      // The intrinsics of the last frame, when there IS one: both natives report null for the
+      // focal scale, the mirror flag and the orientation until a frame has been processed, and
+      // `adoptFrameMeta` refuses a placeholder (frameMeta.js).  The first frames correct it.
       const intrinsics = safe(() => DmsVision.getIntrinsics(), null);
-      if (intrinsics) {
-        if (Number.isFinite(intrinsics.focalScale)) frameMetaRef.current.focalScale = intrinsics.focalScale;
-        if (intrinsics.intrinsicsSource) frameMetaRef.current.intrinsicsSource = intrinsics.intrinsicsSource;
-        if (typeof intrinsics.isMirrored === 'boolean' && frameMetaRef.current.isMirrored === null) {
-          frameMetaRef.current.isMirrored = intrinsics.isMirrored;
-        }
-        if (intrinsics.orientation && frameMetaRef.current.orientation === null) {
-          frameMetaRef.current.orientation = intrinsics.orientation;
-        }
-      }
+      if (intrinsics) adoptFrameMeta(frameMetaRef.current, intrinsics);
       bridgeRef.current.noteStatus({
         intrinsicsSource: frameMetaRef.current.intrinsicsSource,
         focalScale: frameMetaRef.current.focalScale,
@@ -540,12 +577,15 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       buildMonitor(false);
       attachListeners();
       await DmsVision.start({ targetFps: TARGET_FPS, facing: 'front', landmarkFrame: 'upright' });
-      if (!mountedRef.current || !wantCameraRef.current) {
+      if (!mountedRef.current || !wantCameraRef.current || gen !== sessionGenRef.current) {
+        // a newer stop won: undo this start instead of claiming the session
         safe(() => DmsVision.stop());
         detachListeners();
         return;
       }
       runningRef.current = true;
+      nativeStatusRef.current.running = null;
+      lastFrameWallRef.current = nowS();
       bridgeRef.current.setSession('running');
       bridgeRef.current.noteStatus({ permission: 'granted' });
       cadenceRef.current.reset();
@@ -555,6 +595,7 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       detachListeners();
       runningRef.current = false;
       if (isPermissionError(err)) {
+        permissionDeniedRef.current = true;
         bridgeRef.current.setSession('permission_denied');
         bridgeRef.current.noteStatus({ permission: 'denied' });
       } else {
@@ -567,10 +608,19 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     }
   }, [attachListeners, buildMonitor, detachListeners, runSelfTest, seedFromPrior]);
 
-  const stop = useCallback(async (options = {}) => {
+  const start = useCallback(() => {
+    // set synchronously: the 4 Hz tick must not queue a second start behind this one
+    startingRef.current = true;
+    return runExclusive(startInner);
+  }, [runExclusive, startInner]);
+
+  const stopInner = useCallback(async (options = {}) => {
+    sessionGenRef.current += 1;               // any start still in flight is now stale
     const wasRunning = runningRef.current;
     runningRef.current = false;
     inFlightRef.current = false;
+    nativeStatusRef.current.running = null;
+    lastFrameWallRef.current = null;
     detachListeners();
     if (DmsVision && wasRunning) {
       await new Promise((resolve) => {
@@ -584,8 +634,12 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       });
     }
     if (options.persist !== false) await persistReference();
+    // the session change ends every live episode: no banner or siren survives a stopped camera
     if (options.session !== false) bridgeRef.current.setSession(options.session || 'off');
   }, [detachListeners, persistReference]);
+
+  const stop = useCallback((options = {}) => runExclusive(() => stopInner(options)),
+    [runExclusive, stopInner]);
 
   // --- lifecycle -------------------------------------------------------------------------
   useEffect(() => {
@@ -602,8 +656,23 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
   const wasRunningRef = useRef(false);
   useEffect(() => {
     if (!running) {
+      const wasRunning = wasRunningRef.current;
       wasRunningRef.current = false;
-      stop({ persist: true });
+      // The 4 Hz tick is unmounted below while `running` is false, so publish the final
+      // snapshot here: the drive record reads `metrics` (which the bridge keeps) and the pill
+      // has to leave ACTIVE.  Nothing to publish when this hook never ran (DrivePrep).
+      stop({ persist: true }).then(() => {
+        if (!mountedRef.current || !wasRunning) return;
+        const snap = bridgeRef.current.snapshot();
+        setState((prev) => ({
+          ...prev,
+          status: snap.status,
+          calibration: snap.calibration,
+          activeAlert: snap.activeAlert,
+          drowsiness: snap.drowsiness,
+          metrics: { ...snap.metrics, engine: detailRef.current || null },
+        }));
+      });
       return undefined;
     }
     if (!wasRunningRef.current) {
@@ -617,7 +686,10 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       speedGateRef.current.reset();
       cadenceRef.current.reset();
       orientationRef.current = { samples: [], startT: null, checked: false };
-      setState({ ...OFF_STATE, metrics: emptyMonitoringMetrics() });
+      // an explicit drive start clears a previous denial and the automatic-restart backoff
+      permissionDeniedRef.current = false;
+      nextAutoStartRef.current = 0;
+      setState({ ...OFF_STATE, metrics: { ...emptyMonitoringMetrics(), engine: null } });
     } else {
       buildMonitor(true);        // a sensitivity / driver-side change mid-drive
     }
@@ -625,20 +697,33 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     return undefined;
   }, [running, sensitivity, driverSide, start, stop, buildMonitor]);
 
-  // the camera stops in the background; the rules keep their clocks (§3)
+  // The camera stops in the background and the rules keep their clocks (§3).  This handler is
+  // the ONLY owner of that transition: the two native background hooks were removed, so the
+  // JS-visible state and the native session can no longer disagree.
   useEffect(() => {
+    if (!running) return undefined;
+    // re-read at every drive start: the listener is not mounted between drives, so the cached
+    // value could be stale by the time it matters
+    appActiveRef.current = AppState.currentState ? AppState.currentState === 'active' : true;
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') {
+      const active = next === 'active';
+      appActiveRef.current = active;
+      if (active) {
+        // an explicit foreground transition is the one event that retries a denial
+        permissionDeniedRef.current = false;
+        nextAutoStartRef.current = 0;
         if (wantCameraRef.current) start();
       } else if (runningRef.current) {
         stop({ persist: false, session: 'starting' });
       }
     });
     return () => sub.remove();
-  }, [start, stop]);
+  }, [running, start, stop]);
 
-  // Low Power Mode and the battery level (§3)
+  // Low Power Mode and the battery level (§3).  Gated on `running`: DrivePrep mounts this hook
+  // with `enabled: false` and must not poll anything.
   useEffect(() => {
+    if (!running) return undefined;
     let cancelled = false;
     const read = async () => {
       try {
@@ -667,10 +752,11 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
       clearInterval(timer);
       if (sub) safe(() => sub.remove());
     };
-  }, []);
+  }, [running]);
 
   // thermal backstop for a module that does not push status events
   useEffect(() => {
+    if (!running) return undefined;
     if (!DmsVision || typeof DmsVision.getThermalState !== 'function') return undefined;
     const poll = () => {
       const s = safe(() => DmsVision.getThermalState(), null);
@@ -679,10 +765,12 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
     poll();
     const timer = setInterval(poll, THERMAL_POLL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [running]);
 
   // --- the 4 Hz tick: speed, cadence, and the only React state updates -------------------
+  // Gated on `running`: with `enabled: false` (DrivePrep) this hook mounts no timer at all.
   useEffect(() => {
+    if (!running) return undefined;
     let ticks = 0;
     let lastVersion = -1;
     const tick = () => {
@@ -705,17 +793,35 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
         batteryLevel: powerRef.current.level,
         batteryCharging: powerRef.current.charging,
       });
+      // frame-liveness watchdog: episodes only expire on frames, so a camera that stopped
+      // delivering (interrupted, pre-empted, a native stall) must not leave a CRITICAL overlay
+      // on screen with the status stuck at ACTIVE.
+      if (runningRef.current && lastFrameWallRef.current !== null
+          && wall - lastFrameWallRef.current > FRAME_STALL_S) {
+        bridgeRef.current.setSession('starting');       // ends every live episode
+        if (nativeStatusRef.current.running === false) {
+          // the native session is gone: give it up and let the restart below own it
+          stop({ persist: false, session: 'starting' });
+        }
+      }
+
       if (DmsVision && wantCameraRef.current) {
         if (decision.paused) {
           if (runningRef.current) {
             bridgeRef.current.noteStatus({ thermalPause: true });
             stop({ persist: false, session: 'starting' });
           }
-        } else if (!runningRef.current && !startingRef.current && (decision.resume || decision.changed)) {
+        } else if (!runningRef.current && !startingRef.current
+                   && appActiveRef.current && !permissionDeniedRef.current
+                   && (decision.resume || decision.changed || wall >= nextAutoStartRef.current)) {
+          // Never auto-start in the background (M6) or after a denial, and retry a failed
+          // resume at most once a minute (the thermal retry of DETECTION_DESIGN §3).
+          nextAutoStartRef.current = wall + AUTO_RESTART_S;
           start();
         } else if (runningRef.current && decision.changed) {
           safe(() => DmsVision.setTargetFps(decision.targetFps));
-          safe(() => DmsVision.setIdleMode(decision.reason === 'noFace'));
+          // the CONDITION, not the winning reason: a hot phone with no face is still idle
+          safe(() => DmsVision.setIdleMode(decision.noFace === true));
         }
       }
 
@@ -739,13 +845,13 @@ function useEngineMonitoring({ running, enabled, settings, onAlert, speedKmh }) 
           calibration: snap.calibration,
           activeAlert: snap.activeAlert,
           drowsiness: snap.drowsiness,
-          metrics: detailRef.current ? { ...snap.metrics, engine: detailRef.current } : snap.metrics,
+          metrics: { ...snap.metrics, engine: detailRef.current || null },
         });
       }
     };
     const timer = setInterval(tick, UI_TICK_MS);
     return () => clearInterval(timer);
-  }, [start, stop]);
+  }, [running, start, stop]);
 
   // --- imperative API ---------------------------------------------------------------------
   const recalibrate = useCallback(() => {

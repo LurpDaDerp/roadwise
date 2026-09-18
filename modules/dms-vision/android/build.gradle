@@ -37,6 +37,13 @@ dependencies {
   implementation "androidx.camera:camera-camera2:${cameraxVersion}"
   implementation "androidx.camera:camera-lifecycle:${cameraxVersion}"
 
+  // COMPILE ONLY, deliberately: DmsVisionPipeline observes CameraInfo.getCameraState(), whose
+  // type is androidx.lifecycle.Observer<CameraState>.  camera-core exposes LiveData in its own
+  // public API and therefore ships lifecycle-livedata-core at run time; naming it here only
+  // guarantees the class is on the COMPILE classpath (no version is added to the app's runtime
+  // graph, and the Observer interface has been source- and binary-stable since lifecycle 2.0).
+  compileOnly 'androidx.lifecycle:lifecycle-livedata-core:2.6.2'
+
   implementation 'com.google.mediapipe:tasks-vision:0.10.35'
   implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.30.0'
 }

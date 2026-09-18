@@ -111,3 +111,20 @@ test('changed is true only on a transition', () => {
   assert.strictEqual(p.update(Object.assign({}, base, { t: 1, facePresent: true })).changed, false);
   assert.strictEqual(p.update(Object.assign({}, base, { t: 2, facePresent: true, lowPower: true })).changed, true);
 });
+
+test('the decision carries the no-face CONDITION, not just the winning reason', () => {
+  const p = createCadencePolicy();
+  const first = p.update(Object.assign({ t: 0, facePresent: true }, base));
+  assert.strictEqual(first.noFace, false);
+
+  // hot AND no face: 'thermal' names the pill, but the camera must still go idle
+  const hot = p.update(Object.assign({ t: 20, facePresent: false }, base, { thermal: 'serious' }));
+  assert.strictEqual(hot.noFace, true);
+  assert.strictEqual(hot.reason, 'thermal');
+  assert.strictEqual(hot.targetFps, 5, 'the lowest rate wins');
+
+  // the face returns: the condition clears and the change is reported
+  const back = p.update(Object.assign({ t: 21, facePresent: true }, base, { thermal: 'serious' }));
+  assert.strictEqual(back.noFace, false);
+  assert.strictEqual(back.changed, true);
+});

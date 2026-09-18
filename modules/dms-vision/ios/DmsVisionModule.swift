@@ -10,6 +10,7 @@ import Foundation
 public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
   private let pipeline = DmsVisionPipeline()
   private let gaze = DmsVisionGaze()
+  /// Touched only on `statusQueue` (create, resume and cancel all happen there).
   private var statusTimer: DispatchSourceTimer?
   private let statusQueue = DispatchQueue(label: "com.roadcash.dmsvision.status")
 
@@ -24,19 +25,21 @@ public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
 
     OnDestroy {
       self.stopStatusTimer()
-      self.pipeline.stop()
-      self.gaze.close()
-    }
-
-    // Stopping the camera when the app leaves the foreground is required on iOS and matches
-    // DETECTION_DESIGN section 3 ("App state: inactive / background -> camera stopped").
-    OnAppEntersBackground {
-      if self.pipeline.isRunning {
-        self.stopStatusTimer()
-        self.pipeline.stop()
-        self.sendEvent("onStatus", self.statusPayload(stopped: true))
+      // Never block the main thread on a capture-session teardown: the stop waits for the
+      // session queue, which may be inside startRunning().
+      let pipeline = self.pipeline
+      let gaze = self.gaze
+      pipeline.sessionQueue.async {
+        pipeline.stopOnSessionQueue()
+        gaze.close()
       }
     }
+
+    // NOTE (docs/dms/INTEGRATION.md §3): there is deliberately NO OnAppEntersBackground handler.
+    // The JS AppState listener is the single owner of the camera across app-state changes; two
+    // owners left the JS-visible state and the native session disagreeing. iOS interrupts the
+    // session by itself when the app leaves the foreground, and that interruption is reported
+    // through onError / onStatus below, which is what the JS watchdog reacts to.
 
     Function("isAvailable") { () -> Bool in
       return true
@@ -57,7 +60,12 @@ public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
       }
     }
 
-    AsyncFunction("start") { (targetFps: Double, facing: String, landmarkFrame: String,
+    // start / stop configure and tear down an AVCaptureSession, which takes tens of
+    // milliseconds and must not run on the shared Expo async queue (every other module's async
+    // functions would queue behind it). `.runOnQueue` puts the body on the pipeline's own
+    // session queue - the queue the pipeline serialises its state on - so the bodies below call
+    // the "...OnSessionQueue" entry points and never nest a `sync` on it (that deadlocks).
+    AsyncFunction("start", { (targetFps: Double, facing: String, landmarkFrame: String,
                               mirrorPair: Bool, rotationOffsetDegrees: Int) in
       if mirrorPair {
         // TODO(mirror-pair): the promoted research recipe runs the mesh twice (frame + flipped
@@ -69,17 +77,19 @@ public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
         throw DmsVisionException("camera permission has not been granted")
       }
       try self.gaze.prepare()
-      try self.pipeline.start(targetFps: targetFps,
-                              facing: facing,
-                              landmarkFrame: landmarkFrame,
-                              rotationOffsetDegrees: rotationOffsetDegrees)
+      try self.pipeline.startOnSessionQueue(targetFps: targetFps,
+                                            facing: facing,
+                                            landmarkFrame: landmarkFrame,
+                                            rotationOffsetDegrees: rotationOffsetDegrees)
       self.startStatusTimer()
-    }
+    })
+    .runOnQueue(self.pipeline.sessionQueue)
 
-    AsyncFunction("stop") {
+    AsyncFunction("stop", { () -> Void in
       self.stopStatusTimer()
-      self.pipeline.stop()
-    }
+      self.pipeline.stopOnSessionQueue()
+    })
+    .runOnQueue(self.pipeline.sessionQueue)
 
     Function("setTargetFps") { (fps: Double) in
       self.pipeline.setTargetFps(fps)
@@ -112,21 +122,33 @@ public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
 
   // MARK: - Status
 
+  /// Created, resumed and cancelled on `statusQueue` only: a DispatchSourceTimer released before
+  /// it was resumed traps in libdispatch, and cancelling one from another thread while its
+  /// handler runs is a data race on `statusTimer`.
   private func startStatusTimer() {
-    stopStatusTimer()
-    let timer = DispatchSource.makeTimerSource(queue: statusQueue)
-    timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
-    timer.setEventHandler { [weak self] in
-      guard let self = self else { return }
-      self.sendEvent("onStatus", self.statusPayload(stopped: false))
+    statusQueue.sync {
+      self.cancelStatusTimerOnQueue()
+      let timer = DispatchSource.makeTimerSource(queue: self.statusQueue)
+      timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+      timer.setEventHandler { [weak self] in
+        guard let self = self else { return }
+        self.sendEvent("onStatus", self.statusPayload(stopped: false))
+      }
+      timer.resume()                 // resumed BEFORE it is published
+      self.statusTimer = timer
     }
-    statusTimer = timer
-    timer.resume()
   }
 
   private func stopStatusTimer() {
-    statusTimer?.cancel()
+    statusQueue.sync { self.cancelStatusTimerOnQueue() }
+  }
+
+  /// `statusQueue` only.
+  private func cancelStatusTimerOnQueue() {
+    guard let timer = statusTimer else { return }
     statusTimer = nil
+    timer.setEventHandler {}         // drop the captured self before cancelling
+    timer.cancel()
   }
 
   private func statusPayload(stopped: Bool) -> [String: Any?] {
@@ -160,5 +182,12 @@ public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
   func pipelineDidFail(code: String, message: String) {
     let payload: [String: Any?] = ["code": code, "message": message]
     sendEvent("onError", payload)
+  }
+
+  /// The OS interrupted or resumed the session (a call, another app taking the camera, the app
+  /// leaving the foreground). The JS side reads `running` from this status event and restarts
+  /// the session when the app is active again (docs/dms/INTEGRATION.md §3).
+  func pipelineDidChangeRunning(_ running: Bool) {
+    sendEvent("onStatus", statusPayload(stopped: !running))
   }
 }

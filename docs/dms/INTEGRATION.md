@@ -18,11 +18,12 @@ single new prop on the DriveScreen hook call (§5).
 | Path | Kind | Role |
 |---|---|---|
 | `monitoring/engineBridge.js` | pure CommonJS | `MonitoringBridge`: engine events / outputs → `status`, `calibration`, `activeAlert`, `drowsiness`, `metrics`.  All of the translation, none of React. |
-| `monitoring/__tests__/engineBridge.test.js` | `node --test` | 29 tests, incl. two full synthetic drives through the real engine |
+| `monitoring/__tests__/engineBridge.test.js` | `node --test` | 34 tests, incl. two full synthetic drives through the real engine |
 | `hooks/monitor/speedGate.js` | pure CommonJS | GPS speed → the engine's `setVehicleSpeed` (2 s EMA, 10 s staleness, 10/5 km/h hysteresis — D §8) |
 | `hooks/monitor/cadencePolicy.js` | pure CommonJS | 20 / 10 / 5 fps and the thermal pause, as a state machine (D §3) |
 | `hooks/monitor/referenceStore.js` | pure CommonJS | the persisted forward reference in AsyncStorage (D §5.2) |
-| `hooks/__tests__/*.test.js` | `node --test` | 34 tests for the three modules above |
+| `hooks/monitor/frameMeta.js` | pure CommonJS | which camera metadata a frame changes (`focalScale`, `isMirrored`, `orientation`) and whether the rule engine has to be rebuilt |
+| `hooks/__tests__/*.test.js` | `node --test` | 41 tests for the four modules above |
 | `dms/**` | pure CommonJS | the ported rule engine (already on this branch; see `dms/README.md`) |
 | `modules/dms-vision/**` | Expo module | camera + MediaPipe + ONNX Runtime (see `NATIVE_LAYER.md`) |
 
@@ -136,11 +137,14 @@ Behaviour notes:
 | Concern | Where | Design |
 |---|---|---|
 | camera permission | `requestPermissionsAsync()` on the module, else the `start()` rejection | W §6 |
-| camera lifecycle | `start` / `stop`, AppState (`inactive`/`background` → camera off, rules keep their clocks) | D §3 |
+| camera lifecycle | `start` / `stop`, AppState (`inactive`/`background` → camera off, rules keep their clocks).  The JS AppState listener is the **single owner**: the native modules have no background handlers, every start/stop is serialised on one promise chain and stamped with a session generation (a `start` that resolves after a newer `stop` stops itself again), nothing auto-starts unless the app is active, and a `permission_denied` is retried only on an explicit foreground transition or drive toggle | D §3 |
+| stall recovery | 4 Hz watchdog: no `onFrame` for 5 s while running → `bridge.setSession('starting')` (ends every episode); a native status with `running: false` (iOS session interruption / runtime error, CameraX `CameraState.CLOSED`) → treat as stopped and restart at most once a minute while the app is active | D §3 |
 | cadence | `setTargetFps(20/10/5)`, `setIdleMode` on no face > 5 s, pause at thermal `critical` with a 60 s retry | D §3 |
 | GPS speed | `speedGate` → `monitor.setVehicleSpeed()` every 250 ms | D §8 |
 | persisted reference | `@monitorReference:front:{orientation}`, seeded with `calibration.seedStale`, saved when CONFIRMED, dropped after 30 days or a model change | D §5.2 |
-| parity self-test | `selfTest(dms/tests/fixtures/onnx_parity.json)` once per app run → `metrics.engine.parityOk` | `NATIVE_LAYER.md` |
+| parity self-test | `selfTest(dms/tests/fixtures/onnx_parity.json)` once per app run → `metrics.engine.parityOk`; the fixture is `require`d lazily inside that call, never at import | `NATIVE_LAYER.md` |
+| camera metadata | `focalScale` / `isMirrored` / `orientation` come from the FRAMES (`getIntrinsics()` reports null until one has been processed).  A value that disagrees with the cached one by more than 1 % (focal) or at all (mirror) is adopted and the rule engine is rebuilt in place, carrying the learned reference | `hooks/monitor/frameMeta.js`, D §2, §4 |
+| doing nothing | with `enabled: false` (DrivePrep) or `demo: true` the engine path mounts **no** timer and **no** AppState listener | D §12 |
 | orientation check | the outer-eye line (landmarks 33 / 263) must be within ±35° of horizontal over the first 3 s of face frames | D §2 |
 
 ### What the bridge decides (`monitoring/engineBridge.js`)
@@ -162,6 +166,12 @@ Behaviour notes:
   `NO_MIRROR_CHECK` after 6 s.  An INFO banner is held for at least 4 s so it can be read.
 * **INFO never pre-empts** a live WARNING/CRITICAL — it does not even start an episode, so it is not
   counted either.
+* **The speed gate applies to INFO too.**  The engine's arbiter only ever sees WARNING/CRITICAL
+  events, so the bridge applies `monitor.arbiter.speedGated(event.type)` itself before raising an
+  INFO alert: below `alerts.speed_gate_kmh` (10 km/h, speed known) every event except
+  `DRIVER_NOT_VISIBLE` and the closed-eye family is **suppressed — neither voiced nor shown** — and
+  counted only in the engine diagnostics (`metrics.engine.engineEpisodes`).  Without this an
+  "Eyes off the road" banner appears while parked, which contradicts `WARNINGS_DESIGN.md` §2.
 * **`eyesOffRoadSeconds`**: the part of each glance beyond its class allowance (cabin from 0 s,
   lateral beyond 2 s, driving task beyond 1 s) plus head-down frames.
 * **`drowsiness.level`**: `ALERT` → 0, or 1 when the 60-s PERCLOS ≥ 0.08 (the DDWS advisory level) or
@@ -174,8 +184,13 @@ Behaviour notes:
   5 s without a face, then CALIBRATING while the reference is NONE, else ACTIVE.
 * Also exposed, informational: `engineDetail()`, `pointsBlocked(t)` (a voiced attention alert within
   10 s, or level 3) and `streakBreaking()` (≥ 3 distraction episodes, or one PROLONGED_STARE /
-  EYES_CLOSED).  The UX branch derives its own verdict in `monitoring/summary.js`; these exist so the
-  two can be compared.
+  EYES_CLOSED).  Both also appear as booleans in `engineDetail()` (`pointsBlocked`,
+  `streakBreaking`), so the UX branch's own verdict in `monitoring/summary.js` can be compared with
+  them on a real drive.
+* **`expireAll()`** ends every live episode and clears `activeAlert` without a frame.  Episodes
+  otherwise only expire on frames, so a camera that stops delivering would freeze a banner (or a
+  CRITICAL overlay) on screen: every `setSession` to something other than `'running'` calls it, and
+  the hook's frame-liveness watchdog (no `onFrame` for 5 s while running) calls `setSession('starting')`.
 
 ---
 
@@ -333,10 +348,35 @@ this line the record keeps exactly the UX shape and the diagnostics are simply n
 ```
 
 The Expo-module plugin for `modules/dms-vision` is added separately (see `NATIVE_LAYER.md`); it is
-not in the diff above.  `package.json` needs **no new dependency** for this branch: `expo-battery`,
-`expo-speech`, `expo-audio`, `expo-haptics` and AsyncStorage are already installed, and the native
-layer is a local module.  (Note for the merge: this worktree's `app.json` currently lists the four
+not in the diff above.
+
+**Dependencies (corrected).**  This branch's `package.json` adds `expo-battery` (~9.1.4, the Low
+Power Mode / battery-level input of the cadence policy, D §3) and has **no** `expo-haptics` — it was
+removed, so `WARNINGS_DESIGN.md` §3's haptic channel is not wired on this branch.  `expo-keep-awake`,
+`expo-speech`, `expo-audio` and AsyncStorage come from `main`; the native layer is a local module and
+needs nothing in `package.json`.  (Note for the merge: this worktree's `app.json` lists the four
 audio/location Android permissions twice — a pre-existing duplication, left untouched.)
+
+### Merge checklist
+
+Everything below travels together; any one of them missing is a silent failure, not a build error.
+
+1. **`monitoring/types.js` co-merge** (§4).  `monitoring/engineBridge.js` throws at load if any
+   `EVENT_TO_ALERT` value is `undefined`, and falls back to `LONG_GLANCE` / `DROWSY` /
+   `EYES_CLOSED` for an unmapped WARNING or CRITICAL, so a missed co-merge cannot silently drop a
+   critical alert — but it does break the app at import, which is the point.
+2. **`MONITORING_AVAILABLE = true`** in `monitoring/settings.js` (§1).  Until it is flipped the
+   branch is inert.
+3. **The `engine` passthrough** in `monitoring/summary.js` (§7) if the drive record should carry the
+   D §10 diagnostics.  Both hook paths (engine and `demo`) return the same `metrics` shape, with
+   `metrics.engine` present and `null` when there is nothing to report.
+4. **`screens/DriveScreen.js`**: the `speedKmh` feed (§5) and the `demo` prop, plus the `!demo`
+   guard that keeps mock metrics out of the drive record.
+5. **Mandatory co-merged imports**: `dms/**`, `hooks/monitor/**` (`speedGate`, `cadencePolicy`,
+   `referenceStore`, `frameMeta`), `modules/dms-vision/**` and `expo-battery`.  The hook imports all
+   of them directly.
+6. **`hooks/usePermissions.js`** must ask through the module (`DmsVision.getPermissionsAsync` /
+   `requestPermissionsAsync`) when it is linked, with `expo-image-picker` as the Expo Go fallback.
 
 ---
 
@@ -344,8 +384,8 @@ audio/location Android permissions twice — a pre-existing duplication, left un
 
 ```sh
 cd /mnt/c/Users/lurpd/Documents/dev/RoadCash-dms
-node --test "dms/tests/*.test.js"                                           # engine: 140 tests, 140 pass (~35 s)
-node --test "monitoring/__tests__/*.test.js" "hooks/__tests__/*.test.js"    # integration: 63 tests, 63 pass (~2 s)
+node --test "dms/tests/*.test.js"                                           # engine: 141 tests, 141 pass (~34 s)
+node --test "monitoring/__tests__/*.test.js" "hooks/__tests__/*.test.js"    # integration: 75 tests, 75 pass (~2 s)
 node modules/dms-vision/scripts/check-bundle.js                             # the three model copies are identical
 ```
 

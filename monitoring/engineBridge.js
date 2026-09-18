@@ -53,8 +53,29 @@ const EVENT_TO_ALERT = {
   // every calibration / system event are state and metrics only.
 };
 
-/** The engine's PERCLOS advisory event name (dms/alerts.js), kept for callers. */
-const PERCLOS_ADVISORY_EVENT = EventType.PERCLOS_ADVISORY;
+// A value of `undefined` above means `monitoring/types.js` was NOT co-merged with this file (it
+// adds four ALERT_TYPEs — docs/dms/INTEGRATION.md §4).  Every event mapping to it would be
+// dropped, including CRITICALs, so fail at load time where it is a one-line fix.
+for (const eventType of Object.keys(EVENT_TO_ALERT)) {
+  if (eventType === 'undefined') {
+    throw new Error('engineBridge: an EVENT_TO_ALERT key is undefined — dms/alerts.js is out of date');
+  }
+  if (!EVENT_TO_ALERT[eventType]) {
+    throw new Error(`engineBridge: EVENT_TO_ALERT["${eventType}"] is undefined — monitoring/types.js `
+      + 'must be co-merged with this file (docs/dms/INTEGRATION.md §4)');
+  }
+}
+
+/** Engine events whose fallback alert type is the closed-eye family. */
+const CLOSURE_EVENTS = new Set([
+  EventType.EYES_CLOSED, EventType.SLEEP, EventType.MICROSLEEP, EventType.PROLONGED_CLOSURE,
+]);
+
+/** Engine events whose fallback alert type is the drowsiness family. */
+const DROWSINESS_EVENTS = new Set([
+  EventType.DROWSY, EventType.SEVERE_DROWSY, EventType.FREQUENT_YAWNING, EventType.YAWN,
+  EventType.SLOW_BLINKS, EventType.HEAD_NOD, EventType.PERCLOS_ADVISORY,
+]);
 
 /** Episodes that end on a return to the road. */
 const GLANCE_ALERTS = new Set([
@@ -160,6 +181,19 @@ function severityOf(event, alertType) {
   return ALERT_SEVERITY.INFO;
 }
 
+/**
+ * The alert type for an engine event `EVENT_TO_ALERT` does not know (a new engine event type, or
+ * a `types.js` that lost one).  A WARNING / CRITICAL must never be dropped silently, so it is
+ * shown as the nearest family member; INFO events stay unmapped (state and metrics only).
+ */
+function fallbackAlertType(event) {
+  if (severityOf(event) === ALERT_SEVERITY.INFO) return null;
+  const type = event && event.type;
+  if (CLOSURE_EVENTS.has(type)) return ALERT_TYPE.EYES_CLOSED;
+  if (DROWSINESS_EVENTS.has(type)) return ALERT_TYPE.DROWSY;
+  return ALERT_TYPE.LONG_GLANCE;              // the attention family
+}
+
 class MonitoringBridge {
   /**
    * @param {object} options
@@ -258,11 +292,26 @@ class MonitoringBridge {
   setSession(kind) {
     if (this.session === kind) return;
     this.session = kind;
-    if (kind === 'off') {
-      this.activeAlert = null;
-      this.episodes.clear();
-    }
+    // Episodes only expire on frames.  When the session leaves 'running' the frames stop, so
+    // anything live would stay on screen (a CRITICAL overlay included) until they come back:
+    // end every episode here instead (docs/dms/INTEGRATION.md §3).
+    if (kind !== 'running') this.expireAll();
     this.version += 1;
+  }
+
+  /**
+   * End every live episode and clear the active alert, without a frame.  The hook calls this
+   * when the camera stops or stalls; `setSession` calls it on every non-running transition.
+   */
+  expireAll() {
+    if (this.episodes.size > 0) {
+      this.episodes.clear();
+      this.version += 1;
+    }
+    if (this.activeAlert !== null) {
+      this.activeAlert = null;
+      this.version += 1;
+    }
   }
 
   /** fps / thermal / parity / intrinsics for `engineDetail()` (never part of the UI contract). */
@@ -354,7 +403,9 @@ class MonitoringBridge {
       this.confidence = confidence;
       this.version += 1;
     }
-    this.admittedS = Number.isFinite(out.admitted_s) ? out.admitted_s : 0;
+    // ROUNDED (like `perclos` below): the admitted seconds grow by ~1/fps per frame and drive
+    // the progress ring, so only a change at the published resolution is worth a re-render.
+    this.admittedS = Number.isFinite(out.admitted_s) ? num(out.admitted_s, 3) : 0;
 
     for (const e of events) {
       if (!e || !e.type) continue;
@@ -388,13 +439,19 @@ class MonitoringBridge {
       this.calibrationState = state;
       this.version += 1;
     }
-    this.calibrationProgress = clamp01(this.admittedS / CONFIRM_TARGET_S);
+    // The progress ring is published at 3 decimals; bump the version only when it moves there,
+    // so a drive whose admitted seconds are frozen (no face, stationary) stops re-rendering.
+    const progress = num(clamp01(this.admittedS / CONFIRM_TARGET_S), 3);
+    if (progress !== this.calibrationProgress) {
+      this.calibrationProgress = progress;
+      this.version += 1;
+    }
 
     // quality: null until the reference is usable, then the mode's concentration, discounted
-    // while it is still provisional
+    // while it is still provisional (rounded to 2 decimals: the published resolution)
     let quality = null;
     if (confidence === 'PROVISIONAL' || confidence === 'CONFIRMED') {
-      const conc = Number.isFinite(out.concentration) ? out.concentration : 0;
+      const conc = Number.isFinite(out.concentration) ? num(out.concentration, 3) : 0;
       quality = clamp01(conc / 0.8) * (confidence === 'CONFIRMED' ? 1 : 0.7);
       quality = Math.round(quality * 100) / 100;
     }
@@ -406,7 +463,9 @@ class MonitoringBridge {
 
   _updateDrowsiness(out, t) {
     const level = String(out.drowsiness_level || 'ALERT');
-    const perclos = Number.isFinite(out.perclos) ? out.perclos : null;
+    // ROUNDED: the raw 60-s PERCLOS moves in the 5th decimal on every frame, and publishing it
+    // re-renders the whole drive screen four times a second on an attentive drive.
+    const perclos = Number.isFinite(out.perclos) ? num(out.perclos, 3) : null;
     const perclosLong = Number.isFinite(out.perclos_long) ? out.perclos_long : null;
     if (perclos !== null && perclos > this.maxPerclos60) this.maxPerclos60 = perclos;
     if (perclosLong !== null && perclosLong > this.maxPerclos180) this.maxPerclos180 = perclosLong;
@@ -484,12 +543,22 @@ class MonitoringBridge {
     for (const event of events) {
       if (!event || !event.type) continue;
       this._noteEngineEpisode(event);
-      const alertType = EVENT_TO_ALERT[event.type];
+      const alertType = EVENT_TO_ALERT[event.type] || fallbackAlertType(event);
       if (!alertType) continue;
-      const isVoiced = voiced !== null && voiced !== undefined && event === voiced;
+      // The engine hands the SAME object back as `voiced`; the value comparison is a belt for a
+      // caller that copies or re-serialises the events (an episode is keyed by t_start anyway).
+      const isVoiced = voiced !== null && voiced !== undefined
+        && (event === voiced || (event.type === voiced.type && event.t === voiced.t
+            && event.t_start === voiced.t_start));
       const severity = severityOf(event, alertType);
       if (severity !== ALERT_SEVERITY.INFO && !isVoiced) {
         // the arbiter did not sound it (cooldown, speed gate, acknowledgement): not an alert
+        continue;
+      }
+      if (severity === ALERT_SEVERITY.INFO && this._speedGated(event.type)) {
+        // The arbiter never sees INFO events, so the speed gate has to be applied here: an
+        // "Eyes off the road" banner while parked contradicts WARNINGS_DESIGN §2.  It is still
+        // counted in `engineEpisodes` above (the engine diagnostics).
         continue;
       }
       this._raise(alertType, severity, event, t);
@@ -497,6 +566,17 @@ class MonitoringBridge {
 
     // the display-only PERCLOS advisory (DETECTION_DESIGN §7a) arrives as the engine's own
     // PERCLOS_ADVISORY event (dms/drowsiness.js, at most once per 300 s) and is mapped above
+  }
+
+  /** The engine's own stationary gate (dms/monitor.js `AlertArbiter.speedGated`). */
+  _speedGated(eventType) {
+    const arbiter = this.monitor && this.monitor.arbiter;
+    if (!arbiter || typeof arbiter.speedGated !== 'function') return false;
+    try {
+      return Boolean(arbiter.speedGated(eventType));
+    } catch (err) {
+      return false;
+    }
   }
 
   _noteEngineEpisode(event) {
@@ -739,6 +819,11 @@ class MonitoringBridge {
       },
       engineEpisodes: { ...this.engineEpisodes },
       distractionEpisodes: this._distractionEpisodes,
+      // DETECTION_DESIGN §11, informational: what the app WOULD do about points and the streak.
+      // The UX branch derives its own verdict in monitoring/summary.js; these are here so the
+      // two can be compared on a real drive instead of being dead code.
+      pointsBlocked: this.pointsBlocked(),
+      streakBreaking: this.streakBreaking(),
     };
   }
 
@@ -756,23 +841,13 @@ class MonitoringBridge {
   }
 }
 
+// Only what a caller or a test actually uses: the sets and timings above are internal to the
+// translation and are documented where they are defined.
 module.exports = {
   MonitoringBridge,
   EVENT_TO_ALERT,
-  GLANCE_ALERTS,
-  CLOSURE_ALERTS,
-  LINGERING_ALERTS,
-  DISTRACTION_ALERTS,
-  STREAK_BREAKERS,
   NEVER_ACKNOWLEDGEABLE,
+  fallbackAlertType,
   severityOf,
-  PERCLOS_ADVISORY_EVENT,
-  EYES_OFF_ALLOWANCE,
-  INFO_MIN_S,
-  FORWARD_CLEAR_S,
-  NO_REPEAT_CLEAR_S,
-  LINGER_CLEAR_S,
-  NO_FACE_STATUS_S,
   DROWSINESS_HISTORY_MAX,
-  POINTS_HOLD_S,
 };

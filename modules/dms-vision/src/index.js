@@ -85,8 +85,8 @@ function decodeFrame(event) {
     height: event.height,
     facePresent: !!event.facePresent && landmarks !== null,
     score: event.score,
-    isMirrored: !!event.isMirrored,
-    focalScale: event.focalScale,
+    isMirrored: typeof event.isMirrored === 'boolean' ? event.isMirrored : null,
+    focalScale: Number.isFinite(event.focalScale) && event.focalScale > 0 ? event.focalScale : null,
     intrinsicsSource: event.intrinsicsSource,
     orientation: event.orientation,
     landmarks,
@@ -165,9 +165,22 @@ export const DmsVision = {
   /**
    * `{ focalScale, intrinsicsSource, fx, fy, cx, cy, bufferWidth, bufferHeight, width, height,
    *    rotationDegrees, orientation, isMirrored }` for the most recent frame.
+   *
+   * `focalScale`, `isMirrored` and `orientation` are **null until a frame has been processed**:
+   * before that the natives know neither the delivered buffer size nor what the connection did
+   * with mirroring, and a caller that latched the placeholder would run the rule engine on the
+   * wrong camera and the wrong driver-relative left / right (docs/dms/DETECTION_DESIGN.md §2).
+   * The nulls are passed through here, and normalised so an older native build cannot report a
+   * zero focal scale as if it were real.
    */
   getIntrinsics() {
-    return requireNative().getIntrinsics();
+    const raw = requireNative().getIntrinsics() || {};
+    return {
+      ...raw,
+      focalScale: Number.isFinite(raw.focalScale) && raw.focalScale > 0 ? raw.focalScale : null,
+      isMirrored: typeof raw.isMirrored === 'boolean' ? raw.isMirrored : null,
+      orientation: typeof raw.orientation === 'string' && raw.orientation ? raw.orientation : null,
+    };
   },
 
   /** 'nominal' | 'fair' | 'serious' | 'critical' | 'unknown'. */

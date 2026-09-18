@@ -86,13 +86,13 @@ import DmsVision from '../modules/dms-vision';
 | `stop()` | idempotent, resolves even when unavailable |
 | `setTargetFps(fps)` | synchronous; clamped to 1–30 |
 | `setIdleMode(bool)` | true → ~5 fps |
-| `getIntrinsics()` | `{ focalScale, intrinsicsSource, fx, fy, cx, cy, bufferWidth, bufferHeight, width, height, rotationDegrees, orientation, isMirrored }` for the most recent frame |
+| `getIntrinsics()` | `{ focalScale, intrinsicsSource, fx, fy, cx, cy, bufferWidth, bufferHeight, width, height, rotationDegrees, orientation, isMirrored }` for the most recent frame. `focalScale`, `orientation` and `isMirrored` are **null until a frame has been processed** (before that they would be placeholders, and the rule engine is built from them - docs/dms/NATIVE_LAYER.md §4) |
 | `getThermalState()` | `'nominal' \| 'fair' \| 'serious' \| 'critical' \| 'unknown'` |
 | `getModelInfo()` | `{ onnxSha256, parameters }` from the bundled meta.json |
 | `predictGaze(cloudF32, contextF32, validityF32)` | `Promise<{ gaze: Float32Array(3), rotation: Float32Array(9) }>`; 1434 / 7 / 478 floats in |
 | `addFrameListener(cb)` | `cb({ t, width, height, facePresent, score, isMirrored, focalScale, intrinsicsSource, orientation, landmarks })`; `landmarks` is a `Float32Array(1434)` or `null` |
 | `addStatusListener(cb)` | `cb({ thermal, lowPower, fps, dropped, running })`, once per second while running |
-| `addErrorListener(cb)` | `cb({ code, message })` |
+| `addErrorListener(cb)` | `cb({ code, message })`: `FRAME_CONVERSION_FAILED`, `INFERENCE_FAILED`, and — when the OS takes the camera away — `CAMERA_INTERRUPTED` / `CAMERA_RUNTIME_ERROR` (iOS) or `CAMERA_CLOSED` (Android). The interruption cases also emit an `onStatus` with `running: false` |
 | `selfTest(parityFixture)` | runs the 8 cases of `dms/tests/fixtures/onnx_parity.json` → `{ cases, maxAbsGaze, maxAbsRotation, ok }` |
 
 `mirrorPair: true` is **rejected**. The promoted research recipe runs the mesh twice (frame and

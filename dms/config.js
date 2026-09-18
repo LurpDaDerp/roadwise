@@ -340,6 +340,33 @@ function validate(cfg) {
         && d.score_severe_exit < d.score_severe && d.perclos_severe_exit < d.perclos_severe)) {
     throw new Error('drowsiness: exit thresholds must sit below the entry thresholds');
   }
+  // --- the phone-only options (DETECTION_DESIGN §5.1, §6, §7a); every reference default passes
+  if (!(c.stationary_weight >= 0.0 && c.stationary_weight <= 1.0)) {
+    throw new Error('calibration.stationary_weight must be in [0, 1]');
+  }
+  for (const key of ['hard_left_driver_deg', 'hard_left_passenger_deg']) {
+    const v = a[key];
+    if (!(v === null || v === undefined || (Number.isFinite(v) && v > 0.0))) {
+      throw new Error(`attention.${key} must be null or a positive angle`);
+    }
+  }
+  if (!(d.ear_open_freeze_s >= 0.0)) {
+    throw new Error('drowsiness.ear_open_freeze_s must be >= 0 (0 = off)');
+  }
+  if (!(d.ear_open_freeze_ratio > 0.0 && d.ear_open_freeze_ratio <= 1.0)) {
+    throw new Error('drowsiness.ear_open_freeze_ratio must be in (0, 1]');
+  }
+  if (!(d.perclos_blink_exclude_s >= 0.0)) {
+    throw new Error('drowsiness.perclos_blink_exclude_s must be >= 0 (0 = off)');
+  }
+  if (!(d.blink_stats_min_fps >= 0.0)) {
+    throw new Error('drowsiness.blink_stats_min_fps must be >= 0 (0 = off)');
+  }
+  if (!(d.perclos_advisory === null || d.perclos_advisory === undefined
+        || (d.perclos_advisory > 0.0 && d.perclos_advisory < 1.0))) {
+    throw new Error('drowsiness.perclos_advisory must be null or in (0, 1)');
+  }
+
   const names = cfg.zones.map((z) => z.name);
   if (names.length !== new Set(names).size) throw new Error('zone names must be unique');
   if (!cfg.zones.some((z) => z.kind === 'road')) throw new Error("a 'road' zone is required");
