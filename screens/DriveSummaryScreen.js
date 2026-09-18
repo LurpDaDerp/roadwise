@@ -88,6 +88,9 @@ export default function DriveSummaryScreen({ navigation, route }) {
           {summary.autoEnded && (
             <Banner tone="warning" title="Ended automatically" body="You were away from RoadWise for 2 minutes." style={{ marginTop: 14, alignSelf: 'stretch' }} />
           )}
+          {summary.queued && (
+            <Banner tone="info" icon="cloud-upload-outline" title="Saved on this device" body="We could not reach the server. This drive and its points upload automatically next time you are online." style={{ marginTop: 14, alignSelf: 'stretch' }} />
+          )}
           {!summary.saved && earned === 0 && (
             <Banner tone="neutral" icon="information-circle-outline" title="Not saved" body="Drives with no points are not added to your history." style={{ marginTop: 14, alignSelf: 'stretch' }} />
           )}

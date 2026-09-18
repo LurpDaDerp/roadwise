@@ -1,12 +1,14 @@
-// SignUpScreen — username with live availability hint, email, password (show/hide), inline validation.
+// SignUpScreen — username with live availability hint, email, password (show/hide),
+// inline validation. Provisioning follows the backend data layer: a registry
+// pre-flight (works while signed out), the auth account, a transactional username
+// claim, then ensureUserProfile; any failure after the account exists deletes it.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, Keyboard, TouchableWithoutFeedback, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, query, where, getDocs, collection } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 
-import { auth, db } from '../utils/firebase';
-import { saveUserPoints } from '../utils/firestore';
+import { auth } from '../utils/firebase';
+import { claimUsername, ensureUserProfile, isUsernameAvailable, validateUsername, MAX_USERNAME_LENGTH } from '../utils/firestore';
 import { Screen, Section, Button, Field, Eyebrow, Banner, useInputStyle, useTheme } from '../theme';
 
 const isValidEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.toLowerCase());
@@ -21,62 +23,73 @@ export default function SignUpScreen({ navigation }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [availability, setAvailability] = useState(null); // null | 'checking' | 'free' | 'taken' | 'invalid'
+  const [usernameProblem, setUsernameProblem] = useState(null);
   const checkTimer = useRef(null);
 
-  // Live username availability (debounced).
+  // Live availability against the public username registry (debounced).
   useEffect(() => {
     const u = username.trim();
     if (checkTimer.current) clearTimeout(checkTimer.current);
     if (!u) {
       setAvailability(null);
+      setUsernameProblem(null);
       return undefined;
     }
-    if (u.length > 16 || !/^[a-zA-Z0-9_.-]+$/.test(u)) {
+    const problem = validateUsername(u);
+    if (problem) {
       setAvailability('invalid');
+      setUsernameProblem(problem);
       return undefined;
     }
+    setUsernameProblem(null);
     setAvailability('checking');
     checkTimer.current = setTimeout(async () => {
-      try {
-        const snap = await getDocs(query(collection(db, 'users'), where('username', '==', u)));
-        setAvailability(snap.empty ? 'free' : 'taken');
-      } catch {
-        setAvailability(null);
-      }
+      const free = await isUsernameAvailable(u);
+      setAvailability(free ? 'free' : 'taken');
     }, 500);
     return () => checkTimer.current && clearTimeout(checkTimer.current);
   }, [username]);
 
-  const hint = {
-    checking: 'Checking…',
-    free: 'Available',
-    taken: 'Already taken',
-    invalid: 'Up to 16 letters, numbers, dots, dashes or underscores.',
-  }[availability] || 'Shown on the leaderboard. Up to 16 characters.';
+  const hint =
+    {
+      checking: 'Checking…',
+      free: 'Available',
+      taken: 'Already taken',
+      invalid: usernameProblem,
+    }[availability] || `Shown on the leaderboard. Up to ${MAX_USERNAME_LENGTH} characters, starting with a letter or number.`;
 
   const handleSignUp = async () => {
     const u = username.trim();
     const e = email.trim();
     setError(null);
-    if (!u) return setError('Choose a username.');
-    if (availability === 'invalid' || u.length > 16) return setError('Username: up to 16 letters, numbers, dots, dashes or underscores.');
+    const problem = validateUsername(u);
+    if (problem) return setError(problem);
     if (availability === 'taken') return setError('That username is already taken.');
     if (!isValidEmail(e)) return setError('Enter a valid email address.');
     if (password.length < 6) return setError('Password must be at least 6 characters.');
     setBusy(true);
+    let createdUser = null;
     try {
-      const taken = await getDocs(query(collection(db, 'users'), where('username', '==', u)));
-      if (!taken.empty) {
+      if (!(await isUsernameAvailable(u))) {
         setError('That username is already taken.');
         return;
       }
       const cred = await createUserWithEmailAndPassword(auth, e, password);
-      const uid = cred.user.uid;
-      await setDoc(doc(db, 'users', uid), { username: u, points: 0, drivingStreak: 0, photoURL: null, groupId: null });
-      await setDoc(doc(db, 'userinfo', uid), { email: e, createdAt: new Date() });
-      await saveUserPoints(uid, 0);
+      createdUser = cred.user;
+      // Authoritative, race-free claim: exactly one of two simultaneous sign-ups wins.
+      const claimed = await claimUsername(createdUser.uid, u);
+      if (!claimed) {
+        await deleteUser(createdUser).catch(() => {});
+        setError('That username was just taken. Please choose another.');
+        return;
+      }
+      await ensureUserProfile(createdUser, { username: u });
       // RootNavigator shows onboarding on auth change.
     } catch (err) {
+      // Anything that fails after the auth account exists leaves an orphan; remove it.
+      if (createdUser && err?.code !== 'auth/email-already-in-use') {
+        await deleteUser(createdUser).catch(() => {});
+      }
       if (err?.code === 'auth/email-already-in-use') setError('An account with this email already exists. Log in instead.');
       else if (err?.code === 'auth/invalid-email') setError('Enter a valid email address.');
       else if (err?.code === 'auth/weak-password') setError('Choose a stronger password (at least 6 characters).');
@@ -111,7 +124,7 @@ export default function SignUpScreen({ navigation }) {
                     onChangeText={setUsername}
                     autoCapitalize="none"
                     autoCorrect={false}
-                    maxLength={16}
+                    maxLength={MAX_USERNAME_LENGTH}
                   />
                   {(availability === 'free' || availability === 'taken') && (
                     <View style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>

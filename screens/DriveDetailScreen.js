@@ -17,7 +17,9 @@ import { MonitoringSummaryCard } from '../components/monitoring';
 import { MetricGroup, ScoreRing, TipsList, isDistractedDrive } from '../components/drives';
 import { useAuthContext } from '../context/AuthContext';
 import { useSettings } from '../context/SettingsContext';
-import { getUserDrives } from '../utils/firestore';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../utils/firebase';
+import { DRIVE_METRICS_COLLECTION } from '../utils/firestore';
 import { getDriveTips, scoreDrive } from '../utils/driveScore';
 import {
   formatDateTime,
@@ -42,10 +44,16 @@ export default function DriveDetailScreen({ route }) {
     if (paramDrive || !driveId || !uid) return undefined;
     let alive = true;
     (async () => {
-      const all = await getUserDrives(uid);
-      if (!alive) return;
-      setDrive(all.find((d) => d.id === driveId) || null);
-      setLoading(false);
+      try {
+        const snap = await getDoc(doc(db, 'users', uid, DRIVE_METRICS_COLLECTION, driveId));
+        if (!alive) return;
+        setDrive(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+      } catch (e) {
+        console.warn('Drive load failed:', e);
+        if (alive) setDrive(null);
+      } finally {
+        if (alive) setLoading(false);
+      }
     })();
     return () => {
       alive = false;

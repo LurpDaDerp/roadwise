@@ -45,7 +45,7 @@ export default function DriveScreen({ navigation, route }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { settings } = useSettings();
-  const { uid, points: lifetimePoints, groupId } = useAuthContext();
+  const { uid, points: lifetimePoints, streak: currentStreak, groupId } = useAuthContext();
   const player = useAudioPlayer(alertTone);
 
   // Monitoring runs only when the real hook is present; the `demoMonitoring`
@@ -86,7 +86,14 @@ export default function DriveScreen({ navigation, route }) {
       ? { enabled: monitoringEnabled, metrics: monitoring.metrics, calibrationState: monitoring.calibration?.state }
       : null;
   }, [monitoringEnabled, monitoring.metrics, monitoring.calibration?.state]);
-  const getFinalizeExtra = useCallback(() => (monitoringRef.current ? { monitoring: monitoringRef.current } : {}), []);
+  const streakRef = useRef(currentStreak);
+  useEffect(() => {
+    streakRef.current = currentStreak;
+  }, [currentStreak]);
+  const getFinalizeExtra = useCallback(
+    () => ({ previousStreak: streakRef.current, ...(monitoringRef.current ? { monitoring: monitoringRef.current } : {}) }),
+    []
+  );
 
   // ---- drive engine --------------------------------------------------------
   const navigatedRef = useRef(false);
@@ -234,6 +241,13 @@ export default function DriveScreen({ navigation, route }) {
           <AlertBanner alert={bannerAlert} />
         ) : session.gpsStatus === 'denied' ? (
           <Banner tone="danger" icon="navigate" title="Location is off" body="Enable location to track this drive" />
+        ) : session.pendingDrives > 0 ? (
+          <Banner
+            tone="info"
+            icon="cloud-upload-outline"
+            title={session.pendingDrives === 1 ? 'A finished drive is waiting to upload' : `${session.pendingDrives} finished drives are waiting to upload`}
+            body="They will be saved when you are back online"
+          />
         ) : null}
       </View>
 

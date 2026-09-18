@@ -24,7 +24,7 @@ function longestFocusedRun(drives) {
 
 export const BADGES = [
   { id: 'first_drive', title: 'First drive', body: 'Complete your first drive.', icon: 'car-sport-outline', target: 1,
-    progress: ({ drives }) => drives.length },
+    progress: ({ drives, totalDrives }) => (Number.isFinite(totalDrives) ? totalDrives : drives.length) },
   { id: 'focused_5', title: 'Focused ×5', body: 'Five focused drives in a row.', icon: 'eye-outline', target: 5,
     progress: ({ drives }) => longestFocusedRun(drives) },
   { id: 'focused_25', title: 'Focused ×25', body: 'Twenty-five focused drives in a row.', icon: 'ribbon-outline', target: 25,
@@ -49,8 +49,8 @@ export const BADGES = [
     progress: ({ points }) => Number(points) || 0 },
 ];
 
-export function computeBadges({ drives = [], streak = 0, points = 0 }) {
-  const ctx = { drives, streak, points };
+export function computeBadges({ drives = [], streak = 0, points = 0, totalDrives = null }) {
+  const ctx = { drives, streak, points, totalDrives };
   return BADGES.map((b) => {
     let progress = 0;
     try {

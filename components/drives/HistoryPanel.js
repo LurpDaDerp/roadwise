@@ -1,6 +1,6 @@
 // HistoryPanel — the History tab of the Drives screen: a summary strip, the
 // drive list grouped by day, and "Load more" pagination.
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import {
   Button,
@@ -14,10 +14,7 @@ import {
   useTheme,
 } from '../../theme';
 import { formatDayHeading, formatDistance, toDate } from '../../utils/format';
-import { summarizeDrives } from '../../utils/driveScore';
 import { DriveRow } from './DriveRow';
-
-const LOAD_BATCH = 10;
 
 function dayKey(ts) {
   const d = toDate(ts);
@@ -62,11 +59,22 @@ function SkeletonRow({ first }) {
   );
 }
 
-export function HistoryPanel({ drives = [], loading = false, unit = 'mph', onSelectDrive }) {
+// drives: the pages loaded so far (server pagination); counts: { total, distracted,
+// focused } from count queries, so the summary is right even before every page is in.
+export function HistoryPanel({
+  drives = [],
+  counts = null,
+  loading = false,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  unit = 'mph',
+  onSelectDrive,
+}) {
   const t = useTheme();
-  const [visibleCount, setVisibleCount] = useState(LOAD_BATCH);
 
-  const summary = useMemo(() => summarizeDrives(drives), [drives]);
+  const total = counts ? counts.total : drives.length;
+  const focusedPct = counts && counts.total > 0 ? Math.round((counts.focused / counts.total) * 100) : null;
   const monthMeters = useMemo(() => {
     const now = new Date();
     return drives.reduce((sum, d) => {
@@ -78,10 +86,7 @@ export function HistoryPanel({ drives = [], loading = false, unit = 'mph', onSel
     }, 0);
   }, [drives]);
 
-  const groups = useMemo(
-    () => groupByDay(drives.slice(0, visibleCount)),
-    [drives, visibleCount]
-  );
+  const groups = useMemo(() => groupByDay(drives), [drives]);
 
   if (loading && drives.length === 0) {
     return (
@@ -100,11 +105,11 @@ export function HistoryPanel({ drives = [], loading = false, unit = 'mph', onSel
       <Section label="Summary">
         <Card>
           <View style={{ flexDirection: 'row' }}>
-            <StatCell label="Drives" value={String(summary.count)} size="sm" />
+            <StatCell label="Drives" value={String(total)} size="sm" />
             <StatDivider />
             <StatCell
               label="Focused"
-              value={summary.focusedPct === null ? '—' : `${summary.focusedPct}%`}
+              value={focusedPct === null ? '—' : `${focusedPct}%`}
               size="sm"
               color={t.colors.accent}
             />
@@ -146,12 +151,13 @@ export function HistoryPanel({ drives = [], loading = false, unit = 'mph', onSel
           </View>
         )}
 
-        {visibleCount < drives.length && (
+        {hasMore && (
           <View style={{ marginTop: 14 }}>
             <Button
-              title="Load more"
+              title={loadingMore ? 'Loading…' : 'Load more'}
               variant="ghost"
-              onPress={() => setVisibleCount((p) => p + LOAD_BATCH)}
+              disabled={loadingMore}
+              onPress={onLoadMore}
             />
           </View>
         )}

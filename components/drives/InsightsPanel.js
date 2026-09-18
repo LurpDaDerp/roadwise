@@ -2,6 +2,7 @@
 // Timeframe control, the distraction chart, focus and dynamics stats, and the
 // entry point to the AI feedback screen.
 import React, { useCallback, useMemo, useState } from 'react';
+import { getInsightsDrives } from '../../utils/driveCache';
 import { View, Text, Dimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { Ionicons } from '@expo/vector-icons';
@@ -189,8 +190,29 @@ function LegendDot({ color, label }) {
   );
 }
 
-export function InsightsPanel({ drives = [], unit = 'mph', navigation }) {
+// Loads its own data: the last 30 days (a server range query) cached for 5 minutes and
+// invalidated when a drive is finalized, so a drive finished after the first visit shows
+// up on the next focus without re-reading the whole history on every tab press.
+export function InsightsPanel({ uid, unit = 'mph', navigation }) {
   const t = useTheme();
+  const [drives, setDrives] = useState([]);
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      if (!uid) return undefined;
+      (async () => {
+        try {
+          const list = await getInsightsDrives(uid);
+          if (alive) setDrives(Array.isArray(list) ? list : []);
+        } catch (e) {
+          console.warn('Insights load failed:', e);
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [uid])
+  );
   const [timeframeIndex, setTimeframeIndex] = useState(1);
   const [feedbackLabel, setFeedbackLabel] = useState('Get personalized feedback');
   const [notEnoughData, setNotEnoughData] = useState(false);

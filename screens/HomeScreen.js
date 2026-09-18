@@ -5,11 +5,10 @@ import { View, Text, ScrollView, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { doc, getDoc } from 'firebase/firestore';
 
 import { Screen, Section, Card, ScreenHeader, Button, StatCell, StatDivider, ListRow, EmptyState, Skeleton, Sheet, Ring, scoreColor, Chip, useTheme, useCountUp } from '../theme';
-import { db } from '../utils/firebase';
-import { getRecentDrives } from '../utils/firestore';
+import { getDriveHistoryPage } from '../utils/firestore';
+import { getGroup } from '../utils/groups';
 import { summarizeDrives } from '../utils/driveScore';
 import { formatDistance, toDate, serializeDrive } from '../utils/format';
 import { KEYS } from '../utils/storageKeys';
@@ -42,8 +41,8 @@ export default function HomeScreen({ navigation }) {
   const load = useCallback(async () => {
     if (!uid) return;
     try {
-      const [recent, storedScore] = await Promise.all([getRecentDrives(uid, 30), AsyncStorage.getItem(KEYS.safetyScoreFor(uid))]);
-      setDrives(recent);
+      const [page, storedScore] = await Promise.all([getDriveHistoryPage(uid, { pageSize: 30 }), AsyncStorage.getItem(KEYS.safetyScoreFor(uid))]);
+      setDrives(page.drives);
       const parsed = storedScore != null ? parseInt(storedScore, 10) : NaN;
       setSafetyScore(Number.isFinite(parsed) ? parsed : null);
     } catch (e) {
@@ -51,17 +50,17 @@ export default function HomeScreen({ navigation }) {
     }
     if (groupId) {
       try {
-        const snap = await getDoc(doc(db, 'groups', groupId));
-        if (snap.exists()) {
-          const data = snap.data();
+        const data = await getGroup(groupId);
+        if (data) {
           const members = Object.values(data.memberLocations || {});
-          setFamily({ name: data.groupName || 'Your group', members: members.length, emergencies: members.filter((m) => m?.emergency).length });
+          const memberCount = Array.isArray(data.members) && data.members.length ? data.members.length : members.length;
+          setFamily({ name: data.groupName || 'Your group', members: memberCount, emergencies: members.filter((m) => m?.emergency).length });
         } else setFamily(null);
       } catch {
         setFamily(null);
       }
     } else {
-      setFamily(null);
+      setFamily(null); // null = no group; undefined (lookup failed) keeps the last value
     }
   }, [uid, groupId]);
 

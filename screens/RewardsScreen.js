@@ -21,7 +21,7 @@ import {
   useTheme,
 } from '../theme';
 import { useAuthContext } from '../context/AuthContext';
-import { getUserDrives } from '../utils/firestore';
+import { getAllDriveMetrics, getDriveCounts } from '../utils/firestore';
 import { computeBadges } from '../utils/achievements';
 import { fetchLeaderboard } from '../utils/leaderboard';
 import { BadgeGrid, LeaderboardPreview, RewardCategoryTile } from '../components/rewards';
@@ -41,6 +41,7 @@ export default function RewardsScreen({ navigation }) {
   const { uid, points, streak } = useAuthContext();
 
   const [drives, setDrives] = useState([]);
+  const [totalDrives, setTotalDrives] = useState(null);
   const [drivesLoading, setDrivesLoading] = useState(true);
   const [board, setBoard] = useState({ rows: [], me: null });
   const [boardLoading, setBoardLoading] = useState(true);
@@ -68,9 +69,12 @@ export default function RewardsScreen({ navigation }) {
       setBoardError(false);
 
       (async () => {
-        const list = await getUserDrives(uid);
+        // Badges need recent history, not the whole collection: the newest 200 drives
+        // plus a server count for the totals-based badges.
+        const [list, counts] = await Promise.all([getAllDriveMetrics(uid, { maxDrives: 200 }), getDriveCounts(uid)]);
         if (!active) return;
         setDrives(Array.isArray(list) ? list : []);
+        setTotalDrives(counts?.total ?? null);
         setDrivesLoading(false);
       })();
 
@@ -95,8 +99,8 @@ export default function RewardsScreen({ navigation }) {
   );
 
   const badges = useMemo(
-    () => computeBadges({ drives, streak, points }),
-    [drives, streak, points]
+    () => computeBadges({ drives, streak, points, totalDrives }),
+    [drives, streak, points, totalDrives]
   );
   const unlockedCount = badges.filter((b) => b.unlocked).length;
 

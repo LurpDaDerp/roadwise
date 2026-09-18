@@ -14,12 +14,22 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../utils/firebase';
 import { supabase } from '../utils/supabase';
-import { clearUserDrives, getAllDriveMetrics } from '../utils/firestore';
+import { isSupabaseConfigured } from '../utils/config';
+import {
+  clearUserDrives,
+  getDriveCounts,
+  invalidateUserCache,
+  claimUsername,
+  isUsernameAvailable,
+  validateUsername,
+  MAX_USERNAME_LENGTH,
+} from '../utils/firestore';
+import { getGroupName } from '../utils/groups';
 import { useAuthContext } from '../context/AuthContext';
 import { KEYS } from '../utils/storageKeys';
 import {
@@ -60,12 +70,8 @@ export default function AccountSettings() {
       return undefined;
     }
     (async () => {
-      try {
-        const snap = await getDoc(doc(db, 'groups', groupId));
-        if (!cancelled) setGroupName((snap.exists() && snap.data().groupName) || 'Unknown');
-      } catch {
-        if (!cancelled) setGroupName('Unknown');
-      }
+      const name = await getGroupName(groupId);
+      if (!cancelled) setGroupName(name || 'Unknown');
     })();
     return () => {
       cancelled = true;
@@ -77,8 +83,8 @@ export default function AccountSettings() {
     let cancelled = false;
     if (!uid) return undefined;
     (async () => {
-      const drives = await getAllDriveMetrics(uid);
-      if (!cancelled) setDriveCount(Array.isArray(drives) ? drives.length : 0);
+      const counts = await getDriveCounts(uid);
+      if (!cancelled) setDriveCount(counts?.total ?? 0);
     })();
     return () => {
       cancelled = true;
@@ -86,6 +92,10 @@ export default function AccountSettings() {
   }, [uid]);
 
   const pickImage = async () => {
+    if (!isSupabaseConfigured()) {
+      Alert.alert('Photo upload unavailable', 'This build has no photo storage configured.');
+      return;
+    }
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
@@ -123,6 +133,7 @@ export default function AccountSettings() {
         setUploadedPhoto(publicURL);
         await AsyncStorage.setItem(KEYS.cachedProfileImage, publicURL);
         await setDoc(doc(db, 'users', uid), { photoURL: publicURL }, { merge: true });
+        invalidateUserCache(uid);
       }
     } catch (error) {
       Alert.alert('Upload failed', error.message);
@@ -133,18 +144,24 @@ export default function AccountSettings() {
 
   const handleSaveUsername = async () => {
     const trimmed = editedUsername.trim();
-    if (!trimmed) {
-      Alert.alert('Username required', 'Username cannot be empty.');
+    const problem = validateUsername(trimmed);
+    if (problem) {
+      Alert.alert('Check the username', problem);
       return;
     }
     setSaving(true);
     try {
-      const snapshot = await getDocs(query(collection(db, 'users'), where('username', '==', trimmed)));
-      if (snapshot.docs.some((d) => d.id !== uid)) {
+      // Registry pre-flight, then a transactional claim: two renames to the same name
+      // cannot both succeed, and the old claim is released.
+      if (!(await isUsernameAvailable(trimmed, { forUid: uid }))) {
         Alert.alert('Username taken', 'This username is already in use.');
         return;
       }
-      await setDoc(doc(db, 'users', uid), { username: trimmed }, { merge: true });
+      const claimed = await claimUsername(uid, trimmed);
+      if (!claimed) {
+        Alert.alert('Username taken', 'This username is already in use.');
+        return;
+      }
       setIsEditing(false);
     } catch (error) {
       Alert.alert('Update failed', error.message);
@@ -287,7 +304,7 @@ export default function AccountSettings() {
                 />
                 {isEditing && (
                   <View style={{ paddingHorizontal: 18, paddingBottom: 16 }}>
-                    <Field hint="3–30 characters, must be unique.">
+                    <Field hint={`Up to ${MAX_USERNAME_LENGTH} characters: letters, numbers, dots, dashes, underscores.`}>
                       <TextInput
                         style={inputStyle}
                         value={editedUsername}
@@ -295,7 +312,7 @@ export default function AccountSettings() {
                         editable={!saving}
                         autoFocus
                         autoCapitalize="none"
-                        maxLength={30}
+                        maxLength={MAX_USERNAME_LENGTH}
                         placeholder="Enter username"
                         placeholderTextColor={t.colors.textSubtle}
                       />

@@ -1,12 +1,22 @@
 // LoginScreen — email + password (show/hide), inline errors, forgot password, Google.
+// Google sign-in follows the backend data layer: per-platform client ids from
+// utils/config.js, maybeCompleteAuthSession, non-success results surfaced, the button
+// disabled with a notice when the build has no client ids, ensureUserProfile after.
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, Keyboard, TouchableWithoutFeedback, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { signInWithEmailAndPassword, sendPasswordResetEmail, GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
 
 import { auth } from '../utils/firebase';
+import { googleAuthConfig } from '../utils/config';
+import { ensureUserProfile } from '../utils/firestore';
 import { Screen, Section, Button, Field, Eyebrow, Banner, useInputStyle, useTheme } from '../theme';
+
+// Required by expo-auth-session so the browser tab closes and hands control back to the
+// app once Google redirects; without it the response can never be delivered.
+WebBrowser.maybeCompleteAuthSession();
 
 function authMessage(code) {
   switch (code) {
@@ -35,18 +45,45 @@ export default function LoginScreen({ navigation }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: '68093599355-ps82c8m515nrpsont9mhgl2bv7k85b49.apps.googleusercontent.com',
-  });
+  // One OAuth client id PER PLATFORM: a native build redirects to its own URL scheme and
+  // Google rejects a redirect that does not belong to the client id used. The web id is
+  // still passed because it is the audience Firebase validates the id token against.
+  const platformClientId = Platform.OS === 'ios' ? googleAuthConfig.iosClientId : googleAuthConfig.androidClientId;
+  const googleConfigured = Boolean(googleAuthConfig.webClientId && platformClientId);
+
+  // The hook throws during render without any usable client id; a stub keeps the screen
+  // renderable so the "not configured" notice can show.
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
+    googleConfigured
+      ? {
+          clientId: googleAuthConfig.webClientId,
+          iosClientId: googleAuthConfig.iosClientId ?? undefined,
+          androidClientId: googleAuthConfig.androidClientId ?? undefined,
+          webClientId: googleAuthConfig.webClientId,
+        }
+      : { clientId: 'unconfigured.apps.googleusercontent.com' }
+  );
 
   useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      signInWithCredential(auth, credential).catch((e) => setError(e?.message || 'Google sign-in failed.'));
-    } else if (response?.type === 'error') {
-      setError('Google sign-in failed.');
+    if (!response) return;
+    if (response.type === 'error') {
+      setError(response.error?.message ?? 'Google rejected the sign-in request. Check the OAuth client id for this platform.');
+      return;
     }
+    if (response.type !== 'success') return; // dismissed / cancelled
+    const idToken = response.params?.id_token ?? response.authentication?.idToken;
+    if (!idToken) {
+      setError('Google did not return an identity token.');
+      return;
+    }
+    setBusy(true);
+    signInWithCredential(auth, GoogleAuthProvider.credential(idToken))
+      .then(async ({ user }) => {
+        // A Google account has no profile document yet; create one (and a username claim).
+        await ensureUserProfile(user);
+      })
+      .catch((e) => setError(e?.message || 'Google sign-in failed.'))
+      .finally(() => setBusy(false));
   }, [response]);
 
   const handleLogin = async () => {
@@ -147,10 +184,15 @@ export default function LoginScreen({ navigation }) {
               <Button
                 title="Continue with Google"
                 variant="ghost"
-                disabled={!request || busy}
+                disabled={!request || !googleConfigured || busy}
                 onPress={() => promptAsync()}
                 icon={<Ionicons name="logo-google" size={18} color={t.colors.text} />}
               />
+              {!googleConfigured && (
+                <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 8, textAlign: 'center' }]}>
+                  Google sign-in is not configured for this build.
+                </Text>
+              )}
             </Section>
 
             <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 4 }}>
