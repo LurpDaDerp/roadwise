@@ -402,7 +402,7 @@ Applied after an independent review of this branch; none of them has been throug
   resolution only (an explicit `compileOnly androidx.lifecycle:lifecycle-livedata-core:2.6.2` pin
   conflicted with camera-core's transitive 2.1.0 under consistent resolution); the pin was removed in
   7e0e04c (`Observer` / `LiveData` come from camera-core's own API dependency) and the build
-  resubmitted — its outcome is in the final report.
+  resubmitted as `3bbf783c-a2f6-4d8e-8621-3431b38def98` — FINISHED (.apk artifact on the EAS build page).
 
 ## 8. Deliberate omissions
 
