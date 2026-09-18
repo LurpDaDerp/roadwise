@@ -33,7 +33,11 @@ const ElapsedClock = React.memo(function ElapsedClock({ startedAt, running = tru
 });
 
 export const DriveTopBar = React.memo(function DriveTopBar({
-  onSos, monitoring, monitoringEnabled, showMonitoring = true, startedAt, running = true, onPillPress,
+  // `status` and `calibration`, not the whole monitoring object: that object gets a new identity
+  // on every 4 Hz publish, which would re-render this bar (and the pill) even when the two values
+  // it shows are unchanged.
+  onSos, status, calibration, monitoringEnabled, showMonitoring = true, startedAt, running = true,
+  onPillPress,
 }) {
   const t = useTheme();
   return (
@@ -63,8 +67,8 @@ export const DriveTopBar = React.memo(function DriveTopBar({
       {/* MONITORING MOUNT POINT [MP-1]: status pill (hidden while MONITORING_AVAILABLE is false) */}
       {showMonitoring ? (
         <MonitoringStatusPill
-          status={monitoring?.status}
-          calibration={monitoring?.calibration}
+          status={status}
+          calibration={calibration}
           enabled={monitoringEnabled}
           onPress={onPillPress}
           style={{ maxWidth: 190 }}

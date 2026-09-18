@@ -377,7 +377,8 @@ export default function DriveScreen({ navigation, route }) {
       <View onLayout={onTopBarLayout}>
         <DriveTopBar
           onSos={openSos}
-          monitoring={monitoring}
+          status={monitoring.status}
+          calibration={monitoring.calibration}
           monitoringEnabled={monitoringEnabled}
           showMonitoring={MONITORING_AVAILABLE || demo}
           startedAt={session.startedAt}

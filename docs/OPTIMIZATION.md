@@ -193,11 +193,20 @@ the drive screen, which unmounts on navigation.
 
 Measured with `npx expo export` (ios) before and after:
 
-| | before | after | |
+| ios | before | after | |
 |---|---|---|---|
-| Hermes bundle | 7,829,221 B | 7,675,683 B | −2.0 % |
+| Hermes bundle | 7,829,221 B | 7,675,994 B | −2.0 % |
 | assets | 4,405,471 B | 2,263,500 B | **−48.6 %** |
-| export total | 12,238,037 B | 9,941,696 B | **−18.8 %** |
+| export total | 12,238,037 B | 9,942,007 B | **−18.8 %** |
+
+| android | before | after | |
+|---|---|---|---|
+| Hermes bundle | 7,853,198 B | 7,698,274 B | −2.0 % |
+| assets | — | 2,262,006 B | |
+| export total | 12,260,464 B | 9,962,737 B | **−18.7 %** |
+
+The EAS upload is 14.5 MB, down from ~32 MB before the orphan assets, the model reference
+copies and the removed dependencies.
 
 * **Icon fonts, 19 → 2.** `import { Ionicons } from '@expo/vector-icons'` pulls the package
   barrel, which references every font family as an asset, so all 19 TTFs (3.9 MB) shipped when

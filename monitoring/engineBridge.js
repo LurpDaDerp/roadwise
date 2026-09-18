@@ -254,6 +254,7 @@ class MonitoringBridge {
     this.confidence = 'NONE';
     this.calibrationState = CALIBRATION_STATE.OFF;
     this.calibrationProgress = 0;
+    this._calibrationOut = null;
     this.admittedS = 0;
     this.lostUntilT = null;
     this.timeToProvisionalS = null;
@@ -764,12 +765,22 @@ class MonitoringBridge {
     return MONITOR_STATUS.ACTIVE;
   }
 
+  /**
+   * The same OBJECT while the values are the same: this is a React prop, and a fresh identity on
+   * every snapshot re-rendered the status pill four times a second on a drive where nothing about
+   * the calibration had changed.
+   */
   calibration() {
-    return {
-      state: this.session === 'off' ? CALIBRATION_STATE.OFF : this.calibrationState,
-      progress: num(this.calibrationProgress, 3),
-      quality: this.metrics.calibrationQuality,
-    };
+    const state = this.session === 'off' ? CALIBRATION_STATE.OFF : this.calibrationState;
+    const progress = num(this.calibrationProgress, 3);
+    const quality = this.metrics.calibrationQuality;
+    const previous = this._calibrationOut;
+    if (previous && previous.state === state && previous.progress === progress
+        && previous.quality === quality) {
+      return previous;
+    }
+    this._calibrationOut = { state, progress, quality };
+    return this._calibrationOut;
   }
 
   snapshot() {
