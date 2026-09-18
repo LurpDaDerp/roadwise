@@ -205,3 +205,53 @@ export const stopDriving = async (userId) => {
     console.error("Error setting isDriving to false:", error);
   }
 };
+
+// ---------------------------------------------------------------------------
+// Added by the UX rework (docs/UX_REWORK.md §8). Existing functions above are
+// untouched; these are the only additions.
+// ---------------------------------------------------------------------------
+
+import { increment, limit as fsLimit } from "firebase/firestore";
+
+// Atomically add `delta` points to users/{uid}.points (replaces the
+// read-modify-write hand-off through AsyncStorage at the end of a drive).
+export async function addUserPoints(uid, delta) {
+  if (!uid) return;
+  const n = Number(delta) || 0;
+  if (n === 0) return;
+  const userRef = doc(db, "users", uid);
+  try {
+    await setDoc(userRef, { points: increment(n) }, { merge: true });
+  } catch (error) {
+    console.error("Failed to add user points:", error);
+  }
+}
+
+// The user's profile document (username, points, drivingStreak, photoURL, groupId, ...).
+export async function getUserProfile(uid) {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(doc(db, "users", uid));
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  } catch (error) {
+    console.error("Failed to load user profile:", error);
+    return null;
+  }
+}
+
+// Newest `count` drives, timestamps converted to Date (for the Home screen).
+export async function getRecentDrives(uid, count = 5) {
+  if (!uid) return [];
+  try {
+    const drivesRef = collection(db, "users", uid, "drivemetrics");
+    const q = query(drivesRef, orderBy("timestamp", "desc"), fsLimit(count));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+      timestamp: d.data().timestamp?.toDate?.() || new Date(),
+    }));
+  } catch (error) {
+    return [];
+  }
+}

@@ -1,15 +1,8 @@
-// hooks/useAuth.js
-import { useState, useEffect } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../utils/firebase'; // Make sure this is correct
+// hooks/useAuth.js — thin alias over AuthContext for screens that only need the user.
+import { useAuthContext } from '../context/AuthContext';
 
 export function useAuth() {
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  return { user };
+  return useAuthContext();
 }
+
+export default useAuth;
