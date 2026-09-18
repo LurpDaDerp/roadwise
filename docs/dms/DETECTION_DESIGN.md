@@ -20,10 +20,18 @@ Every threshold here is either the reference value (T) or a phone-specific chang
   reference (T, reference DESIGN §1 and §3).
 * Monitoring runs only on the live drive screen (foreground, screen on), which is how the app
   already tracks a drive.  No camera preview is rendered by default.
-* The pipeline per frame: camera frame → MediaPipe FaceLandmarker (single pass, native) →
-  478 normalized landmarks → `dms/gaze_inputs.js` (weak3d cloud, camera context, validity,
-  subject statistic) → gaze network (single pass, no mirror TTA) → `dms/monitor.js`
-  (calibration, attention rules, drowsiness rules, alert arbiter) → `WARNINGS_DESIGN.md`.
+* The pipeline per frame: camera frame → MediaPipe FaceLandmarker (single pass, native, inside the
+  local Expo Module `modules/dms-vision`) → 478 normalized landmarks (one `onFrame` event) →
+  `dms/gaze_inputs.js` on the JS thread (weak3d cloud, camera context, validity, subject
+  statistic) → gaze network (ONNX Runtime linked natively in the same module, one async call
+  per frame, single pass, no mirror TTA) → `dms/monitor.js` (calibration, attention rules,
+  drowsiness rules, alert arbiter) → `WARNINGS_DESIGN.md`.  Why this split (details in
+  `research/mobile_inference_options.md` and `NATIVE_LAYER.md`): the camera and MediaPipe have to be
+  native (no Expo-53 frame API exists; VisionCamera v5 needs RN 0.83 and v4 is an EOL branch on
+  New-Arch interop); the tensor pre-processing stays in JS because it is a verbatim, fixture-tested
+  port of the reference and carries the stateful subject statistic; the network runs natively
+  through pinned ONNX Runtime packages (~100 lines per platform, no JS runtime dependency with
+  unpinned native transitive versions); 1,434 floats in and 12 out per frame cost < 120 KB/s.
 * Every rule is time-based (seconds from the camera timestamp), never frame-count based, so the
   same engine is correct at 30 fps, at the 10 fps thermal fallback and across dropped frames.
 * Pure logic is device-free: `dms/` has no React Native import and is tested with `node --test`.
@@ -42,6 +50,12 @@ The native landmark source delivers one `LandmarkFrame` per processed camera fra
 | `isMirrored` | bool | true when the delivered image is a mirror of the scene (front-camera previews are; frames handed to the landmarker must either be un-mirrored or carry this flag) |
 | `focalScale` | number | `fx / width` of the upright image (§4) |
 | `orientation` | string | device/frame orientation at capture, for the log and the mount-change detector |
+
+MediaPipe returns its landmarks in the UNROTATED buffer frame even when a rotation is requested
+(the Tasks API documents results "expressed in the unrotated input frame of reference"), so the
+native module rotates the points into the upright frame itself (`NATIVE_LAYER.md`); the JS side
+additionally checks that the outer-eye line is near horizontal over the first seconds of tracking
+and reports an orientation fault otherwise (a driver's head is upright in the car).
 
 Conventions (unchanged from the reference, T §1): camera `+x` image right, `+y` down, `+z` away
 from the camera; the stored gaze `s = diag(1, 1, −1) p`; yaw `atan2(x, z)` (+ image right), pitch
@@ -175,7 +189,13 @@ ROAD ellipse 15° × 10°; ROAD_WIDE 22° × 14° (the windshield, "forward" for
 REARVIEW_MIRROR (−45..−15, +5..+25); LEFT_MIRROR (+35..+75, −15..+5); RIGHT_MIRROR (−80..−40,
 −15..+5); CLUSTER (±20, −32..−12); CENTER_STACK (−55..−15, −40..−12); LAP (±30, below −32);
 PASSENGER (−95..−40, −12..+15); DRIVER_WINDOW (beyond +75, ±20); UP (above +25); OTHER.
-Hard limits: |left| > 60°, up < −30°, up > 30° (ADDW Area 1 / Area 3; T, R §5).  Head-pitch
+Hard limits: up < −30°, up > 30° (ADDW Area 3 and Area 1, which includes the roof; NHTSA's
+maximum display down-angle is 30.00° — R §5) and, laterally, an ASYMMETRIC bound (phone change,
+reference 60° both sides): 75° on the driver's side (`hard_left_driver_deg`, the DRIVER_WINDOW zone
+boundary: the side glass carries cross traffic at intersections, where far-left glances average
+2.4 s in the last 30 m — R §3, §6) and 65° on the passenger side (`hard_left_passenger_deg`: beyond
+the passenger mirror at ≈ 46° and the glovebox at ≈ 53°, short of the passenger's face at ≈ 82°
+— R §5 [E]); both mirror with `driver_side`.  Head-pitch
 override zones LOOK_DOWN (head pitch ≤ −12° from rest, exit −9°, 1-s median) and LOOK_UP
 (≥ +20°, exit +15°) because the landmark gaze reads relative pitch at gain ≈ 0.1 on real drivers
 (T, reference DESIGN §12) — vertical glances are read from the head.
@@ -220,7 +240,7 @@ Thresholds (all T unless marked; R gives the sources behind T):
 | AttenD buffer | 2 s, 1-s mirror/instrument delay, 0.1-s refill latency; displayed, not voiced | R §2 |
 | phone pattern | 3 LAP / LOOK_DOWN dwells ≥ 0.6 s within 30 s | Euro NCAP phone use = VATS toward the phone (R §4) |
 | LOOK_DOWN / LOOK_UP | −12° (exit −9°) / +20° (exit +15°), 1-s median | T (no LBW driver holds −10.5° for 1 s) |
-| hard limits | |left| > 60°, up < −30°, up > 30° | ADDW Area 1 ± 55° + margin, Area 3 30° down (R §5) |
+| hard limits | driver side 75° / passenger side 65° (reference 60° / 60°), up < −30°, up > 30° | ADDW Area 1 ± 55° + margin and the cabin geometry, Area 3 30° down = NHTSA display maximum (R §5) |
 | head rules (eyes unreadable) | 35° turn / 20° down, logged at 2 s, voiced from 4 s | T |
 | closure hysteresis | openness < 0.3 enter, > 0.5 exit; P80 = openness < 0.2 | T, R (drowsiness) §1 |
 | blink / long blink | 60–500 ms / > 400 ms | R (drowsiness) §4 |
@@ -233,6 +253,14 @@ Thresholds (all T unless marked; R gives the sources behind T):
 | driver absent | event 5 s, voiced 10 s, repeat 30 s | Euro NCAP non-functional notification within 10 s (R §1) |
 | speed gate | < 10 km/h: only DRIVER_NOT_VISIBLE and the closure family are voiced | Euro NCAP warns from 20 km/h, learns below (R §6) |
 | acknowledgement | 30 s per acknowledged type; ≤ 3 per 120 s; closed-eye family and DRIVER_NOT_VISIBLE never | Euro NCAP suppression after acknowledgement (R §7) |
+
+**Why the limits are per target class and not per angle.**  No standard defines a zone by angle
+and the one study that tested location-weighted glance duration on 100-Car data found it predicts
+crashes no better than duration alone (Liang, Lee & Yekhshatyan 2012; R §2).  Eccentricity costs
+detection margin smoothly (TTC at detection 6–8 s at 0° → 4 s at 90°, Lamble 1999; detection flat
+to 20–30° then falling, Morando 2022; R §2), so the angle picks the class and, in the exposure
+metric, the severity weight (0.25 / 0.5 / 1.0 for driving-task / lateral / cabin, ×2 beyond 2 s — T),
+never a shorter limit than the regulatory 3.0–3.5 s.
 
 **Sensitivity setting** (`@monitorSensitivity`, `standard` | `relaxed`; default `standard` = the
 reference).  `relaxed` applies the regulatory upper bounds instead of the Euro NCAP values:
