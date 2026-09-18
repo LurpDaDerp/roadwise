@@ -399,6 +399,11 @@ function privateDoc(uid, name) {
   return doc(db, "users", uid, "private", name);
 }
 
+/** The owner-only profile document, exposed so group writes can batch against it. */
+export function privateInfoRef(uid) {
+  return privateDoc(uid, "info");
+}
+
 /**
  * The group id is the group's join code, and the group document id is that same code.
  * While it sat on the publicly readable profile, anyone could list users, read a code and
@@ -427,6 +432,26 @@ export async function getGroupIdForUser(uid) {
   if (status === READ_ERROR) return undefined;
   const legacy = data?.groupId;
   return typeof legacy === "string" && legacy ? legacy : null;
+}
+
+/**
+ * Remove the legacy public `groupId` field if this account still carries one.
+ *
+ * The migration script clears these in bulk, but an un-migrated account that joins or
+ * leaves a group would otherwise keep a stale public copy of its join code - which is the
+ * exact thing that made group codes enumerable. Best effort: the group membership write
+ * is what matters and has already committed by the time this runs.
+ */
+export async function clearLegacyPublicGroupId(uid) {
+  if (!uid) return;
+  try {
+    const { status, data } = await readUserSummary(uid);
+    if (status !== READ_OK || !data || data.groupId === undefined) return;
+    await updateDoc(doc(db, "users", uid), { groupId: deleteField() });
+    invalidateUserCache(uid);
+  } catch (err) {
+    console.warn("Could not remove the legacy public groupId:", err);
+  }
 }
 
 /** Write the group id to the private document and remove any legacy public copy. */

@@ -348,10 +348,12 @@ speed over 25 m is GPS drift.
 a failure in the second sent the loop round again with a fresh code. Five attempts, five
 groups, all with the user as a member and none of them reachable from the app.
 
-**Fixed.** Only the create is retried, and only for the errors a retry can help
-(`permission-denied` from a code collision, `already-exists`); anything else fails once,
-honestly, with an offline-specific message. The profile is written once, afterwards, and if
-*that* fails the user is told the group's code so they can join it and finish.
+**Fixed.** The group document and the owner's private group pointer commit as **one
+atomic batch**, so a failed attempt writes nothing at all and a retry leaves no debris.
+Retries only happen for the errors another code could fix (`permission-denied` from a
+collision, `already-exists`); anything else fails once, honestly, with an offline-specific
+message. Joining and leaving are batched the same way, which removes the partial-failure
+window in F18 entirely rather than just ordering around it.
 
 ### F17 — `isDriving` stuck on when finalization failed
 `stopDriving` had become conditional on the finalization batch succeeding, so a failed
@@ -365,10 +367,11 @@ user still broadcasting to, and receiving alerts from, a group the app believed 
 left.
 
 **Fixed.** The group document is the source of truth (it is what the rules and the push
-fan-out read). Leaving removes membership there first and only then detaches the profile,
-and a failure surfaces to the user instead of being swallowed. Joining writes membership
-first for the same reason; the join write is idempotent, so retrying the same code
-completes a half-finished join.
+fan-out read), and membership plus the profile pointer now commit as one atomic batch on
+create, join and leave — so the two cannot disagree at all. A failure surfaces to the user
+instead of being swallowed, and the join write is idempotent, so simply retrying the same
+code is always safe. An un-migrated account that joins or leaves also has its stale public
+`groupId` cleared opportunistically.
 
 ### F19 — A finished drive that could not be uploaded was lost
 If the finalization batch failed — no signal at the end of a drive is the ordinary case —

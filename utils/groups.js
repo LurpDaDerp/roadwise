@@ -25,8 +25,8 @@
 import {
   doc,
   getDoc,
-  setDoc,
   updateDoc,
+  writeBatch,
   arrayUnion,
   arrayRemove,
   deleteField,
@@ -35,7 +35,11 @@ import {
 import * as Crypto from "expo-crypto";
 
 import { db } from "./firebase";
-import { getGroupIdForUser, setGroupIdForUser } from "./firestore";
+import {
+  getGroupIdForUser,
+  privateInfoRef,
+  clearLegacyPublicGroupId,
+} from "./firestore";
 import { updateCachedGroupId } from "./groupCache";
 
 // Ambiguous characters (0/O, 1/I) are left out so a code can be read aloud and typed back.
@@ -97,16 +101,17 @@ export async function createGroup(uid, groupName) {
   const name = String(groupName ?? "").trim();
   if (!name) throw new Error("Please enter a group name.");
 
-  // Only the CREATE is retried. The previous version wrapped the group create and the
-  // profile write in one try, so a failing profile write sent the loop round again and
-  // left behind up to five orphan groups the user was a member of and could not see.
-  let createdGroupId = null;
+  // The group document and the owner's private profile pointer are written in ONE batch.
+  // The previous version wrapped both in a retry loop, so a failing profile write sent the
+  // loop round again with a fresh code and left up to five orphan groups behind. A batch
+  // is atomic: a failed attempt writes nothing at all, so retrying leaves no debris.
   let lastError = null;
 
   for (let attempt = 0; attempt < 5; attempt++) {
     const groupId = generateGroupCode();
     try {
-      await setDoc(doc(db, "groups", groupId), {
+      const batch = writeBatch(db);
+      batch.set(doc(db, "groups", groupId), {
         groupName: name.slice(0, 40),
         createdBy: uid,
         createdAt: serverTimestamp(),
@@ -114,12 +119,20 @@ export async function createGroup(uid, groupName) {
         memberLocations: { [uid]: emptyLocation() },
         savedLocations: [],
       });
-      createdGroupId = groupId;
-      break;
+      batch.set(
+        privateInfoRef(uid),
+        { groupId, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+      await batch.commit();
+
+      await updateCachedGroupId(uid, groupId);
+      clearLegacyPublicGroupId(uid);
+      return groupId;
     } catch (err) {
       lastError = err;
-      // A collision is the only reason to try another code. Anything else - denied,
-      // offline - will fail identically five times over, so say so instead.
+      // A code collision is the only reason another code would help. Anything else -
+      // offline, denied - fails identically five times over, so say so instead.
       if (err?.code !== "permission-denied" && err?.code !== "already-exists") {
         console.error("Could not create group:", err);
         throw new Error(
@@ -131,26 +144,8 @@ export async function createGroup(uid, groupName) {
     }
   }
 
-  if (!createdGroupId) {
-    console.error("Could not create group after retries:", lastError);
-    throw new Error("Could not create the group. Please try again.");
-  }
-
-  // Written once, after the group exists. If this fails the group is still there and the
-  // user can retry by joining it with its own code, which the alert tells them.
-  try {
-    await setGroupIdForUser(uid, createdGroupId);
-  } catch (err) {
-    console.error("Group created but the profile could not be updated:", err);
-    await updateCachedGroupId(uid, createdGroupId);
-    throw new Error(
-      `Your group was created (code ${createdGroupId}) but could not be linked to your ` +
-        "profile. Join it with that code to finish."
-    );
-  }
-
-  await updateCachedGroupId(uid, createdGroupId);
-  return createdGroupId;
+  console.error("Could not create group after retries:", lastError);
+  throw new Error("Could not create the group. Please try again.");
 }
 
 /**
@@ -167,11 +162,22 @@ export async function joinGroup(uid, code) {
   const groupId = normalizeGroupCode(code);
   if (!groupId) throw new Error("Please enter a group code.");
 
+  // Membership and the profile pointer commit together, so there is no window in which
+  // the user is a member of a group their own app does not know about, or the reverse.
+  // A missing document fails the batch as not-found and a malformed attempt as
+  // permission-denied; both mean "bad code" to the user, and neither writes anything.
   try {
-    await updateDoc(doc(db, "groups", groupId), {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "groups", groupId), {
       members: arrayUnion(uid),
       [`memberLocations.${uid}`]: emptyLocation(),
     });
+    batch.set(
+      privateInfoRef(uid),
+      { groupId, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+    await batch.commit();
   } catch (err) {
     if (err?.code === "not-found" || err?.code === "permission-denied") {
       throw new Error("The group code you entered does not exist.");
@@ -179,29 +185,31 @@ export async function joinGroup(uid, code) {
     throw err;
   }
 
-  // Ordering matters: membership on the group document is what the rules and the push
-  // fan-out read, so it is written first. If the profile write then fails the user is
-  // already a member and simply retrying the same code succeeds - the join write is
-  // idempotent (arrayUnion of a uid already present is a no-op).
-  await setGroupIdForUser(uid, groupId);
   await updateCachedGroupId(uid, groupId);
+  clearLegacyPublicGroupId(uid);
   return groupId;
 }
 
 export async function leaveGroup(uid, groupId) {
   if (!uid || !groupId) return;
 
-  // The group document is the source of truth for membership: it is what the rules check
-  // and what the emergency push fan-out reads. Detaching the profile first (as this used
-  // to) and only warning if the group write failed left the user still receiving and
-  // still broadcasting to a group the app believed they had left.
-  await updateDoc(doc(db, "groups", groupId), {
+  // Both halves or neither. Detaching the profile first and only warning if the group
+  // write failed (as this used to) left the user still broadcasting to, and still being
+  // alerted by, a group the app believed they had left.
+  const batch = writeBatch(db);
+  batch.update(doc(db, "groups", groupId), {
     members: arrayRemove(uid),
     [`memberLocations.${uid}`]: deleteField(),
   });
+  batch.set(
+    privateInfoRef(uid),
+    { groupId: null, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+  await batch.commit();
 
-  await setGroupIdForUser(uid, null);
   await updateCachedGroupId(uid, null);
+  clearLegacyPublicGroupId(uid);
 }
 
 export async function getGroup(groupId) {
