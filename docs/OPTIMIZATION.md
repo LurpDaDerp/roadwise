@@ -287,8 +287,11 @@ rest of the work in the commit history.
 | `cd functions && npm run lint` | clean |
 | `cd functions && npm run test:rules` | 69 / 69 (68 before, + the 25-member cap) |
 | `npx expo prebuild --platform android --no-install` | the manifest contains ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE and FOREGROUND_SERVICE_LOCATION (the `expo-location` plugin fix); `android/` deleted afterwards |
-| EAS development build, iOS | `05748bab-ab44-4d2d-9e96-26d9c5ff84d9` — **finished**, so the Swift capture-cadence and ONNX session-option changes compile and link |
-| EAS development build, Android | `60c7aa4c-7dbc-40a0-a636-9ffb0e192361` |
+| EAS development build, iOS | `05748bab-ab44-4d2d-9e96-26d9c5ff84d9` — **finished**, so the Swift capture-cadence (`activeVideoMin/MaxFrameDuration`, `activeMaxExposureDuration`) and the ONNX `addConfigEntry` compile and link |
+| EAS development build, Android | `60c7aa4c-7dbc-40a0-a636-9ffb0e192361` — **finished**, so the Camera2 interop cadence (`Camera2CameraControl` / `Camera2CameraInfo` / `CONTROL_AE_TARGET_FPS_RANGE`) and the ONNX config entries compile |
+
+Neither build has been RUN on a phone: they prove the native changes compile and link, not that
+they behave. §8.1 is the on-device check.
 
 ## 8. What the owner has to do
 
