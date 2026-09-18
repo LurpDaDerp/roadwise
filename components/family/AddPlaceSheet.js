@@ -15,7 +15,7 @@ import {
   Dimensions,
 } from 'react-native';
 import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import debounce from 'lodash.debounce';
 import { useTheme, Button, Field, useInputStyle } from '../../theme';
 import { fetchHereAutocomplete } from '../../utils/here';

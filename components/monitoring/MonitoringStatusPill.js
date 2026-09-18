@@ -2,7 +2,7 @@
 // ≤ 3 words, colour-coded; never requires reading a sentence.
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 import { CALIBRATION_STATE, MONITOR_STATUS } from '../../monitoring/types';
 

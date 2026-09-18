@@ -22,7 +22,7 @@ function longestFocusedRun(drives) {
   return Math.max(best, run);
 }
 
-export const BADGES = [
+const BADGES = [
   { id: 'first_drive', title: 'First drive', body: 'Complete your first drive.', icon: 'car-sport-outline', target: 1,
     progress: ({ drives, totalDrives }) => (Number.isFinite(totalDrives) ? totalDrives : drives.length) },
   { id: 'focused_5', title: 'Focused ×5', body: 'Five focused drives in a row.', icon: 'eye-outline', target: 5,

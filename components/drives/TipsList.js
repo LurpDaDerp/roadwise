@@ -2,7 +2,7 @@
 // the AI feedback tips, rendered with one shared row style.
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, useTheme } from '../../theme';
 
 export function TipRow({ icon = 'bulb-outline', title, body, first = false }) {

@@ -1,7 +1,7 @@
 // SafetySettings — the trusted contacts shown by the SOS button during a drive.
 import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, TextInput, ScrollView, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { saveTrustedContacts, getTrustedContacts } from '../utils/firestore';
 import { useAuthContext } from '../context/AuthContext';
 import {

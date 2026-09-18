@@ -2,7 +2,7 @@
 // the button so an accidental tap never ends a drive.
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, Text, View, Easing } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 
 const HOLD_MS = 1200;

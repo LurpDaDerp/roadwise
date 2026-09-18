@@ -4,7 +4,8 @@
 // can render its live camera preview (useDriverMonitoring().previewComponent).
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../theme';
 import { DRIVER_SIDE_OPTIONS } from '../../monitoring/settings';
 

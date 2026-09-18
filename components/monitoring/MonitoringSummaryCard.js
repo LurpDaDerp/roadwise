@@ -2,7 +2,7 @@
 // DriveDetail and Insights. Accepts the `monitoring` block of a drive record.
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, Chip, useTheme, StatCell, StatDivider, ProgressBar } from '../../theme';
 import { DROWSINESS_LABELS, alertCopy } from '../../monitoring/types';
 import { totalAlerts } from '../../monitoring/summary';

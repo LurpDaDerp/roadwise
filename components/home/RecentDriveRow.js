@@ -1,7 +1,7 @@
 // RecentDriveRow — compact drive row for the Home screen.
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme, Chip, scoreColor } from '../../theme';
 import { formatDateTime, formatDuration, formatDistance } from '../../utils/format';
 import { scoreDrive } from '../../utils/driveScore';

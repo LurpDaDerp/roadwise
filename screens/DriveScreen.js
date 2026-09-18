@@ -23,7 +23,7 @@ import { View, Text, BackHandler, Platform, StyleSheet, ToastAndroid } from 'rea
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { useTheme, Banner, Button } from '../theme';
 import { useSettings } from '../context/SettingsContext';

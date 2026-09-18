@@ -1,8 +1,8 @@
 // DriveRow — one drive in the history list: verdict icon, when it happened,
 // duration / distance / points, and the drive score as a chip.
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Chip, scoreColor, useTheme } from '../../theme';
 import { scoreDrive } from '../../utils/driveScore';
 import { formatDateTime, formatDuration, formatDistance } from '../../utils/format';
@@ -32,24 +32,35 @@ export function driveScoreValue(drive) {
   return typeof drive.score === 'number' ? drive.score : scoreDrive(drive).score;
 }
 
-export function DriveRow({ drive, onPress, first = false, unit = 'mph' }) {
+// Memoised: the history list mounts every row it has ever loaded (20 more per "Load more"),
+// and each row runs a drive score, a colour mix, a regex and two locale date formatters. With
+// the parent re-rendering, all of that ran again for every row.
+export const DriveRow = React.memo(function DriveRow({ drive, onPress, first = false, unit = 'mph' }) {
   const t = useTheme();
-  if (!drive) return null;
-
-  const distracted = isDistractedDrive(drive);
-  const score = driveScoreValue(drive);
-  const color = scoreColor(score, t);
-  const points = Number(drive.points) || 0;
-  const caption = [
-    formatDuration(drive.duration),
-    formatDistance(drive.totalDistance, unit),
-    `+${points} pts`,
-  ].join(' · ');
-  const when = formatDateTime(drive.timestamp);
+  const row = useMemo(() => {
+    if (!drive) return null;
+    const score = driveScoreValue(drive);
+    const points = Number(drive.points) || 0;
+    return {
+      distracted: isDistractedDrive(drive),
+      score,
+      color: scoreColor(score, t),
+      caption: [
+        formatDuration(drive.duration),
+        formatDistance(drive.totalDistance, unit),
+        `+${points} pts`,
+      ].join(' · '),
+      when: formatDateTime(drive.timestamp),
+    };
+  }, [drive, unit, t]);
+  // A stable handler: the parent passes the drive, not a fresh arrow per row per render.
+  const press = useCallback(() => onPress && onPress(drive), [onPress, drive]);
+  if (!drive || !row) return null;
+  const { distracted, score, color, caption, when } = row;
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={press}
       accessibilityRole="button"
       accessibilityLabel={`${distracted ? 'Distracted' : 'Focused'} drive, ${when}, score ${score}`}
       android_ripple={{ color: t.colors.accentFaint }}
@@ -108,6 +119,6 @@ export function DriveRow({ drive, onPress, first = false, unit = 'mph' }) {
       />
     </Pressable>
   );
-}
+});
 
 export default DriveRow;

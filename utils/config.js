@@ -59,11 +59,11 @@ const REQUIRED_FIREBASE_KEYS = [
   'appId',
 ];
 
-export function missingFirebaseKeys() {
+function missingFirebaseKeys() {
   return REQUIRED_FIREBASE_KEYS.filter((key) => !firebaseConfig[key]);
 }
 
-export const CONFIG_HELP =
+const CONFIG_HELP =
   'Copy .env.example to .env and fill it in (values are in the Firebase console under ' +
   'Project settings > Your apps > Web app), then restart the bundler with ' +
   '`npx expo start --clear`. For EAS builds set the same names as EAS environment ' +

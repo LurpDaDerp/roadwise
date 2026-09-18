@@ -3,12 +3,12 @@
 // progress bar with an "n/target" caption. Tapping a badge calls onSelect.
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, ProgressBar, Skeleton, useTheme } from '../../theme';
 
 const COLUMN_WIDTH = '33.33%';
 
-function BadgeTile({ badge, onPress }) {
+const BadgeTile = React.memo(function BadgeTile({ badge, onPress }) {
   const t = useTheme();
   const unlocked = !!badge.unlocked;
   const fg = unlocked ? t.colors.accent : t.colors.textSubtle;
@@ -85,7 +85,7 @@ function BadgeTile({ badge, onPress }) {
       </Pressable>
     </View>
   );
-}
+});
 
 function LoadingTile() {
   const t = useTheme();

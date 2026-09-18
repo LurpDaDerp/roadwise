@@ -4,7 +4,7 @@
 // claim, then ensureUserProfile; any failure after the account exists deletes it.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, Keyboard, TouchableWithoutFeedback, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 
 import { auth } from '../utils/firebase';

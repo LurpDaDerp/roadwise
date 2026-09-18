@@ -2,7 +2,7 @@
 // safety score, recent drives and the family card.
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, RefreshControl } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 

@@ -3,7 +3,7 @@
 // the per-drive monitoring toggle, and one big Start button.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, AppState, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
 

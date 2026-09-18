@@ -3,9 +3,9 @@
 // entry point to the AI feedback screen.
 import React, { useCallback, useMemo, useState } from 'react';
 import { getInsightsDrives } from '../../utils/driveCache';
-import { View, Text, Dimensions } from 'react-native';
+import { View, Text, useWindowDimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -22,10 +22,9 @@ import {
   useTheme,
 } from '../../theme';
 import { summarizeDrives } from '../../utils/driveScore';
-import { formatDistance, formatDuration, formatSpeed, toDate } from '../../utils/format';
+import { distanceValue, formatDistance, formatDuration, formatSpeed, toDate } from '../../utils/format';
 import { MetricGroup } from './MetricGroup';
 
-const { width } = Dimensions.get('window');
 const TIMEFRAMES = [1, 7, 30];
 const GRID_LINES = { 1: 4, 7: 1, 30: 5 };
 
@@ -174,7 +173,8 @@ function generateStatsJSON(drives) {
     suddenStops: totalSuddenStops,
     suddenAccelerations: totalSuddenAccels,
     speedingEvents: totalSpeedingEvents,
-    totalDistance: (totalDistance * 0.000621371).toFixed(1),
+    // One conversion for the whole app (utils/format.js), not a magic constant per file.
+    totalDistance: distanceValue(totalDistance, 'mph').toFixed(1),
     totalDuration,
     generatedAt: new Date().toISOString(),
   };
@@ -195,6 +195,9 @@ function LegendDot({ color, label }) {
 // up on the next focus without re-reading the whole history on every tab press.
 export function InsightsPanel({ uid, unit = 'mph', navigation }) {
   const t = useTheme();
+  // Read per render rather than captured once at module scope: a rotation or a split-screen
+  // resize used to leave the chart at the width the app started with.
+  const { width: windowWidth } = useWindowDimensions();
   const [drives, setDrives] = useState([]);
   useFocusEffect(
     useCallback(() => {
@@ -277,15 +280,38 @@ export function InsightsPanel({ uid, unit = 'mph', navigation }) {
     [drives, timeframe, hasMonitoring]
   );
 
-  const datasets = eyesOff
-    ? [
-        { data, color: () => t.colors.accent, strokeWidth: 2 },
-        { data: eyesOff, color: () => t.colors.info, strokeWidth: 2 },
-      ]
-    : [{ data, color: () => t.colors.accent, strokeWidth: 2 }];
+  // Memoised: these are the props that decide whether the SVG chart re-renders, so rebuilding
+  // them (and their colour closures) on every render made the memoised aggregation pointless.
+  const datasets = useMemo(
+    () => (eyesOff
+      ? [
+          { data, color: () => t.colors.accent, strokeWidth: 2 },
+          { data: eyesOff, color: () => t.colors.info, strokeWidth: 2 },
+        ]
+      : [{ data, color: () => t.colors.accent, strokeWidth: 2 }]),
+    [data, eyesOff, t.colors.accent, t.colors.info]
+  );
+  const chartData = useMemo(() => ({ labels, datasets }), [labels, datasets]);
+  const chartConfig = useMemo(
+    () => ({
+      backgroundGradientFrom: t.colors.surface,
+      backgroundGradientTo: t.colors.surface,
+      decimalPlaces: 0,
+      color: () => t.colors.accent,
+      labelColor: () => t.colors.textMuted,
+      style: { borderRadius: t.radius.md },
+      propsForDots: { r: '4', strokeWidth: '2', stroke: t.colors.accent, fill: t.colors.surface },
+      propsForBackgroundLines: { stroke: t.colors.divider },
+    }),
+    [t.colors.surface, t.colors.accent, t.colors.textMuted, t.colors.divider, t.radius.md]
+  );
 
-  const peak = Math.max(1, ...data, ...(eyesOff || [0]));
-  const segments = Math.max(1, Math.min(Math.round(peak), 6));
+  const segments = useMemo(() => {
+    let peak = 1;
+    for (const v of data) if (v > peak) peak = v;
+    if (eyesOff) for (const v of eyesOff) if (v > peak) peak = v;
+    return Math.max(1, Math.min(Math.round(peak), 6));
+  }, [data, eyesOff]);
 
   // "View" vs "Get" — a cached response for exactly this payload already exists.
   useFocusEffect(
@@ -338,22 +364,13 @@ export function InsightsPanel({ uid, unit = 'mph', navigation }) {
           {data.some((v) => v > 0) || (eyesOff && eyesOff.some((v) => v > 0)) ? (
             <>
               <LineChart
-                data={{ labels, datasets }}
-                width={width - 80}
+                data={chartData}
+                width={windowWidth - 80}
                 height={220}
                 fromZero
                 yAxisInterval={gridLines}
                 segments={segments}
-                chartConfig={{
-                  backgroundGradientFrom: t.colors.surface,
-                  backgroundGradientTo: t.colors.surface,
-                  decimalPlaces: 0,
-                  color: () => t.colors.accent,
-                  labelColor: () => t.colors.textMuted,
-                  style: { borderRadius: t.radius.md },
-                  propsForDots: { r: '4', strokeWidth: '2', stroke: t.colors.accent, fill: t.colors.surface },
-                  propsForBackgroundLines: { stroke: t.colors.divider },
-                }}
+                chartConfig={chartConfig}
                 bezier
                 style={{ marginVertical: 4, borderRadius: t.radius.md, paddingRight: 0 }}
               />

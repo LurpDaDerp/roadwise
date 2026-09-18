@@ -4,9 +4,7 @@ export {
   Screen,
   Section,
   Card,
-  Divider,
   Eyebrow,
-  Stat,
   Button,
   Field,
   Pill,
@@ -32,6 +30,5 @@ export {
   KeyValueRow,
   useCountUp,
 } from './extras';
-export { SafeGradient } from './SafeGradient';
 export { AutoFitText } from './AutoFitText';
 export { ErrorBoundary } from './ErrorBoundary';

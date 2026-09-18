@@ -168,7 +168,8 @@ function Podium({ rows, myId }) {
   );
 }
 
-function LeaderRow({ rank, name, points, highlight, first }) {
+// Memoised: up to 50 rows are mounted at once, each formatting a number with toLocaleString.
+const LeaderRow = React.memo(function LeaderRow({ rank, name, points, highlight, first }) {
   const t = useTheme();
   const color = highlight ? t.colors.accent : t.colors.text;
   return (
@@ -203,7 +204,7 @@ function LeaderRow({ rank, name, points, highlight, first }) {
       </AutoFitText>
     </View>
   );
-}
+});
 
 function LoadingList() {
   return (

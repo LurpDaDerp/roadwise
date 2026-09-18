@@ -2,7 +2,7 @@
 // Replaces the old six-number weather panel: one line, colour-coded.
 import React from 'react';
 import { View, Text } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useTheme, Card } from '../../theme';
 import { getWeatherInfo, roadScoreToTone, roadScoreIcon } from '../../utils/driveConditions';
 

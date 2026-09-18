@@ -1,7 +1,10 @@
 // MemberRow — one family member in the bottom sheet: avatar, name, status
 // chips, where they are and when that was last heard from.
 import React from 'react';
-import { View, Text, Image } from 'react-native';
+import { View, Text } from 'react-native';
+// expo-image, not RN Image: these are remote avatars, and only expo-image has a disk cache.
+// With RN Image every mount of the list re-downloads every member's photo.
+import { Image } from 'expo-image';
 import { useTheme, Card, Chip, IconButton } from '../../theme';
 import { relativeTime, formatSpeed, speedFromMps } from '../../utils/format';
 
@@ -9,7 +12,7 @@ import { relativeTime, formatSpeed, speedFromMps } from '../../utils/format';
 // original Family screen used.
 const DRIVING_MPS = 10;
 
-export function MemberRow({ member, isMe, unit = 'mph', onPress, onLocate }) {
+export const MemberRow = React.memo(function MemberRow({ member, isMe, unit = 'mph', onPress, onLocate }) {
   const t = useTheme();
   if (!member) return null;
 
@@ -35,7 +38,14 @@ export function MemberRow({ member, isMe, unit = 'mph', onPress, onLocate }) {
           }}
         >
           {member.photoURL ? (
-            <Image source={{ uri: member.photoURL }} style={{ width: '100%', height: '100%' }} />
+            <Image
+              source={{ uri: member.photoURL }}
+              style={{ width: '100%', height: '100%' }}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={member.uid}
+              transition={0}
+            />
           ) : (
             <Text style={{ color: member.emergency ? t.colors.danger : t.colors.accent, fontWeight: '700', fontSize: 16 }}>
               {initial}
@@ -81,6 +91,6 @@ export function MemberRow({ member, isMe, unit = 'mph', onPress, onLocate }) {
       </View>
     </Card>
   );
-}
+});
 
 export default MemberRow;

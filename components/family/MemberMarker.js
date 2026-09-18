@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, View, Text, Image } from 'react-native';
 import { Marker } from 'react-native-maps';
+import { Image as ExpoImage } from 'expo-image';
 
 const PIN = require('../../assets/marker.png');
 
@@ -66,7 +67,15 @@ export function MemberMarker({ coordinate, animatedCoordinate, title, name, phot
         {!!emergency && <PulseRing />}
         <Image source={PIN} style={{ width: 50, height: 50 }} resizeMode="contain" />
         {photoURL ? (
-          <Image source={{ uri: photoURL }} style={AVATAR} />
+          // expo-image for the remote photo: a disk cache, so panning the map does not
+          // re-download every member's avatar.
+          <ExpoImage
+            source={{ uri: photoURL }}
+            style={AVATAR}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={0}
+          />
         ) : (
           <View style={[AVATAR, { backgroundColor: '#666', justifyContent: 'center', alignItems: 'center' }]}>
             <Text style={{ color: '#ffffff', fontWeight: '700' }}>{initial}</Text>

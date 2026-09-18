@@ -60,9 +60,9 @@ const userDocCache = { uid: null, data: null, ts: 0, exists: false };
 // there" justifies creating a profile and caching 0 points, "the read failed" (offline,
 // expired token, a rules denial) justifies neither. Callers that write anything as a
 // result of a read must use readUserSummary and check `status`.
-export const READ_OK = "ok";
-export const READ_MISSING = "missing";
-export const READ_ERROR = "error";
+const READ_OK = "ok";
+const READ_MISSING = "missing";
+const READ_ERROR = "error";
 
 export function invalidateUserCache(uid) {
   if (!uid || userDocCache.uid === uid) {
@@ -131,75 +131,8 @@ async function writeUserDoc(uid, data) {
  * Points, username, streak
  * ------------------------------------------------------------------ */
 
-export function getPointsStorageKey(uid) {
+function getPointsStorageKey(uid) {
   return `totalPoints_${uid}`;
-}
-
-export async function getUserPoints(uid) {
-  if (!uid) return 0;
-  const { status, data } = await readUserSummary(uid);
-  if (status === READ_OK) return Number(data.points) || 0;
-
-  // A failed read is not an empty account. Creating the profile here would reset
-  // createdAt on an existing one and cache a zero balance the user then sees.
-  if (status === READ_ERROR) return 0;
-
-  // Genuinely absent: first run for this account.
-  await writeUserDoc(uid, { points: 0, createdAt: serverTimestamp() });
-  return 0;
-}
-
-export async function saveUserPoints(uid, points) {
-  if (!uid) return;
-  const value = Number(points);
-  if (!Number.isFinite(value) || value < 0) {
-    console.warn("saveUserPoints ignored a non-numeric value:", points);
-    return;
-  }
-  await writeUserDoc(uid, { points: value });
-  try {
-    await AsyncStorage.setItem(getPointsStorageKey(uid), String(value));
-  } catch {}
-}
-
-export async function getUsername(uid) {
-  if (!uid) return "guest";
-  const data = await getUserSummary(uid);
-  return data?.username || "guest";
-  // No repair write here. The old version wrote `username: uid` when the document was
-  // absent, which produced a 28-character "username" and is now refused by the rules
-  // anyway. ensureUserProfile() is the one place that provisions an account.
-}
-
-export async function saveUserStreak(uid, streak) {
-  if (!uid) return;
-  try {
-    await writeUserDoc(uid, { drivingStreak: Number(streak) || 0 });
-  } catch (error) {
-    console.error("Failed to save user streak:", error);
-  }
-}
-
-/**
- * Locally cached point total, used by screens that only need a number to render.
- * Falls back to the server value and repairs the cache when it is missing or stale.
- */
-export async function getCachedTotalPoints(uid) {
-  if (!uid) return 0;
-  try {
-    const stored = await AsyncStorage.getItem(getPointsStorageKey(uid));
-    if (stored !== null) {
-      const parsed = parseInt(stored, 10);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  } catch {}
-
-  const { status, data } = await readUserSummary(uid);
-  if (status === READ_ERROR) return 0;
-
-  const points = Number(data?.points) || 0;
-  await cachePointsIfHigher(uid, points);
-  return points;
 }
 
 /**
@@ -218,7 +151,6 @@ async function cachePointsIfHigher(uid, points) {
   } catch {}
 }
 
-export { cachePointsIfHigher };
 
 /* ------------------------------------------------------------------ *
  * Usernames
@@ -230,11 +162,11 @@ export { cachePointsIfHigher };
  * without exposing anything else.
  * ------------------------------------------------------------------ */
 
-export function normalizeUsername(username) {
+function normalizeUsername(username) {
   return String(username ?? "").trim();
 }
 
-export function usernameKey(username) {
+function usernameKey(username) {
   return normalizeUsername(username).toLowerCase();
 }
 
@@ -258,7 +190,7 @@ export function validateUsername(username) {
 }
 
 /** True when `username` can safely be used as a `usernames/{id}` document id. */
-export function isValidUsernameKey(username) {
+function isValidUsernameKey(username) {
   const key = usernameKey(username);
   if (!key || key.length > MAX_USERNAME_LENGTH) return false;
   if (key === "." || key === "..") return false;
@@ -582,22 +514,6 @@ export async function getTotalDrivesNumber(uid) {
   }
 }
 
-/** Newest-first drive history. `pageSize` is optional and unbounded when omitted. */
-export async function getUserDrives(uid, { pageSize = null, cursor = null } = {}) {
-  if (!uid) return [];
-  try {
-    const constraints = [orderBy("timestamp", "desc")];
-    if (cursor) constraints.push(startAfter(cursor));
-    if (pageSize) constraints.push(limit(pageSize));
-
-    const snapshot = await getDocs(query(driveMetricsRef(uid), ...constraints));
-    return snapshot.docs.map(mapDrive);
-  } catch (error) {
-    console.error("Failed to load drives:", error);
-    return [];
-  }
-}
-
 /**
  * One page of drive history plus the cursor needed for the next page.
  * Returns { drives, cursor, hasMore } - pass `cursor` straight back in.
@@ -671,17 +587,6 @@ export async function getDriveCounts(uid, { force = false } = {}) {
     if (driveCountsCache.uid === uid && driveCountsCache.value) return driveCountsCache.value;
     return { total: 0, distracted: 0, focused: 0 };
   }
-}
-
-export async function saveDriveMetrics(uid, metrics) {
-  // Delegates so there is exactly one drive-write code path. Two nearly-identical ones
-  // drift, and the drifting half is the one that stops incrementing the counters.
-  const result = await finalizeDriveWrite(uid, {
-    metrics,
-    pointsEarned: Number(metrics?.points) || 0,
-    wasDistracted: Boolean(metrics?.distracted),
-  });
-  return result?.driveId ?? null;
 }
 
 /* ------------------------------------------------------------------ *

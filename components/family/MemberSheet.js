@@ -2,7 +2,7 @@
 // are moving, and the two actions that matter (locate, call).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, Linking } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme, Sheet, Card, Button, IconButton, KeyValueRow } from '../../theme';
 import { relativeTime, formatSpeed, speedFromMps } from '../../utils/format';

@@ -56,7 +56,7 @@ export function resolveTonePlayer({ sound, players, player }) {
   return player || null;
 }
 
-export function playCue({ severity, speech, player, players, sound, voice, tone, haptic }) {
+function playCue({ severity, speech, player, players, sound, voice, tone, haptic }) {
   const isCritical = severity === ALERT_SEVERITY.CRITICAL;
   try {
     if (tone) {

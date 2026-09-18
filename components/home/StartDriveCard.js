@@ -1,7 +1,7 @@
 // StartDriveCard — the Home hero. One tap → DrivePrep.
 import React from 'react';
 import { View, Text, Pressable, ImageBackground, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 
 export function StartDriveCard({ onPress, subtitle, eyebrow = 'Ready when you are' }) {

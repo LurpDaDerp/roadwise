@@ -3,7 +3,7 @@
 // Never blocks driving; it only informs and offers a manual recalibration.
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme, ProgressBar } from '../../theme';
 import { CALIBRATION_STATE } from '../../monitoring/types';
 

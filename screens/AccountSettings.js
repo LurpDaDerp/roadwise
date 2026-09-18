@@ -8,15 +8,15 @@ import {
   ActivityIndicator,
   TextInput,
   ScrollView,
-  Image,
   Pressable,
   StyleSheet,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { Image as ExpoImage } from 'expo-image';
 import { signOut } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { auth, db } from '../utils/firebase';
 import { supabase } from '../utils/supabase';
 import { isSupabaseConfigured } from '../utils/config';
@@ -242,7 +242,14 @@ export default function AccountSettings() {
                     }}
                   >
                     {photo ? (
-                      <Image key={photo} source={{ uri: photo }} style={{ width: 96, height: 96 }} />
+                      <ExpoImage
+                        key={photo}
+                        source={{ uri: photo }}
+                        style={{ width: 96, height: 96 }}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                        transition={0}
+                      />
                     ) : (
                       <Text style={{ fontSize: 34, fontWeight: '800', color: t.colors.accent }}>
                         {(username || user?.email || '?')[0].toUpperCase()}

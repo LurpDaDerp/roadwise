@@ -2,7 +2,7 @@
 // group, call a trusted contact. Big targets, one tap each.
 import React from 'react';
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme, Sheet } from '../../theme';
 
 function BigAction({ icon, label, sub, tone, onPress, t, busy, disabled }) {

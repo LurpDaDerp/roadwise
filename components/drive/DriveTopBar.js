@@ -1,7 +1,7 @@
 // DriveTopBar — SOS (left), monitoring status pill (centre, [MP-1]), elapsed time (right).
 import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 import { MonitoringStatusPill } from '../monitoring/MonitoringStatusPill';
 import { formatClock } from '../../utils/format';

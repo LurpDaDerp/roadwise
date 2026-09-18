@@ -10,7 +10,7 @@
 // can never be dismissed); this component only offers the affordance it was given.
 import React, { useEffect, useRef } from 'react';
 import { Animated, View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 import { ALERT_SEVERITY } from '../../monitoring/types';
 

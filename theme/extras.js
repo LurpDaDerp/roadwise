@@ -10,7 +10,7 @@ import {
   Easing,
 } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from './useTheme';
 import { AutoFitText } from './AutoFitText';
 
@@ -604,21 +604,34 @@ export function useCountUp(to, duration = 500) {
   const [display, setDisplay] = useState(0);
   const anim = useRef(new Animated.Value(0)).current;
   const lastTarget = useRef(0);
+  // The listener fires ~60 times a second and each setDisplay re-renders the WHOLE host screen,
+  // so it only publishes when the displayed integer actually changes (Home used to re-render
+  // about 27 times in the 450 ms count-up).
+  const shownRef = useRef(0);
   useEffect(() => {
-    const id = anim.addListener(({ value }) => setDisplay(Math.floor(value)));
+    const id = anim.addListener(({ value }) => {
+      const next = Math.floor(value);
+      if (next === shownRef.current) return;
+      shownRef.current = next;
+      setDisplay(next);
+    });
     return () => anim.removeListener(id);
   }, [anim]);
   useEffect(() => {
     const target = Number(to) || 0;
     anim.stopAnimation();
     anim.setValue(lastTarget.current); // count from the previous value, not from 0
+    shownRef.current = Math.floor(lastTarget.current);
     lastTarget.current = target;
     Animated.timing(anim, {
       toValue: target,
       duration,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-    }).start(() => setDisplay(target));
+    }).start(() => {
+      shownRef.current = target;
+      setDisplay(target);
+    });
   }, [to, duration, anim]);
   return display;
 }

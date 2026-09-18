@@ -52,7 +52,7 @@ const CODE_LENGTH = 8;
  * (`Math.random().toString(36).substring(2, 8)`) could also return fewer than six
  * characters. This uses the platform CSPRNG over a 32 character alphabet: 32^8 codes.
  */
-export function generateGroupCode() {
+function generateGroupCode() {
   let bytes;
   try {
     bytes = Crypto.getRandomBytes(CODE_LENGTH);
@@ -69,7 +69,7 @@ export function generateGroupCode() {
   return code;
 }
 
-export function normalizeGroupCode(code) {
+function normalizeGroupCode(code) {
   return String(code ?? "").trim().toUpperCase();
 }
 

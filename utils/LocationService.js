@@ -76,7 +76,7 @@ function knownSpeed(coords) {
 }
 
 /** Decide whether a fix is worth a Firestore write. Exported for testing/diagnostics. */
-export function shouldWriteLocation(previous, coords, now) {
+function shouldWriteLocation(previous, coords, now) {
   if (!previous) return true;
 
   const sinceLast = now - (previous.at ?? 0);
@@ -141,7 +141,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   }
 });
 
-export function waitForSignedInUser(timeoutMs = 15000) {
+function waitForSignedInUser(timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     if (auth.currentUser) return resolve(auth.currentUser);
 

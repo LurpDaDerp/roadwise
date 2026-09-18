@@ -51,11 +51,3 @@ export function totalAlerts(record) {
   return (c.info || 0) + (c.warning || 0) + (c.critical || 0);
 }
 
-export function severityRank(severity) {
-  switch (severity) {
-    case ALERT_SEVERITY.CRITICAL: return 3;
-    case ALERT_SEVERITY.WARNING: return 2;
-    case ALERT_SEVERITY.INFO: return 1;
-    default: return 0;
-  }
-}

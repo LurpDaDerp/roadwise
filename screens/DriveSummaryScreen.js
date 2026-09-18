@@ -1,7 +1,7 @@
 // DriveSummaryScreen — what happened, points earned, what to improve.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, Dimensions } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import ConfettiCannon from 'react-native-confetti-cannon';
 
 import { Screen, Section, Card, Button, Chip, Ring, scoreColor, StatCell, StatDivider, ProgressBar, KeyValueRow, Banner, useTheme, useCountUp } from '../theme';

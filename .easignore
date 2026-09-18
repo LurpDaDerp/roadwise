@@ -18,6 +18,13 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# The reference copies of the model bundle. The native module ships its OWN copies
+# (modules/dms-vision/ios/Resources and android/src/main/assets, kept identical by
+# modules/dms-vision/scripts/check-bundle.js, which is a developer script and never runs on
+# EAS); nothing in the JS bundle requires these, so uploading them costs 7.4 MB per build for
+# files no build reads.
+assets/models/
+
 # ~14 MB of engine parity fixtures and the research notes: test data no app build ever loads.
 # onnx_parity.json (the once-per-run ONNX self-test, required by the hook) and
 # mirror_permutation_478.json are deliberately NOT excluded.

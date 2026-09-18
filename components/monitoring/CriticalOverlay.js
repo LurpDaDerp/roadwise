@@ -4,7 +4,7 @@
 // to nothing — the driver should not be interacting with the phone.
 import React, { useEffect, useRef } from 'react';
 import { Animated, View, Text, StyleSheet, Easing } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 import { ALERT_SEVERITY } from '../../monitoring/types';
 

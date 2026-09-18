@@ -109,63 +109,11 @@ export function Card({ children, style, padded = true, tone = 'default', onPress
   return <View style={[base, style]}>{children}</View>;
 }
 
-// Divider — hairline separator.
-export function Divider({ inset = 0 }) {
-  const t = useTheme();
-  return (
-    <View
-      style={{
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: t.colors.divider,
-        marginVertical: t.spacing[2],
-        marginLeft: inset,
-      }}
-    />
-  );
-}
-
 // Eyebrow — tiny uppercase label used as section header standalone.
 export function Eyebrow({ children, style, tone = 'accent' }) {
   const t = useTheme();
   const color = tone === 'accent' ? t.colors.accent : t.colors.textSubtle;
   return <Text style={[t.typography.micro, { color }, style]}>{children}</Text>;
-}
-
-// Stat — large numeric with label beneath.
-export function Stat({ value, label, trend, accent }) {
-  const t = useTheme();
-  return (
-    <View>
-      <AutoFitText
-        style={[
-          t.typography.numeric,
-          { color: accent || t.colors.text },
-        ]}
-      >
-        {value}
-      </AutoFitText>
-      {!!label && (
-        <Text
-          style={[
-            t.typography.caption,
-            { color: t.colors.textMuted, marginTop: -2 },
-          ]}
-        >
-          {label}
-        </Text>
-      )}
-      {!!trend && (
-        <Text
-          style={[
-            t.typography.caption,
-            { color: t.colors.accent, marginTop: 2 },
-          ]}
-        >
-          {trend}
-        </Text>
-      )}
-    </View>
-  );
 }
 
 // Button — three variants: primary, ghost, danger.

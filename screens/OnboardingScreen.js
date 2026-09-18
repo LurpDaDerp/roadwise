@@ -2,7 +2,7 @@
 // with reasons, camera placement + driver side, ready.
 import React, { useRef, useState } from 'react';
 import { View, Text, ScrollView, Dimensions, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Screen, Card, Button, ListRow, Chip, Toggle, Banner, useTheme, Eyebrow } from '../theme';

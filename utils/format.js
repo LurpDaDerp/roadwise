@@ -1,7 +1,7 @@
 // Small display formatters shared by the drive, history and summary screens.
 
-export const MPS_TO_MPH = 2.23694;
-export const MPS_TO_KPH = 3.6;
+const MPS_TO_MPH = 2.23694;
+const MPS_TO_KPH = 3.6;
 export const METERS_PER_MILE = 1609.34;
 
 export function speedFromMps(mps, unit) {
@@ -46,10 +46,6 @@ export function formatDistance(meters, unit = 'mph') {
 export function distanceValue(meters, unit = 'mph') {
   const m = Number(meters) || 0;
   return unit === 'kph' ? m / 1000 : m / METERS_PER_MILE;
-}
-
-export function distanceUnitLabel(unit = 'mph') {
-  return unit === 'kph' ? 'km' : 'mi';
 }
 
 export function formatSpeed(value, unit = 'mph') {

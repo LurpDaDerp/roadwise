@@ -68,7 +68,7 @@ const inFlight = new Map();
 
 export { distanceMeters, haversineM, bearingDeg, offsetPoint };
 
-export function getGridKey(lat, lon) {
+function getGridKey(lat, lon) {
   return `${Math.round(lat / GRID_RESOLUTION)}_${Math.round(lon / GRID_RESOLUTION)}`;
 }
 
@@ -306,7 +306,3 @@ export function fillCachePolyline(points, valueKph, street) {
   schedulePersist();
 }
 
-/** Diagnostics for the audit document and manual testing. */
-export function speedLimitCacheStats() {
-  return { entries: cache.size, maxEntries: MAX_ENTRIES, loaded };
-}

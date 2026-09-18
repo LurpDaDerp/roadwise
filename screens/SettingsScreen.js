@@ -2,9 +2,10 @@
 // A grouped list: profile → Account, Driving, Monitoring, Safety, Notifications,
 // Appearance (inline) and About. Every preference is served by SettingsContext.
 import React, { useCallback, useContext, useState } from 'react';
-import { View, Text, ScrollView, Image } from 'react-native';
+import { View, Text, ScrollView } from 'react-native';
+import { Image } from 'expo-image';   // remote avatar: expo-image is the one with a disk cache
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
 import {
   Screen,
@@ -94,6 +95,9 @@ export default function SettingsScreen() {
                   <Image
                     source={{ uri: photoURL }}
                     style={{ width: 36, height: 36, borderRadius: 18 }}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={0}
                   />
                 ) : (
                   <Text style={{ color: t.colors.accent, fontSize: 16, fontWeight: '800' }}>

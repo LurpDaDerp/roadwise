@@ -142,7 +142,7 @@ export function HistoryPanel({
                       drive={drive}
                       unit={unit}
                       first={i === 0}
-                      onPress={() => onSelectDrive && onSelectDrive(drive)}
+                      onPress={onSelectDrive}
                     />
                   ))}
                 </Card>

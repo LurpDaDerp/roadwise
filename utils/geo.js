@@ -70,7 +70,7 @@ const stateAbbreviations = {
   Alabama: 'AL', Alaska: 'AK', Arizona: 'AZ', Arkansas: 'AR', California: 'CA', Colorado: 'CO', Connecticut: 'CT', Delaware: 'DE', Florida: 'FL', Georgia: 'GA', Hawaii: 'HI', Idaho: 'ID', Illinois: 'IL', Indiana: 'IN', Iowa: 'IA', Kansas: 'KS', Kentucky: 'KY', Louisiana: 'LA', Maine: 'ME', Maryland: 'MD', Massachusetts: 'MA', Michigan: 'MI', Minnesota: 'MN', Mississippi: 'MS', Missouri: 'MO', Montana: 'MT', Nebraska: 'NE', Nevada: 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', Ohio: 'OH', Oklahoma: 'OK', Oregon: 'OR', Pennsylvania: 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD', Tennessee: 'TN', Texas: 'TX', Utah: 'UT', Vermont: 'VT', Virginia: 'VA', Washington: 'WA', 'West Virginia': 'WV', Wisconsin: 'WI', Wyoming: 'WY',
 };
 
-export function normalizeAddress(addr) {
+function normalizeAddress(addr) {
   if (!addr) return '';
   let normalized = addr.toLowerCase().replace(/[.,]/g, '');
   Object.entries(directionMap).forEach(([word, abbr]) => {
@@ -87,7 +87,7 @@ export function normalizeAddress(addr) {
   return normalized;
 }
 
-export function compareAddresses(addr1, addr2, threshold = 0.7) {
+function compareAddresses(addr1, addr2, threshold = 0.7) {
   if (!addr1 || !addr2) return false;
   const tokens1 = addr1.split(' ').filter(Boolean);
   const tokens2 = addr2.split(' ').filter(Boolean);
@@ -109,7 +109,7 @@ export function compareAddresses(addr1, addr2, threshold = 0.7) {
 }
 
 // Reverse-geocode cache (7-day TTL, purged at most once a day).
-export const ADDR_CACHE_PREFIX = 'addr_';
+const ADDR_CACHE_PREFIX = 'addr_';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_PURGE_THROTTLE_KEY = 'addr_cache_last_purge';
 const CACHE_PURGE_THROTTLE_MS = 24 * 60 * 60 * 1000;

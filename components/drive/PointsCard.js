@@ -1,7 +1,7 @@
 // PointsCard — points this drive (or lifetime total) with the focus shield.
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, View, Text } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme, AutoFitText, Card } from '../../theme';
 
 export const PointsCard = React.memo(function PointsCard({

@@ -1,7 +1,7 @@
 // WelcomeScreen — first thing a signed-out person sees.
 import React from 'react';
 import { View, Text, ImageBackground, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, useTheme } from '../theme';
 

@@ -2,7 +2,7 @@
 // The whole card is one tap target that opens the full Leaderboard screen.
 import React from 'react';
 import { View, Text, Image, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, Skeleton, AutoFitText, useTheme } from '../../theme';
 
 const CROWNS = [

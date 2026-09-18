@@ -1,7 +1,7 @@
 // StreakPill — flame + streak count; tap explains the rule.
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useTheme, AutoFitText } from '../../theme';
 
 export function streakColor(streak, t) {

@@ -26,10 +26,6 @@ export async function getBadgeDrives(uid, { maxDrives = 200, force = false } = {
   return drives;
 }
 
-export function insightsCacheAge(uid) {
-  return cache.uid === uid && cache.at ? Date.now() - cache.at : Infinity;
-}
-
 /** Drives from the last 30 days, oldest first (see getDriveMetrics). */
 export async function getInsightsDrives(uid, { force = false } = {}) {
   if (!uid) return [];
