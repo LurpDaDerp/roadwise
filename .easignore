@@ -9,10 +9,8 @@ Thumbs.db
 .claude/
 /ios/
 /android/
-/.export-check/
-.export-base-*/
-.export-opt-*/
-.export-*.log
+# Local measurement output: every `expo export --output-dir .export-*` and command log.
+.export-*
 .npm-*.log
 .doctor.log
 .prebuild.log
