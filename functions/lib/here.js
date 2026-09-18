@@ -33,6 +33,10 @@ const AUTOCOMPLETE_TTL_MS = 60 * 60 * 1000;
 const revGeocodeMemory = new MemoryCache({maxEntries: 2000, ttlMs: CACHE_TTL_MS});
 const autocompleteMemory = new MemoryCache({maxEntries: 500, ttlMs: AUTOCOMPLETE_TTL_MS});
 
+// MUST stay identical to utils/gridKey.js on the phone: the client keys its own speed-limit
+// cache by this grid, and a disagreement would silently double the HERE requests (the client
+// would miss on cells the server had already cached). The function is deployed on its own, so
+// it cannot import the client's copy; hooks/__tests__/gridKey.test.js asserts they agree.
 function gridKey(lat, lon) {
   return `${Math.round(lat / GRID_RESOLUTION)}_${Math.round(lon / GRID_RESOLUTION)}`;
 }

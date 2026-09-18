@@ -5,7 +5,8 @@
 // There were three separate haversine implementations in the codebase (the background
 // location task, the map screen and the speed-limit cache), written in three different
 // styles and differing in their earth radius. They agree now because there is only one.
-// This module deliberately has no imports: the background task loads it.
+// This module deliberately has no imports beyond AsyncStorage: the background location task
+// loads it outside any screen, so anything it pulled in would be paid for on every fix.
 
 const EARTH_RADIUS_M = 6371000;
 

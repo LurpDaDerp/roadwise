@@ -226,7 +226,10 @@ export default function HomeScreen({ navigation }) {
 
       <Sheet visible={streakInfo} onClose={() => setStreakInfo(false)} eyebrow="Focus streak" title={`${streak} in a row`}>
         <Text style={[t.typography.body, { color: t.colors.textMuted, lineHeight: 22 }]}>
-          Every focused drive adds one. Picking up the phone for more than 5 seconds, or a critical driver-monitoring alert, resets it to zero.
+          Every focused drive adds one. Picking up the phone for more than 5 seconds resets it to
+          zero, and so does a drive that driver monitoring rates as distracted: any critical alert,
+          three or more warnings, or 30 seconds or more with your eyes off the road. While a
+          critical alert is on screen, points stop being earned until it clears.
         </Text>
         <View style={{ height: 16 }} />
         <Button title="Got it" onPress={() => setStreakInfo(false)} />

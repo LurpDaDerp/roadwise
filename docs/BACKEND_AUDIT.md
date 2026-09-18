@@ -844,3 +844,33 @@ points did **not** reset → create a group, join it from a second account, conf
 account sees the first on the map and that a third, non-member account gets
 `permission-denied` reading that group document → raise and clear an emergency and confirm
 both pushes arrive.
+
+
+---
+
+## App Check follow-up (not enabled on this branch, deliberately)
+
+The callables (`hereRevGeocode`, `hereAutocomplete`, the OpenAI proxy) authenticate the caller
+but do not verify that the call came from a genuine build of this app, so a stolen ID token can
+drive HERE and OpenAI spend from anywhere. App Check is the fix, and it is **not** switched on
+here: `enforceAppCheck: true` rejects every call until the console and the native projects are
+configured, which would break the speed-limit lookup on the next deploy of an unconfigured
+project. It needs a device and the Firebase console, so it is the owner's step:
+
+1. **Firebase console → App Check → Apps.** Register the iOS app with **App Attest** (DeviceCheck
+   as the fallback for iOS < 14) and the Android app with **Play Integrity**. Note each app's
+   debug token for development builds.
+2. **Client.** Add `@react-native-firebase/app-check`, or the `firebase/app-check` web SDK with a
+   custom provider, and call `initializeAppCheck` immediately after `initializeApp` in
+   `utils/firebase.js` — before the first callable. In development, set
+   `FIREBASE_APPCHECK_DEBUG_TOKEN` to the debug token from step 1.
+3. **Monitor first, enforce second.** Leave enforcement OFF and watch App Check → Metrics until
+   the "verified" share of requests for each callable is ~100 % (a release build in real users'
+   hands takes a few days to roll out). Turning enforcement on earlier locks out every older
+   installed version.
+4. **Enforce.** Add `enforceAppCheck: true` to each `onCall` options object in
+   `functions/index.js`, deploy, and watch the error rate. The rollback is one deploy with the
+   flag removed.
+5. **Firestore rules** can also require App Check (`request.app != null`), but only after step 3
+   shows every client is verified — the same lockout risk applies, and a locked-out client cannot
+   even read its own profile.

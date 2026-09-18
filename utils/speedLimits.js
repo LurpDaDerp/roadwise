@@ -22,6 +22,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { distanceMeters, haversineM, bearingDeg, offsetPoint } from './geo';
+// The same cell the Cloud Function caches under (functions/lib/here.js keeps its own copy;
+// hooks/__tests__/gridKey.test.js asserts the two agree).
+import { gridKey as getGridKey } from './gridKey';
 import { fetchHereRevGeocode } from './here';
 
 // v2: the grid resolution changed, so v1 keys address different ground. A version in
@@ -31,7 +34,7 @@ const STORAGE_KEY = '@speedLimitCache.v2';
 // Matches the server-side cell size in functions/lib/here.js. A wide cell hands one
 // road's answer to the road beside it; ~55 m is narrower than the gap between parallel
 // streets in almost all grids.
-const GRID_RESOLUTION = 0.0005; // ~55 m
+// The cell size lives in utils/gridKey.js, shared with the Cloud Function's own copy.
 // A ~55 m cell covers ~1/16 the area of the old ~220 m one, so the same amount of
 // travelled road needs proportionally more entries.
 const MAX_ENTRIES = 8000;
@@ -68,9 +71,7 @@ const inFlight = new Map();
 
 export { distanceMeters, haversineM, bearingDeg, offsetPoint };
 
-function getGridKey(lat, lon) {
-  return `${Math.round(lat / GRID_RESOLUTION)}_${Math.round(lon / GRID_RESOLUTION)}`;
-}
+
 
 /* ---------------------------------------------------------------- *
  * Cache persistence

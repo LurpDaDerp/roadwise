@@ -47,7 +47,7 @@ const STATIONARY_SPEED_MPS = 1;
 // the gate entirely.
 const MIN_WRITE_INTERVAL_MS = 15_000;
 
-// Re-exported so existing callers (screens/LocationScreen.js) keep working unchanged.
+// Re-exported so callers do not have to know that the cache moved into utils/groupCache.js.
 export { updateCachedGroupId, clearCachedGroupId };
 
 // In-memory copy of the persisted gate state, so the common case costs no storage read.
