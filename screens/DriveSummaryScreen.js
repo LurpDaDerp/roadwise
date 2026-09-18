@@ -136,7 +136,7 @@ export default function DriveSummaryScreen({ navigation, route }) {
           </Card>
         </Section>
 
-        {summary.monitoring && (
+        {!!summary.monitoring?.enabled && (
           <Section label="Driver monitoring">
             <MonitoringSummaryCard monitoring={summary.monitoring} />
           </Section>

@@ -126,10 +126,9 @@ export function summarizeDrives(drives = []) {
     distance += Number(d.totalDistance) || 0;
     eyesOff += Number(d.eyesOffRoadSeconds ?? d.monitoring?.eyesOffRoadSeconds) || 0;
     points += Number(d.points) || 0;
-    if (typeof d.score === 'number') {
-      scoreSum += d.score;
-      scoreCount += 1;
-    }
+    const s = typeof d.score === 'number' ? d.score : scoreDrive(d).score;
+    scoreSum += s;
+    scoreCount += 1;
   }
   const count = drives.length;
   return {

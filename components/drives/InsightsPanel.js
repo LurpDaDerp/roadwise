@@ -313,7 +313,7 @@ export function InsightsPanel({ drives = [], unit = 'mph', navigation }) {
 
       <Section label="Phone distractions">
         <Card>
-          {labels.length > 0 ? (
+          {data.some((v) => v > 0) || (eyesOff && eyesOff.some((v) => v > 0)) ? (
             <>
               <LineChart
                 data={{ labels, datasets }}
@@ -329,12 +329,7 @@ export function InsightsPanel({ drives = [], unit = 'mph', navigation }) {
                   color: () => t.colors.accent,
                   labelColor: () => t.colors.textMuted,
                   style: { borderRadius: t.radius.md },
-                  propsForDots: ({ value }) => ({
-                    r: value !== undefined && value !== null ? '4' : '0',
-                    strokeWidth: value !== undefined && value !== null ? '2' : '0',
-                    stroke: t.colors.accent,
-                    fill: t.colors.surface,
-                  }),
+                  propsForDots: { r: '4', strokeWidth: '2', stroke: t.colors.accent, fill: t.colors.surface },
                   propsForBackgroundLines: { stroke: t.colors.divider },
                 }}
                 bezier

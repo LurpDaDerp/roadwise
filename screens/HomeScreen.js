@@ -41,9 +41,10 @@ export default function HomeScreen({ navigation }) {
   const load = useCallback(async () => {
     if (!uid) return;
     try {
-      const [recent, storedScore] = await Promise.all([getRecentDrives(uid, 30), AsyncStorage.getItem(KEYS.safetyScore)]);
+      const [recent, storedScore] = await Promise.all([getRecentDrives(uid, 30), AsyncStorage.getItem(KEYS.safetyScoreFor(uid))]);
       setDrives(recent);
-      setSafetyScore(storedScore != null ? parseInt(storedScore, 10) : null);
+      const parsed = storedScore != null ? parseInt(storedScore, 10) : NaN;
+      setSafetyScore(Number.isFinite(parsed) ? parsed : null);
     } catch (e) {
       setDrives([]);
     }

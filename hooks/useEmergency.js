@@ -20,16 +20,35 @@ export function callNumber(phone) {
     .catch((err) => console.error('Failed to call number:', err));
 }
 
-export function useEmergency() {
+// uid: the signed-in user (from AuthContext) so the contacts and the current
+// emergency flag load as soon as auth is restored.
+export function useEmergency(uidParam) {
   const [trustedContacts, setTrustedContacts] = useState([]);
   const [isEmergencyActive, setIsEmergencyActive] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-    getTrustedContacts(uid).then((c) => setTrustedContacts(Array.isArray(c) ? c : []));
-  }, []);
+    const uid = uidParam || auth.currentUser?.uid;
+    if (!uid) return undefined;
+    let cancelled = false;
+    getTrustedContacts(uid).then((c) => {
+      if (!cancelled) setTrustedContacts(Array.isArray(c) ? c : []);
+    });
+    // Hydrate the emergency flag so the sheet offers "I'm safe" when it is already set.
+    (async () => {
+      try {
+        const userSnap = await getDoc(doc(db, 'users', uid));
+        const groupId = userSnap.exists() ? userSnap.data().groupId : null;
+        if (!groupId) return;
+        const groupSnap = await getDoc(doc(db, 'groups', groupId));
+        const flag = groupSnap.exists() ? !!groupSnap.data()?.memberLocations?.[uid]?.emergency : false;
+        if (!cancelled) setIsEmergencyActive(flag);
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uidParam]);
 
   const notifyGroup = useCallback(async () => {
     const uid = auth.currentUser?.uid;

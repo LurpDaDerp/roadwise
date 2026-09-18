@@ -72,8 +72,8 @@ export function useDriveSession({
   pausePoints = false,
   voiceAlerts = true,
   onAutoEnd,
+  getFinalizeExtra, // () => extra merged into finalize() on auto-end ([MP-4] survives the 2-minute timeout)
 } = {}) {
-  const uid = auth.currentUser?.uid || null;
 
   // ---- render state -------------------------------------------------------
   const [rawSpeedMps, setRawSpeedMps] = useState(0);
@@ -85,6 +85,7 @@ export function useDriveSession({
   const [weather, setWeather] = useState(null);
   const [roadSummary, setRoadSummary] = useState(null);
   const [gpsStatus, setGpsStatus] = useState('searching'); // 'searching' | 'ok' | 'denied' | 'error'
+  const [distance, setDistance] = useState(0);
   const [isSpeeding, setIsSpeeding] = useState(false);
   const [speedingAlertOn, setSpeedingAlertOn] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -134,12 +135,14 @@ export function useDriveSession({
   const prevSpokenLimit = useRef(null);
   const showSpeedLimitRef = useRef(showSpeedLimit);
   const onAutoEndRef = useRef(onAutoEnd);
+  const getFinalizeExtraRef = useRef(getFinalizeExtra);
   const settingsRef = useRef({ distractedNotificationsEnabled, notifyDriveComplete, speedingWarningsEnabled });
 
   useEffect(() => { unitRef.current = unit; }, [unit]);
   useEffect(() => { pausePointsRef.current = pausePoints; }, [pausePoints]);
   useEffect(() => { showSpeedLimitRef.current = showSpeedLimit; }, [showSpeedLimit]);
   useEffect(() => { onAutoEndRef.current = onAutoEnd; }, [onAutoEnd]);
+  useEffect(() => { getFinalizeExtraRef.current = getFinalizeExtra; }, [getFinalizeExtra]);
   useEffect(() => {
     settingsRef.current = { distractedNotificationsEnabled, notifyDriveComplete, speedingWarningsEnabled };
   }, [distractedNotificationsEnabled, notifyDriveComplete, speedingWarningsEnabled]);
@@ -227,7 +230,6 @@ export function useDriveSession({
       cancelled = true;
       locationSub.current?.remove?.();
       locationSub.current = null;
-      fillFinalSegmentIfAny();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -283,6 +285,7 @@ export function useDriveSession({
       totalDistance.current += getDistanceMeters(lastLocation.current.latitude, lastLocation.current.longitude, lat, lon);
     }
     lastLocation.current = { latitude: lat, longitude: lon };
+    setDistance(totalDistance.current);
 
     // Speed limit: cache first, then a throttled HERE lookup.
     const cached = getCachedLimit(lat, lon);
@@ -355,7 +358,8 @@ export function useDriveSession({
     if (!hasStartedRef.current && speedU >= thresholdMoving) {
       hasStartedRef.current = true;
       setHasStarted(true);
-      if (uid) startDriving(uid);
+      const liveUid = auth.currentUser?.uid;
+      if (liveUid) startDriving(liveUid);
     }
 
     // Hard brake / acceleration (m/s²).
@@ -417,8 +421,8 @@ export function useDriveSession({
     if (!active || !audioSpeedUpdatesEnabled || limitKph == null || limitSource === 'default') return;
     const rounded = Math.round(kphToUnit(limitKph, unit));
     if (prevSpokenLimit.current === rounded) return;
-    prevSpokenLimit.current = rounded;
     if (!voiceAlerts) return;
+    prevSpokenLimit.current = rounded;
     Speech.stop();
     Speech.speak(`Speed limit ${rounded}`, { language: 'en', pitch: 0.9, rate: 0.95 });
   }, [limitKph, limitSource, unit, audioSpeedUpdatesEnabled, active, voiceAlerts]);
@@ -461,6 +465,7 @@ export function useDriveSession({
         backgroundTimeout.current = setTimeout(async () => {
           if (hasStartedRef.current) {
             isDistractedRef.current = true;
+            phoneUsageSecRef.current += Math.round((Date.now() - (unfocusedAt.current ?? Date.now())) / 1000);
             setPhone((p) => ({ ...p, distracted: true }));
             if (settingsRef.current.notifyDriveComplete) {
               try {
@@ -471,7 +476,8 @@ export function useDriveSession({
               } catch {}
             }
           }
-          const summary = await finalize({ autoEnded: true });
+          const extra = (() => { try { return getFinalizeExtraRef.current?.() || {}; } catch { return {}; } })();
+          const summary = await finalize({ ...extra, autoEnded: true });
           onAutoEndRef.current?.(summary);
         }, AUTO_END_MS);
       }
@@ -519,9 +525,17 @@ export function useDriveSession({
   // ---- finalize ------------------------------------------------------------
   // extra: { monitoring: { enabled, metrics, calibrationState }, autoEnded }
   // Returns the summary object consumed by DriveSummaryScreen.
-  const finalize = useCallback(async (extra = {}) => {
-    if (finalizedRef.current) return finalizedRef.current === true ? null : finalizedRef.current;
-    finalizedRef.current = true;
+  const finalize = useCallback((extra = {}) => {
+    // Concurrent callers (hold-to-end racing the auto-end) share one result.
+    if (finalizedRef.current) return Promise.resolve(finalizedRef.current);
+    const run = finalizeOnce(extra);
+    finalizedRef.current = run;
+    run.then((summary) => { finalizedRef.current = summary; });
+    return run;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const finalizeOnce = async (extra = {}) => {
     stopPointEarning();
     locationSub.current?.remove?.();
     locationSub.current = null;
@@ -610,16 +624,14 @@ export function useDriveSession({
       newStreak: newStreak ?? previousStreak,
       streakChanged: newStreak !== null,
     };
-    finalizedRef.current = summary;
     return summary;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  };
 
   // ---- derived -------------------------------------------------------------
   const speed = speedFromMps(rawSpeedMps, unit);
   const limit = kphToUnit(limitKph ?? defaultLimitKph, unit);
   const limitIsDefault = limitKph == null;
-  const distanceMeters = totalDistance.current;
+  const distanceMeters = distance;
 
   const speedingAlert = useMemo(
     () =>

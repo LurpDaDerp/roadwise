@@ -1,7 +1,7 @@
 // DrivePrepScreen — "everything ready" before the explicit Start:
 // permissions with fix actions, camera placement (when monitoring is on),
 // the per-drive monitoring toggle, and one big Start button.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, AppState, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -30,7 +30,8 @@ export default function DrivePrepScreen({ navigation }) {
   const [starting, setStarting] = useState(false);
 
   // The monitoring branch may expose a live preview for the placement guide.
-  const monitoring = useDriverMonitoring({ enabled: false, driveActive: false, settings: monitoringSettingsFrom(settings) });
+  const monitoringSettings = useMemo(() => monitoringSettingsFrom(settings), [settings]);
+  const monitoring = useDriverMonitoring({ enabled: false, driveActive: false, settings: monitoringSettings });
 
   useEffect(() => setMonitoringOn(!!settings.monitoringEnabled), [settings.monitoringEnabled]);
 

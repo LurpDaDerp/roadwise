@@ -40,7 +40,9 @@ export function useDriverMonitoring({ enabled = false, driveActive = false, sett
   const acknowledged = useRef(new Set());
   const emitted = useRef(new Set());
   const onAlertRef = useRef(onAlert);
-  onAlertRef.current = onAlert;
+  useEffect(() => {
+    onAlertRef.current = onAlert;
+  }, [onAlert]);
 
   const running = enabled && driveActive;
 

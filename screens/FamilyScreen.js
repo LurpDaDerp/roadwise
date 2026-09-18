@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, Pressable, Alert, StyleSheet } from 'react-native';
 import MapView, { AnimatedRegion } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetSectionList, BottomSheetView } from '@gorhom/bottom-sheet';
 
@@ -36,6 +36,7 @@ export default function FamilyScreen() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const route = useRoute();
+  const navigation = useNavigation();
   const perms = usePermissions();
   const { settings } = useSettings();
   const { uid, username, photoURL, groupId: profileGroupId, profileLoaded } = useAuthContext();
@@ -48,7 +49,6 @@ export default function FamilyScreen() {
 
   const mapRef = useRef(null);
   const sheetRef = useRef(null);
-  const handledEmergencyRef = useRef(null);
   const hasFixRef = useRef(false);
   const myCoord = useRef(new AnimatedRegion({ latitude: 0, longitude: 0, ...DELTA })).current;
 
@@ -127,13 +127,13 @@ export default function FamilyScreen() {
   // map on them and open their sheet.
   useEffect(() => {
     const target = route.params?.emergencyUid;
-    if (!target || handledEmergencyRef.current === target) return;
+    if (!target) return;
     const member = members.find((m) => m.uid === target);
-    if (!member?.coords) return;
-    handledEmergencyRef.current = target;
+    if (!member?.coords) return; // wait for the member's location to arrive
     setSelectedUid(target);
     focusOn(member.coords, 1000);
-  }, [route.params?.emergencyUid, members, focusOn]);
+    navigation.setParams({ emergencyUid: null }); // consume it so the next push works again
+  }, [route.params?.emergencyUid, members, focusOn, navigation]);
 
   const confirmLeave = useCallback(() => {
     Alert.alert('Leave group', 'You will stop sharing your location with this group.', [

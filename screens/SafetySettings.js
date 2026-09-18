@@ -77,7 +77,7 @@ export default function SafetySettings() {
       Alert.alert('Invalid phone', 'Please enter a valid 10-digit phone number.');
       return;
     }
-    const existing = contacts.find((c) => c.phone.replace(/\D/g, '') === digitsOnlyPhone);
+    const existing = contacts.find((c) => String(c?.phone || '').replace(/\D/g, '') === digitsOnlyPhone);
     if (existing) {
       Alert.alert('Duplicate', `This number is already saved as "${existing.name || 'Unnamed'}".`);
       return;

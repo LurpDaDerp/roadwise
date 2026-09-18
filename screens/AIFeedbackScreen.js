@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAuth } from 'firebase/auth';
 
 import { getAIFeedback } from '../utils/gptApi';
+import { KEYS } from '../utils/storageKeys';
 import {
   Screen,
   Section,
@@ -69,23 +70,35 @@ export default function AIFeedbackScreen({ route }) {
           return;
         }
 
-        const { statsJSON } = route.params;
+        const statsJSON = route?.params?.statsJSON;
+        if (!statsJSON || typeof statsJSON !== 'object') {
+          if (!controller.signal.aborted) {
+            setError('No drive data to analyse yet. Complete a few drives, then try again from Insights.');
+            setLoading(false);
+          }
+          return;
+        }
         const normalizedInput = normalizeInput(statsJSON);
 
         let cache = [];
         try {
           const storedCache = await AsyncStorage.getItem('feedbackCache');
-          if (storedCache) cache = JSON.parse(storedCache);
+          if (storedCache) {
+            const parsed = JSON.parse(storedCache);
+            cache = Array.isArray(parsed) ? parsed : [];
+          }
         } catch (err) {
           console.error('Error loading cache:', err);
         }
 
         const match = cache.find(
-          (entry) => JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
+          (entry) => entry && JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
         );
         if (match) {
-          setFeedback(match.response);
-          setLoading(false);
+          if (!controller.signal.aborted) {
+            setFeedback(match.response);
+            setLoading(false);
+          }
           return;
         }
 
@@ -97,7 +110,7 @@ export default function AIFeedbackScreen({ route }) {
           } else {
             setFeedback(aiResponse);
             try {
-              await AsyncStorage.setItem('safetyScore', aiResponse.score.toString());
+              await AsyncStorage.setItem(KEYS.safetyScoreFor(user.uid), String(Number(aiResponse.score) || 0));
             } catch (err) {
               console.error('Error saving safety score:', err);
             }

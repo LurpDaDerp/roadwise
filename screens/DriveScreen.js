@@ -39,7 +39,7 @@ export default function DriveScreen({ navigation, route }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { settings } = useSettings();
-  const { points: lifetimePoints, groupId } = useAuthContext();
+  const { uid, points: lifetimePoints, groupId } = useAuthContext();
   const player = useAudioPlayer(alertTone);
 
   const monitoringEnabled = route.params?.monitoringEnabled ?? settings.monitoringEnabled;
@@ -52,18 +52,30 @@ export default function DriveScreen({ navigation, route }) {
   }, []);
 
   // ---- monitoring (mock until the monitoring branch lands) ----------------
+  const monitoringSettings = useMemo(() => monitoringSettingsFrom(settings), [settings]);
   const monitoring = useDriverMonitoring({
     enabled: monitoringEnabled,
     driveActive: !ended,
-    settings: monitoringSettingsFrom(settings),
+    settings: monitoringSettings,
     demo: !!route.params?.demoMonitoring,
   });
   const criticalActive = monitoring.activeAlert?.severity === ALERT_SEVERITY.CRITICAL;
+  const emergency = useEmergency(uid);
+
+  // [MP-4] the monitoring payload stored in the drive record — read at the
+  // moment the drive ends, whether by hold-to-end or by the 2-minute auto-end.
+  const monitoringRef = useRef({ enabled: monitoringEnabled, metrics: monitoring.metrics, calibrationState: monitoring.calibration?.state });
+  useEffect(() => {
+    monitoringRef.current = { enabled: monitoringEnabled, metrics: monitoring.metrics, calibrationState: monitoring.calibration?.state };
+  }, [monitoringEnabled, monitoring.metrics, monitoring.calibration?.state]);
+  const getFinalizeExtra = useCallback(() => ({ monitoring: monitoringRef.current }), []);
 
   // ---- drive engine --------------------------------------------------------
+  const navigatedRef = useRef(false);
   const goToSummary = useCallback(
     (summary) => {
-      if (!summary) return;
+      if (!summary || navigatedRef.current) return;
+      navigatedRef.current = true;
       navigation.replace('DriveSummary', { summary });
     },
     [navigation]
@@ -78,12 +90,13 @@ export default function DriveScreen({ navigation, route }) {
     notifyDriveComplete: settings.notifyDriveComplete,
     voiceAlerts: settings.monitoringVoiceAlerts,
     pausePoints: criticalActive, // [MP-5]
+    getFinalizeExtra,
     onAutoEnd: (summary) => {
       setEnded(true);
+      if (emergency.isEmergencyActive) emergency.cancelGroupEmergency();
       goToSummary(summary);
     },
   });
-  const emergency = useEmergency();
 
   // ---- alert precedence ----------------------------------------------------
   // Display: monitoring INFO/WARNING > speeding > phone use. CRITICAL goes to the overlay.
@@ -120,15 +133,14 @@ export default function DriveScreen({ navigation, route }) {
     setEnded(true);
     if (emergency.isEmergencyActive) await emergency.cancelGroupEmergency();
     // [MP-4] monitoring metrics into the drive record
-    const summary = await session.finalize({
-      monitoring: {
-        enabled: monitoringEnabled,
-        metrics: monitoring.metrics,
-        calibrationState: monitoring.calibration?.state,
-      },
-    });
+    const summary = await session.finalize(getFinalizeExtra());
     goToSummary(summary);
-  }, [emergency, session, monitoring.metrics, monitoring.calibration?.state, monitoringEnabled, goToSummary]);
+  }, [emergency, session, getFinalizeExtra, goToSummary]);
+
+  // A CRITICAL overlay must never be hidden behind the SOS sheet (a native modal).
+  useEffect(() => {
+    if (criticalActive) setSosOpen(false);
+  }, [criticalActive]);
 
   // Android back: never ends a drive by accident.
   useEffect(() => {

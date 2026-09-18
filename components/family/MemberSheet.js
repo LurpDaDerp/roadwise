@@ -1,6 +1,6 @@
 // MemberSheet — member detail: where they are, when that was, how fast they
 // are moving, and the two actions that matter (locate, call).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -10,9 +10,13 @@ import { relativeTime, formatSpeed, speedFromMps } from '../../utils/format';
 export function MemberSheet({ visible, member, isMe, unit = 'mph', onClose, onLocate }) {
   const t = useTheme();
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef(null);
 
   useEffect(() => {
     if (!visible) setCopied(false);
+    return () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
   }, [visible]);
 
   const copyAddress = useCallback(async () => {
@@ -20,7 +24,8 @@ export function MemberSheet({ visible, member, isMe, unit = 'mph', onClose, onLo
     try {
       await Clipboard.setStringAsync(member.address);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       console.warn('Copy failed:', e);
     }

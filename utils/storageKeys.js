@@ -23,7 +23,8 @@ export const KEYS = {
   monitoringShowPreview: '@monitoring.showPreview',
   // Caches and flags
   speedLimitCache: '@speedLimitCache',
-  safetyScore: 'safetyScore',
+  safetyScore: 'safetyScore', // legacy, device-global (pre-rework)
+  safetyScoreFor: (uid) => `@safetyScore_${uid}`,
   feedbackCache: 'feedbackCache',
   cachedProfileImage: 'cachedProfileImage',
   onboarded: (uid) => `@onboarded_${uid}`,

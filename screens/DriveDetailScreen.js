@@ -163,7 +163,7 @@ export default function DriveDetailScreen({ route }) {
           />
         </Section>
 
-        {!!monitoring && (
+        {!!monitoring?.enabled && (
           <Section label="Driver monitoring">
             <MonitoringSummaryCard monitoring={monitoring} />
           </Section>

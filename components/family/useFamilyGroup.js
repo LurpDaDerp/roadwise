@@ -82,7 +82,11 @@ function buildMembers(prev, memberLocations, profiles) {
 }
 
 export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart }) {
-  const [groupId, setGroupId] = useState(profileGroupId);
+  // Derived: the live profile document is the source of truth; create / join /
+  // leave set an optimistic value only until the snapshot catches up.
+  const [optimisticGroupId, setOptimisticGroupId] = useState(undefined);
+  const groupId = optimisticGroupId !== undefined ? optimisticGroupId : profileGroupId;
+  const setGroupId = setOptimisticGroupId;
   const [groupName, setGroupName] = useState('');
   const [members, setMembers] = useState([]);
   const [places, setPlaces] = useState([]);
@@ -94,7 +98,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
 
   // The profile document is live, so the group id follows it; create, join and
   // leave move it optimistically until the snapshot catches up.
-  useEffect(() => setGroupId(profileGroupId), [profileGroupId]);
+  useEffect(() => setOptimisticGroupId(undefined), [profileGroupId]);
 
   const fetchProfiles = useCallback(async (uids) => {
     for (let i = 0; i < uids.length; i += 10) {
@@ -178,7 +182,10 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
             .then((r) => {
               if (!cancelled) setMemberAddress(memberUid, r);
             })
-            .catch(() => {})
+            .catch(() => {
+              // Let the next snapshot retry instead of leaving the member on "Locating".
+              delete lastMemberCoordsRef.current[memberUid];
+            })
             .finally(() => pending.delete(key));
         });
       },
@@ -244,7 +251,9 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
         await setDoc(doc(db, 'users', uid), { groupId: newId }, { merge: true });
         await updateCachedGroupId(uid, newId);
         setGroupId(newId);
-        await startSharing();
+        // Fire-and-forget: the panel unmounts as soon as groupId is set, and
+        // startSharing blocks on OS permission dialogs and a GPS fix.
+        startSharing().catch((e) => console.warn('Location sharing start failed:', e));
         return { ok: true };
       } catch (e) {
         console.warn('Create group failed:', e);
@@ -263,7 +272,9 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
         await setDoc(doc(db, 'users', uid), { groupId: code }, { merge: true });
         await updateCachedGroupId(uid, code);
         setGroupId(code);
-        await startSharing();
+        // Fire-and-forget: the panel unmounts as soon as groupId is set, and
+        // startSharing blocks on OS permission dialogs and a GPS fix.
+        startSharing().catch((e) => console.warn('Location sharing start failed:', e));
         return { ok: true };
       } catch (e) {
         console.warn('Join group failed:', e);

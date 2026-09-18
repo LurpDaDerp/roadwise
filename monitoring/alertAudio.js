@@ -35,9 +35,22 @@ export function playCue({ severity, speech, player, voice, tone, haptic }) {
 // activeAlert: { id, severity, speech? , title } | null
 // audio: { voice, tone, haptic, player } — player is an expo-audio player for the tone.
 export function useAlertAudio(activeAlert, audio) {
-  const lastId = useRef(null);
   const repeatRef = useRef(null);
+  const audioRef = useRef(audio);
+  const alertRef = useRef(activeAlert);
+  useEffect(() => {
+    audioRef.current = audio;
+  }, [audio]);
+  useEffect(() => {
+    alertRef.current = activeAlert;
+  }, [activeAlert]);
 
+  const id = activeAlert?.id || null;
+  const severity = activeAlert?.severity || null;
+
+  // Re-arms only when the alert identity or its severity changes, so a
+  // settings change never silences a live CRITICAL alert and an escalation
+  // WARNING → CRITICAL with the same id plays and repeats.
   useEffect(() => {
     const stop = () => {
       if (repeatRef.current) {
@@ -45,29 +58,18 @@ export function useAlertAudio(activeAlert, audio) {
         repeatRef.current = null;
       }
     };
-    if (!activeAlert || activeAlert.severity === ALERT_SEVERITY.INFO) {
-      stop();
-      lastId.current = activeAlert?.id || null;
-      return stop;
-    }
-    if (activeAlert.id === lastId.current) return stop;
-    lastId.current = activeAlert.id;
     stop();
-    const cue = () =>
-      playCue({
-        severity: activeAlert.severity,
-        speech: activeAlert.speech,
-        player: audio?.player,
-        voice: audio?.voice,
-        tone: audio?.tone,
-        haptic: audio?.haptic,
-      });
+    if (!id || severity === ALERT_SEVERITY.INFO) return stop;
+    const cue = () => {
+      const a = alertRef.current;
+      const s = audioRef.current;
+      if (!a) return;
+      playCue({ severity, speech: a.speech, player: s?.player, voice: s?.voice, tone: s?.tone, haptic: s?.haptic });
+    };
     cue();
-    if (activeAlert.severity === ALERT_SEVERITY.CRITICAL) {
-      repeatRef.current = setInterval(cue, REPEAT_MS);
-    }
+    if (severity === ALERT_SEVERITY.CRITICAL) repeatRef.current = setInterval(cue, REPEAT_MS);
     return stop;
-  }, [activeAlert?.id, activeAlert?.severity, audio?.voice, audio?.tone, audio?.haptic, audio?.player]);
+  }, [id, severity]);
 }
 
 export default useAlertAudio;
