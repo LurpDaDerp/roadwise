@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, Alert, Keyboard, TouchableWithoutFeedback } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth, db } from '../utils/firebase';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../utils/firebase';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 import { useNavigation } from '@react-navigation/native';
-import { doc, setDoc } from 'firebase/firestore';
-import { saveUserPoints } from '../utils/firestore';
-import { query, where, getDocs, collection } from 'firebase/firestore';
+import {
+  claimUsername,
+  ensureUserProfile,
+  isUsernameAvailable,
+  validateUsername,
+  MAX_USERNAME_LENGTH,
+} from '../utils/firestore';
 import {
   Screen,
   Section,
@@ -31,12 +34,9 @@ export default function SignUpScreen() {
     const trimmedUsername = username.trim();
     const trimmedEmail = email.trim();
 
-    if (!trimmedUsername) {
-      Alert.alert('Validation Error', 'Username cannot be empty.');
-      return;
-    }
-    if (trimmedUsername.length > 16) {
-      Alert.alert('Username Too Long!', 'Username cannot be longer than 16 characters.');
+    const usernameProblem = validateUsername(trimmedUsername);
+    if (usernameProblem) {
+      Alert.alert('Validation Error', usernameProblem);
       return;
     }
     if (!isValidEmail(trimmedEmail)) {
@@ -48,17 +48,18 @@ export default function SignUpScreen() {
       return;
     }
 
+    // Pre-flight check against the public username registry. This used to be a query over
+    // the `users` collection, which is not readable while signed out - so sign-up failed
+    // with a permission error before an account was ever created.
+    if (!(await isUsernameAvailable(trimmedUsername))) {
+      Alert.alert('Username Taken', 'This username is already in use. Please choose another.');
+      return;
+    }
+
+    let createdUser = null;
     try {
-      const q = query(collection(db, 'users'), where('username', '==', trimmedUsername));
-      const querySnapshot = await getDocs(q);
-
-      if (!querySnapshot.empty) {
-        Alert.alert('Username Taken', 'This username is already in use. Please choose another.');
-        return;
-      }
-
       const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-      const uid = userCredential.user.uid;
+      createdUser = userCredential.user;
 
       await new Promise((resolve) => {
         const unsub = auth.onAuthStateChanged((currentUser) => {
@@ -69,21 +70,16 @@ export default function SignUpScreen() {
         });
       });
 
-      await setDoc(doc(db, 'users', uid), {
-        username: trimmedUsername,
-        points: 0,
-        drivingStreak: 0,
-        photoURL: null,
-        groupId: null,
-      });
+      // Authoritative, race-free claim. Two people submitting the same name at the same
+      // moment now have exactly one winner instead of two identical usernames.
+      const claimed = await claimUsername(createdUser.uid, trimmedUsername);
+      if (!claimed) {
+        await deleteUser(createdUser).catch(() => {});
+        Alert.alert('Username Taken', 'That username was just taken. Please choose another.');
+        return;
+      }
 
-      await setDoc(doc(db, 'userinfo', uid), {
-        email: trimmedEmail,
-        createdAt: new Date(),
-      });
-
-      await saveUserPoints(uid, 0);
-      await AsyncStorage.setItem('totalPoints', '0');
+      await ensureUserProfile(createdUser, { username: trimmedUsername });
 
       navigation.reset({
         index: 0,
@@ -112,7 +108,7 @@ export default function SignUpScreen() {
         </View>
 
         <Section>
-          <Field label="Username" hint="Up to 16 characters.">
+          <Field label="Username" hint={`Up to ${MAX_USERNAME_LENGTH} characters.`}>
             <TextInput
               placeholder="yourhandle"
               placeholderTextColor={t.colors.textSubtle}

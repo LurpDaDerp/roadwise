@@ -12,7 +12,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { getUserDrives, clearUserDrives } from '../utils/firestore';
+import { getDriveHistoryPage, getDriveCounts, clearUserDrives } from '../utils/firestore';
 import { auth } from '../utils/firebase';
 import {
   Screen,
@@ -55,16 +55,45 @@ const formatDistance = (meters) => {
 export default function MyDrivesScreen() {
   const t = useTheme();
   const [drives, setDrives] = useState([]);
-  const [visibleCount, setVisibleCount] = useState(LOAD_BATCH);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [counts, setCounts] = useState({ total: 0, distracted: 0, focused: 0 });
   const [selectedDrive, setSelectedDrive] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
+  // This screen used to download every drive the user had ever made on each focus, then
+  // slice ten of them for display. It now pages, and the summary comes from count
+  // queries instead of from holding the whole history in memory.
   const loadDrives = async () => {
     const user = auth.currentUser;
-    if (!user) return setDrives([]);
-    const fetched = await getUserDrives(user.uid);
-    setDrives(fetched);
-    setVisibleCount(LOAD_BATCH);
+    if (!user) {
+      setDrives([]);
+      setCounts({ total: 0, distracted: 0, focused: 0 });
+      return;
+    }
+    const [page, driveCounts] = await Promise.all([
+      getDriveHistoryPage(user.uid, { pageSize: LOAD_BATCH }),
+      getDriveCounts(user.uid),
+    ]);
+    setDrives(page.drives);
+    setCursor(page.cursor);
+    setHasMore(page.hasMore);
+    setCounts(driveCounts);
+  };
+
+  const loadMore = async () => {
+    const user = auth.currentUser;
+    if (!user || !cursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await getDriveHistoryPage(user.uid, { pageSize: LOAD_BATCH, cursor });
+      setDrives((prev) => [...prev, ...page.drives]);
+      setCursor(page.cursor);
+      setHasMore(page.hasMore);
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   useFocusEffect(
@@ -73,11 +102,9 @@ export default function MyDrivesScreen() {
     }, [])
   );
 
-  const distractedCount = drives.filter((d) => d.distracted).length;
-  const focusedCount = drives.length - distractedCount;
   const percentDistracted =
-    drives.length > 0
-      ? Math.round((distractedCount / drives.length) * 10000) / 100
+    counts.total > 0
+      ? Math.round((counts.distracted / counts.total) * 10000) / 100
       : null;
   const percentColor =
     percentDistracted !== null ? interpolateColor(percentDistracted) : t.colors.textMuted;
@@ -97,6 +124,9 @@ export default function MyDrivesScreen() {
               if (!user) return;
               await clearUserDrives(user.uid);
               setDrives([]);
+              setCursor(null);
+              setHasMore(false);
+              setCounts({ total: 0, distracted: 0, focused: 0 });
             } catch (e) {
               console.warn('Failed to clear drive history:', e);
             }
@@ -179,12 +209,12 @@ export default function MyDrivesScreen() {
         <Section label="Summary">
           <Card>
             <View style={{ flexDirection: 'row' }}>
-              <StatCell t={t} label="Drives" value={String(drives.length)} />
+              <StatCell t={t} label="Drives" value={String(counts.total)} />
               <Divider t={t} />
               <StatCell
                 t={t}
                 label="Focused"
-                value={String(focusedCount)}
+                value={String(counts.focused)}
                 color={t.colors.accent}
               />
               <Divider t={t} />
@@ -233,26 +263,27 @@ export default function MyDrivesScreen() {
               </View>
             ) : (
               <FlatList
-                data={drives.slice(0, visibleCount)}
-                keyExtractor={(_, i) => i.toString()}
+                data={drives}
+                keyExtractor={(item, i) => item.id ?? String(i)}
                 scrollEnabled={false}
                 renderItem={renderItem}
               />
             )}
           </Card>
 
-          {visibleCount < drives.length && (
+          {hasMore && (
             <View style={{ marginTop: 12 }}>
               <Button
-                title="Load more"
+                title={loadingMore ? 'Loading…' : 'Load more'}
                 variant="ghost"
-                onPress={() => setVisibleCount((p) => p + LOAD_BATCH)}
+                disabled={loadingMore}
+                onPress={loadMore}
               />
             </View>
           )}
         </Section>
 
-        {drives.length > 0 && (
+        {counts.total > 0 && (
           <Section>
             <Button
               title="Clear drive history"

@@ -16,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
 import { auth } from '../utils/firebase';
-import { getAllDriveMetrics } from '../utils/firestore';
+import { getDriveMetrics } from '../utils/firestore';
 import {
   Screen,
   Section,
@@ -240,11 +240,24 @@ export default function AIScreen({ navigation }) {
     return () => unsubscribe();
   }, []);
 
+  // The drive data is fetched once per account for the longest timeframe the screen can
+  // show (30 days) and filtered locally. It previously re-read the user's ENTIRE drive
+  // collection every time the Day/Week/Month control was touched.
+  useEffect(() => {
+    if (!uid) return;
+    let active = true;
+    getDriveMetrics(uid, 30).then((metrics) => {
+      if (active) setDrives(metrics);
+    });
+    return () => {
+      active = false;
+    };
+  }, [uid]);
+
   useEffect(() => {
     if (!uid) return;
     const fetchMetrics = async () => {
-      const metrics = await getAllDriveMetrics(uid);
-      setDrives(metrics);
+      const metrics = drives;
 
       if (!metrics || metrics.length === 0) {
         setStats({
@@ -315,7 +328,7 @@ export default function AIScreen({ navigation }) {
     };
 
     fetchMetrics();
-  }, [uid, timeframe]);
+  }, [uid, timeframe, drives]);
 
   useFocusEffect(
     useCallback(() => {

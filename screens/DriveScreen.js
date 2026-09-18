@@ -18,9 +18,24 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../utils/firebase';
-import { getFirestore, doc, updateDoc, increment, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { saveTrustedContacts, getTrustedContacts, saveDriveMetrics, startDriving, stopDriving } from '../utils/firestore';
-import { fetchHereRevGeocode } from '../utils/here';
+import {
+  getTrustedContacts,
+  finalizeDriveWrite,
+  startDriving,
+  stopDriving,
+} from '../utils/firestore';
+import { getCurrentGroupId, setEmergency } from '../utils/groups';
+import {
+  loadSpeedLimitCache,
+  flushSpeedLimitCache,
+  lookupCachedSpeedLimit,
+  getSpeedLimit,
+  fillCachePolyline,
+  toDisplayUnits,
+  haversineM,
+  bearingDeg,
+  distanceMeters as getDistanceFromLatLonInMeters,
+} from '../utils/speedLimits';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { useContext } from 'react';
@@ -36,8 +51,6 @@ import { fetchWeather, getWeatherIconName } from '../utils/weather';
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { getRoadConditionSummary } from "../utils/gptApi";
 
-
-const db = getFirestore();
 
 const { width, height } = Dimensions.get('window');
 
@@ -122,108 +135,15 @@ function getRoadIcon(score) {
 }
 
 const AnimatedImageBackground = Animated.createAnimatedComponent(ImageBackground);
-const GRID_RESOLUTION = 0.002;
-const speedLimitCache = new Map();
-let lastSpeedLimitFetchTime = 0;
-let lastSpeedLimitFetchCoords = null;
+
+const WEATHER_MIN_INTERVAL_S = 300;
+const WEATHER_MIN_DISTANCE_M = 1000;
 
 const audioSource = require('../assets/sounds/alert.mp3');
 
-function getGridKey(lat, lon) {
-  return `${Math.round(lat / GRID_RESOLUTION)}_${Math.round(lon / GRID_RESOLUTION)}`;
-}
-
-async function loadSpeedLimitCache() {
-  try {
-    const cached = await AsyncStorage.getItem('@speedLimitCache');
-    if (!cached) return;
-    const entries = JSON.parse(cached);
-    for (const [key, val] of entries) {
-      if (val && typeof val === 'object' && 'valueKph' in val) {
-        speedLimitCache.set(key, val);
-      } else if (typeof val === 'number') {
-        speedLimitCache.set(key, { valueKph: val * 1.60934, timestamp: Date.now() });
-      } else if (val && typeof val === 'object' && 'value' in val && 'unit' in val) {
-        const kph = val.unit === 'mph' ? val.value * 1.60934 : val.value;
-        speedLimitCache.set(key, { valueKph: kph, timestamp: Date.now(), street: val.street });
-      }
-    }
-  } catch (err) {
-    console.warn('⚠️ Failed to load speed limit cache:', err);
-  }
-}
-
-async function saveSpeedLimitCache() {
-  try {
-    await AsyncStorage.setItem('@speedLimitCache', JSON.stringify(Array.from(speedLimitCache.entries())));
-  } catch (err) {
-    console.warn('⚠️ Failed to save speed limit cache:', err);
-  }
-}
-
-function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000; 
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; 
-}
-
-function toRad(d){ return d * Math.PI / 180; }
-function toDeg(r){ return r * 180 / Math.PI; }
-
-function haversineM(a,b){
-  return getDistanceFromLatLonInMeters(a.latitude, a.longitude, b.latitude, b.longitude);
-}
-function bearingDeg(a,b){
-  const φ1 = toRad(a.latitude), φ2 = toRad(b.latitude);
-  const Δλ = toRad(b.longitude - a.longitude);
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
-  return (toDeg(Math.atan2(y,x)) + 360) % 360;
-}
-function offsetPoint(lat, lon, bearing, distM){
-  const R=6371000, br=toRad(bearing), lat1=toRad(lat), lon1=toRad(lon), dr=distM/R;
-  const lat2 = Math.asin(Math.sin(lat1)*Math.cos(dr) + Math.cos(lat1)*Math.sin(dr)*Math.cos(br));
-  const lon2 = lon1 + Math.atan2(Math.sin(br)*Math.sin(dr)*Math.cos(lat1), Math.cos(dr)-Math.sin(lat1)*Math.sin(lat2));
-  return { latitude: toDeg(lat2), longitude: toDeg(lon2) };
-}
-
-const FILL_STEP_M = 80;
-const FILL_WIDTH_M = 30;
-async function fillCachePolyline(points, valueKph, street){
-  if (!points || points.length < 2) return;
-  for (let s = 0; s < points.length - 1; s++){
-    const a = points[s], b = points[s+1];
-    const d = haversineM(a,b);
-    if (!isFinite(d) || d < 1) continue;
-    const steps = Math.max(1, Math.ceil(d / FILL_STEP_M));
-    const brg = bearingDeg(a,b);
-    for (let i = 0; i <= steps; i++){
-      const p = offsetPoint(a.latitude, a.longitude, brg, i * (d/steps));
-      const key = getGridKey(p.latitude, p.longitude);
-      if (!speedLimitCache.has(key)){
-        speedLimitCache.set(key, { valueKph, timestamp: Date.now(), street });
-      }
-      if (FILL_WIDTH_M > 0){
-        const left  = offsetPoint(p.latitude, p.longitude, (brg+270)%360, FILL_WIDTH_M);
-        const right = offsetPoint(p.latitude, p.longitude, (brg+90)%360,  FILL_WIDTH_M);
-        for (const q of [left, right]){
-          const k2 = getGridKey(q.latitude, q.longitude);
-          if (!speedLimitCache.has(k2)){
-            speedLimitCache.set(k2, { valueKph, timestamp: Date.now(), street });
-          }
-        }
-      }
-    }
-  }
-  await saveSpeedLimitCache();
-}
+// The speed-limit grid cache, its persistence and the HERE request throttle moved to
+// utils/speedLimits.js. They used to be module-level state inside this screen, which
+// rewrote the entire cache to AsyncStorage on every single cell fill.
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '');
@@ -313,11 +233,6 @@ function hasSignificantChange(prev, curr) {
   );  
 }
 
-function getAdaptiveGridKey(lat, lon, speed) {
-  const res = speed > 50 ? 0.005 : 0.001; 
-  return `${Math.round(lat / res)}_${Math.round(lon / res)}_${res}`;
-}
-
 export default function DriveScreen({ route }) {
   const player = useAudioPlayer(audioSource);
   const navigation = useNavigation();
@@ -400,7 +315,10 @@ export default function DriveScreen({ route }) {
   const lastSpeedValue = useRef(0);
   const ACCEL_THRESHOLD = 3.0; 
   const BRAKE_THRESHOLD = -3.0; 
-  let lastUpdateTime = Date.now();
+  // This was `let lastUpdateTime = Date.now()` in the component body, so every render
+  // reset it and the acceleration figure was computed against a bogus interval - which
+  // made the sudden-stop and sudden-acceleration counts meaningless.
+  const lastAccelSampleAt = useRef(Date.now());
   const [roadSummary, setRoadSummary] = useState(null);
   const lastWeatherRef = useRef(null);
   const lastSpeedMSRef = useRef(null);
@@ -437,9 +355,10 @@ export default function DriveScreen({ route }) {
       if (seg.length >= 2 && prevKph != null) {
         const a = seg[0], b = seg[seg.length - 1];
         if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) {
-          await fillCachePolyline(seg, prevKph, prevStreet);
+          fillCachePolyline(seg, prevKph, prevStreet);
         }
       }
+      await flushSpeedLimitCache();
     } catch (e) {
       console.warn('Final segment fill failed:', e);
     }
@@ -453,16 +372,10 @@ export default function DriveScreen({ route }) {
 
     if (!user) return;
 
-    stopDriving(user.uid);
-
     const driveDurationMs = Date.now() - driveStartTime.current;
-    const droveLongEnough = driveDurationMs >= 60 * 1000;
-
     const wasDistracted = isDistracted.current;
-    const timestamp = new Date().toISOString();
 
     const driveMetrics = {
-      timestamp, 
       points: pointsThisDrive,
       duration: Math.round(driveDurationMs / 1000),
       distracted: distractedCount,
@@ -479,54 +392,43 @@ export default function DriveScreen({ route }) {
       speedingEvents: speedingEvents.current,
     };
 
-    if (pointsThisDrive > 0 /* && droveLongEnough */) {
+    // One atomic write for the drive record, the points, the streak and the drive count.
+    // This used to be a save, then a read of the user document, then a streak write, and
+    // the points were only persisted later if and when the dashboard was opened.
+    if (pointsThisDrive > 0) {
       try {
         await fillFinalSegmentIfAny();
-        await saveDriveMetrics(user.uid, driveMetrics);
-      } catch (e) {
-        console.warn('Failed to save drive history:', e);
-      }
-    }
-      
-
-    try {
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDocSnap = await getDoc(userDocRef);
-
-      const currentStreak = userDocSnap.exists() && userDocSnap.data().drivingStreak
-        ? userDocSnap.data().drivingStreak
-        : 0;
-      if (pointsThisDrive > 0 /* && droveLongEnough */) {
-        let newStreak;
-        if (wasDistracted) {
-          newStreak = 0; 
-        } else {
-          newStreak = currentStreak + 1;
-        }
-
-        await setDoc(userDocRef, { drivingStreak: newStreak }, { merge: true });
+        await finalizeDriveWrite(user.uid, {
+          metrics: driveMetrics,
+          pointsEarned: pointsThisDrive,
+          wasDistracted,
+        });
         await AsyncStorage.setItem('@streakThisDrive', '1');
+        await AsyncStorage.setItem('@driveCompleteSnackbar', 'true');
+      } catch (e) {
+        console.warn('Failed to save the completed drive:', e);
       }
-    } catch (e) {
-      console.warn('Failed to update drive streak:', e);
+    } else {
+      await stopDriving(user.uid);
+      await flushSpeedLimitCache();
     }
-    
-    if (pointsThisDrive > 0) {
-      await AsyncStorage.setItem('@driveCompleteSnackbar', 'true');
-    }
-    
+
     await AsyncStorage.setItem('@pointsThisDrive', pointsThisDrive.toString());
     await AsyncStorage.setItem('@driveWasDistracted', isDistracted.current ? 'true' : 'false');
-    
+
     setDriveJustCompleted(true);
   };
        
+  // `speedRef.current` is a ref: mutating it never re-runs an effect, so this used to be
+  // driven by whatever unrelated render happened to come next - and it dereferenced
+  // `user.uid` with no null check, which throws for a signed-out user.
   useEffect(() => {
-    if (!hasStartedDriving.current && speedRef.current >= speedThreshold) {
+    if (!user?.uid) return;
+    if (!hasStartedDriving.current && speed >= speedThreshold) {
       hasStartedDriving.current = true;
       startDriving(user.uid);
     }
-  }, [speedRef.current, user.uid]);
+  }, [speed, speedThreshold, user?.uid]);
 
   //make calls within app 
   const callNumber = (phone) => {
@@ -790,60 +692,40 @@ export default function DriveScreen({ route }) {
           }
           lastLocation.current = { latitude: lat, longitude: lon };
 
-          const gridKey = getGridKey(lat, lon);
-          if (speedLimitCache.has(gridKey)) {
-            const cached = speedLimitCache.get(gridKey);
-            const adjusted = unit === 'mph' ? cached.valueKph * 0.621371 : cached.valueKph;
-            setSpeedLimit(adjusted);
+          // Cache first; utils/speedLimits owns the grid, the persistence and the
+          // request throttle, and only reaches HERE when the cache misses.
+          const cached = lookupCachedSpeedLimit(lat, lon);
+          if (cached) {
+            setSpeedLimit(toDisplayUnits(cached.valueKph, unit));
 
             if (prevFetchedLimitRef.current == null) {
-              prevFetchedLimitRef.current  = cached.valueKph;
+              prevFetchedLimitRef.current = cached.valueKph;
               prevFetchedStreetRef.current = cached.street ?? undefined;
             }
-          } else {
-            const now = Date.now();
-            const distSinceLastFetch = lastSpeedLimitFetchCoords
-              ? getDistanceFromLatLonInMeters(
-                  lastSpeedLimitFetchCoords.latitude,
-                  lastSpeedLimitFetchCoords.longitude,
-                  lat,
-                  lon
-                )
-              : Infinity; 
+          } else if (showSpeedLimit) {
+            const result = await getSpeedLimit(lat, lon);
+            if (result && result.valueKph != null) {
+              const { valueKph, street } = result;
 
-            if (showSpeedLimit && now - lastSpeedLimitFetchTime > 15000 && distSinceLastFetch >= 250) {
-              lastSpeedLimitFetchTime = now;
-              lastSpeedLimitFetchCoords = { latitude: lat, longitude: lon };
+              const prevKph = prevFetchedLimitRef.current;
+              const prevStreet = prevFetchedStreetRef.current;
+              const changedLimit = prevKph != null && Math.abs(prevKph - valueKph) >= 0.5;
+              const changedStreet = prevStreet && street && prevStreet !== street;
 
-              const result = await fetchSpeedLimit(lat, lon);
-              if (result && result.valueKph != null) {
-                const { valueKph, street } = result;
-
-                const prevKph   = prevFetchedLimitRef.current;
-                const prevStreet= prevFetchedStreetRef.current;
-                const changedLimit = prevKph != null && Math.abs(prevKph - valueKph) >= 0.5;
-                const changedStreet = prevStreet && street && prevStreet !== street;
-
-                if ((changedLimit || changedStreet) && currentSegRef.current.length >= 2) {
-                  const a = currentSegRef.current[0];
-                  const b = currentSegRef.current[currentSegRef.current.length - 1];
-                  if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) {
-                    await fillCachePolyline(currentSegRef.current, prevKph, prevStreet);
-                  }
-                  currentSegRef.current = [ { latitude: lat, longitude: lon } ];
-                  segHeadingRef.current = null;
+              if ((changedLimit || changedStreet) && currentSegRef.current.length >= 2) {
+                const a = currentSegRef.current[0];
+                const b = currentSegRef.current[currentSegRef.current.length - 1];
+                if (haversineM(a, b) >= MIN_SEG_TO_FILL_M) {
+                  fillCachePolyline(currentSegRef.current, prevKph, prevStreet);
                 }
-
-                const gridKeyNow = getGridKey(lat, lon);
-                speedLimitCache.set(gridKeyNow, { valueKph, timestamp: Date.now(), street });
-                await saveSpeedLimitCache();
-
-                const uiValue = unit === 'mph' ? valueKph * 0.621371 : valueKph;
-                setSpeedLimit(uiValue);
-
-                prevFetchedLimitRef.current  = valueKph;
-                prevFetchedStreetRef.current = street;
+                currentSegRef.current = [{ latitude: lat, longitude: lon }];
+                segHeadingRef.current = null;
               }
+
+              setSpeedLimit(toDisplayUnits(valueKph, unit));
+
+              prevFetchedLimitRef.current = valueKph;
+              prevFetchedStreetRef.current = street;
             }
           }
 
@@ -865,16 +747,17 @@ export default function DriveScreen({ route }) {
           
 
           const nowAccel = Date.now();
-          const dt = (nowAccel - lastUpdateTime) / 1000;
+          const dt = (nowAccel - lastAccelSampleAt.current) / 1000;
           const speedMS = rawSpeed ?? 0;
           const prevMS  = lastSpeedMSRef.current ?? speedMS;
-          const accel   = dt > 0 ? (speedMS - prevMS) / dt : 0;
+          // Ignore implausible intervals (first sample, or a long gap while backgrounded).
+          const accel   = dt > 0.2 && dt < 10 ? (speedMS - prevMS) / dt : 0;
 
           if (accel > ACCEL_THRESHOLD)  suddenAccelerations.current++;  
           if (accel < BRAKE_THRESHOLD) suddenStops.current++;
 
           lastSpeedMSRef.current = speedMS;
-          lastUpdateTime = nowAccel;
+          lastAccelSampleAt.current = nowAccel;
 
           const nowWeather = Date.now();
           const elapsed = (nowWeather - lastWeatherFetchTime.current) / 1000; 
@@ -887,7 +770,9 @@ export default function DriveScreen({ route }) {
               )
             : Infinity;
 
-          if (elapsed >= 10 && distSinceLastWeather >= 100) {
+          // Weather was polled every 10 s / 100 m. Conditions do not change on that
+          // timescale, and each poll can trigger an OpenAI road-condition summary.
+          if (elapsed >= WEATHER_MIN_INTERVAL_S && distSinceLastWeather >= WEATHER_MIN_DISTANCE_M) {
             try {
               const data = await fetchWeather(lat, lon);
               if (data) {
@@ -995,27 +880,6 @@ export default function DriveScreen({ route }) {
     }
   };
 
-  //fetch speed limit from HERE API
-  const fetchSpeedLimit = async (lat, lon) => {
-    try {
-      const items = await fetchHereRevGeocode(lat, lon);
-      const item = items?.[0];
-      const street = item?.address?.street || item?.address?.label || '[Unknown Street]';
-      const speedObj = item?.navigationAttributes?.speedLimits?.[0];
-
-      if (!speedObj?.maxSpeed || !speedObj?.speedUnit) {
-        return null;
-      }
-      const raw = speedObj.maxSpeed;
-      const unitSrc = String(speedObj.speedUnit).toLowerCase();
-      const valueKph = unitSrc === 'mph' ? raw * 1.60934 : raw;
-      return { valueKph, street };
-    } catch (err) {
-      console.error('Failed to fetch speed limit via reverse geocode:', err);
-      return null;
-    }
-  };
-
 
   //calculate current speed limit and speeding status
   const currentLimit = Number(speedLimit ?? (unit === 'kph' ? DEFAULT_SPEED_LIMIT_KPH : DEFAULT_SPEED_LIMIT_MPH));
@@ -1101,44 +965,35 @@ export default function DriveScreen({ route }) {
   }, [unit]);
 
 
+  // Both handlers used to read the user document and then the whole group document just
+  // to find the group id and the current flag. The group id comes from the cached user
+  // summary now, and the flag is set unconditionally - writing `true` over `true` is a
+  // no-op that produces no notification, because the Cloud Function only reacts to a
+  // change in value.
   const notifyGroupEmergency = async () => {
     try {
       const uid = auth.currentUser?.uid;
       if (!uid) return;
 
-      const userDocRef = doc(db, "users", uid);
-      const userSnap = await getDoc(userDocRef);
-      const groupId = userSnap.exists() ? userSnap.data().groupId : null;
-
-      if (groupId) {
-        const groupRef = doc(db, "groups", groupId);
-        const groupSnap = await getDoc(groupRef);
-
-        let userLoc = {};
-        if (groupSnap.exists()) {
-          const data = groupSnap.data();
-          userLoc = data.memberLocations?.[uid] || {};
-        }
-
-        const loc = await Location.getCurrentPositionAsync({});
-        const { latitude, longitude, speed } = loc.coords;
-
-        if (!userLoc.emergency) {
-          await updateDoc(groupRef, {
-            [`memberLocations.${uid}.latitude`]: latitude ?? null,
-            [`memberLocations.${uid}.longitude`]: longitude ?? null,
-            [`memberLocations.${uid}.speed`]: speed ?? 0,
-            [`memberLocations.${uid}.updatedAt`]: new Date(),
-            [`memberLocations.${uid}.emergency`]: true,
-          });
-        }
-
-        setIsEmergencyActive(true);
-
-        Alert.alert("Group Notified", "Emergency alert has been sent to your group.");
-      } else {
+      const groupId = await getCurrentGroupId(uid);
+      if (!groupId) {
         Alert.alert("⚠️ Not in a group", "You must join a group to notify them.");
+        return;
       }
+
+      let coords = null;
+      try {
+        const loc = await Location.getCurrentPositionAsync({});
+        coords = loc.coords;
+      } catch (locErr) {
+        console.warn("Could not read position for the emergency alert:", locErr);
+      }
+
+      const ok = await setEmergency(uid, groupId, true, coords);
+      if (!ok) throw new Error("emergency write failed");
+
+      setIsEmergencyActive(true);
+      Alert.alert("Group Notified", "Emergency alert has been sent to your group.");
     } catch (err) {
       console.error("Error notifying group:", err);
       Alert.alert("Error", "Failed to notify your group. Please try again.");
@@ -1150,23 +1005,17 @@ export default function DriveScreen({ route }) {
       const uid = auth.currentUser?.uid;
       if (!uid) return;
 
-      const userDocRef = doc(db, "users", uid);
-      const userSnap = await getDoc(userDocRef);
-      const groupId = userSnap.exists() ? userSnap.data().groupId : null;
-
-      if (groupId) {
-        const groupRef = doc(db, "groups", groupId);
-
-        await updateDoc(groupRef, {
-          [`memberLocations.${uid}.emergency`]: false,
-        });
-
-        setIsEmergencyActive(false);
-
-        Alert.alert("Emergency Cancelled", "Your group has been notified that you are safe.");
-      } else {
+      const groupId = await getCurrentGroupId(uid);
+      if (!groupId) {
         Alert.alert("⚠️ Not in a group", "You must join a group to cancel emergency.");
+        return;
       }
+
+      const ok = await setEmergency(uid, groupId, false);
+      if (!ok) throw new Error("emergency write failed");
+
+      setIsEmergencyActive(false);
+      Alert.alert("Emergency Cancelled", "Your group has been notified that you are safe.");
     } catch (err) {
       console.error("Error cancelling emergency:", err);
       Alert.alert("Error", "Failed to cancel emergency. Please try again.");

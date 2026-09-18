@@ -1,6 +1,5 @@
 import React, { useState, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -10,6 +9,8 @@ import {
   ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { auth } from '../utils/firebase';
+import { getCachedTotalPoints } from '../utils/firestore';
 import {
   Screen,
   Section,
@@ -35,8 +36,10 @@ export default function RewardsScreen({ navigation }) {
       let isActive = true;
       (async () => {
         try {
-          const stored = await AsyncStorage.getItem('totalPoints');
-          if (isActive) setTotalPoints(stored ? parseFloat(stored) : 0);
+          // This read the AsyncStorage key 'totalPoints', but the dashboard writes
+          // `totalPoints_<uid>` - so the redeemable balance always rendered as 0.
+          const points = await getCachedTotalPoints(auth.currentUser?.uid);
+          if (isActive) setTotalPoints(points);
         } catch (e) {
           console.error(e);
         }

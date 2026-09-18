@@ -2,9 +2,17 @@ import React, { useEffect, useState, useContext, useRef, useMemo, useCallback, u
 import { StyleSheet, View, Text, TouchableOpacity, TextInput, ActivityIndicator, Alert, Dimensions, ScrollView, Animated, Easing, Keyboard, TouchableWithoutFeedback } from "react-native";
 import MapView, { Marker, AnimatedRegion } from "react-native-maps";
 import * as Location from "expo-location";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, arrayRemove, arrayUnion, onSnapshot, deleteField, collection, getDocs, query, where } from "firebase/firestore";
+import { getFirestore, doc, onSnapshot, collection, getDocs, query, where, limit } from "firebase/firestore";
 import { fetchHereAutocomplete } from "../utils/here";
 import { auth } from '../utils/firebase';
+import { getUserSummary } from "../utils/firestore";
+import {
+  createGroup,
+  joinGroup,
+  leaveGroup,
+  addSavedLocation,
+  removeSavedLocation,
+} from "../utils/groups";
 import { ThemeContext } from "../context/ThemeContext";
 import { useTheme, SafeGradient, AutoFitText } from "../theme";
 import BottomSheet, { BottomSheetView, BottomSheetSectionList } from "@gorhom/bottom-sheet";
@@ -13,7 +21,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import debounce from "lodash.debounce";
 import { Ionicons } from "@expo/vector-icons";
-import { startLocationUpdates, stopLocationUpdates, updateCachedGroupId } from "../utils/LocationService";
+import { startLocationUpdates, stopLocationUpdates } from "../utils/LocationService";
 import * as Clipboard from "expo-clipboard"; 
 import * as Notifications from "expo-notifications";
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -653,7 +661,7 @@ export default function LocationScreen() {
 
     for (const ids of chunks) {
       try {
-        const q = query(collection(db, "users"), where("__name__", "in", ids));
+        const q = query(collection(db, "users"), where("__name__", "in", ids), limit(10));
         const qs = await getDocs(q);
         qs.forEach(snap => {
           const u = snap.data();
@@ -750,11 +758,7 @@ export default function LocationScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              const groupRef = doc(db, "groups", groupId);
-
-              await updateDoc(groupRef, {
-                savedLocations: arrayRemove(editingLocation),
-              });
+              await removeSavedLocation(groupId, editingLocation);
 
               setLocations(prev =>
                 prev.filter(
@@ -787,12 +791,8 @@ export default function LocationScreen() {
     }
 
     try {
-      const groupRef = doc(db, "groups", groupId);
-
       if (editingLocation) {
-        await updateDoc(groupRef, {
-          savedLocations: arrayRemove(editingLocation)
-        });
+        await removeSavedLocation(groupId, editingLocation);
 
         setLocations(prev =>
           prev.filter(
@@ -824,9 +824,7 @@ export default function LocationScreen() {
         createdBy: user.uid
       };
 
-      await updateDoc(groupRef, {
-        savedLocations: arrayUnion(newLoc)
-      });
+      await addSavedLocation(groupId, newLoc);
 
       setNewLocationName("");
       setNewLocationAddress("");
@@ -1131,12 +1129,10 @@ export default function LocationScreen() {
     const checkGroup = async () => {
       if (!user) return;
 
-      const userRef = doc(db, "users", user.uid);
-      const snapshot = await getDoc(userRef);
+      const data = await getUserSummary(user.uid);
       if (cancelled) return;
 
-      if (snapshot.exists()) {
-        const data = snapshot.data();
+      if (data) {
         setUserData(data);
         if (data.groupId) setGroupId(data.groupId);
       }
@@ -1178,74 +1174,56 @@ export default function LocationScreen() {
   const handleStartCreateGroup = () => setIsCreating(true);
 
   const handleConfirmCreateGroup = async () => {
-    if (!groupName.trim()) {
-      Alert.alert("Missing Name", "Please enter a group name.");
-      return;
+    try {
+      // This never created the groups/{id} document: the name the user typed was thrown
+      // away and the document only appeared later, with no name, when the background
+      // location task merged a member position into it.
+      const newGroupId = await createGroup(user.uid, groupName);
+
+      startLocationUpdates();
+
+      setGroupId(newGroupId);
+      setIsCreating(false);
+    } catch (err) {
+      Alert.alert("Could not create group", err.message);
     }
-
-    const newGroupId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const userRef = doc(db, "users", user.uid);
-
-    await setDoc(userRef, { groupId: newGroupId }, { merge: true });
-    await updateCachedGroupId(user.uid, newGroupId);
-
-    startLocationUpdates();
-
-    setGroupId(newGroupId);
-    setIsCreating(false);
   };
 
   const handleJoinGroup = async () => {
     if (!joinCode.trim()) return;
 
-    const gid = joinCode.trim().toUpperCase();
-    const groupRef = doc(db, "groups", gid);
-    const groupSnap = await getDoc(groupRef);
-
-    if (!groupSnap.exists()) {
-        Alert.alert("Group Not Found", "The group code you entered does not exist.");
-        return;
+    let gid;
+    try {
+      // A non-member cannot read a group any more, so membership is established by the
+      // join write itself; a bad code comes back as an error rather than an empty read.
+      gid = await joinGroup(user.uid, joinCode);
+    } catch (err) {
+      Alert.alert("Group Not Found", err.message);
+      return;
     }
-
-    const userRef = doc(db, "users", user.uid);
-
-    await setDoc(userRef, { groupId: gid }, { merge: true });
-    await updateCachedGroupId(user.uid, gid);
 
     startLocationUpdates();
 
-   
-
-    const savedLocations = groupSnap.data().savedLocations || [];
-    const normalizedSavedLocations = savedLocations.map((loc) => ({
-      ...loc,
-      normalizedAddress: normalizeAddress(loc.address),
-    }));
-
-    const { coords } = await Location.getCurrentPositionAsync({});
-
-    const myAddress = await getAddressForUser(
-      user.uid,
-      { location: { latitude: coords.latitude, longitude: coords.longitude, speed: coords.speed ?? 0 } },
-      savedLocations,
-      normalizedSavedLocations
-    );
-
-     
-
-    setMembers((prev) => [
-      ...prev.filter((m) => m.uid !== user.uid),
-      {
-        uid: user.uid,
-        name: user.displayName || "You",
-        photoURL: user.photoURL || null,
-        coords: { latitude: coords.latitude, longitude: coords.longitude, speed: coords.speed ?? 0 },
-        renderCoord: { latitude: coords.latitude, longitude: coords.longitude },
-        isDriving: (coords.speed ?? 0) > 10,
-        emergency: false,
-        address: myAddress?.displayName || myAddress?.address || "Unknown"
-      },
-    ]);
+    // The group snapshot listener fills in members, saved locations and addresses once
+    // `groupId` is set; showing an optimistic self-entry keeps the list from flashing empty.
+    try {
+      const { coords } = await Location.getCurrentPositionAsync({});
+      setMembers((prev) => [
+        ...prev.filter((m) => m.uid !== user.uid),
+        {
+          uid: user.uid,
+          name: user.displayName || "You",
+          photoURL: user.photoURL || null,
+          coords: { latitude: coords.latitude, longitude: coords.longitude, speed: coords.speed ?? 0 },
+          renderCoord: { latitude: coords.latitude, longitude: coords.longitude },
+          isDriving: (coords.speed ?? 0) > 10,
+          emergency: false,
+          address: null,
+        },
+      ]);
+    } catch (err) {
+      console.warn("Could not read position after joining:", err);
+    }
 
     setGroupId(gid);
   };
@@ -1272,17 +1250,11 @@ export default function LocationScreen() {
   const handleLeaveGroup = async () => {
     if (!groupId || !user) return;
 
-    const userRef = doc(db, "users", user.uid);
-    const groupRef = doc(db, "groups", groupId);
-
-    await setDoc(userRef, { groupId: null }, { merge: true });
-    await updateCachedGroupId(user.uid, null);
-
-    await updateDoc(groupRef, {
-      [`memberLocations.${user.uid}`]: deleteField(),
-    });
+    await leaveGroup(user.uid, groupId);
 
     setGroupId(null);
+    setMembers([]);
+    setLocations([]);
 
     stopLocationUpdates();
   };

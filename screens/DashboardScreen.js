@@ -21,11 +21,11 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../utils/firebase';
 import {
   getUserPoints,
-  saveUserPoints,
-  getUsername,
   getTotalDrivesNumber,
+  getUserSummary,
+  invalidateUserCache,
+  getPointsStorageKey,
 } from '../utils/firestore';
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
 import {
   Screen,
@@ -37,35 +37,14 @@ import {
   useTheme,
 } from '../theme';
 
-const firestore = getFirestore();
 const { width, height } = Dimensions.get('window');
 
-const getStorageKey = (uid) => `totalPoints_${uid}`;
+const getStorageKey = getPointsStorageKey;
 
-const USER_DOC_TTL_MS = 30_000;
-const userDocCache = { uid: null, data: null, ts: 0 };
-
-async function getCachedUserDoc(uid) {
-  const now = Date.now();
-  if (
-    userDocCache.uid === uid &&
-    userDocCache.data &&
-    now - userDocCache.ts < USER_DOC_TTL_MS
-  ) {
-    return userDocCache.data;
-  }
-  const snap = await getDoc(doc(firestore, 'users', uid));
-  const data = snap.exists() ? snap.data() : null;
-  userDocCache.uid = uid;
-  userDocCache.data = data;
-  userDocCache.ts = now;
-  return data;
-}
-
+// The per-screen user-document cache moved into utils/firestore so that every screen
+// shares one copy. Kept as a re-export so existing callers keep working.
 export function invalidateDashboardUserCache() {
-  userDocCache.uid = null;
-  userDocCache.data = null;
-  userDocCache.ts = 0;
+  invalidateUserCache();
 }
 
 
@@ -113,12 +92,22 @@ export default function DashboardScreen({ route }) {
   const [confettiVisible, setConfettiVisible] = useState(false);
 
   useEffect(() => {
-    if (user?.uid) {
-      getUsername(user.uid).then((name) => setUsername(name));
-      getTotalDrivesNumber(user.uid).then((n) => setTotalDrives(Number(n) || 0));
-    } else {
+    if (!user?.uid) {
       setTotalDrives(null);
+      return;
     }
+    let active = true;
+    // getUsername() and getTotalDrivesNumber() both resolve from this one document read;
+    // the drive count used to be a full read of the drive collection.
+    getUserSummary(user.uid).then(async (summary) => {
+      if (!active) return;
+      setUsername(summary?.username || 'guest');
+      const drives = await getTotalDrivesNumber(user.uid);
+      if (active) setTotalDrives(Number(drives) || 0);
+    });
+    return () => {
+      active = false;
+    };
   }, [user]);
 
   useEffect(() => {
@@ -226,28 +215,21 @@ export default function DashboardScreen({ route }) {
           return;
         }
         try {
+          // Points are now written to Firestore atomically when a drive ends, so the
+          // server value is authoritative. This screen used to add `@pointsThisDrive` to a
+          // locally cached total and write the sum back - which lost the points entirely
+          // if the app was killed before the dashboard was next opened, and could write a
+          // stale local total over a newer server value.
           const key = getStorageKey(user.uid);
-          const [storedStr, driveStr] = await Promise.all([
-            AsyncStorage.getItem(key),
-            AsyncStorage.getItem('@pointsThisDrive'),
-          ]);
-          let total = storedStr ? parseInt(storedStr, 10) : 0;
-          const drivePoints = driveStr ? parseInt(driveStr, 10) : 0;
-          if (drivePoints > 0) {
-            total += drivePoints;
-            await AsyncStorage.setItem(key, total.toString());
+          const hadPendingDrive = await AsyncStorage.getItem('@pointsThisDrive');
+          if (hadPendingDrive !== null) {
             await AsyncStorage.removeItem('@pointsThisDrive');
-            await saveUserPoints(user.uid, total);
-          } else {
-            const data = await getCachedUserDoc(user.uid);
-            if (data && data.points != null) {
-              const remote = data.points;
-              if (remote > total) {
-                total = remote;
-                await AsyncStorage.setItem(key, total.toString());
-              }
-            }
           }
+
+          const summary = await getUserSummary(user.uid, { force: hadPendingDrive !== null });
+          const total = Number(summary?.points) || 0;
+          await AsyncStorage.setItem(key, String(total));
+
           if (isActive) {
             setTotalPoints(total);
             animatePoints(0, total);
@@ -268,7 +250,7 @@ export default function DashboardScreen({ route }) {
     useCallback(() => {
       const loadStreak = async () => {
         if (user) {
-          const data = await getCachedUserDoc(user.uid);
+          const data = await getUserSummary(user.uid);
           setStreak(data?.drivingStreak || 0);
         } else {
           setStreak(0);

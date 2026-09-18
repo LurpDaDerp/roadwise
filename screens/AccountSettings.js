@@ -16,10 +16,16 @@ import { auth, db } from '../utils/firebase';
 import { signOut, onAuthStateChanged } from 'firebase/auth';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getUserPoints, saveUserPoints } from '../utils/firestore';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import {
+  getUserSummary,
+  invalidateUserCache,
+  claimUsername,
+  isUsernameAvailable,
+  validateUsername,
+} from '../utils/firestore';
+import { getGroupName } from '../utils/groups';
+import { doc, setDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
-import { query, where, getDocs, collection } from 'firebase/firestore';
 import { supabase } from '../utils/supabase';
 import {
   Screen,
@@ -57,28 +63,17 @@ export default function AccountSettings({ route }) {
         if (cachedImage) setPhotoURL(cachedImage);
 
         try {
-          const userPoints = await getUserPoints(uid);
-          setPoints(userPoints);
+          // One read of the user document instead of two (getUserPoints did its own).
+          const data = await getUserSummary(uid, { force: true });
 
-          const userDocRef = doc(db, 'users', uid);
-          const userDocSnap = await getDoc(userDocRef);
+          setPoints(Number(data?.points) || 0);
+          setUsername(data?.username || 'N/A');
+          setPhotoURL(data?.photoURL || 'noImage');
 
-          if (userDocSnap.exists()) {
-            const data = userDocSnap.data();
-            setUsername(data.username || 'N/A');
-            setPhotoURL(data.photoURL || 'noImage');
-
-            if (data.groupId) {
-              const groupDocRef = doc(db, 'groups', data.groupId);
-              const groupDocSnap = await getDoc(groupDocRef);
-              if (groupDocSnap.exists()) {
-                setGroupName(groupDocSnap.data().groupName || 'Unknown');
-              } else {
-                setGroupName('Unknown');
-              }
-            } else {
-              setGroupName('None');
-            }
+          if (data?.groupId) {
+            setGroupName((await getGroupName(data.groupId)) || 'Unknown');
+          } else {
+            setGroupName('None');
           }
         } catch (err) {
           console.error(err);
@@ -134,6 +129,7 @@ export default function AccountSettings({ route }) {
 
         const userDocRef = doc(db, 'users', uid);
         await setDoc(userDocRef, { photoURL: publicURL }, { merge: true });
+        invalidateUserCache(uid);
       }
     } catch (error) {
       Alert.alert('Upload Failed', error.message);
@@ -143,24 +139,26 @@ export default function AccountSettings({ route }) {
   };
 
   const handleSaveUsername = async () => {
-    if (!editedUsername.trim()) {
-      Alert.alert('Validation Error', 'Username cannot be empty.');
+    const trimmed = editedUsername.trim();
+    const problem = validateUsername(trimmed);
+    if (problem) {
+      Alert.alert('Validation Error', problem);
       return;
     }
     setSaving(true);
     try {
       const uid = user.uid;
-      const trimmed = editedUsername.trim();
-      const q = query(collection(db, 'users'), where('username', '==', trimmed));
-      const querySnapshot = await getDocs(q);
-      const taken = querySnapshot.docs.some((d) => d.id !== uid);
-      if (taken) {
+      // Availability is checked against the username registry and then claimed
+      // transactionally, so two renames to the same name cannot both succeed.
+      if (!(await isUsernameAvailable(trimmed, { forUid: uid }))) {
         Alert.alert('Username Taken', 'This username is already in use.');
-        setSaving(false);
         return;
       }
-      const userDocRef = doc(db, 'users', uid);
-      await setDoc(userDocRef, { username: trimmed }, { merge: true });
+      const claimed = await claimUsername(uid, trimmed);
+      if (!claimed) {
+        Alert.alert('Username Taken', 'This username is already in use.');
+        return;
+      }
       setUsername(trimmed);
       setIsEditing(false);
     } catch (error) {
@@ -329,12 +327,12 @@ export default function AccountSettings({ route }) {
             variant="danger"
             icon={<Ionicons name="log-out-outline" size={18} color="#fff" />}
             onPress={async () => {
-              const uid = user?.uid;
-              if (uid) {
-                const stored = await AsyncStorage.getItem('totalPoints');
-                const totalPoints = stored ? parseFloat(stored) : 0;
-                await saveUserPoints(uid, totalPoints);
-              }
+              // This used to read the AsyncStorage key 'totalPoints' and write the result
+              // back to Firestore. The dashboard stores points under `totalPoints_<uid>`,
+              // so the read always returned null and every sign-out wrote 0 points to the
+              // account. Points are written by the drive finalization path now; sign-out
+              // has no business touching them.
+              invalidateUserCache(user?.uid);
               await signOut(auth);
               if (navigation) navigation.navigate('Dashboard');
             }}

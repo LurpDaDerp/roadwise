@@ -1,7 +1,7 @@
 //LoginScreen.js
 import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
-  View, Text, TextInput, StyleSheet, Alert, Keyboard, TouchableWithoutFeedback,
+  View, Text, TextInput, StyleSheet, Alert, Keyboard, TouchableWithoutFeedback, Platform,
 } from 'react-native';
 import { auth } from '../utils/firebase';
 import {
@@ -10,7 +10,10 @@ import {
   signInWithCredential,
 } from 'firebase/auth';
 import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
 import { useNavigation } from '@react-navigation/native';
+import { googleAuthConfig } from '../utils/config';
+import { ensureUserProfile } from '../utils/firestore';
 import {
   Screen,
   Section,
@@ -20,6 +23,11 @@ import {
   useInputStyle,
   useTheme,
 } from '../theme';
+
+// Required by expo-auth-session so the browser tab closes and hands control back to the
+// app once Google redirects. Without it the sign-in sheet can sit open after a successful
+// authentication and the response is never delivered.
+WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const navigation = useNavigation();
@@ -39,33 +47,68 @@ export default function LoginScreen() {
     };
   }, [navigation]);
 
+  // Google sign-in needs one OAuth client id PER PLATFORM, not just the web one.
+  // A native build redirects to its own URL scheme (the reversed iOS client id, or the
+  // package name plus signing certificate on Android), and Google rejects a redirect that
+  // does not belong to the client id the request was made with - which is why the previous
+  // single-web-client-id version never came back with a result. The web client id is still
+  // passed because it is the audience Firebase validates the id token against.
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: '68093599355-ps82c8m515nrpsont9mhgl2bv7k85b49.apps.googleusercontent.com',
+    clientId: googleAuthConfig.webClientId ?? undefined,
+    iosClientId: googleAuthConfig.iosClientId ?? undefined,
+    androidClientId: googleAuthConfig.androidClientId ?? undefined,
+    webClientId: googleAuthConfig.webClientId ?? undefined,
   });
 
+  const googleConfigured = Boolean(
+    googleAuthConfig.webClientId &&
+      (Platform.OS === 'ios' ? googleAuthConfig.iosClientId : googleAuthConfig.androidClientId)
+  );
+
   useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      signInWithCredential(auth, credential)
-        .then(async () => {
-          const tabNav = navigation.getParent();
-          if (tabNav) {
-            tabNav.navigate('Settings', {
-              screen: 'SettingsMain',
-              params: { reset: true },
-            });
-          }
-          navigation.reset({
-            index: 0,
-            routes: [{ name: 'Dashboard' }],
-          });
-        })
-        .catch((error) => {
-          Alert.alert('Google Sign-In Failed', error.message);
-        });
+    if (!response) return;
+
+    // Failures used to be silent: only 'success' was handled, so a rejected redirect or a
+    // dismissed sheet left the button looking like it had done nothing.
+    if (response.type === 'error') {
+      Alert.alert(
+        'Google Sign-In Failed',
+        response.error?.message ??
+          'Google rejected the sign-in request. Check that the OAuth client id for this platform exists and that its redirect URI matches the app.'
+      );
+      return;
     }
-  }, [response]);
+    if (response.type !== 'success') return;
+
+    const idToken = response.params?.id_token ?? response.authentication?.idToken;
+    if (!idToken) {
+      Alert.alert('Google Sign-In Failed', 'Google did not return an identity token.');
+      return;
+    }
+
+    const credential = GoogleAuthProvider.credential(idToken);
+    signInWithCredential(auth, credential)
+      .then(async ({ user }) => {
+        // A Google account has no profile document yet; create one (and a username claim)
+        // before any screen tries to read it.
+        await ensureUserProfile(user);
+
+        const tabNav = navigation.getParent();
+        if (tabNav) {
+          tabNav.navigate('Settings', {
+            screen: 'SettingsMain',
+            params: { reset: true },
+          });
+        }
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Dashboard' }],
+        });
+      })
+      .catch((error) => {
+        Alert.alert('Google Sign-In Failed', error.message);
+      });
+  }, [response, navigation]);
 
   const handleLogin = async () => {
     const emailTrimmed = email.trim();
@@ -136,9 +179,19 @@ export default function LoginScreen() {
           <Button
             title="Continue with Google"
             variant="ghost"
-            disabled={!request}
+            disabled={!request || !googleConfigured}
             onPress={() => promptAsync()}
           />
+          {!googleConfigured && (
+            <Text
+              style={[
+                t.typography.caption,
+                { color: t.colors.textMuted, marginTop: 8, textAlign: 'center' },
+              ]}
+            >
+              Google sign-in is not configured for this build.
+            </Text>
+          )}
         </Section>
 
         <View style={styles.footerRow}>

@@ -280,7 +280,8 @@ export async function ensureUserProfile(user, { username = null } = {}) {
   const uid = user.uid;
 
   const existing = await getUserSummary(uid, { force: true });
-  if (existing && existing.username) return existing;
+  // Fully provisioned already (a returning Google sign-in) - nothing to do.
+  if (existing && existing.username && typeof existing.points === "number") return existing;
 
   const profile = {
     points: existing?.points ?? 0,
@@ -297,8 +298,9 @@ export async function ensureUserProfile(user, { username = null } = {}) {
     await savePrivateInfo(uid, { email: user.email });
   }
 
-  const desired = normalizeUsername(username) || (await suggestUsername(user));
-  if (desired) {
+  const desired = normalizeUsername(username) || existing?.username || (await suggestUsername(user));
+  const alreadyClaimed = existing?.usernameLower === usernameKey(desired);
+  if (desired && !alreadyClaimed) {
     const claimed = await claimUsername(uid, desired);
     if (!claimed) {
       // Extremely unlikely collision on a derived name; fall back to something unique.
