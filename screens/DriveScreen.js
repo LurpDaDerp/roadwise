@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, BackHandler, Platform, StyleSheet, ToastAndroid } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useKeepAwake } from 'expo-keep-awake';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -46,13 +46,13 @@ const SOS_CLEAR_TIMEOUT_MS = 5000;
 // controls by design (the driver must not reach for the phone while it is showing), so this is
 // the one safe moment to acknowledge one: it is over, and the driver is looking at the road again.
 const CRITICAL_ACK_WINDOW_MS = 8000;
+const KEEP_AWAKE_TAG = 'roadcash-drive';
 
 function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('timeout'), ms))]);
 }
 
 export default function DriveScreen({ navigation, route }) {
-  useKeepAwake();
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { settings } = useSettings();
@@ -78,6 +78,22 @@ export default function DriveScreen({ navigation, route }) {
   useEffect(() => {
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
   }, []);
+
+  // Keep the screen awake only while the drive is RUNNING. `useKeepAwake()` holds it for as long
+  // as the component is mounted, and this screen stays mounted after the drive has ended when
+  // clearing the SOS alert fails - so the phone burned its screen until the driver noticed.
+  useEffect(() => {
+    if (ended) return undefined;
+    activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
+    return () => {
+      try {
+        const result = deactivateKeepAwake(KEEP_AWAKE_TAG);
+        if (result && typeof result.catch === 'function') result.catch(() => {});
+      } catch (err) {
+        // nothing to release
+      }
+    };
+  }, [ended]);
 
   // ---- monitoring ----------------------------------------------------------
   const monitoringSettings = useMemo(() => monitoringSettingsFrom(settings), [settings]);
