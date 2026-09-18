@@ -58,6 +58,46 @@ DRIVER_NOT_VISIBLE and the closed-eye family (PROLONGED_CLOSURE, MICROSLEEP, SLE
 neither voiced nor shown as a banner — it is still logged and counted in the summary as
 "suppressed (stationary)".  The drowsiness level pill is shown regardless of speed.
 
+## 2a. Mapping onto the app's alert vocabulary (`monitoring/types.js`)
+
+The UX-rework drive screen renders `activeAlert {type, severity}` through its own components and
+plays audio with `monitoring/alertAudio.js` (INFO silent; WARNING once — spoken phrase or tone plus
+one haptic pulse; CRITICAL the same, repeated every 4 s with a vibration pattern).  The engine's
+events map onto the app's `ALERT_TYPE` as follows (the bridge in `monitoring/engineBridge.js`):
+
+| engine event | app type | severity | note |
+|---|---|---|---|
+| OFF_ROAD_GLANCE | OFF_ROAD_GLANCE | info | statistics |
+| LONG_GLANCE | LONG_GLANCE | warning | |
+| PROLONGED_STARE | PROLONGED_STARE | critical | copy corrected to "Look back at the road now" |
+| VATS_DISTRACTION | EYES_OFF_ROAD_ACCUMULATED | warning | |
+| PHONE_PATTERN | PHONE_GLANCE | warning | |
+| HEAD_DOWN / HEAD_TURNED | HEAD_DOWN / HEAD_TURNED | warning when audible (eyes unreadable), else info | |
+| MICROSLEEP | MICROSLEEP | critical | |
+| SLEEP, EYES_CLOSED | EYES_CLOSED | critical | one continuing episode |
+| SEVERE_DROWSY | SEVERE_DROWSY (added) | critical | |
+| DROWSY | DROWSY | warning | |
+| PERCLOS_ADVISORY | PERCLOS | info | the display-only 8 % hint |
+| YAWN / FREQUENT_YAWNING | YAWNING | info / warning when audible | |
+| HEAD_NOD | HEAD_NOD | info | |
+| DRIVER_NOT_VISIBLE | NO_FACE | warning from 10 s, info before | |
+| EYES_UNREADABLE | EYES_NOT_VISIBLE (added) | info | head-only mode |
+| GAZE_CONCENTRATION | FIXED_GAZE (added) | info | |
+| NO_MIRROR_CHECK | NO_MIRROR_CHECK (added) | info | |
+| ATTENTION_BUFFER_EMPTY, PROLONGED_CLOSURE, SLOW_BLINKS, BLINK, DROWSINESS_RECOVERED, calibration and system events | — | — | state / metrics only |
+
+Severity rule: engine CRITICAL → `critical`; engine WARNING that the arbiter voiced → `warning`;
+everything else → `info`.  A WARNING/CRITICAL alert is created only from the arbiter's voiced event,
+so the reference's cooldowns, the one-at-a-time hold, the speed gate and acknowledgement suppression
+all apply before the app ever hears a sound; an episode is keyed by the event's `t_start`, so the
+2-s escalations and 1.5-s critical repeats extend the same alert instead of creating new ones.
+Episode termination follows §4: glance alerts end after 1 s of continuous forward gaze (or 3 s
+without a repeat), closed-eye alerts 1 s after the eyes reopen, drowsiness-level alerts 8 s after
+their last event, NO_FACE when the face returns.  The four tone classes of §2 are carried as an
+optional `sound` field per type for a later extension of `alertAudio.js`; the current app plays one
+tone (`assets/sounds/alert.mp3`) and distinguishes closed eyes by the spoken phrase and the 4-s
+repetition.
+
 ## 3. Channels and their arbitration
 
 * **Voice (expo-speech).**  The app already speaks speed-limit changes.  A monitoring alert

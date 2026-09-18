@@ -383,19 +383,40 @@ adds, without changing the existing rules:
 * **Drive summary.**  The summary (§10) is written with the existing `saveDriveMetrics` call; the
   existing `distracted` field keeps its meaning (count) and now includes the monitored episodes.
 
-## 12. Settings (AsyncStorage, `screens/DriveScreenSettings.js` scheme)
+## 12. Settings and the app surface (UX-rework contract)
+
+The drive screen, the settings screen and the drive record are owned by the `ux-rework` branch
+(`docs/UX_REWORK.md` §5–§7 there).  Monitoring plugs in through ONE hook,
+`monitoring/useDriverMonitoring.js`, whose contract this branch implements (the UX branch ships a
+mock with the same shape).  Settings come from the UX `SettingsContext`:
 
 | key | default | meaning |
 |---|---|---|
-| `@monitorEnabled` | `true` | run the camera monitor during drives |
-| `@monitorVoice` | `true` | spoken alerts (expo-speech) |
-| `@monitorTone` | `true` | tones (expo-audio) |
-| `@monitorHaptics` | `true` | haptics (expo-haptics) |
-| `@monitorSensitivity` | `standard` | `standard` (reference) or `relaxed` (§7) |
-| `@monitorDriverSide` | `left` | `left` (LHD) or `right` (RHD) |
-| `@monitorStartupVoice` | `true` | the one spoken line at drive start |
-| `@monitorShowPreview` | `false` | a small camera preview for aiming the mount (costs battery; off by default) |
-| `@monitorReference:*` | — | the persisted forward reference (§5) |
+| `@monitoring.enabled` | `false` | run the camera monitor during drives (a per-drive toggle on the prep screen too) |
+| `@monitoring.voiceAlerts` / `toneAlerts` / `hapticAlerts` | `true` | the audio policy of `monitoring/alertAudio.js` (INFO silent, WARNING once, CRITICAL every 4 s) |
+| `@monitoring.sensitivity` | `medium` | `low` → the `relaxed` profile, `medium` → `standard` (reference), `high` → `strict` (§7; `dms/app_config.js`) |
+| `@monitoring.driverSide` | `left` | LHD / RHD (§6) |
+| `@monitoring.showPreview` | `false` | accepted; the native module has no preview view in this version (`previewComponent` is null) |
+| `@monitorReference:*` | — | the persisted forward reference (§5), owned by this branch |
+
+The hook's inputs are `{ enabled, driveActive, settings, onAlert, demo, speedKmh }`; `speedKmh` is
+the one addition to the UX contract (the GPS speed of §8, `null` when unknown).  Its outputs are the
+UX shapes: `status`, `calibration {state, progress, quality}`, `activeAlert {id, type, severity,
+title, message, startedAt}`, `drowsiness {level 0–3, perclos}`, `metrics {eyesOffRoadSeconds,
+alertCounts, alertsByType, drowsinessPeak, drowsinessHistory, calibrationQuality}`, `recalibrate()`,
+`acknowledgeAlert(id)`, `previewComponent`.  The mapping from the engine's events and outputs to
+those values lives in `monitoring/engineBridge.js` (pure, tested) and is specified in
+`WARNINGS_DESIGN.md` §2a and `INTEGRATION.md`.  The richer per-drive diagnostics of §10 are exposed
+as `metrics.engine` for the record builder to pass through (optional one-line extension of
+`monitoring/summary.js`).
+
+**Points and streak under the UX contract.**  `useDriveSession({ pausePoints })` pauses points while
+a CRITICAL alert is active (MP-5); the "distracted drive" verdict is the UX branch's
+`monitoringVerdict` (any CRITICAL alert, ≥ 3 WARNINGs, or ≥ 30 s of eyes off the road).  So that this
+verdict means what §11 intends, `eyesOffRoadSeconds` counts only time in glances BEYOND their class
+allowance (cabin from 0 s, lateral beyond 2 s, driving-task beyond 1 s, plus head-down time) —
+normal mirror and cluster scanning contributes nothing — and every WARNING/CRITICAL count is one per
+episode (the arbiter's 2-s escalations do not add counts).
 
 ## 13. Out of scope / not observable
 
