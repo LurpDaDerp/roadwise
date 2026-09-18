@@ -22,6 +22,24 @@ export function callNumber(phone) {
 
 // uid: the signed-in user (from AuthContext) so the contacts and the current
 // emergency flag load as soon as auth is restored.
+// A quick fix: a ≤ 10 s old cached position is fine; give up after `ms` and
+// fall back to the last known position so the alert never hangs on GPS.
+async function getFixWithTimeout(ms) {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), ms));
+  try {
+    const fresh = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, maximumAge: 10000 }),
+      timeout,
+    ]);
+    if (fresh) return fresh;
+  } catch {}
+  try {
+    return await Location.getLastKnownPositionAsync({ maxAge: 10 * 60 * 1000 });
+  } catch {
+    return null;
+  }
+}
+
 export function useEmergency(uidParam) {
   const [trustedContacts, setTrustedContacts] = useState([]);
   const [isEmergencyActive, setIsEmergencyActive] = useState(false);
@@ -62,8 +80,8 @@ export function useEmergency(uidParam) {
         return false;
       }
       const groupRef = doc(db, 'groups', groupId);
-      const loc = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude, speed } = loc.coords;
+      const fix = await getFixWithTimeout(6000);
+      const { latitude, longitude, speed } = fix?.coords || {};
       await updateDoc(groupRef, {
         [`memberLocations.${uid}.latitude`]: latitude ?? null,
         [`memberLocations.${uid}.longitude`]: longitude ?? null,

@@ -603,6 +603,7 @@ export function KeyValueRow({ label, value, first, accent, tone }) {
 export function useCountUp(to, duration = 500) {
   const [display, setDisplay] = useState(0);
   const anim = useRef(new Animated.Value(0)).current;
+  const lastTarget = useRef(0);
   useEffect(() => {
     const id = anim.addListener(({ value }) => setDisplay(Math.floor(value)));
     return () => anim.removeListener(id);
@@ -610,7 +611,8 @@ export function useCountUp(to, duration = 500) {
   useEffect(() => {
     const target = Number(to) || 0;
     anim.stopAnimation();
-    anim.setValue(0);
+    anim.setValue(lastTarget.current); // count from the previous value, not from 0
+    lastTarget.current = target;
     Animated.timing(anim, {
       toValue: target,
       duration,

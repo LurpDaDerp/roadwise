@@ -1,7 +1,7 @@
 // AboutScreen — why RoadWise exists, the facts behind it, and the app section
 // (replay onboarding, version).
 import React from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, Alert } from 'react-native';
 import Constants from 'expo-constants';
 import {
   Screen,
@@ -85,7 +85,12 @@ export default function AboutScreen() {
               icon="refresh-outline"
               title="Replay onboarding"
               subtitle="Walk through the setup and permissions again."
-              onPress={resetOnboarding}
+              onPress={() =>
+                Alert.alert('Replay onboarding?', 'You will go through the welcome, permission and mounting steps again. Nothing is deleted.', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Replay', onPress: resetOnboarding },
+                ])
+              }
             />
             <KeyValueRow label="Version" value={version} />
           </Card>

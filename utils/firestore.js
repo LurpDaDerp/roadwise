@@ -1,5 +1,6 @@
 import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, orderBy, where, query, deleteDoc, serverTimestamp } from "firebase/firestore";
 import { db } from './firebase';
+import { increment, limit as fsLimit } from "firebase/firestore"; // used by the UX-rework additions below
 
 export async function getUserPoints(uid) {
   const docRef = doc(db, "users", uid);
@@ -210,8 +211,6 @@ export const stopDriving = async (userId) => {
 // Added by the UX rework (docs/UX_REWORK.md §8). Existing functions above are
 // untouched; these are the only additions.
 // ---------------------------------------------------------------------------
-
-import { increment, limit as fsLimit } from "firebase/firestore";
 
 // Atomically add `delta` points to users/{uid}.points (replaces the
 // read-modify-write hand-off through AsyncStorage at the end of a drive).

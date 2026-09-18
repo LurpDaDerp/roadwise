@@ -18,7 +18,7 @@ import {
 import { ThemeContext } from '../context/ThemeContext';
 import { useSettings } from '../context/SettingsContext';
 import { useAuthContext } from '../context/AuthContext';
-import { SENSITIVITY_OPTIONS } from '../monitoring/settings';
+import { SENSITIVITY_OPTIONS, MONITORING_AVAILABLE } from '../monitoring/settings';
 import { getTrustedContacts } from '../utils/firestore';
 
 const THEME_VALUES = ['light', 'dark', 'system'];
@@ -57,7 +57,9 @@ export default function SettingsScreen() {
   const sensitivity =
     SENSITIVITY_OPTIONS.find((o) => o.value === settings.monitoringSensitivity) ||
     SENSITIVITY_OPTIONS[1];
-  const monitoringSubtitle = settings.monitoringEnabled
+  const monitoringSubtitle = !MONITORING_AVAILABLE
+    ? 'Coming soon'
+    : settings.monitoringEnabled
     ? `On · ${sensitivity.label} · ${settings.monitoringDriverSide} seat`
     : 'Off';
 

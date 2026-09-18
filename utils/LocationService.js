@@ -201,3 +201,21 @@ export async function stopLocationUpdates() {
     await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Added by the UX rework: a single-flight wrapper so the profile snapshot
+// (RootNavigator) and a create / join action (Family) never run two permission
+// chains or two initial location writes at once.
+// ---------------------------------------------------------------------------
+let sharingInFlight = null;
+export function ensureLocationSharing() {
+  if (!sharingInFlight) {
+    sharingInFlight = startLocationUpdates()
+      .catch((err) => console.warn('Location sharing start failed:', err))
+      .finally(() => {
+        sharingInFlight = null;
+      });
+  }
+  return sharingInFlight;
+}

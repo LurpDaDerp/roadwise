@@ -14,11 +14,12 @@ import {
   where,
   arrayUnion,
   arrayRemove,
+  writeBatch,
   deleteField,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
-import { startLocationUpdates, stopLocationUpdates, updateCachedGroupId } from '../../utils/LocationService';
+import { ensureLocationSharing, stopLocationUpdates, updateCachedGroupId } from '../../utils/LocationService';
 import { getDistance, reverseGeocode, makeGroupCode } from '../../utils/geo';
 
 const ADDRESS_MIN_METERS = 10;
@@ -227,7 +228,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
     } catch (e) {
       console.warn('Permission request failed:', e);
     }
-    startLocationUpdates();
+    await ensureLocationSharing();
   }, [onBeforeStart]);
 
   const createGroup = useCallback(
@@ -312,8 +313,11 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
       if (!groupId) return { ok: false, error: 'You are not in a group.' };
       const ref = doc(db, 'groups', groupId);
       try {
-        if (editing) await updateDoc(ref, { savedLocations: arrayRemove(editing) });
-        await updateDoc(ref, { savedLocations: arrayUnion({ ...place, createdBy: editing?.createdBy || uid }) });
+        // One atomic write: remove the old entry (when editing) and add the new one.
+        const batch = writeBatch(db);
+        if (editing) batch.update(ref, { savedLocations: arrayRemove(editing) });
+        batch.update(ref, { savedLocations: arrayUnion({ ...place, createdBy: editing?.createdBy || uid }) });
+        await batch.commit();
         return { ok: true };
       } catch (e) {
         console.warn('Save place failed:', e);

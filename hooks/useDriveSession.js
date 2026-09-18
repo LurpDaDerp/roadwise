@@ -70,7 +70,6 @@ export function useDriveSession({
   distractedNotificationsEnabled = true,
   notifyDriveComplete = true,
   pausePoints = false,
-  voiceAlerts = true,
   onAutoEnd,
   getFinalizeExtra, // () => extra merged into finalize() on auto-end ([MP-4] survives the 2-minute timeout)
 } = {}) {
@@ -172,6 +171,11 @@ export function useDriveSession({
     const currentSpeed = speedRef.current;
     const eff = limitInUnit();
     let delay = currentSpeed <= eff ? DEFAULT_DELAY : DEFAULT_DELAY + Math.min((currentSpeed - eff) / eff, 2) * 2000;
+    // Above 150 % of the limit at schedule time: skip this tick entirely (as before).
+    if (currentSpeed > eff * 1.5) {
+      pointTimer.current = setTimeout(scheduleNextPoint, delay);
+      return;
+    }
     pointTimer.current = setTimeout(() => {
       const v = speedRef.current;
       const e = limitInUnit();
@@ -421,11 +425,10 @@ export function useDriveSession({
     if (!active || !audioSpeedUpdatesEnabled || limitKph == null || limitSource === 'default') return;
     const rounded = Math.round(kphToUnit(limitKph, unit));
     if (prevSpokenLimit.current === rounded) return;
-    if (!voiceAlerts) return;
     prevSpokenLimit.current = rounded;
     Speech.stop();
     Speech.speak(`Speed limit ${rounded}`, { language: 'en', pitch: 0.9, rate: 0.95 });
-  }, [limitKph, limitSource, unit, audioSpeedUpdatesEnabled, active, voiceAlerts]);
+  }, [limitKph, limitSource, unit, audioSpeedUpdatesEnabled, active]);
 
   // ---- speeding alert (2.5 s sustained) -----------------------------------
   useEffect(() => {
@@ -466,6 +469,7 @@ export function useDriveSession({
           if (hasStartedRef.current) {
             isDistractedRef.current = true;
             phoneUsageSecRef.current += Math.round((Date.now() - (unfocusedAt.current ?? Date.now())) / 1000);
+            unfocusedAt.current = null;
             setPhone((p) => ({ ...p, distracted: true }));
             if (settingsRef.current.notifyDriveComplete) {
               try {
@@ -544,16 +548,20 @@ export function useDriveSession({
     const durationSec = Math.round((Date.now() - startTime.current) / 1000);
     const pts = pointsRef.current;
     const u = unitRef.current;
-    const monitoringRecord = buildMonitoringRecord({
-      enabled: !!extra.monitoring?.enabled,
-      metrics: extra.monitoring?.metrics,
-      calibrationState: extra.monitoring?.calibrationState,
-    });
-    const mv = monitoringVerdict(monitoringRecord);
+    // [MP-4] The monitoring block is written only when the caller supplies one
+    // (DriveScreen does so only when MONITORING_AVAILABLE is true).
+    const monitoringRecord = extra.monitoring
+      ? buildMonitoringRecord({
+          enabled: !!extra.monitoring.enabled,
+          metrics: extra.monitoring.metrics,
+          calibrationState: extra.monitoring.calibrationState,
+        })
+      : null;
+    const mv = monitoringRecord ? monitoringVerdict(monitoringRecord) : { distracted: false, reasons: [] };
     const phoneDistracted = isDistractedRef.current;
     const reasons = [];
     if (phoneDistracted) reasons.push(pickupsRef.current > 0 ? `${pickupsRef.current} phone pickup${pickupsRef.current === 1 ? '' : 's'}` : 'phone use');
-    reasons.push(...mv.reasons);
+    for (const r of mv.reasons) if (!reasons.includes(r)) reasons.push(r);
     const wasDistracted = phoneDistracted || mv.distracted;
 
     const w = weatherRef.current;
@@ -574,10 +582,12 @@ export function useDriveSession({
       unit: u,
       wasDistracted,
       distractionReasons: reasons,
-      monitoring: monitoringRecord,
-      eyesOffRoadSeconds: monitoringRecord.enabled ? monitoringRecord.eyesOffRoadSeconds : 0,
       autoEnded: !!extra.autoEnded,
     };
+    if (monitoringRecord) {
+      base.monitoring = monitoringRecord;
+      base.eyesOffRoadSeconds = monitoringRecord.enabled ? monitoringRecord.eyesOffRoadSeconds : 0;
+    }
     if (w?.current) {
       base.weather = {
         code: w.current.weathercode ?? null,
@@ -642,8 +652,9 @@ export function useDriveSession({
             audibleSeverity: ALERT_SEVERITY.CRITICAL,
             title: 'Slow down',
             message: `Over ${Math.round(limit)} ${unit === 'kph' ? 'km/h' : 'mph'} limit`,
-            speech: 'Slow down',
+            speech: null,
             icon: 'speedometer-outline',
+            audio: { voice: false, tone: true, haptic: false }, // "tone and banner", as Driving settings say
           }
         : null,
     [speedingAlertOn, limit, unit]
@@ -658,8 +669,9 @@ export function useDriveSession({
             audibleSeverity: ALERT_SEVERITY.WARNING,
             title: 'Phone use detected',
             message: 'Streak lost · points paused',
-            speech: 'Phone down. Eyes on the road.',
+            speech: null,
             icon: 'phone-portrait-outline',
+            audio: { voice: false, tone: false, haptic: false }, // banner + notification only (as before)
           }
         : null,
     [phone.distracted]

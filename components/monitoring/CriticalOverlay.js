@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
 import { ALERT_SEVERITY } from '../../monitoring/types';
 
-export function CriticalOverlay({ alert }) {
+// top / bottom: pixels left uncovered so the SOS bar and the end-drive control stay visible.
+export function CriticalOverlay({ alert, top = 0, bottom = 0 }) {
   const t = useTheme();
   const pulse = useRef(new Animated.Value(0)).current;
   const visible = !!alert && alert.severity === ALERT_SEVERITY.CRITICAL;
@@ -30,7 +31,7 @@ export function CriticalOverlay({ alert }) {
     <View
       pointerEvents="none"
       accessibilityLiveRegion="assertive"
-      style={[StyleSheet.absoluteFillObject, { zIndex: 5000, elevation: 50, justifyContent: 'center', alignItems: 'center' }]}
+      style={[StyleSheet.absoluteFillObject, { top, bottom, zIndex: 5000, elevation: 50, justifyContent: 'center', alignItems: 'center' }]}
     >
       <Animated.View
         style={[

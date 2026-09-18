@@ -63,3 +63,17 @@ export async function scheduleFirstDistractedNotification() {
     trigger: null,
   });
 }
+
+
+// Added by the UX rework: forget this device's push token when the user turns
+// family-emergency pushes off (Settings › Notifications). The Cloud Function
+// skips users without a pushToken.
+export async function clearPushToken() {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  try {
+    await updateDoc(doc(db, "users", uid), { pushToken: null });
+  } catch (err) {
+    console.error("Error clearing push token:", err);
+  }
+}

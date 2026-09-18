@@ -229,7 +229,8 @@ export default function FamilyScreen() {
   }
 
   const isLoading = !profileLoaded || !loaded;
-  const recenterBottom = Math.max(containerHeight * 0.18, 120) + 16;
+  // Sized for the initial snap point (index 1 = 45 %) so the button is never under the sheet.
+  const recenterBottom = Math.max(containerHeight * 0.45, 200) + 16;
 
   return (
     <View

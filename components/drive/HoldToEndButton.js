@@ -1,6 +1,6 @@
 // HoldToEndButton — press and hold to end the drive; a fill animates across
 // the button so an accidental tap never ends a drive.
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, Text, View, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
@@ -13,6 +13,7 @@ export function HoldToEndButton({ onComplete, label = 'Hold to end drive', disab
   const timer = useRef(null);
   const [holding, setHolding] = useState(false);
   const [width, setWidth] = useState(0);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   const start = () => {
     if (disabled) return;

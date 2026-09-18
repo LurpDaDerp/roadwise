@@ -86,7 +86,7 @@ export default function DriveDetailScreen({ route }) {
   const distracted = isDistractedDrive(drive);
   const score = typeof drive.score === 'number' ? drive.score : computed.score;
   const breakdown = drive.scoreBreakdown || computed.breakdown;
-  const reasons = Array.isArray(drive.distractionReasons) ? drive.distractionReasons : [];
+  const reasons = Array.isArray(drive.distractionReasons) ? Array.from(new Set(drive.distractionReasons)) : [];
   const monitoring = drive.monitoring || null;
   const weather = drive.weather || null;
 

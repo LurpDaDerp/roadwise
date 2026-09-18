@@ -28,6 +28,4 @@ export const KEYS = {
   feedbackCache: 'feedbackCache',
   cachedProfileImage: 'cachedProfileImage',
   onboarded: (uid) => `@onboarded_${uid}`,
-  totalPoints: (uid) => `totalPoints_${uid}`,
-  lastDriveSummary: (uid) => `@lastDriveSummary_${uid}`,
 };

@@ -11,6 +11,7 @@ import { useSettings } from '../context/SettingsContext';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
 import { registerForPushNotificationsAsync } from '../utils/notifications';
 import { CameraPlacementGuide } from '../components/monitoring/CameraPlacementGuide';
+import { MONITORING_AVAILABLE } from '../monitoring/settings';
 
 const { width } = Dimensions.get('window');
 const PAGES = 4;
@@ -77,9 +78,11 @@ export default function OnboardingScreen() {
   };
 
   const toggleMonitoring = async (v) => {
+    if (!MONITORING_AVAILABLE) return;
     await update('monitoringEnabled', v);
     if (v && perms.camera !== 'granted') await perms.requestCamera();
   };
+  const monitoringOn = MONITORING_AVAILABLE && !!settings.monitoringEnabled;
 
   const pageStyle = { width, paddingHorizontal: t.spacing[5] };
 
@@ -128,7 +131,9 @@ export default function OnboardingScreen() {
             <Card padded={false}>
               <PermissionRow first id="location" status={perms.location} canAsk={perms.canAskLocation} onRequest={perms.requestLocation} onSettings={perms.openSettings} />
               <PermissionRow id="notifications" status={perms.notifications} canAsk={perms.canAskNotifications} onRequest={requestNotifications} onSettings={perms.openSettings} />
-              <PermissionRow id="camera" status={perms.camera} canAsk={perms.canAskCamera} onRequest={perms.requestCamera} onSettings={perms.openSettings} />
+              {MONITORING_AVAILABLE && (
+                <PermissionRow id="camera" status={perms.camera} canAsk={perms.canAskCamera} onRequest={perms.requestCamera} onSettings={perms.openSettings} />
+              )}
             </Card>
           </ScrollView>
 
@@ -144,11 +149,13 @@ export default function OnboardingScreen() {
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>Enable driver monitoring</Text>
-                  <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>Voice, tone and haptic alerts. Adjustable in Settings.</Text>
+                  <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>
+                    {MONITORING_AVAILABLE ? 'Voice, tone and haptic alerts. Adjustable in Settings.' : 'Coming soon. Set your seat side now; the toggle unlocks when monitoring ships.'}
+                  </Text>
                 </View>
-                <Toggle value={!!settings.monitoringEnabled} onValueChange={toggleMonitoring} />
+                {MONITORING_AVAILABLE ? <Toggle value={monitoringOn} onValueChange={toggleMonitoring} /> : <Chip label="Coming soon" tone="info" icon="time-outline" />}
               </View>
-              {settings.monitoringEnabled && perms.camera === 'denied' && (
+              {monitoringOn && perms.camera === 'denied' && (
                 <Banner tone="warning" title="Camera access is off" body="Allow it in Settings to use monitoring." style={{ marginTop: 12 }} onPress={perms.openSettings} />
               )}
             </Card>
@@ -162,7 +169,7 @@ export default function OnboardingScreen() {
             <Card padded={false}>
               <ListRow first icon="navigate-outline" title="Location" right={<Chip label={perms.location === 'granted' ? 'On' : 'Off'} tone={perms.location === 'granted' ? 'success' : 'danger'} />} />
               <ListRow icon="notifications-outline" title="Notifications" right={<Chip label={perms.notifications === 'granted' ? 'On' : 'Off'} tone={perms.notifications === 'granted' ? 'success' : 'neutral'} />} />
-              <ListRow icon="eye-outline" title="Driver monitoring" subtitle={settings.monitoringEnabled ? `${settings.monitoringDriverSide} seat` : undefined} right={<Chip label={settings.monitoringEnabled && perms.camera === 'granted' ? 'On' : 'Off'} tone={settings.monitoringEnabled && perms.camera === 'granted' ? 'success' : 'neutral'} />} />
+              <ListRow icon="eye-outline" title="Driver monitoring" subtitle={`${settings.monitoringDriverSide} seat`} right={<Chip label={!MONITORING_AVAILABLE ? 'Coming soon' : monitoringOn && perms.camera === 'granted' ? 'On' : 'Off'} tone={!MONITORING_AVAILABLE ? 'info' : monitoringOn && perms.camera === 'granted' ? 'success' : 'neutral'} />} />
             </Card>
             <Banner tone="info" icon="flame-outline" title="Your streak starts now" body="Every focused drive adds one. Picking up the phone resets it." style={{ marginTop: 16 }} />
           </ScrollView>

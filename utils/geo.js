@@ -113,6 +113,27 @@ export async function getCachedAddressNear(lat, lon, tolerance = 0.00005) {
   return null;
 }
 
+// Nominatim allows one request per second: every uncached lookup goes through
+// a single-flight FIFO queue with a 1.1 s gap between requests.
+const NOMINATIM_GAP_MS = 1100;
+let nominatimChain = Promise.resolve();
+let nominatimLastAt = 0;
+function nominatimFetch(lat, lon) {
+  const run = nominatimChain.then(async () => {
+    const wait = NOMINATIM_GAP_MS - (Date.now() - nominatimLastAt);
+    if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+    nominatimLastAt = Date.now();
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
+      { headers: { 'User-Agent': 'RoadCash/1.0 (contact@roadcash.app)', Accept: 'application/json' } }
+    );
+    if (!response.ok) return null;
+    return response.json();
+  });
+  nominatimChain = run.catch(() => {}); // a failure never blocks the queue
+  return run;
+}
+
 // Reverse geocode one coordinate (cached). Returns { address, displayName }.
 // `savedLocations` are matched to give a friendly name ("Home").
 export async function reverseGeocode(latitude, longitude, savedLocations = []) {
@@ -133,25 +154,18 @@ export async function reverseGeocode(latitude, longitude, savedLocations = []) {
     }
   } else {
     try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
-        { headers: { 'User-Agent': 'RoadCash/1.0 (contact@roadcash.app)', Accept: 'application/json' } }
-      );
-      if (response.ok) {
-        const result = await response.json();
-        if (result && result.address) {
-          const { road, house_number, city, town, village, state, country } = result.address;
-          const addrParts = [house_number ? `${house_number} ` : '', road || '', city || town || village || state || '', country || ''].filter(Boolean);
-          address = addrParts.join(' ');
-        }
-        if (address !== 'Unknown location') {
-          await AsyncStorage.setItem(cacheKey, JSON.stringify({ v: address, ts: Date.now() }));
-        }
+      const result = await nominatimFetch(lat, lon);
+      if (result && result.address) {
+        const { road, house_number, city, town, village, state, country } = result.address;
+        const addrParts = [house_number ? `${house_number} ` : '', road || '', city || town || village || state || '', country || ''].filter(Boolean);
+        address = addrParts.join(' ');
+      }
+      if (address !== 'Unknown location') {
+        await AsyncStorage.setItem(cacheKey, JSON.stringify({ v: address, ts: Date.now() }));
       }
     } catch (e) {
       console.warn('Reverse geocode failed:', e);
     }
-    await new Promise((res) => setTimeout(res, 1000));
   }
   const normalized = normalizeAddress(address);
   const match = savedLocations

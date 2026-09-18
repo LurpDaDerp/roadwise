@@ -3,18 +3,18 @@
 import React from 'react';
 import { View, Text, Image } from 'react-native';
 import { useTheme, Card, Chip, IconButton } from '../../theme';
-import { relativeTime, formatSpeed, speedFromMps, MPS_TO_MPH } from '../../utils/format';
+import { relativeTime, formatSpeed, speedFromMps } from '../../utils/format';
 
-// A member counts as driving above 10 mph, the same threshold the group's
-// background location writer uses to decide a trip is under way.
-const DRIVING_MPH = 10;
+// A member counts as driving above 10 m/s (about 22 mph), the threshold the
+// original Family screen used.
+const DRIVING_MPS = 10;
 
 export function MemberRow({ member, isMe, unit = 'mph', onPress, onLocate }) {
   const t = useTheme();
   if (!member) return null;
 
   const speed = Number(member.speed) || 0;
-  const driving = speed * MPS_TO_MPH > DRIVING_MPH;
+  const driving = speed > DRIVING_MPS;
   const where = member.displayName || member.address || (member.coords ? 'Locating' : 'No location yet');
   const seen = member.updatedAt ? relativeTime(member.updatedAt) : null;
   const initial = (member.name || 'M').trim().charAt(0).toUpperCase();

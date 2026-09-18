@@ -13,6 +13,8 @@ import {
   useTheme,
 } from '../theme';
 import { useSettings } from '../context/SettingsContext';
+import * as Notifications from 'expo-notifications';
+import { registerForPushNotificationsAsync, clearPushToken } from '../utils/notifications';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
 
 const STATUS = {
@@ -47,6 +49,31 @@ export default function NotificationSettings() {
   const { settings, update } = useSettings();
   const { notifications, requestNotifications, openSettings } = usePermissions();
 
+  // Off: forget this device's push token (the Cloud Function then skips it).
+  // On: register again once the OS permission is granted.
+  const onFamilyEmergencyChange = async (v) => {
+    update('notifyFamilyEmergency', v);
+    try {
+      if (v) {
+        const { status } = await Notifications.getPermissionsAsync();
+        if (status === 'granted') await registerForPushNotificationsAsync();
+      } else {
+        await clearPushToken();
+      }
+    } catch (e) {
+      console.warn('Push token update failed:', e);
+    }
+  };
+
+  const onAllow = async () => {
+    const r = await requestNotifications();
+    if (r === 'granted' && settings.notifyFamilyEmergency) {
+      try {
+        await registerForPushNotificationsAsync();
+      } catch {}
+    }
+  };
+
   const status = STATUS[notifications] || STATUS.undetermined;
 
   return (
@@ -80,7 +107,7 @@ export default function NotificationSettings() {
             {notifications !== 'granted' && notifications !== 'unavailable' && (
               <View style={{ marginTop: 16 }}>
                 {notifications === 'undetermined' ? (
-                  <Button title="Allow notifications" onPress={requestNotifications} />
+                  <Button title="Allow notifications" onPress={onAllow} />
                 ) : (
                   <Button title="Open Settings" variant="ghost" onPress={openSettings} />
                 )}
@@ -101,17 +128,17 @@ export default function NotificationSettings() {
             />
             <ToggleRow
               icon="flag-outline"
-              title="Drive complete"
-              subtitle="A summary of your points and score when a drive ends."
+              title="Drive ended automatically"
+              subtitle="Tells you when a drive ends on its own after 2 minutes away from RoadWise."
               value={settings.notifyDriveComplete}
               onValueChange={(v) => update('notifyDriveComplete', v)}
             />
             <ToggleRow
               icon="alert-circle-outline"
               title="Family emergencies"
-              subtitle="Push alerts from your group"
+              subtitle="Push alerts when someone in your group signals an emergency"
               value={settings.notifyFamilyEmergency}
-              onValueChange={(v) => update('notifyFamilyEmergency', v)}
+              onValueChange={onFamilyEmergencyChange}
             />
           </Card>
         </Section>

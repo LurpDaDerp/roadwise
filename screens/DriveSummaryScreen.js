@@ -80,7 +80,7 @@ export default function DriveSummaryScreen({ navigation, route }) {
           <Text style={[t.typography.title, { color: t.colors.text, textAlign: 'center' }]}>{focused ? 'Focused drive' : 'Distracted drive'}</Text>
           {!focused && Array.isArray(summary.distractionReasons) && summary.distractionReasons.length > 0 && (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginTop: 10 }}>
-              {summary.distractionReasons.map((r) => (
+              {Array.from(new Set(summary.distractionReasons)).map((r) => (
                 <Chip key={r} label={r} tone="danger" />
               ))}
             </View>

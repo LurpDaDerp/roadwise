@@ -16,6 +16,7 @@ import { KEYS } from '../utils/storageKeys';
 import { useAuthContext } from '../context/AuthContext';
 import { useSettings } from '../context/SettingsContext';
 import { StartDriveCard, StreakPill, RecentDriveRow } from '../components/home';
+import { MONITORING_AVAILABLE } from '../monitoring/settings';
 
 function greeting() {
   const h = new Date().getHours();
@@ -84,7 +85,11 @@ export default function HomeScreen({ navigation }) {
 
   const totalDrives = drives ? drives.length : null;
   const isNew = drives && drives.length === 0;
-  const monitoringLine = settings.monitoringEnabled ? `Monitoring on · ${settings.monitoringDriverSide} seat` : 'Driver monitoring off';
+  const monitoringLine = !MONITORING_AVAILABLE
+    ? 'Driver monitoring coming soon'
+    : settings.monitoringEnabled
+    ? `Monitoring on · ${settings.monitoringDriverSide} seat`
+    : 'Driver monitoring off';
 
   return (
     <Screen>

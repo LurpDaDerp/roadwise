@@ -8,11 +8,13 @@ import { View, ActivityIndicator } from 'react-native';
 import { NavigationContainer, DarkTheme, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Notifications from 'expo-notifications';
+import * as Location from 'expo-location';
 
 import { useTheme } from '../theme';
 import { useAuthContext } from '../context/AuthContext';
-import { startLocationUpdates } from '../utils/LocationService';
+import { ensureLocationSharing } from '../utils/LocationService';
 import { registerForPushNotificationsAsync } from '../utils/notifications';
+import { useSettings } from '../context/SettingsContext';
 
 import MainTabs from './MainTabs';
 import WelcomeScreen from '../screens/WelcomeScreen';
@@ -38,30 +40,45 @@ function Splash() {
 export default function RootNavigator() {
   const t = useTheme();
   const { user, initializing, onboarded, groupId } = useAuthContext();
+  const { settings, ready: settingsReady } = useSettings();
 
-  // Family location sharing runs only for group members (they opted in).
+  // Family location sharing resumes for group members only when "Always"
+  // location is already granted — never prompt at cold start; create / join
+  // asks explicitly (components/family/useFamilyGroup.js).
   useEffect(() => {
-    if (user && groupId) startLocationUpdates();
+    if (!user || !groupId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const bg = await Location.getBackgroundPermissionsAsync();
+        if (!cancelled && bg.status === 'granted') ensureLocationSharing();
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user?.uid, groupId]);
 
-  // Register the push token once notifications are allowed (no prompt here).
+  // Register the push token once notifications are allowed (no prompt here)
+  // and only while family-emergency pushes are wanted.
   useEffect(() => {
-    if (!user) return;
+    if (!user || !settingsReady || !settings.notifyFamilyEmergency) return;
     (async () => {
       try {
         const { status } = await Notifications.getPermissionsAsync();
         if (status === 'granted') await registerForPushNotificationsAsync();
       } catch {}
     })();
-  }, [user?.uid]);
+  }, [user?.uid, settingsReady, settings.notifyFamilyEmergency]);
 
   // Emergency push → Family tab.
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const emergencyUid = response?.notification?.request?.content?.data?.emergencyUid || null;
+      if (!emergencyUid) return; // only emergency pushes deep-link; "Drive ended" etc. just open the app
       if (!navigationRef.isReady()) return;
       const route = navigationRef.getCurrentRoute();
-      if (route?.name === 'Drive') return;
+      if (['Drive', 'DrivePrep', 'DriveSummary', 'Onboarding'].includes(route?.name)) return;
       navigationRef.navigate('Main', { screen: 'Family', params: { emergencyUid } });
     });
     return () => sub.remove();

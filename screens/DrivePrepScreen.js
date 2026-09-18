@@ -12,7 +12,9 @@ import { useSettings } from '../context/SettingsContext';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
 import { CameraPlacementGuide } from '../components/monitoring/CameraPlacementGuide';
 import { useDriverMonitoring } from '../monitoring/useDriverMonitoring';
-import { monitoringSettingsFrom } from '../monitoring/settings';
+import { monitoringSettingsFrom, MONITORING_AVAILABLE } from '../monitoring/settings';
+import * as Notifications from 'expo-notifications';
+import { registerForPushNotificationsAsync } from '../utils/notifications';
 
 function StatusChip({ status, required }) {
   if (status === 'granted') return <Chip label="Ready" tone="success" icon="checkmark" />;
@@ -25,7 +27,8 @@ export default function DrivePrepScreen({ navigation }) {
   const t = useTheme();
   const { settings, update } = useSettings();
   const perms = usePermissions();
-  const [monitoringOn, setMonitoringOn] = useState(!!settings.monitoringEnabled);
+  // Per-drive choice only: it seeds from the global setting but never writes it back.
+  const [monitoringOn, setMonitoringOn] = useState(MONITORING_AVAILABLE && !!settings.monitoringEnabled);
   const [gps, setGps] = useState('checking'); // 'checking' | 'ok' | 'weak' | 'off'
   const [starting, setStarting] = useState(false);
 
@@ -33,7 +36,21 @@ export default function DrivePrepScreen({ navigation }) {
   const monitoringSettings = useMemo(() => monitoringSettingsFrom(settings), [settings]);
   const monitoring = useDriverMonitoring({ enabled: false, driveActive: false, settings: monitoringSettings });
 
-  useEffect(() => setMonitoringOn(!!settings.monitoringEnabled), [settings.monitoringEnabled]);
+  useEffect(() => setMonitoringOn(MONITORING_AVAILABLE && !!settings.monitoringEnabled), [settings.monitoringEnabled]);
+
+  // Notifications granted from here (or from the OS settings): register the
+  // push token now, not only at cold start.
+  const registeredRef = React.useRef(false);
+  useEffect(() => {
+    if (perms.notifications !== 'granted' || registeredRef.current || !settings.notifyFamilyEmergency) return;
+    registeredRef.current = true;
+    (async () => {
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        if (status === 'granted') await registerForPushNotificationsAsync();
+      } catch {}
+    })();
+  }, [perms.notifications, settings.notifyFamilyEmergency]);
 
   // Re-check permissions when returning from the OS settings.
   useFocusEffect(
@@ -75,7 +92,7 @@ export default function DrivePrepScreen({ navigation }) {
     };
   }, [perms.location]);
 
-  const cameraNeeded = monitoringOn;
+  const cameraNeeded = MONITORING_AVAILABLE && monitoringOn;
   const cameraOk = !cameraNeeded || perms.camera === 'granted';
   const canStart = perms.location === 'granted' && !starting;
 
@@ -83,7 +100,7 @@ export default function DrivePrepScreen({ navigation }) {
     if (!canStart) return;
     setStarting(true);
     navigation.replace('Drive', {
-      monitoringEnabled: monitoringOn && perms.camera === 'granted',
+      monitoringEnabled: MONITORING_AVAILABLE && monitoringOn && perms.camera === 'granted',
       driverSide: settings.monitoringDriverSide,
     });
   };
@@ -93,7 +110,10 @@ export default function DrivePrepScreen({ navigation }) {
   const fixCamera = () => (perms.camera === 'denied' && !perms.canAskCamera ? perms.openSettings() : perms.requestCamera());
 
   const unitLabel = settings.speedUnit === 'kph' ? 'km/h' : 'mph';
-  const alertsLabel = [settings.monitoringVoiceAlerts && 'voice', settings.monitoringToneAlerts && 'tone', settings.monitoringHapticAlerts && 'haptic'].filter(Boolean).join(' · ') || 'silent';
+  const alertsLabel = [
+    settings.speedingWarningsEnabled ? 'speeding: tone + banner' : 'speeding alerts off',
+    settings.audioSpeedUpdatesEnabled ? 'limit changes spoken' : null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <Screen>
@@ -127,8 +147,26 @@ export default function DrivePrepScreen({ navigation }) {
             <ListRow
               icon="eye-outline"
               title="Driver monitoring"
-              subtitle={monitoringOn ? (perms.camera === 'granted' ? 'Front camera watches for eyes off the road' : 'Needs camera access') : 'Off for this drive'}
-              right={<Toggle value={monitoringOn} onValueChange={(v) => { setMonitoringOn(v); update('monitoringEnabled', v); if (v && perms.camera !== 'granted') fixCamera(); }} />}
+              subtitle={
+                !MONITORING_AVAILABLE
+                  ? 'Coming soon'
+                  : monitoringOn
+                  ? perms.camera === 'granted'
+                    ? 'Front camera watches for eyes off the road'
+                    : 'Needs camera access'
+                  : 'Off for this drive'
+              }
+              right={
+                <Toggle
+                  value={monitoringOn}
+                  disabled={!MONITORING_AVAILABLE}
+                  onValueChange={(v) => {
+                    if (!MONITORING_AVAILABLE) return;
+                    setMonitoringOn(v); // this drive only; the global setting lives in Settings
+                    if (v && perms.camera !== 'granted') fixCamera();
+                  }}
+                />
+              }
             />
             {cameraNeeded && perms.camera !== 'granted' && (
               <ListRow
@@ -141,7 +179,7 @@ export default function DrivePrepScreen({ navigation }) {
           </Card>
         </Section>
 
-        {monitoringOn && (
+        {MONITORING_AVAILABLE && monitoringOn && (
           <Section label="Mount your phone">
             <Card>
               <CameraPlacementGuide
@@ -160,7 +198,7 @@ export default function DrivePrepScreen({ navigation }) {
         <Section label="This drive">
           <Card padded={false}>
             <ListRow first icon="speedometer-outline" title={`Speed in ${unitLabel}`} subtitle={settings.speedingWarningsEnabled ? 'Speeding alerts on' : 'Speeding alerts off'} chevron onPress={() => navigation.navigate('Main', { screen: 'Settings', params: { screen: 'DriveScreenSettings' } })} />
-            <ListRow icon="volume-high-outline" title="Alerts" subtitle={`${alertsLabel}${settings.audioSpeedUpdatesEnabled ? ' · speaks limit changes' : ''}`} chevron onPress={() => navigation.navigate('Main', { screen: 'Settings', params: { screen: 'MonitoringSettings' } })} />
+            <ListRow icon="volume-high-outline" title="Alerts" subtitle={alertsLabel} chevron onPress={() => navigation.navigate('Main', { screen: 'Settings', params: { screen: 'DriveScreenSettings' } })} />
           </Card>
         </Section>
 

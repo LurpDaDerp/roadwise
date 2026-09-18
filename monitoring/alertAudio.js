@@ -14,12 +14,13 @@ const REPEAT_MS = 4000;
 export function playCue({ severity, speech, player, voice, tone, haptic }) {
   const isCritical = severity === ALERT_SEVERITY.CRITICAL;
   try {
+    if (tone && player) {
+      player.seekTo(0);
+      player.play();
+    }
     if (voice && speech) {
       Speech.stop();
       Speech.speak(speech, { language: 'en', pitch: 0.9, rate: 0.95 });
-    } else if (tone && player) {
-      player.seekTo(0);
-      player.play();
     }
   } catch (e) {
     console.warn('Alert cue failed:', e);
@@ -32,7 +33,9 @@ export function playCue({ severity, speech, player, voice, tone, haptic }) {
   }
 }
 
-// activeAlert: { id, severity, speech? , title } | null
+// activeAlert: { id, severity, speech?, title, audio? } | null — an alert may carry its
+// own modality (`audio: { voice, tone, haptic }`), e.g. speeding = tone + banner; otherwise
+// the defaults (the monitoring voice / tone / haptic settings) apply.
 // audio: { voice, tone, haptic, player } — player is an expo-audio player for the tone.
 export function useAlertAudio(activeAlert, audio) {
   const repeatRef = useRef(null);
@@ -62,9 +65,9 @@ export function useAlertAudio(activeAlert, audio) {
     if (!id || severity === ALERT_SEVERITY.INFO) return stop;
     const cue = () => {
       const a = alertRef.current;
-      const s = audioRef.current;
+      const s = { ...(audioRef.current || {}), ...(a?.audio || {}) };
       if (!a) return;
-      playCue({ severity, speech: a.speech, player: s?.player, voice: s?.voice, tone: s?.tone, haptic: s?.haptic });
+      playCue({ severity, speech: a.speech, player: s.player, voice: s.voice, tone: s.tone, haptic: s.haptic });
     };
     cue();
     if (severity === ALERT_SEVERITY.CRITICAL) repeatRef.current = setInterval(cue, REPEAT_MS);

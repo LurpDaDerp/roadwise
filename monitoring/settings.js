@@ -1,4 +1,11 @@
 // Driver-monitoring settings: defaults and the option lists shown in Settings.
+
+// MONITORING_AVAILABLE — false while monitoring/useDriverMonitoring.js is the
+// mock. The camera-based monitoring branch flips this to true when it replaces
+// the hook. While false: the toggles read "Coming soon", no camera permission
+// is requested, the status pill and calibration gate stay hidden, and no
+// monitoring data is written to drive records.
+export const MONITORING_AVAILABLE = false;
 export const MONITORING_DEFAULTS = Object.freeze({
   monitoringEnabled: false,
   monitoringVoiceAlerts: true,

@@ -24,7 +24,7 @@ import {
 } from '../theme';
 import { useSettings } from '../context/SettingsContext';
 import { usePermissions, PERMISSION_COPY } from '../hooks/usePermissions';
-import { SENSITIVITY_OPTIONS } from '../monitoring/settings';
+import { SENSITIVITY_OPTIONS, MONITORING_AVAILABLE } from '../monitoring/settings';
 import { CameraPlacementGuide } from '../components/monitoring/CameraPlacementGuide';
 
 const CAMERA_CHIP = {
@@ -39,11 +39,15 @@ export default function MonitoringSettings() {
   const { settings, update } = useSettings();
   const { camera, requestCamera, openSettings } = usePermissions();
 
-  const enabled = !!settings.monitoringEnabled;
+  // While MONITORING_AVAILABLE is false the feature is presented as coming
+  // soon: the master toggle is disabled and no camera permission is requested.
+  const available = MONITORING_AVAILABLE;
+  const enabled = available && !!settings.monitoringEnabled;
   const chip = CAMERA_CHIP[camera] || CAMERA_CHIP.undetermined;
-  const needsPermission = enabled && camera !== 'granted';
+  const needsPermission = available && enabled && camera !== 'granted';
 
   const onToggleEnabled = async (value) => {
+    if (!available) return;
     update('monitoringEnabled', value);
     if (value && camera !== 'granted') await requestCamera();
   };
@@ -74,13 +78,14 @@ export default function MonitoringSettings() {
               first
               icon="eye-outline"
               title="Enable driver monitoring"
-              subtitle="Uses the front camera during a drive."
+              subtitle={available ? 'Uses the front camera during a drive.' : 'Coming soon. Camera-based monitoring is not in this build yet.'}
               value={enabled}
               onValueChange={onToggleEnabled}
+              disabled={!available}
             />
           </Card>
           <View style={{ marginTop: 12 }}>
-            <Chip label={chip.label} icon={chip.icon} tone={chip.tone} />
+            {available ? <Chip label={chip.label} icon={chip.icon} tone={chip.tone} /> : <Chip label="Coming soon" icon="time-outline" tone="info" />}
           </View>
           {needsPermission && (
             <View style={{ marginTop: 12 }}>
@@ -203,7 +208,7 @@ export default function MonitoringSettings() {
                       <Text
                         style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}
                       >
-                        {opt.body}
+                        These apply to driver-monitoring alerts only. Info alerts are shown only, warnings play once, critical alerts repeat until they clear. Speeding alerts (tone and banner) and spoken speed limits are set under Driving.
                       </Text>
                     </View>
                   </Pressable>
