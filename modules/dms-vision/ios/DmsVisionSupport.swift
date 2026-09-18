@@ -197,7 +197,7 @@ internal func dmsIntrinsicsFromSampleBuffer(_ sampleBuffer: CMSampleBuffer, widt
     return nil
   }
   var matrix = matrix_float3x3()
-  _ = withUnsafeMutableBytes(of: &matrix) { destination in
+  withUnsafeMutableBytes(of: &matrix) { destination in
     raw.copyBytes(to: destination.bindMemory(to: UInt8.self),
                   from: 0..<MemoryLayout<matrix_float3x3>.size)
   }

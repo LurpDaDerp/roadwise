@@ -295,6 +295,26 @@ Ordered by how much damage a wrong answer does.
 | `MPImage(pixelBuffer:)` accepts the 32BGRA buffers this session produces | high | `onError` with `FRAME_CONVERSION_FAILED` on every frame. |
 | `ImageProxy.toBitmap()` handles the RGBA row stride correctly | high (CameraX does it internally) | Skewed images, so no face detected on affected devices. |
 
+## 7a. Build evidence (EAS, 2026-09-18)
+
+* **iOS development build `5d646a0f-6f68-463d-a59c-9f1e14ec4d65` — FINISHED** (profile `development`,
+  SDK 53, `EAS_NO_VCS=1` upload from the worktree).  The Xcode log shows the pod `DmsVision` compiled
+  (`DmsVisionGaze/Module/Pipeline/Support.swift`, one redundant-`_ =` warning since removed), the
+  `DmsVision.bundle` resource bundle populated with `face_landmarker.task`, `gaze_direct.onnx` and
+  `gaze_direct.meta.json`, `onnxruntime.xcframework` and the `MediaPipeTasksVision` frameworks
+  embedded, and `** ARCHIVE SUCCEEDED **`.  This settles §7's "links into one binary", "resource
+  bundle location" and "local module builds on EAS" items for iOS; it does not exercise the camera.
+* **Android development build `cc91ab36-…` — ERRORED** on one Kotlin compile error
+  (`DmsVisionModule.kt:114`, a bare `return@AsyncFunction` in a generic lambda: "expected Any?, actual
+  Unit"); fixed in commit 229f78b (void bodies end with `Unit`) and resubmitted as build
+  `3077954a-81bb-46bc-b972-31d0a166ecfd` (result recorded in the final report / INTEGRATION.md §10).
+  The Gradle log confirmed the module is autolinked (`:dms-vision:*` tasks) and that
+  `tasks-vision 0.10.35`, CameraX 1.4.2 and `onnxruntime-android 1.30.0` resolved.
+* EAS note: the worktree's `.git` file points at a WSL path, so Windows `eas` cannot see the
+  repository; builds are submitted with `EAS_NO_VCS=1`, which uploads the directory filtered by
+  `.easignore` (it mirrors `.gitignore` plus the untracked `GoogleService-Info.plist` the iOS prebuild
+  needs and minus `.env`).
+
 ## 8. Deliberate omissions
 
 * **Mirror pair.** The promoted recipe runs the mesh on the frame and its horizontal flip and
