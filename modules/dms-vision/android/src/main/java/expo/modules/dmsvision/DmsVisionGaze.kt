@@ -14,6 +14,9 @@ import java.nio.ByteOrder
  * Mirrors deployment-stack/dms/gaze_model.py: batch 1, two intra-op threads, all graph
  * optimizations, inputs `cloud` (1, 478, 3) / `context` (1, 7) / `validity` (1, 478) float32,
  * outputs `gaze` (1, 3) and `rotation` (1, 3, 3). Mirror TTA is out of scope for this version.
+ * Phone-specific: thread SPINNING is off (docs/OPTIMIZATION.md §2.2) - a busy-waiting worker
+ * between 20 inferences per second is a permanently hot core, and this model's wake-up cost is
+ * single-digit microseconds.
  *
  * Pinned to com.microsoft.onnxruntime:onnxruntime-android 1.30.0; every API used here is verified
  * against microsoft/onnxruntime v1.30.0 java/src/main/java/ai/onnxruntime.
@@ -57,6 +60,18 @@ class DmsVisionGaze {
       options.setIntraOpNumThreads(2)
       options.setInterOpNumThreads(1)
       options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+      // ONNX Runtime's thread pools BUSY-WAIT after each Run so the next one starts without a
+      // wake-up.  At 20 inferences per second the gaps are ~45 ms and the spin window is longer,
+      // so a worker would burn a core continuously for the whole drive.  This model is 867 k
+      // parameters and runs in single-digit milliseconds; the wake-up cost is irrelevant next to
+      // a permanently hot core.  Wrapped: an older runtime that does not know the keys must not
+      // stop the session from being created.
+      try {
+        options.addConfigEntry("session.intra_op.allow_spinning", "0")
+        options.addConfigEntry("session.inter_op.allow_spinning", "0")
+      } catch (_: Exception) {
+        // keep the default spin policy
+      }
       session = env.createSession(model, options)
       environment = env
     } catch (e: Exception) {

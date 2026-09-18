@@ -6,6 +6,9 @@
 //     stop the session by being unmounted;
 //   * the lowest format whose long side is >= 640 px at 30 fps, zoom 1.0, stabilization off
 //     (it disables intrinsics delivery), mirroring off, connection rotation left at 0;
+//   * the CAPTURE RATE follows the cadence (20 / 10 / 5 fps), so the sensor and the ISP are not
+//     asked for frames that would only be discarded; the auto-exposure ceiling stays at 1/30 s
+//     so a slower capture rate cannot lengthen the exposure and add motion blur;
 //   * the device orientation is handed to MediaPipe as MPImage.orientation - pixels are never
 //     rotated - and the returned landmarks are rotated into the upright frame here;
 //   * exactly one detection is in flight at a time; frames that arrive while MediaPipe is busy
@@ -42,10 +45,12 @@ internal final class DmsVisionPipeline: NSObject {
   // Session objects (sessionQueue)
   private var captureSession: AVCaptureSession?
   private var videoOutput: AVCaptureVideoDataOutput?
+  private var captureDevice: AVCaptureDevice?
 
   // Cadence + frame bookkeeping (videoQueue only)
   private var targetFps: Double = 20
-  private var idleFps: Double = 5
+  /// `let`, not `var`: `applyCaptureCadence` reads it from sessionQueue.
+  private let idleFps: Double = 5
   private var idleMode: Bool = false
   private var landmarkFrame: String = "upright"
   private var rotationOffsetDegrees: Int = 0
@@ -56,6 +61,10 @@ internal final class DmsVisionPipeline: NSObject {
   private var inFlightSince: Double = 0
   private var pending: PendingFrame?
   private static let inFlightTimeoutSeconds: Double = 1.0
+  /// Fraction of the cadence period a frame may arrive early and still be accepted.  It has to be
+  /// a FRACTION, not a fixed 2 ms: once the sensor itself runs at the cadence the frames land one
+  /// period apart, and a near-zero slack would reject every other one and halve the rate.
+  private static let cadenceSlack: Double = 0.15
 
   // Shared state (stateLock)
   private let stateLock = NSLock()
@@ -73,6 +82,11 @@ internal final class DmsVisionPipeline: NSObject {
   /// (docs/dms/DETECTION_DESIGN.md §2, §4).
   private var hasProcessedFrame = false
   private var landmarkerStorage: FaceLandmarker?
+  /// The cadence the capture device is driven from, mirrored here because `targetFps` and
+  /// `idleMode` belong to videoQueue while the device is configured on sessionQueue.
+  private var requestedFps: Double = 20
+  private var requestedIdle: Bool = false
+  private var appliedDeviceFps: Double = 0
 
   /// Created on sessionQueue, read on videoQueue - hence the lock.
   private var landmarker: FaceLandmarker? {
@@ -136,6 +150,9 @@ internal final class DmsVisionPipeline: NSObject {
     }
     stateLock.lock()
     hasProcessedFrame = false
+    requestedFps = max(1.0, min(30.0, targetFps))
+    requestedIdle = false
+    appliedDeviceFps = 0
     stateLock.unlock()
 
     // UIDevice.orientation is only populated after begin...Notifications() and must be read on
@@ -181,7 +198,11 @@ internal final class DmsVisionPipeline: NSObject {
     captureSession?.stopRunning()
     captureSession = nil
     videoOutput = nil
+    captureDevice = nil
     landmarker = nil
+    stateLock.lock()
+    appliedDeviceFps = 0
+    stateLock.unlock()
     videoQueue.sync {
       self.inFlight = false
       self.pending = nil
@@ -258,11 +279,83 @@ internal final class DmsVisionPipeline: NSObject {
   }
 
   func setTargetFps(_ fps: Double) {
-    videoQueue.async { self.targetFps = max(1.0, min(30.0, fps)) }
+    let clamped = max(1.0, min(30.0, fps))
+    videoQueue.async { self.targetFps = clamped }
+    stateLock.lock()
+    requestedFps = clamped
+    stateLock.unlock()
+    sessionQueue.async { [weak self] in self?.applyCaptureCadence() }
   }
 
   func setIdleMode(_ idle: Bool) {
     videoQueue.async { self.idleMode = idle }
+    stateLock.lock()
+    requestedIdle = idle
+    stateLock.unlock()
+    sessionQueue.async { [weak self] in self?.applyCaptureCadence() }
+  }
+
+  // MARK: - Capture cadence (sessionQueue)
+
+  /// Drives the CAMERA at the cadence instead of capturing 30 fps and dropping the surplus in
+  /// software.  Sensor read-out, the ISP, the BGRA conversion and the buffer traffic are all
+  /// per-frame costs (640x480x4 B = 1.2 MB per frame), so at the 20 fps target this removes a
+  /// third of them and at the 5 fps no-face idle five sixths.  The software throttle in
+  /// `captureOutput` stays as the authority: a device that cannot deliver the requested rate
+  /// keeps its old behaviour exactly.
+  private func applyCaptureCadence() {
+    #if DEBUG
+    dispatchPrecondition(condition: .onQueue(sessionQueue))
+    #endif
+    guard let camera = captureDevice else { return }
+    stateLock.lock()
+    let cadence = requestedIdle ? idleFps : requestedFps
+    let applied = appliedDeviceFps
+    stateLock.unlock()
+
+    let wanted = Self.supportedCaptureFps(camera, cadence)
+    if abs(wanted - applied) < 0.01 { return }
+    do {
+      try camera.lockForConfiguration()
+      let duration = CMTimeMake(value: 1000, timescale: Int32((wanted * 1000).rounded()))
+      camera.activeVideoMinFrameDuration = duration
+      camera.activeVideoMaxFrameDuration = duration
+      Self.applyExposureCap(camera)
+      camera.unlockForConfiguration()
+      stateLock.lock()
+      appliedDeviceFps = wanted
+      stateLock.unlock()
+    } catch {
+      // Not fatal: the session keeps the rate it already had and the software throttle still
+      // delivers the cadence.
+    }
+  }
+
+  /// The rate closest to `wanted` that the ACTIVE format can actually produce, never lower than
+  /// `wanted` (a lower one would starve the rule engine).  When no range reaches it, the format's
+  /// fastest rate is used - i.e. exactly what the pipeline did before this existed.
+  private static func supportedCaptureFps(_ device: AVCaptureDevice, _ wanted: Double) -> Double {
+    var best = Double.greatestFiniteMagnitude
+    var fastest = 0.0
+    for range in device.activeFormat.videoSupportedFrameRateRanges {
+      fastest = max(fastest, range.maxFrameRate)
+      let candidate = min(max(wanted, range.minFrameRate), range.maxFrameRate)
+      if candidate >= wanted - 0.01 && candidate < best { best = candidate }
+    }
+    if best == Double.greatestFiniteMagnitude { return fastest > 0 ? fastest : 30.0 }
+    return best
+  }
+
+  /// Keeps auto-exposure at 1/30 s or shorter.  Without it, a 5 fps frame duration would let the
+  /// AE algorithm expose for up to 200 ms in the dark and the face would smear - the capture rate
+  /// must cost battery, never image quality.  Must be called with the device locked.
+  private static func applyExposureCap(_ device: AVCaptureDevice) {
+    let format = device.activeFormat
+    var cap = CMTimeMake(value: 1, timescale: 30)
+    if CMTimeCompare(cap, format.minExposureDuration) < 0 { cap = format.minExposureDuration }
+    if CMTimeCompare(cap, format.maxExposureDuration) > 0 { cap = format.maxExposureDuration }
+    guard cap.isValid, !cap.isIndefinite else { return }
+    device.activeMaxExposureDuration = cap
   }
 
   /// Processed / dropped frame counts since the previous call.
@@ -367,15 +460,15 @@ internal final class DmsVisionPipeline: NSObject {
       do {
         try camera.lockForConfiguration()
         camera.activeFormat = format
-        let duration = CMTime(value: 1, timescale: 30)
-        camera.activeVideoMinFrameDuration = duration
-        camera.activeVideoMaxFrameDuration = duration
         camera.videoZoomFactor = 1.0
         camera.unlockForConfiguration()
       } catch {
         // Not fatal: the session keeps whatever format it negotiated.
       }
     }
+    // The frame duration is set from the cadence (below), not pinned at 1/30.
+    captureDevice = camera
+    applyCaptureCadence()
 
     var mirrored = false
     if let connection = output.connection(with: .video) {
@@ -472,10 +565,14 @@ extension DmsVisionPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
     let presentation = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     guard presentation.isFinite else { return }
 
-    // Cadence throttle. The 2 ms slack absorbs capture jitter at an exact divisor of 30 fps.
+    // Cadence throttle.  The slack is a fraction of the period: the sensor is now driven at the
+    // cadence, so frames land one period apart and a 2 ms slack would reject every other one (a
+    // 20 fps request would have run at 10).  On a device whose format cannot produce the cadence
+    // the surplus frames still fall outside the window, exactly as before.
     let cadence = idleMode ? idleFps : targetFps
     let minimumInterval = 1.0 / max(1.0, cadence)
-    if lastAcceptedSeconds >= 0 && presentation - lastAcceptedSeconds < minimumInterval - 0.002 {
+    if lastAcceptedSeconds >= 0
+        && presentation - lastAcceptedSeconds < minimumInterval * (1.0 - Self.cadenceSlack) {
       return
     }
 

@@ -2,9 +2,12 @@ package expo.modules.dmsvision
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
+import android.util.Range
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.camera.core.Camera
@@ -12,6 +15,10 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -40,6 +47,10 @@ import kotlin.concurrent.withLock
  * Design (docs/dms/NATIVE_LAYER.md):
  *   * `STRATEGY_KEEP_ONLY_LATEST` and a cadence throttle; frames that arrive while MediaPipe is
  *     busy are dropped, never queued;
+ *   * the SENSOR is driven at the cadence through `CONTROL_AE_TARGET_FPS_RANGE` (Camera2 interop),
+ *     so the ISP and CameraX's YUV -> RGBA conversion are not paid for frames the throttle would
+ *     discard; only ranges the device advertises are used, and the highest lower bound among them
+ *     is preferred so auto-exposure cannot stretch the exposure and blur the face;
  *   * `setOutputImageRotationEnabled` is left off (its javadoc costs 10-15 ms per 640x480 frame);
  *     the rotation travels to MediaPipe as `ImageProcessingOptions.rotationDegrees` (clockwise,
  *     per the MediaPipe javadoc) and the returned landmarks are rotated into the upright frame
@@ -87,6 +98,9 @@ class DmsVisionPipeline(private val appContext: Context) {
   @Volatile private var orientationListener: OrientationEventListener? = null
   @Volatile private var cameraStateObserver: Observer<CameraState>? = null
   @Volatile private var boundCameraInfo: androidx.camera.core.CameraInfo? = null
+  @Volatile private var boundCamera: Camera? = null
+  /** The AE range currently pushed to the device; null = the device's own default. */
+  @Volatile private var appliedAeRange: Range<Int>? = null
 
   /** Serialises start() against stop(): a double start or a stop mid-start is impossible. */
   private val lifecycleLock = ReentrantLock()
@@ -135,6 +149,12 @@ class DmsVisionPipeline(private val appContext: Context) {
 
   private companion object {
     const val IN_FLIGHT_TIMEOUT_SECONDS = 1.0
+    /**
+     * Fraction of the cadence period a frame may arrive early and still be accepted.  It has to be
+     * a FRACTION, not a fixed 2 ms: once the sensor runs at the cadence the frames land one period
+     * apart, and a near-zero slack would reject every other one and halve the rate.
+     */
+    const val CADENCE_SLACK = 0.15
     const val ANALYSIS_LONG_SIDE = 640
     const val ANALYSIS_SHORT_SIDE = 480
     const val MAIN_THREAD_TIMEOUT_SECONDS = 2L
@@ -237,6 +257,9 @@ class DmsVisionPipeline(private val appContext: Context) {
         if (failure != null) {
           throw DmsVisionException("cannot bind the front camera: ${failure.message}")
         }
+        boundCamera = camera
+        appliedAeRange = null
+        applyCaptureCadence()
         observeCameraState(camera, lifecycleOwner)
         running.set(true)
       } catch (e: Exception) {
@@ -276,6 +299,8 @@ class DmsVisionPipeline(private val appContext: Context) {
       }
       cameraProvider = null
       imageAnalysis = null
+      boundCamera = null
+      appliedAeRange = null
 
       // 2. Stop the analysis thread and wait for the frame in flight to leave analyze().
       val executor = analysisExecutor
@@ -324,6 +349,8 @@ class DmsVisionPipeline(private val appContext: Context) {
     cameraProvider = null
     cameraStateObserver = null
     boundCameraInfo = null
+    boundCamera = null
+    appliedAeRange = null
     landmarker = null
     analysisExecutor = null
     try {
@@ -367,10 +394,69 @@ class DmsVisionPipeline(private val appContext: Context) {
 
   fun setTargetFps(fps: Double) {
     targetFps = fps.coerceIn(1.0, 30.0)
+    applyCaptureCadence()
   }
 
   fun setIdleMode(idle: Boolean) {
     idleMode = idle
+    applyCaptureCadence()
+  }
+
+  /**
+   * Asks the CAMERA for the cadence instead of capturing at the sensor's default rate and dropping
+   * the surplus in software.  Sensor read-out, the ISP and CameraX's YUV -> RGBA conversion are all
+   * per-frame costs (640x480x4 B = 1.2 MB per delivered frame), so at the 20 fps target this
+   * removes about a third of them and at the 5 fps no-face idle about five sixths.
+   *
+   * Only a range the device advertises in `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES` is ever sent,
+   * and anything unexpected leaves the camera exactly as it was: the software throttle in
+   * [analyze] remains the authority for what the rule engine sees.
+   */
+  @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+  private fun applyCaptureCadence() {
+    val camera = boundCamera ?: return
+    val cadence = if (idleMode) idleFps else targetFps
+    val wanted = supportedAeRange(camera, cadence) ?: return
+    if (wanted == appliedAeRange) return
+    try {
+      Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(
+        CaptureRequestOptions.Builder()
+          .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, wanted)
+          .build()
+      )
+      appliedAeRange = wanted
+    } catch (_: Exception) {
+      // The camera keeps the rate it had; the software throttle still delivers the cadence.
+    }
+  }
+
+  /**
+   * The advertised AE range whose upper bound is closest to [cadence] without falling below it
+   * (a lower one would starve the rule engine), preferring the highest lower bound among equals -
+   * a fixed [20, 20] over [7, 20] - so low light cannot lengthen the exposure.  Null when the
+   * device advertises nothing usable, which leaves its default untouched.
+   */
+  @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+  private fun supportedAeRange(camera: Camera, cadence: Double): Range<Int>? {
+    val target = Math.round(cadence).toInt().coerceIn(1, 240)
+    val available = try {
+      Camera2CameraInfo.from(camera.cameraInfo)
+        .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+    } catch (_: Exception) {
+      null
+    } ?: return null
+    var best: Range<Int>? = null
+    for (range in available) {
+      if (range.upper < target) continue
+      val current = best
+      if (current == null ||
+        range.upper < current.upper ||
+        (range.upper == current.upper && range.lower > current.lower)
+      ) {
+        best = range
+      }
+    }
+    return best
   }
 
   /** Processed / dropped frame counts since the previous call. */
@@ -547,9 +633,15 @@ class DmsVisionPipeline(private val appContext: Context) {
       val seconds = proxy.imageInfo.timestamp / 1_000_000_000.0
       if (!seconds.isFinite() || seconds <= 0.0) return
 
+      // The slack is a fraction of the period: the sensor is now asked for the cadence, so frames
+      // land one period apart and a 2 ms slack would reject every other one (a 20 fps request would
+      // have run at 10).  On a device that cannot produce the cadence the surplus frames still fall
+      // outside the window, exactly as before.
       val cadence = if (idleMode) idleFps else targetFps
       val minimumInterval = 1.0 / cadence.coerceAtLeast(1.0)
-      if (lastAcceptedSeconds >= 0.0 && seconds - lastAcceptedSeconds < minimumInterval - 0.002) {
+      if (lastAcceptedSeconds >= 0.0 &&
+        seconds - lastAcceptedSeconds < minimumInterval * (1.0 - CADENCE_SLACK)
+      ) {
         return
       }
 

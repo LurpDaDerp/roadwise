@@ -3,6 +3,9 @@
 // Mirrors deployment-stack/dms/gaze_model.py: batch 1, two intra-op threads, all graph
 // optimizations, inputs `cloud` (1, 478, 3) / `context` (1, 7) / `validity` (1, 478) float32,
 // outputs `gaze` (1, 3) and `rotation` (1, 3, 3). Mirror TTA is out of scope for this version.
+// Phone-specific: intra-op thread SPINNING is off (docs/OPTIMIZATION.md §2.2) - a busy-waiting
+// worker between 20 inferences per second is a permanently hot core, and this model's wake-up
+// cost is single-digit microseconds.
 //
 // Pinned to onnxruntime-objc 1.30.0 (see DmsVision.podspec). Every API used here is verified
 // against microsoft/onnxruntime v1.30.0 objectivec/include/{ort_env,ort_session,ort_value}.h.
@@ -54,6 +57,13 @@ internal final class DmsVisionGaze {
       let options = try ORTSessionOptions()
       try options.setIntraOpNumThreads(2)
       try options.setGraphOptimizationLevel(ORTGraphOptimizationLevel.all)
+      // ONNX Runtime's intra-op thread pool BUSY-WAITS after each Run so the next one starts
+      // without a wake-up.  At 20 inferences per second the gaps are ~45 ms and the spin window is
+      // longer, so the worker thread would burn a core continuously for the whole drive.  The
+      // model is 867 k parameters and runs in single-digit milliseconds, so the wake-up cost is
+      // irrelevant next to a permanently hot core.  `try?`: an older runtime that does not know
+      // the key must not stop the session from being created.
+      try? options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
       let created = try ORTSession(env: environment, modelPath: modelPath, sessionOptions: options)
       env = environment
       session = created

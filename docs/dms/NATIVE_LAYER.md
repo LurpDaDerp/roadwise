@@ -170,7 +170,8 @@ device-facing harness of §6 V4 is what confirms it on hardware.
 | | iOS | Android |
 |---|---|---|
 | session | `AVCaptureSession`, `.inputPriority` preset, one `AVCaptureVideoDataOutput` on a serial queue, **no** `AVCaptureVideoPreviewLayer` | CameraX `ImageAnalysis` bound to the activity lifecycle, **no** `Preview` use case |
-| format | lowest `AVCaptureDevice.Format` with long side ≥ 640 at 30 fps; `activeVideoMin/MaxFrameDuration` = 1/30 | `ResolutionSelector` 4:3 + `ResolutionStrategy(Size(640, 480), FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)` |
+| format | lowest `AVCaptureDevice.Format` with long side ≥ 640 at 30 fps; `activeVideoMin/MaxFrameDuration` follow the cadence (below) | `ResolutionSelector` 4:3 + `ResolutionStrategy(Size(640, 480), FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)` |
+| capture rate | `activeVideoMin/MaxFrameDuration` = 1 / cadence, clamped to the active format's `videoSupportedFrameRateRanges`; `activeMaxExposureDuration` capped at 1/30 s | `CONTROL_AE_TARGET_FPS_RANGE` through `Camera2CameraControl`, chosen from `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES` (highest lower bound among the ranges that reach the cadence) |
 | pixels | `kCVPixelFormatType_32BGRA` (what `MPImage(pixelBuffer:)` accepts) | `OUTPUT_IMAGE_FORMAT_RGBA_8888`, one `ImageProxy.toBitmap()` per processed frame |
 | backpressure | `alwaysDiscardsLateVideoFrames = true` | `STRATEGY_KEEP_ONLY_LATEST` |
 | zoom | `videoZoomFactor = 1.0` | default (no `setZoomRatio` call) |
@@ -178,8 +179,15 @@ device-facing harness of §6 V4 is what confirms it on hardware.
 | mirroring | `automaticallyAdjustsVideoMirroring = false`, `isVideoMirrored = false`, read back after configuration | impossible: `ImageAnalysis.Builder.setMirrorMode` throws `"setMirrorMode is not supported."` |
 | rotation | connection rotation left at 0 (never `videoRotationAngle` / `videoOrientation`) | `setOutputImageRotationEnabled` left off (its javadoc costs 10–15 ms per 640 × 480 frame) |
 
-**Cadence.** A frame is accepted only if at least `1 / fps` has passed since the last accepted one
-(`targetFps`, default 20; `setIdleMode(true)` → 5) *and* no detection is in flight. MediaPipe's
+**Cadence.** The CAMERA is asked for the cadence, so the sensor, the ISP and the BGRA / RGBA
+conversion are not paid for frames that would be discarded (docs/OPTIMIZATION.md §2.1); each
+`setTargetFps` / `setIdleMode` re-applies it, and a device that cannot produce the requested rate
+simply keeps the rate it had.  On top of that a frame is accepted only if at least
+`(1 − 0.15) / fps` has passed since the last accepted one (`targetFps`, default 20;
+`setIdleMode(true)` → 5) *and* no detection is in flight.  The 15 % slack replaced a fixed 2 ms
+one: with the sensor at the cadence the frames arrive exactly one period apart, and a 2 ms slack
+rejected every other one — a 20 fps request used to run at 15 (30 fps sensor, accept every second
+frame) and a 10 fps request at 7.5. MediaPipe's
 LIVE_STREAM mode documents that it may drop an input without emitting a result, so a 1 s watchdog
 clears the in-flight flag; both paths increment the `dropped` counter reported by `onStatus`. The
 pending frame carries the timestamp handed to `detectAsync`, and a result that does not match it

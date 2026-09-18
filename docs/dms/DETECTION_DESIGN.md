@@ -79,8 +79,11 @@ Target: ≥ 20 monitored frames per second on a mid-range phone, without a previ
   pixels buy nothing; fewer pixels cut ISP and memory bandwidth.  Frame delivery goes straight
   to the native landmarker; JS receives landmarks only (478×3 float32 ≈ 5.7 KB per frame,
   ≈ 115 KB/s at 20 fps).
-* **Cadence.**  The landmarker processes every frame it can finish and drops the rest (LIVE_STREAM
-  semantics); the gaze network runs on every landmark frame (867 k parameters, single pass,
+* **Cadence.**  The camera is driven AT the cadence (iOS `activeVideoMin/MaxFrameDuration`,
+  Android `CONTROL_AE_TARGET_FPS_RANGE`), so the sensor and the ISP are not asked for frames the
+  throttle would discard; the auto-exposure ceiling stays at 1/30 s so a slower capture rate
+  cannot lengthen the exposure (`NATIVE_LAYER.md`, docs/OPTIMIZATION.md §2.1).  The landmarker
+  processes every frame it can finish and drops the rest (LIVE_STREAM semantics); the gaze network runs on every landmark frame (867 k parameters, single pass,
   ~5–15 ms on a phone CPU); the monitor runs on the JS thread in < 2 ms.  The JS side never
   queues frames: if a landmark event arrives while the previous prediction is in flight it is
   dropped, and the monitor sees the real timestamps of the frames it did process.

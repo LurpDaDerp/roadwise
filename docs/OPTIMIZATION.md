@@ -63,3 +63,75 @@ hand it to `meanArray`, which merely indexes its argument.  Removed (-3.8 KB/fra
 
 Same rounding, the engine's element-wise convert instead of the iterator protocol, on the 1,434-float
 buffer that crosses the bridge every frame.
+
+---
+
+## 2. Monitoring pipeline — the native layer
+
+### 2.1 The camera is driven at the cadence instead of at 30 fps
+
+*What.*  `modules/dms-vision/ios/DmsVisionPipeline.swift` and the Android `DmsVisionPipeline.kt`
+now ask the CAMERA for the cadence the policy decided (20 / 10 / 5 fps) and re-apply it on every
+`setTargetFps` / `setIdleMode`:
+
+* iOS: `activeVideoMinFrameDuration` / `activeVideoMaxFrameDuration` = 1 / cadence, clamped to a
+  rate the active format's `videoSupportedFrameRateRanges` can actually produce (never below the
+  cadence).  `activeMaxExposureDuration` is pinned at 1/30 s so a 5 fps frame duration cannot let
+  auto-exposure expose for 200 ms and smear the face — the slower capture must cost battery, never
+  image quality.
+* Android: `CONTROL_AE_TARGET_FPS_RANGE` through `Camera2CameraControl.setCaptureRequestOptions`,
+  choosing only among the ranges the device advertises in
+  `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES` and preferring the highest lower bound (a fixed
+  `[20, 20]` over `[7, 20]`), which serves the same anti-blur purpose as the iOS exposure cap.
+  Anything unavailable or unexpected leaves the camera exactly as it was.
+
+*Why.*  The pipeline pinned the sensor at 30 fps and threw away the surplus in software.  Sensor
+read-out, the ISP, the 32BGRA / RGBA_8888 conversion and the buffer traffic are per-frame costs —
+640 × 480 × 4 B = 1.2 MB per delivered frame, 37 MB/s at 30 fps — and at the 5 fps no-face idle
+cadence five of every six of those frames were produced only to be dropped.
+
+*Effect.*  Camera-side per-frame work −33 % at the 20 fps target, −67 % at the 10 fps
+stationary/thermal cadence and −83 % in the 5 fps no-face idle.  Nothing downstream changes: the
+landmark frames still arrive at the cadence, carry the same camera timestamps, and every rule is
+time-based.
+
+### 2.1a … which also fixes the cadence the pipeline actually achieved
+
+The software throttle accepted a frame when `now − lastAccepted >= 1/fps − 0.002`.  With a 30 fps
+sensor and a 20 fps target, frames arrive every 33.3 ms and 33.3 < 48 ms, so **every second frame
+was rejected and the pipeline ran at 15 fps, not the 20 fps design target** (a 10 fps request ran
+at 7.5).  The slack is now 15 % of the cadence period, so a sensor delivering exactly at the
+cadence is accepted, and a device whose format cannot produce the cadence keeps the old behaviour
+exactly (33.3 ms is still outside a 42.5 ms window).  Net effect at the 20 fps target: the camera
+produces 20 frames instead of 30 and all 20 are monitored instead of 15.
+
+### 2.2 ONNX Runtime: intra-op thread spinning off
+
+*What.*  Both `DmsVisionGaze` implementations add
+`session.intra_op.allow_spinning = 0` (and `session.inter_op.allow_spinning = 0` on Android, whose
+Java API exposes it) to the session options.  Thread count (2) and graph optimisation level (ALL)
+are unchanged, so the numerics the `onnx_parity.json` self-test guards are untouched.
+
+*Why.*  ONNX Runtime's thread pool busy-waits after each `Run` so that the next one starts without
+a wake-up.  This model is called ~20 times a second with ~45 ms gaps — longer than the inference
+itself and shorter than the default spin window — so a worker thread would spin for essentially
+the whole drive, keeping a core hot and defeating the SoC's idle states.  The model is 867 k
+parameters and runs in single-digit milliseconds, so the wake-up it saves is irrelevant.
+
+*Effect.*  Estimated: removes up to one continuously-busy core from a 20 fps drive.  Not measurable
+without a device; the config key is a documented no-op on a runtime that does not know it, and both
+call sites swallow a failure so session creation can never break.
+
+### 2.3 Not changed in the native layer, and why
+
+* **MediaPipe GPU delegate.**  The Tasks API would accept `Delegate.GPU`, but the face mesh's
+  landmark values change slightly under the GPU (fp16) path, and nothing in the repo can validate
+  landmark accuracy without a device — the `onnx_parity.json` self-test only covers the gaze
+  network.  Changing the detector's numerics is exactly the "break something" case: the gaze model
+  is trained on the CPU mesh's response.  Left on CPU, noted here as the next thing to measure on
+  a real phone.
+* **CoreML / NNAPI execution providers for the gaze network.**  Both run this model in fp16 on the
+  ANE/DSP, which will not hold the ≤ 1e-4 parity the module's own self-test requires.  The brief
+  allows them "only if parity is preserved", so they stay off.
+* **Capture resolution.**  Already the lowest format with a long side ≥ 640 px; MediaPipe's
+  detector runs at 128 px and the mesh at 192/256 px, so there is nothing to win below it.
