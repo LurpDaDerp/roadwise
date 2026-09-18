@@ -370,7 +370,12 @@ drive of mirror and cluster checks stays completely silent.
 
 ## 10. Not verified on a device
 
-Nothing in this branch has run on a phone.  The following need a build:
+What IS verified without a phone: both native projects generate (`expo prebuild` for ios and android
+with the module autolinked), the iOS bundle exports (`npx expo export --platform ios`: one 7.5 MB
+Hermes bundle), and the EAS development builds — iOS `5d646a0f-6f68-463d-a59c-9f1e14ec4d65`
+FINISHED (the module, its resource bundle and both native runtimes compiled and linked; artifact
+on the EAS build page), Android `3077954a-81bb-46bc-b972-31d0a166ecfd` after the one Kotlin fix
+(`NATIVE_LAYER.md` §7a).  Nothing in this branch has RUN on a phone.  The following need a device:
 
 1. **The whole native path** — camera start, MediaPipe, ONNX, the frame event rate.  See
    `NATIVE_LAYER.md` §V1–V8 for the on-device harness; run it before trusting any number below.
