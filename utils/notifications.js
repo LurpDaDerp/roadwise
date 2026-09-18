@@ -1,8 +1,9 @@
 // notifications.js
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
-import { db, auth } from "./firebase";
-import { doc, updateDoc } from "firebase/firestore";
+import { Platform } from "react-native";
+import { auth } from "./firebase";
+import { savePushToken } from "./firestore";
 
 export async function requestNotificationPermissions() {
   const { status } = await Notifications.requestPermissionsAsync();
@@ -25,18 +26,21 @@ export async function registerForPushNotificationsAsync() {
     return null;
   }
 
-  const tokenData = await Notifications.getExpoPushTokenAsync({
-    projectId: Constants.expoConfig.extra.eas.projectId,
-  });
+  const projectId =
+    Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId ?? null;
+  if (!projectId) {
+    console.warn("No EAS project id available; cannot register for push notifications.");
+    return null;
+  }
+
+  const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
   const token = tokenData.data;
 
+  // The token is stored under users/{uid}/private/push. It used to sit on the public user
+  // document, where any signed-in account could read it and send that device a push.
   const uid = auth.currentUser?.uid;
   if (uid && token) {
-    try {
-      await updateDoc(doc(db, "users", uid), { pushToken: token });
-    } catch (err) {
-      console.error("Error saving push token:", err);
-    }
+    await savePushToken(uid, token, Platform.OS);
   }
 
   return token;

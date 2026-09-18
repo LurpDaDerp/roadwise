@@ -1,316 +1,186 @@
-const { setGlobalOptions } = require("firebase-functions/v2/options");
-const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
+"use strict";
+
+// RoadCash Cloud Functions.
+//
+// Three responsibilities, one file each under lib/:
+//   * proxying the paid upstream APIs (OpenAI, HERE) so their keys never ship in the app
+//   * pushing emergency alerts to the rest of a group
+//   * keeping both of those from being used as an open, unmetered relay
+//
+// Every callable is authenticated, validates its input, and consumes a per-user daily
+// allowance before it spends money upstream.
+
+const {setGlobalOptions} = require("firebase-functions/v2/options");
+const {onDocumentUpdated} = require("firebase-functions/v2/firestore");
+const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {defineSecret} = require("firebase-functions/params");
 const admin = require("firebase-admin");
-const fetch = require("node-fetch");
+
+const limits = require("./lib/limits");
+const here = require("./lib/here");
+const openai = require("./lib/openai");
+const push = require("./lib/push");
+const {
+  requireAuth,
+  requireObject,
+  requireCoordinates,
+  requireQueryString,
+} = require("./lib/validate");
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const HERE_API_KEY = defineSecret("HERE_API_KEY");
 
+admin.initializeApp();
+setGlobalOptions({maxInstances: 10});
+
+/* ------------------------------------------------------------------ *
+ * Emergency notifications
+ * ------------------------------------------------------------------ */
+
+// Firestore triggers are at-least-once. This is a best-effort per-instance guard against
+// a redelivered event producing a second alert; it is bounded so it cannot grow unchecked.
 const PROCESSED_EVENT_TTL_MS = 10 * 60 * 1000;
+const MAX_PROCESSED_EVENTS = 1000;
 const processedEvents = new Map();
 
-function markProcessed(id) {
+function alreadyProcessed(id) {
   const now = Date.now();
   for (const [key, ts] of processedEvents) {
     if (now - ts > PROCESSED_EVENT_TTL_MS) processedEvents.delete(key);
   }
+  if (processedEvents.has(id)) return true;
   processedEvents.set(id, now);
-}
-
-admin.initializeApp();
-setGlobalOptions({ maxInstances: 10 });
-
-//send Expo notifications
-async function sendExpoPush(tokens, title, body, extraData = {}) {
-  const messages = tokens.map(token => ({
-    to: token,
-    sound: "default",
-    title,
-    body,
-    data: extraData,
-  }));
-
-  try {
-    const response = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Accept-encoding": "gzip, deflate",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(messages),
-    });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      console.error("Expo push failed:", response.status, text);
-    }
-  } catch (err) {
-    console.error("Expo push error:", err);
+  while (processedEvents.size > MAX_PROCESSED_EVENTS) {
+    const oldest = processedEvents.keys().next();
+    if (oldest.done) break;
+    processedEvents.delete(oldest.value);
   }
+  return false;
 }
 
 exports.notifyOnEmergency = onDocumentUpdated("groups/{groupId}", async (event) => {
-  if (processedEvents.has(event.id)) {
-    return;
-  }
-  markProcessed(event.id);
-
-  const before = event.data.before.data();
-  const after = event.data.after.data();
-
+  const before = event.data && event.data.before.data();
+  const after = event.data && event.data.after.data();
   if (!before || !after) return;
 
   const beforeMembers = before.memberLocations || {};
   const afterMembers = after.memberLocations || {};
 
-
+  // This trigger fires on every member location write. Work out whether anything we care
+  // about changed before spending anything - most invocations end here.
+  const transitions = [];
   for (const [uid, member] of Object.entries(afterMembers)) {
-    const wasEmergency = beforeMembers[uid]?.emergency || false;
-    const isEmergency = member?.emergency || false;
+    const was = Boolean(beforeMembers[uid] && beforeMembers[uid].emergency);
+    const is = Boolean(member && member.emergency);
+    if (was !== is) transitions.push({uid, raised: is});
+  }
+  if (transitions.length === 0) return;
 
-    if (wasEmergency === isEmergency) continue;
+  if (alreadyProcessed(event.id)) return;
 
-    if (!wasEmergency && isEmergency) {
-      console.log(`Emergency detected for user ${uid} in group ${event.params.groupId}`);
+  const groupId = event.params.groupId;
 
+  for (const {uid, raised} of transitions) {
+    try {
       const userSnap = await admin.firestore().collection("users").doc(uid).get();
-      const userData = userSnap.exists ? userSnap.data() : {};
-      const username = userData.username || "member"; 
+      const username = (userSnap.exists && userSnap.data().username) || "member";
 
-      const userDocs = await admin.firestore()
-        .collection("users")
-        .where("groupId", "==", event.params.groupId)
-        .get();
+      const recipients = await push.tokensForGroup(after, uid);
+      if (recipients.length === 0) continue;
 
-      const tokens = [];
-      userDocs.forEach(doc => {
-        const data = doc.data();
-        if (data.pushToken && doc.id !== uid) {
-          tokens.push(data.pushToken);
-        }
-      });
-
-      if (tokens.length > 0) {
-        await sendExpoPush(
-          tokens,
+      if (raised) {
+        console.log(`Emergency raised by ${uid} in group ${groupId}`);
+        await push.sendExpoPush(
+          recipients,
           "⚠️ Emergency Alert",
           `${username} signaled an emergency! Click here to view location.`,
-          { emergencyUid: uid }
+          {emergencyUid: uid},
         );
-      }
-    }
-
-    if (wasEmergency && !isEmergency) {
-      console.log(`Emergency cleared for user ${uid} in group ${event.params.groupId}`);
-
-      const userSnap = await admin.firestore().collection("users").doc(uid).get();
-      const userData = userSnap.exists ? userSnap.data() : {};
-      const username = userData.username || "member";
-
-      const userDocs = await admin.firestore()
-        .collection("users")
-        .where("groupId", "==", event.params.groupId)
-        .get();
-
-      const tokens = [];
-      userDocs.forEach(doc => {
-        const data = doc.data();
-        if (data.pushToken && doc.id !== uid) {
-          tokens.push(data.pushToken);
-        }
-      });
-
-      if (tokens.length > 0) {
-        await sendExpoPush(
-          tokens,
+      } else {
+        console.log(`Emergency cleared by ${uid} in group ${groupId}`);
+        await push.sendExpoPush(
+          recipients,
           "Emergency Cleared",
           `${username} is no longer in an emergency.`,
-          { emergencyUid: uid }
+          {emergencyUid: uid},
         );
       }
+    } catch (err) {
+      console.error("Failed to deliver emergency notification:", err);
     }
   }
 });
 
-function requireAuth(request) {
-  if (!request.auth?.uid) {
-    throw new HttpsError("unauthenticated", "Must be signed in.");
-  }
-}
-
-async function openAIResponses(apiKey, body, signal) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    signal,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "");
-    console.error("OpenAI error:", response.status, errText);
-    throw new HttpsError("internal", "OpenAI request failed.");
-  }
-
-  const data = await response.json();
-  let text = "";
-  if (data.output_text) {
-    text = data.output_text;
-  } else if (Array.isArray(data.output)) {
-    const item = data.output.find((i) => i.content);
-    const textPart = item?.content?.find(
-      (c) => c.type === "output_text" || c.type === "text"
-    );
-    if (textPart?.text) text = textPart.text;
-  }
-
-  return text;
-}
+/* ------------------------------------------------------------------ *
+ * OpenAI proxy
+ * ------------------------------------------------------------------ */
 
 exports.callChatGPT = onCall(
-  { secrets: [OPENAI_API_KEY], timeoutSeconds: 60 },
+  {secrets: [OPENAI_API_KEY], timeoutSeconds: 60, maxInstances: 5},
   async (request) => {
-    requireAuth(request);
+    const uid = requireAuth(request);
 
-    const { mode, payload } = request.data || {};
+    const {mode, payload} = request.data || {};
     const apiKey = OPENAI_API_KEY.value();
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "OpenAI key not configured.");
     }
 
     if (mode === "feedback") {
-      const statsJSON = payload?.statsJSON;
-      if (!statsJSON || typeof statsJSON !== "object") {
-        throw new HttpsError("invalid-argument", "statsJSON required.");
-      }
-
-      const text = await openAIResponses(apiKey, {
-        model: "gpt-5-chat-latest",
-        input: `Act as a driving safety coach.
-        Stats (30 days): ${JSON.stringify(statsJSON)}
-
-        Thresholds:
-        - Speeding Margin: <3=excellent; 3-7=fair; >7=risky
-        - Sudden Stops: <10=safe; 10-20=moderate; >20=risky
-        - Sudden Accels: same as stops
-        - Distance: <100mi -> mention data may be insufficient
-
-        Output JSON only:
-        {
-          "score": 0-100,
-          "summary": "1-2 sentences on strengths/weaknesses (mention 30 days)",
-          "tips": ["5-10 concise tips referencing stats, casual/constructive"]
-        }
-
-        Rules:
-        - Don't use variable names (e.g. no "avgSpeedingMargin")
-        - Must cite actual numbers (e.g. "22 hard stops")
-        - Be encouraging
-        - No text outside JSON`,
+      const serialized = requireObject(payload && payload.statsJSON, "statsJSON", {
+        maxKeys: 40,
+        maxBytes: 4000,
       });
-
-      if (!text) return { result: null };
-
-      try {
-        const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-        return { result: JSON.parse(cleaned) };
-      } catch (err) {
-        console.error("Failed to parse feedback JSON:", text, err);
-        return { result: null };
-      }
+      await limits.consume(uid, "feedback");
+      return {result: await openai.driverFeedback(apiKey, serialized)};
     }
 
     if (mode === "roadCondition") {
-      const metrics = payload?.metrics;
-      if (!metrics || typeof metrics !== "object") {
-        throw new HttpsError("invalid-argument", "metrics required.");
-      }
-
-      const text = await openAIResponses(apiKey, {
-        model: "gpt-5-nano",
-        input: `You are evaluating road conditions.
-        Metrics: ${JSON.stringify(metrics)}
-
-        Return ONLY valid JSON in this schema, use commas to separate phrases:
-        {
-          "summary": "3-6 words about conditions",
-          "score": 1-5 (1 = very dangerous, 5 = very safe)
-        }`,
-        reasoning: { effort: "minimal" },
+      const serialized = requireObject(payload && payload.metrics, "metrics", {
+        maxKeys: 20,
+        maxBytes: 1500,
       });
-
-      if (!text) return { result: null };
-
-      try {
-        return { result: JSON.parse(text.trim()) };
-      } catch (err) {
-        console.error("Failed to parse road-condition JSON:", text, err);
-        return { result: null };
-      }
+      await limits.consume(uid, "roadCondition");
+      return {result: await openai.roadCondition(apiKey, serialized)};
     }
 
     throw new HttpsError("invalid-argument", `Unknown mode: ${mode}`);
-  }
+  },
 );
 
-exports.hereAutocomplete = onCall(
-  { secrets: [HERE_API_KEY], timeoutSeconds: 15 },
-  async (request) => {
-    requireAuth(request);
+/* ------------------------------------------------------------------ *
+ * HERE proxy
+ * ------------------------------------------------------------------ */
 
-    const { q } = request.data || {};
-    if (typeof q !== "string" || !q.trim()) {
-      throw new HttpsError("invalid-argument", "q (query) required.");
-    }
+exports.hereAutocomplete = onCall(
+  {secrets: [HERE_API_KEY], timeoutSeconds: 15},
+  async (request) => {
+    const uid = requireAuth(request);
+    const q = requireQueryString(request.data || {});
 
     const apiKey = HERE_API_KEY.value();
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "HERE key not configured.");
     }
 
-    const url = `https://autocomplete.search.hereapi.com/v1/autocomplete?q=${encodeURIComponent(
-      q
-    )}&apiKey=${apiKey}`;
-
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.error("HERE autocomplete failed:", res.status);
-      throw new HttpsError("internal", "HERE request failed.");
-    }
-    const data = await res.json();
-    return { items: Array.isArray(data.items) ? data.items : [] };
-  }
+    return {items: await here.autocomplete(uid, q, apiKey)};
+  },
 );
 
 exports.hereRevGeocode = onCall(
-  { secrets: [HERE_API_KEY], timeoutSeconds: 15 },
+  {secrets: [HERE_API_KEY], timeoutSeconds: 15},
   async (request) => {
-    requireAuth(request);
-
-    const { lat, lon } = request.data || {};
-    if (typeof lat !== "number" || typeof lon !== "number") {
-      throw new HttpsError("invalid-argument", "lat/lon (number) required.");
-    }
+    const uid = requireAuth(request);
+    const {lat, lon} = requireCoordinates(request.data || {});
 
     const apiKey = HERE_API_KEY.value();
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "HERE key not configured.");
     }
 
-    const url = `https://revgeocode.search.hereapi.com/v1/revgeocode?at=${lat},${lon}&lang=en-US&showNavAttributes=speedLimits&apikey=${apiKey}`;
-
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.error("HERE revgeocode failed:", res.status);
-      throw new HttpsError("internal", "HERE request failed.");
-    }
-    const data = await res.json();
-    return { items: Array.isArray(data.items) ? data.items : [] };
-  }
+    const {items, source, street} = await here.reverseGeocode(uid, lat, lon, apiKey);
+    // `street` lets the client reject an answer that belongs to a different road from the
+    // one it is currently driving, which a shared grid cache can otherwise hand it.
+    return {items, source, street: street || null};
+  },
 );
