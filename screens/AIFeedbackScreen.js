@@ -1,48 +1,29 @@
+// AIFeedbackScreen — the personalized coaching response. The request, response
+// cache and safety-score write are unchanged; only the presentation moved onto
+// the shared primitives.
 import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Dimensions,
-} from 'react-native';
+import { View, Text, ScrollView, Dimensions } from 'react-native';
 import LottieView from 'lottie-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAuth } from 'firebase/auth';
-import { Ionicons } from '@expo/vector-icons';
 
 import { getAIFeedback } from '../utils/gptApi';
+import { KEYS } from '../utils/storageKeys';
 import {
   Screen,
   Section,
   Card,
   ScreenHeader,
-  SafeGradient as LinearGradient,
+  Banner,
+  Button,
+  Ring,
+  scoreColor,
   useTheme,
-  AutoFitText
 } from '../theme';
+import { TipsList } from '../components/drives';
+import { scoreLabel } from '../utils/driveScore';
 
 const { width } = Dimensions.get('window');
-
-function interpolateColor(percent) {
-  const p = Math.min(Math.max(percent, 0), 100) / 100;
-  const start = { r: 230, g: 80, b: 80 };
-  const mid = { r: 240, g: 180, b: 60 };
-  const end = { r: 0, g: 179, b: 134 };
-  let r, g, b;
-  if (p < 0.5) {
-    const k = p / 0.5;
-    r = Math.round(start.r + (mid.r - start.r) * k);
-    g = Math.round(start.g + (mid.g - start.g) * k);
-    b = Math.round(start.b + (mid.b - start.b) * k);
-  } else {
-    const k = (p - 0.5) / 0.5;
-    r = Math.round(mid.r + (end.r - mid.r) * k);
-    g = Math.round(mid.g + (end.g - mid.g) * k);
-    b = Math.round(mid.b + (end.b - mid.b) * k);
-  }
-  return `rgb(${r},${g},${b})`;
-}
 
 function normalizeInput(stats) {
   const { generatedAt, ...rest } = stats;
@@ -53,6 +34,8 @@ export default function AIFeedbackScreen({ route }) {
   const t = useTheme();
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
+  const [error, setError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('Analyzing data...');
 
   useEffect(() => {
@@ -81,28 +64,41 @@ export default function AIFeedbackScreen({ route }) {
         if (!user) {
           if (!controller.signal.aborted) {
             setFeedback({ summary: 'No user logged in.', score: 0, tips: [] });
+            setError('No user logged in.');
             setLoading(false);
           }
           return;
         }
 
-        const { statsJSON } = route.params;
+        const statsJSON = route?.params?.statsJSON;
+        if (!statsJSON || typeof statsJSON !== 'object') {
+          if (!controller.signal.aborted) {
+            setError('No drive data to analyse yet. Complete a few drives, then try again from Insights.');
+            setLoading(false);
+          }
+          return;
+        }
         const normalizedInput = normalizeInput(statsJSON);
 
         let cache = [];
         try {
           const storedCache = await AsyncStorage.getItem('feedbackCache');
-          if (storedCache) cache = JSON.parse(storedCache);
+          if (storedCache) {
+            const parsed = JSON.parse(storedCache);
+            cache = Array.isArray(parsed) ? parsed : [];
+          }
         } catch (err) {
           console.error('Error loading cache:', err);
         }
 
         const match = cache.find(
-          (entry) => JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
+          (entry) => entry && JSON.stringify(entry.input) === JSON.stringify(normalizedInput)
         );
         if (match) {
-          setFeedback(match.response);
-          setLoading(false);
+          if (!controller.signal.aborted) {
+            setFeedback(match.response);
+            setLoading(false);
+          }
           return;
         }
 
@@ -110,10 +106,11 @@ export default function AIFeedbackScreen({ route }) {
         if (!controller.signal.aborted) {
           if (!aiResponse) {
             setFeedback({ summary: 'No feedback received.', score: 0, tips: [] });
+            setError('No feedback received. The coach did not return a response.');
           } else {
             setFeedback(aiResponse);
             try {
-              await AsyncStorage.setItem('safetyScore', aiResponse.score.toString());
+              await AsyncStorage.setItem(KEYS.safetyScoreFor(user.uid), String(Number(aiResponse.score) || 0));
             } catch (err) {
               console.error('Error saving safety score:', err);
             }
@@ -130,6 +127,7 @@ export default function AIFeedbackScreen({ route }) {
         if (!controller.signal.aborted) {
           console.error(err);
           setFeedback({ summary: 'Error getting AI feedback.', score: 0, tips: [] });
+          setError('Could not reach the feedback service. Check your connection and try again.');
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -144,78 +142,20 @@ export default function AIFeedbackScreen({ route }) {
       controller.abort();
       clearTimeout(timeoutId);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attempt]);
 
-  const renderHeatBar = (score) => {
-    const markerSize = 26;
-    const barWidth = width - 80;
-    const margin = 14;
-    const usableWidth = barWidth - 2 * margin;
-    const markerLeft = margin + (usableWidth * score) / 100 - markerSize / 2;
-    const barColor = interpolateColor(score);
-
-    return (
-      <View style={{ paddingTop: 6, paddingBottom: 10 }}>
-        <View style={{ height: 54, justifyContent: 'center' }}>
-          <View
-            style={{
-              height: 10,
-              borderRadius: 5,
-              backgroundColor: t.colors.divider,
-              overflow: 'hidden',
-            }}
-          >
-            <LinearGradient
-              colors={['#e65050', '#f0b43c', '#00b386']}
-              locations={[0, 0.5, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={{ height: 10, width: '100%' }}
-            />
-          </View>
-          <View
-            style={{
-              position: 'absolute',
-              left: markerLeft,
-              width: markerSize,
-              height: markerSize,
-              borderRadius: markerSize / 2,
-              backgroundColor: t.colors.surface,
-              borderWidth: 3,
-              borderColor: barColor,
-              top: (54 - markerSize) / 2,
-            }}
-          />
-          <Text
-            style={{
-              position: 'absolute',
-              left: markerLeft + markerSize / 2 - 25,
-              top: -4,
-              width: 50,
-              textAlign: 'center',
-              color: barColor,
-              fontWeight: '800',
-              fontSize: 11,
-              letterSpacing: 1.1,
-            }}
-          >
-            {score}
-          </Text>
-        </View>
-      </View>
-    );
+  const retry = () => {
+    setError(null);
+    setFeedback(null);
+    setLoading(true);
+    setAttempt((a) => a + 1);
   };
 
-  return (
-    <Screen hasHeader>
-      {loading ? (
-        <View
-          style={{
-            flex: 1,
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
+  if (loading) {
+    return (
+      <Screen hasHeader>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <LottieView
             source={require('../assets/loader.json')}
             autoPlay
@@ -225,118 +165,75 @@ export default function AIFeedbackScreen({ route }) {
           <Text
             style={[
               t.typography.bodyStrong,
-              {
-                color: t.colors.text,
-                position: 'absolute',
-                marginTop: 40,
-              },
+              { color: t.colors.text, position: 'absolute', marginTop: 40 },
             ]}
           >
             {loadingMessage}
           </Text>
         </View>
-      ) : (
-        <View style={{ flex: 1 }}>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <ScreenHeader
-              align="right"
-              eyebrow="Insights · Feedback"
-              title="Your feedback"
-              subtitle="A personalized read on your recent drives."
+      </Screen>
+    );
+  }
+
+  const score = Math.max(0, Math.min(100, Number(feedback?.score) || 0));
+
+  return (
+    <Screen hasHeader>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+        <ScreenHeader
+          eyebrow="Insights · Feedback"
+          title="Your feedback"
+          subtitle="A personalized read on your recent drives."
+        />
+
+        {error ? (
+          <Section>
+            <Banner
+              tone="danger"
+              title="Feedback unavailable"
+              body={error}
+              style={{ marginBottom: 14 }}
             />
-
-            {feedback && (
-              <>
-                <Section label="Safety rating">
-                  <Card>
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: 6,
-                      }}
-                    >
-                      <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>
-                        Overall score
+            <Button title="Try again" onPress={retry} />
+          </Section>
+        ) : (
+          !!feedback && (
+            <>
+              <Section label="Safety rating">
+                <Card>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+                    <Ring value={score} size={104} color={scoreColor(score, t)} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[t.typography.subheading, { color: scoreColor(score, t) }]}>
+                        {scoreLabel(score)}
                       </Text>
-                      <AutoFitText
-                        style={[
-                          t.typography.numeric,
-                          { color: interpolateColor(feedback.score), fontSize: 28 },
-                        ]}
+                      <Text
+                        style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 4 }]}
                       >
-                        {feedback.score}
-                      </AutoFitText>
+                        Overall score across your last 30 days of driving.
+                      </Text>
                     </View>
-                    {renderHeatBar(feedback.score)}
-                  </Card>
+                  </View>
+                </Card>
+              </Section>
+
+              <Section label="Summary">
+                <Card>
+                  <Text style={[t.typography.body, { color: t.colors.text, lineHeight: 23 }]}>
+                    {feedback.summary}
+                  </Text>
+                </Card>
+              </Section>
+
+              {feedback.tips && feedback.tips.length > 0 && (
+                <Section label="Tips & suggestions">
+                  <TipsList tips={feedback.tips} icon="bulb-outline" />
                 </Section>
-
-                <Section label="Summary">
-                  <Card>
-                    <Text
-                      style={[
-                        t.typography.body,
-                        { color: t.colors.text, lineHeight: 23 },
-                      ]}
-                    >
-                      {feedback.summary}
-                    </Text>
-                  </Card>
-                </Section>
-
-                {feedback.tips && feedback.tips.length > 0 && (
-                  <Section label="Tips & suggestions">
-                    <Card padded={false}>
-                      {feedback.tips.map((tip, idx) => (
-                        <View
-                          key={idx}
-                          style={{
-                            flexDirection: 'row',
-                            paddingVertical: 14,
-                            paddingHorizontal: 18,
-                            borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth,
-                            borderTopColor: t.colors.divider,
-                          }}
-                        >
-                          <View
-                            style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: 14,
-                              backgroundColor: t.colors.accentFaint,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              marginRight: 12,
-                            }}
-                          >
-                            <Ionicons
-                              name="bulb-outline"
-                              size={15}
-                              color={t.colors.accent}
-                            />
-                          </View>
-                          <Text
-                            style={[
-                              t.typography.body,
-                              { color: t.colors.text, flex: 1, lineHeight: 22 },
-                            ]}
-                          >
-                            {tip}
-                          </Text>
-                        </View>
-                      ))}
-                    </Card>
-                  </Section>
-                )}
-
-                <View style={{ height: 32 }} />
-              </>
-            )}
-          </ScrollView>
-        </View>
-      )}
+              )}
+            </>
+          )
+        )}
+      </ScrollView>
     </Screen>
   );
 }

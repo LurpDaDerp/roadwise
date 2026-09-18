@@ -1,22 +1,29 @@
+// AboutScreen — why RoadWise exists, the facts behind it, and the app section
+// (replay onboarding, version).
 import React from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, Alert } from 'react-native';
+import Constants from 'expo-constants';
 import {
   Screen,
   Section,
   Card,
   ScreenHeader,
+  ListRow,
+  KeyValueRow,
   useTheme,
 } from '../theme';
+import { useAuthContext } from '../context/AuthContext';
+
+const STATS = {
+  phoneInvolvedPercent: 12,
+  textingCrashMultiplier: 23,
+  dailyPhoneDeathSummary:
+    'Nearly one life is lost every single day in the U.S. due to phone-related distractions',
+};
 
 export default function AboutScreen() {
   const t = useTheme();
-
-  const STATS = {
-    phoneInvolvedPercent: 12,
-    textingCrashMultiplier: 23,
-    dailyPhoneDeathSummary:
-      'Nearly one life is lost every single day in the U.S. due to phone-related distractions',
-  };
+  const { resetOnboarding } = useAuthContext();
 
   const leadStyle = {
     ...t.typography.body,
@@ -24,6 +31,8 @@ export default function AboutScreen() {
     fontSize: 16,
     lineHeight: 24,
   };
+
+  const version = Constants.expoConfig?.version || '—';
 
   return (
     <Screen hasHeader>
@@ -33,8 +42,8 @@ export default function AboutScreen() {
       >
         <ScreenHeader
           eyebrow="The mission"
-          title="Building a Safer Journey."
-          subtitle="Why RoadWise exists."
+          title="About RoadWise"
+          subtitle="Building a safer journey."
         />
 
         <Section>
@@ -67,6 +76,25 @@ export default function AboutScreen() {
             </Text>
           </Card>
         </Section>
+
+        <Section label="App">
+          <Card padded={false}>
+            <ListRow
+              first
+              chevron
+              icon="refresh-outline"
+              title="Replay onboarding"
+              subtitle="Walk through the setup and permissions again."
+              onPress={() =>
+                Alert.alert('Replay onboarding?', 'You will go through the welcome, permission and mounting steps again. Nothing is deleted.', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Replay', onPress: resetOnboarding },
+                ])
+              }
+            />
+            <KeyValueRow label="Version" value={version} />
+          </Card>
+        </Section>
       </ScrollView>
     </Screen>
   );
@@ -75,12 +103,7 @@ export default function AboutScreen() {
 function StatLine({ children, last }) {
   const t = useTheme();
   return (
-    <View
-      style={{
-        flexDirection: 'row',
-        marginBottom: last ? 0 : 12,
-      }}
-    >
+    <View style={{ flexDirection: 'row', marginBottom: last ? 0 : 12 }}>
       <View
         style={{
           width: 6,
@@ -91,25 +114,12 @@ function StatLine({ children, last }) {
           marginRight: 12,
         }}
       />
-      <Text
-        style={{
-          color: t.colors.text,
-          fontSize: 15,
-          lineHeight: 22,
-          flex: 1,
-        }}
-      >
-        {children}
-      </Text>
+      <Text style={{ color: t.colors.text, fontSize: 15, lineHeight: 22, flex: 1 }}>{children}</Text>
     </View>
   );
 }
 
 function B({ children }) {
   const t = useTheme();
-  return (
-    <Text style={{ color: t.colors.accent, fontWeight: '700' }}>
-      {children}
-    </Text>
-  );
+  return <Text style={{ color: t.colors.accent, fontWeight: '700' }}>{children}</Text>;
 }

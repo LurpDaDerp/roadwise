@@ -1,70 +1,129 @@
-import React, { useState, useCallback } from 'react';
+// RewardsScreen (route `RewardsHome`) — balance, badges, leaderboard preview and
+// the reward catalog. The balance reads the live Firestore profile through
+// AuthContext; the old build read an AsyncStorage key that was never written.
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ImageBackground,
-  Pressable,
-  ScrollView
-} from 'react-native';
+import { Snackbar } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
+
 import {
   Screen,
   Section,
   Card,
-  Eyebrow,
+  Button,
+  ScreenHeader,
+  Chip,
+  Sheet,
+  ProgressBar,
   AutoFitText,
+  useCountUp,
   useTheme,
 } from '../theme';
+import { useAuthContext } from '../context/AuthContext';
+import { getAllDriveMetrics, getDriveCounts } from '../utils/firestore';
+import { computeBadges } from '../utils/achievements';
+import { fetchLeaderboard } from '../utils/leaderboard';
+import { BadgeGrid, LeaderboardPreview, RewardCategoryTile } from '../components/rewards';
 
 const CATEGORIES = [
-  { label: 'Food & Drink',          img: require('../assets/foodback.jpg'), route: 'FoodRewards',          icon: 'restaurant-outline' },
-  { label: 'Shopping',              img: require('../assets/shopback.jpg'), route: 'ShoppingRewards',      icon: 'bag-handle-outline' },
-  { label: 'Games & Entertainment', img: require('../assets/gameback.jpg'), route: 'GamesRewards',         icon: 'game-controller-outline' },
-  { label: 'Subscriptions',         img: require('../assets/subback.jpg'), route: 'SubscriptionsRewards', icon: 'repeat-outline' },
+  { id: 'food', label: 'Food & Drink', icon: 'restaurant-outline', image: require('../assets/foodback.jpg') },
+  { id: 'shopping', label: 'Shopping', icon: 'bag-handle-outline', image: require('../assets/shopback.jpg') },
+  { id: 'games', label: 'Games & Entertainment', icon: 'game-controller-outline', image: require('../assets/gameback.jpg') },
+  { id: 'subscriptions', label: 'Subscriptions', icon: 'repeat-outline', image: require('../assets/subback.jpg') },
 ];
 
+const STREAK_EXPLAINER =
+  'Every focused drive adds 1. A phone pickup or a critical monitoring alert resets it.';
+
 export default function RewardsScreen({ navigation }) {
-  const [totalPoints, setTotalPoints] = useState(0);
   const t = useTheme();
+  const { uid, points, streak } = useAuthContext();
+
+  const [drives, setDrives] = useState([]);
+  const [totalDrives, setTotalDrives] = useState(null);
+  const [drivesLoading, setDrivesLoading] = useState(true);
+  const [board, setBoard] = useState({ rows: [], me: null });
+  const [boardLoading, setBoardLoading] = useState(true);
+  const [boardError, setBoardError] = useState(false);
+
+  const [selectedBadge, setSelectedBadge] = useState(null);
+  const [streakOpen, setStreakOpen] = useState(false);
+  const [snackbar, setSnackbar] = useState(false);
+
+  const displayPoints = useCountUp(points);
 
   useFocusEffect(
     useCallback(() => {
-      let isActive = true;
+      let active = true;
+      if (!uid) {
+        setDrives([]);
+        setDrivesLoading(false);
+        setBoard({ rows: [], me: null });
+        setBoardLoading(false);
+        return undefined;
+      }
+
+      setDrivesLoading(true);
+      setBoardLoading(true);
+      setBoardError(false);
+
+      (async () => {
+        // Badges need recent history, not the whole collection: the newest 200 drives
+        // plus a server count for the totals-based badges.
+        const [list, counts] = await Promise.all([getAllDriveMetrics(uid, { maxDrives: 200 }), getDriveCounts(uid)]);
+        if (!active) return;
+        setDrives(Array.isArray(list) ? list : []);
+        setTotalDrives(counts?.total ?? null);
+        setDrivesLoading(false);
+      })();
+
       (async () => {
         try {
-          const stored = await AsyncStorage.getItem('totalPoints');
-          if (isActive) setTotalPoints(stored ? parseFloat(stored) : 0);
+          const result = await fetchLeaderboard(uid, 3);
+          if (!active) return;
+          setBoard(result);
+          setBoardError(false);
         } catch (e) {
-          console.error(e);
+          console.warn('Leaderboard preview failed:', e);
+          if (active) setBoardError(true);
+        } finally {
+          if (active) setBoardLoading(false);
         }
       })();
-      return () => { isActive = false; };
-    }, [])
+
+      return () => {
+        active = false;
+      };
+    }, [uid])
   );
+
+  const badges = useMemo(
+    () => computeBadges({ drives, streak, points, totalDrives }),
+    [drives, streak, points, totalDrives]
+  );
+  const unlockedCount = badges.filter((b) => b.unlocked).length;
 
   return (
     <Screen>
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-        <View style={{ marginTop: 0, marginBottom: 24 }}>
-          <Eyebrow>Rewards</Eyebrow>
-          <Text style={[t.typography.title, { color: t.colors.text, marginTop: 8 }]}>
-            Redeem points for prizes
-          </Text>
-        </View>
+      <ScrollView
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
+        <ScreenHeader eyebrow="Rewards" title="Earn and compete" />
 
-        <Card style={styles.balanceCard} padded={false}>
+        <Card padded={false} style={{ overflow: 'hidden', marginBottom: t.spacing[6] }}>
           <View
             style={{
               padding: 20,
               flexDirection: 'row',
-              justifyContent: 'space-between',
               alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
             }}
           >
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={[t.typography.micro, { color: t.colors.textMuted }]}>
                 Available balance
               </Text>
@@ -74,139 +133,127 @@ export default function RewardsScreen({ navigation }) {
                   { color: t.colors.text, marginTop: 6, fontSize: 44, lineHeight: 48 },
                 ]}
               >
-                {totalPoints.toFixed(0)}
+                {displayPoints.toLocaleString()}
               </AutoFitText>
-              <Text
-                style={[
-                  t.typography.caption,
-                  { color: t.colors.accent, marginTop: 2 },
-                ]}
-              >
+              <Text style={[t.typography.caption, { color: t.colors.accent, marginTop: 2 }]}>
                 points
               </Text>
             </View>
+
+            <Pressable
+              onPress={() => setStreakOpen((v) => !v)}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: streakOpen }}
+              accessibilityLabel={`Focus streak ${streak}. How the streak works`}
+              hitSlop={8}
+              style={({ pressed }) => [pressed && { opacity: 0.8 }]}
+            >
+              <Chip icon="flame" label={`Streak ${streak}`} tone="warning" size="md" />
+            </Pressable>
+          </View>
+
+          {streakOpen && (
             <View
               style={{
-                width: 56,
-                height: 56,
-                borderRadius: 28,
-                backgroundColor: t.colors.accentFaint,
-                alignItems: 'center',
-                justifyContent: 'center',
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: t.colors.divider,
+                paddingHorizontal: 20,
+                paddingVertical: 12,
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                gap: 10,
               }}
             >
-              <Ionicons name="gift-outline" size={28} color={t.colors.accent} />
+              <Ionicons name="flame-outline" size={16} color={t.colors.warning} />
+              <Text style={[t.typography.caption, { color: t.colors.textMuted, flex: 1 }]}>
+                {STREAK_EXPLAINER}
+              </Text>
             </View>
-          </View>
-          <View
-            style={{
-              height: 1,
-              backgroundColor: t.colors.divider,
-            }}
-          />
-          <View
-            style={{
-              paddingHorizontal: 20,
-              paddingVertical: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <Ionicons name="information-circle-outline" size={16} color={t.colors.textMuted} />
-            <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>
-              Drive safely to earn more points.
-            </Text>
-          </View>
+          )}
         </Card>
 
-        <Section label="Categories" style={{ marginTop: 28 }}>
+        <Section
+          label="Badges"
+          actions={<Chip label={`${unlockedCount} of ${badges.length}`} tone="accent" />}
+        >
+          <BadgeGrid badges={badges} loading={drivesLoading} onSelect={setSelectedBadge} />
+        </Section>
+
+        <Section label="Leaderboard">
+          <LeaderboardPreview
+            rows={board.rows}
+            me={board.me}
+            loading={boardLoading}
+            error={boardError}
+            onPress={() => navigation.navigate('Leaderboard')}
+          />
+        </Section>
+
+        <Section
+          label="Reward catalog"
+          actions={<Chip label="Coming soon" tone="info" />}
+        >
           <View style={{ gap: 12 }}>
-            {CATEGORIES.map((item) => (
-              <CategoryCard
-                key={item.route}
-                item={item}
-                onPress={() => navigation.navigate(item.route)}
+            {CATEGORIES.map((c) => (
+              <RewardCategoryTile
+                key={c.id}
+                label={c.label}
+                icon={c.icon}
+                image={c.image}
+                onPress={() => setSnackbar(true)}
               />
             ))}
           </View>
         </Section>
       </ScrollView>
+
+      <Sheet
+        visible={!!selectedBadge}
+        onClose={() => setSelectedBadge(null)}
+        eyebrow={selectedBadge?.unlocked ? 'Unlocked' : 'Locked'}
+        title={selectedBadge?.title}
+      >
+        {!!selectedBadge && (
+          <View>
+            <Text style={[t.typography.body, { color: t.colors.textMuted }]}>
+              {selectedBadge.body}
+            </Text>
+            <View style={{ marginTop: 18 }}>
+              <ProgressBar value={selectedBadge.fraction} />
+              <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 8 }]}>
+                {selectedBadge.unlocked
+                  ? 'Earned'
+                  : `${selectedBadge.progress} of ${selectedBadge.target}`}
+              </Text>
+            </View>
+            <Button
+              title="Close"
+              variant="ghost"
+              onPress={() => setSelectedBadge(null)}
+              style={{ marginTop: 20 }}
+            />
+          </View>
+        )}
+      </Sheet>
+
+      <Snackbar
+        visible={snackbar}
+        onDismiss={() => setSnackbar(false)}
+        duration={3000}
+        style={{
+          backgroundColor: t.colors.surfaceRaised,
+          borderRadius: t.radius.md,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.colors.border,
+          marginBottom: 12,
+        }}
+        theme={{ colors: { onSurface: t.colors.text } }}
+        action={{ label: 'OK', onPress: () => setSnackbar(false) }}
+      >
+        <Text style={{ color: t.colors.text, fontSize: 14 }}>
+          Reward partners are on the way. Keep earning points.
+        </Text>
+      </Snackbar>
     </Screen>
   );
 }
-
-function CategoryCard({ item, onPress }) {
-  const t = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      android_ripple={{ color: t.colors.accentFaint }}
-      style={({ pressed }) => [
-        {
-          borderRadius: t.radius.lg,
-          overflow: 'hidden',
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: t.colors.border,
-          ...t.elevation.card,
-        },
-        pressed && { transform: [{ scale: 0.99 }] },
-      ]}
-    >
-      <ImageBackground
-        source={item.img}
-        style={{ height: 96, justifyContent: 'center' }}
-        imageStyle={{ borderRadius: t.radius.lg }}
-      >
-        <View
-          style={{
-            ...StyleSheet.absoluteFillObject,
-            backgroundColor: t.isDark ? 'rgba(6,10,12,0.55)' : 'rgba(0,0,0,0.25)',
-          }}
-        />
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: 20,
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                backgroundColor: 'rgba(255,255,255,0.15)',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Ionicons name={item.icon} size={18} color="#fff" />
-            </View>
-            <Text
-              style={{
-                color: '#fff',
-                fontSize: 17,
-                fontWeight: '700',
-                letterSpacing: -0.2,
-                textShadowColor: 'rgba(0,0,0,0.6)',
-                textShadowRadius: 4,
-              }}
-            >
-              {item.label}
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#fff" />
-        </View>
-      </ImageBackground>
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  balanceCard: {
-    overflow: 'hidden',
-  },
-});

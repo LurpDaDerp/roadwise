@@ -29,6 +29,8 @@ export function buildMonitoringRecord({ enabled, metrics, calibrationState }) {
     drowsinessHistory: (m.drowsinessHistory || []).slice(-120),
     calibrationQuality: typeof m.calibrationQuality === 'number' ? m.calibrationQuality : null,
     calibrationState: calibrationState || null,
+    // The monitoring branch's per-drive engine diagnostics (docs/dms/DETECTION_DESIGN.md §10); plain JSON.
+    engine: m.engine && typeof m.engine === 'object' ? m.engine : null,
   };
 }
 

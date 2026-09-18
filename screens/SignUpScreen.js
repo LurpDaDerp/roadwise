@@ -1,170 +1,180 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, Alert, Keyboard, TouchableWithoutFeedback } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth, db } from '../utils/firebase';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { useNavigation } from '@react-navigation/native';
-import { doc, setDoc } from 'firebase/firestore';
-import { saveUserPoints } from '../utils/firestore';
-import { query, where, getDocs, collection } from 'firebase/firestore';
-import {
-  Screen,
-  Section,
-  Button,
-  Field,
-  Eyebrow,
-  useInputStyle,
-  useTheme,
-} from '../theme';
+// SignUpScreen — username with live availability hint, email, password (show/hide),
+// inline validation. Provisioning follows the backend data layer: a registry
+// pre-flight (works while signed out), the auth account, a transactional username
+// claim, then ensureUserProfile; any failure after the account exists deletes it.
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TextInput, Keyboard, TouchableWithoutFeedback, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 
-export default function SignUpScreen() {
-  const navigation = useNavigation();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [username, setUsername] = useState('');
+import { auth } from '../utils/firebase';
+import { claimUsername, ensureUserProfile, isUsernameAvailable, validateUsername, MAX_USERNAME_LENGTH } from '../utils/firestore';
+import { Screen, Section, Button, Field, Eyebrow, Banner, useInputStyle, useTheme } from '../theme';
+
+const isValidEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.toLowerCase());
+
+export default function SignUpScreen({ navigation }) {
   const t = useTheme();
   const inputStyle = useInputStyle();
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [availability, setAvailability] = useState(null); // null | 'checking' | 'free' | 'taken' | 'invalid'
+  const [usernameProblem, setUsernameProblem] = useState(null);
+  const checkTimer = useRef(null);
 
-  const isValidEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.toLowerCase());
+  // Live availability against the public username registry (debounced).
+  useEffect(() => {
+    const u = username.trim();
+    if (checkTimer.current) clearTimeout(checkTimer.current);
+    if (!u) {
+      setAvailability(null);
+      setUsernameProblem(null);
+      return undefined;
+    }
+    const problem = validateUsername(u);
+    if (problem) {
+      setAvailability('invalid');
+      setUsernameProblem(problem);
+      return undefined;
+    }
+    setUsernameProblem(null);
+    setAvailability('checking');
+    checkTimer.current = setTimeout(async () => {
+      const free = await isUsernameAvailable(u);
+      setAvailability(free ? 'free' : 'taken');
+    }, 500);
+    return () => checkTimer.current && clearTimeout(checkTimer.current);
+  }, [username]);
+
+  const hint =
+    {
+      checking: 'Checking…',
+      free: 'Available',
+      taken: 'Already taken',
+      invalid: usernameProblem,
+    }[availability] || `Shown on the leaderboard. Up to ${MAX_USERNAME_LENGTH} characters, starting with a letter or number.`;
 
   const handleSignUp = async () => {
-    const trimmedUsername = username.trim();
-    const trimmedEmail = email.trim();
-
-    if (!trimmedUsername) {
-      Alert.alert('Validation Error', 'Username cannot be empty.');
-      return;
-    }
-    if (trimmedUsername.length > 16) {
-      Alert.alert('Username Too Long!', 'Username cannot be longer than 16 characters.');
-      return;
-    }
-    if (!isValidEmail(trimmedEmail)) {
-      Alert.alert('Validation Error', 'Please enter a valid email address.');
-      return;
-    }
-    if (password.length < 6) {
-      Alert.alert('Validation Error', 'Password must be at least 6 characters.');
-      return;
-    }
-
+    const u = username.trim();
+    const e = email.trim();
+    setError(null);
+    const problem = validateUsername(u);
+    if (problem) return setError(problem);
+    if (availability === 'taken') return setError('That username is already taken.');
+    if (!isValidEmail(e)) return setError('Enter a valid email address.');
+    if (password.length < 6) return setError('Password must be at least 6 characters.');
+    setBusy(true);
+    let createdUser = null;
     try {
-      const q = query(collection(db, 'users'), where('username', '==', trimmedUsername));
-      const querySnapshot = await getDocs(q);
-
-      if (!querySnapshot.empty) {
-        Alert.alert('Username Taken', 'This username is already in use. Please choose another.');
+      if (!(await isUsernameAvailable(u))) {
+        setError('That username is already taken.');
         return;
       }
-
-      const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-      const uid = userCredential.user.uid;
-
-      await new Promise((resolve) => {
-        const unsub = auth.onAuthStateChanged((currentUser) => {
-          if (currentUser) {
-            unsub();
-            resolve();
-          }
-        });
-      });
-
-      await setDoc(doc(db, 'users', uid), {
-        username: trimmedUsername,
-        points: 0,
-        drivingStreak: 0,
-        photoURL: null,
-        groupId: null,
-      });
-
-      await setDoc(doc(db, 'userinfo', uid), {
-        email: trimmedEmail,
-        createdAt: new Date(),
-      });
-
-      await saveUserPoints(uid, 0);
-      await AsyncStorage.setItem('totalPoints', '0');
-
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Dashboard' }],
-      });
-    } catch (error) {
-      if (error.code === 'auth/email-already-in-use') {
-        Alert.alert('Account Exists', 'This account already exists. Please log in instead.');
-      } else {
-        Alert.alert('Sign Up Failed', error.message);
+      const cred = await createUserWithEmailAndPassword(auth, e, password);
+      createdUser = cred.user;
+      // Authoritative, race-free claim: exactly one of two simultaneous sign-ups wins.
+      const claimed = await claimUsername(createdUser.uid, u);
+      if (!claimed) {
+        await deleteUser(createdUser).catch(() => {});
+        setError('That username was just taken. Please choose another.');
+        return;
       }
+      await ensureUserProfile(createdUser, { username: u });
+      // RootNavigator shows onboarding on auth change.
+    } catch (err) {
+      // Anything that fails after the auth account exists leaves an orphan; remove it.
+      if (createdUser && err?.code !== 'auth/email-already-in-use') {
+        await deleteUser(createdUser).catch(() => {});
+      }
+      if (err?.code === 'auth/email-already-in-use') setError('An account with this email already exists. Log in instead.');
+      else if (err?.code === 'auth/invalid-email') setError('Enter a valid email address.');
+      else if (err?.code === 'auth/weak-password') setError('Choose a stronger password (at least 6 characters).');
+      else if (err?.code === 'auth/network-request-failed') setError('No connection. Check your network and try again.');
+      else setError(err?.message || 'Could not create the account.');
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <Screen>
-        <View style={{ marginTop: 48, marginBottom: 40 }}>
-          <Eyebrow>Get started</Eyebrow>
-          <Text style={[t.typography.display, { color: t.colors.text, marginTop: 10 }]}>
-            Create account
-          </Text>
-          <Text style={[t.typography.body, { color: t.colors.textMuted, marginTop: 8 }]}>
-            A few seconds. Then you're on the road.
-          </Text>
-        </View>
+      <Screen hasHeader>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+            <View style={{ marginTop: 8, marginBottom: 28 }}>
+              <Eyebrow>Get started</Eyebrow>
+              <Text style={[t.typography.display, { color: t.colors.text, marginTop: 10 }]}>Create account</Text>
+              <Text style={[t.typography.body, { color: t.colors.textMuted, marginTop: 8 }]}>A few seconds, then you're on the road.</Text>
+            </View>
 
-        <Section>
-          <Field label="Username" hint="Up to 16 characters.">
-            <TextInput
-              placeholder="yourhandle"
-              placeholderTextColor={t.colors.textSubtle}
-              style={inputStyle}
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-            />
-          </Field>
-          <Field label="Email">
-            <TextInput
-              placeholder="you@example.com"
-              placeholderTextColor={t.colors.textSubtle}
-              style={inputStyle}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </Field>
-          <Field label="Password" hint="At least 6 characters.">
-            <TextInput
-              placeholder="••••••••"
-              placeholderTextColor={t.colors.textSubtle}
-              style={inputStyle}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-          </Field>
+            {!!error && <Banner tone="danger" body={error} style={{ marginBottom: 16 }} />}
 
-          <Button title="Create Account" onPress={handleSignUp} />
-        </Section>
+            <Section>
+              <Field label="Username" hint={hint}>
+                <View>
+                  <TextInput
+                    placeholder="yourhandle"
+                    placeholderTextColor={t.colors.textSubtle}
+                    style={[inputStyle, { paddingRight: 40 }]}
+                    value={username}
+                    onChangeText={setUsername}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={MAX_USERNAME_LENGTH}
+                  />
+                  {(availability === 'free' || availability === 'taken') && (
+                    <View style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>
+                      <Ionicons name={availability === 'free' ? 'checkmark-circle' : 'close-circle'} size={20} color={availability === 'free' ? t.colors.success : t.colors.danger} />
+                    </View>
+                  )}
+                </View>
+              </Field>
+              <Field label="Email">
+                <TextInput
+                  placeholder="you@example.com"
+                  placeholderTextColor={t.colors.textSubtle}
+                  style={inputStyle}
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                />
+              </Field>
+              <Field label="Password" hint="At least 6 characters.">
+                <View>
+                  <TextInput
+                    placeholder="Create a password"
+                    placeholderTextColor={t.colors.textSubtle}
+                    style={[inputStyle, { paddingRight: 46 }]}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    textContentType="newPassword"
+                    onSubmitEditing={handleSignUp}
+                  />
+                  <Pressable onPress={() => setShowPassword((v) => !v)} hitSlop={8} accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>
+                    <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={t.colors.textMuted} />
+                  </Pressable>
+                </View>
+              </Field>
 
-        <View
-          style={{
-            flexDirection: 'row',
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginTop: 12,
-          }}
-        >
-          <Text style={[t.typography.body, { color: t.colors.textMuted }]}>
-            Already have one?
-          </Text>
-          <Text
-            onPress={() => navigation.goBack()}
-            style={[t.typography.bodyStrong, { color: t.colors.accent, marginLeft: 6 }]}
-          >
-            Log in
-          </Text>
-        </View>
+              <Button title="Create account" onPress={handleSignUp} loading={busy} />
+            </Section>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 4 }}>
+              <Text style={[t.typography.body, { color: t.colors.textMuted }]}>Already have one?</Text>
+              <Text onPress={() => navigation.replace('Login')} style={[t.typography.bodyStrong, { color: t.colors.accent, marginLeft: 6 }]}>
+                Log in
+              </Text>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Screen>
     </TouchableWithoutFeedback>
   );

@@ -1,141 +1,95 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Switch, ScrollView, StyleSheet } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import SegmentedControl from '@react-native-segmented-control/segmented-control';
+// DriveScreenSettings — units, speed display and points behaviour for the drive
+// screen. Every value is read from and written to SettingsContext.
+import React from 'react';
+import { ScrollView, View } from 'react-native';
 import {
   Screen,
   Section,
   Card,
   ScreenHeader,
+  Banner,
+  SegmentedTabs,
+  ToggleRow,
   useTheme,
 } from '../theme';
+import { useSettings } from '../context/SettingsContext';
 
-const STORAGE_KEYS = {
-  speedUnit: '@speedUnit',
-  warningsEnabled: '@speedingWarningsEnabled',
-  showCurrentSpeed: '@showCurrentSpeed',
-  showSpeedLimit: '@showSpeedLimit',
-  displayTotalPoints: '@displayTotalPoints',
-  distractedNotificationsEnabled: '@distractedNotificationsEnabled',
-  audioSpeedUpdatesEnabled: '@audioSpeedUpdatesEnabled',
-};
+const UNITS = ['mph', 'kph'];
 
 export default function DriveScreenSettings() {
   const t = useTheme();
+  const { settings, update } = useSettings();
 
-  const [speedUnit, setSpeedUnit] = useState('mph');
-  const [warningsEnabled, setWarningsEnabled] = useState(true);
-  const [showCurrentSpeed, setShowCurrentSpeed] = useState(true);
-  const [showSpeedLimit, setShowSpeedLimit] = useState(true);
-  const [displayTotalPoints, setDisplayTotalPoints] = useState(false);
-  const [distractedNotificationsEnabled, setDistractedNotificationsEnabled] = useState(true);
-  const [audioSpeedUpdatesEnabled, setAudioSpeedUpdatesEnabled] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const u = await AsyncStorage.getItem(STORAGE_KEYS.speedUnit);
-        if (u === 'mph' || u === 'kph') setSpeedUnit(u);
-        const a = await AsyncStorage.getItem(STORAGE_KEYS.warningsEnabled);
-        if (a !== null) setWarningsEnabled(a === 'true');
-        const b = await AsyncStorage.getItem(STORAGE_KEYS.showCurrentSpeed);
-        if (b !== null) setShowCurrentSpeed(b === 'true');
-        const c = await AsyncStorage.getItem(STORAGE_KEYS.showSpeedLimit);
-        if (c !== null) setShowSpeedLimit(c === 'true');
-        const d = await AsyncStorage.getItem(STORAGE_KEYS.displayTotalPoints);
-        if (d !== null) setDisplayTotalPoints(d === 'true');
-        const e = await AsyncStorage.getItem(STORAGE_KEYS.distractedNotificationsEnabled);
-        if (e !== null) setDistractedNotificationsEnabled(e === 'true');
-        const f = await AsyncStorage.getItem(STORAGE_KEYS.audioSpeedUpdatesEnabled);
-        if (f !== null) setAudioSpeedUpdatesEnabled(f === 'true');
-      } catch (err) {
-        console.warn('Failed to load settings:', err);
-      }
-    })();
-  }, []);
-
-  const onSpeedUnitChange = async (index) => {
-    const value = index === 0 ? 'mph' : 'kph';
-    setSpeedUnit(value);
-    await AsyncStorage.setItem(STORAGE_KEYS.speedUnit, value);
-  };
-
-  const toggles = [
-    { label: 'Show current speed',            desc: 'Large speedometer during drives.', state: showCurrentSpeed,                  setter: setShowCurrentSpeed,                  key: STORAGE_KEYS.showCurrentSpeed },
-    { label: 'Show speed limit',              desc: 'Posted limit for the current road.', state: showSpeedLimit,                   setter: setShowSpeedLimit,                    key: STORAGE_KEYS.showSpeedLimit },
-    { label: 'Audio speed limit updates',     desc: 'Spoken limit changes.', state: audioSpeedUpdatesEnabled,                      setter: setAudioSpeedUpdatesEnabled,          key: STORAGE_KEYS.audioSpeedUpdatesEnabled },
-    { label: 'Speeding warnings',             desc: 'Alert when you exceed the limit.', state: warningsEnabled,                    setter: setWarningsEnabled,                   key: STORAGE_KEYS.warningsEnabled },
-    { label: 'Distracted notifications',      desc: 'Warn when app is not focused.', state: distractedNotificationsEnabled,        setter: setDistractedNotificationsEnabled,    key: STORAGE_KEYS.distractedNotificationsEnabled },
-    { label: 'Show total points',             desc: 'Replace drive points with lifetime total.', state: displayTotalPoints,    setter: setDisplayTotalPoints,                key: STORAGE_KEYS.displayTotalPoints },
-  ];
+  const unitIndex = settings.speedUnit === 'kph' ? 1 : 0;
 
   return (
     <Screen hasHeader>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: t.spacing[8] }}
+      >
         <ScreenHeader
-          align="right"
-          eyebrow="Settings · Driving"
+          eyebrow="Settings"
           title="Driving"
-          subtitle="Customize your driving experience."
+          subtitle="How the drive screen reads and sounds."
         />
 
         <Section label="Units">
           <Card>
-            <Text style={[t.typography.subheading, { color: t.colors.text, marginBottom: 4 }]}>
-              Speed units
-            </Text>
-            <Text style={[t.typography.caption, { color: t.colors.textMuted, marginBottom: 16 }]}>
-              Used everywhere speed appears.
-            </Text>
-            <SegmentedControl
-              values={['MPH', 'KPH']}
-              selectedIndex={speedUnit === 'mph' ? 0 : 1}
-              onChange={(e) => onSpeedUnitChange(e.nativeEvent.selectedSegmentIndex)}
-              appearance={t.isDark ? 'dark' : 'light'}
-              tintColor={t.colors.accent}
-              style={{ height: 40 }}
+            <SegmentedTabs
+              values={['MPH', 'KM/H']}
+              selectedIndex={unitIndex}
+              onChange={(i) => update('speedUnit', UNITS[i])}
             />
           </Card>
         </Section>
 
-        <Section label="In-drive display">
+        <Section label="Speed">
           <Card padded={false}>
-            {toggles.map((row, i) => (
-              <View
-                key={row.key}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  paddingVertical: 14,
-                  paddingHorizontal: 18,
-                  borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth,
-                  borderTopColor: t.colors.divider,
-                }}
-              >
-                <View style={{ flex: 1, paddingRight: 12 }}>
-                  <Text style={[t.typography.bodyStrong, { color: t.colors.text }]}>
-                    {row.label}
-                  </Text>
-                  <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 2 }]}>
-                    {row.desc}
-                  </Text>
-                </View>
-                <Switch
-                  value={row.state}
-                  onValueChange={async (v) => {
-                    row.setter(v);
-                    await AsyncStorage.setItem(row.key, v.toString());
-                  }}
-                  trackColor={{ false: t.isDark ? '#3a3f46' : '#c9cfd6', true: t.colors.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={t.isDark ? '#3a3f46' : '#c9cfd6'}
-                />
-              </View>
-            ))}
+            <ToggleRow
+              first
+              icon="speedometer-outline"
+              title="Show speed limit"
+              subtitle="Posted limit for the road you are on."
+              value={settings.showSpeedLimit}
+              onValueChange={(v) => update('showSpeedLimit', v)}
+            />
+            <ToggleRow
+              icon="volume-medium-outline"
+              title="Speak limit changes"
+              subtitle="Says the new limit out loud when it changes."
+              value={settings.audioSpeedUpdatesEnabled}
+              onValueChange={(v) => update('audioSpeedUpdatesEnabled', v)}
+            />
+            <ToggleRow
+              icon="warning-outline"
+              title="Speeding alerts"
+              subtitle="Tone and banner after 2.5 s above 125 % of the limit"
+              value={settings.speedingWarningsEnabled}
+              onValueChange={(v) => update('speedingWarningsEnabled', v)}
+            />
           </Card>
         </Section>
 
-        <View style={{ height: 24 }} />
+        <Section label="Points">
+          <Card padded={false}>
+            <ToggleRow
+              first
+              icon="trophy-outline"
+              title="Show lifetime total"
+              subtitle="The drive screen shows your all-time points instead of the points earned on this drive."
+              value={settings.displayTotalPoints}
+              onValueChange={(v) => update('displayTotalPoints', v)}
+            />
+          </Card>
+          <View style={{ height: 12 }} />
+          <Banner
+            tone="info"
+            icon="information-circle-outline"
+            title="How points are earned"
+            body="You earn +1 point every 2.5 seconds while you are moving and staying under 125 % of the speed limit. No points are earned while you are distracted."
+          />
+        </Section>
       </ScrollView>
     </Screen>
   );

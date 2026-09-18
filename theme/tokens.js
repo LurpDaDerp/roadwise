@@ -58,8 +58,13 @@ export const tokens = {
     accentText:    '#06100d',
 
     danger:        palette.red,
+    dangerFaint:   'rgba(255,59,48,0.16)',
     warning:       palette.amber,
+    warningFaint:  'rgba(255,176,32,0.16)',
     success:       palette.teal[400],
+    successFaint:  'rgba(34,199,158,0.16)',
+    info:          '#5aa9ff',
+    infoFaint:     'rgba(90,169,255,0.16)',
 
     scrimTop:      'rgba(0,179,134,0.10)',
     scrimBottom:   'rgba(11,13,16,0.0)',
@@ -90,8 +95,13 @@ export const tokens = {
     accentText:    '#ffffff',
 
     danger:        '#e02e24',
+    dangerFaint:   'rgba(224,46,36,0.12)',
     warning:       '#c77a00',
+    warningFaint:  'rgba(199,122,0,0.12)',
     success:       palette.teal[600],
+    successFaint:  'rgba(0,153,113,0.12)',
+    info:          '#2b7fd6',
+    infoFaint:     'rgba(43,127,214,0.12)',
 
     scrimTop:      'rgba(0,153,113,0.08)',
     scrimBottom:   'rgba(243,245,247,0.0)',
@@ -183,6 +193,20 @@ export const typography = {
     fontWeight: '800',
     letterSpacing: -2,
     lineHeight: 56,
+  },
+  // Drive-screen scale: readable from a dash mount at arm's length.
+  glance: {
+    fontSize: 120,
+    fontWeight: '800',
+    letterSpacing: -4,
+    lineHeight: 124,
+  },
+  glanceLabel: {
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 1.6,
+    lineHeight: 22,
+    textTransform: 'uppercase',
   },
 };
 
