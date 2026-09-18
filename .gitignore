@@ -5,6 +5,7 @@ dist/
 .export-check/
 
 .firebase/
+functions/*.log
 
 GoogleService-Info.plist
 google-services.json

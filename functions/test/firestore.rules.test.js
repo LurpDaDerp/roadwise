@@ -218,9 +218,36 @@ describe("groups", () => {
     );
   });
 
-  test("a member can leave; a member cannot remove someone else", async () => {
+  test("a member can leave", async () => {
     await assertSucceeds(updateDoc(doc(as(BOB), "groups", GROUP), {members: [ALICE]}));
+  });
+
+  // These used to be a second assertion inside the test above, which ran AFTER Bob had
+  // already left - so it wrote members: [ALICE] over a value that was already [ALICE].
+  // That is a no-op, which no rule can distinguish from not writing the field at all, so
+  // it was allowed and the test failed without ever exercising the real case.
+  test("a member cannot remove another member", async () => {
     await assertFails(updateDoc(doc(as(ALICE), "groups", GROUP), {members: [ALICE]}));
+  });
+
+  test("a member cannot empty the members array on their way out", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "groups", GROUP), {members: []}));
+  });
+
+  test("a member cannot replace the membership with just themselves", async () => {
+    await assertFails(updateDoc(doc(as(BOB), "groups", GROUP), {members: [BOB]}));
+  });
+
+  test("leaving removes exactly the caller and nobody else", async () => {
+    await assertSucceeds(updateDoc(doc(as(ALICE), "groups", GROUP), {members: [BOB]}));
+
+    // withSecurityRulesDisabled resolves to undefined, so capture the value outside it.
+    let after = null;
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const snap = await getDoc(doc(ctx.firestore(), "groups", GROUP));
+      after = snap.data().members;
+    });
+    expect(after).toEqual([BOB]);
   });
 
   test("creating a group requires being its only member and its creator", async () => {
@@ -333,7 +360,45 @@ describe("emergency flag", () => {
   });
 
   test("a member cannot clear somebody else's emergency", async () => {
+    // Bob's flag is seeded false, so writing false was a no-op that changed nothing and
+    // was therefore allowed - the assertion never reached the rule it meant to test.
+    // Raise it first so that clearing it is a real change.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "groups", GROUP), {
+        [`memberLocations.${BOB}.emergency`]: true,
+      });
+    });
+
     await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${BOB}.emergency`]: false,
+      }),
+    );
+  });
+
+  test("a member cannot raise somebody else's emergency", async () => {
+    await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${BOB}.emergency`]: true,
+      }),
+    );
+  });
+
+  test("a member cannot overwrite another member's whole location entry", async () => {
+    await assertFails(
+      updateDoc(doc(as(ALICE), "groups", GROUP), {
+        [`memberLocations.${BOB}`]: {
+          latitude: 0, longitude: 0, speed: 0, emergency: false,
+        },
+      }),
+    );
+  });
+
+  // Recorded deliberately: rules cannot see a write that changes nothing, so this is
+  // allowed. It reveals nothing and alters nothing, and forbidding it would mean
+  // requiring every update to change something - which would break idempotent retries.
+  test("writing another member's field to its existing value is a permitted no-op", async () => {
+    await assertSucceeds(
       updateDoc(doc(as(ALICE), "groups", GROUP), {
         [`memberLocations.${BOB}.emergency`]: false,
       }),

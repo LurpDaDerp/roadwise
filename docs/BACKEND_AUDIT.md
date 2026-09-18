@@ -416,6 +416,30 @@ TTL is 7 days. Entries carry an `expiresAt` field for a Firestore TTL policy —
 has to be created, it is not part of a rules or index deploy** (see §3 step 3b), otherwise
 `geocache` grows forever.
 
+### S10 — A member could empty the group's membership on the way out
+Found by running the test suite, not by reading the rules. `membersOnlyRemovesSelf`
+required only that the caller was *absent* from the resulting `members` array and that the
+array was a *subset* of the current one. Writing `members: []` satisfies both, so any member
+could remove everybody else at the same time as themselves.
+
+**Fixed.** The result must now be exactly the current membership minus the caller
+(`hasAll` **and** `hasOnly` against `currentMembers().removeAll([uid])`). Verified by
+reverting the rule and confirming the new test fails against the old one.
+
+Two further test failures in the same round turned out to be **tests, not rules**, and are
+worth recording because the distinction is easy to get wrong:
+
+* `members: [ALICE]` written by Alice *after* Bob had already left, and
+  `memberLocations.<bob>.emergency = false` written when it was already `false`.
+
+Both are writes that change nothing. A no-op does not appear in `diff().affectedKeys()`,
+so **no rule can distinguish it from not writing the field at all**, and it is allowed. That
+is harmless — it cannot alter or reveal anything — and forbidding it would mean requiring
+every update to change something, which would break the idempotent re-join retry in
+`utils/groups.js`. The tests were rewritten to exercise real changes (raise Bob's emergency
+first, then try to clear it), and the permitted no-op is now recorded as an explicit test so
+the semantics are documented rather than rediscovered.
+
 ### Not changed, flagged
 * `screens/LocationScreen.js` reverse-geocodes member positions against
   **nominatim.openstreetmap.org** directly from the client, with a hard-coded 1 s sleep for
@@ -534,7 +558,13 @@ finds — resolve those before deploying.
 Get the service account key from Firebase console → Project settings → Service accounts →
 Generate new private key. Delete the file afterwards; do not commit it.
 
-### 3. Deploy rules and indexes
+### 3. Run the rules tests, then deploy rules and indexes
+```
+cd functions
+cmd /c "set PATH=C:\Program Files\Java\jdk-24\bin;%PATH% && set JAVA_HOME=C:\Program Files\Java\jdk-24 && npm run test:rules"
+```
+68 tests; all must pass before the deploy below.
+
 ```
 cd C:\Users\lurpd\Documents\dev\RoadCash-backend
 firebase deploy --only firestore:rules
@@ -783,12 +813,21 @@ from `utils/LocationService` (re-exported from the new `utils/groupCache`).
 * Grepped for dangling references to everything removed (`getCachedUserDoc`, `userinfo`,
   the bare `'totalPoints'` key, the old speed-limit globals) — none remain.
 
+**The rules tests now pass: 68 of 68.**
+`functions/test/firestore.rules.test.js` covers the group-code enumeration attack, groups,
+legacy groups with no `members` array, emergencies, users and private data, sign-up and
+rename, the drive finalization batch, usernames and the server-only collections. Run them
+from Windows — the Firestore emulator needs Java 11+, and the JDK is not on PATH:
+
+```
+cmd.exe /c "cd /d C:\Users\lurpd\Documents\dev\RoadCash-backend\functions && set PATH=C:\Program Files\Java\jdk-24\bin;%PATH% && set JAVA_HOME=C:\Program Files\Java\jdk-24 && npm run test:rules"
+```
+
+**These must pass before `firebase deploy --only firestore:rules`.** A rules mistake either
+leaks data or locks users out, and neither is visible until it has already happened. The
+suite caught two such mistakes in review (see S10) that reading the rules had not.
+
 **NOT verified here — please check before/after deploying**
-* **The rules tests were not executed.** `functions/test/firestore.rules.test.js` is written
-  (61 cases across the group-code enumeration attack, groups, legacy groups with no
-  `members` array, emergencies, users and private data, sign-up and rename, the drive
-  finalization batch, usernames and the server-only collections) but the Firestore emulator
-  needs Java 11+ and this environment has Java 8.
   Run `cd functions && npm install && npm run test:rules` on Windows first. **Do not deploy
   the rules without running them** — a rules mistake either leaks data or locks users out,
   and neither is visible until it happens.

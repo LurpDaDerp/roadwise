@@ -224,6 +224,12 @@ service cloud.firestore {
         return request.resource.data.diff(resource.data).affectedKeys();
       }
 
+      // Note on no-ops: a write that sets a field to the value it already holds changes
+      // nothing, so it does not appear in affectedKeys() and cannot be distinguished from
+      // "did not write that field" by any rule. Such a write is therefore permitted. It is
+      // harmless (it cannot alter or reveal anything), and forbidding it would mean
+      // requiring every update to change something, which would break the idempotent
+      // re-join retry in utils/groups.js.
       function touchesOnlyOwnLocation() {
         return !changedKeys().hasAny(['memberLocations'])
           || incoming().memberLocations.diff(currentLocations())
@@ -260,10 +266,14 @@ service cloud.firestore {
           && request.auth.uid in incoming().members;
       }
 
+      // The result must be EXACTLY the current membership minus the caller. Requiring only
+      // that the caller is absent and that the result is a subset let a member write
+      // `members: []` and take everyone else out of the group on the way out.
       function membersOnlyRemovesSelf() {
         return changedKeys().hasAny(['members'])
-          && currentMembers().hasAll(incoming().members)
-          && !(request.auth.uid in incoming().members);
+          && !(request.auth.uid in incoming().members)
+          && incoming().members.hasAll(currentMembers().removeAll([request.auth.uid]))
+          && incoming().members.hasOnly(currentMembers().removeAll([request.auth.uid]));
       }
 
       function savedLocationsValid() {
