@@ -1,251 +1,387 @@
-import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ActivityIndicator,
-  ScrollView,
-} from 'react-native';
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  getCountFromServer,
-  query,
-  orderBy,
-  limit,
-  where,
-} from 'firebase/firestore';
-import { Ionicons } from '@expo/vector-icons';
+// LeaderboardScreen — top 50 drivers by points, with a podium for the top three
+// and the signed-in user's rank pinned when they fall outside the list.
+// Refreshes on focus and on pull (the old build fetched once per app session).
+import React, { useCallback, useRef, useState } from 'react';
+import { View, Text, Image, ScrollView, RefreshControl, StyleSheet } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
 
-import { auth, db } from '../utils/firebase';
 import {
   Screen,
   Section,
   Card,
+  Button,
   ScreenHeader,
+  Banner,
+  EmptyState,
+  Skeleton,
   AutoFitText,
   useTheme,
 } from '../theme';
+import { useAuthContext } from '../context/AuthContext';
+import { fetchLeaderboard, LEADERBOARD_SIZE } from '../utils/leaderboard';
 
-const USERS_SHOWN = 50;
+const CROWNS = [
+  require('../assets/crown1.png'),
+  require('../assets/crown2.png'),
+  require('../assets/crown3.png'),
+];
 
-export default function LeaderboardScreen() {
+function initialOf(name) {
+  const s = String(name || '').trim();
+  return s ? s.charAt(0).toUpperCase() : '?';
+}
+
+function Avatar({ row, size, highlight }) {
   const t = useTheme();
-
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [currentUserId, setCurrentUserId] = useState(null);
-  const [currentUserPlacement, setCurrentUserPlacement] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchLeaderboard = async () => {
-      try {
-        const currentUser = auth.currentUser;
-        const currentUid = currentUser?.uid || null;
-        setCurrentUserId(currentUid);
-
-        const leaderboardRef = collection(db, 'users');
-        const leaderboardQuery = query(
-          leaderboardRef,
-          orderBy('points', 'desc'),
-          limit(USERS_SHOWN)
-        );
-        const querySnapshot = await getDocs(leaderboardQuery);
-
-        const topResults = [];
-        let isCurrentUserInTop = false;
-
-        querySnapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          const id = docSnap.id;
-          if (id === currentUid) isCurrentUserInTop = true;
-          topResults.push({
-            id,
-            name: data.username || 'N/A',
-            points: data.points || 0,
-          });
-        });
-
-        setLeaderboard(topResults);
-
-        if (!isCurrentUserInTop && currentUid) {
-          const userSnap = await getDoc(doc(db, 'users', currentUid));
-          if (userSnap.exists()) {
-            const data = userSnap.data();
-            const myPoints = data.points || 0;
-            const higherCount = await getCountFromServer(
-              query(leaderboardRef, where('points', '>', myPoints))
-            );
-            setCurrentUserPlacement({
-              id: currentUid,
-              name: data.username || 'You',
-              points: myPoints,
-              rank: higherCount.data().count + 1,
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching leaderboard:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchLeaderboard();
-  }, []);
-
-  const medalColors = [
-    { bg: '#f5c56a22', fg: '#f2b23a', label: 'Gold' },
-    { bg: '#bcc5cf22', fg: '#aab4bf', label: 'Silver' },
-    { bg: '#c9773a22', fg: '#c78653', label: 'Bronze' },
-  ];
-
+  const border = {
+    borderWidth: 2,
+    borderColor: highlight ? t.colors.accent : t.colors.border,
+  };
+  if (row?.photoURL) {
+    return (
+      <ExpoImage
+        source={{ uri: row.photoURL }}
+        style={{ width: size, height: size, borderRadius: size / 2, ...border }}
+        contentFit="cover"
+        accessibilityLabel={`${row.name} profile photo`}
+      />
+    );
+  }
   return (
-    <Screen>
-      <View style={{ flex: 1 }}>
-        <ScrollView showsVerticalScrollIndicator={false}>
-          <ScreenHeader
-            eyebrow="Community"
-            title="Leaderboard"
-            subtitle="The safest drivers."
-          />
-
-          <Section label={`Top ${USERS_SHOWN}`}>
-            <Card padded={false}>
-              {loading ? (
-                <View style={{ paddingVertical: 48, alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={t.colors.accent} />
-                </View>
-              ) : leaderboard.length === 0 ? (
-                <View style={{ paddingVertical: 36, alignItems: 'center' }}>
-                  <Text style={[t.typography.caption, { color: t.colors.textMuted }]}>
-                    No entries yet.
-                  </Text>
-                </View>
-              ) : (
-                leaderboard.map((user, index) => {
-                  const isCurrentUser = user.id === currentUserId;
-                  const medal = medalColors[index];
-                  return (
-                    <Row
-                      key={user.id}
-                      t={t}
-                      rank={index + 1}
-                      name={user.name}
-                      points={user.points}
-                      isCurrentUser={isCurrentUser}
-                      medal={medal}
-                      first={index === 0}
-                    />
-                  );
-                })
-              )}
-            </Card>
-          </Section>
-
-          {currentUserPlacement && (
-            <Section label="Your rank">
-              <Card padded={false}>
-                <Row
-                  t={t}
-                  rank={currentUserPlacement.rank}
-                  name={`${currentUserPlacement.name} (You)`}
-                  points={currentUserPlacement.points}
-                  isCurrentUser
-                  first
-                />
-              </Card>
-            </Section>
-          )}
-
-          <View style={{ height: 32 }} />
-        </ScrollView>
-      </View>
-    </Screen>
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: highlight ? t.colors.accent : t.colors.surfaceAlt,
+        alignItems: 'center',
+        justifyContent: 'center',
+        ...border,
+      }}
+    >
+      <Text
+        style={{
+          color: highlight ? t.colors.accentText : t.colors.textMuted,
+          fontSize: Math.round(size * 0.4),
+          fontWeight: '800',
+        }}
+      >
+        {initialOf(row?.name)}
+      </Text>
+    </View>
   );
 }
 
-function Row({ t, rank, name, points, isCurrentUser, medal, first }) {
+function PodiumColumn({ row, place, isMe }) {
+  const t = useTheme();
+  if (!row) return <View style={{ flex: 1 }} />;
+  const first = place === 1;
+  const pedestalHeight = first ? 74 : place === 2 ? 56 : 44;
+
+  return (
+    <View style={{ flex: 1, alignItems: 'center' }}>
+      <Image
+        source={CROWNS[place - 1]}
+        style={{ width: first ? 30 : 24, height: first ? 30 : 24, marginBottom: 6 }}
+        resizeMode="contain"
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={`Rank ${place} crown`}
+      />
+      <Avatar row={row} size={first ? 60 : 48} highlight={first || isMe} />
+      <Text
+        style={[
+          t.typography.caption,
+          {
+            color: isMe ? t.colors.accent : t.colors.text,
+            fontWeight: '700',
+            marginTop: 8,
+            textAlign: 'center',
+          },
+        ]}
+        numberOfLines={1}
+      >
+        {isMe ? 'You' : row.name}
+      </Text>
+      <AutoFitText
+        style={[
+          t.typography.numeric,
+          {
+            color: first ? t.colors.accent : t.colors.textMuted,
+            fontSize: 16,
+            lineHeight: 20,
+            marginTop: 2,
+          },
+        ]}
+      >
+        {row.points.toLocaleString()}
+      </AutoFitText>
+      <View
+        style={{
+          marginTop: 10,
+          width: '86%',
+          height: pedestalHeight,
+          borderTopLeftRadius: t.radius.md,
+          borderTopRightRadius: t.radius.md,
+          backgroundColor: first ? t.colors.accentFaint : t.colors.surfaceAlt,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderBottomWidth: 0,
+          borderColor: t.colors.border,
+          alignItems: 'center',
+          paddingTop: 8,
+        }}
+      >
+        <Text
+          style={[
+            t.typography.numeric,
+            { color: first ? t.colors.accent : t.colors.textSubtle, fontSize: 20, lineHeight: 24 },
+          ]}
+        >
+          {place}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function Podium({ rows, myId }) {
+  const order = [rows[1], rows[0], rows[2]];
+  const places = [2, 1, 3];
+  return (
+    <Card
+      padded={false}
+      style={{ overflow: 'hidden', paddingTop: 18, paddingHorizontal: 10 }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+        {order.map((row, i) => (
+          <PodiumColumn
+            key={row ? row.id : `empty-${places[i]}`}
+            row={row}
+            place={places[i]}
+            isMe={!!row && row.id === myId}
+          />
+        ))}
+      </View>
+    </Card>
+  );
+}
+
+function LeaderRow({ rank, name, points, highlight, first }) {
+  const t = useTheme();
+  const color = highlight ? t.colors.accent : t.colors.text;
   return (
     <View
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 14,
+        paddingVertical: 13,
         paddingHorizontal: 18,
         borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
         borderTopColor: t.colors.divider,
-        backgroundColor: isCurrentUser ? t.colors.accentFaint : 'transparent',
-        borderTopLeftRadius: first ? t.radius.lg : 0,
-        borderTopRightRadius: first ? t.radius.lg : 0,
-        overflow: 'hidden',
+        backgroundColor: highlight ? t.colors.accentFaint : 'transparent',
       }}
     >
-      <View
-        style={{
-          width: 36,
-          alignItems: 'center',
-          marginRight: 12,
-        }}
-      >
-        {medal ? (
-          <View
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: 15,
-              backgroundColor: medal.bg,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="trophy" size={16} color={medal.fg} />
-          </View>
-        ) : (
-          <Text
-            style={[
-              t.typography.numeric,
-              { color: t.colors.textMuted, fontSize: 16 },
-            ]}
-          >
-            {rank}
-          </Text>
-        )}
-      </View>
-      
-      {/* FIX 1: Added paddingRight here.
-        This prevents the name container from pushing too hard against the points container.
-      */}
-      <View style={{ flex: 1, paddingRight: 16 }}>
+      <View style={{ width: 34, alignItems: 'center', marginRight: 12 }}>
         <Text
           style={[
-            t.typography.bodyStrong,
-            { color: isCurrentUser ? t.colors.accent : t.colors.text },
+            t.typography.numeric,
+            { color: highlight ? t.colors.accent : t.colors.textMuted, fontSize: 16, lineHeight: 20 },
           ]}
-          numberOfLines={1}
         >
-          {name}
+          {rank}
         </Text>
       </View>
-
+      <Text style={[t.typography.bodyStrong, { color, flex: 1, paddingRight: 14 }]} numberOfLines={1}>
+        {name}
+      </Text>
       <AutoFitText
-        style={[
-          t.typography.numeric,
-          { 
-            color: isCurrentUser ? t.colors.accent : t.colors.text, 
-            fontSize: 16,
-            /* FIX 2: Added paddingRight here. 
-              This forces the internal bounding box of the text to be slightly larger,
-              preventing the right edge of the font glyph from being clipped.
-            */
-            paddingRight: 4 
-          },
-        ]}
+        style={[t.typography.numeric, { color, fontSize: 16, lineHeight: 20, paddingRight: 4 }]}
       >
-        {points.toLocaleString()}
+        {Number(points || 0).toLocaleString()}
       </AutoFitText>
     </View>
+  );
+}
+
+function LoadingList() {
+  return (
+    <Card padded={false} style={{ paddingVertical: 8 }}>
+      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+        <View
+          key={`row-skeleton-${i}`}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 13,
+            paddingHorizontal: 18,
+            gap: 14,
+          }}
+        >
+          <Skeleton width={18} height={12} />
+          <Skeleton width={i % 2 === 0 ? 140 : 108} height={12} />
+          <View style={{ flex: 1 }} />
+          <Skeleton width={44} height={12} />
+        </View>
+      ))}
+    </Card>
+  );
+}
+
+export default function LeaderboardScreen() {
+  const t = useTheme();
+  const insets = useSafeAreaInsets();
+  const { uid } = useAuthContext();
+
+  const [rows, setRows] = useState([]);
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(false);
+
+  const activeRef = useRef(true);
+  const hasRowsRef = useRef(false);
+
+  const load = useCallback(
+    async (mode = 'initial') => {
+      if (mode === 'refresh') setRefreshing(true);
+      else if (mode === 'initial') setLoading(true);
+      setError(false);
+      try {
+        const result = await fetchLeaderboard(uid, LEADERBOARD_SIZE);
+        if (!activeRef.current) return;
+        setRows(result.rows);
+        setMe(result.me);
+        hasRowsRef.current = result.rows.length > 0;
+      } catch (e) {
+        console.warn('Leaderboard fetch failed:', e);
+        if (activeRef.current) setError(true);
+      } finally {
+        if (activeRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [uid]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      activeRef.current = true;
+      load(hasRowsRef.current ? 'silent' : 'initial');
+      return () => {
+        activeRef.current = false;
+      };
+    }, [load])
+  );
+
+  const top = rows.slice(0, 3);
+  const rest = rows.slice(3);
+  const meInList = !!me && rows.some((r) => r.id === me.id);
+  const showPinned = !!me && !meInList && !loading;
+
+  return (
+    <Screen hasHeader>
+      <ScrollView
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: showPinned ? 130 : 40 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => load('refresh')}
+            tintColor={t.colors.accent}
+            colors={[t.colors.accent]}
+          />
+        }
+      >
+        <ScreenHeader
+          align="left"
+          eyebrow="Community"
+          title="Leaderboard"
+          subtitle="Top 50 safest drivers"
+        />
+
+        {error && (
+          <Banner
+            tone="danger"
+            title="Standings unavailable"
+            body="Check your connection and try again."
+            style={{ marginBottom: t.spacing[5] }}
+            right={
+              <Button
+                title="Retry"
+                variant="soft"
+                fullWidth={false}
+                onPress={() => load(hasRowsRef.current ? 'silent' : 'initial')}
+                style={{ paddingVertical: 8, paddingHorizontal: 14 }}
+              />
+            }
+          />
+        )}
+
+        {loading ? (
+          <LoadingList />
+        ) : rows.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="trophy-outline"
+              title="No drivers ranked yet"
+              body="Finish a focused drive to put yourself on the board."
+            />
+          </Card>
+        ) : (
+          <>
+            <Section label="Podium">
+              <Podium rows={top} myId={me?.id} />
+            </Section>
+
+            {rest.length > 0 && (
+              <Section label={`Ranks 4-${rows.length}`}>
+                <Card padded={false} style={{ overflow: 'hidden' }}>
+                  {rest.map((row, i) => (
+                    <LeaderRow
+                      key={row.id}
+                      rank={i + 4}
+                      name={!!me && row.id === me.id ? `${row.name} (You)` : row.name}
+                      points={row.points}
+                      highlight={!!me && row.id === me.id}
+                      first={i === 0}
+                    />
+                  ))}
+                </Card>
+              </Section>
+            )}
+          </>
+        )}
+      </ScrollView>
+
+      {showPinned && (
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: Math.max(insets.bottom, t.spacing[4]),
+          }}
+          pointerEvents="box-none"
+        >
+          <Card padded={false} tone="raised" style={{ overflow: 'hidden' }}>
+            <View
+              style={{
+                paddingHorizontal: 18,
+                paddingTop: 10,
+                backgroundColor: t.colors.accentFaint,
+              }}
+            >
+              <Text style={[t.typography.micro, { color: t.colors.accent }]}>Your rank</Text>
+            </View>
+            <LeaderRow rank={me.rank} name={`${me.name} (You)`} points={me.points} highlight first />
+          </Card>
+        </View>
+      )}
+    </Screen>
   );
 }

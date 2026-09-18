@@ -1,26 +1,27 @@
+// AccountSettings — profile photo, username, account facts, drive-history wipe
+// and sign-out. Profile values come from the live AuthContext subscription.
 import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
-  StyleSheet,
   Alert,
   ActivityIndicator,
   TextInput,
   ScrollView,
   Image,
   Pressable,
+  StyleSheet,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { auth, db } from '../utils/firebase';
-import { signOut, onAuthStateChanged } from 'firebase/auth';
-import { useNavigation } from '@react-navigation/native';
+import { signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getUserPoints, saveUserPoints } from '../utils/firestore';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
-import { query, where, getDocs, collection } from 'firebase/firestore';
+import { auth, db } from '../utils/firebase';
 import { supabase } from '../utils/supabase';
+import { clearUserDrives, getAllDriveMetrics } from '../utils/firestore';
+import { useAuthContext } from '../context/AuthContext';
+import { KEYS } from '../utils/storageKeys';
 import {
   Screen,
   Section,
@@ -28,70 +29,61 @@ import {
   ScreenHeader,
   Button,
   Field,
+  ListRow,
+  KeyValueRow,
+  Skeleton,
   useTheme,
   useInputStyle,
 } from '../theme';
 
-export default function AccountSettings({ route }) {
-  const navigation = useNavigation();
+export default function AccountSettings() {
   const t = useTheme();
   const inputStyle = useInputStyle();
+  const { uid, user, username, points, photoURL, groupId, profileLoaded } = useAuthContext();
 
-  const [user, setUser] = useState(null);
-  const [username, setUsername] = useState(null);
-  const [editedUsername, setEditedUsername] = useState('');
-  const [points, setPoints] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [uploadedPhoto, setUploadedPhoto] = useState(null);
   const [loadingImage, setLoadingImage] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [editedUsername, setEditedUsername] = useState('');
   const [saving, setSaving] = useState(false);
-  const [photoURL, setPhotoURL] = useState('noImage');
   const [groupName, setGroupName] = useState('None');
+  const [driveCount, setDriveCount] = useState(null);
+  const [clearing, setClearing] = useState(false);
 
+  const photo = uploadedPhoto || photoURL;
+
+  // Group name — one read, the id comes from the live profile.
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        const uid = currentUser.uid;
-        const cachedImage = await AsyncStorage.getItem('cachedProfileImage');
-        if (cachedImage) setPhotoURL(cachedImage);
-
-        try {
-          const userPoints = await getUserPoints(uid);
-          setPoints(userPoints);
-
-          const userDocRef = doc(db, 'users', uid);
-          const userDocSnap = await getDoc(userDocRef);
-
-          if (userDocSnap.exists()) {
-            const data = userDocSnap.data();
-            setUsername(data.username || 'N/A');
-            setPhotoURL(data.photoURL || 'noImage');
-
-            if (data.groupId) {
-              const groupDocRef = doc(db, 'groups', data.groupId);
-              const groupDocSnap = await getDoc(groupDocRef);
-              if (groupDocSnap.exists()) {
-                setGroupName(groupDocSnap.data().groupName || 'Unknown');
-              } else {
-                setGroupName('Unknown');
-              }
-            } else {
-              setGroupName('None');
-            }
-          }
-        } catch (err) {
-          console.error(err);
-          setPoints(0);
-          setUsername('N/A');
-          setGroupName('None');
-        }
+    let cancelled = false;
+    if (!groupId) {
+      setGroupName('None');
+      return undefined;
+    }
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'groups', groupId));
+        if (!cancelled) setGroupName((snap.exists() && snap.data().groupName) || 'Unknown');
+      } catch {
+        if (!cancelled) setGroupName('Unknown');
       }
-      setLoading(false);
-    });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [groupId]);
 
-    return unsubscribe;
-  }, []);
+  // Drive count — used by the clear-history confirmation.
+  useEffect(() => {
+    let cancelled = false;
+    if (!uid) return undefined;
+    (async () => {
+      const drives = await getAllDriveMetrics(uid);
+      if (!cancelled) setDriveCount(Array.isArray(drives) ? drives.length : 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
 
   const pickImage = async () => {
     try {
@@ -106,7 +98,6 @@ export default function AccountSettings({ route }) {
 
       if (!result.canceled && result.assets.length > 0) {
         const uri = result.assets[0].uri;
-        const uid = user.uid;
         const filename = `${uid}/profilePic.jpg`;
 
         const response = await fetch(uri);
@@ -129,63 +120,81 @@ export default function AccountSettings({ route }) {
         if (urlError) throw urlError;
 
         const publicURL = urlData.publicUrl + '?t=' + new Date().getTime();
-        setPhotoURL(publicURL);
-        await AsyncStorage.setItem('cachedProfileImage', publicURL);
-
-        const userDocRef = doc(db, 'users', uid);
-        await setDoc(userDocRef, { photoURL: publicURL }, { merge: true });
+        setUploadedPhoto(publicURL);
+        await AsyncStorage.setItem(KEYS.cachedProfileImage, publicURL);
+        await setDoc(doc(db, 'users', uid), { photoURL: publicURL }, { merge: true });
       }
     } catch (error) {
-      Alert.alert('Upload Failed', error.message);
+      Alert.alert('Upload failed', error.message);
     } finally {
       setLoadingImage(false);
     }
   };
 
   const handleSaveUsername = async () => {
-    if (!editedUsername.trim()) {
-      Alert.alert('Validation Error', 'Username cannot be empty.');
+    const trimmed = editedUsername.trim();
+    if (!trimmed) {
+      Alert.alert('Username required', 'Username cannot be empty.');
       return;
     }
     setSaving(true);
     try {
-      const uid = user.uid;
-      const trimmed = editedUsername.trim();
-      const q = query(collection(db, 'users'), where('username', '==', trimmed));
-      const querySnapshot = await getDocs(q);
-      const taken = querySnapshot.docs.some((d) => d.id !== uid);
-      if (taken) {
-        Alert.alert('Username Taken', 'This username is already in use.');
-        setSaving(false);
+      const snapshot = await getDocs(query(collection(db, 'users'), where('username', '==', trimmed)));
+      if (snapshot.docs.some((d) => d.id !== uid)) {
+        Alert.alert('Username taken', 'This username is already in use.');
         return;
       }
-      const userDocRef = doc(db, 'users', uid);
-      await setDoc(userDocRef, { username: trimmed }, { merge: true });
-      setUsername(trimmed);
+      await setDoc(doc(db, 'users', uid), { username: trimmed }, { merge: true });
       setIsEditing(false);
     } catch (error) {
-      Alert.alert('Update Failed', error.message);
+      Alert.alert('Update failed', error.message);
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <Screen>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="small" color={t.colors.accent} />
-        </View>
-      </Screen>
+  const confirmClearDrives = () => {
+    const n = driveCount ?? 0;
+    if (!uid || n === 0) {
+      Alert.alert('Nothing to clear', 'You have no saved drives yet.');
+      return;
+    }
+    Alert.alert(
+      'Clear drive history',
+      `This deletes all ${n} drive${n === 1 ? '' : 's'}, along with their scores and statistics. Your points and streak are not affected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () =>
+            Alert.alert('Really delete?', 'This cannot be undone.', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete everything',
+                style: 'destructive',
+                onPress: async () => {
+                  setClearing(true);
+                  await clearUserDrives(uid);
+                  setDriveCount(0);
+                  setClearing(false);
+                  Alert.alert('Drive history cleared');
+                },
+              },
+            ]),
+        },
+      ]
     );
-  }
+  };
 
   return (
     <Screen hasHeader>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: t.spacing[8] }}
+      >
         <ScreenHeader
-          align="right"
-          eyebrow="Settings · Account"
+          eyebrow="Settings"
           title="Account"
           subtitle="Your profile and sign-in details."
         />
@@ -193,58 +202,51 @@ export default function AccountSettings({ route }) {
         <Section>
           <Card>
             <View style={{ alignItems: 'center', paddingVertical: 8 }}>
-              <Pressable onPress={pickImage} hitSlop={8}>
-                <View
-                  style={{
-                    width: 96,
-                    height: 96,
-                    borderRadius: 48,
-                    backgroundColor: t.colors.accentFaint,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden',
-                    borderWidth: 2,
-                    borderColor: t.colors.accent,
-                  }}
+              {!profileLoaded ? (
+                <Skeleton width={96} height={96} radius={48} />
+              ) : (
+                <Pressable
+                  onPress={pickImage}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change profile photo"
                 >
-                  {photoURL !== 'noImage' ? (
-                    <Image
-                      key={photoURL}
-                      source={{ uri: photoURL }}
-                      style={{ width: 96, height: 96 }}
-                      onLoadEnd={() => setLoadingImage(false)}
-                    />
-                  ) : (
-                    <Text
-                      style={{
-                        fontSize: 34,
-                        fontWeight: '800',
-                        color: t.colors.accent,
-                      }}
-                    >
-                      {username ? username[0].toUpperCase() : '?'}
-                    </Text>
-                  )}
-                  {loadingImage && photoURL !== 'noImage' && (
-                    <View
-                      style={{
-                        ...StyleSheet.absoluteFillObject,
-                        backgroundColor: 'rgba(0,0,0,0.45)',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <ActivityIndicator size="small" color="#fff" />
-                    </View>
-                  )}
-                </View>
-              </Pressable>
-              <Text
-                style={[
-                  t.typography.caption,
-                  { color: t.colors.textMuted, marginTop: 10 },
-                ]}
-              >
+                  <View
+                    style={{
+                      width: 96,
+                      height: 96,
+                      borderRadius: 48,
+                      backgroundColor: t.colors.accentFaint,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden',
+                      borderWidth: 2,
+                      borderColor: t.colors.accent,
+                    }}
+                  >
+                    {photo ? (
+                      <Image key={photo} source={{ uri: photo }} style={{ width: 96, height: 96 }} />
+                    ) : (
+                      <Text style={{ fontSize: 34, fontWeight: '800', color: t.colors.accent }}>
+                        {(username || user?.email || '?')[0].toUpperCase()}
+                      </Text>
+                    )}
+                    {loadingImage && (
+                      <View
+                        style={{
+                          ...StyleSheet.absoluteFillObject,
+                          backgroundColor: 'rgba(0,0,0,0.45)',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <ActivityIndicator size="small" color="#fff" />
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+              )}
+              <Text style={[t.typography.caption, { color: t.colors.textMuted, marginTop: 10 }]}>
                 Tap to change photo
               </Text>
             </View>
@@ -253,136 +255,102 @@ export default function AccountSettings({ route }) {
 
         <Section label="Profile">
           <Card padded={false}>
-            <Row
-              label="Username"
-              value={username ?? 'N/A'}
-              t={t}
-              right={
-                !isEditing && (
-                  <Pressable
-                    onPress={() => {
-                      setEditedUsername(username === 'N/A' ? '' : username);
-                      setIsEditing(true);
-                    }}
-                    hitSlop={10}
-                    style={{ padding: 4 }}
-                  >
-                    <Ionicons name="pencil" size={16} color={t.colors.accent} />
-                  </Pressable>
-                )
-              }
-              first
-            >
-              {isEditing && (
-                <View style={{ marginTop: 10 }}>
-                  <Field>
-                    <TextInput
-                      style={inputStyle}
-                      value={editedUsername}
-                      onChangeText={setEditedUsername}
-                      editable={!saving}
-                      autoFocus
-                      maxLength={30}
-                      placeholder="Enter username"
-                      placeholderTextColor={t.colors.textSubtle}
-                    />
-                  </Field>
-                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        title="Cancel"
-                        variant="ghost"
-                        onPress={() => setIsEditing(false)}
-                        disabled={saving}
+            {!profileLoaded ? (
+              <View style={{ padding: 18, gap: 14 }}>
+                <Skeleton height={18} />
+                <Skeleton height={18} width="70%" />
+                <Skeleton height={18} width="50%" />
+              </View>
+            ) : (
+              <>
+                <ListRow
+                  first
+                  icon="person-outline"
+                  title={username || 'No username'}
+                  subtitle="Username"
+                  right={
+                    !isEditing ? (
+                      <Pressable
+                        onPress={() => {
+                          setEditedUsername(username || '');
+                          setIsEditing(true);
+                        }}
+                        hitSlop={10}
+                        accessibilityRole="button"
+                        accessibilityLabel="Edit username"
+                        style={{ padding: 4 }}
+                      >
+                        <Ionicons name="pencil" size={16} color={t.colors.accent} />
+                      </Pressable>
+                    ) : null
+                  }
+                />
+                {isEditing && (
+                  <View style={{ paddingHorizontal: 18, paddingBottom: 16 }}>
+                    <Field hint="3–30 characters, must be unique.">
+                      <TextInput
+                        style={inputStyle}
+                        value={editedUsername}
+                        onChangeText={setEditedUsername}
+                        editable={!saving}
+                        autoFocus
+                        autoCapitalize="none"
+                        maxLength={30}
+                        placeholder="Enter username"
+                        placeholderTextColor={t.colors.textSubtle}
                       />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        title={saving ? 'Saving…' : 'Save'}
-                        onPress={handleSaveUsername}
-                        disabled={saving}
-                      />
+                    </Field>
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <View style={{ flex: 1 }}>
+                        <Button
+                          title="Cancel"
+                          variant="ghost"
+                          onPress={() => setIsEditing(false)}
+                          disabled={saving}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Button title="Save" onPress={handleSaveUsername} loading={saving} />
+                      </View>
                     </View>
                   </View>
-                </View>
-              )}
-            </Row>
-            <Row label="Email" value={user?.email ?? 'Not logged in'} t={t} />
-            <Row label="Current group" value={groupName} t={t} />
-            <Row label="Total points" value={String(points ?? 0)} t={t} accent />
+                )}
+                <KeyValueRow label="Email" value={user?.email || 'Not signed in'} />
+                <KeyValueRow label="Family group" value={groupName} />
+                <KeyValueRow label="Lifetime points" value={points} accent />
+              </>
+            )}
+          </Card>
+        </Section>
+
+        <Section label="Data">
+          <Card padded={false}>
+            <ListRow
+              first
+              destructive
+              icon="trash-outline"
+              title="Clear drive history"
+              subtitle={
+                driveCount === null
+                  ? 'Deletes every saved drive on this account.'
+                  : `Deletes all ${driveCount} saved drive${driveCount === 1 ? '' : 's'}. Points and streak stay.`
+              }
+              onPress={confirmClearDrives}
+              disabled={clearing}
+              right={clearing ? <ActivityIndicator size="small" color={t.colors.danger} /> : null}
+            />
           </Card>
         </Section>
 
         <Section label="Session">
           <Button
-            title="Switch account"
-            variant="ghost"
-            icon={<Ionicons name="swap-horizontal" size={18} color={t.colors.text} />}
-            onPress={async () => {
-              await signOut(auth);
-              if (navigation) navigation.navigate('Dashboard');
-            }}
-          />
-          <View style={{ height: 10 }} />
-          <Button
             title="Sign out"
             variant="danger"
             icon={<Ionicons name="log-out-outline" size={18} color="#fff" />}
-            onPress={async () => {
-              const uid = user?.uid;
-              if (uid) {
-                const stored = await AsyncStorage.getItem('totalPoints');
-                const totalPoints = stored ? parseFloat(stored) : 0;
-                await saveUserPoints(uid, totalPoints);
-              }
-              await signOut(auth);
-              if (navigation) navigation.navigate('Dashboard');
-            }}
+            onPress={() => signOut(auth)}
           />
         </Section>
-
-        <View style={{ height: 24 }} />
       </ScrollView>
     </Screen>
-  );
-}
-
-function Row({ label, value, t, right, accent, first, children }) {
-  return (
-    <View
-      style={{
-        paddingVertical: 14,
-        paddingHorizontal: 18,
-        borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
-        borderTopColor: t.colors.divider,
-      }}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ flex: 1 }}>
-          <Text
-            style={[
-              t.typography.micro,
-              {
-                color: t.colors.textMuted,
-                textTransform: 'uppercase',
-                letterSpacing: 1.1,
-              },
-            ]}
-          >
-            {label}
-          </Text>
-          <Text
-            style={[
-              t.typography.bodyStrong,
-              { color: accent ? t.colors.accent : t.colors.text, marginTop: 4 },
-            ]}
-          >
-            {value}
-          </Text>
-        </View>
-        {right}
-      </View>
-      {children}
-    </View>
   );
 }

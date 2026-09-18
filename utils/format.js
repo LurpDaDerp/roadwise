@@ -101,3 +101,15 @@ export function relativeTime(ts) {
 export function pluralize(n, singular, plural = `${singular}s`) {
   return `${n} ${n === 1 ? singular : plural}`;
 }
+
+// Navigation params must be serializable: convert a drive record's Date /
+// Firestore Timestamp fields to ISO strings before passing it as a param.
+export function serializeDrive(drive) {
+  if (!drive) return drive;
+  const out = { ...drive };
+  if (out.timestamp) {
+    const d = toDate(out.timestamp);
+    out.timestamp = isNaN(d) ? String(out.timestamp) : d.toISOString();
+  }
+  return out;
+}

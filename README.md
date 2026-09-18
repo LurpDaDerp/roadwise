@@ -44,11 +44,15 @@ RoadWise is a mobile application that encourages safer driving by:
   - Sudden stops
   - Phone usage time
   - Total distance traveled
-- **Distraction Detection** - Monitors for phone use and app switching
-- **Automatic Session Management** - Resets sessions after 10+ minutes of inactivity
+- **Distraction Detection** - Monitors for phone use and app switching; a drive ends by itself after 2 minutes away
+- **Driver Monitoring (in progress)** - Front-camera gaze and drowsiness monitoring with a label-free "looking forward" calibration; alerts are audio-first (info / warning / critical) and never require a touch
+- **Guided Start** - A pre-drive check (location, notifications, camera, GPS) with phone-mount guidance, then one explicit Start
+- **Glanceable Drive Screen** - One large speed readout, a road-sign speed limit, points and a one-line road summary; keep-awake; hold-to-end
+- **Post-Drive Summary** - Per-drive score (focus / speed / smoothness), points and streak change, and what to improve
 
 ### 🎁 Rewards & Redemption (WIP)
-- **Multiple Categories**:
+- **Badges** - Achievements computed from your drive history (first drive, focused streaks, miles, eyes on the road)
+- **Multiple Categories** (coming soon):
   - 🍔 Food & Drink
   - 🛍️ Shopping
   - 🎮 Games & Entertainment
