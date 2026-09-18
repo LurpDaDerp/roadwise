@@ -17,3 +17,8 @@ Thumbs.db
 /ios/
 /android/
 /.export-check/
+
+# Local secrets (owned by the backend branch); never committed or uploaded
+.env
+.env.local
+.env.*.local

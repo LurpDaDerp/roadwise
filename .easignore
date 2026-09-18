@@ -11,3 +11,6 @@ Thumbs.db
 /android/
 /.export-check/
 .git/
+.env
+.env.local
+.env.*.local
