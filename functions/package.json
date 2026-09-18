@@ -1,13 +1,16 @@
 {
   "name": "functions",
-  "description": "Cloud Functions for Firebase",
+  "description": "Cloud Functions for RoadCash",
   "scripts": {
     "lint": "eslint .",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test:rules": "firebase emulators:exec --only firestore --project roadcash-test \"jest test/firestore.rules.test.js --runInBand\"",
+    "migrate": "node scripts/migrate.js",
+    "migrate:apply": "node scripts/migrate.js --apply"
   },
   "engines": {
     "node": "24"
@@ -18,9 +21,11 @@
     "firebase-functions": "^6.4.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
     "eslint": "^8.15.0",
     "eslint-config-google": "^0.14.0",
-    "firebase-functions-test": "^3.1.0"
+    "firebase-functions-test": "^3.1.0",
+    "jest": "^29.7.0"
   },
   "private": true
 }
