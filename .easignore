@@ -1,0 +1,14 @@
+# EAS upload filter (used INSTEAD of .gitignore when present): identical to .gitignore except that
+# GoogleService-Info.plist (kept out of git) is uploaded so the iOS prebuild on EAS can find it.
+node_modules/
+.expo/
+dist/
+.firebase/
+.DS_Store
+Thumbs.db
+.claude/
+/ios/
+/android/
+/.export-check/
+.git/
+dms/tests/fixtures/
