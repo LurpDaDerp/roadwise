@@ -108,20 +108,22 @@ class DmsVisionModule : Module(), DmsVisionPipeline.FrameListener {
       startStatusTimer()
     }
 
+    // A bare `return@AsyncFunction` is rejected by the Kotlin compiler for these generic
+    // lambdas ("expected Any?, actual Unit" - EAS build cc91ab36); end each void body with `Unit`.
     AsyncFunction("stop") {
       stopStatusTimer()
       pipeline?.stop()
-      return@AsyncFunction
+      Unit
     }
 
     Function("setTargetFps") { fps: Double ->
       pipeline?.setTargetFps(fps)
-      return@Function
+      Unit
     }
 
     Function("setIdleMode") { idle: Boolean ->
       pipeline?.setIdleMode(idle)
-      return@Function
+      Unit
     }
 
     Function("getIntrinsics") {
