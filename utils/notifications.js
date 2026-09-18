@@ -15,6 +15,11 @@ export async function requestNotificationPermissions() {
 
 //Push Notifs
 
+// One registration per app RUN. RootNavigator registers at start-up and DrivePrepScreen
+// registers before every drive; without this the second and later calls each cost an HTTP
+// round trip to Expo for a token that cannot have changed since the first one minutes ago.
+let registeredThisRun = null;   // `${uid}:${token}` of the last successful registration
+
 export async function registerForPushNotificationsAsync() {
   const { status } = await Notifications.getPermissionsAsync();
   let finalStatus = status;
@@ -43,6 +48,9 @@ export async function registerForPushNotificationsAsync() {
   // Remember what was last written for this account and skip all three when nothing changed.
   let cached = null;
   if (uid) {
+    if (registeredThisRun && registeredThisRun.startsWith(`${uid}:`)) {
+      return registeredThisRun.slice(uid.length + 1);
+    }
     try {
       cached = await AsyncStorage.getItem(KEYS.pushTokenSent(uid));
     } catch {
@@ -55,13 +63,16 @@ export async function registerForPushNotificationsAsync() {
 
   // The token is stored under users/{uid}/private/push. It used to sit on the public user
   // document, where any signed-in account could read it and send that device a push.
-  if (uid && token && `${Platform.OS}:${token}` !== cached) {
-    await savePushToken(uid, token, Platform.OS);
-    try {
-      await AsyncStorage.setItem(KEYS.pushTokenSent(uid), `${Platform.OS}:${token}`);
-    } catch {
-      // A failed cache write only costs one redundant save next launch.
+  if (uid && token) {
+    if (`${Platform.OS}:${token}` !== cached) {
+      await savePushToken(uid, token, Platform.OS);
+      try {
+        await AsyncStorage.setItem(KEYS.pushTokenSent(uid), `${Platform.OS}:${token}`);
+      } catch {
+        // A failed cache write only costs one redundant save next launch.
+      }
     }
+    registeredThisRun = `${uid}:${token}`;
   }
 
   return token;
