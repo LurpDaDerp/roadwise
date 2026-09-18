@@ -39,7 +39,7 @@ export default function FamilyScreen() {
   const navigation = useNavigation();
   const perms = usePermissions();
   const { settings } = useSettings();
-  const { uid, username, photoURL, groupId: profileGroupId, profileLoaded } = useAuthContext();
+  const { uid, username, photoURL, groupId: profileGroupId, profileLoaded, refreshGroupId, setGroupIdLocal } = useAuthContext();
 
   const [location, setLocation] = useState(null);
   const [selectedUid, setSelectedUid] = useState(null);
@@ -64,6 +64,7 @@ export default function FamilyScreen() {
     profileGroupId,
     location,
     onBeforeStart: requestSharingPermissions,
+    onGroupIdChange: setGroupIdLocal,
   });
   const { groupId, groupName, members, places, loaded } = family;
 
@@ -141,9 +142,13 @@ export default function FamilyScreen() {
       {
         text: 'Leave',
         style: 'destructive',
-        onPress: () => {
+        onPress: async () => {
+          const result = await family.leaveGroup();
+          if (result && result.ok === false) {
+            Alert.alert('Could not leave', result.error || 'Please check your connection and try again.');
+            return;
+          }
           setSelectedUid(null);
-          family.leaveGroup();
         },
       },
     ]);
@@ -216,7 +221,21 @@ export default function FamilyScreen() {
   }, []);
 
   // ---- render ------------------------------------------------------------
-  if (profileLoaded && !groupId) {
+  // groupId: string = in a group, null = confirmed none (show create / join),
+  // undefined = not known yet or the private-profile read failed (never show the
+  // create / join panel on a failed read: the user may already be in a group).
+  if (profileLoaded && groupId === undefined) {
+    return (
+      <View style={{ flex: 1, backgroundColor: t.colors.bg, paddingTop: insets.top + 8, paddingHorizontal: 20, justifyContent: 'center' }}>
+        <Text style={[t.typography.title, { color: t.colors.text, marginBottom: 8 }]}>Checking your group…</Text>
+        <Text style={[t.typography.body, { color: t.colors.textMuted, marginBottom: 20 }]}>
+          If this takes more than a moment, check your connection.
+        </Text>
+        <Button title="Try again" variant="ghost" onPress={() => refreshGroupId()} />
+      </View>
+    );
+  }
+  if (profileLoaded && groupId === null) {
     return (
       <View style={{ flex: 1, backgroundColor: t.colors.bg, paddingTop: insets.top + 8 }}>
         <JoinCreatePanel

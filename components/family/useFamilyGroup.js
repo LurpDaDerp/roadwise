@@ -2,25 +2,18 @@
 // member list with resolved addresses, and every write the screen performs
 // (create, join, leave, saved places, clearing an emergency).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  onSnapshot,
-  collection,
-  query,
-  where,
-  arrayUnion,
-  arrayRemove,
-  writeBatch,
-  deleteField,
-  serverTimestamp,
-} from 'firebase/firestore';
+import { doc, getDocs, onSnapshot, collection, query, where, limit } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
-import { ensureLocationSharing, stopLocationUpdates, updateCachedGroupId } from '../../utils/LocationService';
-import { getDistance, reverseGeocode, makeGroupCode } from '../../utils/geo';
+import { ensureLocationSharing, stopLocationUpdates } from '../../utils/LocationService';
+import {
+  createGroup as createGroupRemote,
+  joinGroup as joinGroupRemote,
+  leaveGroup as leaveGroupRemote,
+  addSavedLocation,
+  removeSavedLocation,
+  setEmergency,
+} from '../../utils/groups';
+import { getDistance, reverseGeocode } from '../../utils/geo';
 
 const ADDRESS_MIN_METERS = 10;
 const MY_ADDRESS_MIN_MS = 10000;
@@ -82,12 +75,20 @@ function buildMembers(prev, memberLocations, profiles) {
   return changed ? next : prev;
 }
 
-export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart }) {
-  // Derived: the live profile document is the source of truth; create / join /
-  // leave set an optimistic value only until the snapshot catches up.
+// profileGroupId comes from AuthContext (users/{uid}/private/info, three-valued:
+// string | null | undefined = not known). Every write goes through utils/groups.js,
+// which is what the security rules were written against; onGroupIdChange lets the
+// caller update AuthContext optimistically after create / join / leave.
+export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart, onGroupIdChange }) {
   const [optimisticGroupId, setOptimisticGroupId] = useState(undefined);
   const groupId = optimisticGroupId !== undefined ? optimisticGroupId : profileGroupId;
-  const setGroupId = setOptimisticGroupId;
+  const setGroupId = useCallback(
+    (id) => {
+      setOptimisticGroupId(id);
+      onGroupIdChange?.(id);
+    },
+    [onGroupIdChange]
+  );
   const [groupName, setGroupName] = useState('');
   const [members, setMembers] = useState([]);
   const [places, setPlaces] = useState([]);
@@ -105,7 +106,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
     for (let i = 0; i < uids.length; i += 10) {
       const ids = uids.slice(i, i + 10);
       try {
-        const snap = await getDocs(query(collection(db, 'users'), where('__name__', 'in', ids)));
+        const snap = await getDocs(query(collection(db, 'users'), where('__name__', 'in', ids), limit(10)));
         snap.forEach((d) => {
           const u = d.data() || {};
           profilesRef.current[d.id] = {
@@ -231,26 +232,14 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
     await ensureLocationSharing();
   }, [onBeforeStart]);
 
+  // create / join / leave: one atomic batch each in utils/groups.js (group document +
+  // the owner's private group pointer + the AsyncStorage mirror the background task
+  // reads). The 8-character code is generated there with the platform CSPRNG.
   const createGroup = useCallback(
     async (name) => {
       if (!uid) return { ok: false, error: 'You need to be signed in.' };
-      const newId = makeGroupCode();
       try {
-        // The group document is written first so the name, the owner and the
-        // created date survive; only then does the user point at it.
-        await setDoc(
-          doc(db, 'groups', newId),
-          {
-            groupName: name,
-            createdBy: uid,
-            createdAt: serverTimestamp(),
-            savedLocations: [],
-            memberLocations: {},
-          },
-          { merge: true }
-        );
-        await setDoc(doc(db, 'users', uid), { groupId: newId }, { merge: true });
-        await updateCachedGroupId(uid, newId);
+        const newId = await createGroupRemote(uid, name);
         setGroupId(newId);
         // Fire-and-forget: the panel unmounts as soon as groupId is set, and
         // startSharing blocks on OS permission dialogs and a GPS fix.
@@ -258,66 +247,57 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
         return { ok: true };
       } catch (e) {
         console.warn('Create group failed:', e);
-        return { ok: false, error: 'Could not create the group. Check your connection and try again.' };
+        return { ok: false, error: e?.message || 'Could not create the group. Check your connection and try again.' };
       }
     },
-    [uid, startSharing]
+    [uid, startSharing, setGroupId]
   );
 
   const joinGroup = useCallback(
     async (code) => {
       if (!uid) return { ok: false, error: 'You need to be signed in.' };
       try {
-        const snap = await getDoc(doc(db, 'groups', code));
-        if (!snap.exists()) return { ok: false, error: 'No group has that code. Check it and try again.' };
-        await setDoc(doc(db, 'users', uid), { groupId: code }, { merge: true });
-        await updateCachedGroupId(uid, code);
-        setGroupId(code);
-        // Fire-and-forget: the panel unmounts as soon as groupId is set, and
-        // startSharing blocks on OS permission dialogs and a GPS fix.
+        // No read before the write: a non-member cannot read a group. A bad code comes
+        // back as an error from the join write itself.
+        const gid = await joinGroupRemote(uid, code);
+        setGroupId(gid);
         startSharing().catch((e) => console.warn('Location sharing start failed:', e));
         return { ok: true };
       } catch (e) {
         console.warn('Join group failed:', e);
-        return { ok: false, error: 'Could not join that group. Check your connection and try again.' };
+        return { ok: false, error: e?.message || 'Could not join that group. Check your connection and try again.' };
       }
     },
-    [uid, startSharing]
+    [uid, startSharing, setGroupId]
   );
 
   const leaveGroup = useCallback(async () => {
-    if (!groupId || !uid) return;
-    const leaving = groupId;
+    if (!groupId || !uid) return { ok: false, error: 'You are not in a group.' };
     try {
-      await setDoc(doc(db, 'users', uid), { groupId: null }, { merge: true });
-      await updateCachedGroupId(uid, null);
-      await updateDoc(doc(db, 'groups', leaving), { [`memberLocations.${uid}`]: deleteField() });
+      // Both halves or neither: a failure keeps the user in the group in the UI too,
+      // otherwise they would keep broadcasting to a group the app believes they left.
+      await leaveGroupRemote(uid, groupId);
     } catch (e) {
       console.warn('Leave group failed:', e);
+      return { ok: false, error: 'Could not leave the group. Check your connection and try again.' };
     }
     setGroupId(null);
     stopLocationUpdates();
-  }, [groupId, uid]);
+    return { ok: true };
+  }, [groupId, uid, setGroupId]);
 
   const clearEmergency = useCallback(async () => {
     if (!groupId || !uid) return;
-    try {
-      await updateDoc(doc(db, 'groups', groupId), { [`memberLocations.${uid}.emergency`]: false });
-    } catch (e) {
-      console.warn('Could not clear the emergency:', e);
-    }
+    const ok = await setEmergency(uid, groupId, false);
+    if (!ok) console.warn('Could not clear the emergency');
   }, [groupId, uid]);
 
   const savePlace = useCallback(
     async (place, editing) => {
       if (!groupId) return { ok: false, error: 'You are not in a group.' };
-      const ref = doc(db, 'groups', groupId);
       try {
-        // One atomic write: remove the old entry (when editing) and add the new one.
-        const batch = writeBatch(db);
-        if (editing) batch.update(ref, { savedLocations: arrayRemove(editing) });
-        batch.update(ref, { savedLocations: arrayUnion({ ...place, createdBy: editing?.createdBy || uid }) });
-        await batch.commit();
+        if (editing) await removeSavedLocation(groupId, editing);
+        await addSavedLocation(groupId, { ...place, createdBy: editing?.createdBy || uid });
         return { ok: true };
       } catch (e) {
         console.warn('Save place failed:', e);
@@ -331,7 +311,7 @@ export function useFamilyGroup({ uid, profileGroupId, location, onBeforeStart })
     async (place) => {
       if (!groupId || !place) return { ok: false, error: 'You are not in a group.' };
       try {
-        await updateDoc(doc(db, 'groups', groupId), { savedLocations: arrayRemove(place) });
+        await removeSavedLocation(groupId, place);
         return { ok: true };
       } catch (e) {
         console.warn('Delete place failed:', e);
