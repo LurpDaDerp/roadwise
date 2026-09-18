@@ -13,6 +13,7 @@ Thumbs.db
 .export-base-*/
 .export-opt-*/
 .export-*.log
+.npm-*.log
 .git/
 .env
 .env.local
