@@ -86,7 +86,8 @@ function computeFeatures(t, landmarks, width, height, cloud, validity, rotation 
   }
   const stats = rowStatistics(cloud);
   const { center, iod } = eyeCenterAndIod(landmarks, width, height);
-  const validityArray = validity instanceof Float64Array ? validity : Float64Array.from(validity);
+  // `meanArray` only indexes its argument, and a float32 0/1 reads back as the exact same
+  // double, so the Float64Array(478) copy this used to make per frame is pure garbage.
   const feat = FrameFeatures({
     t,
     face_present: true,
@@ -100,7 +101,7 @@ function computeFeatures(t, landmarks, width, height, cloud, validity, rotation 
     aperture: stats[0],
     stats: Array.from(stats),
     eye_visibility: [vis[0], vis[1]],
-    in_frame_fraction: meanArray(validityArray),
+    in_frame_fraction: meanArray(validity),
     eye_center: [center[0], center[1]],
     iod,
   });

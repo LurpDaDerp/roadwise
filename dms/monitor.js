@@ -282,7 +282,9 @@ class DriverMonitor {
     context[2] = context3[2];
     for (let k = 0; k < 4; k++) context[3 + k] = stats[k];
     return {
-      cloud: Float32Array.from(cloud64),
+      // `new Float32Array(src)` is the engine's element-wise convert (`.from` walks the iterator
+      // protocol); identical float64 -> float32 rounding, much cheaper on the frame path.
+      cloud: new Float32Array(cloud64),
       cloud64,
       context,
       context3,
