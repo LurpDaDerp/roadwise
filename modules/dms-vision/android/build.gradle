@@ -1,0 +1,42 @@
+// DmsVision — the RoadCash driver-monitoring native inference layer.
+//
+// Pinned native dependencies (verified on Google Maven / Maven Central 2026-09-18):
+//   com.google.mediapipe:tasks-vision      0.10.35 (pulls tasks-core 0.10.35, the native graph)
+//   androidx.camera:*                      1.4.2   (the line Expo SDK 53's expo-camera ships;
+//                                                   camera-core 1.4.2 declares minCompileSdk 34)
+//   com.microsoft.onnxruntime:onnxruntime-android 1.30.0 (full build, all ops, ~50.6 MB AAR)
+// Do NOT use dynamic versions ('0.10.+', 'latest.integration'): EAS builds must be reproducible.
+//
+// compileSdk / minSdk / targetSdk / the Kotlin version come from expo-module-gradle-plugin,
+// which reads the root project's extras (Expo SDK 53: compileSdk 35, minSdk 24, targetSdk 34).
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'com.roadcash.dmsvision'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.dmsvision'
+
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+
+  // The bundled .task / .onnx are read into memory with AssetManager.open() and handed to
+  // MediaPipe as a direct ByteBuffer (setModelAssetBuffer) and to ONNX Runtime as a byte
+  // array, so asset compression is irrelevant and no aapt noCompress rule is needed.
+}
+
+dependencies {
+  def cameraxVersion = '1.4.2'
+
+  implementation "androidx.camera:camera-core:${cameraxVersion}"
+  implementation "androidx.camera:camera-camera2:${cameraxVersion}"
+  implementation "androidx.camera:camera-lifecycle:${cameraxVersion}"
+
+  implementation 'com.google.mediapipe:tasks-vision:0.10.35'
+  implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.30.0'
+}
