@@ -10,6 +10,9 @@ Thumbs.db
 /ios/
 /android/
 /.export-check/
+.export-base-*/
+.export-opt-*/
+.export-*.log
 .git/
 .env
 .env.local
