@@ -346,3 +346,28 @@ repeat drives settle within seconds. Removed: the in-drive calibration banner (`
 deleted), the pill's "Calibrating N%" / "Recalibrating" states and its tap-to-recalibrate, the
 "Mount your phone" guide in DrivePrep and Onboarding. Kept: "Driver not visible" when the camera
 cannot see a face, and the seat side in Settings > Driver monitoring (default left).
+
+## One-tap start, auto-start and the drive screen (2026-09-18)
+
+Starting a drive takes one tap, or none. The "Ready to drive?" DrivePrep screen is gone: the
+Home Start card goes straight into the drive (`hooks/useStartDrive.js`). Location is the only hard
+requirement and is asked for there only if it was never answered; the camera is asked for once
+when driver monitoring is on and never blocks a drive. With **Start drives automatically** on
+(Settings > Driving, default on), Home watches GPS while it is on screen and location is already
+allowed; two fixes at 20 km/h or more show a 5-second countdown with "Not driving", then the
+drive starts and says "Drive started" (`hooks/useAutoStartDrive.js`, `components/home/AutoStartBanner.js`).
+A cancel or a started drive silences auto-start for 10 minutes; the watch stops when Home loses
+focus, the app backgrounds, or after 15 minutes.
+
+Driver monitoring is switched on and off from the Settings list itself (a toggle on the row),
+with the details one tap deeper.
+
+Drive screen: time, monitoring status and SOS on top; the speed, centred, with the limit sign
+beside it; one strip with points and road conditions (`components/drive/DriveStats.js`, replacing
+PointsCard and ConditionsStrip); hold-to-end. Alerts float below the top bar instead of
+reserving an empty slot. Temperature follows the speed unit (°C with km/h).
+
+Navigation fixes: pushed screens now use an opaque native header (a transparent one let titles
+and scrolled content slide under the back button), and DriveDetail lives on the root stack, so a
+drive opened from Home returns to Home instead of leaving the Drives tab stuck on that drive with
+no back button.

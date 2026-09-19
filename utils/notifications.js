@@ -15,9 +15,9 @@ export async function requestNotificationPermissions() {
 
 //Push Notifs
 
-// One registration per app RUN. RootNavigator registers at start-up and DrivePrepScreen
-// registers before every drive; without this the second and later calls each cost an HTTP
-// round trip to Expo for a token that cannot have changed since the first one minutes ago.
+// One registration per app RUN. RootNavigator registers at start-up, and Onboarding and the
+// notification settings register again when permission is granted; without this each later
+// call costs an HTTP round trip to Expo for a token that cannot have changed since the first.
 let registeredThisRun = null;   // `${uid}:${token}` of the last successful registration
 
 export async function registerForPushNotificationsAsync() {

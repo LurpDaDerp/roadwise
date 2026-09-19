@@ -1,14 +1,15 @@
-// StartDriveCard — the Home hero. One tap → DrivePrep.
+// StartDriveCard — the Home hero. One tap starts the drive (hooks/useStartDrive).
 import React from 'react';
 import { View, Text, Pressable, ImageBackground, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../theme';
 
-export function StartDriveCard({ onPress, subtitle, eyebrow = 'Ready when you are' }) {
+export function StartDriveCard({ onPress, subtitle, eyebrow = 'Ready when you are', disabled = false }) {
   const t = useTheme();
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel="Start drive"
       style={({ pressed }) => ({ borderRadius: t.radius.lg, overflow: 'hidden', height: 150, opacity: pressed ? 0.92 : 1, ...t.elevation.card })}

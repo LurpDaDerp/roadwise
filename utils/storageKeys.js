@@ -8,6 +8,7 @@ export const KEYS = {
   displayTotalPoints: '@displayTotalPoints',
   distractedNotificationsEnabled: '@distractedNotificationsEnabled',
   audioSpeedUpdatesEnabled: '@audioSpeedUpdatesEnabled',
+  autoStartDrive: '@drive.autoStart',
   // Appearance (ThemeContext)
   appTheme: '@appTheme',
   // Notifications

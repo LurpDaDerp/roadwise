@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS = {
   displayTotalPoints: false,
   distractedNotificationsEnabled: true,
   audioSpeedUpdatesEnabled: true,
+  autoStartDrive: true,             // start a drive by itself when Home sees the car moving
   // Notifications
   notifyDriveComplete: true,
   notifyFamilyEmergency: true,
@@ -31,6 +32,7 @@ const SPEC = {
   displayTotalPoints: [KEYS.displayTotalPoints, parseBool],
   distractedNotificationsEnabled: [KEYS.distractedNotificationsEnabled, parseBool],
   audioSpeedUpdatesEnabled: [KEYS.audioSpeedUpdatesEnabled, parseBool],
+  autoStartDrive: [KEYS.autoStartDrive, parseBool],
   notifyDriveComplete: [KEYS.notifyDriveComplete, parseBool],
   notifyFamilyEmergency: [KEYS.notifyFamilyEmergency, parseBool],
   monitoringEnabled: [KEYS.monitoringEnabled, parseBool],

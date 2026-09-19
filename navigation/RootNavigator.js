@@ -1,8 +1,9 @@
 // RootNavigator — the auth gate and the full-screen flows.
 //   signed out           → Welcome / Login / SignUp
 //   signed in, first run → Onboarding
-//   otherwise            → Main tabs, with DrivePrep / Drive / DriveSummary
-//                          presented over them (no tab bar, no swipe back)
+//   otherwise            → Main tabs, with Drive / DriveSummary presented over them
+//                          (no tab bar, no swipe back) and DriveDetail pushed over them
+//                          from anywhere (Home or the Drives list), so Back returns there.
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { NavigationContainer, DarkTheme, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
@@ -22,7 +23,7 @@ import WelcomeScreen from '../screens/WelcomeScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SignUpScreen from '../screens/SignUpScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
-import DrivePrepScreen from '../screens/DrivePrepScreen';
+import DriveDetailScreen from '../screens/DriveDetailScreen';
 import DriveScreen from '../screens/DriveScreen';
 import DriveSummaryScreen from '../screens/DriveSummaryScreen';
 
@@ -86,7 +87,7 @@ export default function RootNavigator() {
       if (!emergencyUid) return; // only emergency pushes deep-link; "Drive ended" etc. just open the app
       if (!navigationRef.isReady()) return;
       const route = navigationRef.getCurrentRoute();
-      if (['Drive', 'DrivePrep', 'DriveSummary', 'Onboarding'].includes(route?.name)) return;
+      if (['Drive', 'DriveSummary', 'Onboarding'].includes(route?.name)) return;
       navigationRef.navigate('Main', { screen: 'Family', params: { emergencyUid } });
     });
     return () => sub.remove();
@@ -105,6 +106,15 @@ export default function RootNavigator() {
   };
 
   const loading = initializing || (user && onboarded === null);
+  const pushedHeader = {
+    headerShown: true,
+    headerTransparent: false,
+    headerStyle: { backgroundColor: t.colors.bg },
+    headerTitle: '',
+    headerBackTitle: 'Back',
+    headerTintColor: t.colors.accent,
+    headerShadowVisible: false,
+  };
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme}>
@@ -114,25 +124,17 @@ export default function RootNavigator() {
         ) : !user ? (
           <Stack.Group screenOptions={{ animation: 'fade' }}>
             <Stack.Screen name="Welcome" component={WelcomeScreen} />
-            <Stack.Screen
-              name="Login"
-              component={LoginScreen}
-              options={{ headerShown: true, headerTransparent: true, headerTitle: '', headerTintColor: t.colors.accent, animation: 'slide_from_right' }}
-            />
-            <Stack.Screen
-              name="SignUp"
-              component={SignUpScreen}
-              options={{ headerShown: true, headerTransparent: true, headerTitle: '', headerTintColor: t.colors.accent, animation: 'slide_from_right' }}
-            />
+            <Stack.Screen name="Login" component={LoginScreen} options={{ ...pushedHeader, animation: 'slide_from_right' }} />
+            <Stack.Screen name="SignUp" component={SignUpScreen} options={{ ...pushedHeader, animation: 'slide_from_right' }} />
           </Stack.Group>
         ) : onboarded === false ? (
           <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ animation: 'fade' }} />
         ) : (
           <>
             <Stack.Screen name="Main" component={MainTabs} options={{ animation: 'fade' }} />
+            <Stack.Screen name="DriveDetail" component={DriveDetailScreen} options={pushedHeader} />
             <Stack.Group screenOptions={{ presentation: 'fullScreenModal', gestureEnabled: false, animation: 'slide_from_bottom' }}>
-              <Stack.Screen name="DrivePrep" component={DrivePrepScreen} />
-              <Stack.Screen name="Drive" component={DriveScreen} options={{ animation: 'fade' }} />
+              <Stack.Screen name="Drive" component={DriveScreen} />
               <Stack.Screen name="DriveSummary" component={DriveSummaryScreen} options={{ animation: 'fade' }} />
             </Stack.Group>
           </>

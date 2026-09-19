@@ -34,6 +34,19 @@ export default function DriveScreenSettings() {
           subtitle="How the drive screen reads and sounds."
         />
 
+        <Section label="Starting a drive">
+          <Card padded={false}>
+            <ToggleRow
+              first
+              icon="car-sport-outline"
+              title="Start drives automatically"
+              subtitle={`With RoadWise open, a drive starts once you pass ${settings.speedUnit === 'kph' ? '20 km/h' : '12 mph'}. You get 5 seconds to cancel.`}
+              value={settings.autoStartDrive}
+              onValueChange={(v) => update('autoStartDrive', v)}
+            />
+          </Card>
+        </Section>
+
         <Section label="Units">
           <Card>
             <SegmentedTabs

@@ -1,5 +1,5 @@
 // usePermissions — one place that knows the state of every permission the app
-// asks for, with the reason copy used by Onboarding and DrivePrep.
+// asks for, with the reason copy used by Onboarding and Settings.
 //
 // Camera: the permission is owned by the driver-monitoring native module
 // (modules/dms-vision, the code that actually opens the front camera:
@@ -55,6 +55,22 @@ function normalize(status) {
   if (status === 'denied') return 'denied';
   if (status === 'undetermined') return 'undetermined';
   return status || 'undetermined';
+}
+
+/**
+ * The camera permission outside the hook (one-tap drive start, the Settings toggle):
+ * `{ status, canAskAgain }`, asking the OS only when `request` is true.
+ */
+export async function cameraPermission({ request = false } = {}) {
+  const viaModule = cameraViaModule();
+  const result = request
+    ? viaModule
+      ? await DmsVision.requestPermissionsAsync()
+      : await ImagePicker.requestCameraPermissionsAsync()
+    : viaModule
+    ? await DmsVision.getPermissionsAsync()
+    : await ImagePicker.getCameraPermissionsAsync();
+  return { status: normalize(result?.status), canAskAgain: result?.canAskAgain !== false };
 }
 
 export function usePermissions() {

@@ -1,6 +1,7 @@
 // MainTabs — Home · Drives · Rewards · Family · Settings.
-// Full-screen flows (DrivePrep, Drive, DriveSummary, Onboarding, Auth) live in
-// RootNavigator, so no screen needs to hide the tab bar by hand.
+// Full-screen flows (Drive, DriveSummary, Onboarding, Auth) and DriveDetail live in
+// RootNavigator, so no screen needs to hide the tab bar by hand, and a drive opened from
+// Home returns to Home instead of hijacking the Drives tab.
 import React from 'react';
 import { Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -10,7 +11,6 @@ import { useTheme } from '../theme';
 
 import HomeScreen from '../screens/HomeScreen';
 import DrivesScreen from '../screens/DrivesScreen';
-import DriveDetailScreen from '../screens/DriveDetailScreen';
 import AIFeedbackScreen from '../screens/AIFeedbackScreen';
 import RewardsScreen from '../screens/RewardsScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
@@ -32,7 +32,10 @@ function useStackOptions() {
   const t = useTheme();
   return {
     headerShown: true,
-    headerTransparent: true,
+    // Opaque: a transparent header let every pushed screen's title and scrolled content slide
+    // under the back button (the screens only padded 32 pt for a 44-56 pt header).
+    headerTransparent: false,
+    headerStyle: { backgroundColor: t.colors.bg },
     headerTitle: '',
     headerBackTitle: 'Back',
     headerTintColor: t.colors.accent,
@@ -46,7 +49,6 @@ function DrivesNavigator() {
   return (
     <DrivesStack.Navigator screenOptions={opts}>
       <DrivesStack.Screen name="DrivesHome" component={DrivesScreen} options={{ headerShown: false }} />
-      <DrivesStack.Screen name="DriveDetail" component={DriveDetailScreen} />
       <DrivesStack.Screen name="AIFeedback" component={AIFeedbackScreen} />
     </DrivesStack.Navigator>
   );

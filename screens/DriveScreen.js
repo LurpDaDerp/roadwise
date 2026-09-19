@@ -1,11 +1,14 @@
-// DriveScreen — the live drive, designed for glanceability: one huge speed,
-// the limit sign, points and a one-line road summary. Audio-first alerts, no
-// modals, keep-awake, hold-to-end. The engine lives in hooks/useDriveSession.
+// DriveScreen — the live drive, designed for glanceability:
+//   top     elapsed time · monitoring status · SOS
+//   middle  the speed, huge and centred, with the limit sign beside it
+//   bottom  one stats strip (points + road) and hold-to-end
+// Alerts float over the top of the speed area, so nothing jumps when one appears.
+// Audio-first alerts, no modals, keep-awake. The engine lives in hooks/useDriveSession.
 //
 // ============================================================================
 // MONITORING MOUNT POINTS (docs/UX_REWORK.md §5.3)
 //   [MP-1] status pill        → DriveTopBar (components/drive/DriveTopBar.js)
-//   [MP-2] alert slot         → <AlertSlot/> below the top bar
+//   [MP-2] alert slot         → the floating alert area below the top bar
 //   [MP-3] critical overlay   → <CriticalOverlay/> last child of the root view
 //   [MP-4] metrics in record  → getFinalizeExtra() → useDriveSession.finalize()
 //   [MP-5] points pause       → useDriveSession({ pausePoints })
@@ -32,12 +35,13 @@ import { useDriveSession } from '../hooks/useDriveSession';
 import { useEmergency, callNumber } from '../hooks/useEmergency';
 import { useDriverMonitoring } from '../monitoring/useDriverMonitoring';
 import { useAlertAudio, useAlertSounds } from '../monitoring/alertAudio';
+import { speak } from '../utils/speech';
 import { ALERT_SEVERITY, alertCopy } from '../monitoring/types';
 import { isAcknowledgeable } from '../monitoring/engineBridge';
 import { monitoringSettingsFrom, MONITORING_AVAILABLE } from '../monitoring/settings';
 import { AlertBanner } from '../components/monitoring/AlertBanner';
 import { CriticalOverlay } from '../components/monitoring/CriticalOverlay';
-import { SpeedHero, PointsCard, ConditionsStrip, HoldToEndButton, EmergencySheet, DriveTopBar } from '../components/drive';
+import { SpeedHero, DriveStats, HoldToEndButton, EmergencySheet, DriveTopBar } from '../components/drive';
 
 const alertTone = require('../assets/sounds/alert.mp3');
 const SOS_CLEAR_TIMEOUT_MS = 5000;
@@ -77,6 +81,13 @@ export default function DriveScreen({ navigation, route }) {
   useEffect(() => {
     setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
   }, []);
+
+  // An automatic start happens while the car is already moving: confirm it by voice so the
+  // driver never has to look at the phone to know the drive is being recorded.
+  const autoStarted = !!route.params?.autoStarted;
+  useEffect(() => {
+    if (autoStarted) speak('Drive started');
+  }, [autoStarted]);
 
   // Keep the screen awake only while the drive is RUNNING. `useKeepAwake()` holds it for as long
   // as the component is mounted, and this screen stays mounted after the drive has ended when
@@ -373,6 +384,19 @@ export default function DriveScreen({ navigation, route }) {
       : null),
     [sosOpen, monitoring.activeAlert]
   );
+  const alertContent = bannerAlert ? (
+    <AlertBanner alert={bannerAlert} onDismiss={bannerOnDismiss} />
+  ) : session.gpsStatus === 'denied' ? (
+    <Banner tone="danger" icon="navigate" title="Location is off" body="Enable location to track this drive" />
+  ) : session.pendingDrives > 0 ? (
+    <Banner
+      tone="info"
+      icon="cloud-upload-outline"
+      title={session.pendingDrives === 1 ? 'A finished drive is waiting to upload' : `${session.pendingDrives} finished drives are waiting to upload`}
+      body="They will be saved when you are back online"
+    />
+  ) : null;
+
   const rootStyle = useMemo(
     () => ({
       flex: 1,
@@ -398,23 +422,6 @@ export default function DriveScreen({ navigation, route }) {
         />
       </View>
 
-      {/* MONITORING MOUNT POINT [MP-2]: alert slot. The forward reference is learned silently
-          while driving (no calibration step, no banner); only real alerts appear here. */}
-      <View style={styles.alertSlot}>
-        {bannerAlert ? (
-          <AlertBanner alert={bannerAlert} onDismiss={bannerOnDismiss} />
-        ) : session.gpsStatus === 'denied' ? (
-          <Banner tone="danger" icon="navigate" title="Location is off" body="Enable location to track this drive" />
-        ) : session.pendingDrives > 0 ? (
-          <Banner
-            tone="info"
-            icon="cloud-upload-outline"
-            title={session.pendingDrives === 1 ? 'A finished drive is waiting to upload' : `${session.pendingDrives} finished drives are waiting to upload`}
-            body="They will be saved when you are back online"
-          />
-        ) : null}
-      </View>
-
       <View style={styles.middle}>
         <SpeedHero
           speed={session.speed}
@@ -425,16 +432,19 @@ export default function DriveScreen({ navigation, route }) {
           showLimit={settings.showSpeedLimit}
           gpsStatus={session.gpsStatus}
         />
-        <PointsCard
-          points={shownPoints}
-          label={settings.displayTotalPoints ? 'Lifetime points' : 'Points this drive'}
-          state={pointsState}
-          pausedReason="Paused · alert"
-        />
-        <ConditionsStrip weather={session.weather} roadSummary={session.roadSummary} />
       </View>
 
-      <View onLayout={onEndButtonLayout}>
+      <DriveStats
+        points={shownPoints}
+        pointsLabel={settings.displayTotalPoints ? 'Lifetime points' : 'Points'}
+        pointsState={pointsState}
+        pausedReason="Paused · alert"
+        weather={session.weather}
+        roadSummary={session.roadSummary}
+        unit={settings.speedUnit}
+      />
+
+      <View onLayout={onEndButtonLayout} style={styles.endArea}>
         {endState === 'sosFailed' ? (
           <View style={styles.sosFailed}>
             <Banner
@@ -465,6 +475,15 @@ export default function DriveScreen({ navigation, route }) {
         )}
       </View>
 
+      {/* MONITORING MOUNT POINT [MP-2]: the alert area floats just below the top bar, over the
+          top of the speed area, so the layout never jumps when an alert comes or goes. The forward
+          reference is learned silently while driving (no calibration step, no banner). */}
+      {alertContent && (
+        <View pointerEvents="box-none" style={[styles.alertArea, { top: insets.top + 8 + topBarHeight + 10 }]}>
+          {alertContent}
+        </View>
+      )}
+
       {/* Mounted only while it is open: a Modal with visible={false} still re-rendered its whole
           subtree on every drive tick. */}
       {sosOpen && (
@@ -494,8 +513,9 @@ export default function DriveScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-  alertSlot: { minHeight: 64, justifyContent: 'center', marginTop: 12 },
-  middle: { flex: 1, justifyContent: 'center', gap: 14 },
+  alertArea: { position: 'absolute', left: 18, right: 18, zIndex: 10 },
+  middle: { flex: 1, justifyContent: 'center' },
+  endArea: { marginTop: 14 },
   sosFailed: { gap: 10 },
   row: { flexDirection: 'row', gap: 10 },
   flex1: { flex: 1 },

@@ -33,20 +33,20 @@ export const SpeedHero = React.memo(function SpeedHero({
   const unitLabel = unit === 'kph' ? 'km/h' : 'mph';
   const searching = gpsStatus === 'searching';
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6 }}>
-      <View style={{ flex: 1 }} accessibilityLabel={`Speed ${Math.round(speed)} ${unitLabel}`} accessibilityRole="text">
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      <View style={{ flex: 1, alignItems: 'center' }} accessibilityLabel={`Speed ${Math.round(speed)} ${unitLabel}`} accessibilityRole="text">
         <AutoFitText
-          style={[t.typography.glance, { color: searching ? t.colors.textSubtle : color, includeFontPadding: false }]}
+          style={[t.typography.glance, { color: searching ? t.colors.textSubtle : color, includeFontPadding: false, textAlign: 'center' }]}
           numberOfLines={1}
         >
           {searching ? '--' : Math.round(speed)}
         </AutoFitText>
-        <Text style={[t.typography.glanceLabel, { color: t.colors.textMuted, marginTop: -6, marginLeft: 6 }]}>
+        <Text style={[t.typography.glanceLabel, { color: t.colors.textMuted, marginTop: -4, textAlign: 'center' }]}>
           {searching ? 'Finding GPS' : unitLabel}
         </Text>
       </View>
       {showLimit && (
-        <SpeedLimitSign limit={limit} unit={unit} isDefault={limitIsDefault} speeding={isSpeeding} />
+        <SpeedLimitSign limit={limit} unit={unit} isDefault={limitIsDefault} speeding={isSpeeding} size={84} />
       )}
     </View>
   );

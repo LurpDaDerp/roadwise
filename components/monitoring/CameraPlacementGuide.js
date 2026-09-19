@@ -1,4 +1,4 @@
-// CameraPlacementGuide — used by Onboarding and DrivePrep. Illustrates the
+// CameraPlacementGuide — used by Settings > Driver monitoring. Illustrates the
 // dash-mount placement (front camera facing the driver), lets the user pick
 // the driver side, and exposes a `preview` slot where the monitoring branch
 // can render its live camera preview (useDriverMonitoring().previewComponent).

@@ -1,4 +1,4 @@
-// DriveTopBar — SOS (left), monitoring status pill (centre, [MP-1]), elapsed time (right).
+// DriveTopBar — elapsed time (left), monitoring status pill (centre, [MP-1]), SOS (right).
 import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -37,11 +37,24 @@ export const DriveTopBar = React.memo(function DriveTopBar({
   // on every 4 Hz publish, which would re-render this bar (and the pill) even when the two values
   // it shows are unchanged.
   onSos, status, calibration, monitoringEnabled, showMonitoring = true, startedAt, running = true,
-  onPillPress,
 }) {
   const t = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+      <ElapsedClock startedAt={startedAt} running={running} />
+
+      {/* MONITORING MOUNT POINT [MP-1]: status pill (hidden while MONITORING_AVAILABLE is false) */}
+      {showMonitoring ? (
+        <MonitoringStatusPill
+          status={status}
+          calibration={calibration}
+          enabled={monitoringEnabled}
+          style={{ maxWidth: 170 }}
+        />
+      ) : (
+        <View />
+      )}
+
       <Pressable
         onPress={onSos}
         accessibilityRole="button"
@@ -63,27 +76,12 @@ export const DriveTopBar = React.memo(function DriveTopBar({
         <Ionicons name="alert-circle" size={20} color="#fff" />
         <Text style={{ color: '#fff', fontWeight: '900', fontSize: 15, letterSpacing: 1 }}>SOS</Text>
       </Pressable>
-
-      {/* MONITORING MOUNT POINT [MP-1]: status pill (hidden while MONITORING_AVAILABLE is false) */}
-      {showMonitoring ? (
-        <MonitoringStatusPill
-          status={status}
-          calibration={calibration}
-          enabled={monitoringEnabled}
-          onPress={onPillPress}
-          style={{ maxWidth: 190 }}
-        />
-      ) : (
-        <View />
-      )}
-
-      <ElapsedClock startedAt={startedAt} running={running} />
     </View>
   );
 });
 
 const styles = StyleSheet.create({
-  clock: { minWidth: 64, alignItems: 'flex-end' },
+  clock: { minWidth: 72, alignItems: 'flex-start' },
   clockText: { fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
 });
 

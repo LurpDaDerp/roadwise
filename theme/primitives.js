@@ -28,7 +28,9 @@ export function Screen({ children, style, padded = true, hasHeader = false }) {
       ? StatusBar.currentHeight || 24
       : 20;
 
-  const topPadding = padded ? baseTop + (hasHeader ? t.spacing[7] : t.spacing[4]) : 0;
+  // A screen under a native header (`hasHeader`) starts below it: the header already covers the
+  // status bar, so only a small gap is added. Other screens pad for the status bar themselves.
+  const topPadding = padded ? (hasHeader ? t.spacing[2] : baseTop + t.spacing[4]) : 0;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.colors?.bg || '#000' }}>

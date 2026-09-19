@@ -2,7 +2,7 @@
 // A grouped list: profile → Account, Driving, Monitoring, Safety, Notifications,
 // Appearance (inline) and About. Every preference is served by SettingsContext.
 import React, { useCallback, useContext, useState } from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, Alert, Linking } from 'react-native';
 import { Image } from 'expo-image';   // remote avatar: expo-image is the one with a disk cache
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,6 +14,7 @@ import {
   ScreenHeader,
   ListRow,
   SegmentedTabs,
+  Toggle,
   useTheme,
 } from '../theme';
 import { ThemeContext } from '../context/ThemeContext';
@@ -21,6 +22,7 @@ import { useSettings } from '../context/SettingsContext';
 import { useAuthContext } from '../context/AuthContext';
 import { SENSITIVITY_OPTIONS, MONITORING_AVAILABLE } from '../monitoring/settings';
 import { getTrustedContacts } from '../utils/firestore';
+import { cameraPermission } from '../hooks/usePermissions';
 
 const THEME_VALUES = ['light', 'dark', 'system'];
 const THEME_LABELS = ['Light', 'Dark', 'System'];
@@ -28,8 +30,35 @@ const THEME_LABELS = ['Light', 'Dark', 'System'];
 export default function SettingsScreen() {
   const navigation = useNavigation();
   const t = useTheme();
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const { uid, user, username, photoURL } = useAuthContext();
+
+  // Driver monitoring on/off straight from the list. Turning it on asks for the camera once;
+  // if the camera stays blocked the setting stays on and drives run unmonitored until allowed.
+  const onToggleMonitoring = useCallback(
+    async (value) => {
+      if (!MONITORING_AVAILABLE) return;
+      update('monitoringEnabled', value);
+      if (!value) return;
+      try {
+        let camera = await cameraPermission();
+        if (camera.status === 'undetermined' && camera.canAskAgain) camera = await cameraPermission({ request: true });
+        if (camera.status !== 'granted') {
+          Alert.alert(
+            'Camera access is off',
+            'Driver monitoring uses the front camera. Allow camera access for RoadWise in your phone settings.',
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
+        }
+      } catch {
+        // the module is unavailable (Expo Go): the setting is stored, monitoring stays inactive
+      }
+    },
+    [update]
+  );
   const { theme, updateTheme } = useContext(ThemeContext);
   const [contactCount, setContactCount] = useState(null);
 
@@ -61,8 +90,8 @@ export default function SettingsScreen() {
   const monitoringSubtitle = !MONITORING_AVAILABLE
     ? 'Coming soon'
     : settings.monitoringEnabled
-    ? `On · ${sensitivity.label} · ${settings.monitoringDriverSide} seat`
-    : 'Off';
+    ? `On · ${sensitivity.label} sensitivity · tap for options`
+    : 'Off · tap for options';
 
   const safetySubtitle =
     contactCount === null
@@ -120,11 +149,17 @@ export default function SettingsScreen() {
               onPress={() => navigation.navigate('DriveScreenSettings')}
             />
             <ListRow
-              chevron
               icon="eye-outline"
               title="Driver monitoring"
               subtitle={monitoringSubtitle}
               onPress={() => navigation.navigate('MonitoringSettings')}
+              right={
+                <Toggle
+                  value={MONITORING_AVAILABLE && !!settings.monitoringEnabled}
+                  onValueChange={onToggleMonitoring}
+                  disabled={!MONITORING_AVAILABLE}
+                />
+              }
             />
           </Card>
         </Section>

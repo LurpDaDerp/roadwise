@@ -1,4 +1,5 @@
-// HomeScreen — everything points at "Start drive"; then stats, this week,
+// HomeScreen — everything points at "Start drive": one tap starts it (no prep screen), and with
+// auto-start on, a drive starts by itself once Home sees the car moving. Then stats, this week,
 // safety score, recent drives and the family card.
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, RefreshControl } from 'react-native';
@@ -14,7 +15,9 @@ import { formatDistance, toDate, serializeDrive } from '../utils/format';
 import { KEYS } from '../utils/storageKeys';
 import { useAuthContext } from '../context/AuthContext';
 import { useSettings } from '../context/SettingsContext';
-import { StartDriveCard, StreakPill, RecentDriveRow } from '../components/home';
+import { StartDriveCard, StreakPill, RecentDriveRow, AutoStartBanner } from '../components/home';
+import { useStartDrive } from '../hooks/useStartDrive';
+import { useAutoStartDrive } from '../hooks/useAutoStartDrive';
 import { MONITORING_AVAILABLE } from '../monitoring/settings';
 
 function greeting() {
@@ -34,6 +37,13 @@ export default function HomeScreen({ navigation }) {
   const [family, setFamily] = useState(null); // { name, members, emergencies }
   const [refreshing, setRefreshing] = useState(false);
   const [streakInfo, setStreakInfo] = useState(false);
+
+  const { startDrive, starting } = useStartDrive();
+  const autoStart = useAutoStartDrive({ enabled: settings.autoStartDrive });
+  const onAutoStart = useCallback(() => {
+    autoStart.consume();
+    startDrive({ auto: true });
+  }, [autoStart.consume, startDrive]);
 
   const shownPoints = useCountUp(points, 450);
   const unit = settings.speedUnit;
@@ -87,7 +97,7 @@ export default function HomeScreen({ navigation }) {
   const monitoringLine = !MONITORING_AVAILABLE
     ? 'Driver monitoring coming soon'
     : settings.monitoringEnabled
-    ? `Monitoring on · ${settings.monitoringDriverSide} seat`
+    ? 'Driver monitoring on'
     : 'Driver monitoring off';
 
   return (
@@ -105,14 +115,23 @@ export default function HomeScreen({ navigation }) {
         />
 
         <Section>
-          <StartDriveCard onPress={() => navigation.navigate('DrivePrep')} subtitle={monitoringLine} />
+          {autoStart.detected ? (
+            <AutoStartBanner onStart={onAutoStart} onCancel={autoStart.cancel} />
+          ) : (
+            <StartDriveCard
+              onPress={() => startDrive()}
+              disabled={starting}
+              eyebrow={settings.autoStartDrive ? 'Tap, or just start driving' : 'Ready when you are'}
+              subtitle={monitoringLine}
+            />
+          )}
         </Section>
 
         {isNew ? (
           <Section label="Your first drive">
             <Card padded={false}>
               <ListRow first icon="phone-portrait-outline" title="Phone in its mount" subtitle="Any dash or windshield mount. No setup." />
-              <ListRow icon="play-outline" title="Tap Start drive" subtitle="Points begin once you are moving." />
+              <ListRow icon="play-outline" title="Tap Start drive, or just drive" subtitle="With RoadWise open, a drive starts on its own once you are moving." />
               <ListRow icon="eye-outline" title="Leave it alone" subtitle="Picking up the phone resets your streak." />
               <ListRow icon="gift-outline" title="Earn and compete" subtitle="Points, badges and the leaderboard live in Rewards." />
             </Card>
@@ -198,7 +217,7 @@ export default function HomeScreen({ navigation }) {
               <EmptyState compact icon="car-outline" title="No drives yet" body="Your first drive will show up here with its score." />
             ) : (
               drives.slice(0, 3).map((d, i) => (
-                <RecentDriveRow key={d.id} drive={d} unit={unit} first={i === 0} onPress={() => navigation.navigate('Drives', { screen: 'DriveDetail', params: { drive: serializeDrive(d) } })} />
+                <RecentDriveRow key={d.id} drive={d} unit={unit} first={i === 0} onPress={() => navigation.navigate('DriveDetail', { drive: serializeDrive(d) })} />
               ))
             )}
           </Card>
