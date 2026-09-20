@@ -1,5 +1,6 @@
 import type { Db } from '@/data/db/driver';
 import { asNumber, asText } from '@/data/db/row';
+import { assertTripExists } from '@/data/db/trips';
 import type { SampleRow } from '@/data/db/types';
 
 /**
@@ -23,16 +24,26 @@ const APPEND =
 
 export function createSamplesRepo(db: Db) {
   return {
+    /**
+     * Throws `MissingTripError` rather than writing an orphan row. The check runs on the same
+     * handle as the insert; outside a transaction the foreign key backs it up as well.
+     */
     async append(clientTripId: string, ts: number, row: unknown): Promise<void> {
+      await assertTripExists(db, clientTripId);
       await db.execute(APPEND, [clientTripId, ts, JSON.stringify(row)]);
     },
 
-    /** One transaction per batch: a partial batch is never visible to a reader. */
+    /**
+     * One transaction per batch: a partial batch is never visible to a reader, and a batch for a
+     * trip that is not there writes nothing. The parent check runs inside the transaction, so it
+     * holds even where foreign keys are not enforced there (see `createExpoDb`).
+     */
     appendMany(
       clientTripId: string,
       rows: readonly { ts: number; row: unknown }[]
     ): Promise<void> {
       return db.transaction(async (tx) => {
+        await assertTripExists(tx, clientTripId);
         for (const { ts, row } of rows) {
           await tx.execute(APPEND, [clientTripId, ts, JSON.stringify(row)]);
         }

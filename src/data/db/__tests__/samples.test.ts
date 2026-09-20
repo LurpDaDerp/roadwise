@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
+import { MissingTripError } from '@/data/db/errors';
 import { migrate } from '@/data/db/migrate';
 import { createSamplesRepo } from '@/data/db/samples';
 import { createTripsRepo } from '@/data/db/trips';
@@ -52,11 +53,31 @@ test('appendMany writes a whole 1 Hz batch in one transaction', async () => {
   await expect(samples.count('trip-1')).resolves.toBe(4);
 });
 
-test('appendMany rolls the whole batch back when one row cannot be written', async () => {
-  await expect(
-    samples.appendMany('ghost', [{ ts: T0, row: featureRow(T0) }])
-  ).rejects.toThrow();
+test('append refuses to orphan a row on a trip that is not there', async () => {
+  await expect(samples.append('ghost', T0, featureRow(T0))).rejects.toThrow(MissingTripError);
   await expect(samples.count('ghost')).resolves.toBe(0);
+});
+
+test('appendMany writes nothing when the trip is not there', async () => {
+  const batch = [0, 1000, 2000].map((offset) => ({ ts: T0 + offset, row: featureRow(T0) }));
+
+  // Checked inside the transaction, before any row is written, so the batch rolls back even on
+  // a driver that does not enforce foreign keys there.
+  await expect(samples.appendMany('ghost', batch)).rejects.toThrow(MissingTripError);
+
+  await expect(samples.count('ghost')).resolves.toBe(0);
+  const all = await db.execute('SELECT count(*) AS n FROM samples');
+  expect(all.rows).toEqual([{ n: 0 }]);
+});
+
+test('MissingTripError from a batch names the trip that was missing', async () => {
+  expect.assertions(2);
+  try {
+    await samples.appendMany('ghost', [{ ts: T0, row: {} }]);
+  } catch (error) {
+    expect(error).toBeInstanceOf(MissingTripError);
+    expect((error as MissingTripError).clientTripId).toBe('ghost');
+  }
 });
 
 test('range is inclusive at both ends and ordered oldest first', async () => {

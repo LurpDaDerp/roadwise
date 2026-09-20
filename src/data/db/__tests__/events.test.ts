@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
+import { MissingTripError } from '@/data/db/errors';
 import { createEventsRepo } from '@/data/db/events';
 import { migrate } from '@/data/db/migrate';
 import { createTripsRepo } from '@/data/db/trips';
@@ -82,21 +83,40 @@ test('insertMany writes the whole batch', async () => {
   await expect(events.countByTrip('trip-1')).resolves.toBe(2);
 });
 
-test('insertMany is all-or-nothing', async () => {
-  await expect(
-    events.insertMany([
-      { id: 'e1', client_trip_id: 'trip-1', category: 'phone', started_at: T0 },
-      { id: 'e2', client_trip_id: 'ghost', category: 'phone', started_at: T0 },
-    ])
-  ).rejects.toThrow();
+test('insertMany is all-or-nothing when one row names a trip that is not there', async () => {
+  const batch = [
+    { id: 'e1', client_trip_id: 'trip-1', category: 'phone', started_at: T0 },
+    { id: 'e2', client_trip_id: 'ghost', category: 'phone', started_at: T0 },
+  ];
+
+  // The parent check runs before any row is written, so this holds on a driver that does not
+  // enforce foreign keys inside a transaction as well as on one that does.
+  await expect(events.insertMany(batch)).rejects.toThrow(MissingTripError);
+  await expect(events.insertMany(batch)).rejects.toThrow(/ghost/);
 
   await expect(events.countByTrip('trip-1')).resolves.toBe(0);
+  const all = await db.execute('SELECT count(*) AS n FROM trip_events');
+  expect(all.rows).toEqual([{ n: 0 }]);
 });
 
 test('an event cannot reference a trip that is not there', async () => {
   await expect(
     events.insert({ id: 'e1', client_trip_id: 'ghost', category: 'phone', started_at: T0 })
-  ).rejects.toThrow();
+  ).rejects.toThrow(MissingTripError);
+
+  const all = await db.execute('SELECT count(*) AS n FROM trip_events');
+  expect(all.rows).toEqual([{ n: 0 }]);
+});
+
+test('MissingTripError names the trip that was missing', async () => {
+  expect.assertions(3);
+  try {
+    await events.insert({ id: 'e1', client_trip_id: 'ghost', category: 'phone', started_at: T0 });
+  } catch (error) {
+    expect(error).toBeInstanceOf(MissingTripError);
+    expect((error as MissingTripError).clientTripId).toBe('ghost');
+    expect((error as MissingTripError).name).toBe('MissingTripError');
+  }
 });
 
 test('listByTrip is oldest first and scoped to the one trip', async () => {

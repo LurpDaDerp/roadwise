@@ -8,6 +8,7 @@ import {
   insertStatement,
   updateStatement,
 } from '@/data/db/row';
+import { assertTripExists } from '@/data/db/trips';
 import type { EventPatch, EventRow, NewEvent } from '@/data/db/types';
 
 const COLUMNS = [
@@ -71,11 +72,21 @@ export function createEventsRepo(db: Db) {
   return {
     get: (id: string) => get(id),
 
-    insert: (event: NewEvent) => insertOn(event, db),
+    async insert(event: NewEvent): Promise<EventRow> {
+      await assertTripExists(db, event.client_trip_id);
+      return insertOn(event, db);
+    },
 
-    /** All or nothing: a batch that trips a foreign key leaves the trip's events untouched. */
+    /**
+     * All or nothing: a batch naming a trip that is not there writes none of it, and throws
+     * `MissingTripError` — checked explicitly inside the transaction rather than left to the
+     * foreign key, which may not be enforced there on device.
+     */
     insertMany(events: readonly NewEvent[]): Promise<EventRow[]> {
       return db.transaction(async (tx) => {
+        for (const clientTripId of new Set(events.map((event) => event.client_trip_id))) {
+          await assertTripExists(tx, clientTripId);
+        }
         const written: EventRow[] = [];
         for (const event of events) written.push(await insertOn(event, tx));
         return written;

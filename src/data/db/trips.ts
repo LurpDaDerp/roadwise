@@ -1,4 +1,5 @@
 import type { Db } from '@/data/db/driver';
+import { MissingTripError } from '@/data/db/errors';
 import {
   asEnum,
   asFlag,
@@ -95,6 +96,21 @@ export interface TripListOptions {
   limit?: number;
   offset?: number;
   status?: TripStatus;
+}
+
+/**
+ * Throw unless `clientTripId` names a trip, using the handle it is given so the check sees the
+ * same transaction as the write that follows it.
+ *
+ * The repositories that write child rows call this instead of relying on the foreign key: inside
+ * a transaction on device, foreign keys may not be enforced (see `createExpoDb`). Outside a
+ * transaction the foreign key is still there as a second line of defence.
+ */
+export async function assertTripExists(on: Db, clientTripId: string): Promise<void> {
+  const { rows } = await on.execute('SELECT 1 FROM trips WHERE client_trip_id = ?', [
+    clientTripId,
+  ]);
+  if (rows.length === 0) throw new MissingTripError(clientTripId);
 }
 
 export function createTripsRepo(db: Db) {
