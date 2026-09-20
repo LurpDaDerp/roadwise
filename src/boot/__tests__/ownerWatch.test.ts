@@ -151,7 +151,7 @@ describe('the watch alone', () => {
     stop();
   });
 
-  test('a first sign-in on a device nobody owned records the owner instead of rebuilding', async () => {
+  test('a first sign-in on an empty device nobody owned records the owner instead of rebuilding', async () => {
     await createSettingsRepo(db).remove(LAST_USER_KEY);
     const { auth, handovers, stop } = watching(null);
 
@@ -166,6 +166,22 @@ describe('the watch alone', () => {
     auth.emit('user-b');
     await settle();
     expect(handovers).toHaveLength(1);
+    stop();
+  });
+
+  test('an unowned device with a trip on it raises a handover rather than being adopted', async () => {
+    // The pre-branch database: no owner key was ever written, and it is full of A's drives
+    // (security review C-1). Adopting it would hand them to whoever signs in next.
+    await createSettingsRepo(db).remove(LAST_USER_KEY);
+    await seedDriverData();
+    const { auth, handovers, stop } = watching(null);
+
+    auth.emit('user-b');
+    await settle();
+
+    expect(handovers).toHaveLength(1);
+    // Nothing adopted: the rebuild's own `identity` stage is what decides and wipes.
+    expect(await readDeviceOwner(db)).toBeNull();
     stop();
   });
 

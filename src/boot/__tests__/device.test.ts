@@ -91,15 +91,36 @@ test('a traces directory that will not clear is reported, and the rows are gone 
 });
 
 describe('the owner check', () => {
-  test('the first sign-in ever keeps whatever the device already recorded', async () => {
-    await seedEverything();
+  test('the first sign-in on an empty device adopts it', async () => {
     const { store, traces } = fakeTraces();
 
     expect(await ensureDeviceOwner(db, 'user-a', { traces })).toBe('first');
 
-    expect(await countOf('trips')).toBe(1);
     expect(store.cleared).toBe(0);
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+
+  test('an unowned device with a trip on it is wiped, not adopted', async () => {
+    // No owner recorded is not the same as new: every database written before this branch has
+    // none, including one full of the last driver's drives (security review C-1).
+    await seedEverything();
+    const { store, traces } = fakeTraces();
+
+    expect(await ensureDeviceOwner(db, 'user-b', { traces })).toBe('wiped');
+
+    expect(await totals()).toEqual({ ...emptyTotals, settings: 1 });
+    expect(store.cleared).toBe(1);
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
+  });
+
+  test('an unowned device with only queued work on it is wiped too', async () => {
+    await createQueueRepo(db).enqueue('dispute', { clientTripId: 'gone' }, 'dispute:1', T0);
+    const { store, traces } = fakeTraces();
+
+    expect(await ensureDeviceOwner(db, 'user-b', { traces })).toBe('wiped');
+
+    expect(await countOf('sync_queue')).toBe(0);
+    expect(store.cleared).toBe(1);
   });
 
   test('the same user signing in again changes nothing at all', async () => {

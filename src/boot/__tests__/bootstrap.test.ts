@@ -177,14 +177,28 @@ describe('whose device this is', () => {
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
   });
 
-  test('a first-ever sign-in keeps the drives the device recorded before it', async () => {
-    await crashedDrive();
+  test('a first-ever sign-in on an empty device adopts it', async () => {
+    await migrate(db);
     const { bootstrapDeps } = deps({ supabase: createFakeSupabase({ uid: 'user-a' }) });
 
     runtime = await bootstrapApp(bootstrapDeps);
 
     expect(runtime.owner).toBe('first');
-    expect(runtime.recovery.recovered).toEqual([TRIP]);
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+
+  test('a first-ever sign-in on a device that already holds drives wipes them', async () => {
+    // The pre-branch database (security review C-1): no owner was ever recorded, and the drives
+    // on it are somebody's — just not necessarily the person signing in. Nothing of theirs is
+    // lost by clearing it, and everything of the last driver's would be leaked by keeping it.
+    await crashedDrive();
+    const { bootstrapDeps } = deps({ supabase: createFakeSupabase({ uid: 'user-a' }) });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('wiped');
+    expect(runtime.recovery).toEqual({ recovered: [], discarded: [], failed: [] });
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
   });
 

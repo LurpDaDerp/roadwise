@@ -1,7 +1,7 @@
 import { View } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
-import { LastTripCard } from '@/features/home';
+import { homeCopy, LastTripCard } from '@/features/home';
 import { t } from '@/i18n';
 import { Button, Screen, Text } from '@/ui';
 
@@ -19,7 +19,19 @@ export default function Home() {
       </Text>
       <LastTripCard />
       <View style={{ flexGrow: 1 }} />
-      <Button label={t('home.signOut')} variant="ghost" onPress={() => void signOut()} />
+      {/* The consequence sits with the control, before the press rather than after it: the next
+          sign-in by anyone else clears this phone, and an un-uploaded drive is nowhere else. */}
+      <View style={{ gap: 4 }}>
+        <Button
+          label={t('home.signOut')}
+          variant="ghost"
+          onPress={() => void signOut()}
+          accessibilityHint={homeCopy.signOutWarning}
+        />
+        <Text variant="footnote" tone="muted">
+          {homeCopy.signOutWarning}
+        </Text>
+      </View>
     </Screen>
   );
 }

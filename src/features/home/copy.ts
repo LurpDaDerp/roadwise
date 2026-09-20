@@ -11,6 +11,13 @@ export const homeCopy = {
     title: 'Your first drive will appear here',
     body: 'Every drive you record is printed on this card.',
   },
+  /**
+   * Said before signing out, not after (security review I-5). The next person to sign in on this
+   * phone gets a clean device, and a drive that has not reached the server yet exists nowhere
+   * else — so the person about to sign out is the only one who can still act on that.
+   */
+  signOutWarning:
+    "Drives that haven't finished uploading are lost if someone else signs in on this phone.",
   error: "Couldn't read your last drive.",
   /** The progress line's own failure: the drive above it still stands. */
   countError: "Couldn't count your drives.",

@@ -34,6 +34,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   android: {
     package: 'com.lurp.safedrive',
+    // A driver's whole local record — `roadwise.db` and the raw second-by-second traces beside it
+    // — lives in the app's files directory, which Android auto-backup and `adb backup` would
+    // otherwise copy off the device (security review I-4). On a family phone that backup is often
+    // keyed to the parent's account, and it survives the uninstall and the in-app delete that are
+    // supposed to be final. Nothing this app stores locally is worth restoring: every synced drive
+    // comes back from the server on the next sign-in.
+    allowBackup: false,
     // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
     // tile and nothing crashes. iOS uses Apple Maps and needs no key.
     config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },

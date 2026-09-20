@@ -75,6 +75,22 @@ export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<vo
 export const readDeviceOwner = (db: Db): Promise<string | null> =>
   createSettingsRepo(db).get<string>(LAST_USER_KEY);
 
+/**
+ * Whether anything on this device belongs to a driver: a trip, or work owed to the server.
+ *
+ * The reason an unrecorded owner is not the same as an empty device (security review C-1). The
+ * owner key is this branch's; every database written before it has no owner recorded, including
+ * one full of somebody's drives. Adopting that would hand the previous driver's history — and
+ * their queued uploads — to whoever signs in next, which is the whole leak this file exists to
+ * stop. So "no owner" is only ever trusted on a device with nothing on it.
+ */
+export async function hasDriverData(db: Db): Promise<boolean> {
+  const { rows } = await db.execute(
+    'SELECT (SELECT COUNT(*) FROM trips) + (SELECT COUNT(*) FROM sync_queue) AS n'
+  );
+  return Number((rows[0] as Record<string, unknown>).n) > 0;
+}
+
 /** Record the owner without touching anything else. */
 export const rememberDeviceOwner = (db: Db, uid: string): Promise<void> =>
   createSettingsRepo(db).set(LAST_USER_KEY, uid);
@@ -95,7 +111,10 @@ export async function ensureDeviceOwner(
   const lastUserId = await readDeviceOwner(db);
   if (lastUserId === uid) return 'same';
 
-  if (lastUserId !== null) await wipeDevice(db, deps);
+  // Fail closed: an unowned device is adopted only when it is empty. With data on it, "no owner"
+  // means a database this branch never stamped — somebody's drives, and nobody has said whose.
+  const adopt = lastUserId === null && !(await hasDriverData(db));
+  if (!adopt) await wipeDevice(db, deps);
   await rememberDeviceOwner(db, uid);
-  return lastUserId === null ? 'first' : 'wiped';
+  return adopt ? 'first' : 'wiped';
 }

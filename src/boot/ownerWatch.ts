@@ -16,7 +16,7 @@
  */
 import type { Db } from '@/data/db';
 
-import { readDeviceOwner, rememberDeviceOwner } from './device';
+import { hasDriverData, readDeviceOwner, rememberDeviceOwner } from './device';
 
 /** The slice of the Supabase client this needs. Structural: the real client is assignable. */
 export interface AuthWatchable {
@@ -41,9 +41,10 @@ export interface OwnerWatchDeps {
  *   - a **token refresh** or any other event carrying the same uid — it is the same person;
  *   - a **sign-out**. The owner is kept, and their drives keep waiting to upload; signing back in
  *     is `same` and costs nothing. It is the *next* sign-in that decides anything;
- *   - a **first sign-in on a device nobody owned yet**. There is nothing to wipe and nothing to
- *     rebuild, so the owner is simply recorded — which is what makes the *next* handover, by
- *     someone who never relaunched the app, detectable at all.
+ *   - a **first sign-in on a device nobody owned yet _and with nothing on it_**. There is nothing
+ *     to wipe and nothing to rebuild, so the owner is simply recorded — which is what makes the
+ *     *next* handover, by someone who never relaunched the app, detectable at all. An unowned
+ *     device that *does* hold trips or queued work is a different thing entirely and is wiped.
  */
 export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
   let live = true;
@@ -52,7 +53,10 @@ export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
     if (uid === null) return;
     const owner = await readDeviceOwner(db);
     if (owner === uid) return;
-    if (owner === null) {
+    // An unowned device is adopted only when it is empty (security review C-1): a database with
+    // trips or queued work on it and no owner recorded is a pre-branch device holding somebody
+    // else's drives, not a fresh one. Raise the handover and let the rebuild empty it.
+    if (owner === null && !(await hasDriverData(db))) {
       await rememberDeviceOwner(db, uid);
       return;
     }
