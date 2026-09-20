@@ -55,6 +55,30 @@ export type Database = {
         }
         Relationships: []
       }
+      baselines: {
+        Row: {
+          computed_at: string
+          created_at: string
+          medians: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          computed_at?: string
+          created_at?: string
+          medians?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          computed_at?: string
+          created_at?: string
+          medians?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       consents: {
         Row: {
           actor: string
@@ -130,6 +154,80 @@ export type Database = {
         }
         Relationships: []
       }
+      event_disputes: {
+        Row: {
+          auto_accepted: boolean
+          created_at: string
+          decided_at: string
+          event_id: string
+          id: string
+          note: string | null
+          reason: string
+          stated_limit_mph: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_accepted?: boolean
+          created_at?: string
+          decided_at?: string
+          event_id: string
+          id?: string
+          note?: string | null
+          reason: string
+          stated_limit_mph?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_accepted?: boolean
+          created_at?: string
+          decided_at?: string
+          event_id?: string
+          id?: string
+          note?: string | null
+          reason?: string
+          stated_limit_mph?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_disputes_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: true
+            referencedRelation: "trip_events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      map_feedback: {
+        Row: {
+          created_at: string
+          reports: number
+          segment_key: string
+          stated_limits_mph: number[]
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          reports?: number
+          segment_key: string
+          stated_limits_mph?: number[]
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          reports?: number
+          segment_key?: string
+          stated_limits_mph?: number[]
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       private_profiles: {
         Row: {
           birth_date: string | null
@@ -202,13 +300,345 @@ export type Database = {
         }
         Relationships: []
       }
+      rate_limits: {
+        Row: {
+          count: number
+          created_at: string
+          key: string
+          updated_at: string
+          user_id: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          created_at?: string
+          key: string
+          updated_at?: string
+          user_id: string
+          window_start?: string
+        }
+        Update: {
+          count?: number
+          created_at?: string
+          key?: string
+          updated_at?: string
+          user_id?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
+      score_daily: {
+        Row: {
+          band: string | null
+          camera_day: boolean
+          created_at: string
+          day: string
+          driving_s: number
+          exposure: number
+          good_day: boolean
+          long_term_score: number | null
+          phone_free_day: boolean
+          provisional: boolean
+          safe_day: boolean
+          severe_events: number
+          trips_scored: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          band?: string | null
+          camera_day?: boolean
+          created_at?: string
+          day: string
+          driving_s?: number
+          exposure?: number
+          good_day?: boolean
+          long_term_score?: number | null
+          phone_free_day?: boolean
+          provisional?: boolean
+          safe_day?: boolean
+          severe_events?: number
+          trips_scored?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          band?: string | null
+          camera_day?: boolean
+          created_at?: string
+          day?: string
+          driving_s?: number
+          exposure?: number
+          good_day?: boolean
+          long_term_score?: number | null
+          phone_free_day?: boolean
+          provisional?: boolean
+          safe_day?: boolean
+          severe_events?: number
+          trips_scored?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      trip_events: {
+        Row: {
+          alert_shown: boolean
+          category: string
+          client_event_id: string
+          confidence: number
+          context: Json
+          context_multiplier: number
+          corrected: boolean
+          created_at: string
+          deduction: number | null
+          duration_ms: number
+          id: string
+          lat: number | null
+          lng: number | null
+          measured: Json
+          severity: number
+          source: string
+          started_at: string
+          status: string
+          trip_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          alert_shown?: boolean
+          category: string
+          client_event_id: string
+          confidence: number
+          context?: Json
+          context_multiplier: number
+          corrected?: boolean
+          created_at?: string
+          deduction?: number | null
+          duration_ms: number
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          measured?: Json
+          severity: number
+          source: string
+          started_at: string
+          status: string
+          trip_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          alert_shown?: boolean
+          category?: string
+          client_event_id?: string
+          confidence?: number
+          context?: Json
+          context_multiplier?: number
+          corrected?: boolean
+          created_at?: string
+          deduction?: number | null
+          duration_ms?: number
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          measured?: Json
+          severity?: number
+          source?: string
+          started_at?: string
+          status?: string
+          trip_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_events_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trips: {
+        Row: {
+          camera_session: boolean
+          category_deductions: Json
+          client_trip_id: string
+          conditions: Json
+          created_at: string
+          data_quality: string
+          deleted_at: string | null
+          distance_m: number
+          duration_s: number
+          end_geohash5: string | null
+          end_label: string | null
+          ended_at: string
+          exposure: number
+          had_severe_event: boolean
+          id: string
+          incomplete: boolean
+          limit_coverage_pct: number | null
+          local_day: string
+          mode: string
+          notes: string | null
+          polyline: string
+          role: string
+          role_confidence: number | null
+          role_source: string | null
+          score: number | null
+          scoring_version: number
+          start_geohash5: string | null
+          start_label: string | null
+          started_at: string
+          status: string
+          trace_path: string | null
+          tz: string
+          unscored_reason: string | null
+          updated_at: string
+          user_id: string
+          vehicle_id: string | null
+        }
+        Insert: {
+          camera_session?: boolean
+          category_deductions?: Json
+          client_trip_id: string
+          conditions?: Json
+          created_at?: string
+          data_quality: string
+          deleted_at?: string | null
+          distance_m: number
+          duration_s: number
+          end_geohash5?: string | null
+          end_label?: string | null
+          ended_at: string
+          exposure: number
+          had_severe_event?: boolean
+          id?: string
+          incomplete?: boolean
+          limit_coverage_pct?: number | null
+          local_day: string
+          mode: string
+          notes?: string | null
+          polyline?: string
+          role: string
+          role_confidence?: number | null
+          role_source?: string | null
+          score?: number | null
+          scoring_version?: number
+          start_geohash5?: string | null
+          start_label?: string | null
+          started_at: string
+          status: string
+          trace_path?: string | null
+          tz: string
+          unscored_reason?: string | null
+          updated_at?: string
+          user_id: string
+          vehicle_id?: string | null
+        }
+        Update: {
+          camera_session?: boolean
+          category_deductions?: Json
+          client_trip_id?: string
+          conditions?: Json
+          created_at?: string
+          data_quality?: string
+          deleted_at?: string | null
+          distance_m?: number
+          duration_s?: number
+          end_geohash5?: string | null
+          end_label?: string | null
+          ended_at?: string
+          exposure?: number
+          had_severe_event?: boolean
+          id?: string
+          incomplete?: boolean
+          limit_coverage_pct?: number | null
+          local_day?: string
+          mode?: string
+          notes?: string | null
+          polyline?: string
+          role?: string
+          role_confidence?: number | null
+          role_source?: string | null
+          score?: number | null
+          scoring_version?: number
+          start_geohash5?: string | null
+          start_label?: string | null
+          started_at?: string
+          status?: string
+          trace_path?: string | null
+          tz?: string
+          unscored_reason?: string | null
+          updated_at?: string
+          user_id?: string
+          vehicle_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      apply_recompute: {
+        Args: {
+          p_baselines: Json
+          p_day: Json
+          p_events: Json
+          p_scored: Json
+          p_trip_id: string
+        }
+        Returns: Json
+      }
+      apply_trip: { Args: { p: Json }; Returns: Json }
+      count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
+      record_dispute: {
+        Args: {
+          p_event_id: string
+          p_note: string
+          p_reason: string
+          p_stated_limit_mph: number
+          p_user: string
+        }
+        Returns: Json
+      }
+      require_baselines: {
+        Args: { p_baselines: Json; p_fn: string }
+        Returns: undefined
+      }
+      require_keys: {
+        Args: { p_fn: string; p_keys: string[]; p_obj: Json; p_prefix: string }
+        Returns: undefined
+      }
+      require_score_days: {
+        Args: { p_days: Json; p_fn: string }
+        Returns: undefined
+      }
+      require_type: {
+        Args: { p_fn: string; p_name: string; p_type: string; p_value: Json }
+        Returns: undefined
+      }
       set_birth_date: { Args: { p_birth_date: string }; Returns: undefined }
+      set_trip_role_row: {
+        Args: { p_role: string; p_trip_id: string; p_user: string }
+        Returns: Json
+      }
+      soft_delete_trip: {
+        Args: { p_trip_id: string; p_user: string }
+        Returns: Json
+      }
+      upsert_baselines: {
+        Args: { p_baselines: Json; p_user: string }
+        Returns: undefined
+      }
+      upsert_score_day: {
+        Args: { p_days: Json; p_user: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
