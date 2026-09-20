@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { createEventsRepo, createQueueRepo, type DisputeRecord } from '@/data/db';
-import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
+import { deductions, eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import {
   clearQueryClients,
   press,
@@ -16,7 +16,12 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 const ID = 'trip-1';
 const EVENT = 'e-speeding';
 
-const trip = tripRow({ client_trip_id: ID, score: 84 });
+const trip = tripRow({
+  client_trip_id: ID,
+  score: 84,
+  // What the drive was actually charged; the moment below shows its share of it.
+  category_deductions_json: JSON.stringify(deductions({ speeding: 6 })),
+});
 
 const speeding = (over: Parameters<typeof eventRow>[0] = {}) =>
   eventRow({

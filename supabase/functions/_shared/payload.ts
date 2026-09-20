@@ -148,6 +148,20 @@ export const FinalizeTripPayloadSchema = z
     startGeohash5: z.string().length(5).nullable(),
     endGeohash5: z.string().length(5).nullable(),
     /**
+     * Share of the drive's rows that had a known posted limit, 0–100.
+     *
+     * It gates whether "kept to the limit" may be claimed at all (§9.3: speeding is not scored
+     * where the limit is unknown), and both D1's highlight and E2's clean stamp read it. It has
+     * to travel, or the rule exists on the device and nowhere else — the server's re-score path
+     * and anything restored from the server would have no value to read.
+     *
+     * Nullable rather than optional: a build that predates the field queued its work into a
+     * database that predates `sync_queue.owner_uid` too, and the runner refuses those items on
+     * their own account (they cannot be attributed), so there is nothing left for a default to
+     * rescue.
+     */
+    limitCoveragePct: z.number().min(0).max(100).nullable(),
+    /**
      * Google encoded polyline, simplified, roughly 200 m trimmed at each end; '' when nothing is
      * left. Its characters are ASCII 63–126, so the length in code units is the length in bytes.
      */

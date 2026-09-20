@@ -263,6 +263,51 @@ export function canReport(event: TripEventView): boolean {
   return standing === 'counted' || standing === 'free' || standing === 'reportUnsent';
 }
 
+/**
+ * What each event actually cost this drive, after its category's per-trip cap (§9.3).
+ *
+ * `trip_events.deduction` is the scorer's **pre-cap** figure (`d / E`); `trip.categoryDeductions`
+ * is what the category was actually charged, `min(cap, raw / E)`. When a cap binds they differ,
+ * and they differ reachably: one 18-second phone handling at 25 mph is `8 × 1 × 3 × 1 / 0.75 = 32`
+ * against a phone cap of 30, and 38.4 at night. Printing the raw figure on the timeline puts a
+ * number above the category bar that contradicts it — and contradicts the score — on the one
+ * screen whose stated purpose is "full transparency: where and why the score changed".
+ *
+ * So each event is shown its share of what the category was charged. The shares sum to the bar,
+ * the bars sum to the points lost, and a driver who adds up the moments gets the drive's number.
+ */
+export function cappedCosts(
+  trip: Pick<TripSummary, 'categoryDeductions'>,
+  events: readonly TripEventView[]
+): Map<string, number> {
+  const raw = new Map<EventCategory, number>();
+  for (const event of events) {
+    if (event.category === null || !event.affectsScore) continue;
+    raw.set(event.category, (raw.get(event.category) ?? 0) + event.deduction);
+  }
+
+  const costs = new Map<string, number>();
+  for (const event of events) {
+    if (event.category === null || !event.affectsScore) continue;
+    const before = raw.get(event.category) ?? 0;
+    const charged = trip.categoryDeductions[event.category];
+    // `before` is positive here (this event contributed to it), so the ratio is safe.
+    const share = before === 0 ? 0 : (event.deduction * charged) / before;
+    costs.set(event.id, share);
+  }
+  return costs;
+}
+
+/** What one event cost, after the cap. Null when it cost nothing. */
+export function cappedCost(
+  trip: Pick<TripSummary, 'categoryDeductions'>,
+  events: readonly TripEventView[],
+  event: TripEventView
+): number | null {
+  const cost = cappedCosts(trip, events).get(event.id);
+  return cost === undefined || cost <= 0 ? null : cost;
+}
+
 /** One timeline row, with everything the list and the screen reader need already decided. */
 export interface TimelineRow {
   event: TripEventView;
@@ -278,9 +323,10 @@ export interface TimelineRow {
 
 /** The D2 timeline, oldest first — the order the drive happened and the order the repo returns. */
 export function timelineRows(
-  trip: Pick<TripSummary, 'tz'>,
+  trip: Pick<TripSummary, 'tz' | 'categoryDeductions'>,
   events: readonly TripEventView[]
 ): TimelineRow[] {
+  const costs = cappedCosts(trip, events);
   return events.map((event) => {
     const standing = eventStanding(event);
     return {
@@ -291,10 +337,10 @@ export function timelineRows(
       severity: severityWord(event),
       confidence: confidenceLevel(event),
       standing,
-      // What it *costs*, read from the row rather than from the standing: a report that was
-      // recorded but not applied leaves the event scored, and saying it cost nothing would be
-      // the opposite of honest.
-      points: event.affectsScore ? event.deduction : null,
+      // What it *costs*, after its category's cap and read from the row rather than from the
+      // standing: a report that was recorded but not applied leaves the event scored, and saying
+      // it cost nothing would be the opposite of honest.
+      points: costs.get(event.id) ?? null,
     };
   });
 }

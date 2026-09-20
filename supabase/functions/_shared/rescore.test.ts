@@ -33,6 +33,8 @@ const trip = (overrides: Partial<StoredTrip> = {}): StoredTrip => ({
   durationS: 1320,
   exposure: 1.1,
   dataQuality: 'A',
+  categoryDeductions: { phone: 0, speeding: 4, braking: 0, accel: 0, cornering: 0, focus: 0 },
+  limitCoveragePct: 80,
   rowsDigest: ROWS_DIGEST,
   tracePath: TRACE_KEY,
   incomplete: false,

@@ -51,6 +51,7 @@ export const STORED_SCORE = STORED_SCORED.score as number;
 
 /** A stored trip as PostgREST returns it, with the columns the actions read. */
 export const storedTripRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  limit_coverage_pct: 80,
   id: TRIP_ID,
   user_id: UID,
   client_trip_id: CLIENT_TRIP_ID,

@@ -1,5 +1,5 @@
 import type { Db } from '@/data/db/driver';
-import { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 interface Migration {
   readonly version: number;
@@ -10,7 +10,10 @@ interface Migration {
  * Append-only. A released version's statements are never edited — a change ships as the next
  * entry, so a device that already ran version N only runs what comes after N.
  */
-const MIGRATIONS: readonly Migration[] = [{ version: 1, statements: SCHEMA_V1 }];
+const MIGRATIONS: readonly Migration[] = [
+  { version: 1, statements: SCHEMA_V1 },
+  { version: 2, statements: SCHEMA_V2 },
+];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 

@@ -211,6 +211,14 @@ Deno.test('the happy path re-scores, builds the envelope from the JWT user and a
       score: expected.score,
       status: 'final',
       day: e.day[0],
+      // The device's row follows the server's arithmetic, not its own finalizer's.
+      trip: {
+        categoryDeductions: expected.categoryDeductions,
+        exposure: expected.exposure,
+        dataQuality: expected.dataQuality,
+        hadSevereEvent: p.hadSevereEvent,
+        limitCoveragePct: p.limitCoveragePct,
+      },
       provisionalMismatch: false,
       replayed: false,
     },
@@ -237,7 +245,7 @@ Deno.test('the happy path re-scores, builds the envelope from the JWT user and a
   // the trip is in the current four weeks, and the baseline is the eight weeks behind them
   assertEquals(e.baselines, { medians: {}, computedAt: new Date(NOW).toISOString() });
   assertEquals(e.conditions, { night: false, precipitation: false });
-  assertEquals(e.limitCoveragePct, null);
+  assertEquals(e.limitCoveragePct, p.limitCoveragePct);
   assertEquals(h.warnings.length, 0);
   assertEquals(h.fake.storageTouched(), false);
 });
@@ -504,6 +512,13 @@ Deno.test('a trip already stored replays its result and its stored day row witho
       drivingS: 2400,
       tripsScored: 2,
       severeEvents: 0,
+    },
+    trip: {
+      categoryDeductions: { phone: 0, speeding: 4, braking: 0, accel: 0, cornering: 0, focus: 0 },
+      exposure: 1,
+      dataQuality: 'A',
+      hadSevereEvent: false,
+      limitCoveragePct: null,
     },
     provisionalMismatch: false,
     replayed: true,

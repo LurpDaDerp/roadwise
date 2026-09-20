@@ -246,6 +246,10 @@ export type UnscoredReason = NonNullable<ScoredTrip['reason']>;
 export function unscoredReasonOf(summary: TripSummary): UnscoredReason | null {
   if (summary.scored) return null;
   if (summary.status === 'discarded') return 'implausible_speed';
+  // `'unknown'` is a row that records nothing about who was driving, so "you weren't driving"
+  // would be an assertion this build cannot make. The screens have a facts-only variant for it,
+  // and C10's question is what fills it in.
+  if (summary.role === 'unknown') return null;
   if (summary.role !== 'driver') return 'passenger';
   if (
     summary.distanceM < CONSTANTS.MIN_SCORED_DISTANCE_M ||

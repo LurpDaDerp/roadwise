@@ -8,6 +8,7 @@ import { formatPoints } from '@/ui/charts';
 
 import { tripCopy as copy } from './copy';
 import {
+  cappedCost,
   canReport,
   confidenceLevel,
   confidenceReasons,
@@ -145,7 +146,8 @@ export function EventDetailScreen({
   }
 
   const detail = detailQuery.data;
-  const event = (eventsQuery.data ?? []).find((row) => row.id === eventId);
+  const events = eventsQuery.data ?? [];
+  const event = events.find((row) => row.id === eventId);
   if (!detail || !event) {
     return (
       <Screen>
@@ -161,11 +163,12 @@ export function EventDetailScreen({
   const confidence = confidenceLevel(event);
   const reasons = confidenceReasons(event);
   const why = whyItMatters(event.category);
-  // What the moment costs is read from the row, not from the standing: a report that was
-  // recorded but not applied (§9.9) leaves the points exactly where they were, and a report
-  // still travelling has not taken anything off yet either.
-  const counted = event.affectsScore;
-  const underReview = eventStanding(event) === 'reportSending' && event.deduction > 0;
+  // What the moment cost, after its category's per-trip cap: the raw `deduction` is the
+  // pre-cap figure and would contradict the bar D2 draws below it. Read from the row rather than
+  // from the standing, because a report that was recorded but not applied (§9.9) leaves the
+  // points exactly where they were, and a report still travelling has taken nothing off yet.
+  const cost = cappedCost(trip, events, event);
+  const underReview = eventStanding(event) === 'reportSending' && cost !== null;
 
   const submit = (input: DisputeInput) => {
     void report(event.id, input).then((ok) => {
@@ -211,9 +214,7 @@ export function EventDetailScreen({
 
         <Field label={copy.event.pointsLabel}>
           <FieldText face="numeral" variant="title2" testID="event-points">
-            {counted && event.deduction > 0
-              ? copy.event.pointsLost(formatPoints(event.deduction))
-              : copy.event.pointsNone}
+            {cost === null ? copy.event.pointsNone : copy.event.pointsLost(formatPoints(cost))}
           </FieldText>
           {underReview ? (
             <Text variant="footnote" tone="muted" testID="points-under-review">

@@ -29,6 +29,23 @@ export const BASELINE_WINDOW_D = 56;
  * `longTermScore`, `drivingS`, `tripsScored` and `severeEvents` are integers (`int` columns);
  * `severeEvents` counts the day's scored trips that had a severe event, not events.
  */
+/**
+ * The trip fields a re-score rewrites, returned to the device so its row can follow.
+ *
+ * `apply_trip` and `apply_recompute` both store a fresh `category_deductions`, `exposure`,
+ * `data_quality` and `had_severe_event`; without these on the wire the device keeps whatever its
+ * own finalizer computed, for ever. That is what makes D2's bars contradict the score above them
+ * after an accepted dispute, and what leaves a crash-recovered drive showing an A the server
+ * graded B.
+ */
+export interface TripFields {
+  categoryDeductions: Record<string, number>;
+  exposure: number;
+  dataQuality: string;
+  hadSevereEvent: boolean;
+  limitCoveragePct: number | null;
+}
+
 export interface DayRow {
   day: string;
   longTermScore: number | null;

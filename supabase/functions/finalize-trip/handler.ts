@@ -17,6 +17,7 @@ import {
   isNightAt,
   localDay,
   type DayRow,
+  type TripFields,
   type DayTripInput,
 } from '../_shared/aggregate.ts';
 import type { ApplyTripEnvelope, Db } from '../_shared/db.ts';
@@ -59,6 +60,17 @@ export interface FinalizeTripResponse {
   status: string;
   /** The trip's own day row, exactly as written; the device caches it as the authoritative day. */
   day: DayRow;
+  /**
+   * What this call stored on the trip beyond the score — the per-category breakdown, the
+   * exposure, the data-quality grade, the severe flag and the limit coverage.
+   *
+   * The server re-scores from the payload and may disagree with the device: every crash-recovered
+   * drive is graded at most B here (`tripMetrics` withholds the IMU under any downgrade) while the
+   * device's own finalizer wrote an A, and the per-category breakdown is the input to D2's bars,
+   * D1's highlight, the coaching tip and every insight rate. Without these on the wire the device
+   * keeps its own numbers for ever.
+   */
+  trip: TripFields;
   provisionalMismatch: boolean;
   replayed: boolean;
 }
@@ -122,6 +134,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         score: existing.score,
         status: existing.status,
         day: (await deps.db.getDayRow(userId, existing.localDay)) ?? emptyDayRow(existing.localDay),
+        trip: existing.fields,
         provisionalMismatch: false,
         replayed: true,
       };
@@ -208,18 +221,35 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
       day: dayRows(days, [ownDay, ...dayTrips], lt),
       baselines: baselines(allScored, nowMs),
       conditions: { night, precipitation: false },
-      limitCoveragePct: null,
+      limitCoveragePct: p.limitCoveragePct,
     };
     const result = await deps.db.applyTrip(envelope);
     // The loser of a concurrent first upload gets the winner's stored day, not its own attempt.
     const day = result.replayed
       ? ((await deps.db.getDayRow(userId, result.day)) ?? emptyDayRow(result.day))
       : envelope.day[0];
+    // A replay answers from what is stored; a first write answers with what it just stored.
+    const trip: TripFields = result.replayed
+      ? ((await deps.db.findTrip(userId, p.clientTripId))?.fields ?? {
+          categoryDeductions: scored.categoryDeductions,
+          exposure: scored.exposure,
+          dataQuality: scored.dataQuality,
+          hadSevereEvent,
+          limitCoveragePct: p.limitCoveragePct,
+        })
+      : {
+          categoryDeductions: scored.categoryDeductions,
+          exposure: scored.exposure,
+          dataQuality: scored.dataQuality,
+          hadSevereEvent,
+          limitCoveragePct: p.limitCoveragePct,
+        };
     const response: FinalizeTripResponse = {
       tripId: result.trip_id,
       score: result.score,
       status: result.status,
       day,
+      trip,
       provisionalMismatch: mismatch,
       replayed: result.replayed,
     };

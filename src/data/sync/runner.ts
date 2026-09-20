@@ -36,6 +36,7 @@ import {
   isActionKind,
   recordActionGiveUp,
   RETRIES_EXHAUSTED,
+  tripFieldsPatch,
   type ActionKind,
   type ActionOutcome,
 } from '@/data/sync/actions';
@@ -221,6 +222,18 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   let draining = false;
   let started = false;
+  /**
+   * Which lifetime of this runner a pass belongs to.
+   *
+   * `stop()` is advisory: it unsubscribes, but a pass already inside `drainOnce` keeps running,
+   * and every `await` in it is a window. The host stops this runner when the device changes
+   * hands — the database is wiped and rebuilt behind it — so a pass that wrote after that point
+   * would put the previous driver's day row into the new driver's empty database, and could post
+   * their trip under the new session's token. A pass carries the generation it started in and
+   * abandons its claim untouched the moment that number moves.
+   */
+  let generation = 0;
+  const stale = (of: number): boolean => of !== generation;
   /** A wake that arrived while a drain was in flight, to be run when that drain ends. */
   let wakePending = false;
   let recordingRetry: ReturnType<typeof setTimeout> | null = null;
@@ -329,7 +342,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function applyFinalize(
     payload: FinalizeTripPayload,
     response: unknown,
-    at: number
+    at: number,
+    generation: number
   ): Promise<Outcome> {
     const parsed = FinalizeResponseSchema.safeParse(response);
     if (!parsed.success) {
@@ -337,8 +351,21 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       return { kind: 'retry', code: 'invalid_response' };
     }
     const result = parsed.data;
+    // The device may have changed hands while this call was in flight; a wiped database must not
+    // be given the previous driver's day row (`days.put` inserts, so it would create one).
+    if (stale(generation)) return { kind: 'defer' };
 
     await db.transaction(async (tx) => {
+      const stored = await trips.get(payload.clientTripId, tx);
+      // A reply that names a different server trip must not re-point this row: every later
+      // finalize and trace upload would follow it. The same guard the action handlers carry.
+      if (stored !== null && stored.server_id !== null && stored.server_id !== result.tripId) {
+        report(
+          new Error(`finalize-trip answered a different server trip for ${payload.clientTripId}`),
+          'server id mismatch'
+        );
+        return;
+      }
       await trips.update(
         payload.clientTripId,
         {
@@ -347,6 +374,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           status: result.status,
           score: result.score,
           sync_error: null,
+          // The server re-scores from the payload and may disagree — a crash-recovered drive is
+          // graded at most B there while the device's own finalizer wrote an A, and the
+          // breakdown is what D2's bars, D1's highlight, the tip and every insight rate read.
+          ...tripFieldsPatch(result.trip, stored?.conditions_json ?? null),
         } satisfies TripPatch,
         at,
         tx
@@ -361,6 +392,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   /** Per-item state that survives the one retry a 401 buys. */
   interface ItemState {
     traceUploadedAt: number | null;
+    /** The runner lifetime this item's attempt belongs to; see `generation`. */
+    generation: number;
   }
 
   async function runFinalize(item: QueueItem, state: ItemState, at: number): Promise<Outcome> {
@@ -385,6 +418,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
+    // Re-asserted after the session read, not only before it: `runItem`'s check happened before
+    // this round trip, and the object key below comes from whoever is signed in *now*.
+    if (stale(state.generation) || item.owner_uid !== uid) return { kind: 'defer' };
 
     if (payload.tracePath !== null && state.traceUploadedAt === null) {
       if (await traceWaitsForWifi()) {
@@ -404,10 +440,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       }
     }
 
+    // The invoke travels under whatever token the client holds *now*, so the fence is checked
+    // one last time here: an upload that was already in flight is one thing, a whole trip posted
+    // into the next driver's account is another.
+    if (stale(state.generation)) return { kind: 'defer' };
     const { data, error } = await supabase.functions.invoke(FINALIZE_FUNCTION, { body: payload });
     if (error) return failureOutcome(await classifyInvokeError(error, at));
 
-    const applied = await applyFinalize(payload, data, at);
+    const applied = await applyFinalize(payload, data, at, state.generation);
     if (applied.kind !== 'done') return applied;
     // Only this item's own upload licenses the delete; a trace still waiting under `trace:<id>`
     // is the other item's to remove once it has actually sent it.
@@ -436,6 +476,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
+    if (stale(state.generation) || item.owner_uid !== uid) return { kind: 'defer' };
     // Waiting for Wi-Fi is not a failed attempt: it must not walk the item towards MAX_ATTEMPTS.
     if (await traceWaitsForWifi()) return { kind: 'defer', until: at + WIFI_RETRY_S * 1000 };
 
@@ -461,14 +502,20 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // nothing else; everything they write back is in `actions.ts`.
     if (isActionKind(kind)) {
       const handler = ACTION_HANDLERS[kind];
-      return (item, _state, at) =>
-        handler(item.payload_json, { db, supabase, now: at, report });
+      return (item, state, at) =>
+        handler(item.payload_json, {
+          db,
+          supabase,
+          now: at,
+          report,
+          stale: () => stale(state.generation),
+        });
     }
     return null;
   }
 
   /** One item, with the single session refresh a 401 is allowed to buy. */
-  async function runItem(item: QueueItem, at: number): Promise<Outcome> {
+  async function runItem(item: QueueItem, at: number, generation: number): Promise<Outcome> {
     if (!isSyncKind(item.kind)) {
       report(new Error(`unknown queue kind ${item.kind}`), `item ${item.id}`);
       return { kind: 'defer', until: at + UNHANDLED_KIND_RETRY_S * 1000 };
@@ -476,14 +523,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const handler = handlerFor(item.kind);
     if (!handler) return { kind: 'defer', until: at + UNHANDLED_KIND_RETRY_S * 1000 };
 
-    // Whose work this is. One device holds one database and signing out clears neither it nor
-    // this queue, so an item stamped with a different user must never be sent under the live
-    // session: it would put that driver's own words — a dispute carries free text — into another
-    // account's request, and burn an attempt doing it. Unowned work (queued before any session
-    // was known) is sent by whoever is signed in, which is the behaviour it has always had.
+    // Whose work this is. One device holds one database, so an item that is not this session's
+    // must never be sent: it would put that driver's own words — a dispute carries free text —
+    // into another account's request, and burn an attempt doing it.
+    //
+    // **Work this build cannot attribute is refused too.** A database created before `owner_uid`
+    // existed reads null for every item; sending those under whoever happens to be signed in is
+    // precisely the case the column exists to stop, and a null is indistinguishable from it.
+    // Everything this build queues carries an owner (`currentOwnerUid` falls back to the
+    // bootstrap's own record of the device's user), so a null here means work from before the
+    // guard, and refusing it is the point.
     const uid = await currentUid();
-    if (item.owner_uid !== null && uid !== null && item.owner_uid !== uid) {
-      return { kind: 'failed', code: 'wrong_account' };
+    if (uid !== null && item.owner_uid !== uid) {
+      return { kind: 'failed', code: item.owner_uid === null ? 'unowned' : 'wrong_account' };
     }
     // Signed out, an action would post the body, be refused 401, spend the one refresh the loop
     // below allows and count an attempt. It is work that was never tried: hand the claim back.
@@ -491,7 +543,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // to run signed out — dropping the trace of a drive that is gone.)
     if (uid === null && isActionKind(item.kind)) return { kind: 'defer' };
 
-    const state: ItemState = { traceUploadedAt: item.trace_uploaded_at };
+    const state: ItemState = { traceUploadedAt: item.trace_uploaded_at, generation };
     let refreshed = false;
     for (;;) {
       const outcome = await handler(item, state, at);
@@ -610,7 +662,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   /** Claim one batch and work it. */
-  async function claimAndRun(at: number): Promise<Round> {
+  async function claimAndRun(at: number, generation: number): Promise<Round> {
     const round: Round = { done: 0, failed: 0, deferred: 0, claimed: 0, stopped: false };
     let items: QueueItem[];
     try {
@@ -635,7 +687,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
       let outcome: Outcome;
       try {
-        outcome = await runItem(item, at);
+        outcome = await runItem(item, at, generation);
       } catch (error) {
         if (isDatabaseLocked(error)) {
           await releaseQuietly(item.id, at);
@@ -646,6 +698,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         report(error, `item ${item.id}`);
         outcome = { kind: 'retry', code: 'unexpected' };
       }
+
+      // The device changed hands while this item was in flight: the claim belongs to a database
+      // that no longer exists. Abandon it untouched, exactly as a claim another pass has closed.
+      if (stale(generation)) return { ...round, stopped: true };
 
       // Settling is itself a write, and it can meet the same lock. Failing here leaves the claim
       // standing until `reclaimInflight`, so hand it back and stop rather than push on.
@@ -716,6 +772,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
    * those items due immediately, and looping on them would spin.
    */
   async function pass(at: number): Promise<DrainResult> {
+    const mine = generation;
     const total: DrainResult = { done: 0, failed: 0, deferred: 0 };
     // Once per pass, whether or not there is work: this is what teaches the enqueue sites whose
     // device they are queueing on, and a pass with an empty queue is the common case at launch.
@@ -725,12 +782,15 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       report(error, 'read session');
     }
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
-      const worked = await claimAndRun(at);
+      const worked = await claimAndRun(at, mine);
       total.done += worked.done;
       total.failed += worked.failed;
       total.deferred += worked.deferred;
       if (worked.stopped || worked.claimed < batchSize || worked.done + worked.failed === 0) break;
     }
+    // Nothing below belongs to a device that has changed hands under this pass.
+    if (stale(mine)) return total;
+
     // Settled work is not kept: see `PURGE_DONE_AFTER_MS`. Both sweeps run on every pass, so a
     // device that never settles anything still tidies up after a delete that was interrupted.
     await purgeSettled(at);
@@ -815,6 +875,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     },
 
     stop(): void {
+      // Any pass still in flight belongs to the lifetime that is ending: its writes are refused
+      // from here on, whatever it is waiting for.
+      generation += 1;
       started = false;
       wakePending = false;
       clearRecordingRetry();

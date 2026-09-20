@@ -18,6 +18,7 @@ export const tripPayload = (
   roleSource: 'manual',
   mode: 'mounted',
   cameraSession: false,
+  limitCoveragePct: 80,
   provisional: {
     score: 74,
     status: 'final',

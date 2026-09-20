@@ -96,7 +96,6 @@ export interface TripDetail {
  * `rows.ts` — see `toScoredTrip` for the rule that a locally `provisional` trip is the scorer's
  * `'final'`, without which every unsynced trip would lose its coaching.
  */
-
 export async function readTrip(db: Db, clientTripId: string): Promise<TripDetail | null> {
   const trips = createTripsRepo(db);
   const row = await trips.get(clientTripId);

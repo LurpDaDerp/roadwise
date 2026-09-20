@@ -46,7 +46,14 @@ import {
 } from '@/data/db/types';
 import type { SyncKind } from '@/data/sync/kinds';
 import { CLIENT_TRIP_ID } from '@/data/sync/queue';
-import { classifyInvokeError, DayRowSchema, type DayRow, type Failure } from '@/data/sync/response';
+import {
+  classifyInvokeError,
+  DayRowSchema,
+  TripFieldsSchema,
+  type DayRow,
+  type Failure,
+  type TripFields,
+} from '@/data/sync/response';
 
 /** The edge function all three actions post to. */
 export const TRIP_ACTIONS_FUNCTION = 'trip-actions';
@@ -86,6 +93,12 @@ export interface ActionContext {
   now: number;
   /** Told about a reply this build could not read, and anything else worth a support log. */
   report?: (error: unknown, context: string) => void;
+  /**
+   * True once the device has changed hands under this call. The reply arrived for a database
+   * that no longer exists, so nothing is written — a day row in particular, which is an insert
+   * and would otherwise appear in the new driver's empty cache.
+   */
+  stale?: () => boolean;
 }
 
 export type ActionHandler = (payloadJson: string, ctx: ActionContext) => Promise<ActionOutcome>;
@@ -163,6 +176,8 @@ export const DisputeResponseSchema = z
     reason: z.string().min(1).max(64).nullable(),
     /** The trip still holds a severe speeding episode after the report was applied. */
     hadSevereEvent: z.boolean(),
+    /** What the re-score left on the trip beyond the score; the local row follows it. */
+    trip: TripFieldsSchema,
     days: Days,
     replayed: z.boolean(),
   })
@@ -171,9 +186,16 @@ export const DisputeResponseSchema = z
 export const SetRoleResponseSchema = z
   .object({
     tripId: z.uuid(),
-    role: z.enum(['driver', 'passenger', 'other']),
+    /**
+     * `'unknown'` is in the list because the column's CHECK permits it and the deleted-trip
+     * replay arm echoes `trips.role` straight back. Nothing writes it today; leaving it out
+     * would turn the first row that does into a permanent `invalid_response` retry rather than
+     * anything anyone could see.
+     */
+    role: z.enum(['driver', 'passenger', 'other', 'unknown']),
     score: ServerScore,
     status: ServerStatus,
+    trip: TripFieldsSchema,
     days: Days,
     replayed: z.boolean(),
   })
@@ -229,6 +251,24 @@ const failureOutcome = (failure: Failure): ActionOutcome =>
 export async function classifyActionError(error: unknown, now: number): Promise<Failure> {
   const failure = await classifyInvokeError(error, now);
   return failure.status === 409 ? { ...failure, kind: 'terminal' } : failure;
+}
+
+/**
+ * The trip columns a server answer rewrites.
+ *
+ * One place, used by all three action handlers and by `applyFinalize`, because the failure this
+ * closes was every one of them writing a different subset: the score moved and the breakdown,
+ * the exposure, the grade and the severe flag did not, so every screen that *explains* the score
+ * kept charging points the server had already removed.
+ */
+export function tripFieldsPatch(fields: TripFields, conditionsJson: string | null): TripPatch {
+  return {
+    category_deductions_json: JSON.stringify(fields.categoryDeductions),
+    exposure: fields.exposure,
+    data_quality: fields.dataQuality,
+    limit_coverage_pct: fields.limitCoveragePct,
+    conditions_json: withSevereFlag(conditionsJson, fields.hadSevereEvent),
+  };
 }
 
 /** Upsert every day the server recomputed. Runs inside the caller's transaction. */
@@ -309,6 +349,8 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
   }
   const result = reply.data;
 
+  if (ctx.stale?.() === true) return { kind: 'defer' };
+
   const events = createEventsRepo(ctx.db);
   const trips = createTripsRepo(ctx.db);
   const event = await events.get(payload.clientEventId);
@@ -336,7 +378,6 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
     const trip = await trips.get(event.client_trip_id, tx);
     if (trip === null) return;
     if (!serverIdAgrees(trip.server_id, result.tripId)) return;
-    const conditions = withSevereFlag(trip.conditions_json, result.hadSevereEvent);
     await trips.update(
       event.client_trip_id,
       {
@@ -345,7 +386,7 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
         status: result.status,
         sync_state: 'synced',
         sync_error: null,
-        conditions_json: conditions,
+        ...tripFieldsPatch(result.trip, trip.conditions_json),
       } satisfies TripPatch,
       ctx.now,
       tx
@@ -519,6 +560,8 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
   }
   const result = reply.data;
 
+  if (ctx.stale?.() === true) return { kind: 'defer' };
+
   const trips = createTripsRepo(ctx.db);
   await ctx.db.transaction(async (tx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
@@ -534,6 +577,7 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
         status: result.status,
         sync_state: 'synced',
         sync_error: null,
+        ...tripFieldsPatch(result.trip, trip.conditions_json),
       } satisfies TripPatch,
       ctx.now,
       tx
@@ -584,6 +628,8 @@ export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
     return { kind: 'retry', code: 'invalid_response' };
   }
   const result = reply.data;
+
+  if (ctx.stale?.() === true) return { kind: 'defer' };
 
   const trips = createTripsRepo(ctx.db);
   await ctx.db.transaction(async (tx) => {

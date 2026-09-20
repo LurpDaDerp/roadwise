@@ -30,7 +30,7 @@
 // Order of refusal, cheapest first: method, JWT, size, JSON, contract, then the one lookup that
 // decides 404 / replay, the stored digest (so a row this function cannot score from fails before
 // anything is written), then the writers. Structured logs carry ids and codes only (§4.7).
-import { emptyDayRow, type DayRow } from '../_shared/aggregate.ts';
+import { emptyDayRow, type DayRow, type TripFields } from '../_shared/aggregate.ts';
 import { StorageFailure } from '../_shared/actions_db.ts';
 import type { ActionsDb, RecomputeResult, StoredEvent, StoredTrip } from '../_shared/actions_db.ts';
 import {
@@ -93,6 +93,14 @@ export interface DisputeResponse {
   reason: 'allowance_7d' | 'allowance_30d' | null;
   /** The trip's severe flag after the dispute, for the device's own `conditions`. */
   hadSevereEvent: boolean;
+  /**
+   * What this call left on the trip beyond the score: the per-category breakdown, the exposure,
+   * the data-quality grade and the limit coverage. `apply_recompute` rewrites all of them, and
+   * without them on the wire the device's own copy stays as its finalizer wrote it — which is
+   * what makes D2's bars, D1's highlight, the coaching tip and every insight rate keep charging
+   * points an accepted dispute has already removed.
+   */
+  trip: TripFields;
   /** The day rows this call wrote (the trip's day, plus today when later); stored row when nothing was recomputed. */
   days: DayRow[];
   replayed: boolean;
@@ -103,6 +111,8 @@ export interface SetRoleResponse {
   role: string;
   score: number | null;
   status: string;
+  /** As on a dispute: what the re-score left on the trip beyond the score. */
+  trip: TripFields;
   days: DayRow[];
   replayed: boolean;
 }
@@ -163,6 +173,15 @@ function requireMetrics(trip: StoredTrip, role: TripMetrics['role']): TripMetric
   return metrics;
 }
 
+/** The trip fields as stored, for a reply that recomputed nothing. */
+const storedFields = (trip: StoredTrip, hadSevereEvent = trip.hadSevereEvent): TripFields => ({
+  categoryDeductions: trip.categoryDeductions,
+  exposure: trip.exposure,
+  dataQuality: trip.dataQuality,
+  hadSevereEvent,
+  limitCoveragePct: trip.limitCoveragePct,
+});
+
 /** The stored row of the trip's day (or an empty one), for a reply that recomputed nothing. */
 async function storedDays(run: Run, trip: StoredTrip): Promise<DayRow[]> {
   return [(await run.db.getDayRow(run.userId, trip.localDay)) ?? emptyDayRow(trip.localDay)];
@@ -173,6 +192,8 @@ interface Recomputed {
   days: DayRow[];
   /** The severe flag this recompute stored, re-derived from the stored flag and what survives. */
   hadSevereEvent: boolean;
+  /** The trip fields this recompute stored, for the device's row to follow. */
+  fields: TripFields;
 }
 
 /**
@@ -214,7 +235,19 @@ async function rescore(
     day: aggregates.day,
     baselines: aggregates.baselines,
   });
-  return { result, days: aggregates.day, hadSevereEvent };
+  return {
+    result,
+    days: aggregates.day,
+    hadSevereEvent,
+    fields: {
+      categoryDeductions: scored.categoryDeductions,
+      exposure: scored.exposure,
+      dataQuality: scored.dataQuality,
+      hadSevereEvent,
+      // Untouched by a re-score: it is an observation of the drive, not a scoring output.
+      limitCoveragePct: trip.limitCoveragePct,
+    },
+  };
 }
 
 async function dispute(run: Run, a: DisputeAction): Promise<Response> {
@@ -244,6 +277,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
       remainingAllowance: preview.remaining_allowance,
       reason: null,
       hadSevereEvent: trip.hadSevereEvent,
+      trip: storedFields(trip),
       days: await storedDays(run, trip),
       replayed: true,
     };
@@ -265,6 +299,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
   let score = trip.score;
   let status = trip.status;
   let hadSevereEvent = trip.hadSevereEvent;
+  let fields = storedFields(trip);
   let days: DayRow[];
   // An accepted dispute leaves the event `disputed` until the recompute stores it as `removed`; a
   // replay whose event is already `removed` was finished the first time.
@@ -279,6 +314,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
     score = done.result.score;
     status = done.result.status;
     hadSevereEvent = done.hadSevereEvent;
+    fields = done.fields;
     days = done.days;
   } else {
     days = await storedDays(run, trip);
@@ -291,6 +327,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
     remainingAllowance: decision.remaining_allowance,
     reason: decision.denied_reason,
     hadSevereEvent,
+    trip: fields,
     days,
     replayed: decision.replayed,
   };
@@ -307,6 +344,7 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
       role: trip.role,
       score: trip.score,
       status: trip.status,
+      trip: storedFields(trip),
       days: await storedDays(run, trip),
       replayed: true,
     };
@@ -324,6 +362,7 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
     role: set.role,
     score: done.result.score,
     status: done.result.status,
+    trip: done.fields,
     days: done.days,
     replayed: false,
   };
@@ -332,11 +371,13 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
 
 async function deleteTrip(run: Run, a: DeleteAction): Promise<Response> {
   const { db, userId } = run;
+  // Privacy first, and *before* the lookup decides anything: the key is derived from the JWT and
+  // the client id alone, so it can be removed whether or not a row exists. A drive whose upload
+  // was refused, or whose finalize the delete itself stopped, can still have left an object in
+  // Storage — returning 404 before this ran left that object there for good.
+  await db.removeTrace(traceKey(userId, a.clientTripId));
   const trip = await db.findTripRow(userId, a.clientTripId);
   if (!trip) return json(404, { code: 'not_found' });
-  // Privacy first: the object goes before the row, and always by the derived key — the stored
-  // column may already be cleared by an earlier attempt whose response was lost.
-  await db.removeTrace(traceKey(userId, trip.clientTripId));
   const deleted = await db.softDeleteTrip(userId, trip.id);
   // Refreshed on a replay too: the first attempt may have died between the delete and this.
   const aggregates = await aggregatesAfter(db, userId, run.nowMs, trip, null);

@@ -7,7 +7,13 @@
 // filters on the user id the caller derived from the JWT, and every list is bounded. Failures
 // surface as `PgError` from `_shared/pg.ts`, with the SQLSTATE the handler maps.
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Baselines, DayRow, DayTripInput, ScoredTripInput } from './aggregate.ts';
+import type {
+  Baselines,
+  DayRow,
+  DayTripInput,
+  ScoredTripInput,
+  TripFields,
+} from './aggregate.ts';
 import type { FinalizeTripPayload } from './payload.ts';
 import { asPgError } from './pg.ts';
 import type { ScoredTrip } from './scoring/index';
@@ -19,6 +25,8 @@ export interface ExistingTrip {
   localDay: string;
   tracePath: string | null;
   deletedAt: string | null;
+  /** What a re-score rewrites; echoed on a replay so the device's row follows the stored one. */
+  fields: TripFields;
 }
 
 export interface ScoredTripRow extends ScoredTripInput {
@@ -79,6 +87,8 @@ interface TripRecord {
   exposure: number;
   duration_s: number;
   category_deductions: Record<string, number> | null;
+  data_quality: string | null;
+  limit_coverage_pct: number | string | null;
   had_severe_event: boolean;
   camera_session: boolean;
   trace_path: string | null;
@@ -100,12 +110,37 @@ interface DayRecord {
   severe_events: number;
 }
 
+/**
+ * The trip fields a re-score rewrites, read back off a stored row.
+ *
+ * Used on the replay arms, where nothing was recomputed and the honest answer is what is stored.
+ * PostgREST hands numerics back as strings, so both are normalised here rather than at the reader.
+ */
+export function storedTripFields(row: {
+  category_deductions: Record<string, number> | null;
+  exposure: number | string | null;
+  data_quality: string | null;
+  had_severe_event: boolean;
+  limit_coverage_pct: number | string | null;
+}): TripFields {
+  return {
+    categoryDeductions: row.category_deductions ?? {},
+    exposure: Number(row.exposure ?? 0),
+    dataQuality: row.data_quality ?? 'C',
+    hadSevereEvent: row.had_severe_event,
+    limitCoveragePct: row.limit_coverage_pct === null ? null : Number(row.limit_coverage_pct),
+  };
+}
+
 export function createDb(client: SupabaseClient): Db {
   return {
     async findTrip(userId, clientTripId) {
       const { data, error } = await client
         .from('trips')
-        .select('id, score, status, local_day, trace_path, deleted_at')
+        .select(
+          'id, score, status, local_day, trace_path, deleted_at, category_deductions, exposure,' +
+            ' data_quality, had_severe_event, limit_coverage_pct'
+        )
         .eq('user_id', userId)
         .eq('client_trip_id', clientTripId)
         .maybeSingle();
@@ -119,6 +154,7 @@ export function createDb(client: SupabaseClient): Db {
         localDay: row.local_day,
         tracePath: row.trace_path,
         deletedAt: row.deleted_at,
+        fields: storedTripFields(row),
       };
     },
 

@@ -24,11 +24,20 @@ const DAY_ROW = {
   severeEvents: 0,
 };
 
+const TRIP_FIELDS = {
+  categoryDeductions: { phone: 0, speeding: 6, braking: 0, accel: 0, cornering: 0, focus: 0 },
+  exposure: 1,
+  dataQuality: 'A',
+  hadSevereEvent: false,
+  limitCoveragePct: 80,
+};
+
 const RESPONSE = {
   tripId: 'a3f1c2d4-5b6e-4f8a-9c0d-1e2f3a4b5c6d',
   score: 74,
   status: 'final',
   day: DAY_ROW,
+  trip: TRIP_FIELDS,
   provisionalMismatch: false,
   replayed: false,
 };
@@ -126,7 +135,7 @@ test('SQLite contention is recognised wherever it surfaces', () => {
   expect(isDatabaseLocked(new Error('no such column: nope'))).toBe(false);
 });
 
-test('the success shape is exactly the six keys the function returns', () => {
+test('the success shape is exactly the keys the function returns', () => {
   expect(FinalizeResponseSchema.parse(RESPONSE)).toEqual(RESPONSE);
 
   // An unscored or discarded trip carries a null score.
@@ -143,6 +152,10 @@ test('anything the contract does not describe is refused, not guessed at', () =>
     { ...RESPONSE, longTermScore: 81 }, // an unknown key
     { ...RESPONSE, day: '2026-09-20' }, // the day as a bare date
     { ...RESPONSE, day: { ...DAY_ROW, points: 50 } }, // an unknown key inside the day
+    { ...RESPONSE, trip: { ...TRIP_FIELDS, scoringVersion: 1 } }, // an unknown key inside the trip
+    { ...RESPONSE, trip: { ...TRIP_FIELDS, dataQuality: 'D' } }, // a grade the scorer has no band for
+    // A breakdown missing a category is a partial answer, and a partial answer is not applied.
+    { ...RESPONSE, trip: { ...TRIP_FIELDS, categoryDeductions: { phone: 0 } } },
     { ...RESPONSE, day: { ...DAY_ROW, day: '20 September' } },
     { ...RESPONSE, tripId: 'srv-1' }, // not a uuid
     { ...RESPONSE, score: 74, status: 'unscored' }, // a score on an unscored trip

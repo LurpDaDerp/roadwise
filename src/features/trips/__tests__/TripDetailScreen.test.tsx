@@ -165,6 +165,31 @@ describe('a drive with a route and two moments', () => {
     expect(screen.getByTestId('timeline')).toBeOnTheScreen();
   });
 
+  test('a capped category never prints a moment that contradicts its own bar', async () => {
+    // Two phone pickups at 32 and 8 before the cap; the phone cap is 30, so that is what the
+    // drive lost — and what the two rows have to add up to.
+    const w = await world({
+      trips: [
+        tripRow({
+          client_trip_id: ID,
+          score: 70,
+          category_deductions_json: JSON.stringify(deductions({ phone: 30 })),
+        }),
+      ],
+      events: [
+        eventRow({ id: 'p1', client_trip_id: ID, category: 'phone', deduction: 32, duration_s: 18, measured_json: '{}' }),
+        eventRow({ id: 'p2', client_trip_id: ID, category: 'phone', deduction: 8, duration_s: 5, measured_json: '{}' }),
+      ],
+    });
+    await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
+    await screen.findByTestId('trip-detail');
+
+    expect(screen.getByTestId('timeline-p1').props.accessibilityLabel).toContain('minus 24 points');
+    expect(screen.getByTestId('timeline-p2').props.accessibilityLabel).toContain('minus 6 points');
+    // The raw figure never appears: it would sit directly above a bar reading "30 of 30".
+    expect(screen.queryByText('−32')).toBeNull();
+  });
+
   test('every moment is one row a screen reader reads whole, with what it cost', async () => {
     await open();
     expect(

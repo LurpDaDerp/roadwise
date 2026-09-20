@@ -142,10 +142,18 @@ const post = (body: unknown, token: string | null = GOOD_TOKEN) =>
 
 const json = async (res: Response) => ({ status: res.status, body: await res.json() });
 
-/** A reply with its `days` set aside, so the rest of the body can be compared exactly. */
+/**
+ * A reply with its `days` and its recomputed `trip` fields set aside, so the rest of the body can
+ * be compared exactly and each of those two can be asserted where it is the point.
+ */
 const split = async (res: Response) => {
-  const { days, ...body } = await res.json();
-  return { status: res.status, body, days: days as DayRow[] | undefined };
+  const { days, trip, ...body } = await res.json();
+  return {
+    status: res.status,
+    body,
+    days: days as DayRow[] | undefined,
+    trip: trip as Record<string, unknown> | undefined,
+  };
 };
 
 const dispute = (overrides: Record<string, unknown> = {}) => ({
@@ -382,7 +390,10 @@ Deno.test('a trip the user does not have is 404 for set-role and delete', async 
     body: { code: 'not_found' },
   });
   assertEquals(await json(await handleTripAction(post(del()), h.deps)), { status: 404, body: { code: 'not_found' } });
-  assertEquals(h.fake.calls.length, 0);
+  // The delete still removes the object: its key comes from the JWT and the client id, and a
+  // drive whose upload was refused can have left one behind with no row to find.
+  assertEquals(h.fake.storageCalls, [{ bucket: 'traces', keys: [TRACE_KEY] }]);
+  assertEquals(rpcNames(h), []);
 });
 
 Deno.test('a client event id that matches two stored events is an integrity failure', async () => {
@@ -426,6 +437,14 @@ Deno.test('an accepted dispute records it, re-scores with the event removed and 
       },
     }
   );
+  // The whole point of C-1: what the re-score stored reaches the device, not just the score.
+  assertEquals(r.trip, {
+    categoryDeductions: after.categoryDeductions,
+    exposure: after.exposure,
+    dataQuality: after.dataQuality,
+    hadSevereEvent: false,
+    limitCoveragePct: 80,
+  });
   assertEquals(rpcNames(h), ['count_dispute_allowance', 'record_dispute', 'apply_recompute']);
   assertEquals(rpcArgs(h, 'count_dispute_allowance'), { p_user: UID });
   assertEquals(rpcArgs(h, 'record_dispute'), {

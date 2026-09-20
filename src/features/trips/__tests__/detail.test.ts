@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
+import { deductions, eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { toTripEventView, toTripSummary, type TripEventView } from '@/data/queries';
 import {
   canReport,
@@ -140,7 +140,8 @@ describe('where an event stands against the score', () => {
       dispute_json: JSON.stringify({ reason: 'hazard', outcome: 'queued' }),
     });
     expect(sending.affectsScore).toBe(true);
-    expect(timelineRows(trip(), [sending])[0]?.points).toBe(6);
+    const drive = trip({ category_deductions_json: JSON.stringify(deductions({ speeding: 6 })) });
+    expect(timelineRows(drive, [sending])[0]?.points).toBe(6);
   });
 
   test('a report that has not been sent yet says so, and is not offered twice', () => {
@@ -212,7 +213,8 @@ describe('the timeline', () => {
       view({ id: 'e1', started_at: T0 + 60_000 }),
       view({ id: 'e2', started_at: T0 + 120_000, status: 'possible', deduction: 0, severity: '2' }),
     ];
-    const rows = timelineRows(trip(), events);
+    const drive = trip({ category_deductions_json: JSON.stringify(deductions({ speeding: 6 })) });
+    const rows = timelineRows(drive, events);
     expect(rows.map((row) => row.event.id)).toEqual(['e1', 'e2']);
     expect(rows[0]).toMatchObject({ title: 'Speeding', standing: 'counted', points: 6 });
     expect(rows[1]).toMatchObject({ standing: 'possible', points: null });
@@ -221,6 +223,30 @@ describe('the timeline', () => {
   test('a possible event never shows points, even when a deduction was stored on it', () => {
     const rows = timelineRows(trip(), [view({ status: 'possible', deduction: 6 })]);
     expect(rows[0]?.points).toBeNull();
+  });
+
+  test('a capped category shows what its moments cost, not what they would have', () => {
+    // Two phone events at 32 and 8 pre-cap; the phone cap is 30, so the drive lost 30, not 40.
+    const drive = trip({ category_deductions_json: JSON.stringify(deductions({ phone: 30 })) });
+    const events = [
+      view({ id: 'big', category: 'phone', deduction: 32, measured_json: '{}' }),
+      view({ id: 'small', category: 'phone', deduction: 8, measured_json: '{}' }),
+    ];
+
+    const rows = timelineRows(drive, events);
+    const shown = rows.map((row) => row.points ?? 0);
+
+    // Each moment keeps its share, and the shares add up to what the bar says.
+    expect(shown[0]).toBeCloseTo(24, 6);
+    expect(shown[1]).toBeCloseTo(6, 6);
+    expect(shown.reduce((sum, value) => sum + value, 0)).toBeCloseTo(30, 6);
+    // Never the raw figure, which would sit above a bar reading "30 of 30".
+    expect(shown[0]).toBeLessThan(32);
+  });
+
+  test('an uncapped category is left exactly as the scorer charged it', () => {
+    const drive = trip({ category_deductions_json: JSON.stringify(deductions({ speeding: 6 })) });
+    expect(timelineRows(drive, [view({ deduction: 6 })])[0]?.points).toBe(6);
   });
 });
 

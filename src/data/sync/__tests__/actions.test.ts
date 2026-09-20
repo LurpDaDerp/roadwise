@@ -28,7 +28,8 @@ import {
   type SupabaseReply,
 } from '@/data/sync/__fixtures__/fakes';
 import { SYNC_KINDS } from '@/data/sync/kinds';
-import { currentOwnerUid } from '@/data/sync/queue';
+import { createSettingsRepo } from '@/data/db/settings';
+import { currentOwnerUid, DEVICE_OWNER_KEY } from '@/data/sync/queue';
 import { createSyncRunner } from '@/data/sync/runner';
 
 const T0 = Date.UTC(2026, 0, 5, 12, 0, 0);
@@ -135,6 +136,16 @@ const disputeBody = JSON.stringify({
 const setRoleBody = JSON.stringify({ action: 'set-role', clientTripId: TRIP, role: 'passenger' });
 const deleteBody = JSON.stringify({ action: 'delete', clientTripId: TRIP });
 
+/** What the server's re-score stored on the trip; the device row follows it, not its own. */
+const tripFields = (over: Record<string, unknown> = {}) => ({
+  categoryDeductions: { phone: 0, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+  exposure: 1,
+  dataQuality: 'A',
+  hadSevereEvent: false,
+  limitCoveragePct: 80,
+  ...over,
+});
+
 const disputeReply = (over: Record<string, unknown> = {}): SupabaseReply => ({
   data: {
     tripId: SERVER_TRIP,
@@ -144,6 +155,7 @@ const disputeReply = (over: Record<string, unknown> = {}): SupabaseReply => ({
     remainingAllowance: 2,
     reason: null,
     hadSevereEvent: false,
+    trip: tripFields(),
     days: [day()],
     replayed: false,
     ...over,
@@ -181,6 +193,9 @@ const readDispute = async (): Promise<DisputeRecord> =>
 beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
+  // The bootstrap's identity stage runs before anything is queued; without it every item is
+  // unowned, and the runner refuses work it cannot attribute.
+  await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'user-1');
   supabase = createFakeSupabase();
 });
 
@@ -225,6 +240,55 @@ describe('reporting an event', () => {
       deniedReason: null,
       decidedAt: NOW,
     });
+  });
+
+  test("the drive's breakdown, exposure and grade follow the server, not the device's finalizer", async () => {
+    // The stored row says speeding cost 6; the server has just removed that event.
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: () =>
+        disputeReply({
+          trip: tripFields({ dataQuality: 'B', exposure: 1.4, limitCoveragePct: 55 }),
+        }),
+    });
+
+    await runDispute(disputeBody, ctx());
+
+    const stored = await readTrip();
+    expect(JSON.parse(stored.category_deductions_json ?? '{}')).toEqual({
+      phone: 0,
+      speeding: 0,
+      braking: 0,
+      accel: 0,
+      cornering: 0,
+      focus: 0,
+    });
+    expect(stored).toMatchObject({ exposure: 1.4, data_quality: 'B', limit_coverage_pct: 55 });
+  });
+
+  test('a reply naming a different server trip is not written to this row', async () => {
+    await seed({ server_id: '99999999-2222-4333-8444-555555555555' });
+    supabase = createFakeSupabase({ invoke: () => disputeReply() });
+
+    await expect(runDispute(disputeBody, ctx())).resolves.toEqual({ kind: 'done' });
+
+    // The event still settles — it is named by its own id — but the trip row is left alone.
+    expect(await readTrip()).toMatchObject({
+      server_id: '99999999-2222-4333-8444-555555555555',
+      score: 77,
+    });
+  });
+
+  test('a reply that lands after the device has changed hands writes nothing', async () => {
+    await seed();
+    supabase = createFakeSupabase({ invoke: () => disputeReply() });
+
+    await expect(runDispute(disputeBody, ctx({ stale: () => true }))).resolves.toEqual({
+      kind: 'defer',
+    });
+
+    expect(await readTrip()).toMatchObject({ score: 77 });
+    expect(await createScoreDailyCacheRepo(db).range('2026-01-01', '2026-01-31')).toEqual([]);
   });
 
   test("the server's severe-speeding verdict replaces the device's, and the rest of the conditions stay", async () => {
@@ -461,6 +525,7 @@ describe('changing who was driving', () => {
           role: 'passenger',
           score: null,
           status: 'unscored',
+          trip: tripFields({ dataQuality: 'B' }),
           days: [day({ safeDay: false, tripsScored: 0 })],
           replayed: false,
         },
@@ -636,7 +701,9 @@ describe('through the runner', () => {
       'dispute',
       { action: 'dispute', clientEventId: EVENT, reason: 'hazard' },
       `dispute:${EVENT}`,
-      T0
+      T0,
+      undefined,
+      'user-1'
     );
 
     const runner = runnerFor({ appState: createFakeAppState() });
@@ -654,7 +721,9 @@ describe('through the runner', () => {
       'dispute',
       { action: 'dispute', clientEventId: EVENT, reason: 'other', note: 'my kid was in the car' },
       `dispute:${EVENT}`,
-      T0
+      T0,
+      undefined,
+      'user-1'
     );
 
     await expect(runnerFor().drainOnce(NOW)).resolves.toEqual({
@@ -705,6 +774,7 @@ describe('through the runner', () => {
           role: 'passenger',
           score: null,
           status: 'unscored',
+          trip: tripFields(),
           days: [day()],
           replayed: false,
         },
@@ -715,7 +785,9 @@ describe('through the runner', () => {
       'set-role',
       { action: 'set-role', clientTripId: TRIP, role: 'passenger' },
       `role:${TRIP}:${T0}`,
-      T0
+      T0,
+      undefined,
+      'user-1'
     );
 
     const runner = createSyncRunner({

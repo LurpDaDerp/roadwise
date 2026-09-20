@@ -445,6 +445,8 @@ export async function finalizeTrip(
   );
   const checkpointTs = session.lastRowTs === null ? null : Math.round(session.lastRowTs);
   const incomplete = deps.incomplete === true;
+  const limitCoveragePct =
+    session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0;
   const payload = FinalizeTripPayloadSchema.parse({
     clientTripId: id,
     startedAt,
@@ -462,6 +464,7 @@ export async function finalizeTrip(
     rowsDigest,
     startGeohash5: first ? geohash5(first.lat, first.lng) : null,
     endGeohash5: last ? geohash5(last.lat, last.lng) : null,
+    limitCoveragePct,
     polyline,
     tracePath,
     hadSevereEvent,
@@ -495,8 +498,7 @@ export async function finalizeTrip(
         exposure: scored.exposure,
         data_quality: scored.dataQuality,
         conditions_json: JSON.stringify(conditions),
-        limit_coverage_pct:
-          session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0,
+        limit_coverage_pct: limitCoveragePct,
         start_geohash5: payload.startGeohash5,
         end_geohash5: payload.endGeohash5,
         polyline: polyline === '' ? null : polyline,

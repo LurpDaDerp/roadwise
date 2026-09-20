@@ -37,6 +37,8 @@ Deno.test('findTripRow looks the trip up by the JWT user and the client id, dele
     durationS: 1320,
     exposure: STORED_SCORED.exposure,
     dataQuality: 'A',
+    categoryDeductions: STORED_SCORED.categoryDeductions,
+    limitCoveragePct: 80,
     rowsDigest: ROWS_DIGEST,
     tracePath: TRACE_KEY,
     incomplete: false,

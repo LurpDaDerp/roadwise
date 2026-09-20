@@ -2,6 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
+import { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -45,7 +46,7 @@ test('creates the query indexes the app reads through', async () => {
 test('records the schema version it reached', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 1 }]);
+  expect(rows).toEqual([{ version: CURRENT_SCHEMA_VERSION }]);
 });
 
 test('is idempotent: running twice leaves one version row and the same tables', async () => {
@@ -56,7 +57,32 @@ test('is idempotent: running twice leaves one version row and the same tables', 
 
   expect(await names(db, 'table')).toEqual(tablesAfterFirst);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 1 }]);
+  expect(rows).toEqual([{ version: CURRENT_SCHEMA_VERSION }]);
+});
+
+test('a database left at v1 is brought up, and its queued work is left unattributable', async () => {
+  // Exactly what the two development builds hold: v1 as it shipped, with work already queued.
+  for (const statement of SCHEMA_V1) await db.execute(statement);
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (1)');
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?)',
+    ['finalize-trip', '{}', 'trip:old', 1, 1]
+  );
+
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
+
+  // The columns are there — a read of one would have thrown before.
+  const { rows: trips } = await db.execute('PRAGMA table_info(trips)');
+  expect(trips.map((row) => row.name)).toContain('deleted_at');
+  const { rows: events } = await db.execute('PRAGMA table_info(trip_events)');
+  expect(events.map((row) => row.name)).toContain('dispute_json');
+
+  // And the work that predates the guard has no owner, which is what makes it refusable rather
+  // than sendable under whoever happens to be signed in.
+  const { rows: queued } = await db.execute('SELECT idempotency_key, owner_uid FROM sync_queue');
+  expect(queued).toEqual([{ idempotency_key: 'trip:old', owner_uid: null }]);
 });
 
 test('keeps data written between runs', async () => {

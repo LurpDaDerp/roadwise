@@ -4,6 +4,7 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S } from '@/data/db/queue';
 import { createScoreDailyCacheRepo } from '@/data/db/scoreDailyCache';
+import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { QueueItem, TripStatus } from '@/data/db/types';
 import {
@@ -20,6 +21,7 @@ import {
 } from '@/data/sync/__fixtures__/fakes';
 import { T0, TRIP_ID, tripPayload } from '@/data/sync/__fixtures__/payload';
 import {
+  DEVICE_OWNER_KEY,
   emitQueueChanged,
   enqueueFinalize,
   enqueueTraceUpload,
@@ -63,11 +65,21 @@ const DAY_ROW = {
   severeEvents: 0,
 };
 
+/** What the re-score stored on the trip; the device row follows it, not its own finalizer's. */
+const SERVER_TRIP_FIELDS = {
+  categoryDeductions: { phone: 0, speeding: 6, braking: 0, accel: 0, cornering: 0, focus: 0 },
+  exposure: 1,
+  dataQuality: 'A',
+  hadSevereEvent: false,
+  limitCoveragePct: 80,
+};
+
 const SERVER_OK = {
   tripId: SERVER_TRIP_ID,
   score: 74,
   status: 'final',
   day: DAY_ROW,
+  trip: SERVER_TRIP_FIELDS,
   provisionalMismatch: false,
   replayed: false,
 };
@@ -152,6 +164,9 @@ const traceItem = () => itemByKey(traceIdempotencyKey(TRIP_ID));
 beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
+  // What the bootstrap's identity stage writes before anything can be queued; the enqueue sites
+  // read it to stamp `owner_uid`, and unowned work is refused.
+  await createSettingsRepo(db).set(DEVICE_OWNER_KEY, UID);
   fs = createFakeFs({ [TRACE]: '[{"ts":1}]' });
   supabase = createFakeSupabase({ uid: UID, invoke: () => invokeOk(SERVER_OK) });
   recording = false;
@@ -200,12 +215,32 @@ test('uploads the trace, finalizes the trip and caches the day', async () => {
 });
 
 test('the object key comes from the session, never from the payload', async () => {
+  // Queued by the driver who is signed in now: the key must come from the live session, not
+  // from anything the payload carries. (Work queued by *another* driver is refused outright —
+  // see the owner tests — so the two rules do not meet here.)
+  await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'someone-else');
   await seedQueuedTrip();
   supabase.setUid('someone-else');
 
   await runner().drainOnce(T0);
 
   expect(supabase.uploads[0]?.path).toBe(`someone-else/${TRIP_ID}.bin.gz`);
+});
+
+test('work this build cannot attribute is refused, never sent under whoever is signed in', async () => {
+  // A database from before `owner_uid` existed: every queued item reads null.
+  await seedTrip();
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?)',
+    ['finalize-trip', JSON.stringify(tripPayload()), finalizeIdempotencyKey(TRIP_ID), T0, T0]
+  );
+
+  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 0, failed: 1, deferred: 0 });
+
+  expect(supabase.uploads).toHaveLength(0);
+  expect(supabase.invokes).toHaveLength(0);
+  expect(await finalizeItem()).toMatchObject({ status: 'failed', last_error: 'unowned' });
 });
 
 test('a 409 from storage counts as uploaded and the finalize still runs', async () => {
@@ -536,13 +571,14 @@ test('start drains at once, on app foreground and on queue:changed; stop unsubsc
     T0
   );
   await db.execute(
-    "INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)" +
-      ' VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid,' +
+      ' created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [
       'finalize-trip',
       JSON.stringify(tripPayload({ clientTripId: 'trip-3', tracePath: null })),
       'trip:trip-3',
       T0,
+      UID,
       T0,
     ]
   );
@@ -996,5 +1032,70 @@ describe('housekeeping', () => {
     // The drive that still exists keeps its trace, and nothing else in the directory is touched.
     expect(fs.files.has(TRACE)).toBe(true);
     expect(fs.files.has('not-a-trace.txt')).toBe(true);
+  });
+});
+
+describe('a device that changes hands mid-pass', () => {
+  test('a pass still in flight when stop() lands writes nothing into the database behind it', async () => {
+    // The real sequence: an auth event stops the runner and the host wipes and rebuilds the
+    // database while a finalize is still waiting on its round trip. `stop()` unsubscribes but
+    // cannot cancel that call, so the fence has to refuse the write when it comes back.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: async () => {
+        await held;
+        return invokeOk(SERVER_OK);
+      },
+    });
+    const sync = runner();
+    await seedQueuedTrip();
+
+    const inFlight = sync.drainOnce(T0);
+    await tick();
+
+    // The handover: the runner is stopped, and the database it was working in is emptied.
+    sync.stop();
+    await db.execute('DELETE FROM trips');
+    await db.execute('DELETE FROM sync_queue');
+    release();
+    await inFlight;
+
+    // The previous driver's day row is the dangerous one: `days.put` inserts, so it would appear
+    // in the new driver's empty cache.
+    expect(await allCachedDays()).toEqual([]);
+    const { rows } = await db.execute('SELECT count(*) AS n FROM trips');
+    expect(rows[0]?.n).toBe(0);
+  });
+
+  test('a stopped runner does not upload under the session that replaced it', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    supabase = createFakeSupabase({
+      uid: UID,
+      upload: async () => {
+        await held;
+        return { data: { path: 'x' }, error: null };
+      },
+      invoke: () => invokeOk(SERVER_OK),
+    });
+    const sync = runner();
+    await seedQueuedTrip();
+
+    const inFlight = sync.drainOnce(T0);
+    await tick();
+    sync.stop();
+    supabase.setUid('the-next-driver');
+    release();
+    await inFlight;
+
+    // The trace was already in flight when the handover landed; what must not follow it is the
+    // summary, which would be stored as the new user's trip.
+    expect(supabase.invokes).toHaveLength(0);
   });
 });

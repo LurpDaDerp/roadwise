@@ -29,6 +29,9 @@ export interface StoredTrip {
   durationS: number;
   exposure: number;
   dataQuality: string;
+  /** Points lost per category as stored, for a reply that recomputed nothing. */
+  categoryDeductions: Record<string, number>;
+  limitCoveragePct: number | null;
   /** `trips.rows_digest` verbatim; validated against the contract before it is scored with. */
   rowsDigest: unknown;
   tracePath: string | null;
@@ -157,7 +160,7 @@ export interface ActionsDb extends Db {
 }
 
 const TRIP_COLUMNS =
-  'id, client_trip_id, status, score, role, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, rows_digest, trace_path, incomplete, had_severe_event, camera_session, deleted_at';
+  'id, client_trip_id, status, score, role, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, category_deductions, limit_coverage_pct, rows_digest, trace_path, incomplete, had_severe_event, camera_session, deleted_at';
 const EVENT_COLUMNS =
   'id, trip_id, client_event_id, category, started_at, duration_ms, confidence, corrected, status, measured, context';
 
@@ -175,6 +178,8 @@ interface TripRecord {
   duration_s: number | string;
   exposure: number | string;
   data_quality: string;
+  category_deductions: Record<string, number> | null;
+  limit_coverage_pct: number | string | null;
   rows_digest: unknown;
   trace_path: string | null;
   incomplete: boolean;
@@ -211,6 +216,8 @@ const toStoredTrip = (row: TripRecord): StoredTrip => ({
   durationS: Number(row.duration_s),
   exposure: Number(row.exposure),
   dataQuality: row.data_quality,
+  categoryDeductions: row.category_deductions ?? {},
+  limitCoveragePct: row.limit_coverage_pct === null ? null : Number(row.limit_coverage_pct),
   rowsDigest: row.rows_digest,
   tracePath: row.trace_path,
   incomplete: row.incomplete,

@@ -59,6 +59,7 @@ const payload = (overrides: Partial<FinalizeTripPayload> = {}): FinalizeTripPayl
   roleSource: 'manual',
   mode: 'mounted',
   cameraSession: false,
+  limitCoveragePct: 80,
   provisional,
   events: [event()],
   rowsDigest: {

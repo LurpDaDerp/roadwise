@@ -24,6 +24,13 @@ Deno.test('findTrip looks the trip up by the JWT user and the client id, and map
     localDay: TRIP_DAY,
     tracePath: `${UID}/${CLIENT_TRIP_ID}.bin.gz`,
     deletedAt: null,
+    fields: {
+      categoryDeductions: { phone: 0, speeding: 4, braking: 0, accel: 0, cornering: 0, focus: 0 },
+      exposure: 1,
+      dataQuality: 'A',
+      hadSevereEvent: false,
+      limitCoveragePct: null,
+    },
   });
   assertEquals(await db.findTrip(UID, 'nope'), null);
   assertEquals(fake.queries[0].table, 'trips');

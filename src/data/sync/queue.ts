@@ -36,9 +36,23 @@ export const traceIdempotencyKey = (clientTripId: string): string => `trace:${cl
  */
 export const SESSION_UID_KEY = 'session.uid';
 
-/** The owner to stamp on work queued now, or null when no session has been seen on this device. */
+/**
+ * The bootstrap's record of whose device this is (`src/boot/device.ts`), read here as a fallback.
+ *
+ * It is written on the identity stage of every launch and every handover, which is *before* any
+ * drive can be recorded; `SESSION_UID_KEY` is written by the runner's first pass, which may come
+ * after. Without the fallback, work queued between a sign-in and the next drain would be
+ * unowned — and unowned work is refused, so it would be lost rather than merely unattributed.
+ */
+export const DEVICE_OWNER_KEY = 'device.lastUserId';
+
+/** The owner to stamp on work queued now, or null when this device has never had a user. */
 export async function currentOwnerUid(db: Db): Promise<string | null> {
-  return createSettingsRepo(db).get<string>(SESSION_UID_KEY);
+  const settings = createSettingsRepo(db);
+  return (
+    (await settings.get<string>(SESSION_UID_KEY)) ??
+    (await settings.get<string>(DEVICE_OWNER_KEY))
+  );
 }
 
 /**

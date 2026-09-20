@@ -193,6 +193,35 @@ export const DayRowSchema = z
 
 export type DayRow = z.infer<typeof DayRowSchema>;
 
+/** The six scoring categories, as the breakdown is keyed. */
+const CATEGORY_KEYS = ['phone', 'speeding', 'braking', 'accel', 'cornering', 'focus'] as const;
+
+/**
+ * What the server stored on the trip beyond its score, and what the device row must follow.
+ *
+ * The server is the authority: it re-scores from the payload on every finalize, dispute, role
+ * change and delete-refresh, and writes a fresh breakdown, exposure and grade. Nothing on the
+ * device ever re-reads a trip, so a field that does not travel here is the device's own
+ * finalizer's guess for the life of the install — which is how D2's category bars came to
+ * contradict the score printed above them after an accepted dispute, and how a crash-recovered
+ * drive kept showing an A the server had graded B.
+ *
+ * Strict and fully required, like the day row beside it: a partial answer is not applied.
+ */
+export const TripFieldsSchema = z
+  .object({
+    categoryDeductions: z.object(
+      Object.fromEntries(CATEGORY_KEYS.map((key) => [key, z.number().min(0).max(100)]))
+    ),
+    exposure: z.number().positive(),
+    dataQuality: z.enum(['A', 'B', 'C']),
+    hadSevereEvent: z.boolean(),
+    limitCoveragePct: z.number().min(0).max(100).nullable(),
+  })
+  .strict();
+
+export type TripFields = z.infer<typeof TripFieldsSchema>;
+
 /**
  * What `finalize-trip` answers with on success — exactly six keys, all required.
  *
@@ -208,6 +237,8 @@ export const FinalizeResponseSchema = z
     score: z.number().int().min(0).max(100).nullable(),
     status: z.enum(SERVER_TRIP_STATUSES),
     day: DayRowSchema,
+    /** What the server stored on the trip beyond the score; the device row follows it. */
+    trip: TripFieldsSchema,
     /** The server's re-score disagreed with the device's provisional one by more than 2 points. */
     provisionalMismatch: z.boolean(),
     /** True when the server had already applied this trip — a retry that converged. */
