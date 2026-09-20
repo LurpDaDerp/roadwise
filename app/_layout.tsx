@@ -1,10 +1,11 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { createQueryClient } from '@/data/queries';
 import { SessionProvider } from '@/data/supabase/session';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { ThemeProvider } from '@/ui';
@@ -16,7 +17,10 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
   // The splash is already hidden (a fast reload). Nothing to hold.
 });
 
-const queryClient = new QueryClient();
+// One client for the process. The data layer's defaults live with the hooks that rely on them
+// (`src/data/queries/client.ts`): local SQLite reads never retry, and freshness comes from
+// `invalidateAfterSync` rather than from focus polling.
+const queryClient = createQueryClient();
 
 export default function RootLayout() {
   const { loaded, error } = useAppFonts();
