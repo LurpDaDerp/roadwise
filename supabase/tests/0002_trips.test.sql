@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(541);
+select plan(550);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -19,7 +19,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'tc@example.com', '{"display_name":"Cy"}'),
   ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'td@example.com', '{"display_name":"Dee"}'),
   ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'te@example.com', '{"display_name":"Eli"}'),
-  ('ffffffff-ffff-4fff-8fff-ffffffffffff', 'tf@example.com', '{"display_name":"Fay"}');
+  ('ffffffff-ffff-4fff-8fff-ffffffffffff', 'tf@example.com', '{"display_name":"Fay"}'),
+  ('99999999-9999-4999-8999-999999999999', 'tg@example.com', '{"display_name":"Gus"}');
 
 -- calendar day N days ago in Los Angeles, and a fixed hour of that day
 create function pg_temp.la_day(p_days_ago int) returns date
@@ -136,7 +137,11 @@ insert into fx values
   -- F's first event is a phone event: a stated limit on it is not the free speeding path
   ('f1', pg_temp.envelope('ffffffff-ffff-4fff-8fff-ffffffffffff',
     jsonb_set(pg_temp.payload('f-trip-1', pg_temp.at_la(2, 10), pg_temp.at_la(2, 10) + interval '15 minutes', 10, false),
-      '{events,0,category}', '"phone"'), 70, 'final'));
+      '{events,0,category}', '"phone"'), 70, 'final')),
+  -- G is a new driver: three scored events and one `possible` event on one trip
+  ('g1', pg_temp.envelope('99999999-9999-4999-8999-999999999999',
+    jsonb_set(pg_temp.payload('g-trip-1', pg_temp.at_la(2, 10), pg_temp.at_la(2, 10) + interval '15 minutes', 4, false),
+      '{events,3,status}', '"possible"'), 70, 'final'));
 grant select on fx to service_role;
 grant execute on function pg_temp.trip(uuid, text), pg_temp.ev(uuid, text, text), pg_temp.la_day(int), pg_temp.at_la(int, int), pg_temp.day_row(date, int)
   to service_role, authenticated;
@@ -626,6 +631,21 @@ select is((select public.record_dispute('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 
 select is(((select public.count_dispute_allowance('dddddddd-dddd-4ddd-8ddd-dddddddddddd')) ->> 'used_7d')::int, 3, 'the free dispute did not move the 7-day count');
 select is(((select public.count_dispute_allowance('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')) ->> 'used_7d')::int, 0, 'D rows do not count for B');
 select is((select reports from public.map_feedback), 4, 'D first report on the cell is aggregated');
+
+-- G: a new driver with 3 scored events (20 % = 0.6 -> floor of one) and one `possible` event
+select lives_ok($$ select public.apply_trip((select p from fx where name = 'g1')) $$, 'apply_trip applies G trip');
+select is((select status from public.trip_events where id = pg_temp.ev('99999999-9999-4999-8999-999999999999', 'g-trip-1', 'ev-4')), 'possible', 'G fourth event is possible');
+select is((select public.count_dispute_allowance('99999999-9999-4999-8999-999999999999')),
+  '{"used_7d": 0, "limit_7d": 3, "remaining_7d": 3, "disputed_30d": 0, "scored_30d": 3, "max_30d": 1, "remaining_30d": 1, "remaining_allowance": 1, "can_auto_accept": true, "denied_reason": null}'::jsonb, 'three scored events give a 20 % share of one (floor)');
+select throws_ok($$ select public.record_dispute('99999999-9999-4999-8999-999999999999', pg_temp.ev('99999999-9999-4999-8999-999999999999', 'g-trip-1', 'ev-4'), 'wrong_limit', null, 35) $$, '22023', 'event is not scored', 'a stated-limit dispute on a possible speeding event is refused');
+select is((select public.count_dispute_allowance('99999999-9999-4999-8999-999999999999')),
+  '{"used_7d": 0, "limit_7d": 3, "remaining_7d": 3, "disputed_30d": 0, "scored_30d": 3, "max_30d": 1, "remaining_30d": 1, "remaining_allowance": 1, "can_auto_accept": true, "denied_reason": null}'::jsonb, 'the refused dispute consumed nothing');
+select is((select count(*)::int from public.event_disputes where user_id = '99999999-9999-4999-8999-999999999999'), 0, 'the refused dispute was not recorded');
+select is((select reports from public.map_feedback), 4, 'the refused dispute wrote no map feedback');
+select is((select public.record_dispute('99999999-9999-4999-8999-999999999999', pg_temp.ev('99999999-9999-4999-8999-999999999999', 'g-trip-1', 'ev-1'), 'hazard', null, null)) - 'dispute_id' - 'trip_id',
+  '{"auto_accepted": true, "consumed": true, "denied_reason": null, "remaining_7d": 2, "remaining_30d": 0, "remaining_allowance": 0, "event_status": "disputed", "replayed": false}'::jsonb, 'a new driver first dispute is accepted through the floor');
+select is((select public.record_dispute('99999999-9999-4999-8999-999999999999', pg_temp.ev('99999999-9999-4999-8999-999999999999', 'g-trip-1', 'ev-2'), 'hazard', null, null)) - 'dispute_id' - 'trip_id',
+  '{"auto_accepted": false, "consumed": false, "denied_reason": "allowance_30d", "remaining_7d": 2, "remaining_30d": 0, "remaining_allowance": 0, "event_status": "scored", "replayed": false}'::jsonb, 'the second is denied by the 20 % rule');
 
 -- ---------------------------------------------------------------------------
 -- apply_recompute writes exactly the caller's values, for the caller's user only

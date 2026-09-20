@@ -567,7 +567,8 @@ end $$;
 -- disputes (§9.9). Two guard-rails, both rolling, both counted from event_disputes.created_at:
 --   * 3 consuming disputes per 7 days (a dispute counts while it is younger than 7 days);
 --   * at most 20 % of the user's scored events over 30 days may be auto-accepted, free ones
---     included.
+--     included, with a floor of one so a new driver can dispute at all.
+-- Only events with status `scored` can be disputed (22023 otherwise).
 -- "Wrong limit" with a stated posted limit on a speeding event is accepted without spending one
 -- of the 3 (it still counts toward the 20 %); on any other category it is an ordinary dispute.
 -- Every dispute is recorded whether or not it is applied, with the decision on the row. The
@@ -596,7 +597,8 @@ begin
   select count(*)::int into v_scored from public.trip_events e join public.trips t on t.id = e.trip_id
     where e.user_id = p_user and t.deleted_at is null and t.status in ('provisional', 'final')
       and e.status in ('scored', 'disputed', 'removed') and e.started_at > now() - interval '30 days';
-  v_max := floor(v_scored * v_max_pct_30d / 100.0);
+  -- floor of one: a driver with fewer than five scored events can still dispute one
+  v_max := greatest(1, floor(v_scored * v_max_pct_30d / 100.0));
   v_denied := case when v_used >= v_limit_7d then 'allowance_7d' when v_disputed >= v_max then 'allowance_30d' end;
 
   return jsonb_build_object(
@@ -664,8 +666,10 @@ begin
   if v_trip.status not in ('provisional', 'final') then
     raise exception 'trip is not scored' using errcode = 'insufficient_privilege';
   end if;
-  if v_ev.status not in ('scored', 'possible') then
-    raise exception 'event is not scored' using errcode = 'insufficient_privilege';
+  -- only a scored event costs anything, so only a scored event can be disputed (a `possible` one
+  -- never counted; `disputed`/`removed` ones without a dispute row were removed by the device)
+  if v_ev.status <> 'scored' then
+    raise exception 'event is not scored' using errcode = 'invalid_parameter_value';
   end if;
   if v_trip.ended_at < now() - interval '14 days' then
     raise exception 'dispute window closed' using errcode = 'invalid_parameter_value';
