@@ -67,7 +67,7 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'measured',
     title: 'What we measure',
-    body: 'A drive starts at 100 and only goes down for something we actually detected. Six behaviours can cost points, and every point lost is attached to a moment you can open and read the numbers behind. Anything we did not detect costs nothing.',
+    body: 'A drive starts at 100 and only goes down for something we actually detected. Six behaviors can cost points, and every point lost is attached to a moment you can open and read the numbers behind. Anything we did not detect costs nothing.',
     bullets: [
       'Phone use while the car is moving',
       'Speeding, when the posted limit is known',
@@ -85,20 +85,21 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
       'Seat belts, following distance, lane keeping, signals and stop signs',
       'Speeding on a road where the posted limit is unknown to us',
       'Anything at all on a trip you were not driving',
-      'A possible collision, which starts a check-in and never a deduction',
+      'A possible collision, which we never turn into a deduction',
+      'A drive under half a mile or a couple of minutes, which is too short to judge',
       'Who else was in the car, and anything they said or did',
     ],
   },
   {
     id: 'caps',
     title: 'No one habit can take the whole drive',
-    body: 'Each behaviour has a cap on how much it can take from a single trip, and the caps add up to 100. Deductions are also divided by how far and how long you drove, so a long drive absorbs a moment that would sink a short one. A rough drive costs at most that drive.',
+    body: 'Each behavior has a cap on how much it can take from a single trip, and the caps add up to 100. Deductions are also divided by how far and how long you drove, so a long drive absorbs a moment that would sink a short one. A rough drive costs at most that drive.',
     bullets: categoryCaps.map((entry) => `${entry.label}: at most ${entry.cap} points a trip`),
   },
   {
     id: 'confidence',
     title: 'How sure we are changes what it costs',
-    body: 'Every event carries a confidence, based on things like GPS accuracy, whether the location and motion sensors agree, and how good our speed-limit data is for that road. An event we are not confident about is shown as possible and costs nothing; one we are only partly confident about costs less than one we are sure of. A trip with weak GPS for most of its length is not scored at all, and we show you why.',
+    body: 'Every event carries a confidence, based on things like GPS accuracy, whether the location and motion sensors agree, and how good our speed-limit data is for that road. An event we are not confident about is shown as possible and costs nothing; one we are only partly confident about costs less than one we are sure of. A trip whose GPS was unreliable for too much of its length is not scored at all, and we show you why.',
   },
   {
     id: 'context',
@@ -108,12 +109,12 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'disputes',
     title: 'If something is wrong, say so',
-    body: 'Open the event and tap "This isn\'t right". Most reports are accepted immediately, the event stops counting, and the score is recalculated within seconds. There is a limit on how much is accepted automatically so the score keeps its meaning; past that limit your report is still recorded, still used to improve detection, and you are told plainly that it was not applied.',
+    body: 'Open the event and tap "This isn\'t right". Reports are accepted automatically up to a limit, and when one is accepted the event stops counting and your score is recalculated. Past that limit your report is still recorded, still used to improve detection, and you are told plainly that it was not applied — the limit is there so the score keeps its meaning.',
   },
   {
     id: 'notAScore',
     title: 'What this score is not',
-    body: 'It is a coaching number for you, and nothing else. It describes six measurable habits on one drive, from one phone, with the limits above. It is not a judgement of you as a driver.',
+    body: 'It is a coaching number for you, and nothing else. It describes six measurable habits on one drive, from one phone, with the limits above. It is not a judgment of you as a driver.',
     bullets: [
       'Not a finding of legal fault in anything that happened',
       'Not an insurance rating, and not shared with an insurer',
@@ -124,7 +125,7 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'initialModel',
     title: 'This is an initial model',
-    body: 'These thresholds and weights are our first version and we are still tuning them. They come from published driver-education guidance and our own road testing, not from insurance data or a claims history. When we change the model we give it a new version number and leave already-scored trips exactly as they were, so your history stays honest.',
+    body: 'These thresholds and weights are our first version and we are still tuning them. They come from published driver-education guidance and our own testing against recorded drives, not from insurance data or a claims history. When we change the model we give it a new version number and leave already-scored trips exactly as they were, so your history stays honest.',
   },
 ];
 

@@ -6,6 +6,7 @@ import {
   CATEGORY_PRIORITY,
   dayFallback,
   HIGH_SEVERITY,
+  keepItUpTip,
   pickDailyTip,
   pickTopTip,
   TIP_STAGES,
@@ -35,6 +36,12 @@ const sentences = (text: string): string[] =>
     .filter((s) => s.length > 0);
 
 const words = (text: string): string[] => text.split(/\s+/).filter((w) => w.length > 0);
+
+/** Inclusive numeric range, rounded to 4 dp so an accumulated float never lands off a band edge. */
+const range = (from: number, to: number, step: number): number[] =>
+  Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, i) =>
+    Number((from + i * step).toFixed(4))
+  );
 
 // --- fixtures ------------------------------------------------------------------------------
 
@@ -171,10 +178,43 @@ describe('tip catalogue', () => {
     }
   });
 
-  test('uses only severity bands the scoring package can produce', () => {
+  test('pins every tip to a low or high band', () => {
     for (const tip of tips) {
       const category = tip.category as EventCategory;
       expect([0, HIGH_SEVERITY[category]]).toContain(tip.minSeverity);
+    }
+  });
+
+  // The guard that matters: `HIGH_SEVERITY` re-states band edges that `severity.ts` keeps
+  // private, so probe the real `severity()` over a value grid per category and assert each
+  // threshold is a value the scorer can actually produce, with at least one scoring band below
+  // it (i.e. it really is a *top*-band threshold, not the whole category).
+  test('sets every HIGH_SEVERITY threshold to a band severity() can produce', () => {
+    const grid: Record<EventCategory, ScorableEvent[]> = {
+      phone: range(0, 40, 1).map((mph) => event('p', 'phone', { speedMps: mph * MPH })),
+      speeding: range(0, 30, 1).map((mph) =>
+        event('s', 'speeding', { overMps: mph * MPH, limitMps: 45 * MPH })
+      ),
+      braking: range(0, 0.7, 0.01).map((g) => event('b', 'braking', { peakG: g })),
+      accel: range(0, 0.6, 0.01).map((g) => event('a', 'accel', { peakG: g })),
+      cornering: range(0, 0.7, 0.01).map((g) => event('c', 'cornering', { lateralG: g })),
+      focus: [
+        ...range(0, 8, 0.25).map((s) => event('f', 'focus', { glanceS: s, focusKind: 'glance' })),
+        event('f', 'focus', { focusKind: 'drowsiness' }),
+      ],
+    };
+    for (const category of CATEGORIES) {
+      const produced = [...new Set(grid[category].map(severity))];
+      // the threshold is a real band…
+      expect({ category, isABand: produced.includes(HIGH_SEVERITY[category]) }).toEqual({
+        category,
+        isABand: true,
+      });
+      // …and a scoring band sits below it, so "high" is a top slice, not the whole category
+      expect({
+        category,
+        hasLowerScoringBand: produced.some((s) => s > 0 && s < HIGH_SEVERITY[category]),
+      }).toEqual({ category, hasLowerScoringBand: true });
     }
   });
 
@@ -252,13 +292,52 @@ describe('day fallback', () => {
   });
 
   test('reads the same for both stages, so each lists both rather than appearing twice', () => {
-    for (const tip of dayFallback) {
+    for (const tip of [...dayFallback, keepItUpTip]) {
       expect([...tip.stages].sort()).toEqual([...TIP_STAGES].sort());
     }
   });
 
   test('applies at any severity', () => {
-    for (const tip of dayFallback) expect(tip.minSeverity).toBe(0);
+    for (const tip of [...dayFallback, keepItUpTip]) expect(tip.minSeverity).toBe(0);
+  });
+
+  // `pickDailyTip` hashes a seed and never sees a trip, so anything it can serve has to be true
+  // on any day. A tip that asserts something about the driver's trips must not be in this list.
+  test('asserts nothing about the driver’s own trips', () => {
+    const claims = [/\byour (recent|last) drives?\b/i, /\bthat drive\b/i, /\bnothing to fix\b/i];
+    const hits = dayFallback.flatMap((tip) => {
+      const copy = [tip.title, tip.body, tip.why, tip.practice].join(' ');
+      return claims.filter((p) => p.test(copy)).map((p) => `${tip.id}: ${String(p)}`);
+    });
+    expect(hits).toEqual([]);
+  });
+
+  test('does not contain the clean-trip tip', () => {
+    expect(dayFallback.map((t) => t.id)).not.toContain(keepItUpTip.id);
+    expect(allTips).toContain(keepItUpTip);
+  });
+});
+
+describe('keepItUpTip', () => {
+  test('is the general tip shown when a final trip lost no points', () => {
+    expect(keepItUpTip.category).toBe('general');
+    expect(keepItUpTip.id).toBe('general-keep-it-up');
+  });
+
+  // The whole reason it is a separate export: `pickTopTip` returns null on a clean final trip,
+  // and this is the copy that pairs with that null. It must not be reachable any other way.
+  test('is never returned by pickTopTip, for any trip', () => {
+    const trips = [
+      scoredTrip({}),
+      scoredTrip({ phone: 12 }, { 'e-phone': 12 }),
+      scoredTrip({ focus: 3 }, { 'e-focus': 3 }),
+    ];
+    for (const trip of trips) {
+      for (const stage of TIP_STAGES) {
+        expect(pickTopTip(trip, Object.values(HIGH_EVENTS), stage)).not.toBe(keepItUpTip);
+      }
+    }
+    expect(pickTopTip(scoredTrip({}), [])).toBeNull();
   });
 });
 
@@ -267,6 +346,9 @@ describe('day fallback', () => {
 describe('CATEGORY_PRIORITY', () => {
   test('lists every category once, largest cap first', () => {
     expect([...CATEGORY_PRIORITY].sort()).toEqual([...CATEGORIES].sort());
+    // Canary, not a spec: the order is derived from CONSTANTS.CATEGORY, so a deliberate cap
+    // retune is expected to fail this line. Update it with the retune; the generic ordering
+    // invariant below is the assertion that must always hold.
     expect(CATEGORY_PRIORITY).toEqual(['phone', 'speeding', 'focus', 'braking', 'cornering', 'accel']);
     for (let i = 1; i < CATEGORY_PRIORITY.length; i += 1) {
       const previous = CATEGORY_PRIORITY[i - 1] as EventCategory;
@@ -495,10 +577,20 @@ describe('pickDailyTip', () => {
     }
   });
 
+  // C1: the clean-trip tip asserts that the driver's last drive lost no points. A hash of a seed
+  // cannot know that, so no seed may ever reach it.
+  test('never returns the clean-trip tip, for any seed', () => {
+    for (let i = 0; i < 500; i += 1) {
+      expect(pickDailyTip(`user-${i % 17}:2026-03-${i}`)).not.toBe(keepItUpTip);
+    }
+    expect(dayFallback).not.toContain(keepItUpTip);
+  });
+
   test('spreads seeds across the whole fallback list', () => {
     const seen = new Set<string>();
     for (let day = 0; day < 200; day += 1) seen.add(pickDailyTip(`user-7:day-${day}`).id);
     expect(seen.size).toBe(dayFallback.length);
+    expect(seen).not.toContain(keepItUpTip.id);
   });
 
   test('gives different users different tips on the same day', () => {

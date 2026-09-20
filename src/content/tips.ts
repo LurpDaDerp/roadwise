@@ -25,43 +25,51 @@ export const TIP_STAGES: readonly TipStage[] = ['new', 'experienced'];
 /** Tips that are not tied to one scoring category carry `general` — the Home card's fallbacks. */
 export type TipCategory = EventCategory | 'general';
 
+/**
+ * Every field is `readonly`: `pickTopTip` hands back the catalogue object itself, so a caller that
+ * wrote to a field would corrupt the shared catalogue for every later caller.
+ */
 export interface Tip {
   /** Stable id: `<category>-<band>-<stage>`. Referenced by weekly focus (§10.4), so it never changes. */
-  id: string;
-  category: TipCategory;
+  readonly id: string;
+  readonly category: TipCategory;
   /**
    * Lowest event severity `s` (§9.3, `severity()` in `@scoring`) this tip speaks to. `0` means it
    * applies anywhere in the category; `HIGH_SEVERITY[category]` means it speaks to the top bands.
    */
-  minSeverity: number;
+  readonly minSeverity: number;
   /** Stages this tip reads correctly for. Listed once for both where the copy does not change. */
-  stages: readonly TipStage[];
-  title: string;
+  readonly stages: readonly TipStage[];
+  readonly title: string;
   /** 2-3 sentences: what to do and how. */
-  body: string;
+  readonly body: string;
   /** One sentence on why it matters. */
-  why: string;
+  readonly why: string;
   /** The "Practice this week" action (§7.D D6, §10.4). */
-  practice: string;
+  readonly practice: string;
   /** The driver-education guidance this tip paraphrases; repeated in the comment above the tip. */
-  source: string;
+  readonly source: string;
 }
 
 /**
- * The severity `s` at which a category's events enter its top bands (§9.3). Each value is the
- * lower edge of the second-highest band, so both of a category's worst outcomes reach the
- * high-severity tip: phone handling at 10 mph and above, 15 mph or 40 % over the limit, braking
- * past 0.40 g, acceleration past 0.38 g, cornering past 0.45 g, and a glance of 3 s or longer
- * (a drowsiness episode scores 2 and lands here too).
+ * The severity `s` at which a category's events enter its top bands (§9.3): phone handling at
+ * 10 mph and above (0.7 and 1.0), 15 mph or 40 % over the limit (3.5 and 5), braking past 0.40 g
+ * (1.75 and 2.5), acceleration past 0.38 g, cornering past 0.45 g, and a glance of 3 s or longer
+ * (a drowsiness episode scores 2 and lands here too). For `accel` and `cornering` that is the top
+ * band outright; for the rest it is the lower edge of the second-highest.
+ *
+ * `severity.ts` keeps its band tables private, so these values are re-stated here rather than
+ * imported; `tips.test.ts` probes `severity()` over a value grid per category and fails if a
+ * value below is not a band the scorer can actually produce.
  */
-export const HIGH_SEVERITY: Record<EventCategory, number> = {
+export const HIGH_SEVERITY = {
   phone: 0.7,
   speeding: 3.5,
   braking: 1.75,
   accel: 1.75,
   cornering: 1.75,
   focus: 2,
-};
+} as const satisfies Record<EventCategory, number>;
 
 const NEW: readonly TipStage[] = ['new'];
 const EXPERIENCED: readonly TipStage[] = ['experienced'];
@@ -88,6 +96,10 @@ export const tips: readonly Tip[] = [
   },
   // Source: UK Highway Code rule 149 (a driver must stay in proper control and not use a
   // hand-held phone) and NHTSA distracted-driving guidance.
+  //
+  // Note for the D6 card: handling the phone while stopped is severity 0 (§9.3, "stopped 0
+  // (logged, unscored)"), so this tip coaches a habit the engine never charged for. Do not render
+  // it under a heading that implies the driver lost points for it.
   {
     id: 'phone-low-experienced',
     category: 'phone',
@@ -121,7 +133,7 @@ export const tips: readonly Tip[] = [
     stages: EXPERIENCED,
     title: 'Make the phone hard to reach',
     body: 'Put the phone in its mount or in a bag on the back seat before you drive, so reaching for it is awkward. Turn on your driving focus mode and let messages wait quietly. A habit you cannot act on fades on its own.',
-    why: 'Phone use carries the largest deduction in RoadWise, because it takes your hands and your eyes at once.',
+    why: 'Phone use is the habit that can cost one drive the most, because it takes your hands and your eyes at once.',
     practice: 'This week, start every drive with driving focus mode on.',
     source: 'NHTSA distracted-driving guidance; AAA Foundation for Traffic Safety',
   },
@@ -189,7 +201,7 @@ export const tips: readonly Tip[] = [
     minSeverity: 0,
     stages: NEW,
     title: 'Leave a three-second gap',
-    body: 'Pick a fixed object ahead, such as a sign, and count three seconds between the car in front passing it and you passing it. Add a second in rain or at night. The gap is what turns a hard stop into a gentle one.',
+    body: 'Pick a fixed object ahead, such as a sign, and count three seconds between the car in front passing it and you passing it. Double that count when the road is wet, and add a second at night. The gap is what turns a hard stop into a gentle one.',
     why: 'A short following gap is what turns an ordinary slowdown into a heavy stop.',
     practice: 'This week, count your gap out loud once on every drive.',
     source: 'UK Highway Code rule 126; California DMV Driver Handbook',
@@ -215,7 +227,7 @@ export const tips: readonly Tip[] = [
     minSeverity: HIGH_SEVERITY.braking,
     stages: NEW,
     title: 'Cover the brake on approach',
-    body: 'Coming up to a light, a crosswalk or a line of stopped traffic, lift off the gas early and rest your foot over the brake. The car sheds speed before you press anything. What is left is a light squeeze instead of a stomp.',
+    body: 'Coming up to a light, a crosswalk or a line of stopped traffic, lift off the gas early and hold your foot over the brake, not on it. The car sheds speed before you press anything. What is left is a light squeeze instead of a stomp.',
     why: 'A heavy stop usually means the slowdown started later than it needed to.',
     practice: 'This week, lift off the gas one block before every red light.',
     source: 'California DMV Driver Handbook; UK Highway Code rule 126',
@@ -243,7 +255,7 @@ export const tips: readonly Tip[] = [
     minSeverity: 0,
     stages: NEW,
     title: 'Roll onto the gas',
-    body: 'Press the pedal as if you were sliding a full cup across the dashboard without spilling it. Build speed over a few seconds instead of in one push. The car reaches the same speed, just more smoothly.',
+    body: 'Press the pedal as if there were a full cup on the dashboard that you do not want to spill. Build speed over a few seconds instead of in one push. The car reaches the same speed, just more smoothly.',
     why: 'Smooth starts keep the car settled and leave more grip for steering.',
     practice: 'This week, count to three as you pull away from each stop.',
     source: 'California DMV Driver Handbook; AAA Foundation for Traffic Safety',
@@ -256,7 +268,7 @@ export const tips: readonly Tip[] = [
     minSeverity: 0,
     stages: EXPERIENCED,
     title: 'Stop racing to the next light',
-    body: 'On a street with signals, a hard launch usually ends at the next red anyway. Ease away and let the timing do the work. You arrive at the same moment with less fuel used and a calmer car.',
+    body: 'On a street with signals, a hard launch usually ends at the next red anyway. Ease away and let the timing do the work. You usually arrive at the same moment, with less fuel used and a calmer car.',
     why: 'Quick starts between lights rarely change when you get there.',
     practice: 'This week, pull away gently at one light per drive and see where you end up.',
     source: 'UK Highway Code guidance on driving economically; AAA Foundation for Traffic Safety',
@@ -284,7 +296,7 @@ export const tips: readonly Tip[] = [
     title: 'Keep the tires within their grip',
     body: 'A very quick launch asks the tires for grip you may want for steering a moment later. In rain, on gravel or on a cold morning that margin is smaller. Leave some of it unused.',
     why: 'Grip is shared between accelerating and steering, and you cannot spend it twice.',
-    practice: 'This week, treat wet mornings as a half-throttle rule.',
+    practice: 'This week, pull away at half throttle whenever the road is wet.',
     source: 'California DMV Driver Handbook; UK Highway Code adverse-weather guidance',
   },
 
@@ -325,7 +337,7 @@ export const tips: readonly Tip[] = [
     title: 'Set your speed before the curve',
     body: 'Choose your speed while the road is still straight, before the bend begins. A ramp that tightens halfway is far easier when you enter a little slower than you think you need. You can always add speed once you can see the exit.',
     why: 'Sharp cornering usually comes from entering a bend faster than it turned out to need.',
-    practice: 'This week, set your speed before the curve, not in it.',
+    practice: 'This week, pick your entry speed on the straight before each ramp you take.',
     source: 'California DMV Driver Handbook; UK Highway Code guidance on bends',
   },
   // Source: UK Highway Code adverse-weather guidance and the California DMV Driver Handbook on
@@ -370,20 +382,21 @@ export const tips: readonly Tip[] = [
     source: "New York State Driver's Manual; California DMV Driver Handbook",
   },
   // Source: UK Highway Code rule 91 (do not start a drive tired; plan breaks on a long one) and
-  // NHTSA drowsy-driving guidance, which both treat stopping as the only real remedy.
+  // NHTSA drowsy-driving guidance, which both hold that stopping and resting is the only remedy
+  // and that short-term tricks do not restore alertness.
   {
     id: 'focus-high-new',
     category: 'focus',
     minSeverity: HIGH_SEVERITY.focus,
     stages: NEW,
     title: 'Pull over when you are tired',
-    body: 'Heavy eyes, a missed exit or drifting within your lane all mean the drive should pause. Stop somewhere safe, get out and walk for a few minutes before you decide to carry on. If the feeling comes back, the driving is done for now.',
+    body: 'Heavy eyes, a missed exit or drifting within your lane all mean the drive should pause. Stop somewhere safe and stay stopped until you feel alert again — fresh air and loud music wear off in minutes. If the feeling comes back once you are moving, the driving is done for today.',
     why: 'When you are tired you notice things later than you think you do.',
     practice: 'This week, plan a stop on any drive longer than two hours.',
     source: 'UK Highway Code rule 91; NHTSA drowsy-driving guidance',
   },
-  // Source: IIHS guidance for teen drivers on the role of passengers, with NHTSA
-  // distracted-driving guidance on handing in-car tasks to someone who is not driving.
+  // Source: NHTSA distracted-driving guidance and AAA Foundation for Traffic Safety
+  // driver-education materials on handing in-car tasks to someone who is not driving.
   {
     id: 'focus-high-experienced',
     category: 'focus',
@@ -393,15 +406,18 @@ export const tips: readonly Tip[] = [
     body: 'If someone is with you, let them take the messages, the music and the directions so your eyes stay forward. Say it at the start of the drive, so it is not a negotiation later. Driving alone, let the mount and voice guidance do the same job.',
     why: 'A long glance inside the car is time the road spends unwatched.',
     practice: 'This week, ask your passenger to take the phone at the start of each drive.',
-    source: 'IIHS guidance for teen drivers; NHTSA distracted-driving guidance',
+    source: 'NHTSA distracted-driving guidance; AAA Foundation for Traffic Safety',
   },
 ];
 
 /**
- * General tips for the Home card and for a drive that lost no points at all. None of these is
- * keyed to a category, and every one reads the same whatever the stage, so each lists both
- * stages rather than appearing twice. Typed as a non-empty tuple so `pickDailyTip` always has a
- * tip to return.
+ * General tips for the Home card on a day with nothing to coach. None is keyed to a category,
+ * and every one reads the same whatever the stage, so each lists both stages rather than
+ * appearing twice. Typed as a non-empty tuple so `pickDailyTip` always has a tip to return.
+ *
+ * Every entry here is **unconditionally true** — it asserts nothing about the driver's trips,
+ * because `pickDailyTip` selects from a hash of the seed and knows nothing about them. Conditional
+ * copy belongs outside this list; see `keepItUpTip`.
  */
 export const dayFallback: readonly [Tip, ...Tip[]] = [
   // Source: California DMV Driver Handbook and UK Highway Code guidance on preparing the vehicle
@@ -456,23 +472,46 @@ export const dayFallback: readonly [Tip, ...Tip[]] = [
     practice: 'This week, double your following gap whenever the road is wet.',
     source: "UK Highway Code adverse-weather guidance; New York State Driver's Manual",
   },
-  // Source: IIHS and NHTSA teen-driving guidance, which build confidence through supervised
-  // practice across a widening range of conditions rather than through a single fix.
+  // Source: California DMV Driver Handbook on parking lots and backing up, with AAA Foundation
+  // for Traffic Safety driver-education materials on low-speed maneuvering around pedestrians.
   {
-    id: 'general-keep-it-up',
+    id: 'general-parking-lots',
     category: 'general',
     minSeverity: 0,
     stages: BOTH,
-    title: 'Keep the run going',
-    body: 'Your recent drives came in clean, so there is nothing to fix today. What keeps a score steady is practice in new places: at night, in rain, on the highway. Pick one of those and do it on purpose this week.',
-    why: 'Drivers get steadier by widening the range of conditions they have already practiced in.',
-    practice: 'This week, drive one route you have not driven before.',
-    source: 'IIHS guidance for teen drivers; NHTSA teen-driving guidance',
+    title: 'Take parking lots slowly',
+    body: 'Parking lots, driveways and pickup lines mix people, doors and reversing cars at walking pace. Hold your speed to a walk, cover the brake, and look over your shoulder before you reverse. The surprises here come from outside the car.',
+    why: 'Low speed is what gives you time to stop for someone you did not expect.',
+    practice: 'This week, back into one space so you can pull out facing forward.',
+    source: 'California DMV Driver Handbook; AAA Foundation for Traffic Safety',
   },
 ];
 
+/**
+ * The clean-trip tip, kept out of `dayFallback` on purpose: its first sentence asserts a fact
+ * about the driver's last trip, so it is only true when the trip really did lose no points.
+ *
+ * Show it when — and only when — `pickTopTip` returned `null` for a trip whose `status` is
+ * `'final'`. That is the perfect-trip case: the score explains, and there is no single behaviour
+ * to coach. It is deliberately unreachable from `pickDailyTip`, which serves an arbitrary day
+ * with no knowledge of the driver's trips.
+ */
+// Source: IIHS and NHTSA teen-driving guidance, which build confidence through supervised
+// practice across a widening range of conditions rather than through a single fix.
+export const keepItUpTip: Tip = {
+  id: 'general-keep-it-up',
+  category: 'general',
+  minSeverity: 0,
+  stages: BOTH,
+  title: 'Keep the run going',
+  body: 'That drive came in clean, so there is nothing to fix today. What keeps a score steady is practice in new places: at night, in rain, on the highway. Pick one of those and do it on purpose this week.',
+  why: 'Drivers get steadier by widening the range of conditions they have already practiced in.',
+  practice: 'This week, drive one route you have not driven before.',
+  source: 'IIHS guidance for teen drivers; NHTSA teen-driving guidance',
+};
+
 /** Every tip in the module, for id-uniqueness and copy checks. */
-export const allTips: readonly Tip[] = [...tips, ...dayFallback];
+export const allTips: readonly Tip[] = [...tips, ...dayFallback, keepItUpTip];
 
 /**
  * Categories in the order a tie is broken: largest per-trip cap first, then alphabetically, so
@@ -528,9 +567,14 @@ function worstSeverity(
  * The one coaching tip for a scored trip (§7.D D1 → D6).
  *
  * Deterministic: it reads the trip's own numbers and the fixed catalogue order, never a clock or
- * a random source, so the same trip always produces the same tip. It returns `null` for a trip
- * that was not scored and for a trip that lost no points — the Home card falls back to
- * `pickDailyTip` in that case — and it never returns a tip for a category with a zero deduction.
+ * a random source, so the same trip always produces the same tip. It never returns a tip for a
+ * category with a zero deduction, and it returns `null` in two cases the caller must tell apart:
+ *
+ * - `status` is not `'final'` (passenger, too short, grade C, discarded) — there is no score, so
+ *   show the trip's facts and the reason, not a coaching card.
+ * - `status` is `'final'` and nothing cost points — the perfect trip. Show `keepItUpTip`.
+ *
+ * On a day with no trip to debrief at all, the Home card uses `pickDailyTip` instead.
  *
  * @param stage where the driver is in the learning period; defaults to `new`, the more explanatory
  * copy, because an unknown stage is more likely to be an early driver.
@@ -576,6 +620,9 @@ function fnv1a(text: string): number {
  * A general tip for the Home card, chosen deterministically from `dayFallback`. The same seed
  * always gives the same tip, so the card does not change under the reader's hands on a re-render;
  * pass something that changes once a day, such as `${userId}:${isoDate}`.
+ *
+ * The seed is all it knows — it never sees a trip — so it can only ever return one of the
+ * unconditional `dayFallback` tips, and never `keepItUpTip`.
  */
 export function pickDailyTip(seed: string): Tip {
   const index = fnv1a(seed) % dayFallback.length;
