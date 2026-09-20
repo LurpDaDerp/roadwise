@@ -1,7 +1,8 @@
 import { CONSTANTS } from '@scoring';
 import { createArbiter } from '@/core/alerts/arbiter';
 import { en } from '@/i18n/en';
-import type { ArbiterInput, ArbiterState } from '@/core/alerts/types';
+import type { AlertVoiceKey, ArbiterInput, ArbiterState } from '@/core/alerts/types';
+import type { StringKey } from '@/i18n';
 
 const {
   MPH,
@@ -248,7 +249,7 @@ describe('rule 5: drowsiness', () => {
     expect(tick(0, { drowsy: true })).toMatchObject({
       level: 3,
       kind: 'drowsy',
-      voice: 'alert.takeABreak',
+      voice: 'alert.drowsy',
     });
     expect(tick(CONSTANTS.ALERT_DROWSY_MAX_PER_S - 1, { drowsy: true })).toBeNull();
     expect(tick(CONSTANTS.ALERT_DROWSY_MAX_PER_S, { drowsy: true })).toMatchObject({
@@ -397,6 +398,17 @@ describe('rule 7: L1 budget', () => {
     expect(arbiter.log().filter((d) => d.suppressed === true)).toHaveLength(0);
   });
 
+  test('polling budgetRemaining with a future ts does not refill the budget', () => {
+    const { arbiter, tick } = harness();
+    for (let i = 0; i < CONSTANTS.ALERT_BUDGET_L1_PER_10MIN; i += 1) l1Burst(tick, i * BURST_S);
+    // A UI poll far ahead of the row clock reports what the budget *will* be by then …
+    expect(arbiter.budgetRemaining(at(10_000))).toBe(CONSTANTS.ALERT_BUDGET_L1_PER_10MIN);
+    // … and must not have spent the window on the way: the next row is still over budget.
+    const spentAtS = CONSTANTS.ALERT_BUDGET_L1_PER_10MIN * BURST_S;
+    expect(l1Burst(tick, spentAtS)).toBeNull();
+    expect(arbiter.budgetRemaining(at(spentAtS + ALERT_L1_SPEEDING_MIN_S))).toBe(0);
+  });
+
   test('a suppressed alert still spends its rule, so it is not retried every second', () => {
     const { arbiter, tick } = harness({ tripIndex: 0 });
     for (let i = 0; i < CONSTANTS.ALERT_BUDGET_L1_PER_10MIN; i += 1) l1Burst(tick, i * BURST_S);
@@ -487,6 +499,42 @@ describe('rule 9a: mute', () => {
     });
   });
 
+  test('an escalation lifts the mute: the driver silenced the lower band, not this one', () => {
+    const h = harness();
+    mutedAtL2(h);
+    const worseFromS = escalateAtS + 5;
+    for (let s = worseFromS; s < worseFromS + CONSTANTS.ALERT_L3_MIN_S; s += 1) {
+      h.tick(s, speedingRow(s, OVER_21));
+    }
+    const l3AtS = worseFromS + CONSTANTS.ALERT_L3_MIN_S;
+    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_21))).toMatchObject({ level: 3 });
+    // The L3 was never muted, so its own repeat arrives on schedule.
+    const realertAtS = l3AtS + ALERT_REALERT_S;
+    expect(h.tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_21))).toBeNull();
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_21))).toMatchObject({
+      level: 3,
+      kind: 'speeding',
+    });
+  });
+
+  test('a long-press is recorded in state() and survives a drive resume', () => {
+    const h = harness();
+    mutedAtL2(h);
+    const saved = h.arbiter.state();
+    expect(saved).toEqual({ tripIndex: CONSTANTS.LEARNING_PERIOD_TRIPS, mutedBand: 2 });
+
+    const resumed = createArbiter(saved);
+    expect(resumed.state()).toEqual(saved);
+    const resumedTick = (s: number, input: Partial<Omit<ArbiterInput, 'ts'>>) =>
+      resumed.consider({ ...QUIET, ...input, ts: at(s) });
+    // The resumed arbiter re-opens the episode at L2 — it has no memory of having spoken …
+    const reopenS = escalateAtS + 5;
+    expect(resumedTick(reopenS, speedingRow(reopenS, OVER_9))).toMatchObject({ level: 2 });
+    // … but the long-press the driver placed still silences that band's repeat.
+    const realertAtS = reopenS + ALERT_REALERT_S;
+    expect(resumedTick(realertAtS, speedingRow(realertAtS, OVER_9))).toBeNull();
+  });
+
   test('a long-press after the episode ended does not carry into the next one', () => {
     const h = harness();
     h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
@@ -531,15 +579,54 @@ describe('rule 9a: mute', () => {
   });
 });
 
+describe('log() and consider() hand out copies', () => {
+  test('a consumer cannot reach back into the arbiter through a decision', () => {
+    const { arbiter, tick } = harness();
+    const returned = tick(0, { drowsy: true });
+    expect(returned).toMatchObject({ kind: 'drowsy', level: 3 });
+    // Whatever a consumer does to what it was handed …
+    if (returned !== null) {
+      returned.kind = 'speeding';
+      returned.level = 1;
+    }
+    const [logged] = arbiter.log();
+    if (logged !== undefined) {
+      logged.kind = 'break';
+      logged.suppressed = true;
+    }
+    // … the arbiter's own record is untouched.
+    expect(arbiter.log()[0]).toMatchObject({ kind: 'drowsy', level: 3 });
+    expect(arbiter.log()[0]?.suppressed).toBeUndefined();
+    expect(arbiter.log()[0]).not.toBe(logged);
+  });
+
+  test('a mutated decision cannot turn a mute into a speeding mute', () => {
+    const h = harness();
+    // Drowsy is the alert speaking; relabelling the handed-out copy must not redirect the mute.
+    const returned = h.tick(0, { drowsy: true });
+    if (returned !== null) returned.kind = 'speeding';
+    h.arbiter.mute(at(1));
+    expect(h.arbiter.state().mutedBand).toBeUndefined();
+  });
+});
+
 describe('rule 10: voice keys', () => {
-  test('every phrase is defined, and at most 3 words except the break suggestion', () => {
+  test('every phrase is defined', () => {
     expect(en['alert.easeOff']).toBe('Ease off');
     expect(en['alert.slowDown']).toBe('Slow down');
     expect(en['alert.phoneDown']).toBe('Phone down');
     expect(en['alert.eyesUp']).toBe('Eyes up');
+    expect(en['alert.drowsy']).toBe('Take a break');
     expect(en['alert.takeABreak']).toBe('Take a break soon');
-    const inDrive = ['alert.easeOff', 'alert.slowDown', 'alert.phoneDown', 'alert.eyesUp'] as const;
-    expect(inDrive.map((key) => en[key].split(' ').length)).toEqual([2, 2, 2, 2]);
+  });
+
+  test('every in-drive phrase is at most 3 words, the break suggestion excepted', () => {
+    const inDrive = (Object.keys(en) as StringKey[])
+      .filter((key): key is AlertVoiceKey => key.startsWith('alert.'))
+      .filter((key) => key !== 'alert.takeABreak');
+    expect(inDrive.length).toBeGreaterThanOrEqual(5);
+    const tooLong = inDrive.filter((key) => en[key].split(' ').length > 3);
+    expect(tooLong).toEqual([]);
   });
 
   test('every decision carries one of them', () => {
@@ -551,7 +638,7 @@ describe('rule 10: voice keys', () => {
     const speedAtS = 4 + ALERT_L1_SPEEDING_MIN_S;
     tick(speedAtS, speedingRow(speedAtS, mph(9), 4));
     expect(arbiter.log().map((d) => `${d.kind}:${d.voice ?? ''}`)).toEqual([
-      'drowsy:alert.takeABreak',
+      'drowsy:alert.drowsy',
       'phone:alert.phoneDown',
       'eyes_off:alert.eyesUp',
       'break:alert.takeABreak',

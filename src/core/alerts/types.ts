@@ -54,11 +54,21 @@ export interface ArbiterInput {
   drivingS: number;
 }
 
+/**
+ * Everything an arbiter needs to be rebuilt mid-drive. `createArbiter(previous.state())` resumes
+ * with the driver's mute intact; the per-episode bookkeeping deliberately does not survive, since
+ * the detectors it mirrors do not either.
+ */
 export interface ArbiterState {
   /** 0-based count of prior trips; below `LEARNING_PERIOD_TRIPS` the drive is L1-only. */
   tripIndex: number;
-  /** epoch ms — a mute carried into this arbiter (e.g. restored mid-drive). */
+  /** epoch ms — a time-boxed mute carried into this arbiter (e.g. a paused drive). */
   mutedUntilTs?: number;
+  /**
+   * The speeding band a long-press silenced. Repeats at or below it stay quiet until the episode
+   * ends; an escalation is a different alert and speaks, repeats included.
+   */
+  mutedBand?: AlertLevel;
 }
 
 export interface Arbiter {
@@ -66,8 +76,13 @@ export interface Arbiter {
   consider(input: ArbiterInput): AlertDecision | null;
   /** Long-press: mutes repeats of the alert now speaking, until its episode ends. */
   mute(ts: number): void;
-  /** L1 alerts still available in the rolling `ALERT_BUDGET_WINDOW_S` ending at `ts`. */
+  /**
+   * L1 alerts still available in the rolling `ALERT_BUDGET_WINDOW_S` ending at `ts`. A read only:
+   * polling it — with any `ts`, including one ahead of the row clock — never changes a decision.
+   */
   budgetRemaining(ts: number): number;
-  /** Every decision made this trip, delivered and suppressed alike, in order. */
+  /** A snapshot that `createArbiter` can resume from. */
+  state(): ArbiterState;
+  /** Every decision made this trip, delivered and suppressed alike, in order. Copies. */
   log(): AlertDecision[];
 }

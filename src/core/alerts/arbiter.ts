@@ -2,6 +2,7 @@
 //
 // Pure and deterministic — it never reads the clock, so a timeline of `ts` values replays exactly.
 import { CONSTANTS } from '@scoring';
+import { alertableFor, statusFor } from '@/core/detectors/common';
 import type {
   AlertDecision,
   AlertKind,
@@ -31,7 +32,6 @@ const {
   LEARNING_PERIOD_TRIPS,
   PHONE_HANDLING_MIN_S,
   PHONE_MIN_SPEED_MPS,
-  Q_FULL_AT,
 } = CONSTANTS;
 
 /** How urgent the speeding *state* is right now; 0 means "nothing to say". */
@@ -75,13 +75,15 @@ export function createArbiter(state: ArbiterState): Arbiter {
   const deliveredL1Ts: number[] = [];
   /** The decision currently speaking — what a long-press mutes. */
   let speaking: AlertDecision | null = null;
-  /** Set by `mute()` while a speeding alert is speaking; cleared when its episode ends. */
-  let speedingMuted = false;
+  /** The speeding band a long-press silenced; cleared when the episode ends. */
+  let mutedBand: AlertLevel | undefined = state.mutedBand;
+  /** A time-boxed mute carried in from a paused drive. */
+  const carriedMutedUntilTs = state.mutedUntilTs;
 
   function resetSpeedingEpisode(): void {
     alertedBand = 0;
     lastSpeedingAlertTs = 0;
-    speedingMuted = false;
+    mutedBand = undefined;
     // Nothing is speaking any more, so a late long-press must not mute the next episode.
     if (speaking !== null && speaking.kind === 'speeding') speaking = null;
   }
@@ -106,9 +108,11 @@ export function createArbiter(state: ArbiterState): Arbiter {
 
   function speedingBand(input: ArbiterInput): SpeedingBand {
     const { ts, overMps, overForS, q } = input;
-    // L2 and L3 are escalations of the L1 state, so they inherit its quality gate: below
-    // `Q_FULL_AT` the fix is not good enough to accuse anyone (§8.8 step 2, §9.5).
-    if (!(overMps > 0 && overForS >= ALERT_L1_SPEEDING_MIN_S && q >= Q_FULL_AT)) return 0;
+    // The detectors' own alert gate (§9.5): only an episode we would score in full is worth
+    // speaking about. L2 and L3 are escalations of the L1 state, so they inherit it — below
+    // `Q_FULL_AT` the fix is not good enough to accuse anyone of 20 over (§8.8 step 2).
+    if (!(overMps > 0 && overForS >= ALERT_L1_SPEEDING_MIN_S)) return 0;
+    if (!alertableFor(statusFor(q), q)) return 0;
     if (overL3SinceTs !== null && ts - overL3SinceTs >= ALERT_L3_MIN_S * 1000) return 3;
     const persisted = overForS >= ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
     if (overMps >= ALERT_L2_OVER_MPS || persisted) return 2;
@@ -120,9 +124,10 @@ export function createArbiter(state: ArbiterState): Arbiter {
     if (band === 0) return null;
     const increased = band > alertedBand;
     // Speeding is the only alert that repeats inside one episode, so it is the only one a mute
-    // has anything to silence. A materially worse state still speaks (§8.8 step 6).
-    const carriedMute = state.mutedUntilTs !== undefined && input.ts < state.mutedUntilTs;
-    const muted = speedingMuted || carriedMute;
+    // has anything to silence. A materially worse state still speaks (§8.8 step 6) — and so do
+    // *its* repeats, because the driver silenced the band below, not this one.
+    const carriedMute = carriedMutedUntilTs !== undefined && input.ts < carriedMutedUntilTs;
+    const muted = (mutedBand !== undefined && band <= mutedBand) || carriedMute;
     const dueAgain = !muted && input.ts - lastSpeedingAlertTs >= ALERT_REALERT_S * 1000;
     if (!increased && !dueAgain) return null;
     return {
@@ -179,7 +184,7 @@ export function createArbiter(state: ArbiterState): Arbiter {
     return {
       kind: 'drowsy',
       level: 3,
-      voice: 'alert.takeABreak',
+      voice: 'alert.drowsy',
       commit: () => {
         lastDrowsyAlertTs = input.ts;
       },
@@ -226,13 +231,22 @@ export function createArbiter(state: ArbiterState): Arbiter {
     return learning && candidate.kind !== 'drowsy' ? 1 : candidate.level;
   }
 
-  /** Called with the current row's `ts`, which never goes backwards, so pruning is safe. */
+  /**
+   * A pure read: `budgetRemaining` is a UI poll that may run with any `ts`, so it must never
+   * change what the next row decides.
+   */
   function remaining(ts: number): number {
+    const cutoff = ts - ALERT_BUDGET_WINDOW_S * 1000;
+    const spent = deliveredL1Ts.filter((t) => t > cutoff).length;
+    return Math.max(0, ALERT_BUDGET_L1_PER_10MIN - spent);
+  }
+
+  /** Drops what the rolling window has left behind. Only ever called with a row's own `ts`. */
+  function pruneBudget(ts: number): void {
     const cutoff = ts - ALERT_BUDGET_WINDOW_S * 1000;
     while (deliveredL1Ts.length > 0 && (deliveredL1Ts[0] ?? Infinity) <= cutoff) {
       deliveredL1Ts.shift();
     }
-    return Math.max(0, ALERT_BUDGET_L1_PER_10MIN - deliveredL1Ts.length);
   }
 
   /**
@@ -260,11 +274,14 @@ export function createArbiter(state: ArbiterState): Arbiter {
     if (level === 1) deliveredL1Ts.push(ts);
     decisions.push(decision);
     speaking = decision;
-    return decision;
+    // The caller gets a copy: the arbiter's own record, and the mute that reads `speaking.kind`,
+    // stay out of reach.
+    return { ...decision };
   }
 
   return {
     consider(input) {
+      pruneBudget(input.ts);
       track(input);
       const candidate = pick(input);
       return candidate === null ? null : emit(candidate, input.ts);
@@ -273,15 +290,22 @@ export function createArbiter(state: ArbiterState): Arbiter {
     mute(ts) {
       // A mute can only apply to an alert that has already spoken.
       if (speaking === null || ts < speaking.ts) return;
-      if (speaking.kind === 'speeding') speedingMuted = true;
+      if (speaking.kind === 'speeding' && alertedBand !== 0) mutedBand = alertedBand;
     },
 
     budgetRemaining(ts) {
       return remaining(ts);
     },
 
+    state() {
+      const snapshot: ArbiterState = { tripIndex: state.tripIndex };
+      if (carriedMutedUntilTs !== undefined) snapshot.mutedUntilTs = carriedMutedUntilTs;
+      if (mutedBand !== undefined) snapshot.mutedBand = mutedBand;
+      return snapshot;
+    },
+
     log() {
-      return decisions.slice();
+      return decisions.map((decision) => ({ ...decision }));
     },
   };
 }
