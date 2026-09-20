@@ -9,5 +9,7 @@ module.exports = {
     // Disable transforming the react-native babel preset, since it's part of the transformer itself
     '/node_modules/@react-native/babel-preset/',
   ],
-  testPathIgnorePatterns: ['/node_modules/', '/ios/', '/android/', '/supabase/'],
+  // Only the repo-root `supabase/` directory (pgTAP SQL tests) is off limits; `src/data/supabase`
+  // holds real Jest suites, so anchor the pattern to <rootDir> instead of matching any segment.
+  testPathIgnorePatterns: ['/node_modules/', '/ios/', '/android/', '<rootDir>/supabase/'],
 };
