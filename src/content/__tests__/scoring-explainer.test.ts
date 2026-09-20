@@ -1,5 +1,5 @@
-import { CONSTANTS } from '@scoring';
-import type { EventCategory } from '@scoring';
+import { CONSTANTS, contextMultiplier, scoreTrip } from '@scoring';
+import type { EventCategory, TripMetrics } from '@scoring';
 
 import {
   capTotal,
@@ -24,6 +24,16 @@ const E4_ITEMS: readonly ExplainerBlockId[] = [
 ];
 
 const blockFor = (id: ExplainerBlockId) => scoringExplainer.find((b) => b.id === id);
+
+/** A scorable trip, for the claims that have to be checked against the engine rather than asserted. */
+const METRICS: TripMetrics = {
+  distanceM: 8 * CONSTANTS.MILE,
+  durationS: 22 * 60,
+  validGnssPct: 95,
+  imuPresent: true,
+  role: 'driver',
+  maxSustainedSpeedMps: 31,
+};
 
 describe('scoring explainer blocks', () => {
   test('has a block for every E4 item, in reading order', () => {
@@ -87,6 +97,73 @@ describe('scoring explainer blocks', () => {
 
   test('tells the driver how to dispute an event', () => {
     expect(blockFor('disputes')?.body.toLowerCase()).toContain("this isn't right");
+  });
+});
+
+// A block may only describe what the shipped app actually does to a real driver's score. These
+// are the two places the copy had drifted ahead of the code; each guard fails if the claim comes
+// back, and each carries the condition under which it may honestly be relaxed.
+describe('claims are limited to what the app actually does', () => {
+  const contextCopy = () => blockFor('context')?.body ?? '';
+
+  // The night factor is real, so check the copy's category list against the engine rather than
+  // taking it on trust: `contextMultiplier` must raise exactly the categories the block names.
+  test('names exactly the categories the engine raises at night', () => {
+    const atNight = (category: EventCategory): number =>
+      contextMultiplier({
+        id: 'x',
+        category,
+        startedAt: 0,
+        durationS: 1,
+        q: 1,
+        corrected: false,
+        status: 'scored',
+        measured: {},
+        context: { night: true, precipitation: false },
+      });
+    const raised = CATEGORIES.filter((c) => atNight(c) > 1);
+    expect([...raised].sort()).toEqual(['focus', 'phone', 'speeding']);
+
+    const copy = contextCopy().toLowerCase();
+    for (const named of ['phone use', 'speeding', 'focus']) expect(copy).toContain(named);
+    expect(copy).toContain('at night');
+  });
+
+  // M-6. `context.precipitation` is hard-`false` at every site that builds a trip
+  // (`core/engine/finalize.ts`, `core/engine/recovery.ts`, `finalize-trip/handler.ts`), so the
+  // rain/snow factor has never fired for anyone and the trip has never shown it. Relax this only
+  // once a weather source actually sets the flag on a real drive.
+  test('does not claim a weather adjustment the app cannot make', () => {
+    const copy = contextCopy();
+    const claimsWeatherRaises =
+      /(rain|snow|wet|weather)[^.]*\b(count|counts|weigh|weighs|cost|costs|more)\b/i.test(copy) &&
+      !/\bnot\b/i.test(copy.split(/(?<=[.!?])\s+/).find((s) => /rain|snow|weather/i.test(s)) ?? '');
+    expect({ claimsWeatherRaises, copy }).toEqual({ claimsWeatherRaises: false, copy });
+    // and it says so rather than staying silent about a factor the spec describes
+    expect(copy.toLowerCase()).toMatch(/rain and snow are not adjusted for/);
+  });
+
+  // M-5. Nothing dispatches a re-score on the version a trip was scored under: `apply_recompute`
+  // writes whatever the deployed scorer reports and `trip-actions` calls `scoreTrip` with no
+  // version dispatch, so disputing one event on an old trip re-scores the whole trip under the
+  // current model. Relax this only once the re-score path pins the stored version.
+  test('does not promise that a scored trip is never scored again', () => {
+    const copy = blockFor('initialModel')?.body ?? '';
+    const forbidden = [
+      /leave already-scored trips exactly as they were/i,
+      /never (re-?scored?|scored again)/i,
+      /your (old |past |already-scored )?(trips|drives|history) (are|is) never/i,
+    ];
+    expect(forbidden.filter((p) => p.test(copy)).map(String)).toEqual([]);
+    // and it discloses the one path that does re-score a trip
+    expect(copy.toLowerCase()).toContain('score a trip again');
+    expect(copy.toLowerCase()).toContain('reporting an event');
+  });
+
+  test('records that a trip carries the model version it was scored under', () => {
+    expect(blockFor('initialModel')?.body.toLowerCase()).toContain('model version it was scored under');
+    // the claim the copy rests on: the scorer does stamp a version on every trip
+    expect(scoreTrip(METRICS, []).scoringVersion).toBe(scoringChangelog[0]?.version);
   });
 });
 

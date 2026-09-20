@@ -5,6 +5,23 @@
 // that could drift out of date is derived from `@scoring` rather than typed into prose: the caps
 // below come from `CONSTANTS.CATEGORY`, so a tuning change updates the screen with the engine.
 //
+// The same rule applies to behaviour, and it is stricter than it looks: a block may only describe
+// something the shipped app actually does to a real driver's score. A rule the scorer supports but
+// nothing feeds is not a rule the driver is subject to, and saying otherwise on this screen of all
+// screens is the failure mode to guard against. Two live examples, both pinned by tests in
+// `__tests__/scoring-explainer.test.ts`:
+//
+//   - `contextMultiplier` will weight rain and snow, but `context.precipitation` is hard-`false`
+//     at every site that builds a trip (`core/engine/finalize.ts`, `core/engine/recovery.ts`,
+//     `supabase/functions/finalize-trip/handler.ts`) because the app has no weather source. So
+//     `context` claims the night factor, which is real, and says plainly that weather is not
+//     applied yet.
+//   - Nothing pins a re-score to the version a trip was scored under: `apply_recompute` writes
+//     whatever the deployed scorer reports and `trip-actions` calls `scoreTrip` with no version
+//     dispatch. So `initialModel` promises only that a model change does not sweep back over
+//     scored drives, and discloses that reporting an event re-scores that trip under the current
+//     version.
+//
 // Pure data: no React, no network, no I/O.
 import { CATEGORY } from '@scoring';
 import type { EventCategory } from '@scoring';
@@ -103,8 +120,8 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   },
   {
     id: 'context',
-    title: 'Night and weather count',
-    body: 'The same action is harder to recover from in the dark or in bad weather, so phone use, speeding and focus events count for more at night, and speeding and harsh events count for more in rain or snow. The adjustment is capped, and the trip shows you when it was applied. Nothing is adjusted for where you drove or who you are.',
+    title: 'Driving at night counts for more',
+    body: 'Something you do in the dark is harder to recover from, so phone use, speeding and focus events count for more at night. The adjustment is capped, and the trip shows you when it applied. Rain and snow are not adjusted for at all right now, because the app has no weather source yet. Nothing is ever adjusted for where you drove or who you are.',
   },
   {
     id: 'disputes',
@@ -125,7 +142,7 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'initialModel',
     title: 'This is an initial model',
-    body: 'These thresholds and weights are our first version and we are still tuning them. They come from published driver-education guidance and our own testing against recorded drives, not from insurance data or a claims history. When we change the model we give it a new version number and leave already-scored trips exactly as they were, so your history stays honest.',
+    body: 'These thresholds and weights are our first version and we are still tuning them. They come from published driver-education guidance and our own testing against recorded drives, not from insurance data or a claims history. Every trip records the model version it was scored under, and changing the model does not send us back over drives that are already scored. One thing does score a trip again: reporting an event on it, which uses whichever version is current at the time.',
   },
 ];
 
