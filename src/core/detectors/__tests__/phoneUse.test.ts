@@ -1,6 +1,6 @@
 import { CONSTANTS, severity } from '@scoring';
 import { createPhoneUseDetector } from '@/core/detectors/phoneUse';
-import { T0, counterIds, ctx, drive, only, seq } from '../__fixtures__/rows';
+import { NO_LIMIT, T0, counterIds, ctx, drive, only, seq } from '../__fixtures__/rows';
 
 const HAND = { handlingScore: 0.7 };
 const QUIET = {};
@@ -178,5 +178,40 @@ describe('app switch', () => {
       source: 'both',
       durationS: 3,
     });
+  });
+});
+
+describe('openEpisode', () => {
+  const step = (det: ReturnType<typeof make>, r: Parameters<typeof det.push>[0], c = ctx()) => {
+    det.push(r, NO_LIMIT, c);
+    return det.openEpisode();
+  };
+
+  test('null until the run confirms, then the id and the rows through the last signal', () => {
+    const det = make();
+    const seen = seq([3, HAND], [1, QUIET], [1, HAND], [2, QUIET]).map((r) => step(det, r));
+    expect(seen).toEqual([
+      null,
+      null,
+      { id: 'e1', durationS: 3 },
+      { id: 'e1', durationS: 3 }, // a quiet row keeps the episode open but adds nothing
+      { id: 'e1', durationS: 5 },
+      { id: 'e1', durationS: 5 },
+      null, // the second quiet row closed it
+    ]);
+  });
+
+  test('an app switch in mounted mode confirms on its first row', () => {
+    const det = make();
+    const seen = seq([2, { appForeground: false }]).map((r) => step(det, r, ctx({ mode: 'mounted' })));
+    expect(seen).toEqual([
+      { id: 'e1', durationS: 1 },
+      { id: 'e1', durationS: 2 },
+    ]);
+  });
+
+  test('a run that breaks before confirming exposes nothing', () => {
+    const det = make();
+    expect(seq([2, HAND], [1, QUIET]).map((r) => step(det, r))).toEqual([null, null, null]);
   });
 });

@@ -1,18 +1,16 @@
 // Speeding episodes (§9.3): speed above limit + tolerance for at least SPEEDING_MIN_S rows, on a
 // valid fix with a known limit. Confidence comes from the limit source and the GNSS quality (§9.5).
 import { CONSTANTS } from '@scoring';
-import type { DetectedEvent, Detector, LimitSample } from '../engine/types';
-import { ROW_MS, alertableFor, contextOf, statusFor } from './common';
-
-/** Speed-limit source confidence (§9.5). */
-const LIMIT_Q = { posted: 0.9, cached: 0.8, statutory: 0.7 } as const;
-/** Parallel roads or a weak map match: the limit may belong to the road next door. */
-const LIMIT_Q_AMBIGUOUS = 0.6;
-const MATCH_CONFIDENCE_MIN = 0.7;
-/** GNSS quality beyond which the whole episode is capped at `GNSS_CAP_Q` — unscored (§9.5). */
-const H_ACC_MAX_M = 20;
-const SPEED_ACC_MAX_MPS = 2;
-const GNSS_CAP_Q = 0.4;
+import type { DetectedEvent, Detector } from '../engine/types';
+import {
+  GNSS_CAP_Q,
+  ROW_MS,
+  alertableFor,
+  contextOf,
+  gnssPoor,
+  limitConfidence,
+  statusFor,
+} from './common';
 
 interface OpenEpisode {
   id: string;
@@ -33,13 +31,6 @@ export interface SpeedingDetector extends Detector {
   markAlerted(id: string, ts: number): void;
   /** Id of the open episode once it is long enough to become an event, else null. */
   openEpisodeId(): string | null;
-}
-
-function limitConfidence(limit: LimitSample): number | null {
-  if (limit.source === 'unknown' || limit.limitMps === null) return null;
-  const base = LIMIT_Q[limit.source];
-  const ambiguous = limit.parallelRoads || limit.matchConfidence < MATCH_CONFIDENCE_MIN;
-  return ambiguous ? Math.min(base, LIMIT_Q_AMBIGUOUS) : base;
 }
 
 export function createSpeedingDetector(newId: () => string): SpeedingDetector {
@@ -107,7 +98,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
         open.speedAtMax = row.speed;
       }
       open.limitQ = Math.min(open.limitQ, limitQ);
-      if (row.hAcc > H_ACC_MAX_M || row.speedAcc > SPEED_ACC_MAX_MPS) open.gnssCapped = true;
+      if (gnssPoor(row)) open.gnssCapped = true;
       return [];
     },
     flush: close,

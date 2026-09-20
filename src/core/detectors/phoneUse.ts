@@ -9,6 +9,18 @@ import { CONSTANTS } from '@scoring';
 import type { DetectedEvent, Detector, EventSource } from '../engine/types';
 import { alertableFor, contextOf, knownSpeed, statusFor } from './common';
 
+/** The confirmed open episode, as the alert layer sees it. */
+export interface OpenPhoneEpisode {
+  id: string;
+  /** Rows through the last signal row — what the closed event's `durationS` will be so far. */
+  durationS: number;
+}
+
+export interface PhoneUseDetector extends Detector {
+  /** The confirmed open episode, or null before confirmation and between episodes. */
+  openEpisode(): OpenPhoneEpisode | null;
+}
+
 /** Phone-use confidence (§9.5): handling alone 0.6; with unlock or app-switch evidence 0.9. */
 const Q = { handling: 0.6, evidenced: 0.9 } as const;
 /** `handlingScore` at or above this reads as the phone being handled. */
@@ -38,7 +50,7 @@ interface Episode {
   context: DetectedEvent['context'];
 }
 
-export function createPhoneUseDetector(newId: () => string): Detector {
+export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
   let open: Episode | null = null;
   let handlingRun = 0;
 
@@ -127,5 +139,8 @@ export function createPhoneUseDetector(newId: () => string): Detector {
       return out;
     },
     flush: close,
+    openEpisode() {
+      return open !== null && open.confirmed ? { id: open.id, durationS: open.durationRows } : null;
+    },
   };
 }

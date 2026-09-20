@@ -107,3 +107,12 @@ describe('mergeEvents over the whole trip keeps possible events apart', () => {
     ]);
   });
 });
+
+test("openPhoneEpisode exposes the phone detector's confirmed episode", () => {
+  const suite = createDetectors(counterIds());
+  const seen = seq([3, HAND], [2, {}]).map((r) => {
+    suite.push(r, L35, ctx());
+    return suite.openPhoneEpisode();
+  });
+  expect(seen).toEqual([null, null, { id: 'e1', durationS: 3 }, { id: 'e1', durationS: 3 }, null]);
+});

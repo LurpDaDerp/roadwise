@@ -4,14 +4,8 @@
 // `EngineEvent`; everything it decides goes out through the `EngineDeps` callbacks and
 // `EngineSnapshot`. Time is only ever the `ts` on an event or a row.
 import type { AlertDecision, Arbiter } from '../alerts/types';
-import type {
-  DetectedEvent,
-  DetectorContext,
-  DetectorSuite,
-  DriveMode,
-  FeatureRow,
-  LimitSample,
-} from './types';
+import type { TripDetectors } from '../detectors';
+import type { DetectedEvent, DetectorContext, DriveMode, FeatureRow, LimitSample } from './types';
 
 export type EngineStatus = 'off' | 'armed' | 'candidate' | 'recording' | 'ending' | 'finalizing';
 
@@ -29,9 +23,9 @@ export interface Fix {
 
 /**
  * A stretch the trip was in `ending` and then resumed (gap-merge, §19.1 "drive-through, fuel
- * stop"). `fromTs` is where the recorded data stops — one row-length after the last row before
- * the gap — and `toTs` the moment recording resumed, so `toTs - fromTs` is exactly the missing
- * time.
+ * stop"). `fromTs` is where driving stopped — the start of an idle stretch that was still open,
+ * else one row-length after the last recorded row — and `toTs` the moment recording resumed, so
+ * `toTs - fromTs` is exactly the time that was not driving.
  */
 export interface TripGap {
   fromTs: number;
@@ -52,7 +46,12 @@ export interface TripSession {
   startedAt: number;
   /** `startedAt` came from the motion history rather than a fix (marked in data quality, §8.5). */
   startApproximate: boolean;
-  /** epoch ms — one row-length after the last row; null while the trip is open. */
+  /**
+   * epoch ms — where driving stopped: the start of an idle stretch that was still open when the
+   * trip closed (a stationary auto-end trims its five idle minutes), else one row-length after the
+   * last row, or the closing event's `ts` for a trip with no rows. Rows may run past it. Null
+   * while the trip is open.
+   */
   endedAt: number | null;
   lastRowTs: number | null;
   /** Rows appended over the whole trip, ring or not. */
@@ -78,7 +77,9 @@ export interface TripSession {
    * `ts` of the last row covered by each completed checkpoint, in order. Rows after the last
    * entry are not yet durable. The session handed to `onCheckpoint` lists the checkpoints
    * completed *before* that call, so the rows with `ts > checkpoints.at(-1)` are what the call
-   * must persist — they are all inside `rows`, since the ring is longer than the cadence.
+   * must persist — they are all inside `rows`, since the ring is longer than the cadence. Besides
+   * the cadence, the tail is checkpointed as the trip goes to `ending` and again just before
+   * `onFinalize`, so no row is left for the ring to evict.
    */
   checkpoints: number[];
   firstFix: Fix | null;
@@ -116,13 +117,22 @@ export interface EngineDeps {
     /** Warm the cache along the heading; called once per `PREFETCH_EVERY_M` travelled (§3.5). */
     prefetch(lat: number, lng: number, course: number): void;
   };
-  detectors: DetectorSuite;
-  arbiter: Arbiter;
+  /** A fresh detector suite for each trip, made when the trip is confirmed. */
+  createDetectors(): TripDetectors;
+  /** A fresh arbiter for each trip; the host closes over its `ArbiterState` (trip index, carried mute). */
+  createArbiter(): Arbiter;
   onAlert(decision: AlertDecision): void;
   /** Every `CHECKPOINT_S` rows. Owns persistence; a rejection leaves the checkpoint unrecorded. */
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
   /** Once per trip with the closed session; the finalizer scores and stores it. */
   onFinalize(session: Readonly<TripSession>): Promise<void>;
+  /**
+   * Where a failure that must not stop the engine is reported: a finalizer or detector flush that
+   * threw (after the engine has moved on and any follow-on trip has started) and a subscriber
+   * that threw. Without it a finalize failure rejects the dispatch — still after the state change
+   * — and a subscriber's error is dropped.
+   */
+  onError?(err: unknown): void;
   /** The per-row detector context minus `mode`, which the engine knows. */
   ctx(): Omit<DetectorContext, 'mode'>;
 }

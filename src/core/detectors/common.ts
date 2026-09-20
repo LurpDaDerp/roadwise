@@ -1,6 +1,6 @@
 // Small pure helpers every detector shares. Nothing here touches the platform.
 import { CONSTANTS } from '@scoring';
-import type { DetectedEvent, DetectorContext, FeatureRow } from '../engine/types';
+import type { DetectedEvent, DetectorContext, FeatureRow, LimitSample } from '../engine/types';
 
 /** Standard gravity, m/s²: turns a GNSS Δspeed over a second into g for the IMU comparison. */
 export const G_MPS2 = 9.80665;
@@ -25,4 +25,31 @@ export function alertableFor(status: DetectedEvent['status'], q: number): boolea
 
 export function contextOf(ctx: DetectorContext): DetectedEvent['context'] {
   return { night: ctx.night, precipitation: ctx.precipitation };
+}
+
+// --- speeding confidence (§9.5) --------------------------------------------------------------
+// Shared by the speeding detector and the engine's arbiter feed, so an alert is only ever
+// considered for an episode the detector would score in full.
+
+/** Speed-limit source confidence. */
+export const LIMIT_Q = { posted: 0.9, cached: 0.8, statutory: 0.7 } as const;
+/** Parallel roads or a weak map match: the limit may belong to the road next door. */
+export const LIMIT_Q_AMBIGUOUS = 0.6;
+export const MATCH_CONFIDENCE_MIN = 0.7;
+/** A fix looser than either bound caps the whole speeding episode at `GNSS_CAP_Q` — unscored. */
+export const H_ACC_MAX_M = 20;
+export const SPEED_ACC_MAX_MPS = 2;
+export const GNSS_CAP_Q = 0.4;
+
+/** Confidence in the limit itself, or null when there is no usable limit. */
+export function limitConfidence(limit: LimitSample): number | null {
+  if (limit.source === 'unknown' || limit.limitMps === null) return null;
+  const base = LIMIT_Q[limit.source];
+  const ambiguous = limit.parallelRoads || limit.matchConfidence < MATCH_CONFIDENCE_MIN;
+  return ambiguous ? Math.min(base, LIMIT_Q_AMBIGUOUS) : base;
+}
+
+/** The fix is too loose to accuse anyone of a precise speed. */
+export function gnssPoor(row: FeatureRow): boolean {
+  return row.hAcc > H_ACC_MAX_M || row.speedAcc > SPEED_ACC_MAX_MPS;
 }

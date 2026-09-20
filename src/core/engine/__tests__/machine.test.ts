@@ -1,7 +1,7 @@
 import { CONSTANTS } from '@scoring';
 import { createArbiter } from '@/core/alerts/arbiter';
-import type { AlertDecision } from '@/core/alerts/types';
-import { createDetectors } from '@/core/detectors';
+import type { AlertDecision, Arbiter } from '@/core/alerts/types';
+import { createDetectors, type TripDetectors } from '@/core/detectors';
 import { T0, counterIds, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import type { EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
 import { PREFETCH_EVERY_M, STATIONARY_SPEED_MPS, createEngine } from '@/core/engine/machine';
@@ -23,6 +23,8 @@ const L35 = limit(mph(35));
 const UNKNOWN: LimitSample = { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false };
 /** Epoch ms of second `s` of a scripted drive (row `i` sits at `at(i)`). */
 const at = (s: number) => T0 + s * ROW_MS;
+/** `[at(from), …, at(to - 1)]` */
+const range = (from: number, to: number) => Array.from({ length: to - from }, (_, k) => at(from + k));
 
 /** Comfortably above the 12 mph confirm speed and the 5 mph lockout. */
 const FAST = { speed: mph(20) };
@@ -41,6 +43,10 @@ interface HarnessOptions {
   tripIndex?: number;
   limit?: LimitSample | null;
   cameraAt?: (i: number) => CameraFocusSample | null;
+  /** Give the engine an `onError` sink and collect what lands in it. */
+  onError?: boolean;
+  /** Make every detector suite's `flush` throw. */
+  breakFlush?: boolean;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -50,6 +56,9 @@ function harness(opts: HarnessOptions = {}) {
   const alerts: AlertDecision[] = [];
   const checkpoints: Readonly<TripSession>[] = [];
   const finalized: Readonly<TripSession>[] = [];
+  const detectorsMade: TripDetectors[] = [];
+  const arbiters: Arbiter[] = [];
+  const errors: unknown[] = [];
   const lookup = jest.fn((): LimitSample | null => (opts.limit === undefined ? L35 : opts.limit));
   const prefetch = jest.fn();
   const onCheckpoint = jest.fn(async (s: Readonly<TripSession>) => {
@@ -58,12 +67,27 @@ function harness(opts: HarnessOptions = {}) {
   const onFinalize = jest.fn(async (s: Readonly<TripSession>) => {
     finalized.push(s);
   });
+  const detectorFactory = jest.fn((): TripDetectors => {
+    const suite = createDetectors(counterIds());
+    if (opts.breakFlush) {
+      suite.flush = () => {
+        throw new Error('flush failed');
+      };
+    }
+    detectorsMade.push(suite);
+    return suite;
+  });
+  const arbiterFactory = jest.fn((): Arbiter => {
+    const arbiter = createArbiter({ tripIndex: opts.tripIndex ?? LEARNING_PERIOD_TRIPS });
+    arbiters.push(arbiter);
+    return arbiter;
+  });
   const deps: EngineDeps = {
     now: () => now,
     newId: () => `trip-${(ids += 1)}`,
     limits: { lookup, prefetch },
-    detectors: createDetectors(counterIds()),
-    arbiter: createArbiter({ tripIndex: opts.tripIndex ?? LEARNING_PERIOD_TRIPS }),
+    createDetectors: detectorFactory,
+    createArbiter: arbiterFactory,
     onAlert: (d) => {
       alerts.push(d);
     },
@@ -75,6 +99,11 @@ function harness(opts: HarnessOptions = {}) {
       cameraFocus: opts.cameraAt ? opts.cameraAt(rowIndex) : null,
     }),
   };
+  if (opts.onError) {
+    deps.onError = (err) => {
+      errors.push(err);
+    };
+  }
   const engine = createEngine(deps);
 
   const rowAt = (i: number, overrides: Overrides): FeatureRow =>
@@ -99,16 +128,20 @@ function harness(opts: HarnessOptions = {}) {
     alerts,
     checkpoints,
     finalized,
+    detectorsMade,
+    arbiters,
+    errors,
     lookup,
     prefetch,
     onCheckpoint,
     onFinalize,
+    detectorFactory,
+    arbiterFactory,
     status: () => engine.snapshot().status,
-    setNow: (s: number) => {
-      now = at(s);
-    },
   };
 }
+
+type Harness = ReturnType<typeof harness>;
 
 async function armed(opts: HarnessOptions = {}) {
   const h = harness(opts);
@@ -123,15 +156,29 @@ async function recording(opts: HarnessOptions = {}) {
   return h;
 }
 
-/** Ends whatever is open right now: `end` takes recording to ending, a second `end` finalizes. */
-async function endNow(h: Awaited<ReturnType<typeof armed>>, s: number) {
+/** One tap on End (C6): recording or ending → finalized. */
+async function endNow(h: Harness, s: number) {
   await h.engine.dispatch({ type: 'end', ts: at(s) });
-  await h.engine.dispatch({ type: 'end', ts: at(s) });
+}
+
+/** Recording ten fast seconds, then walking at second 10 puts the trip in `ending`. */
+async function endingAt10(opts: HarnessOptions = {}) {
+  const h = await recording(opts);
+  await h.drive(0, 10);
+  await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(10) });
+  expect(h.status()).toBe('ending');
+  return h;
 }
 
 const only = <T>(list: readonly T[]): T => {
   expect(list).toHaveLength(1);
   return list[0] as T;
+};
+
+/** The `ts` of the rows a checkpoint call must persist: everything after the last completed one. */
+const rowsSince = (s: Readonly<TripSession>): number[] => {
+  const last = s.checkpoints[s.checkpoints.length - 1] ?? -Infinity;
+  return s.rows.filter((r) => r.ts > last).map((r) => r.ts);
 };
 
 describe('arm and disarm', () => {
@@ -191,6 +238,8 @@ describe('armed → candidate', () => {
       clientTripId: null,
       startedAt: null,
     });
+    expect(h.detectorFactory).not.toHaveBeenCalled();
+    expect(h.arbiterFactory).not.toHaveBeenCalled();
   });
 
   test('an automotive activity opens a candidate', async () => {
@@ -230,6 +279,8 @@ describe('candidate confirmation (30 s over 12 mph within 180 s)', () => {
       startedAt: at(0),
       lastRowTs: at(AUTO_DETECT_CONFIRM_S - 1),
     });
+    expect(h.detectorFactory).toHaveBeenCalledTimes(1);
+    expect(h.arbiterFactory).toHaveBeenCalledTimes(1);
   });
 
   test('the fast seconds are cumulative, not consecutive', async () => {
@@ -240,6 +291,40 @@ describe('candidate confirmation (30 s over 12 mph within 180 s)', () => {
     s = await h.drive(s, 19, FAST);
     expect(h.status()).toBe('candidate');
     await h.drive(s, 1, FAST);
+    expect(h.status()).toBe('recording');
+  });
+
+  test('rows at 2 Hz count half a second each', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    const halfSecond = (i: number) => ({ ...FAST, ts: at(0) + i * 500 });
+    // The first row stands for a full row-length, every later one for the half second since the
+    // row before it: 1 + 57 × 0.5 = 29.5 after 58 rows; the 59th brings 30.
+    for (let i = 0; i < 58; i += 1) {
+      await h.engine.dispatch({ type: 'row', row: h.rowAt(i, halfSecond(i)) });
+    }
+    expect(h.status()).toBe('candidate');
+    await h.engine.dispatch({ type: 'row', row: h.rowAt(58, halfSecond(58)) });
+    expect(h.status()).toBe('recording');
+  });
+
+  test('rows at 0.5 Hz count at most a second each', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    const twoSeconds = (i: number) => ({ ...FAST, ts: at(0) + i * 2000 });
+    // Sixteen rows span 30 s of wall clock, but a sparse fix vouches for one second at most.
+    for (let i = 0; i < 16; i += 1) {
+      await h.engine.dispatch({ type: 'row', row: h.rowAt(i, twoSeconds(i)) });
+    }
+    expect(h.status()).toBe('candidate');
+    for (let i = 16; i < AUTO_DETECT_CONFIRM_S - 1; i += 1) {
+      await h.engine.dispatch({ type: 'row', row: h.rowAt(i, twoSeconds(i)) });
+    }
+    expect(h.status()).toBe('candidate');
+    await h.engine.dispatch({
+      type: 'row',
+      row: h.rowAt(AUTO_DETECT_CONFIRM_S - 1, twoSeconds(AUTO_DETECT_CONFIRM_S - 1)),
+    });
     expect(h.status()).toBe('recording');
   });
 
@@ -268,6 +353,7 @@ describe('candidate confirmation (30 s over 12 mph within 180 s)', () => {
     expect(h.status()).toBe('armed');
     expect(h.onFinalize).not.toHaveBeenCalled();
     expect(h.onCheckpoint).not.toHaveBeenCalled();
+    expect(h.detectorFactory).not.toHaveBeenCalled();
     expect(h.engine.snapshot().lastRowTs).toBeNull();
 
     // The next candidate starts from nothing: no leftover fast seconds, no consumed trip id.
@@ -393,11 +479,12 @@ describe('manual start', () => {
     expect(only(h.finalized).rowsCount).toBe(5);
   });
 
-  test('a manual trip with no rows still finalizes once', async () => {
+  test('a manual trip with no rows still finalizes once, without a checkpoint', async () => {
     const h = await recording();
     await endNow(h, 4);
     const trip = only(h.finalized);
     expect(trip).toMatchObject({ rowsCount: 0, startedAt: at(0), endedAt: at(4), durationS: 4 });
+    expect(h.onCheckpoint).not.toHaveBeenCalled();
   });
 });
 
@@ -487,7 +574,7 @@ describe('rows while recording', () => {
 });
 
 describe('checkpoints', () => {
-  test('exactly floor(rows / CHECKPOINT_S) calls, each with the rows to persist', async () => {
+  test('floor(rows / CHECKPOINT_S) calls during the drive, each with the rows to persist', async () => {
     const h = await recording();
     const n = CHECKPOINT_S * 3 + 5;
     await h.drive(0, n);
@@ -495,13 +582,53 @@ describe('checkpoints', () => {
     expect(h.checkpoints.map((s) => s.rowsCount)).toEqual([30, 60, 90]);
     expect(h.checkpoints.map((s) => s.checkpoints)).toEqual([[], [at(29)], [at(29), at(59)]]);
     const third = h.checkpoints[2]!;
-    const since = third.checkpoints[third.checkpoints.length - 1] ?? -Infinity;
-    expect(third.rows.filter((r) => r.ts > since).map((r) => r.ts)).toEqual(
-      Array.from({ length: CHECKPOINT_S }, (_, k) => at(60 + k))
-    );
+    expect(rowsSince(third)).toEqual(range(60, 90));
     expect(Object.isFrozen(third)).toBe(true);
+    // Finalize persists the five rows the cadence had not reached.
     await endNow(h, n);
-    expect(only(h.finalized).checkpoints).toEqual([at(29), at(59), at(89)]);
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(4);
+    expect(rowsSince(h.checkpoints[3]!)).toEqual(range(90, 95));
+    expect(only(h.finalized).checkpoints).toEqual([at(29), at(59), at(89), at(94)]);
+  });
+
+  test('finalize persists the tail before handing the session over', async () => {
+    const h = await recording();
+    await h.drive(0, 45);
+    await endNow(h, 45);
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(2);
+    const tail = h.checkpoints[1]!;
+    expect(tail.checkpoints).toEqual([at(29)]);
+    expect(rowsSince(tail)).toEqual(range(30, 45));
+    expect(h.onCheckpoint.mock.invocationCallOrder[1]).toBeLessThan(
+      h.onFinalize.mock.invocationCallOrder[0]!
+    );
+    expect(only(h.finalized).checkpoints).toEqual([at(29), at(44)]);
+  });
+
+  test('no tail checkpoint when the last row is already covered', async () => {
+    const h = await recording();
+    await h.drive(0, CHECKPOINT_S);
+    await endNow(h, CHECKPOINT_S);
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(1);
+    expect(only(h.finalized).checkpoints).toEqual([at(CHECKPOINT_S - 1)]);
+  });
+
+  test('ending checkpoints the tail, so a long gap cannot evict un-persisted rows', async () => {
+    const h = await recording();
+    await h.drive(0, 45);
+    await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(45) });
+    expect(h.status()).toBe('ending');
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(2);
+    expect(rowsSince(h.checkpoints[1]!)).toEqual(range(30, 45));
+    // Nine minutes later — well past the 120 s ring — the trip resumes.
+    const back = 45 + 540;
+    await h.drive(back, 15, FAST);
+    expect(h.status()).toBe('recording');
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(3);
+    expect(rowsSince(h.checkpoints[2]!)).toEqual(range(back, back + 15));
+    await endNow(h, back + 15);
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(3);
+    expect(only(h.finalized).checkpoints).toEqual([at(29), at(44), at(back + 14)]);
   });
 
   test('the candidate rows count towards the cadence once they are replayed', async () => {
@@ -551,7 +678,7 @@ describe('detectors and alerts', () => {
 
   test('the arbiter sees the plain over-limit and a tolerance-gated overForS', async () => {
     const h = await recording();
-    const consider = jest.spyOn(h.deps.arbiter, 'consider');
+    const consider = jest.spyOn(only(h.arbiters), 'consider');
     await h.drive(0, 2, OVER);
     await h.drive(2, 1, { speed: mph(38) }); // over the limit, inside the tolerance
     await h.drive(3, 1, { speed: mph(30) });
@@ -572,19 +699,55 @@ describe('detectors and alerts', () => {
 
   test('an unknown limit means no over-limit and no quality', async () => {
     const h = await recording({ limit: null });
-    const consider = jest.spyOn(h.deps.arbiter, 'consider');
+    const consider = jest.spyOn(only(h.arbiters), 'consider');
     await h.drive(0, 1, OVER);
     expect(consider.mock.calls[0]![0]).toMatchObject({ limitMps: null, overMps: 0, overForS: 0, q: 0 });
   });
 
-  test('a handling run is offered to the arbiter as a phone episode', async () => {
+  test("the detector's open phone episode is offered to the arbiter, with its own id", async () => {
     const h = await recording();
+    const consider = jest.spyOn(only(h.arbiters), 'consider');
     await h.drive(0, 5, { speed: 15, ...HAND });
     const alert = only(h.alerts);
-    expect(alert).toMatchObject({ kind: 'phone', level: 2, ts: at(2), eventId: `phone@${at(0)}` });
+    expect(alert).toMatchObject({ kind: 'phone', level: 2, ts: at(2), eventId: 'e1' });
+    expect(consider.mock.calls.map(([i]) => i.phoneEpisode ?? null)).toEqual([
+      null,
+      null,
+      { id: 'e1', durationS: 3 },
+      { id: 'e1', durationS: 4 },
+      { id: 'e1', durationS: 5 },
+    ]);
     const s = await h.drive(5, 3, { speed: 15 });
     await endNow(h, s);
-    expect(only(only(h.finalized).events)).toMatchObject({ category: 'phone', startedAt: at(0) });
+    expect(only(only(h.finalized).events)).toMatchObject({ id: 'e1', category: 'phone', startedAt: at(0) });
+  });
+
+  test('an app-switch episode in mounted mode reaches the arbiter too; pocket mode has none', async () => {
+    const h = await recording();
+    await h.drive(0, 3, { speed: 15, appForeground: false });
+    expect(only(h.alerts)).toMatchObject({ kind: 'phone', eventId: 'e1', ts: at(2) });
+
+    const g = await armed();
+    await g.engine.dispatch({ type: 'manualStart', mode: 'pocket', passenger: false, ts: at(0) });
+    await g.drive(0, 5, { speed: 15, appForeground: false });
+    expect(g.alerts).toEqual([]);
+  });
+
+  test('each trip gets its own detectors and its own arbiter', async () => {
+    const h = await recording();
+    await h.drive(0, 5, { speed: 15, ...HAND });
+    await h.drive(5, 3, { speed: 15 });
+    await endNow(h, 8);
+    await h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(200) });
+    await h.drive(200, 5, { speed: 15, ...HAND });
+    expect(h.detectorFactory).toHaveBeenCalledTimes(2);
+    expect(h.arbiterFactory).toHaveBeenCalledTimes(2);
+    // Fresh ids and a fresh record: a shared suite would number this episode e2, and a shared
+    // arbiter would stay silent about an id it had already alerted on.
+    expect(h.alerts.map((a) => [a.kind, a.eventId, a.ts])).toEqual([
+      ['phone', 'e1', at(2)],
+      ['phone', 'e1', at(202)],
+    ]);
   });
 
   test('camera focus samples drive the eyes-off and drowsy alerts and the focus events', async () => {
@@ -632,30 +795,30 @@ describe('lockedOut and stoppedPanel', () => {
     expect(h.engine.snapshot().lockedOut).toBe(false);
     await h.engine.dispatch({ type: 'setPassenger', passenger: false, ts: at(3) });
     expect(h.engine.snapshot().lockedOut).toBe(true);
-    await h.engine.dispatch({ type: 'end', ts: at(3) });
-    expect(h.engine.snapshot().lockedOut).toBe(false);
+    await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(3) });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', lockedOut: false });
   });
 
-  test('stoppedPanel after STOPPED_PANEL_S at zero, held through a creep, cleared over 3 mph', async () => {
+  test('stoppedPanel after STOPPED_PANEL_S under 0.5 m/s, held through a creep, cleared over 3 mph', async () => {
     const h = await recording();
-    let s = await h.drive(0, STOPPED_PANEL_S - 1, STOPPED);
+    let s = await h.drive(0, STOPPED_PANEL_S - 1, STILL);
     expect(h.engine.snapshot().stoppedPanel).toBe(false);
-    s = await h.drive(s, 1, STOPPED);
+    s = await h.drive(s, 1, STOPPED); // 0 and 0.2 m/s are the same stop
     expect(h.engine.snapshot().stoppedPanel).toBe(true);
     s = await h.drive(s, 1, CREEP);
     expect(h.engine.snapshot().stoppedPanel).toBe(true);
     s = await h.drive(s, 1, { speed: mph(3) + 0.01 });
     expect(h.engine.snapshot().stoppedPanel).toBe(false);
-    // The zero run starts over.
-    await h.drive(s, STOPPED_PANEL_S - 1, STOPPED);
+    // The stop starts over.
+    await h.drive(s, STOPPED_PANEL_S - 1, STILL);
     expect(h.engine.snapshot().stoppedPanel).toBe(false);
   });
 
   test('a stop broken by movement starts a fresh count', async () => {
     const h = await recording();
-    let s = await h.drive(0, STOPPED_PANEL_S - 1, STOPPED);
-    s = await h.drive(s, 1, CREEP);
-    await h.drive(s, STOPPED_PANEL_S - 1, STOPPED);
+    let s = await h.drive(0, STOPPED_PANEL_S - 1, STILL);
+    s = await h.drive(s, 1, { speed: STATIONARY_SPEED_MPS });
+    await h.drive(s, STOPPED_PANEL_S - 1, STILL);
     expect(h.engine.snapshot().stoppedPanel).toBe(false);
   });
 
@@ -663,20 +826,31 @@ describe('lockedOut and stoppedPanel', () => {
     const h = await recording();
     await h.drive(0, STOPPED_PANEL_S, STOPPED);
     expect(h.engine.snapshot().stoppedPanel).toBe(true);
-    await h.engine.dispatch({ type: 'end', ts: at(STOPPED_PANEL_S) });
-    expect(h.engine.snapshot().stoppedPanel).toBe(false);
+    await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(STOPPED_PANEL_S) });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stoppedPanel: false });
   });
 });
 
 describe('ending', () => {
-  test('stationary for AUTO_END_STATIONARY_S ends the trip on that row', async () => {
+  test('stationary for AUTO_END_STATIONARY_S ends the trip on that row and trims the idle tail', async () => {
     const h = await recording();
     let s = await h.drive(0, 10, FAST);
     s = await h.drive(s, AUTO_END_STATIONARY_S - 1, STILL);
     expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stationarySinceTs: at(10) });
-    await h.drive(s, 1, STILL);
+    s = await h.drive(s, 1, STILL);
     expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stationarySinceTs: at(10) });
     expect(h.onFinalize).not.toHaveBeenCalled();
+    // The ending row persisted what the cadence had not reached.
+    const last = h.checkpoints[h.checkpoints.length - 1]!;
+    expect(rowsSince(last)).toEqual(range(300, 310));
+    await h.engine.dispatch({ type: 'tick', ts: at(s + GAP_MERGE_S) });
+    // Driving stopped at second 10; the five idle minutes are recorded but not counted.
+    expect(only(h.finalized)).toMatchObject({
+      rowsCount: 10 + AUTO_END_STATIONARY_S,
+      endedAt: at(10),
+      durationS: 10,
+      gaps: [],
+    });
   });
 
   test('the stationary clock restarts on a moving row', async () => {
@@ -704,28 +878,31 @@ describe('ending', () => {
     expect(h.onFinalize).not.toHaveBeenCalled();
   });
 
-  test('end goes to ending first, and a second end finalizes', async () => {
+  test('end while recording finalizes in one dispatch', async () => {
     const h = await recording();
     await h.drive(0, 5);
     await h.engine.dispatch({ type: 'end', ts: at(5) });
-    expect(h.status()).toBe('ending');
-    expect(h.onFinalize).not.toHaveBeenCalled();
-    await h.engine.dispatch({ type: 'end', ts: at(6) });
     expect(h.status()).toBe('armed');
-    expect(h.onFinalize).toHaveBeenCalledTimes(1);
+    expect(only(h.finalized)).toMatchObject({ rowsCount: 5, endedAt: at(5), durationS: 5, gaps: [] });
+  });
+
+  test('end while ending finalizes, without a gap', async () => {
+    const h = await endingAt10();
+    await h.engine.dispatch({ type: 'end', ts: at(100) });
+    expect(h.status()).toBe('armed');
+    expect(only(h.finalized)).toMatchObject({ rowsCount: 10, endedAt: at(10), durationS: 10, gaps: [] });
+  });
+
+  test('end while parked trims the idle seconds too', async () => {
+    const h = await recording();
+    let s = await h.drive(0, 10, FAST);
+    s = await h.drive(s, 20, STILL);
+    await endNow(h, s);
+    expect(only(h.finalized)).toMatchObject({ rowsCount: 30, endedAt: at(10), durationS: 10 });
   });
 });
 
 describe('gap-merge', () => {
-  /** Recording, then ending at second 10 via the user's End. */
-  async function endingAt10() {
-    const h = await recording();
-    await h.drive(0, 10);
-    await h.engine.dispatch({ type: 'end', ts: at(10) });
-    expect(h.status()).toBe('ending');
-    return h;
-  }
-
   test('a fast row inside GAP_MERGE_S resumes the same trip and notes the gap', async () => {
     const h = await endingAt10();
     const resumeAt = 10 + GAP_MERGE_S - 1;
@@ -750,6 +927,14 @@ describe('gap-merge', () => {
     expect(only(h.finalized).rowsCount).toBe(10);
   });
 
+  test('a row that does not advance the clock is dropped in ending too', async () => {
+    const h = await endingAt10();
+    await h.engine.dispatch({ type: 'row', row: h.rowAt(5, FAST) });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', lastRowTs: at(9) });
+    await h.engine.dispatch({ type: 'row', row: h.rowAt(9, FAST) });
+    expect(h.status()).toBe('ending');
+  });
+
   test('an automotive activity inside the window resumes the trip', async () => {
     const h = await endingAt10();
     await h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(100) });
@@ -757,6 +942,22 @@ describe('gap-merge', () => {
     await h.drive(101, 2, FAST);
     await endNow(h, 103);
     expect(only(h.finalized).gaps).toEqual([{ fromTs: at(10), toTs: at(100) }]);
+  });
+
+  test('a stationary ending puts the idle tail inside the gap', async () => {
+    const h = await recording();
+    const s = await h.drive(0, 10, FAST);
+    await h.drive(s, AUTO_END_STATIONARY_S, STILL);
+    expect(h.status()).toBe('ending');
+    await h.drive(400, 5, FAST);
+    expect(h.status()).toBe('recording');
+    await endNow(h, 405);
+    expect(only(h.finalized)).toMatchObject({
+      gaps: [{ fromTs: at(10), toTs: at(400) }],
+      rowsCount: 10 + AUTO_END_STATIONARY_S + 5,
+      endedAt: at(405),
+      durationS: 15,
+    });
   });
 
   test('a tick past GAP_MERGE_S finalizes; one just inside does not', async () => {
@@ -819,7 +1020,7 @@ describe('gap-merge', () => {
   test('two gaps in one trip are both kept', async () => {
     const h = await endingAt10();
     await h.drive(100, 5, FAST);
-    await h.engine.dispatch({ type: 'end', ts: at(105) });
+    await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(105) });
     await h.drive(200, 5, FAST);
     await endNow(h, 205);
     expect(only(h.finalized).gaps).toEqual([
@@ -888,18 +1089,88 @@ describe('finalizing', () => {
     await h.drive(0, 2);
     await endNow(h, 2);
     expect(during).toBe('finalizing');
-    expect(statuses.slice(-3)).toEqual(['ending', 'finalizing', 'armed']);
+    expect(statuses).toEqual(['recording', 'recording', 'finalizing', 'armed']);
   });
 
   test('a failing finalizer rejects the dispatch but the engine still re-arms', async () => {
     const h = await recording();
     h.onFinalize.mockRejectedValueOnce(new Error('no disk'));
     await h.drive(0, 2);
-    await h.engine.dispatch({ type: 'end', ts: at(2) });
     await expect(h.engine.dispatch({ type: 'end', ts: at(2) })).rejects.toThrow('no disk');
     expect(h.status()).toBe('armed');
     await h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(3) });
     expect(h.status()).toBe('recording');
+  });
+
+  test('with onError the failing finalizer is reported there instead', async () => {
+    const h = await recording({ onError: true });
+    h.onFinalize.mockRejectedValueOnce(new Error('no disk'));
+    await h.drive(0, 2);
+    await expect(h.engine.dispatch({ type: 'end', ts: at(2) })).resolves.toBeUndefined();
+    expect(h.status()).toBe('armed');
+    expect(h.errors.map((e) => (e as Error).message)).toEqual(['no disk']);
+  });
+
+  test('a failed finalizer still opens the follow-on candidate, and reports through onError', async () => {
+    const h = await endingAt10({ onError: true });
+    h.onFinalize.mockRejectedValueOnce(new Error('no disk'));
+    await expect(
+      h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(10 + GAP_MERGE_S) })
+    ).resolves.toBeUndefined();
+    expect(h.status()).toBe('candidate');
+    expect(h.errors.map((e) => (e as Error).message)).toEqual(['no disk']);
+  });
+
+  test('a failed finalizer still starts the follow-on manual trip', async () => {
+    const h = await endingAt10({ onError: true });
+    h.onFinalize.mockRejectedValueOnce(new Error('no disk'));
+    await h.engine.dispatch({ type: 'manualStart', mode: 'pocket', passenger: false, ts: at(10 + GAP_MERGE_S) });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'trip-2' });
+    expect(h.errors.map((e) => (e as Error).message)).toEqual(['no disk']);
+  });
+
+  test('without onError the follow-on still happens and the dispatch rejects afterwards', async () => {
+    const h = await endingAt10();
+    h.onFinalize.mockRejectedValueOnce(new Error('no disk'));
+    await expect(
+      h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(10 + GAP_MERGE_S) })
+    ).rejects.toThrow('no disk');
+    expect(h.status()).toBe('candidate');
+  });
+
+  test('a detector flush that throws still returns the engine to armed', async () => {
+    const h = await recording({ breakFlush: true });
+    await h.drive(0, 3);
+    await expect(h.engine.dispatch({ type: 'end', ts: at(3) })).rejects.toThrow('flush failed');
+    expect(h.status()).toBe('armed');
+    expect(h.onFinalize).not.toHaveBeenCalled();
+    await h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(4) });
+    expect(h.status()).toBe('recording');
+  });
+
+  test('a throwing subscriber never breaks a transition; its error goes to onError', async () => {
+    const h = await recording({ onError: true });
+    const seen: string[] = [];
+    h.engine.subscribe(() => {
+      throw new Error('listener bug');
+    });
+    h.engine.subscribe((s) => seen.push(s.status));
+    await h.drive(0, 2);
+    await expect(h.engine.dispatch({ type: 'end', ts: at(2) })).resolves.toBeUndefined();
+    expect(h.status()).toBe('armed');
+    expect(seen).toEqual(['recording', 'recording', 'finalizing', 'armed']);
+    expect(h.errors.length).toBeGreaterThan(0);
+    expect(h.errors.every((e) => (e as Error).message === 'listener bug')).toBe(true);
+  });
+
+  test('a throwing subscriber is dropped silently when there is no onError', async () => {
+    const h = await recording();
+    h.engine.subscribe(() => {
+      throw new Error('listener bug');
+    });
+    await expect(h.drive(0, 2)).resolves.toBe(2);
+    await expect(h.engine.dispatch({ type: 'end', ts: at(2) })).resolves.toBeUndefined();
+    expect(h.status()).toBe('armed');
   });
 });
 
@@ -955,7 +1226,6 @@ describe('dispatch is serialised', () => {
       h.engine.dispatch({ type: 'row', row: h.rowAt(0, FAST) }),
       h.engine.dispatch({ type: 'setPassenger', passenger: true, ts: at(1) }),
       h.engine.dispatch({ type: 'row', row: h.rowAt(1, FAST) }),
-      h.engine.dispatch({ type: 'end', ts: at(2) }),
       h.engine.dispatch({ type: 'end', ts: at(2) }),
     ];
     await Promise.all(results);

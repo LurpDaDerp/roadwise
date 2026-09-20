@@ -1,13 +1,15 @@
 // The trip state machine (design §3.1; spec §8.4, §8.5, §8.7–8.9, §13.1, §19.1, Appendix A).
 //
 //   off ⇄ armed → candidate → recording ⇄ ending → finalizing → armed | off
+//                                 └── End (one tap) ──┘
 //
 // A reducer over one explicit state, driven by 1 Hz rows and OS-style events through a serialised
 // `dispatch`. Everything the engine wants done — persistence, scoring, sound — goes out through the
 // `EngineDeps` callbacks; the only clock is the `ts` on what comes in.
 import { CONSTANTS } from '@scoring';
-import type { AlertDecision, ArbiterInput } from '@/core/alerts/types';
-import { mergeEvents } from '@/core/detectors';
+import type { AlertDecision, Arbiter, ArbiterInput } from '@/core/alerts/types';
+import { mergeEvents, type TripDetectors } from '@/core/detectors';
+import { GNSS_CAP_Q, gnssPoor, limitConfidence } from '@/core/detectors/common';
 import type {
   Engine,
   EngineDeps,
@@ -34,14 +36,14 @@ const {
   STOPPED_PANEL_S,
 } = CONSTANTS;
 
-/** Below this the car is stationary for the C8 auto-end clock. */
+/** Below this the car is stationary: the C8 auto-end clock and the C6 stopped panel both run. */
 export const STATIONARY_SPEED_MPS = 0.5;
 /** The stopped panel (C6) clears once the car is clearly rolling again. */
 export const STOPPED_PANEL_CLEAR_MPS = 3 * MPH;
 /** Speed-limit tiles are prefetched once per this much distance, never per fix (§3.5). */
 export const PREFETCH_EVERY_M = 1000;
-/** `handlingScore` at or above this reads as the phone being handled — mirrors `phoneUse.ts`. */
-const HANDLING_MIN_SCORE = 0.6;
+/** Slack for the cumulative fast seconds, which are sums of row spacings. */
+const EPSILON_S = 1e-9;
 
 const UNKNOWN_LIMIT: LimitSample = Object.freeze({
   limitMps: null,
@@ -50,33 +52,17 @@ const UNKNOWN_LIMIT: LimitSample = Object.freeze({
   parallelRoads: false,
 });
 
-// --- row quality for the arbiter ---------------------------------------------------------------
-// Mirrors the speeding detector's confidence (§9.5): the arbiter only speaks about an episode the
-// detector would score in full, so it must judge the row the same way.
-const LIMIT_Q: Record<Exclude<LimitSample['source'], 'unknown'>, number> = {
-  posted: 0.9,
-  cached: 0.8,
-  statutory: 0.7,
-};
-const LIMIT_Q_AMBIGUOUS = 0.6;
-const MATCH_CONFIDENCE_MIN = 0.7;
-const H_ACC_MAX_M = 20;
-const SPEED_ACC_MAX_MPS = 2;
-const GNSS_CAP_Q = 0.4;
-
 const knownLimit = (limit: LimitSample): number | null =>
   limit.source !== 'unknown' ? limit.limitMps : null;
 
 const knownSpeed = (row: FeatureRow): number | null =>
   row.gnssValid && row.speed >= 0 ? row.speed : null;
 
+/** The speeding detector's own confidence for this row (§9.5), so the arbiter judges it the same way. */
 function rowQuality(row: FeatureRow, limit: LimitSample): number {
-  if (limit.source === 'unknown' || limit.limitMps === null || knownSpeed(row) === null) return 0;
-  const base = LIMIT_Q[limit.source];
-  const ambiguous = limit.parallelRoads || limit.matchConfidence < MATCH_CONFIDENCE_MIN;
-  const q = ambiguous ? Math.min(base, LIMIT_Q_AMBIGUOUS) : base;
-  const gnssPoor = row.hAcc > H_ACC_MAX_M || row.speedAcc > SPEED_ACC_MAX_MPS;
-  return gnssPoor ? Math.min(q, GNSS_CAP_Q) : q;
+  const q = limitConfidence(limit);
+  if (q === null || knownSpeed(row) === null) return 0;
+  return gnssPoor(row) ? Math.min(q, GNSS_CAP_Q) : q;
 }
 
 // --- state --------------------------------------------------------------------------------------
@@ -113,6 +99,12 @@ interface Confirmation {
   liveLast: boolean;
 }
 
+/** The per-trip detector suite and arbiter, made fresh at confirmation. */
+interface TripSuite {
+  detectors: TripDetectors;
+  arbiter: Arbiter;
+}
+
 const noop = (): void => {};
 
 export function createEngine(deps: EngineDeps): Engine {
@@ -120,19 +112,20 @@ export function createEngine(deps: EngineDeps): Engine {
   let autoDetect = false;
   let candidate: Candidate | null = null;
   let session: TripSession | null = null;
+  let suite: TripSuite | null = null;
   /** The role a trip starts with; `setPassenger` before confirmation lands here. */
   let pendingRole: TripRole = 'driver';
   let seen: Seen | null = null;
 
   // Per-row derived state while a trip is open. Everything here is recomputed from rows alone.
+  /** First row of the current run below `STATIONARY_SPEED_MPS`. */
   let stationarySinceTs: number | null = null;
-  let zeroSinceTs: number | null = null;
   let stoppedPanel = false;
   let endingSinceTs: number | null = null;
+  /** Where driving stopped when the trip went to `ending`: the gap starts, or the trip ends, here. */
+  let pausedAt: number | null = null;
   /** First row of the current run beyond limit + tolerance, for the arbiter's `overForS`. */
   let firstOverTs: number | null = null;
-  /** The current run of handling rows, offered to the arbiter as a phone episode. */
-  let handling: { id: string; rows: number } | null = null;
   /** Trip distance at the last prefetch; null until the first fix of a candidate or trip. */
   let prefetchedAtM: number | null = null;
   /** Start of the current stretch of continuous driving, for the break suggestion (§8.7). */
@@ -147,11 +140,18 @@ export function createEngine(deps: EngineDeps): Engine {
     version += 1;
   };
 
+  /** A listener's exception is the listener's problem: reported if there is somewhere to, never fatal. */
   function notify(): void {
     if (version === notified) return;
     notified = version;
     const current = snapshot();
-    for (const fn of listeners) fn(current);
+    for (const fn of listeners) {
+      try {
+        fn(current);
+      } catch (err) {
+        deps.onError?.(err);
+      }
+    }
   }
 
   /** Status changes are announced at once, so a subscriber sees `finalizing` while it runs. */
@@ -162,6 +162,12 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   const idle = (): EngineStatus => (autoDetect ? 'armed' : 'off');
+
+  /** Hand a failure to the host, or fail the dispatch with it when there is no host sink. */
+  function report(err: unknown): void {
+    if (deps.onError) deps.onError(err);
+    else throw err;
+  }
 
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
@@ -188,17 +194,17 @@ export function createEngine(deps: EngineDeps): Engine {
   /** Forget the per-row state of a stretch of driving; the next row starts every clock afresh. */
   function resetRun(): void {
     stationarySinceTs = null;
-    zeroSinceTs = null;
     stoppedPanel = false;
     endingSinceTs = null;
+    pausedAt = null;
     firstOverTs = null;
-    handling = null;
   }
 
   /** Forget everything about the candidate or trip that just closed. */
   function clearTrip(): void {
     candidate = null;
     session = null;
+    suite = null;
     pendingRole = 'driver';
     seen = null;
     prefetchedAtM = null;
@@ -230,20 +236,24 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     const last = c.rows[c.rows.length - 1];
     if (last !== undefined && row.ts <= last.row.ts) return;
+    // A row vouches for the time since the row before it, at most one row-length: dense fixes
+    // count what they cover, sparse ones cannot claim more than a second each. The first row has
+    // nothing before it and stands for a full row-length.
+    const coversS = (last === undefined ? ROW_MS : Math.min(row.ts - last.row.ts, ROW_MS)) / 1000;
     c.rows.push({ row, ctx: deps.ctx() });
     seen = { row, limit: seen?.limit ?? UNKNOWN_LIMIT };
     touch();
     maybePrefetch(row, 0);
-    if (row.speed > AUTO_DETECT_CONFIRM_SPEED_MPS) c.fastS += 1;
-    if (c.fastS >= AUTO_DETECT_CONFIRM_S) {
+    if (row.speed > AUTO_DETECT_CONFIRM_SPEED_MPS) c.fastS += coversS;
+    if (c.fastS + EPSILON_S >= AUTO_DETECT_CONFIRM_S) {
       await confirm({ source: 'auto', mode: 'auto', role: pendingRole, ts: row.ts, liveLast: true });
     }
   }
 
   /**
-   * Open the trip. The rows buffered while it was a candidate belong to it (§8.5 step 2), so they
-   * are replayed through the detectors and the accumulators — but not the arbiter: an alert about
-   * the past is noise, so only the confirming row itself may speak.
+   * Open the trip with its own detectors and arbiter. The rows buffered while it was a candidate
+   * belong to it (§8.5 step 2), so they are replayed through the detectors and the accumulators —
+   * but not the arbiter: an alert about the past is noise, so only the confirming row may speak.
    */
   async function confirm(c: Confirmation): Promise<void> {
     const buffered = candidate?.rows ?? [];
@@ -257,6 +267,7 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt,
       startApproximate: backfillTs !== null,
     });
+    suite = { detectors: deps.createDetectors(), arbiter: deps.createArbiter() };
     candidate = null;
     resetRun();
     continuousSinceTs = startedAt;
@@ -275,7 +286,12 @@ export function createEngine(deps: EngineDeps): Engine {
     prefetchedAtM = distanceM;
   }
 
-  function arbiterInput(row: FeatureRow, limit: LimitSample, ctx: DetectorContext): ArbiterInput {
+  function arbiterInput(
+    row: FeatureRow,
+    limit: LimitSample,
+    ctx: DetectorContext,
+    detectors: TripDetectors
+  ): ArbiterInput {
     const limitMps = knownLimit(limit);
     const speed = knownSpeed(row);
     const overMps = limitMps !== null && speed !== null ? Math.max(0, speed - limitMps) : 0;
@@ -283,11 +299,6 @@ export function createEngine(deps: EngineDeps): Engine {
       if (firstOverTs === null) firstOverTs = row.ts;
     } else {
       firstOverTs = null;
-    }
-    if (speed !== null && row.handlingScore >= HANDLING_MIN_SCORE) {
-      handling = handling ? { id: handling.id, rows: handling.rows + 1 } : { id: `phone@${row.ts}`, rows: 1 };
-    } else {
-      handling = null;
     }
     const input: ArbiterInput = {
       ts: row.ts,
@@ -298,7 +309,8 @@ export function createEngine(deps: EngineDeps): Engine {
       q: rowQuality(row, limit),
       drivingS: (row.ts - continuousSinceTs) / 1000,
     };
-    if (handling !== null) input.phoneEpisode = { id: handling.id, durationS: handling.rows };
+    const phone = detectors.openPhoneEpisode();
+    if (phone !== null) input.phoneEpisode = phone;
     const cam = ctx.cameraFocus;
     if (cam) {
       if (cam.kind === 'glance') input.eyesOffS = cam.glanceS;
@@ -307,14 +319,14 @@ export function createEngine(deps: EngineDeps): Engine {
     return input;
   }
 
-  function deliver(decision: AlertDecision | null, ts: number): void {
+  function deliver(decision: AlertDecision | null, ts: number, detectors: TripDetectors): void {
     if (decision === null) return;
     const s = session as TripSession;
     let delivered = decision;
     if (decision.kind === 'speeding') {
-      const id = deps.detectors.openSpeedingEpisodeId();
+      const id = detectors.openSpeedingEpisodeId();
       if (id !== null) {
-        deps.detectors.markAlerted(id, ts);
+        detectors.markAlerted(id, ts);
         delivered = { ...decision, eventId: id };
       }
     }
@@ -322,7 +334,7 @@ export function createEngine(deps: EngineDeps): Engine {
     deps.onAlert(delivered);
   }
 
-  /** The C8 stationary clock and the C6 stopped panel, from this row alone. */
+  /** The stationary clock (C8) and the stopped panel (C6), from this row alone. */
   function updateFlags(row: FeatureRow): void {
     const speed = row.speed;
     // An unknown speed (-1) cannot prove motion, so it keeps the stationary clock running.
@@ -331,15 +343,21 @@ export function createEngine(deps: EngineDeps): Engine {
     } else {
       stationarySinceTs = null;
     }
-    if (speed === 0) {
-      if (zeroSinceTs === null) zeroSinceTs = row.ts;
-    } else {
-      zeroSinceTs = null;
-    }
-    if (zeroSinceTs !== null && row.ts + ROW_MS - zeroSinceTs >= STOPPED_PANEL_S * 1000) {
+    if (
+      stationarySinceTs !== null &&
+      row.ts + ROW_MS - stationarySinceTs >= STOPPED_PANEL_S * 1000
+    ) {
       stoppedPanel = true;
     }
     if (speed > STOPPED_PANEL_CLEAR_MPS) stoppedPanel = false;
+  }
+
+  /** Persist what the ring holds beyond the last checkpoint, if anything, and record it. */
+  async function checkpointTail(s: TripSession): Promise<void> {
+    const last = s.checkpoints[s.checkpoints.length - 1] ?? null;
+    if (s.lastRowTs === null || (last !== null && s.lastRowTs <= last)) return;
+    await deps.onCheckpoint(snapshotSession(s));
+    s.checkpoints.push(s.lastRowTs);
   }
 
   /** One row of the open trip. `live` is false for a replayed candidate row. */
@@ -349,34 +367,45 @@ export function createEngine(deps: EngineDeps): Engine {
     live: boolean
   ): Promise<void> {
     const s = session as TripSession;
+    const trip = suite as TripSuite;
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
     seen = { row, limit };
     touch();
     appendRow(s, row, limit);
     maybePrefetch(row, s.distanceM);
     const full: DetectorContext = { ...ctx, mode: s.mode };
-    s.events.push(...deps.detectors.push(row, limit, full));
-    const input = arbiterInput(row, limit, full);
-    if (live) deliver(deps.arbiter.consider(input), row.ts);
+    s.events.push(...trip.detectors.push(row, limit, full));
+    const input = arbiterInput(row, limit, full, trip.detectors);
+    if (live) deliver(trip.arbiter.consider(input), row.ts, trip.detectors);
     updateFlags(row);
     if (
       status === 'recording' &&
       stationarySinceTs !== null &&
       row.ts + ROW_MS - stationarySinceTs >= AUTO_END_STATIONARY_S * 1000
     ) {
-      beginEnding(row.ts);
+      await beginEnding(row.ts);
     }
-    if (s.rowsCount % CHECKPOINT_S === 0) {
-      await deps.onCheckpoint(snapshotSession(s));
-      s.checkpoints.push(row.ts);
-    }
+    if (s.rowsCount % CHECKPOINT_S === 0) await checkpointTail(s);
   }
 
   // --- ending and finalizing --------------------------------------------------------------------
 
-  function beginEnding(ts: number): void {
+  /** Where driving stopped: the start of an idle stretch still open, else just past the last row. */
+  function drivingStoppedTs(s: TripSession): number | null {
+    if (stationarySinceTs !== null) return stationarySinceTs;
+    return s.lastRowTs !== null ? s.lastRowTs + ROW_MS : null;
+  }
+
+  /**
+   * Into the gap-merge window. The un-checkpointed tail is persisted now, because the ring evicts
+   * by time and a gap can be far longer than the ring.
+   */
+  async function beginEnding(ts: number): Promise<void> {
+    const s = session as TripSession;
+    pausedAt = drivingStoppedTs(s) ?? ts;
     endingSinceTs = ts;
     setStatus('ending');
+    await checkpointTail(s);
   }
 
   const withinGap = (ts: number): boolean =>
@@ -385,7 +414,7 @@ export function createEngine(deps: EngineDeps): Engine {
   /** Gap-merge: the same trip carries on, with the missing stretch on record (§19.1). */
   function resume(ts: number, changes?: { mode: DriveMode; role: TripRole }): void {
     const s = session as TripSession;
-    const fromTs = s.lastRowTs !== null ? s.lastRowTs + ROW_MS : s.startedAt;
+    const fromTs = pausedAt ?? s.startedAt;
     if (ts > fromTs) noteGap(s, fromTs, ts);
     if (changes) {
       s.mode = changes.mode;
@@ -397,19 +426,49 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * Close the trip and hand it over exactly once. The finalizer may fail; the engine still
-   * returns to idle so the next drive is not lost with it.
+   * Close the trip and hand it over exactly once. Whatever fails on the way — the tail
+   * checkpoint, the detectors' flush, the finalizer itself — the engine returns to idle so the
+   * next drive is not lost with this one; the first failure is thrown after that.
    */
   async function finalize(atTs: number): Promise<void> {
     const s = session as TripSession;
+    const trip = suite as TripSuite;
     setStatus('finalizing');
-    s.events = mergeEvents([...s.events, ...deps.detectors.flush()]);
-    const closed = closeSession(s, s.lastRowTs !== null ? s.lastRowTs + ROW_MS : atTs);
+    let failure: { err: unknown } | null = null;
     try {
+      // The rows since the last checkpoint must be durable before the finalizer reads the session.
+      try {
+        await checkpointTail(s);
+      } catch (err) {
+        failure = { err };
+      }
+      s.events = mergeEvents([...s.events, ...trip.detectors.flush()]);
+      const closed = closeSession(s, pausedAt ?? drivingStoppedTs(s) ?? atTs);
       await deps.onFinalize(closed);
+    } catch (err) {
+      if (failure === null) failure = { err };
     } finally {
       clearTrip();
       setStatus(idle());
+    }
+    if (failure !== null) throw failure.err;
+  }
+
+  /**
+   * Finalize, then run the follow-on (a new candidate or trip) even if finalizing failed, and only
+   * then report the failure — a lost upload must never cost the next drive.
+   */
+  async function finalizeThen(atTs: number, follow: () => Promise<void> | void = noop): Promise<void> {
+    let failure: { err: unknown } | null = null;
+    try {
+      await finalize(atTs);
+    } catch (err) {
+      failure = { err };
+    }
+    try {
+      await follow();
+    } finally {
+      if (failure !== null) report(failure.err);
     }
   }
 
@@ -426,16 +485,19 @@ export function createEngine(deps: EngineDeps): Engine {
         await processRow(row, deps.ctx(), true);
         return;
       }
-      case 'ending':
+      case 'ending': {
+        const s = session as TripSession;
+        if (s.lastRowTs !== null && row.ts <= s.lastRowTs) return;
         seen = { row, limit: seen?.limit ?? UNKNOWN_LIMIT };
         touch();
         if (!withinGap(row.ts)) {
-          await finalize(row.ts);
+          await finalizeThen(row.ts);
         } else if (row.speed > LOCKOUT_SPEED_MPS) {
           resume(row.ts);
           await processRow(row, deps.ctx(), true);
         }
         return;
+      }
       default:
         return;
     }
@@ -443,7 +505,7 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function onActivity(e: Extract<EngineEvent, { type: 'activity' }>): Promise<void> {
     if (e.walking) {
-      if (status === 'recording') beginEnding(e.ts);
+      if (status === 'recording') await beginEnding(e.ts);
       else if (status === 'candidate') discardCandidate();
       return;
     }
@@ -454,8 +516,9 @@ export function createEngine(deps: EngineDeps): Engine {
       if (withinGap(e.ts)) {
         resume(e.ts);
       } else {
-        await finalize(e.ts);
-        if (autoDetect) openCandidate(e.ts, e.candidateStartTs);
+        await finalizeThen(e.ts, () => {
+          if (autoDetect) openCandidate(e.ts, e.candidateStartTs);
+        });
       }
     }
   }
@@ -470,12 +533,8 @@ export function createEngine(deps: EngineDeps): Engine {
         await confirm(start);
         return;
       case 'ending':
-        if (withinGap(e.ts)) {
-          resume(e.ts, { mode: e.mode, role });
-        } else {
-          await finalize(e.ts);
-          await confirm(start);
-        }
+        if (withinGap(e.ts)) resume(e.ts, { mode: e.mode, role });
+        else await finalizeThen(e.ts, () => confirm(start));
         return;
       default:
         // Already recording: the tap changes nothing (§8.4).
@@ -495,16 +554,15 @@ export function createEngine(deps: EngineDeps): Engine {
     touch();
   }
 
+  /** End (C6) is one tap: whether recording or already in the gap window, the trip closes now. */
   async function onEnd(ts: number): Promise<void> {
     switch (status) {
       case 'candidate':
         discardCandidate();
         return;
       case 'recording':
-        beginEnding(ts);
-        return;
       case 'ending':
-        await finalize(ts);
+        await finalizeThen(ts);
         return;
       default:
         return;
@@ -515,7 +573,7 @@ export function createEngine(deps: EngineDeps): Engine {
     if (status === 'candidate' && windowClosed(candidate as Candidate, ts)) {
       discardCandidate();
     } else if (status === 'ending' && !withinGap(ts)) {
-      await finalize(ts);
+      await finalizeThen(ts);
     }
   }
 
