@@ -12,18 +12,26 @@
  *                      detector suite (`src/core/replay/runTrace.ts`);
  *   2. finalize        the closed session through `finalizeTrip` (`src/core/engine/finalize.ts`)
  *                      over a real SQLite (sql.js), which writes the trip, the events, the trace
- *                      file and the queue item — the payload taken back off the queue, not out of
- *                      the finalizer's return value;
+ *                      file and the queue item — and the queued payload is asserted byte-equal to
+ *                      the one the finalizer returned and then uploaded;
  *   3. upload          the gzip trace to `traces/<uid>/<clientTripId>.bin.gz` with a user JWT;
  *   4. finalize-trip   POST the payload to the edge function, which re-scores it and calls the
  *                      `apply_trip` writer;
  *   5. read back       the stored `trips`, `trip_events` and `score_daily` rows with the service
  *                      key, and assert the authoritative numbers against the device's provisional
  *                      ones (the golden: Δ = 0, `provisionalMismatch: false`);
- *   6. trip-actions    dispute the worked example's most expensive scored event (the recomputed
- *                      score is checked against what `packages/scoring` predicts without it, never
- *                      against a hard-coded number), then set-role passenger, then delete;
- *   7. idempotency     re-POST a finalize payload and prove `replayed: true` with the rows unmoved.
+ *   6. trip-actions    dispute the worked example's most expensive scored event, change its role to
+ *                      passenger, and delete a trip that is still scored — asserting how each one
+ *                      *moves* the day aggregates, not merely that a row is still there;
+ *   7. idempotency     re-POST every payload and prove `replayed: true` with the rows unmoved;
+ *   8. negative control  post a payload that declares a score it did not earn, and prove the server
+ *                      returns and stores its own number instead. Without this step every score
+ *                      check is server-against-device, and a `finalize-trip` that simply echoed
+ *                      `provisional.score` back would pass the whole run.
+ *
+ * Nothing here is skippable. Each section declares how many checks it must record and the run ends
+ * by asserting it recorded exactly that many, so a block that silently does not run is a failure
+ * rather than a shorter green run.
  *
  * Local only, by construction: every key is read from `npx supabase status -o json` at run time and
  * nothing is written to this file or to the repository. The run refuses to start unless the stack's
@@ -34,8 +42,9 @@
  * imports the app writes, which is all Metro and Jest add on top of plain ESM for this subtree.
  *
  * Flags: --self-check (run the pure-helper checks and stop, no stack needed) · --user <uuid> (pin
- * the user instead of a fresh one per run) · --keep (leave the trips behind for inspection) ·
- * --external-serve (do not start `supabase functions serve`; assume one is already running).
+ * the user instead of a fresh one per run; that user's trips, day rows, baselines and rate limits
+ * are deleted first) · --keep (leave the trips behind for inspection) · --external-serve (do not
+ * start `supabase functions serve`; assume one is already running).
  */
 
 const { execFileSync, spawn } = require('child_process');
@@ -51,6 +60,14 @@ const TZ = 'America/Los_Angeles';
 /** Local hour each trip starts at, yesterday: inside the day, never inside the night window. */
 const TRIP_HOURS = { filler: 7, speeding: 9, phone: 10, worked: 11 };
 const TRACES_BUCKET = 'traces';
+
+/**
+ * The quality-downgrade constants of `supabase/functions/_shared/plausibility.ts:43-46`, mirrored
+ * so `downgradesFromPayload` below is the server's rule and not an assumption about it.
+ */
+const SPEED_DIVERGENCE_FACTOR = 1.25;
+const SPEED_DIVERGENCE_SLACK_MPS = 2;
+const SPAN_SLACK_S = 1;
 
 // ---------------------------------------------------------------------------
 // The module hooks: `@/x` -> src/x, `@scoring` -> packages/scoring/src/index.ts, and the
@@ -108,9 +125,14 @@ const importSource = (relative) => import(pathToFileURL(path.join(ROOT, relative
 // ---------------------------------------------------------------------------
 // Assertions. Everything is recorded, nothing throws: a golden that stops at the first
 // divergence hides the rest of the divergence, and the whole point of this script is the list.
+//
+// Every section also declares its check count, and `verifyStepCounts` asserts it at the end. A
+// block that is skipped — or a crash halfway through one — therefore fails loudly instead of
+// producing a shorter run that still reads as "all passed".
 // ---------------------------------------------------------------------------
 
 const results = [];
+const steps = [];
 let step = 'start';
 
 const show = (value) =>
@@ -127,11 +149,14 @@ const canonical = (value) =>
     );
   });
 
+/** Numbers out of Postgres carry more digits than the scorer's; three decimals is the contract. */
+const round3 = (v) => (typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(3)) : v);
+const map3 = (o) => (o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, round3(Number(v))])) : o);
+
 function check(name, ok, detail) {
-  results.push({ step, name, ok, detail: detail ?? '' });
-  const mark = ok ? 'PASS' : 'FAIL';
-  console.log(`  ${mark}  ${name}${detail ? ` — ${detail}` : ''}`);
-  return ok;
+  results.push({ step, name, ok: ok === true, detail: detail ?? '' });
+  console.log(`  ${ok === true ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
+  return ok === true;
 }
 
 function checkEq(name, actual, expected) {
@@ -146,13 +171,34 @@ function checkClose(name, actual, expected, epsilon) {
 
 /** One readable line per stored `score_daily` row — the numbers a golden is read for. */
 const dayLine = (d) =>
-  `${d.day} longTermScore ${d.long_term_score} band ${d.band} provisional ${d.provisional} ` +
-  `safeDay ${d.safe_day} goodDay ${d.good_day} phoneFreeDay ${d.phone_free_day} ` +
-  `exposure ${d.exposure} drivingS ${d.driving_s} tripsScored ${d.trips_scored} severeEvents ${d.severe_events}`;
+  d === null || d === undefined
+    ? 'no row'
+    : `${d.day} longTermScore ${d.long_term_score} band ${d.band} provisional ${d.provisional} ` +
+      `safeDay ${d.safe_day} goodDay ${d.good_day} phoneFreeDay ${d.phone_free_day} ` +
+      `exposure ${d.exposure} drivingS ${d.driving_s} tripsScored ${d.trips_scored} severeEvents ${d.severe_events}`;
 
-function beginStep(title) {
+function closeStep() {
+  const last = steps[steps.length - 1];
+  if (last) last.ran = results.length - last.from;
+}
+
+/** Start a section. `expected` is how many checks it must record — asserted at the end of the run. */
+function beginStep(title, expected) {
+  closeStep();
   step = title;
+  steps.push({ title, expected, from: results.length, ran: 0 });
   console.log(`\n== ${title}`);
+}
+
+let counted = false;
+
+/** The accounting: one check per section, comparing the checks it ran with the checks it promised. */
+function verifyStepCounts() {
+  if (counted || steps.length === 0) return;
+  counted = true;
+  const prior = steps.slice();
+  beginStep('check accounting', prior.length);
+  for (const s of prior) checkEq(`"${s.title}" ran every check it declares`, s.ran, s.expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,15 +267,24 @@ function yesterdayIn(now, tz) {
 const LOCAL_URL = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/;
 
 function supabaseStatus() {
-  const out = execFileSync('npx', ['supabase', 'status', '-o', 'json'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let out;
+  try {
+    out = execFileSync('npx', ['supabase', 'status', '-o', 'json'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const detail = [err.stdout, err.stderr].filter(Boolean).join('').trim() || String(err.message ?? err);
+    throw new Error(
+      `BLOCKED: \`npx supabase status\` failed, so there is no local stack to run the golden against.\n` +
+        `Start it with \`npx supabase start\` (Docker must be running).\n${detail}`
+    );
+  }
   // The CLI may print a "Stopped services" line before the JSON.
   const start = out.indexOf('{');
-  if (start < 0) throw new Error(`supabase status printed no JSON:\n${out}`);
+  if (start < 0) throw new Error(`BLOCKED: \`npx supabase status\` printed no JSON:\n${out}`);
   return JSON.parse(out.slice(start));
 }
 
@@ -254,9 +309,16 @@ function devJwt(sub) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP: the three surfaces the device touches (functions, storage) and the one the assertions do
+// HTTP: the surfaces the device touches (functions, storage) and the one the assertions do
 // (PostgREST with the service key — a read the app itself is never allowed to make).
 // ---------------------------------------------------------------------------
+
+/**
+ * Statuses that mean "the runtime answered". The gateway 401s an unauthenticated GET; a function
+ * that is not being served 503s, and a wrong path 404s. Anything else — a 500 from the gateway,
+ * say — is not a working runtime and must not be mistaken for one.
+ */
+const FUNCTIONS_READY_STATUSES = new Set([200, 400, 401, 405]);
 
 function makeApi(stack) {
   const { API_URL, ANON_KEY, SERVICE_ROLE_KEY, SECRET_KEY } = stack;
@@ -285,11 +347,10 @@ function makeApi(stack) {
       return { status: res.status, body: json, text, requestId: res.headers.get('x-request-id') };
     },
 
-    /** Is the functions runtime answering? An unauthenticated GET is 401 when it is, 503 when it is not. */
     async functionsReady(name) {
       try {
         const res = await fetch(`${API_URL}/functions/v1/${name}`, { method: 'GET' });
-        return res.status !== 503 && res.status !== 404;
+        return FUNCTIONS_READY_STATUSES.has(res.status);
       } catch {
         return false;
       }
@@ -363,16 +424,34 @@ function namespaceEvents(events, prefix) {
   }));
 }
 
-/** A trace replayed at a new wall-clock start: every timestamp moves by the same delta. */
+/** Every field `traceSchema` (`src/core/replay/trace.ts`) allows. */
+const TRACE_KEYS = ['name', 'mode', 'night', 'precipitation', 'rows', 'limits', 'expected', 'noEvents'];
+
+/**
+ * A trace replayed at a new wall-clock start: every timestamp moves by the same delta.
+ *
+ * The fields are listed rather than spread, so a timestamp-bearing field added to `traceSchema`
+ * later fails here instead of being carried through unshifted into a golden that still passes.
+ */
 function rebaseTrace(trace, startedAt) {
-  const base = trace.rows[0].ts;
-  const delta = startedAt - base;
-  return {
-    ...trace,
+  const unknown = Object.keys(trace).filter((k) => !TRACE_KEYS.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `e2e-trip: rebaseTrace does not know the trace field(s) ${unknown.join(', ')}; if any of them carries a timestamp it must be shifted too`
+    );
+  }
+  const delta = startedAt - trace.rows[0].ts;
+  const out = {
+    name: trace.name,
+    mode: trace.mode,
+    night: trace.night,
+    precipitation: trace.precipitation,
     rows: trace.rows.map((r) => ({ ...r, ts: r.ts + delta })),
     limits: trace.limits.map((l) => ({ ...l, fromTs: l.fromTs + delta })),
     expected: trace.expected.map((e) => ({ ...e, startsNear: e.startsNear + delta })),
   };
+  if (trace.noEvents !== undefined) out.noEvents = trace.noEvents;
+  return out;
 }
 
 /**
@@ -412,7 +491,12 @@ function closedSession(device, { clientTripId, trace, rows, events, limitFor }) 
   return device.session.closeSession(session, rows[rows.length - 1].ts + 1000);
 }
 
-/** Run one trip through the finalizer and take the payload back off the sync queue. */
+/**
+ * Run one trip through the finalizer and take the payload back off the sync queue.
+ *
+ * Records 2 checks: the queue item is byte-equal to the payload the finalizer returned (so what is
+ * uploaded below is what the runner would have sent), and the trace file was written.
+ */
 async function finalizeAndQueue(device, db, session, clientTripId, tz) {
   const files = new Map();
   const result = await device.finalize.finalizeTrip(session, {
@@ -430,12 +514,19 @@ async function finalizeAndQueue(device, db, session, clientTripId, tz) {
     now: () => Date.now(),
   });
   const queued = await device.queue.findFinalize(db, clientTripId);
-  return {
-    scored: result.scored,
-    payload: result.payload,
-    queued,
-    gzip: files.get(device.finalize.tracePathFor(clientTripId)) ?? null,
-  };
+  const gzip = files.get(device.finalize.tracePathFor(clientTripId)) ?? null;
+
+  const queuedMatches = queued != null && result.payload != null && canonical(queued) === canonical(result.payload);
+  check(
+    'the payload on the sync queue is the one the finalizer returned',
+    queuedMatches,
+    queuedMatches
+      ? `${result.payload.events.length} events, ${JSON.stringify(result.payload).length} bytes`
+      : `queued ${show(queued)}`
+  );
+  check('the trace file was written and gzipped', gzip !== null && gzip.length > 0, `${gzip?.length ?? 0} bytes`);
+
+  return { scored: result.scored, payload: result.payload, queued, gzip };
 }
 
 /**
@@ -483,36 +574,56 @@ function workedExampleEvents(device, startedAt) {
 }
 
 // ---------------------------------------------------------------------------
-// Scoring the same trip the way the server re-scores a stored one, from the payload alone.
-// `packages/scoring` is the source of truth for both ends, so the dispute's expected score is
-// computed here rather than written down.
+// Scoring the same trip the way the server does, from the payload alone. `packages/scoring` is the
+// source of truth for both ends, so every expected value here is computed rather than written down.
 // ---------------------------------------------------------------------------
 
-/** `tripMetrics` (`supabase/functions/_shared/plausibility.ts`) over a payload with no downgrades. */
+/**
+ * The quality downgrades `checkPlausibility` (`_shared/plausibility.ts:160-173`) would apply, in
+ * its order. Mirrored rather than assumed away: `metricsFromPayload` needs to withhold the IMU on
+ * exactly the same condition the server does, and the self-check pins both branches.
+ */
+function downgradesFromPayload(p) {
+  const out = [];
+  if (p.tracePath === null) out.push('no_trace');
+  if (p.incomplete) out.push('incomplete');
+  const spanS = (p.endedAt - p.startedAt) / 1000;
+  if (p.durationS > spanS + SPAN_SLACK_S) out.push('duration_exceeds_span');
+  const max = p.rowsDigest.maxSustainedSpeedMps;
+  const allowed = Math.max(max * SPEED_DIVERGENCE_FACTOR, max + SPEED_DIVERGENCE_SLACK_MPS);
+  if (p.durationS > 0 && p.distanceM / p.durationS > allowed) out.push('distance_exceeds_speed');
+  return out;
+}
+
+/** `tripMetrics` (`supabase/functions/_shared/plausibility.ts:185`) over an upload payload. */
 function metricsFromPayload(payload) {
   return {
     distanceM: payload.distanceM,
     durationS: payload.durationS,
     validGnssPct: payload.rowsDigest.validGnssPct,
-    imuPresent: payload.rowsDigest.imuPresent,
+    imuPresent: downgradesFromPayload(payload).length === 0 && payload.rowsDigest.imuPresent,
     role: payload.role,
     maxSustainedSpeedMps: payload.rowsDigest.maxSustainedSpeedMps,
   };
 }
 
-/** `toScorableEvent` (`supabase/functions/_shared/rescore.ts`) over the payload's events. */
-function scorableFromPayload(payload, statusOverrides = {}) {
-  return payload.events.map((e) => ({
+/** `toScorableEvent` (`supabase/functions/_shared/rescore.ts:64`) over one payload event. */
+function scorableEvent(e, status) {
+  return {
     id: e.id,
     category: e.category,
     startedAt: e.startedAt,
     durationS: e.durationMs / 1000,
     q: e.q,
     corrected: e.corrected,
-    status: statusOverrides[e.id] ?? e.status,
+    status: status ?? e.status,
     measured: { ...e.measured },
     context: { night: e.context.night === true, precipitation: e.context.precipitation === true },
-  }));
+  };
+}
+
+function scorableFromPayload(payload, statusOverrides = {}) {
+  return payload.events.map((e) => scorableEvent(e, statusOverrides[e.id]));
 }
 
 /** The scored event that costs the most points — the one a driver would dispute first. */
@@ -530,8 +641,10 @@ const DISPUTE_REASON_FOR = { phone: 'passenger_phone', speeding: 'hazard' };
 // every full run too, so a broken helper is never mistaken for a broken pipeline.
 // ---------------------------------------------------------------------------
 
+const SELF_CHECKS = 20;
+
 function selfCheck() {
-  beginStep('self-check (pure helpers, no stack)');
+  beginStep('self-check (pure helpers, no stack)', SELF_CHECKS);
 
   // A zone with daylight saving, on both sides of a transition.
   const march = epochAtLocalHour(2026, 3, 9, 9, TZ);
@@ -553,6 +666,8 @@ function selfCheck() {
   const trace = {
     name: 't',
     mode: 'mounted',
+    night: false,
+    precipitation: false,
     rows: [{ ts: 1_000, speed: 3 }, { ts: 2_000, speed: 4 }],
     limits: [{ fromTs: 1_000, limitMps: 10 }],
     expected: [{ category: 'phone', startsNear: 1_500 }],
@@ -562,14 +677,32 @@ function selfCheck() {
   checkEq('rebasing shifts the limits', moved.limits[0].fromTs, 9_000);
   checkEq('rebasing shifts the expectations', moved.expected[0].startsNear, 9_500);
   checkEq('rebasing leaves everything else alone', moved.rows[1].speed, 4);
+  checkEq(
+    'rebasing refuses a trace field it does not know, rather than carrying it through unshifted',
+    (() => {
+      try {
+        rebaseTrace({ ...trace, startsAt: 7 }, 9_000);
+        return 'carried through';
+      } catch {
+        return 'refused';
+      }
+    })(),
+    'refused'
+  );
+
+  // The quality cap: the server withholds the IMU on any downgrade, so this must agree with it.
+  const clean = {
+    tracePath: 'x.bin.gz', incomplete: false, startedAt: 0, endedAt: 150_000, durationS: 150,
+    distanceM: 1_500, rowsDigest: { maxSustainedSpeedMps: 20, validGnssPct: 100, imuPresent: true }, role: 'driver',
+  };
+  checkEq('a consistent payload carries no quality downgrade', downgradesFromPayload(clean), []);
+  checkEq('a trip without a trace, or longer than its own span, is downgraded', downgradesFromPayload({ ...clean, tracePath: null, durationS: 400 }), ['no_trace', 'duration_exceeds_span']);
+  checkEq('a downgraded payload withholds the IMU from the scorer, as the server does', metricsFromPayload({ ...clean, tracePath: null }).imuPresent, false);
 
   // The event a driver would dispute first is the most expensive *scored* one.
+  const ev = (id, status) => ({ id, status, category: 'braking', startedAt: 1, durationMs: 1000, q: 1, corrected: false, measured: {}, context: { night: false, precipitation: false } });
   const payload = {
-    events: [
-      { id: 'a', status: 'scored', category: 'phone', startedAt: 1, durationMs: 1000, q: 1, corrected: false, measured: {}, context: { night: false, precipitation: false } },
-      { id: 'b', status: 'scored', category: 'braking', startedAt: 2, durationMs: 2000, q: 1, corrected: false, measured: {}, context: { night: false, precipitation: false } },
-      { id: 'c', status: 'possible', category: 'braking', startedAt: 3, durationMs: 1000, q: 1, corrected: false, measured: {}, context: { night: false, precipitation: false } },
-    ],
+    events: [{ ...ev('a', 'scored'), category: 'phone' }, { ...ev('b', 'scored'), durationMs: 2000 }, ev('c', 'possible')],
     provisional: { eventDeductions: { a: 4, b: 9, c: 99 } },
   };
   checkEq('the top scored event is the most expensive one', topScoredEvent(payload).id, 'b');
@@ -650,26 +783,119 @@ async function startFunctionsServe(api, log) {
     /* already gone */
   }
   throw new Error(
-    `e2e-trip: the edge functions runtime never answered on ${api.apiUrl}/functions/v1/finalize-trip.\n` +
+    `BLOCKED: the edge functions runtime never answered on ${api.apiUrl}/functions/v1/finalize-trip.\n` +
       `Run \`npx supabase functions serve\` yourself, or check Docker.\n${log.join('').slice(-4000)}`
   );
 }
 
-/** One upload: the trace object, then the function, then the rows that came out of the writer. */
-async function uploadAndRead(api, ctx, trip) {
-  const { uid, jwt } = ctx;
-  const put = await api.uploadTrace(uid, trip.payload.clientTripId, trip.gzip, jwt);
-  check(`the trace object is stored under ${uid.slice(0, 8)}…/${trip.payload.clientTripId.slice(0, 8)}…`, put.status === 200, `HTTP ${put.status}`);
+/** How many checks `uploadTrip` records. Every one of them runs on every path. */
+const UPLOAD_CHECKS = 21;
+
+/**
+ * One upload and everything it must be true of: the trace object, the function call, and the rows
+ * the writer left behind.
+ *
+ * Nothing here is guarded. A 200 with no readable row, or an error reply, fails the remaining
+ * checks (optional chaining yields `undefined`, which `canonical` never lets pass for a real value)
+ * instead of skipping them — a skipped check would otherwise read as a shorter green run.
+ */
+async function uploadTrip(api, ctx, device, trip, expect = {}) {
+  const { uid, jwt, expectedDay } = ctx;
+  const want = {
+    score: trip.scored.score,
+    status: trip.scored.status,
+    dataQuality: trip.scored.dataQuality,
+    categoryDeductions: trip.scored.categoryDeductions,
+    eventDeductions: trip.scored.eventDeductions ?? {},
+    mismatch: false,
+    ...expect,
+  };
+  const id = trip.payload.clientTripId;
+
+  const put = await api.uploadTrace(uid, id, trip.gzip, jwt);
+  check(`the trace object is stored under ${uid.slice(0, 8)}…/${id.slice(0, 8)}…`, put.status === 200, `HTTP ${put.status}`);
 
   const res = await api.invoke('finalize-trip', trip.payload, jwt);
   check('finalize-trip answered 200', res.status === 200, res.status === 200 ? `x-request-id ${res.requestId}` : res.text.slice(0, 300));
-  if (res.status !== 200) return { res, stored: null, events: [], day: null };
 
-  const [stored] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${trip.payload.clientTripId}&select=*`);
-  const events = stored ? await api.rows('trip_events', `trip_id=eq.${stored.id}&select=*&order=started_at`) : [];
-  const [day] = await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${res.body.day.day}&select=*`);
-  console.log(`   server: score ${res.body.score} ${res.body.status}, day ${show(res.body.day)}`);
-  return { res, stored, events, day };
+  const [stored] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${id}&select=*`);
+  check('the trip row was stored', stored != null, stored ? `id ${stored.id}` : 'no row for this client trip id');
+
+  const eventRows = stored ? await api.rows('trip_events', `trip_id=eq.${stored.id}&select=*&order=started_at`) : [];
+  const dayKey = res.body?.day?.day;
+  const [day] = typeof dayKey === 'string' ? await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${dayKey}&select=*`) : [];
+  console.log(`   server: score ${res.body?.score} ${res.body?.status}, day ${show(res.body?.day)}`);
+
+  checkEq('the authoritative score equals the expected score (Δ = 0)', res.body?.score, want.score);
+  checkEq('provisionalMismatch is what this payload deserves', res.body?.provisionalMismatch, want.mismatch);
+  checkEq('the writer stored the trip, not a replay', res.body?.replayed, false);
+  checkEq('the status is the scorer status', res.body?.status, want.status);
+  checkEq('the stored score is the answered score', stored?.score, res.body?.score);
+  checkEq('the stored data quality is the scorer grade', stored?.data_quality, want.dataQuality);
+  checkEq('the stored category deductions are the scorer breakdown', map3(stored?.category_deductions), map3(want.categoryDeductions));
+  checkEq('the stored local day is the trip day in its zone', stored?.local_day, expectedDay);
+  checkEq('trips.rows_digest is stored verbatim', stored?.rows_digest, trip.payload.rowsDigest);
+  checkEq('trips.trace_path is the derived storage key', stored?.trace_path, `${uid}/${id}.bin.gz`);
+  checkEq('trips.conditions is the server clock rule, not a client field', stored?.conditions, {
+    night: device.finalize.nightAt(trip.payload.startedAt, trip.payload.tz, device.scoring.CONSTANTS),
+    precipitation: false,
+  });
+  checkEq('every payload event was stored', eventRows.length, trip.payload.events.length);
+  checkEq(
+    'the stored per-event status, severity, multiplier and deduction are the scorer\'s',
+    trip.payload.events.map((e) => {
+      const row = eventRows.find((r) => r.client_event_id === e.id);
+      return {
+        id: e.id,
+        status: row?.status,
+        severity: round3(Number(row?.severity)),
+        contextMultiplier: round3(Number(row?.context_multiplier)),
+        deduction: row?.deduction == null ? null : round3(Number(row.deduction)),
+      };
+    }),
+    trip.payload.events.map((e) => ({
+      id: e.id,
+      status: e.status,
+      severity: round3(device.scoring.severity(scorableEvent(e))),
+      contextMultiplier: round3(device.scoring.contextMultiplier(scorableEvent(e))),
+      deduction: want.status === 'final' ? round3(want.eventDeductions[e.id] ?? 0) : null,
+    }))
+  );
+  checkEq('the answered day is the trip local day', dayKey, expectedDay);
+  check('the answered day row is a stored day row', day != null && day.day === expectedDay, dayLine(day ?? null));
+  checkEq('the stored long-term score matches the answer', day?.long_term_score, res.body?.day?.longTermScore);
+  checkEq('the stored trips_scored matches the answer', day?.trips_scored, res.body?.day?.tripsScored);
+  checkEq('the stored driving_s matches the answer', day?.driving_s, res.body?.day?.drivingS);
+
+  return { res, stored, events: eventRows, day };
+}
+
+/** The `score_daily` row of `day`, or null. */
+async function readDay(api, uid, day) {
+  const [row] = await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${day}&select=*`);
+  return row ?? null;
+}
+
+/**
+ * The long-term score `packages/scoring` gives for the user's live scored trips *right now* — the
+ * same set and the same rounding `dayRows` uses, computed here so the day row is checked against an
+ * independent number rather than against itself.
+ */
+async function expectedLongTerm(api, device, uid) {
+  const rows = await api.rows(
+    'trips',
+    `user_id=eq.${uid}&deleted_at=is.null&status=in.(final,provisional)&select=ended_at,score,exposure,duration_s`
+  );
+  const trips = rows
+    .filter((r) => r.score !== null)
+    .map((r) => ({
+      endedAt: Date.parse(r.ended_at),
+      score: Number(r.score),
+      exposure: Number(r.exposure),
+      durationS: Number(r.duration_s),
+    }));
+  const lt = device.scoring.longTermScore(trips, Date.now());
+  return lt.score === null ? null : Math.round(lt.score);
 }
 
 async function main() {
@@ -682,159 +908,149 @@ async function main() {
   selfCheck();
   if (args.includes('--self-check')) return;
 
-  beginStep('local stack');
+  beginStep('local stack', 3);
   const stack = supabaseStatus();
   requireLocal(stack.API_URL);
-  check('the stack is local', true, stack.API_URL);
+  check(
+    'the local stack reported the keys this run needs',
+    Boolean(stack.API_URL && stack.ANON_KEY && (stack.SERVICE_ROLE_KEY || stack.SECRET_KEY)),
+    stack.API_URL
+  );
   const api = makeApi(stack);
   const serveLog = [];
-  const serve = args.includes('--external-serve') ? null : await startFunctionsServe(api, serveLog);
-  check('the edge functions runtime answers', await api.functionsReady('finalize-trip'));
-
+  let serve = null;
   const uid = flag('--user') ?? crypto.randomUUID();
-  const jwt = devJwt(uid);
-  check('a user JWT was minted for the local stack', jwt.split('.').length === 3, `user ${uid}`);
 
-  // A user of this run's own, wiped first so the dispute allowance and the day rows are this
-  // run's alone even when `--user` pins the subject.
-  await api.removeTraces(uid, await api.listTraces(uid));
-  await api.wipe('trips', `user_id=eq.${uid}`);
-  await api.wipe('score_daily', `user_id=eq.${uid}`);
-  await api.wipe('baselines', `user_id=eq.${uid}`);
-  await api.wipe('rate_limits', `user_id=eq.${uid}`);
+  try {
+    serve = args.includes('--external-serve') ? null : await startFunctionsServe(api, serveLog);
+    check('the edge functions runtime answers', await api.functionsReady('finalize-trip'));
 
-  const device = await loadDevice();
-  const db = await device.sqljs.createSqlJsDb();
-  await device.db.migrate(db);
+    const jwt = devJwt(uid);
+    check('a user JWT was minted for the local stack', jwt.split('.').length === 3, `user ${uid}`);
 
-  const now = Date.now();
-  const { year, month, day } = yesterdayIn(now, TZ);
-  const expectedDay = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const ctx = { uid, jwt, expectedDay };
+    // A user of this run's own, wiped first so the dispute allowance and the day rows are this
+    // run's alone even when `--user` pins the subject.
+    await api.removeTraces(uid, await api.listTraces(uid));
+    await api.wipe('trips', `user_id=eq.${uid}`);
+    await api.wipe('score_daily', `user_id=eq.${uid}`);
+    await api.wipe('baselines', `user_id=eq.${uid}`);
+    await api.wipe('rate_limits', `user_id=eq.${uid}`);
 
-  const trips = [];
-  /** The synthetic track's limit: 35 mph, unknown every tenth second (for `limit_coverage_pct`). */
-  const syntheticLimit = (startedAt) => (row) =>
-    Math.round((row.ts - startedAt) / 1000) % 10 === 9
-      ? device.rows.NO_LIMIT
-      : device.rows.limit(device.rows.mph(35));
+    const device = await loadDevice();
+    const db = await device.sqljs.createSqlJsDb();
+    await device.db.migrate(db);
 
-  // ---- a long, uneventful drive, so the long-term score has something to stand on ----
-  // §9.6 withholds the number below three trips or an hour of driving; without this one the whole
-  // run would only ever see `longTermScore: null`, which proves nothing about the writer's day row.
-  beginStep('a 40-minute uneventful drive (so the long-term score is not withheld)');
-  {
-    const startedAt = epochAtLocalHour(year, month, day, TRIP_HOURS.filler, TZ);
-    const clientTripId = crypto.randomUUID();
-    const rows = straightTrack(device, startedAt, 2400);
-    await persistRecording(device, db, clientTripId, rows, TZ, 30);
-    const session = closedSession(device, {
-      clientTripId,
+    const now = Date.now();
+    const { year, month, day } = yesterdayIn(now, TZ);
+    const expectedDay = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const ctx = { uid, jwt, expectedDay };
+
+    const trips = [];
+    /** The synthetic track's limit: 35 mph, unknown every tenth second (for `limit_coverage_pct`). */
+    const syntheticLimit = (startedAt) => (row) =>
+      Math.round((row.ts - startedAt) / 1000) % 10 === 9
+        ? device.rows.NO_LIMIT
+        : device.rows.limit(device.rows.mph(35));
+
+    // ---- a long, uneventful drive, so the long-term score has something to stand on ----
+    // §9.6 withholds the number below three trips or an hour of driving; without this one the whole
+    // run would only ever see `longTermScore: null`, which proves nothing about the writer's day row.
+    // It is also the trip the delete lands on later, while it is still scored.
+    beginStep('a 40-minute uneventful drive (so the long-term score is not withheld)', UPLOAD_CHECKS + 4);
+    const fillerStart = epochAtLocalHour(year, month, day, TRIP_HOURS.filler, TZ);
+    const fillerId = crypto.randomUUID();
+    const fillerRows = straightTrack(device, fillerStart, 2400);
+    await persistRecording(device, db, fillerId, fillerRows, TZ, 30);
+    const fillerSession = closedSession(device, {
+      clientTripId: fillerId,
       trace: { mode: 'mounted' },
-      rows,
+      rows: fillerRows,
       events: [],
-      limitFor: syntheticLimit(startedAt),
+      limitFor: syntheticLimit(fillerStart),
     });
-    const trip = await finalizeAndQueue(device, db, session, clientTripId, TZ);
-    checkEq('an uneventful drive scores 100', trip.scored.score, 100);
-    const out = await uploadAndRead(api, ctx, trip);
-    if (out.stored) {
-      checkEq('the authoritative score equals the device provisional score (Δ = 0)', out.res.body.score, trip.scored.score);
-      checkEq('the server reports no provisional mismatch', out.res.body.provisionalMismatch, false);
-      checkEq('the long-term score is still withheld after one trip', out.res.body.day.longTermScore, null);
-      checkEq('the day row says so', out.res.body.day.provisional, true);
-      trips.push({ name: 'filler', clientTripId, trip, out });
+    const filler = await finalizeAndQueue(device, db, fillerSession, fillerId, TZ);
+    checkEq('an uneventful drive scores 100', filler.scored.score, 100);
+    const fillerOut = await uploadTrip(api, ctx, device, filler);
+    checkEq('the long-term score is still withheld after one trip', fillerOut.res.body?.day?.longTermScore, null);
+    trips.push({ name: 'filler', clientTripId: fillerId, trip: filler, out: fillerOut });
+
+    // ---- the two recorded traces -------------------------------------------------
+    for (const [name, hour, prefix] of [
+      ['speeding-corrected', TRIP_HOURS.speeding, 't1'],
+      ['phone-pickup', TRIP_HOURS.phone, 't2'],
+    ]) {
+      beginStep(`replay → finalize → upload → finalize-trip: ${name}`, UPLOAD_CHECKS + 5);
+      const startedAt = epochAtLocalHour(year, month, day, hour, TZ);
+      check('the trip starts in the past, inside the server 30-day window', startedAt < now && now - startedAt < 30 * 86_400_000, new Date(startedAt).toISOString());
+
+      const raw = device.trace.parseTrace(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'core', '__fixtures__', 'traces', `${name}.json`), 'utf8')));
+      const trace = device.trace.parseTrace(rebaseTrace(raw, startedAt));
+      // The server rewrites every event's `context.night` from the trip's own clock rule. The
+      // replay fed the detectors `trace.night`, so the two must agree or the golden would diverge
+      // for a reason that has nothing to do with the pipeline.
+      checkEq(
+        'the rebased start agrees with the night flag the trace was replayed under',
+        device.finalize.nightAt(startedAt, TZ, device.scoring.CONSTANTS),
+        trace.night
+      );
+      const replayed = device.runTrace.runTrace(trace);
+      check('the replay harness met the trace expectations', replayed.passes, replayed.failures.join(' | ') || `${replayed.events.length} events`);
+
+      const clientTripId = crypto.randomUUID();
+      await persistRecording(device, db, clientTripId, trace.rows, TZ, 30);
+      const session = closedSession(device, {
+        clientTripId,
+        trace,
+        rows: trace.rows,
+        events: namespaceEvents(replayed.events, prefix),
+        limitFor: (row) => device.trace.limitAt(trace.limits, row.ts),
+      });
+      const trip = await finalizeAndQueue(device, db, session, clientTripId, TZ);
+      console.log(
+        `   device: score ${trip.scored.score} ${trip.scored.status} grade ${trip.scored.dataQuality}, ` +
+          `${Math.round(trip.payload.distanceM)} m in ${trip.payload.durationS.toFixed(1)} s, ` +
+          `${trip.payload.events.length} events (${trip.payload.events.filter((e) => e.status === 'scored').length} scored)`
+      );
+      const out = await uploadTrip(api, ctx, device, trip);
+      trips.push({ name, clientTripId, trip, out });
     }
-  }
 
-  // ---- the two recorded traces -------------------------------------------------
-  for (const [name, hour, prefix] of [
-    ['speeding-corrected', TRIP_HOURS.speeding, 't1'],
-    ['phone-pickup', TRIP_HOURS.phone, 't2'],
-  ]) {
-    beginStep(`replay → finalize → upload → finalize-trip: ${name}`);
-    const startedAt = epochAtLocalHour(year, month, day, hour, TZ);
-    check('the trip starts in the past, inside the server 30-day window', startedAt < now && now - startedAt < 30 * 86_400_000, new Date(startedAt).toISOString());
-    check('the trip starts in daylight, so the server does not rewrite the event context', !device.finalize.nightAt(startedAt, TZ, device.scoring.CONSTANTS));
-
-    const raw = device.trace.parseTrace(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'core', '__fixtures__', 'traces', `${name}.json`), 'utf8')));
-    const trace = device.trace.parseTrace(rebaseTrace(raw, startedAt));
-    const replayed = device.runTrace.runTrace(trace);
-    check('the replay harness met the trace expectations', replayed.passes, replayed.failures.join(' | ') || `${replayed.events.length} events`);
-
-    const clientTripId = crypto.randomUUID();
-    await persistRecording(device, db, clientTripId, trace.rows, TZ, 30);
-    const session = closedSession(device, {
-      clientTripId,
-      trace,
-      rows: trace.rows,
-      events: namespaceEvents(replayed.events, prefix),
-      limitFor: (row) => device.trace.limitAt(trace.limits, row.ts),
+    // ---- the §9.4 worked example ------------------------------------------------
+    beginStep('the §9.4 worked example through the function', UPLOAD_CHECKS + 10);
+    const workedStart = epochAtLocalHour(year, month, day, TRIP_HOURS.worked, TZ);
+    const workedId = crypto.randomUUID();
+    const workedRows = straightTrack(device, workedStart, 1320);
+    await persistRecording(device, db, workedId, workedRows, TZ, 30);
+    const workedSession = closedSession(device, {
+      clientTripId: workedId,
+      trace: { mode: 'mounted' },
+      rows: workedRows,
+      events: workedExampleEvents(device, workedStart),
+      limitFor: syntheticLimit(workedStart),
     });
-    const trip = await finalizeAndQueue(device, db, session, clientTripId, TZ);
-    check('the finalizer queued the payload it validated', JSON.stringify(trip.queued) === JSON.stringify(trip.payload));
-    check('the trace file was written and gzipped', trip.gzip !== null && trip.gzip.length > 0, `${trip.gzip?.length ?? 0} bytes`);
-    console.log(
-      `   device: score ${trip.scored.score} ${trip.scored.status} grade ${trip.scored.dataQuality}, ` +
-        `${Math.round(trip.payload.distanceM)} m in ${trip.payload.durationS.toFixed(1)} s, ` +
-        `${trip.payload.events.length} events (${trip.payload.events.filter((e) => e.status === 'scored').length} scored)`
+    const worked = await finalizeAndQueue(device, db, workedSession, workedId, TZ);
+    checkEq('the device scores the worked example 74', worked.scored.score, 74);
+    checkClose('the worked example exposure is 1.1', worked.scored.exposure, 1.1, 1e-6);
+    const workedOut = await uploadTrip(api, ctx, device, worked);
+    // The spec constant, asserted against the server independently of the device's number.
+    checkEq('the function re-scores the worked example to the spec 74', workedOut.res.body?.score, 74);
+    checkEq('apply_trip stored 74', workedOut.stored?.score, 74);
+    checkEq('the stored trip is not flagged severe', workedOut.stored?.had_severe_event, false);
+    check(
+      'with four trips and over an hour of driving the long-term score is no longer withheld',
+      typeof workedOut.res.body?.day?.longTermScore === 'number' && workedOut.res.body?.day?.band !== null,
+      `longTermScore ${workedOut.res.body?.day?.longTermScore} band ${workedOut.res.body?.day?.band} provisional ${workedOut.res.body?.day?.provisional}`
+    );
+    checkEq('the writer stored the band', workedOut.day?.band, workedOut.res.body?.day?.band);
+    checkEq(
+      'the day long-term score is what the scoring package gives for the stored trips',
+      workedOut.day?.long_term_score,
+      await expectedLongTerm(api, device, uid)
     );
 
-    const out = await uploadAndRead(api, ctx, trip);
-    if (out.stored === null) break;
-    checkEq('the authoritative score equals the device provisional score (Δ = 0)', out.res.body.score, trip.scored.score);
-    checkEq('the server reports no provisional mismatch', out.res.body.provisionalMismatch, false);
-    checkEq('the writer stored the trip, not a replay', out.res.body.replayed, false);
-    checkEq('the status is the device status', out.res.body.status, trip.scored.status === 'final' ? 'final' : trip.scored.status);
-    checkEq('the stored score is the answered score', out.stored.score, out.res.body.score);
-    checkEq('the stored data quality is the device grade', out.stored.data_quality, trip.scored.dataQuality);
-    checkEq('the stored local day is the trip day in its zone', out.stored.local_day, expectedDay);
-    checkEq('trips.rows_digest is stored verbatim', out.stored.rows_digest, trip.payload.rowsDigest);
-    checkEq('trips.trace_path is the derived storage key', out.stored.trace_path, `${uid}/${clientTripId}.bin.gz`);
-    checkEq('every payload event was stored', out.events.length, trip.payload.events.length);
-    checkEq('the score_daily row exists for the trip day', out.res.body.day.day, expectedDay);
-    check('the answered day row is the stored day row', out.day !== undefined && out.day !== null && out.day.day === expectedDay, out.day ? dayLine(out.day) : 'missing');
-    if (out.day) {
-      checkEq('the stored long-term score matches the answer', out.day.long_term_score, out.res.body.day.longTermScore);
-      checkEq('the stored trips_scored matches the answer', out.day.trips_scored, out.res.body.day.tripsScored);
-      checkEq('the stored driving_s matches the answer', out.day.driving_s, out.res.body.day.drivingS);
-    }
-    trips.push({ name, clientTripId, trip, out });
-  }
-
-  // ---- the §9.4 worked example ------------------------------------------------
-  beginStep('the §9.4 worked example through the function');
-  const workedStart = epochAtLocalHour(year, month, day, TRIP_HOURS.worked, TZ);
-  const workedId = crypto.randomUUID();
-  const workedRows = straightTrack(device, workedStart, 1320);
-  await persistRecording(device, db, workedId, workedRows, TZ, 30);
-  const workedSession = closedSession(device, {
-    clientTripId: workedId,
-    trace: { mode: 'mounted' },
-    rows: workedRows,
-    events: workedExampleEvents(device, workedStart),
-    limitFor: syntheticLimit(workedStart),
-  });
-  const worked = await finalizeAndQueue(device, db, workedSession, workedId, TZ);
-  checkEq('the device scores the worked example 74', worked.scored.score, 74);
-  checkClose('the worked example exposure is 1.1', worked.scored.exposure, 1.1, 1e-6);
-
-  const workedOut = await uploadAndRead(api, ctx, worked);
-  let workedStored = workedOut.stored;
-  if (workedStored) {
-    checkEq('the function re-scores the worked example to 74', workedOut.res.body.score, 74);
-    checkEq('the worked example is no provisional mismatch', workedOut.res.body.provisionalMismatch, false);
-    checkEq('apply_trip stored 74', workedStored.score, 74);
-    checkEq('the stored category deductions are the scorer breakdown', Object.fromEntries(Object.entries(workedStored.category_deductions).map(([k, v]) => [k, Number(Number(v).toFixed(3))])), Object.fromEntries(Object.entries(worked.scored.categoryDeductions).map(([k, v]) => [k, Number(Number(v).toFixed(3))])));
-    checkEq('the stored trip is not flagged severe', workedStored.had_severe_event, false);
-    check('with four trips and over an hour of driving the long-term score is no longer withheld', typeof workedOut.res.body.day.longTermScore === 'number' && workedOut.res.body.day.band !== null, `longTermScore ${workedOut.res.body.day.longTermScore} band ${workedOut.res.body.day.band} provisional ${workedOut.res.body.day.provisional}`);
-    checkEq('the writer stored the long-term score as an integer', workedOut.day.long_term_score, workedOut.res.body.day.longTermScore);
-    checkEq('the writer stored the band', workedOut.day.band, workedOut.res.body.day.band);
-  }
-
-  // ---- dispute, role change, delete -------------------------------------------
-  if (workedStored) {
-    beginStep('trip-actions: dispute the most expensive scored event');
+    // ---- dispute ------------------------------------------------------------------
+    beginStep('trip-actions: dispute the most expensive scored event', 16);
+    const beforeDispute = await readDay(api, uid, expectedDay);
     const target = topScoredEvent(worked.payload);
     const metrics = metricsFromPayload(worked.payload);
     const asIs = device.scoring.scoreTrip(metrics, scorableFromPayload(worked.payload));
@@ -845,113 +1061,191 @@ async function main() {
     const reason = DISPUTE_REASON_FOR[target.category] ?? 'hazard';
     const dispute = await api.invoke('trip-actions', { action: 'dispute', clientEventId: target.id, reason }, jwt);
     check('trip-actions answered 200', dispute.status === 200, dispute.status === 200 ? '' : dispute.text.slice(0, 300));
-    if (dispute.status === 200) {
-      checkEq('the dispute was auto-accepted', dispute.body.autoAccepted, true);
-      checkEq('the recomputed score is what the scoring package predicts without the event', dispute.body.score, without.score);
-      checkEq('the trip is still final', dispute.body.status, 'final');
-      const [afterDispute] = await api.rows('trips', `id=eq.${workedStored.id}&select=*`);
-      checkEq('apply_recompute stored the recomputed score', afterDispute.score, without.score);
-      const events = await api.rows('trip_events', `trip_id=eq.${workedStored.id}&select=*`);
-      const removed = events.find((e) => e.client_event_id === target.id);
-      checkEq('the disputed event is removed', removed.status, 'removed');
-      checkEq('the removed event costs nothing', Number(removed.deduction), 0);
-      const disputes = await api.rows('event_disputes', `user_id=eq.${uid}&select=*`);
-      checkEq('event_disputes has exactly this run one row', disputes.length, 1);
-      checkEq('the dispute row names the event', disputes[0].event_id, removed.id);
-      checkEq('the dispute row carries the reason', disputes[0].reason, reason);
-      checkEq('the dispute row is marked accepted', disputes[0].auto_accepted, true);
-      const [dayAfter] = await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${expectedDay}&select=*`);
-      check('the day row was refreshed with the recompute', dayAfter && dayAfter.day === expectedDay, dayAfter ? dayLine(dayAfter) : 'missing');
-      checkEq('the reply carries the day rows it wrote', dispute.body.days.some((d) => d.day === expectedDay), true);
-    }
+    checkEq('the dispute was auto-accepted', dispute.body?.autoAccepted, true);
+    checkEq('the recomputed score is what the scoring package predicts without the event', dispute.body?.score, without.score);
+    checkEq('the trip is still final', dispute.body?.status, 'final');
+    const [afterDispute] = await api.rows('trips', `id=eq.${workedOut.stored?.id}&select=*`);
+    checkEq('apply_recompute stored the recomputed score', afterDispute?.score, without.score);
+    const disputedEvents = await api.rows('trip_events', `trip_id=eq.${workedOut.stored?.id}&select=*`);
+    const removed = disputedEvents.find((e) => e.client_event_id === target.id);
+    checkEq('the disputed event is removed', removed?.status, 'removed');
+    checkEq('the removed event costs nothing', removed?.deduction == null ? removed?.deduction : Number(removed.deduction), 0);
+    const disputes = await api.rows('event_disputes', `user_id=eq.${uid}&select=*`);
+    checkEq('event_disputes has exactly one row for this run', disputes.length, 1);
+    checkEq('the dispute row names the event', disputes[0]?.event_id, removed?.id);
+    checkEq('the dispute row carries the reason', disputes[0]?.reason, reason);
+    checkEq('the dispute row is marked accepted', disputes[0]?.auto_accepted, true);
+    checkEq('the reply carries the day rows it wrote', dispute.body?.days?.some((d) => d.day === expectedDay), true);
 
-    beginStep('trip-actions: set-role passenger');
+    const dayAfterDispute = await readDay(api, uid, expectedDay);
+    console.log(`   day after the dispute: ${dayLine(dayAfterDispute)}`);
+    checkEq(
+      'the day long-term score moved to what the package gives for the recomputed trips',
+      dayAfterDispute?.long_term_score,
+      await expectedLongTerm(api, device, uid)
+    );
+    checkEq('a dispute does not change how many trips the day counts', dayAfterDispute?.trips_scored, beforeDispute?.trips_scored);
+    checkEq('a dispute does not change the day driving time', dayAfterDispute?.driving_s, beforeDispute?.driving_s);
+
+    // ---- set-role passenger --------------------------------------------------------
+    beginStep('trip-actions: set-role passenger', 12);
     const role = await api.invoke('trip-actions', { action: 'set-role', clientTripId: workedId, role: 'passenger' }, jwt);
     check('trip-actions answered 200', role.status === 200, role.status === 200 ? '' : role.text.slice(0, 300));
-    if (role.status === 200) {
-      checkEq('the role is passenger', role.body.role, 'passenger');
-      checkEq('a passenger trip is unscored', role.body.status, 'unscored');
-      checkEq('a passenger trip has no score', role.body.score, null);
-      const [afterRole] = await api.rows('trips', `id=eq.${workedStored.id}&select=*`);
-      checkEq('the stored role is passenger', afterRole.role, 'passenger');
-      checkEq('the stored status is unscored', afterRole.status, 'unscored');
-      checkEq('the stored score is cleared', afterRole.score, null);
-      checkEq('the stored reason is passenger', afterRole.unscored_reason, 'passenger');
-      const [dayAfterRole] = await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${expectedDay}&select=*`);
-      check('the day no longer counts the passenger trip', dayAfterRole.trips_scored === trips.length, dayLine(dayAfterRole));
-    }
+    checkEq('the role is passenger', role.body?.role, 'passenger');
+    checkEq('a passenger trip is unscored', role.body?.status, 'unscored');
+    checkEq('a passenger trip has no score', role.body?.score, null);
+    const [afterRole] = await api.rows('trips', `id=eq.${workedOut.stored?.id}&select=*`);
+    checkEq('the stored role is passenger', afterRole?.role, 'passenger');
+    checkEq('the stored status is unscored', afterRole?.status, 'unscored');
+    checkEq('the stored score is cleared', afterRole?.score, null);
+    checkEq('the stored reason is passenger', afterRole?.unscored_reason, 'passenger');
+    const dayAfterRole = await readDay(api, uid, expectedDay);
+    console.log(`   day after the role change: ${dayLine(dayAfterRole)}`);
+    checkEq('the day counts one scored trip fewer', dayAfterRole?.trips_scored, dayAfterDispute?.trips_scored - 1);
+    checkEq('the day loses exactly that trip driving time', dayAfterRole?.driving_s, dayAfterDispute?.driving_s - Math.round(worked.payload.durationS));
+    checkEq('the day loses exactly that trip exposure', round3(Number(dayAfterRole?.exposure)), round3(Number(dayAfterDispute?.exposure) - worked.scored.exposure));
+    checkEq('the long-term score follows the trips that are left', dayAfterRole?.long_term_score, await expectedLongTerm(api, device, uid));
 
-    beginStep('trip-actions: delete');
-    const before = await api.listTraces(uid);
-    check('the trace object is in the bucket before the delete', before.includes(`${workedId}.bin.gz`), before.join(', '));
-    const del = await api.invoke('trip-actions', { action: 'delete', clientTripId: workedId }, jwt);
+    // ---- delete, on a trip that is still scored -------------------------------------
+    beginStep('trip-actions: delete a trip that is still scored', 10);
+    const bucketBefore = await api.listTraces(uid);
+    check('the trace object is in the bucket before the delete', bucketBefore.includes(`${fillerId}.bin.gz`), bucketBefore.join(', '));
+    const del = await api.invoke('trip-actions', { action: 'delete', clientTripId: fillerId }, jwt);
     check('trip-actions answered 200', del.status === 200, del.status === 200 ? '' : del.text.slice(0, 300));
-    if (del.status === 200) {
-      checkEq('the trip is reported deleted', del.body.deleted, true);
-      const [afterDelete] = await api.rows('trips', `id=eq.${workedStored.id}&select=*`);
-      check('deleted_at is set', afterDelete.deleted_at !== null, String(afterDelete.deleted_at));
-      checkEq('the stored trace path is cleared', afterDelete.trace_path, null);
-      const after = await api.listTraces(uid);
-      checkEq('the storage object is gone', after.includes(`${workedId}.bin.gz`), false);
-      const [dayAfterDelete] = await api.rows('score_daily', `user_id=eq.${uid}&day=eq.${expectedDay}&select=*`);
-      check('the day row survives the delete, refreshed without the trip', dayAfterDelete.day === expectedDay, dayLine(dayAfterDelete));
+    checkEq('the trip is reported deleted', del.body?.deleted, true);
+    const [afterDelete] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${fillerId}&select=*`);
+    check('deleted_at is set', afterDelete?.deleted_at != null, String(afterDelete?.deleted_at));
+    checkEq('the stored trace path is cleared', afterDelete?.trace_path, null);
+    const bucketAfter = await api.listTraces(uid);
+    checkEq('the storage object is gone', bucketAfter.includes(`${fillerId}.bin.gz`), false);
+    const dayAfterDelete = await readDay(api, uid, expectedDay);
+    console.log(`   day after the delete: ${dayLine(dayAfterDelete)}`);
+    checkEq('the day counts one scored trip fewer', dayAfterDelete?.trips_scored, dayAfterRole?.trips_scored - 1);
+    checkEq('the day loses exactly the deleted trip driving time', dayAfterDelete?.driving_s, dayAfterRole?.driving_s - Math.round(filler.payload.durationS));
+    checkEq('the day loses exactly the deleted trip exposure', round3(Number(dayAfterDelete?.exposure)), round3(Number(dayAfterRole?.exposure) - filler.scored.exposure));
+    checkEq('the long-term score follows the trips that are left', dayAfterDelete?.long_term_score, await expectedLongTerm(api, device, uid));
+
+    // ---- idempotency --------------------------------------------------------------
+    beginStep('idempotency: the same payload again', trips.length * 4);
+    for (const t of trips) {
+      const [before] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${t.clientTripId}&select=*`);
+      const again = await api.invoke('finalize-trip', t.trip.payload, jwt);
+      checkEq(`${t.name}: the second upload is a replay`, again.status === 200 && again.body?.replayed, true);
+      checkEq(`${t.name}: the replay answers the stored score`, again.body?.score, before?.score);
+      const [after] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${t.clientTripId}&select=*`);
+      checkEq(`${t.name}: the stored row did not move`, { ...after, updated_at: null }, { ...before, updated_at: null });
+      checkEq(`${t.name}: updated_at did not move either`, after?.updated_at, before?.updated_at);
     }
-  }
 
-  // ---- idempotency --------------------------------------------------------------
-  beginStep('idempotency: the same payload again');
-  for (const t of trips) {
-    const [before] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${t.clientTripId}&select=*`);
-    const again = await api.invoke('finalize-trip', t.trip.payload, jwt);
-    checkEq(`${t.name}: the second upload is a replay`, again.status === 200 && again.body.replayed, true);
-    checkEq(`${t.name}: the replay answers the stored score`, again.body.score, before.score);
-    const [after] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${t.clientTripId}&select=*`);
-    checkEq(`${t.name}: the stored row did not move`, { ...after, updated_at: null }, { ...before, updated_at: null });
-    checkEq(`${t.name}: updated_at did not move either`, after.updated_at, before.updated_at);
-  }
+    // ---- the negative control -------------------------------------------------------
+    // Every check so far compares the server's number with the device's, so a `finalize-trip` that
+    // stored `provisional.score` verbatim would pass all of them. This one posts a payload whose
+    // declared score, category totals and per-event derived fields are all wrong, and proves the
+    // server answers and stores its own numbers instead.
+    beginStep('negative control: a payload that declares a score it did not earn', 11);
+    const lie = JSON.parse(JSON.stringify(worked.payload));
+    lie.clientTripId = crypto.randomUUID();
+    lie.tracePath = `${lie.clientTripId}.bin.gz`;
+    lie.events = lie.events.map((e) => ({
+      ...e,
+      id: `nc-${e.id}`,
+      severity: 0,
+      contextMultiplier: 1,
+      deduction: e.deduction === null ? null : 0,
+    }));
+    const declaredScore = Math.max(0, worked.scored.score - 24);
+    lie.provisional = {
+      ...lie.provisional,
+      score: declaredScore,
+      categoryDeductions: { phone: 0, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+      eventDeductions: {},
+    };
+    const truth = device.scoring.scoreTrip(metricsFromPayload(lie), scorableFromPayload(lie));
+    console.log(`   the payload declares ${declaredScore}; the scoring package says this trip is worth ${truth.score}`);
 
-  // ---- the golden, in one place ---------------------------------------------------
-  beginStep('golden values');
-  const finalTrips = await api.rows('trips', `user_id=eq.${uid}&select=client_trip_id,score,status,role,data_quality,local_day,deleted_at&order=started_at`);
-  console.log(JSON.stringify(finalTrips, null, 2));
-  const finalDays = await api.rows('score_daily', `user_id=eq.${uid}&select=*&order=day`);
-  console.log(JSON.stringify(finalDays, null, 2));
-  const finalBaselines = await api.rows('baselines', `user_id=eq.${uid}&select=*`);
-  console.log(JSON.stringify(finalBaselines, null, 2));
+    const lieput = await api.uploadTrace(uid, lie.clientTripId, worked.gzip, jwt);
+    check('the trace object is stored', lieput.status === 200, `HTTP ${lieput.status}`);
+    const lieRes = await api.invoke('finalize-trip', lie, jwt);
+    check('finalize-trip answered 200', lieRes.status === 200, lieRes.status === 200 ? `x-request-id ${lieRes.requestId}` : lieRes.text.slice(0, 300));
+    const [lieStored] = await api.rows('trips', `user_id=eq.${uid}&client_trip_id=eq.${lie.clientTripId}&select=*`);
+    check('the trip row was stored', lieStored != null, lieStored ? `id ${lieStored.id}` : 'no row');
+    checkEq('the server answers the score it computed, not the score it was told', lieRes.body?.score, truth.score);
+    checkEq('the declared score is not what came back', lieRes.body?.score === declaredScore, false);
+    checkEq('the server reports the provisional mismatch', lieRes.body?.provisionalMismatch, true);
+    checkEq('apply_trip stored the server score', lieStored?.score, truth.score);
+    checkEq('the stored category deductions are the server breakdown, not the declared zeros', map3(lieStored?.category_deductions), map3(truth.categoryDeductions));
+    const lieEvents = await api.rows('trip_events', `trip_id=eq.${lieStored?.id}&select=*&order=started_at`);
+    checkEq(
+      'the stored per-event deductions are the server numbers, not the declared zeros',
+      lie.events.map((e) => {
+        const row = lieEvents.find((r) => r.client_event_id === e.id);
+        return { id: e.id, deduction: row?.deduction == null ? null : round3(Number(row.deduction)) };
+      }),
+      lie.events.map((e) => ({ id: e.id, deduction: round3(truth.eventDeductions[e.id] ?? 0) }))
+    );
+    checkEq(
+      'the stored per-event severity is the server number, not the declared zero',
+      lie.events.map((e) => round3(Number(lieEvents.find((r) => r.client_event_id === e.id)?.severity))),
+      lie.events.map((e) => round3(device.scoring.severity(scorableEvent(e))))
+    );
+    checkEq(
+      'the stored per-event context multiplier is the server number, not the declared 1',
+      lie.events.map((e) => round3(Number(lieEvents.find((r) => r.client_event_id === e.id)?.context_multiplier))),
+      lie.events.map((e) => round3(device.scoring.contextMultiplier(scorableEvent(e))))
+    );
 
-  if (!args.includes('--keep')) {
-    await api.removeTraces(uid, await api.listTraces(uid));
-    await api.wipe('trips', `user_id=eq.${uid}`);
-    await api.wipe('score_daily', `user_id=eq.${uid}`);
-    await api.wipe('baselines', `user_id=eq.${uid}`);
-    await api.wipe('rate_limits', `user_id=eq.${uid}`);
-  }
-
-  if (serve) {
-    try {
-      if (process.platform === 'win32') {
-        execFileSync('taskkill', ['/pid', String(serve.pid), '/T', '/F'], { stdio: 'ignore' });
-      } else {
-        serve.kill();
+    // ---- the golden, in one place ---------------------------------------------------
+    beginStep('golden values', 0);
+    const finalTrips = await api.rows('trips', `user_id=eq.${uid}&select=client_trip_id,score,status,role,data_quality,local_day,deleted_at&order=started_at`);
+    console.log(JSON.stringify(finalTrips, null, 2));
+    const finalDays = await api.rows('score_daily', `user_id=eq.${uid}&select=*&order=day`);
+    console.log(JSON.stringify(finalDays, null, 2));
+    const finalBaselines = await api.rows('baselines', `user_id=eq.${uid}&select=*`);
+    console.log(JSON.stringify(finalBaselines, null, 2));
+  } finally {
+    // Cleanup and the spawned runtime are released whatever happened above, so a thrown error
+    // neither leaks a `functions serve` process nor leaves this run's rows behind.
+    if (!args.includes('--keep')) {
+      await api.removeTraces(uid, await api.listTraces(uid)).catch(() => undefined);
+      await api.wipe('trips', `user_id=eq.${uid}`);
+      await api.wipe('score_daily', `user_id=eq.${uid}`);
+      await api.wipe('baselines', `user_id=eq.${uid}`);
+      await api.wipe('rate_limits', `user_id=eq.${uid}`);
+    }
+    if (serve) {
+      try {
+        if (process.platform === 'win32') {
+          execFileSync('taskkill', ['/pid', String(serve.pid), '/T', '/F'], { stdio: 'ignore' });
+        } else {
+          serve.kill();
+        }
+      } catch {
+        /* the runtime is the CLI's to clean up */
       }
-    } catch {
-      /* the runtime is the CLI's to clean up */
     }
   }
 }
 
+/** The accounting, the count and the failure list — printed on every path, thrown or not. */
+function summarise() {
+  verifyStepCounts();
+  closeStep();
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  if (failed.length > 0) {
+    console.log('\nFAILED:');
+    for (const f of failed) console.log(`  [${f.step}] ${f.name} — ${f.detail}`);
+  }
+  return failed.length === 0;
+}
+
 main()
   .then(() => {
-    const failed = results.filter((r) => !r.ok);
-    console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-    if (failed.length > 0) {
-      console.log('\nFAILED:');
-      for (const f of failed) console.log(`  [${f.step}] ${f.name} — ${f.detail}`);
-      process.exitCode = 1;
-    }
+    if (!summarise()) process.exitCode = 1;
   })
   .catch((err) => {
     console.error(`\ne2e-trip: ${err instanceof Error ? err.message : String(err)}`);
     if (err instanceof Error && err.stack) console.error(err.stack);
+    summarise();
     process.exitCode = 1;
   });

@@ -38,19 +38,28 @@ Every EAS command is run as `npx eas-cli@24.7.0 …` (the CLI is deliberately no
 
 `npm run e2e:trip` drives recorded trips through every piece at once and asserts the authoritative
 numbers at each step: replay a committed trace through the M1 detectors, finalize it over a real
-SQLite, upload the gzip trace, POST the queued payload to `finalize-trip`, read the stored rows back,
-then dispute an event, change the role and delete the trip through `trip-actions`. The device's
-provisional score and the server's authoritative score must agree exactly (`provisionalMismatch:
-false`), and the dispute's recomputed score is checked against what `packages/scoring` predicts
-without the disputed event rather than against a written-down number.
+SQLite, upload the gzip trace, POST the payload to `finalize-trip` (the one the finalizer returned,
+asserted byte-equal to the one it put on the sync queue), read the stored rows back, then dispute an
+event, change a role and delete a still-scored trip through `trip-actions` — checking how each one
+moves the day aggregates, not merely that a row is still there.
+
+Three things keep it honest. The device's provisional score and the server's authoritative score
+must agree exactly (`provisionalMismatch: false`). The dispute's recomputed score is checked against
+what `packages/scoring` predicts without the disputed event, computed before the request goes out
+rather than written down. And a final negative control posts a payload declaring a score it did not
+earn, proving the server returns and stores its own number — without it, a `finalize-trip` that
+simply echoed the device back would pass every other check. Each section also declares how many
+checks it must record, and the run ends by asserting it recorded exactly that many, so a block that
+does not run is a failure rather than a shorter green run.
 
 It needs the local stack running (`npx supabase start`); it starts `npx supabase functions serve`
 itself if nothing is answering, or pass `--external-serve` to use one you already have. Every key is
 read from `npx supabase status -o json` at run time and the run refuses to start unless the stack is
 on 127.0.0.1 or localhost — no secret is ever written down and no hosted project can be reached.
-Each run uses a fresh user and cleans up after itself; `--user <uuid>` pins the subject and `--keep`
-leaves the trips in place for inspection. `--self-check` runs only the script's own pure-helper
-checks and needs no stack at all.
+Each run uses a fresh user and cleans up after itself. `--user <uuid>` pins the subject instead —
+which first **deletes** that user's trips, day rows, baselines and rate limits, so the dispute
+allowance and the aggregates are this run's alone. `--keep` leaves the trips in place for
+inspection, and `--self-check` runs only the script's own pure-helper checks and needs no stack.
 
 ## Layout
 
