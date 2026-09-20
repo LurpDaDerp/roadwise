@@ -141,3 +141,42 @@ test('deleting a trip cascades to its events and samples', async () => {
   expect(events.rows).toEqual([{ n: 0 }]);
   expect(samples.rows).toEqual([{ n: 0 }]);
 });
+
+test('trips carries sync_error, so a refused upload can say why', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(trips)');
+  expect(rows.find((row) => row.name === 'sync_error')).toMatchObject({
+    type: 'TEXT',
+    notnull: 0,
+  });
+
+  await insertTrip(db, 'final', 'failed');
+  await db.execute('UPDATE trips SET sync_error = ?', ['implausible_speed']);
+  const { rows: stored } = await db.execute('SELECT sync_error FROM trips');
+  expect(stored).toEqual([{ sync_error: 'implausible_speed' }]);
+});
+
+test('sync_queue carries trace_uploaded_at, null until the object is in Storage', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(sync_queue)');
+  expect(rows.find((row) => row.name === 'trace_uploaded_at')).toMatchObject({
+    type: 'INTEGER',
+    notnull: 0,
+  });
+
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?)',
+    ['finalize-trip', '{}', 'trip:t1', 1, 1]
+  );
+  const { rows: stored } = await db.execute('SELECT trace_uploaded_at FROM sync_queue');
+  expect(stored).toEqual([{ trace_uploaded_at: null }]);
+});
+
+test('score_daily_cache is keyed by the local date and stamped when written', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(score_daily_cache)');
+  expect(rows.map((row) => row.name)).toEqual(['day', 'payload_json', 'updated_at']);
+  expect(rows.find((row) => row.name === 'day')).toMatchObject({ pk: 1, notnull: 1 });
+  expect(rows.find((row) => row.name === 'payload_json')).toMatchObject({ notnull: 1 });
+});

@@ -40,6 +40,7 @@ function toQueueItem(row: Record<string, unknown>): QueueItem {
     attempts: asNumber(row, 'attempts'),
     next_attempt_at: asNumber(row, 'next_attempt_at'),
     claimed_at: asNumberOrNull(row, 'claimed_at'),
+    trace_uploaded_at: asNumberOrNull(row, 'trace_uploaded_at'),
     last_error: asTextOrNull(row, 'last_error'),
     created_at: asNumber(row, 'created_at'),
   };
@@ -197,6 +198,71 @@ export function createQueueRepo(db: Db) {
         );
         return get(id, tx);
       });
+    },
+
+    /**
+     * Give a claim back without counting an attempt, so the item is due again at
+     * `nextAttemptAt`. For work that was not *tried* — no session yet, the trace is waiting for
+     * Wi-Fi, the pass stopped on a locked database — where counting a failure would walk the
+     * item towards `MAX_ATTEMPTS` for no fault of its own.
+     *
+     * Guarded by `status = 'inflight'`: null when the claim this caller held is already closed.
+     */
+    async release(
+      id: number,
+      nextAttemptAt: number = Date.now(),
+      on: Db = db
+    ): Promise<QueueItem | null> {
+      const { changes } = await on.execute(
+        `UPDATE sync_queue SET status = 'pending', claimed_at = NULL, next_attempt_at = ?
+          WHERE id = ? AND status = 'inflight'`,
+        [nextAttemptAt, id]
+      );
+      return changes === 0 ? null : get(id, on);
+    },
+
+    /**
+     * Push an item's next try out to `at`, never in. The server's `Retry-After` outranks the
+     * backoff ladder when it asks for longer; a shorter one is ignored, since the ladder exists
+     * to protect a struggling server from the whole fleet at once.
+     */
+    async deferUntil(id: number, at: number, on: Db = db): Promise<QueueItem | null> {
+      const { changes } = await on.execute(
+        'UPDATE sync_queue SET next_attempt_at = ? WHERE id = ? AND next_attempt_at < ?',
+        [at, id, at]
+      );
+      return changes === 0 ? null : get(id, on);
+    },
+
+    /**
+     * Give up on an item for good — the server refused it with an error retrying cannot fix.
+     * Called after `markAttempt(id, false, …)` has closed the claim, so the guard allows only
+     * the states that attempt can have left behind: a fresh claim by another pass is not stomped.
+     */
+    async markFailed(id: number, error: string, on: Db = db): Promise<QueueItem | null> {
+      const { changes } = await on.execute(
+        `UPDATE sync_queue SET status = 'failed', last_error = ?, claimed_at = NULL
+          WHERE id = ? AND status IN ('pending', 'failed')`,
+        [error, id]
+      );
+      return changes === 0 ? null : get(id, on);
+    },
+
+    /**
+     * Record that this item's large object is in Storage. Written the moment the upload returns,
+     * outside any claim guard: the object is there whoever holds the claim now, and the point of
+     * the mark is that the next attempt — this process or the next one — skips the upload.
+     */
+    async markTraceUploaded(
+      id: number,
+      at: number = Date.now(),
+      on: Db = db
+    ): Promise<QueueItem | null> {
+      await on.execute(
+        'UPDATE sync_queue SET trace_uploaded_at = ? WHERE id = ? AND trace_uploaded_at IS NULL',
+        [at, id]
+      );
+      return get(id, on);
     },
 
     async countByStatus(status: QueueStatus): Promise<number> {

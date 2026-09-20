@@ -50,6 +50,7 @@ const COLUMNS = [
   'checkpoint_ts',
   'incomplete',
   'server_id',
+  'sync_error',
   'created_at',
   'updated_at',
 ] as const;
@@ -89,6 +90,7 @@ function toTripRow(row: Record<string, unknown>): TripRow {
     checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
     incomplete: asFlag(row, 'incomplete'),
     server_id: asTextOrNull(row, 'server_id'),
+    sync_error: asTextOrNull(row, 'sync_error'),
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
   };

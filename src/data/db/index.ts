@@ -12,6 +12,10 @@ export {
   type QueueRepo,
 } from '@/data/db/queue';
 export { createSamplesRepo, type SamplesRepo } from '@/data/db/samples';
+export {
+  createScoreDailyCacheRepo,
+  type ScoreDailyCacheRepo,
+} from '@/data/db/scoreDailyCache';
 export { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 export { createTilesRepo, type TilesRepo } from '@/data/db/tiles';
 export {
@@ -30,6 +34,8 @@ export type {
   QueueItem,
   QueueStatus,
   SampleRow,
+  ScoreDailyCache,
+  ScoreDailyCacheRow,
   SettingRow,
   Tile,
   TileRow,

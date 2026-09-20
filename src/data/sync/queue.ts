@@ -1,16 +1,73 @@
+import { z } from 'zod';
+
 import type { Db } from '@/data/db/driver';
 import { createQueueRepo } from '@/data/db/queue';
 import type { QueueItem } from '@/data/db/types';
+import { type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
 
 /** The queue `kind` the sync runner maps to `POST /functions/v1/finalize-trip`. */
-export const FINALIZE_KIND = 'finalize-trip';
+export const FINALIZE_KIND: SyncKind = 'finalize-trip';
+
+/** The queue `kind` for a trace the device owes Storage after the summary has already gone up. */
+export const TRACE_UPLOAD_KIND: SyncKind = 'trace-upload';
 
 /**
  * Deterministic per trip — not a fresh uuid — so a finalize retried after a failure cannot queue
  * the same trip twice, and the server dedupes the upload on the same key.
  */
 export const finalizeIdempotencyKey = (clientTripId: string): string => `trip:${clientTripId}`;
+
+/**
+ * The trace's own key, distinct from the trip's so both items can be in the queue at once: on
+ * cellular the summary goes up under `trip:<id>` while the file waits under `trace:<id>`.
+ */
+export const traceIdempotencyKey = (clientTripId: string): string => `trace:${clientTripId}`;
+
+/**
+ * What a deferred trace upload needs, and nothing more: the object key is derived from the
+ * signed-in user and the trip id at upload time, never from anything stored here (§4.7).
+ */
+export const TraceUploadPayloadSchema = z
+  .object({
+    clientTripId: z.string().min(1).max(64),
+    /** The local file, relative to the traces directory: `<clientTripId>.bin.gz`. */
+    tracePath: z.string().min(1).max(256),
+  })
+  .strict();
+
+export type TraceUploadPayload = z.infer<typeof TraceUploadPayloadSchema>;
+
+// The `queue:changed` emitter. The sync runner subscribes in `start()` so a trip queued while
+// the app is open uploads at once instead of waiting for the next foreground.
+//
+// Listeners are called on a macrotask rather than inline, because the one caller that matters —
+// `finalizeTrip` — enqueues inside the transaction that also writes the trip row. Waking a drain
+// inside that transaction would have it meet SQLite's write lock (or, under sql.js, an illegal
+// nested BEGIN); by the time a `setTimeout(0)` runs, the transaction has committed and the row
+// the runner is about to read is there. Nothing is scheduled while no one is listening.
+type QueueChangedListener = () => void;
+
+const queueChangedListeners = new Set<QueueChangedListener>();
+let queueChangedScheduled = false;
+
+/** Subscribe to "something was queued"; the returned function unsubscribes. */
+export function onQueueChanged(listener: QueueChangedListener): () => void {
+  queueChangedListeners.add(listener);
+  return () => {
+    queueChangedListeners.delete(listener);
+  };
+}
+
+/** Wake every listener once, after the current transaction has had its chance to commit. */
+export function emitQueueChanged(): void {
+  if (queueChangedScheduled || queueChangedListeners.size === 0) return;
+  queueChangedScheduled = true;
+  setTimeout(() => {
+    queueChangedScheduled = false;
+    for (const listener of [...queueChangedListeners]) listener();
+  }, 0);
+}
 
 /**
  * Validate the payload against the contract, then queue it. Idempotent: a trip already in the
@@ -24,13 +81,38 @@ export async function enqueueFinalize(
   on?: Db
 ): Promise<QueueItem> {
   const valid = FinalizeTripPayloadSchema.parse(payload);
-  return createQueueRepo(db).enqueue(
+  const item = await createQueueRepo(db).enqueue(
     FINALIZE_KIND,
     valid,
     finalizeIdempotencyKey(valid.clientTripId),
     now,
     on
   );
+  emitQueueChanged();
+  return item;
+}
+
+/**
+ * Queue a trace the runner chose not to upload with its trip — cellular, with
+ * `sync.wifiOnlyTraces` on. Idempotent on `trace:<clientTripId>`, so a finalize item retried
+ * before the trace goes up does not queue a second one.
+ */
+export async function enqueueTraceUpload(
+  db: Db,
+  payload: TraceUploadPayload,
+  now: number = Date.now(),
+  on?: Db
+): Promise<QueueItem> {
+  const valid = TraceUploadPayloadSchema.parse(payload);
+  const item = await createQueueRepo(db).enqueue(
+    TRACE_UPLOAD_KIND,
+    valid,
+    traceIdempotencyKey(valid.clientTripId),
+    now,
+    on
+  );
+  emitQueueChanged();
+  return item;
 }
 
 /**

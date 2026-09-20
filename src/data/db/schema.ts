@@ -49,6 +49,9 @@ export const SCHEMA_V1: readonly string[] = [
     -- Finalized by crash recovery from the last checkpoint rather than by the engine (§19.1).
     incomplete INTEGER NOT NULL DEFAULT 0,
     server_id TEXT,
+    -- Why the upload was refused for good: the error code from the server's 400, shown to the
+    -- driver beside a failed trip. NULL on every trip whose upload has not been refused.
+    sync_error TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
@@ -93,6 +96,10 @@ export const SCHEMA_V1: readonly string[] = [
     -- When the item was claimed for upload. A crash mid-upload would leave it 'inflight'
     -- forever otherwise; reclaimInflight uses this to hand a stale claim back.
     claimed_at INTEGER,
+    -- When this item's large object (a trip's trace) reached Storage. The uploader records it
+    -- the moment the object is there, so a crash between the upload and the call that follows
+    -- does not send the file a second time. NULL until it has, and on items with no object.
+    trace_uploaded_at INTEGER,
     last_error TEXT,
     created_at INTEGER NOT NULL
   )`,
@@ -108,9 +115,12 @@ export const SCHEMA_V1: readonly string[] = [
     value_json TEXT NOT NULL
   )`,
 
+  // The server's day evaluation (§9.9), as `finalize-trip` returned it, so the home screen can
+  // show today's badges offline. `day` is the local calendar date, `YYYY-MM-DD`.
   `CREATE TABLE IF NOT EXISTS score_daily_cache (
     day TEXT PRIMARY KEY NOT NULL,
-    payload_json TEXT NOT NULL
+    payload_json TEXT NOT NULL,
+    updated_at INTEGER
   )`,
 
   `CREATE TABLE IF NOT EXISTS inbox_cache (

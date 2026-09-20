@@ -290,3 +290,65 @@ test('enqueue on a transaction handle joins that transaction instead of opening 
   expect(item).toMatchObject({ idempotency_key: 'trip:a', status: 'pending' });
   await expect(queue.countByStatus('pending')).resolves.toBe(1);
 });
+
+test('release hands a claim back without counting an attempt', async () => {
+  const item = await queue.enqueue('trace-upload', { n: 1 }, 'trace:a', T0);
+  await queue.nextDue(T0);
+
+  const released = await queue.release(item.id, T0 + 900 * SECOND);
+  expect(released).toMatchObject({
+    status: 'pending',
+    attempts: 0,
+    claimed_at: null,
+    next_attempt_at: T0 + 900 * SECOND,
+  });
+  // Only the pass holding the claim may release it.
+  await expect(queue.release(item.id, T0)).resolves.toBeNull();
+});
+
+test('deferUntil pushes the next try out, never in', async () => {
+  const item = await queue.enqueue('finalize-trip', { n: 1 }, 'trip:a', T0);
+  await queue.nextDue(T0);
+  await queue.markAttempt(item.id, false, 'http_503', T0);
+  const backedOff = T0 + backoffSeconds(0) * SECOND;
+
+  await expect(queue.deferUntil(item.id, T0 + 120 * SECOND)).resolves.toMatchObject({
+    next_attempt_at: T0 + 120 * SECOND,
+  });
+  // A Retry-After shorter than the ladder is ignored.
+  await expect(queue.deferUntil(item.id, backedOff)).resolves.toBeNull();
+  expect((await queue.get(item.id))?.next_attempt_at).toBe(T0 + 120 * SECOND);
+});
+
+test('markFailed gives up on an item, but never stomps a fresh claim', async () => {
+  const item = await queue.enqueue('finalize-trip', { n: 1 }, 'trip:a', T0);
+  await queue.nextDue(T0);
+
+  // Guarded: the item is still inflight, so there is nothing to give up on yet.
+  await expect(queue.markFailed(item.id, 'implausible_speed')).resolves.toBeNull();
+
+  await queue.markAttempt(item.id, false, 'implausible_speed', T0);
+  await expect(queue.markFailed(item.id, 'implausible_speed')).resolves.toMatchObject({
+    status: 'failed',
+    attempts: 1,
+    last_error: 'implausible_speed',
+    claimed_at: null,
+  });
+});
+
+test('markTraceUploaded records the object once and keeps the first time', async () => {
+  const item = await queue.enqueue('finalize-trip', { n: 1 }, 'trip:a', T0);
+  expect(item.trace_uploaded_at).toBeNull();
+
+  await expect(queue.markTraceUploaded(item.id, T0)).resolves.toMatchObject({
+    trace_uploaded_at: T0,
+  });
+  // A later attempt does not move the mark: the object went up when it went up.
+  await expect(queue.markTraceUploaded(item.id, T0 + 60 * SECOND)).resolves.toMatchObject({
+    trace_uploaded_at: T0,
+  });
+  // It survives a failed attempt, which is the whole point of storing it on the row.
+  await queue.nextDue(T0);
+  await queue.markAttempt(item.id, false, 'network', T0);
+  expect((await queue.get(item.id))?.trace_uploaded_at).toBe(T0);
+});

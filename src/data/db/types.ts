@@ -65,6 +65,11 @@ export interface TripRow {
   incomplete: Flag;
   /** The server's `trips.id`, once `finalize-trip` has accepted the upload. */
   server_id: string | null;
+  /**
+   * The `code` of the 400 that refused this trip's upload for good, so the history screen can say
+   * why. Set together with `sync_state = 'failed'`; cleared when an upload finally succeeds.
+   */
+  sync_error: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -117,6 +122,11 @@ export interface QueueItem {
   next_attempt_at: number;
   /** Set when `nextDue` claims the item, cleared when the attempt closes out. */
   claimed_at: number | null;
+  /**
+   * When this item's large object (a trip's trace) reached Storage, so a retry after a crash
+   * between the upload and the call that follows does not send the file again. Null until it has.
+   */
+  trace_uploaded_at: number | null;
   last_error: string | null;
   created_at: number;
 }
@@ -137,4 +147,18 @@ export interface Tile<T> {
 export interface SettingRow {
   key: string;
   value_json: string;
+}
+
+export interface ScoreDailyCacheRow {
+  /** Local calendar date, `YYYY-MM-DD` — the key the server's day evaluation is filed under. */
+  day: string;
+  payload_json: string;
+  updated_at: number | null;
+}
+
+/** A cached day with its payload already parsed — what callers of the cache repo want. */
+export interface ScoreDailyCache<T> {
+  day: string;
+  payload: T;
+  updated_at: number | null;
 }

@@ -4,11 +4,16 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createQueueRepo } from '@/data/db/queue';
 import type { FinalizeTripPayload } from '@/data/sync/payload';
+import { isSyncKind, SYNC_KINDS } from '@/data/sync/kinds';
 import {
   enqueueFinalize,
+  enqueueTraceUpload,
   FINALIZE_KIND,
   finalizeIdempotencyKey,
   findFinalize,
+  onQueueChanged,
+  TRACE_UPLOAD_KIND,
+  traceIdempotencyKey,
 } from '@/data/sync/queue';
 
 const T0 = 1_700_000_000_000;
@@ -119,4 +124,90 @@ test('findFinalize still finds the payload once the item is done', async () => {
   await queue.nextDue(T0);
   await queue.markAttempt(item.id, true, null, T0);
   await expect(findFinalize(db, ID)).resolves.toEqual(payload());
+});
+
+test('the trace key is distinct from the trip key, so both can be queued at once', () => {
+  expect(traceIdempotencyKey(ID)).toBe(`trace:${ID}`);
+  expect(traceIdempotencyKey(ID)).not.toBe(finalizeIdempotencyKey(ID));
+});
+
+test('enqueueTraceUpload queues one pending trace-upload item keyed by the trip', async () => {
+  const item = await enqueueTraceUpload(db, { clientTripId: ID, tracePath: `${ID}.bin.gz` }, T0);
+
+  expect(item).toMatchObject({
+    kind: TRACE_UPLOAD_KIND,
+    idempotency_key: `trace:${ID}`,
+    status: 'pending',
+    attempts: 0,
+    trace_uploaded_at: null,
+  });
+  expect(JSON.parse(item.payload_json)).toEqual({
+    clientTripId: ID,
+    tracePath: `${ID}.bin.gz`,
+  });
+
+  // Idempotent: a finalize retried before the trace goes up does not queue a second one.
+  const again = await enqueueTraceUpload(
+    db,
+    { clientTripId: ID, tracePath: `${ID}.bin.gz` },
+    T0 + 5000
+  );
+  expect(again.id).toBe(item.id);
+  await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1);
+});
+
+test('enqueueTraceUpload refuses anything but the two keys it knows', async () => {
+  await expect(enqueueTraceUpload(db, { clientTripId: '', tracePath: 'x' }, T0)).rejects.toThrow();
+  await expect(
+    enqueueTraceUpload(
+      db,
+      { clientTripId: ID, tracePath: 'x', uid: 'nice try' } as never,
+      T0
+    )
+  ).rejects.toThrow();
+  await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
+});
+
+test('every queued kind is one the runner knows about', () => {
+  expect(SYNC_KINDS).toEqual([
+    'finalize-trip',
+    'trace-upload',
+    'dispute',
+    'set-role',
+    'delete-trip',
+  ]);
+  expect(isSyncKind(FINALIZE_KIND)).toBe(true);
+  expect(isSyncKind(TRACE_UPLOAD_KIND)).toBe(true);
+  expect(isSyncKind('nonsense')).toBe(false);
+});
+
+test('queue:changed fires once per batch, after the enqueueing transaction commits', async () => {
+  const seen: number[] = [];
+  const unsubscribe = onQueueChanged(() => seen.push(Date.now()));
+  try {
+    await db.transaction(async (tx) => {
+      await enqueueFinalize(db, payload(), T0, tx);
+      await enqueueTraceUpload(db, { clientTripId: ID, tracePath: `${ID}.bin.gz` }, T0, tx);
+      // Nothing has run yet: a listener firing here would be inside the open transaction.
+      expect(seen).toHaveLength(0);
+    });
+    expect(seen).toHaveLength(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toHaveLength(1);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('a listener that has unsubscribed is not called again', async () => {
+  let calls = 0;
+  const unsubscribe = onQueueChanged(() => {
+    calls += 1;
+  });
+  unsubscribe();
+
+  await enqueueFinalize(db, payload(), T0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(calls).toBe(0);
 });
