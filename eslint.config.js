@@ -4,7 +4,9 @@ const globals = require('globals');
 
 module.exports = defineConfig([
   expoConfig,
-  { ignores: ['dist/*', 'ios/*', 'android/*', 'supabase/functions/*'] },
+  // `.expo` holds the router's generated types, rewritten by every dev-server run and never
+  // committed; linting it reports warnings about Expo's own generated header.
+  { ignores: ['dist/*', 'ios/*', 'android/*', 'supabase/functions/*', '.expo/*'] },
   // Maintenance scripts run under Node, not in the app bundle, so they need Node's globals
   // (`__dirname`) rather than the React Native ones. This *declares globals*; it ignores nothing
   // and disables no rule.
