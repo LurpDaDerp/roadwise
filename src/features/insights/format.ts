@@ -146,7 +146,11 @@ export function trendSummary(trend: readonly InsightTrendPoint[], period: Insigh
           : copy.trend.steady(formatScore(lastScore), over);
   }
   const sparse = trend.slice(first, last + 1).some((p) => p.score === null);
-  return sparse ? `${sentence} ${copy.trend.sparse}` : sentence;
+  // The prior comes from the engine, not from prose: it is where the long-term score lands when
+  // the recency weights have decayed away, and the note is only honest while the two agree.
+  return sparse
+    ? `${sentence} ${copy.trend.sparse(formatScore(CONSTANTS.LONG_TERM_MU0))}`
+    : sentence;
 }
 
 // --- Bars ----------------------------------------------------------------------------------------
@@ -327,11 +331,28 @@ export const MAX_HIGHLIGHTS = 3;
  */
 export const LIMIT_KNOWN_PCT = 50;
 
-/** A clean category the drive actually measured. */
+/** Why a window had nothing to read a category from. */
+export type NotMeasured = 'noDrives' | 'noCamera' | 'noLimit';
+
+/**
+ * The categories a drive can fail to measure, each with the test it has to pass and the sentence
+ * to print when no drive in a window passed it. One table, read by both `measured()` and
+ * `notMeasuredReason()`: restating the split by hand in the second of them is how a future
+ * camera-gated category would silently inherit the speeding wording.
+ */
+const GATE: Partial<
+  Record<EventCategory, { measuredOn: (trip: TripSummary) => boolean; reason: NotMeasured }>
+> = {
+  focus: { measuredOn: (trip) => trip.cameraSession, reason: 'noCamera' },
+  speeding: {
+    measuredOn: (trip) => (trip.limitCoveragePct ?? 0) >= LIMIT_KNOWN_PCT,
+    reason: 'noLimit',
+  },
+};
+
+/** A clean category the drive actually measured. An ungated category is always measured. */
 function measured(trip: TripSummary, category: EventCategory): boolean {
-  if (category === 'focus') return trip.cameraSession;
-  if (category === 'speeding') return (trip.limitCoveragePct ?? 0) >= LIMIT_KNOWN_PCT;
-  return true;
+  return GATE[category]?.measuredOn(trip) ?? true;
 }
 
 /**
@@ -373,8 +394,6 @@ export function highlightsFor(
  * (a celebration of not driving, which §10.1 is at pains to avoid) and over drives whose posted
  * limit was never known (which §9.3 does not score).
  */
-export type NotMeasured = 'noDrives' | 'noCamera' | 'noLimit';
-
 /**
  * `scoredTrips` comes from the aggregate — the same source as every figure the screen prints —
  * rather than from `trips.length`, so a *failed* drive-list read cannot announce "no scored
@@ -389,7 +408,9 @@ export function notMeasuredReason(
   const scored = seen.trips.filter((trip) => trip.scored);
   if (scored.length === 0) return null;
   if (scored.some((trip) => measured(trip, category))) return null;
-  return category === 'focus' ? 'noCamera' : 'noLimit';
+  // Unreachable for an ungated category — `measured()` is true for every drive there, and the
+  // `some()` above has already returned — but null is the safe answer if one is ever added.
+  return GATE[category]?.reason ?? null;
 }
 
 // --- Conditions ----------------------------------------------------------------------------------

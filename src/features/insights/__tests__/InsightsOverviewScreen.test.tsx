@@ -192,7 +192,7 @@ describe('with enough scored drives', () => {
 
     expect(
       screen.getByText(
-        'Up 10 points over 3 months. Weeks without a drive leave a gap. Driving less never lowers your score.'
+        'Up 10 points over 3 months. Weeks without a drive leave a gap. A quiet week costs no points; over a long break the score drifts back toward 80, where every score starts.'
       )
     ).toBeOnTheScreen();
     expect(screen.getByText('Speeding was 63% of the points you lost over 3 months.')).toBeOnTheScreen();
@@ -230,7 +230,7 @@ test('a period with no drives in it says so once, instead of six bars of nothing
   expect(screen.getByTestId('quiet-period')).toBeOnTheScreen();
   expect(
     screen.getByText(
-      'No scored drives over 4 weeks. Widen the period to see further back — driving less never lowers your score.'
+      'No scored drives over 4 weeks. Widen the period to see further back.'
     )
   ).toBeOnTheScreen();
   // §7.0 Empty: one sentence, not a breakdown of zeroes and a table of dashes.
@@ -260,7 +260,7 @@ describe('without enough scored drives', () => {
     expect(await screen.findByText('Building your score: 2 of 3 drives')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'Insights start after 3 scored drives. Drive the way you normally would — there is no hurry, and nothing here rewards driving more.'
+        'Insights start after 3 scored drives. Drive the way you normally would — there is no hurry, and nothing here is a reward for distance or trip count.'
       )
     ).toBeOnTheScreen();
     expect(screen.getByRole('progressbar', { name: '2 of 3 scored drives' })).toBeOnTheScreen();

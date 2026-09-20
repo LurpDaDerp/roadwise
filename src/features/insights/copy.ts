@@ -54,8 +54,18 @@ export const insightsCopy = {
     steady: (score: string, over: string) => `Steady at ${score} ${over}.`,
     one: (score: string) => `One scored week so far, at ${score}.`,
     none: (over: string) => `No scored weeks ${over}.`,
-    /** §7.E E1, the sparse-period note. */
-    sparse: 'Weeks without a drive leave a gap. Driving less never lowers your score.',
+    /**
+     * §7.E E1's sparse-period note, and the one claim on this screen a driver will check.
+     *
+     * It does *not* say driving less never lowers the score, which §9.6 promises and the model
+     * does not do: the long-term score is a recency-weighted mean pulled toward a prior of
+     * `LONG_TERM_MU0`, so as the weights decay a quiet stretch slides the score toward that
+     * prior — down for a driver above it, up for one below. What is true is the half a driver
+     * needs: a week without a drive takes no points off, and the number they are looking at
+     * follows recent driving. Naming the prior is what keeps the drift from reading as a penalty.
+     */
+    sparse: (start: string) =>
+      `Weeks without a drive leave a gap. A quiet week costs no points; over a long break the score drifts back toward ${start}, where every score starts.`,
   },
 
   youVsYou: {
@@ -80,7 +90,9 @@ export const insightsCopy = {
       title: 'Your first four weeks are the baseline',
       body: 'Once there are drives from before them, this card compares you with your earlier self — and with no one else.',
     },
-    quiet: 'No drives in the last 4 weeks to set against your baseline. Nothing is lost by the pause.',
+    /** "Nothing is lost by the pause" was the same promise in a softer voice; this states the fact. */
+    quiet:
+      'No drives in the last 4 weeks to set against your baseline. The comparison picks up again with your next drive.',
     /** §10.1.4: compare with yourself first. Scoped to this screen — F5 adds opt-in crew boards. */
     note: 'The only comparison on this screen, and it is with your own earlier drives.',
     spokenScore: (current: string, text: string, word: string) =>
@@ -130,8 +142,7 @@ export const insightsCopy = {
   },
 
   /** §7.0 Empty: one sentence, not a breakdown of zeroes and a table of dashes. */
-  quietPeriod: (over: string) =>
-    `No scored drives ${over}. Widen the period to see further back — driving less never lowers your score.`,
+  quietPeriod: (over: string) => `No scored drives ${over}. Widen the period to see further back.`,
 
   entries: {
     totals: 'Totals & records',
@@ -144,8 +155,13 @@ export const insightsCopy = {
     /** §7.B B1, verbatim shape. */
     building: (scored: number, needed: number) =>
       `Building your score: ${scored} of ${needed} drives`,
+    /**
+     * §10.1: no badge, level or reward is tied to mileage or trip count, which is implemented and
+     * true. The older wording ("nothing here rewards driving more") reached past that to the
+     * long-term score, which does follow recent driving — see `trend.sparse`.
+     */
     body: (needed: number) =>
-      `Insights start after ${needed} scored drives. Drive the way you normally would — there is no hurry, and nothing here rewards driving more.`,
+      `Insights start after ${needed} scored drives. Drive the way you normally would — there is no hurry, and nothing here is a reward for distance or trip count.`,
     spokenProgress: (scored: number, needed: number) =>
       `${scored} of ${needed} scored drives`,
   },

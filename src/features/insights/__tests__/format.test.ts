@@ -1,4 +1,4 @@
-import type { EventCategory } from '@scoring';
+import { CONSTANTS, type EventCategory } from '@scoring';
 
 import { deductions, MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import {
@@ -14,6 +14,7 @@ import {
   type TrendPoint,
   type TripSummary,
 } from '@/data/queries';
+import { insightsCopy } from '@/features/insights/copy';
 import {
   apportionPercents,
   bestWeek,
@@ -52,6 +53,7 @@ import {
   youVsYouRows,
   type BarRow,
 } from '@/features/insights/format';
+import { periodPhrase } from '@/features/insights/period';
 
 const T0 = Date.UTC(2026, 0, 5, 12, 0, 0);
 const DAY = 86_400_000;
@@ -126,14 +128,20 @@ describe('trendSummary', () => {
     expect(trendSummary([point('2026-01-05', null)], 'all')).toBe('No scored weeks since your first drive.');
   });
 
-  test('a gap between scored weeks adds the note that driving less never lowers the score', () => {
+  test('a gap between scored weeks says what the model actually does between drives', () => {
     const sparse = trendSummary(
       [point('2026-01-05', 70), point('2026-01-12', null), point('2026-01-19', 80)],
       '4w'
     );
+    // Not "driving less never lowers your score": the long-term score is a recency-weighted mean
+    // pulled toward `LONG_TERM_MU0`, so a long gap moves it toward 80 from either side. The note
+    // keeps the half that is true (a quiet week costs no points) and names where the drift goes.
     expect(sparse).toBe(
-      'Up 10 points over 4 weeks. Weeks without a drive leave a gap. Driving less never lowers your score.'
+      'Up 10 points over 4 weeks. Weeks without a drive leave a gap. A quiet week costs no points; over a long break the score drifts back toward 80, where every score starts.'
     );
+    // The number is the engine's prior, not a typed constant.
+    expect(sparse).toContain(String(CONSTANTS.LONG_TERM_MU0));
+    expect(sparse).not.toContain('never lowers');
   });
 
   test('an empty current week is not a gap: the note is for gaps between scored weeks', () => {
@@ -533,6 +541,34 @@ describe('what a window could actually measure', () => {
   test('a category that was measured and cost nothing is not a "nothing measured" case', () => {
     expect(notMeasuredReason('braking', seen([scored('a')]))).toBeNull();
   });
+
+  test('the sentence is chosen by the same table that decides whether a drive measured it', () => {
+    // The two gated categories get their own wording, and an ungated one is measured by every
+    // scored drive, so it never reaches a reason at all. A second camera-gated category added to
+    // the table brings its own sentence with it rather than inheriting speeding's.
+    expect(notMeasuredReason('focus', seen([scored('a', { limit_coverage_pct: 10 })]))).toBe('noCamera');
+    expect(notMeasuredReason('speeding', seen([scored('a', { limit_coverage_pct: 10 })]))).toBe('noLimit');
+    const ungated: EventCategory[] = ['phone', 'braking', 'accel', 'cornering'];
+    for (const category of ungated) {
+      expect(notMeasuredReason(category, seen([scored('a', { limit_coverage_pct: 10 })]))).toBeNull();
+    }
+  });
+});
+
+test('no insight sentence promises the score cannot move between drives', () => {
+  // §9.6 says "the score never decays from not driving" and `longTermScore` does not implement
+  // it: the recency weights decay against a fixed prior, so a long gap slides the score toward
+  // `LONG_TERM_MU0` — down from above it, up from below. Until the *model* changes, no string
+  // here may claim otherwise, and this is the guard that keeps the claim from coming back.
+  const said = [
+    insightsCopy.trend.sparse(String(CONSTANTS.LONG_TERM_MU0)),
+    insightsCopy.quietPeriod(periodPhrase('4w')),
+    insightsCopy.youVsYou.quiet,
+    insightsCopy.notEnough.body(MIN_SCORED_TRIPS),
+  ];
+  for (const sentence of said) {
+    expect(sentence).not.toMatch(/never lowers|nothing is lost|can(not|'t) go down|never decays/i);
+  }
 });
 
 describe('percentages that add up', () => {
