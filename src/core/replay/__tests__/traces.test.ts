@@ -1,7 +1,13 @@
 /** @jest-environment node */
-import { row } from '@/core/detectors/__fixtures__/rows';
+import { T0, mph, row } from '@/core/detectors/__fixtures__/rows';
 import { runTrace } from '@/core/replay/runTrace';
-import { ROW_DEFAULTS, TRACE_BUILDERS, serializeTrace } from '@/core/replay/synth';
+import {
+  MPH,
+  ROW_DEFAULTS,
+  T0 as SYNTH_T0,
+  TRACE_BUILDERS,
+  serializeTrace,
+} from '@/core/replay/synth';
 import { parseTrace } from '@/core/replay/trace';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
@@ -70,10 +76,13 @@ test.each(names)('%s drives a straight line away from Seattle', (name) => {
 
 test('the synthetic rows carry the same sensor defaults as the detector fixtures', () => {
   // The traces are only a regression suite if a quiet second looks exactly like the quiet second
-  // the detector unit tests use.
+  // the detector unit tests use. `synth.ts` cannot import any of this — plain Node has to be able
+  // to require it — so the duplicated values are pinned here instead.
   const quiet = row();
   const shared = Object.fromEntries(
     Object.keys(ROW_DEFAULTS).map((k) => [k, quiet[k as keyof typeof quiet]])
   );
   expect(ROW_DEFAULTS).toEqual(shared);
+  expect(SYNTH_T0).toBe(T0);
+  expect(MPH).toBe(mph(1));
 });

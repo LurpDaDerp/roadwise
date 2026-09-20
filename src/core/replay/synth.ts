@@ -26,7 +26,10 @@ const round = (value: number, digits: number): number => {
   return rounded === 0 ? 0 : rounded;
 };
 
-const mps = (mph: number): number => round(mph * 0.44704, 4);
+/** m/s per mph. Spelled out here for the same reason as `G`; `traces.test.ts` pins it. */
+export const MPH = 0.44704;
+
+const mps = (mph: number): number => round(mph * MPH, 4);
 
 /** Every trace is one 2½ minute drive at 1 Hz. */
 const ROWS = 150;
@@ -183,6 +186,7 @@ interface TraceParts {
   over?: (i: number) => Partial<FeatureRow>;
   limits: LimitEntry[];
   expected: Expectation[];
+  noEvents?: true;
   night?: boolean;
   precipitation?: boolean;
 }
@@ -192,6 +196,8 @@ const makeTrace = (parts: TraceParts): Trace => ({
   mode: parts.mode,
   night: parts.night ?? false,
   precipitation: parts.precipitation ?? false,
+  // Omitted rather than written as `false`: the schema takes the flag or nothing.
+  ...(parts.noEvents ? { noEvents: parts.noEvents } : {}),
   limits: parts.limits,
   expected: parts.expected,
   rows: rowsFrom(parts.speeds, parts.over),
@@ -208,13 +214,18 @@ const COMMUTE = [
 const EVENT_ROW = 60;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
-  /** A drive with nothing in it. Every category must stay silent. */
+  /**
+   * A drive with nothing in it. `noEvents` is the real assertion — not one event of any status,
+   * so a new false positive that only ever reaches `possible` fails here too. The `absent`
+   * expectations stay as the per-category reading of the same fact.
+   */
   'clean-commute': () =>
     makeTrace({
       name: 'clean-commute',
       mode: 'mounted',
       speeds: COMMUTE,
       limits: [posted(LIMIT_35)],
+      noEvents: true,
       expected: absentExcept(),
     }),
 
@@ -243,6 +254,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
           qMin: 0.8,
           durationMin: 43,
           durationMax: 47,
+          status: 'scored',
         },
         ...absentExcept('speeding'),
       ],
@@ -278,6 +290,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
           qMin: 0.85,
           durationMin: 1,
           durationMax: 1,
+          status: 'scored',
         },
         ...absentExcept('braking'),
       ],
@@ -308,7 +321,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
       ),
       limits: [posted(LIMIT_35)],
       expected: [
-        { category: 'braking', startsNear: tsOf(EVENT_ROW), qMax: 0.3 },
+        { category: 'braking', startsNear: tsOf(EVENT_ROW), qMax: 0.3, status: 'possible' },
         ...absentExcept(),
       ],
     }),
@@ -340,7 +353,14 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
       ),
       limits: [posted(LIMIT_40)],
       expected: [
-        { category: 'phone', startsNear: tsOf(EVENT_ROW), qMin: 0.9, durationMin: 8, durationMax: 8 },
+        {
+          category: 'phone',
+          startsNear: tsOf(EVENT_ROW),
+          qMin: 0.9,
+          durationMin: 8,
+          durationMax: 8,
+          status: 'scored',
+        },
         ...absentExcept('phone'),
       ],
     }),
@@ -376,7 +396,14 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
       limits: [posted(LIMIT_35)],
       expected: [
         // Logged for the summary, at the confidence of unlocked handling — but never scored.
-        { category: 'phone', startsNear: tsOf(62), qMax: 0.9, durationMin: 13, durationMax: 13 },
+        {
+          category: 'phone',
+          startsNear: tsOf(62),
+          qMax: 0.9,
+          durationMin: 13,
+          durationMax: 13,
+          status: 'possible',
+        },
         ...absentExcept(),
       ],
     }),
@@ -400,6 +427,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
           qMin: 0.9,
           durationMin: 20,
           durationMax: 20,
+          status: 'scored',
         },
         ...absentExcept('phone'),
       ],
@@ -425,6 +453,7 @@ export function serializeTrace(trace: Trace): string {
     `  "mode": ${JSON.stringify(trace.mode)}`,
     `  "night": ${JSON.stringify(trace.night)}`,
     `  "precipitation": ${JSON.stringify(trace.precipitation)}`,
+    ...(trace.noEvents ? ['  "noEvents": true'] : []),
     block('limits', trace.limits),
     block('expected', trace.expected),
     block('rows', trace.rows),

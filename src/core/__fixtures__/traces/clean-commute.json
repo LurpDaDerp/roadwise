@@ -3,6 +3,7 @@
   "mode": "mounted",
   "night": false,
   "precipitation": false,
+  "noEvents": true,
   "limits": [
     {"fromTs":1700000000000,"limitMps":15.6464,"source":"posted","matchConfidence":1,"parallelRoads":false}
   ],

@@ -25,6 +25,11 @@ export interface Expectation {
   durationMax?: number;
   qMin?: number;
   qMax?: number;
+  /**
+   * The status the matching event must carry. Without it a regression that quietly downgrades a
+   * scored event to `possible` — and so stops costing the driver anything — still passes.
+   */
+  status?: 'scored' | 'possible';
   /** no *scored* event of this category anywhere in the trace (a `possible` one is fine) */
   absent?: true;
 }
@@ -73,6 +78,8 @@ export const expectationSchema: z.ZodType<Expectation> = z.strictObject({
   durationMax: z.number().nonnegative().optional(),
   qMin: z.number().min(0).max(1).optional(),
   qMax: z.number().min(0).max(1).optional(),
+  // `disputed` and `removed` are dispute-flow states; a detector never produces them.
+  status: z.enum(['scored', 'possible']).optional(),
   // A flag, not a switch: `absent: false` would read like "this must happen" and assert nothing.
   absent: z.literal(true).optional(),
 });
@@ -87,6 +94,11 @@ export const traceSchema = z.strictObject({
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),
   expected: z.array(expectationSchema),
+  /**
+   * The drive must produce no events at all — not even a `possible` one. A list of `absent`
+   * expectations only says "nothing scored", which a new false positive would slip past.
+   */
+  noEvents: z.literal(true).optional(),
 });
 
 export type Trace = z.infer<typeof traceSchema>;

@@ -7,7 +7,7 @@
     {"fromTs":1700000000000,"limitMps":15.6464,"source":"posted","matchConfidence":1,"parallelRoads":false}
   ],
   "expected": [
-    {"category":"braking","startsNear":1700000061000,"qMin":0.85,"durationMin":1,"durationMax":1},
+    {"category":"braking","startsNear":1700000061000,"qMin":0.85,"durationMin":1,"durationMax":1,"status":"scored"},
     {"category":"phone","startsNear":1700000075000,"absent":true},
     {"category":"speeding","startsNear":1700000075000,"absent":true},
     {"category":"accel","startsNear":1700000075000,"absent":true},

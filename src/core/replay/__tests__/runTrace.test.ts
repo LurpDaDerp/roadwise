@@ -57,6 +57,17 @@ test('absent is a flag, not a switch: only true is accepted', () => {
   expect(() => parseTrace(bad)).toThrow(/expected\.0\.absent/);
 });
 
+test('noEvents is a flag too', () => {
+  expect(() => parseTrace({ ...trace(), noEvents: false })).toThrow(/noEvents/);
+});
+
+test('an expected status has to be one a detector can produce', () => {
+  const bad = trace({
+    expected: [{ category: 'phone', startsNear: T0, status: 'disputed' } as unknown as Expectation],
+  });
+  expect(() => parseTrace(bad)).toThrow(/expected\.0\.status/);
+});
+
 test('a key nobody reads is rejected rather than silently dropped', () => {
   expect(() => parseTrace({ ...trace(), tolerance: 2 })).toThrow(/tolerance/);
 });
@@ -116,18 +127,18 @@ test('an expectation the events meet passes', () => {
   expect(res).toMatchObject({ passes: true, failures: [] });
 });
 
-test('an expectation nothing matches fails with a readable line', () => {
+test('an expectation nothing matches fails with a readable line, named by trace', () => {
   const res = runTrace(trace({ expected: [{ category: 'phone', startsNear: T0 + 3_000 }] }));
   expect(res.passes).toBe(false);
   expect(res.failures).toEqual([
-    'phone expected near +3 s (±2 s): no phone event there; phone events: none',
+    'unit: phone expected near +3 s (±2 s): no phone event there; phone events: none',
   ]);
 });
 
 test('the failure line lists the events of the category that did not line up', () => {
   const res = runTrace(trace({ expected: [{ category: 'speeding', startsNear: T0 + 30_000 }] }));
   expect(res.failures).toEqual([
-    'speeding expected near +30 s (±2 s): no speeding event there; ' +
+    'unit: speeding expected near +30 s (±2 s): no speeding event there; ' +
       'speeding events: speeding +0 s q=0.90 scored 20 s',
   ]);
 });
@@ -154,15 +165,50 @@ test('two events in the window are an ambiguous expectation, not a pass', () => 
 test('qMin, qMax, durationMin and durationMax each fail on their own line', () => {
   const fails = (e: Expectation): string[] => runTrace(trace({ expected: [e] })).failures;
   const near = { category: 'speeding', startsNear: T0 } as const;
-  expect(fails({ ...near, qMin: 0.95 })).toEqual(['speeding +0 s: q 0.90 is below qMin 0.95']);
-  expect(fails({ ...near, qMax: 0.5 })).toEqual(['speeding +0 s: q 0.90 is above qMax 0.5']);
+  expect(fails({ ...near, qMin: 0.95 })).toEqual([
+    'unit: speeding +0 s: q 0.90 is below qMin 0.95',
+  ]);
+  expect(fails({ ...near, qMax: 0.5 })).toEqual(['unit: speeding +0 s: q 0.90 is above qMax 0.5']);
   expect(fails({ ...near, durationMin: 25 })).toEqual([
-    'speeding +0 s: durationS 20 is below durationMin 25',
+    'unit: speeding +0 s: durationS 20 is below durationMin 25',
   ]);
   expect(fails({ ...near, durationMax: 10 })).toEqual([
-    'speeding +0 s: durationS 20 is above durationMax 10',
+    'unit: speeding +0 s: durationS 20 is above durationMax 10',
   ]);
   expect(fails({ ...near, qMin: 0.95, durationMin: 25 })).toHaveLength(2);
+});
+
+test('a scored expectation fails when the detector only thought it possible', () => {
+  // Handling at a red light: the same signal, logged but never scored.
+  const rows = seq([5, { speed: 0, handlingScore: 0.8 }], [3, { speed: 0 }]);
+  const scored = runTrace(
+    trace({ rows, expected: [{ category: 'phone', startsNear: T0, status: 'scored' }] })
+  );
+  expect(scored.passes).toBe(false);
+  expect(scored.failures).toEqual(['unit: phone +0 s: status possible, expected scored']);
+  const possible = runTrace(
+    trace({ rows, expected: [{ category: 'phone', startsNear: T0, status: 'possible' }] })
+  );
+  expect(possible).toMatchObject({ passes: true, failures: [] });
+});
+
+test('a possible expectation fails when the detector scored it after all', () => {
+  const res = runTrace(
+    trace({ expected: [{ category: 'speeding', startsNear: T0, status: 'possible' }] })
+  );
+  expect(res.failures).toEqual(['unit: speeding +0 s: status scored, expected possible']);
+});
+
+test('noEvents fails on any event at all, whatever its status', () => {
+  const rows = seq([5, { speed: 0, handlingScore: 0.8 }], [3, { speed: 0 }]);
+  expect(runTrace(trace({ rows, noEvents: true })).failures).toEqual([
+    'unit: expected no events at all; 1 turned up: phone +0 s q=0.60 possible 5 s',
+  ]);
+});
+
+test('noEvents passes on a drive that produced nothing', () => {
+  const rows = seq([20, { speed: 10 }]);
+  expect(runTrace(trace({ rows, noEvents: true }))).toMatchObject({ passes: true, failures: [] });
 });
 
 test('absent means no scored event in the category, so a possible one is fine', () => {
@@ -181,6 +227,6 @@ test('absent fails when the category did score, whatever the timing', () => {
   );
   expect(res.passes).toBe(false);
   expect(res.failures).toEqual([
-    'phone expected absent: 1 scored phone event: phone +0 s q=0.60 scored 5 s',
+    'unit: phone expected absent: 1 scored phone event: phone +0 s q=0.60 scored 5 s',
   ]);
 });

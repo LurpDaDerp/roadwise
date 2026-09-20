@@ -29,9 +29,12 @@ for (const name of names) {
 }
 
 // A renamed or deleted builder must not leave its old fixture behind for the harness to keep
-// replaying: nothing would regenerate it, so nothing would ever fail when it went stale.
-const stale = fs.readdirSync(DIR).filter((f) => !names.includes(f.replace(/\.json$/, '')));
-for (const name of stale) fs.rmSync(path.join(DIR, name), { recursive: true, force: true });
+// replaying: nothing would regenerate it, so nothing would ever fail when it went stale. Only
+// `.json` files are ours to delete — anything else in the directory belongs to someone else.
+const stale = fs
+  .readdirSync(DIR)
+  .filter((f) => f.endsWith('.json') && !names.includes(f.slice(0, -'.json'.length)));
+for (const name of stale) fs.rmSync(path.join(DIR, name));
 
 console.log(`wrote ${names.length} traces to ${path.relative(process.cwd(), DIR)}`);
 if (stale.length > 0) console.log(`removed ${stale.join(', ')}`);

@@ -40,6 +40,9 @@ const list = (events: readonly DetectedEvent[], base: number): string =>
 function checkBounds(exp: Expectation, e: DetectedEvent, base: number): string[] {
   const where = `${e.category} ${rel(e.startedAt, base)}`;
   const out: string[] = [];
+  if (exp.status !== undefined && e.status !== exp.status) {
+    out.push(`${where}: status ${e.status}, expected ${exp.status}`);
+  }
   if (exp.qMin !== undefined && e.q < exp.qMin) {
     out.push(`${where}: q ${e.q.toFixed(2)} is below qMin ${exp.qMin}`);
   }
@@ -111,6 +114,15 @@ export function runTrace(trace: Trace): TraceResult {
   events.push(...suite.flush());
 
   const base = trace.rows[0]?.ts ?? 0;
-  const failures = trace.expected.flatMap((exp) => checkExpectation(exp, events, base));
+  const noEvents =
+    trace.noEvents && events.length > 0
+      ? [`expected no events at all; ${events.length} turned up: ${list(events, base)}`]
+      : [];
+  const failures = [
+    ...noEvents,
+    ...trace.expected.flatMap((exp) => checkExpectation(exp, events, base)),
+    // Every line carries the trace it came from: the suite runs one test per fixture, but the
+    // failures land in a shared report and "phone +60 s" alone does not say which drive.
+  ].map((line) => `${trace.name}: ${line}`);
   return { events, passes: failures.length === 0, failures };
 }
