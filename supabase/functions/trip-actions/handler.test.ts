@@ -15,7 +15,7 @@ import {
   TRACE_KEY,
   TRIP_ID,
 } from '../_shared/testing/action_fixtures.ts';
-import { CLIENT_TRIP_ID, T0, TRIP_DAY, tripRow, UID } from '../_shared/testing/fixtures.ts';
+import { baselineTripRow, CLIENT_TRIP_ID, T0, TRIP_DAY, tripRow, UID } from '../_shared/testing/fixtures.ts';
 import type { RpcError } from '../_shared/testing/fake_supabase.ts';
 import {
   handleTripAction,
@@ -324,6 +324,18 @@ Deno.test('control and format characters are stripped from a note before the wri
   assertEquals((await handleTripAction(post(dispute({ note: 'x'.repeat(501) })), harness().deps)).status, 400);
 });
 
+Deno.test('an emoji note survives the strip; zero-width, bidi and line separators do not', async () => {
+  const h = harness();
+  // a ZWJ sequence and a variation selector: the joiners are what make these one glyph each
+  const emoji = 'thanks \u{1F469}\u200D\u{1F692} \u2764\uFE0F';
+  assertEquals((await handleTripAction(post(dispute({ note: emoji })), h.deps)).status, 200);
+  assertEquals(rpcArgs(h, 'record_dispute').p_note, emoji);
+  const hostile = harness();
+  const note = 'a\u202Eb\u200Bc\u2028d\u2029e\uFEFFf\u0007g';
+  assertEquals((await handleTripAction(post(dispute({ note })), hostile.deps)).status, 200);
+  assertEquals(rpcArgs(hostile, 'record_dispute').p_note, 'abcdefg');
+});
+
 Deno.test('every reply carries a fresh request id, whatever the outcome', async () => {
   const h = harness();
   const ids: string[] = [];
@@ -376,7 +388,7 @@ Deno.test('a trip the user does not have is 404 for set-role and delete', async 
 Deno.test('a client event id that matches two stored events is an integrity failure', async () => {
   const h = harness({
     tables: {
-      trips: [storedTripRow()],
+      trips: [storedTripRow(), storedTripRow({ id: 'trip-0002', client_trip_id: 'c2' })],
       trip_events: [storedEventRow(), storedEventRow({ id: 'event-0002', trip_id: 'trip-0002' })],
       event_disputes: [],
     },
@@ -438,8 +450,8 @@ Deno.test('an accepted dispute records it, re-scores with the event removed and 
   assertEquals(e.day[0].longTermScore, null);
   // the reply carries the very rows the writer was given
   assertEquals(r.days, e.day);
-  assertEquals(e.baselines?.medians.score, after.score);
-  assertEquals(e.baselines?.medians.phone, 0);
+  // a trip disputed inside its 14-day window is in the current four weeks, never in the baseline
+  assertEquals(e.baselines, { medians: {}, computedAt: new Date(NOW).toISOString() });
   assertEquals(h.fake.storageCalls.length, 0);
   assertEquals(h.warnings.length, 0);
 });
@@ -456,9 +468,19 @@ Deno.test('the stored trips around the disputed one feed the long-term score, th
       category_deductions: { phone: 6, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
     })
   );
+  // the baseline is the eight weeks before the current four, so it is these two and nothing else
+  const older = [1, 2].map((i) =>
+    baselineTripRow(20 * (i + 1), {
+      id: `older-${i}`,
+      score: i === 1 ? 60 : 80,
+      duration_s: 1500,
+      exposure: 1.5,
+      category_deductions: { phone: i === 1 ? 2 : 8, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+    })
+  );
   const h = harness({
     tables: {
-      trips: [storedTripRow(), ...others],
+      trips: [storedTripRow(), ...others, ...older],
       trip_events: [storedEventRow(), { trip_id: 'other-1', category: 'phone', status: 'scored' }],
       event_disputes: [],
     },
@@ -473,11 +495,11 @@ Deno.test('the stored trips around the disputed one feed the long-term score, th
   assertEquals(e.day[0].drivingS, 1500 + 1320);
   // other-1 still has its scored phone event
   assertEquals(e.day[0].phoneFreeDay, false);
-  // medians over the three stored trips and the re-scored one: phone 6, 6, 6, 0 and score 80, 80,
-  // 80, 100 — the sorted middle pairs are 6/6 and 80/80
+  // the re-scored trip and the three around it are all inside the current four weeks, so the
+  // baseline is the two behind it: phone 2 and 8, score 60 and 80
   assert((after.score as number) > 80);
-  assertEquals(e.baselines?.medians.phone, 6);
-  assertEquals(e.baselines?.medians.score, 80);
+  assertEquals(e.baselines?.medians.phone, 5);
+  assertEquals(e.baselines?.medians.score, 70);
 });
 
 Deno.test("a dispute synced on a later day also refreshes today's row", async () => {
@@ -783,6 +805,29 @@ Deno.test('a second severe speeding event keeps the flag when one is removed', a
   assertEquals(e.day[0].severeEvents, 1);
 });
 
+Deno.test("a recompute other than the dispute's own settles a disputed severe event and lowers the flag", async () => {
+  // the dispute was accepted (the writer left the event `disputed`) but its own recompute never
+  // landed; a set-role reaches the trip first and settles the event. The flag must go with it.
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ had_severe_event: true })],
+      trip_events: [storedEventRow(), severeSpeedingRow({ status: 'disputed' })],
+      event_disputes: [],
+    },
+  });
+  const r = await split(await handleTripAction(post(setRole('driver')), h.deps));
+  assertEquals(r.status, 200);
+  const e = recompute(h);
+  assertEquals(e.scored?.hadSevereEvent, false);
+  assertEquals(e.events, [
+    { id: EVENT_ID, status: 'scored', deduction: STORED_SCORED.eventDeductions[CLIENT_EVENT_ID] },
+    { id: 'event-s1', status: 'removed', deduction: 0 },
+  ]);
+  assertEquals(e.day[0].severeEvents, 0);
+  assertEquals(e.day[0].safeDay, true);
+  assertEquals(r.days?.[0].severeEvents, 0);
+});
+
 Deno.test('a device-only severe flag (no severe speeding stored) survives a dispute of an ordinary event', async () => {
   const h = harness({ tables: { trips: [storedTripRow({ had_severe_event: true })], trip_events: [storedEventRow()], event_disputes: [] } });
   const r = await split(await handleTripAction(post(dispute()), h.deps));
@@ -820,7 +865,8 @@ Deno.test('set-role passenger unscores the trip and applies an unscored envelope
   // only the other trip counts for the day now
   assertEquals(e.day[0].tripsScored, 1);
   assertEquals(e.day[0].drivingS, 1500);
-  assertEquals(e.baselines?.medians.score, 80);
+  // both trips are inside the current four weeks: the window behind them holds nothing
+  assertEquals(e.baselines?.medians, {});
   assertEquals(r.days, e.day);
 });
 
@@ -930,7 +976,8 @@ Deno.test('delete removes the trace object before the writer, then refreshes the
   assertEquals(e.events, null);
   assertEquals(e.day[0].tripsScored, 1);
   assertEquals(e.day[0].drivingS, 1500);
-  assertEquals(e.baselines?.medians.score, 80);
+  // both trips are inside the current four weeks: the window behind them holds nothing
+  assertEquals(e.baselines?.medians, {});
   assertEquals(r.days, e.day);
 });
 

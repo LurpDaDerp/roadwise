@@ -5,6 +5,7 @@ import { createDb, type ApplyTripEnvelope } from '../_shared/db.ts';
 import { tripMetrics } from '../_shared/plausibility.ts';
 import { fakeSupabase, type RpcError } from '../_shared/testing/fake_supabase.ts';
 import {
+  baselineTripRow,
   CLIENT_TRIP_ID,
   dayRowRecord,
   event,
@@ -105,6 +106,19 @@ Deno.test('a missing or unverifiable bearer token is 401 and nothing is read', a
     status: 401,
     body: { code: 'unauthorized' },
   });
+  assertEquals(h.fake.queries.length, 0);
+  assertEquals(h.fake.rpcCalls.length, 0);
+});
+
+Deno.test('a token check that fails on Auth itself is 503 retry, logged, with nothing read', async () => {
+  const h = harness();
+  h.deps.verifyJwt = () => Promise.reject(new TypeError('fetch failed'));
+  const res = await handleFinalizeTrip(post(payload()), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals(res.headers.get('retry-after'), '2');
+  assertMatch(res.headers.get('x-request-id') ?? '', UUID);
+  assertEquals(await res.json(), { code: 'retry' });
+  assertEquals(h.errors.length, 1);
   assertEquals(h.fake.queries.length, 0);
   assertEquals(h.fake.rpcCalls.length, 0);
 });
@@ -220,7 +234,8 @@ Deno.test('the happy path re-scores, builds the envelope from the JWT user and a
     tripsScored: 1,
     severeEvents: 0,
   });
-  assertEquals(e.baselines?.medians.score, expected.score);
+  // the trip is in the current four weeks, and the baseline is the eight weeks behind them
+  assertEquals(e.baselines, { medians: {}, computedAt: new Date(NOW).toISOString() });
   assertEquals(e.conditions, { night: false, precipitation: false });
   assertEquals(e.limitCoveragePct, null);
   assertEquals(h.warnings.length, 0);
@@ -254,7 +269,26 @@ Deno.test('the stored trips feed the long-term score, the day row and the baseli
       category_deductions: { phone: 2 * i, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
     })
   );
-  const h = harness({ tables: { trips: stored, trip_events: [{ trip_id: 's0', category: 'phone', status: 'scored' }], score_daily: [] } });
+  // the baseline window is the eight weeks before the current four, so only these two are in it
+  const older = [
+    baselineTripRow(40, {
+      id: 'b0',
+      score: 60,
+      category_deductions: { phone: 2, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+    }),
+    baselineTripRow(60, {
+      id: 'b1',
+      score: 80,
+      category_deductions: { phone: 8, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+    }),
+  ];
+  const h = harness({
+    tables: {
+      trips: [...stored, ...older],
+      trip_events: [{ trip_id: 's0', category: 'phone', status: 'scored' }],
+      score_daily: [],
+    },
+  });
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   const e = envelope(h);
@@ -264,7 +298,8 @@ Deno.test('the stored trips feed the long-term score, the day row and the baseli
   assertEquals(e.day[0].tripsScored, 2); // s0 and the new trip
   assertEquals(e.day[0].drivingS, 1500 + 1320);
   assertEquals(e.day[0].phoneFreeDay, false);
-  assertEquals(e.baselines?.medians.phone, 3); // median of 0, 2, 4 and the new trip's own ~14.5
+  assertEquals(e.baselines?.medians.phone, 5); // median of 2 and 8, the two inside the window
+  assertEquals(e.baselines?.medians.score, 70); // median of 60 and 80
 });
 
 Deno.test('a trip synced on a later day also writes today\'s row; the response carries the trip\'s own', async () => {
@@ -309,10 +344,8 @@ Deno.test('the §9.4 worked example scores 74 through the handler and the envelo
   assertEquals(e.day[0].cameraDay, false);
   assertEquals(e.day[0].longTermScore, null);
   assertEquals(e.day[0].provisional, true);
-  assertAlmostEquals(e.baselines?.medians.phone ?? 0, 14.545, 0.001);
-  assertAlmostEquals(e.baselines?.medians.speeding ?? 0, 6.818, 0.001);
-  assertAlmostEquals(e.baselines?.medians.braking ?? 0, 4.773, 0.001);
-  assertEquals(e.baselines?.medians.score, 74);
+  // the trip is today's: it is the current period, never its own baseline
+  assertEquals(e.baselines?.medians, {});
   assertEquals(e.conditions, { night: false, precipitation: false });
   assertEquals(body.day, e.day[0]);
   assertEquals(h.warnings.length, 0);

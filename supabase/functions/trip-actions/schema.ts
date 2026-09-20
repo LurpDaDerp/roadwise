@@ -11,11 +11,20 @@ export const MAX_NOTE_CHARS = 500;
 
 /**
  * A note is free text the owner, ops and the tuning pipeline read back. Control characters (a
- * newline excepted) and format characters — bidi overrides, zero-width joiners and spaces,
- * byte-order marks — are stripped before the length is checked, so what is stored renders as
- * what was typed and the bound applies to what is stored.
+ * newline excepted) and format characters — bidi overrides, zero-width spaces, byte-order marks —
+ * are stripped, as are the line and paragraph separators U+2028/U+2029 (neither class, both a line
+ * break to a JS parser), before the length is checked, so what is stored renders as what was typed
+ * and the bound applies to what is stored.
+ *
+ * Two format characters are kept, because stripping them rewrites what the user typed rather than
+ * neutralising it: U+200D, the zero-width joiner that makes a woman-firefighter emoji one glyph
+ * rather than two, and U+FE0F, the variation selector that makes a red heart the emoji it was
+ * picked as (Mn, so never stripped by the class anyway — named here so the policy is one list).
+ * Neither carries a direction nor hides text.
  */
-export const cleanNote = (note: string): string => note.replace(/(?!\n)[\p{Cc}\p{Cf}]/gu, '');
+const NOTE_STRIP = /(?![\n\u200D\uFE0F])[\p{Cc}\p{Cf}\u2028\u2029]/gu;
+
+export const cleanNote = (note: string): string => note.replace(NOTE_STRIP, '');
 
 /** Mirrors `trips.client_trip_id`: the id is also the storage key's second segment. */
 const clientTripId = z.string().regex(CLIENT_ID_PATTERN, 'clientTripId must be 1 to 64 url-safe characters');

@@ -40,8 +40,23 @@ class FakeQuery implements PromiseLike<QueryResult> {
 
   constructor(
     private readonly rows: Row[],
-    private readonly log: QueryLog
+    private readonly log: QueryLog,
+    private readonly tables: Record<string, Row[]> = {}
   ) {}
+
+  /**
+   * A row's own column, or an embedded resource's as PostgREST names it in a filter on an embed
+   * (`trips.deleted_at` beside a `trips!inner(…)` select): the parent row through
+   * `<embed without its plural s>_id`. A row whose parent is missing is dropped, as `!inner` drops
+   * it, so `joined` is false there and every filter fails.
+   */
+  private cell(row: Row, column: string): { joined: boolean; value: unknown } {
+    const dot = column.indexOf('.');
+    if (dot === -1) return { joined: true, value: row[column] };
+    const table = column.slice(0, dot);
+    const parent = (this.tables[table] ?? []).find((p) => p.id === row[`${table.replace(/s$/, '')}_id`]);
+    return { joined: parent !== undefined, value: parent?.[column.slice(dot + 1)] };
+  }
 
   select(columns: string, opts?: { count?: string; head?: boolean }): this {
     this.log.select = columns;
@@ -51,22 +66,34 @@ class FakeQuery implements PromiseLike<QueryResult> {
   }
   eq(column: string, value: unknown): this {
     this.log.filters.push(['eq', column, value]);
-    this.filters.push((r) => r[column] === value);
+    this.filters.push((r) => {
+      const c = this.cell(r, column);
+      return c.joined && c.value === value;
+    });
     return this;
   }
   in(column: string, values: readonly unknown[]): this {
     this.log.filters.push(['in', column, values]);
-    this.filters.push((r) => values.includes(r[column]));
+    this.filters.push((r) => {
+      const c = this.cell(r, column);
+      return c.joined && values.includes(c.value);
+    });
     return this;
   }
   is(column: string, value: unknown): this {
     this.log.filters.push(['is', column, value]);
-    this.filters.push((r) => (value === null ? r[column] == null : r[column] === value));
+    this.filters.push((r) => {
+      const c = this.cell(r, column);
+      return c.joined && (value === null ? c.value == null : c.value === value);
+    });
     return this;
   }
   gte(column: string, value: unknown): this {
     this.log.filters.push(['gte', column, value]);
-    this.filters.push((r) => (r[column] as string | number) >= (value as string | number));
+    this.filters.push((r) => {
+      const c = this.cell(r, column);
+      return c.joined && (c.value as string | number) >= (value as string | number);
+    });
     return this;
   }
   order(column: string, opts?: { ascending?: boolean }): this {
@@ -128,7 +155,7 @@ export function fakeSupabase(
     from(table: string) {
       const log: QueryLog = { table, select: null, filters: [] };
       queries.push(log);
-      return new FakeQuery(tables[table] ?? [], log);
+      return new FakeQuery(tables[table] ?? [], log, tables);
     },
     rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });

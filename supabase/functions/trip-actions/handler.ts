@@ -7,8 +7,9 @@
 // The SQL writers own the rules (allowance, window, ownership, the status transitions); this
 // function maps client ids to rows under the JWT's user, re-scores in TypeScript from the stored
 // row and events (`_shared/rescore.ts`), rebuilds the user's day rows and baselines around the
-// result, and hands everything to `apply_recompute`. The severe flag is re-derived when a dispute
-// removes an event (the server can only lower it when the removed event was the severe one). The
+// result, and hands everything to `apply_recompute`. The severe flag is re-derived by every
+// recompute, not only the dispute's own: whichever action settles the disputed event lowers the
+// flag with it (`severeAfter`), and the device's own half survives anything else. The
 // trace object is never read: re-scoring works from the stored events, so no rule here needs it
 // (a `trace_unverified` path would sit in the dispute branch if one did). For a delete the object
 // is removed first, then the row is soft-deleted: a trace must not outlive the user's decision
@@ -20,7 +21,11 @@
 //
 // Concurrency: two actions of one user that overlap (two devices) are last-writer-wins on
 // `score_daily` and `baselines` for M2; the writers serialise the trip and event rows themselves.
-// The device queue is sequential, so this is a race between devices only.
+// The device queue is sequential, so this is a race between devices only. On the trip row itself
+// the same window covers `had_severe_event` alongside `score`, `status` and `category_deductions`:
+// each is re-derived from the rows this call read, so the later writer's values stand whether or
+// not it saw the earlier one's. Both derive the flag by the same rule (`severeAfter`), so the
+// loser's value differs only by what it had read, and the next recompute of the trip settles it.
 //
 // Order of refusal, cheapest first: method, JWT, size, JSON, contract, then the one lookup that
 // decides 404 / replay, the stored digest (so a row this function cannot score from fails before
@@ -42,10 +47,9 @@ import {
 import { isPgError } from '../_shared/pg.ts';
 import {
   aggregatesAfter,
-  anySevereSpeeding,
   eventRows,
-  isSevereSpeeding,
   settleDisputed,
+  severeAfter,
   storedDowngrades,
   storedMetrics,
   toScorableEvent,
@@ -167,21 +171,23 @@ async function storedDays(run: Run, trip: StoredTrip): Promise<DayRow[]> {
 interface Recomputed {
   result: RecomputeResult;
   days: DayRow[];
+  /** The severe flag this recompute stored, re-derived from the stored flag and what survives. */
+  hadSevereEvent: boolean;
 }
 
 /**
  * Score the trip again under `metrics` over `events` (statuses as they should be; `disputed`
- * settles to `removed`), rebuild the aggregates around the result, and apply it all in one
- * writer call.
+ * settles to `removed`), re-derive the severe flag over the same events, rebuild the aggregates
+ * around the result, and apply it all in one writer call.
  */
 async function rescore(
   run: Run,
   trip: StoredTrip,
   metrics: TripMetrics,
-  events: StoredEvent[],
-  hadSevereEvent: boolean
+  events: StoredEvent[]
 ): Promise<Recomputed> {
   const settled = settleDisputed(events);
+  const hadSevereEvent = severeAfter(events, trip.hadSevereEvent);
   const scored = scoreTrip(metrics, settled.map(toScorableEvent));
   if (scored.dataQuality !== trip.dataQuality) {
     run.log.warn('trip-actions quality re-derived differently', {
@@ -208,7 +214,7 @@ async function rescore(
     day: aggregates.day,
     baselines: aggregates.baselines,
   });
-  return { result, days: aggregates.day };
+  return { result, days: aggregates.day, hadSevereEvent };
 }
 
 async function dispute(run: Run, a: DisputeAction): Promise<Response> {
@@ -263,15 +269,16 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
   // An accepted dispute leaves the event `disputed` until the recompute stores it as `removed`; a
   // replay whose event is already `removed` was finished the first time.
   if (decision.auto_accepted && decision.event_status !== 'removed') {
+    // The writer has just put this event at `disputed`; saying so here as well costs nothing and
+    // keeps the recompute right if the read raced the write. `rescore` settles it to `removed`
+    // and re-derives the severe flag over the same events.
     const events = (await db.listTripEvents(userId, trip.id)).map((e) =>
-      e.id === event.id ? { ...e, status: 'removed' } : e
+      e.id === event.id ? { ...e, status: 'disputed' } : e
     );
-    // The flag is at least what the surviving scored speeding events prove; the device's own half
-    // (an L3 alert, the same episode) is kept unless the removed event was the severe one.
-    hadSevereEvent = anySevereSpeeding(events) || (trip.hadSevereEvent && !isSevereSpeeding(event));
-    const done = await rescore(run, trip, metrics, events, hadSevereEvent);
+    const done = await rescore(run, trip, metrics, events);
     score = done.result.score;
     status = done.result.status;
+    hadSevereEvent = done.hadSevereEvent;
     days = done.days;
   } else {
     days = await storedDays(run, trip);
@@ -309,8 +316,9 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
   const set = await db.setTripRole(userId, trip.id, a.role);
   // The writer has already unscored a passenger/other trip; the recompute writes the same result
   // (the scorer's own `unscored` / `passenger`) and refreshes the day rows and baselines, so both
-  // roles go through the one path. The severe flag is not the role's to change.
-  const done = await rescore(run, trip, metrics, await db.listTripEvents(userId, trip.id), trip.hadSevereEvent);
+  // roles go through the one path. The role does not touch the severe flag, but this recompute
+  // settles any `disputed` event it finds, so the flag is re-derived over what survives.
+  const done = await rescore(run, trip, metrics, await db.listTripEvents(userId, trip.id));
   const response: SetRoleResponse = {
     tripId: trip.id,
     role: set.role,

@@ -6,6 +6,7 @@ import {
   eventRows,
   isSevereSpeeding,
   settleDisputed,
+  severeAfter,
   storedDowngrades,
   storedMetrics,
   toScorableEvent,
@@ -14,7 +15,7 @@ import type { StoredEvent, StoredTrip } from './actions_db.ts';
 import { scoreTrip } from './scoring/index';
 import { fakeSupabase } from './testing/fake_supabase.ts';
 import { ROWS_DIGEST, TRACE_KEY, TRIP_ID } from './testing/action_fixtures.ts';
-import { CLIENT_TRIP_ID, T0, TRIP_DAY, tripRow, TZ, UID } from './testing/fixtures.ts';
+import { baselineTripRow, CLIENT_TRIP_ID, T0, TRIP_DAY, tripRow, TZ, UID } from './testing/fixtures.ts';
 
 const DAY_MS = 86_400_000;
 
@@ -132,6 +133,22 @@ Deno.test('a severe speeding event is one at or beyond 20 mph over, whatever its
   assertEquals(anySevereSpeeding([]), false);
 });
 
+Deno.test('the severe flag after a recompute is what survives, and the stored half only while no disputed severe event is being settled', () => {
+  const severe = (status: string, id = 'event-s1') =>
+    event({ id, clientEventId: id, category: 'speeding', status, measured: { speedMps: 24.6, limitMps: 15.6464, overMps: 9 } });
+  // a scored severe event proves the flag whatever was stored
+  assertEquals(severeAfter([event(), severe('scored')], false), true);
+  // the dispute's own recompute: the event settles here, so the flag goes
+  assertEquals(severeAfter([event(), severe('disputed')], true), false);
+  // a foreign recompute settles it just the same — the flag must not outlive the event
+  assertEquals(severeAfter([event({ status: 'disputed' }), severe('disputed')], true), false);
+  // the device's own half (an L3 alert) survives a dispute of an ordinary event
+  assertEquals(severeAfter([event({ status: 'disputed' })], true), true);
+  // one of two severe events settling leaves the other
+  assertEquals(severeAfter([severe('scored', 'event-s2'), severe('disputed')], true), true);
+  assertEquals(severeAfter([event()], false), false);
+});
+
 Deno.test('eventRows carries the server ids with the new statuses and deductions; null deductions on an unscored trip', () => {
   const events = [event(), event({ id: 'event-2', clientEventId: 'p2', status: 'removed' })];
   const scored = scoreTrip(storedMetrics(trip(), 'driver')!, events.map(toScorableEvent));
@@ -174,6 +191,22 @@ const store = () =>
           local_day: '2023-11-13',
           ended_at: new Date(T0 - 2 * DAY_MS).toISOString(),
         }),
+        // the baseline window is the eight weeks before the current four, so only these two are in
+        // it: the trip under test and the three above are all inside the current four weeks
+        baselineTripRow(40, {
+          id: 'baseline-1',
+          score: 60,
+          duration_s: 900,
+          exposure: 1,
+          category_deductions: { phone: 2, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+        }),
+        baselineTripRow(60, {
+          id: 'baseline-2',
+          score: 80,
+          duration_s: 900,
+          exposure: 1,
+          category_deductions: { phone: 8, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
+        }),
       ],
       trip_events: [{ trip_id: TRIP_ID, category: 'phone', status: 'scored' }],
     },
@@ -199,8 +232,9 @@ Deno.test("aggregatesAfter replaces the trip's stored values with the outcome in
   assertEquals(out.day[0].phoneFreeDay, true);
   assertEquals(out.day[0].severeEvents, 0);
   assertEquals(typeof out.day[0].longTermScore, 'number');
-  assertEquals(out.baselines?.medians.score, 80); // median of 96, 80, 70
-  assertEquals(out.baselines?.medians.phone, 0); // median of 0, 6, 0
+  // the outcome and the recent trips are in the current four weeks; the baseline is the two behind them
+  assertEquals(out.baselines?.medians.score, 70); // median of 60 and 80
+  assertEquals(out.baselines?.medians.phone, 5); // median of 2 and 8
 });
 
 Deno.test('an unscored outcome keeps the trip on its day but out of the scored aggregates', async () => {
@@ -215,7 +249,7 @@ Deno.test('an unscored outcome keeps the trip on its day but out of the scored a
   });
   assertEquals(out.day[0].tripsScored, 1);
   assertEquals(out.day[0].drivingS, 1500);
-  assertEquals(out.baselines?.medians.score, 75); // 80 and 70
+  assertEquals(out.baselines?.medians.score, 70); // the window behind the current four is unmoved by the outcome
 });
 
 Deno.test('a deleted trip is left out of every aggregate, and a late action also refreshes today', async () => {
@@ -228,7 +262,7 @@ Deno.test('a deleted trip is left out of every aggregate, and a late action also
   assertEquals(out.day[0].tripsScored, 1);
   assertEquals(out.day[1].tripsScored, 0);
   assertEquals(out.day[1].longTermScore, out.day[0].longTermScore);
-  assertEquals(out.baselines?.medians.score, 75);
+  assertEquals(out.baselines?.medians.score, 70);
 });
 
 Deno.test('the integer-bound day fields reach the envelope as integers even when the stored durations are not', async () => {

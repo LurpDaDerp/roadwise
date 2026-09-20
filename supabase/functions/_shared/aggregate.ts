@@ -9,7 +9,19 @@ import { CATEGORY, CONSTANTS, evaluateDay } from './scoring/index';
 import type { DayTrip, LongTermScore, ScoreBand, TripForLongTerm } from './scoring/index';
 
 const DAY_MS = 86_400_000;
-/** The baseline window: "rolling 8-week median per category" (§9.6). */
+/**
+ * The current period a baseline is read against (§7.E E1, "current 4 weeks"): the window ends
+ * where this one begins, so the two never overlap.
+ */
+export const BASELINE_CURRENT_D = 28;
+/**
+ * The baseline window: the "rolling 8-week median per category" of §9.6, taken over the eight
+ * weeks *preceding* the current four — `[now − 84 d, now − 28 d)`, the lower edge included and the
+ * upper excluded. This is the device's own definition (`src/data/queries/insights.ts`
+ * `YOU_VS_YOU_CURRENT_D` / `BASELINE_WINDOW_D`), so a card drawn from the stored row means exactly
+ * what the same card drawn locally means; the last 56 days would overlap the current four and
+ * shrink every delta.
+ */
 export const BASELINE_WINDOW_D = 56;
 
 /**
@@ -134,18 +146,25 @@ export function median(values: readonly number[]): number {
 }
 
 /**
- * The "you vs. you" baseline (§9.6): per category, the median of the points that category cost
- * per trip over the last eight weeks, plus the median trip score, over the scored trips the
- * caller passes (final, plus provisional if any ever exist); null when nothing was scored in the
- * window, so the writer leaves the stored row alone.
+ * The "you vs. you" baseline (§9.6): per category, the median of the points that category cost per
+ * trip over the eight weeks before the current four, plus the median trip score, over the scored
+ * trips the caller passes (final, plus provisional if any ever exist).
+ *
+ * A window with nothing in it yields `{ medians: {} }`, not the previous medians and not null: a
+ * baseline that no longer describes the driver must not keep standing because there is nothing to
+ * replace it with. The device's reader keeps only the six categories and `score`, so an empty set
+ * of keys reads as "no stored baseline" and the card falls back to the local one.
  */
-export function baselines(trips: readonly ScoredTripInput[], nowMs: number): Baselines | null {
-  const recent = trips.filter((t) => nowMs - t.endedAt <= BASELINE_WINDOW_D * DAY_MS);
-  if (recent.length === 0) return null;
+export function baselines(trips: readonly ScoredTripInput[], nowMs: number): Baselines {
+  const to = nowMs - BASELINE_CURRENT_D * DAY_MS;
+  const from = to - BASELINE_WINDOW_D * DAY_MS;
+  const inWindow = trips.filter((t) => t.endedAt >= from && t.endedAt < to);
   const medians: Record<string, number> = {};
-  for (const category of Object.keys(CATEGORY)) {
-    medians[category] = median(recent.map((t) => t.categoryDeductions[category] ?? 0));
+  if (inWindow.length > 0) {
+    for (const category of Object.keys(CATEGORY)) {
+      medians[category] = median(inWindow.map((t) => t.categoryDeductions[category] ?? 0));
+    }
+    medians.score = median(inWindow.map((t) => t.score));
   }
-  medians.score = median(recent.map((t) => t.score));
   return { medians, computedAt: new Date(nowMs).toISOString() };
 }

@@ -161,6 +161,20 @@ export const tripRow = (overrides: Record<string, unknown> = {}): Record<string,
   };
 };
 
+/**
+ * A stored trip inside the baseline window behind `T0` — `[T0 − 84 d, T0 − 28 d)`, the eight weeks
+ * before the current four — and on a day of its own, so it moves the baselines and no day row.
+ */
+export const baselineTripRow = (daysAgo: number, overrides: Record<string, unknown> = {}): Record<string, unknown> => {
+  const endedAt = T0 - daysAgo * 86_400_000;
+  return tripRow({
+    ended_at: new Date(endedAt).toISOString(),
+    created_at: new Date(endedAt).toISOString(),
+    local_day: new Date(endedAt).toISOString().slice(0, 10),
+    ...overrides,
+  });
+};
+
 /** A stored `score_daily` row as PostgREST returns it. */
 export const dayRowRecord = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   user_id: UID,

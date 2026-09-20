@@ -265,16 +265,33 @@ export function createActionsDb(client: SupabaseClient): ActionsDb {
       return data ? toStoredTrip(data as unknown as TripRecord) : null;
     },
 
+    // A trip the user deleted keeps its events, and the device reuses a client event id across
+    // installs, so a deleted trip's event must not make a live one ambiguous (a 409 the user can
+    // do nothing about). The live trips are asked first; only when nothing live matches is the
+    // whole set read, so a queued dispute for a trip deleted meanwhile still finds its event and
+    // replays rather than reading as a 404.
     async findEvent(userId, clientEventId) {
-      const { data, error } = await client
+      const live = await client
         .from('trip_events')
-        .select(EVENT_COLUMNS)
+        .select(`${EVENT_COLUMNS}, trips!inner(deleted_at)`)
         .eq('user_id', userId)
         .eq('client_event_id', clientEventId)
+        .is('trips.deleted_at', null)
         .order('created_at', { ascending: false })
         .limit(2);
-      if (error) throw asPgError(error);
-      const rows = (data ?? []) as unknown as EventRecord[];
+      if (live.error) throw asPgError(live.error);
+      let rows = (live.data ?? []) as unknown as EventRecord[];
+      if (rows.length === 0) {
+        const any = await client
+          .from('trip_events')
+          .select(EVENT_COLUMNS)
+          .eq('user_id', userId)
+          .eq('client_event_id', clientEventId)
+          .order('created_at', { ascending: false })
+          .limit(2);
+        if (any.error) throw asPgError(any.error);
+        rows = (any.data ?? []) as unknown as EventRecord[];
+      }
       if (rows.length === 0) return { kind: 'none' };
       if (rows.length > 1) return { kind: 'many' };
       return { kind: 'one', event: toStoredEvent(rows[0]) };

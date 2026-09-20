@@ -178,9 +178,12 @@ export function checkPlausibility(p: FinalizeTripPayload, nowMs: number): Plausi
  * the IMU so `dataQualityGrade` can give at most B. The grade that results is stored as
  * `trips.data_quality`; a later re-score (Task 2b) reproduces it from the row with
  * `imuPresent = rows_digest.imuPresent && data_quality === 'A'`.
+ *
+ * `role` is the scorer's, not the upload contract's: an upload can only say `driver` or
+ * `passenger`, while the stored role a re-score works from is also `other` or `unknown`.
  */
 export function tripMetrics(
-  p: Pick<FinalizeTripPayload, 'distanceM' | 'durationS' | 'role' | 'rowsDigest'>,
+  p: Pick<FinalizeTripPayload, 'distanceM' | 'durationS' | 'rowsDigest'> & { role: TripMetrics['role'] },
   downgrades: readonly QualityDowngrade[]
 ): TripMetrics {
   return {

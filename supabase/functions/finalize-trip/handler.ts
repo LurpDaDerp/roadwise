@@ -81,7 +81,19 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
   if (wrongMethod) return reply(wrongMethod);
 
   const token = bearerToken(req);
-  const userId = token ? await deps.verifyJwt(token) : null;
+  let userId: string | null = null;
+  if (token) {
+    try {
+      userId = await deps.verifyJwt(token);
+    } catch (err) {
+      // Auth itself failed (transport, GoTrue down), which says nothing about the token: retry
+      log.error('finalize-trip token check failed', {
+        requestId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return reply(json(503, { code: 'retry' }, { 'retry-after': '2' }));
+    }
+  }
   if (!userId) return reply(json(401, { code: 'unauthorized' }));
 
   const body = await readJsonBody(req, MAX_BODY_BYTES);

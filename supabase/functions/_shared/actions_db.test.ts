@@ -76,6 +76,7 @@ Deno.test('findTripById is scoped to the user too', async () => {
 Deno.test("findEvent answers none, one or many for the user's client event id", async () => {
   const fake = fakeActionsClient({
     tables: {
+      trips: [storedTripRow(), storedTripRow({ id: 'trip-0002', client_trip_id: 'c2' })],
       trip_events: [
         storedEventRow(),
         storedEventRow({ id: 'foreign', user_id: OTHER_UID }),
@@ -105,6 +106,32 @@ Deno.test("findEvent answers none, one or many for the user's client event id", 
   const theirs = await db.findEvent(OTHER_UID, CLIENT_EVENT_ID);
   assertEquals(theirs.kind === 'one' ? theirs.event.id : null, 'foreign');
   assertEquals(await db.findEvent(UID, 'dup'), { kind: 'many' });
+});
+
+Deno.test("an event of a trip the user deleted does not make the live event ambiguous", async () => {
+  const fake = fakeActionsClient({
+    tables: {
+      trips: [storedTripRow(), storedTripRow({ id: 'trip-0002', client_trip_id: 'c2', deleted_at: '2023-11-15T00:00:00.000Z' })],
+      trip_events: [storedEventRow(), storedEventRow({ id: 'twin', trip_id: 'trip-0002' })],
+    },
+  });
+  const found = await createActionsDb(fake.client).findEvent(UID, CLIENT_EVENT_ID);
+  assertEquals(found.kind === 'one' ? found.event.id : found.kind, EVENT_ID);
+  assertEquals(fake.queries[0].filters, [
+    ['eq', 'user_id', UID],
+    ['eq', 'client_event_id', CLIENT_EVENT_ID],
+    ['is', 'trips.deleted_at', null],
+  ]);
+  // nothing live to prefer: the deleted trip's own event is still answered (a queued dispute for
+  // a trip the user deleted meanwhile replays rather than reading as a 404)
+  const gone = fakeActionsClient({
+    tables: {
+      trips: [storedTripRow({ deleted_at: '2023-11-15T00:00:00.000Z' })],
+      trip_events: [storedEventRow()],
+    },
+  });
+  const replay = await createActionsDb(gone.client).findEvent(UID, CLIENT_EVENT_ID);
+  assertEquals(replay.kind === 'one' ? replay.event.id : replay.kind, EVENT_ID);
 });
 
 Deno.test("listTripEvents returns the user's events of the trip oldest first, whatever their status", async () => {

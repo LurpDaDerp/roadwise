@@ -1,6 +1,8 @@
 import { assert, assertEquals } from '@std/assert';
 import {
   baselines,
+  BASELINE_CURRENT_D,
+  BASELINE_WINDOW_D,
   dayRows,
   emptyDayRow,
   isNightAt,
@@ -120,32 +122,51 @@ Deno.test('median of an even count is the mean of the middle pair', () => {
   assertEquals(median([4, 1, 3, 2]), 2.5);
 });
 
-Deno.test('baselines are the 8-week medians per category and of the score', () => {
-  const day = 86_400_000;
-  const cat = (phone: number, speeding: number) => ({
-    phone,
-    speeding,
-    braking: 0,
-    accel: 0,
-    cornering: 0,
-    focus: 0,
-  });
+const day = 86_400_000;
+const cat = (phone: number, speeding: number) => ({
+  phone,
+  speeding,
+  braking: 0,
+  accel: 0,
+  cornering: 0,
+  focus: 0,
+});
+const scoredAt = (endedAt: number, score: number, deductions: Record<string, number>) => ({
+  endedAt,
+  score,
+  exposure: 1,
+  durationS: 600,
+  categoryDeductions: deductions,
+});
+
+Deno.test('baselines are the medians of the eight weeks before the current four, edges included and excluded', () => {
   const b = baselines(
     [
-      { endedAt: T0 - 1 * day, score: 90, exposure: 1, durationS: 600, categoryDeductions: cat(0, 2) },
-      { endedAt: T0 - 10 * day, score: 70, exposure: 1, durationS: 600, categoryDeductions: cat(4, 6) },
-      { endedAt: T0 - 55 * day, score: 80, exposure: 1, durationS: 600, categoryDeductions: cat(10, 4) },
-      // aged out of the window: must not move the medians
-      { endedAt: T0 - 57 * day, score: 0, exposure: 1, durationS: 600, categoryDeductions: cat(30, 25) },
+      // the current four weeks: the baseline is what came *before* them, so these do not count
+      scoredAt(T0 - 1 * day, 0, cat(30, 25)),
+      scoredAt(T0 - BASELINE_CURRENT_D * day, 0, cat(30, 25)), // now - 28 d: the exclusive edge
+      // the window itself: [now - 84 d, now - 28 d)
+      scoredAt(T0 - BASELINE_CURRENT_D * day - 1, 90, cat(0, 2)),
+      scoredAt(T0 - (BASELINE_CURRENT_D + BASELINE_WINDOW_D) * day, 70, cat(4, 6)), // now - 84 d: included
+      // older than the window
+      scoredAt(T0 - (BASELINE_CURRENT_D + BASELINE_WINDOW_D) * day - 1, 100, cat(50, 50)),
     ],
     T0
   );
   assertEquals(b, {
-    medians: { phone: 4, speeding: 4, braking: 0, accel: 0, cornering: 0, focus: 0, score: 80 },
+    medians: { phone: 2, speeding: 4, braking: 0, accel: 0, cornering: 0, focus: 0, score: 80 },
     computedAt: new Date(T0).toISOString(),
   });
 });
 
-Deno.test('no scored trips in the window means no baselines row', () => {
-  assertEquals(baselines([], T0), null);
+Deno.test('the window is the device\'s own: 84 and 28 days, not the last 56', () => {
+  assertEquals(BASELINE_CURRENT_D, 28);
+  assertEquals(BASELINE_WINDOW_D, 56);
+});
+
+Deno.test('an emptied window sends empty medians rather than leaving yesterday\'s row standing', () => {
+  const empty = { medians: {}, computedAt: new Date(T0).toISOString() };
+  // a driver whose every trip is inside the current four weeks has no baseline yet
+  assertEquals(baselines([scoredAt(T0 - 1 * day, 90, cat(0, 2))], T0), empty);
+  assertEquals(baselines([], T0), empty);
 });

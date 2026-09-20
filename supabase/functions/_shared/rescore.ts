@@ -49,12 +49,10 @@ export function storedDowngrades(t: StoredTrip): QualityDowngrade[] {
 export function storedMetrics(t: StoredTrip, role: TripMetrics['role']): TripMetrics | null {
   const digest = RowsDigestSchema.safeParse(t.rowsDigest);
   if (!digest.success) return null;
-  // tripMetrics takes the upload contract's role (driver | passenger); the stored role is wider.
-  const base = tripMetrics(
-    { distanceM: t.distanceM, durationS: t.durationS, role: 'driver', rowsDigest: digest.data },
+  return tripMetrics(
+    { distanceM: t.distanceM, durationS: t.durationS, role, rowsDigest: digest.data },
     storedDowngrades(t)
   );
-  return { ...base, role };
 }
 
 /**
@@ -99,6 +97,24 @@ export function isSevereSpeeding(e: StoredEvent): boolean {
  */
 export function anySevereSpeeding(events: readonly StoredEvent[]): boolean {
   return events.some((e) => e.status === 'scored' && isSevereSpeeding(e));
+}
+
+/**
+ * The trip's severe flag once `events` are settled, from the stored flag and what survives.
+ *
+ * Two halves make the stored flag (§9.9): a scored speeding event at or beyond the threshold,
+ * which the server can see, and an L3 alert, which only the device knows. So the flag is at least
+ * what the surviving scored events prove, and the device's half is kept — unless a severe event is
+ * being settled by *this* recompute, whichever action accepted the dispute. That last clause is
+ * what stops the flag outliving its event: when a dispute is accepted its event waits at
+ * `disputed` until a recompute lands, and any recompute of the trip settles it (`settleDisputed`),
+ * not only the dispute's own.
+ */
+export function severeAfter(events: readonly StoredEvent[], hadSevereEvent: boolean): boolean {
+  return (
+    anySevereSpeeding(settleDisputed(events)) ||
+    (hadSevereEvent && !events.some((e) => e.status === 'disputed' && isSevereSpeeding(e)))
+  );
 }
 
 /** The `p_events` rows: every event of the trip with its status and the scorer's deduction. */
