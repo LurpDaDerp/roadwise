@@ -1,0 +1,29 @@
+// DriveSense - the RoadWise background drive-capture module.
+//
+// M0 ships the shell only; the capture pipeline lands in M3. play-services-location is the
+// pinned source of the activity-transition and location APIs that pipeline will use.
+// Do NOT use dynamic versions ('21.+', 'latest.integration'): EAS builds must be reproducible.
+//
+// compileSdk / minSdk / targetSdk / the Kotlin version come from expo-module-gradle-plugin,
+// which reads the root project's Expo SDK 57 extras - the same proven form as
+// modules/dms-vision/android/build.gradle.
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'expo.modules.drivesense'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.drivesense'
+
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  implementation 'com.google.android.gms:play-services-location:21.3.0'
+}

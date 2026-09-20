@@ -2,9 +2,11 @@
 node_modules/
 
 # expo / native (CNG: generated, never committed)
+# Anchored: unanchored `ios/` / `android/` also swallow every local Expo module's own native
+# sources (modules/*/ios, modules/*/android), which are hand-written and must be committed.
 .expo/
-ios/
-android/
+/ios/
+/android/
 *.orig.*
 web-build/
 dist/
