@@ -23,16 +23,34 @@ test('a transit pattern is other transport, even against strong driver evidence'
   });
 });
 
-test.each(['manualStart', 'cameraFaceDriverSeat'] as const)(
-  '%s is strong driver evidence that handling does not dilute',
-  (key) => {
-    expect(inferRole({ ...none, [key]: true, continuousHandlingMinutes: 10 }, 0.1)).toEqual({
-      role: 'driver',
-      pDriver: 0.95,
-      ask: false,
-    });
-  }
-);
+test('a face in the driver seat is strong driver evidence that nothing dilutes', () => {
+  expect(inferRole({ ...none, cameraFaceDriverSeat: true, continuousHandlingMinutes: 10 }, 0.1)).toEqual({
+    role: 'driver',
+    pDriver: 0.95,
+    ask: false,
+  });
+  expect(
+    inferRole({ ...none, cameraFaceDriverSeat: true, habitualDriverRoute: true }, 0.1).pDriver
+  ).toBe(0.95);
+});
+
+test('a manual start is strong driver evidence, but the later evidence still applies to it', () => {
+  expect(inferRole({ ...none, manualStart: true }, 0.1)).toEqual({
+    role: 'driver',
+    pDriver: 0.95,
+    ask: false,
+  });
+  const diluted = inferRole({ ...none, manualStart: true, continuousHandlingMinutes: 3 }, 0.1);
+  expect(diluted).toMatchObject({ role: 'unknown', ask: true });
+  expect(diluted.pDriver).toBeCloseTo(0.475, 12);
+  expect(inferRole({ ...none, manualStart: true, habitualDriverRoute: true }, 0.1).pDriver).toBe(0.98);
+  const both = inferRole(
+    { ...none, manualStart: true, continuousHandlingMinutes: 3, habitualDriverRoute: true },
+    0.1
+  );
+  expect(both).toMatchObject({ role: 'unknown', ask: true });
+  expect(both.pDriver).toBeCloseTo(0.625, 12);
+});
 
 test.each([
   [1, 'driver', false],

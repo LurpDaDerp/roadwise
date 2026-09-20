@@ -74,6 +74,11 @@ export type EventSource = 'gnss' | 'imu' | 'both' | 'os' | 'camera';
 export interface DetectedEvent extends ScorableEvent {
   alertable: boolean;
   source: EventSource;
+  /**
+   * Ids of the events `mergeEvents` folded into this one, in absorption order, so an alert or a
+   * dispute that referenced them can still be traced. Absent when nothing was absorbed.
+   */
+  absorbedIds?: string[];
 }
 
 export interface Detector {

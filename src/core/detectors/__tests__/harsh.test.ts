@@ -233,6 +233,51 @@ describe('sharp cornering', () => {
   });
 });
 
+describe('unknown speed', () => {
+  // With no usable fix the lockout and the cornering speed gate cannot be checked, so the IMU
+  // evidence is logged as possible (q 0.4) rather than scored or dropped, whatever the kind.
+  const NO_FIX = { gnssValid: false };
+
+  test('braking with no usable fix is logged as possible', () => {
+    const e = only(drive(make(), seq([1, {}], [1, { ...NO_FIX, aLonMin: -0.35 }], [3, {}])).all);
+    expect(e).toMatchObject({
+      category: 'braking',
+      status: 'possible',
+      q: 0.4,
+      source: 'imu',
+      alertable: false,
+      measured: { peakG: 0.35 },
+    });
+    expect(e.measured.speedMps).toBeUndefined();
+  });
+
+  test('acceleration with the -1 speed sentinel is logged as possible', () => {
+    const e = only(drive(make(), seq([1, {}], [1, { speed: -1, aLonMax: 0.3 }], [3, {}])).all);
+    expect(e).toMatchObject({
+      category: 'accel',
+      status: 'possible',
+      q: 0.4,
+      source: 'imu',
+      measured: { peakG: 0.3 },
+    });
+    expect(e.measured.speedMps).toBeUndefined();
+  });
+
+  test('cornering with no usable fix cannot confirm its speed gate: possible, not dropped', () => {
+    const e = only(drive(make(), seq([1, {}], [1, { ...NO_FIX, aLatMax: 0.4 }], [3, {}])).all);
+    expect(e).toMatchObject({
+      category: 'cornering',
+      status: 'possible',
+      q: 0.4,
+      source: 'imu',
+      alertable: false,
+      measured: { lateralG: 0.4 },
+    });
+    expect(e.measured.speedMps).toBeUndefined();
+    expect(drive(make(), seq([1, {}], [1, { ...NO_FIX, aLatMax: 0.3 }], [3, {}])).all).toEqual([]);
+  });
+});
+
 describe('lockout and independence', () => {
   test('nothing is scored below LOCKOUT_SPEED_MPS', () => {
     const list = seq(

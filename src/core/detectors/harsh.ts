@@ -29,7 +29,11 @@ const ORIENTATION_WINDOW_MS = 2000;
 
 interface Signal {
   peakG: number;
-  /** GNSS agreement; null when the kind has no GNSS cross-check */
+  /**
+   * Whether GNSS vouches for the row: the Δspeed cross-check for braking and accel; for cornering
+   * (no cross-check) null once the speed gate was confirmed, false when the speed was unknown so
+   * the event can only be possible.
+   */
   agreed: boolean | null;
 }
 
@@ -65,8 +69,9 @@ function signalFor(
       return { peakG: row.aLonMax, agreed: gnssDeltaG !== null && gnssDeltaG >= GNSS_AGREE_G };
     case 'cornering': {
       const lateral = Math.max(Math.abs(row.aLatMax), Math.abs(row.aLatMin));
-      if (speed === null || speed < CONSTANTS.CORNER_MIN_SPEED_MPS) return null;
       if (lateral < CONSTANTS.HARSH_CORNER_G) return null;
+      if (speed === null) return { peakG: lateral, agreed: false };
+      if (speed < CONSTANTS.CORNER_MIN_SPEED_MPS) return null;
       return { peakG: lateral, agreed: null };
     }
   }

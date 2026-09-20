@@ -39,15 +39,17 @@ const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 export function inferRole(e: RoleEvidence, prior: number): RoleInference {
   if (e.statedPassenger) return { role: 'passenger', pDriver: P.statedPassenger, ask: false };
   if (e.transitPattern) return { role: 'other', pDriver: P.transit, ask: false };
+  // A face in the driver seat is direct observation; nothing later in the sequence dilutes it.
+  if (e.cameraFaceDriverSeat) return { role: 'driver', pDriver: P.strongDriver, ask: false };
 
-  let p: number;
-  if (e.manualStart || e.cameraFaceDriverSeat) {
-    p = P.strongDriver;
-  } else {
-    p = Number.isFinite(prior) ? clamp01(prior) : NEUTRAL_PRIOR;
-    if (e.continuousHandlingMinutes >= HANDLING_MINUTES_MIN) p *= P.handlingFactor;
-    if (e.habitualDriverRoute) p = Math.min(P.cap, p + P.habitualBonus);
-  }
+  // A manual start replaces the prior but, like the prior, is still subject to what the trip showed.
+  let p = e.manualStart
+    ? P.strongDriver
+    : Number.isFinite(prior)
+      ? clamp01(prior)
+      : NEUTRAL_PRIOR;
+  if (e.continuousHandlingMinutes >= HANDLING_MINUTES_MIN) p *= P.handlingFactor;
+  if (e.habitualDriverRoute) p = Math.min(P.cap, p + P.habitualBonus);
 
   if (p >= DRIVER_AT) return { role: 'driver', pDriver: p, ask: false };
   if (p <= PASSENGER_AT) return { role: 'passenger', pDriver: p, ask: false };

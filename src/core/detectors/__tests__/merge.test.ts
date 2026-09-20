@@ -39,6 +39,7 @@ test('phone + overlapping camera focus → one phone event: max q, union span, s
     source: 'both',
     alertable: true,
     status: 'scored',
+    absorbedIds: ['f'],
     measured: { speedMps: 15, glanceS: 3, focusKind: 'glance' },
   });
 });
@@ -46,19 +47,31 @@ test('phone + overlapping camera focus → one phone event: max q, union span, s
 test('two overlapping phone events collapse into the higher-q one', () => {
   const a = ev({ id: 'p1', category: 'phone', ...at(0, 5), q: 0.6 });
   const b = ev({ id: 'p2', category: 'phone', ...at(4, 4), q: 0.9, source: 'os', alertable: true });
-  expect(mergeEvents([a, b])).toEqual([{ ...b, startedAt: T0, durationS: 8, source: 'both' }]);
+  expect(mergeEvents([a, b])).toEqual([
+    { ...b, startedAt: T0, durationS: 8, source: 'both', absorbedIds: ['p1'] },
+  ]);
 });
 
 test('with equal q the earlier phone event is kept', () => {
   const a = ev({ id: 'p1', category: 'phone', ...at(0, 5) });
   const b = ev({ id: 'p2', category: 'phone', ...at(2, 5) });
-  expect(mergeEvents([b, a])).toEqual([{ ...a, durationS: 7 }]);
+  expect(mergeEvents([b, a])).toEqual([{ ...a, durationS: 7, absorbedIds: ['p2'] }]);
 });
 
-test('touching intervals count as overlapping', () => {
+test('spans are half-open: touching intervals do not overlap, one millisecond of overlap does', () => {
   const a = ev({ id: 'p', category: 'phone', ...at(0, 5) });
-  const f = ev({ id: 'f', category: 'focus', ...at(5, 2), source: 'camera' });
-  expect(mergeEvents([a, f])).toMatchObject([{ id: 'p', durationS: 7, source: 'both' }]);
+  const touching = ev({ id: 'f', category: 'focus', ...at(5, 2), source: 'camera' });
+  expect(mergeEvents([a, touching])).toEqual([a, touching]);
+  const grazing = ev({ id: 'f', category: 'focus', startedAt: T0 + 4999, durationS: 2, source: 'camera' });
+  expect(mergeEvents([a, grazing])).toMatchObject([
+    { id: 'p', durationS: 6.999, source: 'both', absorbedIds: ['f'] },
+  ]);
+});
+
+test('absorbed ids accumulate in absorption order, including what the absorbed event had absorbed', () => {
+  const p = ev({ id: 'p', category: 'phone', ...at(0, 5), q: 0.6, absorbedIds: ['x'] });
+  const p2 = ev({ id: 'p2', category: 'phone', ...at(3, 5), q: 0.9, absorbedIds: ['z'] });
+  expect(mergeEvents([p, p2])).toMatchObject([{ id: 'p2', absorbedIds: ['z', 'p', 'x'] }]);
 });
 
 test('non-overlapping phone and focus events are untouched', () => {
@@ -86,17 +99,37 @@ test('a phone event absorbs every focus event it overlaps, whatever the input or
   const p = ev({ id: 'p', category: 'phone', ...at(0, 6) });
   const out = mergeEvents([f1, f2, p]);
   expect(out).toHaveLength(1);
-  expect(out[0]).toMatchObject({ id: 'p', category: 'phone', startedAt: T0, durationS: 8, q: 0.95 });
+  expect(out[0]).toMatchObject({
+    id: 'p',
+    category: 'phone',
+    startedAt: T0,
+    durationS: 8,
+    q: 0.95,
+    absorbedIds: ['f1', 'f2'],
+  });
 });
 
-test('status and corrected come from the kept event; alertable is recomputed from the merged q', () => {
+test('only scored events merge: stopped phone use (possible) and a scored focus stay two events', () => {
   const stopped = ev({ id: 'p', category: 'phone', ...at(0, 5), status: 'possible', measured: { speedMps: 0 } });
+  const focus = ev({ id: 'f', category: 'focus', ...at(1, 3), q: 0.9, source: 'camera', alertable: true });
+  expect(mergeEvents([stopped, focus])).toEqual([stopped, focus]);
+});
+
+test('disputed and removed events pass through untouched', () => {
+  const disputed = ev({ id: 'p', category: 'phone', ...at(0, 5), status: 'disputed' });
+  const focus = ev({ id: 'f', category: 'focus', ...at(1, 3), q: 0.9, source: 'camera' });
+  expect(mergeEvents([disputed, focus])).toEqual([disputed, focus]);
+  const removed = ev({ id: 'p1', category: 'phone', ...at(0, 5), status: 'removed' });
+  const phone = ev({ id: 'p2', category: 'phone', ...at(2, 5) });
+  expect(mergeEvents([removed, phone])).toEqual([removed, phone]);
+});
+
+test('corrected comes from the kept event; alertable is recomputed from the merged q', () => {
+  const phone = ev({ id: 'p', category: 'phone', ...at(0, 5) });
   const focus = ev({ id: 'f', category: 'focus', ...at(1, 3), q: 0.9, source: 'camera', corrected: true, alertable: true });
-  expect(mergeEvents([stopped, focus])).toMatchObject([
-    { id: 'p', status: 'possible', corrected: false, q: 0.9, alertable: false },
+  expect(mergeEvents([phone, focus])).toMatchObject([
+    { id: 'p', status: 'scored', corrected: false, q: 0.9, alertable: true, absorbedIds: ['f'] },
   ]);
-  const moving = ev({ id: 'p', category: 'phone', ...at(0, 5) });
-  expect(mergeEvents([moving, focus])).toMatchObject([{ id: 'p', status: 'scored', q: 0.9, alertable: true }]);
 });
 
 test('the result is sorted by startedAt and the input is not mutated', () => {

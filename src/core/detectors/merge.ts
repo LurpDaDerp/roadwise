@@ -9,12 +9,19 @@ const MERGEABLE: ReadonlySet<EventCategory> = new Set<EventCategory>(['phone', '
 
 const endOf = (e: DetectedEvent): number => e.startedAt + e.durationS * 1000;
 
-/** Closed intervals: sharing an instant is enough to be "the same moment". */
+/** Half-open spans `[start, end)`: events that merely touch are consecutive, not the same moment. */
 const overlaps = (a: DetectedEvent, b: DetectedEvent): boolean =>
-  a.startedAt <= endOf(b) && b.startedAt <= endOf(a);
+  a.startedAt < endOf(b) && b.startedAt < endOf(a);
 
-/** Phone with phone, or phone with camera focus. Two focus events are two glances and stay apart. */
+/**
+ * Phone with phone, or phone with camera focus, and only when both are scored. Two focus events
+ * are two glances and stay apart. A `possible`, `disputed` or `removed` event is never folded in:
+ * merging a stopped (possible, speed 0) stretch with the scored one next to it would either hide
+ * the scored deduction or charge the stopped seconds at moving severity.
+ */
 const mergeable = (a: DetectedEvent, b: DetectedEvent): boolean =>
+  a.status === 'scored' &&
+  b.status === 'scored' &&
   MERGEABLE.has(a.category) &&
   MERGEABLE.has(b.category) &&
   (a.category === 'phone' || b.category === 'phone');
@@ -40,6 +47,7 @@ function mergePair(a: DetectedEvent, b: DetectedEvent): DetectedEvent {
     source: a.source === b.source ? a.source : 'both',
     measured: { ...other.measured, ...kept.measured },
     alertable: alertableFor(kept.status, q),
+    absorbedIds: [...(kept.absorbedIds ?? []), other.id, ...(other.absorbedIds ?? [])],
   };
 }
 
