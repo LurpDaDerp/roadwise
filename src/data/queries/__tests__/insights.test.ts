@@ -13,9 +13,12 @@ import {
   buildInsights,
   categoryRates,
   conditionsSplit,
+  localHour,
   MAX_TREND_WEEKS,
   median,
   parseStoredBaseline,
+  timeOfDayBucket,
+  timeOfDaySplit,
   toInsightTrip,
   weeklyTrend,
   weekStartOf,
@@ -175,9 +178,29 @@ describe('weeklyTrend', () => {
       weekStart: '2026-01-19',
       trips: 0,
       score: null,
+      categoryDeductions: deductions(),
       distanceM: 0,
       durationS: 0,
     });
+  });
+
+  test('each point carries what every category cost that week', () => {
+    // Week of 2026-01-05 holds A (speeding 6, braking 4) and B (speeding 10, phone 10).
+    expect(points[0]?.categoryDeductions).toEqual(
+      deductions({ phone: 10, speeding: 16, braking: 4 })
+    );
+    // C was clean, so its week reports zeros rather than nothing.
+    expect(points[1]?.categoryDeductions).toEqual(deductions());
+  });
+
+  test('a trip whose own week falls outside the axis still gets its point', () => {
+    // The axis is one week long; the trip's own local day is in the week before it.
+    const early = toInsightTrip(
+      summary({ client_trip_id: 'early', started_at: Date.UTC(2025, 11, 30, 12, 0, 0), score: 90 })
+    ) as InsightTrip;
+    const edge = weeklyTrend([early], { fromDay: '2026-01-05', toDay: '2026-01-05' });
+    expect(edge.map((p) => p.weekStart)).toEqual(['2025-12-29', '2026-01-05']);
+    expect(edge[0]).toMatchObject({ trips: 1, score: 90 });
   });
 
   test('a very long history keeps the newest weeks rather than growing without bound', () => {
@@ -228,6 +251,10 @@ describe('parseStoredBaseline', () => {
     expect(parseStoredBaseline([1, 2])).toBeNull();
     expect(parseStoredBaseline({})).toBeNull();
     expect(parseStoredBaseline({ phone: 'lots' })).toBeNull();
+    // A numeric `computedAt` is not a baseline: letting it through would report six confident
+    // deltas against nothing.
+    expect(parseStoredBaseline({ computedAt: 1_700_000_000 })).toBeNull();
+    expect(parseStoredBaseline({ medians: { speeding: 4, nonsense: 9 } })).toEqual({ speeding: 4 });
   });
 });
 
@@ -327,11 +354,46 @@ describe('buildInsights', () => {
     expect(insights.categories[0]).toMatchObject({ category: 'speeding', per100Mi: 45.71 });
   });
 
-  test('three scored trips are enough data, and the long-term score is no longer provisional', () => {
+  test('three scored trips are enough data, and the long-term score is the §9.6 number', () => {
     expect(insights.enoughData).toBe(true);
     expect(insights.scoredTripsAllTime).toBe(3);
-    expect(insights.longTerm).toMatchObject({ provisional: false, tripsUsed: 3 });
-    expect(typeof insights.longTerm.score).toBe('number');
+    // w = min(E,3) x 0.5^(age/21) at NOW: A 14.979 d -> 0.60992, B 12.958 d -> 0.65200,
+    // C 7.990 d -> 0.76820. Sw = 2.03012, SwS = 183.8728.
+    // (183.8728 + 2 x 80) / (2.03012 + 2) = 343.8728 / 4.03012 = 85.326 -> 85, band good.
+    expect(insights.longTerm).toEqual({
+      score: 85,
+      band: 'good',
+      provisional: false,
+      tripsUsed: 3,
+    });
+  });
+
+  test('exposure reaches the long-term score: A at exposure 3 moves it to 86', () => {
+    const heavy = summary({
+      client_trip_id: 'a',
+      started_at: Date.UTC(2026, 0, 5, 12, 0, 0),
+      duration_s: 1800,
+      distance_m: 10 * MILE_M,
+      score: 90,
+      exposure: 3,
+      category_deductions_json: JSON.stringify(deductions({ speeding: 6, braking: 4 })),
+    });
+    // w_A becomes 3 x 0.60992 = 1.82976: (293.6584 + 160) / (3.24996 + 2) = 86.412 -> 86.
+    const weighted = buildInsights({ trips: [heavy, B, C], period: '4w', now: NOW, tz: 'UTC' });
+    expect(weighted.longTerm).toMatchObject({ score: 86, band: 'good', tripsUsed: 3 });
+  });
+
+  test('an unscored trip counts towards the window total but towards nothing else', () => {
+    const unscored = summary({
+      client_trip_id: 'u',
+      started_at: Date.UTC(2026, 0, 13, 12, 0, 0),
+      status: 'unscored',
+      score: null,
+    });
+    const mixed = buildInsights({ trips: [A, B, C, unscored], period: '4w', now: NOW, tz: 'UTC' });
+    expect(mixed.totals).toMatchObject({ trips: 4, scoredTrips: 3, durationS: 6300 });
+    expect(mixed.scoredTripsAllTime).toBe(3);
+    expect(mixed.longTerm.tripsUsed).toBe(3);
   });
 
   test('the trend spans every week of the window, in the zone it was given', () => {
@@ -415,5 +477,78 @@ describe('buildInsights', () => {
     });
     expect(none.totals).toEqual({ trips: 0, scoredTrips: 0, distanceM: 0, durationS: 0 });
     expect(none.categories.every((r) => r.per100Mi === null)).toBe(true);
+  });
+});
+
+describe('time of day (E2)', () => {
+  const at = (id: string, iso: string, over: Parameters<typeof tripRow>[0] = {}) =>
+    toInsightTrip(summary({ client_trip_id: id, started_at: Date.parse(iso), ...over })) as InsightTrip;
+
+  test('the boundaries are night 22-05, morning 05-11, afternoon 11-17, evening 17-22', () => {
+    expect([0, 4, 22, 23].map(timeOfDayBucket)).toEqual(['night', 'night', 'night', 'night']);
+    expect([5, 10].map(timeOfDayBucket)).toEqual(['morning', 'morning']);
+    expect([11, 16].map(timeOfDayBucket)).toEqual(['afternoon', 'afternoon']);
+    expect([17, 21].map(timeOfDayBucket)).toEqual(['evening', 'evening']);
+  });
+
+  test('the hour is the one on the clock where the drive started', () => {
+    // 2026-01-13T02:00Z is 18:00 the previous evening in Los Angeles.
+    expect(localHour(Date.UTC(2026, 0, 13, 2, 0, 0), 'America/Los_Angeles')).toBe(18);
+    expect(localHour(Date.UTC(2026, 0, 13, 2, 0, 0), 'UTC')).toBe(2);
+    const abroad = at('abroad', '2026-01-13T02:00:00Z', { tz: 'America/Los_Angeles' });
+    expect(abroad.startHour).toBe(18);
+    expect(timeOfDayBucket(abroad.startHour)).toBe('evening');
+  });
+
+  test('buckets the window by start hour, with what each category cost inside it', () => {
+    const morning = at('m', '2026-01-13T07:00:00Z', {
+      score: 90,
+      category_deductions_json: JSON.stringify(deductions({ phone: 5 })),
+    });
+    const evening = at('e', '2026-01-13T19:00:00Z', {
+      score: 70,
+      category_deductions_json: JSON.stringify(deductions({ speeding: 8 })),
+    });
+    const night = at('n', '2026-01-14T23:00:00Z', {
+      score: 60,
+      category_deductions_json: JSON.stringify(deductions({ braking: 3 })),
+    });
+
+    const split = timeOfDaySplit([...trips, morning, evening, night]);
+    // A, B and C all start at 12:00Z.
+    expect(split.afternoon).toMatchObject({ trips: 3, score: 90 });
+    expect(split.afternoon.categoryDeductions).toEqual(
+      deductions({ phone: 10, speeding: 16, braking: 4 })
+    );
+    expect(split.morning).toMatchObject({ trips: 1, score: 90 });
+    expect(split.morning.categoryDeductions).toEqual(deductions({ phone: 5 }));
+    expect(split.evening).toMatchObject({ trips: 1, score: 70 });
+    expect(split.night).toMatchObject({ trips: 1, score: 60 });
+    expect(split.night.categoryDeductions).toEqual(deductions({ braking: 3 }));
+  });
+
+  test('an empty bucket reports no score rather than a zero', () => {
+    const split = timeOfDaySplit(trips);
+    expect(split.night).toEqual({
+      trips: 0,
+      distanceM: 0,
+      durationS: 0,
+      score: null,
+      categoryDeductions: deductions(),
+    });
+  });
+
+  test('a 22:30 drive is a night bar but was never scored as a night drive', () => {
+    // The bar runs from 22:00; §9.4's night multiplier starts at 23:00 and lives on `conditions`.
+    const late = at('late', '2026-01-13T22:30:00Z', { score: 80 });
+    expect(timeOfDayBucket(late.startHour)).toBe('night');
+    expect(late.night).toBe(false);
+    expect(conditionsSplit([late]).night.trips).toBe(0);
+  });
+
+  test('buildInsights reports the split over the window', () => {
+    const insights = buildInsights({ trips: [A, B, C], period: '4w', now: NOW, tz: 'UTC' });
+    expect(insights.timeOfDay.afternoon.trips).toBe(3);
+    expect(insights.timeOfDay.morning.trips).toBe(0);
   });
 });

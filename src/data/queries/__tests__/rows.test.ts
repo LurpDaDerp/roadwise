@@ -1,6 +1,11 @@
+import { keepItUpTip, pickTopTip } from '@/content/tips';
 import { deductions, eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
+import { normalizeTripsFilter } from '@/data/queries/keys';
 import {
   isHiddenTrip,
+  toScorableEvent,
+  toScorableEvents,
+  toScoredTrip,
   isScoredRow,
   matchesTripsFilter,
   pageOf,
@@ -174,6 +179,12 @@ describe('why a trip has no score, and which card D1 shows', () => {
     );
   });
 
+  test('a row with no data quality is not called grade C: the scorer always writes one', () => {
+    expect(
+      unscoredReasonOf(summary({ status: 'unscored', score: null, data_quality: null }))
+    ).toBeNull();
+  });
+
   test('the three D1 variants are distinguishable', () => {
     expect(
       tipOutcomeOf(summary({ category_deductions_json: JSON.stringify(deductions({ phone: 3 })) }))
@@ -281,3 +292,107 @@ describe('toDayEntry', () => {
     expect(entry.band).toBeNull();
   });
 });
+
+describe('normalizeTripsFilter', () => {
+  test('drops undefined keys and fixes the order, so two spellings hash alike', () => {
+    const normalized = normalizeTripsFilter({ limit: 5, role: 'driver', from: undefined });
+    expect(Object.keys(normalized)).toEqual(['role', 'limit']);
+    expect(normalized).toEqual({ role: 'driver', limit: 5 });
+    expect(JSON.stringify(normalizeTripsFilter({ role: 'driver', limit: 5 }))).toBe(
+      JSON.stringify(normalized)
+    );
+  });
+
+  test('an empty filter normalizes to an empty object, not to undefined', () => {
+    expect(normalizeTripsFilter()).toEqual({});
+  });
+});
+
+describe('the scorer bridge (rows -> @scoring -> pickTopTip)', () => {
+  const speedingEvent = eventRow({ id: 'e1', category: 'speeding', status: 'scored', deduction: 6 });
+  const scoredTrip = summary({
+    status: 'provisional',
+    sync_state: 'queued',
+    score: 90,
+    category_deductions_json: JSON.stringify(deductions({ speeding: 6, braking: 4 })),
+  });
+
+  test('a locally provisional trip is the scorer\'s final — the rule the whole card rests on', () => {
+    // finalizeTrip stores every scored trip as `provisional` until the server confirms it, which
+    // is the state D1 always shows after a drive. `pickTopTip` refuses anything but 'final'.
+    expect(toScoredTrip(scoredTrip).status).toBe('final');
+    expect(toScoredTrip(summary({ status: 'final', score: 90 })).status).toBe('final');
+  });
+
+  test('unscored and discarded map to themselves and carry the reason', () => {
+    const passenger = summary({ status: 'unscored', score: null, role: 'passenger' });
+    expect(toScoredTrip(passenger)).toMatchObject({
+      status: 'unscored',
+      score: null,
+      reason: 'passenger',
+    });
+    expect(toScoredTrip(summary({ status: 'discarded', score: null }))).toMatchObject({
+      status: 'discarded',
+      reason: 'implausible_speed',
+    });
+  });
+
+  test('only events that cost points reach eventDeductions', () => {
+    const possible = toTripEventView(eventRow({ id: 'e2', status: 'possible', deduction: null }));
+    const scored = toTripEventView(speedingEvent);
+    const bridged = toScoredTrip(scoredTrip, [scored, possible]);
+    // Exactly one key: a `possible` event that cost nothing must not appear at all, or
+    // `worstSeverity` would weigh an event the driver was never charged for.
+    expect(bridged.eventDeductions).toEqual({ e1: 6 });
+    expect(bridged).toMatchObject({
+      categoryDeductions: deductions({ speeding: 6, braking: 4 }),
+      exposure: 1,
+      dataQuality: 'A',
+      scoringVersion: 1,
+    });
+  });
+
+  test('toScorableEvent keeps what the scorer reads and drops what it cannot score', () => {
+    expect(toScorableEvent(toTripEventView(speedingEvent))).toEqual({
+      id: 'e1',
+      category: 'speeding',
+      startedAt: speedingEvent.started_at,
+      durationS: 38,
+      q: 0.9,
+      corrected: false,
+      status: 'scored',
+      measured: { speedMps: 21, limitMps: 15.6, overMps: 5.4 },
+      context: { night: false, precipitation: false },
+    });
+    // A category or a status this build has no band for cannot be scored against.
+    expect(toScorableEvent(toTripEventView(eventRow({ category: 'tailgating' })))).toBeNull();
+    expect(toScorableEvent(toTripEventView(eventRow({ status: null })))).toBeNull();
+    // No confidence recorded is not the same as certain.
+    expect(toScorableEvent(toTripEventView(eventRow({ confidence: null })))?.q).toBe(0);
+    expect(toScorableEvents([toTripEventView(eventRow({ category: 'tailgating' }))])).toEqual([]);
+  });
+
+  test('a freshly finalized, unsynced trip still gets its coaching tip', () => {
+    const events = [toTripEventView(speedingEvent)];
+    const tip = pickTopTip(toScoredTrip(scoredTrip, events), toScorableEvents(events), 'new');
+
+    expect(tipOutcomeOf(scoredTrip)).toBe('coach');
+    expect(tip).not.toBeNull();
+    expect(tip?.category).toBe('speeding');
+  });
+
+  test('a clean scored trip yields no tip, which is the keep-it-up card', () => {
+    const clean = summary({ status: 'provisional', score: 100 });
+    expect(tipOutcomeOf(clean)).toBe('keep_it_up');
+    expect(pickTopTip(toScoredTrip(clean, []), [], 'new')).toBeNull();
+    // The card the screen shows instead asserts the trip really was clean.
+    expect(keepItUpTip.category).toBe('general');
+  });
+
+  test('an unscored trip yields no tip, and nothing to coach', () => {
+    const passenger = summary({ status: 'unscored', score: null, role: 'passenger' });
+    expect(tipOutcomeOf(passenger)).toBe('facts_only');
+    expect(unscoredReasonOf(passenger)).toBe('passenger');
+    expect(pickTopTip(toScoredTrip(passenger, []), [], 'new')).toBeNull();
+  });
+})

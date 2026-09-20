@@ -78,13 +78,24 @@ export interface TripDetail {
   trip: TripSummary;
   /** Scored trips the driver has made, this one included. */
   scoredTripCount: number;
-  /** `new` below `LEARNING_PERIOD_TRIPS` scored trips, `experienced` at or past it. */
+  /**
+   * `new` below `LEARNING_PERIOD_TRIPS` scored trips, `experienced` at or past it — the driver's
+   * stage **now**, not at the time of this trip. Re-opening drive #1 after ten drives shows the
+   * experienced copy, which is the right call: the tip is advice to act on today.
+   */
   stage: TripStage;
   /** Which card D1 shows: a coaching tip, `keepItUpTip`, or the facts alone. */
   tipOutcome: TipOutcome;
   /** Why there is no score, when the row explains it. Null for a scored trip. */
   unscoredReason: UnscoredReason | null;
 }
+
+/**
+ * The tip a screen shows is built from this result and `useTripEvents`:
+ * `pickTopTip(toScoredTrip(trip, events), toScorableEvents(events), stage)`. Both bridges are in
+ * `rows.ts` — see `toScoredTrip` for the rule that a locally `provisional` trip is the scorer's
+ * `'final'`, without which every unsynced trip would lose its coaching.
+ */
 
 export async function readTrip(db: Db, clientTripId: string): Promise<TripDetail | null> {
   const trips = createTripsRepo(db);

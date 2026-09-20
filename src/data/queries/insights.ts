@@ -23,7 +23,16 @@ const HOUR_S = 3600;
 
 /** The "you vs. you" comparison window (§7.E E1): the driver's current four weeks. */
 export const YOU_VS_YOU_CURRENT_D = 28;
-/** The baseline behind it (§9.6): the eight weeks before the current window. */
+/**
+ * The baseline behind it: the eight weeks *before* the current window, which is what §7.E E1
+ * asks for ("current 4 weeks vs. previous 8-week baseline").
+ *
+ * Note this is **not** the server's window: `baselines()` in the edge function takes the *last*
+ * 56 days, which overlaps the current four weeks and therefore shrinks every delta. The median
+ * arithmetic is identical; only the window differs. Whoever wires `insights.baseline` from the
+ * server must either move the server to `[now-84 d, now-28 d)` or caption the card differently
+ * when `baselineSource === 'stored'`.
+ */
 export const BASELINE_WINDOW_D = 56;
 /**
  * Ten years of weekly points. `all` over a long history would otherwise grow the trend without
@@ -38,6 +47,25 @@ function round(value: number, places: number): number {
   return rounded === 0 ? 0 : rounded;
 }
 
+/**
+ * The hour of `ts` on the clock in `tz`, 0-23 — the same `Intl` recipe `dayKey` uses, so a trip's
+ * hour and its local day always come from one calendar. The device's own hour when `Intl` does
+ * not know the zone.
+ */
+export function localHour(ts: number, tz: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(ts));
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+    return Number.isFinite(hour) ? hour : new Date(ts).getHours();
+  } catch {
+    return new Date(ts).getHours();
+  }
+}
+
 /** A scored trip, reduced to what every aggregation below needs. */
 export interface InsightTrip {
   clientTripId: string;
@@ -45,6 +73,10 @@ export interface InsightTrip {
   endedAt: number;
   /** The trip's own local calendar date. */
   day: string;
+  /** The trip's own zone, as `trips.tz` stored it. */
+  tz: string;
+  /** The hour the drive started, on the clock in `tz`, 0-23. Buckets the time-of-day split. */
+  startHour: number;
   distanceM: number;
   durationS: number;
   score: number;
@@ -68,6 +100,8 @@ export function toInsightTrip(summary: TripSummary): InsightTrip | null {
     startedAt: summary.startedAt,
     endedAt: summary.endedAt ?? summary.startedAt + summary.durationS * 1000,
     day: summary.day,
+    tz: summary.tz,
+    startHour: localHour(summary.startedAt, summary.tz),
     distanceM: summary.distanceM,
     durationS: summary.durationS,
     score: summary.score,
@@ -166,8 +200,27 @@ export interface TrendPoint {
   trips: number;
   /** The week's exposure-weighted mean score, or null when nothing was scored that week. */
   score: number | null;
+  /**
+   * Points the week lost per category — E2's per-category trend. With `distanceM` beside it a
+   * screen can draw the same rate per 100 miles the overview reports, week by week.
+   */
+  categoryDeductions: Record<EventCategory, number>;
   distanceM: number;
   durationS: number;
+}
+
+/** Points lost per category across a set of trips, every category present, each rounded to 2 dp. */
+export function sumCategoryDeductions(
+  trips: readonly InsightTrip[]
+): Record<EventCategory, number> {
+  const out = {} as Record<EventCategory, number>;
+  for (const category of CATEGORIES) {
+    out[category] = round(
+      trips.reduce((sum, trip) => sum + trip.categoryDeductions[category], 0),
+      2
+    );
+  }
+  return out;
 }
 
 /**
@@ -177,7 +230,10 @@ export interface TrendPoint {
  *
  * A trip is bucketed by *its own* local day, so a drive taken in another time zone stays on the
  * date the driver remembers; the axis itself is enumerated in whatever zone `fromDay`/`toDay`
- * were computed in.
+ * were computed in. Those two zones can disagree across a Monday at the edge of the window, so
+ * the axis is the *union* of the enumerated weeks and the weeks that actually hold trips: a
+ * drive is never silently dropped from its own trend, at the price of an occasional extra point
+ * just outside the range.
  */
 export function weeklyTrend(
   trips: readonly InsightTrip[],
@@ -201,8 +257,11 @@ export function weeklyTrend(
   ) {
     weeks.push(new Date(at).toISOString().slice(0, 10));
   }
+  const axis = new Set(weeks);
+  for (const week of buckets.keys()) axis.add(week);
+  const ordered = [...axis].sort();
   // Keep the newest weeks when a very long history would overflow the chart.
-  const kept = weeks.length > MAX_TREND_WEEKS ? weeks.slice(-MAX_TREND_WEEKS) : weeks;
+  const kept = ordered.length > MAX_TREND_WEEKS ? ordered.slice(-MAX_TREND_WEEKS) : ordered;
 
   return kept.map((weekStart) => {
     const own = buckets.get(weekStart) ?? [];
@@ -210,6 +269,7 @@ export function weeklyTrend(
       weekStart,
       trips: own.length,
       score: weightedScore(own),
+      categoryDeductions: sumCategoryDeductions(own),
       distanceM: own.reduce((sum, t) => sum + t.distanceM, 0),
       durationS: own.reduce((sum, t) => sum + t.durationS, 0),
     };
@@ -240,10 +300,17 @@ export function baselineMedians(trips: readonly InsightTrip[]): Record<string, n
   return medians;
 }
 
+/** The keys a baseline may carry: the six scoring categories, plus the median trip score. */
+export const BASELINE_KEYS: readonly string[] = [...CATEGORIES, 'score'];
+
 /**
  * Read a stored baseline. Accepts the server's `{ medians, computedAt }` envelope and a bare
- * `{ phone: 2, … }` record alike, keeps only finite numbers, and answers null for anything else
- * — a setting written by an older build must not take a screen down.
+ * `{ phone: 2, … }` record alike, and answers null for anything else — a setting written by an
+ * older build must not take a screen down.
+ *
+ * Only the six categories and `score` are kept: a bare envelope whose only number is a numeric
+ * `computedAt` is not a baseline, and letting it through would compare every category against
+ * `?? 0` and report six confident deltas from nothing.
  */
 export function parseStoredBaseline(value: unknown): Record<string, number> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -254,7 +321,8 @@ export function parseStoredBaseline(value: unknown): Record<string, number> | nu
       ? (inner as Record<string, unknown>)
       : record;
   const medians: Record<string, number> = {};
-  for (const [key, entry] of Object.entries(source)) {
+  for (const key of BASELINE_KEYS) {
+    const entry = source[key];
     if (typeof entry === 'number' && Number.isFinite(entry)) medians[key] = entry;
   }
   return Object.keys(medians).length === 0 ? null : medians;
@@ -352,6 +420,50 @@ export function conditionsSplit(trips: readonly InsightTrip[]): ConditionsSplit 
   };
 }
 
+/**
+ * The four time-of-day buckets E2 shows, by the hour the drive *started* on the clock where it
+ * happened: night 22:00-04:59, morning 05:00-10:59, afternoon 11:00-16:59, evening 17:00-21:59.
+ *
+ * These are reading buckets, not the scoring night context: §9.4's `night` multiplier runs
+ * 23:00-04:59 (`CONSTANTS.NIGHT_START_H`/`NIGHT_END_H`) and lives on `conditions.night`, which is
+ * the flag the engine stored per trip. A drive at 22:30 is in the `night` bar here and was not
+ * scored as a night drive, which is correct for both: the bar answers "when do I drive", the
+ * multiplier answers "how dark was it".
+ */
+export type TimeOfDayBucket = 'night' | 'morning' | 'afternoon' | 'evening';
+export const TIME_OF_DAY_BUCKETS: readonly TimeOfDayBucket[] = [
+  'morning',
+  'afternoon',
+  'evening',
+  'night',
+];
+/** The first hour of each daylight bucket, and the hour night begins. */
+export const TIME_OF_DAY_BOUNDS = { morning: 5, afternoon: 11, evening: 17, night: 22 } as const;
+
+export function timeOfDayBucket(hour: number): TimeOfDayBucket {
+  if (hour >= TIME_OF_DAY_BOUNDS.night || hour < TIME_OF_DAY_BOUNDS.morning) return 'night';
+  if (hour < TIME_OF_DAY_BOUNDS.afternoon) return 'morning';
+  if (hour < TIME_OF_DAY_BOUNDS.evening) return 'afternoon';
+  return 'evening';
+}
+
+/** A time-of-day bar: the slice, plus what each category cost inside it. */
+export interface TimeOfDaySlice extends ConditionSlice {
+  categoryDeductions: Record<EventCategory, number>;
+}
+
+export type TimeOfDaySplit = Record<TimeOfDayBucket, TimeOfDaySlice>;
+
+/** Trips bucketed by their own local start hour — E2's "time-of-day pattern". */
+export function timeOfDaySplit(trips: readonly InsightTrip[]): TimeOfDaySplit {
+  const out = {} as TimeOfDaySplit;
+  for (const bucket of TIME_OF_DAY_BUCKETS) {
+    const own = trips.filter((trip) => timeOfDayBucket(trip.startHour) === bucket);
+    out[bucket] = { ...slice(own), categoryDeductions: sumCategoryDeductions(own) };
+  }
+  return out;
+}
+
 export interface InsightTotals {
   /** Every visible trip in the window, scored or not. */
   trips: number;
@@ -394,6 +506,8 @@ export interface Insights {
   /** Where the baseline behind `youVsYou` came from, or null when there was none. */
   baselineSource: 'stored' | 'local' | null;
   conditions: ConditionsSplit;
+  /** E2's time-of-day pattern over the window, by the trip's own local start hour. */
+  timeOfDay: TimeOfDaySplit;
 }
 
 const forLongTerm = (trip: InsightTrip): TripForLongTerm => ({
@@ -465,5 +579,6 @@ export function buildInsights(input: BuildInsightsInput): Insights {
     youVsYou: youVsYou(current, baseline),
     baselineSource: stored !== null ? 'stored' : localBaseline !== null ? 'local' : null,
     conditions: conditionsSplit(inWindow),
+    timeOfDay: timeOfDaySplit(inWindow),
   };
 }

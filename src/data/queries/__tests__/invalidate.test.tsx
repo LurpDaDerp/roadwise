@@ -5,7 +5,7 @@ import type { Db } from '@/data/db/driver';
 import { createTestDb, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createQueryClient } from '@/data/queries/client';
-import { useTrip, useTrips } from '@/data/queries/hooks';
+import { useTrip, useTripEvents, useTrips, type TripDetail } from '@/data/queries/hooks';
 import { queryKeys } from '@/data/queries/keys';
 import {
   invalidateAfterSync,
@@ -114,7 +114,7 @@ test('an injected queue emitter is used in place of the default', async () => {
   await waitFor(() => expect(result.current.data).toHaveLength(2));
 });
 
-test('onTripChanged refreshes the named trip and the lists, and leaves other trips alone', async () => {
+test('onTripChanged refreshes every open trip detail, because the trip count moved', async () => {
   await seedTrips(db, [A, B]);
   const engine = fakeEmitter<[string | undefined]>();
   detach = subscribeInvalidation(client, {
@@ -130,9 +130,15 @@ test('onTripChanged refreshes the named trip and the lists, and leaves other tri
   await db.execute('UPDATE trips SET score = 50 WHERE client_trip_id IN (?, ?)', ['a', 'b']);
   engine.emit('a');
 
+  // `scoredTripCount` and `stage` ride on every TripDetail, so one finalize moves them all.
   await waitFor(() => expect(first.result.current.data?.trip.score).toBe(50));
-  // 'b' was never invalidated, so its cached detail is still the one that was read.
-  expect(second.result.current.data?.trip.score).toBe(80);
+  // Read 'b' from the cache rather than from its hook: RNTL drives one tree at a time, so the
+  // second `renderHook`'s tree has not necessarily re-rendered yet. What is under test is that
+  // the query refetched, which is what a mounted screen would then paint.
+  await waitFor(() =>
+    expect(client.getQueryData<TripDetail | null>(queryKeys.trip('b'))?.trip.score).toBe(50)
+  );
+  expect(second.result.current.isSuccess).toBe(true);
 });
 
 test('a trip change with no id falls back to invalidating everything', async () => {
@@ -152,14 +158,24 @@ test('a trip change with no id falls back to invalidating everything', async () 
   await waitFor(() => expect(result.current.data?.trip.score).toBe(50));
 });
 
-test('invalidateTrip touches the trip keys and the lists, not another trip', async () => {
+test('invalidateTrip sweeps the trip root but only the named timeline', async () => {
   await seedTrips(db, [A, B]);
-  const first = await renderHook(() => useTrip('a'), { wrapper });
+  const first = await renderHook(() => useTripEvents('a'), { wrapper });
+  const second = await renderHook(() => useTripEvents('b'), { wrapper });
+  const detail = await renderHook(() => useTrip('b'), { wrapper });
   await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+  await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
+  await waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
 
-  await invalidateTrip(client, 'a');
-  expect(client.getQueryState(['trip', 'b'])).toBeUndefined();
-  expect(client.getQueryState(['trip', 'a'])).toBeDefined();
+  // `invalidateQueries` marks its matches synchronously and clears the flag only once the
+  // refetch lands, so the flags read before the await are the scope of the sweep.
+  const pending = invalidateTrip(client, 'a');
+  expect(client.getQueryState(queryKeys.tripEvents('a'))?.isInvalidated).toBe(true);
+  // No other trip's timeline can have moved.
+  expect(client.getQueryState(queryKeys.tripEvents('b'))?.isInvalidated).toBe(false);
+  // But every trip's detail carries the scored-trip count, so the root is swept.
+  expect(client.getQueryState(queryKeys.trip('b'))?.isInvalidated).toBe(true);
+  await pending;
 });
 
 test('the unsubscribe detaches both sources and is safe to call twice', () => {

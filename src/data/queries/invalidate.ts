@@ -30,15 +30,20 @@ export async function invalidateAfterSync(queryClient: QueryClient): Promise<voi
 }
 
 /**
- * One trip changed: its own two keys, and the lists and aggregates it appears in. Cheaper than a
- * full sweep when the engine finalizes a drive and names it.
+ * One trip changed: the trip details, its own event timeline, and the lists and aggregates it
+ * appears in. Cheaper than a full sweep when the engine finalizes a drive and names it — only
+ * `tripEvents` is narrowed to the one id, since no other trip's timeline can have moved.
+ *
+ * The `['trip']` *root* is invalidated rather than the single key: `TripDetail` carries
+ * `scoredTripCount` and `stage`, which every finalize changes for every trip. Only active
+ * queries refetch, so a screen that is not mounted costs nothing.
  */
 export async function invalidateTrip(
   queryClient: QueryClient,
   clientTripId: string
 ): Promise<void> {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.trip(clientTripId) }).catch(ignore),
+    queryClient.invalidateQueries({ queryKey: ['trip'] }).catch(ignore),
     queryClient.invalidateQueries({ queryKey: queryKeys.tripEvents(clientTripId) }).catch(ignore),
     queryClient.invalidateQueries({ queryKey: ['trips'] }).catch(ignore),
     queryClient.invalidateQueries({ queryKey: ['scoreDaily'] }).catch(ignore),

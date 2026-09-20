@@ -34,11 +34,21 @@ export function DataProvider({
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
 
+/**
+ * Thrown when a hook is rendered outside `DataProvider`. Named, so the host's error boundary can
+ * tell "the database was never opened" apart from a failing statement and say so.
+ */
+export class MissingDataProviderError extends Error {
+  override readonly name = 'MissingDataProviderError';
+
+  constructor() {
+    super('useDataSource: wrap the tree in <DataProvider db={…}> before reading data');
+  }
+}
+
 export function useDataSource(): DataSource {
   const value = useContext(DataContext);
-  if (value === null) {
-    throw new Error('useDataSource: wrap the tree in <DataProvider db={…}> before reading data');
-  }
+  if (value === null) throw new MissingDataProviderError();
   return value;
 }
 

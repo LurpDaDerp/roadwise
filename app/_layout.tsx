@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { createQueryClient } from '@/data/queries';
+import { createQueryClient } from '@/data/queries/client';
 import { SessionProvider } from '@/data/supabase/session';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { ThemeProvider } from '@/ui';

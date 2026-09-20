@@ -1,5 +1,11 @@
 export { createQueryClient, DEFAULT_GC_MS, DEFAULT_STALE_MS } from '@/data/queries/client';
-export { DataProvider, useDataSource, useDb, type DataSource } from '@/data/queries/context';
+export {
+  DataProvider,
+  MissingDataProviderError,
+  useDataSource,
+  useDb,
+  type DataSource,
+} from '@/data/queries/context';
 export {
   BASELINE_SETTING_KEY,
   readInsights,
@@ -18,11 +24,18 @@ export {
 export {
   buildInsights,
   baselineMedians,
+  BASELINE_KEYS,
   BASELINE_WINDOW_D,
   categoryRates,
   conditionsSplit,
+  localHour,
   median,
   parseStoredBaseline,
+  sumCategoryDeductions,
+  timeOfDayBucket,
+  timeOfDaySplit,
+  TIME_OF_DAY_BOUNDS,
+  TIME_OF_DAY_BUCKETS,
   toInsightTrip,
   weeklyTrend,
   weekStartOf,
@@ -31,10 +44,15 @@ export {
   YOU_VS_YOU_CURRENT_D,
   type BuildInsightsInput,
   type CategoryRate,
+  type ConditionSlice,
   type ConditionsSplit,
   type Delta,
+  type InsightTotals,
   type InsightTrip,
   type Insights,
+  type TimeOfDayBucket,
+  type TimeOfDaySlice,
+  type TimeOfDaySplit,
   type TrendPoint,
   type YouVsYou,
 } from '@/data/queries/insights';
@@ -67,6 +85,9 @@ export {
   parseConditions,
   tipOutcomeOf,
   toDayEntry,
+  toScorableEvent,
+  toScorableEvents,
+  toScoredTrip,
   toTripEventView,
   toTripSummary,
   unscoredReasonOf,

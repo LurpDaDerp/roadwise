@@ -11,7 +11,7 @@ import { band, CATEGORY, CONSTANTS } from '@scoring';
 import type { EventCategory, ScorableEvent, ScoreBand, ScoredTrip } from '@scoring';
 
 import type { EventRow, ScoreDailyCache, TripRow, TripStatus, TripSyncState } from '@/data/db/types';
-import type { TripRole, TripsFilter } from '@/data/queries/keys';
+import { TRIP_ROLES, type TripRole, type TripsFilter } from '@/data/queries/keys';
 import { dayKey } from '@/lib/time';
 
 /** The six scoring categories, in the order `CATEGORY` declares them. */
@@ -113,7 +113,6 @@ export interface TripSummary {
   serverId: string | null;
 }
 
-const ROLES: readonly string[] = ['driver', 'passenger', 'other', 'unknown'];
 const QUALITIES: readonly string[] = ['A', 'B', 'C'];
 
 function worstOf(deductions: Record<EventCategory, number>): EventCategory | null {
@@ -143,7 +142,10 @@ export function toTripSummary(row: TripRow): TripSummary {
     day: dayKey(new Date(row.started_at), row.tz),
     distanceM: row.distance_m,
     durationS: row.duration_s,
-    role: row.role !== null && ROLES.includes(row.role) ? (row.role as TripRole) : 'unknown',
+    role:
+      row.role !== null && (TRIP_ROLES as readonly string[]).includes(row.role)
+        ? (row.role as TripRole)
+        : 'unknown',
     mode: row.mode,
     status: row.status,
     score: row.score,
@@ -221,6 +223,9 @@ export type UnscoredReason = NonNullable<ScoredTrip['reason']>;
  * trip was implausibly fast, then a non-driver, then a trip too short, then data the phone could
  * not grade. Null for a scored trip, and null when nothing in the row explains it — better than
  * telling the driver a reason that is not theirs.
+ *
+ * A *missing* `data_quality` is such a row: the scorer always writes a grade (§9.4), so a null
+ * one is a row this build did not write, and calling it grade C would be a guess.
  */
 export function unscoredReasonOf(summary: TripSummary): UnscoredReason | null {
   if (summary.scored) return null;
@@ -232,7 +237,7 @@ export function unscoredReasonOf(summary: TripSummary): UnscoredReason | null {
   ) {
     return 'too_short';
   }
-  if (summary.dataQuality === 'C' || summary.dataQuality === null) return 'grade_c';
+  if (summary.dataQuality === 'C') return 'grade_c';
   return null;
 }
 
@@ -309,6 +314,78 @@ export function toTripEventView(row: EventRow): TripEventView {
     alertShown: row.alert_shown === 1,
     corrected: row.corrected === 1,
     source: row.source,
+  };
+}
+
+/**
+ * The scorer's view of a stored event, for `pickTopTip` (§7.D D1 → D6).
+ *
+ * Null for an event this build cannot score against: an unknown category, or a status the scorer
+ * has no band for. `q` is the stored confidence, defaulting to 0 — an event with no confidence
+ * recorded must not be treated as certain.
+ */
+export function toScorableEvent(view: TripEventView): ScorableEvent | null {
+  if (view.category === null || view.status === null) return null;
+  return {
+    id: view.id,
+    category: view.category,
+    startedAt: view.startedAt,
+    durationS: view.durationS,
+    q: view.confidence ?? 0,
+    corrected: view.corrected,
+    status: view.status,
+    measured: view.measured,
+    context: view.context,
+  };
+}
+
+/** `toScorableEvent` over a timeline, dropping the events the scorer has no opinion about. */
+export function toScorableEvents(views: readonly TripEventView[]): ScorableEvent[] {
+  const out: ScorableEvent[] = [];
+  for (const view of views) {
+    const event = toScorableEvent(view);
+    if (event !== null) out.push(event);
+  }
+  return out;
+}
+
+/**
+ * The scorer's view of a stored trip, so a screen can call
+ * `pickTopTip(toScoredTrip(trip, events), toScorableEvents(events), stage)`.
+ *
+ * **The load-bearing rule: a locally `provisional` trip is the scorer's `'final'`.** The engine
+ * stores a scored trip as `provisional` until `finalize-trip` confirms it (`finalize.ts`,
+ * `tripStatus`), which is the state *every* trip is in on the D1 screen that follows a drive, and
+ * the state every trip stays in on an offline device. `pickTopTip` returns null for any status
+ * but `'final'`, so mapping `provisional → 'unscored'` — the natural-looking choice — would
+ * silently kill coaching for exactly the trips that need it, while `tipOutcomeOf` still said
+ * `'coach'`. `scored` (`isScoredRow`) is the single predicate both answers come from.
+ *
+ * `unscored` and `discarded` map to themselves, and carry `reason` when the row explains it.
+ *
+ * `eventDeductions` is keyed by event id and holds the stored per-event deduction — the
+ * post-exposure value `scoreTrip` wrote. `pickTopTip` only tests it for `> 0`, so the units do
+ * not matter to it; only events that actually cost points appear, which is what makes a
+ * `possible` or disputed event uncoachable.
+ */
+export function toScoredTrip(
+  trip: TripSummary,
+  events: readonly TripEventView[] = []
+): ScoredTrip {
+  const eventDeductions: Record<string, number> = {};
+  for (const event of events) {
+    if (event.affectsScore) eventDeductions[event.id] = event.deduction;
+  }
+  const reason = unscoredReasonOf(trip);
+  return {
+    score: trip.score,
+    status: trip.scored ? 'final' : trip.status === 'discarded' ? 'discarded' : 'unscored',
+    ...(reason === null ? {} : { reason }),
+    exposure: trip.exposure ?? CONSTANTS.EXPOSURE_FLOOR,
+    dataQuality: trip.dataQuality ?? 'C',
+    categoryDeductions: trip.categoryDeductions,
+    eventDeductions,
+    scoringVersion: 1,
   };
 }
 

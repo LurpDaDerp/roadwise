@@ -11,6 +11,7 @@ import {
 } from '@/data/queries/__fixtures__/harness';
 import { deductions, eventRow, MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createQueryClient } from '@/data/queries/client';
+import { MissingDataProviderError } from '@/data/queries/context';
 import { useInsights, useScoreDaily, useTrip, useTripEvents, useTrips } from '@/data/queries/hooks';
 
 const NOW = Date.UTC(2026, 0, 20, 12, 0, 0);
@@ -284,3 +285,23 @@ describe('useInsights', () => {
     });
   });
 });
+
+describe('the client and the provider', () => {
+  test('local reads never retry and nothing polls', () => {
+    // The "freshness comes from invalidation, not from polling" design rests on these three.
+    expect(createQueryClient().getDefaultOptions().queries).toMatchObject({
+      retry: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    });
+  });
+
+  test('a hook rendered without DataProvider throws a named error', async () => {
+    const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(renderHook(() => useTrips())).rejects.toBeInstanceOf(MissingDataProviderError);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+})
