@@ -157,36 +157,45 @@ export type Database = {
       event_disputes: {
         Row: {
           auto_accepted: boolean
+          consumed_allowance: boolean
           created_at: string
           decided_at: string
+          denied_reason: string | null
           event_id: string
           id: string
           note: string | null
           reason: string
+          segment_key: string | null
           stated_limit_mph: number | null
           updated_at: string
           user_id: string
         }
         Insert: {
           auto_accepted?: boolean
+          consumed_allowance?: boolean
           created_at?: string
           decided_at?: string
+          denied_reason?: string | null
           event_id: string
           id?: string
           note?: string | null
           reason: string
+          segment_key?: string | null
           stated_limit_mph?: number | null
           updated_at?: string
           user_id: string
         }
         Update: {
           auto_accepted?: boolean
+          consumed_allowance?: boolean
           created_at?: string
           decided_at?: string
+          denied_reason?: string | null
           event_id?: string
           id?: string
           note?: string | null
           reason?: string
+          segment_key?: string | null
           stated_limit_mph?: number | null
           updated_at?: string
           user_id?: string
@@ -487,6 +496,7 @@ export type Database = {
           role: string
           role_confidence: number | null
           role_source: string | null
+          rows_digest: Json
           score: number | null
           scoring_version: number
           start_geohash5: string | null
@@ -525,6 +535,7 @@ export type Database = {
           role: string
           role_confidence?: number | null
           role_source?: string | null
+          rows_digest?: Json
           score?: number | null
           scoring_version?: number
           start_geohash5?: string | null
@@ -563,6 +574,7 @@ export type Database = {
           role?: string
           role_confidence?: number | null
           role_source?: string | null
+          rows_digest?: Json
           score?: number | null
           scoring_version?: number
           start_geohash5?: string | null
@@ -590,6 +602,7 @@ export type Database = {
           p_events: Json
           p_scored: Json
           p_trip_id: string
+          p_user: string
         }
         Returns: Json
       }
@@ -618,6 +631,11 @@ export type Database = {
         Args: { p_days: Json; p_fn: string }
         Returns: undefined
       }
+      require_scored_trip: {
+        Args: { p_fn: string; p_scored: Json }
+        Returns: Record<string, unknown>
+      }
+      require_service_role: { Args: { p_fn: string }; Returns: undefined }
       require_type: {
         Args: { p_fn: string; p_name: string; p_type: string; p_value: Json }
         Returns: undefined
