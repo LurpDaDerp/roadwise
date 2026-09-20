@@ -57,6 +57,11 @@ export interface TripRow {
   sync_state: TripSyncState;
   /** How far the recorder has durably written, so a crash resumes rather than restarts. */
   checkpoint_ts: number | null;
+  /**
+   * The trip was finalized by crash recovery from its last checkpoint, not by the engine that
+   * recorded it (§19.1): its tail past the checkpoint may be missing and it had no alerts.
+   */
+  incomplete: Flag;
   /** The server's `trips.id`, once `finalize-trip` has accepted the upload. */
   server_id: string | null;
   created_at: number;

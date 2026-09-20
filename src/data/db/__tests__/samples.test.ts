@@ -137,3 +137,21 @@ test('purgeByTrip on a transaction handle is undone when that transaction rolls 
   await expect(db.transaction((tx) => samples.purgeByTrip('trip-1', tx))).resolves.toBe(2);
   await expect(samples.count('trip-1')).resolves.toBe(0);
 });
+
+test('appendMany on a transaction handle joins it: undone on rollback, and still refuses a missing trip', async () => {
+  const batch = [{ ts: T0, row: { n: 1 } }, { ts: T0 + 1000, row: { n: 2 } }];
+  await expect(
+    db.transaction(async (tx) => {
+      await samples.appendMany('trip-1', batch, tx);
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  await expect(samples.count('trip-1')).resolves.toBe(0);
+
+  await expect(
+    db.transaction((tx) => samples.appendMany('ghost', batch, tx))
+  ).rejects.toThrow(MissingTripError);
+
+  await db.transaction((tx) => samples.appendMany('trip-1', batch, tx));
+  await expect(samples.count('trip-1')).resolves.toBe(2);
+});

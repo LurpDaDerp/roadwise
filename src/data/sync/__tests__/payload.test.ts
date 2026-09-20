@@ -73,6 +73,7 @@ const payload = (overrides: Partial<FinalizeTripPayload> = {}): FinalizeTripPayl
   polyline: '_p~iF~ps|U_ulLnnqC_mqNvxq`@',
   tracePath: '123e4567-e89b-42d3-a456-426614174000.bin.gz',
   hadSevereEvent: false,
+  incomplete: false,
   ...overrides,
 });
 
@@ -133,6 +134,11 @@ describe('rejects', () => {
   const digest = (sha256: string) => ({ ...payload().rowsDigest, sha256 });
 
   rejects('a missing field', missing());
+  rejects('a missing incomplete flag', (() => {
+    const { incomplete: _drop, ...rest } = payload();
+    return rest;
+  })());
+  rejects('an incomplete flag that is not a boolean', payload({ incomplete: 1 as never }));
   rejects('a digest that is not 64 hex characters', payload({ rowsDigest: digest('abc') }));
   rejects('an upper-case digest', payload({ rowsDigest: digest('A'.repeat(64)) }));
   rejects('a negative distance', payload({ distanceM: -1 }));
@@ -216,6 +222,12 @@ describe('rejects', () => {
   // Coordinates arrive already rounded to 3 dp (§4.2 lat/lng numeric(8,3)).
   rejects('an unrounded latitude', payload({ events: [event({ lat: 37.7749 })] }));
   rejects('an unrounded longitude', payload({ events: [event({ lng: -122.41945 })] }));
+});
+
+test('a recovered trip carries incomplete: true and round-trips', () => {
+  const p = payload({ incomplete: true });
+  expect(FinalizeTripPayloadSchema.parse(p)).toEqual(p);
+  expect(FinalizeTripPayloadSchema.parse(JSON.parse(JSON.stringify(p)))).toEqual(p);
 });
 
 test('tracePath is exactly <clientTripId>.bin.gz, or null', () => {

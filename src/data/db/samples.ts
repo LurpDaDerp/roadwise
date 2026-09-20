@@ -36,18 +36,21 @@ export function createSamplesRepo(db: Db) {
     /**
      * One transaction per batch: a partial batch is never visible to a reader, and a batch for a
      * trip that is not there writes nothing. The parent check runs inside the transaction, so it
-     * holds even where foreign keys are not enforced there (see `createExpoDb`).
+     * holds even where foreign keys are not enforced there (see `createExpoDb`). Given a
+     * transaction handle `on`, the batch joins that transaction instead of opening its own.
      */
     appendMany(
       clientTripId: string,
-      rows: readonly { ts: number; row: unknown }[]
+      rows: readonly { ts: number; row: unknown }[],
+      on?: Db
     ): Promise<void> {
-      return db.transaction(async (tx) => {
+      const run = async (tx: Db): Promise<void> => {
         await assertTripExists(tx, clientTripId);
         for (const { ts, row } of rows) {
           await tx.execute(APPEND, [clientTripId, ts, JSON.stringify(row)]);
         }
-      });
+      };
+      return on ? run(on) : db.transaction(run);
     },
 
     /** Inclusive at both ends, oldest first. */

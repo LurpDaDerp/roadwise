@@ -91,6 +91,17 @@ test('rejects a trip sync_state outside the allowed set', async () => {
   }
 });
 
+test('trips carries the incomplete flag, NOT NULL and off by default', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(trips)');
+  const column = rows.find((row) => row.name === 'incomplete');
+  expect(column).toMatchObject({ type: 'INTEGER', notnull: 1, dflt_value: '0' });
+
+  await insertTrip(db, 'recording', 'local');
+  const { rows: stored } = await db.execute('SELECT incomplete FROM trips');
+  expect(stored).toEqual([{ incomplete: 0 }]);
+});
+
 test('rejects a sync_queue status outside the allowed set', async () => {
   await migrate(db);
   const insert = (status: string) =>

@@ -48,6 +48,7 @@ const COLUMNS = [
   'status',
   'sync_state',
   'checkpoint_ts',
+  'incomplete',
   'server_id',
   'created_at',
   'updated_at',
@@ -86,6 +87,7 @@ function toTripRow(row: Record<string, unknown>): TripRow {
     status: asEnum(row, 'status', TRIP_STATUSES),
     sync_state: asEnum(row, 'sync_state', TRIP_SYNC_STATES),
     checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
+    incomplete: asFlag(row, 'incomplete'),
     server_id: asTextOrNull(row, 'server_id'),
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
@@ -149,14 +151,15 @@ export function createTripsRepo(db: Db) {
     get,
     update,
 
-    async insert(trip: NewTrip, now: number = Date.now()): Promise<TripRow> {
+    /** Runs on `on` when given, so the recorder can insert the trip with its first samples. */
+    async insert(trip: NewTrip, now: number = Date.now(), on: Db = db): Promise<TripRow> {
       const { sql, params } = insertStatement('trips', COLUMNS, {
         ...trip,
         created_at: now,
         updated_at: now,
       });
-      await db.execute(sql, params);
-      const inserted = await get(trip.client_trip_id);
+      await on.execute(sql, params);
+      const inserted = await get(trip.client_trip_id, on);
       // The INSERT succeeded, so the row is there; the read-back exists to pick up the defaults.
       if (!inserted) throw new Error(`trip ${trip.client_trip_id} vanished after insert`);
       return inserted;
@@ -189,9 +192,12 @@ export function createTripsRepo(db: Db) {
     setSyncState: (clientTripId: string, syncState: TripSyncState, now: number = Date.now()) =>
       update(clientTripId, { sync_state: syncState }, now),
 
-    /** Record how far the recorder has durably written, so a relaunch resumes from here. */
-    checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now()) =>
-      update(clientTripId, { checkpoint_ts: checkpointTs }, now),
+    /**
+     * Record how far the recorder has durably written, so a relaunch resumes from here. Runs on
+     * `on` when given, so the mark commits together with the samples it vouches for.
+     */
+    checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now(), on?: Db) =>
+      update(clientTripId, { checkpoint_ts: checkpointTs }, now, on),
 
     /** Takes the trip's events and samples with it, via ON DELETE CASCADE. */
     async remove(clientTripId: string): Promise<boolean> {

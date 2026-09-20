@@ -48,6 +48,7 @@ const payload = (overrides: Partial<FinalizeTripPayload> = {}): FinalizeTripPayl
   polyline: '',
   tracePath: `${ID}.bin.gz`,
   hadSevereEvent: false,
+  incomplete: false,
   ...overrides,
 });
 

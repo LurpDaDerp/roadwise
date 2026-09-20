@@ -184,6 +184,7 @@ describe('the worked example (spec §9.4): 22 minutes, 13.2 km, the three golden
       start_label: null,
       end_label: null,
       checkpoint_ts: rows[N - 1]!.ts,
+      incomplete: 0,
       created_at: T0,
       updated_at: NOW,
     });
@@ -592,6 +593,27 @@ describe('other outcomes', () => {
       expect(events[0]).toMatchObject({ duration_s: 12, alert_shown: 1, source: 'both' });
       expect(payload.events[0]).toMatchObject({ id: 'p', alertShown: true, measured: { speedMps: 15, glanceS: 5, focusKind: 'glance' } });
     });
+  });
+
+  test('the incomplete flag comes from the deps: off by default, on the row and in the payload when set', async () => {
+    const rows = track(200);
+    const normal = await finalizeTrip(session(rows), deps);
+    expect(normal.trip.incomplete).toBe(0);
+    expect(normal.payload.incomplete).toBe(false);
+
+    await db.execute('DELETE FROM sync_queue');
+    await db.execute('DELETE FROM trips');
+    const recovered = await finalizeTrip(session(rows), { ...deps, incomplete: true });
+    expect(recovered.trip.incomplete).toBe(1);
+    expect(recovered.payload.incomplete).toBe(true);
+    expect(FinalizeTripPayloadSchema.parse(recovered.payload)).toEqual(recovered.payload);
+  });
+
+  test('a fractional last row ts is rounded before it becomes checkpoint_ts', async () => {
+    const rows = track(200).map((r, i) => (i === 199 ? { ...r, ts: r.ts + 0.4 } : r));
+    const { trip } = await finalizeTrip(session(rows), deps);
+    expect(trip.checkpoint_ts).toBe(rows[198]!.ts + 1000);
+    expect(Number.isInteger(trip.checkpoint_ts)).toBe(true);
   });
 
   test('the camera flag comes from the host', async () => {

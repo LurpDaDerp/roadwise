@@ -46,6 +46,8 @@ export const SCHEMA_V1: readonly string[] = [
     sync_state TEXT NOT NULL DEFAULT 'local'
       CHECK (sync_state IN ('local', 'queued', 'uploading', 'synced', 'failed')),
     checkpoint_ts INTEGER,
+    -- Finalized by crash recovery from the last checkpoint rather than by the engine (§19.1).
+    incomplete INTEGER NOT NULL DEFAULT 0,
     server_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL

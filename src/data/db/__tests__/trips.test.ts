@@ -32,10 +32,19 @@ test('insert returns the stored row with the schema defaults filled in', async (
     status: 'recording',
     sync_state: 'local',
     checkpoint_ts: null,
+    incomplete: 0,
     server_id: null,
     created_at: T0,
     updated_at: T0,
   });
+});
+
+test('insert stores the incomplete flag when given', async () => {
+  const row = await trips.insert(
+    { client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'provisional', incomplete: 1 },
+    T0
+  );
+  expect(row.incomplete).toBe(1);
 });
 
 test('insert keeps the JSON columns as given', async () => {
@@ -177,4 +186,23 @@ test('update on a transaction handle is undone when that transaction rolls back'
 
   const updated = await db.transaction((tx) => trips.update('a', { status: 'provisional' }, T0 + 2, tx));
   expect(updated).toMatchObject({ status: 'provisional', updated_at: T0 + 2 });
+});
+
+test('insert and checkpoint on a transaction handle are undone when that transaction rolls back', async () => {
+  await expect(
+    db.transaction(async (tx) => {
+      await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0, tx);
+      await trips.checkpoint('a', T0 + 30_000, T0 + 30_000, tx);
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  await expect(trips.get('a')).resolves.toBeNull();
+
+  const inserted = await db.transaction(async (tx) => {
+    const row = await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0, tx);
+    await trips.checkpoint('a', T0 + 30_000, T0 + 30_000, tx);
+    return row;
+  });
+  expect(inserted).toMatchObject({ client_trip_id: 'a', status: 'recording', checkpoint_ts: null });
+  expect(await trips.get('a')).toMatchObject({ checkpoint_ts: T0 + 30_000, updated_at: T0 + 30_000 });
 });

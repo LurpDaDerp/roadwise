@@ -82,6 +82,12 @@ export interface FinalizeDeps {
   now?: () => number;
   /** Whether the camera pipeline ran for this trip. M1 has no camera, so it defaults to false. */
   cameraSession?: boolean;
+  /**
+   * The session was rebuilt by crash recovery from the last checkpoint (`recovery.ts`), not
+   * closed by the engine that recorded it: stored on the row and sent in the payload as
+   * `incomplete`. Defaults to false — the engine's own finalize never sets it.
+   */
+  incomplete?: boolean;
 }
 
 export interface FinalizeResult {
@@ -245,6 +251,21 @@ function hourIn(ts: number, tz: string): number {
   }
 }
 
+/**
+ * The night condition (§9.4): the clock rule in `tz` — at or past `NIGHT_START_H`, or before
+ * `NIGHT_END_H` — falling back to the device-local rule when Intl does not know the zone. The
+ * sun's position belongs to the HUD's night mode, not to scoring.
+ */
+export function nightAt(
+  ts: number,
+  tz: string,
+  constants: { NIGHT_START_H: number; NIGHT_END_H: number }
+): boolean {
+  const hour = hourIn(ts, tz);
+  if (Number.isNaN(hour)) return isNight(new Date(ts));
+  return hour >= constants.NIGHT_START_H || hour < constants.NIGHT_END_H;
+}
+
 /** A copy of the event with every number finite, so the payload contract holds whatever a detector emitted. */
 function sanitizeEvent(e: DetectedEvent, tripStartedAt: number): DetectedEvent {
   const measured: ScorableEvent['measured'] = {};
@@ -380,13 +401,9 @@ export async function finalizeTrip(
   const first = track[0] ?? null;
   const last = track[track.length - 1] ?? null;
 
-  // Conditions and the safe-day flag (§9.9). Night is the clock rule in the trip's zone (§9.4);
-  // the sun's position belongs to the HUD's night mode, not to scoring.
+  // Conditions and the safe-day flag (§9.9). Night is the clock rule in the trip's zone (§9.4).
   const { CONSTANTS } = scoring;
-  const hour = hourIn(startedAt, tz);
-  const night = Number.isNaN(hour)
-    ? isNight(new Date(startedAt))
-    : hour >= CONSTANTS.NIGHT_START_H || hour < CONSTANTS.NIGHT_END_H;
+  const night = nightAt(startedAt, tz, CONSTANTS);
   const hadSevereEvent =
     merged.some(
       (e) =>
@@ -425,6 +442,8 @@ export async function finalizeTrip(
   const endedAt = Math.round(
     session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + ROW_MS : startedAt)
   );
+  const checkpointTs = session.lastRowTs === null ? null : Math.round(session.lastRowTs);
+  const incomplete = deps.incomplete === true;
   const payload = FinalizeTripPayloadSchema.parse({
     clientTripId: id,
     startedAt,
@@ -445,6 +464,7 @@ export async function finalizeTrip(
     polyline,
     tracePath,
     hadSevereEvent,
+    incomplete,
   } satisfies FinalizeTripPayload);
 
   // 4. One transaction: the events, the trip row, the queue item and the purge commit together,
@@ -482,7 +502,8 @@ export async function finalizeTrip(
         status: tripStatus(scored.status),
         // Nothing to sync for a discarded trip: it is settled the moment it is stored.
         sync_state: discarded ? 'synced' : 'queued',
-        checkpoint_ts: session.lastRowTs,
+        checkpoint_ts: checkpointTs,
+        incomplete: incomplete ? 1 : 0,
       },
       now(),
       tx

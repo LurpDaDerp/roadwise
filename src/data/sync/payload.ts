@@ -154,6 +154,12 @@ export const FinalizeTripPayloadSchema = z
     tracePath: z.string().min(1).max(256).nullable(),
     /** A scored speeding event at or beyond `SEVERE_SPEEDING_OVER_MPS`, or any L3 alert (§9.9 safe day). */
     hadSevereEvent: z.boolean(),
+    /**
+     * Finalized by crash recovery from the last checkpoint rather than by the engine that
+     * recorded it (§19.1): the rows past that checkpoint may be missing and no alerts were
+     * delivered. False on every trip the engine closed itself.
+     */
+    incomplete: z.boolean(),
   })
   .strict()
   .refine((p) => p.endedAt >= p.startedAt, { error: 'endedAt precedes startedAt', path: ['endedAt'] })
