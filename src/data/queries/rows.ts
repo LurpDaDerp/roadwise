@@ -10,7 +10,17 @@
 import { band, CATEGORY, CONSTANTS } from '@scoring';
 import type { EventCategory, ScorableEvent, ScoreBand, ScoredTrip } from '@scoring';
 
-import type { EventRow, ScoreDailyCache, TripRow, TripStatus, TripSyncState } from '@/data/db/types';
+import {
+  DISPUTE_REASONS,
+  type DisputeOutcome,
+  type DisputeReason,
+  type DisputeRecord,
+  type EventRow,
+  type ScoreDailyCache,
+  type TripRow,
+  type TripStatus,
+  type TripSyncState,
+} from '@/data/db/types';
 import { TRIP_ROLES, type TripRole, type TripsFilter } from '@/data/queries/keys';
 import { dayKey } from '@/lib/time';
 
@@ -108,6 +118,8 @@ export interface TripSummary {
   incomplete: boolean;
   syncState: TripSyncState;
   syncError: string | null;
+  /** When the driver deleted this trip (§7.D D5). A row with a value here is never listed. */
+  deletedAt: number | null;
   /** The upload has not settled yet — D1 marks its points provisional. */
   pendingSync: boolean;
   serverId: string | null;
@@ -168,6 +180,7 @@ export function toTripSummary(row: TripRow): TripSummary {
     incomplete: row.incomplete === 1,
     syncState: row.sync_state,
     syncError: row.sync_error,
+    deletedAt: row.deleted_at,
     pendingSync: row.sync_state !== 'synced' && row.sync_state !== 'failed',
     serverId: row.server_id,
   };
@@ -175,13 +188,16 @@ export function toTripSummary(row: TripRow): TripSummary {
 
 /**
  * Trips a list never shows, whatever the filter says:
+ * - `deletedAt` set — the driver deleted it (§7.D D5). The row survives only until the queued
+ *   `delete-trip` reaches the server; nothing in the app may show it again in the meantime, and
+ *   no filter brings it back.
  * - `recording` — the row the engine is writing to. Recovery finalizes it at app start (§19.1),
  *   so a list that showed it would be showing a trip that is about to change under the driver.
- * - `discarded` — the scorer decided this was not a drive (a train, a plane, §9.4). The local
- *   schema has no `deleted_at`, and this is the row the driver would call deleted; `finalizeTrip`
- *   settles it as `synced` and never uploads it. `includeDiscarded` brings it back.
+ * - `discarded` — the scorer decided this was not a drive (a train, a plane, §9.4). Distinct
+ *   from a delete: nobody asked for it to go, so `includeDiscarded` brings it back.
  */
 export function isHiddenTrip(summary: TripSummary, filter: TripsFilter = {}): boolean {
+  if (summary.deletedAt !== null) return true;
   if (summary.status === 'recording') return true;
   return summary.status === 'discarded' && filter.includeDiscarded !== true;
 }
@@ -286,6 +302,45 @@ export interface TripEventView {
   alertShown: boolean;
   corrected: boolean;
   source: string | null;
+  /** The driver's report about this event and where it got to (§7.D D3). Null until reported. */
+  dispute: DisputeRecord | null;
+}
+
+const isDisputeReason = (value: unknown): value is DisputeReason =>
+  typeof value === 'string' && (DISPUTE_REASONS as readonly string[]).includes(value);
+
+const DISPUTE_OUTCOMES: readonly string[] = [
+  'queued',
+  'accepted',
+  'denied',
+  'window_closed',
+  'refused',
+];
+
+/**
+ * `dispute_json`, read the way every other stored JSON column is read: leniently. A record whose
+ * reason this build does not recognise is not a report it can describe, so it reads as none —
+ * the event still shows its own status, which is the fact that matters to the score.
+ */
+export function parseDispute(json: string | null): DisputeRecord | null {
+  if (json === null) return null;
+  const raw = parseObject(json);
+  if (!isDisputeReason(raw.reason)) return null;
+  const outcome = typeof raw.outcome === 'string' && DISPUTE_OUTCOMES.includes(raw.outcome)
+    ? (raw.outcome as DisputeOutcome)
+    : 'queued';
+  return {
+    reason: raw.reason,
+    note: typeof raw.note === 'string' && raw.note.length > 0 ? raw.note : null,
+    statedLimitMph: typeof raw.statedLimitMph === 'number' ? raw.statedLimitMph : null,
+    submittedAt: num(raw.submittedAt),
+    outcome,
+    deniedReason: typeof raw.deniedReason === 'string' ? raw.deniedReason : null,
+    remainingAllowance:
+      typeof raw.remainingAllowance === 'number' ? raw.remainingAllowance : null,
+    code: typeof raw.code === 'string' ? raw.code : null,
+    decidedAt: typeof raw.decidedAt === 'number' ? raw.decidedAt : null,
+  };
 }
 
 export function toTripEventView(row: EventRow): TripEventView {
@@ -314,6 +369,7 @@ export function toTripEventView(row: EventRow): TripEventView {
     alertShown: row.alert_shown === 1,
     corrected: row.corrected === 1,
     source: row.source,
+    dispute: parseDispute(row.dispute_json),
   };
 }
 

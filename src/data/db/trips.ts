@@ -51,6 +51,7 @@ const COLUMNS = [
   'incomplete',
   'server_id',
   'sync_error',
+  'deleted_at',
   'created_at',
   'updated_at',
 ] as const;
@@ -91,6 +92,7 @@ function toTripRow(row: Record<string, unknown>): TripRow {
     incomplete: asFlag(row, 'incomplete'),
     server_id: asTextOrNull(row, 'server_id'),
     sync_error: asTextOrNull(row, 'sync_error'),
+    deleted_at: asNumberOrNull(row, 'deleted_at'),
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
   };

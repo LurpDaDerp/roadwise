@@ -52,6 +52,12 @@ export const SCHEMA_V1: readonly string[] = [
     -- Why the upload was refused for good: the error code from the server's 400, shown to the
     -- driver beside a failed trip. NULL on every trip whose upload has not been refused.
     sync_error TEXT,
+    -- When the driver deleted this trip (§7.D D5). The row is kept rather than dropped because
+    -- the delete is owed to the server: the delete-trip queue item sits here until it drains, and
+    -- the runner reads this column to decide that a queued trace is no longer worth uploading.
+    -- Every list and every detail read excludes a row with a value here, so the trip is gone the
+    -- instant the driver confirms, offline included. NULL on a live trip.
+    deleted_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
@@ -72,7 +78,14 @@ export const SCHEMA_V1: readonly string[] = [
     alert_shown INTEGER NOT NULL DEFAULT 0,
     corrected INTEGER NOT NULL DEFAULT 0,
     status TEXT,
-    source TEXT
+    source TEXT,
+    -- The driver's report about this event (§7.D D3, §9.9): reason, note, statedLimitMph,
+    -- submittedAt, outcome, deniedReason, remainingAllowance, decidedAt. The status column alone
+    -- cannot carry the three outcomes D3 has to tell apart — accepted and removed from the score,
+    -- recorded but beyond the auto-accept allowance, and refused because the 14-day window closed
+    -- — and the queue item that carried the report is purged once it settles, so the record lives
+    -- with the event it is about and goes with it when the trip is deleted. NULL until reported.
+    dispute_json TEXT
   )`,
 
   // The 1 Hz feature rows for the active trip. Purged once the trace is exported, so the table

@@ -1,6 +1,7 @@
 export { createExpoDb, type Db, type DbResult } from '@/data/db/driver';
 export { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
 export { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+export { DISPUTE_REASONS } from '@/data/db/types';
 
 export { MissingTripError } from '@/data/db/errors';
 export { createEventsRepo, type EventsRepo } from '@/data/db/events';
@@ -26,6 +27,9 @@ export {
 } from '@/data/db/trips';
 
 export type {
+  DisputeOutcome,
+  DisputeReason,
+  DisputeRecord,
   EventPatch,
   EventRow,
   Flag,

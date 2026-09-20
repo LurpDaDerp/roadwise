@@ -914,9 +914,7 @@ test('a trace belonging to a discarded trip never reaches Storage', async () => 
   expect(fs.files.has(TRACE)).toBe(false);
 });
 
-test('a trace belonging to a soft-deleted trip is dropped once that column exists', async () => {
-  // Task 7 adds `deleted_at`; until then the column is simply absent and the check is inert.
-  await db.execute('ALTER TABLE trips ADD COLUMN deleted_at INTEGER');
+test('a trace belonging to a soft-deleted trip is dropped', async () => {
   await seedTrip();
   await enqueueTraceUpload(db, { clientTripId: TRIP_ID, tracePath: TRACE }, T0);
 

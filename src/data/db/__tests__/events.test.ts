@@ -45,6 +45,7 @@ test('insert returns the stored row with the schema defaults filled in', async (
     corrected: 0,
     status: null,
     source: null,
+    dispute_json: null,
   });
 });
 

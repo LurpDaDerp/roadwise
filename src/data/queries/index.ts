@@ -83,6 +83,7 @@ export {
   matchesTripsFilter,
   parseCategoryDeductions,
   parseConditions,
+  parseDispute,
   tipOutcomeOf,
   toDayEntry,
   toScorableEvent,

@@ -70,6 +70,11 @@ export interface TripRow {
    * why. Set together with `sync_state = 'failed'`; cleared when an upload finally succeeds.
    */
   sync_error: string | null;
+  /**
+   * When the driver deleted this trip (§7.D D5). The row survives the delete because the server
+   * still has to be told; every read excludes it. Null on a live trip.
+   */
+  deleted_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -79,6 +84,48 @@ export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'st
   Partial<Omit<TripRow, 'client_trip_id' | 'created_at' | 'updated_at'>>;
 
 export type TripPatch = Partial<Omit<TripRow, 'client_trip_id' | 'created_at' | 'updated_at'>>;
+
+/**
+ * The six reasons D3 offers (§7.D D3), in the order they are read, and the words the
+ * `trip-actions` contract expects on the wire.
+ */
+export const DISPUTE_REASONS = [
+  'not_driver',
+  'passenger_phone',
+  'wrong_limit',
+  'hazard',
+  'phone_moved',
+  'other',
+] as const;
+export type DisputeReason = (typeof DISPUTE_REASONS)[number];
+
+/**
+ * Where a report has got to (§9.9). `queued` is the optimistic local state written the moment
+ * the driver confirms; the rest are the server's answers, applied by the sync handler.
+ *
+ * - `accepted` — inside the auto-accept guard-rails: the event is removed from the score.
+ * - `denied` — recorded as feedback, beyond the allowance, and honestly said so.
+ * - `window_closed` — the 14-day window had passed; nothing was recorded.
+ * - `refused` — the server would not take it for some other stated reason (the event is not
+ *   scored, the trip is not scored). The code is kept so support can read it.
+ */
+export type DisputeOutcome = 'queued' | 'accepted' | 'denied' | 'window_closed' | 'refused';
+
+/** `trip_events.dispute_json`, parsed. Written by the D3 sheet, settled by the sync handler. */
+export interface DisputeRecord {
+  reason: DisputeReason;
+  note: string | null;
+  statedLimitMph: number | null;
+  submittedAt: number;
+  outcome: DisputeOutcome;
+  /** The server's own `denied_reason` (`allowance_7d` / `allowance_30d`), never derived here. */
+  deniedReason: string | null;
+  /** Reports left inside the guard-rails, as the server counted them. Null until it answers. */
+  remainingAllowance: number | null;
+  /** The refusal code behind a `window_closed` or `refused` outcome. */
+  code: string | null;
+  decidedAt: number | null;
+}
 
 export interface EventRow {
   id: string;
@@ -97,6 +144,8 @@ export interface EventRow {
   corrected: Flag;
   status: string | null;
   source: string | null;
+  /** The driver's report about this event and how it was resolved (§7.D D3). Null until reported. */
+  dispute_json: string | null;
 }
 
 export type NewEvent = Pick<EventRow, 'id' | 'client_trip_id' | 'category' | 'started_at'> &

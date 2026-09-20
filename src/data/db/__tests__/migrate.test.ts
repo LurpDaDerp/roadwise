@@ -156,6 +156,45 @@ test('trips carries sync_error, so a refused upload can say why', async () => {
   expect(stored).toEqual([{ sync_error: 'implausible_speed' }]);
 });
 
+test('trips carries deleted_at, so a deleted drive can be hidden before the server hears', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(trips)');
+  expect(rows.find((row) => row.name === 'deleted_at')).toMatchObject({
+    type: 'INTEGER',
+    notnull: 0,
+    dflt_value: null,
+  });
+
+  await insertTrip(db, 'final', 'synced');
+  const { rows: fresh } = await db.execute('SELECT deleted_at FROM trips');
+  expect(fresh).toEqual([{ deleted_at: null }]);
+
+  await db.execute('UPDATE trips SET deleted_at = ?', [1234]);
+  const { rows: stored } = await db.execute('SELECT deleted_at FROM trips');
+  expect(stored).toEqual([{ deleted_at: 1234 }]);
+});
+
+test('trip_events carries dispute_json, so a report and its outcome outlive the queue item', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(trip_events)');
+  expect(rows.find((row) => row.name === 'dispute_json')).toMatchObject({
+    type: 'TEXT',
+    notnull: 0,
+  });
+
+  await insertTrip(db, 'final', 'synced');
+  await db.execute(
+    'INSERT INTO trip_events (id, client_trip_id, category, started_at) VALUES (?, ?, ?, ?)',
+    ['e1', 't1', 'speeding', 2]
+  );
+  const { rows: fresh } = await db.execute('SELECT dispute_json FROM trip_events');
+  expect(fresh).toEqual([{ dispute_json: null }]);
+
+  await db.execute('UPDATE trip_events SET dispute_json = ?', ['{"outcome":"queued"}']);
+  const { rows: stored } = await db.execute('SELECT dispute_json FROM trip_events');
+  expect(stored).toEqual([{ dispute_json: '{"outcome":"queued"}' }]);
+});
+
 test('sync_queue carries trace_uploaded_at, null until the object is in Storage', async () => {
   await migrate(db);
   const { rows } = await db.execute('PRAGMA table_info(sync_queue)');

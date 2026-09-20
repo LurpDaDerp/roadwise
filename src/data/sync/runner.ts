@@ -31,6 +31,7 @@ import { createScoreDailyCacheRepo } from '@/data/db/scoreDailyCache';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { QueueItem, TripPatch } from '@/data/db/types';
+import { ACTION_HANDLERS, isActionKind, type ActionOutcome } from '@/data/sync/actions';
 import { isSyncKind, type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
 import {
@@ -156,13 +157,11 @@ export interface SyncRunner {
  * What one item's attempt concluded. `defer` hands the claim back without counting an attempt —
  * the work was never tried — which is what keeps a trace waiting for Wi-Fi from walking towards
  * `MAX_ATTEMPTS`.
+ *
+ * Declared in `actions.ts` so the three `trip-actions` handlers can live outside this file and
+ * still speak the same language as the two that live in it.
  */
-type Outcome =
-  | { kind: 'done' }
-  | { kind: 'failed'; code: string }
-  | { kind: 'retry'; code: string; retryAfterS?: number | null }
-  | { kind: 'unauthorized'; code: string }
-  | { kind: 'defer'; until?: number };
+type Outcome = ActionOutcome;
 
 type FailureOutcome = Extract<Outcome, { kind: 'failed' | 'retry' | 'unauthorized' }>;
 
@@ -407,8 +406,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   ): ((item: QueueItem, state: ItemState, at: number) => Promise<Outcome>) | null {
     if (kind === 'finalize-trip') return runFinalize;
     if (kind === 'trace-upload') return runTraceUpload;
-    // `dispute`, `set-role` and `delete-trip` go through `trip-actions`, which M2 Task 3 does not
-    // ship. Leave such an item alone rather than failing work the next build will handle.
+    // `dispute`, `set-role` and `delete-trip` go through `trip-actions` (§4.5). They carry no
+    // object and no per-item state, so each is handed its stored body and the pass's clock and
+    // nothing else; everything they write back is in `actions.ts`.
+    if (isActionKind(kind)) {
+      const handler = ACTION_HANDLERS[kind];
+      return (item, _state, at) =>
+        handler(item.payload_json, { db, supabase, now: at, report });
+    }
     return null;
   }
 

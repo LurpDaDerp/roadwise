@@ -100,7 +100,10 @@ export interface TripDetail {
 export async function readTrip(db: Db, clientTripId: string): Promise<TripDetail | null> {
   const trips = createTripsRepo(db);
   const row = await trips.get(clientTripId);
-  if (row === null) return null;
+  // A deleted trip reads as no trip at all (§7.D D5): the row is only still here because the
+  // server has not been told yet, and a screen that opened it would be showing a drive the
+  // driver has already thrown away.
+  if (row === null || row.deleted_at !== null) return null;
 
   // The learning-period stage is a count over the whole table, so it is read here rather than
   // left to the screen: the summary needs it before it can ask for a tip.
@@ -153,7 +156,7 @@ export function useTrips(filter: TripsFilter = {}): UseQueryResult<TripSummary[]
   });
 }
 
-/** The D1 summary. Disabled — never fetching — while the caller has no id to ask about. */
+/** The D1 summary. Null for a deleted trip. Disabled while the caller has no id to ask about. */
 export function useTrip(
   clientTripId: string | null | undefined
 ): UseQueryResult<TripDetail | null> {

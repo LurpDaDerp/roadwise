@@ -28,6 +28,7 @@ const COLUMNS = [
   'corrected',
   'status',
   'source',
+  'dispute_json',
 ] as const;
 
 /** An event never changes which trip it belongs to, and its id is its identity. */
@@ -51,6 +52,7 @@ function toEventRow(row: Record<string, unknown>): EventRow {
     corrected: asFlag(row, 'corrected'),
     status: asTextOrNull(row, 'status'),
     source: asTextOrNull(row, 'source'),
+    dispute_json: asTextOrNull(row, 'dispute_json'),
   };
 }
 
@@ -114,12 +116,15 @@ export function createEventsRepo(db: Db) {
       return asNumber(rows[0] ?? {}, 'n');
     },
 
-    /** Used when a dispute is accepted: mark corrected, zero the deduction. */
-    async update(id: string, patch: EventPatch): Promise<EventRow | null> {
+    /**
+     * Used when a dispute is settled: mark corrected, zero the deduction, record the report.
+     * Runs on `on` when given, so the event, its trip and the day cache move together.
+     */
+    async update(id: string, patch: EventPatch, on: Db = db): Promise<EventRow | null> {
       const statement = updateStatement('trip_events', PATCHABLE, patch, 'id = ?', [id]);
-      if (!statement) return get(id);
-      const { changes } = await db.execute(statement.sql, statement.params);
-      return changes === 0 ? null : get(id);
+      if (!statement) return get(id, on);
+      const { changes } = await on.execute(statement.sql, statement.params);
+      return changes === 0 ? null : get(id, on);
     },
 
     /** Runs on `on` when given, so it can share a caller's transaction. */

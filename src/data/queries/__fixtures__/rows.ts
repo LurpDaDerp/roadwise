@@ -58,6 +58,7 @@ const BASE: TripRow = {
   incomplete: 0,
   server_id: null,
   sync_error: null,
+  deleted_at: null,
   created_at: T0,
   updated_at: T0,
 };
@@ -89,6 +90,7 @@ const EVENT_BASE: EventRow = {
   corrected: 0,
   status: 'scored',
   source: 'gnss',
+  dispute_json: null,
 };
 
 export function eventRow(over: Partial<EventRow> = {}): EventRow {
