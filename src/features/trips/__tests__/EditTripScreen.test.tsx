@@ -196,6 +196,28 @@ describe('deleting the drive', () => {
     expect(JSON.parse(item?.payload_json ?? 'null')).toEqual({ action: 'delete', clientTripId: ID });
   });
 
+  test('the queued upload goes too, so nothing left in SQLite still holds the route', async () => {
+    const w = await open();
+    // A finalize body *is* the drive: its polyline, both endpoint geohashes and every event
+    // coordinate. Leaving it queued would keep the route the delete was meant to destroy.
+    await createQueueRepo(w.db).enqueue(
+      'finalize-trip',
+      { clientTripId: ID, polyline: 'ceaqGfnqiVaA?', events: [{ lat: 45.5, lng: -122.6 }] },
+      `trip:${ID}`,
+      T0
+    );
+
+    await press(screen.getByTestId('delete-trip'));
+    await press(screen.getByTestId('delete-confirm'));
+
+    await waitFor(async () => {
+      expect(await createQueueRepo(w.db).byKey(`trip:${ID}`)).toBeNull();
+    });
+    // What is left is the delete itself, which carries nothing but the id.
+    const [item] = await queued(w.db);
+    expect(JSON.parse(item?.payload_json ?? 'null')).toEqual({ action: 'delete', clientTripId: ID });
+  });
+
   test('a trace still waiting for Wi-Fi is dropped with the drive', async () => {
     const w = await open();
     await createQueueRepo(w.db).enqueue(

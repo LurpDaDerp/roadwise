@@ -13,7 +13,7 @@ import type { TraceBody, TraceFs } from '@/data/sync/runner';
  */
 export const TRACES_DIRECTORY = 'traces';
 
-/** `expo-file-system`'s `File`/`Paths`, or a test's stand-in for them. */
+/** `expo-file-system`'s `File`/`Directory`/`Paths`, or a test's stand-in for them. */
 export interface ExpoFileSystemLike {
   Paths: { document: unknown };
   File: new (
@@ -23,16 +23,23 @@ export interface ExpoFileSystemLike {
     bytes(): Promise<Uint8Array>;
     delete(): void;
   };
+  Directory: new (
+    ...uris: never[]
+  ) => {
+    exists: boolean;
+    list(): { name: string }[];
+  };
 }
 
 export async function createExpoTraceFs(
   directory: string = TRACES_DIRECTORY,
   load?: () => Promise<ExpoFileSystemLike>
 ): Promise<TraceFs> {
-  const { File, Paths } = await (load
+  const { Directory, File, Paths } = await (load
     ? load()
     : (import('expo-file-system') as unknown as Promise<ExpoFileSystemLike>));
   const at = (path: string) => new File(...([Paths.document, directory, path] as never[]));
+  const dir = () => new Directory(...([Paths.document, directory] as never[]));
 
   return {
     async exists(path: string): Promise<boolean> {
@@ -47,6 +54,12 @@ export async function createExpoTraceFs(
       const file = at(path);
       // `delete()` throws on a file that is not there; gone is the outcome we wanted anyway.
       if (file.exists) file.delete();
+    },
+
+    async list(): Promise<string[]> {
+      const folder = dir();
+      // Nothing has been written yet: an empty directory and a missing one mean the same here.
+      return folder.exists ? folder.list().map((entry) => entry.name) : [];
     },
   };
 }

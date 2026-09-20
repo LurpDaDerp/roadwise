@@ -170,6 +170,7 @@ export interface FakeFs {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<TraceBody>;
   remove(path: string): Promise<void>;
+  list(): Promise<string[]>;
 }
 
 export function createFakeFs(initial: Record<string, string> = {}): FakeFs {
@@ -192,6 +193,9 @@ export function createFakeFs(initial: Record<string, string> = {}): FakeFs {
     async remove(path: string) {
       this.removals.push(path);
       files.delete(path);
+    },
+    async list() {
+      return [...files.keys()];
     },
   };
 }

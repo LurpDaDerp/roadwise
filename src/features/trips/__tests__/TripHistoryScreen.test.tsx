@@ -84,30 +84,30 @@ describe('the list', () => {
   });
 
   test('a delete the server was never told about is said out loud, and can be asked again', async () => {
-    const w = await open({
+    const w = await world({
       trips: [
         drive('a', 0),
         drive('b', 0, { deleted_at: T0, sync_state: 'failed', sync_error: 'retries_exhausted' }),
       ],
     });
-    await createQueueRepo(w.db).enqueue(
-      'delete-trip',
-      { action: 'delete', clientTripId: 'b' },
-      'delete:b',
-      T0
+    // The queue is where "the delete gave up" actually lives: an item this build has failed.
+    await w.db.execute(
+      'INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts,' +
+        ' next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        'delete-trip',
+        JSON.stringify({ action: 'delete', clientTripId: 'b' }),
+        'delete:b',
+        'failed',
+        20,
+        T0,
+        T0,
+      ]
     );
-    await createQueueRepo(w.db).markAttempt(
-      (await createQueueRepo(w.db).nextDue(T0 + 1, 10))[0]?.id ?? 0,
-      false,
-      'retries_exhausted',
-      T0
-    );
-    await createQueueRepo(w.db).markFailed(
-      (await createQueueRepo(w.db).byKey('delete:b'))?.id ?? 0,
-      'retries_exhausted'
-    );
+    await w.renderScreen(<TripHistoryScreen />);
+    await screen.findByTestId('trip-history');
 
-    expect(await screen.findByTestId('delete-failed')).toBeOnTheScreen();
+    expect(screen.getByTestId('delete-failed')).toBeOnTheScreen();
     expect(
       screen.getByText(
         "One drive couldn't be deleted yet. It's gone from your phone, but still on our side."
@@ -124,6 +124,16 @@ describe('the list', () => {
       });
     });
     expect(screen.queryByTestId('delete-failed')).toBeNull();
+  });
+
+  test('a drive whose upload failed for its own reasons raises no delete notice', async () => {
+    // `trips.sync_error` is set by a refused upload too. The banner is about deletes, and reads
+    // the queue rather than the row, so this drive is simply a drive.
+    await open({
+      trips: [drive('a', 0, { sync_state: 'failed', sync_error: 'trip_too_old' })],
+    });
+    expect(screen.queryByTestId('delete-failed')).toBeNull();
+    expect(screen.getByTestId('history-a')).toBeOnTheScreen();
   });
 });
 

@@ -12,7 +12,7 @@
  * free) is the server's to count. The device writes `outcome: 'queued'` and waits to be told.
  */
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import {
   createEventsRepo,
@@ -31,7 +31,12 @@ import {
 import { invalidateAfterSync, invalidateTrip, useDb } from '@/data/queries';
 import { DisputePayloadSchema } from '@/data/sync/actions';
 import type { SyncKind } from '@/data/sync/kinds';
-import { currentOwnerUid, emitQueueChanged, traceIdempotencyKey } from '@/data/sync/queue';
+import {
+  currentOwnerUid,
+  emitQueueChanged,
+  finalizeIdempotencyKey,
+  traceIdempotencyKey,
+} from '@/data/sync/queue';
 import type { TraceFs } from '@/data/sync/runner';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 
@@ -128,10 +133,13 @@ export async function disputeEvent(
     if (updated === null) throw new MissingEventError(clientEventId);
 
     const queue = createQueueRepo(db);
-    await queue.enqueue(DISPUTE_KIND, payload, disputeIdempotencyKey(clientEventId), now, tx, owner);
+    const key = disputeIdempotencyKey(clientEventId);
+    await queue.enqueue(DISPUTE_KIND, payload, key, now, tx, owner);
     // A report that never left leaves a `failed` item behind, and `INSERT OR IGNORE` would drop
-    // the second attempt on the floor. Sending it again means putting that item back in the queue.
-    await queue.reopen(disputeIdempotencyKey(clientEventId), now, tx);
+    // the second attempt on the floor. Sending it again means putting that item back in the
+    // queue **with the answer the driver just gave**: the key is the same work, not the same
+    // words, and the stored record already holds the new reason.
+    await queue.reopen(key, now, tx, payload);
     return updated;
   });
   // After the commit, so a listener that drains meets the row and not the lock.
@@ -216,8 +224,13 @@ export async function deleteTrip(
     await createSamplesRepo(db).purgeByTrip(clientTripId, tx);
 
     const queue = createQueueRepo(db);
-    // A trace waiting for Wi-Fi has nothing left to upload for.
+    // Nothing queued about this drive may outlive it. The trace item has nothing left to upload
+    // for; the finalize item is worse — its stored body *is* the drive, polyline, endpoint
+    // geohashes and every event coordinate, so leaving it would keep the route the delete was
+    // supposed to destroy. `runFinalize` would refuse to send it anyway (`tripIsGone`), which
+    // means dropping it costs nothing and keeps nothing.
     await queue.dropByKey(traceIdempotencyKey(clientTripId), tx);
+    await queue.dropByKey(finalizeIdempotencyKey(clientTripId), tx);
     await queue.enqueue(
       DELETE_TRIP_KIND,
       payload,
@@ -238,13 +251,25 @@ export async function deleteTrip(
 }
 
 /**
- * The drives the device has deleted and the server has not been told about, because the queue
- * item gave up. They are gone from every list — so D4 carries a notice rather than a row, and a
- * way to ask again.
+ * The drives the device has deleted and the server has not been told about.
+ *
+ * Read from the **queue**, not from the trip rows: a `failed` `delete-trip` item is precisely
+ * "the delete gave up", where `trips.sync_error` is also set by an upload refusal that had
+ * nothing to do with a delete, and would put a banner about deleting in front of a driver whose
+ * delete is still on its way.
  */
-export async function readFailedDeletes(db: Db): Promise<TripRow[]> {
-  const rows = await createTripsRepo(db).list();
-  return rows.filter((row) => row.deleted_at !== null && row.sync_error !== null);
+export async function readFailedDeletes(db: Db): Promise<string[]> {
+  const items = await createQueueRepo(db).listFailed(DELETE_TRIP_KIND);
+  const ids: string[] = [];
+  for (const item of items) {
+    try {
+      const body = JSON.parse(item.payload_json) as { clientTripId?: unknown };
+      if (typeof body.clientTripId === 'string') ids.push(body.clientTripId);
+    } catch {
+      // A body this build cannot read names no drive; the queue row is still the record.
+    }
+  }
+  return ids;
 }
 
 /** Put every given-up delete back in the queue, for the driver's "Try again". */
@@ -343,11 +368,11 @@ export function useFailedDeletes(): FailedDeletes {
   const db = useDb();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const query: UseQueryResult<TripRow[]> = useQuery({
+  const query: UseQueryResult<string[]> = useQuery({
     queryKey: ['trips', 'failed-deletes'],
     queryFn: () => readFailedDeletes(db),
   });
-  const ids = (query.data ?? []).map((row) => row.client_trip_id);
+  const ids = useMemo(() => query.data ?? [], [query.data]);
 
   const retry = useCallback(async () => {
     setBusy(true);

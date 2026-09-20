@@ -358,6 +358,9 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
 /** The server's refusal of a report, as §7.D D3 has to show it. */
 export const DISPUTE_WINDOW_CLOSED = 'dispute_window_closed';
 
+/** The server has no such trip or event for this user. */
+export const NOT_FOUND = 'not_found';
+
 /** What the runner records on a report whose queue item ran out of attempts. */
 export const RETRIES_EXHAUSTED = 'retries_exhausted';
 
@@ -560,7 +563,20 @@ export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
   const payload = parsed.data;
 
   const sent = await post(ctx, payload);
-  if (!sent.ok) return sent.outcome;
+  if (!sent.ok) {
+    // The server has nothing to delete, which is the ordinary outcome for a drive whose upload
+    // never landed — offline, or a finalize still backing off when the driver deleted it, in
+    // which case `runFinalize` stopped the upload on purpose. There is nothing owed and nothing
+    // to retry: finish the delete here rather than tell the driver their drive is still on a
+    // server that never had it.
+    if (sent.outcome.kind === 'failed' && sent.outcome.code === NOT_FOUND) {
+      await ctx.db.transaction(async (tx) => {
+        await createTripsRepo(ctx.db).remove(payload.clientTripId, tx);
+      });
+      return { kind: 'done' };
+    }
+    return sent.outcome;
+  }
 
   const reply = DeleteTripResponseSchema.safeParse(sent.data);
   if (!reply.success) {

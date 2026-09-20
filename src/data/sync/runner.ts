@@ -68,6 +68,16 @@ export const WIFI_ONLY_TRACES_KEY = 'sync.wifiOnlyTraces';
 export const WIFI_ONLY_TRACES_DEFAULT = true;
 /** How long a trace waiting for Wi-Fi sits before the runner asks about the network again. */
 export const WIFI_RETRY_S = 900;
+/**
+ * How long a settled queue item is kept before it is purged.
+ *
+ * It is kept at all only so a pass that crashed between the server's answer and the local write
+ * can be reasoned about; nothing in the app reads a `done` row. It must not be kept longer,
+ * because the body of a `finalize-trip` item is the whole drive — its polyline, both endpoint
+ * geohashes and every event coordinate — and leaving that in SQLite for the life of the install
+ * would keep a copy of every route the driver has ever taken, deleted or not.
+ */
+export const PURGE_DONE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** How long an item whose kind has no handler yet waits before being looked at again. */
 export const UNHANDLED_KIND_RETRY_S = 3600;
 /** After a wake declined because the engine was recording, try again this long after. */
@@ -77,9 +87,12 @@ export const DEFAULT_BATCH = 10;
 /** Batches one drain will work through before leaving the rest to the next wake. */
 export const MAX_ROUNDS = 20;
 
+/** What the finalizer names a trace file, after the trip's client id. */
+export const TRACE_SUFFIX = '.bin.gz';
+
 /** The object key under the traces bucket: the user's own prefix, then the trip. */
 export const traceObjectKey = (uid: string, clientTripId: string): string =>
-  `${uid}/${clientTripId}.bin.gz`;
+  `${uid}/${clientTripId}${TRACE_SUFFIX}`;
 
 /** What a trace file can be handed to Storage as; the adapter picks whatever the platform uploads best. */
 export type TraceBody = Uint8Array | ArrayBuffer | Blob | string;
@@ -90,6 +103,11 @@ export interface TraceFs {
   read(path: string): Promise<TraceBody>;
   /** Remove the local trace. A file that is already gone is not an error. */
   remove(path: string): Promise<void>;
+  /**
+   * Every file in the traces directory, by name. Optional: an adapter that cannot list simply
+   * does not get the orphan sweep, which is housekeeping rather than correctness.
+   */
+  list?(): Promise<string[]>;
 }
 
 export interface NetStatus {
@@ -540,9 +558,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   /**
    * Leave the driver something to read when an item gives up, whatever kind it was.
    *
-   * The queue row is not that something: nothing in the app reads it, and `purgeDone` eventually
-   * removes it. A report that never left has to stop saying "sending", and a delete that never
-   * reached the server has to stop looking like it did.
+   * The queue row is not that something: nothing in the app renders it, and a settled row is
+   * purged within a day. A report that never left has to stop saying "sending", and a delete
+   * that never reached the server has to stop looking like it did.
    */
   async function recordGiveUp(item: QueueItem, code: string, at: number): Promise<void> {
     try {
@@ -644,6 +662,51 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   /**
+   * Remove settled items older than `PURGE_DONE_AFTER_MS`.
+   *
+   * Housekeeping, but privacy housekeeping: a `finalize-trip` body carries the drive's polyline
+   * and every event's coordinates, so a `done` row that is never removed is a second copy of the
+   * route, outliving even a deleted drive. The cost of purging is that a re-finalize of a trip
+   * whose item has gone finds nothing to replay and throws instead — a state M1 already
+   * anticipates, and the right trade against keeping the route for ever.
+   */
+  async function purgeSettled(at: number): Promise<void> {
+    try {
+      await queue.purgeDone(at - PURGE_DONE_AFTER_MS);
+    } catch (error) {
+      report(error, 'purge settled queue items');
+    }
+  }
+
+  /**
+   * Delete trace files with no drive behind them.
+   *
+   * `deleteTrip` writes the rows first and removes the file second, so a process killed between
+   * the two leaves the most identifying artefact the app holds on disk with nothing pointing at
+   * it. Reordering would be worse — a file removed before a transaction that then failed would
+   * lose a trace of a drive that still exists — so the window is closed from the other end
+   * instead: anything in the traces directory whose trip is gone is removed here.
+   */
+  async function sweepOrphanTraces(): Promise<void> {
+    if (!fs.list) return;
+    try {
+      const names = await fs.list();
+      for (const name of names) {
+        const clientTripId = name.endsWith(TRACE_SUFFIX)
+          ? name.slice(0, -TRACE_SUFFIX.length)
+          : null;
+        if (clientTripId === null || !CLIENT_TRIP_ID.test(clientTripId)) continue;
+        const { rows } = await db.execute('SELECT 1 FROM trips WHERE client_trip_id = ?', [
+          clientTripId,
+        ]);
+        if (rows.length === 0) await removeTrace(name);
+      }
+    } catch (error) {
+      report(error, 'sweep orphan traces');
+    }
+  }
+
+  /**
    * One drain: batches until the backlog is gone.
    *
    * A device that was offline for a week has more than `batchSize` trips waiting, and there is no
@@ -668,6 +731,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       total.deferred += worked.deferred;
       if (worked.stopped || worked.claimed < batchSize || worked.done + worked.failed === 0) break;
     }
+    // Settled work is not kept: see `PURGE_DONE_AFTER_MS`. Both sweeps run on every pass, so a
+    // device that never settles anything still tidies up after a delete that was interrupted.
+    await purgeSettled(at);
+    await sweepOrphanTraces();
+
     // Trips have changed state and a day row may have landed: tell whoever is showing them.
     if (total.done + total.failed > 0) {
       emitSyncApplied(total, (error) => report(error, 'sync:applied listener'));

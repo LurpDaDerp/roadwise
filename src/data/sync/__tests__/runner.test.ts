@@ -31,6 +31,7 @@ import {
 } from '@/data/sync/queue';
 import {
   createSyncRunner,
+  PURGE_DONE_AFTER_MS,
   RECORDING_RETRY_MS,
   TRACES_BUCKET,
   WIFI_ONLY_TRACES_KEY,
@@ -954,4 +955,46 @@ test('a trace whose trip is gone is dropped even signed out on cellular', async 
   await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
   expect(supabase.uploads).toHaveLength(0);
   expect(fs.files.has(TRACE)).toBe(false);
+});
+
+describe('housekeeping', () => {
+  test('a settled item is purged within a day, so the route it carries is not kept for ever', async () => {
+    await seedTrip();
+    await enqueueFinalize(db, tripPayload(), T0);
+
+    await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+    // Still there right after it settled: a pass that crashed between the answer and the local
+    // write is the reason to keep it at all.
+    expect(await createQueueRepo(db).byKey('trip:' + TRIP_ID)).toMatchObject({ status: 'done' });
+
+    // A day later, gone — with its polyline and every event coordinate.
+    await runner().drainOnce(T0 + PURGE_DONE_AFTER_MS + 1);
+    expect(await createQueueRepo(db).byKey('trip:' + TRIP_ID)).toBeNull();
+  });
+
+  test('a failed item is not purged: it is the record the driver can retry from', async () => {
+    await seedTrip();
+    await enqueueFinalize(db, tripPayload(), T0);
+    const item = await createQueueRepo(db).byKey('trip:' + TRIP_ID);
+    await createQueueRepo(db).markFailed(item?.id ?? 0, 'trip_too_old');
+
+    await runner().drainOnce(T0 + PURGE_DONE_AFTER_MS + 1);
+
+    expect(await createQueueRepo(db).byKey('trip:' + TRIP_ID)).toMatchObject({ status: 'failed' });
+  });
+
+  test('a trace file with no drive behind it is swept, whatever left it there', async () => {
+    // What a process killed between a delete's commit and its file removal leaves on disk.
+    fs.files.set('ghost.bin.gz', new TextEncoder().encode('[]'));
+    fs.files.set('not-a-trace.txt', new TextEncoder().encode('x'));
+    await seedTrip();
+    fs.files.set(TRACE, new TextEncoder().encode('[]'));
+
+    await runner().drainOnce(T0);
+
+    expect(fs.files.has('ghost.bin.gz')).toBe(false);
+    // The drive that still exists keeps its trace, and nothing else in the directory is touched.
+    expect(fs.files.has(TRACE)).toBe(true);
+    expect(fs.files.has('not-a-trace.txt')).toBe(true);
+  });
 });

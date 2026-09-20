@@ -311,4 +311,47 @@ describe('what the server said', () => {
     expect(screen.getByText("We couldn't get it through. You can send it again.")).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: "This isn't right" })).toBeOnTheScreen();
   });
+
+  test('a re-sent report travels as the answer just given, not the one that failed', async () => {
+    const w = await world({
+      trips: [trip],
+      events: [speeding({ dispute_json: record({ outcome: 'refused', code: 'retries_exhausted' }) })],
+    });
+    // The first attempt is still in the queue, failed, with the reason it carried.
+    await w.db.execute(
+      'INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts,' +
+        ' next_attempt_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        'dispute',
+        JSON.stringify({ action: 'dispute', clientEventId: EVENT, reason: 'hazard' }),
+        `dispute:${EVENT}`,
+        'failed',
+        20,
+        T0,
+        T0,
+      ]
+    );
+    await w.renderScreen(<EventDetailScreen clientTripId={ID} eventId={EVENT} />);
+    await screen.findByTestId('event-detail');
+
+    await press(screen.getByRole('button', { name: "This isn't right" }));
+    await press(screen.getByTestId('reason-phone_moved'));
+    await press(screen.getByTestId('dispute-submit'));
+
+    await waitFor(async () => {
+      const item = await createQueueRepo(w.db).byKey(`dispute:${EVENT}`);
+      expect(item).toMatchObject({ status: 'pending', attempts: 0 });
+      expect(JSON.parse(item?.payload_json ?? 'null')).toEqual({
+        action: 'dispute',
+        clientEventId: EVENT,
+        reason: 'phone_moved',
+      });
+    });
+    // And the record the screen reads says the same thing.
+    const stored = await createEventsRepo(w.db).get(EVENT);
+    expect(JSON.parse(stored?.dispute_json ?? 'null')).toMatchObject({
+      reason: 'phone_moved',
+      outcome: 'queued',
+    });
+  });
 });

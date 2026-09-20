@@ -1,4 +1,10 @@
-import { createQueueRepo, createTripsRepo, MissingTripError, type Db } from '@/data/db';
+import {
+  createQueueRepo,
+  createSettingsRepo,
+  createTripsRepo,
+  MissingTripError,
+  type Db,
+} from '@/data/db';
 import { createTestDb, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { onQueueChanged } from '@/data/sync/queue';
@@ -30,6 +36,17 @@ test('a passenger answer clears the score locally and queues the trip-actions re
     clientTripId: 'unknown',
     role: 'passenger',
   });
+});
+
+test('the answer carries the driver who gave it, so no other session can send it', async () => {
+  await createSettingsRepo(db).set('session.uid', 'user-a');
+
+  await setTripRole(db, 'unknown', 'passenger', NOW);
+
+  // `roleStamp` keeps the key strictly increasing, so the item is read by what is due, not by a
+  // key rebuilt from `NOW`.
+  const [item] = await createQueueRepo(db).nextDue(NOW + 1000, 10);
+  expect(item).toMatchObject({ kind: 'set-role', owner_uid: 'user-a' });
 });
 
 test('a driver answer keeps the row as it is, so the server scores it', async () => {

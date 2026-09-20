@@ -546,6 +546,17 @@ describe('deleting a drive', () => {
     expect(cached[0]?.payload.tripsScored).toBe(0);
   });
 
+  test('a delete whose drive never reached the server never posts its route either', async () => {
+    // The finalize body is the whole drive; `deleteTrip` drops it, so by the time the delete is
+    // sent there is nothing queued that still carries the route.
+    await seed({ deleted_at: NOW });
+    supabase = createFakeSupabase({ invoke: () => functionsHttpError(404, { code: 'not_found' }) });
+
+    await runDeleteTrip(deleteBody, ctx());
+
+    expect(supabase.invokes.map((invoke) => invoke.name)).toEqual([TRIP_ACTIONS_FUNCTION]);
+  });
+
   test('a confirmed delete leaves nothing behind', async () => {
     await seed({ deleted_at: NOW });
     supabase = createFakeSupabase({ invoke: () => deleteReply() });
@@ -569,15 +580,16 @@ describe('deleting a drive', () => {
     expect(cached).toHaveLength(1);
   });
 
-  test('a drive the server never had is failed, and stays deleted here', async () => {
+  test('a drive the server never had is already deleted: the husk goes, and nothing is owed', async () => {
+    // The ordinary outcome for a drive whose finalize never landed — offline, or a finalize the
+    // delete correctly stopped. There is nothing on the server to delete and nothing to retry.
     await seed({ deleted_at: NOW });
     supabase = createFakeSupabase({ invoke: () => functionsHttpError(404, { code: 'not_found' }) });
 
-    await expect(runDeleteTrip(deleteBody, ctx())).resolves.toEqual({
-      kind: 'failed',
-      code: 'not_found',
-    });
-    expect(await readTrip()).toMatchObject({ deleted_at: NOW });
+    await expect(runDeleteTrip(deleteBody, ctx())).resolves.toEqual({ kind: 'done' });
+
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    expect(await createEventsRepo(db).listByTrip(TRIP)).toEqual([]);
   });
 
   test('a delete that gives up leaves the drive visible as unfinished, not silently undone', async () => {

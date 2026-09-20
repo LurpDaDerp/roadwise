@@ -37,6 +37,23 @@ function fakeFileSystem(present: Record<string, Uint8Array>) {
         delete present[this.key];
       }
     },
+    Directory: class {
+      readonly key: string;
+
+      constructor(...uris: never[]) {
+        this.key = (uris as unknown as string[]).join('/');
+      }
+
+      get exists(): boolean {
+        return Object.keys(present).some((path) => path.startsWith(`${this.key}/`));
+      }
+
+      list(): { name: string }[] {
+        return Object.keys(present)
+          .filter((path) => path.startsWith(`${this.key}/`))
+          .map((path) => ({ name: path.slice(this.key.length + 1) }));
+      }
+    },
   };
   return { module, opened, deleted };
 }
@@ -61,4 +78,21 @@ test('removing a trace that is already gone is not an error', async () => {
   expect(deleted).toEqual([KEY]);
   await expect(fs.remove('trip-1.bin.gz')).resolves.toBeUndefined();
   expect(deleted).toEqual([KEY]);
+});
+
+test('the directory can be listed, so a trace with no drive behind it can be found', async () => {
+  const { module } = fakeFileSystem({
+    [KEY]: BYTES,
+    [`DOCUMENTS/${TRACES_DIRECTORY}/trip-2.bin.gz`]: BYTES,
+  });
+  const fs = await createExpoTraceFs(TRACES_DIRECTORY, async () => module);
+
+  await expect(fs.list?.()).resolves.toEqual(['trip-1.bin.gz', 'trip-2.bin.gz']);
+});
+
+test('listing a traces directory that does not exist yet is empty, not an error', async () => {
+  const { module } = fakeFileSystem({});
+  const fs = await createExpoTraceFs(TRACES_DIRECTORY, async () => module);
+
+  await expect(fs.list?.()).resolves.toEqual([]);
 });

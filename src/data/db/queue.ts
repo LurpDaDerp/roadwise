@@ -293,20 +293,46 @@ export function createQueueRepo(db: Db) {
      * Put a `failed` item back in the queue with a clean ladder, for a driver who asked to try
      * again. Anything but `failed` is left alone: re-opening work that is pending or in flight
      * would reset a backoff that is doing its job.
+     *
+     * `payload` replaces the stored body. A second answer to the same question — a report re-sent
+     * with a different reason — must travel as the answer the driver just gave, not as the one
+     * the first attempt carried; the idempotency key is the same work, not the same words.
      */
     async reopen(
       idempotencyKey: string,
       now: number = Date.now(),
-      on: Db = db
+      on: Db = db,
+      payload?: unknown
     ): Promise<QueueItem | null> {
-      const { changes } = await on.execute(
-        `UPDATE sync_queue
-            SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
-                claimed_at = NULL
-          WHERE idempotency_key = ? AND status = 'failed'`,
-        [now, idempotencyKey]
-      );
+      const sql =
+        payload === undefined
+          ? `UPDATE sync_queue
+                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+                    claimed_at = NULL
+              WHERE idempotency_key = ? AND status = 'failed'`
+          : `UPDATE sync_queue
+                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+                    claimed_at = NULL, payload_json = ?
+              WHERE idempotency_key = ? AND status = 'failed'`;
+      const params =
+        payload === undefined
+          ? [now, idempotencyKey]
+          : [now, JSON.stringify(payload), idempotencyKey];
+      const { changes } = await on.execute(sql, params);
       return changes === 0 ? null : byKey(idempotencyKey, on);
+    },
+
+    /**
+     * Every item of one kind the queue has given up on. This is what "the server was never told"
+     * actually means — a `failed` item — rather than any trip row that happens to carry a
+     * `sync_error`, which an unrelated upload refusal also sets.
+     */
+    async listFailed(kind: string, on: Db = db): Promise<QueueItem[]> {
+      const { rows } = await on.execute(
+        "SELECT * FROM sync_queue WHERE kind = ? AND status = 'failed' ORDER BY id ASC",
+        [kind]
+      );
+      return rows.map(toQueueItem);
     },
 
     async purgeDone(createdBefore: number): Promise<number> {

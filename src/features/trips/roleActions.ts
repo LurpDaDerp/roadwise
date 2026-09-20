@@ -21,7 +21,7 @@ import {
 } from '@/data/db';
 import { invalidateTrip, useDb } from '@/data/queries';
 import type { SyncKind } from '@/data/sync/kinds';
-import { emitQueueChanged } from '@/data/sync/queue';
+import { currentOwnerUid, emitQueueChanged } from '@/data/sync/queue';
 
 /** The three answers the chips offer; `trips.role` stores the same words. */
 export type ChosenRole = 'driver' | 'passenger' | 'other';
@@ -65,6 +65,9 @@ export async function setTripRole(
   role: ChosenRole,
   now: number = Date.now()
 ): Promise<TripRow> {
+  // Stamped like every other queued request: an item with no owner is sent by whatever session
+  // happens to be live, which is the hole the column exists to close.
+  const owner = await currentOwnerUid(db);
   const row = await db.transaction(async (tx) => {
     const trips = createTripsRepo(db);
     const current = await trips.get(clientTripId, tx);
@@ -84,7 +87,8 @@ export async function setTripRole(
       payload,
       setRoleIdempotencyKey(clientTripId, roleStamp(now)),
       now,
-      tx
+      tx,
+      owner
     );
     return updated;
   });
