@@ -70,13 +70,16 @@ Deno.test('an unknown IANA zone is refused before the database sees it', () => {
   assertEquals(failure(payload({ tz: 'Mars/Olympus' })), { code: 'invalid_timezone', field: 'tz' });
 });
 
-Deno.test('a trip more than seven days old, or ahead of the server clock, is implausible in time', () => {
-  const old = T0 - 8 * DAY;
+Deno.test('a trip more than thirty days old, or ahead of the server clock, is implausible in time', () => {
+  const old = NOW - 30 * DAY - 60_000;
   assertEquals(failure(payload({ startedAt: old, endedAt: old + 1_320_000, events: [event({ startedAt: old + 1000 })] })), {
     code: 'implausible_time',
     field: 'startedAt',
   });
-  const week = NOW - 7 * DAY + 60_000;
+  const month = NOW - 30 * DAY + 60_000;
+  assert(passes(payload({ startedAt: month, endedAt: month + 1_320_000, events: [event({ startedAt: month + 1000 })] })));
+  // a week-old backlog (a Wi-Fi-only device away from home) is fine
+  const week = NOW - 8 * DAY;
   assert(passes(payload({ startedAt: week, endedAt: week + 1_320_000, events: [event({ startedAt: week + 1000 })] })));
   const future = NOW + HOUR + 1000;
   assertEquals(

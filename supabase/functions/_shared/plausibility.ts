@@ -25,8 +25,12 @@ export const EVENT_ID_MAX = 64;
 export const MAX_DURATION_S = 172_800;
 export const MAX_DISTANCE_M = 2_000_000;
 export const MAX_EVENT_DURATION_MS = 172_800_000;
-/** A trip may not have started more than this long ago (the queue retries well inside it). */
-export const MAX_TRIP_AGE_MS = 7 * 86_400_000;
+/**
+ * A trip may not have started more than this long ago: long enough for a Wi-Fi-only device to
+ * sync a road trip's backlog, short enough that the past cannot be used as free buckets for the
+ * aggregates (ruled: 30 days).
+ */
+export const MAX_TRIP_AGE_MS = 30 * 86_400_000;
 /** Device clocks drift; a trip may run this far ahead of the server's clock. */
 export const MAX_CLOCK_SKEW_MS = 3_600_000;
 /** Wall span ceiling, the `duration_s` ceiling in milliseconds. */

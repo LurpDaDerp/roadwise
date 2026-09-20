@@ -1,11 +1,20 @@
-// The per-event columns the server derives itself before anything is stored (§4.7: never a
-// client-supplied derived value). The device sends `severity`, `contextMultiplier` and
-// `deduction` beside each event because its own row needs them; the server recomputes all three
-// from the event's inputs with the same package, so what `apply_trip` stores is what the score
-// was actually built from.
+// The per-event values the server derives itself before anything is scored or stored (§4.7:
+// never a client-supplied derived value). The device sends `context.night`, `severity`,
+// `contextMultiplier` and `deduction` beside each event because its own row needs them; the server
+// sets night from the trip's clock rule and recomputes the other three from the event's inputs
+// with the same package, so what `apply_trip` stores is what the score was actually built from.
 import { CONSTANTS, contextMultiplier, severity } from './scoring/index';
 import type { ScoredTrip } from './scoring/index';
 import type { PayloadEvent } from './payload.ts';
+
+/**
+ * Every event's `context.night` set from the trip: the clock rule at trip start in its zone (the
+ * M1 ruling — 23:00 to 05:00), never the device's flag. Precipitation stays as sent (false in M2).
+ * Runs before scoring, because night is a scoring input.
+ */
+export function withTripNight(events: readonly PayloadEvent[], night: boolean): PayloadEvent[] {
+  return events.map((e) => ({ ...e, context: { ...e.context, night } }));
+}
 
 /** Every event with the server's `severity`, `contextMultiplier` and `deduction`; inputs untouched. */
 export function deriveEvents(events: readonly PayloadEvent[], scored: ScoredTrip): PayloadEvent[] {
@@ -31,7 +40,7 @@ export function hasSevereSpeeding(events: readonly PayloadEvent[]): boolean {
   );
 }
 
-/** How many events' derived numbers the device got wrong (beyond float noise), for the log. */
+/** How many events the device described differently from the server (night flag or derived numbers), for the log. */
 export function countDerivedDrift(sent: readonly PayloadEvent[], derived: readonly PayloadEvent[]): number {
   let n = 0;
   for (let i = 0; i < sent.length; i += 1) {
@@ -39,7 +48,12 @@ export function countDerivedDrift(sent: readonly PayloadEvent[], derived: readon
     const b = derived[i];
     const off = (x: number | null, y: number | null) =>
       x === null || y === null ? x !== y : Math.abs(x - y) > 1e-6;
-    if (off(a.severity, b.severity) || off(a.contextMultiplier, b.contextMultiplier) || off(a.deduction, b.deduction)) {
+    if (
+      a.context.night !== b.context.night ||
+      off(a.severity, b.severity) ||
+      off(a.contextMultiplier, b.contextMultiplier) ||
+      off(a.deduction, b.deduction)
+    ) {
       n += 1;
     }
   }

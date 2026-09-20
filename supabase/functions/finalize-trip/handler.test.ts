@@ -376,6 +376,33 @@ Deno.test('hadSevereEvent is at least what the scored speeding events prove', as
   assertEquals((h.warnings[0][1] as { hadSevereEvent: boolean }).hadSevereEvent, true);
 });
 
+Deno.test('per-event night is the trip\'s clock rule in its zone; a device flag saying otherwise is overruled', async () => {
+  const start = Date.UTC(2023, 10, 15, 7, 30); // 23:30 in Los Angeles on the 14th
+  const h = harness({ now: start + 2 * HOUR });
+  // the device scored a 24 s pickup as a daytime event
+  const lying = payload({
+    startedAt: start,
+    endedAt: start + 1_320_000,
+    events: [event({ startedAt: start + 300_000, durationS: 24, durationMs: 24_000, context: { night: false, precipitation: false } })],
+  });
+  assertEquals(lying.events[0].contextMultiplier, 1);
+  const { status, body } = await json(await handleFinalizeTrip(post(lying), h.deps));
+  assertEquals(status, 200);
+  const e = envelope(h);
+  assertEquals(e.payload.events[0].context, { night: true, precipitation: false });
+  assertEquals(e.payload.events[0].contextMultiplier, 1.2);
+  assertEquals(e.conditions.night, true);
+  assertEquals(e.day[0].day, TRIP_DAY);
+  assertEquals(e.scored.score, 74); // 8 × 1 × 3 × 1 × 1.2 / 1.1 off 100
+  assertEquals(lying.provisional.score, 78); // what the device believed
+  assertEquals(body.score, 74);
+  assertEquals(body.provisionalMismatch, true);
+  assertEquals(
+    h.warnings.map((w) => String(w[0])),
+    ['finalize-trip mismatch', 'finalize-trip derived fields corrected']
+  );
+});
+
 Deno.test('a provisional score more than 2 points off is reported and logged; the server score wins', async () => {
   const h = harness();
   const p = payload();

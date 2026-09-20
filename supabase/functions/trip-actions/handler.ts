@@ -269,7 +269,7 @@ async function deleteTrip(run: Run, a: DeleteAction): Promise<Response> {
 export async function handleTripAction(req: Request, deps: ActionsDeps): Promise<Response> {
   const log = deps.log ?? console;
   const now = deps.now ?? Date.now;
-  const id = requestId(req);
+  const id = requestId();
 
   const wrongMethod = requirePost(req);
   if (wrongMethod) return wrongMethod;

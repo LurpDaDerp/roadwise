@@ -1,8 +1,8 @@
 // A PostgREST error as the edge functions map it: the SQLSTATE and the writer's fixed message.
 //
-// Extracted from db.ts (finalize-trip) unchanged. db.ts keeps its own copy of the class until its
-// fix round imports this module, so `isPgError` recognises the shape from either — the handlers
-// must not depend on which module threw.
+// The one class both database ports throw (db.ts for finalize-trip, actions_db.ts for
+// trip-actions). `isPgError` also accepts the same shape from any other module, so a handler never
+// depends on which module threw.
 
 export class PgError extends Error {
   constructor(

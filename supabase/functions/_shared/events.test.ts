@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { deriveEvents, hasSevereSpeeding } from './events.ts';
+import { countDerivedDrift, deriveEvents, hasSevereSpeeding, withTripNight } from './events.ts';
 import { event, payload, provisionalFor, T0 } from './testing/fixtures.ts';
 
 Deno.test('deriveEvents replaces the device\'s severity, multiplier and deduction with the server\'s', () => {
@@ -32,6 +32,29 @@ Deno.test('a possible event costs nothing even when the device says otherwise', 
   const p = payload({ events });
   const derived = deriveEvents(events, p.provisional);
   assertEquals(derived[1].deduction, 0);
+});
+
+Deno.test('withTripNight sets every event\'s night from the trip and keeps precipitation', () => {
+  const events = [
+    event({ context: { night: false, precipitation: true } }),
+    event({ id: 'b', category: 'braking', measured: { peakG: 0.42 }, context: { night: false, precipitation: false }, source: 'imu' }),
+  ];
+  assertEquals(
+    withTripNight(events, true).map((e) => e.context),
+    [
+      { night: true, precipitation: true },
+      { night: true, precipitation: false },
+    ]
+  );
+  assertEquals(withTripNight(events, false)[0].context, { night: false, precipitation: true });
+  assertEquals(withTripNight(events, true)[0].measured, { speedMps: 15.6464 }); // inputs otherwise untouched
+});
+
+Deno.test('countDerivedDrift counts a corrected night flag even when no number moved', () => {
+  const sent = [event({ id: 'b', category: 'braking', measured: { peakG: 0.42 }, context: { night: false, precipitation: false }, source: 'imu' })];
+  assertEquals(countDerivedDrift(sent, withTripNight(sent, true)), 1); // braking: multiplier unchanged by night
+  assertEquals(countDerivedDrift(sent, sent), 0);
+  assertEquals(countDerivedDrift(sent, [{ ...sent[0], severity: 0 }]), 1);
 });
 
 Deno.test('hasSevereSpeeding is a scored speeding event at or beyond 20 mph over', () => {

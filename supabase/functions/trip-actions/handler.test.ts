@@ -730,15 +730,16 @@ Deno.test("the writers' authorization refusals map to 403, 409 and 500", async (
   assertEquals(role.errors.length, 1);
 });
 
-Deno.test('an envelope the writer refuses is 400 with the message, and anything else is 500 without detail', async () => {
+Deno.test('an envelope the writer refuses is 400 with the code only (the message is logged), and anything else is 500 without detail', async () => {
   const drift = harness({
     rpc: { apply_recompute: () => ({ error: { code: '22023', message: 'apply_recompute payload is missing day[0].band' } }) },
   });
   assertEquals(await json(await handleTripAction(post(del()), drift.deps)), {
     status: 400,
-    body: { code: 'invalid_envelope', message: 'apply_recompute payload is missing day[0].band' },
+    body: { code: 'invalid_envelope' },
   });
   assertEquals(drift.errors.length, 1);
+  assertEquals((drift.errors[0][1] as { message: string }).message, 'apply_recompute payload is missing day[0].band');
   const boom = harness({ rpc: { record_dispute: () => ({ error: { code: 'XX000', message: 'kaboom' } }) } });
   assertEquals(await json(await handleTripAction(post(dispute()), boom.deps)), {
     status: 500,

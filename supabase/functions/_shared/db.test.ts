@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects } from '@std/assert';
-import { createDb, DAY_TRIPS_LIMIT, EVENT_ID_CHUNK, PgError } from './db.ts';
+import { createDb, DAY_TRIPS_LIMIT, EVENT_ID_CHUNK } from './db.ts';
+import { PgError } from './pg.ts';
 import { fakeSupabase } from './testing/fake_supabase.ts';
 import { CLIENT_TRIP_ID, dayRowRecord, NOW, OTHER_UID, T0, TRIP_DAY, tripRow, UID } from './testing/fixtures.ts';
 

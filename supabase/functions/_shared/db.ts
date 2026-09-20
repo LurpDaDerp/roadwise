@@ -4,24 +4,13 @@
 // through the migration's writers (`apply_trip` here; `apply_recompute` and the dispute/role/delete
 // writers in trip-actions). The port keeps the handlers testable against an in-memory client and
 // keeps every column name in one place. All of it runs under the service role, so every lookup
-// filters on the user id the caller derived from the JWT, and every list is bounded.
+// filters on the user id the caller derived from the JWT, and every list is bounded. Failures
+// surface as `PgError` from `_shared/pg.ts`, with the SQLSTATE the handler maps.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Baselines, DayRow, DayTripInput, ScoredTripInput } from './aggregate.ts';
 import type { FinalizeTripPayload } from './payload.ts';
+import { asPgError } from './pg.ts';
 import type { ScoredTrip } from './scoring/index';
-
-/** A PostgREST error with its SQLSTATE, so the handler can map the writers' fixed codes. */
-export class PgError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly details: string | null = null,
-    readonly hint: string | null = null
-  ) {
-    super(message);
-    this.name = 'PgError';
-  }
-}
 
 export interface ExistingTrip {
   id: string;
@@ -110,16 +99,6 @@ interface DayRecord {
   trips_scored: number;
   severe_events: number;
 }
-
-interface PostgrestError {
-  code?: string;
-  message: string;
-  details?: string | null;
-  hint?: string | null;
-}
-
-const asPgError = (e: PostgrestError): PgError =>
-  new PgError(e.code ?? 'unknown', e.message, e.details ?? null, e.hint ?? null);
 
 export function createDb(client: SupabaseClient): Db {
   return {
