@@ -319,9 +319,13 @@ begin
   for d in select * from jsonb_array_elements(case when jsonb_typeof(p_days) = 'array' then p_days else jsonb_build_array(p_days) end) loop
     insert into public.score_daily (user_id, day, long_term_score, band, provisional, safe_day, good_day,
       phone_free_day, camera_day, exposure, driving_s, trips_scored, severe_events)
-    values (p_user, (d->>'day')::date, (d->>'longTermScore')::int, d->>'band', (d->>'provisional')::boolean,
+    -- the integer columns are rounded, not cast: `::int` from JSON text refuses a decimal point,
+    -- and the caller's arithmetic (a sum of fractional durations, a weighted score) is numeric.
+    -- The callers round at the same boundary, so this only stops a fraction becoming a 22P02.
+    values (p_user, (d->>'day')::date, round((d->>'longTermScore')::numeric)::int, d->>'band', (d->>'provisional')::boolean,
       (d->>'safeDay')::boolean, (d->>'goodDay')::boolean, (d->>'phoneFreeDay')::boolean, (d->>'cameraDay')::boolean,
-      (d->>'exposure')::numeric, (d->>'drivingS')::int, (d->>'tripsScored')::int, (d->>'severeEvents')::int)
+      (d->>'exposure')::numeric, round((d->>'drivingS')::numeric)::int, round((d->>'tripsScored')::numeric)::int,
+      round((d->>'severeEvents')::numeric)::int)
     on conflict (user_id, day) do update set
       long_term_score = excluded.long_term_score, band = excluded.band, provisional = excluded.provisional,
       safe_day = excluded.safe_day, good_day = excluded.good_day, phone_free_day = excluded.phone_free_day,

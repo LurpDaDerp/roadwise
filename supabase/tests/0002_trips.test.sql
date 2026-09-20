@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(555);
+select plan(560);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -682,6 +682,17 @@ select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaa
   jsonb_build_array(pg_temp.day_row(pg_temp.la_day(2), 71), pg_temp.day_row(pg_temp.la_day(0), 71)), null) $$, 'recompute accepts an array of day rows');
 select is((select count(*)::int from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 3, 'both day rows written');
 select is((select long_term_score from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(0)), 71, 'today row carries the refreshed long-term score');
+-- the integer-bound day fields are rounded by the writer, so a caller that sends them as numerics
+-- (a sum of fractional durations, a JSON number that kept its point) is written, not refused
+select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), null, null,
+  jsonb_build_object('day', pg_temp.la_day(0), 'longTermScore', 68.6, 'band', 'good', 'provisional', false,
+    'safeDay', false, 'goodDay', false, 'phoneFreeDay', false, 'cameraDay', false,
+    'exposure', 2.100001, 'drivingS', 2520.4, 'tripsScored', 2.0, 'severeEvents', 1.4), null) $$,
+  'a day row whose integer fields arrive as numerics is accepted');
+select is((select driving_s from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(0)), 2520, 'drivingS is rounded into the integer column');
+select is((select long_term_score from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(0)), 69, 'longTermScore is rounded into the integer column');
+select is((select trips_scored from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(0)), 2, 'tripsScored is rounded into the integer column');
+select is((select severe_events from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(0)), 1, 'severeEvents is rounded into the integer column');
 
 select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 101, "status": "final", "categoryDeductions": {}}', null, null, null) $$, '22023', 'apply_recompute score must be between 0 and 100', 'recompute rejects a score above 100');
 select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 50, "status": "bogus", "categoryDeductions": {}}', null, null, null) $$, '22023', 'apply_recompute status is not a trip status', 'recompute rejects an unknown status');
