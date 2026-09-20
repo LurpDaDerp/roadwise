@@ -1,0 +1,156 @@
+import { bootstrapApp, BootstrapError, type AppRuntime, type BootstrapDeps } from '@/app/bootstrap';
+import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
+import { UNKNOWN_LIMIT } from '@/core/detectors/common';
+import { drive, TZ } from '@/core/engine/__fixtures__/drives';
+import type { TripSession } from '@/core/engine/engine.types';
+import { createRecorder } from '@/core/engine/recorder';
+import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
+import { CURRENT_SCHEMA_VERSION, createQueueRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
+import { emitQueueChanged } from '@/data/sync/queue';
+
+/** Wall clock at launch: the morning after the drive. */
+const NOW = T0 + 36_000_000;
+const TRIP = 'trip-1';
+
+let db: Db;
+let runtime: AppRuntime | null;
+
+beforeEach(async () => {
+  db = await createSqlJsDb();
+  runtime = null;
+});
+
+afterEach(() => {
+  runtime?.stop();
+  // The client's 5-minute gc timers would otherwise hold the worker open.
+  runtime?.queryClient.clear();
+});
+
+/** Lowercase hex of the right length — the payload schema checks the shape, not the digest. */
+const fakeSha256 = async (text: string): Promise<string> =>
+  String(text.length).padStart(64, '0');
+
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+/** What a process that died mid-drive leaves behind: the row and its checkpointed samples. */
+async function crashedDrive(rows = 200): Promise<void> {
+  await migrate(db);
+  const recorder = createRecorder(db, { tz: TZ, now: () => T0 });
+  const session: TripSession = createSession({
+    clientTripId: TRIP,
+    mode: 'mounted',
+    role: 'driver',
+    startSource: 'manual',
+    startedAt: T0,
+  });
+  for (const row of drive(rows)) appendRow(session, row, UNKNOWN_LIMIT);
+  await recorder.onCheckpoint(snapshotSession(session));
+}
+
+function deps(over: Partial<BootstrapDeps> = {}) {
+  const supabase = createFakeSupabase({ uid: null });
+  const appState = createFakeAppState();
+  const traces = new Map<string, Uint8Array>();
+  const errors: string[] = [];
+  const bootstrapDeps: BootstrapDeps = {
+    openDb: async () => db,
+    supabase,
+    traceFs: createFakeFs(),
+    traceWriter: {
+      async writeGzip(path, bytes) {
+        traces.set(path, bytes);
+      },
+    },
+    hash: { sha256: fakeSha256 },
+    newId: counterIds(),
+    appState,
+    tz: TZ,
+    now: () => NOW,
+    onError: (_error, context) => {
+      errors.push(context);
+    },
+    ...over,
+  };
+  return { bootstrapDeps, supabase, appState, traces, errors };
+}
+
+test('opens, migrates, recovers the crashed drive and starts the runner on what it queued', async () => {
+  await crashedDrive();
+  const { bootstrapDeps, supabase, appState, traces, errors } = deps();
+
+  runtime = await bootstrapApp(bootstrapDeps);
+
+  expect(runtime.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  expect(runtime.recovery).toEqual({ recovered: [TRIP], discarded: [], failed: [] });
+  // Finalized from its checkpoint, scored, flagged, and queued for upload.
+  const trip = await createTripsRepo(db).get(TRIP);
+  expect(trip).toMatchObject({ status: 'provisional', incomplete: 1, sync_state: 'queued' });
+  expect(trip?.score).not.toBeNull();
+  expect([...traces.keys()]).toEqual([`${TRIP}.bin.gz`]);
+
+  // The runner is live: it listens to the foreground, and its first drain already met the
+  // recovered trip's item — signed out, so it asked for a session and handed the claim back.
+  expect(appState.listeners).toHaveLength(1);
+  await settle();
+  expect(supabase.sessions).toBeGreaterThanOrEqual(1);
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('with nothing to recover the launch is the same, only quieter', async () => {
+  const { bootstrapDeps, appState, supabase } = deps();
+  runtime = await bootstrapApp(bootstrapDeps);
+  expect(runtime.recovery.recovered).toEqual([]);
+  expect(appState.listeners).toHaveLength(1);
+  await settle();
+  // Nothing was queued, so no drain ever needed a session.
+  expect(supabase.sessions).toBe(0);
+});
+
+test('the cache is wired to the queue, and stop() detaches everything', async () => {
+  const { bootstrapDeps, appState } = deps();
+  runtime = await bootstrapApp(bootstrapDeps);
+  const { queryClient } = runtime;
+  const key = ['trips', {}];
+
+  queryClient.setQueryData(key, []);
+  emitQueueChanged();
+  await settle();
+  expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+
+  runtime.stop();
+  runtime = null;
+  expect(appState.removals).toBe(1);
+  queryClient.setQueryData(key, []);
+  emitQueueChanged();
+  await settle();
+  expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+  // `afterEach` no longer holds this runtime; the cache's gc timers are this test's to drop.
+  queryClient.clear();
+});
+
+test('a database that will not open fails the launch by stage, with the cause kept', async () => {
+  const { bootstrapDeps } = deps({
+    openDb: () => Promise.reject(new Error('disk I/O error')),
+  });
+  const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(BootstrapError);
+  expect(failure).toMatchObject({ stage: 'open', message: 'bootstrap failed at open: disk I/O error' });
+  expect((failure as BootstrapError).reason).toBeInstanceOf(Error);
+});
+
+test('a drive recovery cannot finalize is reported, and the launch goes on without it', async () => {
+  await crashedDrive();
+  const { bootstrapDeps, errors } = deps({
+    traceWriter: {
+      writeGzip: () => Promise.reject(new Error('ENOSPC')),
+    },
+  });
+  runtime = await bootstrapApp(bootstrapDeps);
+  expect(runtime.recovery.failed.map((f) => f.clientTripId)).toEqual([TRIP]);
+  expect(errors).toEqual([`recover ${TRIP}`]);
+  // Left exactly as found, for the next launch to retry.
+  expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ status: 'recording' });
+});
