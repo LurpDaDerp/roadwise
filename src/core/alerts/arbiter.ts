@@ -1,0 +1,287 @@
+// The alert arbiter: every in-drive alert passes through here (spec §13.4, §8.8).
+//
+// Pure and deterministic — it never reads the clock, so a timeline of `ts` values replays exactly.
+import { CONSTANTS } from '@scoring';
+import type {
+  AlertDecision,
+  AlertKind,
+  AlertLevel,
+  AlertVoiceKey,
+  Arbiter,
+  ArbiterInput,
+  ArbiterState,
+} from './types';
+
+const {
+  ALERT_BREAK_AFTER_S,
+  ALERT_BUDGET_L1_PER_10MIN,
+  ALERT_BUDGET_WINDOW_S,
+  ALERT_DROWSY_MAX_PER_S,
+  ALERT_EYES_OFF_REARM_S,
+  ALERT_L1_SPEEDING_MIN_S,
+  ALERT_L2_OVER_MPS,
+  ALERT_L2_PERSIST_S,
+  ALERT_L3_OVER_MPS,
+  ALERT_L3_MIN_S,
+  ALERT_PHONE_COOLDOWN_S,
+  ALERT_REALERT_S,
+  ALERT_SPEEDING_RESET_S,
+  EYES_OFF_MIN_SPEED_MPS,
+  EYES_OFF_S,
+  LEARNING_PERIOD_TRIPS,
+  PHONE_HANDLING_MIN_S,
+  PHONE_MIN_SPEED_MPS,
+  Q_FULL_AT,
+} = CONSTANTS;
+
+/** How urgent the speeding *state* is right now; 0 means "nothing to say". */
+type SpeedingBand = 0 | 1 | 2 | 3;
+
+/**
+ * A rule that would fire on this row. Rules are evaluated in priority order but only the winner is
+ * committed, so a phone alert that lost to a drowsiness alert is still pending on the next row.
+ */
+interface Candidate {
+  kind: AlertKind;
+  level: AlertLevel;
+  voice: AlertVoiceKey;
+  eventId?: string;
+  /** Record that this candidate was the decision (delivered or budget-suppressed). */
+  commit(): void;
+}
+
+export function createArbiter(state: ArbiterState): Arbiter {
+  const decisions: AlertDecision[] = [];
+  let seq = 0;
+
+  // --- speeding episode ------------------------------------------------------------------------
+  /** Highest band already alerted in the open episode; 0 between episodes. */
+  let alertedBand: SpeedingBand = 0;
+  let lastSpeedingAlertTs = 0;
+  /** When `overMps` last fell to 0, for the episode reset. */
+  let notOverSinceTs: number | null = null;
+  /** When `overMps` last reached the L3 threshold, for the "≥ 20 over for ≥ 10 s" clock. */
+  let overL3SinceTs: number | null = null;
+
+  // --- the other rules -------------------------------------------------------------------------
+  const alertedPhoneEpisodes = new Set<string>();
+  let lastPhoneAlertTs: number | null = null;
+  /** False between an eyes-off alert and the eyes coming back to the road. */
+  let eyesOffArmed = true;
+  let lastDrowsyAlertTs: number | null = null;
+  let breakSuggested = false;
+
+  /** `ts` of every *delivered* L1, for the rolling budget. Suppressed ones cost nothing. */
+  const deliveredL1Ts: number[] = [];
+  /** The decision currently speaking — what a long-press mutes. */
+  let speaking: AlertDecision | null = null;
+  /** Set by `mute()` while a speeding alert is speaking; cleared when its episode ends. */
+  let speedingMuted = false;
+
+  function resetSpeedingEpisode(): void {
+    alertedBand = 0;
+    lastSpeedingAlertTs = 0;
+    speedingMuted = false;
+    // Nothing is speaking any more, so a late long-press must not mute the next episode.
+    if (speaking !== null && speaking.kind === 'speeding') speaking = null;
+  }
+
+  function track(input: ArbiterInput): void {
+    const { ts, overMps } = input;
+    if (overMps > 0) {
+      notOverSinceTs = null;
+      if (overMps >= ALERT_L3_OVER_MPS) {
+        if (overL3SinceTs === null) overL3SinceTs = ts;
+      } else {
+        overL3SinceTs = null;
+      }
+    } else {
+      overL3SinceTs = null;
+      if (notOverSinceTs === null) notOverSinceTs = ts;
+      if (ts - notOverSinceTs >= ALERT_SPEEDING_RESET_S * 1000) resetSpeedingEpisode();
+    }
+    // Eyes back on the road long enough: the next glance is a new one.
+    if ((input.eyesOffS ?? 0) < ALERT_EYES_OFF_REARM_S) eyesOffArmed = true;
+  }
+
+  function speedingBand(input: ArbiterInput): SpeedingBand {
+    const { ts, overMps, overForS, q } = input;
+    // L2 and L3 are escalations of the L1 state, so they inherit its quality gate: below
+    // `Q_FULL_AT` the fix is not good enough to accuse anyone (§8.8 step 2, §9.5).
+    if (!(overMps > 0 && overForS >= ALERT_L1_SPEEDING_MIN_S && q >= Q_FULL_AT)) return 0;
+    if (overL3SinceTs !== null && ts - overL3SinceTs >= ALERT_L3_MIN_S * 1000) return 3;
+    const persisted = overForS >= ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
+    if (overMps >= ALERT_L2_OVER_MPS || persisted) return 2;
+    return 1;
+  }
+
+  function speedingCandidate(input: ArbiterInput): Candidate | null {
+    const band = speedingBand(input);
+    if (band === 0) return null;
+    const increased = band > alertedBand;
+    // Speeding is the only alert that repeats inside one episode, so it is the only one a mute
+    // has anything to silence. A materially worse state still speaks (§8.8 step 6).
+    const carriedMute = state.mutedUntilTs !== undefined && input.ts < state.mutedUntilTs;
+    const muted = speedingMuted || carriedMute;
+    const dueAgain = !muted && input.ts - lastSpeedingAlertTs >= ALERT_REALERT_S * 1000;
+    if (!increased && !dueAgain) return null;
+    return {
+      kind: 'speeding',
+      level: band,
+      voice: band === 3 ? 'alert.slowDown' : 'alert.easeOff',
+      commit: () => {
+        alertedBand = band;
+        lastSpeedingAlertTs = input.ts;
+      },
+    };
+  }
+
+  function phoneCandidate(input: ArbiterInput): Candidate | null {
+    const episode = input.phoneEpisode;
+    if (episode === undefined) return null;
+    if (episode.durationS < PHONE_HANDLING_MIN_S) return null;
+    if (input.speedMps < PHONE_MIN_SPEED_MPS) return null;
+    if (alertedPhoneEpisodes.has(episode.id)) return null;
+    if (lastPhoneAlertTs !== null && input.ts - lastPhoneAlertTs < ALERT_PHONE_COOLDOWN_S * 1000) {
+      return null;
+    }
+    return {
+      kind: 'phone',
+      level: 2,
+      voice: 'alert.phoneDown',
+      eventId: episode.id,
+      commit: () => {
+        alertedPhoneEpisodes.add(episode.id);
+        lastPhoneAlertTs = input.ts;
+      },
+    };
+  }
+
+  function eyesOffCandidate(input: ArbiterInput): Candidate | null {
+    if (!eyesOffArmed) return null;
+    if ((input.eyesOffS ?? 0) < EYES_OFF_S) return null;
+    if (input.speedMps < EYES_OFF_MIN_SPEED_MPS) return null;
+    return {
+      kind: 'eyes_off',
+      level: 2,
+      voice: 'alert.eyesUp',
+      commit: () => {
+        eyesOffArmed = false;
+      },
+    };
+  }
+
+  function drowsyCandidate(input: ArbiterInput): Candidate | null {
+    if (input.drowsy !== true) return null;
+    if (lastDrowsyAlertTs !== null && input.ts - lastDrowsyAlertTs < ALERT_DROWSY_MAX_PER_S * 1000) {
+      return null;
+    }
+    return {
+      kind: 'drowsy',
+      level: 3,
+      voice: 'alert.takeABreak',
+      commit: () => {
+        lastDrowsyAlertTs = input.ts;
+      },
+    };
+  }
+
+  function breakCandidate(input: ArbiterInput): Candidate | null {
+    if (breakSuggested || input.drivingS < ALERT_BREAK_AFTER_S) return null;
+    return {
+      kind: 'break',
+      level: 1,
+      voice: 'alert.takeABreak',
+      commit: () => {
+        breakSuggested = true;
+      },
+    };
+  }
+
+  /**
+   * At most one decision per row, in the order a driver needs them:
+   * drowsy L3 > speeding L3 > phone L2 > eyes-off L2 > speeding L2 > speeding L1 > break L1.
+   */
+  function pick(input: ArbiterInput): Candidate | null {
+    const drowsy = drowsyCandidate(input);
+    if (drowsy !== null) return drowsy;
+    const speeding = speedingCandidate(input);
+    if (speeding !== null && speeding.level === 3) return speeding;
+    const phone = phoneCandidate(input);
+    if (phone !== null) return phone;
+    const eyesOff = eyesOffCandidate(input);
+    if (eyesOff !== null) return eyesOff;
+    if (speeding !== null) return speeding;
+    return breakCandidate(input);
+  }
+
+  // --- decision plumbing -----------------------------------------------------------------------
+
+  /**
+   * First trips are L1-only, so the app's first impression is never harsh (§13.4). Drowsiness is
+   * the exception: a safety alert is not softened for a new driver.
+   */
+  function levelFor(candidate: Candidate): AlertLevel {
+    const learning = state.tripIndex < LEARNING_PERIOD_TRIPS;
+    return learning && candidate.kind !== 'drowsy' ? 1 : candidate.level;
+  }
+
+  /** Called with the current row's `ts`, which never goes backwards, so pruning is safe. */
+  function remaining(ts: number): number {
+    const cutoff = ts - ALERT_BUDGET_WINDOW_S * 1000;
+    while (deliveredL1Ts.length > 0 && (deliveredL1Ts[0] ?? Infinity) <= cutoff) {
+      deliveredL1Ts.shift();
+    }
+    return Math.max(0, ALERT_BUDGET_L1_PER_10MIN - deliveredL1Ts.length);
+  }
+
+  /**
+   * Turns the winning candidate into a decision. The candidate is committed either way: a
+   * budget-suppressed alert was still *decided*, so it lands in the log once and does not come
+   * back a second later (§13.4 "log silently and summarize after the trip").
+   */
+  function emit(candidate: Candidate, ts: number): AlertDecision | null {
+    candidate.commit();
+    seq += 1;
+    const level = levelFor(candidate);
+    const decision: AlertDecision = {
+      id: `${candidate.kind}-${ts}-${seq}`,
+      level,
+      kind: candidate.kind,
+      ts,
+      voice: candidate.voice,
+    };
+    if (candidate.eventId !== undefined) decision.eventId = candidate.eventId;
+    // Only L1 is rationed; a warning or an urgent alert always plays.
+    if (level === 1 && remaining(ts) === 0) {
+      decisions.push({ ...decision, suppressed: true });
+      return null;
+    }
+    if (level === 1) deliveredL1Ts.push(ts);
+    decisions.push(decision);
+    speaking = decision;
+    return decision;
+  }
+
+  return {
+    consider(input) {
+      track(input);
+      const candidate = pick(input);
+      return candidate === null ? null : emit(candidate, input.ts);
+    },
+
+    mute(ts) {
+      // A mute can only apply to an alert that has already spoken.
+      if (speaking === null || ts < speaking.ts) return;
+      if (speaking.kind === 'speeding') speedingMuted = true;
+    },
+
+    budgetRemaining(ts) {
+      return remaining(ts);
+    },
+
+    log() {
+      return decisions.slice();
+    },
+  };
+}

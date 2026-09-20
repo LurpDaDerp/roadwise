@@ -29,6 +29,12 @@ export const en = {
   'common.cancel': 'Cancel',
   'common.done': 'Done',
   'common.unknown': '—',
+  // In-drive voice phrases (§8.8: audio first, ≤ 3 words — the break suggestion is the exception).
+  'alert.easeOff': 'Ease off',
+  'alert.slowDown': 'Slow down',
+  'alert.phoneDown': 'Phone down',
+  'alert.eyesUp': 'Eyes up',
+  'alert.takeABreak': 'Take a break soon',
 } as const;
 
 export type StringKey = keyof typeof en;

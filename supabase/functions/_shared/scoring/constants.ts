@@ -87,8 +87,14 @@ export const CONSTANTS = {
   ALERT_L3_OVER_MPS: 20 * MPH,
   ALERT_L3_MIN_S: 10,
   ALERT_REALERT_S: 120,
+  /** Back at or under the limit this long ends the speeding episode, so the next one alerts fresh. */
+  ALERT_SPEEDING_RESET_S: 2,
   ALERT_PHONE_COOLDOWN_S: 60,
+  /** Eyes back on the road this long re-arms the eyes-off alert for the next glance. */
+  ALERT_EYES_OFF_REARM_S: 1,
   ALERT_DROWSY_MAX_PER_S: 600,
+  /** Continuous driving before the one-per-trip break suggestion (§8.7). */
+  ALERT_BREAK_AFTER_S: 7200,
   CHECKPOINT_S: 30,
   DISCARD_SPEED_MPS: 100 * MPH,
   DATA_QUALITY_A_PCT: 90,
