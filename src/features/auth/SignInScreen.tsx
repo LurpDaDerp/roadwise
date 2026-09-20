@@ -23,13 +23,23 @@ export function SignInScreen() {
   const [email, setEmail] = useState('');
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'apple' | 'google' | 'email' | null>(null);
 
   const canSend = email.trim().includes('@');
-  const run = (fn: () => Promise<unknown>) => () => {
+  // One sign-in at a time. A second tap while the Apple sheet is opening would stack two of them,
+  // and the driver would be answering a dialog they cannot see the first of.
+  const run = (key: 'apple' | 'google' | 'email', fn: () => Promise<unknown>) => async () => {
     setError(null);
-    fn().catch(() => setError(t('signIn.errorGeneric')));
+    setBusy(key);
+    try {
+      await fn();
+    } catch {
+      setError(t('signIn.errorGeneric'));
+    } finally {
+      setBusy(null);
+    }
   };
-  const submit = run(() => magic.send(email.trim()));
+  const submit = run('email', () => magic.send(email.trim()));
   // `available` only ever turns true on iOS, and it resolves a tick after the first paint, so the
   // platform check is what keeps the button from popping into the stack under the driver's thumb.
   const showApple = Platform.OS === 'ios' || apple.available;
@@ -42,13 +52,20 @@ export function SignInScreen() {
 
       <View style={{ gap: th.space.md }}>
         {showApple ? (
-          <Button label={t('signIn.apple')} variant="secondary" onPress={run(apple.signIn)} />
+          <Button
+            label={t('signIn.apple')}
+            variant="secondary"
+            onPress={run('apple', apple.signIn)}
+            loading={busy === 'apple'}
+            disabled={busy !== null}
+          />
         ) : null}
         <Button
           label={t('signIn.google')}
           variant="secondary"
-          onPress={run(google.signIn)}
-          disabled={!google.ready}
+          onPress={run('google', google.signIn)}
+          loading={busy === 'google'}
+          disabled={!google.ready || busy !== null}
         />
       </View>
 
@@ -98,8 +115,8 @@ export function SignInScreen() {
         <Button
           label={t('signIn.magicLink')}
           onPress={submit}
-          loading={magic.state === 'sending'}
-          disabled={!canSend}
+          loading={busy === 'email' || magic.state === 'sending'}
+          disabled={!canSend || busy !== null}
         />
       </View>
 

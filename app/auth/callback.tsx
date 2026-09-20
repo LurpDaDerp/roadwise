@@ -1,4 +1,4 @@
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 
 import { supabase } from '@/data/supabase/client';
@@ -25,22 +25,26 @@ export default function AuthCallback() {
   // A link with no code is already spent; that is read off the params, not stored in state.
   const state = exchange ?? (code ? 'pending' : 'error');
 
-  // The session provider already holds the new session; the launch router decides where it goes.
-  if (state === 'ok') return <Redirect href="/" />;
-
-  return (
-    <Screen>
-      {state === 'error' ? (
+  if (state === 'error') {
+    return (
+      <Screen>
         <Banner
           tone="danger"
           message={t('auth.linkInvalid')}
           action={{ label: t('common.retry'), onPress: () => router.replace('/(auth)/sign-in') }}
         />
-      ) : (
-        <Text variant="body" accessibilityLiveRegion="polite">
-          {t('auth.signingIn')}
-        </Text>
-      )}
+      </Screen>
+    );
+  }
+
+  // Exchanging the code is only half of it: the session provider still has to read the profile
+  // before anyone counts as signed in. So this screen never navigates — it keeps saying what is
+  // happening, and `AuthGate` moves the driver the moment `status` flips.
+  return (
+    <Screen>
+      <Text variant="body" accessibilityLiveRegion="polite">
+        {t('auth.signingIn')}
+      </Text>
     </Screen>
   );
 }
