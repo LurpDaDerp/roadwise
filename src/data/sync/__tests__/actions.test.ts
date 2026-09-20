@@ -554,6 +554,58 @@ describe('changing who was driving', () => {
     expect(cached[0]?.payload.tripsScored).toBe(0);
   });
 
+  test("the server's severe-speeding verdict travels on this path too, not only on a dispute", async () => {
+    // The stored row says the drive had a severe episode; the server's re-score under the new
+    // role says it does not. The flag is maintained on every path that re-scores, or it drifts.
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: () => ({
+        data: {
+          tripId: SERVER_TRIP,
+          role: 'passenger',
+          score: null,
+          status: 'unscored',
+          trip: tripFields({ hadSevereEvent: false }),
+          days: [day()],
+          replayed: false,
+        },
+        error: null,
+      }),
+    });
+
+    await runSetRole(setRoleBody, ctx());
+
+    expect(JSON.parse((await readTrip()).conditions_json ?? '{}')).toEqual({
+      night: false,
+      precipitation: false,
+      hadSevereEvent: false,
+    });
+  });
+
+  test('a replay echoing a role the column allows but nothing writes is still a reply we can read', async () => {
+    // `trips.role`'s CHECK permits 'unknown', and the deleted-trip replay arm echoes the column
+    // straight back. A narrower device enum would turn the first such row into a permanent
+    // `invalid_response` retry loop rather than anything anyone could see.
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: () => ({
+        data: {
+          tripId: SERVER_TRIP,
+          role: 'unknown',
+          score: null,
+          status: 'unscored',
+          trip: tripFields(),
+          days: [day()],
+          replayed: true,
+        },
+        error: null,
+      }),
+    });
+
+    await expect(runSetRole(setRoleBody, ctx())).resolves.toEqual({ kind: 'done' });
+    expect(await readTrip()).toMatchObject({ role: 'unknown', sync_state: 'synced' });
+  });
+
   test('a drive the server does not have is a refusal a retry cannot fix', async () => {
     await seed();
     supabase = createFakeSupabase({ invoke: () => functionsHttpError(404, { code: 'not_found' }) });

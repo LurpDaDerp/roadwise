@@ -167,6 +167,15 @@ describe('why a trip has no score, and which card D1 shows', () => {
     expect(unscoredReasonOf(trip)).toBe('implausible_speed');
   });
 
+  test('a role the row does not know explains nothing, and never blames the driver', () => {
+    // `toTripSummary` maps a null `role` column to 'unknown'. Calling that a passenger trip
+    // would be an assertion about who was driving over a row that records nothing; the screens
+    // have a facts-only variant for it, and C10's question is what fills it in.
+    const unknown = summary({ status: 'unscored', score: null, role: null });
+    expect(unknown.role).toBe('unknown');
+    expect(unscoredReasonOf(unknown)).toBeNull();
+  });
+
   test('a passenger, a short trip and grade C each explain themselves', () => {
     expect(unscoredReasonOf(summary({ status: 'unscored', score: null, role: 'passenger' }))).toBe(
       'passenger'

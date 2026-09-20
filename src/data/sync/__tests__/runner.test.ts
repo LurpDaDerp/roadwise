@@ -993,6 +993,36 @@ test('a trace whose trip is gone is dropped even signed out on cellular', async 
   expect(fs.files.has(TRACE)).toBe(false);
 });
 
+test("the server's severe flag reaches the trip on finalize, not only on a dispute", async () => {
+  // The device uploads its own flag; the server ORs it with what the scored speeding events
+  // prove and may raise it. The row has to follow, on this path as on the other two.
+  await trips().insert(
+    {
+      client_trip_id: TRIP_ID,
+      started_at: T0,
+      tz: 'UTC',
+      status: 'provisional',
+      conditions_json: JSON.stringify({ night: true, precipitation: false, hadSevereEvent: false }),
+    },
+    T0
+  );
+  await enqueueFinalize(db, tripPayload(), T0);
+  supabase = createFakeSupabase({
+    uid: UID,
+    invoke: () => invokeOk({ ...SERVER_OK, trip: { ...SERVER_TRIP_FIELDS, hadSevereEvent: true } }),
+  });
+
+  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+
+  const stored = await trips().get(TRIP_ID);
+  // The server's verdict replaces the device's; the observations beside it are untouched.
+  expect(JSON.parse(stored?.conditions_json ?? '{}')).toEqual({
+    night: true,
+    precipitation: false,
+    hadSevereEvent: true,
+  });
+});
+
 describe('housekeeping', () => {
   test('a settled item is purged within a day, so the route it carries is not kept for ever', async () => {
     await seedTrip();
