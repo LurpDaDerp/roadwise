@@ -4,7 +4,11 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "types": ["jest"],
-    "paths": { "@/*": ["./src/*"], "@scoring": ["./packages/scoring/src/index.ts"] }
+    "paths": {
+      "@/*": ["./src/*"],
+      "@scoring": ["./packages/scoring/src/index.ts"],
+      "@scoring/*": ["./packages/scoring/src/*"]
+    }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
   "exclude": ["node_modules", "supabase/functions"]
