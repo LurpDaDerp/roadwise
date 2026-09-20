@@ -1,0 +1,24 @@
+export const en = {
+  'app.name': 'RoadWise',
+  'welcome.headline': 'Put your phone down.\nDrive. Get better.',
+  'welcome.body':
+    'RoadWise coaches you quietly while you drive and rewards you when you get home.',
+  'welcome.privacy': 'Your drives are yours. Nothing is shared unless you choose to.',
+  'welcome.getStarted': 'Get started',
+  'welcome.signIn': 'I already have an account',
+  'signIn.title': 'Sign in',
+  'signIn.apple': 'Continue with Apple',
+  'signIn.google': 'Continue with Google',
+  'signIn.emailLabel': 'Email',
+  'signIn.magicLink': 'Email me a sign-in link',
+  'signIn.magicLinkSent': 'Check your email for a sign-in link.',
+  'signIn.errorGeneric': 'Sign-in did not work. Try again.',
+  'signIn.offline': 'You are offline. Connect to sign in.',
+  'summary.pointsEarned': '+{points} points',
+  'common.retry': 'Try again',
+  'common.cancel': 'Cancel',
+  'common.done': 'Done',
+  'common.unknown': '—',
+} as const;
+
+export type StringKey = keyof typeof en;
