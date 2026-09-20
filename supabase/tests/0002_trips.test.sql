@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(621);
+select plan(630);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -274,6 +274,7 @@ select col_has_check('public', 'trip_events', 'context', 'trip_events.context is
 select col_has_check('public', 'trip_events', 'confidence', 'trip_events.confidence is range-checked');
 select col_has_check('public', 'trip_events', 'context_multiplier', 'trip_events.context_multiplier is range-checked');
 select col_has_check('public', 'trip_events', 'severity', 'trip_events.severity is range-checked');
+select col_has_check('public', 'trip_events', 'deduction', 'trip_events.deduction is range-checked');
 select col_has_check('public', 'trip_events', 'lat', 'trip_events.lat is range-checked');
 select col_has_check('public', 'trip_events', 'lng', 'trip_events.lng is range-checked');
 select col_has_check('public', 'event_disputes', 'reason', 'event_disputes.reason is an enum check');
@@ -406,6 +407,9 @@ select throws_ok($$ select public.apply_trip((select jsonb_set(p, '{payload,clie
 select throws_ok($$ select public.apply_trip((select jsonb_set(p, '{payload,events,0,category}', '"bogus"') from fx where name = 'a1')) $$, '23514', null, 'an unknown event category is rejected by the table');
 select throws_ok($$ select public.apply_trip((select jsonb_set(p, '{payload,events,1,id}', '"ev-1"') from fx where name = 'a1')) $$, '23505', null, 'duplicate event ids are rejected by the unique key');
 select throws_ok($$ select public.apply_trip((select jsonb_set(p, '{payload,distanceM}', '3000000') from fx where name = 'a1')) $$, '23514', null, 'an implausible distance is rejected by the table ceiling');
+-- M-9: a deduction past the ceiling is not a score the scorer can produce, and on the ingest path
+-- every drive takes it fails closed as a row code the edge functions answer 400, not as a 500
+select throws_ok($$ select public.apply_trip((select jsonb_set(p, '{scored,eventDeductions,ev-1}', '1000.001') from fx where name = 'a1')) $$, '23514', null, 'a deduction past the ceiling is rejected by the table ceiling, in the row-code family (400), not as an internal error');
 select is((select count(*)::int from public.trips), 0, 'rejected payloads wrote nothing');
 
 -- happy path
@@ -711,6 +715,9 @@ select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaa
   jsonb_build_array(jsonb_build_object('id', pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1'), 'status', 'removed', 'deduction', 0)), null, null) $$, '22023', 'apply_recompute event does not belong to the trip', 'recompute rejects an event of another trip');
 select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {}}',
   jsonb_build_array(jsonb_build_object('id', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-2'), 'status', 'bogus', 'deduction', 0)), null, null) $$, '22023', 'apply_recompute event status is not an event status', 'recompute rejects an unknown event status');
+select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {}}',
+  jsonb_build_array(jsonb_build_object('id', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-2'), 'status', 'scored', 'deduction', 1000.001)), null, null) $$, '23514', null, 'recompute rejects a deduction past the ceiling in the row-code family (400), not as an internal error');
+select is((select deduction from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-2')), 3.5, 'the refused recompute moved no deduction');
 select throws_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '00000000-0000-4000-8000-000000000000', '{"score": 72, "status": "final", "categoryDeductions": {}}', null, null, null) $$, '42501', 'trip not owned by user', 'an unknown trip reads as not owned (no oracle)');
 select throws_ok($$ select public.apply_recompute('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 100, "status": "final", "categoryDeductions": {}}', null, pg_temp.day_row(pg_temp.la_day(2), 100), null) $$, '42501', 'trip not owned by user', 'B cannot recompute A trip');
 select is((select score from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1')), 72, 'A score untouched by B attempt');
@@ -1058,6 +1065,12 @@ select throws_ok($$ update public.trips set distance_m = 3000000 where id = pg_t
 select throws_ok($$ update public.trip_events set measured = (select jsonb_object_agg('k' || i, md5(i::text)) from generate_series(1, 50) i) where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'oversize event measured rejected');
 select throws_ok($$ update public.trip_events set lat = 91 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'latitude out of range rejected');
 select throws_ok($$ update public.trip_events set severity = 101 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'severity above the ceiling rejected');
+-- M-9: the deduction ceiling clears every score the scorer can reach, and still refuses a non-score
+select lives_ok($$ update public.trip_events set deduction = 80 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, 'the scorer''s reachable maximum (speeding, 2 x 5 x 4 x 1.5 / 0.75 = 80) is accepted');
+select lives_ok($$ update public.trip_events set deduction = 320 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, 'the impossible cross-product of every factor''s own maximum (8 x 5 x 4 x 1.5 / 0.75 = 320) is accepted');
+select lives_ok($$ update public.trip_events set deduction = 1000 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, 'the ceiling itself is accepted');
+select throws_ok($$ update public.trip_events set deduction = 1000.001 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'a deduction past the ceiling is rejected by the table, never truncated');
+select throws_ok($$ update public.trip_events set deduction = -0.001 where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'a negative deduction is still rejected: the floor did not move');
 select throws_ok($$ update public.trip_events set status = 'bogus' where id = pg_temp.ev('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1', 'ev-1') $$, '23514', null, 'unknown event status rejected by the table');
 select throws_ok($$ update public.event_disputes set reason = 'bogus' where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' $$, '23514', null, 'unknown dispute reason rejected by the table');
 select throws_ok($$ update public.event_disputes set denied_reason = 'bogus' where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' $$, '23514', null, 'unknown denied reason rejected by the table');

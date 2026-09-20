@@ -106,7 +106,14 @@ create table public.trip_events (
   severity numeric not null check (severity between 0 and 100),
   confidence numeric not null check (confidence between 0 and 1),
   context_multiplier numeric not null check (context_multiplier between 1 and 1.5),
-  deduction numeric check (deduction between 0 and 100),
+  -- what this event cost the trip: `B x s x t x q x x / E` (§9.4). The scorer's reachable maximum
+  -- is speeding at 2 x 5 x 4 x 1.5 / 0.75 = 80, and even the impossible cross-product of every
+  -- factor's own maximum across categories (base 8 phone, severity 5 speeding, duration 4
+  -- speeding, context cap 1.5, exposure floor 0.75) is 320. The ceiling sits an order of magnitude
+  -- clear of both, so no score this scorer can produce is ever refused on the ingest path every
+  -- drive goes through -- while a value that is not a score at all still fails closed on this
+  -- CHECK as 23514, which _shared/http.ts ROW_CODES answers 400 `invalid_event_rows`, not 500.
+  deduction numeric check (deduction between 0 and 1000),
   alert_shown boolean not null default false,
   corrected boolean not null default false,
   source text not null check (source in ('gnss', 'imu', 'both', 'os', 'camera')),
