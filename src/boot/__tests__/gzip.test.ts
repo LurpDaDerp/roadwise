@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { crc32, gzipStored } from '@/app/gzip';
+import { crc32, gzipStored } from '@/boot/gzip';
 
 // Jest compiles this suite to CommonJS, so `require` is real at run time. The root tsconfig's
 // `types` is `["jest"]`, so Node's own typings are not in the program and the shape is local.

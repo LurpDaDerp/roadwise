@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { bootstrapApp, type AppRuntime } from '@/app/bootstrap';
-import { BootstrapFailed } from '@/app/BootstrapFailed';
+import { bootstrapApp, type AppRuntime } from '@/boot/bootstrap';
+import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { DataProvider } from '@/data/queries';
 import { SessionProvider } from '@/data/supabase/session';
 import { AuthGate } from '@/features/auth/AuthGate';
@@ -23,8 +23,9 @@ export default function RootLayout() {
   const { loaded, error } = useAppFonts();
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered, the sync runner
-  // started (`src/app/bootstrap.ts`). A failure keeps the attempt it belongs to, so a retry can
-  // show its progress without blanking the screen.
+  // started (`src/boot/bootstrap.ts`). A failure keeps the attempt it belongs to, so a retry can
+  // show its progress without blanking the screen. The launch carries its own deadline
+  // (`BOOTSTRAP_TIMEOUT_MS`), so a hang arrives here as a failure rather than as a held splash.
   const [runtime, setRuntime] = useState<AppRuntime | null>(null);
   const [failed, setFailed] = useState<{ attempt: number; error: Error } | null>(null);
   const [attempt, setAttempt] = useState(0);

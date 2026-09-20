@@ -12,6 +12,13 @@ type Props = {
   trailing?: ReactNode;
   onPress?: () => void;
   accessory?: 'chevron' | 'none';
+  /**
+   * What the row says instead of "title, subtitle". Needed when `leading` carries meaning of its
+   * own — a score, a count — which the row's own label would otherwise silence, since a label on
+   * the pressable replaces everything inside it.
+   */
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
   testID?: string;
 };
 
@@ -27,6 +34,8 @@ export function ListRow({
   trailing,
   onPress,
   accessory = 'chevron',
+  accessibilityLabel,
+  accessibilityHint,
   testID,
 }: Props) {
   const t = useTheme();
@@ -71,7 +80,8 @@ export function ListRow({
     <Pressable
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+      accessibilityLabel={accessibilityLabel ?? (subtitle ? `${title}, ${subtitle}` : title)}
+      accessibilityHint={accessibilityHint}
       onPress={onPress}
       style={({ pressed }) => [
         row,

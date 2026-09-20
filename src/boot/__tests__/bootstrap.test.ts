@@ -1,4 +1,4 @@
-import { bootstrapApp, BootstrapError, type AppRuntime, type BootstrapDeps } from '@/app/bootstrap';
+import { bootstrapApp, BootstrapError, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
 import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
@@ -7,6 +7,7 @@ import { createRecorder } from '@/core/engine/recorder';
 import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
 import { CURRENT_SCHEMA_VERSION, createQueueRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
 import { emitQueueChanged } from '@/data/sync/queue';
 
@@ -131,14 +132,107 @@ test('the cache is wired to the queue, and stop() detaches everything', async ()
   queryClient.clear();
 });
 
-test('a database that will not open fails the launch by stage, with the cause kept', async () => {
-  const { bootstrapDeps } = deps({
-    openDb: () => Promise.reject(new Error('disk I/O error')),
+test('recovery finishes before the runner starts, so nothing races the row it queued', async () => {
+  await crashedDrive();
+  const { bootstrapDeps, appState } = deps();
+  // The trace is written inside `finalizeTrip`, the last thing recovery does. If the runner were
+  // already live at that moment, it would be listening to the foreground.
+  let listenersWhenRecovered = -1;
+  bootstrapDeps.traceWriter = {
+    async writeGzip() {
+      listenersWhenRecovered = appState.listeners.length;
+    },
+  };
+
+  runtime = await bootstrapApp(bootstrapDeps);
+
+  expect(listenersWhenRecovered).toBe(0);
+  expect(appState.listeners).toHaveLength(1);
+});
+
+test('no limit cache exists at launch, so a recovered drive is never judged for speeding', async () => {
+  await crashedDrive();
+  const { bootstrapDeps } = deps();
+
+  runtime = await bootstrapApp(bootstrapDeps);
+
+  // `limits` is deliberately not passed to `recoverRecordingTrips`: every replayed row is judged
+  // against UNKNOWN_LIMIT, so none of the drive is covered and nothing can cost speeding points.
+  const trip = await createTripsRepo(db).get(TRIP);
+  expect(trip?.limit_coverage_pct).toBe(0);
+  expect(JSON.parse(trip?.category_deductions_json ?? '{}')).toMatchObject({ speeding: 0 });
+});
+
+describe('a launch that fails', () => {
+  /** A handle that opens and then refuses every statement — a file that is there but corrupt. */
+  const corruptDb = (): Db => {
+    const fail = () => Promise.reject(new Error('SQLITE_CORRUPT'));
+    return { execute: fail, transaction: fail };
+  };
+
+  test('a database that will not open is tagged open, with the cause kept', async () => {
+    const { bootstrapDeps } = deps({
+      openDb: () => Promise.reject(new Error('disk I/O error')),
+    });
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BootstrapError);
+    expect(failure).toMatchObject({
+      stage: 'open',
+      message: 'bootstrap failed at open: disk I/O error',
+    });
+    expect((failure as BootstrapError).reason).toBeInstanceOf(Error);
   });
-  const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(BootstrapError);
-  expect(failure).toMatchObject({ stage: 'open', message: 'bootstrap failed at open: disk I/O error' });
-  expect((failure as BootstrapError).reason).toBeInstanceOf(Error);
+
+  test('a schema that will not migrate is tagged migrate', async () => {
+    const { bootstrapDeps } = deps({ openDb: async () => corruptDb() });
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ stage: 'migrate' });
+  });
+
+  test('a runner that will not start is tagged sync, and takes its own listeners with it', async () => {
+    const queryClient = createQueryClient();
+    const { bootstrapDeps, supabase } = deps({
+      queryClient,
+      appState: {
+        addEventListener() {
+          throw new Error('AppState is unavailable');
+        },
+      },
+    });
+
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ stage: 'sync' });
+
+    // Nothing the failed launch attached is still listening: neither the cache's subscription to
+    // the queue, nor the runner's own — a retry must not stack a second of each.
+    const key = ['trips', {}];
+    queryClient.setQueryData(key, []);
+    emitQueueChanged();
+    await settle();
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    expect(supabase.sessions).toBe(0);
+    queryClient.clear();
+  });
+
+  test('a launch that hangs past its deadline is reported, and the late runtime is shut down', async () => {
+    const queryClient = createQueryClient();
+    const { bootstrapDeps, appState } = deps({
+      queryClient,
+      timeoutMs: 10,
+      openDb: () => new Promise<Db>((resolve) => setTimeout(() => resolve(db), 60)),
+    });
+
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BootstrapError);
+    expect(failure).toMatchObject({ stage: 'open' });
+    expect((failure as BootstrapError).message).toContain('timed out after 10 ms');
+
+    // The sequence still finishes; what it built belongs to nobody, so it is stopped.
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    expect(appState.listeners).toHaveLength(0);
+    expect(appState.removals).toBe(1);
+    queryClient.clear();
+  });
 });
 
 test('a drive recovery cannot finalize is reported, and the launch goes on without it', async () => {

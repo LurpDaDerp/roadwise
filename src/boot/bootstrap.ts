@@ -36,6 +36,12 @@ import { createExpoTraceWriter, type TraceWriter } from './traceWriter';
 /** The one database file on the device. */
 export const DB_NAME = 'roadwise.db';
 
+/**
+ * How long the whole launch may take before the driver is told it failed. Generous: a first
+ * migration on a slow device is seconds, not milliseconds, and a false alarm costs a retry.
+ */
+export const BOOTSTRAP_TIMEOUT_MS = 20_000;
+
 export type BootstrapStage = 'open' | 'migrate' | 'recover' | 'sync';
 
 /** Which step failed, with the underlying error kept for the log. */
@@ -75,6 +81,8 @@ export interface BootstrapDeps {
   /** Default: no engine exists yet, so nothing is ever recording. M3 hands over the engine's status. */
   isRecording?: () => boolean;
   queryClient?: QueryClient;
+  /** The launch deadline. Default: `BOOTSTRAP_TIMEOUT_MS`. */
+  timeoutMs?: number;
   now?: () => number;
   /** IANA zone. Default: the device's. */
   tz?: string;
@@ -98,6 +106,46 @@ function warn(error: unknown, context: string): void {
   if (__DEV__) console.warn(`[bootstrap] ${context}:`, error);
 }
 
+/**
+ * The whole launch, with the deadline (`M-4`) around it.
+ *
+ * A *failure* at any step is already answered; a *hang* — a stuck `openDb`, a migration grinding
+ * through a large database — is not, and it holds the splash forever with no words and no exit.
+ * Past the deadline the launch is reported as a failure at whichever step it had reached, and a
+ * sequence that comes back later is nobody's: it is shut down rather than left with a started
+ * runner and a live subscriber behind it.
+ */
+export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime> {
+  const limitMs = deps.timeoutMs ?? BOOTSTRAP_TIMEOUT_MS;
+  let reached: BootstrapStage = 'open';
+  let abandoned = false;
+
+  const sequence = runLaunch(deps, (name) => {
+    reached = name;
+  });
+  sequence.then(
+    (runtime) => {
+      if (abandoned) runtime.stop();
+    },
+    // The deadline already reported it; a second rejection here would be unhandled.
+    () => {}
+  );
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      abandoned = true;
+      reject(new BootstrapError(reached, new Error(`timed out after ${limitMs} ms`)));
+    }, limitMs);
+  });
+
+  try {
+    return await Promise.race([sequence, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function stage<T>(name: BootstrapStage, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
@@ -106,13 +154,19 @@ async function stage<T>(name: BootstrapStage, run: () => Promise<T>): Promise<T>
   }
 }
 
-export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime> {
+async function runLaunch(
+  deps: BootstrapDeps,
+  enter: (name: BootstrapStage) => void
+): Promise<AppRuntime> {
   const now = deps.now ?? Date.now;
   const onError = deps.onError ?? warn;
 
+  enter('open');
   const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
+  enter('migrate');
   const schemaVersion = await stage('migrate', () => migrate(db));
 
+  enter('recover');
   const recovery = await stage('recover', async () => {
     const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
     return recoverRecordingTrips(db, {
@@ -122,6 +176,8 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
       hash: deps.hash ?? { sha256: (await import('@/lib/hash')).sha256Hex },
       now,
       createDetectors: () => createDetectors(newId),
+      // `limits` is deliberately absent: no tile cache exists at launch, so every replayed row
+      // is judged against `UNKNOWN_LIMIT` — no speeding without a limit, everything else.
     });
   });
   for (const failure of recovery.failed) onError(failure.error, `recover ${failure.clientTripId}`);
@@ -129,19 +185,33 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   const queryClient = deps.queryClient ?? createQueryClient();
   const detach = subscribeInvalidation(queryClient);
 
-  const runner = await stage('sync', async () =>
-    createSyncRunner({
-      db,
-      supabase: deps.supabase ?? (await import('@/data/supabase/client')).supabase,
-      fs: deps.traceFs ?? (await createExpoTraceFs()),
-      net: deps.net ?? { isWifi: () => false },
-      isRecording: deps.isRecording ?? (() => false),
-      appState: deps.appState ?? AppState,
-      now,
-      onError,
-    })
-  );
-  runner.start();
+  enter('sync');
+  let runner: SyncRunner | null = null;
+  try {
+    const created = await stage('sync', async () =>
+      createSyncRunner({
+        db,
+        supabase: deps.supabase ?? (await import('@/data/supabase/client')).supabase,
+        fs: deps.traceFs ?? (await createExpoTraceFs()),
+        net: deps.net ?? { isWifi: () => false },
+        isRecording: deps.isRecording ?? (() => false),
+        appState: deps.appState ?? AppState,
+        now,
+        onError,
+      })
+    );
+    runner = created;
+    // Inside the stage as well: a `start()` that throws is a launch that failed at `sync`, not
+    // an untagged error escaping the sequence.
+    await stage('sync', async () => created.start());
+  } catch (reason) {
+    // Nothing this step attached may outlive it. The layout offers a retry that re-runs the
+    // whole sequence, and a subscriber left behind would fire `invalidateAfterSync` into a
+    // `QueryClient` nobody will ever render — once per press, forever.
+    runner?.stop();
+    detach();
+    throw reason;
+  }
 
   return {
     db,

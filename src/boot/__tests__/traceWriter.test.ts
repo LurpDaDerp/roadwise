@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { createExpoTraceWriter, type ExpoWriterFileSystemLike } from '@/app/traceWriter';
+import { createExpoTraceWriter, type ExpoWriterFileSystemLike } from '@/boot/traceWriter';
 import { TRACES_DIRECTORY } from '@/data/sync/traceFs';
 
 /** A stand-in for `expo-file-system`: records how the directory and the file were addressed. */

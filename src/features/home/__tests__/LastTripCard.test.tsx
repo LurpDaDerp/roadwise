@@ -1,6 +1,6 @@
 import { fireEvent, screen } from '@testing-library/react-native';
 
-import { createQueueRepo } from '@/data/db';
+import { createQueueRepo, type Db } from '@/data/db';
 import { deductions, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { LastTripCard } from '@/features/home/LastTripCard';
 import {
@@ -16,6 +16,24 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 const DAY = 86_400_000;
 const drive = (id: string, daysAgo: number, over: Parameters<typeof tripRow>[0] = {}) =>
   tripRow({ client_trip_id: id, started_at: T0 - daysAgo * DAY, ...over });
+
+/**
+ * The card reads the database twice — the last drive, then the scored drives it counts — through
+ * one `Db`. This lets the second read fail while the first stands, which is the only way the two
+ * queries can disagree.
+ */
+function failNthRead(db: Db, nth: number): Db {
+  let reads = 0;
+  return {
+    execute(sql, params) {
+      reads += 1;
+      return reads === nth
+        ? Promise.reject(new Error('SQLITE_CORRUPT: database disk image is malformed'))
+        : db.execute(sql, params);
+    },
+    transaction: (fn) => db.transaction(fn),
+  };
+}
 
 beforeEach(() => mockRouter.push.mockClear());
 afterEach(clearQueryClients);
@@ -74,6 +92,29 @@ test('an unscored last drive prints a dash, and an unclassified one asks its que
   const [item] = await createQueueRepo(w.db).nextDue(Date.now() + 1, 10);
   expect(JSON.parse(item?.payload_json ?? '{}')).toMatchObject({ action: 'set-role', role: 'other' });
   expect(screen.queryByText('Were you driving?')).toBeNull();
+});
+
+test('the three splits are printed, conditions included, as one spoken line', async () => {
+  const w = await world({
+    trips: [
+      drive('last', 1, {
+        conditions_json: JSON.stringify({ night: true, precipitation: true, hadSevereEvent: false }),
+      }),
+    ],
+  });
+  await w.renderScreen(<LastTripCard />);
+  expect(await screen.findByLabelText('30 min, 10 mi, Night, rain')).toBeOnTheScreen();
+  expect(screen.getByText('Night, rain')).toBeOnTheScreen();
+});
+
+test('a count that cannot be read says nothing rather than a wrong number', async () => {
+  const w = await world({
+    trips: [drive('a', 3, { score: 70 }), drive('last', 1, { score: 84 })],
+  });
+  // The last drive is read first and stands; the count behind it fails.
+  await w.renderScreen(<LastTripCard />, failNthRead(w.db, 2));
+  expect(await screen.findByText('84')).toBeOnTheScreen();
+  expect(screen.queryByText(/Building your score/)).toBeNull();
 });
 
 test('a database that cannot be read fails on the card alone, with a retry', async () => {
