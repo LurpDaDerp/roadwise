@@ -10,6 +10,8 @@ import type { DisputeRecord, EventRow, TripRow } from '@/data/db/types';
 import {
   ACTION_HANDLERS,
   isActionKind,
+  recordActionGiveUp,
+  RETRIES_EXHAUSTED,
   runDeleteTrip,
   runDispute,
   runSetRole,
@@ -26,6 +28,7 @@ import {
   type SupabaseReply,
 } from '@/data/sync/__fixtures__/fakes';
 import { SYNC_KINDS } from '@/data/sync/kinds';
+import { currentOwnerUid } from '@/data/sync/queue';
 import { createSyncRunner } from '@/data/sync/runner';
 
 const T0 = Date.UTC(2026, 0, 5, 12, 0, 0);
@@ -148,6 +151,20 @@ const disputeReply = (over: Record<string, unknown> = {}): SupabaseReply => ({
   error: null,
 });
 
+const queuedRecord = (over: Partial<DisputeRecord> = {}): string =>
+  JSON.stringify({
+    reason: 'hazard',
+    note: null,
+    statedLimitMph: null,
+    submittedAt: T0,
+    outcome: 'queued',
+    deniedReason: null,
+    remainingAllowance: null,
+    code: null,
+    decidedAt: null,
+    ...over,
+  });
+
 const readEvent = async (): Promise<EventRow> => {
   const row = await createEventsRepo(db).get(EVENT);
   if (!row) throw new Error('no event');
@@ -267,7 +284,7 @@ describe('reporting an event', () => {
   });
 
   test('a report past the 14-day window is refused for good, and the event says so', async () => {
-    await seed({}, { status: 'disputed' });
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
     supabase = createFakeSupabase({
       invoke: () => functionsHttpError(422, { code: 'dispute_window_closed' }),
     });
@@ -283,6 +300,50 @@ describe('reporting an event', () => {
       code: 'dispute_window_closed',
       decidedAt: NOW,
     });
+  });
+
+  test('a refusal that is not about the window keeps its own code, and never claims the window', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+    supabase = createFakeSupabase({
+      invoke: () => functionsHttpError(422, { code: 'event_not_scored' }),
+    });
+
+    await expect(runDispute(disputeBody, ctx())).resolves.toEqual({
+      kind: 'failed',
+      code: 'event_not_scored',
+    });
+
+    expect(await readDispute()).toMatchObject({
+      outcome: 'refused',
+      code: 'event_not_scored',
+      decidedAt: NOW,
+    });
+    expect(await readEvent()).toMatchObject({ status: 'scored' });
+  });
+
+  test('a report whose queue item ran out of attempts stops saying it is on its way', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+
+    await recordActionGiveUp(ctx(), 'dispute', disputeBody, RETRIES_EXHAUSTED);
+
+    expect(await readDispute()).toMatchObject({
+      outcome: 'refused',
+      code: RETRIES_EXHAUSTED,
+    });
+    expect(await readEvent()).toMatchObject({ status: 'scored' });
+  });
+
+  test('a body this build cannot send still leaves a record, so D3 is not stuck on sending', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+
+    const bad = JSON.stringify({ action: 'dispute', clientEventId: EVENT, reason: 'nope' });
+    await expect(runDispute(bad, ctx())).resolves.toEqual({
+      kind: 'failed',
+      code: 'invalid_payload',
+    });
+
+    expect(supabase.invokes).toHaveLength(0);
+    expect(await readDispute()).toMatchObject({ outcome: 'refused', code: 'invalid_payload' });
   });
 
   test('a server that asks for later is retried, with the wait it asked for', async () => {
@@ -483,8 +544,20 @@ describe('deleting a drive', () => {
       '2026-01-31'
     );
     expect(cached[0]?.payload.tripsScored).toBe(0);
-    // The row stays, still deleted: it is what stops a queued trace being uploaded.
-    expect(await readTrip()).toMatchObject({ deleted_at: NOW, sync_state: 'synced' });
+  });
+
+  test('a confirmed delete leaves nothing behind', async () => {
+    await seed({ deleted_at: NOW });
+    supabase = createFakeSupabase({ invoke: () => deleteReply() });
+
+    await expect(runDeleteTrip(deleteBody, ctx())).resolves.toEqual({ kind: 'done' });
+
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    expect(await createEventsRepo(db).listByTrip(TRIP)).toEqual([]);
+    const { rows } = await db.execute('SELECT count(*) AS n FROM samples WHERE client_trip_id = ?', [
+      TRIP,
+    ]);
+    expect(rows[0]?.n).toBe(0);
   });
 
   test('a delete the server had already applied is a replay, and still refreshes the day', async () => {
@@ -507,6 +580,17 @@ describe('deleting a drive', () => {
     expect(await readTrip()).toMatchObject({ deleted_at: NOW });
   });
 
+  test('a delete that gives up leaves the drive visible as unfinished, not silently undone', async () => {
+    await seed({ deleted_at: NOW });
+    await recordActionGiveUp(ctx(), 'delete-trip', deleteBody, RETRIES_EXHAUSTED);
+
+    expect(await readTrip()).toMatchObject({
+      deleted_at: NOW,
+      sync_state: 'failed',
+      sync_error: RETRIES_EXHAUSTED,
+    });
+  });
+
   test('a storage failure on the server is tried again later', async () => {
     await seed({ deleted_at: NOW });
     supabase = createFakeSupabase({
@@ -522,6 +606,17 @@ describe('deleting a drive', () => {
 });
 
 describe('through the runner', () => {
+  const runnerFor = (over: Partial<Parameters<typeof createSyncRunner>[0]> = {}) =>
+    createSyncRunner({
+      db,
+      supabase,
+      fs: createFakeFs(),
+      net: { isWifi: () => true },
+      isRecording: () => false,
+      now: () => NOW,
+      ...over,
+    });
+
   test('a queued report is drained, applied and closed out', async () => {
     await seed();
     supabase = createFakeSupabase({ invoke: () => disputeReply() });
@@ -532,20 +627,61 @@ describe('through the runner', () => {
       T0
     );
 
-    const runner = createSyncRunner({
-      db,
-      supabase,
-      fs: createFakeFs(),
-      net: { isWifi: () => true },
-      isRecording: () => false,
-      appState: createFakeAppState(),
-      now: () => NOW,
-    });
+    const runner = runnerFor({ appState: createFakeAppState() });
 
     await expect(runner.drainOnce(NOW)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
     expect(await readEvent()).toMatchObject({ status: 'removed' });
     const [item] = await createQueueRepo(db).nextDue(NOW + 1, 10);
     expect(item).toBeUndefined();
+  });
+
+  test('signed out, an action is held rather than posted — and costs no attempt', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+    supabase = createFakeSupabase({ uid: null, invoke: () => disputeReply() });
+    await createQueueRepo(db).enqueue(
+      'dispute',
+      { action: 'dispute', clientEventId: EVENT, reason: 'other', note: 'my kid was in the car' },
+      `dispute:${EVENT}`,
+      T0
+    );
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toEqual({
+      done: 0,
+      failed: 0,
+      deferred: 1,
+    });
+
+    // The note never left the device, and the ladder did not move.
+    expect(supabase.invokes).toHaveLength(0);
+    const [item] = await createQueueRepo(db).nextDue(NOW + 1, 10);
+    expect(item).toMatchObject({ attempts: 0 });
+  });
+
+  test("work queued by one driver is never posted under another's session", async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+    supabase = createFakeSupabase({ uid: 'user-b', invoke: () => disputeReply() });
+    await createQueueRepo(db).enqueue(
+      'dispute',
+      { action: 'dispute', clientEventId: EVENT, reason: 'hazard' },
+      `dispute:${EVENT}`,
+      T0,
+      undefined,
+      'user-a'
+    );
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toEqual({
+      done: 0,
+      failed: 1,
+      deferred: 0,
+    });
+    expect(supabase.invokes).toHaveLength(0);
+  });
+
+  test('the signed-in user is remembered, so work queued between drains carries its owner', async () => {
+    await seed();
+    supabase = createFakeSupabase({ uid: 'user-1' });
+    await runnerFor().drainOnce(NOW);
+    await expect(currentOwnerUid(db)).resolves.toBe('user-1');
   });
 
   test('a role change queued before this build had a handler now drains', async () => {

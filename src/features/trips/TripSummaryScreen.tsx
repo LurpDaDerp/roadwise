@@ -17,9 +17,6 @@ import { TripHeader } from './TripHeader';
 import { TripHighlights } from './TripHighlights';
 import { TripScoreField } from './TripScoreField';
 
-/** A day key no trip can have, so the day query has nothing to read until the trip is known. */
-const NO_DAY = '0000-00-00';
-
 /** §7.0: plain words first; the server's code only under "Details", for support. */
 function SyncErrorNotice({ code }: { code: string | null }) {
   const [open, setOpen] = useState(false);
@@ -102,8 +99,9 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
   const th = useTheme();
   const detailQuery = useTrip(clientTripId);
   const eventsQuery = useTripEvents(clientTripId);
-  const day = detailQuery.data?.trip.day ?? NO_DAY;
-  const dayQuery = useScoreDaily({ from: day, to: day });
+  // Only once the trip is known, so no cache entry is minted for a day nothing has (M-12).
+  const day = detailQuery.data?.trip.day ?? null;
+  const dayQuery = useScoreDaily(day === null ? null : { from: day, to: day });
 
   const done = () => router.dismissTo(HOME_HREF);
   const back = router.canGoBack() ? () => router.back() : null;

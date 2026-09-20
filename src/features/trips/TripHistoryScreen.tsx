@@ -12,8 +12,9 @@ import { tripCopy as copy } from './copy';
 import { groupTripsByDay, historyItems, type HistoryItem } from './detail';
 import { FieldText } from './Field';
 import { conditionsLabel, formatTripDate, formatTimeSpan, spokenRoute, routeLine } from './format';
-import { ICON, TIGHT, TOUCH } from './layout';
+import { ICON, SCORE_COLUMN, TIGHT, TOUCH } from './layout';
 import { tripSummaryHref } from './routes';
+import { useFailedDeletes } from './tripActions';
 import { TripTopBar } from './TopBar';
 import { hasFilters, NO_FILTERS, toTripsFilter, TripFilterBar, type HistoryFilters } from './TripFilters';
 
@@ -91,7 +92,7 @@ function HistoryRow({ trip, onPress }: { trip: TripSummary; onPress: () => void 
         backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
       })}
     >
-      <View style={{ minWidth: 56, alignItems: 'center' }}>
+      <View style={{ minWidth: SCORE_COLUMN, alignItems: 'center' }}>
         {scored && trip.score !== null && trip.band !== null ? (
           <>
             <FieldText face="numeral" variant="title1">
@@ -178,16 +179,21 @@ export function TripHistoryScreen() {
 
   // One read for every day on screen; `score_daily_cache` is keyed by the same local dates.
   const days = groups.map((group) => group.day);
-  const range = {
-    from: days[days.length - 1] ?? '9999-12-31',
-    to: days[0] ?? '9999-12-31',
-  };
-  const daysQuery = useScoreDaily(range);
+  const oldest = days[days.length - 1];
+  const newest = days[0];
+  const daysQuery = useScoreDaily(
+    oldest === undefined || newest === undefined ? null : { from: oldest, to: newest }
+  );
   const dayByKey = useMemo(() => {
     const map = new Map<string, DayEntry>();
     for (const entry of daysQuery.data ?? []) map.set(entry.day, entry);
     return map;
   }, [daysQuery.data]);
+
+  // Deletes the queue gave up on: the drives are gone from this phone but still on the server,
+  // and the driver was told otherwise. A notice rather than a row, because there is no drive left
+  // to show — only a promise to finish keeping.
+  const failedDeletes = useFailedDeletes();
 
   const filtered = hasFilters(filters);
   const more = all.length > limit;
@@ -239,6 +245,14 @@ export function TripHistoryScreen() {
   return (
     <Screen testID="trip-history">
       <TripTopBar title={copy.history.title} onBack={null} />
+      {failedDeletes.ids.length > 0 ? (
+        <Banner
+          tone="warning"
+          message={copy.history.deleteFailed(failedDeletes.ids.length)}
+          action={{ label: copy.history.deleteRetry, onPress: () => void failedDeletes.retry() }}
+          testID="delete-failed"
+        />
+      ) : null}
       <TripFilterBar filters={filters} onChange={setFilters} testID="history-filters" />
 
       {items.length === 0 ? (

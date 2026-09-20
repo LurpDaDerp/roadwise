@@ -176,6 +176,11 @@ export interface QueueItem {
    * between the upload and the call that follows does not send the file again. Null until it has.
    */
   trace_uploaded_at: number | null;
+  /**
+   * The signed-in user this work was queued for. The runner posts an item only under this user's
+   * session; null means the owner was not known at enqueue time and any session may send it.
+   */
+  owner_uid: string | null;
   last_error: string | null;
   created_at: number;
 }

@@ -914,6 +914,19 @@ test('a trace belonging to a discarded trip never reaches Storage', async () => 
   expect(fs.files.has(TRACE)).toBe(false);
 });
 
+test('a deleted drive never uploads its trace or its summary', async () => {
+  await seedTrip();
+  await db.execute('UPDATE trips SET deleted_at = ?', [T0]);
+  await enqueueFinalize(db, tripPayload(), T0);
+
+  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+
+  expect(supabase.uploads).toHaveLength(0);
+  expect(supabase.invokes).toHaveLength(0);
+  // The local file goes with it: nothing will ever read it again.
+  expect(fs.files.has(TRACE)).toBe(false);
+});
+
 test('a trace belonging to a soft-deleted trip is dropped', async () => {
   await seedTrip();
   await enqueueTraceUpload(db, { clientTripId: TRIP_ID, tracePath: TRACE }, T0);

@@ -14,7 +14,15 @@ const LABEL_TRACKING = 1.2;
  * `<Text variant="title2">` printing B612 Bold — same size, same card, different weight
  * (Task 6 review, M-9).
  */
-const BOLD_VARIANTS: readonly (keyof TypeScale)[] = ['display', 'title1', 'title2'];
+const BOLD_VARIANTS: readonly (keyof TypeScale)[] = [
+  'display',
+  'title1',
+  'title2',
+  // These two name the UI face at weight 600. Swapping in the licence face leaves the weight with
+  // no matching cut to resolve to, so they take the bold face as well (Task 7 review, M-4).
+  'title3',
+  'headline',
+];
 
 /**
  * A printed field on the licence: the small-caps label sits over a hairline, the value under it.

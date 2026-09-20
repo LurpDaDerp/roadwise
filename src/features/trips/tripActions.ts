@@ -11,12 +11,13 @@
  * allowance (3 per rolling 7 days, ≤ 20 % of scored events over 30 days, a stated posted limit
  * free) is the server's to count. The device writes `outcome: 'queued'` and waits to be told.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 
 import {
   createEventsRepo,
   createQueueRepo,
+  createSamplesRepo,
   createTripsRepo,
   MissingTripError,
   type Db,
@@ -28,8 +29,11 @@ import {
   type TripRow,
 } from '@/data/db';
 import { invalidateAfterSync, invalidateTrip, useDb } from '@/data/queries';
+import { DisputePayloadSchema } from '@/data/sync/actions';
 import type { SyncKind } from '@/data/sync/kinds';
-import { emitQueueChanged } from '@/data/sync/queue';
+import { currentOwnerUid, emitQueueChanged, traceIdempotencyKey } from '@/data/sync/queue';
+import type { TraceFs } from '@/data/sync/runner';
+import { createExpoTraceFs } from '@/data/sync/traceFs';
 
 export const DISPUTE_KIND: SyncKind = 'dispute';
 export const DELETE_TRIP_KIND: SyncKind = 'delete-trip';
@@ -98,6 +102,9 @@ export async function disputeEvent(
     decidedAt: null,
   };
 
+  // Validated here rather than only on the way out: a body the runner cannot send would be a
+  // terminal failure hours later, with the driver looking at "Reported — sending" in the
+  // meantime. Refusing at the tap is the only place they can do anything about it.
   const payload: DisputePayload = {
     action: 'dispute',
     clientEventId,
@@ -105,7 +112,9 @@ export async function disputeEvent(
     ...(record.note === null ? {} : { note: record.note }),
     ...(record.statedLimitMph === null ? {} : { statedLimitMph: record.statedLimitMph }),
   };
+  DisputePayloadSchema.parse(payload);
 
+  const owner = await currentOwnerUid(db);
   const row = await db.transaction(async (tx) => {
     const events = createEventsRepo(db);
     const current = await events.get(clientEventId);
@@ -118,13 +127,11 @@ export async function disputeEvent(
     const updated = await events.update(clientEventId, patch, tx);
     if (updated === null) throw new MissingEventError(clientEventId);
 
-    await createQueueRepo(db).enqueue(
-      DISPUTE_KIND,
-      payload,
-      disputeIdempotencyKey(clientEventId),
-      now,
-      tx
-    );
+    const queue = createQueueRepo(db);
+    await queue.enqueue(DISPUTE_KIND, payload, disputeIdempotencyKey(clientEventId), now, tx, owner);
+    // A report that never left leaves a `failed` item behind, and `INSERT OR IGNORE` would drop
+    // the second attempt on the floor. Sending it again means putting that item back in the queue.
+    await queue.reopen(disputeIdempotencyKey(clientEventId), now, tx);
     return updated;
   });
   // After the commit, so a listener that drains meets the row and not the lock.
@@ -139,40 +146,120 @@ export class MissingEventError extends Error {
   }
 }
 
+/** A drive's trace on disk, as the finalizer wrote it and the runner reads it. */
+const tracePathFor = (clientTripId: string): string => `${clientTripId}.bin.gz`;
+
+/**
+ * Remove a drive's trace file. Best effort and silent: a file that will not delete is disk to
+ * reclaim, not a reason to refuse the delete the driver just confirmed. `fs` is injectable so a
+ * test never loads the native file-system module.
+ */
+async function removeTraceFile(clientTripId: string, fs?: TraceFs): Promise<void> {
+  try {
+    const target = fs ?? (await createExpoTraceFs());
+    await target.remove(tracePathFor(clientTripId));
+  } catch {
+    // Nothing to do about it, and nothing about the delete depends on it.
+  }
+}
+
+export interface DeleteTripDeps {
+  /** The traces directory. Defaults to the device's; a test passes its own. */
+  fs?: TraceFs;
+}
+
 /**
  * Delete a drive (§7.D D5).
  *
- * The row is marked `deleted_at` and every read excludes it from that instant — offline included
- * — while the queued `delete-trip` owes the server the same. The row itself is kept until the
- * queue drains: it is what the runner reads to decide that a trace still waiting for Wi-Fi is no
- * longer worth uploading, and what stops a second delete being queued for a trip already gone.
+ * D5's copy says the drive "goes for good", so **everything that identifies it goes now**: the
+ * trace file — a second-by-second record of where the driver went, and the most identifying thing
+ * this app holds — the route polyline, the endpoint labels and geohashes, every event with its
+ * coordinates, and the 1 Hz samples. A trace still queued for Wi-Fi is dropped with them, so
+ * nothing about the drive can reach Storage after this point.
+ *
+ * What is left is a husk: a hidden row carrying its id, its `deleted_at` and the sync bookkeeping,
+ * because the server still has to be told and the queue item is the only thing that will tell it.
+ * `runDeleteTrip` removes that row too once the server confirms. Every read already excludes it
+ * (`isHiddenTrip`, `readTrip`), so the drive is gone from the app the instant this returns —
+ * offline included.
  */
 export async function deleteTrip(
   db: Db,
   clientTripId: string,
-  now: number = Date.now()
+  now: number = Date.now(),
+  deps: DeleteTripDeps = {}
 ): Promise<TripRow> {
   const payload: DeleteTripPayload = { action: 'delete', clientTripId };
+  const owner = await currentOwnerUid(db);
 
   const row = await db.transaction(async (tx) => {
     const trips = createTripsRepo(db);
     const current = await trips.get(clientTripId, tx);
     if (current === null) throw new MissingTripError(clientTripId);
 
-    const updated = await trips.update(clientTripId, { deleted_at: now } satisfies TripPatch, now, tx);
+    const updated = await trips.update(
+      clientTripId,
+      {
+        deleted_at: now,
+        polyline: null,
+        start_label: null,
+        end_label: null,
+        start_geohash5: null,
+        end_geohash5: null,
+      } satisfies TripPatch,
+      now,
+      tx
+    );
     if (updated === null) throw new MissingTripError(clientTripId);
 
-    await createQueueRepo(db).enqueue(
+    await createEventsRepo(db).removeByTrip(clientTripId, tx);
+    await createSamplesRepo(db).purgeByTrip(clientTripId, tx);
+
+    const queue = createQueueRepo(db);
+    // A trace waiting for Wi-Fi has nothing left to upload for.
+    await queue.dropByKey(traceIdempotencyKey(clientTripId), tx);
+    await queue.enqueue(
       DELETE_TRIP_KIND,
       payload,
       deleteIdempotencyKey(clientTripId),
       now,
-      tx
+      tx,
+      owner
     );
+    await queue.reopen(deleteIdempotencyKey(clientTripId), now, tx);
     return updated;
   });
+
+  // Outside the transaction: the file system is not in it, and a delete that committed must not
+  // be undone by a file that would not go.
+  await removeTraceFile(clientTripId, deps.fs);
   emitQueueChanged();
   return row;
+}
+
+/**
+ * The drives the device has deleted and the server has not been told about, because the queue
+ * item gave up. They are gone from every list — so D4 carries a notice rather than a row, and a
+ * way to ask again.
+ */
+export async function readFailedDeletes(db: Db): Promise<TripRow[]> {
+  const rows = await createTripsRepo(db).list();
+  return rows.filter((row) => row.deleted_at !== null && row.sync_error !== null);
+}
+
+/** Put every given-up delete back in the queue, for the driver's "Try again". */
+export async function retryFailedDeletes(
+  db: Db,
+  clientTripIds: readonly string[],
+  now: number = Date.now()
+): Promise<void> {
+  const queue = createQueueRepo(db);
+  const trips = createTripsRepo(db);
+  for (const id of clientTripIds) {
+    await trips.update(id, { sync_error: null, sync_state: 'queued' } satisfies TripPatch, now);
+    await queue.reopen(deleteIdempotencyKey(id), now);
+  }
+  emitQueueChanged();
 }
 
 type Phase = 'idle' | 'busy' | 'done' | 'error';
@@ -239,4 +326,38 @@ export function useDeleteTrip(): DeleteTrip {
   );
 
   return { remove, phase };
+}
+
+export interface FailedDeletes {
+  /** The client ids of drives deleted here that the server has not been told about. */
+  ids: string[];
+  retry(): Promise<void>;
+  busy: boolean;
+}
+
+/**
+ * D4's read of the deletes that gave up. Keyed under the `trips` root so every invalidation that
+ * refreshes the history refreshes this too.
+ */
+export function useFailedDeletes(): FailedDeletes {
+  const db = useDb();
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const query: UseQueryResult<TripRow[]> = useQuery({
+    queryKey: ['trips', 'failed-deletes'],
+    queryFn: () => readFailedDeletes(db),
+  });
+  const ids = (query.data ?? []).map((row) => row.client_trip_id);
+
+  const retry = useCallback(async () => {
+    setBusy(true);
+    try {
+      await retryFailedDeletes(db, ids);
+      await invalidateAfterSync(queryClient);
+    } finally {
+      setBusy(false);
+    }
+  }, [db, queryClient, ids]);
+
+  return { ids, retry, busy };
 }

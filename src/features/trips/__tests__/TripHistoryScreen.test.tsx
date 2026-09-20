@@ -1,5 +1,6 @@
-import { screen } from '@testing-library/react-native';
+import { screen, waitFor } from '@testing-library/react-native';
 
+import { createQueueRepo } from '@/data/db';
 import { deductions, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import {
   brokenDb,
@@ -80,6 +81,49 @@ describe('the list', () => {
     await open({ trips: [drive('a', 0), drive('b', 0, { deleted_at: T0 })] });
     expect(screen.getByTestId('history-a')).toBeOnTheScreen();
     expect(screen.queryByTestId('history-b')).toBeNull();
+  });
+
+  test('a delete the server was never told about is said out loud, and can be asked again', async () => {
+    const w = await open({
+      trips: [
+        drive('a', 0),
+        drive('b', 0, { deleted_at: T0, sync_state: 'failed', sync_error: 'retries_exhausted' }),
+      ],
+    });
+    await createQueueRepo(w.db).enqueue(
+      'delete-trip',
+      { action: 'delete', clientTripId: 'b' },
+      'delete:b',
+      T0
+    );
+    await createQueueRepo(w.db).markAttempt(
+      (await createQueueRepo(w.db).nextDue(T0 + 1, 10))[0]?.id ?? 0,
+      false,
+      'retries_exhausted',
+      T0
+    );
+    await createQueueRepo(w.db).markFailed(
+      (await createQueueRepo(w.db).byKey('delete:b'))?.id ?? 0,
+      'retries_exhausted'
+    );
+
+    expect(await screen.findByTestId('delete-failed')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        "One drive couldn't be deleted yet. It's gone from your phone, but still on our side."
+      )
+    ).toBeOnTheScreen();
+    // The drive itself stays hidden: there is nothing left of it to show.
+    expect(screen.queryByTestId('history-b')).toBeNull();
+
+    await press(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(async () => {
+      expect(await createQueueRepo(w.db).byKey('delete:b')).toMatchObject({
+        status: 'pending',
+        attempts: 0,
+      });
+    });
+    expect(screen.queryByTestId('delete-failed')).toBeNull();
   });
 });
 

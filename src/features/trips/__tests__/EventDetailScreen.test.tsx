@@ -77,15 +77,19 @@ describe('the moment itself', () => {
     expect(await screen.findByText("This moment isn't on the drive")).toBeOnTheScreen();
   });
 
-  test('a low-confidence moment says it was detected and did not count, and why', async () => {
+  test('a low-confidence moment is detected, not counted, and offered no report', async () => {
     await open([speeding({ status: 'possible', deduction: 0, confidence: 0.4 })]);
     expect(screen.getByText('Detected, not counted')).toBeOnTheScreen();
     expect(
       screen.getByText("We weren't sure enough about this one, so it didn't affect your score.")
     ).toBeOnTheScreen();
     expect(screen.getByTestId('event-points')).toHaveTextContent('None');
-    // It can still be reported: the driver may know it never happened at all.
-    expect(screen.getByRole('button', { name: "This isn't right" })).toBeOnTheScreen();
+    // The server refuses every report of an unscored moment, so the button is not offered and
+    // the screen finishes the sentence instead.
+    expect(screen.queryByRole('button', { name: "This isn't right" })).toBeNull();
+    expect(screen.getByTestId('no-report-reason')).toHaveTextContent(
+      "We didn't count this one, so there's nothing to take off your score."
+    );
   });
 });
 
@@ -129,6 +133,31 @@ describe('reporting it', () => {
       clientEventId: EVENT,
       reason: 'hazard',
     });
+  });
+
+  test('a posted limit outside the range is refused at the tap, not dropped in silence', async () => {
+    const w = await open();
+    await press(screen.getByRole('button', { name: "This isn't right" }));
+    await press(screen.getByTestId('reason-wrong_limit'));
+    await fireEvent.changeText(screen.getByTestId('stated-limit'), '300');
+
+    expect(screen.getByTestId('limit-error')).toHaveTextContent(
+      'Enter a limit between 5 and 100 mph.'
+    );
+    expect(screen.getByTestId('dispute-submit')).toBeDisabled();
+    await press(screen.getByTestId('dispute-submit'));
+    expect(await createQueueRepo(w.db).nextDue(Date.now() + 1, 10)).toHaveLength(0);
+  });
+
+  test('the sheet forgets an abandoned answer', async () => {
+    await open();
+    await press(screen.getByRole('button', { name: "This isn't right" }));
+    await press(screen.getByTestId('reason-hazard'));
+    expect(screen.getByTestId('reason-hazard')).toBeChecked();
+
+    await press(screen.getByTestId('dispute-cancel'));
+    await press(screen.getByRole('button', { name: "This isn't right" }));
+    expect(screen.getByTestId('reason-hazard')).not.toBeChecked();
   });
 
   test('a stated posted limit rides along, and is free', async () => {
@@ -200,12 +229,17 @@ describe('reporting it', () => {
 });
 
 describe('what the server said', () => {
-  test('a report on its way says so, and is not offered a second time', async () => {
+  test('a report on its way says so, is not offered twice, and still shows what it costs', async () => {
     await open([speeding({ status: 'disputed', dispute_json: record({ outcome: 'queued' }) })]);
     expect(screen.getByText('Reported — sending')).toBeOnTheScreen();
     expect(
       screen.getByText("Your report is saved. We'll send it the next time you're online.")
     ).toBeOnTheScreen();
+    // The score and the category bars still include this moment, so the points field must too.
+    expect(screen.getByTestId('event-points')).toHaveTextContent('−6');
+    expect(screen.getByTestId('points-under-review')).toHaveTextContent(
+      'Still counted while we check'
+    );
     expect(screen.queryByRole('button', { name: "This isn't right" })).toBeNull();
     expect(screen.getByRole('button', { name: 'Back to the drive' })).toBeOnTheScreen();
   });
@@ -230,7 +264,7 @@ describe('what the server said', () => {
     expect(screen.getByText('Reported')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        "You've used your reports for now, so this one didn't change your score. We still logged it, and it helps us fix what flagged you."
+        "You've used your three reports for this week, so this one didn't change your score. We still logged it, and it helps us fix what flagged you."
       )
     ).toBeOnTheScreen();
     // The points it cost are still on the row: nothing was applied.
@@ -247,5 +281,34 @@ describe('what the server said', () => {
     expect(
       screen.getByText("Reports close 14 days after a drive, so this one couldn't be applied.")
     ).toBeOnTheScreen();
+  });
+
+  test('a refusal that is not about the window never claims the window, and keeps its code', async () => {
+    await open([
+      speeding({ dispute_json: record({ outcome: 'refused', code: 'event_not_scored' }) }),
+    ]);
+
+    expect(screen.getByText("We couldn't apply that report")).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        "This moment wasn't part of your score, so there was nothing to take off. Your report is still logged."
+      )
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('Reported too late')).toBeNull();
+    expect(screen.queryByText(/14 days/)).toBeNull();
+
+    // The server's own code is there for support, behind a disclosure, never as primary text.
+    expect(screen.queryByTestId('standing-code')).toBeNull();
+    await press(screen.getByTestId('standing-details'));
+    expect(screen.getByTestId('standing-code')).toHaveTextContent('Server code: event_not_scored');
+  });
+
+  test('a report that never left says so and can be sent again', async () => {
+    await open([
+      speeding({ dispute_json: record({ outcome: 'refused', code: 'retries_exhausted' }) }),
+    ]);
+    expect(screen.getByText("Your report didn't send")).toBeOnTheScreen();
+    expect(screen.getByText("We couldn't get it through. You can send it again.")).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: "This isn't right" })).toBeOnTheScreen();
   });
 });

@@ -14,6 +14,8 @@ export {
   routeFor,
   routeSegments,
   severityWord,
+  standingLabel,
+  standingWhy,
   timelineRows,
   TRIM_ENDPOINTS_M,
   trimRoute,
@@ -58,7 +60,8 @@ export {
   type Highlight,
   type UnscoredCopy,
 } from './format';
-export { ICON, TIGHT, TOUCH, TOUCH_LG } from './layout';
+export { CLOCK_COLUMN, ICON, NOTICE_BORDER, SCORE_COLUMN, TIGHT, TOUCH, TOUCH_LG } from './layout';
+export { CATEGORY_ICON, UNKNOWN_CATEGORY_ICON } from './icons';
 export { QualityStamp } from './QualityStamp';
 export { RoleChips } from './RoleChips';
 export {
@@ -102,7 +105,7 @@ export { EventMiniMap, loadMaps, resetMapsCache, TripRouteField } from './TripMa
 export { TripScoreField } from './TripScoreField';
 export { TripStatusChip, type TripStatusChipKind } from './TripStatusChip';
 export { TripSummaryScreen } from './TripSummaryScreen';
-export { spokenRow, STANDING_WHY, TripTimeline } from './TripTimeline';
+export { spokenRow, TripTimeline } from './TripTimeline';
 export {
   DELETE_TRIP_KIND,
   deleteIdempotencyKey,
@@ -112,10 +115,15 @@ export {
   disputeIdempotencyKey,
   MAX_NOTE,
   MissingEventError,
+  readFailedDeletes,
+  retryFailedDeletes,
   useDeleteTrip,
+  useFailedDeletes,
   useReportEvent,
   type DeleteTrip,
+  type DeleteTripDeps,
   type DeleteTripPayload,
+  type FailedDeletes,
   type DisputeInput,
   type DisputePayload,
   type ReportEvent,

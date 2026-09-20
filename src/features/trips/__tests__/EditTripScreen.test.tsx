@@ -1,7 +1,7 @@
 import { screen, waitFor } from '@testing-library/react-native';
 
-import { createQueueRepo, createTripsRepo } from '@/data/db';
-import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
+import { createEventsRepo, createQueueRepo, createTripsRepo } from '@/data/db';
+import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import {
   brokenDb,
   clearQueryClients,
@@ -153,6 +153,64 @@ describe('deleting the drive', () => {
     expect(item).toMatchObject({ kind: 'delete-trip', idempotency_key: `delete:${ID}` });
     expect(JSON.parse(item?.payload_json ?? 'null')).toEqual({ action: 'delete', clientTripId: ID });
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(app)/trips');
+  });
+
+  test('nothing identifying about the drive survives the confirmation', async () => {
+    const w = await world({
+      trips: [tripRow({ client_trip_id: ID, polyline: 'ceaqGfnqiVaA?' })],
+      events: [eventRow({ id: 'e1', client_trip_id: ID })],
+    });
+    await w.db.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [
+      ID,
+      T0,
+      '{}',
+    ]);
+    await w.renderScreen(<EditTripScreen clientTripId={ID} />);
+    await screen.findByTestId('edit-trip-screen');
+
+    await press(screen.getByTestId('delete-trip'));
+    await press(screen.getByTestId('delete-confirm'));
+
+    await waitFor(async () => {
+      const row = await createTripsRepo(w.db).get(ID);
+      expect(row?.deleted_at).toEqual(expect.any(Number));
+    });
+
+    const row = await createTripsRepo(w.db).get(ID);
+    // The husk keeps only what the queued delete needs; every location and label is gone.
+    expect(row).toMatchObject({
+      polyline: null,
+      start_label: null,
+      end_label: null,
+      start_geohash5: null,
+      end_geohash5: null,
+    });
+    expect(await createEventsRepo(w.db).listByTrip(ID)).toEqual([]);
+    const { rows } = await w.db.execute(
+      'SELECT count(*) AS n FROM samples WHERE client_trip_id = ?',
+      [ID]
+    );
+    expect(rows[0]?.n).toBe(0);
+    // And the request that still has to go is queued, carrying nothing but the id.
+    const [item] = await queued(w.db);
+    expect(JSON.parse(item?.payload_json ?? 'null')).toEqual({ action: 'delete', clientTripId: ID });
+  });
+
+  test('a trace still waiting for Wi-Fi is dropped with the drive', async () => {
+    const w = await open();
+    await createQueueRepo(w.db).enqueue(
+      'trace-upload',
+      { clientTripId: ID, tracePath: `${ID}.bin.gz` },
+      `trace:${ID}`,
+      T0
+    );
+
+    await press(screen.getByTestId('delete-trip'));
+    await press(screen.getByTestId('delete-confirm'));
+
+    await waitFor(async () => {
+      expect(await createQueueRepo(w.db).byKey(`trace:${ID}`)).toBeNull();
+    });
   });
 
   test('a delete that cannot be written says so and stays on the screen', async () => {

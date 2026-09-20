@@ -212,6 +212,34 @@ test('sync_queue carries trace_uploaded_at, null until the object is in Storage'
   expect(stored).toEqual([{ trace_uploaded_at: null }]);
 });
 
+test('sync_queue carries owner_uid, so work is never posted under another account', async () => {
+  await migrate(db);
+  const { rows } = await db.execute('PRAGMA table_info(sync_queue)');
+  expect(rows.find((row) => row.name === 'owner_uid')).toMatchObject({
+    type: 'TEXT',
+    notnull: 0,
+  });
+
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?, ?)',
+    ['dispute', '{}', 'dispute:e1', 1, 'user-a', 1]
+  );
+  // Work queued before any session was seen is unowned, which is not the same as owned by nobody.
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?)',
+    ['finalize-trip', '{}', 'trip:t1', 1, 1]
+  );
+  const { rows: stored } = await db.execute(
+    'SELECT idempotency_key, owner_uid FROM sync_queue ORDER BY idempotency_key'
+  );
+  expect(stored).toEqual([
+    { idempotency_key: 'dispute:e1', owner_uid: 'user-a' },
+    { idempotency_key: 'trip:t1', owner_uid: null },
+  ]);
+});
+
 test('score_daily_cache is keyed by the local date and stamped when written', async () => {
   await migrate(db);
   const { rows } = await db.execute('PRAGMA table_info(score_daily_cache)');

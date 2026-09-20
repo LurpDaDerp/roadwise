@@ -113,6 +113,12 @@ export const SCHEMA_V1: readonly string[] = [
     -- the moment the object is there, so a crash between the upload and the call that follows
     -- does not send the file a second time. NULL until it has, and on items with no object.
     trace_uploaded_at INTEGER,
+    -- The signed-in user this work belongs to, stamped when it was queued. One device holds one
+    -- database, and signing out clears neither it nor this queue, so without this column user A's
+    -- queued dispute -- free-text note and all -- would be posted under user B's token. The runner
+    -- refuses an item whose owner is not the live session. NULL on work queued before any session
+    -- was known, which is treated as unowned.
+    owner_uid TEXT,
     last_error TEXT,
     created_at INTEGER NOT NULL
   )`,

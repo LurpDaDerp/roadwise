@@ -135,16 +135,39 @@ export type EventStanding =
   | 'reportAccepted'
   | 'reportRecorded'
   | 'reportClosed'
+  | 'reportRefused'
+  | 'reportUnsent'
   | 'removed'
   | 'free';
+
+/**
+ * The refusal codes that are genuinely about this report and will not change on a retry: the
+ * 14-day window, and the two §9.9 input refusals for a moment that was never in the score.
+ *
+ * `dispute_window_closed` gets its own standing because it has its own explanation. Everything
+ * else the server refuses — `not_found`, `ambiguous_event`, an `invalid_payload` this build
+ * cannot fix — is a refusal whose reason the screen will not invent; and anything *not* in this
+ * list that came from the transport rather than the server (`http_400` through an interfering
+ * proxy, a ladder that ran out) leaves the report offerable again.
+ */
+const FINAL_REFUSALS: readonly string[] = [
+  'dispute_window_closed',
+  'event_not_scored',
+  'trip_not_scored',
+  'not_found',
+  'ambiguous_event',
+  'invalid_payload',
+];
 
 /**
  * Where this event stands against the score, which is the one thing every timeline row and every
  * D3 screen has to be honest about.
  *
  * `possible` is the §9.4 low-confidence state: detected, shown, and deliberately costing nothing.
- * The three `report*` states are §9.9's outcomes, read from the stored record the sync handler
- * settles — never recomputed here, because the allowance lives on the server.
+ * The `report*` states are §9.9's outcomes, read from the stored record the sync handler settles
+ * — never recomputed here, because the allowance lives on the server. **A refusal is never
+ * reported as the window closing unless that is what the server said**: `window_closed` is one
+ * code, and the rest keep their own standing and their own words.
  */
 export function eventStanding(event: TripEventView): EventStanding {
   const dispute = event.dispute;
@@ -152,7 +175,12 @@ export function eventStanding(event: TripEventView): EventStanding {
     if (dispute.outcome === 'queued') return 'reportSending';
     if (dispute.outcome === 'accepted') return 'reportAccepted';
     if (dispute.outcome === 'denied') return 'reportRecorded';
-    if (dispute.outcome === 'window_closed' || dispute.outcome === 'refused') return 'reportClosed';
+    if (dispute.outcome === 'window_closed') return 'reportClosed';
+    if (dispute.outcome === 'refused') {
+      return dispute.code !== null && FINAL_REFUSALS.includes(dispute.code)
+        ? 'reportRefused'
+        : 'reportUnsent';
+    }
   }
   if (event.possible) return 'possible';
   if (event.status === 'removed') return 'removed';
@@ -160,10 +188,79 @@ export function eventStanding(event: TripEventView): EventStanding {
   return event.affectsScore ? 'counted' : 'free';
 }
 
-/** Whether D3 may offer "This isn't right" — one report per event, and none once one is in. */
+/** The words for a standing, or null where the row needs no label of its own. */
+export function standingLabel(standing: EventStanding): string | null {
+  switch (standing) {
+    case 'possible':
+      return copy.standing.possible;
+    case 'reportSending':
+      return copy.standing.reportSending;
+    case 'reportAccepted':
+      return copy.standing.reportAccepted;
+    case 'reportRecorded':
+      return copy.standing.reportRecorded;
+    case 'reportClosed':
+      return copy.standing.reportClosed;
+    case 'reportRefused':
+      return copy.standing.reportRefused;
+    case 'reportUnsent':
+      return copy.standing.reportUnsent;
+    case 'removed':
+      return copy.standing.removed;
+    case 'counted':
+    case 'free':
+      return null;
+  }
+}
+
+/**
+ * The sentence that makes a standing fair, for this event.
+ *
+ * It takes the event rather than the standing alone because §9.9's two rails are different
+ * shapes — three reports per rolling seven days, or a fifth of the month's scored moments — and
+ * the server says which one it hit. A rail this build does not recognise falls back to the words
+ * that are true of both.
+ */
+export function standingWhy(event: TripEventView): string | null {
+  const standing = eventStanding(event);
+  if (standing === 'reportRecorded') {
+    const rail = event.dispute?.deniedReason;
+    if (rail === 'allowance_7d') return copy.standing.reportRecordedWhy7d;
+    if (rail === 'allowance_30d') return copy.standing.reportRecordedWhy30d;
+    return copy.standing.reportRecordedWhy;
+  }
+  switch (standing) {
+    case 'possible':
+      return copy.standing.possibleWhy;
+    case 'reportSending':
+      return copy.standing.reportSendingWhy;
+    case 'reportAccepted':
+      return copy.standing.reportAcceptedWhy;
+    case 'reportClosed':
+      return copy.standing.reportClosedWhy;
+    case 'reportRefused':
+      return copy.standing.reportRefusedWhy;
+    case 'reportUnsent':
+      return copy.standing.reportUnsentWhy;
+    case 'counted':
+    case 'free':
+    case 'removed':
+      return null;
+  }
+}
+
+/**
+ * Whether D3 may offer "This isn't right".
+ *
+ * One report per event while one stands — and none at all on a `possible` event: it costs
+ * nothing, so there is nothing to take off, and the server refuses every such report with
+ * `event_not_scored` (task-2b's own smoke run). Offering a button whose only outcome is a refusal
+ * would be steering the driver into a dead end. A report that never left (`reportUnsent`) can be
+ * sent again, because nothing about it was ever decided.
+ */
 export function canReport(event: TripEventView): boolean {
   const standing = eventStanding(event);
-  return standing === 'counted' || standing === 'possible' || standing === 'free';
+  return standing === 'counted' || standing === 'free' || standing === 'reportUnsent';
 }
 
 /** One timeline row, with everything the list and the screen reader need already decided. */

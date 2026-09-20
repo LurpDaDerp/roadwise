@@ -145,6 +145,12 @@ export const tripCopy = {
     /** The grade is the only signal quality measure the device keeps; the raw % is not stored. */
     gpsUnknown: 'Not recorded',
     sensors: 'How the phone was carried',
+    modes: {
+      mounted: 'In a mount',
+      pocket: 'Pocket or bag',
+      handheld: 'Held or loose',
+      unknown: 'Not recorded',
+    } as Record<string, string>,
     recovered: 'Saved from a checkpoint',
     recoveredBody:
       'Your phone stopped recording before the end, so the tail of this drive is missing.',
@@ -170,6 +176,8 @@ export const tripCopy = {
     pointsLabel: 'Points',
     pointsLost: (points: string) => `−${points}`,
     pointsNone: 'None',
+    /** Still in the score while the report travels: the chart and the score still include it. */
+    pointsUnderReview: 'Still counted while we check',
     whyLabel: 'Why this matters',
     report: "This isn't right",
     back: 'Back to the drive',
@@ -180,6 +188,7 @@ export const tripCopy = {
     possible: 'Detected, not counted',
     /** §9.4: below the confidence floor an event is shown and deliberately costs nothing. */
     possibleWhy: "We weren't sure enough about this one, so it didn't affect your score.",
+    possibleNoReport: "We didn't count this one, so there's nothing to take off your score.",
     reportSending: 'Reported — sending',
     reportSendingWhy: "Your report is saved. We'll send it the next time you're online.",
     reportAccepted: 'Removed from score (your report)',
@@ -187,9 +196,25 @@ export const tripCopy = {
     reportRecorded: 'Reported',
     reportRecordedWhy:
       "You've used your reports for now, so this one didn't change your score. We still logged it, and it helps us fix what flagged you.",
+    /** §9.9's two rails have different shapes, so each says which one was hit. */
+    reportRecordedWhy7d:
+      "You've used your three reports for this week, so this one didn't change your score. We still logged it, and it helps us fix what flagged you.",
+    reportRecordedWhy30d:
+      "You've reported a lot of moments this month, so this one didn't change your score. We still logged it, and it helps us fix what flagged you.",
     reportClosed: 'Reported too late',
     reportClosedWhy: "Reports close 14 days after a drive, so this one couldn't be applied.",
+    /** Any other refusal the server actually made: named without inventing a rule for it. */
+    reportRefused: "We couldn't apply that report",
+    reportRefusedWhy:
+      "This moment wasn't part of your score, so there was nothing to take off. Your report is still logged.",
+    /** The report never reached the server, so nothing about it was decided. */
+    reportUnsent: "Your report didn't send",
+    reportUnsentWhy: "We couldn't get it through. You can send it again.",
     removed: 'Removed from score',
+    /** §7.0: plain words first; the server's code only under "Details", for support. */
+    details: 'Details',
+    hideDetails: 'Hide details',
+    code: (code: string) => `Server code: ${code}`,
   },
   measured: {
     speed: (mph: number) => `${mph} mph`,
@@ -239,6 +264,7 @@ export const tripCopy = {
     limitLabel: 'The posted limit (optional)',
     limitPlaceholder: 'mph',
     limitHint: "A posted limit you tell us is free — it doesn't use up a report.",
+    limitRange: (min: number, max: number) => `Enter a limit between ${min} and ${max} mph.`,
     noteLabel: 'What happened (optional)',
     notePlaceholder: 'A sentence is plenty',
     submit: 'Send report',
@@ -267,6 +293,11 @@ export const tripCopy = {
     retry: 'Try again',
     goodDay: 'Good day',
     /** §18.4: summaries and events stay until the driver deletes them; raw traces do not. */
+    deleteFailed: (n: number) =>
+      n === 1
+        ? "One drive couldn't be deleted yet. It's gone from your phone, but still on our side."
+        : `${n} drives couldn't be deleted yet. They're gone from your phone, but still on our side.`,
+    deleteRetry: 'Try again',
     retention:
       "That's every drive on this phone. Drives stay until you delete them; the detailed route is kept for 90 days.",
     roles: {

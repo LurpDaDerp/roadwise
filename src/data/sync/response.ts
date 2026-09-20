@@ -62,8 +62,18 @@ export function retryAfterSeconds(header: string | null, now: number): number | 
   return Number.isNaN(at) ? null : Math.max(0, Math.round((at - now) / 1000));
 }
 
-/** The 400 body the functions answer with: `{ code, field? }`. */
-const ErrorBodySchema = z.object({ code: z.string().min(1), field: z.string().optional() });
+/**
+ * The 400 body the functions answer with: `{ code, field? }`.
+ *
+ * The code is bounded because it does not stay in memory: it is written to `trips.sync_error` and
+ * to a dispute record, and `sync_error` is rendered on D1. A server-controlled string with no
+ * ceiling has no business in either.
+ */
+const MAX_CODE = 64;
+const ErrorBodySchema = z.object({
+  code: z.string().min(1).max(MAX_CODE),
+  field: z.string().max(MAX_CODE).optional(),
+});
 
 async function readBody(context: Record<string, unknown>): Promise<unknown> {
   const json = context.json;

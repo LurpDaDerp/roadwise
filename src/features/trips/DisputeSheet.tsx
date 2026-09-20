@@ -1,23 +1,37 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { DISPUTE_REASONS, type DisputeReason } from '@/data/db';
 import { Banner, Button, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
-import { ICON, TIGHT, TOUCH } from './layout';
+import { ICON, NOTICE_BORDER, TIGHT, TOUCH } from './layout';
 import { MAX_NOTE, type DisputeInput } from './tripActions';
 
 /** The posted limit a driver may state, in mph — the bounds the server validates against. */
 export const MIN_STATED_LIMIT = 5;
 export const MAX_STATED_LIMIT = 100;
 
-/** A stated limit outside the server's bounds is dropped rather than sent and refused. */
-export function parseStatedLimit(text: string): number | undefined {
-  const value = Number.parseInt(text.trim(), 10);
-  if (!Number.isFinite(value)) return undefined;
-  if (value < MIN_STATED_LIMIT || value > MAX_STATED_LIMIT) return undefined;
+/**
+ * A stated limit, or `undefined` when the field is empty. A value outside the server's bounds
+ * comes back as `out_of_range` rather than as nothing: dropping it silently would send the report
+ * without the limit that makes it free, straight after telling the driver it was free.
+ */
+export function parseStatedLimit(text: string): number | 'out_of_range' | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return undefined;
+  const value = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(value)) return 'out_of_range';
+  if (value < MIN_STATED_LIMIT || value > MAX_STATED_LIMIT) return 'out_of_range';
   return value;
 }
 
@@ -67,6 +81,7 @@ function Radio({
 function Input({
   label,
   hint,
+  error = null,
   value,
   onChangeText,
   placeholder,
@@ -76,6 +91,7 @@ function Input({
 }: {
   label: string;
   hint?: string;
+  error?: string | null;
   value: string;
   onChangeText: (text: string) => void;
   placeholder: string;
@@ -104,7 +120,7 @@ function Input({
         style={{
           minHeight: multiline ? TOUCH * 2 : TOUCH,
           borderWidth: 1,
-          borderColor: th.colors.borderStrong,
+          borderColor: error === null ? th.colors.borderStrong : th.colors.danger,
           borderRadius: th.radius.sm,
           paddingHorizontal: th.space.md,
           paddingVertical: th.space.sm,
@@ -114,7 +130,11 @@ function Input({
           textAlignVertical: multiline ? 'top' : 'center',
         }}
       />
-      {hint ? (
+      {error !== null ? (
+        <Text variant="caption" tone="danger" accessibilityLiveRegion="polite" testID="limit-error">
+          {error}
+        </Text>
+      ) : hint ? (
         <Text variant="caption" tone="subtle">
           {hint}
         </Text>
@@ -154,42 +174,78 @@ export function DisputeSheet({
   testID?: string;
 }) {
   const th = useTheme();
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType={th.reduceMotion ? 'none' : 'slide'}
+      onRequestClose={onClose}
+      testID={testID}
+    >
+      {/* Mounted only while the sheet is open, which is what makes a dismissed sheet an abandoned
+          one: the answers live in this child's state and go with it. */}
+      {visible ? (
+        <DisputeForm
+          busy={busy}
+          failed={failed}
+          onSubmit={onSubmit}
+          onNotDriver={onNotDriver}
+          onClose={onClose}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function DisputeForm({
+  busy,
+  failed,
+  onSubmit,
+  onNotDriver,
+  onClose,
+}: {
+  busy: boolean;
+  failed: boolean;
+  onSubmit: (input: DisputeInput) => void;
+  onNotDriver: () => void;
+  onClose: () => void;
+}) {
+  const th = useTheme();
   const [reason, setReason] = useState<DisputeReason | null>(null);
   const [limit, setLimit] = useState('');
   const [note, setNote] = useState('');
 
   const notDriver = reason === 'not_driver';
+  const stated = reason === 'wrong_limit' ? parseStatedLimit(limit) : undefined;
+  const badLimit = stated === 'out_of_range';
+
   const submit = () => {
-    if (reason === null) return;
+    if (reason === null || badLimit) return;
     if (notDriver) {
       onNotDriver();
       return;
     }
-    const statedLimitMph = reason === 'wrong_limit' ? parseStatedLimit(limit) : undefined;
     const trimmed = note.trim();
     onSubmit({
       reason,
       ...(trimmed.length > 0 ? { note: trimmed } : {}),
-      ...(statedLimitMph === undefined ? {} : { statedLimitMph }),
+      ...(typeof stated === 'number' ? { statedLimitMph: stated } : {}),
     });
   };
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-      testID={testID}
-    >
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: th.colors.scrim }}>
+    <>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: th.colors.scrim }}
+      >
         <View
           style={{
             maxHeight: '88%',
             backgroundColor: th.colors.bgElevated,
             borderTopLeftRadius: th.radius.xl,
             borderTopRightRadius: th.radius.xl,
-            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopWidth: NOTICE_BORDER,
             borderColor: th.colors.border,
             padding: th.space.lg,
             gap: th.space.md,
@@ -227,7 +283,7 @@ export function DisputeSheet({
                   gap: TIGHT,
                   padding: th.space.md,
                   borderRadius: th.radius.sm,
-                  borderWidth: 1,
+                  borderWidth: NOTICE_BORDER,
                   borderColor: th.colors.border,
                   backgroundColor: th.colors.surface,
                 }}
@@ -243,6 +299,7 @@ export function DisputeSheet({
               <Input
                 label={copy.dispute.limitLabel}
                 hint={copy.dispute.limitHint}
+                error={badLimit ? copy.dispute.limitRange(MIN_STATED_LIMIT, MAX_STATED_LIMIT) : null}
                 value={limit}
                 onChangeText={setLimit}
                 placeholder={copy.dispute.limitPlaceholder}
@@ -268,7 +325,7 @@ export function DisputeSheet({
           <Button
             label={notDriver ? copy.dispute.notDriverGo : copy.dispute.submit}
             onPress={submit}
-            disabled={reason === null}
+            disabled={reason === null || badLimit}
             loading={busy}
             testID="dispute-submit"
           />
@@ -280,7 +337,7 @@ export function DisputeSheet({
             testID="dispute-cancel"
           />
         </View>
-      </View>
-    </Modal>
+      </KeyboardAvoidingView>
+    </>
   );
 }

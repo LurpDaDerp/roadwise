@@ -1,3 +1,5 @@
+import { StyleSheet } from 'react-native';
+
 /**
  * The measurements the trip screens use that `src/ui/tokens.ts` does not (yet) name.
  *
@@ -19,6 +21,16 @@ export const TOUCH_LG = 64;
  * `ListRow` and `Field` already draw this gap.
  */
 export const TIGHT = 2;
+
+/**
+ * The two printed columns that have to line up down a list: the timeline's clock and the history
+ * list's score block. Both hold tabular numerals, so the width is the content's, not a guess.
+ */
+export const CLOCK_COLUMN = 64;
+export const SCORE_COLUMN = 56;
+
+/** A printed notice's rule. Every bordered panel in the feature draws the same weight. */
+export const NOTICE_BORDER = StyleSheet.hairlineWidth;
 
 /** Drawn-icon sizes, matched to the type they sit beside. */
 export const ICON = {

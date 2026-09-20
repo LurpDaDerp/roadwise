@@ -1,22 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, View } from 'react-native';
 
 import { useScoreDaily, useTrip } from '@/data/queries';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
 import { Field } from './Field';
-import { ICON, TIGHT, TOUCH } from './layout';
+import { ICON, NOTICE_BORDER, TIGHT, TOUCH } from './layout';
 import { useSetTripRole, type ChosenRole } from './roleActions';
 import { HOME_HREF, TRIP_HISTORY_HREF } from './routes';
 import { TripTopBar } from './TopBar';
 import { TripHeader } from './TripHeader';
 import { useDeleteTrip } from './tripActions';
-
-/** A day key no trip can have, so the day query has nothing to read until the trip is known. */
-const NO_DAY = '0000-00-00';
 
 const ROLE_OPTIONS: readonly { value: ChosenRole; label: string }[] = [
   { value: 'driver', label: copy.edit.roleDriver },
@@ -100,14 +97,19 @@ function DeleteSheet({
 }) {
   const th = useTheme();
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType={th.reduceMotion ? 'none' : 'slide'}
+      onRequestClose={onCancel}
+    >
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: th.colors.scrim }}>
         <View
           style={{
             backgroundColor: th.colors.bgElevated,
             borderTopLeftRadius: th.radius.xl,
             borderTopRightRadius: th.radius.xl,
-            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopWidth: NOTICE_BORDER,
             borderColor: th.colors.border,
             padding: th.space.lg,
             gap: th.space.md,
@@ -130,7 +132,7 @@ function DeleteSheet({
                 gap: TIGHT,
                 padding: th.space.md,
                 borderRadius: th.radius.sm,
-                borderWidth: 1,
+                borderWidth: NOTICE_BORDER,
                 borderColor: th.colors.border,
                 backgroundColor: th.colors.surface,
               }}
@@ -178,8 +180,10 @@ export function EditTripScreen({ clientTripId }: { clientTripId: string }) {
   const router = useRouter();
   const th = useTheme();
   const detailQuery = useTrip(clientTripId);
-  const day = detailQuery.data?.trip.day ?? NO_DAY;
-  const dayQuery = useScoreDaily({ from: day, to: day });
+  // Only once the trip is known: a placeholder range would mint a cache entry nothing reads
+  // (Task 6 review M-12, reproduced here).
+  const day = detailQuery.data?.trip.day ?? null;
+  const dayQuery = useScoreDaily(day === null ? null : { from: day, to: day });
   const { setRole, busy, failed } = useSetTripRole();
   const remove = useDeleteTrip();
   const [confirming, setConfirming] = useState(false);

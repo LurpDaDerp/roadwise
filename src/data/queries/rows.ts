@@ -297,7 +297,12 @@ export interface TripEventView {
   status: EventStatus | null;
   /** Shown as "possible" and explicitly labelled as not affecting the score (§7.D D1). */
   possible: boolean;
-  /** This event actually cost points. */
+  /**
+   * This event is costing points **right now**. A report that has been sent but not answered
+   * leaves the event `disputed`, and the trip's score and category bars still include it, so it
+   * keeps counting until the server says otherwise — the same reading the server takes, where
+   * `disputed` is transient and any recompute settles it to `removed`.
+   */
   affectsScore: boolean;
   alertShown: boolean;
   corrected: boolean;
@@ -365,7 +370,7 @@ export function toTripEventView(row: EventRow): TripEventView {
     context: { night: flag(context.night), precipitation: flag(context.precipitation) },
     status,
     possible: status === 'possible',
-    affectsScore: status === 'scored' && deduction > 0,
+    affectsScore: (status === 'scored' || status === 'disputed') && deduction > 0,
     alertShown: row.alert_shown === 1,
     corrected: row.corrected === 1,
     source: row.source,

@@ -106,8 +106,11 @@ test('with nothing to recover the launch is the same, only quieter', async () =>
   expect(runtime.recovery.recovered).toEqual([]);
   expect(appState.listeners).toHaveLength(1);
   await settle();
-  // Nothing was queued, so no drain ever needed a session.
-  expect(supabase.sessions).toBe(0);
+  // Nothing was queued, so nothing was uploaded — but the drain still reads the session once,
+  // which is how the enqueue sites learn whose device they are queueing on (`SESSION_UID_KEY`).
+  expect(supabase.uploads).toEqual([]);
+  expect(supabase.invokes).toEqual([]);
+  expect(supabase.sessions).toBe(1);
 });
 
 test('the cache is wired to the queue, and stop() detaches everything', async () => {

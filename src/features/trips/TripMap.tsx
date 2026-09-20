@@ -4,12 +4,13 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import type { TripEventView } from '@/data/queries';
 import type { LatLng } from '@/lib/geo';
-import { Text, useTheme } from '@/ui';
+import { Text, tokens, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
 import { measuredLine, regionFor, routeSegments, type RouteSegment } from './detail';
 import { Field } from './Field';
-import { ICON, TOUCH } from './layout';
+import { CATEGORY_ICON, UNKNOWN_CATEGORY_ICON } from './icons';
+import { ICON, NOTICE_BORDER, TOUCH } from './layout';
 
 /**
  * The route map (§7.D D2), and the rule that governs it: **the map is never the only way to read
@@ -59,6 +60,16 @@ const MAP_HEIGHT = 220;
 const ROUTE_WIDTH = 5;
 /** The dash the over-limit stretches are drawn with: long enough to read at a glance. */
 const OVER_DASH: number[] = [12, 8];
+const PIN_SIZE = 28;
+
+/**
+ * The route is drawn on map tiles, not on an app surface, so its inks are pinned to the light
+ * palette rather than taken from the theme. Apple Maps follows the system appearance and Google
+ * Maps does not, and the app's own scheme need not match either — reading the dark tokens here
+ * risks a pale blue line on pale roads. Ink and *pattern* both carry the meaning (§14), and the
+ * legend beside the map is drawn from the same two values.
+ */
+const MAP_INK = { normal: tokens.color.light.accent, over: tokens.color.light.stamp } as const;
 
 function Legend() {
   const th = useTheme();
@@ -90,8 +101,8 @@ function Legend() {
   );
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: th.space.lg }}>
-      {row(th.colors.accent, false, copy.detail.legendNormal)}
-      {row(th.colors.stamp, true, copy.detail.legendOver)}
+      {row(MAP_INK.normal, false, copy.detail.legendNormal)}
+      {row(MAP_INK.over, true, copy.detail.legendOver)}
     </View>
   );
 }
@@ -106,7 +117,7 @@ function NoMap({ title, body, testID }: { title: string; body: string; testID?: 
         gap: th.space.xs,
         padding: th.space.lg,
         borderRadius: th.radius.md,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: NOTICE_BORDER,
         borderColor: th.colors.border,
         backgroundColor: th.colors.surfaceRaised,
       }}
@@ -157,7 +168,13 @@ function MapCanvas({
       <MapView
         style={StyleSheet.absoluteFill}
         initialRegion={region}
-        pointerEvents="none"
+        // Not `pointerEvents="none"`: that would make the pins' callouts unreachable and the map
+        // a picture. Disabling the gestures instead stops it stealing the page scroll while a tap
+        // on a pin still opens what it measured.
+        scrollEnabled={false}
+        zoomEnabled={false}
+        rotateEnabled={false}
+        pitchEnabled={false}
         toolbarEnabled={false}
         showsUserLocation={false}
         showsMyLocationButton={false}
@@ -167,7 +184,7 @@ function MapCanvas({
             key={index}
             coordinates={segment.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
             strokeWidth={ROUTE_WIDTH}
-            strokeColor={segment.over ? th.colors.stamp : th.colors.accent}
+            strokeColor={segment.over ? MAP_INK.over : MAP_INK.normal}
             lineDashPattern={segment.over ? OVER_DASH : undefined}
           />
         ))}
@@ -176,8 +193,31 @@ function MapCanvas({
             key={event.id}
             coordinate={{ latitude: event.lat ?? 0, longitude: event.lng ?? 0 }}
             title={measuredLine(event)}
-            pinColor={th.colors.stamp}
-          />
+            testID={`pin-${event.id}`}
+          >
+            <View
+              style={{
+                width: PIN_SIZE,
+                height: PIN_SIZE,
+                borderRadius: PIN_SIZE / 2,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: MAP_INK.over,
+                borderWidth: 2,
+                borderColor: tokens.color.light.surface,
+              }}
+            >
+              <Ionicons
+                name={
+                  event.category === null
+                    ? UNKNOWN_CATEGORY_ICON
+                    : CATEGORY_ICON[event.category]
+                }
+                size={ICON.sm}
+                color={tokens.color.light.surface}
+              />
+            </View>
+          </Marker>
         ))}
       </MapView>
     </View>

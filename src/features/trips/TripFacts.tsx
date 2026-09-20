@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { TripSummary } from '@/data/queries';
 import { Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
 import { Field, FieldText } from './Field';
-import { ICON, TIGHT } from './layout';
+import { ICON, NOTICE_BORDER, TIGHT } from './layout';
 import { QualityStamp } from './QualityStamp';
 
 /** One fact and its value, printed the way a licence prints a field within a field. */
@@ -112,7 +112,13 @@ export function TripQualityField({ trip, testID }: { trip: TripSummary; testID?:
             </Text>
           )}
           {trip.mode !== null ? (
-            <Fact label={copy.qualityPanel.sensors} value={trip.mode} icon="phone-portrait-outline" />
+            <Fact
+              label={copy.qualityPanel.sensors}
+              // A stored enum is not interface copy: every other value on both panels is a
+              // sentence, and a mode this build does not know reads as not recorded.
+              value={copy.qualityPanel.modes[trip.mode] ?? copy.qualityPanel.gpsUnknown}
+              icon="phone-portrait-outline"
+            />
           ) : null}
         </View>
 
@@ -123,7 +129,7 @@ export function TripQualityField({ trip, testID }: { trip: TripSummary; testID?:
               gap: TIGHT,
               padding: th.space.md,
               borderRadius: th.radius.sm,
-              borderWidth: StyleSheet.hairlineWidth,
+              borderWidth: NOTICE_BORDER,
               borderColor: th.colors.border,
               backgroundColor: th.colors.surfaceRaised,
             }}

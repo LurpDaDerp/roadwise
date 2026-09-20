@@ -5,9 +5,9 @@ import { Text, useTheme } from '@/ui';
 import { formatPoints } from '@/ui/charts';
 
 import { tripCopy as copy } from './copy';
-import type { EventStanding, TimelineRow } from './detail';
+import { standingLabel, type EventStanding, type TimelineRow } from './detail';
 import { Field, FieldText } from './Field';
-import { ICON, TIGHT, TOUCH } from './layout';
+import { CLOCK_COLUMN, ICON, TIGHT, TOUCH } from './layout';
 
 /** The glyph beside each standing, so no state on the timeline rides on colour (§14). */
 const GLYPH: Record<EventStanding, keyof typeof Ionicons.glyphMap> = {
@@ -17,31 +17,10 @@ const GLYPH: Record<EventStanding, keyof typeof Ionicons.glyphMap> = {
   reportAccepted: 'checkmark-circle-outline',
   reportRecorded: 'chatbox-ellipses-outline',
   reportClosed: 'time-outline',
+  reportRefused: 'alert-circle-outline',
+  reportUnsent: 'cloud-offline-outline',
   removed: 'close-circle-outline',
   free: 'ellipse-outline',
-};
-
-const STANDING_TEXT: Record<EventStanding, string | null> = {
-  counted: null,
-  possible: copy.standing.possible,
-  reportSending: copy.standing.reportSending,
-  reportAccepted: copy.standing.reportAccepted,
-  reportRecorded: copy.standing.reportRecorded,
-  reportClosed: copy.standing.reportClosed,
-  removed: copy.standing.removed,
-  free: null,
-};
-
-/** The one line that explains a standing, where the standing needs one (§9.4, §9.9). */
-export const STANDING_WHY: Record<EventStanding, string | null> = {
-  counted: null,
-  possible: copy.standing.possibleWhy,
-  reportSending: copy.standing.reportSendingWhy,
-  reportAccepted: copy.standing.reportAcceptedWhy,
-  reportRecorded: copy.standing.reportRecordedWhy,
-  reportClosed: copy.standing.reportClosedWhy,
-  removed: null,
-  free: null,
 };
 
 /** Everything one row says, in the order it is spoken. */
@@ -49,7 +28,7 @@ export function spokenRow(row: TimelineRow): string {
   const parts: string[] = [row.clock, row.title, row.measured];
   if (row.severity !== 'none') parts.push(copy.severity[row.severity]);
   if (row.points !== null) parts.push(copy.highlights.lost(formatPoints(row.points)));
-  const standing = STANDING_TEXT[row.standing];
+  const standing = standingLabel(row.standing);
   if (standing !== null) parts.push(standing);
   parts.push(copy.confidence[row.confidence]);
   return parts.join(', ');
@@ -67,7 +46,7 @@ function Row({
   testID?: string;
 }) {
   const th = useTheme();
-  const standing = STANDING_TEXT[row.standing];
+  const standing = standingLabel(row.standing);
   const counted = row.points !== null;
   const ink = counted ? th.colors.text : th.colors.textMuted;
 
@@ -90,7 +69,7 @@ function Row({
         backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
       })}
     >
-      <FieldText face="numeral" variant="footnote" tone="muted" style={{ minWidth: 64 }}>
+      <FieldText face="numeral" variant="footnote" tone="muted" style={{ minWidth: CLOCK_COLUMN }}>
         {row.clock}
       </FieldText>
 

@@ -142,8 +142,13 @@ const SERVER_TRIP_STATUSES = [
 
 const ServerStatus = z.enum(SERVER_TRIP_STATUSES);
 const ServerScore = z.number().int().min(0).max(100).nullable();
-/** One row per day the action moved: the trip's own, plus today when the action lands later. */
-const Days = z.array(DayRowSchema).min(1);
+/**
+ * One row per day the action moved: the trip's own, plus today when the action lands later. The
+ * ceiling is stated because every row is written inside the apply transaction; the contract sends
+ * one or two, so anything near the cap is already a bug worth refusing.
+ */
+export const MAX_DAYS = 8;
+const Days = z.array(DayRowSchema).min(1).max(MAX_DAYS);
 
 export const DisputeResponseSchema = z
   .object({
@@ -190,6 +195,15 @@ export type DeleteTripResponse = z.infer<typeof DeleteTripResponseSchema>;
 // ---------------------------------------------------------------------------------------------
 // Shared plumbing
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Whether a reply's `tripId` may be written to this local row. The server resolves the trip from
+ * the caller's own rows, so a mismatch is a server bug rather than an attack — but re-pointing a
+ * local trip at a different server trip is followed by every later finalize and trace upload, so
+ * it is refused rather than applied.
+ */
+const serverIdAgrees = (stored: string | null, replied: string): boolean =>
+  stored === null || stored === replied;
 
 /** `JSON.parse` that answers `null` instead of throwing — a stored row is data, not a promise. */
 function parseJson(text: string): unknown {
@@ -269,7 +283,12 @@ function settleDispute(
  */
 export const runDispute: ActionHandler = async (payloadJson, ctx) => {
   const parsed = DisputePayloadSchema.safeParse(parseJson(payloadJson));
-  if (!parsed.success) return { kind: 'failed', code: 'invalid_payload' };
+  if (!parsed.success) {
+    // The one terminal outcome the driver can do nothing about, so it must still leave a record:
+    // without it D3 says "sending" for ever about a body that will never be sent.
+    await recordRefusalFor(ctx, storedEventId(payloadJson), 'invalid_payload');
+    return { kind: 'failed', code: 'invalid_payload' };
+  }
   const payload = parsed.data;
 
   const sent = await post(ctx, payload);
@@ -277,7 +296,9 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
     // A refusal is an answer, and D3 has a state for it — "Reports close 14 days after a drive".
     // Without this the item would fail with its code on the queue row and the screen would go on
     // saying "sending" forever, because a terminal outcome never reaches the apply step below.
-    if (sent.outcome.kind === 'failed') await recordRefusal(ctx, payload, sent.outcome.code);
+    if (sent.outcome.kind === 'failed') {
+      await recordRefusalFor(ctx, payload.clientEventId, sent.outcome.code, payload);
+    }
     return sent.outcome;
   }
 
@@ -314,6 +335,7 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
 
     const trip = await trips.get(event.client_trip_id, tx);
     if (trip === null) return;
+    if (!serverIdAgrees(trip.server_id, result.tripId)) return;
     const conditions = withSevereFlag(trip.conditions_json, result.hadSevereEvent);
     await trips.update(
       event.client_trip_id,
@@ -336,35 +358,102 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
 /** The server's refusal of a report, as §7.D D3 has to show it. */
 export const DISPUTE_WINDOW_CLOSED = 'dispute_window_closed';
 
+/** What the runner records on a report whose queue item ran out of attempts. */
+export const RETRIES_EXHAUSTED = 'retries_exhausted';
+
+/** The event id inside a stored dispute body this build could not otherwise parse. */
+function storedEventId(payloadJson: string): string | null {
+  const raw = parseJson(payloadJson);
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const id = (raw as { clientEventId?: unknown }).clientEventId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 64 ? id : null;
+}
+
 /**
  * Put a refused report on the event, so D3 can say what happened instead of showing "sending"
  * for a request that will never be sent again. The event's own status is put back the way it was
  * — nothing was applied, so nothing should look as though it was.
+ *
+ * The **code is kept verbatim** and the outcome is `window_closed` only for the one refusal that
+ * is actually about the window. Every other terminal refusal (`event_not_scored`,
+ * `trip_not_scored`, `not_found`, `ambiguous_event`, an exhausted ladder) is `refused` with its
+ * own code, because the screen has to name what the server said rather than the nearest rule it
+ * knows.
  */
-async function recordRefusal(
+async function recordRefusalFor(
   ctx: ActionContext,
-  payload: DisputePayload,
+  clientEventId: string | null,
+  code: string,
+  from?: Pick<DisputePayload, 'reason' | 'note' | 'statedLimitMph'>
+): Promise<void> {
+  if (clientEventId === null) return;
+  const events = createEventsRepo(ctx.db);
+  const event = await events.get(clientEventId);
+  if (event === null) return;
+
+  const base =
+    parseStoredDispute(event.dispute_json) ??
+    (from === undefined
+      ? null
+      : {
+          reason: from.reason,
+          note: from.note ?? null,
+          statedLimitMph: from.statedLimitMph ?? null,
+          submittedAt: ctx.now,
+          outcome: 'queued' as const,
+          deniedReason: null,
+          remainingAllowance: null,
+          code: null,
+          decidedAt: null,
+        });
+
+  const patch: EventPatch = {};
+  if (base !== null) {
+    const record: DisputeRecord = {
+      ...base,
+      outcome: code === DISPUTE_WINDOW_CLOSED ? 'window_closed' : 'refused',
+      deniedReason: null,
+      remainingAllowance: null,
+      code,
+      decidedAt: ctx.now,
+    };
+    patch.dispute_json = JSON.stringify(record);
+  }
+  // Whatever else is known, the event must stop looking as though a report were on its way.
+  if (event.status === 'disputed') patch.status = 'scored';
+  if (Object.keys(patch).length > 0) await events.update(event.id, patch);
+}
+
+/**
+ * What an action leaves behind when its queue item gives up — a terminal refusal the handler did
+ * not already record, or a retry ladder that ran out.
+ *
+ * Without this the two failures the driver most needs to see are the two that say nothing: a
+ * report reads "Reported — sending" for ever, and a drive the driver was told was deleted stays
+ * on the server with no sign of it anywhere. Both now leave a record the screens read — the
+ * report on its event, the trip in `sync_error` beside `sync_state: 'failed'`, which is the shape
+ * the finalize path already uses.
+ */
+export async function recordActionGiveUp(
+  ctx: ActionContext,
+  kind: ActionKind,
+  payloadJson: string,
   code: string
 ): Promise<void> {
-  const events = createEventsRepo(ctx.db);
-  const event = await events.get(payload.clientEventId);
-  if (event === null) return;
-  const existing = parseStoredDispute(event.dispute_json);
-  const record: DisputeRecord = {
-    reason: existing?.reason ?? payload.reason,
-    note: existing?.note ?? payload.note ?? null,
-    statedLimitMph: existing?.statedLimitMph ?? payload.statedLimitMph ?? null,
-    submittedAt: existing?.submittedAt ?? ctx.now,
-    outcome: code === DISPUTE_WINDOW_CLOSED ? 'window_closed' : 'refused',
-    deniedReason: null,
-    remainingAllowance: null,
-    code,
-    decidedAt: ctx.now,
-  };
-  const patch: EventPatch = { dispute_json: JSON.stringify(record) };
-  if (event.status === 'disputed') patch.status = 'scored';
-  await events.update(event.id, patch);
-};
+  if (kind === 'dispute') {
+    await recordRefusalFor(ctx, storedEventId(payloadJson), code);
+    return;
+  }
+  const raw = parseJson(payloadJson);
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+  const id = (raw as { clientTripId?: unknown }).clientTripId;
+  if (typeof id !== 'string' || !CLIENT_TRIP_ID.test(id)) return;
+  await createTripsRepo(ctx.db).update(
+    id,
+    { sync_state: 'failed', sync_error: code } satisfies TripPatch,
+    ctx.now
+  );
+}
 
 /**
  * `conditions_json` with the server's re-derived severe-speeding flag written back (§9.9 fix
@@ -432,6 +521,7 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
     const trip = await trips.get(payload.clientTripId, tx);
     if (trip === null) return;
+    if (!serverIdAgrees(trip.server_id, result.tripId)) return;
     await trips.update(
       payload.clientTripId,
       {
@@ -455,13 +545,14 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Tell the server the trip is gone. The local row was marked `deleted_at` the moment the driver
- * confirmed, so nothing on screen changes here; what the reply brings is the day rows the delete
- * moved, which the badges on Home are read from.
+ * Tell the server the trip is gone, then finish the job on the device.
  *
- * The row is kept, not dropped: `delete-trip` may be retried, a `trace-upload` item may still
- * name the trip (the runner reads `deleted_at` to drop it), and the delete is what the server
- * itself did — a soft delete with the summary and events removed from every aggregate.
+ * `deleteTrip` already destroyed everything identifying the moment the driver confirmed — the
+ * trace file, the polyline, the endpoint labels, the events and the samples — leaving a hidden
+ * husk of a row so the delete could still be sent. Once the server confirms, that row goes too:
+ * D5's copy says the drive "goes for good", and a row that outlives the confirmation is the one
+ * part of that promise the device was not keeping. `tripIsGone` answers `true` for a missing row,
+ * so the runner's trace guard is unaffected.
  */
 export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
   const parsed = DeleteTripPayloadSchema.safeParse(parseJson(payloadJson));
@@ -481,14 +572,9 @@ export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
   const trips = createTripsRepo(ctx.db);
   await ctx.db.transaction(async (tx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
-    const trip = await trips.get(payload.clientTripId, tx);
-    if (trip === null) return;
-    await trips.update(
-      payload.clientTripId,
-      { server_id: result.tripId, sync_state: 'synced', sync_error: null } satisfies TripPatch,
-      ctx.now,
-      tx
-    );
+    // Explicit rather than left to ON DELETE CASCADE, which may not be enforced inside a
+    // transaction on device; `remove` takes the events and the samples with the row.
+    await trips.remove(payload.clientTripId, tx);
   });
 
   return { kind: 'done' };

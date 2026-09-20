@@ -41,6 +41,7 @@ function toQueueItem(row: Record<string, unknown>): QueueItem {
     next_attempt_at: asNumber(row, 'next_attempt_at'),
     claimed_at: asNumberOrNull(row, 'claimed_at'),
     trace_uploaded_at: asNumberOrNull(row, 'trace_uploaded_at'),
+    owner_uid: asTextOrNull(row, 'owner_uid'),
     last_error: asTextOrNull(row, 'last_error'),
     created_at: asNumber(row, 'created_at'),
   };
@@ -100,14 +101,16 @@ export function createQueueRepo(db: Db) {
       payload: unknown,
       idempotencyKey: string,
       now: number = Date.now(),
-      on?: Db
+      on?: Db,
+      ownerUid: string | null = null
     ): Promise<QueueItem> {
       const run = async (tx: Db): Promise<QueueItem> => {
         await tx.execute(
           `INSERT OR IGNORE INTO sync_queue
-             (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at)
-           VALUES (?, ?, ?, 'pending', 0, ?, ?)`,
-          [kind, JSON.stringify(payload), idempotencyKey, now, now]
+             (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, owner_uid,
+              created_at)
+           VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`,
+          [kind, JSON.stringify(payload), idempotencyKey, now, ownerUid, now]
         );
         const item = await byKey(idempotencyKey, tx);
         if (!item) throw new Error(`queue item ${idempotencyKey} vanished after insert`);
@@ -273,6 +276,39 @@ export function createQueueRepo(db: Db) {
     },
 
     /** Housekeeping: finished items older than the cutoff are of no further use. */
+    /**
+     * Remove one item outright, whatever state it is in. Used when the work itself has become
+     * pointless -- a trace waiting for Wi-Fi on a drive the driver has just deleted. An item
+     * another pass is holding `inflight` is dropped too; that pass's `markAttempt` then answers
+     * null and it abandons the claim untouched, which is the behaviour it already has.
+     */
+    async dropByKey(idempotencyKey: string, on: Db = db): Promise<boolean> {
+      const { changes } = await on.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [
+        idempotencyKey,
+      ]);
+      return changes > 0;
+    },
+
+    /**
+     * Put a `failed` item back in the queue with a clean ladder, for a driver who asked to try
+     * again. Anything but `failed` is left alone: re-opening work that is pending or in flight
+     * would reset a backoff that is doing its job.
+     */
+    async reopen(
+      idempotencyKey: string,
+      now: number = Date.now(),
+      on: Db = db
+    ): Promise<QueueItem | null> {
+      const { changes } = await on.execute(
+        `UPDATE sync_queue
+            SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+                claimed_at = NULL
+          WHERE idempotency_key = ? AND status = 'failed'`,
+        [now, idempotencyKey]
+      );
+      return changes === 0 ? null : byKey(idempotencyKey, on);
+    },
+
     async purgeDone(createdBefore: number): Promise<number> {
       const { changes } = await db.execute(
         "DELETE FROM sync_queue WHERE status = 'done' AND created_at < ?",

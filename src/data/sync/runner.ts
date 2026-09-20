@@ -31,7 +31,14 @@ import { createScoreDailyCacheRepo } from '@/data/db/scoreDailyCache';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { QueueItem, TripPatch } from '@/data/db/types';
-import { ACTION_HANDLERS, isActionKind, type ActionOutcome } from '@/data/sync/actions';
+import {
+  ACTION_HANDLERS,
+  isActionKind,
+  recordActionGiveUp,
+  RETRIES_EXHAUSTED,
+  type ActionKind,
+  type ActionOutcome,
+} from '@/data/sync/actions';
 import { isSyncKind, type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
 import {
@@ -40,6 +47,7 @@ import {
   emitSyncApplied,
   enqueueTraceUpload,
   onQueueChanged,
+  SESSION_UID_KEY,
   TraceUploadPayloadSchema,
   type TraceUploadPayload,
 } from '@/data/sync/queue';
@@ -200,10 +208,26 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   let recordingRetry: ReturnType<typeof setTimeout> | null = null;
   const unsubscribes: (() => void)[] = [];
 
-  /** The signed-in user's id, or null when there is no session to upload under. */
+  /**
+   * The signed-in user's id, or null when there is no session to upload under.
+   *
+   * A new uid is also written to settings, because that is where the enqueue sites read the owner
+   * to stamp on work queued between drains. Written only when it changes, so a drain does not
+   * cost a write per item.
+   */
+  let knownUid: string | null = null;
   async function currentUid(): Promise<string | null> {
     const { data } = await supabase.auth.getSession();
-    return data.session?.user.id ?? null;
+    const uid = data.session?.user.id ?? null;
+    if (uid !== null && uid !== knownUid) {
+      knownUid = uid;
+      try {
+        await settings.set(SESSION_UID_KEY, uid);
+      } catch (error) {
+        report(error, 'record session uid');
+      }
+    }
+    return uid;
   }
 
   async function refreshSession(): Promise<boolean> {
@@ -333,6 +357,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       return { kind: 'failed', code: 'invalid_client_trip_id' };
     }
 
+    // The driver deleted the drive while its upload was still owed. Sending the trace and the
+    // summary now would transmit exactly the data they asked to destroy, and the `delete-trip`
+    // item that follows is not guaranteed to run after this one (`nextDue` orders by due time).
+    if (await tripIsGone(payload.clientTripId)) {
+      if (payload.tracePath !== null) await removeTrace(payload.tracePath);
+      return { kind: 'done' };
+    }
+
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
 
@@ -426,6 +458,21 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const handler = handlerFor(item.kind);
     if (!handler) return { kind: 'defer', until: at + UNHANDLED_KIND_RETRY_S * 1000 };
 
+    // Whose work this is. One device holds one database and signing out clears neither it nor
+    // this queue, so an item stamped with a different user must never be sent under the live
+    // session: it would put that driver's own words — a dispute carries free text — into another
+    // account's request, and burn an attempt doing it. Unowned work (queued before any session
+    // was known) is sent by whoever is signed in, which is the behaviour it has always had.
+    const uid = await currentUid();
+    if (item.owner_uid !== null && uid !== null && item.owner_uid !== uid) {
+      return { kind: 'failed', code: 'wrong_account' };
+    }
+    // Signed out, an action would post the body, be refused 401, spend the one refresh the loop
+    // below allows and count an attempt. It is work that was never tried: hand the claim back.
+    // (`finalize-trip` and `trace-upload` do their own deferring, after the housekeeping that has
+    // to run signed out — dropping the trace of a drive that is gone.)
+    if (uid === null && isActionKind(item.kind)) return { kind: 'defer' };
+
     const state: ItemState = { traceUploadedAt: item.trace_uploaded_at };
     let refreshed = false;
     for (;;) {
@@ -462,7 +509,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           return;
         }
         await queue.markFailed(item.id, outcome.code);
-        if (item.kind === 'finalize-trip') await failTrip(item, outcome.code, at);
+        await recordGiveUp(item, outcome.code, at);
         result.failed += 1;
         return;
       }
@@ -473,7 +520,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         // saying `queued` behind a dead queue row. The item keeps the last transport code as its
         // `last_error`; the trip records *why it will never go*, which is a different fact.
         if (closed?.status === 'failed') {
-          if (item.kind === 'finalize-trip') await failTrip(item, 'retries_exhausted', at);
+          await recordGiveUp(item, RETRIES_EXHAUSTED, at);
           result.failed += 1;
           return;
         }
@@ -487,6 +534,32 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         result.deferred += 1;
         return;
       }
+    }
+  }
+
+  /**
+   * Leave the driver something to read when an item gives up, whatever kind it was.
+   *
+   * The queue row is not that something: nothing in the app reads it, and `purgeDone` eventually
+   * removes it. A report that never left has to stop saying "sending", and a delete that never
+   * reached the server has to stop looking like it did.
+   */
+  async function recordGiveUp(item: QueueItem, code: string, at: number): Promise<void> {
+    try {
+      if (item.kind === 'finalize-trip') {
+        await failTrip(item, code, at);
+        return;
+      }
+      if (isSyncKind(item.kind) && isActionKind(item.kind)) {
+        await recordActionGiveUp(
+          { db, supabase, now: at, report },
+          item.kind as ActionKind,
+          item.payload_json,
+          code
+        );
+      }
+    } catch (error) {
+      report(error, `record give-up for item ${item.id}`);
     }
   }
 
@@ -581,6 +654,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
    */
   async function pass(at: number): Promise<DrainResult> {
     const total: DrainResult = { done: 0, failed: 0, deferred: 0 };
+    // Once per pass, whether or not there is work: this is what teaches the enqueue sites whose
+    // device they are queueing on, and a pass with an empty queue is the common case at launch.
+    try {
+      await currentUid();
+    } catch (error) {
+      report(error, 'read session');
+    }
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       const worked = await claimAndRun(at);
       total.done += worked.done;

@@ -106,8 +106,12 @@ export async function readTrip(db: Db, clientTripId: string): Promise<TripDetail
   if (row === null || row.deleted_at !== null) return null;
 
   // The learning-period stage is a count over the whole table, so it is read here rather than
-  // left to the screen: the summary needs it before it can ask for a tip.
-  const scoredTripCount = (await trips.list()).filter(isScoredRow).length;
+  // left to the screen: the summary needs it before it can ask for a tip. A deleted drive is not
+  // on the record and must not keep pushing the driver towards `LEARNING_PERIOD_TRIPS` — every
+  // other read excludes it through `isHiddenTrip`; this one counts rows directly.
+  const scoredTripCount = (await trips.list()).filter(
+    (row) => row.deleted_at === null && isScoredRow(row)
+  ).length;
   const trip = toTripSummary(row);
   return {
     trip,
@@ -182,12 +186,18 @@ export function useTripEvents(
   });
 }
 
-/** The home strip and the D4 day headers, from the cache the sync runner fills. */
-export function useScoreDaily(range: DayRange): UseQueryResult<DayEntry[]> {
+/**
+ * The home strip and the D4 day headers, from the cache the sync runner fills. Disabled — never
+ * fetching, and no cache entry minted — while the caller has no span to ask about, which is the
+ * state a screen is in until it knows which day its trip belongs to.
+ */
+export function useScoreDaily(range: DayRange | null): UseQueryResult<DayEntry[]> {
   const { db } = useDataSource();
+  const span = range ?? { from: '', to: '' };
   return useQuery({
-    queryKey: queryKeys.scoreDaily(range),
-    queryFn: () => readScoreDaily(db, range),
+    queryKey: queryKeys.scoreDaily(span),
+    queryFn: () => readScoreDaily(db, span),
+    enabled: range !== null,
   });
 }
 

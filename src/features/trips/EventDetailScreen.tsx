@@ -14,54 +14,70 @@ import {
   eventStanding,
   measuredLine,
   severityWord,
+  standingLabel,
+  standingWhy,
   whyItMatters,
 } from './detail';
 import { DisputeSheet } from './DisputeSheet';
 import { Field, FieldText } from './Field';
 import { categoryLabel, dateLine, formatClock } from './format';
-import { TIGHT } from './layout';
+import { NOTICE_BORDER, TIGHT } from './layout';
 import { HOME_HREF, tripEditHref } from './routes';
 import { TripTopBar } from './TopBar';
 import { EventMiniMap } from './TripMap';
-import { STANDING_WHY } from './TripTimeline';
 import { useReportEvent, type DisputeInput } from './tripActions';
 
-/** The standing, said out loud, with the sentence that makes it fair. */
+/**
+ * The standing, said out loud, with the sentence that makes it fair — and, for a refusal, the
+ * server's own code behind a disclosure, so support has it and §7.0's "never a code in primary
+ * text" holds. The whole notice is one element to a screen reader.
+ */
 function StandingNotice({ event, testID }: { event: TripEventView; testID?: string }) {
   const th = useTheme();
+  const [open, setOpen] = useState(false);
   const standing = eventStanding(event);
-  const why = STANDING_WHY[standing];
-  const label = {
-    counted: null,
-    possible: copy.standing.possible,
-    reportSending: copy.standing.reportSending,
-    reportAccepted: copy.standing.reportAccepted,
-    reportRecorded: copy.standing.reportRecorded,
-    reportClosed: copy.standing.reportClosed,
-    removed: copy.standing.removed,
-    free: null,
-  }[standing];
+  const label = standingLabel(standing);
+  const why = standingWhy(event);
   if (label === null) return null;
+  const code =
+    standing === 'reportRefused' || standing === 'reportClosed' || standing === 'reportUnsent'
+      ? (event.dispute?.code ?? null)
+      : null;
 
   return (
     <View
       testID={testID}
-      accessible
-      accessibilityRole="text"
-      accessibilityLabel={why === null ? label : `${label}. ${why}`}
       style={{
         gap: TIGHT,
         padding: th.space.md,
         borderRadius: th.radius.md,
-        borderWidth: 1,
+        borderWidth: NOTICE_BORDER,
         borderColor: th.colors.border,
         backgroundColor: th.colors.surfaceRaised,
       }}
     >
-      <Text variant="headline">{label}</Text>
-      {why !== null ? (
-        <Text variant="subhead" tone="muted">
-          {why}
+      <View accessible accessibilityRole="text" accessibilityLabel={why === null ? label : `${label}. ${why}`}>
+        <Text variant="headline">{label}</Text>
+        {why !== null ? (
+          <Text variant="subhead" tone="muted">
+            {why}
+          </Text>
+        ) : null}
+      </View>
+      {code !== null ? (
+        <View style={{ alignSelf: 'flex-start', marginLeft: -th.space.lg }}>
+          <Button
+            label={open ? copy.standing.hideDetails : copy.standing.details}
+            variant="ghost"
+            size="md"
+            onPress={() => setOpen((v) => !v)}
+            testID="standing-details"
+          />
+        </View>
+      ) : null}
+      {open && code !== null ? (
+        <Text variant="footnote" tone="muted" selectable testID="standing-code">
+          {copy.standing.code(code)}
         </Text>
       ) : null}
     </View>
@@ -146,8 +162,10 @@ export function EventDetailScreen({
   const reasons = confidenceReasons(event);
   const why = whyItMatters(event.category);
   // What the moment costs is read from the row, not from the standing: a report that was
-  // recorded but not applied (§9.9) leaves the points exactly where they were.
+  // recorded but not applied (§9.9) leaves the points exactly where they were, and a report
+  // still travelling has not taken anything off yet either.
   const counted = event.affectsScore;
+  const underReview = eventStanding(event) === 'reportSending' && event.deduction > 0;
 
   const submit = (input: DisputeInput) => {
     void report(event.id, input).then((ok) => {
@@ -197,6 +215,11 @@ export function EventDetailScreen({
               ? copy.event.pointsLost(formatPoints(event.deduction))
               : copy.event.pointsNone}
           </FieldText>
+          {underReview ? (
+            <Text variant="footnote" tone="muted" testID="points-under-review">
+              {copy.event.pointsUnderReview}
+            </Text>
+          ) : null}
         </Field>
       </Card>
 
@@ -219,7 +242,14 @@ export function EventDetailScreen({
       {canReport(event) ? (
         <Button label={copy.event.report} onPress={() => setSheet(true)} testID="report" />
       ) : (
-        <Button label={copy.event.back} variant="secondary" onPress={back} testID="back-to-drive" />
+        <>
+          {eventStanding(event) === 'possible' ? (
+            <Text variant="footnote" tone="muted" testID="no-report-reason">
+              {copy.standing.possibleNoReport}
+            </Text>
+          ) : null}
+          <Button label={copy.event.back} variant="secondary" onPress={back} testID="back-to-drive" />
+        </>
       )}
 
       <DisputeSheet

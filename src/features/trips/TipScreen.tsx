@@ -3,7 +3,6 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import type { TipCategory } from '@/content/tips';
 import { createSettingsRepo } from '@/data/db';
 import { useDb, useTrip, useTripEvents } from '@/data/queries';
 import { Banner, Button, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
@@ -11,6 +10,8 @@ import { Banner, Button, EmptyState, Screen, Skeleton, Text, useTheme } from '@/
 import { tripCopy as copy } from './copy';
 import { Field, FieldText } from './Field';
 import { describeEvent, formatClock } from './format';
+import { CATEGORY_ICON as MARK } from './icons';
+import { ICON, TOUCH } from './layout';
 import { tipForTrip } from './tip';
 
 /** Where "Practice this week" is kept until the weekly focus (§10.4, M5) has a home of its own. */
@@ -20,16 +21,6 @@ export interface WeeklyFocus {
   tipId: string;
   setAt: number;
 }
-
-const MARK: Record<TipCategory, keyof typeof Ionicons.glyphMap> = {
-  phone: 'phone-portrait-outline',
-  speeding: 'speedometer-outline',
-  braking: 'hand-left-outline',
-  accel: 'trending-up-outline',
-  cornering: 'return-down-forward-outline',
-  focus: 'eye-outline',
-  general: 'compass-outline',
-};
 
 /** How many of the drive's own events the tip shows as examples (§7.D D6: one or two). */
 const MAX_EXAMPLES = 2;
@@ -44,8 +35,8 @@ function BackButton({ onPress }: { onPress: () => void }) {
       hitSlop={th.space.sm}
       style={({ pressed }) => ({
         alignSelf: 'flex-start',
-        minWidth: 44,
-        minHeight: 44,
+        minWidth: TOUCH,
+        minHeight: TOUCH,
         alignItems: 'center',
         justifyContent: 'center',
         marginLeft: -th.space.sm,
@@ -53,7 +44,7 @@ function BackButton({ onPress }: { onPress: () => void }) {
         backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
       })}
     >
-      <Ionicons name="chevron-back" size={26} color={th.colors.accent} />
+      <Ionicons name="chevron-back" size={ICON.xl} color={th.colors.accent} />
     </Pressable>
   );
 }

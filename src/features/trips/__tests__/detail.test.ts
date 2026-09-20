@@ -13,6 +13,8 @@ import {
   routeFor,
   routeSegments,
   severityWord,
+  standingLabel,
+  standingWhy,
   timelineRows,
   TRIM_ENDPOINTS_M,
   trimRoute,
@@ -123,10 +125,22 @@ describe('where an event stands against the score', () => {
     expect(eventStanding(view())).toBe('counted');
   });
 
-  test('a low-confidence event is detected and not counted, and can still be reported', () => {
+  test('a low-confidence event is detected, not counted, and not offered a report', () => {
+    // It costs nothing, so there is nothing to take off — and the server refuses every such
+    // report with `event_not_scored`, which is a dead end to steer a driver into.
     const possible = view({ status: 'possible', deduction: 0 });
     expect(eventStanding(possible)).toBe('possible');
-    expect(canReport(possible)).toBe(true);
+    expect(canReport(possible)).toBe(false);
+  });
+
+  test('a report still travelling keeps costing what it cost', () => {
+    const sending = view({
+      status: 'disputed',
+      deduction: 6,
+      dispute_json: JSON.stringify({ reason: 'hazard', outcome: 'queued' }),
+    });
+    expect(sending.affectsScore).toBe(true);
+    expect(timelineRows(trip(), [sending])[0]?.points).toBe(6);
   });
 
   test('a report that has not been sent yet says so, and is not offered twice', () => {
@@ -138,13 +152,53 @@ describe('where an event stands against the score', () => {
     expect(canReport(sending)).toBe(false);
   });
 
-  test('the server s three answers each have their own standing', () => {
-    const record = (outcome: string) => JSON.stringify({ reason: 'hazard', outcome });
+  test('the server s answers each have their own standing', () => {
+    const record = (outcome: string, code: string | null = null) =>
+      JSON.stringify({ reason: 'hazard', outcome, code });
     expect(eventStanding(view({ status: 'removed', dispute_json: record('accepted') }))).toBe(
       'reportAccepted'
     );
     expect(eventStanding(view({ dispute_json: record('denied') }))).toBe('reportRecorded');
-    expect(eventStanding(view({ dispute_json: record('window_closed') }))).toBe('reportClosed');
+    expect(
+      eventStanding(view({ dispute_json: record('window_closed', 'dispute_window_closed') }))
+    ).toBe('reportClosed');
+  });
+
+  test('a refusal that is not about the window is never reported as the window closing', () => {
+    const refused = (code: string) =>
+      view({ dispute_json: JSON.stringify({ reason: 'hazard', outcome: 'refused', code }) });
+    for (const code of ['event_not_scored', 'trip_not_scored', 'not_found', 'ambiguous_event']) {
+      const event = refused(code);
+      expect(eventStanding(event)).toBe('reportRefused');
+      expect(standingLabel(eventStanding(event))).not.toContain('too late');
+      expect(standingWhy(event)).not.toContain('14 days');
+      // Final: the server decided, so the button does not come back.
+      expect(canReport(event)).toBe(false);
+    }
+  });
+
+  test('a report that never left can be sent again, and says so', () => {
+    const unsent = view({
+      dispute_json: JSON.stringify({
+        reason: 'hazard',
+        outcome: 'refused',
+        code: 'retries_exhausted',
+      }),
+    });
+    expect(eventStanding(unsent)).toBe('reportUnsent');
+    expect(standingWhy(unsent)).toBe("We couldn't get it through. You can send it again.");
+    expect(canReport(unsent)).toBe(true);
+  });
+
+  test('a denied report names the rail the server said it hit', () => {
+    const denied = (rail: string | null) =>
+      view({
+        dispute_json: JSON.stringify({ reason: 'hazard', outcome: 'denied', deniedReason: rail }),
+      });
+    expect(standingWhy(denied('allowance_7d'))).toContain('three reports for this week');
+    expect(standingWhy(denied('allowance_30d'))).toContain('a lot of moments this month');
+    // A rail this build does not know falls back to what is true of both.
+    expect(standingWhy(denied(null))).toContain('used your reports for now');
   });
 
   test('an event removed by something other than a report is not credited to the driver', () => {

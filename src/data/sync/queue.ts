@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Db } from '@/data/db/driver';
 import { createQueueRepo } from '@/data/db/queue';
+import { createSettingsRepo } from '@/data/db/settings';
 import type { QueueItem } from '@/data/db/types';
 import { type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
@@ -23,6 +24,22 @@ export const finalizeIdempotencyKey = (clientTripId: string): string => `trip:${
  * cellular the summary goes up under `trip:<id>` while the file waits under `trace:<id>`.
  */
 export const traceIdempotencyKey = (clientTripId: string): string => `trace:${clientTripId}`;
+
+/**
+ * Where the last signed-in user's id is kept, so work queued between drains can be stamped with
+ * its owner. The sync runner writes it whenever it reads a session; nothing else does.
+ *
+ * It is a *record of who queued this*, never an authorisation: every request still travels under
+ * the live session's own token, and the server scopes every lookup to that token's user. What the
+ * stamp buys is the refusal — an item queued by one user is never posted under another's session
+ * (one device, one database, and `signOut` clears neither).
+ */
+export const SESSION_UID_KEY = 'session.uid';
+
+/** The owner to stamp on work queued now, or null when no session has been seen on this device. */
+export async function currentOwnerUid(db: Db): Promise<string | null> {
+  return createSettingsRepo(db).get<string>(SESSION_UID_KEY);
+}
 
 /**
  * The characters a `client_trip_id` may contain — the server's own rule, enforced here too.
@@ -127,12 +144,14 @@ export async function enqueueFinalize(
   on?: Db
 ): Promise<QueueItem> {
   const valid = FinalizeTripPayloadSchema.parse(payload);
+  const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(
     FINALIZE_KIND,
     valid,
     finalizeIdempotencyKey(valid.clientTripId),
     now,
-    on
+    on,
+    owner
   );
   emitQueueChanged();
   return item;
@@ -150,12 +169,14 @@ export async function enqueueTraceUpload(
   on?: Db
 ): Promise<QueueItem> {
   const valid = TraceUploadPayloadSchema.parse(payload);
+  const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(
     TRACE_UPLOAD_KIND,
     valid,
     traceIdempotencyKey(valid.clientTripId),
     now,
-    on
+    on,
+    owner
   );
   emitQueueChanged();
   return item;

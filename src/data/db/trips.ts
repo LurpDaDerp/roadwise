@@ -203,9 +203,16 @@ export function createTripsRepo(db: Db) {
     checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now(), on?: Db) =>
       update(clientTripId, { checkpoint_ts: checkpointTs }, now, on),
 
-    /** Takes the trip's events and samples with it, via ON DELETE CASCADE. */
-    async remove(clientTripId: string): Promise<boolean> {
-      const { changes } = await db.execute('DELETE FROM trips WHERE client_trip_id = ?', [
+    /**
+     * Takes the trip's events and samples with it. The child rows are deleted explicitly rather
+     * than left to `ON DELETE CASCADE`: inside a transaction on device, foreign keys may not be
+     * enforced (see `createExpoDb`), and a delete that left a drive's events behind is exactly
+     * the residue this call exists to remove. Runs on `on` when given.
+     */
+    async remove(clientTripId: string, on: Db = db): Promise<boolean> {
+      await on.execute('DELETE FROM samples WHERE client_trip_id = ?', [clientTripId]);
+      await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
+      const { changes } = await on.execute('DELETE FROM trips WHERE client_trip_id = ?', [
         clientTripId,
       ]);
       return changes > 0;
