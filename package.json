@@ -15,7 +15,9 @@
     "traces:make": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/make-traces.js",
     "db:start": "supabase start",
     "db:test": "supabase test db",
-    "db:types": "supabase gen types typescript --local > src/data/supabase/types.ts"
+    "db:types": "supabase gen types typescript --local > src/data/supabase/types.ts",
+    "functions:check": "deno lint --config supabase/functions/deno.json supabase/functions && deno check --config supabase/functions/deno.json supabase/functions",
+    "functions:test": "deno test --config supabase/functions/deno.json supabase/functions"
   },
   "dependencies": {
     "@expo-google-fonts/b612": "^0.4.1",

@@ -12,6 +12,9 @@ same sync also generates the `imports` map in `supabase/functions/deno.json` —
 That map is generated too: add or remove a module in the package and re-run the sync, never hand-edit
 it. Rewriting the specifiers in this copy is not an option; it has to stay byte-identical.
 
+The same sync copies the upload contract to `../payload.ts` (from `src/data/sync/payload.ts`) and
+pins `zod` in the import map to the version the app has installed; both are generated the same way.
+
 Deno finds that config by walking up from the working directory, which is what `supabase functions`
 does. Checking the copy by hand from the repo root needs it spelled out:
 

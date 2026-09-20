@@ -2,16 +2,20 @@
 'use strict';
 /**
  * Copies packages/scoring/src into supabase/functions/_shared/scoring, so the edge function that
- * re-scores a trip server-side runs exactly the code the app ran on the device.
+ * re-scores a trip server-side runs exactly the code the app ran on the device, and copies the
+ * upload contract (src/data/sync/payload.ts) to supabase/functions/_shared/payload.ts, so the
+ * server validates exactly what the device validated before queueing.
  *
  *   npm run scoring:sync
  *
- * A plain file copy works because the scoring package is deliberately dependency-free: no imports
- * outside its own directory, no Node built-ins, no React Native. That makes the copied tree a valid
- * Deno module graph as-is.
+ * A plain file copy works because both sources are deliberately dependency-free: the scoring
+ * package imports nothing outside its own directory, and the payload contract imports only `zod`.
+ * That makes the copied tree a valid Deno module graph once `deno.json` maps `zod` to the npm
+ * package at the version the app has installed (node_modules/zod/package.json), which this sync
+ * also writes — the two ends then agree on the schema *and* on the validator.
  *
- * scripts/__tests__/sync-scoring.test.ts fails the moment the two trees drift, so run this after
- * every change under packages/scoring/src and commit the result.
+ * scripts/__tests__/sync-scoring.test.ts fails the moment any of the three drift, so run this
+ * after every change under packages/scoring/src or src/data/sync/payload.ts and commit the result.
  */
 
 const fs = require('fs');
@@ -19,9 +23,13 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'packages', 'scoring', 'src');
+const PAYLOAD_SRC = path.join(ROOT, 'src', 'data', 'sync', 'payload.ts');
 const FUNCTIONS = path.join(ROOT, 'supabase', 'functions');
-const DST = path.join(FUNCTIONS, '_shared', 'scoring');
+const SHARED = path.join(FUNCTIONS, '_shared');
+const DST = path.join(SHARED, 'scoring');
+const PAYLOAD_DST = path.join(SHARED, 'payload.ts');
 const DENO_JSON = path.join(FUNCTIONS, 'deno.json');
+const ZOD_PKG = path.join(ROOT, 'node_modules', 'zod', 'package.json');
 const README = 'README.md';
 /** Every generated import-map key starts with this, so a re-sync can replace exactly its own keys. */
 const MAP_PREFIX = './_shared/scoring/';
@@ -39,6 +47,9 @@ Those specifiers are extensionless (\`./constants\`) and Deno will not resolve t
 same sync also generates the \`imports\` map in \`supabase/functions/deno.json\` — one entry per module.
 That map is generated too: add or remove a module in the package and re-run the sync, never hand-edit
 it. Rewriting the specifiers in this copy is not an option; it has to stay byte-identical.
+
+The same sync copies the upload contract to \`../payload.ts\` (from \`src/data/sync/payload.ts\`) and
+pins \`zod\` in the import map to the version the app has installed; both are generated the same way.
 
 Deno finds that config by walking up from the working directory, which is what \`supabase functions\`
 does. Checking the copy by hand from the repo root needs it spelled out:
@@ -62,6 +73,9 @@ for (const name of fs.readdirSync(DST)) {
 
 fs.writeFileSync(path.join(DST, README), README_TEXT);
 
+// The upload contract, verbatim: the server must refuse exactly what the device refuses.
+fs.copyFileSync(PAYLOAD_SRC, PAYLOAD_DST);
+
 // Deno resolves relative specifiers literally, so `./constants` inside the copy is a 404 to it and
 // `deno check` fails on every module. The package cannot carry `.ts` specifiers (Metro and tsc would
 // both object) and the copy has to stay byte-identical, so the extension is supplied out of band, by
@@ -75,12 +89,17 @@ for (const key of Object.keys(imports)) {
 for (const name of sources) {
   imports[MAP_PREFIX + name.replace(/\.ts$/, '')] = MAP_PREFIX + name;
 }
+// The contract's one dependency, at the app's installed version: `import { z } from 'zod'` in the
+// copy resolves to the same validator the device ran.
+const zodVersion = JSON.parse(fs.readFileSync(ZOD_PKG, 'utf8')).version;
+imports.zod = `npm:zod@${zodVersion}`;
 config.imports = Object.fromEntries(
   Object.entries(imports).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 );
 fs.writeFileSync(DENO_JSON, JSON.stringify(config, null, 2) + '\n');
 
 console.log(
-  `scoring: synced ${sources.length} file(s) to supabase/functions/_shared/scoring ` +
-    `and mapped them in supabase/functions/deno.json`
+  `scoring: synced ${sources.length} file(s) to supabase/functions/_shared/scoring, ` +
+    `the upload contract to supabase/functions/_shared/payload.ts, and mapped them ` +
+    `(zod@${zodVersion}) in supabase/functions/deno.json`
 );

@@ -10,6 +10,9 @@
     "./_shared/scoring/quality": "./_shared/scoring/quality.ts",
     "./_shared/scoring/scoreTrip": "./_shared/scoring/scoreTrip.ts",
     "./_shared/scoring/severity": "./_shared/scoring/severity.ts",
-    "./_shared/scoring/types": "./_shared/scoring/types.ts"
+    "./_shared/scoring/types": "./_shared/scoring/types.ts",
+    "@std/assert": "jsr:@std/assert@^1.0.0",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.116.0",
+    "zod": "npm:zod@4.6.5"
   }
 }
