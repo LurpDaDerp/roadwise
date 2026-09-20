@@ -1,13 +1,27 @@
-import { assert, assertEquals, assertMatch } from '@std/assert';
+import { assert, assertAlmostEquals, assertEquals, assertMatch, assertNotEquals } from '@std/assert';
 import { scoreTrip } from '../_shared/scoring/index';
+import { emptyDayRow, type DayRow } from '../_shared/aggregate.ts';
 import { createDb, type ApplyTripEnvelope } from '../_shared/db.ts';
 import { tripMetrics } from '../_shared/plausibility.ts';
 import { fakeSupabase, type RpcError } from '../_shared/testing/fake_supabase.ts';
-import { CLIENT_TRIP_ID, event, payload, T0, TRIP_DAY, tripRow, UID } from '../_shared/testing/fixtures.ts';
-import { handleFinalizeTrip, MAX_BODY_BYTES, MAX_TRIPS_PER_DAY, type FinalizeDeps } from './handler.ts';
+import {
+  CLIENT_TRIP_ID,
+  dayRowRecord,
+  event,
+  NOW,
+  payload,
+  T0,
+  TRIP_DAY,
+  tripRow,
+  UID,
+  workedExample,
+} from '../_shared/testing/fixtures.ts';
+import { handleFinalizeTrip, MAX_BODY_BYTES, MAX_TRIPS_PER_24H, type FinalizeDeps } from './handler.ts';
 
-const DAY_MS = 86_400_000;
+const HOUR = 3_600_000;
+const DAY_MS = 24 * HOUR;
 const GOOD_TOKEN = 'good-token';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface Harness {
   deps: FinalizeDeps;
@@ -20,11 +34,12 @@ function harness(
   opts: {
     tables?: Record<string, Record<string, unknown>[]>;
     rpcError?: RpcError;
+    rpcReplayed?: boolean;
     now?: number;
   } = {}
 ): Harness {
   const fake = fakeSupabase({
-    tables: opts.tables ?? { trips: [], trip_events: [] },
+    tables: opts.tables ?? { trips: [], trip_events: [], score_daily: [] },
     rpc: (_fn, args) => {
       if (opts.rpcError) return { error: opts.rpcError };
       const p = args.p as ApplyTripEnvelope;
@@ -34,7 +49,7 @@ function harness(
           score: p.scored.score,
           status: p.scored.status,
           day: p.day[0].day,
-          replayed: false,
+          replayed: opts.rpcReplayed === true,
         },
       };
     },
@@ -44,21 +59,21 @@ function harness(
   const deps: FinalizeDeps = {
     verifyJwt: (token) => Promise.resolve(token === GOOD_TOKEN ? UID : null),
     db: createDb(fake.client),
-    now: () => opts.now ?? T0 + 2 * 3_600_000,
+    now: () => opts.now ?? NOW,
     log: { warn: (...a) => warnings.push(a), error: (...a) => errors.push(a) },
   };
   return { deps, fake, warnings, errors };
 }
 
-const post = (body: unknown, token: string | null = GOOD_TOKEN, init: RequestInit = {}) =>
+const post = (body: unknown, token: string | null = GOOD_TOKEN, headers: Record<string, string> = {}) =>
   new Request('http://local/finalize-trip', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...(token === null ? {} : { authorization: `Bearer ${token}` }),
+      ...headers,
     },
     body: typeof body === 'string' ? body : JSON.stringify(body),
-    ...init,
   });
 
 const json = async (res: Response) => ({ status: res.status, body: await res.json() });
@@ -68,6 +83,10 @@ const envelope = (h: Harness): ApplyTripEnvelope => {
   assertEquals(h.fake.rpcCalls[0].fn, 'apply_trip');
   return h.fake.rpcCalls[0].args.p as ApplyTripEnvelope;
 };
+
+/** A payload dated `daysAgo` days before the fixture trip, events moved with it. */
+const dated = (startedAt: number) =>
+  payload({ startedAt, endedAt: startedAt + 1_320_000, events: [event({ startedAt: startedAt + 300_000 })] });
 
 Deno.test('anything but POST is 405', async () => {
   const h = harness();
@@ -90,13 +109,35 @@ Deno.test('a missing or unverifiable bearer token is 401 and nothing is read', a
   assertEquals(h.fake.rpcCalls.length, 0);
 });
 
-Deno.test('a body over 1 MB is 413', async () => {
+Deno.test('a body over 1 MB is 413, by its declared length or by what actually arrives', async () => {
   const h = harness();
   const big = `{"pad":"${'x'.repeat(MAX_BODY_BYTES)}"}`;
   assertEquals(await json(await handleFinalizeTrip(post(big), h.deps)), {
     status: 413,
     body: { code: 'payload_too_large' },
   });
+  // a lying Content-Length is refused without reading
+  assertEquals(
+    (await handleFinalizeTrip(post(payload(), GOOD_TOKEN, { 'content-length': String(MAX_BODY_BYTES + 1) }), h.deps)).status,
+    413
+  );
+  // a chunked body with no length is cut off at the cap
+  let pulled = 0;
+  const chunk = new Uint8Array(65_536).fill(0x78);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      if (pulled > 64) controller.close();
+      else controller.enqueue(chunk);
+    },
+  });
+  const req = new Request('http://local/finalize-trip', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${GOOD_TOKEN}` },
+    body: stream,
+  });
+  assertEquals((await handleFinalizeTrip(req, h.deps)).status, 413);
+  assert(pulled < 64, `read the whole stream (${pulled} chunks) instead of stopping at the cap`);
 });
 
 Deno.test('malformed JSON is 400 invalid_json', async () => {
@@ -109,63 +150,96 @@ Deno.test('malformed JSON is 400 invalid_json', async () => {
 
 Deno.test('a payload the contract refuses is 400 with the failing fields', async () => {
   const h = harness();
-  const bad = { ...payload(), events: [event({ durationMs: 999 })], extra: 1 };
+  const bad = { ...payload(), events: [event({ durationMs: 999 })] };
   const { status, body } = await json(await handleFinalizeTrip(post(bad), h.deps));
   assertEquals(status, 400);
   assertEquals(body.code, 'invalid_payload');
   const paths = (body.issues as { path: string }[]).map((i) => i.path);
-  assert(paths.includes('events.0.durationMs'), `paths: ${paths.join(', ')}`);
-  assert(paths.some((p) => p === '' || p === 'extra'), `unknown key not reported: ${paths.join(', ')}`);
+  assertEquals(paths, ['events.0.durationMs']);
   assertEquals(h.fake.rpcCalls.length, 0);
 });
 
-Deno.test('an implausible trip is 400 with the rule code and field, before any lookup', async () => {
+Deno.test('a key the contract does not know is refused, so a smuggled user id never reaches the envelope', async () => {
+  const h = harness();
+  const { status, body } = await json(
+    await handleFinalizeTrip(post({ ...payload(), userId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), h.deps)
+  );
+  assertEquals(status, 400);
+  assertEquals(body.code, 'invalid_payload');
+  assert((body.issues as { message: string }[]).some((i) => /userId/.test(i.message)));
+  assertEquals(h.fake.queries.length, 0);
+});
+
+Deno.test('an implausible trip is 400 with the rule code and field; only the replay lookup ran', async () => {
   const h = harness();
   const p = payload({ rowsDigest: { ...payload().rowsDigest, maxSustainedSpeedMps: 60 } });
   assertEquals(await json(await handleFinalizeTrip(post(p), h.deps)), {
     status: 400,
     body: { code: 'implausible_speed', field: 'rowsDigest.maxSustainedSpeedMps' },
   });
-  assertEquals(h.fake.queries.length, 0);
+  assertEquals(
+    h.fake.queries.map((q) => q.table),
+    ['trips']
+  );
+  assertEquals(h.fake.rpcCalls.length, 0);
 });
 
-Deno.test('the happy path re-scores, builds the envelope from the JWT user and answers with the writer result', async () => {
+Deno.test('the happy path re-scores, builds the envelope from the JWT user and answers with the writer result and the day row', async () => {
   const h = harness();
   const p = payload();
-  const res = await handleFinalizeTrip(post({ ...p, userId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), h.deps);
-  // the smuggled key is refused by the strict contract, so send the clean payload
-  assertEquals(res.status, 400);
-  const ok = await handleFinalizeTrip(post(p), h.deps);
+  const res = await handleFinalizeTrip(post(p), h.deps);
   const expected = scoreTrip(tripMetrics(p, []), p.events);
-  assertEquals(await json(ok), {
+  const e = envelope(h);
+  assertEquals(await json(res), {
     status: 200,
     body: {
       tripId: 'new-trip-id',
       score: expected.score,
       status: 'final',
-      day: TRIP_DAY,
+      day: e.day[0],
       provisionalMismatch: false,
       replayed: false,
     },
   });
-  const e = envelope(h);
+  assertMatch(res.headers.get('x-request-id') ?? '', UUID);
   assertEquals(e.userId, UID);
-  assertEquals(e.payload, p);
+  assertEquals(e.payload, p); // a consistent device sends exactly what the server derives
   assertEquals(e.scored, expected);
   assertEquals(e.day.length, 1);
-  assertEquals(e.day[0].day, TRIP_DAY);
-  assertEquals(e.day[0].tripsScored, 1);
-  assertEquals(e.day[0].drivingS, 1320);
-  assertEquals(e.day[0].exposure, expected.exposure);
-  assertEquals(e.day[0].phoneFreeDay, false);
-  // one trip: the long-term score is withheld, the day row says so
-  assertEquals(e.day[0].longTermScore, null);
-  assertEquals(e.day[0].provisional, true);
+  assertEquals(e.day[0], {
+    day: TRIP_DAY,
+    longTermScore: null, // one trip: the long-term score is withheld
+    band: null,
+    provisional: true,
+    safeDay: true,
+    goodDay: false,
+    phoneFreeDay: false,
+    cameraDay: false,
+    exposure: expected.exposure,
+    drivingS: 1320,
+    tripsScored: 1,
+    severeEvents: 0,
+  });
   assertEquals(e.baselines?.medians.score, expected.score);
   assertEquals(e.conditions, { night: false, precipitation: false });
   assertEquals(e.limitCoveragePct, null);
   assertEquals(h.warnings.length, 0);
   assertEquals(h.fake.storageTouched(), false);
+});
+
+Deno.test('fractional device durations reach the writer as integers where it casts', async () => {
+  const h = harness({ tables: { trips: [tripRow({ duration_s: 1199.6 })], trip_events: [], score_daily: [] } });
+  const p = payload({ durationS: 1320.417 });
+  const { status, body } = await json(await handleFinalizeTrip(post(p), h.deps));
+  assertEquals(status, 200);
+  const e = envelope(h);
+  assertEquals(e.day[0].drivingS, 2520);
+  for (const k of ['drivingS', 'tripsScored', 'severeEvents'] as const) {
+    assert(Number.isInteger(e.day[0][k]), `${k} = ${e.day[0][k]}`);
+  }
+  assert(e.day[0].longTermScore === null || Number.isInteger(e.day[0].longTermScore));
+  assertEquals(e.payload.durationS, 1320.417); // the trip's own numeric column keeps the fraction
+  assertEquals(body.day, e.day[0]);
 });
 
 Deno.test('the stored trips feed the long-term score, the day row and the baselines', async () => {
@@ -180,7 +254,7 @@ Deno.test('the stored trips feed the long-term score, the day row and the baseli
       category_deductions: { phone: 2 * i, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
     })
   );
-  const h = harness({ tables: { trips: stored, trip_events: [{ trip_id: 's0', category: 'phone', status: 'scored' }] } });
+  const h = harness({ tables: { trips: stored, trip_events: [{ trip_id: 's0', category: 'phone', status: 'scored' }], score_daily: [] } });
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   const e = envelope(h);
@@ -190,13 +264,13 @@ Deno.test('the stored trips feed the long-term score, the day row and the baseli
   assertEquals(e.day[0].tripsScored, 2); // s0 and the new trip
   assertEquals(e.day[0].drivingS, 1500 + 1320);
   assertEquals(e.day[0].phoneFreeDay, false);
-  assertEquals(e.baselines?.medians.phone, 3); // median of 0, 2, 4 and the new trip's own ~10.2
+  assertEquals(e.baselines?.medians.phone, 3); // median of 0, 2, 4 and the new trip's own ~14.5
 });
 
-Deno.test('a trip synced on a later day also writes today\'s row', async () => {
+Deno.test('a trip synced on a later day also writes today\'s row; the response carries the trip\'s own', async () => {
   const h = harness({ now: T0 + 3 * DAY_MS });
-  const res = await handleFinalizeTrip(post(payload()), h.deps);
-  assertEquals(res.status, 200);
+  const { status, body } = await json(await handleFinalizeTrip(post(payload()), h.deps));
+  assertEquals(status, 200);
   const e = envelope(h);
   assertEquals(
     e.day.map((d) => d.day),
@@ -204,6 +278,102 @@ Deno.test('a trip synced on a later day also writes today\'s row', async () => {
   );
   assertEquals(e.day[1].tripsScored, 0);
   assertEquals(e.day[1].longTermScore, e.day[0].longTermScore);
+  assertEquals((body.day as DayRow).day, TRIP_DAY);
+});
+
+Deno.test('the §9.4 worked example scores 74 through the handler and the envelope carries the breakdown', async () => {
+  const h = harness();
+  const p = workedExample();
+  const { status, body } = await json(await handleFinalizeTrip(post(p), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body.score, 74);
+  assertEquals(body.status, 'final');
+  assertEquals(body.provisionalMismatch, false);
+  assertEquals(body.replayed, false);
+  const e = envelope(h);
+  assertEquals(e.scored.score, 74);
+  assertEquals(e.scored.dataQuality, 'A');
+  assertAlmostEquals(e.scored.exposure, 1.1, 1e-9);
+  const d = e.scored.categoryDeductions;
+  assertAlmostEquals(d.phone, 14.545, 0.001);
+  assertAlmostEquals(d.speeding, 6.818, 0.001);
+  assertAlmostEquals(d.braking, 4.773, 0.001);
+  assertEquals([d.accel, d.cornering, d.focus], [0, 0, 0]);
+  assertEquals(Object.keys(e.scored.eventDeductions).sort(), ['b1', 'p1', 's1']);
+  assertEquals(e.day[0].tripsScored, 1);
+  assertEquals(e.day[0].drivingS, 1320);
+  assertAlmostEquals(e.day[0].exposure, 1.1, 1e-9);
+  assertEquals(e.day[0].safeDay, false);
+  assertEquals(e.day[0].goodDay, true);
+  assertEquals(e.day[0].phoneFreeDay, false);
+  assertEquals(e.day[0].cameraDay, false);
+  assertEquals(e.day[0].longTermScore, null);
+  assertEquals(e.day[0].provisional, true);
+  assertAlmostEquals(e.baselines?.medians.phone ?? 0, 14.545, 0.001);
+  assertAlmostEquals(e.baselines?.medians.speeding ?? 0, 6.818, 0.001);
+  assertAlmostEquals(e.baselines?.medians.braking ?? 0, 4.773, 0.001);
+  assertEquals(e.baselines?.medians.score, 74);
+  assertEquals(e.conditions, { night: false, precipitation: false });
+  assertEquals(body.day, e.day[0]);
+  assertEquals(h.warnings.length, 0);
+});
+
+Deno.test('the worked example with a device score of 70 is a mismatch of 4; without a trace it is grade B', async () => {
+  const off = harness();
+  const p = workedExample();
+  const { body } = await json(
+    await handleFinalizeTrip(post({ ...p, provisional: { ...p.provisional, score: 70 } }), off.deps)
+  );
+  assertEquals(body.score, 74);
+  assertEquals(body.provisionalMismatch, true);
+  assertEquals(off.warnings.length, 1);
+  assertEquals((off.warnings[0][1] as { delta: number }).delta, 4);
+  assertEquals(envelope(off).scored.score, 74);
+
+  const noTrace = harness();
+  const res = await json(await handleFinalizeTrip(post(workedExample({ tracePath: null })), noTrace.deps));
+  assertEquals(res.body.score, 74);
+  const e = envelope(noTrace);
+  assertEquals(e.scored.dataQuality, 'B');
+  assertEquals(e.payload.rowsDigest.imuPresent, true);
+});
+
+Deno.test('per-event severity, multiplier and deduction in the envelope are the server\'s, not the device\'s', async () => {
+  const h = harness();
+  const p = payload();
+  const lying = { ...p, events: [event({ severity: 0, contextMultiplier: 1.5, deduction: 0 })] };
+  const { status, body } = await json(await handleFinalizeTrip(post(lying), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body.provisionalMismatch, false); // the score never read those numbers
+  const [e] = envelope(h).payload.events;
+  assertEquals(e.severity, 1);
+  assertEquals(e.contextMultiplier, 1);
+  assertAlmostEquals(e.deduction ?? -1, 14.545, 0.001);
+  assertEquals(h.warnings.length, 1);
+  assertMatch(String(h.warnings[0][0]), /derived/);
+  assertEquals((h.warnings[0][1] as { events: number }).events, 1);
+});
+
+Deno.test('hadSevereEvent is at least what the scored speeding events prove', async () => {
+  const h = harness();
+  const severe = event({
+    id: 's1',
+    category: 'speeding',
+    startedAt: T0 + 600_000,
+    durationS: 30,
+    durationMs: 30_000,
+    measured: { overMps: 9, limitMps: 20 },
+    source: 'gnss',
+  });
+  const p = payload({ events: [event(), severe], hadSevereEvent: false });
+  const { status } = await json(await handleFinalizeTrip(post(p), h.deps));
+  assertEquals(status, 200);
+  const e = envelope(h);
+  assertEquals(e.payload.hadSevereEvent, true);
+  assertEquals(e.day[0].severeEvents, 1);
+  assertEquals(e.day[0].safeDay, false);
+  assertEquals(h.warnings.length, 1);
+  assertEquals((h.warnings[0][1] as { hadSevereEvent: boolean }).hadSevereEvent, true);
 });
 
 Deno.test('a provisional score more than 2 points off is reported and logged; the server score wins', async () => {
@@ -248,29 +418,69 @@ Deno.test('a trip without a trace is scored at grade B at best', async () => {
   assertEquals(e.payload.rowsDigest.imuPresent, true); // the digest is stored as sent
 });
 
-Deno.test('a trip already stored replays its result without calling the writer', async () => {
+Deno.test('a trip already stored replays its result and its stored day row without calling the writer', async () => {
   const h = harness({
     tables: {
       trips: [tripRow({ id: 'stored', client_trip_id: CLIENT_TRIP_ID, score: 77, trace_path: `${UID}/${CLIENT_TRIP_ID}.bin.gz` })],
+      score_daily: [dayRowRecord()],
     },
   });
-  assertEquals(await json(await handleFinalizeTrip(post(payload()), h.deps)), {
-    status: 200,
-    body: { tripId: 'stored', score: 77, status: 'final', day: TRIP_DAY, provisionalMismatch: false, replayed: true },
+  const { status, body } = await json(await handleFinalizeTrip(post(payload()), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body, {
+    tripId: 'stored',
+    score: 77,
+    status: 'final',
+    day: {
+      day: TRIP_DAY,
+      longTermScore: 81,
+      band: 'good',
+      provisional: false,
+      safeDay: true,
+      goodDay: false,
+      phoneFreeDay: true,
+      cameraDay: false,
+      exposure: 2.5,
+      drivingS: 2400,
+      tripsScored: 2,
+      severeEvents: 0,
+    },
+    provisionalMismatch: false,
+    replayed: true,
   });
   assertEquals(h.fake.rpcCalls.length, 0);
+});
+
+Deno.test('a replay is answered from the store even if the payload would fail plausibility today', async () => {
+  const h = harness({
+    tables: { trips: [tripRow({ id: 'stored', client_trip_id: CLIENT_TRIP_ID })], score_daily: [] },
+  });
+  const p = payload({ rowsDigest: { ...payload().rowsDigest, maxSustainedSpeedMps: 60 } });
+  const { status, body } = await json(await handleFinalizeTrip(post(p), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body.replayed, true);
+  assertEquals(body.day, emptyDayRow(TRIP_DAY)); // no stored day row: an empty one, never a missing field
 });
 
 Deno.test('a replay for a trip the user has since deleted is still 200 replayed', async () => {
   const h = harness({
     tables: {
       trips: [tripRow({ id: 'gone', client_trip_id: CLIENT_TRIP_ID, deleted_at: new Date(T0).toISOString() })],
+      score_daily: [],
     },
   });
   const { status, body } = await json(await handleFinalizeTrip(post(payload()), h.deps));
   assertEquals(status, 200);
   assertEquals(body.replayed, true);
   assertEquals(body.tripId, 'gone');
+});
+
+Deno.test('the loser of a concurrent first upload gets the stored day row with replayed: true', async () => {
+  const h = harness({ rpcReplayed: true, tables: { trips: [], trip_events: [], score_daily: [dayRowRecord({ long_term_score: 66 })] } });
+  const { status, body } = await json(await handleFinalizeTrip(post(payload()), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body.replayed, true);
+  assertEquals((body.day as DayRow).longTermScore, 66);
 });
 
 Deno.test('a stored trace path that is not the derived key is an integrity failure, not a client error', async () => {
@@ -284,14 +494,37 @@ Deno.test('a stored trace path that is not the derived key is an integrity failu
   assertEquals(h.errors.length, 1);
 });
 
-Deno.test('the 201st trip of a local day is 429', async () => {
-  const many = Array.from({ length: MAX_TRIPS_PER_DAY }, (_, i) => tripRow({ client_trip_id: `t${i}` }));
-  const h = harness({ tables: { trips: many, trip_events: [] } });
-  assertEquals(await json(await handleFinalizeTrip(post(payload()), h.deps)), {
+Deno.test('the 201st upload in 24 hours is 429, whatever day the trip is dated', async () => {
+  const recent = Array.from({ length: MAX_TRIPS_PER_24H }, (_, i) =>
+    tripRow({ client_trip_id: `t${i}`, created_at: new Date(NOW - i * 60_000).toISOString(), local_day: '2023-10-01' })
+  );
+  const h = harness({ tables: { trips: recent, trip_events: [], score_daily: [] } });
+  const backdated = dated(T0 - 3 * DAY_MS);
+  assertEquals(await json(await handleFinalizeTrip(post(backdated), h.deps)), {
     status: 429,
     body: { code: 'too_many_trips' },
   });
   assertEquals(h.fake.rpcCalls.length, 0);
+});
+
+Deno.test('uploads older than 24 hours no longer count against the cap', async () => {
+  const old = Array.from({ length: MAX_TRIPS_PER_24H }, (_, i) =>
+    tripRow({ client_trip_id: `t${i}`, created_at: new Date(NOW - 25 * HOUR - i * 60_000).toISOString() })
+  );
+  const h = harness({ tables: { trips: old, trip_events: [], score_daily: [] } });
+  assertEquals((await handleFinalizeTrip(post(payload()), h.deps)).status, 200);
+});
+
+Deno.test('a client-supplied request id is ignored: the log id is generated and returned', async () => {
+  const h = harness();
+  const p = payload();
+  const device = { ...p.provisional, score: (p.provisional.score as number) - 5 };
+  const res = await handleFinalizeTrip(post({ ...p, provisional: device }, GOOD_TOKEN, { 'x-request-id': 'evil' }), h.deps);
+  assertEquals(res.status, 200);
+  const id = (h.warnings[0][1] as { requestId: string }).requestId;
+  assertNotEquals(id, 'evil');
+  assertMatch(id, UUID);
+  assertEquals(res.headers.get('x-request-id'), id);
 });
 
 Deno.test('a writer lock or serialization failure is 503 with Retry-After', async () => {
@@ -304,18 +537,23 @@ Deno.test('a writer lock or serialization failure is 503 with Retry-After', asyn
   }
 });
 
-Deno.test('a writer envelope or row refusal is 400 with the writer\'s message', async () => {
+Deno.test('a writer envelope or row refusal is 400 with the code only; the message goes to the log', async () => {
   const shape = harness({ rpcError: { code: '22023', message: 'apply_trip day does not match the trip' } });
   assertEquals(await json(await handleFinalizeTrip(post(payload()), shape.deps)), {
     status: 400,
-    body: { code: 'invalid_envelope', message: 'apply_trip day does not match the trip' },
+    body: { code: 'invalid_envelope' },
   });
-  for (const code of ['23514', '23505', '22P02', '23502']) {
-    const h = harness({ rpcError: { code, message: 'row refused' } });
+  assertEquals(shape.errors.length, 1);
+  const logged = shape.errors[0][1] as { message: string; tz: string };
+  assertEquals(logged.message, 'apply_trip day does not match the trip');
+  assertEquals(logged.tz, 'America/Los_Angeles');
+  for (const code of ['23514', '23505', '22P02', '23502', '22003']) {
+    const h = harness({ rpcError: { code, message: 'new row for relation "trips" violates check constraint "x"' } });
     assertEquals(await json(await handleFinalizeTrip(post(payload()), h.deps)), {
       status: 400,
-      body: { code: 'invalid_event_rows', message: 'row refused' },
+      body: { code: 'invalid_event_rows' },
     });
+    assertEquals(h.errors.length, 1);
   }
 });
 

@@ -4,7 +4,7 @@
 // through the migration's writers (`apply_trip` here; `apply_recompute` and the dispute/role/delete
 // writers in trip-actions). The port keeps the handlers testable against an in-memory client and
 // keeps every column name in one place. All of it runs under the service role, so every lookup
-// filters on the user id the caller derived from the JWT.
+// filters on the user id the caller derived from the JWT, and every list is bounded.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Baselines, DayRow, DayTripInput, ScoredTripInput } from './aggregate.ts';
 import type { FinalizeTripPayload } from './payload.ts';
@@ -63,8 +63,10 @@ export interface ApplyTripResult {
 export interface Db {
   /** The stored trip for this user and client id, deleted or not; null when none. */
   findTrip(userId: string, clientTripId: string): Promise<ExistingTrip | null>;
-  /** Every trip row of the user on that local day, deleted ones included (deleting must not reset the cap). */
-  countTripsOnDay(userId: string, day: string): Promise<number>;
+  /** Trip rows of the user created at or after `sinceMs`, deleted ones included (deleting must not reset the cap). */
+  countTripsSince(userId: string, sinceMs: number): Promise<number>;
+  /** The stored `score_daily` row for that local day, or null. */
+  getDayRow(userId: string, day: string): Promise<DayRow | null>;
   /** Live scored trips (final or provisional) that ended at or after `sinceMs`, newest first. */
   listScoredTrips(userId: string, sinceMs: number): Promise<ScoredTripRow[]>;
   /** Live trips of those local days, any status, with their scored phone-event counts. */
@@ -74,6 +76,10 @@ export interface Db {
 
 /** Newest-first with a cutoff at `LONG_TERM_MAX_D`, so PostgREST's row cap can never drop a recent trip. */
 export const SCORED_TRIPS_LIMIT = 1000;
+/** Trips per requested set of days; far above the 24 h upload cap times the 7-day age window per day. */
+export const DAY_TRIPS_LIMIT = 500;
+/** Trip ids per `in (…)` list on the event query, well inside the gateway's URL budget. */
+export const EVENT_ID_CHUNK = 50;
 
 interface TripRecord {
   id: string;
@@ -81,13 +87,28 @@ interface TripRecord {
   status: string;
   local_day: string;
   ended_at: string;
-  exposure: number | string;
-  duration_s: number | string;
+  exposure: number;
+  duration_s: number;
   category_deductions: Record<string, number> | null;
   had_severe_event: boolean;
   camera_session: boolean;
   trace_path: string | null;
   deleted_at: string | null;
+}
+
+interface DayRecord {
+  day: string;
+  long_term_score: number | null;
+  band: DayRow['band'];
+  provisional: boolean;
+  safe_day: boolean;
+  good_day: boolean;
+  phone_free_day: boolean;
+  camera_day: boolean;
+  exposure: number;
+  driving_s: number;
+  trips_scored: number;
+  severe_events: number;
 }
 
 interface PostgrestError {
@@ -122,14 +143,42 @@ export function createDb(client: SupabaseClient): Db {
       };
     },
 
-    async countTripsOnDay(userId, day) {
+    async countTripsSince(userId, sinceMs) {
       const { count, error } = await client
         .from('trips')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', userId)
-        .eq('local_day', day);
+        .gte('created_at', new Date(sinceMs).toISOString());
       if (error) throw asPgError(error);
       return count ?? 0;
+    },
+
+    async getDayRow(userId, day) {
+      const { data, error } = await client
+        .from('score_daily')
+        .select(
+          'day, long_term_score, band, provisional, safe_day, good_day, phone_free_day, camera_day, exposure, driving_s, trips_scored, severe_events'
+        )
+        .eq('user_id', userId)
+        .eq('day', day)
+        .maybeSingle();
+      if (error) throw asPgError(error);
+      if (!data) return null;
+      const row = data as unknown as DayRecord;
+      return {
+        day: row.day,
+        longTermScore: row.long_term_score,
+        band: row.band,
+        provisional: row.provisional,
+        safeDay: row.safe_day,
+        goodDay: row.good_day,
+        phoneFreeDay: row.phone_free_day,
+        cameraDay: row.camera_day,
+        exposure: Number(row.exposure),
+        drivingS: row.driving_s,
+        tripsScored: row.trips_scored,
+        severeEvents: row.severe_events,
+      };
     },
 
     async listScoredTrips(userId, sinceMs) {
@@ -161,18 +210,17 @@ export function createDb(client: SupabaseClient): Db {
         .eq('user_id', userId)
         .in('local_day', days)
         .is('deleted_at', null)
-        .order('started_at');
+        .order('started_at')
+        .limit(DAY_TRIPS_LIMIT);
       if (error) throw asPgError(error);
       const trips = (data ?? []) as unknown as TripRecord[];
       const phone = new Map<string, number>();
-      if (trips.length > 0) {
+      const ids = trips.map((t) => t.id);
+      for (let at = 0; at < ids.length; at += EVENT_ID_CHUNK) {
         const events = await client
           .from('trip_events')
           .select('trip_id')
-          .in(
-            'trip_id',
-            trips.map((t) => t.id)
-          )
+          .in('trip_id', ids.slice(at, at + EVENT_ID_CHUNK))
           .eq('category', 'phone')
           .eq('status', 'scored');
         if (events.error) throw asPgError(events.error);

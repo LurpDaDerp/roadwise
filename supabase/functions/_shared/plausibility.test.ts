@@ -1,25 +1,29 @@
 import { assert, assertEquals } from '@std/assert';
 import type { FinalizeTripPayload } from './payload.ts';
 import { checkPlausibility, tripMetrics, type PlausibilityCode } from './plausibility.ts';
-import { event, payload, T0 } from './testing/fixtures.ts';
+import { event, NOW, payload, T0 } from './testing/fixtures.ts';
 
-const failure = (p: FinalizeTripPayload): { code: PlausibilityCode; field: string } => {
-  const r = checkPlausibility(p);
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+const failure = (p: FinalizeTripPayload, now = NOW): { code: PlausibilityCode; field: string } => {
+  const r = checkPlausibility(p, now);
   if (r.ok) throw new Error('expected a plausibility failure');
   return r.failure;
 };
-const downgrades = (p: FinalizeTripPayload): string[] => {
-  const r = checkPlausibility(p);
+const downgrades = (p: FinalizeTripPayload, now = NOW): string[] => {
+  const r = checkPlausibility(p, now);
   if (!r.ok) throw new Error(`unexpected failure ${r.failure.code}`);
   return r.downgrades;
 };
+const passes = (p: FinalizeTripPayload, now = NOW): boolean => checkPlausibility(p, now).ok;
 const digest = (overrides: Partial<FinalizeTripPayload['rowsDigest']>) => ({
   ...payload().rowsDigest,
   ...overrides,
 });
 
 Deno.test('a consistent upload passes with no downgrade', () => {
-  assertEquals(checkPlausibility(payload()), { ok: true, downgrades: [] });
+  assertEquals(checkPlausibility(payload(), NOW), { ok: true, downgrades: [] });
 });
 
 Deno.test('the client trip id must match the storage-key character class', () => {
@@ -27,7 +31,7 @@ Deno.test('the client trip id must match the storage-key character class', () =>
     code: 'invalid_client_trip_id',
     field: 'clientTripId',
   });
-  assert(checkPlausibility(payload({ clientTripId: 'a-b_C9' })).ok);
+  assert(passes(payload({ clientTripId: 'a-b_C9' })));
 });
 
 Deno.test('event ids must be unique', () => {
@@ -49,8 +53,69 @@ Deno.test('more than 500 events is refused even if the schema were bypassed', ()
   assertEquals(failure(payload({ events })), { code: 'too_many_events', field: 'events' });
 });
 
+Deno.test('the device\'s deduction map is bounded like the event list', () => {
+  const p = payload();
+  const many = Object.fromEntries(Array.from({ length: 501 }, (_, i) => [`e${i}`, 0]));
+  assertEquals(failure({ ...p, provisional: { ...p.provisional, eventDeductions: many } }), {
+    code: 'invalid_event_deductions',
+    field: 'provisional.eventDeductions',
+  });
+  const longKey = { ...p.provisional, eventDeductions: { ['k'.repeat(65)]: 1 } };
+  assertEquals(failure({ ...p, provisional: longKey }).code, 'invalid_event_deductions');
+  // ids the server never received (trimmed by the device) are fine
+  assert(passes({ ...p, provisional: { ...p.provisional, eventDeductions: { p1: 1, gone: 2 } } }));
+});
+
 Deno.test('an unknown IANA zone is refused before the database sees it', () => {
   assertEquals(failure(payload({ tz: 'Mars/Olympus' })), { code: 'invalid_timezone', field: 'tz' });
+});
+
+Deno.test('a trip more than seven days old, or ahead of the server clock, is implausible in time', () => {
+  const old = T0 - 8 * DAY;
+  assertEquals(failure(payload({ startedAt: old, endedAt: old + 1_320_000, events: [event({ startedAt: old + 1000 })] })), {
+    code: 'implausible_time',
+    field: 'startedAt',
+  });
+  const week = NOW - 7 * DAY + 60_000;
+  assert(passes(payload({ startedAt: week, endedAt: week + 1_320_000, events: [event({ startedAt: week + 1000 })] })));
+  const future = NOW + HOUR + 1000;
+  assertEquals(
+    failure(payload({ startedAt: future, endedAt: future + 1_320_000, events: [event({ startedAt: future + 1000 })] })),
+    { code: 'implausible_time', field: 'startedAt' }
+  );
+  // starts inside the skew allowance but ends beyond it
+  const late = NOW + 30 * 60_000;
+  assertEquals(
+    failure(payload({ startedAt: late, endedAt: late + HOUR, events: [event({ startedAt: late + 1000 })] })),
+    { code: 'implausible_time', field: 'endedAt' }
+  );
+});
+
+Deno.test('a span longer than 48 hours is implausible in time', () => {
+  const start = NOW - 3 * DAY;
+  assertEquals(
+    failure(payload({ startedAt: start, endedAt: start + 48 * HOUR + 1, events: [event({ startedAt: start + 1000 })] })),
+    { code: 'implausible_time', field: 'endedAt' }
+  );
+});
+
+Deno.test('an epoch past the Date range is refused as a time failure, not thrown', () => {
+  assertEquals(failure(payload({ startedAt: 8_640_000_000_000_001, endedAt: 8_640_000_000_000_002, events: [] })).code, 'implausible_time');
+});
+
+Deno.test('the table ceilings are mirrored so the refusal names the field', () => {
+  assertEquals(failure(payload({ durationS: 172_801 })), { code: 'duration_out_of_range', field: 'durationS' });
+  assertEquals(failure(payload({ distanceM: 2_000_001 })), { code: 'distance_out_of_range', field: 'distanceM' });
+  assertEquals(
+    failure(payload({ events: [event({ durationS: 172_801, durationMs: 172_801_000 })] })).code,
+    'event_duration_out_of_range'
+  );
+});
+
+Deno.test('the polyline is bounded in bytes, not code units', () => {
+  // 16 384 code units of a two-byte character: passes the contract, exceeds octet_length
+  assertEquals(failure(payload({ polyline: 'é'.repeat(16_384) })), { code: 'polyline_too_long', field: 'polyline' });
+  assert(passes(payload({ polyline: '_'.repeat(16_384) })));
 });
 
 Deno.test('sustained speed above 100 mph is implausible', () => {
@@ -58,7 +123,7 @@ Deno.test('sustained speed above 100 mph is implausible', () => {
     code: 'implausible_speed',
     field: 'rowsDigest.maxSustainedSpeedMps',
   });
-  assert(checkPlausibility(payload({ rowsDigest: digest({ maxSustainedSpeedMps: 44.7 }) })).ok);
+  assert(passes(payload({ rowsDigest: digest({ maxSustainedSpeedMps: 44.7 }) })));
 });
 
 Deno.test('an average above 45 m/s is implausible; zero over zero is not', () => {
@@ -76,7 +141,7 @@ Deno.test('an average above 45 m/s is implausible; zero over zero is not', () =>
     events: [],
     rowsDigest: digest({ count: 0, maxSustainedSpeedMps: 0 }),
   });
-  assert(checkPlausibility(empty).ok);
+  assert(passes(empty));
 });
 
 Deno.test('events must start and end inside the trip window', () => {
@@ -89,8 +154,8 @@ Deno.test('events must start and end inside the trip window', () => {
     code: 'event_outside_trip',
     field: 'events.0.startedAt',
   });
-  assert(checkPlausibility(payload({ events: [event({ startedAt: T0 + 1_320_000 - 12_000 })] })).ok);
-  assert(checkPlausibility(payload({ events: [event({ startedAt: T0 })] })).ok);
+  assert(passes(payload({ events: [event({ startedAt: T0 + 1_320_000 - 12_000 })] })));
+  assert(passes(payload({ events: [event({ startedAt: T0 })] })));
 });
 
 Deno.test('row density below 70 % of the driving time fails a grade-A or grade-B trip', () => {
@@ -98,13 +163,13 @@ Deno.test('row density below 70 % of the driving time fails a grade-A or grade-B
     code: 'sparse_rows',
     field: 'rowsDigest.count',
   });
-  assert(checkPlausibility(payload({ rowsDigest: digest({ count: 924 }) })).ok);
+  assert(passes(payload({ rowsDigest: digest({ count: 924 }) })));
   // grade B (no IMU) is held to the same density
   assertEquals(failure(payload({ rowsDigest: digest({ count: 923, imuPresent: false }) })).code, 'sparse_rows');
 });
 
 Deno.test('row density is not required of a grade-C trip', () => {
-  assert(checkPlausibility(payload({ rowsDigest: digest({ count: 10, validGnssPct: 50 }) })).ok);
+  assert(passes(payload({ rowsDigest: digest({ count: 10, validGnssPct: 50 }) })));
 });
 
 Deno.test('a recovered (incomplete) trip skips the density rule and is capped at grade B', () => {

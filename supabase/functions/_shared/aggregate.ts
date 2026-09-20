@@ -2,6 +2,9 @@
 // 8-week baselines (§9.6, `baselines`). Pure functions over plain rows, so finalize-trip can fold
 // the trip it is about to write into the stored ones, and trip-actions can re-run the same
 // arithmetic after a dispute, a role change or a delete.
+//
+// The writers cast the integer columns with `::int` from JSON text, which refuses a decimal point,
+// so every integer-bound field is rounded here, at the boundary, and nowhere else.
 import { CATEGORY, CONSTANTS, evaluateDay } from './scoring/index';
 import type { DayTrip, LongTermScore, ScoreBand, TripForLongTerm } from './scoring/index';
 
@@ -9,7 +12,11 @@ const DAY_MS = 86_400_000;
 /** The baseline window: "rolling 8-week median per category" (§9.6). */
 export const BASELINE_WINDOW_D = 56;
 
-/** One `score_daily` row as `apply_trip` / `apply_recompute` take it (camelCase, all keys present). */
+/**
+ * One `score_daily` row as `apply_trip` / `apply_recompute` take it (camelCase, all keys present).
+ * `longTermScore`, `drivingS`, `tripsScored` and `severeEvents` are integers (`int` columns);
+ * `severeEvents` counts the day's scored trips that had a severe event, not events.
+ */
 export interface DayRow {
   day: string;
   longTermScore: number | null;
@@ -39,7 +46,10 @@ export interface DayTripInput {
   cameraGood: boolean;
 }
 
-/** A scored trip as the long-term score and the baselines need it. */
+/**
+ * A scored trip as the long-term score and the baselines need it: `status` final or provisional
+ * with a score (nothing sets `provisional` in M2, so in practice final).
+ */
 export interface ScoredTripInput extends TripForLongTerm {
   categoryDeductions: Record<string, number>;
 }
@@ -81,6 +91,11 @@ const toDayTrip = (t: DayTripInput): DayTrip => ({
 /** Six decimals: enough for any exposure sum, and no 3.3000000000000003 in a stored row. */
 const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
 
+const WITHHELD: LongTermScore = { score: null, band: null, provisional: true, tripsUsed: 0 };
+
+/** The row for a day with nothing on it: all zeros, the long-term score withheld. */
+export const emptyDayRow = (day: string): DayRow => dayRows([day], [], WITHHELD)[0];
+
 /**
  * One row per requested day over the trips that fall on it, every row carrying the same
  * long-term score: a late-synced trip writes its own day with the score as of now, and the
@@ -97,7 +112,7 @@ export function dayRows(
     const scored = own.filter((t) => t.status === 'final' && t.score !== null);
     return {
       day,
-      longTermScore: lt.score,
+      longTermScore: lt.score === null ? null : Math.round(lt.score),
       band: lt.band,
       provisional: lt.provisional,
       safeDay: result.safeDay,
@@ -105,7 +120,7 @@ export function dayRows(
       phoneFreeDay: result.phoneFreeDay,
       cameraDay: result.cameraDay,
       exposure: round6(scored.reduce((sum, t) => sum + t.exposure, 0)),
-      drivingS: result.drivingS,
+      drivingS: Math.round(result.drivingS),
       tripsScored: scored.length,
       severeEvents: scored.filter((t) => t.hadSevereEvent).length,
     };
@@ -120,8 +135,9 @@ export function median(values: readonly number[]): number {
 
 /**
  * The "you vs. you" baseline (§9.6): per category, the median of the points that category cost
- * per trip over the last eight weeks, plus the median trip score; null when nothing was scored in
- * the window, so the writer leaves the stored row alone.
+ * per trip over the last eight weeks, plus the median trip score, over the scored trips the
+ * caller passes (final, plus provisional if any ever exist); null when nothing was scored in the
+ * window, so the writer leaves the stored row alone.
  */
 export function baselines(trips: readonly ScoredTripInput[], nowMs: number): Baselines | null {
   const recent = trips.filter((t) => nowMs - t.endedAt <= BASELINE_WINDOW_D * DAY_MS);

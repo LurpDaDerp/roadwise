@@ -1,5 +1,13 @@
-import { assertEquals } from '@std/assert';
-import { baselines, dayRows, isNightAt, localDay, median, type DayTripInput } from './aggregate.ts';
+import { assert, assertEquals } from '@std/assert';
+import {
+  baselines,
+  dayRows,
+  emptyDayRow,
+  isNightAt,
+  localDay,
+  median,
+  type DayTripInput,
+} from './aggregate.ts';
 import type { LongTermScore } from './scoring/index';
 import { T0, TRIP_DAY, TZ } from './testing/fixtures.ts';
 
@@ -61,6 +69,20 @@ Deno.test('a day row aggregates only that day\'s final trips and carries the lon
   ]);
 });
 
+Deno.test('every integer-bound field is an integer even when the device durations are fractional', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ durationS: 1320.417, exposure: 1.1000000000000001 }), trip({ durationS: 1199.6, exposure: 1 })],
+    { score: 82.4 as number, band: 'good', provisional: false, tripsUsed: 3 }
+  );
+  assertEquals(row.drivingS, 2520);
+  assertEquals(row.longTermScore, 82);
+  for (const k of ['longTermScore', 'drivingS', 'tripsScored', 'severeEvents'] as const) {
+    assert(Number.isInteger(row[k]), `${k} = ${row[k]}`);
+  }
+  assertEquals(row.exposure, 2.1);
+});
+
 Deno.test('a severe event on a scored trip is counted and forfeits the safe day', () => {
   const [row] = dayRows(
     [TRIP_DAY],
@@ -76,7 +98,8 @@ Deno.test('a severe event on a scored trip is counted and forfeits the safe day'
 Deno.test('a day with no trips is all zeros but still carries the long-term score', () => {
   const rows = dayRows([TRIP_DAY, '2023-11-15'], [], withheld);
   assertEquals(rows.length, 2);
-  assertEquals(rows[1], {
+  assertEquals(rows[1], emptyDayRow('2023-11-15'));
+  assertEquals(emptyDayRow('2023-11-15'), {
     day: '2023-11-15',
     longTermScore: null,
     band: null,

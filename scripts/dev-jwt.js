@@ -17,7 +17,8 @@
  * service key from the same status output) when it does not exist yet: `auth.getUser()` looks
  * the subject up, so a minted token for a subject that is not in `auth.users` is refused.
  *
- * Local only: refuses to run when the stack reports a linked project's remote URL.
+ * Local only: the effective API URL (env or status output) must be 127.0.0.1 or localhost, so
+ * neither a remote SUPABASE_URL nor a linked project can be minted for or written to.
  */
 
 const { execFileSync } = require('child_process');
@@ -33,6 +34,10 @@ const has = (name) => args.includes(name);
 const sub = flag('--sub') || 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const email = flag('--email') || `${sub.slice(0, 8)}@dev.local`;
 const ttl = Number(flag('--ttl') || 3600);
+if (!Number.isInteger(ttl) || ttl <= 0 || ttl > 7 * 86400) {
+  console.error('dev-jwt: --ttl must be a whole number of seconds, at most one week');
+  process.exit(2);
+}
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sub)) {
   console.error('dev-jwt: --sub must be a uuid');
   process.exit(2);
@@ -96,12 +101,14 @@ async function ensureUser(apiUrl, serviceKey) {
   let serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!secret || has('--ensure-user') || !process.env.SUPABASE_URL) {
     const s = status();
-    if (s.linked_project && !/^https?:\/\/(127\.0\.0\.1|localhost)/.test(s.API_URL || '')) {
-      throw new Error('dev-jwt: only the local stack is supported');
-    }
     secret = secret || s.JWT_SECRET;
     apiUrl = process.env.SUPABASE_URL || s.API_URL || apiUrl;
     serviceKey = serviceKey || s.SERVICE_ROLE_KEY || s.SECRET_KEY;
+  }
+  // The effective URL decides, whatever env or the status output said: nothing is minted for, or
+  // written to, a project that is not on this machine.
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(apiUrl)) {
+    throw new Error('dev-jwt: only the local stack is supported (SUPABASE_URL must be 127.0.0.1 or localhost)');
   }
   if (!secret) throw new Error('dev-jwt: no JWT secret (is the local stack running?)');
   if (has('--ensure-user')) {

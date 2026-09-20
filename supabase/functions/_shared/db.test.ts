@@ -1,7 +1,10 @@
 import { assertEquals, assertRejects } from '@std/assert';
-import { createDb, PgError } from './db.ts';
+import { createDb, DAY_TRIPS_LIMIT, EVENT_ID_CHUNK, PgError } from './db.ts';
 import { fakeSupabase } from './testing/fake_supabase.ts';
-import { CLIENT_TRIP_ID, OTHER_UID, T0, TRIP_DAY, tripRow, UID } from './testing/fixtures.ts';
+import { CLIENT_TRIP_ID, dayRowRecord, NOW, OTHER_UID, T0, TRIP_DAY, tripRow, UID } from './testing/fixtures.ts';
+
+const HOUR = 3_600_000;
+const DAY_MS = 24 * HOUR;
 
 Deno.test('findTrip looks the trip up by the JWT user and the client id, and maps the row', async () => {
   const fake = fakeSupabase({
@@ -30,22 +33,54 @@ Deno.test('findTrip looks the trip up by the JWT user and the client id, and map
   assertEquals(fake.storageTouched(), false);
 });
 
-Deno.test('countTripsOnDay counts every row of the user on that local day, deleted ones included', async () => {
+Deno.test('countTripsSince counts the user\'s rows created in the window, deleted ones included', async () => {
+  const since = NOW - DAY_MS;
   const fake = fakeSupabase({
     tables: {
       trips: [
-        tripRow(),
-        tripRow({ deleted_at: new Date(T0).toISOString() }),
-        tripRow({ local_day: '2023-11-13' }),
-        tripRow({ user_id: OTHER_UID }),
+        tripRow({ created_at: new Date(NOW - HOUR).toISOString() }),
+        tripRow({ created_at: new Date(since).toISOString() }), // exactly at the edge counts
+        tripRow({ created_at: new Date(NOW - HOUR).toISOString(), deleted_at: new Date(NOW).toISOString() }),
+        tripRow({ created_at: new Date(NOW - HOUR).toISOString(), local_day: '2023-10-01' }), // backdated trip still counts
+        tripRow({ created_at: new Date(since - 1000).toISOString() }),
+        tripRow({ created_at: new Date(NOW - HOUR).toISOString(), user_id: OTHER_UID }),
       ],
     },
   });
-  assertEquals(await createDb(fake.client).countTripsOnDay(UID, TRIP_DAY), 2);
+  assertEquals(await createDb(fake.client).countTripsSince(UID, since), 4);
+  assertEquals(fake.queries[0].filters, [
+    ['eq', 'user_id', UID],
+    ['gte', 'created_at', new Date(since).toISOString()],
+  ]);
+});
+
+Deno.test('getDayRow maps the stored day row, or null when the day has none', async () => {
+  const fake = fakeSupabase({ tables: { score_daily: [dayRowRecord(), dayRowRecord({ user_id: OTHER_UID, day: TRIP_DAY, long_term_score: 5 })] } });
+  const db = createDb(fake.client);
+  assertEquals(await db.getDayRow(UID, TRIP_DAY), {
+    day: TRIP_DAY,
+    longTermScore: 81,
+    band: 'good',
+    provisional: false,
+    safeDay: true,
+    goodDay: false,
+    phoneFreeDay: true,
+    cameraDay: false,
+    exposure: 2.5,
+    drivingS: 2400,
+    tripsScored: 2,
+    severeEvents: 0,
+  });
+  assertEquals(await db.getDayRow(UID, '2023-11-15'), null);
+  assertEquals(fake.queries[0].table, 'score_daily');
+  assertEquals(fake.queries[0].filters, [
+    ['eq', 'user_id', UID],
+    ['eq', 'day', TRIP_DAY],
+  ]);
 });
 
 Deno.test('listScoredTrips returns live scored trips since the cutoff, newest first', async () => {
-  const old = new Date(T0 - 200 * 86_400_000).toISOString();
+  const old = new Date(T0 - 200 * DAY_MS).toISOString();
   const fake = fakeSupabase({
     tables: {
       trips: [
@@ -58,7 +93,7 @@ Deno.test('listScoredTrips returns live scored trips since the cutoff, newest fi
       ],
     },
   });
-  const rows = await createDb(fake.client).listScoredTrips(UID, T0 - 180 * 86_400_000);
+  const rows = await createDb(fake.client).listScoredTrips(UID, T0 - 180 * DAY_MS);
   assertEquals(
     rows.map((r) => r.id),
     ['a', 'b']
@@ -125,6 +160,24 @@ Deno.test('listDayTrips returns the live trips of those days with their scored p
   ]);
 });
 
+Deno.test('listDayTrips is bounded and asks for phone events in chunks of trip ids', async () => {
+  const trips = Array.from({ length: DAY_TRIPS_LIMIT + 20 }, (_, i) =>
+    tripRow({ id: `t${i}`, started_at: new Date(T0 + i * 1000).toISOString() })
+  );
+  const fake = fakeSupabase({
+    tables: { trips, trip_events: [{ trip_id: `t${DAY_TRIPS_LIMIT - 1}`, category: 'phone', status: 'scored' }] },
+  });
+  const rows = await createDb(fake.client).listDayTrips(UID, [TRIP_DAY]);
+  assertEquals(rows.length, DAY_TRIPS_LIMIT);
+  const eventQueries = fake.queries.filter((q) => q.table === 'trip_events');
+  assertEquals(eventQueries.length, Math.ceil(DAY_TRIPS_LIMIT / EVENT_ID_CHUNK));
+  for (const q of eventQueries) {
+    const ids = q.filters[0][2] as string[];
+    assertEquals(ids.length <= EVENT_ID_CHUNK, true);
+  }
+  assertEquals(rows.find((r) => r.id === `t${DAY_TRIPS_LIMIT - 1}`)?.phoneEvents, 1);
+});
+
 Deno.test('listDayTrips makes no event query when the days are empty', async () => {
   const fake = fakeSupabase({ tables: { trips: [] } });
   assertEquals(await createDb(fake.client).listDayTrips(UID, [TRIP_DAY]), []);
@@ -142,7 +195,7 @@ Deno.test('applyTrip calls the writer with the envelope as `p` and returns its r
   assertEquals(fake.storageTouched(), false);
 });
 
-Deno.test('applyTrip surfaces the writer’s SQLSTATE and message as a PgError', async () => {
+Deno.test('applyTrip surfaces the writer\'s SQLSTATE and message as a PgError', async () => {
   const fake = fakeSupabase({
     rpc: () => ({ error: { code: '22023', message: 'apply_trip day does not match the trip' } }),
   });
