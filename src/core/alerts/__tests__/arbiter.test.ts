@@ -471,6 +471,7 @@ describe('rule 8: learning period', () => {
 
 describe('rule 9a: mute', () => {
   const OVER_12 = mph(12);
+  const OVER_15 = mph(15);
   const OVER_20 = mph(20);
   const escalateAtS = ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
 
@@ -511,6 +512,41 @@ describe('rule 9a: mute', () => {
       level: 1,
       kind: 'speeding',
     });
+  });
+
+  test('the mute dies with the episode: the next episode repeats its L2 on schedule', () => {
+    const h = harness();
+    mutedAtL2(h);
+    h.tick(escalateAtS + 2, { overMps: 0, overForS: 0 });
+    h.tick(escalateAtS + 2 + ALERT_SPEEDING_RESET_S, { overMps: 0, overForS: 0 });
+    // A fresh episode that opens straight at L2 (15 over) speaks as a band increase either way …
+    const restartS = escalateAtS + 3 + ALERT_SPEEDING_RESET_S;
+    const l2AtS = restartS + ALERT_L1_SPEEDING_MIN_S;
+    expect(h.tick(l2AtS, speedingRow(l2AtS, OVER_15, restartS))).toMatchObject({ level: 2 });
+    // … but its repeat is what a stale mute would silence; it arrives on schedule.
+    const realertAtS = l2AtS + ALERT_REALERT_S;
+    expect(h.tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_15, restartS))).toBeNull();
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_15, restartS))).toMatchObject({
+      level: 2,
+      kind: 'speeding',
+    });
+  });
+
+  test('after an escalation, dropping back to the muted band stays quiet', () => {
+    const h = harness();
+    mutedAtL2(h);
+    const worseFromS = escalateAtS + 5;
+    for (let s = worseFromS; s < worseFromS + CONSTANTS.ALERT_L3_MIN_S; s += 1) {
+      h.tick(s, speedingRow(s, OVER_20));
+    }
+    const l3AtS = worseFromS + CONSTANTS.ALERT_L3_MIN_S;
+    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_20))).toMatchObject({ level: 3 });
+    // Back to 12 over inside the same episode: the L2 band the driver silenced, so no repeat —
+    // not now, not when ALERT_REALERT_S would otherwise bring one.
+    expect(h.tick(l3AtS + 1, speedingRow(l3AtS + 1, OVER_12))).toBeNull();
+    const realertAtS = l3AtS + ALERT_REALERT_S;
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_12))).toBeNull();
+    expect(h.tick(realertAtS + 60, speedingRow(realertAtS + 60, OVER_12))).toBeNull();
   });
 
   test('an escalation lifts the mute: the driver silenced the lower band, not this one', () => {

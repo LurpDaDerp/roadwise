@@ -6,7 +6,10 @@ import type { FocusKind, ScorableEvent } from '@scoring';
  * phone-state signals. Accelerations are in g, speeds in m/s, angles in radians unless noted.
  */
 export interface FeatureRow {
-  /** epoch ms */
+  /**
+   * epoch ms, as an integer: the native module rounds its clock before emitting the row, since
+   * the upload contract (`FinalizeTripPayloadSchema`) accepts only whole milliseconds.
+   */
   ts: number;
   lat: number;
   lng: number;

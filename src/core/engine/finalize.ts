@@ -7,18 +7,24 @@
 // Order of work:
 //   1. the trip row exists, and the ring's un-checkpointed tail is in `samples`;
 //   2. the trip's rows are read back from `samples` — the durable record, not the ring — and
-//      become the trace file, its digest, and the metrics the score is built on;
-//   3. events are scored, located and capped for the upload; the payload is validated;
-//   4. ONE transaction replaces the events, updates the trip row (marked `queued`), queues the
-//      upload under `trip:<clientTripId>` and purges the samples. It commits or it does not.
+//      become the trace text, its digest, and the metrics the score is built on;
+//   3. the trip and its events are scored, located and capped for the upload; the payload is
+//      validated; the trace file is written. A *discarded* trip (§9.4: a train, a plane) is the
+//      exception — nobody wants it uploaded, so no trace is written, nothing is queued, and its
+//      row goes straight to `sync_state = 'synced'`;
+//   4. ONE transaction replaces the events, updates the trip row (marked `queued`, or `synced`
+//      when discarded), queues the upload under `trip:<clientTripId>` and purges the samples.
+//      It commits or it does not.
 // Steps 1–3 leave nothing behind that the next call cannot redo (a `recording` row, durable
 // samples, a trace file that is rewritten). A re-run is an in-process retry of the same session
 // — the events, alerts and gaps live only in memory — so a failure is reported to the engine
 // (which re-arms) and the host may call again with the same closed session. A call that finds
 // the trip already finalized returns what is stored; one that finds it synced or final and no
-// longer queued refuses, since re-running would overwrite what the server confirmed.
+// longer queued (a discarded trip included) refuses, since re-running would overwrite what was
+// settled.
 import type { ScorableEvent, ScoredTrip, TripMetrics } from '@scoring';
 import { mergeEvents } from '@/core/detectors';
+import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import {
   createEventsRepo,
   createSamplesRepo,
@@ -42,8 +48,8 @@ import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
 import { encodePolyline, simplify } from '@/lib/polyline';
 import { isNight } from '@/lib/time';
 import type { Fix, TripSession } from './engine.types';
-import { appendRow, createSession, GNSS_JUMP_MPS, ROW_MS } from './session';
-import type { DetectedEvent, FeatureRow, LimitSample } from './types';
+import { appendRow, createSession, GNSS_JUMP_MPS } from './session';
+import type { DetectedEvent, FeatureRow } from './types';
 
 /**
  * Rows within this distance of the trip's first and last fix stay out of the polyline and off the
@@ -79,19 +85,20 @@ export interface FinalizeDeps {
 }
 
 export interface FinalizeResult {
+  /**
+   * The stored row: `sync_state` is `queued` — or `synced` when `scored.status` is `discarded`,
+   * since a discarded trip is kept locally but never uploaded.
+   */
   trip: TripRow;
   /** Every event stored locally — the upload in `payload.events` may be capped below this. */
   events: EventRow[];
   scored: ScoredTrip;
+  /**
+   * The validated upload. For a discarded trip it was built and validated but never queued, and
+   * its `tracePath` is null: no trace file exists for it.
+   */
   payload: FinalizeTripPayload;
 }
-
-const UNKNOWN_LIMIT: LimitSample = {
-  limitMps: null,
-  source: 'unknown',
-  matchConfidence: 0,
-  parallelRoads: false,
-};
 
 const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
@@ -287,6 +294,8 @@ export async function finalizeTrip(
   const events = createEventsRepo(db);
   const samples = createSamplesRepo(db);
   const id = session.clientTripId;
+  // The contract carries whole milliseconds; a fractional native clock must not fail the trip.
+  const startedAt = Math.round(session.startedAt);
 
   // Already done: hand back what the first run stored. A trip the server has confirmed, or that
   // is final, is never re-run — that would replace the confirmed result with a provisional one.
@@ -310,10 +319,7 @@ export async function finalizeTrip(
       );
     }
   } else {
-    await trips.insert(
-      { client_trip_id: id, started_at: session.startedAt, tz, status: 'recording' },
-      now()
-    );
+    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, status: 'recording' }, now());
   }
 
   // 1. Whatever the recorder did not checkpoint is still in the ring; make it durable first.
@@ -321,19 +327,16 @@ export async function finalizeTrip(
   const tail = session.rows.filter((r) => r.ts > (latest?.ts ?? Number.NEGATIVE_INFINITY));
   if (tail.length > 0) await samples.appendMany(id, tail.map((row) => ({ ts: row.ts, row })));
 
-  // 2. The durable rows become the trace, the digest and the metrics.
+  // 2. The durable rows become the trace text, the digest and the metrics.
   const rows = (await samples.range(id, 0, Number.MAX_SAFE_INTEGER)).map(
     (s) => JSON.parse(s.row_json) as FeatureRow
   );
   const traceJson = canonicalJson(rows);
-  const tracePath = tracePathFor(id);
-  await deps.fs.writeGzip(tracePath, new TextEncoder().encode(traceJson));
   const recheck = replay(session, rows);
-  const sha256 = await deps.hash.sha256(traceJson);
 
   // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is
   //    written out as 0 so the trip is kept rather than refused by the contract.
-  const merged = mergeEvents(session.events.map((e) => sanitizeEvent(e, session.startedAt)));
+  const merged = mergeEvents(session.events.map((e) => sanitizeEvent(e, startedAt)));
   const measured: TripMetrics = {
     distanceM: recheck.distanceM,
     durationS: session.durationS,
@@ -349,6 +352,13 @@ export async function finalizeTrip(
     validGnssPct: clamp(finite(measured.validGnssPct), 0, 100),
     maxSustainedSpeedMps: Math.max(0, finite(measured.maxSustainedSpeedMps)),
   };
+
+  // A discarded trip is settled locally and never uploaded: the server would only reject it
+  // (§4.4), so it gets no trace file and no queue item. The digest still describes its rows.
+  const discarded = scored.status === 'discarded';
+  const tracePath = discarded ? null : tracePathFor(id);
+  if (tracePath !== null) await deps.fs.writeGzip(tracePath, new TextEncoder().encode(traceJson));
+  const sha256 = await deps.hash.sha256(traceJson);
   const rowsDigest: FinalizeTripPayload['rowsDigest'] = {
     count: rows.length,
     validGnssPct: metrics.validGnssPct,
@@ -373,9 +383,9 @@ export async function finalizeTrip(
   // Conditions and the safe-day flag (§9.9). Night is the clock rule in the trip's zone (§9.4);
   // the sun's position belongs to the HUD's night mode, not to scoring.
   const { CONSTANTS } = scoring;
-  const hour = hourIn(session.startedAt, tz);
+  const hour = hourIn(startedAt, tz);
   const night = Number.isNaN(hour)
-    ? isNight(new Date(session.startedAt))
+    ? isNight(new Date(startedAt))
     : hour >= CONSTANTS.NIGHT_START_H || hour < CONSTANTS.NIGHT_END_H;
   const hadSevereEvent =
     merged.some(
@@ -412,12 +422,12 @@ export async function finalizeTrip(
     };
   });
 
-  const endedAt =
-    session.endedAt ??
-    (session.lastRowTs !== null ? session.lastRowTs + ROW_MS : session.startedAt);
+  const endedAt = Math.round(
+    session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + ROW_MS : startedAt)
+  );
   const payload = FinalizeTripPayloadSchema.parse({
     clientTripId: id,
-    startedAt: session.startedAt,
+    startedAt,
     endedAt,
     tz,
     distanceM: metrics.distanceM,
@@ -448,7 +458,7 @@ export async function finalizeTrip(
     const trip = await trips.update(
       id,
       {
-        started_at: session.startedAt,
+        started_at: startedAt,
         ended_at: endedAt,
         tz,
         distance_m: metrics.distanceM,
@@ -470,14 +480,15 @@ export async function finalizeTrip(
         end_geohash5: payload.endGeohash5,
         polyline: polyline === '' ? null : polyline,
         status: tripStatus(scored.status),
-        sync_state: 'queued',
+        // Nothing to sync for a discarded trip: it is settled the moment it is stored.
+        sync_state: discarded ? 'synced' : 'queued',
         checkpoint_ts: session.lastRowTs,
       },
       now(),
       tx
     );
     if (!trip) throw new MissingTripError(id);
-    await enqueueFinalize(db, payload, now(), tx);
+    if (!discarded) await enqueueFinalize(db, payload, now(), tx);
     await samples.purgeByTrip(id, tx);
     return { trip, eventRows };
   });

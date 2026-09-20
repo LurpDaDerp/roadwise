@@ -9,7 +9,14 @@
 import { CONSTANTS } from '@scoring';
 import type { AlertDecision, Arbiter, ArbiterInput } from '@/core/alerts/types';
 import { mergeEvents, type TripDetectors } from '@/core/detectors';
-import { GNSS_CAP_Q, gnssPoor, limitConfidence } from '@/core/detectors/common';
+import {
+  GNSS_CAP_Q,
+  ROW_MS,
+  UNKNOWN_LIMIT,
+  gnssPoor,
+  knownSpeed,
+  limitConfidence,
+} from '@/core/detectors/common';
 import type {
   Engine,
   EngineDeps,
@@ -20,7 +27,7 @@ import type {
   TripRole,
   TripSession,
 } from './engine.types';
-import { ROW_MS, appendRow, closeSession, createSession, noteGap, snapshotSession } from './session';
+import { appendRow, closeSession, createSession, noteGap, snapshotSession } from './session';
 import type { DetectorContext, DriveMode, FeatureRow, LimitSample } from './types';
 
 const {
@@ -45,18 +52,8 @@ export const PREFETCH_EVERY_M = 1000;
 /** Slack for the cumulative fast seconds, which are sums of row spacings. */
 const EPSILON_S = 1e-9;
 
-const UNKNOWN_LIMIT: LimitSample = Object.freeze({
-  limitMps: null,
-  source: 'unknown',
-  matchConfidence: 0,
-  parallelRoads: false,
-});
-
 const knownLimit = (limit: LimitSample): number | null =>
   limit.source !== 'unknown' ? limit.limitMps : null;
-
-const knownSpeed = (row: FeatureRow): number | null =>
-  row.gnssValid && row.speed >= 0 ? row.speed : null;
 
 /** The speeding detector's own confidence for this row (§9.5), so the arbiter judges it the same way. */
 function rowQuality(row: FeatureRow, limit: LimitSample): number {
@@ -126,6 +123,11 @@ export function createEngine(deps: EngineDeps): Engine {
   let pausedAt: number | null = null;
   /** First row of the current run beyond limit + tolerance, for the arbiter's `overForS`. */
   let firstOverTs: number | null = null;
+  /**
+   * The last speed a valid fix reported this run; null until one has. The lockout (SR2) is
+   * judged on it, so a GNSS dropout at 60 mph keeps the HUD locked until a fix says otherwise.
+   */
+  let lastKnownSpeedMps: number | null = null;
   /** Trip distance at the last prefetch; null until the first fix of a candidate or trip. */
   let prefetchedAtM: number | null = null;
   /** Start of the current stretch of continuous driving, for the break suggestion (§8.7). */
@@ -184,7 +186,8 @@ export function createEngine(deps: EngineDeps): Engine {
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       distanceM: session?.distanceM ?? 0,
       stationarySinceTs,
-      lockedOut: status === 'recording' && speed > LOCKOUT_SPEED_MPS && role === 'driver',
+      lockedOut:
+        status === 'recording' && role === 'driver' && (lastKnownSpeedMps ?? 0) > LOCKOUT_SPEED_MPS,
       stoppedPanel: status === 'recording' && stoppedPanel,
     });
   }
@@ -198,6 +201,7 @@ export function createEngine(deps: EngineDeps): Engine {
     endingSinceTs = null;
     pausedAt = null;
     firstOverTs = null;
+    lastKnownSpeedMps = null;
   }
 
   /** Forget everything about the candidate or trip that just closed. */
@@ -244,7 +248,8 @@ export function createEngine(deps: EngineDeps): Engine {
     seen = { row, limit: seen?.limit ?? UNKNOWN_LIMIT };
     touch();
     maybePrefetch(row, 0);
-    if (row.speed > AUTO_DETECT_CONFIRM_SPEED_MPS) c.fastS += coversS;
+    // Only a valid fix vouches for speed: an invalid one may carry a stale reading.
+    if ((knownSpeed(row) ?? 0) > AUTO_DETECT_CONFIRM_SPEED_MPS) c.fastS += coversS;
     if (c.fastS + EPSILON_S >= AUTO_DETECT_CONFIRM_S) {
       await confirm({ source: 'auto', mode: 'auto', role: pendingRole, ts: row.ts, liveLast: true });
     }
@@ -259,6 +264,9 @@ export function createEngine(deps: EngineDeps): Engine {
     const buffered = candidate?.rows ?? [];
     const backfillTs = candidate?.backfillTs ?? null;
     const startedAt = backfillTs ?? buffered[0]?.row.ts ?? c.ts;
+    // The factories run before anything is assigned: if one throws, there is no session without
+    // detectors, and the candidate (rows included) is exactly as it was.
+    const made: TripSuite = { detectors: deps.createDetectors(), arbiter: deps.createArbiter() };
     session = createSession({
       clientTripId: deps.newId(),
       mode: c.mode,
@@ -267,7 +275,7 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt,
       startApproximate: backfillTs !== null,
     });
-    suite = { detectors: deps.createDetectors(), arbiter: deps.createArbiter() };
+    suite = made;
     candidate = null;
     resetRun();
     continuousSinceTs = startedAt;
@@ -331,13 +339,23 @@ export function createEngine(deps: EngineDeps): Engine {
       }
     }
     s.alerts.push(delivered);
-    deps.onAlert(delivered);
+    // The alert is on record either way; a sound or UI failure is the host's, never the row's
+    // (SR9: failure while moving is silent).
+    try {
+      deps.onAlert(delivered);
+    } catch (err) {
+      deps.onError?.(err);
+    }
   }
 
-  /** The stationary clock (C8) and the stopped panel (C6), from this row alone. */
+  /**
+   * The stationary clock (C8) and the stopped panel (C6), from this row alone. An unknown speed
+   * proves neither motion nor stillness, so it changes nothing: a run already counting keeps
+   * counting through the dropout, and one that had not started does not start on it.
+   */
   function updateFlags(row: FeatureRow): void {
-    const speed = row.speed;
-    // An unknown speed (-1) cannot prove motion, so it keeps the stationary clock running.
+    const speed = knownSpeed(row);
+    if (speed === null) return;
     if (speed < STATIONARY_SPEED_MPS) {
       if (stationarySinceTs === null) stationarySinceTs = row.ts;
     } else {
@@ -370,6 +388,8 @@ export function createEngine(deps: EngineDeps): Engine {
     const trip = suite as TripSuite;
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
     seen = { row, limit };
+    const speed = knownSpeed(row);
+    if (speed !== null) lastKnownSpeedMps = speed;
     touch();
     appendRow(s, row, limit);
     maybePrefetch(row, s.distanceM);
@@ -492,7 +512,7 @@ export function createEngine(deps: EngineDeps): Engine {
         touch();
         if (!withinGap(row.ts)) {
           await finalizeThen(row.ts);
-        } else if (row.speed > LOCKOUT_SPEED_MPS) {
+        } else if ((knownSpeed(row) ?? 0) > LOCKOUT_SPEED_MPS) {
           resume(row.ts);
           await processRow(row, deps.ctx(), true);
         }

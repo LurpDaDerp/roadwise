@@ -146,13 +146,21 @@ export const FinalizeTripPayloadSchema = z
      * left. Its characters are ASCII 63–126, so the length in code units is the length in bytes.
      */
     polyline: z.string().max(MAX_POLYLINE_BYTES),
-    /** Storage object name under the user's prefix, `<clientTripId>.bin.gz`; null when no trace was written. */
+    /**
+     * Storage object name under the user's prefix: exactly `<clientTripId>.bin.gz`, or null when
+     * no trace was written. The server derives the object key from the JWT and this id, never
+     * from the field itself (§4.7: no client-supplied identifiers are trusted).
+     */
     tracePath: z.string().min(1).max(256).nullable(),
     /** A scored speeding event at or beyond `SEVERE_SPEEDING_OVER_MPS`, or any L3 alert (§9.9 safe day). */
     hadSevereEvent: z.boolean(),
   })
   .strict()
-  .refine((p) => p.endedAt >= p.startedAt, { error: 'endedAt precedes startedAt', path: ['endedAt'] });
+  .refine((p) => p.endedAt >= p.startedAt, { error: 'endedAt precedes startedAt', path: ['endedAt'] })
+  .refine((p) => p.tracePath === null || p.tracePath === `${p.clientTripId}.bin.gz`, {
+    error: 'tracePath must be null or <clientTripId>.bin.gz',
+    path: ['tracePath'],
+  });
 
 export type PayloadEvent = z.infer<typeof PayloadEventSchema>;
 export type FinalizeTripPayload = z.infer<typeof FinalizeTripPayloadSchema>;

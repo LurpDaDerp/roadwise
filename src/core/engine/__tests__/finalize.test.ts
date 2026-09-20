@@ -437,13 +437,42 @@ describe('other outcomes', () => {
     await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
   });
 
-  test('an implausibly fast trip is discarded', async () => {
+  test('an implausibly fast trip is discarded: stored as synced, nothing queued, no trace written', async () => {
     const rows = track(300, T0, 50);
     await persisted(rows, 300);
-    const { trip, scored } = await finalizeTrip(session(rows), deps);
+    const { trip, scored, payload, events } = await finalizeTrip(session(rows), deps);
 
-    expect(scored).toMatchObject({ status: 'discarded', reason: 'implausible_speed' });
-    expect(trip.status).toBe('discarded');
+    expect(scored).toMatchObject({ status: 'discarded', reason: 'implausible_speed', score: null });
+    // Kept locally so the trip is not re-detected, but there is nothing to upload (§4.4).
+    expect(trip).toMatchObject({
+      status: 'discarded',
+      sync_state: 'synced',
+      server_id: null,
+      checkpoint_ts: rows[299]!.ts,
+    });
+    expect(events).toEqual([]);
+    expect(payload).toMatchObject({ provisional: scored, tracePath: null });
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+    expect(files.size).toBe(0);
+    const queue = createQueueRepo(db);
+    await expect(queue.countByStatus('pending')).resolves.toBe(0);
+    await expect(queue.byKey(`trip:${TRIP}`)).resolves.toBeNull();
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+    // Settled: like a synced trip with no queue item, it is never re-run.
+    await expect(finalizeTrip(session(rows), deps)).rejects.toThrow(/already discarded\/synced/);
+    expect(files.size).toBe(0);
+  });
+
+  test('fractional row timestamps finalize cleanly: the trip stamps are whole milliseconds', async () => {
+    // A native clock reporting `Date().timeIntervalSince1970 * 1000` is not integral.
+    const rows = track(300).map((r) => ({ ...r, ts: r.ts + 0.25 }));
+    await persisted(rows, 300);
+    const { trip, payload } = await finalizeTrip(session(rows), deps);
+
+    expect(payload).toMatchObject({ startedAt: T0, endedAt: T0 + 300_000 });
+    expect(trip).toMatchObject({ started_at: T0, ended_at: T0 + 300_000 });
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+    expect(payload.rowsDigest.count).toBe(300);
   });
 
   test('when checkpoints were lost, the metrics describe what the trace holds, not what the engine saw', async () => {

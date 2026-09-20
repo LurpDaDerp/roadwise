@@ -6,6 +6,7 @@
 // than silently dropped — a typo in `toleranceS` would otherwise turn an assertion off.
 import { z } from 'zod';
 import type { EventCategory } from '@scoring';
+import { UNKNOWN_LIMIT } from '../detectors/common';
 import type { DriveMode, FeatureRow, LimitSample } from '../engine/types';
 
 /** The speed limit in force from `fromTs` until the next entry (§9.5 speed-limit source). */
@@ -103,15 +104,10 @@ export const traceSchema = z.strictObject({
 
 export type Trace = z.infer<typeof traceSchema>;
 
-/** Nothing known about the limit: what a row before the first `LimitEntry` is fed. */
-export const UNKNOWN_LIMIT: LimitSample = {
-  limitMps: null,
-  source: 'unknown',
-  matchConfidence: 0,
-  parallelRoads: false,
-};
-
-/** The limit in force at `ts`: the latest entry that had already started. Order-independent. */
+/**
+ * The limit in force at `ts`: the latest entry that had already started. Order-independent. A
+ * row before the first `LimitEntry` is fed `UNKNOWN_LIMIT`.
+ */
 export function limitAt(limits: readonly LimitEntry[], ts: number): LimitSample {
   let best: LimitEntry | null = null;
   for (const entry of limits) {

@@ -2,12 +2,11 @@
 //
 // Pure functions over a mutable `TripSession`: the machine decides *whether* a row belongs to the
 // trip, this module decides what the trip knows once it does. Nothing here reads a clock.
+import { ROW_MS, knownSpeed } from '@/core/detectors/common';
 import { haversineMeters } from '@/lib/geo';
 import type { Fix, StartSource, TripRole, TripSession } from './engine.types';
 import type { DriveMode, FeatureRow, LimitSample } from './types';
 
-/** Row spacing at 1 Hz; a row covers the second starting at its `ts`. */
-export const ROW_MS = 1000;
 /** How many seconds of rows stay in memory between checkpoints. */
 export const RING_S = 120;
 /** Consecutive fixes implying a speed above this are GNSS noise, not distance (§19.1). */
@@ -51,15 +50,20 @@ export function createSession(start: SessionStart): TripSession {
   };
 }
 
-const gapSeconds = (session: TripSession): number =>
-  session.gaps.reduce((sum, gap) => sum + (gap.toTs - gap.fromTs), 0) / 1000;
+/**
+ * Seconds of the gaps that fall before `endTs`. A gap is clipped to the closing instant: a trip
+ * that resumed and then closed without another row ends at its last row, *before* the gap's
+ * `toTs`, and must not have that gap taken off a duration it was never part of.
+ */
+const gapSeconds = (session: TripSession, endTs: number): number =>
+  session.gaps.reduce(
+    (sum, gap) => sum + Math.max(0, Math.min(gap.toTs, endTs) - Math.min(gap.fromTs, endTs)),
+    0
+  ) / 1000;
 
-/** Trip seconds through `endTs`, net of the gaps. */
+/** Trip seconds through `endTs`, net of the gaps before it. */
 const durationThrough = (session: TripSession, endTs: number): number =>
-  Math.max(0, (endTs - session.startedAt) / 1000 - gapSeconds(session));
-
-const knownSpeed = (row: FeatureRow): number | null =>
-  row.gnssValid && row.speed >= 0 ? row.speed : null;
+  Math.max(0, (endTs - session.startedAt) / 1000 - gapSeconds(session, endTs));
 
 function addDistance(session: TripSession, row: FeatureRow): void {
   if (!row.gnssValid) return;

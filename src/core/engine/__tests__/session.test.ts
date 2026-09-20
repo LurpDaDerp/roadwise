@@ -1,8 +1,8 @@
 import { NO_LIMIT, T0, limit, mph, row, seq } from '@/core/detectors/__fixtures__/rows';
+import { ROW_MS } from '@/core/detectors/common';
 import {
   GNSS_JUMP_MPS,
   RING_S,
-  ROW_MS,
   SUSTAINED_WINDOW_S,
   appendRow,
   closeSession,
@@ -209,6 +209,22 @@ describe('gaps and closing', () => {
     expect(s.gaps).toEqual([{ fromTs: T0 + 9000, toTs: T0 + 309_000 }]);
     // 311 s of wall time, 300 s of gap.
     expect(s.durationS).toBe(11);
+  });
+
+  test('a gap is clipped to the close: what lies after endedAt is not subtracted', () => {
+    const s = make();
+    seq([10, {}]).forEach((r) => appendRow(s, r, L35));
+    const t = s.lastRowTs as number;
+    // A resume with no row before the close: the gap starts where driving stopped and runs on
+    // for ten minutes, but the trip ends at that same instant.
+    noteGap(s, t + 1000, t + 600_000);
+    expect(closeSession(s, t + 1000).durationS).toBe(s.durationS);
+    expect(closeSession(s, t + 1000).durationS).toBe(10);
+    // Closing inside the gap counts only the part before the close.
+    expect(closeSession(s, t + 6000).durationS).toBe(10);
+    // A row after the gap sees it in full, as before.
+    appendRow(s, row({}, 610), L35);
+    expect(s.durationS).toBe(12);
   });
 
   test('closeSession returns a frozen copy with endedAt set and the original untouched', () => {

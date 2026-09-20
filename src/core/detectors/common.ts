@@ -5,10 +5,25 @@ import type { DetectedEvent, DetectorContext, FeatureRow, LimitSample } from '..
 /** Standard gravity, m/s²: turns a GNSS Δspeed over a second into g for the IMU comparison. */
 export const G_MPS2 = 9.80665;
 
-/** Row spacing at 1 Hz; an episode ends one row after its last row. */
+/**
+ * Row spacing at 1 Hz. A row covers the second starting at its `ts`, so an episode — or a trip —
+ * ends one row-length after its last row.
+ */
 export const ROW_MS = 1000;
 
-/** A GNSS speed the detectors may reason about: the fix is valid and the speed is not the -1 sentinel. */
+/** Nothing known about the limit: what a row is judged against when no lookup answered. */
+export const UNKNOWN_LIMIT: LimitSample = Object.freeze({
+  limitMps: null,
+  source: 'unknown',
+  matchConfidence: 0,
+  parallelRoads: false,
+});
+
+/**
+ * A GNSS speed anyone may reason about: the fix is valid and the speed is not the -1 sentinel.
+ * Null is "unknown", which proves neither motion nor stillness — the detectors, the session
+ * accumulators and the engine's own clocks all leave their state alone on such a row.
+ */
 export function knownSpeed(row: FeatureRow): number | null {
   return row.gnssValid && row.speed >= 0 ? row.speed : null;
 }

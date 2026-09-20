@@ -3,9 +3,9 @@ import { createArbiter } from '@/core/alerts/arbiter';
 import type { AlertDecision, Arbiter } from '@/core/alerts/types';
 import { createDetectors, type TripDetectors } from '@/core/detectors';
 import { T0, counterIds, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
+import { ROW_MS } from '@/core/detectors/common';
 import type { EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
 import { PREFETCH_EVERY_M, STATIONARY_SPEED_MPS, createEngine } from '@/core/engine/machine';
-import { ROW_MS } from '@/core/engine/session';
 import type { CameraFocusSample, FeatureRow, LimitSample } from '@/core/engine/types';
 
 const {
@@ -47,6 +47,8 @@ interface HarnessOptions {
   onError?: boolean;
   /** Make every detector suite's `flush` throw. */
   breakFlush?: boolean;
+  /** Make the host's `onAlert` throw instead of recording the alert. */
+  breakAlert?: boolean;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -89,6 +91,7 @@ function harness(opts: HarnessOptions = {}) {
     createDetectors: detectorFactory,
     createArbiter: arbiterFactory,
     onAlert: (d) => {
+      if (opts.breakAlert) throw new Error('alert sink failed');
       alerts.push(d);
     },
     onCheckpoint,
@@ -437,6 +440,46 @@ describe('candidate confirmation (30 s over 12 mph within 180 s)', () => {
     await endNow(h, s);
     expect(only(h.finalized)).toMatchObject({ rowsCount: 15, startSource: 'manual' });
   });
+
+  test('an invalid fix with a stale positive speed does not count towards confirmation', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    let s = await h.drive(0, AUTO_DETECT_CONFIRM_S, { ...FAST, gnssValid: false });
+    expect(h.status()).toBe('candidate');
+    s = await h.drive(s, AUTO_DETECT_CONFIRM_S, { speed: -1 });
+    expect(h.status()).toBe('candidate');
+    // Only valid fixes vouch for the fast seconds.
+    await h.drive(s, AUTO_DETECT_CONFIRM_S, FAST);
+    expect(h.status()).toBe('recording');
+  });
+
+  test('a factory that throws at confirmation leaves the candidate exactly as it was', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    await h.drive(0, 5, CREEP);
+    const before = h.engine.snapshot();
+    h.arbiterFactory.mockImplementationOnce(() => {
+      throw new Error('no arbiter');
+    });
+    await expect(
+      h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(5) })
+    ).rejects.toThrow('no arbiter');
+    expect(h.engine.snapshot()).toEqual(before);
+    expect(h.onCheckpoint).not.toHaveBeenCalled();
+    // The same candidate then confirms with its buffered rows and the first trip id: nothing
+    // was consumed by the failed attempt. The detector suite made beside the failed arbiter is
+    // a factory side effect, not engine state, and is simply made again.
+    await h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(5) });
+    expect(h.engine.snapshot()).toMatchObject({
+      status: 'recording',
+      clientTripId: 'trip-1',
+      startedAt: at(0),
+      lastRowTs: at(4),
+    });
+    expect(h.detectorFactory).toHaveBeenCalledTimes(2);
+    await endNow(h, 5);
+    expect(only(h.finalized).rowsCount).toBe(5);
+  });
 });
 
 describe('manual start', () => {
@@ -777,6 +820,39 @@ describe('detectors and alerts', () => {
       durationS: AUTO_DETECT_CONFIRM_S,
     });
   });
+
+  test('a throwing onAlert is reported through onError and costs the row nothing', async () => {
+    const drowsy: CameraFocusSample = { glanceS: 0, kind: 'drowsiness', q: 0.8 };
+    const alertRow = CHECKPOINT_S - 1;
+    const h = await recording({
+      onError: true,
+      breakAlert: true,
+      cameraAt: (i) => (i === alertRow ? drowsy : null),
+    });
+    await h.drive(0, alertRow, STILL);
+    expect(h.engine.snapshot()).toMatchObject({ stationarySinceTs: at(0), stoppedPanel: true });
+    // The alert row is also the first moving row and the CHECKPOINT_S-th row: the flags must
+    // still be updated and the checkpoint still taken after the sink throws.
+    await expect(h.drive(alertRow, 1, FAST)).resolves.toBe(CHECKPOINT_S);
+    expect(h.errors.map((e) => (e as Error).message)).toEqual(['alert sink failed']);
+    expect(h.engine.snapshot()).toMatchObject({
+      status: 'recording',
+      lastRowTs: at(alertRow),
+      stationarySinceTs: null,
+      stoppedPanel: false,
+    });
+    expect(h.onCheckpoint).toHaveBeenCalledTimes(1);
+    await endNow(h, CHECKPOINT_S);
+    // The alert itself is on the trip's record: only its delivery failed.
+    expect(only(h.finalized).alerts.map((a) => a.kind)).toEqual(['drowsy']);
+  });
+
+  test('a throwing onAlert without onError is dropped silently', async () => {
+    const drowsy: CameraFocusSample = { glanceS: 0, kind: 'drowsiness', q: 0.8 };
+    const h = await recording({ breakAlert: true, cameraAt: (i) => (i === 1 ? drowsy : null) });
+    await expect(h.drive(0, 3)).resolves.toBe(3);
+    expect(h.engine.snapshot()).toMatchObject({ status: 'recording', lastRowTs: at(2) });
+  });
 });
 
 describe('lockedOut and stoppedPanel', () => {
@@ -829,6 +905,37 @@ describe('lockedOut and stoppedPanel', () => {
     await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(STOPPED_PANEL_S) });
     expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stoppedPanel: false });
   });
+
+  // A GNSS dropout at 60 mph must not unlock the HUD (SR2) or show the stopped panel (C6): an
+  // unknown speed proves nothing, so the lockout holds at the last known speed and no stop starts.
+  test.each([
+    ['the -1 sentinel', { speed: -1 }],
+    ['an invalid fix carrying a stale positive speed', { ...FAST, gnssValid: false }],
+  ])('a dropout at speed (%s) keeps lockedOut, starts no stop', async (_name, unknown) => {
+    const h = await recording();
+    await h.drive(0, 3, FAST);
+    expect(h.engine.snapshot().lockedOut).toBe(true);
+    await h.drive(3, 5, unknown);
+    expect(h.engine.snapshot()).toMatchObject({
+      status: 'recording',
+      lockedOut: true,
+      stoppedPanel: false,
+      stationarySinceTs: null,
+    });
+    // Only a known slow row releases the lockout and starts the stationary clock.
+    await h.drive(8, 1, STILL);
+    expect(h.engine.snapshot()).toMatchObject({ lockedOut: false, stationarySinceTs: at(8) });
+  });
+
+  test('the lockout is judged on the last valid fix, so a dropout while slow stays unlocked', async () => {
+    const h = await recording();
+    await h.drive(0, 2, CREEP);
+    expect(h.engine.snapshot().lockedOut).toBe(false);
+    await h.drive(2, 3, { speed: -1 });
+    expect(h.engine.snapshot().lockedOut).toBe(false);
+    await h.drive(5, 1, FAST);
+    expect(h.engine.snapshot().lockedOut).toBe(true);
+  });
 });
 
 describe('ending', () => {
@@ -862,10 +969,22 @@ describe('ending', () => {
     expect(h.status()).toBe('recording');
   });
 
-  test('an unknown speed cannot prove motion, so it counts as stationary', async () => {
+  test('an unknown speed cannot prove stillness either: a dropout never auto-ends the trip', async () => {
     const h = await recording();
     await h.drive(0, AUTO_END_STATIONARY_S, { speed: -1 });
-    expect(h.status()).toBe('ending');
+    expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stationarySinceTs: null });
+    await h.drive(AUTO_END_STATIONARY_S, AUTO_END_STATIONARY_S, { ...FAST, gnssValid: false });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stationarySinceTs: null });
+  });
+
+  test('a stationary run that started before a dropout keeps counting and auto-ends at its first still row', async () => {
+    const h = await recording();
+    let s = await h.drive(0, 3, STILL);
+    expect(h.engine.snapshot().stationarySinceTs).toBe(at(0));
+    s = await h.drive(s, AUTO_END_STATIONARY_S, { speed: -1 });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stationarySinceTs: at(0) });
+    await endNow(h, s);
+    expect(only(h.finalized)).toMatchObject({ endedAt: at(0), durationS: 0 });
   });
 
   test('walking ends the trip; a second walking report changes nothing', async () => {
@@ -925,6 +1044,16 @@ describe('gap-merge', () => {
     expect(h.status()).toBe('ending');
     await h.engine.dispatch({ type: 'end', ts: at(24) });
     expect(only(h.finalized).rowsCount).toBe(10);
+  });
+
+  test('an unknown speed inside the window cannot resume the trip', async () => {
+    const h = await endingAt10();
+    await h.drive(20, 3, { ...FAST, gnssValid: false });
+    expect(h.status()).toBe('ending');
+    await h.drive(23, 1, { speed: -1 });
+    expect(h.status()).toBe('ending');
+    await h.drive(24, 1, FAST);
+    expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'trip-1' });
   });
 
   test('a row that does not advance the clock is dropped in ending too', async () => {
@@ -1027,6 +1156,38 @@ describe('gap-merge', () => {
       { fromTs: at(10), toTs: at(100) },
       { fromTs: at(105), toTs: at(200) },
     ]);
+  });
+
+  test('a resume with no row before End counts the seconds driven, not less the gap', async () => {
+    const h = await endingAt10();
+    await h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(100) });
+    expect(h.status()).toBe('recording');
+    await endNow(h, 200);
+    // Driving stopped at second 10; the 90 s gap lies wholly after that and costs nothing.
+    expect(only(h.finalized)).toMatchObject({
+      endedAt: at(10),
+      durationS: 10,
+      gaps: [{ fromTs: at(10), toTs: at(100) }],
+    });
+  });
+
+  test('the same when walking and the window close the rowless resume', async () => {
+    const h = await endingAt10();
+    await h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(100) });
+    await h.engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: at(150) });
+    expect(h.status()).toBe('ending');
+    await h.engine.dispatch({ type: 'tick', ts: at(150 + GAP_MERGE_S) });
+    expect(only(h.finalized)).toMatchObject({ endedAt: at(10), durationS: 10 });
+  });
+
+  test('a gap-merged trip keeps its detectors and its arbiter: one of each for the whole trip', async () => {
+    const h = await endingAt10();
+    await h.engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: at(100) });
+    await h.drive(100, 5, FAST);
+    await endNow(h, 105);
+    expect(h.detectorFactory).toHaveBeenCalledTimes(1);
+    expect(h.arbiterFactory).toHaveBeenCalledTimes(1);
+    expect(only(h.finalized).rowsCount).toBe(15);
   });
 });
 

@@ -175,6 +175,13 @@ describe('rejects', () => {
   rejects('a four-character geohash', payload({ startGeohash5: '9q8y' }));
   rejects('a polyline that is not a string', payload({ polyline: null as never }));
   rejects('an empty trace path (null is the way to say none)', payload({ tracePath: '' }));
+  // The trace is always `<clientTripId>.bin.gz`; anything else is a client-supplied name the
+  // server must not trust (§4.7), least of all one that tries to carry a directory.
+  rejects('a trace path that is not the trip id', payload({ tracePath: 'other.bin.gz' }));
+  rejects(
+    'a trace path with a directory prefix',
+    payload({ tracePath: `someone-else/${payload().clientTripId}.bin.gz` })
+  );
   rejects('an empty client trip id', payload({ clientTripId: '' }));
 
   // The M2 plausibility caps, enforced here so the device never queues what the server rejects.
@@ -209,6 +216,14 @@ describe('rejects', () => {
   // Coordinates arrive already rounded to 3 dp (§4.2 lat/lng numeric(8,3)).
   rejects('an unrounded latitude', payload({ events: [event({ lat: 37.7749 })] }));
   rejects('an unrounded longitude', payload({ events: [event({ lng: -122.41945 })] }));
+});
+
+test('tracePath is exactly <clientTripId>.bin.gz, or null', () => {
+  const id = 'abc-123';
+  const named = payload({ clientTripId: id, tracePath: `${id}.bin.gz` });
+  expect(FinalizeTripPayloadSchema.parse(named)).toEqual(named);
+  const none = payload({ clientTripId: id, tracePath: null });
+  expect(FinalizeTripPayloadSchema.parse(none)).toEqual(none);
 });
 
 test('the caps are exported for the finalizer and are the M2 numbers', () => {
