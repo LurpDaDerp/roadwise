@@ -1,0 +1,9 @@
+.agent/
+.impeccable/
+.claude/
+PRODUCT.md
+DESIGN.md
+docs/
+supabase/data/downloads/
+supabase/.temp/
+*.log
