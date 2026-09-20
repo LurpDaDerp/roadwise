@@ -267,3 +267,26 @@ test('purgeDone drops finished items created before the cutoff', async () => {
   await expect(queue.get(old.id)).resolves.toBeNull();
   expect((await queue.get(fresh.id))?.status).toBe('done');
 });
+
+test('byKey returns the item under an idempotency key, or null', async () => {
+  await expect(queue.byKey('trip:a')).resolves.toBeNull();
+  const item = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+  await expect(queue.byKey('trip:a')).resolves.toEqual(item);
+  await expect(queue.byKey('trip:b')).resolves.toBeNull();
+});
+
+test('enqueue on a transaction handle joins that transaction instead of opening its own', async () => {
+  await expect(
+    db.transaction(async (tx) => {
+      await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0, tx);
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  await expect(queue.byKey('trip:a')).resolves.toBeNull();
+
+  const item = await db.transaction((tx) =>
+    queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0, tx)
+  );
+  expect(item).toMatchObject({ idempotency_key: 'trip:a', status: 'pending' });
+  await expect(queue.countByStatus('pending')).resolves.toBe(1);
+});

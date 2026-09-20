@@ -76,9 +76,12 @@ export function createSamplesRepo(db: Db) {
       return asNumber(rows[0] ?? {}, 'n');
     },
 
-    /** Called once the trace has been exported. Returns how many rows went. */
-    async purgeByTrip(clientTripId: string): Promise<number> {
-      const { changes } = await db.execute('DELETE FROM samples WHERE client_trip_id = ?', [
+    /**
+     * Called once the trace has been exported. Returns how many rows went. Runs on `on` when
+     * given, so the purge can commit together with the trip it belongs to.
+     */
+    async purgeByTrip(clientTripId: string, on: Db = db): Promise<number> {
+      const { changes } = await on.execute('DELETE FROM samples WHERE client_trip_id = ?', [
         clientTripId,
       ]);
       return changes;

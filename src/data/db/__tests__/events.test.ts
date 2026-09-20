@@ -169,3 +169,36 @@ test('removeByTrip clears one trip and leaves the others alone', async () => {
   await expect(events.countByTrip('trip-1')).resolves.toBe(0);
   await expect(events.countByTrip('trip-2')).resolves.toBe(1);
 });
+
+test('insertMany and removeByTrip on a transaction handle join that transaction', async () => {
+  await events.insert({ id: 'old', client_trip_id: 'trip-1', category: 'phone', started_at: T0 });
+  await expect(
+    db.transaction(async (tx) => {
+      await events.removeByTrip('trip-1', tx);
+      await events.insertMany(
+        [{ id: 'new', client_trip_id: 'trip-1', category: 'braking', started_at: T0 + 1 }],
+        tx
+      );
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  expect((await events.listByTrip('trip-1')).map((e) => e.id)).toEqual(['old']);
+
+  const written = await db.transaction(async (tx) => {
+    await events.removeByTrip('trip-1', tx);
+    return events.insertMany(
+      [{ id: 'new', client_trip_id: 'trip-1', category: 'braking', started_at: T0 + 1 }],
+      tx
+    );
+  });
+  expect(written.map((e) => e.id)).toEqual(['new']);
+  expect((await events.listByTrip('trip-1')).map((e) => e.id)).toEqual(['new']);
+});
+
+test('insertMany on a transaction handle still refuses a trip that is not there', async () => {
+  await expect(
+    db.transaction((tx) =>
+      events.insertMany([{ id: 'x', client_trip_id: 'nope', category: 'phone', started_at: T0 }], tx)
+    )
+  ).rejects.toBeInstanceOf(MissingTripError);
+});

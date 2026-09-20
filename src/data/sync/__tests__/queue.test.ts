@@ -97,6 +97,21 @@ test('findFinalize returns the queued payload for a trip, or null', async () => 
   await expect(findFinalize(db, 'other')).resolves.toBeNull();
 });
 
+test('enqueueFinalize on a transaction handle is part of that transaction', async () => {
+  await expect(
+    db.transaction(async (tx) => {
+      await enqueueFinalize(db, payload(), T0, tx);
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  await expect(findFinalize(db, ID)).resolves.toBeNull();
+
+  await db.transaction(async (tx) => {
+    await enqueueFinalize(db, payload(), T0, tx);
+  });
+  await expect(findFinalize(db, ID)).resolves.toEqual(payload());
+});
+
 test('findFinalize still finds the payload once the item is done', async () => {
   const item = await enqueueFinalize(db, payload(), T0);
   const queue = createQueueRepo(db);

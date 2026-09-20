@@ -1,6 +1,8 @@
 import type { ScorableEvent, ScoredTrip } from '@scoring';
 import {
   FinalizeTripPayloadSchema,
+  MAX_EVENTS,
+  MAX_POLYLINE_BYTES,
   type FinalizeTripPayload,
   type PayloadEvent,
 } from '@/data/sync/payload';
@@ -174,6 +176,49 @@ describe('rejects', () => {
   rejects('a polyline that is not a string', payload({ polyline: null as never }));
   rejects('an empty trace path (null is the way to say none)', payload({ tracePath: '' }));
   rejects('an empty client trip id', payload({ clientTripId: '' }));
+
+  // The M2 plausibility caps, enforced here so the device never queues what the server rejects.
+  rejects(
+    'more than MAX_EVENTS events',
+    payload({ events: Array.from({ length: MAX_EVENTS + 1 }, (_, i) => event({ id: `e${i}` })) })
+  );
+  rejects('a polyline over MAX_POLYLINE_BYTES', payload({ polyline: 'a'.repeat(MAX_POLYLINE_BYTES + 1) }));
+
+  // Strict at every level: a key the contract does not know is drift, not data.
+  rejects('an unknown top-level key', { ...payload(), extra: 1 });
+  rejects('an unknown key in provisional', payload({ provisional: { ...provisional, extra: 1 } as never }));
+  rejects(
+    'an unknown category in the deductions',
+    payload({
+      provisional: {
+        ...provisional,
+        categoryDeductions: { ...provisional.categoryDeductions, parking: 1 } as never,
+      },
+    })
+  );
+  rejects(
+    'an unknown key in the digest',
+    payload({ rowsDigest: { ...payload().rowsDigest, extra: 1 } as never })
+  );
+  rejects('an unknown key in an event', payload({ events: [{ ...event(), extra: 1 } as never] }));
+  rejects(
+    'an unknown key in an event context',
+    payload({ events: [event({ context: { night: false, precipitation: false, fog: true } as never })] })
+  );
+
+  // Coordinates arrive already rounded to 3 dp (§4.2 lat/lng numeric(8,3)).
+  rejects('an unrounded latitude', payload({ events: [event({ lat: 37.7749 })] }));
+  rejects('an unrounded longitude', payload({ events: [event({ lng: -122.41945 })] }));
+});
+
+test('the caps are exported for the finalizer and are the M2 numbers', () => {
+  expect(MAX_EVENTS).toBe(500);
+  expect(MAX_POLYLINE_BYTES).toBe(16_384);
+  const full = payload({
+    events: Array.from({ length: MAX_EVENTS }, (_, i) => event({ id: `e${i}` })),
+    polyline: 'a'.repeat(MAX_POLYLINE_BYTES),
+  });
+  expect(FinalizeTripPayloadSchema.safeParse(full).success).toBe(true);
 });
 
 test('the parsed types are structurally the scoring package types, so the server can re-score', () => {

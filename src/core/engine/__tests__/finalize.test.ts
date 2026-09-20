@@ -6,6 +6,7 @@ import type { TripRole, TripSession } from '@/core/engine/engine.types';
 import {
   finalizeTrip,
   POLYLINE_EPSILON_M,
+  simplifyTrack,
   TRIM_ENDPOINTS_M,
   tracePathFor,
   type FinalizeDeps,
@@ -22,9 +23,9 @@ import {
   type TripStatus,
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { FinalizeTripPayloadSchema } from '@/data/sync/payload';
-import { geohash5, haversineMeters, roundCoord } from '@/lib/geo';
-import { decodePolyline } from '@/lib/polyline';
+import { FinalizeTripPayloadSchema, MAX_EVENTS, MAX_POLYLINE_BYTES } from '@/data/sync/payload';
+import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
+import { decodePolyline, encodePolyline, simplify } from '@/lib/polyline';
 
 const TRIP = '123e4567-e89b-42d3-a456-426614174000';
 const TZ = 'America/Los_Angeles';
@@ -322,18 +323,21 @@ describe('the worked example (spec §9.4): 22 minutes, 13.2 km, the three golden
 
     expect(trip.polyline).toBe(payload.polyline);
     const pts = decodePolyline(payload.polyline);
-    // Two straight legs: the first kept row, the corner, the last kept row.
-    expect(pts).toHaveLength(3);
+    // Two straight legs: the first kept row, the corner, the last kept row — plus the one chunk
+    // boundary the ~1280-point track crosses (simplification runs per 1000 points).
+    expect(pts).toHaveLength(4);
 
     const first = rows[0]!;
     const last = rows[N - 1]!;
     const startGap = haversineMeters(pts[0]!, first);
-    const endGap = haversineMeters(pts[2]!, last);
+    const endGap = haversineMeters(pts[pts.length - 1]!, last);
     expect(startGap).toBeGreaterThan(TRIM_ENDPOINTS_M - 2);
     expect(startGap).toBeLessThan(TRIM_ENDPOINTS_M + 2 * SPEED + 2);
     expect(endGap).toBeGreaterThan(TRIM_ENDPOINTS_M - 2);
     expect(endGap).toBeLessThan(TRIM_ENDPOINTS_M + 2 * SPEED + 2);
     expect(haversineMeters(pts[1]!, rows[660]!)).toBeLessThan(POLYLINE_EPSILON_M);
+    // The boundary vertex lies on the north leg, so it adds no error to the drawn path.
+    expect(pts[2]!.lng).toBeCloseTo(pts[3]!.lng, 5);
   });
 
   test('is idempotent: a second call returns the stored result and queues nothing more', async () => {
@@ -507,12 +511,20 @@ describe('other outcomes', () => {
   });
 
   describe('night', () => {
-    test('a drive starting at 04:13 local is night: both the clock rule and the sun agree', async () => {
+    test('a drive starting at 04:13 local is night by the clock rule', async () => {
       const t0 = T0 - 10 * 3_600_000; // 12:13 UTC = 04:13 in Los Angeles
       const rows = track(300, t0);
       await persisted(rows, 300);
       const { trip } = await finalizeTrip(session(rows), deps);
       expect(JSON.parse(trip.conditions_json ?? 'null').night).toBe(true);
+    });
+
+    test('the clock rule alone decides: 20:00 local in November is dark, and is not night', async () => {
+      const t0 = Date.UTC(2023, 10, 15, 4, 0); // 20:00 the evening before in Los Angeles
+      const rows = track(300, t0);
+      await persisted(rows, 300);
+      const { trip } = await finalizeTrip(session(rows), deps);
+      expect(JSON.parse(trip.conditions_json ?? 'null').night).toBe(false);
     });
 
     test('the clock rule runs in the trip time zone, not the device zone', async () => {
@@ -559,5 +571,193 @@ describe('other outcomes', () => {
     const { trip, payload } = await finalizeTrip(session(rows), { ...deps, cameraSession: true });
     expect(trip.camera_session).toBe(1);
     expect(payload.cameraSession).toBe(true);
+  });
+
+  test('non-finite numbers never reach the payload: grade C path, bad fixes dropped', async () => {
+    const rows = track(300);
+    // The very first fix is the one the jump rule cannot catch (nothing to jump from).
+    rows[0] = { ...rows[0]!, lat: Number.NaN };
+    rows[150] = { ...rows[150]!, lat: Number.NaN, lng: Number.NaN };
+    rows[299] = { ...rows[299]!, lat: Number.POSITIVE_INFINITY };
+    await persisted(rows, 300);
+    const s: Readonly<TripSession> = { ...session(rows), durationS: Number.NaN };
+
+    const { trip, scored, payload } = await finalizeTrip(s, deps);
+
+    expect(scored).toMatchObject({ status: 'unscored', reason: 'grade_c', dataQuality: 'C' });
+    expect(trip).toMatchObject({ status: 'unscored', duration_s: 0 });
+    expect(payload.durationS).toBe(0);
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+    expect(payload.startGeohash5).toBe(geohash5(rows[1]!.lat, rows[1]!.lng));
+    expect(payload.endGeohash5).toBe(geohash5(rows[298]!.lat, rows[298]!.lng));
+    const pts = decodePolyline(payload.polyline);
+    expect(pts.length).toBeGreaterThanOrEqual(2);
+    expect(pts.every((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))).toBe(true);
+    expect(pts.every((p) => haversineMeters(p, SF) < 5000)).toBe(true);
+  });
+});
+
+describe('read-back rule', () => {
+  const N = 300;
+  let rows: FeatureRow[];
+
+  beforeEach(async () => {
+    rows = track(N);
+    await persisted(rows, N);
+    await finalizeTrip(session(rows), deps);
+    await createTripsRepo(db).update(TRIP, { sync_state: 'synced', server_id: 'srv-1' }, NOW);
+  });
+
+  test('a synced trip comes back from storage, never re-run', async () => {
+    const { trip, payload } = await finalizeTrip(session(rows), deps);
+    expect(trip).toMatchObject({ sync_state: 'synced', server_id: 'srv-1' });
+    expect(payload.clientTripId).toBe(TRIP);
+    expect(files.size).toBe(1);
+  });
+
+  test('a synced trip whose queue item was purged cannot be re-run either', async () => {
+    await db.execute('DELETE FROM sync_queue');
+    await expect(finalizeTrip(session(rows), deps)).rejects.toThrow(/already/);
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ sync_state: 'synced', server_id: 'srv-1' });
+    expect(files.size).toBe(1);
+  });
+});
+
+describe('the write step is atomic', () => {
+  test('a failure at the queue insert leaves the trip recording, no events, samples intact', async () => {
+    const rows = track(1320);
+    await persisted(rows, 1290);
+    const failing: Db = {
+      execute: (sql, params) => db.execute(sql, params),
+      transaction: (fn) =>
+        db.transaction((tx) =>
+          fn({
+            ...tx,
+            execute: (sql, params) =>
+              sql.includes('sync_queue') ? Promise.reject(new Error('disk full')) : tx.execute(sql, params),
+          })
+        ),
+    };
+
+    await expect(
+      finalizeTrip(session(rows, { events: WORKED }), { ...deps, db: failing })
+    ).rejects.toThrow('disk full');
+
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({
+      status: 'recording',
+      sync_state: 'local',
+      score: null,
+    });
+    await expect(createEventsRepo(db).countByTrip(TRIP)).resolves.toBe(0);
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(1320);
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
+
+    // The same session finalizes cleanly on the retry.
+    const { trip } = await finalizeTrip(session(rows, { events: WORKED }), deps);
+    expect(trip).toMatchObject({ status: 'provisional', sync_state: 'queued', score: 74 });
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+  });
+});
+
+describe('upload caps (M2 plausibility: at most MAX_EVENTS events, polyline at most MAX_POLYLINE_BYTES)', () => {
+  test('over MAX_EVENTS: removed, then possible, then the cheapest scored go; the score is over all of them', async () => {
+    const rows = track(1320);
+    await persisted(rows, 1320);
+    const tiny = Array.from({ length: 498 }, (_, i) =>
+      ev({
+        id: `t${i}`,
+        category: 'braking',
+        startedAt: T0 + 10_000 + i * 2000,
+        durationS: 1,
+        q: i === 0 ? 0.55 : 0.8,
+        measured: { peakG: 0.3 + (i % 5) * 0.01 },
+        source: 'both',
+      })
+    );
+    const removed = ev({
+      id: 'r1',
+      category: 'phone',
+      startedAt: T0 + 400_000,
+      durationS: 20,
+      q: 0.95,
+      status: 'removed',
+      measured: { speedMps: 20 },
+      source: 'os',
+    });
+    const all = [p1, s1, b1, x1, removed, ...tiny];
+    expect(all).toHaveLength(503);
+
+    const { scored, events, payload } = await finalizeTrip(session(rows, { events: all }), deps);
+
+    expect(events).toHaveLength(503);
+    expect(payload.events).toHaveLength(MAX_EVENTS);
+    const ids = new Set(payload.events.map((e) => e.id));
+    expect(ids.has('r1')).toBe(false);
+    expect(ids.has('x1')).toBe(false);
+    expect(ids.has('t0')).toBe(false);
+    expect(['p1', 's1', 'b1', 't1', 't497'].every((id) => ids.has(id))).toBe(true);
+    expect(payload.events.map((e) => e.startedAt)).toEqual(
+      [...payload.events.map((e) => e.startedAt)].sort((a, b) => a - b)
+    );
+    // Provisional was scored over everything: 501 scored events, braking capped at 12.
+    expect(Object.keys(scored.eventDeductions)).toHaveLength(501);
+    expect(scored.score).toBe(67);
+    expect(payload.provisional).toEqual(scored);
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+  });
+
+  test('a polyline over MAX_POLYLINE_BYTES at 10 m is re-simplified with a doubled epsilon until it fits', async () => {
+    const n = 6000;
+    // Due north at 10 m/s with a 15 m zigzag: every vertex survives epsilon = 10, none survives 20.
+    const rows = Array.from({ length: n }, (_, i) =>
+      row({
+        ts: T0 + i * 1000,
+        lat: SF.lat + (i * SPEED) / M_PER_DEG_LAT,
+        lng: SF.lng + (i % 2 === 0 ? 15 : -15) / M_PER_DEG_LNG,
+        speed: SPEED,
+        course: 0,
+        aLonMax: 0.02,
+      })
+    );
+    const dense = encodePolyline(simplify(rows, POLYLINE_EPSILON_M));
+    expect(dense.length).toBeGreaterThan(MAX_POLYLINE_BYTES);
+    await persisted(rows, n);
+
+    const { trip, payload } = await finalizeTrip(session(rows), deps);
+
+    expect(payload.polyline.length).toBeLessThanOrEqual(MAX_POLYLINE_BYTES);
+    expect(payload.polyline.length).toBeGreaterThan(0);
+    expect(trip.polyline).toBe(payload.polyline);
+    const pts = decodePolyline(payload.polyline);
+    expect(pts.length).toBeGreaterThanOrEqual(2);
+    expect(haversineMeters(pts[0]!, pts[pts.length - 1]!)).toBeGreaterThan((n - 50) * SPEED);
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+  }, 30_000);
+});
+
+describe('simplifyTrack (Douglas–Peucker per chunk of at most 1000 points)', () => {
+  const smooth = (n: number): LatLng[] =>
+    Array.from({ length: n }, (_, i) => ({
+      lat: SF.lat + (i * 8) / M_PER_DEG_LAT,
+      lng: SF.lng + (40 * Math.sin(i / 60)) / M_PER_DEG_LNG,
+    }));
+
+  test('a 12,000-point smooth track simplifies within budget, decodes, and shares chunk boundaries', () => {
+    const pts = smooth(12_000);
+    const started = performance.now();
+    const out = simplifyTrack(pts, POLYLINE_EPSILON_M);
+    expect(performance.now() - started).toBeLessThan(1500);
+
+    expect(out.length).toBeGreaterThan(2);
+    expect(out.length).toBeLessThan(pts.length / 4);
+    expect(out[0]).toEqual(pts[0]);
+    expect(out[out.length - 1]).toEqual(pts[pts.length - 1]);
+    for (let i = 1; i < out.length; i += 1) expect(out[i]).not.toEqual(out[i - 1]);
+    expect(decodePolyline(encodePolyline(out))).toHaveLength(out.length);
+  });
+
+  test('a short track is exactly what the primitive gives', () => {
+    const pts = smooth(500);
+    expect(simplifyTrack(pts, POLYLINE_EPSILON_M)).toEqual(simplify(pts, POLYLINE_EPSILON_M));
   });
 });

@@ -81,16 +81,20 @@ export function createEventsRepo(db: Db) {
      * All or nothing: a batch naming a trip that is not there writes none of it, and throws
      * `MissingTripError` — checked explicitly inside the transaction rather than left to the
      * foreign key, which may not be enforced there on device.
+     *
+     * Given a transaction handle `on`, the batch joins that transaction instead of opening its
+     * own; atomicity is then the caller's transaction.
      */
-    insertMany(events: readonly NewEvent[]): Promise<EventRow[]> {
-      return db.transaction(async (tx) => {
+    insertMany(events: readonly NewEvent[], on?: Db): Promise<EventRow[]> {
+      const run = async (tx: Db): Promise<EventRow[]> => {
         for (const clientTripId of new Set(events.map((event) => event.client_trip_id))) {
           await assertTripExists(tx, clientTripId);
         }
         const written: EventRow[] = [];
         for (const event of events) written.push(await insertOn(event, tx));
         return written;
-      });
+      };
+      return on ? run(on) : db.transaction(run);
     },
 
     /** Oldest first — the order the trip detail screen lists them in. */
@@ -118,8 +122,9 @@ export function createEventsRepo(db: Db) {
       return changes === 0 ? null : get(id);
     },
 
-    async removeByTrip(clientTripId: string): Promise<number> {
-      const { changes } = await db.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [
+    /** Runs on `on` when given, so it can share a caller's transaction. */
+    async removeByTrip(clientTripId: string, on: Db = db): Promise<number> {
+      const { changes } = await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [
         clientTripId,
       ]);
       return changes;

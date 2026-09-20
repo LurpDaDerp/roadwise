@@ -164,3 +164,17 @@ test('remove deletes the trip and everything hanging off it', async () => {
   expect(events.rows).toEqual([{ n: 0 }]);
   expect(samples.rows).toEqual([{ n: 0 }]);
 });
+
+test('update on a transaction handle is undone when that transaction rolls back', async () => {
+  await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0);
+  await expect(
+    db.transaction(async (tx) => {
+      await trips.update('a', { status: 'provisional', score: 74 }, T0 + 1, tx);
+      throw new Error('boom');
+    })
+  ).rejects.toThrow('boom');
+  expect(await trips.get('a')).toMatchObject({ status: 'recording', score: null, updated_at: T0 });
+
+  const updated = await db.transaction((tx) => trips.update('a', { status: 'provisional' }, T0 + 2, tx));
+  expect(updated).toMatchObject({ status: 'provisional', updated_at: T0 + 2 });
+});

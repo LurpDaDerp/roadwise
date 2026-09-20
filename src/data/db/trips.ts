@@ -114,19 +114,23 @@ export async function assertTripExists(on: Db, clientTripId: string): Promise<vo
 }
 
 export function createTripsRepo(db: Db) {
-  async function get(clientTripId: string): Promise<TripRow | null> {
-    const { rows } = await db.execute('SELECT * FROM trips WHERE client_trip_id = ?', [
+  async function get(clientTripId: string, on: Db = db): Promise<TripRow | null> {
+    const { rows } = await on.execute('SELECT * FROM trips WHERE client_trip_id = ?', [
       clientTripId,
     ]);
     const row = rows[0];
     return row ? toTripRow(row) : null;
   }
 
-  /** Applies the named columns and always moves `updated_at`. Null when there is no such trip. */
+  /**
+   * Applies the named columns and always moves `updated_at`. Null when there is no such trip.
+   * Runs on `on` when given, so it can share a caller's transaction.
+   */
   async function update(
     clientTripId: string,
     patch: TripPatch,
-    now: number = Date.now()
+    now: number = Date.now(),
+    on: Db = db
   ): Promise<TripRow | null> {
     const statement = updateStatement(
       'trips',
@@ -137,8 +141,8 @@ export function createTripsRepo(db: Db) {
     );
     // `updated_at` is always set, so `updateStatement` never returns null here.
     if (!statement) return null;
-    const { changes } = await db.execute(statement.sql, statement.params);
-    return changes === 0 ? null : get(clientTripId);
+    const { changes } = await on.execute(statement.sql, statement.params);
+    return changes === 0 ? null : get(clientTripId, on);
   }
 
   return {

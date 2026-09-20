@@ -4,16 +4,20 @@
 // polyline and one idempotent upload. Pure TypeScript over the `Db`; the platform comes in
 // through `FinalizeDeps` (the trace writer, the hash), so the whole pipeline runs under Jest.
 //
-// Order of work, chosen so that a crash anywhere leaves a state the next call repairs:
+// Order of work:
 //   1. the trip row exists, and the ring's un-checkpointed tail is in `samples`;
 //   2. the trip's rows are read back from `samples` — the durable record, not the ring — and
 //      become the trace file, its digest, and the metrics the score is built on;
-//   3. events are scored, located and stored; the trip row is updated and marked `queued`;
-//   4. the upload is queued under `trip:<clientTripId>`; only then are the samples purged.
-// A call that finds the trip already finalized *and* queued returns what is stored. One that
-// finds it finalized but not queued (a crash between 3 and 4) simply runs again: the samples
-// are still there, and every step is idempotent.
-import type { ScoredTrip, TripMetrics } from '@scoring';
+//   3. events are scored, located and capped for the upload; the payload is validated;
+//   4. ONE transaction replaces the events, updates the trip row (marked `queued`), queues the
+//      upload under `trip:<clientTripId>` and purges the samples. It commits or it does not.
+// Steps 1–3 leave nothing behind that the next call cannot redo (a `recording` row, durable
+// samples, a trace file that is rewritten). A re-run is an in-process retry of the same session
+// — the events, alerts and gaps live only in memory — so a failure is reported to the engine
+// (which re-arms) and the host may call again with the same closed session. A call that finds
+// the trip already finalized returns what is stored; one that finds it synced or final and no
+// longer queued refuses, since re-running would overwrite what the server confirmed.
+import type { ScorableEvent, ScoredTrip, TripMetrics } from '@scoring';
 import { mergeEvents } from '@/core/detectors';
 import {
   createEventsRepo,
@@ -26,11 +30,17 @@ import {
   type TripRow,
   type TripStatus,
 } from '@/data/db';
-import { FinalizeTripPayloadSchema, type FinalizeTripPayload, type PayloadEvent } from '@/data/sync/payload';
+import {
+  FinalizeTripPayloadSchema,
+  MAX_EVENTS,
+  MAX_POLYLINE_BYTES,
+  type FinalizeTripPayload,
+  type PayloadEvent,
+} from '@/data/sync/payload';
 import { enqueueFinalize, findFinalize } from '@/data/sync/queue';
 import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
 import { encodePolyline, simplify } from '@/lib/polyline';
-import { isNight, sunIsDown } from '@/lib/time';
+import { isNight } from '@/lib/time';
 import type { Fix, TripSession } from './engine.types';
 import { appendRow, createSession, GNSS_JUMP_MPS, ROW_MS } from './session';
 import type { DetectedEvent, FeatureRow, LimitSample } from './types';
@@ -40,8 +50,10 @@ import type { DetectedEvent, FeatureRow, LimitSample } from './types';
  * events' coordinates, so a stored trip never pins the driveway. Scoring sees every row.
  */
 export const TRIM_ENDPOINTS_M = 200;
-/** Douglas–Peucker tolerance for the stored polyline. */
+/** Douglas–Peucker tolerance for the stored polyline; doubled until the polyline fits the cap. */
 export const POLYLINE_EPSILON_M = 10;
+/** Douglas–Peucker runs per chunk of this many points (O(n·k) on a long smooth track otherwise). */
+export const SIMPLIFY_CHUNK = 1000;
 
 /** The trace's name, relative to the traces directory; the sync runner prefixes `<uid>/` in storage. */
 export const tracePathFor = (clientTripId: string): string => `${clientTripId}.bin.gz`;
@@ -68,6 +80,7 @@ export interface FinalizeDeps {
 
 export interface FinalizeResult {
   trip: TripRow;
+  /** Every event stored locally — the upload in `payload.events` may be capped below this. */
   events: EventRow[];
   scored: ScoredTrip;
   payload: FinalizeTripPayload;
@@ -79,6 +92,9 @@ const UNKNOWN_LIMIT: LimitSample = {
   matchConfidence: 0,
   parallelRoads: false,
 };
+
+const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
+const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 /** JSON with every object's keys sorted, so the digest is the same whatever order the rows were stored in. */
 export function canonicalJson(value: unknown): string {
@@ -118,11 +134,16 @@ const imuPresent = (rows: FeatureRow[]): boolean =>
       r.jerkMax !== 0
   );
 
-/** Valid fixes in order, minus any that would take more than `GNSS_JUMP_MPS` to reach — the distance rule. */
+/**
+ * Valid, finite fixes in order, minus any that would take more than `GNSS_JUMP_MPS` to reach —
+ * the distance rule.
+ */
 function cleanTrack(rows: FeatureRow[]): Fix[] {
   const track: Fix[] = [];
   for (const r of rows) {
-    if (!r.gnssValid) continue;
+    if (!r.gnssValid || !Number.isFinite(r.lat) || !Number.isFinite(r.lng) || !Number.isFinite(r.ts)) {
+      continue;
+    }
     const prev = track[track.length - 1];
     if (prev && haversineMeters(prev, r) > GNSS_JUMP_MPS * Math.max(1, (r.ts - prev.ts) / 1000)) {
       continue;
@@ -162,6 +183,47 @@ function fixIndexAt(track: Fix[], ts: number): number {
   return track.length > 0 ? 0 : -1;
 }
 
+/**
+ * Douglas–Peucker over chunks of at most `SIMPLIFY_CHUNK` points that share their boundary
+ * points, so a three-hour track costs a few chunks' worth rather than O(n·k) in one go. The
+ * boundary points are kept, which costs a handful of extra vertices per trip.
+ */
+export function simplifyTrack(points: readonly LatLng[], epsilonM: number): LatLng[] {
+  const out: LatLng[] = [];
+  for (let start = 0; start < points.length; start += SIMPLIFY_CHUNK - 1) {
+    const chunk = simplify(points.slice(start, start + SIMPLIFY_CHUNK), epsilonM);
+    out.push(...(start === 0 ? chunk : chunk.slice(1)));
+    if (start + SIMPLIFY_CHUNK >= points.length) break;
+  }
+  return out;
+}
+
+/** Simplify at `epsilonM`, doubling the tolerance until the encoding fits in `maxBytes`. */
+function fitPolyline(points: readonly LatLng[], epsilonM: number, maxBytes: number): string {
+  for (let eps = epsilonM; ; eps *= 2) {
+    const encoded = encodePolyline(simplifyTrack(points, eps));
+    if (encoded.length <= maxBytes) return encoded;
+    // Wider than the planet and still too long cannot happen; the guard keeps the loop finite.
+    if (eps > 1e8) return '';
+  }
+}
+
+/**
+ * Keep at most `max` events for the upload: removed events go first, then possible ones (both
+ * score-neutral), then scored events from the cheapest up; among equals the latest goes first.
+ */
+export function capEvents(events: PayloadEvent[], max: number): PayloadEvent[] {
+  if (events.length <= max) return events;
+  const rank = (e: PayloadEvent): number =>
+    e.status === 'removed' ? 0 : e.status === 'possible' ? 1 : 2;
+  const dropOrder = [...events].sort(
+    (a, b) =>
+      rank(a) - rank(b) || (a.deduction ?? 0) - (b.deduction ?? 0) || b.startedAt - a.startedAt
+  );
+  const dropped = new Set(dropOrder.slice(0, events.length - max).map((e) => e.id));
+  return events.filter((e) => !dropped.has(e.id));
+}
+
 /** Hour of day in `tz`; NaN when Intl does not know the zone. */
 function hourIn(ts: number, tz: string): number {
   try {
@@ -174,6 +236,23 @@ function hourIn(ts: number, tz: string): number {
   } catch {
     return NaN;
   }
+}
+
+/** A copy of the event with every number finite, so the payload contract holds whatever a detector emitted. */
+function sanitizeEvent(e: DetectedEvent, tripStartedAt: number): DetectedEvent {
+  const measured: ScorableEvent['measured'] = {};
+  for (const [key, value] of Object.entries(e.measured)) {
+    if (typeof value !== 'number' || Number.isFinite(value)) {
+      (measured as Record<string, unknown>)[key] = value;
+    }
+  }
+  return {
+    ...e,
+    startedAt: Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt,
+    durationS: Math.max(0, finite(e.durationS)),
+    q: clamp(finite(e.q), 0, 1),
+    measured,
+  };
 }
 
 const tripStatus = (status: ScoredTrip['status']): TripStatus =>
@@ -209,10 +288,13 @@ export async function finalizeTrip(
   const samples = createSamplesRepo(db);
   const id = session.clientTripId;
 
-  // Already done: hand back what the first run stored, and finish its purge if it never got there.
+  // Already done: hand back what the first run stored. A trip the server has confirmed, or that
+  // is final, is never re-run — that would replace the confirmed result with a provisional one.
   const existing = await trips.get(id);
-  if (existing && existing.status !== 'recording') {
-    const stored = await findFinalize(db, id);
+  if (existing) {
+    const settled = existing.status === 'final' || existing.sync_state === 'synced';
+    const stored =
+      settled || existing.status !== 'recording' ? await findFinalize(db, id) : null;
     if (stored) {
       await samples.purgeByTrip(id);
       return {
@@ -222,8 +304,12 @@ export async function finalizeTrip(
         payload: stored,
       };
     }
-  }
-  if (!existing) {
+    if (settled) {
+      throw new Error(
+        `trip ${id} is already ${existing.status}/${existing.sync_state} and no longer queued; it cannot be finalized again`
+      );
+    }
+  } else {
     await trips.insert(
       { client_trip_id: id, started_at: session.startedAt, tz, status: 'recording' },
       now()
@@ -243,48 +329,54 @@ export async function finalizeTrip(
   const tracePath = tracePathFor(id);
   await deps.fs.writeGzip(tracePath, new TextEncoder().encode(traceJson));
   const recheck = replay(session, rows);
-  const rowsDigest: FinalizeTripPayload['rowsDigest'] = {
-    count: rows.length,
-    validGnssPct: recheck.validGnssPct,
-    imuPresent: imuPresent(rows),
-    maxSustainedSpeedMps: recheck.maxSustainedSpeedMps,
-    sha256: await deps.hash.sha256(traceJson),
-  };
+  const sha256 = await deps.hash.sha256(traceJson);
 
-  // 3. Score. The engine merged already; running the rule again is idempotent and covers a host
-  //    that hands over raw detections.
-  const merged = mergeEvents([...session.events]);
-  const metrics: TripMetrics = {
+  // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is
+  //    written out as 0 so the trip is kept rather than refused by the contract.
+  const merged = mergeEvents(session.events.map((e) => sanitizeEvent(e, session.startedAt)));
+  const measured: TripMetrics = {
     distanceM: recheck.distanceM,
     durationS: session.durationS,
-    validGnssPct: rowsDigest.validGnssPct,
-    imuPresent: rowsDigest.imuPresent,
+    validGnssPct: recheck.validGnssPct,
+    imuPresent: imuPresent(rows),
     role: session.role,
-    maxSustainedSpeedMps: rowsDigest.maxSustainedSpeedMps,
+    maxSustainedSpeedMps: recheck.maxSustainedSpeedMps,
   };
-  const scored = scoring.scoreTrip(metrics, merged);
+  const scored = scoring.scoreTrip(measured, merged);
+  const metrics = {
+    distanceM: Math.max(0, finite(measured.distanceM)),
+    durationS: Math.max(0, finite(measured.durationS)),
+    validGnssPct: clamp(finite(measured.validGnssPct), 0, 100),
+    maxSustainedSpeedMps: Math.max(0, finite(measured.maxSustainedSpeedMps)),
+  };
+  const rowsDigest: FinalizeTripPayload['rowsDigest'] = {
+    count: rows.length,
+    validGnssPct: metrics.validGnssPct,
+    imuPresent: measured.imuPresent,
+    maxSustainedSpeedMps: metrics.maxSustainedSpeedMps,
+    sha256,
+  };
 
   // Geometry: the polyline and the events' coordinates share one trimmed track.
   const track = cleanTrack(rows);
   const [from, to] = trimmedRange(track, TRIM_ENDPOINTS_M);
-  const polyline = encodePolyline(simplify(track.slice(from, to), POLYLINE_EPSILON_M));
+  const polyline = fitPolyline(track.slice(from, to), POLYLINE_EPSILON_M, MAX_POLYLINE_BYTES);
   const locate = (ts: number): LatLng | null => {
     const i = fixIndexAt(track, ts);
     if (i < from || i >= to) return null;
     const fix = track[i] as Fix;
     return { lat: roundCoord(fix.lat), lng: roundCoord(fix.lng) };
   };
-  const first = recheck.firstFix ?? session.firstFix;
-  const last = recheck.lastFix ?? session.lastFix;
+  const first = track[0] ?? null;
+  const last = track[track.length - 1] ?? null;
 
-  // Conditions and the safe-day flag (§9.9): night by the trip's clock or by the sun at its start.
+  // Conditions and the safe-day flag (§9.9). Night is the clock rule in the trip's zone (§9.4);
+  // the sun's position belongs to the HUD's night mode, not to scoring.
   const { CONSTANTS } = scoring;
   const hour = hourIn(session.startedAt, tz);
-  const night =
-    (Number.isNaN(hour)
-      ? isNight(new Date(session.startedAt))
-      : hour >= CONSTANTS.NIGHT_START_H || hour < CONSTANTS.NIGHT_END_H) ||
-    (first !== null && sunIsDown(new Date(session.startedAt), first.lat, first.lng));
+  const night = Number.isNaN(hour)
+    ? isNight(new Date(session.startedAt))
+    : hour >= CONSTANTS.NIGHT_START_H || hour < CONSTANTS.NIGHT_END_H;
   const hadSevereEvent =
     merged.some(
       (e) =>
@@ -297,7 +389,7 @@ export async function finalizeTrip(
   const alerted = new Set(session.alerts.flatMap((a) => (a.eventId ? [a.eventId] : [])));
   const alertShown = (e: DetectedEvent): boolean =>
     alerted.has(e.id) || (e.absorbedIds ?? []).some((absorbed) => alerted.has(absorbed));
-  const payloadEvents: PayloadEvent[] = merged.map((e) => {
+  const allEvents: PayloadEvent[] = merged.map((e) => {
     const at = locate(e.startedAt);
     return {
       id: e.id,
@@ -309,10 +401,10 @@ export async function finalizeTrip(
       corrected: e.corrected,
       status: e.status,
       measured: { ...e.measured },
-      context: { ...e.context },
+      context: { night: e.context.night, precipitation: e.context.precipitation },
       contextMultiplier: scoring.contextMultiplier(e),
-      severity: scoring.severity(e),
-      deduction: scored.status === 'final' ? (scored.eventDeductions[e.id] ?? 0) : null,
+      severity: Math.max(0, finite(scoring.severity(e))),
+      deduction: scored.status === 'final' ? Math.max(0, finite(scored.eventDeductions[e.id] ?? 0)) : null,
       lat: at?.lat ?? null,
       lng: at?.lng ?? null,
       alertShown: alertShown(e),
@@ -336,7 +428,7 @@ export async function finalizeTrip(
     mode: session.mode,
     cameraSession: deps.cameraSession ?? false,
     provisional: scored,
-    events: payloadEvents,
+    events: capEvents(allEvents, MAX_EVENTS),
     rowsDigest,
     startGeohash5: first ? geohash5(first.lat, first.lng) : null,
     endGeohash5: last ? geohash5(last.lat, last.lng) : null,
@@ -345,43 +437,50 @@ export async function finalizeTrip(
     hadSevereEvent,
   } satisfies FinalizeTripPayload);
 
-  // 4. Persist: events, then the trip row (marked queued before the item exists, so a runner that
-  //    drains on enqueue cannot have its `synced` overwritten), then the queue item, then the purge.
-  await events.removeByTrip(id);
-  const eventRows = await events.insertMany(payloadEvents.map((e) => toNewEvent(e, id)));
-  const trip = await trips.update(
-    id,
-    {
-      started_at: session.startedAt,
-      ended_at: endedAt,
-      tz,
-      distance_m: metrics.distanceM,
-      duration_s: metrics.durationS,
-      role: session.role,
-      role_confidence: null,
-      role_source: session.startSource,
-      mode: session.mode,
-      camera_session: payload.cameraSession ? 1 : 0,
-      score: scored.score,
-      scoring_version: String(scored.scoringVersion),
-      category_deductions_json: JSON.stringify(scored.categoryDeductions),
-      exposure: scored.exposure,
-      data_quality: scored.dataQuality,
-      conditions_json: JSON.stringify(conditions),
-      limit_coverage_pct:
-        session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0,
-      start_geohash5: payload.startGeohash5,
-      end_geohash5: payload.endGeohash5,
-      polyline: polyline === '' ? null : polyline,
-      status: tripStatus(scored.status),
-      sync_state: 'queued',
-      checkpoint_ts: session.lastRowTs,
-    },
-    now()
-  );
-  if (!trip) throw new MissingTripError(id);
-  await enqueueFinalize(db, payload, now());
-  await samples.purgeByTrip(id);
+  // 4. One transaction: the events, the trip row, the queue item and the purge commit together,
+  //    so no state exists in which the trip says `queued` and nothing is queued.
+  const written = await db.transaction(async (tx) => {
+    await events.removeByTrip(id, tx);
+    const eventRows = await events.insertMany(
+      allEvents.map((e) => toNewEvent(e, id)),
+      tx
+    );
+    const trip = await trips.update(
+      id,
+      {
+        started_at: session.startedAt,
+        ended_at: endedAt,
+        tz,
+        distance_m: metrics.distanceM,
+        duration_s: metrics.durationS,
+        role: session.role,
+        role_confidence: null,
+        role_source: session.startSource,
+        mode: session.mode,
+        camera_session: payload.cameraSession ? 1 : 0,
+        score: scored.score,
+        scoring_version: String(scored.scoringVersion),
+        category_deductions_json: JSON.stringify(scored.categoryDeductions),
+        exposure: scored.exposure,
+        data_quality: scored.dataQuality,
+        conditions_json: JSON.stringify(conditions),
+        limit_coverage_pct:
+          session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0,
+        start_geohash5: payload.startGeohash5,
+        end_geohash5: payload.endGeohash5,
+        polyline: polyline === '' ? null : polyline,
+        status: tripStatus(scored.status),
+        sync_state: 'queued',
+        checkpoint_ts: session.lastRowTs,
+      },
+      now(),
+      tx
+    );
+    if (!trip) throw new MissingTripError(id);
+    await enqueueFinalize(db, payload, now(), tx);
+    await samples.purgeByTrip(id, tx);
+    return { trip, eventRows };
+  });
 
-  return { trip, events: eventRows, scored, payload };
+  return { trip: written.trip, events: written.eventRows, scored, payload };
 }

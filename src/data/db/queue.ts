@@ -81,20 +81,27 @@ export function createQueueRepo(db: Db) {
   return {
     get: (id: number) => get(id),
 
+    /** The item under an idempotency key, whatever state it has reached, or null. */
+    byKey: (idempotencyKey: string) => byKey(idempotencyKey, db),
+
     reclaimInflight: (olderThanS: number = RECLAIM_AFTER_S, now: number = Date.now()) =>
       reclaimInflight(olderThanS, now),
 
     /**
      * Idempotent: enqueueing a key already in the queue keeps the item that is there, whatever
      * state it has reached, rather than queueing the same work twice.
+     *
+     * Given a transaction handle `on`, the insert joins that transaction instead of opening its
+     * own, so a caller can commit the queue item together with the rows it describes.
      */
     enqueue(
       kind: string,
       payload: unknown,
       idempotencyKey: string,
-      now: number = Date.now()
+      now: number = Date.now(),
+      on?: Db
     ): Promise<QueueItem> {
-      return db.transaction(async (tx) => {
+      const run = async (tx: Db): Promise<QueueItem> => {
         await tx.execute(
           `INSERT OR IGNORE INTO sync_queue
              (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at)
@@ -104,7 +111,8 @@ export function createQueueRepo(db: Db) {
         const item = await byKey(idempotencyKey, tx);
         if (!item) throw new Error(`queue item ${idempotencyKey} vanished after insert`);
         return item;
-      });
+      };
+      return on ? run(on) : db.transaction(run);
     },
 
     /**
