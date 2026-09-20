@@ -15,12 +15,9 @@ const TABLES = [
   'inbox_cache',
 ];
 
-const INDEXES = [
-  'idx_trips_started_at',
-  'idx_trip_events_client_trip_id',
-  'idx_samples_trip_ts',
-  'idx_sync_queue_due',
-];
+// `samples` is deliberately absent: its primary key (client_trip_id, ts) already covers the
+// range reads, and a second index on the 1 Hz table would cost every insert.
+const INDEXES = ['idx_trips_started_at', 'idx_trip_events_client_trip_id', 'idx_sync_queue_due'];
 
 async function names(db: Db, type: 'table' | 'index'): Promise<string[]> {
   const { rows } = await db.execute(

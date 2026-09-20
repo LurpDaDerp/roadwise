@@ -121,8 +121,8 @@ export const SCHEMA_V1: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_trips_started_at ON trips (started_at DESC)',
   // Every event read is scoped to one trip.
   'CREATE INDEX IF NOT EXISTS idx_trip_events_client_trip_id ON trip_events (client_trip_id)',
-  // Range reads while scoring a trip.
-  'CREATE INDEX IF NOT EXISTS idx_samples_trip_ts ON samples (client_trip_id, ts)',
+  // `samples` has no index of its own: its primary key (client_trip_id, ts) already serves the
+  // range reads, and a second B-tree would be maintained on every 1 Hz insert for nothing.
   // The uploader's "what is due now" query.
   'CREATE INDEX IF NOT EXISTS idx_sync_queue_due ON sync_queue (status, next_attempt_at)',
 ];
