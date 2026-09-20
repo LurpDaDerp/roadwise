@@ -177,7 +177,12 @@ export interface DrainResult {
 export interface SyncRunner {
   drainOnce(now?: number): Promise<DrainResult>;
   start(): void;
-  stop(): void;
+  /**
+   * Ends this runner's lifetime. The returned promise settles when a pass already in flight has
+   * finished; its writes are refused from the moment `stop()` returns, so awaiting is about not
+   * racing the next runtime over the same rows, never about correctness.
+   */
+  stop(): Promise<void>;
 }
 
 /**
@@ -221,6 +226,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const days = createScoreDailyCacheRepo(db);
 
   let draining = false;
+  /** Resolves when the pass in flight finishes, so `stop()` can be awaited. Null when idle. */
+  let inFlight: Promise<void> | null = null;
   let started = false;
   /**
    * Which lifetime of this runner a pass belongs to.
@@ -814,10 +821,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // One drain at a time: two passes claiming the same items would race on every `markAttempt`.
     if (draining || isRecording()) return empty;
     draining = true;
+    // Held so `stop()` can be awaited: the generation fence already refuses a dead pass's writes,
+    // but a host rebuilding the runtime (a handover) wants the old pass's network work finished
+    // before the new one starts claiming the same rows.
+    let settled: () => void = () => {};
+    inFlight = new Promise<void>((resolve) => {
+      settled = resolve;
+    });
     try {
       return await pass(at);
     } finally {
       draining = false;
+      inFlight = null;
+      settled();
       // A wake that arrived mid-drain was not lost, it was held: run it now. The common case is
       // app start, where M1's crash recovery finalizes the interrupted trip (and enqueues, inside
       // its transaction) while `start()`'s own first drain is still running.
@@ -874,14 +890,16 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       wake();
     },
 
-    stop(): void {
+    stop(): Promise<void> {
       // Any pass still in flight belongs to the lifetime that is ending: its writes are refused
-      // from here on, whatever it is waiting for.
+      // from here on, whatever it is waiting for. The promise lets a host that is rebuilding the
+      // runtime wait for that pass's network work to finish before the new one claims the same rows.
       generation += 1;
       started = false;
       wakePending = false;
       clearRecordingRetry();
       for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
+      return inFlight ?? Promise.resolve();
     },
   };
 }

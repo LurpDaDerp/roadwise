@@ -136,7 +136,9 @@ test('the cache is wired to the queue, and stop() detaches everything', async ()
   await settle();
   expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
 
-  runtime.stop();
+  // `stop()` is awaitable so a host rebuilding the runtime can let a pass in flight finish; the
+  // teardown it performs (detach, cache clear) is done when it settles.
+  await runtime.stop();
   runtime = null;
   expect(appState.removals).toBe(1);
   queryClient.setQueryData(key, []);

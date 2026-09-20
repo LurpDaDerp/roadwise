@@ -58,7 +58,7 @@ export default function RootLayout() {
     bootstrapApp().then(
       (next) => {
         if (!live) {
-          next.stop();
+          void next.stop();
           return;
         }
         started = next;
@@ -77,7 +77,7 @@ export default function RootLayout() {
     );
     return () => {
       live = false;
-      started?.stop();
+      void started?.stop();
     };
   }, [attempt]);
 

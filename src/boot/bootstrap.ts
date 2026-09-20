@@ -107,7 +107,7 @@ export interface AppRuntime {
    * tear a runtime down is that the device changed hands, and the last driver's rows must not
    * sit in memory for five more minutes.
    */
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 const deviceZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -135,7 +135,7 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   });
   sequence.then(
     (runtime) => {
-      if (abandoned) runtime.stop();
+      if (abandoned) void runtime.stop();
     },
     // The deadline already reported it; a second rejection here would be unhandled.
     () => {}
@@ -232,7 +232,7 @@ async function runLaunch(
     // Nothing this step attached may outlive it. The layout offers a retry that re-runs the
     // whole sequence, and a subscriber left behind would fire `invalidateAfterSync` into a
     // `QueryClient` nobody will ever render — once per press, forever.
-    runner?.stop();
+    void runner?.stop();
     detach();
     throw reason;
   }
@@ -244,8 +244,8 @@ async function runLaunch(
     recovery,
     owner: identity.owner,
     schemaVersion,
-    stop() {
-      runner.stop();
+    async stop() {
+      await runner.stop();
       detach();
       queryClient.clear();
     },
