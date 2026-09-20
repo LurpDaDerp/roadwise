@@ -4,8 +4,12 @@
 // `ending`, and once more before `onFinalize`. This module is that callback: the first time it
 // sees a trip it writes the `recording` row, then it appends the rows the row's own mark does not
 // yet vouch for and advances the mark — all in one transaction, so a crash leaves either the whole
-// checkpoint or none of it, and `checkpoint_ts` never claims rows that were not written. What it
-// leaves behind is exactly what `recovery.ts` finalizes from after a process death.
+// checkpoint or none of it, and the mark never runs ahead of the rows it was offered. What it
+// cannot promise is that no row is ever lost: the session's ring holds `RING_S` seconds, so rows a
+// failed checkpoint left unwritten and a later one no longer finds in the ring are gone, and the
+// mark then steps over the hole. The finalizer's metrics describe the durable rows in that case
+// (its "when checkpoints were lost" test), and what this module leaves behind is exactly what
+// `recovery.ts` finalizes from after a process death.
 import { createSamplesRepo, createTripsRepo, type Db } from '@/data/db';
 import type { EngineDeps, TripSession } from './engine.types';
 

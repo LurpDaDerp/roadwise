@@ -85,7 +85,8 @@ export interface FinalizeDeps {
   /**
    * The session was rebuilt by crash recovery from the last checkpoint (`recovery.ts`), not
    * closed by the engine that recorded it: stored on the row and sent in the payload as
-   * `incomplete`. Defaults to false — the engine's own finalize never sets it.
+   * `incomplete`. Such a session has no gaps and no alerts, so its `durationS` is the wall span
+   * from the first row to the close. Defaults to false — the engine's own finalize never sets it.
    */
   incomplete?: boolean;
 }

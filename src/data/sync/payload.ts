@@ -127,7 +127,13 @@ export const FinalizeTripPayloadSchema = z
     /** IANA time zone the trip was recorded in. */
     tz: z.string().min(1).max(64),
     distanceM: nonNegative,
-    /** Net of gap-merge gaps. */
+    /**
+     * Net of gap-merge gaps on a trip the engine closed. On a recovered trip (`incomplete`) the
+     * gaps existed only in memory, so this is the wall span from the first row to the last
+     * durable row plus one second — never more than `endedAt − startedAt`, but a drive that
+     * gap-merged through a stop reports the stop as driving, and `rowsDigest.count` can fall
+     * well below it.
+     */
     durationS: nonNegative,
     role: z.enum(['driver', 'passenger']),
     roleConfidence: unit.nullable(),
@@ -156,8 +162,9 @@ export const FinalizeTripPayloadSchema = z
     hadSevereEvent: z.boolean(),
     /**
      * Finalized by crash recovery from the last checkpoint rather than by the engine that
-     * recorded it (§19.1): the rows past that checkpoint may be missing and no alerts were
-     * delivered. False on every trip the engine closed itself.
+     * recorded it (§19.1): the rows past that checkpoint may be missing, no alerts were
+     * delivered, and `durationS` is the wall span (see there). False on every trip the engine
+     * closed itself.
      */
     incomplete: z.boolean(),
   })

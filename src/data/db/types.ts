@@ -59,7 +59,8 @@ export interface TripRow {
   checkpoint_ts: number | null;
   /**
    * The trip was finalized by crash recovery from its last checkpoint, not by the engine that
-   * recorded it (§19.1): its tail past the checkpoint may be missing and it had no alerts.
+   * recorded it (§19.1): its tail past the checkpoint may be missing, it had no alerts, and its
+   * `duration_s` is the wall span with no gap-merge pause subtracted.
    */
   incomplete: Flag;
   /** The server's `trips.id`, once `finalize-trip` has accepted the upload. */

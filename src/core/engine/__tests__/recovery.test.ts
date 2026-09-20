@@ -44,6 +44,8 @@ interface OrphanOptions {
   role?: TripRole;
   /** Deliver the rows past the last cadence checkpoint too, as `ending` or a finalize would. */
   tail?: boolean;
+  /** The device zone at the first checkpoint, which the recorder stores on the row. */
+  tz?: string;
 }
 
 /**
@@ -51,7 +53,7 @@ interface OrphanOptions {
  * the engine's cadence (plus, with `tail`, the ones after the last cadence mark). No engine exists.
  */
 async function orphan(id: string, rows: readonly FeatureRow[], opts: OrphanOptions = {}): Promise<void> {
-  const recorder = createRecorder(db, { tz: TZ, now: () => rows[0]?.ts ?? T0 });
+  const recorder = createRecorder(db, { tz: opts.tz ?? TZ, now: () => rows[0]?.ts ?? T0 });
   const s: TripSession = createSession({
     clientTripId: id,
     mode: opts.mode ?? 'mounted',
@@ -142,9 +144,19 @@ test('an orphaned 200-row recording with a hard brake is finalized from its chec
   await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1);
 });
 
-test('without a limit cache nothing is speeding; with one, the cached limit is applied per fix', async () => {
-  // 20 m/s (about 45 mph) the whole way: 10 mph over a 35.
-  const rows = drive(200, { speed: 20 });
+/** 20 m/s (about 45 mph) the whole way — 10 mph over a 35 — with the heading turning a degree a second. */
+const fastDrive = (): FeatureRow[] => drive(200, { speed: 20 }).map((r, i) => ({ ...r, course: i % 360 }));
+
+/** One speeding episode per stretch between the fixture's four lost fixes: an unknown speed closes an episode. */
+async function expectFiveSpeedingEpisodes(): Promise<void> {
+  const events = await createEventsRepo(db).listByTrip(TRIP);
+  expect(events).toHaveLength(5);
+  for (const e of events) expect(e).toMatchObject({ category: 'speeding', status: 'scored', alert_shown: 0 });
+  expect((await trips.get(TRIP))?.limit_coverage_pct).toBe(100);
+}
+
+test('without a limit cache nothing is speeding; with one, each fix is looked up with its heading, as the engine does', async () => {
+  const rows = fastDrive();
   await orphan(TRIP, rows);
 
   const blind = await recoverRecordingTrips(db, recoveryDeps().deps);
@@ -155,16 +167,56 @@ test('without a limit cache nothing is speeding; with one, the cached limit is a
   await db.execute('DELETE FROM sync_queue');
   await db.execute('DELETE FROM trips');
   await orphan(TRIP, rows);
-  const lookup = jest.fn(async () => L35);
+  const lookup = jest.fn(async (_lat: number, _lng: number, _course: number) => L35);
   const cached = await recoverRecordingTrips(db, recoveryDeps({ limits: { lookup } }).deps);
   expect(cached.recovered).toEqual([TRIP]);
   expect(lookup).toHaveBeenCalledTimes(200);
-  expect(lookup).toHaveBeenCalledWith(rows[0]?.lat, rows[0]?.lng);
-  // One episode per stretch between the four lost fixes: an unknown speed closes an episode.
-  const events = await createEventsRepo(db).listByTrip(TRIP);
-  expect(events).toHaveLength(5);
-  for (const e of events) expect(e).toMatchObject({ category: 'speeding', status: 'scored', alert_shown: 0 });
-  expect((await trips.get(TRIP))?.limit_coverage_pct).toBe(100);
+  expect(lookup.mock.calls).toEqual(rows.map((r) => [r.lat, r.lng, r.course]));
+  await expectFiveSpeedingEpisodes();
+});
+
+test("a synchronous lookup is accepted as is, so the engine's own in-memory lookup can be handed over", async () => {
+  const rows = fastDrive();
+  await orphan(TRIP, rows);
+  const lookup = jest.fn((_lat: number, _lng: number, _course: number) => L35);
+
+  const result = await recoverRecordingTrips(db, recoveryDeps({ limits: { lookup } }).deps);
+
+  expect(result.recovered).toEqual([TRIP]);
+  expect(lookup).toHaveBeenCalledWith(rows[7]?.lat, rows[7]?.lng, 7);
+  await expectFiveSpeedingEpisodes();
+});
+
+test("night is judged in the trip's own zone, not the zone the app relaunched in, and that zone is what is stored", async () => {
+  // 14:30 UTC on the trip's day: 23:30 in Tokyo (night), 06:30 in Los Angeles (day).
+  const t0 = T0 - 27_800_000;
+  const rows = drive(200, { brakeAt: 100, t0 });
+  await orphan(TRIP, rows, { tz: 'Asia/Tokyo' });
+
+  // Relaunched in Los Angeles.
+  const result = await recoverRecordingTrips(db, recoveryDeps({ tz: TZ }).deps);
+
+  expect(result.recovered).toEqual([TRIP]);
+  const trip = await trips.get(TRIP);
+  expect(trip?.tz).toBe('Asia/Tokyo');
+  expect(JSON.parse(trip?.conditions_json ?? 'null')).toMatchObject({ night: true });
+  const [brake] = await createEventsRepo(db).listByTrip(TRIP);
+  expect(JSON.parse(brake?.context_json ?? 'null')).toEqual({ night: true, precipitation: false });
+  const payload = await findFinalize(db, TRIP);
+  expect(payload?.tz).toBe('Asia/Tokyo');
+  expect(payload?.events[0]?.context.night).toBe(true);
+});
+
+test('a row stored without a zone falls back to the relaunch zone', async () => {
+  const t0 = T0 - 27_800_000;
+  await orphan(TRIP, drive(200, { t0 }), { tz: '' });
+
+  const result = await recoverRecordingTrips(db, recoveryDeps({ tz: 'Asia/Tokyo' }).deps);
+
+  expect(result.recovered).toEqual([TRIP]);
+  const trip = await trips.get(TRIP);
+  expect(trip?.tz).toBe('Asia/Tokyo');
+  expect(JSON.parse(trip?.conditions_json ?? 'null')).toMatchObject({ night: true });
 });
 
 test('the role stored on the row is honoured: a passenger orphan recovers unscored', async () => {

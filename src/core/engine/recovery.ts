@@ -6,8 +6,9 @@
 // the gaps — so the trip is rebuilt from the durable rows alone: replayed through a fresh detector
 // suite with whatever limit the local tile cache still holds (no arbiter: nobody is driving and
 // nothing is said), closed one row-length after its last row, and finalized exactly as the engine
-// finalizes, flagged `incomplete`. A `recording` row with no samples was never a drive worth
-// keeping and is removed.
+// finalizes, flagged `incomplete`. With the gaps gone, `durationS` is the wall span from the
+// first row to that close — a gap-merge pause the drive had is not subtracted. A `recording` row
+// with no samples was never a drive worth keeping and is removed.
 import { mergeEvents, type TripDetectors } from '@/core/detectors';
 import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { createSamplesRepo, createTripsRepo, type Db, type TripRow } from '@/data/db';
@@ -21,11 +22,26 @@ export interface RecoveryDeps
   /** A fresh detector suite per trip, as `EngineDeps.createDetectors`. */
   createDetectors(): TripDetectors;
   /**
-   * The local speed-limit tile cache, if the host has one. Never the network: recovery runs at
-   * app start, connected or not, and a row nothing is cached for is judged against
-   * `UNKNOWN_LIMIT` — no speeding without a limit; harsh and phone events are still detected.
+   * The local speed-limit tile cache, if the host has one — the same arguments as
+   * `EngineDeps.limits.lookup`, heading included, so a matcher that disambiguates by course
+   * judges the replay exactly as it judged the drive; the engine's own in-memory lookup can be
+   * handed over as is, or an async cache read. Never the network: recovery runs at app start,
+   * connected or not, and a row nothing is cached for is judged against `UNKNOWN_LIMIT` — no
+   * speeding without a limit; harsh and phone events are still detected.
    */
-  limits?: { lookup(lat: number, lng: number): Promise<LimitSample | null> };
+  limits?: {
+    lookup(
+      lat: number,
+      lng: number,
+      course: number
+    ): LimitSample | null | Promise<LimitSample | null>;
+  };
+  /**
+   * The device zone now. Only the fallback for a row stored without one: the trip is judged
+   * (night rule) and reported in the zone it was driven in, `trips.tz`, which the recorder took
+   * from the device at the first checkpoint.
+   */
+  tz: string;
   /** Wall clock for the row stamps. */
   now: () => number;
 }
@@ -78,16 +94,18 @@ export async function recoverRecordingTrips(db: Db, deps: RecoveryDeps): Promise
       startedAt: trip.started_at,
     });
     if (trip.checkpoint_ts !== null) session.checkpoints.push(trip.checkpoint_ts);
+    // The zone the trip was driven in, not the one the app relaunched in.
+    const tz = trip.tz || deps.tz;
     // The host's per-row context is gone with the process; night is the trip's own condition,
     // the same clock rule the finalizer stores for it.
     const ctx: DetectorContext = {
       mode,
-      night: nightAt(trip.started_at, deps.tz, deps.scoring.CONSTANTS),
+      night: nightAt(trip.started_at, tz, deps.scoring.CONSTANTS),
       precipitation: false,
     };
     const detectors = deps.createDetectors();
     for (const row of rows) {
-      const limit = (await deps.limits?.lookup(row.lat, row.lng)) ?? UNKNOWN_LIMIT;
+      const limit = (await deps.limits?.lookup(row.lat, row.lng, row.course)) ?? UNKNOWN_LIMIT;
       appendRow(session, row, limit);
       session.events.push(...detectors.push(row, limit, ctx));
     }
@@ -98,7 +116,7 @@ export async function recoverRecordingTrips(db: Db, deps: RecoveryDeps): Promise
     await finalizeTrip(closed, {
       db,
       scoring: deps.scoring,
-      tz: deps.tz,
+      tz,
       fs: deps.fs,
       hash: deps.hash,
       now: deps.now,
