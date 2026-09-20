@@ -97,6 +97,7 @@ export type Database = {
           permissions: Json
           platform: string
           push_token: string | null
+          updated_at: string
           user_id: string
         }
         Insert: {
@@ -110,6 +111,7 @@ export type Database = {
           permissions?: Json
           platform: string
           push_token?: string | null
+          updated_at?: string
           user_id: string
         }
         Update: {
@@ -123,6 +125,7 @@ export type Database = {
           permissions?: Json
           platform?: string
           push_token?: string | null
+          updated_at?: string
           user_id?: string
         }
         Relationships: []

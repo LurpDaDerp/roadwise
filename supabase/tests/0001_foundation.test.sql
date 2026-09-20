@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(142);
+select plan(165);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): three auth users (C signs up with a
@@ -20,7 +20,9 @@ insert into public.app_config (key, value, is_public) values
   ('test_public', '{"x":1}', true),
   ('test_private', '{"x":2}', false);
 
-insert into public.devices (id, user_id, platform) values ('dev-b', '00000000-0000-0000-0000-000000000002', 'android');
+-- dev-b carries a stale updated_at on purpose: now() is fixed for this whole transaction, so the
+-- touch trigger's bump is only visible against a value older than now()
+insert into public.devices (id, user_id, platform, updated_at) values ('dev-b', '00000000-0000-0000-0000-000000000002', 'android', timestamptz '2020-01-01 00:00:00+00');
 
 -- new-user bootstrap trigger
 select is((select count(*)::int from public.profiles), 3, 'trigger creates a profile per user');
@@ -74,6 +76,17 @@ select column_privs_are('public', 'consents', 'revoked_at', 'authenticated', arr
 
 select has_index('public', 'consents', 'consents_user_id_idx', 'consents indexed by owner');
 select has_index('public', 'private_profiles', 'private_profiles_guardian_user_id_idx', 'guardian FK indexed for the set-null cascade');
+
+-- devices: the one table with full client DML is bounded and touched like the rest
+select has_column('public', 'devices', 'updated_at', 'devices carries updated_at');
+select has_trigger('public', 'devices', 'devices_touch', 'devices.updated_at is maintained by touch_updated_at');
+select col_has_check('public', 'devices', 'id', 'devices.id is length-bounded');
+select col_has_check('public', 'devices', 'model', 'devices.model is length-bounded');
+select col_has_check('public', 'devices', 'os_version', 'devices.os_version is length-bounded');
+select col_has_check('public', 'devices', 'app_version', 'devices.app_version is length-bounded');
+select col_has_check('public', 'devices', 'push_token', 'devices.push_token is length-bounded');
+select col_has_check('public', 'devices', 'capability_tier', 'devices.capability_tier is length-bounded');
+select col_has_check('public', 'devices', 'permissions', 'devices.permissions is type- and size-checked');
 
 -- function privileges
 select is(has_function_privilege('anon', 'public.set_birth_date(date)', 'execute'), false, 'anon cannot execute set_birth_date');
@@ -185,6 +198,22 @@ select is((select granted_at from public.consents where user_id = '00000000-0000
 select lives_ok($$ insert into public.devices (id, user_id, platform) values ('dev-a', '00000000-0000-0000-0000-000000000001', 'ios') $$, 'A registers own device');
 select lives_ok($$ update public.devices set push_token = 'tok' where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, 'A updates own device');
 select lives_ok($$ insert into public.devices (id, user_id, platform) values ('dev-a', '00000000-0000-0000-0000-000000000001', 'ios') on conflict (user_id, id) do update set last_seen_at = now() $$, 'A upserts own device');
+-- bounds: every text column is length-checked and permissions must be a small JSON object (23514, never a silent truncation)
+select throws_ok($$ insert into public.devices (id, user_id, platform) values (repeat('i', 129), '00000000-0000-0000-0000-000000000001', 'ios') $$, '23514', null, 'device id longer than 128 rejected');
+select throws_ok($$ update public.devices set model = repeat('m', 65) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'device model longer than 64 rejected');
+select throws_ok($$ update public.devices set os_version = repeat('o', 65) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'device os_version longer than 64 rejected');
+select throws_ok($$ update public.devices set app_version = repeat('a', 65) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'device app_version longer than 64 rejected');
+select throws_ok($$ update public.devices set push_token = repeat('t', 513) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'push token longer than 512 rejected');
+select throws_ok($$ update public.devices set capability_tier = repeat('c', 33) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'capability tier longer than 32 rejected');
+select throws_ok($$ update public.devices set permissions = '[1, 2]' where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'device permissions must be a JSON object');
+select throws_ok($$ update public.devices set permissions = (select jsonb_object_agg('k' || i, md5(i::text)) from generate_series(1, 100) i) where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, '23514', null, 'oversize device permissions rejected');
+select lives_ok($$ update public.devices set model = repeat('m', 64), os_version = repeat('o', 64), app_version = repeat('a', 64), push_token = repeat('t', 512), capability_tier = repeat('c', 32), permissions = '{"location": "always", "motion": true}' where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a' $$, 'device values at the bounds are accepted');
+select lives_ok($$ insert into public.devices (id, user_id, platform) values (repeat('i', 128), '00000000-0000-0000-0000-000000000001', 'ios') $$, 'a 128-character device id is accepted');
+delete from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and id = repeat('i', 128);
+-- updated_at is server-stamped: whatever the client sends, the touch trigger writes now()
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a'), now(), 'device updated_at defaults to server time');
+update public.devices set updated_at = '2020-01-01' where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a';
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and id = 'dev-a'), now(), 'a client-supplied updated_at is overwritten by the touch trigger');
 select throws_ok($$ insert into public.devices (id, user_id, platform) values ('dev-x', '00000000-0000-0000-0000-000000000002', 'android') $$, '42501', null, 'A cannot register a device for B');
 select throws_ok($$ insert into public.devices (id, user_id, platform) values ('dev-b', '00000000-0000-0000-0000-000000000002', 'android') on conflict (user_id, id) do update set push_token = 'x' $$, '42501', null, 'A cannot upsert onto B device');
 select throws_ok($$ update public.devices set user_id = '00000000-0000-0000-0000-000000000002' where id = 'dev-a' $$, '42501', null, 'A cannot hand own device to B');
@@ -240,6 +269,11 @@ update public.private_profiles set birth_date = date '2015-01-01' where user_id 
 select is((select age_band from public.profiles where id = '00000000-0000-0000-0000-000000000002'), 'u13', 'a server write of birth_date re-derives the band');
 update public.private_profiles set birth_date = null where user_id = '00000000-0000-0000-0000-000000000002';
 select is((select age_band from public.profiles where id = '00000000-0000-0000-0000-000000000002'), 'unknown', 'clearing birth_date server-side resets the band');
+
+-- devices.updated_at moves on update: the fixture row started stale (see the top of the file)
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), timestamptz '2020-01-01 00:00:00+00', 'fixture device starts with a stale updated_at');
+update public.devices set push_token = 'srv' where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b';
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), now(), 'updated_at bumps on update');
 
 select * from finish();
 rollback;

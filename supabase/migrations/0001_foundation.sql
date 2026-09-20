@@ -76,16 +76,20 @@ create table public.consents (
 -- every policy-scoped read of consents filters on user_id
 create index consents_user_id_idx on public.consents (user_id, granted_at desc);
 
+-- the one table with full client DML, so every column the client fills is bounded here
 create table public.devices (
-  id text not null,
+  id text not null check (char_length(id) <= 128),
   user_id uuid not null references auth.users(id) on delete cascade,
   platform text not null check (platform in ('ios','android')),
-  model text, os_version text, app_version text,
-  push_token text,
-  permissions jsonb not null default '{}'::jsonb,
-  capability_tier text not null default 'unknown',
+  model text check (char_length(model) <= 64),
+  os_version text check (char_length(os_version) <= 64),
+  app_version text check (char_length(app_version) <= 64),
+  push_token text check (char_length(push_token) <= 512),
+  permissions jsonb not null default '{}'::jsonb check (jsonb_typeof(permissions) = 'object' and pg_column_size(permissions) <= 2048),
+  capability_tier text not null default 'unknown' check (char_length(capability_tier) <= 32),
   last_seen_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   primary key (user_id, id)
 );
 
@@ -102,6 +106,7 @@ language plpgsql set search_path = public as $$
 begin new.updated_at = now(); return new; end $$;
 create trigger profiles_touch before update on public.profiles for each row execute function public.touch_updated_at();
 create trigger private_profiles_touch before update on public.private_profiles for each row execute function public.touch_updated_at();
+create trigger devices_touch before update on public.devices for each row execute function public.touch_updated_at();
 
 -- age band follows birth_date whichever path writes it (rpc, service_role, a future guardian flow)
 create or replace function public.sync_age_band() returns trigger
