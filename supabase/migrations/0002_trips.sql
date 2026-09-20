@@ -21,6 +21,12 @@
 --     carries `replayed` so nothing silently no-ops.
 --   * lock order inside the writers is trips -> trip_events -> rate_limits, so a dispute and a
 --     recompute on the same trip queue rather than deadlock.
+--   * a delete takes the route with it. soft_delete_trip scrubs the polyline, both endpoint
+--     geohashes, both labels, the note, the re-score digest and every event's coordinates,
+--     measurements and context, and keeps only what an aggregate reads back; the device already
+--     destroys all of it locally, and the promise the driver was shown is one promise.
+--   * expire_trace_objects is the retention half: raw traces exist only to verify a dispute, and
+--     the dispute window closes at 14 days. Nothing schedules it yet (see its header).
 
 -- ---------------------------------------------------------------------------
 -- tables
@@ -766,11 +772,43 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- delete: soft (deleted_at); events and disputes stay for audit and the owner policies hide them.
+-- delete: soft for the aggregates, hard for the route.
+--
+-- The driver is told the drive and everything on its timeline go for good (D5), and the device
+-- keeps that promise locally: polyline, both endpoint cells, both labels, every event coordinate,
+-- every 1 Hz sample and the trace file are destroyed there. The promise is one promise, so the
+-- server destroys the same things in the same call. What survives is only what an aggregate
+-- legitimately reads back -- score, status, category deductions, distance, duration, local_day,
+-- role, the timing and the event rows' identity and status -- none of which says *where*.
+--
+-- Scrubbed on the trip:  polyline (to ''), start_geohash5, end_geohash5, start_label, end_label,
+--                        notes, trace_path, rows_digest.
+--   * the two geohash5 cells are ~2.4 km squares of the drive's two endpoints: home and school.
+--   * the labels and the note have no M2 writer, but the columns exist and a later milestone will
+--     fill them; clearing them here means the delete is already right when it does.
+--   * rows_digest is the sha256 of the raw trace plus the inputs of a re-score. A deleted trip can
+--     never be re-scored (apply_recompute refuses one: 42501 `trip already deleted`), so the only
+--     thing the digest can still do is fingerprint a trace file the same call destroys.
+-- Scrubbed on every one of the trip's events: lat, lng (3 dp, ~100 m -- "you were here"),
+--                        measured (a speeding row carries the posted limit of the road) and
+--                        context.
+--
+-- The event rows themselves stay, and are nulled rather than deleted, for two reasons:
+--   * event_disputes references trip_events on delete cascade, and the rolling 7-day and 30-day
+--     dispute allowances are counted from event_disputes.created_at. Deleting the events would
+--     cascade the audit away and let a driver refill an exhausted allowance by deleting the trips
+--     the disputes were on.
+--   * trip-actions answers a queued dispute or role change for a trip the user has since deleted
+--     with 200 `replayed`, which needs to find the event; deleting the rows would turn that into
+--     a 404 for an action the device already considers done.
+-- The owner policies hide both the trip and its events either way.
+--
 -- The trace object is removed through the Storage API by the edge function before this call
 -- (storage refuses direct row deletes and a row delete would orphan the blob); the key that was
 -- stored is returned for that call and the column is cleared here. A repeat on an already-deleted
--- own trip replays (the queued delete-trip item may be retried after a lost response).
+-- own trip replays (the queued delete-trip item may be retried after a lost response) and writes
+-- nothing: the scrub is part of the one transition, and 0002 has never shipped, so no row can be
+-- carrying a pre-scrub delete. Lock order is the migration's: trips, then trip_events.
 -- ---------------------------------------------------------------------------
 create or replace function public.soft_delete_trip(p_user uuid, p_trip_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -788,7 +826,20 @@ begin
   if v_trip.deleted_at is not null then
     return jsonb_build_object('trip_id', p_trip_id, 'trace_path', null, 'replayed', true);
   end if;
-  update public.trips set deleted_at = now(), trace_path = null where id = p_trip_id;
+  update public.trips
+    set deleted_at = now(),
+        trace_path = null,
+        polyline = '',
+        start_geohash5 = null,
+        end_geohash5 = null,
+        start_label = null,
+        end_label = null,
+        notes = null,
+        rows_digest = '{}'::jsonb
+    where id = p_trip_id;
+  update public.trip_events
+    set lat = null, lng = null, measured = '{}'::jsonb, context = '{}'::jsonb
+    where trip_id = p_trip_id;
   return jsonb_build_object('trip_id', p_trip_id, 'trace_path', v_trip.trace_path, 'replayed', false);
 end $$;
 
@@ -805,6 +856,100 @@ create policy traces_select_own on storage.objects for select to authenticated
   using (bucket_id = 'traces' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy traces_delete_own on storage.objects for delete to authenticated
   using (bucket_id = 'traces' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+-- ---------------------------------------------------------------------------
+-- retention: a raw trace expires when the only window it exists for closes.
+--
+-- The raw 1 Hz trace is the most identifying thing this product produces: second-by-second GPS
+-- for the whole drive. The one purpose it is kept for is verifying a disputed moment, and a
+-- dispute can only be raised within 14 days of the trip's end (record_dispute). Nothing expired
+-- it, so it was kept forever for a use that dies a fortnight after the drive.
+--
+-- WHAT THIS DELETES, for every trip whose dispute window has closed (ended_at < now() -
+-- p_older_than) that still has a raw trace:
+--   * public.trips.trace_path is cleared, and
+--   * the object key is returned, derived from user_id and client_trip_id exactly as every other
+--     path derives it and never read from the column.
+--
+-- WHAT IT CANNOT DELETE, and the caller must: the object's bytes. Postgres has no reach into the
+-- object backend. storage.objects carries a statement trigger (storage.protect_delete) that
+-- refuses direct deletes precisely because the row is only the index -- deleting it leaves the
+-- blob in the backend forever *and* destroys the only handle the Storage API had to reclaim it,
+-- which is strictly worse than doing nothing. So the caller passes the returned `keys` to the
+-- Storage API's remove('traces', keys): the same call trip-actions already makes on a delete, and
+-- the same division of labour as soft_delete_trip (the writer clears the column, the edge
+-- function removes the object).
+--
+-- WHAT IT LEAVES: everything else. The trip row and every field an aggregate reads (score,
+-- status, local_day, distance_m, duration_s, role, category_deductions), its route -- this is
+-- retention, not a delete; deleting a drive is soft_delete_trip's job -- its events, its
+-- disputes, score_daily and baselines. It never touches a trip inside the window.
+--
+-- Soft-deleted trips are included on purpose. trip-actions removes the object before the delete,
+-- but a trace upload deferred to Wi-Fi can land under a deleted trip's key afterwards, and
+-- nothing else would ever clean that object up. Their trace_path is already null, so for them
+-- only the key is returned. Objects under no trips row at all (a drive the server never stored)
+-- are out of reach from here and need a bucket-side reconciliation.
+--
+-- Selection reads storage.objects as well as trace_path, so a caller that died between this
+-- commit and the Storage API call still gets the key on the next run: the sweep converges on the
+-- bucket rather than on the column, and stops naming a key only once the object is really gone.
+-- p_older_than drives the age so a test can; p_limit caps one batch. Returns
+-- { cutoff, older_than, trips, cleared, keys }.
+--
+-- NOTHING CALLS THIS YET. There is no pg_cron schedule and no edge function that invokes it;
+-- wiring it up, and choosing the age (the dispute window is 14 days; the design doc's M8
+-- retention job proposed 90), belongs to the M8 hardening milestone. Whoever schedules it must
+-- also settle what an expired trace means for a later re-score: trip-actions re-derives the
+-- `no_trace` quality downgrade from `trace_path is null` (_shared/rescore.ts, storedDowngrades),
+-- so a role change on a trip whose trace expired would grade it as if it had never had one.
+-- ---------------------------------------------------------------------------
+create or replace function public.expire_trace_objects(
+  p_older_than interval default interval '14 days',
+  p_limit int default 500
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_cutoff timestamptz;
+  v_trips uuid[];
+  v_keys text[];
+  v_cleared int;
+begin
+  perform public.require_service_role('expire_trace_objects');
+  if p_older_than is null or p_older_than < interval '0' then
+    raise exception 'expire_trace_objects requires a non-negative age' using errcode = 'invalid_parameter_value';
+  end if;
+  if p_limit is null or p_limit < 1 or p_limit > 5000 then
+    raise exception 'expire_trace_objects limit must be between 1 and 5000' using errcode = 'invalid_parameter_value';
+  end if;
+  v_cutoff := now() - p_older_than;
+
+  select coalesce(array_agg(d.id order by d.ended_at, d.id), '{}'::uuid[]),
+         coalesce(array_agg(d.object_key order by d.ended_at, d.id), '{}'::text[])
+    into v_trips, v_keys
+  from (
+    select t.id, t.ended_at, t.user_id::text || '/' || t.client_trip_id || '.bin.gz' as object_key
+    from public.trips t
+    where t.ended_at < v_cutoff
+      and (t.trace_path is not null
+        or exists (
+          select 1 from storage.objects o
+          where o.bucket_id = 'traces'
+            and o.name = t.user_id::text || '/' || t.client_trip_id || '.bin.gz'))
+    order by t.ended_at, t.id
+    limit p_limit
+  ) d;
+
+  update public.trips set trace_path = null where id = any(v_trips) and trace_path is not null;
+  get diagnostics v_cleared = row_count;
+
+  return jsonb_build_object(
+    'cutoff', v_cutoff,
+    'older_than', p_older_than::text,
+    'trips', coalesce(array_length(v_trips, 1), 0),
+    'cleared', v_cleared,
+    'keys', to_jsonb(v_keys));
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- function grants: the writers are service-role only; helpers and triggers are callable by no client
@@ -824,12 +969,14 @@ revoke all on function public.count_dispute_allowance(uuid) from public, anon, a
 revoke all on function public.record_dispute(uuid, uuid, text, text, int) from public, anon, authenticated;
 revoke all on function public.set_trip_role_row(uuid, uuid, text) from public, anon, authenticated;
 revoke all on function public.soft_delete_trip(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.expire_trace_objects(interval, int) from public, anon, authenticated;
 grant execute on function public.apply_trip(jsonb) to service_role;
 grant execute on function public.apply_recompute(uuid, uuid, jsonb, jsonb, jsonb, jsonb) to service_role;
 grant execute on function public.count_dispute_allowance(uuid) to service_role;
 grant execute on function public.record_dispute(uuid, uuid, text, text, int) to service_role;
 grant execute on function public.set_trip_role_row(uuid, uuid, text) to service_role;
 grant execute on function public.soft_delete_trip(uuid, uuid) to service_role;
+grant execute on function public.expire_trace_objects(interval, int) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- RLS: default deny; owner-only reads; deleted trips (their events and disputes) hidden from the owner

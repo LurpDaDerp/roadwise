@@ -609,6 +609,10 @@ export type Database = {
       apply_trip: { Args: { p: Json }; Returns: Json }
       count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
+      expire_trace_objects: {
+        Args: { p_limit?: number; p_older_than?: string }
+        Returns: Json
+      }
       record_dispute: {
         Args: {
           p_event_id: string

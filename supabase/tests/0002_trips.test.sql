@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(560);
+select plan(609);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -20,7 +20,10 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'td@example.com', '{"display_name":"Dee"}'),
   ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'te@example.com', '{"display_name":"Eli"}'),
   ('ffffffff-ffff-4fff-8fff-ffffffffffff', 'tf@example.com', '{"display_name":"Fay"}'),
-  ('99999999-9999-4999-8999-999999999999', 'tg@example.com', '{"display_name":"Gus"}');
+  ('99999999-9999-4999-8999-999999999999', 'tg@example.com', '{"display_name":"Gus"}'),
+  -- R owns only the trace-retention fixtures; no other assertion in this file mentions R, so the
+  -- expire_trace_objects section can write trips and objects without moving any other count
+  ('11111111-1111-4111-8111-111111111111', 'tr@example.com', '{"display_name":"Ro"}');
 
 -- calendar day N days ago in Los Angeles, and a fixed hour of that day
 create function pg_temp.la_day(p_days_ago int) returns date
@@ -306,6 +309,9 @@ select is(has_function_privilege('service_role', 'public.set_trip_role_row(uuid,
 select is(has_function_privilege('anon', 'public.soft_delete_trip(uuid, uuid)', 'execute'), false, 'anon cannot execute soft_delete_trip');
 select is(has_function_privilege('authenticated', 'public.soft_delete_trip(uuid, uuid)', 'execute'), false, 'authenticated cannot execute soft_delete_trip');
 select is(has_function_privilege('service_role', 'public.soft_delete_trip(uuid, uuid)', 'execute'), true, 'service_role can execute soft_delete_trip');
+select is(has_function_privilege('anon', 'public.expire_trace_objects(interval, int)', 'execute'), false, 'anon cannot execute expire_trace_objects');
+select is(has_function_privilege('authenticated', 'public.expire_trace_objects(interval, int)', 'execute'), false, 'authenticated cannot execute expire_trace_objects');
+select is(has_function_privilege('service_role', 'public.expire_trace_objects(interval, int)', 'execute'), true, 'service_role can execute expire_trace_objects');
 select is(has_function_privilege('authenticated', 'public.upsert_score_day(uuid, jsonb)', 'execute'), false, 'authenticated cannot call upsert_score_day');
 select is(has_function_privilege('authenticated', 'public.upsert_baselines(uuid, jsonb)', 'execute'), false, 'authenticated cannot call upsert_baselines');
 select is(has_function_privilege('anon', 'public.upsert_score_day(uuid, jsonb)', 'execute'), false, 'anon cannot call upsert_score_day');
@@ -334,6 +340,9 @@ select is((select proconfig from pg_proc where oid = 'public.set_trip_role_row(u
 select is_definer('public', 'soft_delete_trip', array['uuid', 'uuid']::name[], 'soft_delete_trip is security definer');
 select function_owner_is('public', 'soft_delete_trip', array['uuid', 'uuid']::name[], 'postgres', 'soft_delete_trip owned by postgres');
 select is((select proconfig from pg_proc where oid = 'public.soft_delete_trip(uuid, uuid)'::regprocedure), array['search_path=public'], 'soft_delete_trip pins search_path');
+select is_definer('public', 'expire_trace_objects', array['interval', 'integer']::name[], 'expire_trace_objects is security definer');
+select function_owner_is('public', 'expire_trace_objects', array['interval', 'integer']::name[], 'postgres', 'expire_trace_objects owned by postgres');
+select is((select proconfig from pg_proc where oid = 'public.expire_trace_objects(interval, int)'::regprocedure), array['search_path=public'], 'expire_trace_objects pins search_path');
 select is(
   (select count(*)::int from pg_proc p join pg_roles r on r.oid = p.proowner
     where p.pronamespace = 'public'::regnamespace and p.prosecdef
@@ -508,6 +517,7 @@ select throws_ok($$ select public.count_dispute_allowance('aaaaaaaa-aaaa-4aaa-8a
 select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-1'), 'hazard', null, null) $$, '42501', 'record_dispute requires the service role', 'record_dispute refuses a non-service claim');
 select throws_ok($$ select public.set_trip_role_row('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), 'passenger') $$, '42501', 'set_trip_role_row requires the service role', 'set_trip_role_row refuses a non-service claim');
 select throws_ok($$ select public.soft_delete_trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1')) $$, '42501', 'soft_delete_trip requires the service role', 'soft_delete_trip refuses a non-service claim');
+select throws_ok($$ select public.expire_trace_objects() $$, '42501', 'expire_trace_objects requires the service role', 'expire_trace_objects refuses a non-service claim');
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 -- ---------------------------------------------------------------------------
@@ -733,11 +743,40 @@ select throws_ok($$ select public.set_trip_role_row('aaaaaaaa-aaaa-4aaa-8aaa-aaa
 select throws_ok($$ select public.set_trip_role_row(null, pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile'), 'passenger') $$, '22023', 'set_trip_role_row requires a user', 'role change needs a user');
 select is((select role from public.trips where id = pg_temp.trip('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1')), 'driver', 'B trip role untouched');
 
+-- a delete must take the route with it (audit I-1). No M2 writer fills the endpoint labels or the
+-- note, so set them first: otherwise the assertions below would pass on a writer that scrubs
+-- nothing.
+update public.trips set start_label = 'Home', end_label = 'School', notes = 'dropped my sister at school'
+  where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old');
+select is((select polyline from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '_p~iF~ps|U_ulLnnqC_mqNvxq`@', 'the live trip holds its route before the delete');
+select is((select lat from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old', 'ev-1')), 47.606, 'its event holds a coordinate before the delete');
+
 select is((select public.soft_delete_trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old'))),
   jsonb_build_object('trip_id', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old'), 'trace_path', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/a-trip-old.bin.gz', 'replayed', false), 'soft delete returns the trace key that was stored');
 select is((select deleted_at from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), now(), 'deleted_at stamped');
 select is((select trace_path from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'trace path cleared on delete');
 select is((select count(*)::int from public.trip_events where trip_id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), 1, 'events survive a soft delete (audit)');
+
+-- gone: everything that says where the drive went
+select is((select polyline from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '', 'the deleted trip holds no polyline');
+select is((select start_geohash5 from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'the deleted trip holds no start cell');
+select is((select end_geohash5 from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'the deleted trip holds no end cell');
+select is((select start_label from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'the deleted trip holds no start label');
+select is((select end_label from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'the deleted trip holds no end label');
+select is((select notes from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), null, 'the deleted trip holds no note');
+select is((select rows_digest from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '{}'::jsonb, 'the deleted trip holds no re-score inputs and no trace digest');
+select is((select count(*)::int from public.trip_events where trip_id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old') and (lat is not null or lng is not null)), 0, 'no event of the deleted trip holds a coordinate');
+select is((select measured from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old', 'ev-1')), '{}'::jsonb, 'the deleted trip event holds no measurements (a speeding row carries the road''s posted limit)');
+select is((select context from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old', 'ev-1')), '{}'::jsonb, 'the deleted trip event holds no context');
+
+-- kept: exactly what an aggregate reads back, and nothing that says where
+select is((select status from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), 'final', 'the deleted trip keeps its status');
+select is((select category_deductions from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '{"phone":0,"speeding":26,"braking":0,"accel":0,"cornering":0,"focus":0}'::jsonb, 'the deleted trip keeps its category deductions');
+select is((select distance_m from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), 12500.5::numeric, 'the deleted trip keeps its distance');
+select is((select duration_s from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), 900::numeric, 'the deleted trip keeps its duration');
+select is((select local_day from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), pg_temp.la_day(20), 'the deleted trip keeps its day');
+select is((select role from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), 'driver', 'the deleted trip keeps its role');
+select is((select status from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old', 'ev-1')), 'scored', 'the event row and its status stay: the dispute allowance and the replay branch read them');
 select is((select public.soft_delete_trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old'))),
   jsonb_build_object('trip_id', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old'), 'trace_path', null, 'replayed', true), 'a repeat delete replays (queued retry after a lost response)');
 select is((select deleted_at from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), now(), 'deleted_at unchanged by the replay');
@@ -751,7 +790,99 @@ select throws_ok($$ select public.soft_delete_trip(null, pg_temp.trip('aaaaaaaa-
 select is((select deleted_at from public.trips where id = pg_temp.trip('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1')), null, 'B trip not deleted');
 select is(((select public.apply_trip((select p from fx where name = 'a-old')) ->> 'replayed')::boolean), true, 'a re-upload of a deleted trip replays instead of resurrecting it');
 select is((select deleted_at from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), now(), 'deleted trip stays deleted after the replay');
+select is((select polyline from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '', 'a re-upload of a deleted trip does not restore its route');
 select is(((select public.soft_delete_trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile'))) ->> 'trace_path'), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/a-trip-hostile.bin.gz', 'the disputed trip is deleted too (its dispute must vanish from the owner view)');
+
+-- the catch-all the audit asked for: after every delete in this file, no deleted trip anywhere
+-- says where its driver went
+select is((select count(*)::int from public.trips
+  where deleted_at is not null
+    and (polyline <> '' or start_geohash5 is not null or end_geohash5 is not null
+      or start_label is not null or end_label is not null or notes is not null
+      or trace_path is not null or rows_digest <> '{}'::jsonb)),
+  0, 'no soft-deleted trip holds a route, an endpoint cell, a label, a note, a trace key or a trace digest');
+select is((select count(*)::int from public.trip_events e join public.trips t on t.id = e.trip_id
+  where t.deleted_at is not null
+    and (e.lat is not null or e.lng is not null or e.measured <> '{}'::jsonb or e.context <> '{}'::jsonb)),
+  0, 'no event of a soft-deleted trip holds a coordinate, a measurement or a context');
+
+-- ---------------------------------------------------------------------------
+-- retention: expire_trace_objects (audit I-6). Four trips for user R, written
+-- straight into the table so no day row, baseline or count anywhere else moves:
+--   r-deleted  40 days old, soft-deleted, trace_path already null, object still
+--              in the bucket (the Wi-Fi upload that landed after the delete)
+--   r-old      30 days old, live, trace_path set, object in the bucket
+--   r-fresh    13 days old, live, trace_path set, object in the bucket -- still
+--              inside the 14-day dispute window the trace exists for
+--   r-none     30 days old, live, never had a trace
+-- Every other trip in this file is 1 to 3 days old, or is A's a-trip-old, which
+-- has neither a trace path nor an object, so no sweep below reaches one.
+-- ---------------------------------------------------------------------------
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s,
+  role, mode, exposure, data_quality, status, score, polyline, start_geohash5, trace_path, deleted_at)
+values
+  ('11111111-1111-4111-8111-111111111111', 'r-deleted', now() - interval '40 days' - interval '15 minutes',
+   now() - interval '40 days', 'America/Los_Angeles', 1000, 900, 'driver', 'mounted', 1, 'A', 'final', 70,
+   '', null, null, now() - interval '40 days'),
+  ('11111111-1111-4111-8111-111111111111', 'r-old', now() - interval '30 days' - interval '15 minutes',
+   now() - interval '30 days', 'America/Los_Angeles', 1000, 900, 'driver', 'mounted', 1, 'A', 'final', 90,
+   '_p~iF~ps|U', 'c23nb', '11111111-1111-4111-8111-111111111111/r-old.bin.gz', null),
+  ('11111111-1111-4111-8111-111111111111', 'r-fresh', now() - interval '13 days' - interval '15 minutes',
+   now() - interval '13 days', 'America/Los_Angeles', 1000, 900, 'driver', 'mounted', 1, 'A', 'final', 80,
+   '_p~iF~ps|U', 'c23nb', '11111111-1111-4111-8111-111111111111/r-fresh.bin.gz', null),
+  ('11111111-1111-4111-8111-111111111111', 'r-none', now() - interval '30 days' - interval '15 minutes',
+   now() - interval '30 days', 'America/Los_Angeles', 1000, 900, 'driver', 'mounted', 1, 'A', 'final', 60,
+   '_p~iF~ps|U', 'c23nb', null, null);
+insert into storage.objects (bucket_id, name, owner_id) values
+  ('traces', '11111111-1111-4111-8111-111111111111/r-deleted.bin.gz', '11111111-1111-4111-8111-111111111111'),
+  ('traces', '11111111-1111-4111-8111-111111111111/r-old.bin.gz', '11111111-1111-4111-8111-111111111111'),
+  ('traces', '11111111-1111-4111-8111-111111111111/r-fresh.bin.gz', '11111111-1111-4111-8111-111111111111');
+select is((select count(*)::int from storage.objects where bucket_id = 'traces' and name like '11111111-%'), 3, 'three retention fixture objects are in the bucket to start with');
+select is((select count(*)::int from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and trace_path is not null), 2, 'two retention fixture trips still name a trace');
+
+select throws_ok($$ select public.expire_trace_objects(interval '-1 day') $$, '22023', 'expire_trace_objects requires a non-negative age', 'a negative age is refused');
+select throws_ok($$ select public.expire_trace_objects(null::interval) $$, '22023', 'expire_trace_objects requires a non-negative age', 'a null age is refused');
+select throws_ok($$ select public.expire_trace_objects(interval '14 days', 0) $$, '22023', 'expire_trace_objects limit must be between 1 and 5000', 'an empty batch is refused');
+select throws_ok($$ select public.expire_trace_objects(interval '14 days', 5001) $$, '22023', 'expire_trace_objects limit must be between 1 and 5000', 'an oversize batch is refused');
+
+-- the default sweep: the dispute window is 14 days, so the 40- and 30-day trips go and nothing else
+select is((select public.expire_trace_objects(interval '14 days')) - 'cutoff'::text - 'older_than'::text,
+  jsonb_build_object('trips', 2, 'cleared', 1, 'keys', jsonb_build_array(
+    '11111111-1111-4111-8111-111111111111/r-deleted.bin.gz',
+    '11111111-1111-4111-8111-111111111111/r-old.bin.gz')),
+  'the sweep names the two trips past the dispute window, oldest first, and clears the one column that was set');
+select is((select trace_path from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and client_trip_id = 'r-old'), null, 'the expired trip no longer names its trace');
+select is((select trace_path from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and client_trip_id = 'r-fresh'), '11111111-1111-4111-8111-111111111111/r-fresh.bin.gz', 'a trip still inside the dispute window keeps its trace');
+select is((select trace_path from public.trips where id = pg_temp.trip('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'a-trip-1')), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/a-trip-1.bin.gz', 'a recent trip keeps its trace, whoever owns it');
+select is((select count(*)::int from storage.objects where bucket_id = 'traces' and name like '11111111-%'), 3, 'the sweep removes no object itself: only the Storage API can, and the caller makes that call');
+select is((select score from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and client_trip_id = 'r-old'), 90, 'expiring a trace leaves the trip''s score alone');
+select is((select deleted_at is null from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and client_trip_id = 'r-old'), true, 'expiring a trace does not delete the trip');
+select is((select polyline from public.trips where user_id = '11111111-1111-4111-8111-111111111111' and client_trip_id = 'r-old'), '_p~iF~ps|U', 'expiring a trace leaves a live trip''s route alone: this is retention, not a delete');
+
+-- a re-run before the caller has removed the objects still names them: the sweep converges on the
+-- bucket, not on the column, so a caller that died between the two steps loses no key
+select is((select public.expire_trace_objects(interval '14 days')) -> 'keys'::text,
+  jsonb_build_array('11111111-1111-4111-8111-111111111111/r-deleted.bin.gz',
+    '11111111-1111-4111-8111-111111111111/r-old.bin.gz'),
+  'a re-run still names the objects the caller has not removed yet');
+select is(((select public.expire_trace_objects(interval '14 days')) ->> 'cleared'::text)::int, 0, 'the re-run clears nothing: the columns are already null');
+
+-- the age is a parameter, so a shorter window reaches trips the default leaves alone
+select is((select public.expire_trace_objects(interval '10 days')) -> 'keys'::text,
+  jsonb_build_array('11111111-1111-4111-8111-111111111111/r-deleted.bin.gz',
+    '11111111-1111-4111-8111-111111111111/r-old.bin.gz',
+    '11111111-1111-4111-8111-111111111111/r-fresh.bin.gz'),
+  'a shorter age reaches a trip that is still inside the 14-day window');
+select is((select public.expire_trace_objects(interval '10 days', 1)) -> 'keys'::text,
+  jsonb_build_array('11111111-1111-4111-8111-111111111111/r-deleted.bin.gz'),
+  'the batch limit caps one sweep, oldest first');
+select is((select count(*)::int from public.trips where trace_path is not null and ended_at < now() - interval '10 days'), 0, 'after the sweep no trip past the window still names a trace');
+
+-- this delete stands in for the Storage API call the caller makes with the returned keys
+delete from storage.objects where bucket_id = 'traces' and name like '11111111-%';
+select is((select public.expire_trace_objects(interval '10 days')) - 'cutoff'::text - 'older_than'::text,
+  jsonb_build_object('trips', 0, 'cleared', 0, 'keys', '[]'::jsonb),
+  'once the objects are gone the sweep is empty: it terminates instead of re-reporting them forever');
 
 -- ---------------------------------------------------------------------------
 -- act as user A (authenticated): reads are owner-only and hide deleted trips;
