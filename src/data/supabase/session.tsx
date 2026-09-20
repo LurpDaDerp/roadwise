@@ -23,29 +23,78 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    // Auth events overlap: a TOKEN_REFRESHED can land while the profile fetch for the previous one
+    // is still out, and a SIGNED_OUT can land after both. Only the newest load may write state.
+    let generation = 0;
+    let loadedUserId: string | null = null;
+    let loadedProfile: Profile | null = null;
+    let inFlight: { userId: string; promise: Promise<Profile> } | null = null;
+
+    // getSession() and the INITIAL_SESSION event both arrive on mount; share one request rather
+    // than asking the server for the same row twice.
+    function profileFor(userId: string): Promise<Profile> {
+      if (inFlight?.userId === userId) return inFlight.promise;
+      const promise = fetchProfile(userId);
+      const clear = () => {
+        if (inFlight?.promise === promise) inFlight = null;
+      };
+      inFlight = { userId, promise };
+      promise.then(clear, clear);
+      return promise;
+    }
 
     async function load(next: Session | null) {
-      if (!active) return;
+      generation += 1;
+      const mine = generation;
+      const superseded = () => !active || generation !== mine;
+
       setSession(next);
+
       if (!next) {
+        loadedUserId = null;
+        loadedProfile = null;
+        inFlight = null;
         setProfile(null);
         setStatus('signedOut');
         return;
       }
+
+      const userId = next.user.id;
+      if (userId !== loadedUserId) {
+        // A different account: whatever profile is on screen belongs to someone else.
+        loadedUserId = userId;
+        loadedProfile = null;
+        setProfile(null);
+      } else if (loadedProfile) {
+        // Same user, profile already in hand. TOKEN_REFRESHED, USER_UPDATED and a repeated
+        // INITIAL_SESSION must not cost a round trip.
+        setStatus('signedIn');
+        return;
+      }
+
       try {
-        const row = await fetchProfile(next.user.id);
-        if (!active) return;
+        const row = await profileFor(userId);
+        if (superseded()) return;
+        loadedProfile = row;
         setProfile(row);
       } catch {
-        // The profile row can lag the sign-in (the handle_new_user trigger races the first read).
-        // Signed in without a profile is a legitimate state; onboarding fills it in.
-        if (!active) return;
-        setProfile(null);
+        if (superseded()) return;
+        // The row can lag sign-up (the handle_new_user trigger races the first read) and a later
+        // read can fail transiently. Only the first fetch for a user may leave the profile null;
+        // after that the last known row stands, so a blip cannot bounce an onboarded user back
+        // into onboarding.
       }
+
+      if (superseded()) return;
       setStatus('signedIn');
     }
 
-    void supabase.auth.getSession().then(({ data }) => load(data.session));
+    supabase.auth.getSession().then(
+      ({ data }) => load(data.session),
+      // An unreadable stored session (a reset Keychain, a corrupt blob) rejects here. Treat it as
+      // signed out; leaving the app on 'loading' would strand it on the splash screen.
+      () => load(null)
+    );
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
       void load(next as Session | null);
     });

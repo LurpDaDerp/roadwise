@@ -1,41 +1,153 @@
-import { act, render, screen, waitFor } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Text, View } from 'react-native';
 
 import { SessionProvider, useSession } from '@/data/supabase/session';
 
+type AuthListener = (event: string, session: unknown) => void;
+type Gate<T> = { resolve?: (value: T) => void; reject?: (reason: unknown) => void };
+
 // `jest.mock` is hoisted above these imports; the variables below are only read from inside the
-// mocked functions, so they are initialised by the time any of them runs.
-const listeners: ((e: string, s: unknown) => void)[] = [];
-// Held open so the provider's first paint can be observed while getSession is still in flight.
-const mockSessionGate: { resolve?: (value: { data: { session: unknown } }) => void } = {};
+// mocked functions, so they are initialised by the time any of them runs. Each is declared with a
+// pure initialiser, which is what lets babel-plugin-jest-hoist accept them.
+const listeners: AuthListener[] = [];
+const profileCalls: string[] = [];
+// The gates hold getSession / fetchProfile open, so a test can observe the provider mid-flight and
+// decide the order in which promises settle.
+const mockSessionGate: Gate<{ data: { session: unknown } }> = {};
+const mockProfileGate: Gate<unknown> = {};
+// Recorded rather than held as a jest.fn: the factory below is hoisted above these declarations,
+// so it must not read one of them as a value at definition time.
+const authCalls: string[] = [];
+
 jest.mock('@/data/supabase/client', () => ({
   supabase: {
     auth: {
-      getSession: jest.fn(() => new Promise((resolve) => { mockSessionGate.resolve = resolve; })),
-      onAuthStateChange: jest.fn((cb: (e: string, s: unknown) => void) => { listeners.push(cb); return { data: { subscription: { unsubscribe: jest.fn() } } }; }),
-      signOut: jest.fn(async () => ({ error: null })),
+      getSession: jest.fn(() => new Promise((resolve, reject) => { mockSessionGate.resolve = resolve; mockSessionGate.reject = reject; })),
+      onAuthStateChange: jest.fn((cb: AuthListener) => { listeners.push(cb); return { data: { subscription: { unsubscribe: jest.fn() } } }; }),
+      signOut: jest.fn(async () => { authCalls.push('signOut'); return { error: null }; }),
     },
   },
 }));
-jest.mock('@/data/supabase/profile', () => ({ fetchProfile: jest.fn(async () => ({ id: 'u1', display_name: 'Ava', age_band: '18_plus' })) }));
+jest.mock('@/data/supabase/profile', () => ({
+  fetchProfile: jest.fn((userId: string) => new Promise((resolve, reject) => {
+    profileCalls.push(userId);
+    mockProfileGate.resolve = resolve;
+    mockProfileGate.reject = reject;
+  })),
+}));
 
-function Probe() { const s = useSession(); return <Text>{s.status}:{s.profile?.display_name ?? '-'}</Text>; }
+const ava = { id: 'u1', display_name: 'Ava', age_band: '18_plus' };
+const sessionFor = (id: string) => ({ user: { id } });
+
+function Probe() {
+  const s = useSession();
+  return (
+    <View>
+      <Text>{s.status}:{s.profile?.display_name ?? '-'}</Text>
+      <Text onPress={() => void s.signOut()}>sign out</Text>
+    </View>
+  );
+}
+
+const emit = (event: string, session: unknown) => listeners.forEach((cb) => cb(event, session));
+
+beforeEach(() => {
+  listeners.length = 0;
+  profileCalls.length = 0;
+  authCalls.length = 0;
+  delete mockSessionGate.resolve;
+  delete mockSessionGate.reject;
+  delete mockProfileGate.resolve;
+  delete mockProfileGate.reject;
+});
+
+async function mount() {
+  await render(<SessionProvider><Probe /></SessionProvider>);
+}
 
 test('starts loading, becomes signedOut, then signedIn with profile on auth event', async () => {
-  await render(<SessionProvider><Probe /></SessionProvider>);
+  await mount();
   // While the stored session is still being read nothing downstream may treat the user as signed
   // out - that is what keeps a warm start off the sign-in screen.
   expect(screen.getByText('loading:-')).toBeTruthy();
 
   // The provider settles inside promises, so drive each transition through act(); otherwise React
   // warns that the state updates escaped it.
-  await act(async () => {
-    mockSessionGate.resolve?.({ data: { session: null } });
-  });
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
   await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
 
-  await act(async () => {
-    listeners.forEach((cb) => cb('SIGNED_IN', { user: { id: 'u1' } }));
-  });
+  await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
+  await act(async () => { mockProfileGate.resolve?.(ava); });
   await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+});
+
+test('reading the stored session can fail without stranding the app on loading', async () => {
+  await mount();
+  expect(screen.getByText('loading:-')).toBeTruthy();
+
+  // An unreadable Keychain entry rejects getSession; the app has to fall back to signed out rather
+  // than hang on the splash screen forever.
+  await act(async () => { mockSessionGate.reject?.(new Error('DecryptException')); });
+
+  await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+});
+
+test('stays signed in when the profile row is not readable yet', async () => {
+  await mount();
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
+
+  await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
+  // The handle_new_user trigger can lag the first read; a missing row must not hold up sign-in.
+  await act(async () => { mockProfileGate.reject?.(new Error('row not found')); });
+  await waitFor(() => expect(screen.getByText('signedIn:-')).toBeTruthy());
+
+  // A later event retries, because there is still no profile in hand.
+  await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
+  expect(profileCalls).toEqual(['u1', 'u1']);
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+});
+
+test('does not refetch the profile for the same user on a token refresh', async () => {
+  await mount();
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+
+  await act(async () => { emit('INITIAL_SESSION', sessionFor('u1')); });
+  await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
+  await act(async () => { emit('USER_UPDATED', sessionFor('u1')); });
+
+  // One fetch for the whole lifecycle, and the profile never blinks out.
+  expect(profileCalls).toEqual(['u1']);
+  expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+});
+
+test('a superseded load never overwrites newer state', async () => {
+  await mount();
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
+
+  await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
+  expect(profileCalls).toEqual(['u1']);
+
+  // Signing out while that fetch is still in flight, then letting it land: the stale result must
+  // not resurrect a session the user has already ended.
+  await act(async () => { emit('SIGNED_OUT', null); });
+  await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+
+  expect(screen.getByText('signedOut:-')).toBeTruthy();
+});
+
+test('signOut asks Supabase to end the session and clears it on the event', async () => {
+  await mount();
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+
+  await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+  expect(authCalls).toEqual(['signOut']);
+
+  await act(async () => { emit('SIGNED_OUT', null); });
+  await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
 });
