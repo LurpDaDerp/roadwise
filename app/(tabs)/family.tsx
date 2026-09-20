@@ -3,7 +3,7 @@ import { Screen, Text } from '@/ui';
 
 export default function Family() {
   return (
-    <Screen>
+    <Screen bottomInset={false}>
       <Text variant="title1" accessibilityRole="header">
         {t('tabs.family')}
       </Text>

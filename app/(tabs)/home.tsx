@@ -9,7 +9,7 @@ export default function Home() {
   const { signOut } = useSession();
 
   return (
-    <Screen>
+    <Screen bottomInset={false}>
       <Text variant="title1" accessibilityRole="header">
         {t('tabs.home')}
       </Text>
