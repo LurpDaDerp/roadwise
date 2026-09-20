@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit && tsc -p scripts --noEmit && tsc -p packages/scoring",
     "typecheck:scoring": "tsc -p packages/scoring",
     "scoring:sync": "node scripts/sync-scoring.js",
+    "traces:make": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/make-traces.js",
     "db:start": "supabase start",
     "db:test": "supabase test db",
     "db:types": "supabase gen types typescript --local > src/data/supabase/types.ts"
