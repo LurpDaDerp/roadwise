@@ -71,6 +71,14 @@ export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<vo
   }
 }
 
+/** Who this device belongs to, or null if nobody has signed in on it yet. */
+export const readDeviceOwner = (db: Db): Promise<string | null> =>
+  createSettingsRepo(db).get<string>(LAST_USER_KEY);
+
+/** Record the owner without touching anything else. */
+export const rememberDeviceOwner = (db: Db, uid: string): Promise<void> =>
+  createSettingsRepo(db).set(LAST_USER_KEY, uid);
+
 /**
  * Compare the signed-in user against the one this device remembers, wiping if they differ, and
  * record the new owner. Call before anything reads a row — at launch that is straight after
@@ -84,11 +92,10 @@ export async function ensureDeviceOwner(
 ): Promise<DeviceOwnerOutcome> {
   if (uid === null) return 'signed-out';
 
-  const settings = createSettingsRepo(db);
-  const lastUserId = await settings.get<string>(LAST_USER_KEY);
+  const lastUserId = await readDeviceOwner(db);
   if (lastUserId === uid) return 'same';
 
   if (lastUserId !== null) await wipeDevice(db, deps);
-  await settings.set(LAST_USER_KEY, uid);
+  await rememberDeviceOwner(db, uid);
   return lastUserId === null ? 'first' : 'wiped';
 }

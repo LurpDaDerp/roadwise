@@ -101,7 +101,12 @@ export interface AppRuntime {
   /** What the owner check found. `wiped` means this launch emptied a previous driver's device. */
   owner: DeviceOwnerOutcome;
   schemaVersion: number;
-  /** Stops the runner and detaches the cache from the queue. For teardown; never mid-session. */
+  /**
+   * Stops the runner, detaches the cache from the queue and empties it. For teardown; never
+   * mid-session. The cache is emptied rather than left to its gc timers because one reason to
+   * tear a runtime down is that the device changed hands, and the last driver's rows must not
+   * sit in memory for five more minutes.
+   */
   stop(): void;
 }
 
@@ -242,6 +247,7 @@ async function runLaunch(
     stop() {
       runner.stop();
       detach();
+      queryClient.clear();
     },
   };
 }
