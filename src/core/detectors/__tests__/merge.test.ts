@@ -144,3 +144,20 @@ test('the result is sorted by startedAt and the input is not mutated', () => {
 test('an empty list stays empty', () => {
   expect(mergeEvents([])).toEqual([]);
 });
+
+test('drowsiness never merges with phone use: a different behaviour, not the same moment', () => {
+  const phone = ev({ id: 'p', category: 'phone', ...at(0, 12), q: 0.9, measured: { speedMps: 15 } });
+  const drowsy = ev({
+    id: 'd',
+    category: 'focus',
+    ...at(5, 5),
+    q: 0.9,
+    source: 'camera',
+    measured: { glanceS: 5, focusKind: 'drowsiness' },
+  });
+  expect(mergeEvents([drowsy, phone])).toEqual([phone, drowsy]);
+
+  // The same overlap with a glance is the same moment, and still merges.
+  const glance = ev({ ...drowsy, measured: { glanceS: 5, focusKind: 'glance' } });
+  expect(mergeEvents([glance, phone])).toMatchObject([{ id: 'p', absorbedIds: ['d'] }]);
+});

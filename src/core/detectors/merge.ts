@@ -13,18 +13,25 @@ const endOf = (e: DetectedEvent): number => e.startedAt + e.durationS * 1000;
 const overlaps = (a: DetectedEvent, b: DetectedEvent): boolean =>
   a.startedAt < endOf(b) && b.startedAt < endOf(a);
 
+/** Drowsiness is a different behaviour from phone-in-hand, so it is never "the same moment". */
+const drowsiness = (e: DetectedEvent): boolean =>
+  e.category === 'focus' && e.measured.focusKind === 'drowsiness';
+
 /**
- * Phone with phone, or phone with camera focus, and only when both are scored. Two focus events
- * are two glances and stay apart. A `possible`, `disputed` or `removed` event is never folded in:
- * merging a stopped (possible, speed 0) stretch with the scored one next to it would either hide
- * the scored deduction or charge the stopped seconds at moving severity.
+ * Phone with phone, or phone with a camera glance, and only when both are scored. Two focus
+ * events are two glances and stay apart; a drowsiness episode is its own event even when the
+ * phone is in hand. A `possible`, `disputed` or `removed` event is never folded in: merging a
+ * stopped (possible, speed 0) stretch with the scored one next to it would either hide the
+ * scored deduction or charge the stopped seconds at moving severity.
  */
 const mergeable = (a: DetectedEvent, b: DetectedEvent): boolean =>
   a.status === 'scored' &&
   b.status === 'scored' &&
   MERGEABLE.has(a.category) &&
   MERGEABLE.has(b.category) &&
-  (a.category === 'phone' || b.category === 'phone');
+  (a.category === 'phone' || b.category === 'phone') &&
+  !drowsiness(a) &&
+  !drowsiness(b);
 
 /** Which event's identity survives: the heavier category, then the higher q, then the earlier start. */
 function rank(a: DetectedEvent, b: DetectedEvent): [kept: DetectedEvent, other: DetectedEvent] {
