@@ -6,6 +6,8 @@ import { CONSTANTS } from './constants';
  * or the other being thin; grade C is too thin to score at all, so the trip is kept but unscored.
  */
 export function dataQualityGrade(validGnssPct: number, imuPresent: boolean): 'A' | 'B' | 'C' {
+  // A share that is not a number is no evidence of GNSS coverage at all.
+  if (!Number.isFinite(validGnssPct)) return 'C';
   if (validGnssPct < CONSTANTS.DATA_QUALITY_B_PCT) return 'C';
   if (imuPresent && validGnssPct >= CONSTANTS.DATA_QUALITY_A_PCT) return 'A';
   return 'B';

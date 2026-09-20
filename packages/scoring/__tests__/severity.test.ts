@@ -46,7 +46,10 @@ test('focus severity', () => {
 // tables exist so that flipping any comparison fails a test.
 describe('band boundaries', () => {
   // A 65 mph limit keeps every percentage band below the absolute one, isolating the absolute edges.
+  // The lowest edge is the tolerance itself (`SPEEDING_TOLERANCE_MPS`, 5 mph): under it, no event.
   test.each([
+    [mph(4.99), 0],
+    [mph(5), 1],
     [mph(9.99), 1],
     [mph(10), 2],
     [mph(14.99), 2],
