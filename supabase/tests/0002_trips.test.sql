@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(609);
+select plan(621);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -791,7 +791,27 @@ select is((select deleted_at from public.trips where id = pg_temp.trip('bbbbbbbb
 select is(((select public.apply_trip((select p from fx where name = 'a-old')) ->> 'replayed')::boolean), true, 'a re-upload of a deleted trip replays instead of resurrecting it');
 select is((select deleted_at from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), now(), 'deleted trip stays deleted after the replay');
 select is((select polyline from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old')), '', 'a re-upload of a deleted trip does not restore its route');
+-- the dispute audit row of a deleted drive keeps neither the driver's own words nor the ~150 m
+-- cell the report came from. Both are set directly here: the dispute recorded on this trip above
+-- is a `hazard` one, which carries neither, and recording a real wrong-limit dispute instead would
+-- move the rolling allowance and the map_feedback counts this file already pins.
+update public.event_disputes set note = 'my mum was driving, we were outside her office', segment_key = 'gh7:c23nb12'
+  where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1');
+select is((select note from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), 'my mum was driving, we were outside her office', 'the dispute holds the driver''s own words before the delete');
+select is((select segment_key from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), 'gh7:c23nb12', 'the dispute holds its ~150 m cell before the delete');
+
 select is(((select public.soft_delete_trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile'))) ->> 'trace_path'), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/a-trip-hostile.bin.gz', 'the disputed trip is deleted too (its dispute must vanish from the owner view)');
+
+-- gone from the dispute: the words and the place. Kept: everything the rolling allowance counts on.
+select is((select note from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), '', 'the deleted drive''s dispute holds no note');
+select is((select segment_key from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), null, 'the deleted drive''s dispute holds no segment cell');
+select is((select count(*)::int from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), 1, 'the dispute row itself stays: the rolling allowance counts rows, not contents');
+select is((select created_at from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), now(), 'the dispute keeps its created_at, which the 7- and 30-day windows read');
+select is((select reason from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), 'hazard', 'the dispute keeps its reason');
+select is((select consumed_allowance from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), false, 'the dispute keeps whether it consumed the allowance');
+select is((select denied_reason from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-hostile', 'ev-1')), 'allowance_7d', 'the dispute keeps the decision it replays');
+select is((select note from public.event_disputes where event_id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-1')), 'swerved round a ladder', 'a live drive''s dispute keeps its note: the scrub is scoped to the deleted trip');
+select is((select count(*)::int from public.map_feedback) > 0, true, 'map_feedback keeps its aggregated cells: those reports are de-identified by design and are not the driver''s to delete');
 
 -- the catch-all the audit asked for: after every delete in this file, no deleted trip anywhere
 -- says where its driver went
@@ -805,6 +825,12 @@ select is((select count(*)::int from public.trip_events e join public.trips t on
   where t.deleted_at is not null
     and (e.lat is not null or e.lng is not null or e.measured <> '{}'::jsonb or e.context <> '{}'::jsonb)),
   0, 'no event of a soft-deleted trip holds a coordinate, a measurement or a context');
+select is((select count(*)::int from public.event_disputes d
+  join public.trip_events e on e.id = d.event_id
+  join public.trips t on t.id = e.trip_id
+  where t.deleted_at is not null
+    and (coalesce(d.note, '') <> '' or d.segment_key is not null)),
+  0, 'no dispute of a soft-deleted trip holds the driver''s words or a segment cell');
 
 -- ---------------------------------------------------------------------------
 -- retention: expire_trace_objects (audit I-6). Four trips for user R, written

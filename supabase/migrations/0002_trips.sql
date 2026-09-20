@@ -22,8 +22,9 @@
 --   * lock order inside the writers is trips -> trip_events -> rate_limits, so a dispute and a
 --     recompute on the same trip queue rather than deadlock.
 --   * a delete takes the route with it. soft_delete_trip scrubs the polyline, both endpoint
---     geohashes, both labels, the note, the re-score digest and every event's coordinates,
---     measurements and context, and keeps only what an aggregate reads back; the device already
+--     geohashes, both labels, the note, the re-score digest, every event's coordinates,
+--     measurements and context, and the note and segment cell of every dispute on those events,
+--     and keeps only what an aggregate or the dispute allowance reads back; the device already
 --     destroys all of it locally, and the promise the driver was shown is one promise.
 --   * expire_trace_objects is the retention half: raw traces exist only to verify a dispute, and
 --     the dispute window closes at 14 days. Nothing schedules it yet (see its header).
@@ -793,6 +794,16 @@ end $$;
 --                        measured (a speeding row carries the posted limit of the road) and
 --                        context.
 --
+-- Scrubbed on every dispute of one of those events: note (to '') and segment_key. The note is the
+-- driver's own words about a drive they have just deleted; segment_key is `gh7:<geohash>`, a
+-- ~150 m cell of where the reported moment happened, sitting beside user_id. Neither is needed for
+-- what the row exists to do: the rolling 7-day and 30-day allowances count rows, not contents, so
+-- id, created_at, reason, consumed_allowance, denied_reason and auto_accepted all stay.
+-- One consequence, accepted: record_dispute dedupes map_feedback one report per (segment_key,
+-- user) through this column, so a driver who deletes the drive can report the same cell again. The
+-- dedupe wants a hash of (cell, user) rather than the cell itself; that is the privacy-hardening
+-- milestone's. map_feedback itself is untouched here -- it is already aggregated and de-identified.
+--
 -- The event rows themselves stay, and are nulled rather than deleted, for two reasons:
 --   * event_disputes references trip_events on delete cascade, and the rolling 7-day and 30-day
 --     dispute allowances are counted from event_disputes.created_at. Deleting the events would
@@ -808,7 +819,9 @@ end $$;
 -- stored is returned for that call and the column is cleared here. A repeat on an already-deleted
 -- own trip replays (the queued delete-trip item may be retried after a lost response) and writes
 -- nothing: the scrub is part of the one transition, and 0002 has never shipped, so no row can be
--- carrying a pre-scrub delete. Lock order is the migration's: trips, then trip_events.
+-- carrying a pre-scrub delete. Lock order is the migration's, extended at the tail: trips, then
+-- trip_events, then event_disputes -- record_dispute takes the same two in the same order before
+-- it writes a dispute row, so the two cannot invert.
 -- ---------------------------------------------------------------------------
 create or replace function public.soft_delete_trip(p_user uuid, p_trip_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -840,6 +853,10 @@ begin
   update public.trip_events
     set lat = null, lng = null, measured = '{}'::jsonb, context = '{}'::jsonb
     where trip_id = p_trip_id;
+  update public.event_disputes d
+    set note = '', segment_key = null
+    from public.trip_events e
+    where e.trip_id = p_trip_id and d.event_id = e.id;
   return jsonb_build_object('trip_id', p_trip_id, 'trace_path', v_trip.trace_path, 'replayed', false);
 end $$;
 
