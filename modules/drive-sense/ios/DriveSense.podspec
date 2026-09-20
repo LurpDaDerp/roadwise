@@ -9,9 +9,12 @@ Pod::Spec.new do |s|
   s.version        = '0.1.0'
   s.summary        = 'Background drive capture for RoadWise'
   s.author         = 'RoadWise'
-  s.license        = 'Proprietary'
+  s.license        = { :type => 'Proprietary' }
   s.homepage       = 'https://github.com/LurpDaDerp/RoadCash'
   s.platforms      = { :ios => '15.1' }
+  # Swift-only pod: CocoaPods aborts `pod install` for a pod with Swift sources and no declared
+  # Swift version. Same pin as modules/dms-vision/ios/DmsVision.podspec.
+  s.swift_version  = '5.9'
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'

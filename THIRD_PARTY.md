@@ -1,6 +1,8 @@
-# Third-party notices — `modules/dms-vision`
+# Third-party notices — RoadWise
 
-## Prior art read while writing this module
+## `modules/dms-vision`
+
+### Prior art read while writing this module
 
 **`expo-mediapipe@0.4.1`** (MIT, © the expo-mediapipe contributors) was read as the reference for
 an Expo Module that wraps MediaPipe Tasks: the `FaceLandmarker` LIVE_STREAM task runner on both
@@ -38,6 +40,7 @@ code copied.
 | `MediaPipeTasksVision` / `com.google.mediapipe:tasks-vision` 0.10.35 | Apache-2.0 |
 | `onnxruntime-objc` / `com.microsoft.onnxruntime:onnxruntime-android` 1.30.0 | MIT |
 | `androidx.camera:*` 1.4.2 | Apache-2.0 |
+| `com.google.android.gms:play-services-location` 21.3.0 (linked by `modules/drive-sense`) | Android Software Development Kit License (Google Play Services terms) |
 | `ExpoModulesCore` | MIT |
 
 The bundled model files (`face_landmarker.task`) are Google's MediaPipe Face Landmarker assets

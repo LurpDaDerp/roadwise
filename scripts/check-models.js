@@ -83,7 +83,7 @@ if (fs.existsSync(metaFile)) {
 }
 
 if (failed) {
-  console.error('\ncheck-bundle: FAILED - re-copy assets/models/* into modules/dms-vision/ios/Resources/ and modules/dms-vision/android/src/main/assets/');
+  console.error('\ncheck-models: FAILED - re-copy assets/models/* into modules/dms-vision/ios/Resources/ and modules/dms-vision/android/src/main/assets/');
   process.exit(1);
 }
-console.log('\ncheck-bundle: all model copies are identical.');
+console.log('\ncheck-models: all model copies are identical.');
