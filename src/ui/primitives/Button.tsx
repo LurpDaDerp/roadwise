@@ -59,8 +59,10 @@ export function Button({
         minHeight,
         borderRadius: t.radius.md,
         backgroundColor: bg,
-        borderWidth: variant === 'secondary' ? 1 : 0,
-        borderColor: t.colors.border,
+        // `secondary` fills with `surfaceRaised`, which is all but invisible against `bg`, so the
+        // border is what makes it a button at all: 1.5 pt of ink that clears 3:1 on the background.
+        borderWidth: variant === 'secondary' ? 1.5 : 0,
+        borderColor: t.colors.borderStrong,
         opacity: inactive ? 0.6 : pressed ? 0.85 : 1,
         transform: [{ scale: pressed && !inactive ? 0.98 : 1 }],
         alignItems: 'center',

@@ -16,6 +16,8 @@ export type ColorSet = {
   surface: string;
   surfaceRaised: string;
   border: string;
+  /** A rule that has to read as an edge on `bg`, not just a hint on a card face. */
+  borderStrong: string;
   divider: string;
   text: string;
   textMuted: string;
@@ -55,7 +57,8 @@ type TypeStyle = {
   fontFamily: string;
   fontSize: number;
   lineHeight: number;
-  fontWeight: '400' | '500' | '600' | '700' | '800';
+  /** Omitted when `fontFamily` already names a weighted face, so Android cannot synthesise a second bold. */
+  fontWeight?: '400' | '500' | '600' | '700' | '800';
   letterSpacing?: number;
   fontVariant?: TextStyle['fontVariant'];
 };
@@ -80,6 +83,7 @@ const light: ColorSet = {
   surface: '#FFFFFF',
   surfaceRaised: '#F2F5FA',
   border: '#C9D3E2',
+  borderStrong: '#6B7A99',
   divider: '#DFE6F0',
   text: '#14213D',
   textMuted: '#4A5878',
@@ -108,6 +112,7 @@ const dark: ColorSet = {
   surface: '#141C40',
   surfaceRaised: '#1D2757',
   border: '#2C3768',
+  borderStrong: '#8FA0CC',
   divider: '#222C58',
   text: '#E8EEFF',
   textMuted: '#A9B8E0',
@@ -146,12 +151,11 @@ const type: TypeScale = {
     fontFamily: fontFamilies.numeralsBold,
     fontSize: 40,
     lineHeight: 46,
-    fontWeight: '700',
     letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
-  title1: { fontFamily: fontFamilies.fieldBold, fontSize: 28, lineHeight: 34, fontWeight: '700' },
-  title2: { fontFamily: fontFamilies.fieldBold, fontSize: 22, lineHeight: 28, fontWeight: '700' },
+  title1: { fontFamily: fontFamilies.fieldBold, fontSize: 28, lineHeight: 34 },
+  title2: { fontFamily: fontFamilies.fieldBold, fontSize: 22, lineHeight: 28 },
   title3: { fontFamily: fontFamilies.ui, fontSize: 20, lineHeight: 25, fontWeight: '600' },
   headline: { fontFamily: fontFamilies.ui, fontSize: 17, lineHeight: 22, fontWeight: '600' },
   body: { fontFamily: fontFamilies.ui, fontSize: 17, lineHeight: 22, fontWeight: '400' },

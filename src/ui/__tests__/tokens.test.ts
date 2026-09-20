@@ -36,3 +36,9 @@ test('the licence stamp is legible on a card face and the laminate sheen is a tr
     expect(c.sheen).toHaveLength(3);
   }
 });
+test('a strong rule reads as an edge on the app background', () => {
+  for (const s of schemes) {
+    const c = tokens.color[s];
+    expect(contrastRatio(c.borderStrong, c.bg)).toBeGreaterThanOrEqual(3);
+  }
+});
