@@ -6,24 +6,26 @@ import { ChartTable, type ChartTableProps } from '@/ui/charts';
 
 import { insightsCopy as copy } from './copy';
 
-export type ChartBlockProps = {
-  /** The whole drawing in one sentence, for a reader that cannot see it. */
-  label: string;
+type ChartBlockBase = {
   /** The visible line under the chart, in the product's words (§7.E E1 a11y: every chart has one). */
   summaryText: string;
   table: Omit<ChartTableProps, 'testID'>;
-  /**
-   * Off (the default) for a drawing: it becomes one accessible image whose label is `label`, and
-   * the marks inside it are hidden so a reader never lands on a stray bar or numeral.
-   *
-   * On when the rows are controls. `@/ui/charts`' own `ChartFrame` always hides its children,
-   * which is right for an SVG and wrong for a row of buttons — a hidden button cannot be reached
-   * at all. With this on, the children carry their own labels and the container carries none.
-   */
-  interactive?: boolean;
   children: ReactNode;
   testID?: string;
 };
+
+/**
+ * A drawing is one accessible image whose label is `label`, with the marks inside it hidden so a
+ * reader never lands on a stray bar or numeral.
+ *
+ * `interactive` is for a chart whose rows are controls. `@/ui/charts`' own `ChartFrame` always
+ * hides its children, which is right for an SVG and wrong for a row of buttons — a hidden button
+ * cannot be reached at all. There the children carry their own labels and the container carries
+ * none, so `label` is not merely optional: asking for one would be paying to build a sentence
+ * nothing can read.
+ */
+export type ChartBlockProps = ChartBlockBase &
+  ({ interactive: true; label?: never } | { interactive?: false; label: string });
 
 /**
  * What every chart on the insight screens shares: the drawing, one summary sentence that stays
@@ -48,7 +50,7 @@ export function ChartBlock({
     <View
       accessible
       accessibilityRole="image"
-      accessibilityLabel={label}
+      accessibilityLabel={label as string}
       testID={testID ? `${testID}-chart` : undefined}
     >
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">

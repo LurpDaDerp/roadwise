@@ -15,11 +15,13 @@ import {
   type TripSummary,
 } from '@/data/queries';
 import {
+  apportionPercents,
   bestWeek,
   capRows,
   categoryFigures,
   categoryLabel,
   conditionRows,
+  describeRows,
   exampleTripsFor,
   formatMiles,
   formatRate,
@@ -27,9 +29,11 @@ import {
   longestSafeStreak,
   MAX_EXAMPLES,
   MAX_HIGHLIGHTS,
+  MAX_SPOKEN_ROWS,
   MAX_WEEK_COLUMNS,
   MIN_HIGHLIGHT_RUN,
   MIN_SCORED_TRIPS,
+  notMeasuredReason,
   parseCategory,
   shareRows,
   shareSummary,
@@ -46,6 +50,7 @@ import {
   windowOf,
   youVsYouCaption,
   youVsYouRows,
+  type BarRow,
 } from '@/features/insights/format';
 
 const T0 = Date.UTC(2026, 0, 5, 12, 0, 0);
@@ -487,4 +492,102 @@ test('the window carries both the instants and the calendar days the day cache i
     to: Date.UTC(2026, 1, 2, 12),
   });
   expect(MIN_SCORED_TRIPS).toBe(3);
+});
+
+describe('what a window could actually measure', () => {
+  const scored = (id: string, over: Parameters<typeof tripRow>[0] = {}) =>
+    summary({ client_trip_id: id, ...over });
+
+  test('a window with no scored drives has nothing to report for any category', () => {
+    expect(notMeasuredReason([], 'speeding')).toBe('noDrives');
+    expect(notMeasuredReason([summary({ score: null, status: 'unscored' })], 'phone')).toBe('noDrives');
+  });
+
+  test('speeding is not measured where no drive had a known limit', () => {
+    const unknown = [scored('a', { limit_coverage_pct: 20 }), scored('b', { limit_coverage_pct: null })];
+    expect(notMeasuredReason(unknown, 'speeding')).toBe('noLimit');
+    // One drive with enough coverage is enough for the window to have looked.
+    expect(notMeasuredReason([...unknown, scored('c')], 'speeding')).toBeNull();
+    // The same drives measured every other category perfectly well.
+    expect(notMeasuredReason(unknown, 'phone')).toBeNull();
+  });
+
+  test('focus is not measured without a camera drive, and is with one', () => {
+    expect(notMeasuredReason([scored('a')], 'focus')).toBe('noCamera');
+    expect(notMeasuredReason([scored('a', { camera_session: 1 })], 'focus')).toBeNull();
+  });
+
+  test('a category that was measured and cost nothing is not a "nothing measured" case', () => {
+    expect(notMeasuredReason([scored('a')], 'braking')).toBeNull();
+  });
+});
+
+describe('percentages that add up', () => {
+  test('two shares that each round up still sum to a hundred', () => {
+    expect(apportionPercents([0.625, 0.375])).toEqual(['63%', '37%']);
+    expect(apportionPercents([1 / 3, 1 / 3, 1 / 3])).toEqual(['34%', '33%', '33%']);
+    expect(apportionPercents([0.6, 0.4])).toEqual(['60%', '40%']);
+  });
+
+  test('nothing lost apportions to nothing, not to a hundred', () => {
+    expect(apportionPercents([0, 0, 0])).toEqual(['0%', '0%', '0%']);
+    expect(apportionPercents([])).toEqual([]);
+  });
+
+  test('the bars and the sentence above them print the same percent', () => {
+    const rates = categoryRates([
+      insight({ client_trip_id: 'a', category_deductions_json: JSON.stringify(deductions({ speeding: 20, phone: 12 })) }),
+    ]);
+    const rows = shareRows(rates);
+    expect(rows[0]).toMatchObject({ key: 'speeding', printed: '63%' });
+    expect(rows[1]).toMatchObject({ key: 'phone', printed: '37%' });
+    expect(rows.reduce((total, r) => total + Number.parseInt(r.printed, 10), 0)).toBe(100);
+    expect(shareSummary(rates, '3mo')).toBe('Speeding was 63% of the points you lost over 3 months.');
+  });
+});
+
+describe('the spoken label of a chart', () => {
+  const row = (key: string): BarRow => ({
+    key,
+    label: key,
+    value: 1,
+    max: 1,
+    printed: '1',
+    cells: [key, '1'],
+    spoken: `${key}, 1 point`,
+  });
+
+  test('a short chart is read out row by row', () => {
+    const rows = Array.from({ length: MAX_SPOKEN_ROWS }, (_, i) => row(`w${i}`));
+    expect(describeRows('Caption', rows)).toBe(`Caption. ${rows.map((r) => r.spoken).join(', ')}`);
+    expect(describeRows('Caption', [])).toBe('Caption');
+  });
+
+  test('a year of weeks is named and counted, not recited', () => {
+    const rows = Array.from({ length: 52 }, (_, i) => row(`w${i}`));
+    expect(describeRows('Speeding per 100 miles by week', rows)).toBe(
+      'Speeding per 100 miles by week. 52 rows — open the table to read them.'
+    );
+  });
+});
+
+test('the you vs. you score row reproduces its own arithmetic', () => {
+  const card = youVsYou([insight({ score: 83.5 })], { ...deductions(), score: 81 });
+  if (card === null) throw new Error('no card');
+  const row = youVsYouRows(card)[0];
+  // "84 vs 81" beside "Up 2.5" would be a row that argues with itself.
+  expect(row).toMatchObject({ detail: '84 vs 81', text: 'Up 3', direction: 'better' });
+
+  // A movement that rounds away is Same, whatever the unrounded delta says.
+  const tiny = youVsYou([insight({ score: 80.4 })], { ...deductions(), score: 80.1 });
+  if (tiny === null) throw new Error('no card');
+  expect(youVsYouRows(tiny)[0]).toMatchObject({ detail: '80 vs 80', text: 'Same', direction: 'same' });
+});
+
+test('the rates card prints the points it is named after', () => {
+  const rates = categoryRates([
+    insight({ distance_m: 10 * MILE_M, duration_s: 1800, category_deductions_json: JSON.stringify(deductions({ speeding: 6 })) }),
+  ]);
+  expect(categoryFigures(rates, 'speeding', 1)).toMatchObject({ total: '6', deduction: 6 });
+  expect(categoryFigures(rates, 'phone', 1)).toMatchObject({ total: '0' });
 });

@@ -165,9 +165,20 @@ export interface BarRow {
   spoken: string;
 }
 
-/** The whole set of bars in one sentence: what a reader gets instead of the drawing. */
+/**
+ * Beyond this many rows the label stops enumerating. A year of weeks read out in one utterance is
+ * two thousand characters a reader cannot pause, rewind or skim; the table is the place for that.
+ */
+export const MAX_SPOKEN_ROWS = 8;
+
+/**
+ * The whole set of bars in one sentence: what a reader gets instead of the drawing. A short set is
+ * read out row by row; a long one is named and counted, and "Show as table" carries the detail.
+ */
 export function describeRows(caption: string, rows: readonly BarRow[]): string {
-  return rows.length === 0 ? caption : `${caption}. ${rows.map((row) => row.spoken).join(', ')}`;
+  if (rows.length === 0) return caption;
+  if (rows.length > MAX_SPOKEN_ROWS) return copy.chart.manyRows(caption, rows.length);
+  return `${caption}. ${rows.map((row) => row.spoken).join(', ')}`;
 }
 
 /** The same rows as the ruled table `ChartTable` prints. */
@@ -175,20 +186,44 @@ export function tableRows(rows: readonly BarRow[]): ChartTableRow[] {
   return rows.map((row) => ({ key: row.key, cells: row.cells, label: row.spoken }));
 }
 
-const percent = (share: number) => `${Math.round(share * 100)}%`;
+/**
+ * Whole percents that still add up to the total they are a breakdown of.
+ *
+ * Rounding each share on its own prints 63 % and 38 % for shares of 0.625 and 0.375 — a hundred
+ * points of loss presented as 101. Largest remainder gives every share its floor and hands the
+ * leftover percent to whichever share was cut by the most, so the column sums to 100 (or to
+ * nothing at all, when nothing was lost).
+ */
+export function apportionPercents(shares: readonly number[]): string[] {
+  const raw = shares.map((share) => share * 100);
+  const floors = raw.map(Math.floor);
+  const whole = Math.round(raw.reduce((sum, value) => sum + value, 0));
+  let left = whole - floors.reduce((sum, value) => sum + value, 0);
+  const byRemainder = raw
+    .map((value, index) => index)
+    .sort((a, b) => raw[b]! - floors[b]! - (raw[a]! - floors[a]!));
+  const out = [...floors];
+  for (const index of byRemainder) {
+    if (left <= 0) break;
+    out[index] = out[index]! + 1;
+    left -= 1;
+  }
+  return out.map((value) => `${value}%`);
+}
 
 /** E1's category breakdown: each category's share of every point lost, costliest first. */
 export function shareRows(categories: readonly CategoryRate[]): BarRow[] {
-  return categories.map((c) => ({
+  const printed = apportionPercents(categories.map((c) => c.share));
+  return categories.map((c, i) => ({
     key: c.category,
     label: categoryLabel(c.category),
     value: c.share,
     max: 1,
-    printed: percent(c.share),
-    cells: [categoryLabel(c.category), percent(c.share), formatPoints(c.deduction)],
+    printed: printed[i]!,
+    cells: [categoryLabel(c.category), printed[i]!, formatPoints(c.deduction)],
     spoken: copy.breakdown.spoken(
       categoryLabel(c.category),
-      percent(c.share),
+      printed[i]!,
       formatPoints(c.deduction)
     ),
   }));
@@ -198,7 +233,9 @@ export function shareSummary(categories: readonly CategoryRate[], period: Insigh
   const over = periodPhrase(period);
   const top = categories[0];
   if (top === undefined || top.deduction <= 0) return copy.breakdown.none(over);
-  return copy.breakdown.summary(categoryLabel(top.category), percent(top.share), over);
+  // Through the same apportionment as the bars: the sentence and the row it names must agree.
+  const printed = apportionPercents(categories.map((c) => c.share))[0]!;
+  return copy.breakdown.summary(categoryLabel(top.category), printed, over);
 }
 
 // --- You vs. you ---------------------------------------------------------------------------------
@@ -220,23 +257,26 @@ const directionWord = (direction: Delta['direction']) =>
 /** The card's rows: the score first, then every category in the aggregate's order (largest move first). */
 export function youVsYouRows(card: YouVsYou): YouVsYouRow[] {
   const score = card.score;
-  const scoreN = formatPoints(Math.abs(score.delta));
+  // The row prints both numbers, so its movement is the difference between them *as printed*:
+  // an unrounded delta puts "Up 2.5" beside "84 vs 81". A move that rounds away reads as Same.
+  const moved = Math.round(score.current) - Math.round(score.baseline);
+  const scoreWay: Delta['direction'] = moved === 0 ? 'same' : moved > 0 ? 'better' : 'worse';
   const scoreText =
-    score.direction === 'same'
+    scoreWay === 'same'
       ? copy.youVsYou.same
-      : score.delta > 0
-        ? copy.youVsYou.up(scoreN)
-        : copy.youVsYou.down(scoreN);
+      : moved > 0
+        ? copy.youVsYou.up(String(moved))
+        : copy.youVsYou.down(String(-moved));
   const scoreRow: YouVsYouRow = {
     key: 'score',
     label: copy.youVsYou.scoreLabel,
     text: scoreText,
     detail: `${formatScore(score.current)} vs ${formatScore(score.baseline)}`,
-    direction: score.direction,
+    direction: scoreWay,
     spoken:
-      score.direction === 'same'
+      scoreWay === 'same'
         ? copy.youVsYou.spokenSame(copy.youVsYou.scoreLabel)
-        : copy.youVsYou.spokenScore(formatScore(score.current), scoreText, directionWord(score.direction)),
+        : copy.youVsYou.spokenScore(formatScore(score.current), scoreText, directionWord(scoreWay)),
   };
 
   const categories = card.categories.map((d): YouVsYouRow => {
@@ -321,6 +361,30 @@ export function highlightsFor(
     }
   }
   return highlights.sort((a, b) => b.run - a.run).slice(0, MAX_HIGHLIGHTS);
+}
+
+/**
+ * Why a category has nothing to report for a window, or null when it genuinely has something to
+ * say — including "it was measured and it cost nothing", which is the celebration.
+ *
+ * The rule `measured()` applies to a highlight applies here too, and for the same reason: a
+ * category the app could not observe has not been kept clean, it has not been looked at. Without
+ * this, "Nothing lost to speeding over 4 weeks" prints over a month with no drives in it at all
+ * (a celebration of not driving, which §10.1 is at pains to avoid) and over drives whose posted
+ * limit was never known (which §9.3 does not score).
+ */
+export type NotMeasured = 'noDrives' | 'noCamera' | 'noLimit';
+
+export function notMeasuredReason(
+  trips: readonly TripSummary[],
+  category: EventCategory
+): NotMeasured | null {
+  const scored = trips.filter((trip) => trip.scored);
+  if (scored.length === 0) return 'noDrives';
+  if (!scored.some((trip) => measured(trip, category))) {
+    return category === 'focus' ? 'noCamera' : 'noLimit';
+  }
+  return null;
 }
 
 // --- Conditions ----------------------------------------------------------------------------------
@@ -457,6 +521,8 @@ export function weeklyRateSummary(columns: readonly WeekColumn[], period: Insigh
 
 export interface CategoryFigures {
   deduction: number;
+  /** The points themselves, printed — the field is called "Points lost", so it prints them. */
+  total: string;
   per100Mi: string;
   perHour: string;
   drives: string;
@@ -472,6 +538,7 @@ export function categoryFigures(
   const rate = categories.find((c) => c.category === category);
   return {
     deduction: rate?.deduction ?? 0,
+    total: formatPoints(rate?.deduction ?? 0),
     per100Mi: formatRate(rate?.per100Mi ?? null),
     perHour: formatRate(rate?.perHour ?? null),
     drives: copy.category.rates.drivesValue(rate?.trips ?? 0, scoredTrips),

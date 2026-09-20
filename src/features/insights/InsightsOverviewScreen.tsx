@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { EventCategory } from '@scoring';
+import { CONSTANTS, type EventCategory } from '@scoring';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 
@@ -14,7 +14,6 @@ import { insightsCopy as copy } from './copy';
 import { Field, FieldText, Rule } from './Field';
 import {
   conditionRows,
-  describeRows,
   highlightsFor,
   MIN_SCORED_TRIPS,
   shareRows,
@@ -24,9 +23,10 @@ import {
   trendSummary,
   youVsYouCaption,
   youVsYouRows,
+  type YouVsYouRow,
 } from './format';
 import { PeriodSelector } from './PeriodSelector';
-import type { InsightsPeriod } from './period';
+import { periodPhrase, type InsightsPeriod } from './period';
 import { categoryHref, howScoringWorksHref, totalsHref } from './routes';
 
 /** The long-term score as one printed field: the numeral, the band as a word, the stamp if any. */
@@ -49,12 +49,19 @@ function ScoreField({ longTerm }: { longTerm: Insights['longTerm'] }) {
       </View>
       {longTerm.provisional ? (
         <Text variant="footnote" tone="muted">
-          {copy.score.provisionalNote}
+          {copy.score.provisionalNote(CONSTANTS.LONG_TERM_MIN_TRIPS, CONSTANTS.LONG_TERM_WINDOW_D)}
         </Text>
       ) : null}
     </Field>
   );
 }
+
+/** A drawn arrow per direction. It rides beside the words, so meaning never rests on it alone. */
+const DELTA_GLYPH: Record<YouVsYouRow['direction'], keyof typeof Ionicons.glyphMap> = {
+  better: 'arrow-up',
+  worse: 'arrow-down',
+  same: 'remove',
+};
 
 /**
  * §7.E E1: the current four weeks against the eight before them — the only comparison in the app,
@@ -67,6 +74,8 @@ function YouVsYouField({
   card: YouVsYou | null;
   source: Insights['baselineSource'];
 }) {
+  const th = useTheme();
+
   if (card === null) {
     return (
       <Field label={copy.youVsYou.label} testID="you-vs-you">
@@ -98,19 +107,29 @@ function YouVsYouField({
             <Text variant="subhead" style={{ flex: 1 }}>
               {row.label}
             </Text>
-            {row.detail ? (
-              <Text variant="footnote" tone="subtle">
-                {row.detail}
-              </Text>
-            ) : null}
-            <FieldText
-              face="numeral"
-              variant="subhead"
-              tone={row.direction === 'same' ? 'muted' : 'default'}
-              style={{ minWidth: 72, textAlign: 'right' }}
-            >
-              {row.text}
-            </FieldText>
+            {/* §7.E E1 asks for per-category arrows. The arrow is drawn *beside* the words, never
+                instead of them, and never as the only carrier of the meaning. */}
+            <Ionicons
+              name={DELTA_GLYPH[row.direction]}
+              size={16}
+              color={row.direction === 'same' ? th.colors.textSubtle : th.colors.text}
+            />
+            {/* The movement sits above what it is a movement of: "a drive" printed before the
+                number it qualifies reads as "Phone use, a drive, 4 more". */}
+            <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
+              <FieldText
+                face="numeral"
+                variant="subhead"
+                tone={row.direction === 'same' ? 'muted' : 'default'}
+              >
+                {row.text}
+              </FieldText>
+              {row.detail ? (
+                <Text variant="caption" tone="subtle">
+                  {row.detail}
+                </Text>
+              ) : null}
+            </View>
           </Rule>
         ))}
       </View>
@@ -193,21 +212,29 @@ function Entries({ period }: { period: InsightsPeriod }) {
 export function InsightsOverviewScreen({
   period,
   onPeriodChange,
+  bottomInset = true,
 }: {
   period: InsightsPeriod;
   onPeriodChange: (period: InsightsPeriod) => void;
+  /** Off inside the tab bar, which sits between this screen and the home indicator and pads itself. */
+  bottomInset?: boolean;
 }) {
   const router = useRouter();
   const th = useTheme();
   const insightsQuery = useInsights(period);
   // Highlights are a standing record — the run of clean drives from the newest back — so they are
-  // read over the driver's own drives rather than over the selected window.
-  const tripsQuery = useTrips({ role: 'driver', limit: 100 });
+  // read over the driver's own drives rather than over the selected window, and uncapped: a page
+  // of 100 would silently print a longer run as exactly "100 drives". `readInsights` already
+  // reads the whole table, and E3 shares this cache entry.
+  const tripsQuery = useTrips({ role: 'driver' });
 
   if (insightsQuery.isPending) {
     return (
-      <Screen scroll>
+      <Screen scroll bottomInset={bottomInset}>
         <TopBar title={copy.title} />
+        {/* The control the driver just used stays under their finger while the page reprints;
+            losing it mid-switch reads as the screen having broken. */}
+        <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
         <InsightsSkeleton testID="insights-skeleton" />
       </Screen>
     );
@@ -215,7 +242,7 @@ export function InsightsOverviewScreen({
 
   if (insightsQuery.error || !insightsQuery.data) {
     return (
-      <Screen>
+      <Screen bottomInset={bottomInset}>
         <TopBar title={copy.title} />
         <ReadError onRetry={() => void insightsQuery.refetch()} />
       </Screen>
@@ -226,7 +253,7 @@ export function InsightsOverviewScreen({
 
   if (!insights.enoughData) {
     return (
-      <Screen scroll testID="insights-overview">
+      <Screen scroll bottomInset={bottomInset} testID="insights-overview">
         <TopBar title={copy.title} />
         <BuildingState scored={insights.scoredTripsAllTime} />
         <Entries period={period} />
@@ -237,9 +264,12 @@ export function InsightsOverviewScreen({
   const shares = shareRows(insights.categories);
   const highlights = highlightsFor(tripsQuery.data ?? []);
   const conditions = conditionRows(insights.conditions);
+  // §7.0 Empty: a window with nothing in it gets one sentence, not six bars of 0 % and four rows
+  // of dashes. The trend, the you-vs-you note and the highlights still have something to say.
+  const quiet = insights.totals.scoredTrips === 0;
 
   return (
-    <Screen scroll testID="insights-overview">
+    <Screen scroll bottomInset={bottomInset} testID="insights-overview">
       <TopBar title={copy.title} />
       <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
 
@@ -259,31 +289,38 @@ export function InsightsOverviewScreen({
         <YouVsYouField card={insights.youVsYou} source={insights.baselineSource} />
       </Card>
 
-      <Field label={copy.breakdown.label} testID="breakdown">
-        <ChartBlock
-          interactive
-          label={describeRows(copy.breakdown.caption, shares)}
-          summaryText={shareSummary(insights.categories, period)}
-          table={{
-            caption: copy.breakdown.caption,
-            columns: [
-              { title: copy.breakdown.columns.category },
-              { title: copy.breakdown.columns.share, numeric: true },
-              { title: copy.breakdown.columns.points, numeric: true },
-            ],
-            rows: tableRows(shares),
-          }}
-          testID="breakdown-chart"
-        >
-          <Bars
-            rows={shares}
-            pressHint={copy.breakdown.hint}
-            onPress={(key) => router.push(categoryHref(key as EventCategory, period))}
-            testID="breakdown-bars"
-          />
-        </ChartBlock>
-      </Field>
+      {quiet ? (
+        <Text variant="subhead" tone="muted" testID="quiet-period">
+          {copy.quietPeriod(periodPhrase(period))}
+        </Text>
+      ) : (
+        <Field label={copy.breakdown.label} testID="breakdown">
+          <ChartBlock
+            interactive
+            summaryText={shareSummary(insights.categories, period)}
+            table={{
+              caption: copy.breakdown.caption,
+              columns: [
+                { title: copy.breakdown.columns.category },
+                { title: copy.breakdown.columns.share, numeric: true },
+                { title: copy.breakdown.columns.points, numeric: true },
+              ],
+              rows: tableRows(shares),
+            }}
+            testID="breakdown-chart"
+          >
+            <Bars
+              rows={shares}
+              pressHint={copy.breakdown.hint}
+              onPress={(key) => router.push(categoryHref(key as EventCategory, period))}
+              testID="breakdown-bars"
+            />
+          </ChartBlock>
+        </Field>
+      )}
 
+      {/* Not period-scoped: a run of clean drives is a standing record, and stays whatever
+          window is open. */}
       <Field label={copy.highlights.label} testID="highlights">
         {highlights.length === 0 ? (
           <Text variant="subhead" tone="muted">
@@ -304,26 +341,33 @@ export function InsightsOverviewScreen({
         )}
       </Field>
 
-      <Field label={copy.conditions.label} testID="conditions">
-        <View accessibilityRole="list">
-          {conditions.map((row, index) => (
-            <Rule key={row.key} label={row.spoken} first={index === 0} testID={`condition-${row.key}`}>
-              <Text variant="subhead" style={{ width: '28%' }}>
-                {row.label}
-              </Text>
-              <FieldText face="numeral" variant="subhead" style={{ minWidth: 40 }}>
-                {row.score}
-              </FieldText>
-              <Text variant="footnote" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
-                {row.detail}
-              </Text>
-            </Rule>
-          ))}
-        </View>
-        <Text variant="footnote" tone="muted">
-          {copy.conditions.note}
-        </Text>
-      </Field>
+      {quiet ? null : (
+        <Field label={copy.conditions.label} testID="conditions">
+          <View accessibilityRole="list">
+            {conditions.map((row, index) => (
+              <Rule
+                key={row.key}
+                label={row.spoken}
+                first={index === 0}
+                testID={`condition-${row.key}`}
+              >
+                <Text variant="subhead" style={{ width: '28%' }}>
+                  {row.label}
+                </Text>
+                <FieldText face="numeral" variant="subhead" style={{ minWidth: 40 }}>
+                  {row.score}
+                </FieldText>
+                <Text variant="footnote" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
+                  {row.detail}
+                </Text>
+              </Rule>
+            ))}
+          </View>
+          <Text variant="footnote" tone="muted">
+            {copy.conditions.note}
+          </Text>
+        </Field>
+      )}
 
       <Entries period={period} />
     </Screen>

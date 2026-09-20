@@ -19,16 +19,18 @@ import {
   describeRows,
   exampleTripsFor,
   inWindow,
+  notMeasuredReason,
   tableRows,
   timeOfDayRows,
   timeOfDaySummary,
   tipsFor,
   weeklyRateColumns,
   weeklyRateSummary,
+  type NotMeasured,
 } from './format';
 import { PeriodSelector } from './PeriodSelector';
 import { periodPhrase, type InsightsPeriod } from './period';
-import { tripSummaryHref } from './routes';
+import { insightsHref, tripSummaryHref } from './routes';
 import { useCameraMode } from './useCameraMode';
 
 /** The three exposure-normalised figures §7.E E2 leads with, as printed fields. */
@@ -41,6 +43,12 @@ function RatesField({
 }) {
   // Each row speaks its own unit: "26.7" alone is not a number a reader can act on.
   const rows = [
+    {
+      key: 'total',
+      label: copy.category.rates.total,
+      value: figures.total,
+      spoken: copy.category.rates.spokenRate(copy.category.rates.total, figures.total),
+    },
     {
       key: 'per100Mi',
       label: copy.category.rates.per100Mi,
@@ -133,6 +141,25 @@ function CameraExplainer() {
 }
 
 /**
+ * The window held nothing this category could be read from. Said plainly, and never as a failure
+ * or as a reason to drive more — the period selector sits right above it, and widening it is the
+ * move. The tips stay: advice about a habit is useful whether or not this window saw it.
+ */
+
+function NotMeasuredCard({ reason, period }: { reason: NotMeasured; period: InsightsPeriod }) {
+  return (
+    <Card testID="category-not-measured">
+      <Text variant="title3" accessibilityRole="header">
+        {copy.category.notMeasured.title}
+      </Text>
+      <Text variant="subhead" tone="muted">
+        {copy.category.notMeasured[reason](periodPhrase(period))}
+      </Text>
+    </Card>
+  );
+}
+
+/**
  * Nothing lost to this behaviour in the window: the celebration §7.E E2 asks for. The stamp is
  * this screen's one moving thing — it lands once, on arrival, and is simply there under reduce
  * motion.
@@ -178,17 +205,32 @@ export function CategoryScreen({
     return (
       <Screen>
         <TopBar title={copy.title} />
-        <EmptyState title={copy.category.notFound.title} body={copy.category.notFound.body} />
+        {/* §7.0: never a dead end. A cold open of a stale link has no Back to fall back on, so
+            the way to the overview has to be on the screen itself. */}
+        <EmptyState
+          title={copy.category.notFound.title}
+          body={copy.category.notFound.body}
+          action={{
+            label: copy.category.notFound.action,
+            onPress: () => router.replace(insightsHref(period)),
+          }}
+          testID="category-not-found"
+        />
       </Screen>
     );
   }
 
   const label = categoryLabel(category);
 
-  if (insightsQuery.isPending) {
+  // All three reads, not just the aggregate: `notMeasuredReason` is computed from the drive list,
+  // so painting before it lands would flash "No scored drives" over a window that has plenty.
+  if (insightsQuery.isPending || tripsQuery.isPending || cameraQuery.isPending) {
     return (
       <Screen scroll>
         <TopBar title={label} />
+        {/* The control the driver just used stays under their finger while the page reprints;
+            losing it mid-switch reads as the screen having broken. */}
+        <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
         <InsightsSkeleton testID="insights-skeleton" />
       </Screen>
     );
@@ -210,10 +252,11 @@ export function CategoryScreen({
   const tips = tipsFor(category, stage);
   const figures = categoryFigures(insights.categories, category, insights.totals.scoredTrips);
 
-  const cameraOff = category === 'focus' && cameraQuery.data !== true;
-  // Focus is only ever measured on a camera drive: with none in the window there is nothing to
-  // rate, and a "nothing lost" stamp would be a claim about drives the app never watched.
-  const measured = category !== 'focus' || trips.some((trip) => trip.cameraSession);
+  // Not while the setting is still being read: `undefined` is "not known yet", not "off".
+  const cameraOff = category === 'focus' && !cameraQuery.isPending && cameraQuery.data !== true;
+  // What this window could actually see. A category the app did not observe has not been kept
+  // clean — it has not been looked at — so it never earns the stamp.
+  const notMeasured = notMeasuredReason(trips, category);
   const weeks = weeklyRateColumns(insights.trend, category);
   const buckets = timeOfDayRows(insights.timeOfDay, category);
   const examples = exampleTripsFor(trips, category);
@@ -225,8 +268,14 @@ export function CategoryScreen({
 
       {cameraOff ? <CameraExplainer /> : null}
 
-      {!measured ? (
-        <Tips tips={tips} title={copy.category.tips.label} />
+      {notMeasured !== null ? (
+        <>
+          {/* With camera mode off the explainer above has already said this, in full. */}
+          {cameraOff && notMeasured === 'noCamera' ? null : (
+            <NotMeasuredCard reason={notMeasured} period={period} />
+          )}
+          <Tips tips={tips} title={copy.category.tips.label} />
+        </>
       ) : figures.clean ? (
         <>
           <CleanField category={category} period={period} />

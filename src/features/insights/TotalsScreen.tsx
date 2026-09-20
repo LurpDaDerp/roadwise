@@ -1,6 +1,6 @@
 import { View } from 'react-native';
 
-import { useInsights, useScoreDaily, useTrips } from '@/data/queries';
+import { useInsights, useScoreDaily, useTrips, type Insights } from '@/data/queries';
 import { Button, Card, EmptyState, Screen, Text, useTheme } from '@/ui';
 import { formatScore } from '@/ui/charts';
 
@@ -15,6 +15,13 @@ import type { InsightsPeriod } from './period';
  * E3 — totals and records (§7.E E3). Descriptive only (§10.1): nothing here is a target, nothing
  * is compared with another driver, and no number on this page earns a point, a badge or a level.
  * Distance and trip count in particular never become goals — §10.1 forbids rewarding mileage.
+ *
+ * Split in two on purpose. The day cache is keyed by a calendar span that does not exist until
+ * the aggregate has resolved its window, and a hook cannot be skipped: asking for `{from:'',
+ * to:''}` in the meantime issues a real read, caches it under a nonsense key, and lands its
+ * result after the screen has moved on — an un-acted React update that breaks `act` for every
+ * later test in the same worker. Mounting the record only once the window is known removes the
+ * placeholder read rather than papering over it.
  */
 export function TotalsScreen({
   period,
@@ -23,23 +30,22 @@ export function TotalsScreen({
   period: InsightsPeriod;
   onPeriodChange: (period: InsightsPeriod) => void;
 }) {
-  const th = useTheme();
   const insightsQuery = useInsights(period);
-  const window = insightsQuery.data ? windowOf(insightsQuery.data) : null;
-  // Every drive the driver made, windowed by `totalsFor`: one cache entry for all four periods.
-  const tripsQuery = useTrips({ role: 'driver' });
-  const daysQuery = useScoreDaily(window?.days ?? { from: '', to: '' });
+  const insights = insightsQuery.data;
 
   if (insightsQuery.isPending) {
     return (
       <Screen scroll>
         <TopBar title={copy.totals.title} />
+        {/* The control the driver just used stays under their finger while the page reprints;
+            losing it mid-switch reads as the screen having broken. */}
+        <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
         <InsightsSkeleton testID="insights-skeleton" />
       </Screen>
     );
   }
 
-  if (insightsQuery.error || !insightsQuery.data || window === null) {
+  if (insightsQuery.error || !insights) {
     return (
       <Screen>
         <TopBar title={copy.totals.title} />
@@ -48,10 +54,43 @@ export function TotalsScreen({
     );
   }
 
+  return <TotalsRecord insights={insights} period={period} onPeriodChange={onPeriodChange} />;
+}
+
+/** The record itself. Mounted only with a window in hand, so both its reads are real ones. */
+function TotalsRecord({
+  insights,
+  period,
+  onPeriodChange,
+}: {
+  insights: Insights;
+  period: InsightsPeriod;
+  onPeriodChange: (period: InsightsPeriod) => void;
+}) {
+  const th = useTheme();
+  const window = windowOf(insights);
+  // Every drive the driver made, windowed by `totalsFor`: one cache entry for all four periods.
+  const tripsQuery = useTrips({ role: 'driver' });
+  const daysQuery = useScoreDaily(window.days);
+
+  // A record is printed once, whole. Painting it from the drives alone would show "Safe days, 0"
+  // for a frame and then correct itself, which on a page of records reads as a number that was
+  // wrong. `isPending` is false once a read has settled either way, so a failed day cache shows
+  // the record with no safe days rather than holding the page.
+  if (tripsQuery.isPending || daysQuery.isPending) {
+    return (
+      <Screen scroll>
+        <TopBar title={copy.totals.title} />
+        <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
+        <InsightsSkeleton testID="insights-skeleton" />
+      </Screen>
+    );
+  }
+
   const totals = totalsFor({
     trips: tripsQuery.data ?? [],
     days: daysQuery.data ?? [],
-    trend: insightsQuery.data.trend,
+    trend: insights.trend,
     from: window.from,
     to: window.to,
   });

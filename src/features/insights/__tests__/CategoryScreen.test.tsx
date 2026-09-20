@@ -70,6 +70,7 @@ async function open(seed: Seed, category: string | undefined) {
 
 beforeEach(() => {
   mockRouter.push.mockClear();
+  mockRouter.replace.mockClear();
   jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
 });
 
@@ -82,6 +83,7 @@ describe('a category that cost points', () => {
 
     expect(screen.getByRole('header', { name: 'Speeding' })).toBeOnTheScreen();
     // 8 points over 30 miles and an hour and a half, on two of the three drives.
+    expect(screen.getByTestId('rate-total')).toHaveTextContent('8');
     expect(screen.getByTestId('rate-per100Mi')).toHaveTextContent('26.7');
     expect(screen.getByTestId('rate-perHour')).toHaveTextContent('5.3');
     expect(screen.getByTestId('rate-drives')).toHaveTextContent('2 of 3');
@@ -170,16 +172,24 @@ describe('the camera category', () => {
     // Nothing was watched, so nothing is claimed: no rates, and no "clean" stamp either.
     expect(screen.queryByTestId('rates')).toBeNull();
     expect(screen.queryByTestId('category-clean')).toBeNull();
+    // And it is said once: the explainer above already carries the whole sentence.
+    expect(screen.queryByTestId('category-not-measured')).toBeNull();
     // Still useful: the two tips for the behaviour are here.
     expect(screen.getByTestId('tips')).toBeOnTheScreen();
   });
 
-  test('with camera mode on but no camera drive, it still claims nothing', async () => {
+  test('with camera mode on but no camera drive, it says so instead of claiming a clean record', async () => {
     await open({ trips: SPEEDING, settings: [[CAMERA_MODE_SETTING_KEY, true]] }, 'focus');
     await ready();
 
     expect(screen.queryByTestId('camera-explainer')).toBeNull();
     expect(screen.queryByTestId('category-clean')).toBeNull();
+    expect(screen.getByTestId('category-not-measured')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This is only measured on drives with camera mode on, and there were none over 4 weeks.'
+      )
+    ).toBeOnTheScreen();
     expect(screen.getByTestId('tips')).toBeOnTheScreen();
   });
 
@@ -202,11 +212,94 @@ describe('the camera category', () => {
   });
 });
 
+describe('a window that measured nothing', () => {
+  test('a period with no scored drives says so, and never stamps CLEAN over it', async () => {
+    // Every drive is outside the four-week window; `enoughData` is about all time, so E2 still
+    // renders and used to celebrate a month of not driving.
+    await open(
+      { trips: [drive('old', Date.UTC(2025, 10, 3, 12), { speeding: 6 })] },
+      'speeding'
+    );
+    await ready();
+
+    expect(screen.getByTestId('category-not-measured')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'No scored drives over 4 weeks, so there is nothing to rate. Widen the period to see further back.'
+      )
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-clean')).toBeNull();
+    expect(screen.queryByLabelText('Clean')).toBeNull();
+    expect(screen.queryByText('Nothing lost to speeding over 4 weeks')).toBeNull();
+    // Still useful, and still a way on: the tips and the selector.
+    expect(screen.getByTestId('tips')).toBeOnTheScreen();
+    expect(screen.getByRole('radio', { name: 'All time' })).toBeOnTheScreen();
+  });
+
+  test('widening the period to where the drives are brings the numbers back', async () => {
+    await open(
+      { trips: [drive('old', Date.UTC(2025, 10, 3, 12), { speeding: 6 })] },
+      'speeding'
+    );
+    await ready();
+    expect(screen.getByTestId('category-not-measured')).toBeOnTheScreen();
+
+    await press(screen.getByRole('radio', { name: 'All time' }));
+    await flush();
+    expect(screen.queryByTestId('category-not-measured')).toBeNull();
+    expect(screen.getByTestId('rate-total')).toHaveTextContent('6');
+  });
+
+  test('speeding over roads whose limit was never known is not a kept limit', async () => {
+    await open(
+      {
+        trips: [
+          drive('a', Date.UTC(2026, 0, 5, 12), { braking: 4 }, { limit_coverage_pct: 20 }),
+          drive('b', Date.UTC(2026, 0, 12, 12), {}, { limit_coverage_pct: null }),
+        ],
+      },
+      'speeding'
+    );
+    await ready();
+
+    expect(
+      screen.getByText(
+        'Speeding is only counted where the posted limit is known, and it was not known on your drives over 4 weeks.'
+      )
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-clean')).toBeNull();
+  });
+
+  test('the same drives measured every other category, and one of them is genuinely clean', async () => {
+    await open(
+      {
+        trips: [
+          drive('a', Date.UTC(2026, 0, 5, 12), { braking: 4 }, { limit_coverage_pct: 20 }),
+          drive('b', Date.UTC(2026, 0, 12, 12), {}, { limit_coverage_pct: null }),
+        ],
+      },
+      'phone'
+    );
+    await ready();
+
+    expect(screen.queryByTestId('category-not-measured')).toBeNull();
+    expect(screen.getByTestId('category-clean')).toBeOnTheScreen();
+    expect(screen.getByText('Nothing lost to phone use over 4 weeks')).toBeOnTheScreen();
+  });
+});
+
 describe('the edges', () => {
-  test('a route segment that is not a category is an empty state, not a crash', async () => {
+  test('a route segment that is not a category is an empty state with a way out, not a dead end', async () => {
     await open({ trips: SPEEDING }, 'driving');
     expect(await screen.findByText("That isn't a category we score")).toBeOnTheScreen();
     expect(screen.getByText('Pick one from the overview.')).toBeOnTheScreen();
+
+    // §7.0: a cold deep link has no Back, so the overview has to be on the screen.
+    await press(screen.getByRole('button', { name: 'Insights overview' }));
+    expect(mockRouter.replace).toHaveBeenCalledWith({
+      pathname: '/(app)/insights',
+      params: { period: '4w' },
+    });
   });
 
   test('a database that cannot be read says so in place and offers a retry', async () => {

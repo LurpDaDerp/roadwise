@@ -15,7 +15,13 @@ export const insightsCopy = {
   back: 'Back',
   loading: 'Loading your insights',
   error: { message: "Couldn't read your drives.", retry: 'Try again' },
-  chart: { showTable: 'Show as table', showChart: 'Show as chart' },
+  chart: {
+    showTable: 'Show as table',
+    showChart: 'Show as chart',
+    /** A long chart names itself and hands the rows to the table rather than reciting them. */
+    manyRows: (caption: string, rows: number) =>
+      `${caption}. ${rows} rows — open the table to read them.`,
+  },
 
   period: {
     label: 'Period',
@@ -33,8 +39,12 @@ export const insightsCopy = {
     notYet: '—',
     building: 'Building',
     provisional: 'Provisional',
-    /** §9.6: displayed after three scored trips and an hour of driving. */
-    provisionalNote: 'Provisional until you have an hour of scored driving.',
+    /**
+     * §9.6 gates on *both* a trip count and driving time, and over the recent window rather than
+     * all time, so the note names both and says which window it means.
+     */
+    provisionalNote: (trips: number, days: number) =>
+      `Provisional until you have ${trips} scored drives and an hour of scored driving in the last ${days} days.`,
   },
 
   trend: {
@@ -71,8 +81,8 @@ export const insightsCopy = {
       body: 'Once there are drives from before them, this card compares you with your earlier self — and with no one else.',
     },
     quiet: 'No drives in the last 4 weeks to set against your baseline. Nothing is lost by the pause.',
-    /** §10.11: the app compares the driver with nobody else, and says so where it compares. */
-    note: 'The only comparison in the app, and it is with your own earlier drives.',
+    /** §10.1.4: compare with yourself first. Scoped to this screen — F5 adds opt-in crew boards. */
+    note: 'The only comparison on this screen, and it is with your own earlier drives.',
     spokenScore: (current: string, text: string, word: string) =>
       `Score ${current}, ${text} from your baseline, ${word}`,
     spokenCategory: (label: string, text: string, word: string) =>
@@ -119,6 +129,10 @@ export const insightsCopy = {
     spokenNone: (label: string) => `${label}, no drives`,
   },
 
+  /** §7.0 Empty: one sentence, not a breakdown of zeroes and a table of dashes. */
+  quietPeriod: (over: string) =>
+    `No scored drives ${over}. Widen the period to see further back — driving less never lowers your score.`,
+
   entries: {
     totals: 'Totals & records',
     totalsSub: 'Miles, hours, safe days and bests',
@@ -137,9 +151,14 @@ export const insightsCopy = {
   },
 
   category: {
-    notFound: { title: "That isn't a category we score", body: 'Pick one from the overview.' },
+    notFound: {
+      title: "That isn't a category we score",
+      body: 'Pick one from the overview.',
+      action: 'Insights overview',
+    },
     rates: {
       label: (over: string) => `Points lost ${over}`,
+      total: 'Total',
       per100Mi: 'Per 100 miles',
       perHour: 'Per hour',
       drives: 'Drives affected',
@@ -147,6 +166,16 @@ export const insightsCopy = {
       /** No miles or no hours in the window: there is no rate to print. */
       noRate: '—',
       spokenRate: (label: string, value: string) => `${label}, ${value} points`,
+    },
+    /** §7.E E2: measured-and-clean is a celebration; not-measured is a different sentence. */
+    notMeasured: {
+      title: 'Nothing to measure here yet',
+      noDrives: (over: string) =>
+        `No scored drives ${over}, so there is nothing to rate. Widen the period to see further back.`,
+      noCamera: (over: string) =>
+        `This is only measured on drives with camera mode on, and there were none ${over}.`,
+      noLimit: (over: string) =>
+        `Speeding is only counted where the posted limit is known, and it was not known on your drives ${over}.`,
     },
     clean: {
       stamp: 'Clean',

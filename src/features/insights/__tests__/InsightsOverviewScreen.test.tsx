@@ -22,6 +22,8 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 const NOW = Date.UTC(2026, 0, 26, 12);
 const now = () => NOW;
 
+const DAY = 86_400_000;
+
 const MON = {
   dec1: Date.UTC(2025, 11, 1, 12),
   dec8: Date.UTC(2025, 11, 8, 12),
@@ -212,6 +214,39 @@ describe('with enough scored drives', () => {
     await press(screen.getByRole('button', { name: /^How scoring works/ }));
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/insights/how-scoring-works');
   });
+});
+
+test('a period with no drives in it says so once, instead of six bars of nothing', async () => {
+  // Three scored drives all-time, so the overview is past its progress state; none of them in the
+  // last four weeks, so the window itself is empty.
+  const w = await world(
+    { trips: [drive('b1', MON.dec1, 80), drive('b2', MON.dec8, 80), drive('b3', MON.dec8 + DAY, 80)] },
+    now
+  );
+  await w.renderScreen(<Route />);
+  await screen.findByTestId('insights-overview');
+  await flush();
+
+  expect(screen.getByTestId('quiet-period')).toBeOnTheScreen();
+  expect(
+    screen.getByText(
+      'No scored drives over 4 weeks. Widen the period to see further back — driving less never lowers your score.'
+    )
+  ).toBeOnTheScreen();
+  // §7.0 Empty: one sentence, not a breakdown of zeroes and a table of dashes.
+  expect(screen.queryByTestId('breakdown')).toBeNull();
+  expect(screen.queryByTestId('conditions')).toBeNull();
+  // The trend, the highlights and the doors are still worth having.
+  expect(screen.getByTestId('trend')).toBeOnTheScreen();
+  expect(screen.getByTestId('highlights')).toBeOnTheScreen();
+  expect(screen.getByTestId('insights-entries')).toBeOnTheScreen();
+
+  // Widening the period brings them back.
+  await press(screen.getByRole('radio', { name: 'All time' }));
+  await flush();
+  expect(screen.queryByTestId('quiet-period')).toBeNull();
+  expect(screen.getByTestId('breakdown')).toBeOnTheScreen();
+  expect(screen.getByTestId('conditions')).toBeOnTheScreen();
 });
 
 describe('without enough scored drives', () => {

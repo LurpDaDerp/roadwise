@@ -62,6 +62,10 @@ function Route({ initial = 'all' as InsightsPeriod }) {
   return <TotalsScreen period={period} onPeriodChange={setPeriod} />;
 }
 
+/**
+ * All three reads have landed. The screen only carries this testID once the aggregate, the drives
+ * and the day cache have all settled, so awaiting it cannot leave a read to land after the test.
+ */
 async function ready(): Promise<void> {
   await screen.findByTestId('totals-screen');
   await flush();
@@ -115,9 +119,11 @@ test('the period narrows the record without changing what it means', async () =>
 
   // Four weeks back from 26 January opens on 29 December, so every drive is still inside it:
   // the window moved, the meaning of each field did not.
+  // The selector stays put while the record reprints, and the record comes back whole: three
+  // reads have to land, which is more than one turn of the loop.
   await press(screen.getByRole('radio', { name: '4 weeks' }));
-  await flush();
   expect(screen.getByRole('radio', { name: '4 weeks', selected: true })).toBeOnTheScreen();
+  await ready();
   expect(screen.getByLabelText('Drives, 3')).toBeOnTheScreen();
   expect(
     screen.getByText('These describe your driving. Nothing here earns points, badges or levels.')
