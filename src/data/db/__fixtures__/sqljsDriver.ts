@@ -9,10 +9,10 @@ import type { Db, DbResult } from '@/data/db/driver';
  * CASCADE`, `AUTOINCREMENT` and index behaviour match the device. Loading the wasm needs Node's
  * `fs`, so every suite that uses this driver must declare `@jest-environment node`.
  *
- * Caveat: sql.js is a single in-memory connection, so `transaction()` issues plain
- * BEGIN/COMMIT/ROLLBACK and hands the *same* handle back as `tx`. Nested transactions are not
- * supported — calling `transaction()` from inside a `transaction()` callback will fail with
- * "cannot start a transaction within a transaction".
+ * sql.js is a single in-memory connection, so `transaction()` issues plain BEGIN/COMMIT/ROLLBACK
+ * and hands the *same* handle back as `tx` — unlike the device driver, where `tx` is a separate
+ * connection. Both refuse a nested `transaction()` with the same error, so code written against
+ * the interface behaves the same either way.
  */
 
 let runtime: Promise<SqlJsStatic> | undefined;
@@ -50,21 +50,19 @@ function run(raw: Database, sql: string, params: unknown[]): DbResult {
   }
 }
 
-export async function createSqlJsDb(): Promise<Db> {
-  const SQL = await loadSqlJs();
-  const raw = new SQL.Database();
-  // Must be set outside any transaction, and it is off by default in SQLite.
-  raw.run('PRAGMA foreign_keys = ON;');
-
+function wrap(raw: Database, insideTransaction: boolean): Db {
   const db: Db = {
     // `async` so that a SQLite error surfaces as a rejection, the way the native driver's would.
     async execute(sql: string, params: unknown[] = []): Promise<DbResult> {
       return run(raw, sql, params);
     },
     async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      if (insideTransaction) {
+        throw new Error('Db.transaction: nested transactions are not supported');
+      }
       raw.run('BEGIN;');
       try {
-        const out = await fn(db);
+        const out = await fn(wrap(raw, true));
         raw.run('COMMIT;');
         return out;
       } catch (error) {
@@ -73,6 +71,13 @@ export async function createSqlJsDb(): Promise<Db> {
       }
     },
   };
-
   return db;
+}
+
+export async function createSqlJsDb(): Promise<Db> {
+  const SQL = await loadSqlJs();
+  const raw = new SQL.Database();
+  // Must be set outside any transaction, and it is off by default in SQLite.
+  raw.run('PRAGMA foreign_keys = ON;');
+  return wrap(raw, false);
 }

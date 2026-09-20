@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
-import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS } from '@/data/db/queue';
+import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S } from '@/data/db/queue';
 
 const T0 = 1_700_000_000_000;
 const SECOND = 1000;
@@ -49,8 +49,12 @@ test('nextDue hands back due items oldest first and marks them inflight', async 
 
   expect(due.map((i) => i.idempotency_key)).toEqual(['k-a', 'k-b']);
   expect(due.every((i) => i.status === 'inflight')).toBe(true);
+  expect(due.every((i) => i.claimed_at === T0 + 10)).toBe(true);
   await expect(queue.countByStatus('pending')).resolves.toBe(0);
   await expect(queue.countByStatus('inflight')).resolves.toBe(2);
+
+  // The claim is recorded on the stored row, not only on what nextDue handed back.
+  expect((await queue.get(due[0]?.id ?? 0))?.claimed_at).toBe(T0 + 10);
 });
 
 test('nextDue honours the limit and leaves the rest pending', async () => {
@@ -142,6 +146,108 @@ test('the twentieth failure gives up and marks the item failed', async () => {
 
 test('markAttempt returns null for an item that is not there', async () => {
   await expect(queue.markAttempt(999, true, null, T0)).resolves.toBeNull();
+});
+
+test('markAttempt does nothing to an item nobody has claimed', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+
+  await expect(queue.markAttempt(item.id, false, 'boom', T0)).resolves.toBeNull();
+
+  expect(await queue.get(item.id)).toMatchObject({
+    status: 'pending',
+    attempts: 0,
+    last_error: null,
+    next_attempt_at: T0,
+  });
+});
+
+test('closing the same claim twice does not double-count the attempt', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+
+  const first = await queue.markAttempt(item.id, false, 'boom', T0);
+  const second = await queue.markAttempt(item.id, false, 'boom again', T0);
+
+  expect(first).toMatchObject({ attempts: 1, status: 'pending', last_error: 'boom' });
+  expect(second).toBeNull();
+  expect(await queue.get(item.id)).toMatchObject({
+    attempts: 1,
+    status: 'pending',
+    last_error: 'boom',
+    next_attempt_at: T0 + 30 * SECOND,
+  });
+});
+
+test('a success reported twice for one claim marks the item done once', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+
+  await expect(queue.markAttempt(item.id, true, null, T0)).resolves.toMatchObject({
+    status: 'done',
+    attempts: 0,
+  });
+  await expect(queue.markAttempt(item.id, true, null, T0)).resolves.toBeNull();
+  await expect(queue.markAttempt(item.id, false, 'late failure', T0)).resolves.toBeNull();
+
+  expect(await queue.get(item.id)).toMatchObject({ status: 'done', attempts: 0 });
+});
+
+test('closing a claim clears it', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+  expect((await queue.get(item.id))?.claimed_at).toBe(T0);
+
+  await queue.markAttempt(item.id, false, 'boom', T0);
+
+  expect((await queue.get(item.id))?.claimed_at).toBeNull();
+});
+
+test('a claim the uploader died holding is handed back after the window', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+  // The uploader is killed here: the item stays 'inflight' with nobody working on it.
+
+  const stillFresh = await queue.nextDue(T0 + RECLAIM_AFTER_S * SECOND - 1, 10);
+  expect(stillFresh).toEqual([]);
+  expect((await queue.get(item.id))?.status).toBe('inflight');
+
+  const reclaimed = await queue.nextDue(T0 + RECLAIM_AFTER_S * SECOND, 10);
+  expect(reclaimed.map((i) => i.id)).toEqual([item.id]);
+  expect(reclaimed[0]).toMatchObject({ status: 'inflight', attempts: 0 });
+});
+
+test('reclaimInflight leaves the attempt count alone and reports what it recovered', async () => {
+  const stale = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+  await queue.markAttempt(stale.id, false, 'boom', T0);
+  await queue.nextDue(T0 + 30 * SECOND, 10);
+  const fresh = await queue.enqueue('b', {}, 'k-b', T0 + 30 * SECOND);
+  await queue.nextDue(T0 + 30 * SECOND, 10);
+
+  // `stale` was claimed at T0 + 30 s along with `fresh`; move past the window for both but
+  // ask only for claims older than the remaining gap.
+  const now = T0 + 400 * SECOND;
+  await expect(queue.reclaimInflight(300, now)).resolves.toBe(2);
+
+  expect(await queue.get(stale.id)).toMatchObject({
+    status: 'pending',
+    attempts: 1,
+    next_attempt_at: now,
+    claimed_at: null,
+    last_error: 'boom',
+  });
+  expect(await queue.get(fresh.id)).toMatchObject({ status: 'pending', attempts: 0 });
+});
+
+test('reclaimInflight spares a claim inside the window', async () => {
+  const item = await queue.enqueue('a', {}, 'k-a', T0);
+  await queue.nextDue(T0, 10);
+
+  await expect(queue.reclaimInflight(300, T0 + 299 * SECOND)).resolves.toBe(0);
+  expect((await queue.get(item.id))?.status).toBe('inflight');
+
+  await expect(queue.reclaimInflight(300, T0 + 300 * SECOND)).resolves.toBe(1);
+  expect((await queue.get(item.id))?.status).toBe('pending');
 });
 
 test('get returns the item, or null when it is gone', async () => {

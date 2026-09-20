@@ -1,5 +1,5 @@
 import type { Db } from '@/data/db/driver';
-import { asEnum, asNumber, asText, asTextOrNull } from '@/data/db/row';
+import { asEnum, asNumber, asNumberOrNull, asText, asTextOrNull } from '@/data/db/row';
 import { QUEUE_STATUSES, type QueueItem, type QueueStatus } from '@/data/db/types';
 
 /**
@@ -9,11 +9,18 @@ import { QUEUE_STATUSES, type QueueItem, type QueueStatus } from '@/data/db/type
  * Retries back off from 30 s, doubling to a one-hour ceiling, and give up after 20 attempts.
  * The server dedupes on `idempotency_key`, so a retry that actually succeeded the first time is
  * harmless.
+ *
+ * An item moves `pending → inflight` when `nextDue` claims it and back out when `markAttempt`
+ * closes the attempt. A process killed mid-upload leaves the claim open, so `nextDue` first
+ * reclaims claims older than `RECLAIM_AFTER_S`.
  */
 
 const FIRST_DELAY_S = 30;
 const MAX_DELAY_S = 3600;
 export const MAX_ATTEMPTS = 20;
+
+/** How long a claim may stand before `nextDue` assumes the uploader died holding it. */
+export const RECLAIM_AFTER_S = 300;
 
 /**
  * Seconds to wait before the next try, given how many attempts have already failed:
@@ -32,6 +39,7 @@ function toQueueItem(row: Record<string, unknown>): QueueItem {
     status: asEnum(row, 'status', QUEUE_STATUSES),
     attempts: asNumber(row, 'attempts'),
     next_attempt_at: asNumber(row, 'next_attempt_at'),
+    claimed_at: asNumberOrNull(row, 'claimed_at'),
     last_error: asTextOrNull(row, 'last_error'),
     created_at: asNumber(row, 'created_at'),
   };
@@ -52,8 +60,29 @@ export function createQueueRepo(db: Db) {
     return row ? toQueueItem(row) : null;
   }
 
+  /**
+   * Hand back claims nobody closed out. Attempts are left untouched — the upload may well have
+   * reached the server, and the idempotency key is what stops a duplicate.
+   */
+  async function reclaimInflight(
+    olderThanS: number = RECLAIM_AFTER_S,
+    now: number = Date.now(),
+    on: Db = db
+  ): Promise<number> {
+    const { changes } = await on.execute(
+      `UPDATE sync_queue
+          SET status = 'pending', next_attempt_at = ?, claimed_at = NULL
+        WHERE status = 'inflight' AND (claimed_at IS NULL OR claimed_at <= ?)`,
+      [now, now - olderThanS * 1000]
+    );
+    return changes;
+  }
+
   return {
     get: (id: number) => get(id),
+
+    reclaimInflight: (olderThanS: number = RECLAIM_AFTER_S, now: number = Date.now()) =>
+      reclaimInflight(olderThanS, now),
 
     /**
      * Idempotent: enqueueing a key already in the queue keeps the item that is there, whatever
@@ -80,10 +109,17 @@ export function createQueueRepo(db: Db) {
 
     /**
      * Claim up to `limit` items whose retry time has arrived, marking them `inflight` in the
-     * same transaction so two drain passes cannot pick up the same work.
+     * same transaction so two drain passes cannot pick up the same work. Stale claims are
+     * reclaimed first, inside that transaction, so a crashed upload is retried rather than lost.
      */
-    nextDue(now: number = Date.now(), limit = 10): Promise<QueueItem[]> {
+    nextDue(
+      now: number = Date.now(),
+      limit = 10,
+      reclaimAfterS: number = RECLAIM_AFTER_S
+    ): Promise<QueueItem[]> {
       return db.transaction(async (tx) => {
+        await reclaimInflight(reclaimAfterS, now, tx);
+
         const { rows } = await tx.execute(
           `SELECT * FROM sync_queue
             WHERE status = 'pending' AND next_attempt_at <= ?
@@ -94,8 +130,11 @@ export function createQueueRepo(db: Db) {
         const claimed: QueueItem[] = [];
         for (const row of rows) {
           const item = toQueueItem(row);
-          await tx.execute("UPDATE sync_queue SET status = 'inflight' WHERE id = ?", [item.id]);
-          claimed.push({ ...item, status: 'inflight' });
+          await tx.execute(
+            "UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?",
+            [now, item.id]
+          );
+          claimed.push({ ...item, status: 'inflight', claimed_at: now });
         }
         return claimed;
       });
@@ -104,37 +143,52 @@ export function createQueueRepo(db: Db) {
     /**
      * Close out one attempt. Success marks the item `done` and clears the error; failure records
      * it and schedules the next try, or gives up at `MAX_ATTEMPTS`.
+     *
+     * Guarded by `status = 'inflight'` and run in one transaction, so closing the same claim
+     * twice — a retried callback, two drain passes racing — is a no-op rather than a double
+     * increment. Returns the item as it now stands, or `null` when nothing changed (no such
+     * item, or no claim open on it).
      */
-    async markAttempt(
+    markAttempt(
       id: number,
       ok: boolean,
       error: string | null = null,
       now: number = Date.now()
     ): Promise<QueueItem | null> {
-      const current = await get(id);
-      if (!current) return null;
-
-      if (ok) {
-        await db.execute(
-          "UPDATE sync_queue SET status = 'done', last_error = NULL WHERE id = ?",
+      return db.transaction(async (tx) => {
+        const { rows } = await tx.execute(
+          "SELECT * FROM sync_queue WHERE id = ? AND status = 'inflight'",
           [id]
         );
-        return get(id);
-      }
+        const row = rows[0];
+        if (!row) return null;
+        const current = toQueueItem(row);
 
-      const attempts = current.attempts + 1;
-      const givingUp = attempts >= MAX_ATTEMPTS;
-      await db.execute(
-        'UPDATE sync_queue SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?',
-        [
-          givingUp ? 'failed' : 'pending',
-          attempts,
-          givingUp ? current.next_attempt_at : now + backoffSeconds(current.attempts) * 1000,
-          error,
-          id,
-        ]
-      );
-      return get(id);
+        if (ok) {
+          await tx.execute(
+            `UPDATE sync_queue SET status = 'done', last_error = NULL, claimed_at = NULL
+              WHERE id = ? AND status = 'inflight'`,
+            [id]
+          );
+          return get(id, tx);
+        }
+
+        const attempts = current.attempts + 1;
+        const givingUp = attempts >= MAX_ATTEMPTS;
+        await tx.execute(
+          `UPDATE sync_queue
+              SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, claimed_at = NULL
+            WHERE id = ? AND status = 'inflight'`,
+          [
+            givingUp ? 'failed' : 'pending',
+            attempts,
+            givingUp ? current.next_attempt_at : now + backoffSeconds(current.attempts) * 1000,
+            error,
+            id,
+          ]
+        );
+        return get(id, tx);
+      });
     },
 
     async countByStatus(status: QueueStatus): Promise<number> {

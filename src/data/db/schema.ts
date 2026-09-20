@@ -88,6 +88,9 @@ export const SCHEMA_V1: readonly string[] = [
       CHECK (status IN ('pending', 'inflight', 'done', 'failed')),
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL,
+    -- When the item was claimed for upload. A crash mid-upload would leave it 'inflight'
+    -- forever otherwise; reclaimInflight uses this to hand a stale claim back.
+    claimed_at INTEGER,
     last_error TEXT,
     created_at INTEGER NOT NULL
   )`,

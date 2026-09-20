@@ -3,7 +3,13 @@ export { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
 export { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 export { createEventsRepo, type EventsRepo } from '@/data/db/events';
-export { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, type QueueRepo } from '@/data/db/queue';
+export {
+  backoffSeconds,
+  createQueueRepo,
+  MAX_ATTEMPTS,
+  RECLAIM_AFTER_S,
+  type QueueRepo,
+} from '@/data/db/queue';
 export { createSamplesRepo, type SamplesRepo } from '@/data/db/samples';
 export { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 export { createTilesRepo, type TilesRepo } from '@/data/db/tiles';

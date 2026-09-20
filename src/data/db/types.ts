@@ -106,8 +106,11 @@ export interface QueueItem {
   /** Unique; the server dedupes on it, so re-enqueueing the same work is a no-op. */
   idempotency_key: string;
   status: QueueStatus;
+  /** Failed attempts so far; a successful one does not count. Drives the backoff ladder. */
   attempts: number;
   next_attempt_at: number;
+  /** Set when `nextDue` claims the item, cleared when the attempt closes out. */
+  claimed_at: number | null;
   last_error: string | null;
   created_at: number;
 }

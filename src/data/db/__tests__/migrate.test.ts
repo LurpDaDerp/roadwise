@@ -72,15 +72,41 @@ test('keeps data written between runs', async () => {
   expect(rows).toEqual([{ value_json: '"mph"' }]);
 });
 
+const insertTrip = (db: Db, status: string, syncState: string) =>
+  db.execute(
+    'INSERT INTO trips (client_trip_id, started_at, tz, status, sync_state, created_at, updated_at)' +
+      ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ['t1', 1, 'UTC', status, syncState, 1, 1]
+  );
+
 test('rejects a trip status outside the allowed set', async () => {
   await migrate(db);
-  await expect(
+  await expect(insertTrip(db, 'bogus', 'local')).rejects.toThrow();
+});
+
+test('rejects a trip sync_state outside the allowed set', async () => {
+  await migrate(db);
+  await expect(insertTrip(db, 'final', 'bogus')).rejects.toThrow();
+  // The allowed ones all go in.
+  for (const state of ['local', 'queued', 'uploading', 'synced', 'failed']) {
+    await db.execute('DELETE FROM trips');
+    await expect(insertTrip(db, 'final', state)).resolves.toBeDefined();
+  }
+});
+
+test('rejects a sync_queue status outside the allowed set', async () => {
+  await migrate(db);
+  const insert = (status: string) =>
     db.execute(
-      'INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at)' +
+      'INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at)' +
         ' VALUES (?, ?, ?, ?, ?, ?)',
-      ['t1', 1, 'UTC', 'bogus', 1, 1]
-    )
-  ).rejects.toThrow();
+      ['finalize-trip', '{}', `k-${status}`, status, 1, 1]
+    );
+
+  await expect(insert('bogus')).rejects.toThrow();
+  for (const status of ['pending', 'inflight', 'done', 'failed']) {
+    await expect(insert(status)).resolves.toBeDefined();
+  }
 });
 
 test('deleting a trip cascades to its events and samples', async () => {
