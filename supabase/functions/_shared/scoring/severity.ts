@@ -14,7 +14,8 @@ const clamp = (value: number, min: number, max: number): number =>
 
 /** Phone use, by the speed at the moment of handling (§9.3). Stopped is logged but unscored. */
 function phoneSeverity(speedMps: number | undefined): number {
-  if (speedMps === undefined || speedMps <= 0) return 0;
+  // NaN fails every band below, so it has to be caught here or it would fall through to 0.3.
+  if (speedMps === undefined || !Number.isFinite(speedMps) || speedMps <= 0) return 0;
   if (speedMps >= 25 * MPH) return 1;
   if (speedMps >= CONSTANTS.PHONE_MIN_SPEED_MPS) return 0.7;
   return 0.3;

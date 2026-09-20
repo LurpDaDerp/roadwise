@@ -24,3 +24,9 @@ test('falls back to the last 10 scored trips when fewer than 3 are within 60 day
 test('bands', () => {
   expect(band(90)).toBe('excellent'); expect(band(89)).toBe('good'); expect(band(65)).toBe('getting_there'); expect(band(64)).toBe('needs_focus');
 });
+test('a future-dated trip weighs no more than a fresh one', () => {
+  // A clock skewed forward would otherwise give 0.5^(negative) > 1 and let one trip outvote the rest.
+  const skewed = longTermScore([trip(-30, 60), trip(0, 100), trip(0, 100)], now);
+  const fresh = longTermScore([trip(0, 60), trip(0, 100), trip(0, 100)], now);
+  expect(skewed.score).toBe(fresh.score);
+});

@@ -60,6 +60,7 @@ describe('band boundaries', () => {
   });
 
   test.each([
+    [NaN, 0],
     [mph(0), 0],
     [mph(9.99), 0.3],
     [mph(10), 0.7],

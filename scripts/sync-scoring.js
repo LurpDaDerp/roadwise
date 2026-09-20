@@ -19,8 +19,12 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'packages', 'scoring', 'src');
-const DST = path.join(ROOT, 'supabase', 'functions', '_shared', 'scoring');
+const FUNCTIONS = path.join(ROOT, 'supabase', 'functions');
+const DST = path.join(FUNCTIONS, '_shared', 'scoring');
+const DENO_JSON = path.join(FUNCTIONS, 'deno.json');
 const README = 'README.md';
+/** Every generated import-map key starts with this, so a re-sync can replace exactly its own keys. */
+const MAP_PREFIX = './_shared/scoring/';
 
 const README_TEXT = `# scoring (generated)
 
@@ -30,10 +34,16 @@ Every file beside this one is a byte-for-byte copy of \`packages/scoring/src\`. 
 run \`npm run scoring:sync\`, and commit both trees together; \`scripts/__tests__/sync-scoring.test.ts\`
 fails when they differ.
 
-The modules only ever import each other by relative path, which is what makes a plain copy work. The
-specifiers are extensionless (\`./constants\`), so the function importing this tree has to tell Deno
-how to resolve them — a \`deno.json\` with sloppy-imports, or an import map. Rewriting them here is not
-an option: the copy has to stay byte-identical to the package.
+The modules only ever import each other by relative path, which is what makes a plain copy work.
+Those specifiers are extensionless (\`./constants\`) and Deno will not resolve them on its own, so the
+same sync also generates the \`imports\` map in \`supabase/functions/deno.json\` — one entry per module.
+That map is generated too: add or remove a module in the package and re-run the sync, never hand-edit
+it. Rewriting the specifiers in this copy is not an option; it has to stay byte-identical.
+
+Deno finds that config by walking up from the working directory, which is what \`supabase functions\`
+does. Checking the copy by hand from the repo root needs it spelled out:
+
+    deno check --config supabase/functions/deno.json supabase/functions/_shared/scoring/index.ts
 `;
 
 fs.mkdirSync(DST, { recursive: true });
@@ -52,4 +62,25 @@ for (const name of fs.readdirSync(DST)) {
 
 fs.writeFileSync(path.join(DST, README), README_TEXT);
 
-console.log(`scoring: synced ${sources.length} file(s) to supabase/functions/_shared/scoring`);
+// Deno resolves relative specifiers literally, so `./constants` inside the copy is a 404 to it and
+// `deno check` fails on every module. The package cannot carry `.ts` specifiers (Metro and tsc would
+// both object) and the copy has to stay byte-identical, so the extension is supplied out of band, by
+// an import map. Other keys in an existing deno.json are left alone; ours are rewritten wholesale so
+// a module deleted from the package also disappears from the map.
+const config = fs.existsSync(DENO_JSON) ? JSON.parse(fs.readFileSync(DENO_JSON, 'utf8')) : {};
+const imports = config.imports || {};
+for (const key of Object.keys(imports)) {
+  if (key.startsWith(MAP_PREFIX)) delete imports[key];
+}
+for (const name of sources) {
+  imports[MAP_PREFIX + name.replace(/\.ts$/, '')] = MAP_PREFIX + name;
+}
+config.imports = Object.fromEntries(
+  Object.entries(imports).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+);
+fs.writeFileSync(DENO_JSON, JSON.stringify(config, null, 2) + '\n');
+
+console.log(
+  `scoring: synced ${sources.length} file(s) to supabase/functions/_shared/scoring ` +
+    `and mapped them in supabase/functions/deno.json`
+);

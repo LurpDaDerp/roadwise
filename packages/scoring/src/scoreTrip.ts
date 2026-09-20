@@ -57,6 +57,10 @@ export function scoreTrip(m: TripMetrics, events: ScorableEvent[]): ScoredTrip {
   const eventDeductions: Record<string, number> = {};
   for (const e of events) {
     if (e.status !== 'scored') continue;
+    // The trip-level guard above does not reach an event's own numbers. A NaN duration or
+    // confidence makes the event unmeasurable, not free, so it is skipped exactly like a
+    // 'possible' one: no deduction, and no entry in the "why this score" list.
+    if (!Number.isFinite(e.durationS) || !Number.isFinite(e.q)) continue;
     const q = effectiveConfidence(e.q);
     if (q === 0) continue;
     const d = baseWeight(e) * severity(e) * durationFactor(e) * q * contextMultiplier(e);

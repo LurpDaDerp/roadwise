@@ -6,7 +6,13 @@ Every file beside this one is a byte-for-byte copy of `packages/scoring/src`. Ed
 run `npm run scoring:sync`, and commit both trees together; `scripts/__tests__/sync-scoring.test.ts`
 fails when they differ.
 
-The modules only ever import each other by relative path, which is what makes a plain copy work. The
-specifiers are extensionless (`./constants`), so the function importing this tree has to tell Deno
-how to resolve them — a `deno.json` with sloppy-imports, or an import map. Rewriting them here is not
-an option: the copy has to stay byte-identical to the package.
+The modules only ever import each other by relative path, which is what makes a plain copy work.
+Those specifiers are extensionless (`./constants`) and Deno will not resolve them on its own, so the
+same sync also generates the `imports` map in `supabase/functions/deno.json` — one entry per module.
+That map is generated too: add or remove a module in the package and re-run the sync, never hand-edit
+it. Rewriting the specifiers in this copy is not an option; it has to stay byte-identical.
+
+Deno finds that config by walking up from the working directory, which is what `supabase functions`
+does. Checking the copy by hand from the repo root needs it spelled out:
+
+    deno check --config supabase/functions/deno.json supabase/functions/_shared/scoring/index.ts

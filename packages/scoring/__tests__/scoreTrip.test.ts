@@ -44,3 +44,17 @@ test('a measurement that is not finite grades the trip C instead of scoring it f
     expect(Number.isFinite(r.exposure)).toBe(true);
   }
 });
+test('an event whose own numbers are not finite is skipped, like a possible one', () => {
+  for (const bad of [{ durationS: NaN }, { durationS: Infinity }, { q: NaN }, { q: Infinity }]) {
+    const r = scoreTrip(metrics, [{ ...events[0]!, ...bad }]);
+    expect(r).toMatchObject({ status: 'final', score: 100 });
+    expect(r.categoryDeductions.phone).toBe(0);
+    expect(r.eventDeductions).toEqual({});
+  }
+});
+test('one unusable event does not disturb the others', () => {
+  const r = scoreTrip(metrics, [...events, { ...events[0]!, id: 'p2', q: NaN }]);
+  expect(r.score).toBe(74);
+  expect(r.categoryDeductions.phone).toBeCloseTo(14.545, 2);
+  expect(Object.keys(r.eventDeductions).sort()).toEqual(['b1', 'p1', 's1']);
+});

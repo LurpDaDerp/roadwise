@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "test": "jest",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p scripts --noEmit && tsc -p packages/scoring",
     "typecheck:scoring": "tsc -p packages/scoring",
     "scoring:sync": "node scripts/sync-scoring.js",
     "db:start": "supabase start",
