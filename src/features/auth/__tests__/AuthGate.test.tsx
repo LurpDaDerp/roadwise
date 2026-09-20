@@ -35,16 +35,19 @@ const cases: [Status, string[], string | null][] = [
   ['loading', ['(tabs)', 'home'], null],
   // Signing out, or a session expiring, cannot leave anyone inside the app.
   ['signedOut', ['(tabs)', 'home'], '/(auth)/welcome'],
-  ['signedOut', ['auth', 'callback'], '/(auth)/welcome'],
-  ['signedOut', [], '/(auth)/welcome'],
   ['signedOut', ['(auth)', 'sign-in'], null],
+  // A magic-link landing is signed out until the exchange comes back. Moving now would unmount
+  // the callback mid-flight and an expired link could never show its retry.
+  ['signedOut', ['auth', 'callback'], null],
   // Signing in moves the driver on, from the sign-in screen or the deep-link landing pad.
   ['signedIn', ['(auth)', 'welcome'], '/(tabs)/home'],
   ['signedIn', ['(auth)', 'sign-in'], '/(tabs)/home'],
   ['signedIn', ['auth', 'callback'], '/(tabs)/home'],
   ['signedIn', ['(tabs)', 'insights'], null],
-  // The launch router owns the cold start at `/`; the gate leaves it alone.
+  // The launch router owns the cold start at `/`, whatever the status; a second opinion from the
+  // gate only mounts the destination twice.
   ['signedIn', [], null],
+  ['signedOut', [], null],
 ];
 
 test.each(cases)('%s at [%s] redirects to %s', async (status, segments, expected) => {
