@@ -13,6 +13,9 @@ export type ChartTableRow = {
   label: string;
 };
 
+/** Width a column of numerals reserves, in the table and beside the category bars alike. */
+export const NUMERIC_COLUMN_MIN_WIDTH = 64;
+
 export type ChartTableProps = {
   /** Names the table to assistive tech; the chart it stands in for is captioned visibly. */
   caption: string;
@@ -41,7 +44,7 @@ export function ChartTable({
     const numeric = !!columns[i]?.numeric;
     return {
       flex: numeric ? 0 : 1,
-      minWidth: numeric ? 64 : undefined,
+      minWidth: numeric ? NUMERIC_COLUMN_MIN_WIDTH : undefined,
       textAlign: numeric ? ('right' as const) : ('left' as const),
     };
   };

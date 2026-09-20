@@ -33,8 +33,12 @@ beforeEach(() => {
   mockFontScale.mockReturnValue(1);
 });
 
+// The drawing is hidden from assistive tech by design (the image label carries the data), so
+// anything inside it is queried as a drawn element, not an accessible one.
+const drawn = { includeHiddenElements: true };
+
 const fontSizeOf = (text: string): number =>
-  (StyleSheet.flatten(screen.getByText(text).props.style as TextStyle).fontSize ?? 0);
+  (StyleSheet.flatten(screen.getByText(text, drawn).props.style as TextStyle).fontSize ?? 0);
 
 /** A 160 dp ring carries a 10 dp stroke, so the arc runs on a 75 dp radius. */
 const CIRCUMFERENCE = 2 * Math.PI * 75;
@@ -46,23 +50,33 @@ test('speaks the score and its band, and prints the numeral as the largest text'
   expect(fontSizeOf('74')).toBeGreaterThan(fontSizeOf('Getting there'));
 });
 
+test('the drawing is hidden from assistive tech; the image label carries the numbers', async () => {
+  await render(<ScoreRing score={74} band="getting_there" provisional testID="ring" />);
+  expect(screen.queryByText('74')).toBeNull();
+  expect(screen.queryByText('PROVISIONAL')).toBeNull();
+  expect(screen.getByText('74', drawn)).toBeOnTheScreen();
+});
+
 test('a provisional score says so and carries the stamp', async () => {
   await render(<ScoreRing score={74} band="getting_there" provisional testID="ring" />);
   expect(
     screen.getByRole('image', { name: 'Score 74, Getting there, provisional' })
   ).toBeOnTheScreen();
-  expect(screen.getByText('PROVISIONAL')).toBeOnTheScreen();
+  expect(screen.getByText('PROVISIONAL', drawn)).toBeOnTheScreen();
 });
 
 test('with motion allowed the arc mounts empty and draws in', async () => {
   await render(<ScoreRing score={74} band="getting_there" testID="ring" />);
-  expect(screen.getByTestId('ring-arc').props.strokeDashoffset).toBeCloseTo(CIRCUMFERENCE, 3);
+  expect(screen.getByTestId('ring-arc', drawn).props.strokeDashoffset).toBeCloseTo(
+    CIRCUMFERENCE,
+    3
+  );
 });
 
 test('with reduce motion on the arc is drawn to the score immediately', async () => {
   mockReduceMotion.mockReturnValue(true);
   await render(<ScoreRing score={74} band="getting_there" testID="ring" />);
-  expect(screen.getByTestId('ring-arc').props.strokeDashoffset).toBeCloseTo(
+  expect(screen.getByTestId('ring-arc', drawn).props.strokeDashoffset).toBeCloseTo(
     CIRCUMFERENCE * 0.26,
     3
   );
@@ -70,8 +84,8 @@ test('with reduce motion on the arc is drawn to the score immediately', async ()
 
 test('a score of zero prints the number over the bare track', async () => {
   await render(<ScoreRing score={0} band="needs_focus" testID="ring" />);
-  expect(screen.queryByTestId('ring-arc')).toBeNull();
-  expect(screen.getByText('0')).toBeOnTheScreen();
+  expect(screen.queryByTestId('ring-arc', drawn)).toBeNull();
+  expect(screen.getByText('0', drawn)).toBeOnTheScreen();
 });
 
 test('the ring grows with Dynamic Type but stops at 1.5x; the band label keeps the full 2x', async () => {

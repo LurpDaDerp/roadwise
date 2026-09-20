@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react-native';
-import { StyleSheet, type ViewStyle } from 'react-native';
+import { StyleSheet, type TextStyle, type ViewStyle } from 'react-native';
 
 import { Stamp } from '@/ui/charts/Stamp';
 import { tokens } from '@/ui/tokens';
@@ -91,4 +91,27 @@ test('with reduce motion on the stamp is at rest immediately: -8 degrees, full s
   const s = styleOf('stamp');
   expect(s.transform).toEqual([{ rotate: '-8deg' }]);
   expect(s.opacity ?? 1).toBe(1);
+});
+
+test('animate off renders the stamp at rest even when motion is allowed, for recycled rows', async () => {
+  await render(<Stamp kind="safeDay" animate={false} testID="stamp" />);
+  const s = styleOf('stamp');
+  expect(s.transform).toEqual([{ rotate: '-8deg' }]);
+  expect(s.opacity ?? 1).toBe(1);
+});
+
+test('type sizes are steps of the M0 scale, not private values', async () => {
+  await render(
+    <>
+      <Stamp kind="safeDay" testID="md" />
+      <Stamp kind="safeDay" size="sm" testID="sm" />
+      <Stamp kind="A" testID="grade" />
+    </>
+  );
+  const sizeOf = (text: string, nth: number) =>
+    StyleSheet.flatten(screen.getAllByText(text)[nth]!.props.style as TextStyle).fontSize;
+  expect(sizeOf('SAFE DAY', 0)).toBe(tokens.type.callout.fontSize);
+  expect(sizeOf('SAFE DAY', 1)).toBe(tokens.type.caption.fontSize);
+  expect(sizeOf('A', 0)).toBe(tokens.type.title2.fontSize);
+  expect(sizeOf('DATA QUALITY', 0)).toBe(tokens.type.caption.fontSize);
 });

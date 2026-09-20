@@ -95,41 +95,49 @@ export function ScoreRing({
       accessible
       accessibilityRole="image"
       accessibilityLabel={describeScore(score, band, provisional)}
-      style={{ width: d, height: d, alignItems: 'center', justifyContent: 'center' }}
+      style={{ width: d, height: d }}
     >
-      <Svg width={d} height={d} style={StyleSheet.absoluteFill} pointerEvents="none">
-        <Circle
-          cx={centre}
-          cy={centre}
-          r={r}
-          stroke={t.colors.border}
-          strokeWidth={stroke}
-          fill="none"
-        />
-        {fraction > 0 ? (
-          // Rotated so the arc starts at twelve o'clock and runs clockwise, the way a dial reads.
-          <G rotation={-90} originX={centre} originY={centre}>
-            {still ? (
-              <Circle {...arc} strokeDashoffset={circumference * (1 - fraction)} />
-            ) : (
-              <AnimatedCircle {...arc} animatedProps={drawn} />
-            )}
-          </G>
+      {/* The label above carries every number; the drawing itself is hidden from assistive tech
+          so TalkBack cannot land on the numeral or the stamp a second time. */}
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}
+      >
+        <Svg width={d} height={d} style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Circle
+            cx={centre}
+            cy={centre}
+            r={r}
+            stroke={t.colors.border}
+            strokeWidth={stroke}
+            fill="none"
+          />
+          {fraction > 0 ? (
+            // Rotated so the arc starts at twelve o'clock and runs clockwise, the way a dial reads.
+            <G rotation={-90} originX={centre} originY={centre}>
+              {still ? (
+                <Circle {...arc} strokeDashoffset={circumference * (1 - fraction)} />
+              ) : (
+                <AnimatedCircle {...arc} animatedProps={drawn} />
+              )}
+            </G>
+          ) : null}
+        </Svg>
+        <Text variant="display" style={{ fontSize: numeral, lineHeight: Math.round(numeral * 1.1) }}>
+          {formatScore(score)}
+        </Text>
+        <Text variant="subhead" tone="muted" style={{ textAlign: 'center', maxWidth: d * 0.72 }}>
+          {bandLabel(band)}
+        </Text>
+        {provisional ? (
+          <Stamp
+            kind="provisional"
+            size="sm"
+            style={{ position: 'absolute', bottom: 0, alignSelf: 'center' }}
+          />
         ) : null}
-      </Svg>
-      <Text variant="display" style={{ fontSize: numeral, lineHeight: Math.round(numeral * 1.1) }}>
-        {formatScore(score)}
-      </Text>
-      <Text variant="subhead" tone="muted" style={{ textAlign: 'center', maxWidth: d * 0.72 }}>
-        {bandLabel(band)}
-      </Text>
-      {provisional ? (
-        <Stamp
-          kind="provisional"
-          size="sm"
-          style={{ position: 'absolute', bottom: 0, alignSelf: 'center' }}
-        />
-      ) : null}
+      </View>
     </View>
   );
 }

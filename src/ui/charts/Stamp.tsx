@@ -21,6 +21,11 @@ export type StampProps = {
   /** Replaces the printed word on a state stamp, or the caption under the letter on a grade stamp. */
   label?: string;
   size?: 'sm' | 'md';
+  /**
+   * Off renders the stamp at rest with no thump, for a stamp that re-mounts as a list recycles
+   * its rows: the slam is for a stamp that has just landed, not one scrolling back into view.
+   */
+  animate?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 };
@@ -38,12 +43,6 @@ const STATE_TEXT: Record<StateKind, { printed: string; spoken: string }> = {
 };
 const GRADE_CAPTION = 'DATA QUALITY';
 
-/** [fontSize, lineHeight] before Dynamic Type. */
-const SIZES = {
-  md: { word: [16, 20], letter: [26, 30], caption: [11, 14] },
-  sm: { word: [12, 15], letter: [18, 22], caption: [10, 12] },
-} as const;
-
 function isGrade(kind: StampKind): kind is Grade {
   return kind === 'A' || kind === 'B' || kind === 'C';
 }
@@ -55,9 +54,14 @@ function isGrade(kind: StampKind): kind is Grade {
  * line such as the score ring. Motion is a single thump on mount; with reduce motion on the
  * stamp is simply there.
  */
-export function Stamp({ kind, label, size = 'md', style, testID }: StampProps) {
+export function Stamp({ kind, label, size = 'md', animate = true, style, testID }: StampProps) {
   const t = useTheme();
   const fs = useFontScale();
+  // Sizes are steps of the M0 scale; the face stays B612 Bold from the `title` variants.
+  const steps =
+    size === 'md'
+      ? { word: t.type.callout, letter: t.type.title2, caption: t.type.caption }
+      : { word: t.type.caption, letter: t.type.headline, caption: t.type.caption };
 
   const text = isGrade(kind)
     ? {
@@ -75,7 +79,7 @@ export function Stamp({ kind, label, size = 'md', style, testID }: StampProps) {
   const ink = text.grade ? t.colors.accent : t.colors.stamp;
   const wash = text.grade ? t.colors.accentFaint : t.colors.stampFaint;
 
-  const still = t.reduceMotion;
+  const still = t.reduceMotion || !animate;
   const scale = useSharedValue(still ? 1 : SLAM_SCALE);
   const rotation = useSharedValue(still ? STAMP_ROTATION_DEG : SLAM_ROTATION_DEG);
   const opacity = useSharedValue(still ? 1 : 0);
@@ -109,8 +113,7 @@ export function Stamp({ kind, label, size = 'md', style, testID }: StampProps) {
     transform: [{ rotate: `${rotation.value}deg` }, { scale: scale.value }],
   }));
 
-  const s = SIZES[size];
-  const [wordSize, wordLine] = text.grade ? s.letter : s.word;
+  const step = text.grade ? steps.letter : steps.word;
   const face = (
     <View
       style={{
@@ -126,8 +129,8 @@ export function Stamp({ kind, label, size = 'md', style, testID }: StampProps) {
         variant={text.grade ? 'title1' : 'title2'}
         style={{
           color: ink,
-          fontSize: wordSize * fs,
-          lineHeight: wordLine * fs,
+          fontSize: step.fontSize * fs,
+          lineHeight: step.lineHeight * fs,
           letterSpacing: text.grade ? 0 : 1.5,
           textTransform: 'uppercase',
         }}
@@ -140,8 +143,8 @@ export function Stamp({ kind, label, size = 'md', style, testID }: StampProps) {
           style={{
             color: ink,
             fontFamily: fontFamilies.field,
-            fontSize: s.caption[0] * fs,
-            lineHeight: s.caption[1] * fs,
+            fontSize: steps.caption.fontSize * fs,
+            lineHeight: steps.caption.lineHeight * fs,
             letterSpacing: 1,
             textTransform: 'uppercase',
           }}

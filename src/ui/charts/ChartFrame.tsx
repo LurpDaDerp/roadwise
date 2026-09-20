@@ -47,7 +47,11 @@ export function ChartFrame({
           accessibilityLabel={label}
           testID={testID ? `${testID}-chart` : undefined}
         >
-          {children}
+          {/* The label carries the data; the drawing is hidden so a screen reader never lands on
+              a stray tick numeral or value after the image itself. */}
+          <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            {children}
+          </View>
         </View>
       )}
       {summaryText ? (

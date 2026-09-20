@@ -4,6 +4,7 @@ import { fontFamilies } from '../fonts';
 import { Text } from '../primitives/Text';
 import { useTheme } from '../theme';
 import { ChartFrame, type ChartToggleLabels } from './ChartFrame';
+import { NUMERIC_COLUMN_MIN_WIDTH } from './ChartTable';
 import { clamp, describeBars, formatPoints } from './format';
 
 /** `categoryCaps` from the scoring explainer fits this as it is. */
@@ -20,6 +21,8 @@ export type CategoryBarsProps = {
 };
 
 const BAR_HEIGHT = 10;
+/** The box's corner; the fill's data end sits concentric inside the 1 dp rule, one less. */
+const BOX_RADIUS = 4;
 const pct = (part: number, whole: number) =>
   `${((part / Math.max(whole, 1)) * 100).toFixed(2)}%` as `${number}%`;
 
@@ -81,7 +84,7 @@ export function CategoryBars({
                 style={{
                   width: pct(r.cap, maxCap),
                   height: BAR_HEIGHT,
-                  borderRadius: 2,
+                  borderRadius: BOX_RADIUS,
                   borderWidth: 1,
                   borderColor: t.colors.borderStrong,
                   backgroundColor: t.colors.surfaceRaised,
@@ -95,8 +98,8 @@ export function CategoryBars({
                       width: pct(r.value, r.cap),
                       height: '100%',
                       backgroundColor: t.colors.accent,
-                      borderTopRightRadius: 4,
-                      borderBottomRightRadius: 4,
+                      borderTopRightRadius: BOX_RADIUS - 1,
+                      borderBottomRightRadius: BOX_RADIUS - 1,
                     }}
                   />
                 ) : null}
@@ -106,7 +109,7 @@ export function CategoryBars({
               variant="footnote"
               tone="muted"
               style={{
-                minWidth: 64,
+                minWidth: NUMERIC_COLUMN_MIN_WIDTH,
                 textAlign: 'right',
                 fontFamily: fontFamilies.numerals,
                 fontVariant: ['tabular-nums'],
