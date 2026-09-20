@@ -11,6 +11,7 @@ const {
   ALERT_REALERT_S,
   ALERT_SPEEDING_RESET_S,
   Q_FULL_AT,
+  SPEEDING_TOLERANCE_MPS,
 } = CONSTANTS;
 
 const mph = (v: number) => v * MPH;
@@ -43,22 +44,27 @@ function harness(state: Partial<ArbiterState> = {}) {
   };
 }
 
-/** Seconds `from`..`to` inclusive of a steady speeding episode, as `tick` arguments. */
+/**
+ * One row of a steady speeding episode. `overMps` is the plain over-limit (speed − limit), so the
+ * tolerance is still ahead of it; `overForS` counts the rows beyond that tolerance.
+ */
 function speedingRow(s: number, overMps: number, startedAtS = 0) {
   return { overMps, overForS: s - startedAtS, speedMps: mph(35) + overMps };
 }
 
 describe('rule 2: speeding', () => {
-  const OVER_9 = mph(9);
-  const OVER_16 = mph(16);
-  const OVER_21 = mph(21);
+  // Plain over-limit values: 12 clears the 5 mph tolerance without reaching L2, while 15 and 20
+  // sit exactly on the L2 and L3 thresholds.
+  const OVER_12 = mph(12);
+  const OVER_15 = mph(15);
+  const OVER_20 = mph(20);
 
-  test('L1 once `overMps > 0` has held for ALERT_L1_SPEEDING_MIN_S with q ≥ Q_FULL_AT', () => {
+  test('L1 once the over-limit has been beyond tolerance for ALERT_L1_SPEEDING_MIN_S, q ≥ Q_FULL_AT', () => {
     const { tick } = harness();
     for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) {
-      expect(tick(s, speedingRow(s, OVER_9))).toBeNull();
+      expect(tick(s, speedingRow(s, OVER_12))).toBeNull();
     }
-    const decision = tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
+    const decision = tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12));
     expect(decision).toMatchObject({
       level: 1,
       kind: 'speeding',
@@ -70,16 +76,16 @@ describe('rule 2: speeding', () => {
   test('stays silent below Q_FULL_AT, at any band', () => {
     const { tick } = harness();
     for (let s = 0; s <= 20; s += 1) {
-      expect(tick(s, { ...speedingRow(s, OVER_21), q: Q_FULL_AT - 0.01 })).toBeNull();
+      expect(tick(s, { ...speedingRow(s, OVER_20), q: Q_FULL_AT - 0.01 })).toBeNull();
     }
     // The same row at full quality is an L3 — only `q` was holding it back.
-    expect(tick(21, { ...speedingRow(21, OVER_21), q: Q_FULL_AT })).toMatchObject({ level: 3 });
+    expect(tick(21, { ...speedingRow(21, OVER_20), q: Q_FULL_AT })).toMatchObject({ level: 3 });
   });
 
-  test('opens at L2 when already ALERT_L2_OVER_MPS over', () => {
+  test('opens at L2 when already ALERT_L2_OVER_MPS over the limit', () => {
     const { tick } = harness();
-    expect(tick(4, speedingRow(4, OVER_16))).toBeNull();
-    expect(tick(5, speedingRow(5, OVER_16))).toMatchObject({
+    expect(tick(4, speedingRow(4, OVER_15))).toBeNull();
+    expect(tick(5, speedingRow(5, OVER_15))).toMatchObject({
       level: 2,
       kind: 'speeding',
       voice: 'alert.easeOff',
@@ -89,11 +95,11 @@ describe('rule 2: speeding', () => {
   test('escalates L1 → L2 after the L1 state persists ALERT_L2_PERSIST_S', () => {
     const { tick } = harness();
     const escalateAtS = ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
-    expect(tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9))).toMatchObject({ level: 1 });
+    expect(tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12))).toMatchObject({ level: 1 });
     for (let s = ALERT_L1_SPEEDING_MIN_S + 1; s < escalateAtS; s += 1) {
-      expect(tick(s, speedingRow(s, OVER_9))).toBeNull();
+      expect(tick(s, speedingRow(s, OVER_12))).toBeNull();
     }
-    expect(tick(escalateAtS, speedingRow(escalateAtS, OVER_9))).toMatchObject({
+    expect(tick(escalateAtS, speedingRow(escalateAtS, OVER_12))).toMatchObject({
       level: 2,
       kind: 'speeding',
     });
@@ -101,22 +107,22 @@ describe('rule 2: speeding', () => {
 
   test('a band increase re-alerts immediately, without waiting for ALERT_REALERT_S', () => {
     const { tick } = harness();
-    expect(tick(5, speedingRow(5, OVER_9))).toMatchObject({ level: 1 });
-    expect(tick(6, speedingRow(6, OVER_16))).toMatchObject({ level: 2 });
+    expect(tick(5, speedingRow(5, OVER_12))).toMatchObject({ level: 1 });
+    expect(tick(6, speedingRow(6, OVER_15))).toMatchObject({ level: 2 });
   });
 
   test('L3 once ALERT_L3_OVER_MPS has held for ALERT_L3_MIN_S, voiced "slow down"', () => {
     const { tick } = harness();
-    // 21 over is ≥ the L2 threshold from the first alertable row, so the episode opens at L2 at
+    // 20 over is ≥ the L2 threshold from the first alertable row, so the episode opens at L2 at
     // second 5; the L3 clock started at second 0, with the first row this far over.
     for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) {
-      expect(tick(s, speedingRow(s, OVER_21))).toBeNull();
+      expect(tick(s, speedingRow(s, OVER_20))).toBeNull();
     }
-    expect(tick(5, speedingRow(5, OVER_21))).toMatchObject({ level: 2 });
+    expect(tick(5, speedingRow(5, OVER_20))).toMatchObject({ level: 2 });
     for (let s = 6; s < CONSTANTS.ALERT_L3_MIN_S; s += 1) {
-      expect(tick(s, speedingRow(s, OVER_21))).toBeNull();
+      expect(tick(s, speedingRow(s, OVER_20))).toBeNull();
     }
-    expect(tick(CONSTANTS.ALERT_L3_MIN_S, speedingRow(CONSTANTS.ALERT_L3_MIN_S, OVER_21))).toMatchObject({
+    expect(tick(CONSTANTS.ALERT_L3_MIN_S, speedingRow(CONSTANTS.ALERT_L3_MIN_S, OVER_20))).toMatchObject({
       level: 3,
       kind: 'speeding',
       voice: 'alert.slowDown',
@@ -126,35 +132,43 @@ describe('rule 2: speeding', () => {
   test('re-alerts at the same band only after ALERT_REALERT_S, still over', () => {
     const { tick } = harness();
     const escalateAtS = ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
-    tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
-    expect(tick(escalateAtS, speedingRow(escalateAtS, OVER_9))).toMatchObject({ level: 2 });
+    tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12));
+    expect(tick(escalateAtS, speedingRow(escalateAtS, OVER_12))).toMatchObject({ level: 2 });
     const realertAtS = escalateAtS + ALERT_REALERT_S;
-    expect(tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_9))).toBeNull();
-    expect(tick(realertAtS, speedingRow(realertAtS, OVER_9))).toMatchObject({
+    expect(tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_12))).toBeNull();
+    expect(tick(realertAtS, speedingRow(realertAtS, OVER_12))).toMatchObject({
       level: 2,
       kind: 'speeding',
     });
   });
 
-  test('the episode resets after overMps returns to 0 for ALERT_SPEEDING_RESET_S', () => {
+  test('the episode resets after overMps falls back within tolerance for ALERT_SPEEDING_RESET_S', () => {
     const { tick } = harness();
-    expect(tick(5, speedingRow(5, OVER_9))).toMatchObject({ level: 1 });
-    tick(6, { overMps: 0, overForS: 0 });
-    tick(6 + ALERT_SPEEDING_RESET_S, { overMps: 0, overForS: 0 });
+    expect(tick(5, speedingRow(5, OVER_12))).toMatchObject({ level: 1 });
+    // Back inside the tolerance is enough; it need not be back under the limit.
+    tick(6, { overMps: SPEEDING_TOLERANCE_MPS, overForS: 0 });
+    tick(6 + ALERT_SPEEDING_RESET_S, { overMps: SPEEDING_TOLERANCE_MPS, overForS: 0 });
     // A fresh episode: five seconds over is an L1 again, long before ALERT_REALERT_S.
     const restartS = 7 + ALERT_SPEEDING_RESET_S;
     expect(
-      tick(restartS + ALERT_L1_SPEEDING_MIN_S, speedingRow(restartS + ALERT_L1_SPEEDING_MIN_S, OVER_9, restartS))
+      tick(restartS + ALERT_L1_SPEEDING_MIN_S, speedingRow(restartS + ALERT_L1_SPEEDING_MIN_S, OVER_12, restartS))
     ).toMatchObject({ level: 1, kind: 'speeding' });
+  });
+
+  test('exactly the tolerance is not speeding, however long it lasts', () => {
+    const { tick } = harness();
+    for (let s = 0; s <= ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S; s += 1) {
+      expect(tick(s, speedingRow(s, SPEEDING_TOLERANCE_MPS))).toBeNull();
+    }
   });
 
   test('a shorter dip below the limit does not reset the episode', () => {
     const { tick } = harness();
-    expect(tick(5, speedingRow(5, OVER_9))).toMatchObject({ level: 1 });
+    expect(tick(5, speedingRow(5, OVER_12))).toMatchObject({ level: 1 });
     tick(6, { overMps: 0, overForS: 0 });
     // Back over before ALERT_SPEEDING_RESET_S elapsed: same episode, so no second L1.
     for (let s = 7; s < 7 + ALERT_L1_SPEEDING_MIN_S + 2; s += 1) {
-      expect(tick(s, speedingRow(s, OVER_9, 6))).toBeNull();
+      expect(tick(s, speedingRow(s, OVER_12, 6))).toBeNull();
     }
   });
 });
@@ -280,7 +294,7 @@ describe('rule 6: break suggestion', () => {
 });
 
 describe('rule 9b: priority when several rules fire on one row', () => {
-  const OVER_21 = mph(21);
+  const OVER_20 = mph(20);
   /** Everything wrong at once, on a row where the L3 clock has already run. */
   const EVERYTHING = {
     phoneEpisode: { id: 'p1', durationS: 5 },
@@ -294,9 +308,9 @@ describe('rule 9b: priority when several rules fire on one row', () => {
     // Ten quiet-ish seconds well over the limit, held below the quality gate so only the L3
     // clock advances.
     for (let s = 0; s < CONSTANTS.ALERT_L3_MIN_S; s += 1) {
-      expect(tick(s, { ...speedingRow(s, OVER_21), q: Q_FULL_AT - 0.01 })).toBeNull();
+      expect(tick(s, { ...speedingRow(s, OVER_20), q: Q_FULL_AT - 0.01 })).toBeNull();
     }
-    const row = (s: number) => ({ ...speedingRow(s, OVER_21), ...EVERYTHING });
+    const row = (s: number) => ({ ...speedingRow(s, OVER_20), ...EVERYTHING });
     expect(tick(10, row(10))).toMatchObject({ level: 3, kind: 'drowsy' });
     expect(tick(11, row(11))).toMatchObject({ level: 3, kind: 'speeding' });
     expect(tick(12, row(12))).toMatchObject({ level: 2, kind: 'phone' });
@@ -310,13 +324,13 @@ describe('rule 9b: priority when several rules fire on one row', () => {
     // Speeding L1 outranks the break suggestion; the break is not lost, only deferred.
     expect(
       tick(ALERT_L1_SPEEDING_MIN_S, {
-        ...speedingRow(ALERT_L1_SPEEDING_MIN_S, mph(9)),
+        ...speedingRow(ALERT_L1_SPEEDING_MIN_S, mph(12)),
         drivingS: CONSTANTS.ALERT_BREAK_AFTER_S,
       })
     ).toMatchObject({ level: 1, kind: 'speeding' });
     expect(
       tick(ALERT_L1_SPEEDING_MIN_S + 1, {
-        ...speedingRow(ALERT_L1_SPEEDING_MIN_S + 1, mph(9)),
+        ...speedingRow(ALERT_L1_SPEEDING_MIN_S + 1, mph(12)),
         drivingS: CONSTANTS.ALERT_BREAK_AFTER_S + 1,
       })
     ).toMatchObject({ level: 1, kind: 'break' });
@@ -325,14 +339,14 @@ describe('rule 9b: priority when several rules fire on one row', () => {
   test('phone L2 outranks speeding L2', () => {
     const { tick } = harness();
     const escalateAtS = ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
-    tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, mph(9)));
+    tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, mph(12)));
     expect(
       tick(escalateAtS, {
-        ...speedingRow(escalateAtS, mph(9)),
+        ...speedingRow(escalateAtS, mph(12)),
         phoneEpisode: { id: 'p1', durationS: 3 },
       })
     ).toMatchObject({ level: 2, kind: 'phone' });
-    expect(tick(escalateAtS + 1, speedingRow(escalateAtS + 1, mph(9)))).toMatchObject({
+    expect(tick(escalateAtS + 1, speedingRow(escalateAtS + 1, mph(12)))).toMatchObject({
       level: 2,
       kind: 'speeding',
     });
@@ -345,7 +359,7 @@ describe('rule 9b: priority when several rules fire on one row', () => {
  */
 function l1Burst(tick: ReturnType<typeof harness>['tick'], startS: number) {
   const alertAtS = startS + ALERT_L1_SPEEDING_MIN_S;
-  const decision = tick(alertAtS, speedingRow(alertAtS, mph(9), startS));
+  const decision = tick(alertAtS, speedingRow(alertAtS, mph(12), startS));
   tick(startS + 6, { overMps: 0, overForS: 0 });
   tick(startS + 6 + ALERT_SPEEDING_RESET_S, { overMps: 0, overForS: 0 });
   return decision;
@@ -420,7 +434,7 @@ describe('rule 7: L1 budget', () => {
 });
 
 describe('rule 8: learning period', () => {
-  const OVER_21 = mph(21);
+  const OVER_20 = mph(20);
 
   test('L2 becomes L1 while tripIndex < LEARNING_PERIOD_TRIPS, keeping kind and voice', () => {
     const { tick } = harness({ tripIndex: CONSTANTS.LEARNING_PERIOD_TRIPS - 1 });
@@ -435,9 +449,9 @@ describe('rule 8: learning period', () => {
   test('speeding L3 becomes L1 too', () => {
     const { tick } = harness({ tripIndex: 0 });
     for (let s = 0; s < CONSTANTS.ALERT_L3_MIN_S; s += 1) {
-      tick(s, { ...speedingRow(s, OVER_21), q: Q_FULL_AT - 0.01 });
+      tick(s, { ...speedingRow(s, OVER_20), q: Q_FULL_AT - 0.01 });
     }
-    expect(tick(10, speedingRow(10, OVER_21))).toMatchObject({
+    expect(tick(10, speedingRow(10, OVER_20))).toMatchObject({
       level: 1,
       kind: 'speeding',
       voice: 'alert.slowDown',
@@ -456,14 +470,14 @@ describe('rule 8: learning period', () => {
 });
 
 describe('rule 9a: mute', () => {
-  const OVER_9 = mph(9);
-  const OVER_21 = mph(21);
+  const OVER_12 = mph(12);
+  const OVER_20 = mph(20);
   const escalateAtS = ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;
 
   /** Drives an episode up to its L2 escalation and mutes it a second later. */
   function mutedAtL2(h: ReturnType<typeof harness>) {
-    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
-    expect(h.tick(escalateAtS, speedingRow(escalateAtS, OVER_9))).toMatchObject({ level: 2 });
+    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12));
+    expect(h.tick(escalateAtS, speedingRow(escalateAtS, OVER_12))).toMatchObject({ level: 2 });
     h.arbiter.mute(at(escalateAtS + 1));
   }
 
@@ -471,8 +485,8 @@ describe('rule 9a: mute', () => {
     const h = harness();
     mutedAtL2(h);
     const realertAtS = escalateAtS + ALERT_REALERT_S;
-    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_9))).toBeNull();
-    expect(h.tick(realertAtS + 1, speedingRow(realertAtS + 1, OVER_9))).toBeNull();
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_12))).toBeNull();
+    expect(h.tick(realertAtS + 1, speedingRow(realertAtS + 1, OVER_12))).toBeNull();
   });
 
   test('a band increase still speaks through the mute', () => {
@@ -480,10 +494,10 @@ describe('rule 9a: mute', () => {
     mutedAtL2(h);
     const worseFromS = escalateAtS + 5;
     for (let s = worseFromS; s < worseFromS + CONSTANTS.ALERT_L3_MIN_S; s += 1) {
-      expect(h.tick(s, speedingRow(s, OVER_21))).toBeNull();
+      expect(h.tick(s, speedingRow(s, OVER_20))).toBeNull();
     }
     const l3AtS = worseFromS + CONSTANTS.ALERT_L3_MIN_S;
-    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_21))).toMatchObject({ level: 3, kind: 'speeding' });
+    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_20))).toMatchObject({ level: 3, kind: 'speeding' });
   });
 
   test('a new episode speaks again', () => {
@@ -493,7 +507,7 @@ describe('rule 9a: mute', () => {
     h.tick(escalateAtS + 2 + ALERT_SPEEDING_RESET_S, { overMps: 0, overForS: 0 });
     const restartS = escalateAtS + 3 + ALERT_SPEEDING_RESET_S;
     const alertAtS = restartS + ALERT_L1_SPEEDING_MIN_S;
-    expect(h.tick(alertAtS, speedingRow(alertAtS, OVER_9, restartS))).toMatchObject({
+    expect(h.tick(alertAtS, speedingRow(alertAtS, OVER_12, restartS))).toMatchObject({
       level: 1,
       kind: 'speeding',
     });
@@ -504,14 +518,14 @@ describe('rule 9a: mute', () => {
     mutedAtL2(h);
     const worseFromS = escalateAtS + 5;
     for (let s = worseFromS; s < worseFromS + CONSTANTS.ALERT_L3_MIN_S; s += 1) {
-      h.tick(s, speedingRow(s, OVER_21));
+      h.tick(s, speedingRow(s, OVER_20));
     }
     const l3AtS = worseFromS + CONSTANTS.ALERT_L3_MIN_S;
-    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_21))).toMatchObject({ level: 3 });
+    expect(h.tick(l3AtS, speedingRow(l3AtS, OVER_20))).toMatchObject({ level: 3 });
     // The L3 was never muted, so its own repeat arrives on schedule.
     const realertAtS = l3AtS + ALERT_REALERT_S;
-    expect(h.tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_21))).toBeNull();
-    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_21))).toMatchObject({
+    expect(h.tick(realertAtS - 1, speedingRow(realertAtS - 1, OVER_20))).toBeNull();
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_20))).toMatchObject({
       level: 3,
       kind: 'speeding',
     });
@@ -529,26 +543,26 @@ describe('rule 9a: mute', () => {
       resumed.consider({ ...QUIET, ...input, ts: at(s) });
     // The resumed arbiter re-opens the episode at L2 — it has no memory of having spoken …
     const reopenS = escalateAtS + 5;
-    expect(resumedTick(reopenS, speedingRow(reopenS, OVER_9))).toMatchObject({ level: 2 });
+    expect(resumedTick(reopenS, speedingRow(reopenS, OVER_12))).toMatchObject({ level: 2 });
     // … but the long-press the driver placed still silences that band's repeat.
     const realertAtS = reopenS + ALERT_REALERT_S;
-    expect(resumedTick(realertAtS, speedingRow(realertAtS, OVER_9))).toBeNull();
+    expect(resumedTick(realertAtS, speedingRow(realertAtS, OVER_12))).toBeNull();
   });
 
   test('a long-press after the episode ended does not carry into the next one', () => {
     const h = harness();
-    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
+    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12));
     h.tick(6, { overMps: 0, overForS: 0 });
     h.tick(6 + ALERT_SPEEDING_RESET_S, { overMps: 0, overForS: 0 });
     h.arbiter.mute(at(20)); // nothing is speaking any more
 
     const restartS = 9;
     const l1AtS = restartS + ALERT_L1_SPEEDING_MIN_S;
-    expect(h.tick(l1AtS, speedingRow(l1AtS, OVER_9, restartS))).toMatchObject({ level: 1 });
+    expect(h.tick(l1AtS, speedingRow(l1AtS, OVER_12, restartS))).toMatchObject({ level: 1 });
     const l2AtS = restartS + escalateAtS;
-    expect(h.tick(l2AtS, speedingRow(l2AtS, OVER_9, restartS))).toMatchObject({ level: 2 });
+    expect(h.tick(l2AtS, speedingRow(l2AtS, OVER_12, restartS))).toMatchObject({ level: 2 });
     const realertAtS = l2AtS + ALERT_REALERT_S;
-    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_9, restartS))).toMatchObject({
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_12, restartS))).toMatchObject({
       level: 2,
       kind: 'speeding',
     });
@@ -559,7 +573,7 @@ describe('rule 9a: mute', () => {
     mutedAtL2(h);
     expect(
       h.tick(escalateAtS + 2, {
-        ...speedingRow(escalateAtS + 2, OVER_9),
+        ...speedingRow(escalateAtS + 2, OVER_12),
         phoneEpisode: { id: 'p1', durationS: 3 },
       })
     ).toMatchObject({ level: 2, kind: 'phone' });
@@ -568,11 +582,11 @@ describe('rule 9a: mute', () => {
   test('a mute carried in as state.mutedUntilTs holds until it expires', () => {
     const untilS = escalateAtS + ALERT_REALERT_S + 10;
     const h = harness({ mutedUntilTs: at(untilS) });
-    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_9));
-    expect(h.tick(escalateAtS, speedingRow(escalateAtS, OVER_9))).toMatchObject({ level: 2 });
+    h.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12));
+    expect(h.tick(escalateAtS, speedingRow(escalateAtS, OVER_12))).toMatchObject({ level: 2 });
     const realertAtS = escalateAtS + ALERT_REALERT_S;
-    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_9))).toBeNull();
-    expect(h.tick(untilS, speedingRow(untilS, OVER_9))).toMatchObject({
+    expect(h.tick(realertAtS, speedingRow(realertAtS, OVER_12))).toBeNull();
+    expect(h.tick(untilS, speedingRow(untilS, OVER_12))).toMatchObject({
       level: 2,
       kind: 'speeding',
     });
@@ -636,7 +650,7 @@ describe('rule 10: voice keys', () => {
     tick(2, { eyesOffS: 2 });
     tick(3, { drivingS: CONSTANTS.ALERT_BREAK_AFTER_S });
     const speedAtS = 4 + ALERT_L1_SPEEDING_MIN_S;
-    tick(speedAtS, speedingRow(speedAtS, mph(9), 4));
+    tick(speedAtS, speedingRow(speedAtS, mph(12), 4));
     expect(arbiter.log().map((d) => `${d.kind}:${d.voice ?? ''}`)).toEqual([
       'drowsy:alert.drowsy',
       'phone:alert.phoneDown',

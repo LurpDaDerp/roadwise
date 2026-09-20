@@ -32,6 +32,7 @@ const {
   LEARNING_PERIOD_TRIPS,
   PHONE_HANDLING_MIN_S,
   PHONE_MIN_SPEED_MPS,
+  SPEEDING_TOLERANCE_MPS,
 } = CONSTANTS;
 
 /** How urgent the speeding *state* is right now; 0 means "nothing to say". */
@@ -58,8 +59,8 @@ export function createArbiter(state: ArbiterState): Arbiter {
   /** Highest band already alerted in the open episode; 0 between episodes. */
   let alertedBand: SpeedingBand = 0;
   let lastSpeedingAlertTs = 0;
-  /** When `overMps` last fell to 0, for the episode reset. */
-  let notOverSinceTs: number | null = null;
+  /** When `overMps` last fell back inside the tolerance, for the episode reset. */
+  let withinToleranceSinceTs: number | null = null;
   /** When `overMps` last reached the L3 threshold, for the "≥ 20 over for ≥ 10 s" clock. */
   let overL3SinceTs: number | null = null;
 
@@ -90,8 +91,10 @@ export function createArbiter(state: ArbiterState): Arbiter {
 
   function track(input: ArbiterInput): void {
     const { ts, overMps } = input;
-    if (overMps > 0) {
-      notOverSinceTs = null;
+    // Every threshold compares the plain over-limit: L1 starts past the tolerance, L2 and L3 at
+    // 15 and 20 over as §13.4 states them.
+    if (overMps > SPEEDING_TOLERANCE_MPS) {
+      withinToleranceSinceTs = null;
       if (overMps >= ALERT_L3_OVER_MPS) {
         if (overL3SinceTs === null) overL3SinceTs = ts;
       } else {
@@ -99,8 +102,8 @@ export function createArbiter(state: ArbiterState): Arbiter {
       }
     } else {
       overL3SinceTs = null;
-      if (notOverSinceTs === null) notOverSinceTs = ts;
-      if (ts - notOverSinceTs >= ALERT_SPEEDING_RESET_S * 1000) resetSpeedingEpisode();
+      if (withinToleranceSinceTs === null) withinToleranceSinceTs = ts;
+      if (ts - withinToleranceSinceTs >= ALERT_SPEEDING_RESET_S * 1000) resetSpeedingEpisode();
     }
     // Eyes back on the road long enough: the next glance is a new one.
     if ((input.eyesOffS ?? 0) < ALERT_EYES_OFF_REARM_S) eyesOffArmed = true;
@@ -111,7 +114,7 @@ export function createArbiter(state: ArbiterState): Arbiter {
     // The detectors' own alert gate (§9.5): only an episode we would score in full is worth
     // speaking about. L2 and L3 are escalations of the L1 state, so they inherit it — below
     // `Q_FULL_AT` the fix is not good enough to accuse anyone of 20 over (§8.8 step 2).
-    if (!(overMps > 0 && overForS >= ALERT_L1_SPEEDING_MIN_S)) return 0;
+    if (!(overMps > SPEEDING_TOLERANCE_MPS && overForS >= ALERT_L1_SPEEDING_MIN_S)) return 0;
     if (!alertableFor(statusFor(q), q)) return 0;
     if (overL3SinceTs !== null && ts - overL3SinceTs >= ALERT_L3_MIN_S * 1000) return 3;
     const persisted = overForS >= ALERT_L1_SPEEDING_MIN_S + ALERT_L2_PERSIST_S;

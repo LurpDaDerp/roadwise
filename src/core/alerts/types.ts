@@ -40,9 +40,12 @@ export interface ArbiterInput {
   speedMps: number;
   /** null when the limit is unknown — shown as unknown, never guessed (§13.2). */
   limitMps: number | null;
-  /** m/s beyond limit + tolerance; 0 when not speeding. */
+  /**
+   * m/s over the posted limit — the plain `speed - limit`, never below 0, and 0 when the limit is
+   * unknown. The tolerance is the arbiter's to apply, not the caller's (§13.4).
+   */
   overMps: number;
-  /** seconds `overMps` has been continuously > 0. */
+  /** seconds `overMps` has been continuously beyond `SPEEDING_TOLERANCE_MPS`. */
   overForS: number;
   /** data quality 0..1 (§9.5). */
   q: number;
