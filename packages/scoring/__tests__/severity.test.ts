@@ -41,6 +41,77 @@ test('focus severity', () => {
   expect(baseWeight(ev({ category: 'focus', measured: { focusKind: 'drowsiness' } }))).toBe(6);
 });
 
+// Band edges are lower-bound inclusive (`>=`); the four open-ended top bands the spec writes as
+// strict (`> 0.55 g`, `> 0.38 g`, `> 0.45 g`, `> 5 s`) must be exceeded, not merely touched. These
+// tables exist so that flipping any comparison fails a test.
+describe('band boundaries', () => {
+  // A 65 mph limit keeps every percentage band below the absolute one, isolating the absolute edges.
+  test.each([
+    [mph(9.99), 1],
+    [mph(10), 2],
+    [mph(14.99), 2],
+    [mph(15), 3.5],
+    [mph(19.99), 3.5],
+    [mph(20), 5],
+  ])('speeding over %p m/s in a 65 → %p', (overMps, want) => {
+    expect(severity(ev({ category: 'speeding', measured: { overMps, limitMps: mph(65) } }))).toBe(
+      want
+    );
+  });
+
+  test.each([
+    [mph(0), 0],
+    [mph(9.99), 0.3],
+    [mph(10), 0.7],
+    [mph(24.99), 0.7],
+    [mph(25), 1],
+  ])('phone at %p m/s → %p', (speedMps, want) => {
+    expect(severity(ev({ category: 'phone', measured: { speedMps } }))).toBe(want);
+  });
+
+  test.each([
+    [0.29, 0],
+    [0.3, 1],
+    [0.39, 1],
+    [0.4, 1.75],
+    [0.55, 1.75],
+    [0.56, 2.5],
+  ])('braking at %p g → %p', (peakG, want) => {
+    expect(severity(ev({ category: 'braking', measured: { peakG } }))).toBe(want);
+  });
+
+  test.each([
+    [0.27, 0],
+    [0.28, 1],
+    [0.38, 1],
+    [0.381, 1.75],
+  ])('accel at %p g → %p', (peakG, want) => {
+    expect(severity(ev({ category: 'accel', measured: { peakG } }))).toBe(want);
+  });
+
+  test.each([
+    [0.34, 0],
+    [0.35, 1],
+    [0.45, 1],
+    [0.451, 1.75],
+  ])('cornering at %p g → %p', (lateralG, want) => {
+    expect(severity(ev({ category: 'cornering', measured: { lateralG } }))).toBe(want);
+  });
+
+  test.each([
+    [1.99, 0],
+    [2, 1],
+    [2.99, 1],
+    [3, 2],
+    [5, 2],
+    [5.01, 3],
+  ])('glance of %p s → %p', (glanceS, want) => {
+    expect(severity(ev({ category: 'focus', measured: { glanceS, focusKind: 'glance' } }))).toBe(
+      want
+    );
+  });
+});
+
 test('duration factors and correction credit', () => {
   expect(durationFactor(ev({ category: 'phone', durationS: 12 }))).toBe(2);
   expect(durationFactor(ev({ category: 'phone', durationS: 1 }))).toBe(0.5);

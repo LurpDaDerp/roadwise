@@ -6,11 +6,17 @@ const MPH = CONSTANTS.MPH;
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
+// Band convention, pinned by the boundary tables in `__tests__/severity.test.ts`: every band
+// includes its lower bound (`>=`), except the four open-ended top bands the spec writes as strict
+// (`> 0.55 g`, `> 0.38 g`, `> 0.45 g`, `> 5 s`), which a value must exceed to enter. Where a band
+// edge is the same quantity as a named detector threshold, the constant is used rather than a
+// repeated literal.
+
 /** Phone use, by the speed at the moment of handling (§9.3). Stopped is logged but unscored. */
 function phoneSeverity(speedMps: number | undefined): number {
   if (speedMps === undefined || speedMps <= 0) return 0;
   if (speedMps >= 25 * MPH) return 1;
-  if (speedMps >= 10 * MPH) return 0.7;
+  if (speedMps >= CONSTANTS.PHONE_MIN_SPEED_MPS) return 0.7;
   return 0.3;
 }
 
@@ -19,10 +25,10 @@ function speedingSeverity(overMps: number | undefined, limitMps: number | undefi
   if (overMps === undefined || overMps <= 0) return 0;
 
   let absolute = 0;
-  if (overMps >= 20 * MPH) absolute = 5;
+  if (overMps >= CONSTANTS.SEVERE_SPEEDING_OVER_MPS) absolute = 5;
   else if (overMps >= 15 * MPH) absolute = 3.5;
   else if (overMps >= 10 * MPH) absolute = 2;
-  else if (overMps >= 5 * MPH) absolute = 1;
+  else if (overMps >= CONSTANTS.SPEEDING_TOLERANCE_MPS) absolute = 1;
 
   let percentage = 0;
   if (limitMps !== undefined && limitMps > 0) {

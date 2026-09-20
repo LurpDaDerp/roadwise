@@ -11,14 +11,14 @@ const MILE = 1609.344;
 export type EventCategory = 'phone' | 'speeding' | 'braking' | 'accel' | 'cornering' | 'focus';
 
 /** Base weight `B` and per-trip deduction cap per category (§9.3). Caps sum to 100. */
-export const CATEGORY: Record<EventCategory, { base: number; cap: number }> = {
+export const CATEGORY = {
   phone: { base: 8, cap: 30 },
   speeding: { base: 2, cap: 25 },
   braking: { base: 3, cap: 12 },
   accel: { base: 2, cap: 8 },
   cornering: { base: 2.5, cap: 10 },
   focus: { base: 3, cap: 15 },
-};
+} as const satisfies Record<EventCategory, { base: number; cap: number }>;
 
 /** Drowsiness episodes carry a heavier base than the rest of the focus category (§9.3). */
 export const DROWSINESS_BASE = 6;
