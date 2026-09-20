@@ -1,6 +1,15 @@
 import { assertEquals } from '@std/assert';
 import { createDb } from './db.ts';
-import { aggregatesAfter, eventRows, storedDowngrades, storedMetrics, toScorableEvent } from './rescore.ts';
+import {
+  aggregatesAfter,
+  anySevereSpeeding,
+  eventRows,
+  isSevereSpeeding,
+  settleDisputed,
+  storedDowngrades,
+  storedMetrics,
+  toScorableEvent,
+} from './rescore.ts';
 import type { StoredEvent, StoredTrip } from './actions_db.ts';
 import { scoreTrip } from './scoring/index';
 import { fakeSupabase } from './testing/fake_supabase.ts';
@@ -102,6 +111,27 @@ Deno.test("a stored event maps back to the scorer's event", () => {
   assertEquals(bare.context, { night: false, precipitation: false });
 });
 
+Deno.test("settleDisputed turns the writer's transient disputed status into removed and leaves the rest alone", () => {
+  const events = [event(), event({ id: 'event-2', clientEventId: 'p2', status: 'disputed' }), event({ id: 'event-3', clientEventId: 'p3', status: 'possible' })];
+  assertEquals(
+    settleDisputed(events).map((e) => e.status),
+    ['scored', 'removed', 'possible']
+  );
+});
+
+Deno.test('a severe speeding event is one at or beyond 20 mph over, whatever its status; the trip has one only while it is scored', () => {
+  const over = (overMps: number, status: StoredEvent['status'] = 'scored') =>
+    event({ category: 'speeding', status, measured: { speedMps: 24, limitMps: 15, overMps } });
+  assertEquals(isSevereSpeeding(over(8.9408)), true);
+  assertEquals(isSevereSpeeding(over(8.94)), false);
+  assertEquals(isSevereSpeeding(over(9, 'removed')), true);
+  assertEquals(isSevereSpeeding(event()), false);
+  assertEquals(anySevereSpeeding([event(), over(9)]), true);
+  assertEquals(anySevereSpeeding([event(), over(9, 'removed')]), false);
+  assertEquals(anySevereSpeeding([event(), over(9, 'possible')]), false);
+  assertEquals(anySevereSpeeding([]), false);
+});
+
 Deno.test('eventRows carries the server ids with the new statuses and deductions; null deductions on an unscored trip', () => {
   const events = [event(), event({ id: 'event-2', clientEventId: 'p2', status: 'removed' })];
   const scored = scoreTrip(storedMetrics(trip(), 'driver')!, events.map(toScorableEvent));
@@ -158,6 +188,7 @@ Deno.test("aggregatesAfter replaces the trip's stored values with the outcome in
     exposure: 1.1,
     categoryDeductions: { phone: 0, speeding: 0, braking: 0, accel: 0, cornering: 0, focus: 0 },
     phoneEvents: 0,
+    hadSevereEvent: false,
   });
   assertEquals(out.day.length, 1);
   assertEquals(out.day[0].day, TRIP_DAY);
@@ -166,6 +197,7 @@ Deno.test("aggregatesAfter replaces the trip's stored values with the outcome in
   assertEquals(out.day[0].exposure, 2.6);
   // the stored row said one phone event; the outcome says none
   assertEquals(out.day[0].phoneFreeDay, true);
+  assertEquals(out.day[0].severeEvents, 0);
   assertEquals(typeof out.day[0].longTermScore, 'number');
   assertEquals(out.baselines?.medians.score, 80); // median of 96, 80, 70
   assertEquals(out.baselines?.medians.phone, 0); // median of 0, 6, 0
@@ -179,6 +211,7 @@ Deno.test('an unscored outcome keeps the trip on its day but out of the scored a
     exposure: 1.1,
     categoryDeductions: {},
     phoneEvents: 0,
+    hadSevereEvent: false,
   });
   assertEquals(out.day[0].tripsScored, 1);
   assertEquals(out.day[0].drivingS, 1500);
@@ -198,7 +231,7 @@ Deno.test('a deleted trip is left out of every aggregate, and a late action also
   assertEquals(out.baselines?.medians.score, 75);
 });
 
-Deno.test('the integer-bound day fields are integers even when the stored durations are not', async () => {
+Deno.test('the integer-bound day fields reach the envelope as integers even when the stored durations are not', async () => {
   const fake = fakeSupabase({
     tables: {
       trips: [tripRow({ id: 'frac', score: 80, duration_s: 1200.6, exposure: 1.5 })],
@@ -211,6 +244,7 @@ Deno.test('the integer-bound day fields are integers even when the stored durati
     exposure: 1.1,
     categoryDeductions: {},
     phoneEvents: 0,
+    hadSevereEvent: false,
   });
   assertEquals(out.day[0].drivingS, 2521);
   for (const row of out.day) {

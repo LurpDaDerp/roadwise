@@ -1,11 +1,14 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import { createActionsDb, StorageFailure } from './actions_db.ts';
+import { MAX_EVENTS } from './payload.ts';
 import { PgError } from './pg.ts';
 import { fakeActionsClient } from './testing/fake_actions_client.ts';
 import {
   CLIENT_EVENT_ID,
   EVENT_ID,
   ROWS_DIGEST,
+  STORED_SCORE,
+  STORED_SCORED,
   storedEventRow,
   storedTripRow,
   TRACE_KEY,
@@ -24,7 +27,7 @@ Deno.test('findTripRow looks the trip up by the JWT user and the client id, dele
     id: TRIP_ID,
     clientTripId: CLIENT_TRIP_ID,
     status: 'final',
-    score: 90,
+    score: STORED_SCORE,
     role: 'driver',
     localDay: TRIP_DAY,
     tz: TZ,
@@ -32,7 +35,7 @@ Deno.test('findTripRow looks the trip up by the JWT user and the client id, dele
     endedAt: T0 + 1_320_000,
     distanceM: 13_200,
     durationS: 1320,
-    exposure: 1.1,
+    exposure: STORED_SCORED.exposure,
     dataQuality: 'A',
     rowsDigest: ROWS_DIGEST,
     tracePath: TRACE_KEY,
@@ -104,7 +107,7 @@ Deno.test("findEvent answers none, one or many for the user's client event id", 
   assertEquals(await db.findEvent(UID, 'dup'), { kind: 'many' });
 });
 
-Deno.test("listTripEvents returns the trip's events oldest first, whatever their status", async () => {
+Deno.test("listTripEvents returns the user's events of the trip oldest first, whatever their status", async () => {
   const fake = fakeActionsClient({
     tables: {
       trip_events: [
@@ -116,15 +119,31 @@ Deno.test("listTripEvents returns the trip's events oldest first, whatever their
         }),
         storedEventRow(),
         storedEventRow({ id: 'elsewhere', trip_id: 'trip-0002' }),
+        storedEventRow({ id: 'theirs', user_id: OTHER_UID }),
       ],
     },
   });
-  const rows = await createActionsDb(fake.client).listTripEvents(TRIP_ID);
+  const rows = await createActionsDb(fake.client).listTripEvents(UID, TRIP_ID);
   assertEquals(
     rows.map((r) => r.id),
     [EVENT_ID, 'later']
   );
   assertEquals(rows[1].status, 'possible');
+  assertEquals(fake.queries[0].filters, [
+    ['eq', 'user_id', UID],
+    ['eq', 'trip_id', TRIP_ID],
+  ]);
+});
+
+Deno.test('listTripEvents reads at most MAX_EVENTS rows, oldest first', async () => {
+  const rows = Array.from({ length: MAX_EVENTS + 1 }, (_, i) =>
+    storedEventRow({ id: `e${i}`, client_event_id: `c${i}`, started_at: new Date(T0 + i * 1000).toISOString() })
+  );
+  const fake = fakeActionsClient({ tables: { trip_events: rows } });
+  const got = await createActionsDb(fake.client).listTripEvents(UID, TRIP_ID);
+  assertEquals(got.length, MAX_EVENTS);
+  assertEquals(got[0].id, 'e0');
+  assertEquals(got[MAX_EVENTS - 1].id, `e${MAX_EVENTS - 1}`);
 });
 
 Deno.test("countDeniedDisputes counts the user's denied rows since the cutoff", async () => {

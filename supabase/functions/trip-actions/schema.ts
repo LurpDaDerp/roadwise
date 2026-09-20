@@ -9,6 +9,14 @@ export const DISPUTE_REASONS = ['not_driver', 'passenger_phone', 'wrong_limit', 
 export const STATED_ROLES = ['driver', 'passenger', 'other'] as const;
 export const MAX_NOTE_CHARS = 500;
 
+/**
+ * A note is free text the owner, ops and the tuning pipeline read back. Control characters (a
+ * newline excepted) and format characters — bidi overrides, zero-width joiners and spaces,
+ * byte-order marks — are stripped before the length is checked, so what is stored renders as
+ * what was typed and the bound applies to what is stored.
+ */
+export const cleanNote = (note: string): string => note.replace(/(?!\n)[\p{Cc}\p{Cf}]/gu, '');
+
 /** Mirrors `trips.client_trip_id`: the id is also the storage key's second segment. */
 const clientTripId = z.string().regex(CLIENT_ID_PATTERN, 'clientTripId must be 1 to 64 url-safe characters');
 /** Mirrors `trip_events.client_event_id` (length only; the table has no character class). */
@@ -19,7 +27,7 @@ export const DisputeActionSchema = z
     action: z.literal('dispute'),
     clientEventId,
     reason: z.enum(DISPUTE_REASONS),
-    note: z.string().max(MAX_NOTE_CHARS).nullable().optional(),
+    note: z.string().transform(cleanNote).pipe(z.string().max(MAX_NOTE_CHARS)).nullable().optional(),
     /** The posted limit the driver states for a wrong-limit dispute; 5..100 as the table bounds it. */
     statedLimitMph: z.number().int().min(5).max(100).nullable().optional(),
   })

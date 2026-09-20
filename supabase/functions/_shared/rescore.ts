@@ -57,7 +57,12 @@ export function storedMetrics(t: StoredTrip, role: TripMetrics['role']): TripMet
   return { ...base, role };
 }
 
-/** A stored event as the scorer takes it: the device's id, the measurements, the context. */
+/**
+ * A stored event as the scorer takes it: the device's id, the measurements, the context.
+ * `durationS` comes back from the stored `duration_ms`, which the upload contract pins to
+ * `round(durationS × 1000)`: the re-score's duration factor can differ from the upload's by under
+ * half a millisecond, which no score has ever turned on.
+ */
 export function toScorableEvent(e: StoredEvent): ScorableEvent {
   return {
     id: e.clientEventId,
@@ -70,6 +75,30 @@ export function toScorableEvent(e: StoredEvent): ScorableEvent {
     measured: e.measured as ScorableEvent['measured'],
     context: { night: e.context.night === true, precipitation: e.context.precipitation === true },
   };
+}
+
+/**
+ * `disputed` is the writer's transient state for an accepted dispute whose recompute has not
+ * landed; any recompute of the trip settles it to `removed`, so an event never stays in limbo
+ * because a later action reached the trip before its own dispute was replayed.
+ */
+export function settleDisputed(events: readonly StoredEvent[]): StoredEvent[] {
+  return events.map((e) => (e.status === 'disputed' ? { ...e, status: 'removed' } : e));
+}
+
+/** A speeding event at or beyond the severe threshold (§9.9), whatever its status. */
+export function isSevereSpeeding(e: StoredEvent): boolean {
+  return e.category === 'speeding' && Number(e.measured.overMps ?? 0) >= CONSTANTS.SEVERE_SPEEDING_OVER_MPS;
+}
+
+/**
+ * The half of the severe flag the server can check (`hasSevereSpeeding` in events.ts, over stored
+ * rows): a scored speeding event at or beyond the threshold. An L3 alert is the other half and only
+ * the device knows it, so a caller lowers the stored flag only when the removed event was the
+ * severe one.
+ */
+export function anySevereSpeeding(events: readonly StoredEvent[]): boolean {
+  return events.some((e) => e.status === 'scored' && isSevereSpeeding(e));
 }
 
 /** The `p_events` rows: every event of the trip with its status and the scorer's deduction. */
@@ -89,21 +118,15 @@ export interface TripOutcome {
   categoryDeductions: Record<string, number>;
   /** Scored phone events after the action. */
   phoneEvents: number;
+  /** The severe flag after the action (re-derived by the caller when a dispute removed an event). */
+  hadSevereEvent: boolean;
 }
-
-/** `upsert_score_day` casts these to int; the arithmetic upstream may leave fractions. */
-const roundDay = (row: DayRow): DayRow => ({
-  ...row,
-  longTermScore: row.longTermScore === null ? null : Math.round(row.longTermScore),
-  drivingS: Math.round(row.drivingS),
-  tripsScored: Math.round(row.tripsScored),
-  severeEvents: Math.round(row.severeEvents),
-});
 
 /**
  * The day rows and baselines as they stand once `trip` has `outcome`: the stored trips minus this
  * one, plus this one as it will be. The trip's own day always; today as well when the action
- * lands on a later day, so the long-term score moves today too (as finalize-trip does).
+ * lands on a later day, so the long-term score moves today too (as finalize-trip does). Every
+ * integer-bound field is rounded by `dayRows`, at the boundary, and nowhere else.
  */
 export async function aggregatesAfter(
   db: Db,
@@ -142,7 +165,7 @@ export async function aggregatesAfter(
           status: outcome.status,
           durationS: trip.durationS,
           exposure: outcome.exposure,
-          hadSevereEvent: trip.hadSevereEvent,
+          hadSevereEvent: outcome.hadSevereEvent,
           phoneEvents: outcome.phoneEvents,
           cameraGood: trip.cameraSession,
         },
@@ -150,7 +173,7 @@ export async function aggregatesAfter(
     : [];
 
   return {
-    day: dayRows(days, [...ownDay, ...dayTrips], lt).map(roundDay),
+    day: dayRows(days, [...ownDay, ...dayTrips], lt),
     baselines: baselines(allScored, nowMs),
   };
 }

@@ -6,6 +6,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Baselines, DayRow } from './aggregate.ts';
 import { createDb, type Db } from './db.ts';
+import { MAX_EVENTS } from './payload.ts';
 import { asPgError } from './pg.ts';
 import type { ScoredTrip, TripMetrics } from './scoring/index';
 
@@ -103,11 +104,14 @@ export interface RecomputeEventRow {
   deduction: number | null;
 }
 
+/** `p_scored`: the scorer's result plus the trip's severe flag as re-derived by the caller. */
+export type RecomputeScored = ScoredTrip & { hadSevereEvent: boolean };
+
 /** `apply_recompute(p_user, p_trip_id, p_scored, p_events, p_day, p_baselines)`; null scored + null events = day refresh. */
 export interface RecomputeEnvelope {
   userId: string;
   tripId: string;
-  scored: ScoredTrip | null;
+  scored: RecomputeScored | null;
   events: RecomputeEventRow[] | null;
   day: DayRow[];
   baselines: Baselines | null;
@@ -133,8 +137,8 @@ export interface ActionsDb extends Db {
   findTripById(userId: string, tripId: string): Promise<StoredTrip | null>;
   /** The user's event with that client id; `many` when the device reused an id across trips. */
   findEvent(userId: string, clientEventId: string): Promise<EventLookup>;
-  /** Every event of the trip, oldest first, any status. */
-  listTripEvents(tripId: string): Promise<StoredEvent[]>;
+  /** Every event of the user's trip, oldest first, any status; at most `MAX_EVENTS`, all `apply_trip` stores. */
+  listTripEvents(userId: string, tripId: string): Promise<StoredEvent[]>;
   /** Dispute rows of the user that were not auto-accepted, created at or after `sinceMs`. */
   countDeniedDisputes(userId: string, sinceMs: number): Promise<number>;
   countDisputeAllowance(userId: string): Promise<AllowanceResult>;
@@ -276,12 +280,14 @@ export function createActionsDb(client: SupabaseClient): ActionsDb {
       return { kind: 'one', event: toStoredEvent(rows[0]) };
     },
 
-    async listTripEvents(tripId) {
+    async listTripEvents(userId, tripId) {
       const { data, error } = await client
         .from('trip_events')
         .select(EVENT_COLUMNS)
+        .eq('user_id', userId)
         .eq('trip_id', tripId)
-        .order('started_at');
+        .order('started_at')
+        .limit(MAX_EVENTS);
       if (error) throw asPgError(error);
       return ((data ?? []) as unknown as EventRecord[]).map(toStoredEvent);
     },

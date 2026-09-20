@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(550);
+select plan(555);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (run as the migration owner): six auth users, payload builders in
@@ -670,8 +670,14 @@ select is((select status from public.trip_events where id = pg_temp.ev('aaaaaaaa
 select is((select deduction from public.trip_events where id = pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-3')), 2::numeric, 'events not in the recompute list are untouched');
 select is((select long_term_score from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and day = pg_temp.la_day(2)), 70, 'recompute refreshed the day row');
 select is((select (medians ->> 'speeding')::numeric from public.baselines where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 0.9, 'recompute refreshed the baselines');
+-- the severe flag follows p_scored.hadSevereEvent when it is given and stays when it is not
+select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {"speeding": 24}, "hadSevereEvent": true}', null, null, null) $$, 'recompute accepts a severe flag');
+select is((select had_severe_event from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1')), true, 'recompute stored the severe flag it was given');
 select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {"speeding": 24}}', null, null, null) $$, 'recompute with no events, day or baselines touches only the trip');
 select is((select count(*)::int from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 2, 'a null day writes no day row');
+select is((select had_severe_event from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1')), true, 'a recompute without hadSevereEvent leaves the severe flag alone');
+select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {"speeding": 24}, "hadSevereEvent": false}', null, null, null) $$, 'recompute accepts a cleared severe flag');
+select is((select had_severe_event from public.trips where id = pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1')), false, 'a recompute with hadSevereEvent false clears the severe flag');
 select lives_ok($$ select public.apply_recompute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.trip('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1'), '{"score": 72, "status": "final", "categoryDeductions": {"speeding": 24}}', null,
   jsonb_build_array(pg_temp.day_row(pg_temp.la_day(2), 71), pg_temp.day_row(pg_temp.la_day(0), 71)), null) $$, 'recompute accepts an array of day rows');
 select is((select count(*)::int from public.score_daily where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 3, 'both day rows written');

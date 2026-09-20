@@ -7,17 +7,25 @@
 // The SQL writers own the rules (allowance, window, ownership, the status transitions); this
 // function maps client ids to rows under the JWT's user, re-scores in TypeScript from the stored
 // row and events (`_shared/rescore.ts`), rebuilds the user's day rows and baselines around the
-// result, and hands everything to `apply_recompute`. The trace object is never read: re-scoring
-// works from the stored events, so no rule here needs it (a `trace_unverified` path would sit in
-// the dispute branch if one did). For a delete the object is removed first, then the row is
-// soft-deleted: a trace must not outlive the user's decision even if the writer fails.
+// result, and hands everything to `apply_recompute`. The severe flag is re-derived when a dispute
+// removes an event (the server can only lower it when the removed event was the severe one). The
+// trace object is never read: re-scoring works from the stored events, so no rule here needs it
+// (a `trace_unverified` path would sit in the dispute branch if one did). For a delete the object
+// is removed first, then the row is soft-deleted: a trace must not outlive the user's decision
+// even if the writer fails.
+//
+// Every 200 carries `days`: the day rows this call wrote (or, when nothing was recomputed, the
+// stored row of the trip's day), so the device can cache the authoritative day as it does after
+// finalize-trip.
 //
 // Concurrency: two actions of one user that overlap (two devices) are last-writer-wins on
 // `score_daily` and `baselines` for M2; the writers serialise the trip and event rows themselves.
 // The device queue is sequential, so this is a race between devices only.
 //
 // Order of refusal, cheapest first: method, JWT, size, JSON, contract, then the one lookup that
-// decides 404 / replay, then the writers. Structured logs carry ids and codes only (§4.7).
+// decides 404 / replay, the stored digest (so a row this function cannot score from fails before
+// anything is written), then the writers. Structured logs carry ids and codes only (§4.7).
+import { emptyDayRow, type DayRow } from '../_shared/aggregate.ts';
 import { StorageFailure } from '../_shared/actions_db.ts';
 import type { ActionsDb, RecomputeResult, StoredEvent, StoredTrip } from '../_shared/actions_db.ts';
 import {
@@ -28,10 +36,20 @@ import {
   readJsonBody,
   requestId,
   requirePost,
+  withRequestId,
   type Logger,
 } from '../_shared/http.ts';
 import { isPgError } from '../_shared/pg.ts';
-import { aggregatesAfter, eventRows, storedDowngrades, storedMetrics, toScorableEvent } from '../_shared/rescore.ts';
+import {
+  aggregatesAfter,
+  anySevereSpeeding,
+  eventRows,
+  isSevereSpeeding,
+  settleDisputed,
+  storedDowngrades,
+  storedMetrics,
+  toScorableEvent,
+} from '../_shared/rescore.ts';
 import { scoreTrip } from '../_shared/scoring/index';
 import type { TripMetrics } from '../_shared/scoring/index';
 import { TripActionSchema, type DeleteAction, type DisputeAction, type SetRoleAction } from './schema.ts';
@@ -40,6 +58,8 @@ import { TripActionSchema, type DeleteAction, type DisputeAction, type SetRoleAc
 export const MAX_BODY_BYTES = 16_384;
 /** Denied disputes a user may record per rolling day before the writer stops being called (429). */
 export const MAX_DENIED_PER_DAY = 20;
+/** What the 429 tells the queue: the denials age out of the rolling day one at a time. */
+export const RETRY_AFTER_DENIED_S = 3600;
 
 const DAY_MS = 86_400_000;
 
@@ -67,6 +87,10 @@ export interface DisputeResponse {
   remainingAllowance: number;
   /** Why the dispute was not applied, or null. */
   reason: 'allowance_7d' | 'allowance_30d' | null;
+  /** The trip's severe flag after the dispute, for the device's own `conditions`. */
+  hadSevereEvent: boolean;
+  /** The day rows this call wrote (the trip's day, plus today when later); stored row when nothing was recomputed. */
+  days: DayRow[];
   replayed: boolean;
 }
 
@@ -75,12 +99,14 @@ export interface SetRoleResponse {
   role: string;
   score: number | null;
   status: string;
+  days: DayRow[];
   replayed: boolean;
 }
 
 export interface DeleteResponse {
   tripId: string;
   deleted: true;
+  days: DayRow[];
   replayed: boolean;
 }
 
@@ -119,7 +145,6 @@ function failure(err: unknown, log: Logger, ctx: Ctx): Response {
 }
 
 interface Run {
-  deps: ActionsDeps;
   db: ActionsDb;
   log: Logger;
   nowMs: number;
@@ -127,14 +152,37 @@ interface Run {
   ctx: Ctx;
 }
 
-/**
- * Score the trip again from the stored row under `role` and `events` (statuses already as they
- * should be), rebuild the aggregates around the result, and apply it all in one writer call.
- */
-async function rescore(run: Run, trip: StoredTrip, role: TripMetrics['role'], events: StoredEvent[]): Promise<RecomputeResult> {
+/** The scorer's inputs from the row, or the integrity failure — checked before anything is written. */
+function requireMetrics(trip: StoredTrip, role: TripMetrics['role']): TripMetrics {
   const metrics = storedMetrics(trip, role);
   if (!metrics) throw new IntegrityFailure('rows_digest_invalid');
-  const scored = scoreTrip(metrics, events.map(toScorableEvent));
+  return metrics;
+}
+
+/** The stored row of the trip's day (or an empty one), for a reply that recomputed nothing. */
+async function storedDays(run: Run, trip: StoredTrip): Promise<DayRow[]> {
+  return [(await run.db.getDayRow(run.userId, trip.localDay)) ?? emptyDayRow(trip.localDay)];
+}
+
+interface Recomputed {
+  result: RecomputeResult;
+  days: DayRow[];
+}
+
+/**
+ * Score the trip again under `metrics` over `events` (statuses as they should be; `disputed`
+ * settles to `removed`), rebuild the aggregates around the result, and apply it all in one
+ * writer call.
+ */
+async function rescore(
+  run: Run,
+  trip: StoredTrip,
+  metrics: TripMetrics,
+  events: StoredEvent[],
+  hadSevereEvent: boolean
+): Promise<Recomputed> {
+  const settled = settleDisputed(events);
+  const scored = scoreTrip(metrics, settled.map(toScorableEvent));
   if (scored.dataQuality !== trip.dataQuality) {
     run.log.warn('trip-actions quality re-derived differently', {
       ...run.ctx,
@@ -149,16 +197,18 @@ async function rescore(run: Run, trip: StoredTrip, role: TripMetrics['role'], ev
     status: scored.status,
     exposure: scored.exposure,
     categoryDeductions: scored.categoryDeductions,
-    phoneEvents: events.filter((e) => e.category === 'phone' && e.status === 'scored').length,
+    phoneEvents: settled.filter((e) => e.category === 'phone' && e.status === 'scored').length,
+    hadSevereEvent,
   });
-  return run.db.applyRecompute({
+  const result = await run.db.applyRecompute({
     userId: run.userId,
     tripId: trip.id,
-    scored,
-    events: eventRows(events, scored),
+    scored: { ...scored, hadSevereEvent },
+    events: eventRows(settled, scored),
     day: aggregates.day,
     baselines: aggregates.baselines,
   });
+  return { result, days: aggregates.day };
 }
 
 async function dispute(run: Run, a: DisputeAction): Promise<Response> {
@@ -187,27 +237,44 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
       autoAccepted: false,
       remainingAllowance: preview.remaining_allowance,
       reason: null,
+      hadSevereEvent: trip.hadSevereEvent,
+      days: await storedDays(run, trip),
       replayed: true,
     };
     return json(200, replay);
   }
 
+  // a row this function cannot re-score from must fail before the writer consumes allowance
+  const metrics = requireMetrics(trip, trip.role);
+
   if (!preview.can_auto_accept) {
     const denied = await db.countDeniedDisputes(userId, run.nowMs - DAY_MS);
-    if (denied >= MAX_DENIED_PER_DAY) return json(429, { code: 'too_many_disputes' });
+    if (denied >= MAX_DENIED_PER_DAY) {
+      return json(429, { code: 'too_many_disputes' }, { 'retry-after': String(RETRY_AFTER_DENIED_S) });
+    }
   }
 
   const decision = await db.recordDispute(userId, event.id, a.reason, a.note ?? null, a.statedLimitMph ?? null);
 
   let score = trip.score;
   let status = trip.status;
+  let hadSevereEvent = trip.hadSevereEvent;
+  let days: DayRow[];
   // An accepted dispute leaves the event `disputed` until the recompute stores it as `removed`; a
   // replay whose event is already `removed` was finished the first time.
   if (decision.auto_accepted && decision.event_status !== 'removed') {
-    const events = (await db.listTripEvents(trip.id)).map((e) => (e.id === event.id ? { ...e, status: 'removed' } : e));
-    const result = await rescore(run, trip, trip.role, events);
-    score = result.score;
-    status = result.status;
+    const events = (await db.listTripEvents(userId, trip.id)).map((e) =>
+      e.id === event.id ? { ...e, status: 'removed' } : e
+    );
+    // The flag is at least what the surviving scored speeding events prove; the device's own half
+    // (an L3 alert, the same episode) is kept unless the removed event was the severe one.
+    hadSevereEvent = anySevereSpeeding(events) || (trip.hadSevereEvent && !isSevereSpeeding(event));
+    const done = await rescore(run, trip, metrics, events, hadSevereEvent);
+    score = done.result.score;
+    status = done.result.status;
+    days = done.days;
+  } else {
+    days = await storedDays(run, trip);
   }
   const response: DisputeResponse = {
     tripId: trip.id,
@@ -216,6 +283,8 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
     autoAccepted: decision.auto_accepted,
     remainingAllowance: decision.remaining_allowance,
     reason: decision.denied_reason,
+    hadSevereEvent,
+    days,
     replayed: decision.replayed,
   };
   return json(200, response);
@@ -226,19 +295,28 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
   const trip = await db.findTripRow(userId, a.clientTripId);
   if (!trip) return json(404, { code: 'not_found' });
   if (trip.deletedAt !== null) {
-    const replay: SetRoleResponse = { tripId: trip.id, role: trip.role, score: trip.score, status: trip.status, replayed: true };
+    const replay: SetRoleResponse = {
+      tripId: trip.id,
+      role: trip.role,
+      score: trip.score,
+      status: trip.status,
+      days: await storedDays(run, trip),
+      replayed: true,
+    };
     return json(200, replay);
   }
+  const metrics = requireMetrics(trip, a.role);
   const set = await db.setTripRole(userId, trip.id, a.role);
   // The writer has already unscored a passenger/other trip; the recompute writes the same result
   // (the scorer's own `unscored` / `passenger`) and refreshes the day rows and baselines, so both
-  // roles go through the one path.
-  const result = await rescore(run, trip, a.role, await db.listTripEvents(trip.id));
+  // roles go through the one path. The severe flag is not the role's to change.
+  const done = await rescore(run, trip, metrics, await db.listTripEvents(userId, trip.id), trip.hadSevereEvent);
   const response: SetRoleResponse = {
     tripId: trip.id,
     role: set.role,
-    score: result.score,
-    status: result.status,
+    score: done.result.score,
+    status: done.result.status,
+    days: done.days,
     replayed: false,
   };
   return json(200, response);
@@ -262,7 +340,7 @@ async function deleteTrip(run: Run, a: DeleteAction): Promise<Response> {
     day: aggregates.day,
     baselines: aggregates.baselines,
   });
-  const response: DeleteResponse = { tripId: trip.id, deleted: true, replayed: deleted.replayed };
+  const response: DeleteResponse = { tripId: trip.id, deleted: true, days: aggregates.day, replayed: deleted.replayed };
   return json(200, response);
 }
 
@@ -270,36 +348,45 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
   const log = deps.log ?? console;
   const now = deps.now ?? Date.now;
   const id = requestId();
+  const reply = (res: Response) => withRequestId(res, id);
 
   const wrongMethod = requirePost(req);
-  if (wrongMethod) return wrongMethod;
+  if (wrongMethod) return reply(wrongMethod);
 
   const token = bearerToken(req);
-  const userId = token ? await deps.verifyJwt(token) : null;
-  if (!userId) return json(401, { code: 'unauthorized' });
+  let userId: string | null = null;
+  if (token) {
+    try {
+      userId = await deps.verifyJwt(token);
+    } catch (err) {
+      // Auth itself failed (transport, GoTrue down), which says nothing about the token: retry
+      log.error('trip-actions token check failed', { requestId: id, error: err instanceof Error ? err.message : String(err) });
+      return reply(json(503, { code: 'retry' }, { 'retry-after': '2' }));
+    }
+  }
+  if (!userId) return reply(json(401, { code: 'unauthorized' }));
 
   const body = await readJsonBody(req, MAX_BODY_BYTES);
-  if (!body.ok) return body.response;
+  if (!body.ok) return reply(body.response);
   const parsed = TripActionSchema.safeParse(body.body);
-  if (!parsed.success) return invalidPayload(parsed.error);
+  if (!parsed.success) return reply(invalidPayload(parsed.error));
   const action = parsed.data;
 
   const ctx: Ctx = { requestId: id, action: action.action };
   if (action.action === 'dispute') ctx.clientEventId = action.clientEventId;
   else ctx.clientTripId = action.clientTripId;
-  const nowMs = now();
-  const run: Run = { deps, db: deps.db, log, nowMs, userId, ctx };
+  const run: Run = { db: deps.db, log, nowMs: now(), userId, ctx };
 
   try {
     switch (action.action) {
       case 'dispute':
-        return await dispute(run, action);
+        return reply(await dispute(run, action));
       case 'set-role':
-        return await setRole(run, action);
+        return reply(await setRole(run, action));
       case 'delete':
-        return await deleteTrip(run, action);
+        return reply(await deleteTrip(run, action));
     }
   } catch (err) {
-    return failure(err, log, ctx);
+    return reply(failure(err, log, ctx));
   }
 }

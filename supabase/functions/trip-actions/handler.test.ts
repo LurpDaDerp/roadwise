@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertMatch } from '@std/assert';
+import { assert, assertEquals, assertMatch, assertNotEquals } from '@std/assert';
+import { emptyDayRow, type DayRow } from '../_shared/aggregate.ts';
 import { createActionsDb, type RecomputeEnvelope } from '../_shared/actions_db.ts';
 import { scoreTrip } from '../_shared/scoring/index';
 import type { ScorableEvent, ScoredTrip, TripMetrics } from '../_shared/scoring/index';
@@ -7,6 +8,8 @@ import {
   CLIENT_EVENT_ID,
   EVENT_ID,
   ROWS_DIGEST,
+  STORED_SCORE,
+  STORED_SCORED,
   storedEventRow,
   storedTripRow,
   TRACE_KEY,
@@ -14,11 +17,18 @@ import {
 } from '../_shared/testing/action_fixtures.ts';
 import { CLIENT_TRIP_ID, T0, TRIP_DAY, tripRow, UID } from '../_shared/testing/fixtures.ts';
 import type { RpcError } from '../_shared/testing/fake_supabase.ts';
-import { handleTripAction, MAX_BODY_BYTES, MAX_DENIED_PER_DAY, type ActionsDeps } from './handler.ts';
+import {
+  handleTripAction,
+  MAX_BODY_BYTES,
+  MAX_DENIED_PER_DAY,
+  RETRY_AFTER_DENIED_S,
+  type ActionsDeps,
+} from './handler.ts';
 
 const DAY_MS = 86_400_000;
 const GOOD_TOKEN = 'good-token';
 const NOW = T0 + 2 * 3_600_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 type Row = Record<string, unknown>;
 type RpcReply = { data?: unknown; error?: RpcError | null };
@@ -70,7 +80,12 @@ function writers(overrides: Record<string, (args: Record<string, unknown>) => Rp
       case 'set_trip_role_row': {
         const driver = args.p_role === 'driver';
         return {
-          data: { trip_id: args.p_trip_id, role: args.p_role, status: driver ? 'final' : 'unscored', score: driver ? 90 : null },
+          data: {
+            trip_id: args.p_trip_id,
+            role: args.p_role,
+            status: driver ? 'final' : 'unscored',
+            score: driver ? STORED_SCORE : null,
+          },
         };
       }
       case 'soft_delete_trip':
@@ -78,7 +93,11 @@ function writers(overrides: Record<string, (args: Record<string, unknown>) => Rp
       case 'apply_recompute': {
         const scored = args.p_scored as ScoredTrip | null;
         return {
-          data: { trip_id: args.p_trip_id, score: scored ? scored.score : 90, status: scored ? scored.status : 'final' },
+          data: {
+            trip_id: args.p_trip_id,
+            score: scored ? scored.score : STORED_SCORE,
+            status: scored ? scored.status : 'final',
+          },
         };
       }
       default:
@@ -123,6 +142,12 @@ const post = (body: unknown, token: string | null = GOOD_TOKEN) =>
 
 const json = async (res: Response) => ({ status: res.status, body: await res.json() });
 
+/** A reply with its `days` set aside, so the rest of the body can be compared exactly. */
+const split = async (res: Response) => {
+  const { days, ...body } = await res.json();
+  return { status: res.status, body, days: days as DayRow[] | undefined };
+};
+
 const dispute = (overrides: Record<string, unknown> = {}) => ({
   action: 'dispute',
   clientEventId: CLIENT_EVENT_ID,
@@ -143,7 +168,7 @@ const recompute = (h: Harness): RecomputeEnvelope => {
   return {
     userId: a.p_user as string,
     tripId: a.p_trip_id as string,
-    scored: a.p_scored as ScoredTrip | null,
+    scored: a.p_scored as RecomputeEnvelope['scored'],
     events: a.p_events as RecomputeEnvelope['events'],
     day: a.p_day as RecomputeEnvelope['day'],
     baselines: a.p_baselines as RecomputeEnvelope['baselines'],
@@ -170,6 +195,49 @@ const storedEvent = (status: ScorableEvent['status'] = 'scored'): ScorableEvent 
   measured: { speedMps: 15.6464 },
   context: { night: false, precipitation: false },
 });
+/** A stored speeding event 20 mph over the limit: severe (§9.9). */
+const severeSpeedingRow = (overrides: Record<string, unknown> = {}) =>
+  storedEventRow({
+    id: 'event-s1',
+    client_event_id: 's1',
+    category: 'speeding',
+    started_at: new Date(T0 + 600_000).toISOString(),
+    duration_ms: 38_000,
+    measured: { speedMps: 24.6, limitMps: 15.6464, overMps: 9 },
+    source: 'gnss',
+    ...overrides,
+  });
+
+/** A stored `score_daily` row as PostgREST returns it, and the DayRow it maps to. */
+const storedDayRecord = {
+  user_id: UID,
+  day: TRIP_DAY,
+  long_term_score: 81,
+  band: 'good',
+  provisional: false,
+  safe_day: true,
+  good_day: false,
+  phone_free_day: true,
+  camera_day: false,
+  exposure: 3.3,
+  driving_s: 3960,
+  trips_scored: 3,
+  severe_events: 0,
+};
+const storedDayRow: DayRow = {
+  day: TRIP_DAY,
+  longTermScore: 81,
+  band: 'good',
+  provisional: false,
+  safeDay: true,
+  goodDay: false,
+  phoneFreeDay: true,
+  cameraDay: false,
+  exposure: 3.3,
+  drivingS: 3960,
+  tripsScored: 3,
+  severeEvents: 0,
+};
 
 // --- request plumbing ---------------------------------------------------------------------------
 
@@ -190,6 +258,19 @@ Deno.test('a missing or unverifiable bearer token is 401 and nothing is read', a
     status: 401,
     body: { code: 'unauthorized' },
   });
+  assertEquals(h.fake.queries.length, 0);
+  assertEquals(h.fake.calls.length, 0);
+});
+
+Deno.test('a token check that fails on Auth itself is 503 retry, logged, with nothing read', async () => {
+  const h = harness();
+  h.deps.verifyJwt = () => Promise.reject(new TypeError('fetch failed'));
+  const res = await handleTripAction(post(del()), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals(res.headers.get('retry-after'), '2');
+  assertMatch(res.headers.get('x-request-id') ?? '', UUID);
+  assertEquals(await res.json(), { code: 'retry' });
+  assertEquals(h.errors.length, 1);
   assertEquals(h.fake.queries.length, 0);
   assertEquals(h.fake.calls.length, 0);
 });
@@ -230,6 +311,37 @@ Deno.test('each action is checked against its strict contract', async () => {
   }
   assertEquals(h.fake.queries.length, 0);
   assertEquals(h.fake.calls.length, 0);
+});
+
+Deno.test('control and format characters are stripped from a note before the writer sees it; newlines stay and the bound applies to what is stored', async () => {
+  const h = harness();
+  const hostile = 'line1\nline2\r [31mred[0m‮evil​ ';
+  assertEquals((await handleTripAction(post(dispute({ note: hostile })), h.deps)).status, 200);
+  assertEquals(rpcArgs(h, 'record_dispute').p_note, 'line1\nline2 [31mred[0mevil');
+  const padded = harness();
+  assertEquals((await handleTripAction(post(dispute({ note: '​'.repeat(10) + 'x'.repeat(500) })), padded.deps)).status, 200);
+  assertEquals((rpcArgs(padded, 'record_dispute').p_note as string).length, 500);
+  assertEquals((await handleTripAction(post(dispute({ note: 'x'.repeat(501) })), harness().deps)).status, 400);
+});
+
+Deno.test('every reply carries a fresh request id, whatever the outcome', async () => {
+  const h = harness();
+  const ids: string[] = [];
+  for (const req of [post(del()), post('{nope'), post(del(), null), post(dispute())]) {
+    const res = await handleTripAction(req, h.deps);
+    const id = res.headers.get('x-request-id');
+    assert(id !== null, `${res.status} reply without a request id`);
+    assertMatch(id, UUID);
+    ids.push(id);
+  }
+  assertEquals(new Set(ids).size, ids.length);
+  // the id is minted, never taken from the caller
+  const spoofed = new Request('http://local/trip-actions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${GOOD_TOKEN}`, 'x-request-id': 'theirs' },
+    body: JSON.stringify(del()),
+  });
+  assertNotEquals((await handleTripAction(spoofed, h.deps)).headers.get('x-request-id'), 'theirs');
 });
 
 // --- lookups ------------------------------------------------------------------------------------
@@ -285,18 +397,23 @@ Deno.test('an accepted dispute records it, re-scores with the event removed and 
   const before = scoreTrip(storedMetrics(), [storedEvent('scored')]);
   const after = scoreTrip(storedMetrics(), [storedEvent('removed')]);
   assert((before.score as number) < (after.score as number));
-  assertEquals(await json(res), {
-    status: 200,
-    body: {
-      tripId: TRIP_ID,
-      score: after.score,
-      status: 'final',
-      autoAccepted: true,
-      remainingAllowance: 0,
-      reason: null,
-      replayed: false,
-    },
-  });
+  const r = await split(res);
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: {
+        tripId: TRIP_ID,
+        score: after.score,
+        status: 'final',
+        autoAccepted: true,
+        remainingAllowance: 0,
+        reason: null,
+        hadSevereEvent: false,
+        replayed: false,
+      },
+    }
+  );
   assertEquals(rpcNames(h), ['count_dispute_allowance', 'record_dispute', 'apply_recompute']);
   assertEquals(rpcArgs(h, 'count_dispute_allowance'), { p_user: UID });
   assertEquals(rpcArgs(h, 'record_dispute'), {
@@ -309,7 +426,7 @@ Deno.test('an accepted dispute records it, re-scores with the event removed and 
   const e = recompute(h);
   assertEquals(e.userId, UID);
   assertEquals(e.tripId, TRIP_ID);
-  assertEquals(e.scored, after);
+  assertEquals(e.scored, { ...after, hadSevereEvent: false });
   assertEquals(e.events, [{ id: EVENT_ID, status: 'removed', deduction: 0 }]);
   assertEquals(e.day.length, 1);
   assertEquals(e.day[0].day, TRIP_DAY);
@@ -319,6 +436,8 @@ Deno.test('an accepted dispute records it, re-scores with the event removed and 
   // the disputed pickup was the day's only phone event
   assertEquals(e.day[0].phoneFreeDay, true);
   assertEquals(e.day[0].longTermScore, null);
+  // the reply carries the very rows the writer was given
+  assertEquals(r.days, e.day);
   assertEquals(e.baselines?.medians.score, after.score);
   assertEquals(e.baselines?.medians.phone, 0);
   assertEquals(h.fake.storageCalls.length, 0);
@@ -363,7 +482,8 @@ Deno.test('the stored trips around the disputed one feed the long-term score, th
 
 Deno.test("a dispute synced on a later day also refreshes today's row", async () => {
   const h = harness({ now: T0 + 3 * DAY_MS });
-  assertEquals((await handleTripAction(post(dispute()), h.deps)).status, 200);
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(r.status, 200);
   const e = recompute(h);
   assertEquals(
     e.day.map((d) => d.day),
@@ -371,10 +491,12 @@ Deno.test("a dispute synced on a later day also refreshes today's row", async ()
   );
   assertEquals(e.day[1].tripsScored, 0);
   assertEquals(e.day[1].longTermScore, e.day[0].longTermScore);
+  assertEquals(r.days, e.day);
 });
 
-Deno.test("a denied dispute answers with the writer's reason and does not recompute", async () => {
+Deno.test("a denied dispute answers with the writer's reason and the stored day row, and does not recompute", async () => {
   const h = harness({
+    tables: { trips: [storedTripRow()], trip_events: [storedEventRow()], event_disputes: [], score_daily: [storedDayRecord] },
     rpc: {
       count_dispute_allowance: () => ({
         data: allowance({ used_7d: 3, remaining_7d: 0, remaining_allowance: 0, can_auto_accept: false, denied_reason: 'allowance_7d' }),
@@ -391,18 +513,24 @@ Deno.test("a denied dispute answers with the writer's reason and does not recomp
       }),
     },
   });
-  assertEquals(await json(await handleTripAction(post(dispute()), h.deps)), {
-    status: 200,
-    body: {
-      tripId: TRIP_ID,
-      score: 90,
-      status: 'final',
-      autoAccepted: false,
-      remainingAllowance: 0,
-      reason: 'allowance_7d',
-      replayed: false,
-    },
-  });
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: {
+        tripId: TRIP_ID,
+        score: STORED_SCORE,
+        status: 'final',
+        autoAccepted: false,
+        remainingAllowance: 0,
+        reason: 'allowance_7d',
+        hadSevereEvent: false,
+        replayed: false,
+      },
+    }
+  );
+  assertEquals(r.days, [storedDayRow]);
   assertEquals(rpcNames(h), ['count_dispute_allowance', 'record_dispute']);
 });
 
@@ -415,10 +543,25 @@ Deno.test('a replayed dispute whose event is already removed answers from the st
     },
     rpc: { record_dispute: () => ({ data: accepted({ event_status: 'removed', replayed: true, remaining_allowance: 0 }) }) },
   });
-  assertEquals(await json(await handleTripAction(post(dispute()), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, score: 96, status: 'final', autoAccepted: true, remainingAllowance: 0, reason: null, replayed: true },
-  });
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: {
+        tripId: TRIP_ID,
+        score: 96,
+        status: 'final',
+        autoAccepted: true,
+        remainingAllowance: 0,
+        reason: null,
+        hadSevereEvent: false,
+        replayed: true,
+      },
+    }
+  );
+  // no stored day row yet: the reply still carries a (zero) row for the trip's day
+  assertEquals(r.days, [emptyDayRow(TRIP_DAY)]);
   assertEquals(rpcNames(h), ['count_dispute_allowance', 'record_dispute']);
 });
 
@@ -443,14 +586,28 @@ Deno.test('a dispute on a trip the user has since deleted is 200 replayed and wr
       event_disputes: [],
     },
   });
-  assertEquals(await json(await handleTripAction(post(dispute()), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, score: 90, status: 'final', autoAccepted: false, remainingAllowance: 1, reason: null, replayed: true },
-  });
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: {
+        tripId: TRIP_ID,
+        score: STORED_SCORE,
+        status: 'final',
+        autoAccepted: false,
+        remainingAllowance: 1,
+        reason: null,
+        hadSevereEvent: false,
+        replayed: true,
+      },
+    }
+  );
+  assertEquals(r.days, [emptyDayRow(TRIP_DAY)]);
   assertEquals(rpcNames(h), ['count_dispute_allowance']);
 });
 
-Deno.test('a user out of allowance with 20 denied disputes in 24 hours is 429 before the writer', async () => {
+Deno.test('a user out of allowance with 20 denied disputes in 24 hours is 429 with Retry-After, before the writer', async () => {
   const denied = Array.from({ length: MAX_DENIED_PER_DAY }, (_, i) => ({
     id: `d${i}`,
     user_id: UID,
@@ -463,10 +620,10 @@ Deno.test('a user out of allowance with 20 denied disputes in 24 hours is 429 be
     }),
   };
   const h = harness({ tables: { trips: [storedTripRow()], trip_events: [storedEventRow()], event_disputes: denied }, rpc: exhausted });
-  assertEquals(await json(await handleTripAction(post(dispute()), h.deps)), {
-    status: 429,
-    body: { code: 'too_many_disputes' },
-  });
+  const res = await handleTripAction(post(dispute()), h.deps);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('retry-after'), String(RETRY_AFTER_DENIED_S));
+  assertEquals(await res.json(), { code: 'too_many_disputes' });
   assertEquals(rpcNames(h), ['count_dispute_allowance']);
 
   // denials older than a day, and accepted disputes, do not count
@@ -509,7 +666,7 @@ Deno.test("the writer's not-scored and window-closed refusals are 422", async ()
   }
 });
 
-Deno.test('a stored digest the contract does not recognise is an integrity failure before any recompute', async () => {
+Deno.test('a stored digest the contract does not recognise is refused before the dispute is recorded', async () => {
   const h = harness({
     tables: { trips: [storedTripRow({ rows_digest: {} })], trip_events: [storedEventRow()], event_disputes: [] },
   });
@@ -517,7 +674,7 @@ Deno.test('a stored digest the contract does not recognise is an integrity failu
     status: 500,
     body: { code: 'rows_digest_invalid' },
   });
-  assertEquals(rpcNames(h), ['count_dispute_allowance', 'record_dispute']);
+  assertEquals(rpcNames(h), ['count_dispute_allowance']);
   assertEquals(h.errors.length, 1);
 });
 
@@ -528,7 +685,7 @@ Deno.test('a trip stored without a trace is re-scored at grade B at best, and a 
   assertEquals((await handleTripAction(post(dispute()), h.deps)).status, 200);
   const e = recompute(h);
   assertEquals(e.scored?.dataQuality, 'B');
-  assertEquals(e.scored, scoreTrip(storedMetrics('driver', false), [storedEvent('removed')]));
+  assertEquals(e.scored, { ...scoreTrip(storedMetrics('driver', false), [storedEvent('removed')]), hadSevereEvent: false });
   assertEquals(h.warnings.length, 1);
   assertMatch(String(h.warnings[0][0]), /quality/);
 });
@@ -564,12 +721,73 @@ Deno.test('the re-score takes severity and context from the stored measurements,
     context: { night: true, precipitation: false },
   };
   const expected = scoreTrip(storedMetrics(), [storedEvent('removed'), night]);
-  assertEquals(e.scored, expected);
+  assertEquals(e.scored, { ...expected, hadSevereEvent: false });
   assert(expected.eventDeductions.p2 > 0);
   assertEquals(e.events, [
     { id: EVENT_ID, status: 'removed', deduction: 0 },
     { id: 'event-0002', status: 'scored', deduction: expected.eventDeductions.p2 },
   ]);
+});
+
+// --- the severe flag ----------------------------------------------------------------------------
+
+Deno.test('a dispute that removes the only severe speeding event clears the severe flag', async () => {
+  const h = harness({
+    tables: { trips: [storedTripRow({ had_severe_event: true })], trip_events: [storedEventRow(), severeSpeedingRow()], event_disputes: [] },
+  });
+  const r = await split(await handleTripAction(post(dispute({ clientEventId: 's1', reason: 'hazard' })), h.deps));
+  assertEquals(r.status, 200);
+  assertEquals(r.body.hadSevereEvent, false);
+  const e = recompute(h);
+  assertEquals(e.scored?.hadSevereEvent, false);
+  assertEquals(e.events, [
+    { id: EVENT_ID, status: 'scored', deduction: STORED_SCORED.eventDeductions[CLIENT_EVENT_ID] },
+    { id: 'event-s1', status: 'removed', deduction: 0 },
+  ]);
+  // with the episode gone the pickup-only trip scores 85 and the day is safe again
+  assertEquals(e.scored?.score, STORED_SCORE);
+  assertEquals(e.day[0].severeEvents, 0);
+  assertEquals(e.day[0].safeDay, true);
+  assertEquals(r.days?.[0].safeDay, true);
+});
+
+Deno.test('removing a non-severe event leaves a stored severe flag alone', async () => {
+  const h = harness({
+    tables: { trips: [storedTripRow({ had_severe_event: true })], trip_events: [storedEventRow(), severeSpeedingRow()], event_disputes: [] },
+  });
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(r.status, 200);
+  assertEquals(r.body.hadSevereEvent, true);
+  const e = recompute(h);
+  assertEquals(e.scored?.hadSevereEvent, true);
+  assertEquals(e.day[0].severeEvents, 1);
+  assertEquals(e.day[0].safeDay, false);
+});
+
+Deno.test('a second severe speeding event keeps the flag when one is removed', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ had_severe_event: true })],
+      trip_events: [
+        severeSpeedingRow(),
+        severeSpeedingRow({ id: 'event-s2', client_event_id: 's2', started_at: new Date(T0 + 900_000).toISOString() }),
+      ],
+      event_disputes: [],
+    },
+  });
+  const r = await split(await handleTripAction(post(dispute({ clientEventId: 's1', reason: 'hazard' })), h.deps));
+  assertEquals(r.status, 200);
+  assertEquals(r.body.hadSevereEvent, true);
+  const e = recompute(h);
+  assertEquals(e.scored?.hadSevereEvent, true);
+  assertEquals(e.day[0].severeEvents, 1);
+});
+
+Deno.test('a device-only severe flag (no severe speeding stored) survives a dispute of an ordinary event', async () => {
+  const h = harness({ tables: { trips: [storedTripRow({ had_severe_event: true })], trip_events: [storedEventRow()], event_disputes: [] } });
+  const r = await split(await handleTripAction(post(dispute()), h.deps));
+  assertEquals(r.body.hadSevereEvent, true);
+  assertEquals(recompute(h).scored?.hadSevereEvent, true);
 });
 
 // --- set-role -----------------------------------------------------------------------------------
@@ -582,10 +800,14 @@ Deno.test('set-role passenger unscores the trip and applies an unscored envelope
       event_disputes: [],
     },
   });
-  assertEquals(await json(await handleTripAction(post(setRole('passenger')), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, role: 'passenger', score: null, status: 'unscored', replayed: false },
-  });
+  const r = await split(await handleTripAction(post(setRole('passenger')), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: { tripId: TRIP_ID, role: 'passenger', score: null, status: 'unscored', replayed: false },
+    }
+  );
   assertEquals(rpcNames(h), ['set_trip_role_row', 'apply_recompute']);
   assertEquals(rpcArgs(h, 'set_trip_role_row'), { p_user: UID, p_trip_id: TRIP_ID, p_role: 'passenger' });
   const e = recompute(h);
@@ -593,11 +815,13 @@ Deno.test('set-role passenger unscores the trip and applies an unscored envelope
   assertEquals(e.scored?.status, 'unscored');
   assertEquals(e.scored?.reason, 'passenger');
   assertEquals(e.scored?.score, null);
+  assertEquals(e.scored?.hadSevereEvent, false);
   assertEquals(e.events, [{ id: EVENT_ID, status: 'scored', deduction: null }]);
   // only the other trip counts for the day now
   assertEquals(e.day[0].tripsScored, 1);
   assertEquals(e.day[0].drivingS, 1500);
   assertEquals(e.baselines?.medians.score, 80);
+  assertEquals(r.days, e.day);
 });
 
 Deno.test('set-role driver re-scores from the stored digest and events', async () => {
@@ -609,26 +833,71 @@ Deno.test('set-role driver re-scores from the stored digest and events', async (
     },
   });
   const expected = scoreTrip(storedMetrics('driver'), [storedEvent('scored')]);
-  assertEquals(await json(await handleTripAction(post(setRole('driver')), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, role: 'driver', score: expected.score, status: 'final', replayed: false },
-  });
+  const r = await split(await handleTripAction(post(setRole('driver')), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: { tripId: TRIP_ID, role: 'driver', score: expected.score, status: 'final', replayed: false },
+    }
+  );
   assertEquals(rpcNames(h), ['set_trip_role_row', 'apply_recompute']);
   const e = recompute(h);
-  assertEquals(e.scored, expected);
+  assertEquals(e.scored, { ...expected, hadSevereEvent: false });
   assertEquals(e.events, [{ id: EVENT_ID, status: 'scored', deduction: expected.eventDeductions[CLIENT_EVENT_ID] }]);
   assertEquals(e.day[0].tripsScored, 1);
   assertEquals(e.day[0].phoneFreeDay, false);
+  assertEquals(r.days, e.day);
+});
+
+Deno.test('a role change keeps the stored severe flag, whichever way it goes', async () => {
+  for (const role of ['passenger', 'driver']) {
+    const h = harness({
+      tables: { trips: [storedTripRow({ had_severe_event: true })], trip_events: [storedEventRow()], event_disputes: [] },
+    });
+    assertEquals((await handleTripAction(post(setRole(role)), h.deps)).status, 200, role);
+    assertEquals(recompute(h).scored?.hadSevereEvent, true, role);
+  }
+});
+
+Deno.test('disputed events are settled to removed by any recompute of the trip', async () => {
+  // an accepted dispute whose own recompute never landed, then a role change reaches the trip
+  const h = harness({
+    tables: { trips: [storedTripRow()], trip_events: [storedEventRow({ status: 'disputed' })], event_disputes: [] },
+  });
+  assertEquals((await handleTripAction(post(setRole('driver')), h.deps)).status, 200);
+  const e = recompute(h);
+  assertEquals(e.events, [{ id: EVENT_ID, status: 'removed', deduction: 0 }]);
+  assertEquals(e.scored?.score, scoreTrip(storedMetrics(), [storedEvent('removed')]).score);
+});
+
+Deno.test('a stored digest the contract does not recognise is refused before the role is written', async () => {
+  const h = harness({ tables: { trips: [storedTripRow({ rows_digest: null })], trip_events: [storedEventRow()], event_disputes: [] } });
+  assertEquals(await json(await handleTripAction(post(setRole('passenger')), h.deps)), {
+    status: 500,
+    body: { code: 'rows_digest_invalid' },
+  });
+  assertEquals(h.fake.calls.length, 0);
 });
 
 Deno.test('set-role on a trip the user has since deleted is 200 replayed and writes nothing', async () => {
   const h = harness({
-    tables: { trips: [storedTripRow({ deleted_at: new Date(T0 + DAY_MS).toISOString() })], trip_events: [], event_disputes: [] },
+    tables: {
+      trips: [storedTripRow({ deleted_at: new Date(T0 + DAY_MS).toISOString() })],
+      trip_events: [],
+      event_disputes: [],
+      score_daily: [storedDayRecord],
+    },
   });
-  assertEquals(await json(await handleTripAction(post(setRole('passenger')), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, role: 'driver', score: 90, status: 'final', replayed: true },
-  });
+  const r = await split(await handleTripAction(post(setRole('passenger')), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: { tripId: TRIP_ID, role: 'driver', score: STORED_SCORE, status: 'final', replayed: true },
+    }
+  );
+  assertEquals(r.days, [storedDayRow]);
   assertEquals(h.fake.calls.length, 0);
 });
 
@@ -642,10 +911,14 @@ Deno.test('delete removes the trace object before the writer, then refreshes the
       event_disputes: [],
     },
   });
-  assertEquals(await json(await handleTripAction(post(del()), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, deleted: true, replayed: false },
-  });
+  const r = await split(await handleTripAction(post(del()), h.deps));
+  assertEquals(
+    { status: r.status, body: r.body },
+    {
+      status: 200,
+      body: { tripId: TRIP_ID, deleted: true, replayed: false },
+    }
+  );
   const order = h.fake.calls.map((c: RecordedCall) => `${c.kind}:${c.name}`);
   assertEquals(order, ['storage:traces.remove', 'rpc:soft_delete_trip', 'rpc:apply_recompute']);
   assertEquals(h.fake.storageCalls, [{ bucket: 'traces', keys: [TRACE_KEY] }]);
@@ -658,6 +931,7 @@ Deno.test('delete removes the trace object before the writer, then refreshes the
   assertEquals(e.day[0].tripsScored, 1);
   assertEquals(e.day[0].drivingS, 1500);
   assertEquals(e.baselines?.medians.score, 80);
+  assertEquals(r.days, e.day);
 });
 
 Deno.test('the object is removed even when the stored row no longer names it', async () => {
@@ -675,10 +949,9 @@ Deno.test('a delete replay is 200 replayed and still refreshes the day', async (
     },
     rpc: { soft_delete_trip: (args) => ({ data: { trip_id: args.p_trip_id, trace_path: null, replayed: true } }) },
   });
-  assertEquals(await json(await handleTripAction(post(del()), h.deps)), {
-    status: 200,
-    body: { tripId: TRIP_ID, deleted: true, replayed: true },
-  });
+  const r = await split(await handleTripAction(post(del()), h.deps));
+  assertEquals({ status: r.status, body: r.body }, { status: 200, body: { tripId: TRIP_ID, deleted: true, replayed: true } });
+  assertEquals(r.days, recompute(h).day);
   assertEquals(
     h.fake.calls.map((c) => `${c.kind}:${c.name}`),
     ['storage:traces.remove', 'rpc:soft_delete_trip', 'rpc:apply_recompute']

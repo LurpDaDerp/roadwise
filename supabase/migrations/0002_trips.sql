@@ -473,7 +473,9 @@ end $$;
 -- TypeScript and writes exactly these values for one of p_user's trips. p_scored null skips the
 -- trip and its events and refreshes only the owner's day rows and baselines (the post-delete case,
 -- so a soft-deleted own trip is accepted there and refused for a re-score); p_events rows are
--- { id (trip_events.id), status, deduction }. rows_digest is never touched.
+-- { id (trip_events.id), status, deduction }. p_scored.hadSevereEvent, when present, is stored as
+-- had_severe_event (the edge function re-derives the flag when a dispute removes the severe
+-- event); absent, the column is left alone. rows_digest is never touched.
 -- ---------------------------------------------------------------------------
 create or replace function public.apply_recompute(p_user uuid, p_trip_id uuid, p_scored jsonb, p_events jsonb, p_day jsonb, p_baselines jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -547,7 +549,8 @@ begin
           exposure = coalesce((p_scored->>'exposure')::numeric, exposure),
           data_quality = coalesce(p_scored->>'dataQuality', data_quality),
           scoring_version = coalesce((p_scored->>'scoringVersion')::int, scoring_version),
-          unscored_reason = p_scored->>'reason'
+          unscored_reason = p_scored->>'reason',
+          had_severe_event = coalesce((p_scored->>'hadSevereEvent')::boolean, had_severe_event)
       where id = p_trip_id;
     if not v_scored_now then
       update public.trip_events set deduction = null where trip_id = p_trip_id and deduction is not null;
