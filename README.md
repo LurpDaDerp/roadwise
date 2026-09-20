@@ -7,7 +7,7 @@ Reward-based safe-driving app for new drivers. React Native / Expo (development 
     npm install
     npx expo start --dev-client
 
-Camera coaching and background drive capture need a development build (`eas build --profile development`); they do not run in Expo Go.
+Camera coaching and background drive capture need a development build (`npx eas-cli@24.7.0 build --profile development`); they do not run in Expo Go.
 
 ## Development builds
 
@@ -16,7 +16,11 @@ Install the dev client from its build page, then run `npx expo start --dev-clien
 - Android: https://expo.dev/accounts/lurpdaderp/projects/SafeDriveApp/builds/3c6971a3-ab6f-4ed4-b9e4-67c162dd0ab5
 - iOS: https://expo.dev/accounts/lurpdaderp/projects/SafeDriveApp/builds/3627c3be-9130-4597-9001-fc9ea274cd70
 
-Rebuild both with `npx eas-cli build --profile development --platform all`. The pinned `eas-cli` in `devDependencies` is what `npx eas-cli` resolves, so everyone runs the same CLI.
+Every EAS command is run as `npx eas-cli@24.7.0 …` (the CLI is deliberately not a devDependency: its optional `typescript@5` peer made npm 10 and npm 11 write incompatible lockfiles, and the EAS builder runs `npm ci` on npm 10). Rebuild both with:
+
+    npx eas-cli@24.7.0 build --profile development --platform all
+
+`eas.json` still refuses any CLI below 24.
 
 ## Test
 
