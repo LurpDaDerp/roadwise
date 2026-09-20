@@ -1,11 +1,19 @@
 import { bootstrapApp, BootstrapError, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
+import { LAST_USER_KEY } from '@/boot/device';
 import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
 import { createRecorder } from '@/core/engine/recorder';
 import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
-import { CURRENT_SCHEMA_VERSION, createQueueRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import {
+  CURRENT_SCHEMA_VERSION,
+  createQueueRepo,
+  createSettingsRepo,
+  createTripsRepo,
+  migrate,
+  type Db,
+} from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
@@ -63,6 +71,9 @@ function deps(over: Partial<BootstrapDeps> = {}) {
       async writeGzip(path, bytes) {
         traces.set(path, bytes);
       },
+      async clear() {
+        traces.clear();
+      },
     },
     hash: { sha256: fakeSha256 },
     newId: counterIds(),
@@ -106,11 +117,12 @@ test('with nothing to recover the launch is the same, only quieter', async () =>
   expect(runtime.recovery.recovered).toEqual([]);
   expect(appState.listeners).toHaveLength(1);
   await settle();
-  // Nothing was queued, so nothing was uploaded — but the drain still reads the session once,
-  // which is how the enqueue sites learn whose device they are queueing on (`SESSION_UID_KEY`).
+  // Nothing was queued, so nothing was uploaded — but the session is read twice: once by the
+  // owner check, and once by the drain, which is how the enqueue sites learn whose device they
+  // are queueing on (`SESSION_UID_KEY`).
   expect(supabase.uploads).toEqual([]);
   expect(supabase.invokes).toEqual([]);
-  expect(supabase.sessions).toBe(1);
+  expect(supabase.sessions).toBe(2);
 });
 
 test('the cache is wired to the queue, and stop() detaches everything', async () => {
@@ -135,6 +147,60 @@ test('the cache is wired to the queue, and stop() detaches everything', async ()
   queryClient.clear();
 });
 
+describe('whose device this is', () => {
+  test('a launch by the same user leaves the record alone', async () => {
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const { bootstrapDeps } = deps({ supabase: createFakeSupabase({ uid: 'user-a' }) });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('same');
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+  });
+
+  test('a launch by a different user empties the device before anything reads it', async () => {
+    // What user A left behind: a drive the process died in, and an action owed to the server.
+    await crashedDrive();
+    await createQueueRepo(db).enqueue('dispute', { clientTripId: TRIP }, 'dispute:1', T0);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const { bootstrapDeps, traces } = deps({ supabase: createFakeSupabase({ uid: 'user-b' }) });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('wiped');
+    // The wipe runs before recovery, so A's interrupted drive is never finalized into B's account.
+    expect(runtime.recovery).toEqual({ recovered: [], discarded: [], failed: [] });
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+    expect([...traces.keys()]).toEqual([]);
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
+  });
+
+  test('a first-ever sign-in keeps the drives the device recorded before it', async () => {
+    await crashedDrive();
+    const { bootstrapDeps } = deps({ supabase: createFakeSupabase({ uid: 'user-a' }) });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('first');
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+
+  test('a signed-out launch keeps everything, and does not forget who it belongs to', async () => {
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const { bootstrapDeps } = deps();
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('signed-out');
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+});
+
 test('recovery finishes before the runner starts, so nothing races the row it queued', async () => {
   await crashedDrive();
   const { bootstrapDeps, appState } = deps();
@@ -145,6 +211,7 @@ test('recovery finishes before the runner starts, so nothing races the row it qu
     async writeGzip() {
       listenersWhenRecovered = appState.listeners.length;
     },
+    clear: () => Promise.resolve(),
   };
 
   runtime = await bootstrapApp(bootstrapDeps);
@@ -230,7 +297,9 @@ describe('a launch that fails', () => {
     emitQueueChanged();
     await settle();
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
-    expect(supabase.sessions).toBe(0);
+    // The one read is the owner check, which ran before the failure; no drain ever started.
+    expect(supabase.sessions).toBe(1);
+    expect(supabase.invokes).toEqual([]);
     queryClient.clear();
   });
 
@@ -260,6 +329,7 @@ test('a drive recovery cannot finalize is reported, and the launch goes on witho
   const { bootstrapDeps, errors } = deps({
     traceWriter: {
       writeGzip: () => Promise.reject(new Error('ENOSPC')),
+      clear: () => Promise.resolve(),
     },
   });
   runtime = await bootstrapApp(bootstrapDeps);

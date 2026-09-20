@@ -5,6 +5,7 @@ import { TRACES_DIRECTORY } from '@/data/sync/traceFs';
 /** A stand-in for `expo-file-system`: records how the directory and the file were addressed. */
 function fakeFileSystem() {
   const created: { key: string; options: unknown }[] = [];
+  const deleted: { key: string; options: unknown }[] = [];
   const written = new Map<string, Uint8Array>();
   const module: ExpoWriterFileSystemLike = {
     Paths: { document: 'DOCUMENTS' },
@@ -15,6 +16,9 @@ function fakeFileSystem() {
       }
       create(options?: unknown): void {
         created.push({ key: this.key, options });
+      }
+      delete(options?: unknown): void {
+        deleted.push({ key: this.key, options });
       }
     },
     File: class {
@@ -27,7 +31,7 @@ function fakeFileSystem() {
       }
     },
   };
-  return { module, created, written };
+  return { module, created, deleted, written };
 }
 
 test('writes the trace as gzip under the documents traces directory, creating it idempotently', async () => {
@@ -45,4 +49,16 @@ test('writes the trace as gzip under the documents traces directory, creating it
   expect(file && [...file.slice(0, 2)]).toEqual([0x1f, 0x8b]);
   // The second write replaced the first: the trailer carries the new length.
   expect(file?.[file.length - 4]).toBe(3);
+});
+
+test('clear() removes the whole traces directory, and a directory that was never there is fine', async () => {
+  const { module, deleted } = fakeFileSystem();
+  const writer = await createExpoTraceWriter(TRACES_DIRECTORY, async () => module);
+
+  await writer.clear();
+
+  // Idempotent, so a device that never recorded a drive is already in the state this asks for.
+  expect(deleted).toEqual([
+    { key: `DOCUMENTS/${TRACES_DIRECTORY}`, options: { idempotent: true } },
+  ]);
 });

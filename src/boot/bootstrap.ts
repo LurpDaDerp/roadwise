@@ -4,11 +4,13 @@
  * In order, because each step needs the one before:
  *   1. open SQLite — WAL, foreign keys, the busy timeout (`createExpoDb`);
  *   2. `migrate` to the current schema;
- *   3. `recoverRecordingTrips` — a drive the last process died in is finalized from its last
+ *   3. whose device this is — a sign-in by a different user empties it, rows and traces alike,
+ *      before any of the last owner's data can be read, recovered or uploaded (`./device.ts`);
+ *   4. `recoverRecordingTrips` — a drive the last process died in is finalized from its last
  *      checkpoint, before any engine exists to own a `recording` row. No speed-limit cache yet,
  *      so a recovered drive is judged against an unknown limit: no speeding, everything else;
- *   4. the query client, wired to the queue's events so a sync pass refreshes what is on screen;
- *   5. the sync runner, started — whatever recovery just queued goes up now.
+ *   5. the query client, wired to the queue's events so a sync pass refreshes what is on screen;
+ *   6. the sync runner, started — whatever recovery just queued goes up now.
  *
  * Everything platform-shaped is injectable, so the whole sequence runs under Jest against
  * sql.js; the defaults are the device adapters, imported lazily where they carry a native module.
@@ -31,6 +33,7 @@ import {
 } from '@/data/sync/runner';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 
+import { ensureDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { createExpoTraceWriter, type TraceWriter } from './traceWriter';
 
 /** The one database file on the device. */
@@ -42,7 +45,7 @@ export const DB_NAME = 'roadwise.db';
  */
 export const BOOTSTRAP_TIMEOUT_MS = 20_000;
 
-export type BootstrapStage = 'open' | 'migrate' | 'recover' | 'sync';
+export type BootstrapStage = 'open' | 'migrate' | 'identity' | 'recover' | 'sync';
 
 /** Which step failed, with the underlying error kept for the log. */
 export class BootstrapError extends Error {
@@ -95,6 +98,8 @@ export interface AppRuntime {
   queryClient: QueryClient;
   runner: SyncRunner;
   recovery: RecoveryResult;
+  /** What the owner check found. `wiped` means this launch emptied a previous driver's device. */
+  owner: DeviceOwnerOutcome;
   schemaVersion: number;
   /** Stops the runner and detaches the cache from the queue. For teardown; never mid-session. */
   stop(): void;
@@ -166,13 +171,27 @@ async function runLaunch(
   enter('migrate');
   const schemaVersion = await stage('migrate', () => migrate(db));
 
+  // Before anything reads a row: a device that changed hands is emptied here, so recovery cannot
+  // finalize the last driver's interrupted drive into this one's account (`src/boot/device.ts`).
+  enter('identity');
+  const identity = await stage('identity', async () => {
+    const supabase = deps.supabase ?? (await import('@/data/supabase/client')).supabase;
+    const traceWriter = deps.traceWriter ?? (await createExpoTraceWriter());
+    const { data } = await supabase.auth.getSession();
+    const owner = await ensureDeviceOwner(db, data.session?.user.id ?? null, {
+      traces: traceWriter,
+      onError,
+    });
+    return { supabase, traceWriter, owner };
+  });
+
   enter('recover');
   const recovery = await stage('recover', async () => {
     const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
     return recoverRecordingTrips(db, {
       scoring,
       tz: deps.tz ?? deviceZone(),
-      fs: deps.traceWriter ?? (await createExpoTraceWriter()),
+      fs: identity.traceWriter,
       hash: deps.hash ?? { sha256: (await import('@/lib/hash')).sha256Hex },
       now,
       createDetectors: () => createDetectors(newId),
@@ -191,7 +210,7 @@ async function runLaunch(
     const created = await stage('sync', async () =>
       createSyncRunner({
         db,
-        supabase: deps.supabase ?? (await import('@/data/supabase/client')).supabase,
+        supabase: identity.supabase,
         fs: deps.traceFs ?? (await createExpoTraceFs()),
         net: deps.net ?? { isWifi: () => false },
         isRecording: deps.isRecording ?? (() => false),
@@ -218,6 +237,7 @@ async function runLaunch(
     queryClient,
     runner,
     recovery,
+    owner: identity.owner,
     schemaVersion,
     stop() {
       runner.stop();

@@ -5,6 +5,11 @@ import { gzipStored } from './gzip';
 /** The finalizer's `fs` (`FinalizeDeps.fs`): one gzip file per trip, replacing any there. */
 export interface TraceWriter {
   writeGzip(path: string, bytes: Uint8Array): Promise<void>;
+  /**
+   * Remove every trace on disk, directory and all, for when the device changes hands
+   * (`src/boot/device.ts`). The next write recreates the directory, so nothing has to put it back.
+   */
+  clear(): Promise<void>;
 }
 
 /** The slice of `expo-file-system` the writer touches, or a test's stand-in for it. */
@@ -12,6 +17,7 @@ export interface ExpoWriterFileSystemLike {
   Paths: { document: unknown };
   Directory: new (...uris: never[]) => {
     create(options?: { intermediates?: boolean; idempotent?: boolean }): void;
+    delete(options?: { idempotent?: boolean }): void;
   };
   File: new (...uris: never[]) => { write(content: Uint8Array): void };
 }
@@ -38,6 +44,11 @@ export async function createExpoTraceWriter(
         idempotent: true,
       });
       new File(...([Paths.document, directory, path] as never[])).write(gzipStored(bytes));
+    },
+
+    async clear(): Promise<void> {
+      // Idempotent: a directory that was never written is already in the state this asks for.
+      new Directory(...([Paths.document, directory] as never[])).delete({ idempotent: true });
     },
   };
 }
