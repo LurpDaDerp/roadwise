@@ -1,0 +1,46 @@
+# dependencies
+node_modules/
+
+# expo / native (CNG: generated, never committed)
+.expo/
+ios/
+android/
+*.orig.*
+web-build/
+dist/
+expo-env.d.ts
+
+# eas
+*.ipa
+*.apk
+*.aab
+.eas-build-local/
+
+# env
+.env
+.env.*
+!.env.example
+
+# supabase local
+supabase/.temp/
+supabase/.branches/
+supabase/data/downloads/
+
+# agent and design-tool artifacts (never committed)
+.agent/
+.impeccable/
+.claude/
+.superpowers/
+PRODUCT.md
+DESIGN.md
+docs/superpowers/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# logs
+npm-debug.log*
+*.log
