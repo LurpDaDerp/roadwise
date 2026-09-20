@@ -12,7 +12,7 @@ import {
 } from '@/data/db';
 import { createTestDb, seedDay, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
-import { SESSION_UID_KEY } from '@/data/sync/queue';
+import { currentOwnerUid, enqueueTraceUpload, SESSION_UID_KEY } from '@/data/sync/queue';
 
 const TRIP = 'trip-1';
 
@@ -108,7 +108,9 @@ describe('the owner check', () => {
 
     expect(await ensureDeviceOwner(db, 'user-b', { traces })).toBe('wiped');
 
-    expect(await totals()).toEqual({ ...emptyTotals, settings: 1 });
+    // Two settings rows survive: the new owner, written in both places the app asks who owns
+    // this device (`LAST_USER_KEY`) and whose work is being queued (`SESSION_UID_KEY`).
+    expect(await totals()).toEqual({ ...emptyTotals, settings: 2 });
     expect(store.cleared).toBe(1);
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
   });
@@ -142,13 +144,13 @@ describe('the owner check', () => {
 
     expect(await ensureDeviceOwner(db, 'user-b', { traces })).toBe('wiped');
 
-    expect(await totals()).toEqual({ ...emptyTotals, settings: 1 });
+    // The only rows left are the new owner's, in both places: the wipe took the old owner's
+    // `session.uid` with everything else, and it was rewritten as B rather than left as A.
+    expect(await totals()).toEqual({ ...emptyTotals, settings: 2 });
     expect(store.cleared).toBe(1);
-    // The one row left is the new owner: the wipe took the old one with everything else.
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
+    expect(await createSettingsRepo(db).get(SESSION_UID_KEY)).toBe('user-b');
     expect(await createSettingsRepo(db).get('focus.weekly')).toBeNull();
-    // The old owner's uid goes with everything else, so nothing can be stamped with it again.
-    expect(await createSettingsRepo(db).get(SESSION_UID_KEY)).toBeNull();
   });
 
   test('signing out wipes nothing and keeps the owner, so the drives waiting to upload survive', async () => {
@@ -161,6 +163,38 @@ describe('the owner check', () => {
     expect(await countOf('sync_queue')).toBe(1);
     expect(store.cleared).toBe(0);
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+
+  test('the owner is stamped where the queue reads it, before anything can be queued', async () => {
+    const { traces } = fakeTraces();
+
+    expect(await ensureDeviceOwner(db, 'user-a', { traces })).toBe('first');
+
+    // The runner writes `session.uid` on its first pass, which can be after a drive has been
+    // recorded and queued. Writing it here is what makes the stamp true rather than likely.
+    expect(await createSettingsRepo(db).get(SESSION_UID_KEY)).toBe('user-a');
+
+    // Not the fallback doing the work: with the device-owner key gone, the queue still knows.
+    await createSettingsRepo(db).remove(LAST_USER_KEY);
+    expect(await currentOwnerUid(db)).toBe('user-a');
+
+    // And a real enqueue site takes it, straight after the sign-in and before any drain.
+    await seedTrips(db, [tripRow({ client_trip_id: TRIP })]);
+    const item = await enqueueTraceUpload(
+      db,
+      { clientTripId: TRIP, tracePath: `${TRIP}.bin.gz` },
+      T0
+    );
+    expect(item.owner_uid).toBe('user-a');
+  });
+
+  test('a launch by the owner re-stamps the queue key, whatever state it was left in', async () => {
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const { traces } = fakeTraces();
+
+    expect(await ensureDeviceOwner(db, 'user-a', { traces })).toBe('same');
+
+    expect(await createSettingsRepo(db).get(SESSION_UID_KEY)).toBe('user-a');
   });
 
   test('the wipe happens once: the second launch under the new user is a quiet one', async () => {
