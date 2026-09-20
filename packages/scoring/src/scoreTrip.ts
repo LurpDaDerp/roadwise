@@ -18,8 +18,17 @@ const zero = () => Object.fromEntries(CATEGORIES.map((c) => [c, 0])) as Record<E
  * "possible", or that fall below the confidence floor cost nothing at all.
  */
 export function scoreTrip(m: TripMetrics, events: ScorableEvent[]): ScoredTrip {
-  const E = exposure(m.distanceM, m.durationS);
-  const dataQuality = dataQualityGrade(m.validGnssPct, m.imuPresent);
+  // One NaN or Infinity anywhere in the trip's measurements propagates through exposure into every
+  // deduction and out as a NaN score, which would then be stored and shown. A trip we cannot even
+  // measure is graded C and left unscored, like any other trip too thin to judge.
+  const measured =
+    Number.isFinite(m.distanceM) &&
+    Number.isFinite(m.durationS) &&
+    Number.isFinite(m.validGnssPct) &&
+    Number.isFinite(m.maxSustainedSpeedMps);
+
+  const E = measured ? exposure(m.distanceM, m.durationS) : CONSTANTS.EXPOSURE_FLOOR;
+  const dataQuality = measured ? dataQualityGrade(m.validGnssPct, m.imuPresent) : 'C';
   const unscored = (
     reason: NonNullable<ScoredTrip['reason']>,
     status: ScoredTrip['status'] = 'unscored'
@@ -34,6 +43,7 @@ export function scoreTrip(m: TripMetrics, events: ScorableEvent[]): ScoredTrip {
     scoringVersion: 1,
   });
 
+  if (!measured) return unscored('grade_c');
   if (m.maxSustainedSpeedMps > CONSTANTS.DISCARD_SPEED_MPS) {
     return unscored('implausible_speed', 'discarded');
   }

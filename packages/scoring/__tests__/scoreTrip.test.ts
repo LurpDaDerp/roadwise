@@ -37,3 +37,10 @@ test('a perfect trip scores 100 and a removed event does not count', () => {
   expect(scoreTrip(metrics, []).score).toBe(100);
   expect(scoreTrip(metrics, [{ ...events[0]!, status: 'removed' }]).score).toBe(100);
 });
+test('a measurement that is not finite grades the trip C instead of scoring it from NaN', () => {
+  for (const bad of [{ distanceM: NaN }, { durationS: NaN }, { validGnssPct: NaN }, { maxSustainedSpeedMps: Infinity }]) {
+    const r = scoreTrip({ ...metrics, ...bad }, events);
+    expect(r).toMatchObject({ status: 'unscored', reason: 'grade_c', dataQuality: 'C', score: null });
+    expect(Number.isFinite(r.exposure)).toBe(true);
+  }
+});
