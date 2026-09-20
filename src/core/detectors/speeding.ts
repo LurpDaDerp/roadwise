@@ -78,8 +78,11 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       const limitQ = limitConfidence(limit);
       const limitMps = limit.limitMps;
       const usable = limitQ !== null && limitMps !== null && row.gnssValid && row.speed >= 0;
-      const over = usable ? row.speed - (limitMps + CONSTANTS.SPEEDING_TOLERANCE_MPS) : 0;
-      if (limitQ === null || limitMps === null || over <= 0) return close();
+      // The trigger is measured from the tolerance line; the recorded over-limit is measured from
+      // the limit itself, which is what the §9.3 severity bands are written against.
+      const beyondTolerance = usable ? row.speed - (limitMps + CONSTANTS.SPEEDING_TOLERANCE_MPS) : 0;
+      if (limitQ === null || limitMps === null || beyondTolerance <= 0) return close();
+      const over = row.speed - limitMps;
 
       if (!open) {
         open = {

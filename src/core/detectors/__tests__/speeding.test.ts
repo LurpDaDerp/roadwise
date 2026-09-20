@@ -1,4 +1,4 @@
-import { CONSTANTS } from '@scoring';
+import { CONSTANTS, severity } from '@scoring';
 import { createSpeedingDetector } from '@/core/detectors/speeding';
 import { NO_LIMIT, T0, counterIds, ctx, drive, limit, mph, only, row, seq } from '../__fixtures__/rows';
 
@@ -29,7 +29,7 @@ describe('episode length', () => {
       source: 'gnss',
       context: { night: false, precipitation: false },
     });
-    expect(e.measured.overMps).toBeCloseTo(mph(5), 9);
+    expect(e.measured.overMps).toBeCloseTo(mph(10), 9); // over the limit, not the tolerance line
     expect(e.measured.limitMps).toBeCloseTo(mph(35), 9);
     expect(e.measured.speedMps).toBeCloseTo(mph(45), 9);
   });
@@ -56,6 +56,13 @@ describe('what counts as over', () => {
     expect(drive(make(), seq([6, { speed: edge + 0.01 }]), L35).all).toHaveLength(1);
   });
 
+  test('an episode that opens just above the line records an over-limit just above the tolerance', () => {
+    const edge = mph(35) + CONSTANTS.SPEEDING_TOLERANCE_MPS;
+    const e = only(drive(make(), seq([6, { speed: edge + 0.01 }]), L35).all);
+    expect(e.measured.overMps).toBeCloseTo(CONSTANTS.SPEEDING_TOLERANCE_MPS + 0.01, 9);
+    expect(e.measured.limitMps).toBeCloseTo(mph(35), 9);
+  });
+
   test('an unknown limit never opens an episode', () => {
     expect(drive(make(), seq([10, OVER]), NO_LIMIT).all).toEqual([]);
     expect(drive(make(), seq([10, OVER]), limit(null, 'posted')).all).toEqual([]);
@@ -77,15 +84,23 @@ describe('measured values', () => {
     const list = seq(...speeds.map((s) => [1, { speed: mph(s) }] as const));
     const e = only(drive(make(), list, L35).all);
     expect(e.durationS).toBe(5);
-    expect(e.measured.overMps).toBeCloseTo(mph(15), 9);
+    expect(e.measured.overMps).toBeCloseTo(mph(20), 9);
     expect(e.measured.speedMps).toBeCloseTo(mph(55), 9);
   });
 
   test('when the limit changes mid-episode, limitMps is the one at the max-over row', () => {
     const lim = (_r: unknown, i: number) => (i < 3 ? limit(mph(35)) : limit(mph(30)));
     const e = only(drive(make(), seq([6, { speed: mph(55) }], [1, UNDER]), lim).all);
-    expect(e.measured.overMps).toBeCloseTo(mph(20), 9);
+    expect(e.measured.overMps).toBeCloseTo(mph(25), 9);
     expect(e.measured.limitMps).toBeCloseTo(mph(30), 9);
+  });
+
+  test('spec §9.4 worked example: 47 in a 35 for 45 s is 12 mph over and severity 2', () => {
+    const e = only(drive(make(), seq([45, { speed: mph(47) }], [1, UNDER]), L35).all);
+    expect(e).toMatchObject({ durationS: 45, q: 0.9, status: 'scored' });
+    expect(e.measured.overMps).toBeCloseTo(mph(12), 9);
+    expect(e.measured.limitMps).toBeCloseTo(mph(35), 9);
+    expect(severity(e)).toBe(2);
   });
 });
 
