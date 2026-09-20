@@ -170,12 +170,16 @@ export const insightsCopy = {
     /** §7.E E2: measured-and-clean is a celebration; not-measured is a different sentence. */
     notMeasured: {
       title: 'Nothing to measure here yet',
-      noDrives: (over: string) =>
-        `No scored drives ${over}, so there is nothing to rate. Widen the period to see further back.`,
+      noDrives: (over: string) => `No scored drives ${over}, so there is nothing to rate.`,
       noCamera: (over: string) =>
         `This is only measured on drives with camera mode on, and there were none ${over}.`,
       noLimit: (over: string) =>
         `Speeding is only counted where the posted limit is known, and it was not known on your drives ${over}.`,
+      /**
+       * Offered after any of the three, but only when there is a wider window to open: on `all`
+       * there is nothing further back, and the sentence would name a move that does not exist.
+       */
+      widen: 'Widen the period to see further back.',
     },
     clean: {
       stamp: 'Clean',

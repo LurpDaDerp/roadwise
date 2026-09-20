@@ -497,28 +497,41 @@ test('the window carries both the instants and the calendar days the day cache i
 describe('what a window could actually measure', () => {
   const scored = (id: string, over: Parameters<typeof tripRow>[0] = {}) =>
     summary({ client_trip_id: id, ...over });
+  const seen = (trips: readonly TripSummary[], scoredTrips = trips.filter((t) => t.scored).length) => ({
+    scoredTrips,
+    trips,
+  });
 
   test('a window with no scored drives has nothing to report for any category', () => {
-    expect(notMeasuredReason([], 'speeding')).toBe('noDrives');
-    expect(notMeasuredReason([summary({ score: null, status: 'unscored' })], 'phone')).toBe('noDrives');
+    expect(notMeasuredReason('speeding', seen([]))).toBe('noDrives');
+    expect(notMeasuredReason('phone', seen([summary({ score: null, status: 'unscored' })]))).toBe(
+      'noDrives'
+    );
+  });
+
+  test('the count of drives comes from the aggregate, so a failed list read claims nothing', () => {
+    // `trips` empty because the read failed, not because the window is: the aggregate knows
+    // better, and announcing "no scored drives" over it would be a false claim.
+    expect(notMeasuredReason('speeding', { scoredTrips: 3, trips: [] })).toBeNull();
+    expect(notMeasuredReason('focus', { scoredTrips: 3, trips: [] })).toBeNull();
   });
 
   test('speeding is not measured where no drive had a known limit', () => {
     const unknown = [scored('a', { limit_coverage_pct: 20 }), scored('b', { limit_coverage_pct: null })];
-    expect(notMeasuredReason(unknown, 'speeding')).toBe('noLimit');
+    expect(notMeasuredReason('speeding', seen(unknown))).toBe('noLimit');
     // One drive with enough coverage is enough for the window to have looked.
-    expect(notMeasuredReason([...unknown, scored('c')], 'speeding')).toBeNull();
+    expect(notMeasuredReason('speeding', seen([...unknown, scored('c')]))).toBeNull();
     // The same drives measured every other category perfectly well.
-    expect(notMeasuredReason(unknown, 'phone')).toBeNull();
+    expect(notMeasuredReason('phone', seen(unknown))).toBeNull();
   });
 
   test('focus is not measured without a camera drive, and is with one', () => {
-    expect(notMeasuredReason([scored('a')], 'focus')).toBe('noCamera');
-    expect(notMeasuredReason([scored('a', { camera_session: 1 })], 'focus')).toBeNull();
+    expect(notMeasuredReason('focus', seen([scored('a')]))).toBe('noCamera');
+    expect(notMeasuredReason('focus', seen([scored('a', { camera_session: 1 })]))).toBeNull();
   });
 
   test('a category that was measured and cost nothing is not a "nothing measured" case', () => {
-    expect(notMeasuredReason([scored('a')], 'braking')).toBeNull();
+    expect(notMeasuredReason('braking', seen([scored('a')]))).toBeNull();
   });
 });
 

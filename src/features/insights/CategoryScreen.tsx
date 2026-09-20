@@ -147,13 +147,18 @@ function CameraExplainer() {
  */
 
 function NotMeasuredCard({ reason, period }: { reason: NotMeasured; period: InsightsPeriod }) {
+  const said = copy.category.notMeasured[reason](periodPhrase(period));
+  // `all` is already the widest window there is; offering to widen it would name a move the
+  // period selector cannot make.
+  const body = period === 'all' ? said : `${said} ${copy.category.notMeasured.widen}`;
+
   return (
     <Card testID="category-not-measured">
       <Text variant="title3" accessibilityRole="header">
         {copy.category.notMeasured.title}
       </Text>
       <Text variant="subhead" tone="muted">
-        {copy.category.notMeasured[reason](periodPhrase(period))}
+        {body}
       </Text>
     </Card>
   );
@@ -256,7 +261,17 @@ export function CategoryScreen({
   const cameraOff = category === 'focus' && !cameraQuery.isPending && cameraQuery.data !== true;
   // What this window could actually see. A category the app did not observe has not been kept
   // clean — it has not been looked at — so it never earns the stamp.
-  const notMeasured = notMeasuredReason(trips, category);
+  //
+  // Points that *were* measured outrank the notice, always. `LIMIT_KNOWN_PCT` gates whether a
+  // clean speeding record can be claimed; it never gates the points themselves, which the
+  // scorer takes from whatever stretch of road was mapped. So a window that cost points has
+  // plainly been looked at, whatever the coverage of the rest of the drive says — and the notice
+  // would contradict both E1's breakdown and the score the driver is carrying.
+  const reason = notMeasuredReason(category, {
+    scoredTrips: insights.totals.scoredTrips,
+    trips,
+  });
+  const notMeasured = figures.deduction > 0 ? null : reason;
   const weeks = weeklyRateColumns(insights.trend, category);
   const buckets = timeOfDayRows(insights.timeOfDay, category);
   const examples = exampleTripsFor(trips, category);

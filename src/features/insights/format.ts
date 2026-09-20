@@ -375,16 +375,21 @@ export function highlightsFor(
  */
 export type NotMeasured = 'noDrives' | 'noCamera' | 'noLimit';
 
+/**
+ * `scoredTrips` comes from the aggregate — the same source as every figure the screen prints —
+ * rather than from `trips.length`, so a *failed* drive-list read cannot announce "no scored
+ * drives" over a window the aggregate knows holds them. With a count but no list, the camera and
+ * limit arms have nothing to judge by and this says so by saying nothing.
+ */
 export function notMeasuredReason(
-  trips: readonly TripSummary[],
-  category: EventCategory
+  category: EventCategory,
+  seen: { scoredTrips: number; trips: readonly TripSummary[] }
 ): NotMeasured | null {
-  const scored = trips.filter((trip) => trip.scored);
-  if (scored.length === 0) return 'noDrives';
-  if (!scored.some((trip) => measured(trip, category))) {
-    return category === 'focus' ? 'noCamera' : 'noLimit';
-  }
-  return null;
+  if (seen.scoredTrips === 0) return 'noDrives';
+  const scored = seen.trips.filter((trip) => trip.scored);
+  if (scored.length === 0) return null;
+  if (scored.some((trip) => measured(trip, category))) return null;
+  return category === 'focus' ? 'noCamera' : 'noLimit';
 }
 
 // --- Conditions ----------------------------------------------------------------------------------

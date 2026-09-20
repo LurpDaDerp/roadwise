@@ -185,9 +185,11 @@ describe('the camera category', () => {
     expect(screen.queryByTestId('camera-explainer')).toBeNull();
     expect(screen.queryByTestId('category-clean')).toBeNull();
     expect(screen.getByTestId('category-not-measured')).toBeOnTheScreen();
+    // The offer to widen rides on any of the three arms: a camera drive may well be further back.
     expect(
       screen.getByText(
-        'This is only measured on drives with camera mode on, and there were none over 4 weeks.'
+        'This is only measured on drives with camera mode on, and there were none over 4 weeks.' +
+          ' Widen the period to see further back.'
       )
     ).toBeOnTheScreen();
     expect(screen.getByTestId('tips')).toBeOnTheScreen();
@@ -250,6 +252,39 @@ describe('a window that measured nothing', () => {
     expect(screen.getByTestId('rate-total')).toHaveTextContent('6');
   });
 
+  test('on all time the notice does not offer to widen a period that is already widest', async () => {
+    await open({ trips: [] }, 'speeding');
+    await ready();
+    await press(screen.getByRole('radio', { name: 'All time' }));
+    await flush();
+
+    expect(
+      screen.getByText('No scored drives since your first drive, so there is nothing to rate.')
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/Widen the period/)).toBeNull();
+  });
+
+  test('points that were measured always outrank the notice, whatever the coverage says', async () => {
+    // The limit was known for too little of each drive to claim a *clean* record — but the
+    // scorer still took points from the stretch it could see, and E1's breakdown shows them.
+    // Saying "the posted limit was not known" over a window that cost points contradicts both.
+    await open(
+      {
+        trips: [
+          drive('a', Date.UTC(2026, 0, 5, 12), { speeding: 6 }, { limit_coverage_pct: 30 }),
+          drive('b', Date.UTC(2026, 0, 12, 12), { speeding: 2 }, { limit_coverage_pct: 30 }),
+        ],
+      },
+      'speeding'
+    );
+    await ready();
+
+    expect(screen.queryByTestId('category-not-measured')).toBeNull();
+    expect(screen.queryByTestId('category-clean')).toBeNull();
+    expect(screen.getByTestId('rate-total')).toHaveTextContent('8');
+    expect(screen.getByTestId('category-trend')).toBeOnTheScreen();
+  });
+
   test('speeding over roads whose limit was never known is not a kept limit', async () => {
     await open(
       {
@@ -264,7 +299,8 @@ describe('a window that measured nothing', () => {
 
     expect(
       screen.getByText(
-        'Speeding is only counted where the posted limit is known, and it was not known on your drives over 4 weeks.'
+        'Speeding is only counted where the posted limit is known, and it was not known on your' +
+          ' drives over 4 weeks. Widen the period to see further back.'
       )
     ).toBeOnTheScreen();
     expect(screen.queryByTestId('category-clean')).toBeNull();

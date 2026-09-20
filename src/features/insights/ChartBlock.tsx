@@ -33,24 +33,21 @@ export type ChartBlockProps = ChartBlockBase &
  * table. Built to match `ChartFrame` exactly, so a chart drawn here and one drawn by
  * `@/ui/charts` read as one system.
  */
-export function ChartBlock({
-  label,
-  summaryText,
-  table,
-  interactive = false,
-  children,
-  testID,
-}: ChartBlockProps) {
+export function ChartBlock(props: ChartBlockProps) {
+  const { summaryText, table, children, testID } = props;
   const th = useTheme();
   const [showTable, setShowTable] = useState(false);
 
-  const drawing = interactive ? (
+  // Narrowed on the whole `props` object rather than on a destructured flag: destructuring breaks
+  // the link between the discriminant and `label`, and the cast it then needs would be the only
+  // thing standing between a caller and an unlabelled image.
+  const drawing = props.interactive ? (
     <View testID={testID ? `${testID}-chart` : undefined}>{children}</View>
   ) : (
     <View
       accessible
       accessibilityRole="image"
-      accessibilityLabel={label as string}
+      accessibilityLabel={props.label}
       testID={testID ? `${testID}-chart` : undefined}
     >
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
