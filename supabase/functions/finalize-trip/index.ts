@@ -16,9 +16,16 @@ const stateless = { auth: { persistSession: false, autoRefreshToken: false, dete
 const auth = createClient(url, anonKey, stateless).auth;
 const db = createDb(createClient(url, serviceKey, stateless));
 
+// A token Auth refuses is null (401). A failure to reach Auth at all (auth-js hands those back as
+// a retryable fetch error rather than throwing) is thrown, so the handler answers 503 and the
+// queue retries instead of discarding a session that may be fine.
 const verifyJwt = async (token: string): Promise<string | null> => {
   const { data, error } = await auth.getUser(token);
-  return error || !data.user ? null : data.user.id;
+  if (error) {
+    if (error.name === 'AuthRetryableFetchError') throw error;
+    return null;
+  }
+  return data.user ? data.user.id : null;
 };
 
 Deno.serve((req) => handleFinalizeTrip(req, { verifyJwt, db }));

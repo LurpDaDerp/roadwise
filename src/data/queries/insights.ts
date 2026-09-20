@@ -27,11 +27,11 @@ export const YOU_VS_YOU_CURRENT_D = 28;
  * The baseline behind it: the eight weeks *before* the current window, which is what §7.E E1
  * asks for ("current 4 weeks vs. previous 8-week baseline").
  *
- * Note this is **not** the server's window: `baselines()` in the edge function takes the *last*
- * 56 days, which overlaps the current four weeks and therefore shrinks every delta. The median
- * arithmetic is identical; only the window differs. Whoever wires `insights.baseline` from the
- * server must either move the server to `[now-84 d, now-28 d)` or caption the card differently
- * when `baselineSource === 'stored'`.
+ * The server agrees: `baselines()` in the edge function takes the same `[now-84 d, now-28 d)`
+ * window and the same median arithmetic, and sends `{ medians: {} }` when that window holds no
+ * trips, so a stored baseline and this local one are computed the same way. Whoever wires
+ * `insights.baseline` can compare them directly; an empty `medians` means "not enough history
+ * yet", which is why `parseStoredBaseline` returns null for it and the card falls back to local.
  */
 export const BASELINE_WINDOW_D = 56;
 /**
