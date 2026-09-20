@@ -34,6 +34,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   android: {
     package: 'com.lurp.safedrive',
+    // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
+    // tile and nothing crashes. iOS uses Apple Maps and needs no key.
+    config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000000' },
     permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'],
   },
