@@ -189,6 +189,23 @@ describe('a launch that fails', () => {
     expect(failure).toMatchObject({ stage: 'migrate' });
   });
 
+  test('a recovery that cannot even read the trips is tagged recover', async () => {
+    // Not the per-trip failure the launch survives: the sweep itself cannot run. Migration only
+    // writes the schema, so failing every read of the table lets `migrate` through and stops the
+    // first thing recovery does.
+    const unreadableTrips: Db = {
+      execute: (sql, params) =>
+        /from\s+trips/i.test(sql)
+          ? Promise.reject(new Error('SQLITE_CORRUPT'))
+          : db.execute(sql, params),
+      transaction: (fn) => db.transaction(fn),
+    };
+    const { bootstrapDeps } = deps({ openDb: async () => unreadableTrips });
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BootstrapError);
+    expect(failure).toMatchObject({ stage: 'recover' });
+  });
+
   test('a runner that will not start is tagged sync, and takes its own listeners with it', async () => {
     const queryClient = createQueryClient();
     const { bootstrapDeps, supabase } = deps({

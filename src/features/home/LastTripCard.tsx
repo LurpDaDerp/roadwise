@@ -6,6 +6,7 @@ import { useTrips, type TripSummary } from '@/data/queries';
 import {
   conditionsLabel,
   dateLine,
+  Field,
   FieldText,
   RoleChips,
   routeLine,
@@ -34,27 +35,22 @@ function ScoreBlock({ score }: { score: { numeral: string; band: string } | null
   );
 }
 
-/**
- * The three printed splits under the record row — time, distance, conditions — as the direction
- * contract's FIRST VIEWPORT asks for and as D1's own header prints them. One element to a screen
- * reader, so the row above it stays one short utterance.
- */
+/** Time, distance, conditions — the three splits the direction contract prints on this row. */
+function splitsOf(trip: TripSummary): string[] {
+  return [formatDuration(trip.durationS), formatDistanceMi(trip.distanceM), conditionsLabel(trip)];
+}
+
 function Splits({ trip }: { trip: TripSummary }) {
   const th = useTheme();
-  const parts = [formatDuration(trip.durationS), formatDistanceMi(trip.distanceM)];
-  const conditions = conditionsLabel(trip);
+  const [duration, distance, conditions] = splitsOf(trip);
   return (
-    <View
-      accessible
-      accessibilityRole="text"
-      accessibilityLabel={[...parts, conditions].join(', ')}
-      style={{ flexDirection: 'row', gap: th.space.md }}
-    >
-      {parts.map((part) => (
-        <FieldText key={part} face="numeral" variant="footnote" tone="muted">
-          {part}
-        </FieldText>
-      ))}
+    <View style={{ flexDirection: 'row', gap: th.space.md }}>
+      <FieldText face="numeral" variant="footnote" tone="muted">
+        {duration}
+      </FieldText>
+      <FieldText face="numeral" variant="footnote" tone="muted">
+        {distance}
+      </FieldText>
       <FieldText variant="footnote" tone="muted">
         {conditions}
       </FieldText>
@@ -116,37 +112,49 @@ export function LastTripCard() {
       : null;
 
   // Counted only once the count is real: a second query settling a frame later must not print
-  // "0 of 3 drives" under three scored drives, and a count that cannot be read says nothing at
-  // all rather than something false.
+  // "0 of 3 drives" under three scored drives, and a count that cannot be read says so rather
+  // than something false.
   const scoredCount = Math.min(scored.data?.length ?? 0, DRIVES_TO_BUILD);
   const building = scored.isSuccess && scoredCount < DRIVES_TO_BUILD;
 
   return (
     <Card testID="last-trip">
-      {/* Bled to the card's edges: the row's own padding puts its content back on the card's
-          content edge, and the pressed wash covers the whole rule rather than a floating inset. */}
-      <View style={{ marginHorizontal: -th.space.lg }}>
-        <ListRow
-          title={routeLine(trip)}
-          subtitle={dateLine(trip)}
-          leading={<ScoreBlock score={score} />}
-          onPress={() => router.push(tripSummaryHref(trip.clientTripId))}
-          accessibilityLabel={[
-            copy.lastDrive,
-            routeLine(trip),
-            dateLine(trip),
-            score ? `${score.numeral}, ${score.band}` : copy.notScored,
-          ].join(', ')}
-          accessibilityHint={copy.open}
-          testID="last-trip-row"
-        />
-      </View>
-      <Splits trip={trip} />
+      <Field label={copy.lastDrive}>
+        {/* Bled to the card's edges: the row's own padding puts its content back on the card's
+            content edge, and the pressed wash covers the whole rule rather than a floating inset. */}
+        <View style={{ marginHorizontal: -th.space.lg }}>
+          <ListRow
+            title={routeLine(trip)}
+            subtitle={dateLine(trip)}
+            detail={<Splits trip={trip} />}
+            leading={<ScoreBlock score={score} />}
+            onPress={() => router.push(tripSummaryHref(trip.clientTripId))}
+            accessibilityLabel={[
+              copy.lastDrive,
+              routeLine(trip),
+              dateLine(trip),
+              ...splitsOf(trip),
+              score ? `${score.numeral}, ${score.band}` : copy.notScored,
+            ].join(', ')}
+            accessibilityHint={copy.open}
+            testID="last-trip-row"
+          />
+        </View>
+      </Field>
 
       {building ? (
         <Text variant="footnote" tone="muted" testID="building-score">
           {copy.building(scoredCount, DRIVES_TO_BUILD)}
         </Text>
+      ) : null}
+
+      {scored.error ? (
+        <Banner
+          tone="warning"
+          message={copy.countError}
+          action={{ label: copy.retry, onPress: () => void scored.refetch() }}
+          testID="count-error"
+        />
       ) : null}
 
       {trip.role === 'unknown' ? (

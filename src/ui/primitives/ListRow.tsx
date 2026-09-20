@@ -8,6 +8,12 @@ import { Text } from './Text';
 type Props = {
   title: string;
   subtitle?: string;
+  /**
+   * A third line under the subtitle, inside the row — printed splits, a chip. Drawn rather than
+   * written, so it takes a node; it is inside the press target and under the pressed wash, and
+   * the row's own label speaks for it, so give the row an `accessibilityLabel` that includes it.
+   */
+  detail?: ReactNode;
   leading?: ReactNode;
   trailing?: ReactNode;
   onPress?: () => void;
@@ -30,6 +36,7 @@ type Props = {
 export function ListRow({
   title,
   subtitle,
+  detail,
   leading,
   trailing,
   onPress,
@@ -60,6 +67,7 @@ export function ListRow({
             {subtitle}
           </Text>
         ) : null}
+        {detail}
       </View>
       {trailing ? <View>{trailing}</View> : null}
       {showChevron ? (

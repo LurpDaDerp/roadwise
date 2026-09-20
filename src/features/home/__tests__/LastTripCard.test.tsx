@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react-native';
+import { fireEvent, screen, within } from '@testing-library/react-native';
 
 import { createQueueRepo, type Db } from '@/data/db';
 import { deductions, T0, tripRow } from '@/data/queries/__fixtures__/rows';
@@ -54,6 +54,8 @@ test('prints the last drive — score, band, route, date, splits — and counts 
   await w.renderScreen(<LastTripCard />);
 
   expect(await screen.findByText('84')).toBeOnTheScreen();
+  // The field caption is printed on the card, not only spoken by the row.
+  expect(screen.getByText('Last drive')).toBeOnTheScreen();
   expect(screen.getByText('Good')).toBeOnTheScreen();
   expect(screen.getByText('Near Home → Near Lincoln HS')).toBeOnTheScreen();
   expect(screen.getByText('Sun, Jan 4 · 12:00 – 12:30 PM')).toBeOnTheScreen();
@@ -94,7 +96,7 @@ test('an unscored last drive prints a dash, and an unclassified one asks its que
   expect(screen.queryByText('Were you driving?')).toBeNull();
 });
 
-test('the three splits are printed, conditions included, as one spoken line', async () => {
+test('the three splits are printed inside the row, and the row speaks them', async () => {
   const w = await world({
     trips: [
       drive('last', 1, {
@@ -103,11 +105,21 @@ test('the three splits are printed, conditions included, as one spoken line', as
     ],
   });
   await w.renderScreen(<LastTripCard />);
-  expect(await screen.findByLabelText('30 min, 10 mi, Night, rain')).toBeOnTheScreen();
-  expect(screen.getByText('Night, rain')).toBeOnTheScreen();
+
+  expect(await screen.findByText('Night, rain')).toBeOnTheScreen();
+  const row = screen.getByTestId('last-trip-row');
+  // Inside the press target, so the whole record row is tappable and washes as one.
+  expect(within(row).getByText('30 min')).toBeOnTheScreen();
+  expect(within(row).getByText('10 mi')).toBeOnTheScreen();
+  expect(within(row).getByText('Night, rain')).toBeOnTheScreen();
+  expect(
+    screen.getByRole('button', {
+      name: 'Last drive, Near Home → Near Lincoln HS, Sun, Jan 4 · 12:00 – 12:30 PM, 30 min, 10 mi, Night, rain, 90, Excellent',
+    })
+  ).toBeOnTheScreen();
 });
 
-test('a count that cannot be read says nothing rather than a wrong number', async () => {
+test('a count that cannot be read says so, with a retry, rather than a wrong number', async () => {
   const w = await world({
     trips: [drive('a', 3, { score: 70 }), drive('last', 1, { score: 84 })],
   });
@@ -115,6 +127,8 @@ test('a count that cannot be read says nothing rather than a wrong number', asyn
   await w.renderScreen(<LastTripCard />, failNthRead(w.db, 2));
   expect(await screen.findByText('84')).toBeOnTheScreen();
   expect(screen.queryByText(/Building your score/)).toBeNull();
+  expect(screen.getByText("Couldn't count your drives.")).toBeOnTheScreen();
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
 });
 
 test('a database that cannot be read fails on the card alone, with a retry', async () => {

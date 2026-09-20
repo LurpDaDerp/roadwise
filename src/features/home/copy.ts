@@ -12,5 +12,7 @@ export const homeCopy = {
     body: 'Every drive you record is printed on this card.',
   },
   error: "Couldn't read your last drive.",
+  /** The progress line's own failure: the drive above it still stands. */
+  countError: "Couldn't count your drives.",
   retry: 'Try again',
 } as const;
