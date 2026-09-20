@@ -25,16 +25,29 @@ export const finalizeIdempotencyKey = (clientTripId: string): string => `trip:${
 export const traceIdempotencyKey = (clientTripId: string): string => `trace:${clientTripId}`;
 
 /**
+ * The characters a `client_trip_id` may contain — the server's own rule, enforced here too.
+ *
+ * Defence in depth: the id is embedded in a Storage object key and in a local file path, and while
+ * the bucket policy confines a write to `<uid>/` and the function refuses anything else, neither
+ * protects the device's own filesystem from a `../` that somehow reached the queue.
+ */
+export const CLIENT_TRIP_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
  * What a deferred trace upload needs, and nothing more: the object key is derived from the
  * signed-in user and the trip id at upload time, never from anything stored here (§4.7).
  */
 export const TraceUploadPayloadSchema = z
   .object({
-    clientTripId: z.string().min(1).max(64),
+    clientTripId: z.string().regex(CLIENT_TRIP_ID),
     /** The local file, relative to the traces directory: `<clientTripId>.bin.gz`. */
     tracePath: z.string().min(1).max(256),
   })
-  .strict();
+  .strict()
+  .refine((p) => p.tracePath === `${p.clientTripId}.bin.gz`, {
+    error: 'tracePath must be <clientTripId>.bin.gz',
+    path: ['tracePath'],
+  });
 
 export type TraceUploadPayload = z.infer<typeof TraceUploadPayloadSchema>;
 
@@ -67,6 +80,39 @@ export function emitQueueChanged(): void {
     queueChangedScheduled = false;
     for (const listener of [...queueChangedListeners]) listener();
   }, 0);
+}
+
+// `sync:applied`: a drain pass has finished and at least one item was settled — a trip is now
+// `synced` or `failed`, and a day row may have landed in `score_daily_cache`. This is the precise
+// signal for the query hooks: it carries the counts and fires only on a pass that changed
+// something. (The runner also re-emits `queue:changed` on such a pass, since the queue genuinely
+// did change and that is what a subscriber wired to "the sync queue" already listens to.)
+//
+// Fired synchronously at the end of the pass, once every write has committed and no transaction is
+// open, so a listener sees the settled rows. Each listener is guarded: one that throws must not
+// fail the drain that told it the good news.
+export type SyncApplied = Readonly<{ done: number; failed: number; deferred: number }>;
+
+type SyncAppliedListener = (result: SyncApplied) => void;
+
+const syncAppliedListeners = new Set<SyncAppliedListener>();
+
+/** Subscribe to "a pass settled something"; the returned function unsubscribes. */
+export function onSyncApplied(listener: SyncAppliedListener): () => void {
+  syncAppliedListeners.add(listener);
+  return () => {
+    syncAppliedListeners.delete(listener);
+  };
+}
+
+export function emitSyncApplied(result: SyncApplied, onError?: (error: unknown) => void): void {
+  for (const listener of [...syncAppliedListeners]) {
+    try {
+      listener(result);
+    } catch (error) {
+      onError?.(error);
+    }
+  }
 }
 
 /**

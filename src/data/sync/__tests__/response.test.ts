@@ -3,12 +3,35 @@ import {
   classifyInvokeError,
   classifyStatus,
   classifyStorageError,
-  dayKeyOf,
+  DayRowSchema,
   FinalizeResponseSchema,
   isDatabaseLocked,
-  localDay,
   retryAfterSeconds,
 } from '@/data/sync/response';
+
+const DAY_ROW = {
+  day: '2026-09-20',
+  longTermScore: 81,
+  band: 'gold',
+  provisional: false,
+  safeDay: true,
+  goodDay: false,
+  phoneFreeDay: true,
+  cameraDay: false,
+  exposure: 1.1,
+  drivingS: 1200,
+  tripsScored: 2,
+  severeEvents: 0,
+};
+
+const RESPONSE = {
+  tripId: 'a3f1c2d4-5b6e-4f8a-9c0d-1e2f3a4b5c6d',
+  score: 74,
+  status: 'final',
+  day: DAY_ROW,
+  provisionalMismatch: false,
+  replayed: false,
+};
 
 const T0 = 1_700_000_000_000;
 
@@ -74,10 +97,26 @@ test('a storage 409 is not a failure: the object is already where it belongs', (
   expect(classifyStorageError({ message: 'The resource already exists' })).toMatchObject({
     alreadyExists: true,
   });
+  // Some storage-api versions answer a duplicate as HTTP 400 with the real code in the body.
+  expect(
+    classifyStorageError({
+      status: 400,
+      statusCode: '409',
+      error: 'Duplicate',
+      message: 'The resource already exists',
+    })
+  ).toMatchObject({ alreadyExists: true });
+  expect(classifyStorageError({ status: 400, code: 'KeyAlreadyExists' })).toMatchObject({
+    alreadyExists: true,
+  });
   expect(classifyStorageError({ status: 500, message: 'boom' })).toMatchObject({
     alreadyExists: false,
     kind: 'retryable',
     code: 'storage_500',
+  });
+  expect(classifyStorageError({ status: 403, message: 'not authorized' })).toMatchObject({
+    alreadyExists: false,
+    kind: 'terminal',
   });
 });
 
@@ -87,39 +126,42 @@ test('SQLite contention is recognised wherever it surfaces', () => {
   expect(isDatabaseLocked(new Error('no such column: nope'))).toBe(false);
 });
 
-test('the success shape is read leniently, but a status it cannot store is refused', () => {
+test('the success shape is exactly the six keys the function returns', () => {
+  expect(FinalizeResponseSchema.parse(RESPONSE)).toEqual(RESPONSE);
+
+  // An unscored or discarded trip carries a null score.
   expect(
-    FinalizeResponseSchema.parse({
-      tripId: 'srv-1',
-      score: 74,
-      status: 'final',
-      day: { day: '2026-09-20' },
-      provisionalMismatch: false,
-      replayed: true,
-      longTermScore: 81,
-    })
-  ).toEqual({
-    tripId: 'srv-1',
-    score: 74,
-    status: 'final',
-    day: { day: '2026-09-20' },
-    provisionalMismatch: false,
-    replayed: true,
-  });
-
-  // An unscored trip has no score; a response that omits the key leaves the local one alone.
-  expect(FinalizeResponseSchema.parse({ tripId: 'srv-1', score: null, status: 'unscored' }).score)
-    .toBeNull();
-  expect(FinalizeResponseSchema.parse({ tripId: 'srv-1', status: 'final' }).score).toBeUndefined();
-
-  expect(() => FinalizeResponseSchema.parse({ tripId: 'srv-1', status: 'recording' })).toThrow();
-  expect(() => FinalizeResponseSchema.parse({ status: 'final' })).toThrow();
+    FinalizeResponseSchema.parse({ ...RESPONSE, score: null, status: 'unscored' }).score
+  ).toBeNull();
+  expect(
+    FinalizeResponseSchema.parse({ ...RESPONSE, score: null, status: 'discarded' }).status
+  ).toBe('discarded');
 });
 
-test('a day is filed under the server key when there is one, else the trip local date', () => {
-  expect(dayKeyOf({ day: '2026-09-20', points: 50 }, T0, 'UTC')).toBe('2026-09-20');
-  // 2023-11-14T22:13:20Z is still the 14th in London and already the 15th in Tokyo.
-  expect(dayKeyOf({ points: 50 }, T0, 'Europe/London')).toBe('2023-11-14');
-  expect(dayKeyOf(undefined, T0, 'Asia/Tokyo')).toBe('2023-11-15');
-  expect(localDay(T0, 'not/a-zone')).toBe('2023-11-14');
+test('anything the contract does not describe is refused, not guessed at', () => {
+  const refused: Record<string, unknown>[] = [
+    { ...RESPONSE, longTermScore: 81 }, // an unknown key
+    { ...RESPONSE, day: '2026-09-20' }, // the day as a bare date
+    { ...RESPONSE, day: { ...DAY_ROW, points: 50 } }, // an unknown key inside the day
+    { ...RESPONSE, day: { ...DAY_ROW, day: '20 September' } },
+    { ...RESPONSE, tripId: 'srv-1' }, // not a uuid
+    { ...RESPONSE, score: 74, status: 'unscored' }, // a score on an unscored trip
+    { ...RESPONSE, score: null }, // no score on a final trip
+    { ...RESPONSE, score: 101 },
+    { ...RESPONSE, status: 'recording' },
+    { ...RESPONSE, provisionalMismatch: undefined },
+    { ...RESPONSE, replayed: undefined },
+    { ...RESPONSE, day: undefined },
+  ];
+  for (const value of refused) expect(FinalizeResponseSchema.safeParse(value).success).toBe(false);
+});
+
+test('every number in a day row is finite', () => {
+  // JSON cannot carry them, but the schema is the contract and says so out loud.
+  for (const broken of [Infinity, -Infinity, NaN]) {
+    expect(DayRowSchema.safeParse({ ...DAY_ROW, exposure: broken }).success).toBe(false);
+    expect(DayRowSchema.safeParse({ ...DAY_ROW, drivingS: broken }).success).toBe(false);
+  }
+  expect(DayRowSchema.safeParse({ ...DAY_ROW, longTermScore: null, band: null }).success).toBe(true);
+  expect(DayRowSchema.safeParse({ ...DAY_ROW, tripsScored: -1 }).success).toBe(false);
 });

@@ -117,7 +117,16 @@ export function classifyStorageError(error: unknown): Failure & { alreadyExists:
   const record = asRecord(error);
   const status = asStatus(record.status) ?? asStatus(record.statusCode);
   const message = typeof record.message === 'string' ? record.message : '';
-  const alreadyExists = status === 409 || /already exists/i.test(message);
+  // storage-js puts the HTTP status in `status` and the body's own code in `statusCode`, and some
+  // storage-api versions answer a duplicate as HTTP 400 with `statusCode: '409'` — so the body's
+  // code and error name are checked too, not only the transport status.
+  const alreadyExists =
+    status === 409 ||
+    asStatus(record.statusCode) === 409 ||
+    record.error === 'Duplicate' ||
+    record.code === 'Duplicate' ||
+    record.code === 'KeyAlreadyExists' ||
+    /already exists/i.test(message);
   return {
     alreadyExists,
     kind: classifyStatus(status),
@@ -141,47 +150,63 @@ const SERVER_TRIP_STATUSES = [
   'discarded',
 ] as const satisfies readonly TripStatus[];
 
+/** A local calendar date, which is both the day row's identity and its cache key. */
+const LOCAL_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * What `finalize-trip` answers with on success.
+ * One day's standing, as `finalize-trip` recomputed it over every trip the server holds for that
+ * date (§9.9). Cached verbatim under `day`, so the home screen has the badges with no network.
  *
- * Unknown keys are dropped rather than refused: the response is read, never echoed, and a server
- * that starts reporting one more field must not fail every queued trip on an older build.
- * `score` is optional so that a response which omits it leaves the local score alone — a missing
- * key is not the same as `null`, which is the server saying "this trip has no score".
+ * Strict, like the upload contract it answers: a key this build does not know is drift between the
+ * device and the function, and a response the device cannot read is better retried — and reported —
+ * than half-applied. `z.number()` in zod 4 already refuses NaN and Infinity, so every number here is
+ * finite (pinned by a test).
  */
-export const FinalizeResponseSchema = z.object({
-  tripId: z.string().min(1).max(64),
-  score: z.number().nullable().optional(),
-  status: z.enum(SERVER_TRIP_STATUSES),
-  /** The day evaluation (§9.9) for the trip's local date, cached verbatim. */
-  day: z.unknown().optional(),
-  provisionalMismatch: z.boolean().optional(),
-  /** True when the server had already applied this trip — a retry that converged. */
-  replayed: z.boolean().optional(),
-});
+export const DayRowSchema = z
+  .object({
+    day: z.string().regex(LOCAL_DAY),
+    /** The §9.6 long-term score as of this day, or null before there is enough driving for one. */
+    longTermScore: z.number().int().min(0).max(100).nullable(),
+    band: z.string().min(1).max(32).nullable(),
+    /** The day is still provisional: more trips for it may yet arrive. */
+    provisional: z.boolean(),
+    safeDay: z.boolean(),
+    goodDay: z.boolean(),
+    phoneFreeDay: z.boolean(),
+    cameraDay: z.boolean(),
+    exposure: z.number().nonnegative(),
+    drivingS: z.number().nonnegative(),
+    tripsScored: z.number().int().nonnegative(),
+    severeEvents: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type DayRow = z.infer<typeof DayRowSchema>;
+
+/**
+ * What `finalize-trip` answers with on success — exactly six keys, all required.
+ *
+ * Strict by ruling: the runner writes the trip row and the day cache from this and nothing else, so
+ * a response it cannot read in full must not be applied at all. A parse failure is *retryable*, not
+ * terminal (`runner.ts`): the payload was fine and the server accepted it, so the fix is a new build
+ * or a server correction, never dropping the trip.
+ */
+export const FinalizeResponseSchema = z
+  .object({
+    tripId: z.uuid(),
+    /** Null exactly when the trip carries no score. */
+    score: z.number().int().min(0).max(100).nullable(),
+    status: z.enum(SERVER_TRIP_STATUSES),
+    day: DayRowSchema,
+    /** The server's re-score disagreed with the device's provisional one by more than 2 points. */
+    provisionalMismatch: z.boolean(),
+    /** True when the server had already applied this trip — a retry that converged. */
+    replayed: z.boolean(),
+  })
+  .strict()
+  .refine((r) => (r.score !== null) === (r.status === 'provisional' || r.status === 'final'), {
+    error: 'a score exists exactly when the trip is scored',
+    path: ['score'],
+  });
 
 export type FinalizeResponse = z.infer<typeof FinalizeResponseSchema>;
-
-/**
- * The cache key for a day evaluation: the server's own `day` field when it carries one, else the
- * trip's local date, so the row is filed where the home screen will look for it either way.
- */
-export function dayKeyOf(day: unknown, startedAt: number, tz: string): string {
-  const named = asRecord(day).day;
-  if (typeof named === 'string' && named.length > 0) return named;
-  return localDay(startedAt, tz);
-}
-
-/** `YYYY-MM-DD` for an instant in a zone; the device's own date when Intl does not know it. */
-export function localDay(ts: number, tz: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date(ts));
-  } catch {
-    return new Date(ts).toISOString().slice(0, 10);
-  }
-}

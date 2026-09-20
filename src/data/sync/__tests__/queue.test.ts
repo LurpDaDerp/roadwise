@@ -6,12 +6,14 @@ import { createQueueRepo } from '@/data/db/queue';
 import type { FinalizeTripPayload } from '@/data/sync/payload';
 import { isSyncKind, SYNC_KINDS } from '@/data/sync/kinds';
 import {
+  emitSyncApplied,
   enqueueFinalize,
   enqueueTraceUpload,
   FINALIZE_KIND,
   finalizeIdempotencyKey,
   findFinalize,
   onQueueChanged,
+  onSyncApplied,
   TRACE_UPLOAD_KIND,
   traceIdempotencyKey,
 } from '@/data/sync/queue';
@@ -210,4 +212,36 @@ test('a listener that has unsubscribed is not called again', async () => {
   await enqueueFinalize(db, payload(), T0);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(calls).toBe(0);
+});
+
+test('a trace-upload payload must name a trip id the server would accept', async () => {
+  for (const bad of ['../../etc/passwd', 'a b', '', 'x'.repeat(65)]) {
+    await expect(
+      enqueueTraceUpload(db, { clientTripId: bad, tracePath: `${bad}.bin.gz` }, T0)
+    ).rejects.toThrow();
+  }
+  // And the path must be that trip's own trace, not another's.
+  await expect(
+    enqueueTraceUpload(db, { clientTripId: ID, tracePath: 'someone-else.bin.gz' }, T0)
+  ).rejects.toThrow();
+  await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
+});
+
+test('sync:applied reaches its listeners and survives one that throws', () => {
+  const seen: number[] = [];
+  const errors: unknown[] = [];
+  const first = onSyncApplied(() => {
+    throw new Error('boom');
+  });
+  const second = onSyncApplied((result) => seen.push(result.done));
+  try {
+    emitSyncApplied({ done: 2, failed: 1, deferred: 0 }, (error) => errors.push(error));
+    expect(seen).toEqual([2]);
+    expect(errors).toHaveLength(1);
+  } finally {
+    first();
+    second();
+  }
+  emitSyncApplied({ done: 1, failed: 0, deferred: 0 });
+  expect(seen).toEqual([2]);
 });

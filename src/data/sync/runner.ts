@@ -34,6 +34,9 @@ import type { QueueItem, TripPatch } from '@/data/db/types';
 import { isSyncKind, type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
 import {
+  CLIENT_TRIP_ID,
+  emitQueueChanged,
+  emitSyncApplied,
   enqueueTraceUpload,
   onQueueChanged,
   TraceUploadPayloadSchema,
@@ -42,7 +45,6 @@ import {
 import {
   classifyInvokeError,
   classifyStorageError,
-  dayKeyOf,
   FinalizeResponseSchema,
   isDatabaseLocked,
   type Failure,
@@ -61,8 +63,10 @@ export const WIFI_RETRY_S = 900;
 export const UNHANDLED_KIND_RETRY_S = 3600;
 /** After a wake declined because the engine was recording, try again this long after. */
 export const RECORDING_RETRY_MS = 15_000;
-/** Items claimed per pass. */
+/** Items claimed per batch. */
 export const DEFAULT_BATCH = 10;
+/** Batches one drain will work through before leaving the rest to the next wake. */
+export const MAX_ROUNDS = 20;
 
 /** The object key under the traces bucket: the user's own prefix, then the trip. */
 export const traceObjectKey = (uid: string, clientTripId: string): string =>
@@ -120,8 +124,11 @@ export interface SyncRunnerDeps {
   supabase: SyncSupabase;
   fs: TraceFs;
   net: NetStatus;
-  /** True while the engine is recording *or finalizing* — the runner stays off the database. */
-  isRecording?: () => boolean;
+  /**
+   * True while the engine is recording *or finalizing* — the runner stays off the database.
+   * Required, not defaulted: a host that forgot it would drain into the 1 Hz recorder in silence.
+   */
+  isRecording: () => boolean;
   /** React Native's `AppState`, or nothing in a host that has no foreground to speak of. */
   appState?: AppStateLike;
   now?: () => number;
@@ -159,6 +166,15 @@ type Outcome =
 
 type FailureOutcome = Extract<Outcome, { kind: 'failed' | 'retry' | 'unauthorized' }>;
 
+/** `JSON.parse` that answers `null` instead of throwing — a stored row is data, not a promise. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 const failureOutcome = (failure: Failure): FailureOutcome =>
   failure.kind === 'terminal'
     ? { kind: 'failed', code: failure.code }
@@ -169,7 +185,7 @@ const failureOutcome = (failure: Failure): FailureOutcome =>
 export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const { db, supabase, fs, net } = deps;
   const now = deps.now ?? Date.now;
-  const isRecording = deps.isRecording ?? (() => false);
+  const { isRecording } = deps;
   const batchSize = deps.batchSize ?? DEFAULT_BATCH;
   const report = (error: unknown, context: string): void => deps.onError?.(error, context);
 
@@ -180,6 +196,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   let draining = false;
   let started = false;
+  /** A wake that arrived while a drain was in flight, to be run when that drain ends. */
+  let wakePending = false;
   let recordingRetry: ReturnType<typeof setTimeout> | null = null;
   const unsubscribes: (() => void)[] = [];
 
@@ -203,7 +221,26 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function traceWaitsForWifi(): Promise<boolean> {
     const wifiOnly = await settings.getOr(WIFI_ONLY_TRACES_KEY, WIFI_ONLY_TRACES_DEFAULT);
     if (!wifiOnly) return false;
-    return (await net.isWifi()) === false;
+    // Anything but a definite yes waits. An adapter that answers `undefined` — a NetInfo state
+    // that has not arrived yet — must not be read as "on Wi-Fi, send the megabytes".
+    return (await net.isWifi()) !== true;
+  }
+
+  /**
+   * Whether the trip a queued trace belongs to is gone from the device: deleted outright,
+   * `discarded` (§9.4 — a train, a plane; never uploaded in the first place), or soft-deleted.
+   *
+   * Read through `SELECT *` rather than the trips repo so that `deleted_at` — which Task 7 adds —
+   * is honoured the moment the column exists and is simply absent from the row until then.
+   */
+  async function tripIsGone(clientTripId: string): Promise<boolean> {
+    const { rows } = await db.execute('SELECT * FROM trips WHERE client_trip_id = ?', [
+      clientTripId,
+    ]);
+    const row = rows[0];
+    if (!row) return true;
+    if (row.status === 'discarded') return true;
+    return row.deleted_at !== undefined && row.deleted_at !== null;
   }
 
   async function removeTrace(path: string): Promise<void> {
@@ -241,27 +278,43 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     return failureOutcome(failure);
   }
 
-  /** Write the server's answer to the trip and cache its day, in one transaction. */
+  /**
+   * Write the server's answer to the trip and cache its day, in one transaction.
+   *
+   * A response this build cannot read in full is **not applied**: the upload itself succeeded, so
+   * failing the trip would be wrong, and writing half of an answer would be worse. It becomes a
+   * retryable `invalid_response`, which a new build or a server correction resolves.
+   */
   async function applyFinalize(
     payload: FinalizeTripPayload,
     response: unknown,
     at: number
-  ): Promise<void> {
-    const result = FinalizeResponseSchema.parse(response);
-    const patch: TripPatch = {
-      sync_state: 'synced',
-      server_id: result.tripId,
-      status: result.status,
-      sync_error: null,
-    };
-    if (result.score !== undefined) patch.score = result.score;
+  ): Promise<Outcome> {
+    const parsed = FinalizeResponseSchema.safeParse(response);
+    if (!parsed.success) {
+      report(parsed.error, `finalize-trip response for ${payload.clientTripId}`);
+      return { kind: 'retry', code: 'invalid_response' };
+    }
+    const result = parsed.data;
 
     await db.transaction(async (tx) => {
-      await trips.update(payload.clientTripId, patch, at, tx);
-      if (result.day !== undefined && result.day !== null) {
-        await days.put(dayKeyOf(result.day, payload.startedAt, payload.tz), result.day, at, tx);
-      }
+      await trips.update(
+        payload.clientTripId,
+        {
+          sync_state: 'synced',
+          server_id: result.tripId,
+          status: result.status,
+          score: result.score,
+          sync_error: null,
+        } satisfies TripPatch,
+        at,
+        tx
+      );
+      // The day row is the server's own §9.9 evaluation over every trip it holds for that date;
+      // it is filed under its own `day`, which is the trip's local date, not the device's.
+      await days.put(result.day.day, result.day, at, tx);
     });
+    return { kind: 'done' };
   }
 
   /** Per-item state that survives the one retry a 401 buys. */
@@ -270,11 +323,16 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   async function runFinalize(item: QueueItem, state: ItemState, at: number): Promise<Outcome> {
-    const parsed = FinalizeTripPayloadSchema.safeParse(JSON.parse(item.payload_json));
+    const parsed = FinalizeTripPayloadSchema.safeParse(parseJson(item.payload_json));
     // Drift between what this build queued and what this build can send. Retrying cannot fix it,
     // and the samples it was built from are long purged.
     if (!parsed.success) return { kind: 'failed', code: 'invalid_payload' };
     const payload = parsed.data;
+    // The id becomes a Storage object key and a local file path. M1's contract bounds its length
+    // but not its characters; the server refuses anything outside this set, so refuse it here too.
+    if (!CLIENT_TRIP_ID.test(payload.clientTripId)) {
+      return { kind: 'failed', code: 'invalid_client_trip_id' };
+    }
 
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
@@ -300,7 +358,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const { data, error } = await supabase.functions.invoke(FINALIZE_FUNCTION, { body: payload });
     if (error) return failureOutcome(await classifyInvokeError(error, at));
 
-    await applyFinalize(payload, data, at);
+    const applied = await applyFinalize(payload, data, at);
+    if (applied.kind !== 'done') return applied;
     // Only this item's own upload licenses the delete; a trace still waiting under `trace:<id>`
     // is the other item's to remove once it has actually sent it.
     if (payload.tracePath !== null && state.traceUploadedAt !== null) {
@@ -314,9 +373,17 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     state: ItemState,
     at: number
   ): Promise<Outcome> {
-    const parsed = TraceUploadPayloadSchema.safeParse(JSON.parse(item.payload_json));
+    const parsed = TraceUploadPayloadSchema.safeParse(parseJson(item.payload_json));
     if (!parsed.success) return { kind: 'failed', code: 'invalid_payload' };
     const payload: TraceUploadPayload = parsed.data;
+
+    // The trip went away while its trace was waiting for Wi-Fi. Uploading now would put an object
+    // under a key nothing will ever read — and, after a delete, one the server has already swept.
+    // Checked before the session and the network, so a signed-out device on cellular clears it too.
+    if (await tripIsGone(payload.clientTripId)) {
+      await removeTrace(payload.tracePath);
+      return { kind: 'done' };
+    }
 
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
@@ -397,6 +464,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       case 'retry':
       case 'unauthorized': {
         const closed = await queue.markAttempt(item.id, false, outcome.code, at);
+        // The ladder ran out: `markAttempt` has just given up on the item, so the trip must stop
+        // saying `queued` behind a dead queue row. The item keeps the last transport code as its
+        // `last_error`; the trip records *why it will never go*, which is a different fact.
+        if (closed?.status === 'failed') {
+          if (item.kind === 'finalize-trip') await failTrip(item, 'retries_exhausted', at);
+          result.failed += 1;
+          return;
+        }
         const retryAfterS = outcome.kind === 'retry' ? outcome.retryAfterS : null;
         if (closed && retryAfterS) await queue.deferUntil(item.id, at + retryAfterS * 1000);
         result.deferred += 1;
@@ -422,8 +497,25 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     }
   }
 
-  async function pass(at: number): Promise<DrainResult> {
-    const result: DrainResult = { done: 0, failed: 0, deferred: 0 };
+  /** Hand a claim back, reporting rather than throwing — used where the database is already sore. */
+  async function releaseQuietly(id: number, at: number): Promise<void> {
+    try {
+      await queue.release(id, at);
+    } catch (error) {
+      report(error, `release ${id}`);
+    }
+  }
+
+  interface Round extends DrainResult {
+    /** How many items this round claimed; a full batch means there may be more behind them. */
+    claimed: number;
+    /** The round ended early — the recorder holds the write lock, or a drive started. */
+    stopped: boolean;
+  }
+
+  /** Claim one batch and work it. */
+  async function claimAndRun(at: number): Promise<Round> {
+    const round: Round = { done: 0, failed: 0, deferred: 0, claimed: 0, stopped: false };
     let items: QueueItem[];
     try {
       // Hand back claims a killed process left standing before deciding what is due. `nextDue`
@@ -432,33 +524,76 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       await queue.reclaimInflight(RECLAIM_AFTER_S, at);
       items = await queue.nextDue(at, batchSize);
     } catch (error) {
-      if (isDatabaseLocked(error)) return result;
+      if (isDatabaseLocked(error)) return { ...round, stopped: true };
       throw error;
     }
+    round.claimed = items.length;
 
     for (const item of items) {
       // The engine may have started a drive between two items.
       if (isRecording()) {
-        await queue.release(item.id, at);
-        result.deferred += 1;
+        await releaseQuietly(item.id, at);
+        round.deferred += 1;
         continue;
       }
+
       let outcome: Outcome;
       try {
         outcome = await runItem(item, at);
       } catch (error) {
         if (isDatabaseLocked(error)) {
-          await queue.release(item.id, at).catch((e: unknown) => report(e, 'release'));
-          result.deferred += 1;
+          await releaseQuietly(item.id, at);
+          round.deferred += 1;
           // The recorder holds the write lock. Everything after this would meet it too.
-          break;
+          return { ...round, stopped: true };
         }
         report(error, `item ${item.id}`);
         outcome = { kind: 'retry', code: 'unexpected' };
       }
-      await settle(item, outcome, at, result);
+
+      // Settling is itself a write, and it can meet the same lock. Failing here leaves the claim
+      // standing until `reclaimInflight`, so hand it back and stop rather than push on.
+      try {
+        await settle(item, outcome, at, round);
+      } catch (error) {
+        report(error, `settle ${item.id}`);
+        await releaseQuietly(item.id, at);
+        round.deferred += 1;
+        return { ...round, stopped: true };
+      }
     }
-    return result;
+    return round;
+  }
+
+  /**
+   * One drain: batches until the backlog is gone.
+   *
+   * A device that was offline for a week has more than `batchSize` trips waiting, and there is no
+   * poll to pick up the rest — the next wake is a foreground or another enqueue. So a round that
+   * filled its batch *and* settled something goes round again; progress is guaranteed because a
+   * settled item leaves the pending set. A round that only deferred never loops: `release` makes
+   * those items due immediately, and looping on them would spin.
+   */
+  async function pass(at: number): Promise<DrainResult> {
+    const total: DrainResult = { done: 0, failed: 0, deferred: 0 };
+    for (let round = 0; round < MAX_ROUNDS; round += 1) {
+      const worked = await claimAndRun(at);
+      total.done += worked.done;
+      total.failed += worked.failed;
+      total.deferred += worked.deferred;
+      if (worked.stopped || worked.claimed < batchSize || worked.done + worked.failed === 0) break;
+    }
+    // Trips have changed state and a day row may have landed: tell whoever is showing them.
+    if (total.done + total.failed > 0) {
+      emitSyncApplied(total, (error) => report(error, 'sync:applied listener'));
+      // `sync:applied` is the precise event — it carries the counts and fires only on a settled
+      // pass. `queue:changed` is fired too because the queue genuinely did change (items moved to
+      // `done`/`failed`) and it is what a subscriber wired to "the sync queue" already listens to.
+      // The self-wake that follows costs one empty claim pass, held by `wakePending` until this
+      // drain ends and then finding nothing due.
+      emitQueueChanged();
+    }
+    return total;
   }
 
   async function drainOnce(at: number = now()): Promise<DrainResult> {
@@ -470,6 +605,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       return await pass(at);
     } finally {
       draining = false;
+      // A wake that arrived mid-drain was not lost, it was held: run it now. The common case is
+      // app start, where M1's crash recovery finalizes the interrupted trip (and enqueues, inside
+      // its transaction) while `start()`'s own first drain is still running.
+      if (wakePending) {
+        wakePending = false;
+        wake();
+      }
     }
   }
 
@@ -480,7 +622,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   function wake(): void {
-    if (!started || draining) return;
+    if (!started) return;
+    // Not dropped: `drainOnce`'s `finally` runs it. `pass()` claims its batch once at the start,
+    // so an item enqueued mid-drain is not picked up by the drain that is already running.
+    if (draining) {
+      wakePending = true;
+      return;
+    }
     if (isRecording()) {
       // The wake would otherwise be lost: nothing tells the runner when a drive ends, and the
       // app is already in the foreground, so no AppState change is coming either.
@@ -515,6 +663,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     stop(): void {
       started = false;
+      wakePending = false;
       clearRecordingRetry();
       for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
     },
