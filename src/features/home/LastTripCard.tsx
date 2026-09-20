@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { CONSTANTS } from '@scoring';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
@@ -8,9 +9,12 @@ import {
   dateLine,
   Field,
   FieldText,
+  highlightsFor,
   RoleChips,
   routeLine,
+  spokenRoute,
   tripSummaryHref,
+  type Highlight,
 } from '@/features/trips';
 import { formatDistanceMi, formatDuration } from '@/lib/format';
 import { Banner, Card, EmptyState, ListRow, Skeleton, Text, useTheme } from '@/ui';
@@ -54,6 +58,31 @@ function Splits({ trip }: { trip: TripSummary }) {
       <FieldText variant="footnote" tone="muted">
         {conditions}
       </FieldText>
+    </View>
+  );
+}
+
+/**
+ * §7.B B1 item 5's top highlight: the first of the same three D1 prints, which is a positive
+ * whenever the drive earned one and the costly category otherwise. The Home row reads no
+ * timeline, so a costly category is named without its episode count — the documented degradation
+ * of `highlightsFor`, and the count is one tap away on the card back.
+ */
+const topHighlightOf = (trip: TripSummary): Highlight | undefined => highlightsFor(trip, [])[0];
+
+function TopHighlight({ highlight }: { highlight: Highlight }) {
+  const th = useTheme();
+  const positive = highlight.kind === 'positive';
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.xs }}>
+      <Ionicons
+        name={positive ? 'checkmark-circle-outline' : 'remove-circle-outline'}
+        size={14}
+        color={positive ? th.colors.success : th.colors.danger}
+      />
+      <Text variant="footnote" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
+        {highlight.text}
+      </Text>
     </View>
   );
 }
@@ -116,6 +145,7 @@ export function LastTripCard() {
   // than something false.
   const scoredCount = Math.min(scored.data?.length ?? 0, DRIVES_TO_BUILD);
   const building = scored.isSuccess && scoredCount < DRIVES_TO_BUILD;
+  const top = topHighlightOf(trip);
 
   return (
     <Card testID="last-trip">
@@ -126,14 +156,22 @@ export function LastTripCard() {
           <ListRow
             title={routeLine(trip)}
             subtitle={dateLine(trip)}
-            detail={<Splits trip={trip} />}
+            detail={
+              <>
+                <Splits trip={trip} />
+                {top ? <TopHighlight highlight={top} /> : null}
+              </>
+            }
             leading={<ScoreBlock score={score} />}
             onPress={() => router.push(tripSummaryHref(trip.clientTripId))}
             accessibilityLabel={[
               copy.lastDrive,
-              routeLine(trip),
+              // Spoken, not printed: the arrow in the route line reads as "right arrow" or is
+              // dropped altogether (Task 6 review, M-7).
+              spokenRoute(trip),
               dateLine(trip),
               ...splitsOf(trip),
+              ...(top ? [top.text] : []),
               score ? `${score.numeral}, ${score.band}` : copy.notScored,
             ].join(', ')}
             accessibilityHint={copy.open}

@@ -63,8 +63,14 @@ test('prints the last drive — score, band, route, date, splits — and counts 
   expect(screen.getByText('10 mi')).toBeOnTheScreen();
   expect(screen.getByText('Building your score: 2 of 3 drives')).toBeOnTheScreen();
 
+  // The top highlight (§7.B B1 item 5) is the first of the three D1 prints — a positive here.
+  expect(screen.getByText('No phone use')).toBeOnTheScreen();
+
+  // Spoken with "to", never the printed arrow (M-7).
   await fireEvent.press(
-    screen.getByRole('button', { name: /Last drive, Near Home → Near Lincoln HS, .*84, Good/ })
+    screen.getByRole('button', {
+      name: /Last drive, Near Home to Near Lincoln HS, .*No phone use, 84, Good/,
+    })
   );
   expect(mockRouter.push).toHaveBeenCalledWith({
     pathname: '/(app)/trips/[clientTripId]/summary',
@@ -114,9 +120,33 @@ test('the three splits are printed inside the row, and the row speaks them', asy
   expect(within(row).getByText('Night, rain')).toBeOnTheScreen();
   expect(
     screen.getByRole('button', {
-      name: 'Last drive, Near Home → Near Lincoln HS, Sun, Jan 4 · 12:00 – 12:30 PM, 30 min, 10 mi, Night, rain, 90, Excellent',
+      name: 'Last drive, Near Home to Near Lincoln HS, Sun, Jan 4 · 12:00 – 12:30 PM, 30 min, 10 mi, Night, rain, No phone use, 90, Excellent',
     })
   ).toBeOnTheScreen();
+});
+
+test('with nothing clean to claim the highlight is the costliest category, named without a count', async () => {
+  const w = await world({
+    trips: [
+      drive('last', 1, {
+        score: 55,
+        category_deductions_json: JSON.stringify(
+          deductions({ speeding: 18, phone: 9, braking: 6, accel: 5, cornering: 4 })
+        ),
+      }),
+    ],
+  });
+  await w.renderScreen(<LastTripCard />);
+  // The Home row reads no timeline, so there is no episode count to print here; the card back has it.
+  expect(await screen.findByText('Speeding')).toBeOnTheScreen();
+  expect(screen.queryByText(/episode/)).toBeNull();
+});
+
+test('an unscored drive has no highlight to print', async () => {
+  const w = await world({ trips: [drive('last', 1, { score: null, status: 'unscored' })] });
+  await w.renderScreen(<LastTripCard />);
+  await screen.findByText('Not scored');
+  expect(screen.queryByText('No phone use')).toBeNull();
 });
 
 test('a count that cannot be read says so, with a retry, rather than a wrong number', async () => {
