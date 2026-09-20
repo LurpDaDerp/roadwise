@@ -44,7 +44,8 @@ function Probe() {
   return (
     <View>
       <Text>{s.status}:{s.profile?.display_name ?? '-'}</Text>
-      <Text onPress={() => void s.signOut()}>sign out</Text>
+      <Text onPress={() => { s.signOut().catch(() => {}); }}>sign out</Text>
+      <Text onPress={() => { s.refreshProfile().catch(() => {}); }}>refresh</Text>
     </View>
   );
 }
@@ -150,4 +151,43 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
 
   await act(async () => { emit('SIGNED_OUT', null); });
   await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+});
+
+test('a hung profile fetch cannot strand the app on loading', async () => {
+  jest.useFakeTimers();
+  try {
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    // The fetch is gated and never settles. Unbounded, status would stay 'loading' for the rest of
+    // the process and every later event would just join the same hung promise.
+    expect(screen.getByText('loading:-')).toBeTruthy();
+
+    await act(async () => { jest.advanceTimersByTime(10_000); });
+    expect(screen.getByText('signedIn:-')).toBeTruthy();
+
+    // The in-flight slot was released too, so the next event genuinely retries.
+    await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
+    expect(profileCalls).toEqual(['u1', 'u1']);
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a refresh landing after sign-out does not resurrect the profile', async () => {
+  await mount();
+  await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+
+  await act(async () => { fireEvent.press(screen.getByText('refresh')); });
+  expect(profileCalls).toEqual(['u1', 'u1']);
+
+  await act(async () => { emit('SIGNED_OUT', null); });
+  await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+
+  // That refresh was started for a session that has since ended; its row must not be written.
+  await act(async () => { mockProfileGate.resolve?.(ava); });
+  expect(screen.getByText('signedOut:-')).toBeTruthy();
 });

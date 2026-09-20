@@ -1,4 +1,5 @@
 import * as aesjs from 'aes-js';
+import * as SecureStore from 'expo-secure-store';
 
 import { LargeSecureStore } from '@/data/supabase/largeSecureStore';
 
@@ -6,9 +7,19 @@ import { LargeSecureStore } from '@/data/supabase/largeSecureStore';
 // functions, so they are initialised by the time any of them runs.
 const mockSecure = new Map<string, string>();
 const mockAsync = new Map<string, string>();
+// Injects a keychain read failure - a locked device, a busy Keystore - without deleting anything.
+const mockSecureFailure: { read?: Error } = {};
+const mockKeychainOptions: unknown[] = [];
 jest.mock('expo-secure-store', () => ({
-  getItemAsync: jest.fn(async (k: string) => mockSecure.get(k) ?? null),
-  setItemAsync: jest.fn(async (k: string, v: string) => { mockSecure.set(k, v); }),
+  AFTER_FIRST_UNLOCK: 'afterFirstUnlock',
+  getItemAsync: jest.fn(async (k: string) => {
+    if (mockSecureFailure.read) throw mockSecureFailure.read;
+    return mockSecure.get(k) ?? null;
+  }),
+  setItemAsync: jest.fn(async (k: string, v: string, options?: { keychainAccessible?: unknown }) => {
+    mockKeychainOptions.push(options?.keychainAccessible);
+    mockSecure.set(k, v);
+  }),
   deleteItemAsync: jest.fn(async (k: string) => { mockSecure.delete(k); }),
 }));
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -21,6 +32,8 @@ jest.mock('expo-crypto', () => ({ getRandomBytes: (n: number) => Uint8Array.from
 beforeEach(() => {
   mockSecure.clear();
   mockAsync.clear();
+  mockKeychainOptions.length = 0;
+  delete mockSecureFailure.read;
 });
 
 test('round-trips a value larger than 2048 bytes and keeps only ciphertext in AsyncStorage', async () => {
@@ -40,6 +53,8 @@ test('round-trips a value larger than 2048 bytes and keeps only ciphertext in As
   const key = mockSecure.get('session');
   expect(key).toMatch(/^[0-9a-f]{64}$/);
   expect(stored).not.toContain(key as string);
+  // Readable after the first unlock, so a background drive-detection launch can still open it.
+  expect(mockKeychainOptions).toEqual([SecureStore.AFTER_FIRST_UNLOCK]);
 
   expect(await store.getItem('session')).toBe(big);
 
@@ -57,6 +72,24 @@ test('round-trips non-BMP characters, so an emoji display name survives a cold s
   await store.setItem('session', value);
 
   expect(await store.getItem('session')).toBe(value);
+});
+
+test('keeps both halves when the keychain read fails, and recovers on the next read', async () => {
+  const store = new LargeSecureStore();
+  await store.setItem('session', 'a session');
+  const blob = mockAsync.get('session');
+  const key = mockSecure.get('session');
+
+  // errSecInteractionNotAllowed: the JS runtime started while the device was locked, which happens
+  // on a background drive-detection launch. That is transient, not corruption.
+  mockSecureFailure.read = new Error('errSecInteractionNotAllowed');
+  await expect(store.getItem('session')).resolves.toBeNull();
+  expect(mockAsync.get('session')).toBe(blob);
+  expect(mockSecure.get('session')).toBe(key);
+
+  // Nothing was thrown away, so the next unlocked read still has the user signed in.
+  delete mockSecureFailure.read;
+  expect(await store.getItem('session')).toBe('a session');
 });
 
 test('self-heals when the encryption key is gone, rather than throwing', async () => {

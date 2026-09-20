@@ -1,5 +1,5 @@
 import type { Session } from '@supabase/supabase-js';
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { supabase } from './client';
 import { fetchProfile, type Profile } from './profile';
@@ -16,10 +16,38 @@ type Ctx = {
 
 const SessionCtx = createContext<Ctx | null>(null);
 
+/**
+ * A request that never settles would otherwise pin the app to 'loading' for the life of the
+ * process, and every later auth event would join the same hung promise.
+ */
+const PROFILE_TIMEOUT_MS = 10_000;
+
+function withTimeout(promise: Promise<Profile>): Promise<Profile> {
+  return new Promise<Profile>((resolve, reject) => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(
+      () => reject(new Error('Timed out reading the profile')),
+      PROFILE_TIMEOUT_MS
+    );
+    promise.then(
+      (row) => {
+        clearTimeout(timer);
+        resolve(row);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error('Could not read the profile'));
+      }
+    );
+  });
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState<Status>('loading');
+  // The effect owns the bookkeeping that decides whether a write is still current; refreshProfile
+  // has to go through the same gate, so it reaches it through this ref.
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let active = true;
@@ -34,7 +62,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     // than asking the server for the same row twice.
     function profileFor(userId: string): Promise<Profile> {
       if (inFlight?.userId === userId) return inFlight.promise;
-      const promise = fetchProfile(userId);
+      const promise = withTimeout(fetchProfile(userId));
       const clear = () => {
         if (inFlight?.promise === promise) inFlight = null;
       };
@@ -79,8 +107,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setProfile(row);
       } catch {
         if (superseded()) return;
-        // The row can lag sign-up (the handle_new_user trigger races the first read) and a later
-        // read can fail transiently. Only the first fetch for a user may leave the profile null;
+        // The row can lag sign-up (the handle_new_user trigger races the first read), and a later
+        // read can fail or time out. Only the first fetch for a user may leave the profile null;
         // after that the last known row stands, so a blip cannot bounce an onboarded user back
         // into onboarding.
       }
@@ -88,6 +116,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       if (superseded()) return;
       setStatus('signedIn');
     }
+
+    // Deliberately not routed through profileFor: a refresh is asked for because the row is known
+    // to have changed, so it must not join an older in-flight read.
+    refreshRef.current = async () => {
+      const userId = loadedUserId;
+      if (!userId) return;
+      const mine = generation;
+      const row = await withTimeout(fetchProfile(userId));
+      // A sign-out or an account switch while this was in flight makes the row someone else's.
+      if (!active || generation !== mine || loadedUserId !== userId) return;
+      loadedProfile = row;
+      setProfile(row);
+    };
 
     supabase.auth.getSession().then(
       ({ data }) => load(data.session),
@@ -113,9 +154,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       signOut: async () => {
         await supabase.auth.signOut();
       },
-      refreshProfile: async () => {
-        if (session) setProfile(await fetchProfile(session.user.id));
-      },
+      refreshProfile: () => refreshRef.current(),
     }),
     [status, session, profile]
   );

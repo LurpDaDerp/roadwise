@@ -21,17 +21,7 @@ function utf8FromBytes(bytes: Uint8Array): string {
  * blob unreadable.
  */
 export class LargeSecureStore {
-  private async encrypt(key: string, value: string): Promise<string> {
-    const encryptionKey = getRandomBytes(32);
-    const cipher = new aesjs.ModeOfOperation.ctr(encryptionKey, new aesjs.Counter(1));
-    const encrypted = cipher.encrypt(aesjs.utils.utf8.toBytes(value));
-    await SecureStore.setItemAsync(key, aesjs.utils.hex.fromBytes(encryptionKey));
-    return aesjs.utils.hex.fromBytes(encrypted);
-  }
-
-  private async decrypt(key: string, value: string): Promise<string | null> {
-    const hex = await SecureStore.getItemAsync(key);
-    if (!hex) return null;
+  private decrypt(hex: string, value: string): string {
     const cipher = new aesjs.ModeOfOperation.ctr(aesjs.utils.hex.toBytes(hex), new aesjs.Counter(1));
     return utf8FromBytes(cipher.decrypt(aesjs.utils.hex.toBytes(value)));
   }
@@ -54,26 +44,47 @@ export class LargeSecureStore {
     const encrypted = await AsyncStorage.getItem(key);
     if (!encrypted) return null;
 
-    let decrypted: string | null = null;
+    // Read the key outside the corruption guard below. A rejection here is transient - an iOS
+    // keychain errSecInteractionNotAllowed because the runtime started on a locked device (a
+    // background drive-detection launch does exactly that), or a busy Android Keystore - and
+    // deleting on it would sign the user out for good. Returning null reads to supabase-js as
+    // "no session", which does not trigger removeItem, so both halves survive to the next
+    // unlocked launch.
+    let hex: string | null = null;
     try {
-      decrypted = await this.decrypt(key, encrypted);
+      hex = await SecureStore.getItemAsync(key);
     } catch {
-      // A reinstall, a Keychain reset or a half-written blob leaves something that cannot be
-      // decrypted. Swallow the cause rather than surface it: aes-js and SecureStore put key
-      // material and raw input into their messages, and there is nothing here a caller can act on.
-      decrypted = null;
+      return null;
     }
 
-    if (decrypted === null) {
-      // Self-heal, so the next sign-in starts clean instead of tripping over the same blob forever.
+    if (!hex) {
+      // The key really is gone (a reinstall, a Keychain reset) while the blob survives: it can
+      // never be read again, so drop both halves rather than trip over it on every launch.
       await this.purge(key);
       return null;
     }
-    return decrypted;
+
+    try {
+      return this.decrypt(hex, encrypted);
+    } catch {
+      // A truncated or half-written blob. Swallow the cause rather than surface it: aes-js and
+      // SecureStore put key material and raw input into their messages, and there is nothing here
+      // a caller can act on.
+      await this.purge(key);
+      return null;
+    }
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    await AsyncStorage.setItem(key, await this.encrypt(key, value));
+    const encryptionKey = getRandomBytes(32);
+    const cipher = new aesjs.ModeOfOperation.ctr(encryptionKey, new aesjs.Counter(1));
+    const encrypted = cipher.encrypt(aesjs.utils.utf8.toBytes(value));
+    await SecureStore.setItemAsync(key, aesjs.utils.hex.fromBytes(encryptionKey), {
+      // The default (WHEN_UNLOCKED) is unreadable on a background launch while the phone is
+      // locked, which is precisely when drive detection wakes the app.
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+    });
+    await AsyncStorage.setItem(key, aesjs.utils.hex.fromBytes(encrypted));
   }
 
   async removeItem(key: string): Promise<void> {
