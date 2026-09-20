@@ -664,7 +664,7 @@ begin
   end if;
 
   if v_trip.status not in ('provisional', 'final') then
-    raise exception 'trip is not scored' using errcode = 'insufficient_privilege';
+    raise exception 'trip is not scored' using errcode = 'invalid_parameter_value';
   end if;
   -- only a scored event costs anything, so only a scored event can be disputed (a `possible` one
   -- never counted; `disputed`/`removed` ones without a dispute row were removed by the device)

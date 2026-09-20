@@ -576,7 +576,7 @@ select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaa
 select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-9'), 'wrong_limit', null, 200) $$, '22023', 'record_dispute stated limit must be between 5 and 100', 'implausible stated limit rejected');
 select throws_ok($$ select public.record_dispute(null, pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-1', 'ev-9'), 'hazard', null, null) $$, '22023', 'record_dispute requires a user', 'dispute needs a user');
 select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-old', 'ev-1'), 'hazard', null, null) $$, '22023', 'dispute window closed', 'events older than 14 days cannot be disputed');
-select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-unscored', 'ev-1'), 'hazard', null, null) $$, '42501', 'trip is not scored', 'events on an unscored trip cannot be disputed');
+select throws_ok($$ select public.record_dispute('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.ev('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'a-trip-unscored', 'ev-1'), 'hazard', null, null) $$, '22023', 'trip is not scored', 'events on an unscored trip cannot be disputed');
 select is((select count(*)::int from public.event_disputes where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 9, 'rejected calls and replays recorded nothing');
 
 -- C has 10 scored events in 30 days: 20 % = 2, so the 30-day rule binds before the 7-day cap
