@@ -5,6 +5,7 @@ import type { Tip } from '@/content/tips';
 import { Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
+import { ICON, TIGHT, TOUCH_LG } from './layout';
 
 /** The first sentence of a two-or-three-sentence body: enough to decide whether to read on. */
 export function firstSentence(body: string): string {
@@ -29,7 +30,7 @@ export function TipCard({ tip, onPress, testID }: { tip: Tip; onPress: () => voi
         flexDirection: 'row',
         alignItems: 'center',
         gap: th.space.md,
-        minHeight: 64,
+        minHeight: TOUCH_LG,
         padding: th.space.lg,
         borderRadius: th.radius.md,
         borderWidth: 1,
@@ -37,14 +38,14 @@ export function TipCard({ tip, onPress, testID }: { tip: Tip; onPress: () => voi
         backgroundColor: pressed ? th.colors.surfaceRaised : th.colors.surface,
       })}
     >
-      <Ionicons name="bulb-outline" size={24} color={th.colors.accent} />
-      <View style={{ flex: 1, gap: 2 }}>
+      <Ionicons name="bulb-outline" size={ICON.xl} color={th.colors.accent} />
+      <View style={{ flex: 1, gap: TIGHT }}>
         <Text variant="headline">{tip.title}</Text>
         <Text variant="subhead" tone="muted">
           {firstSentence(tip.body)}
         </Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color={th.colors.textSubtle} />
+      <Ionicons name="chevron-forward" size={ICON.md} color={th.colors.textSubtle} />
     </Pressable>
   );
 }

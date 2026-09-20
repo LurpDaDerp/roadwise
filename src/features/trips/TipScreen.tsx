@@ -104,12 +104,24 @@ export function TipScreen({ clientTripId }: { clientTripId: string }) {
   }
 
   const detail = detailQuery.data;
-  const tipped = detail ? tipForTrip(detail, eventsQuery.data ?? []) : null;
-  if (!detail || !tipped?.tip) {
+  if (!detail) {
     return (
       <Screen>
         <BackButton onPress={back} />
         <EmptyState title={copy.notFound.title} body={copy.notFound.body} />
+      </Screen>
+    );
+  }
+
+  const tipped = tipForTrip(detail, eventsQuery.data ?? []);
+  if (!tipped.tip) {
+    // The drive is on the record; there is simply nothing to coach — an unscored drive, or one
+    // whose costliest category has no tip in the catalogue. Saying "this drive isn't on your
+    // record" here would be untrue (Task 6 review, M-1).
+    return (
+      <Screen>
+        <BackButton onPress={back} />
+        <EmptyState title={copy.noTip.title} body={copy.noTip.body} testID="no-tip" />
       </Screen>
     );
   }

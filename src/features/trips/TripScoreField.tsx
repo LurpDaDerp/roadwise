@@ -6,7 +6,8 @@ import { ScoreRing, Stamp } from '@/ui/charts';
 
 import { tripCopy as copy } from './copy';
 import { Field, FieldText } from './Field';
-import { qualityCaption, unscoredCopy } from './format';
+import { unscoredCopy } from './format';
+import { QualityStamp } from './QualityStamp';
 
 /**
  * The SCORE field (§7.D D1): the ring with its band, the data-quality grade stamped beside it
@@ -25,9 +26,7 @@ export function TripScoreField({
 }) {
   const th = useTheme();
   const grade = trip.dataQuality;
-  const gradeStamp = grade ? (
-    <Stamp kind={grade} label={qualityCaption(grade)} size="sm" testID="stamp-quality" />
-  ) : null;
+  const gradeStamp = grade ? <QualityStamp grade={grade} testID="stamp-quality" /> : null;
 
   if (trip.scored && trip.score !== null && trip.band !== null) {
     return (
@@ -72,9 +71,7 @@ export function TripScoreField({
         }}
       >
         <View style={{ flexGrow: 1, flexShrink: 1, minWidth: '55%', gap: th.space.xs }}>
-          <FieldText variant="title2" accessibilityLiveRegion="polite">
-            {words.title}
-          </FieldText>
+          <FieldText variant="title2">{words.title}</FieldText>
           <Text variant="subhead" tone="muted">
             {words.body}
           </Text>

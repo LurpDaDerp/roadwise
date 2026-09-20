@@ -35,7 +35,22 @@ export interface SetRolePayload {
   role: ChosenRole;
 }
 
-/** One item per answer: a driver who changes their mind queues a second, later item. */
+/**
+ * One item per answer: a driver who changes their mind queues a second, later item, and the
+ * server keeps the last one.
+ *
+ * The stamp is **strictly increasing within the process**, not `Date.now()` — two answers inside
+ * the same millisecond would otherwise build the same key and `INSERT OR IGNORE` would silently
+ * drop the second, leaving the local row and the server disagreeing (Task 6 review, M-13). Across
+ * a relaunch the wall clock has moved on, so the sequence keeps rising.
+ */
+let lastStamp = 0;
+
+export function roleStamp(now: number): number {
+  lastStamp = Math.max(now, lastStamp + 1);
+  return lastStamp;
+}
+
 export const setRoleIdempotencyKey = (clientTripId: string, now: number): string =>
   `role:${clientTripId}:${now}`;
 
@@ -67,7 +82,7 @@ export async function setTripRole(
     await createQueueRepo(db).enqueue(
       SET_ROLE_KIND,
       payload,
-      setRoleIdempotencyKey(clientTripId, now),
+      setRoleIdempotencyKey(clientTripId, roleStamp(now)),
       now,
       tx
     );

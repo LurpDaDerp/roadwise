@@ -5,7 +5,7 @@
  * and each suite declares that mock itself (Jest hoists `jest.mock` per file).
  */
 import type { QueryClient } from '@tanstack/react-query';
-import { render, type RenderResult } from '@testing-library/react-native';
+import { fireEvent, render, type RenderResult } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
 import type { Db, DbResult, EventRow, TripRow } from '@/data/db';
@@ -99,6 +99,20 @@ export function brokenDb(): Db {
   const fail = () => Promise.reject(new Error('SQLITE_CORRUPT: database disk image is malformed'));
   return { execute: fail, transaction: fail };
 }
+
+/**
+ * Press, and wait for everything the press started.
+ *
+ * RNTL 14's `fireEvent.press` returns a promise. An un-awaited one breaks `act` for every later
+ * test in the same worker and shows up as the *next* test hanging rather than this one failing,
+ * so every press in this feature goes through here.
+ */
+export async function press(element: PressTarget): Promise<void> {
+  await fireEvent.press(element);
+}
+
+/** Whatever RNTL 14's queries hand back — taken from `fireEvent` so the two never drift. */
+export type PressTarget = Parameters<typeof fireEvent.press>[0];
 
 /** The `useRouter()` double every screen suite installs. */
 export function routerDouble() {

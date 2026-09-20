@@ -67,8 +67,16 @@ test('the clean-drive card has nothing to practise: it reads, and Done goes back
   expect(mockRouter.back).toHaveBeenCalled();
 });
 
-test('a trip with no tip to show is an empty state, not a blank screen', async () => {
+test('a drive that is on the record but has nothing to coach says exactly that', async () => {
   const w = await world({ trips: [tripRow({ client_trip_id: ID, score: null, status: 'unscored' })] });
   await w.renderScreen(<TipScreen clientTripId={ID} />);
+  expect(await screen.findByText('No tip for this drive')).toBeOnTheScreen();
+  expect(screen.getByText("This drive didn't cost points in any one area.")).toBeOnTheScreen();
+  expect(screen.queryByText("This drive isn't on your record")).toBeNull();
+});
+
+test('a drive that is not on the record at all is still the not-found state', async () => {
+  const w = await world();
+  await w.renderScreen(<TipScreen clientTripId="missing" />);
   expect(await screen.findByText("This drive isn't on your record")).toBeOnTheScreen();
 });

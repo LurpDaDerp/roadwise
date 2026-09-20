@@ -13,6 +13,7 @@ import {
   isPerfect,
   LIMIT_KNOWN_PCT,
   routeLine,
+  spokenRoute,
   unscoredCopy,
 } from '@/features/trips/format';
 
@@ -41,6 +42,12 @@ describe('the header', () => {
     expect(routeLine(summary())).toBe('Near Home → Near Lincoln HS');
     expect(routeLine(summary({ start_label: null, end_label: null }))).toBe('Start → End');
     expect(dateLine(summary())).toBe('Mon, Jan 5 · 12:00 – 12:30 PM');
+  });
+
+  test('the spoken route says "to": a screen reader reads the arrow as "right arrow" or not at all', () => {
+    expect(spokenRoute(summary())).toBe('Near Home to Near Lincoln HS');
+    expect(spokenRoute(summary())).not.toContain('→');
+    expect(spokenRoute(summary({ start_label: null, end_label: null }))).toBe('Start to End');
   });
 
   test('conditions are words', () => {
@@ -172,6 +179,13 @@ describe('the earned field', () => {
     expect(earnedFor(synced, day({ safeDay: true }))).toBe('safeDay');
     expect(earnedFor(synced, day({ goodDay: true }))).toBe('goodDay');
     expect(earnedFor(summary({ score: 60 }), day({ safeDay: true }))).toBe('counts');
+  });
+
+  test('never claims a day the server has already judged and said no to', () => {
+    // A 90-point drive on a day the server evaluated as neither safe nor good: "Safe day on
+    // track" would be contradicting the only authority there is.
+    const synced = summary({ score: 90, sync_state: 'synced', status: 'final' });
+    expect(earnedFor(synced, day({}))).toBe('counts');
   });
 });
 

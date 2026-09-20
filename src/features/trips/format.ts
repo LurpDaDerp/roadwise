@@ -46,6 +46,15 @@ export function routeLine(trip: Pick<TripSummary, 'startLabel' | 'endLabel'>): s
   return `${trip.startLabel ?? copy.route.start} → ${trip.endLabel ?? copy.route.end}`;
 }
 
+/**
+ * The same route, spoken. VoiceOver and TalkBack read the arrow as "right arrow" or drop it
+ * silently (Task 6 review, M-7), so every `accessibilityLabel` that names a route uses this and
+ * never `routeLine`.
+ */
+export function spokenRoute(trip: Pick<TripSummary, 'startLabel' | 'endLabel'>): string {
+  return `${trip.startLabel ?? copy.route.start} ${copy.route.to} ${trip.endLabel ?? copy.route.end}`;
+}
+
 /** "Mon, Jan 5 · 7:42 – 8:12 AM". */
 export function dateLine(trip: Pick<TripSummary, 'startedAt' | 'endedAt' | 'tz'>): string {
   return `${formatTripDate(trip.startedAt, trip.tz)} · ${formatTimeSpan(trip.startedAt, trip.endedAt, trip.tz)}`;
@@ -173,8 +182,12 @@ export type EarnedKind = 'safeDay' | 'goodDay' | 'safeOnTrack' | 'goodOnTrack' |
  */
 export function earnedFor(trip: TripSummary, day: DayEntry | null): EarnedKind {
   if (trip.syncState === 'synced' && day !== null) {
+    // The server has evaluated this day with this drive in it. Whatever it says is the answer —
+    // including "neither", which must not fall through to an "on track" claim derived from this
+    // one drive's score (Task 6 review, M-2).
     if (day.safeDay) return 'safeDay';
     if (day.goodDay) return 'goodDay';
+    return 'counts';
   }
   if (!trip.scored || trip.score === null) return 'counts';
   if (trip.score >= CONSTANTS.SAFE_DAY_AVG) return 'safeOnTrack';

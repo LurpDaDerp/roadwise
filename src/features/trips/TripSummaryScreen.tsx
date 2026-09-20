@@ -1,7 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
 import { useScoreDaily, useTrip, useTripEvents } from '@/data/queries';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
@@ -13,42 +12,13 @@ import { RoleChips } from './RoleChips';
 import { HOME_HREF, tripDetailHref, tripEventsHref, tripTipHref } from './routes';
 import { tipForTrip } from './tip';
 import { TipCard } from './TipCard';
+import { TripTopBar } from './TopBar';
 import { TripHeader } from './TripHeader';
 import { TripHighlights } from './TripHighlights';
 import { TripScoreField } from './TripScoreField';
 
 /** A day key no trip can have, so the day query has nothing to read until the trip is known. */
 const NO_DAY = '0000-00-00';
-
-function TopBar({ onBack }: { onBack: (() => void) | null }) {
-  const th = useTheme();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, minHeight: 44 }}>
-      {onBack ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={copy.back}
-          onPress={onBack}
-          hitSlop={th.space.sm}
-          style={({ pressed }) => ({
-            minWidth: 44,
-            minHeight: 44,
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginLeft: -th.space.sm,
-            borderRadius: th.radius.pill,
-            backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
-          })}
-        >
-          <Ionicons name="chevron-back" size={26} color={th.colors.accent} />
-        </Pressable>
-      ) : null}
-      <Text variant="title3" accessibilityRole="header">
-        {copy.summaryTitle}
-      </Text>
-    </View>
-  );
-}
 
 /** §7.0: plain words first; the server's code only under "Details", for support. */
 function SyncErrorNotice({ code }: { code: string | null }) {
@@ -144,7 +114,7 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
   if (detailQuery.isPending || eventsQuery.isPending) {
     return (
       <Screen scroll>
-        <TopBar onBack={back} />
+        <TripTopBar title={copy.summaryTitle} onBack={back} />
         <View accessibilityLabel={copy.loading} accessibilityRole="progressbar" accessible>
           <SummarySkeleton />
         </View>
@@ -152,14 +122,23 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
     );
   }
 
-  if (detailQuery.error) {
+  // The timeline is not optional decoration: the episode count on the costly highlight and the
+  // severity the tip is chosen at both come from it, so a failed events read must not render a
+  // quietly different card (Task 6 review, I-1). Both reads are retried together.
+  if (detailQuery.error || eventsQuery.error) {
     return (
       <Screen>
-        <TopBar onBack={back} />
+        <TripTopBar title={copy.summaryTitle} onBack={back} />
         <Banner
           tone="danger"
           message={copy.error.message}
-          action={{ label: copy.error.retry, onPress: () => void detailQuery.refetch() }}
+          action={{
+            label: copy.error.retry,
+            onPress: () => {
+              void detailQuery.refetch();
+              void eventsQuery.refetch();
+            },
+          }}
         />
         <View style={{ flexGrow: 1 }} />
         <Button label={copy.done} onPress={done} />
@@ -171,7 +150,7 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
   if (!detail) {
     return (
       <Screen>
-        <TopBar onBack={back} />
+        <TripTopBar title={copy.summaryTitle} onBack={back} />
         <EmptyState title={copy.notFound.title} body={copy.notFound.body} />
         <View style={{ flexGrow: 1 }} />
         <Button label={copy.done} onPress={done} />
@@ -188,7 +167,7 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
 
   return (
     <Screen scroll testID="trip-summary">
-      <TopBar onBack={back} />
+      <TripTopBar title={copy.summaryTitle} onBack={back} />
       {trip.syncState === 'failed' ? <SyncErrorNotice code={trip.syncError} /> : null}
 
       <Card variant="license" testID="card-back">

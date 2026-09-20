@@ -1,11 +1,17 @@
 /**
- * Where the trip screens live, in one place. Task 7 builds D2 (the full trip) and D3 (the event
- * list) under the same `[clientTripId]` folder; the names below are the contract between the
- * two tasks, so the summary's footer links land on them the day they exist.
+ * Where the trip screens live, in one place. Every `Href` below names a file that exists, so the
+ * compiler checks each one against Expo Router's generated union — Task 6's `pending()` cast is
+ * gone now that D2–D5 are built.
  */
 import type { Href } from 'expo-router';
 
 export const HOME_HREF: Href = '/(tabs)/home';
+
+/** D4 — the history list. */
+export const TRIP_HISTORY_HREF: Href = '/(app)/trips';
+
+/** E4 — "How scoring works", where a data-quality grade is explained (Task 8's screen). */
+export const HOW_SCORING_WORKS_HREF: Href = '/(app)/insights/how-scoring-works';
 
 /** D1 — the card back. */
 export const tripSummaryHref = (clientTripId: string): Href => ({
@@ -19,17 +25,26 @@ export const tripTipHref = (clientTripId: string): Href => ({
   params: { clientTripId },
 });
 
-/**
- * D2 and D3 are not built yet, so their names are not in the generated route types. The cast is
- * confined to these two lines; when Task 7 adds the screens, the casts come off and the
- * compiler checks them like the rest.
- */
-const pending = (path: string): Href => path as Href;
+/** D2 — the whole drive: map and timeline. */
+export const tripDetailHref = (clientTripId: string): Href => ({
+  pathname: '/(app)/trips/[clientTripId]',
+  params: { clientTripId },
+});
 
-/** D2 — the full trip: map and timeline (Task 7). */
-export const tripDetailHref = (clientTripId: string): Href =>
-  pending(`/(app)/trips/${clientTripId}`);
+/** D3 list — "Something wrong?": every moment on the drive, to pick one from. */
+export const tripEventsHref = (clientTripId: string): Href => ({
+  pathname: '/(app)/trips/[clientTripId]/events',
+  params: { clientTripId },
+});
 
-/** D3 — the event list, where "Something wrong?" goes (Task 7). */
-export const tripEventsHref = (clientTripId: string): Href =>
-  pending(`/(app)/trips/${clientTripId}/events`);
+/** D3 — one moment, and the report form. */
+export const tripEventHref = (clientTripId: string, eventId: string): Href => ({
+  pathname: '/(app)/trips/[clientTripId]/events/[eventId]',
+  params: { clientTripId, eventId },
+});
+
+/** D5 — edit the drive: who was driving, and delete. */
+export const tripEditHref = (clientTripId: string): Href => ({
+  pathname: '/(app)/trips/[clientTripId]/edit',
+  params: { clientTripId },
+});

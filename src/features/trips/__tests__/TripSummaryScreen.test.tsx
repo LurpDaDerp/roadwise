@@ -151,9 +151,15 @@ describe('a scored drive', () => {
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     await screen.findByText('Near Home → Near Lincoln HS');
     await fireEvent.press(screen.getByRole('button', { name: 'See full trip' }));
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/(app)/trips/trip-1');
+    expect(mockRouter.push).toHaveBeenLastCalledWith({
+      pathname: '/(app)/trips/[clientTripId]',
+      params: { clientTripId: ID },
+    });
     await fireEvent.press(screen.getByRole('button', { name: 'Something wrong?' }));
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/(app)/trips/trip-1/events');
+    expect(mockRouter.push).toHaveBeenLastCalledWith({
+      pathname: '/(app)/trips/[clientTripId]/events',
+      params: { clientTripId: ID },
+    });
     expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
     expect(screen.getByText('Share cards are coming soon.')).toBeOnTheScreen();
     await fireEvent.press(screen.getByRole('button', { name: 'Done' }));

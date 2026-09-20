@@ -1,7 +1,20 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 
-import { fontFamilies, Text, useTheme } from '@/ui';
+import { fontFamilies, Text, useTheme, type TypeScale } from '@/ui';
+
+import { TIGHT } from './layout';
+
+/** Small caps need air between the letters or the word closes up; this is the field-label step. */
+const LABEL_TRACKING = 1.2;
+
+/**
+ * The type steps that already name a weighted face. `FieldText` swaps the family for the licence
+ * face, so without this list `<FieldText variant="title2">` would print B612 **Regular** beside a
+ * `<Text variant="title2">` printing B612 Bold — same size, same card, different weight
+ * (Task 6 review, M-9).
+ */
+const BOLD_VARIANTS: readonly (keyof TypeScale)[] = ['display', 'title1', 'title2'];
 
 /**
  * A printed field on the licence: the small-caps label sits over a hairline, the value under it.
@@ -26,8 +39,8 @@ export function Field({
         tone="subtle"
         style={{
           textTransform: 'uppercase',
-          letterSpacing: 1.2,
-          paddingBottom: 2,
+          letterSpacing: LABEL_TRACKING,
+          paddingBottom: TIGHT,
           borderBottomWidth: StyleSheet.hairlineWidth,
           borderBottomColor: th.colors.borderStrong,
         }}
@@ -52,7 +65,15 @@ export function FieldText({
   face?: 'field' | 'numeral';
   style?: StyleProp<TextStyle>;
 }) {
-  const family = face === 'numeral' ? fontFamilies.numerals : fontFamilies.field;
+  const bold = BOLD_VARIANTS.includes(variant);
+  const family =
+    face === 'numeral'
+      ? bold
+        ? fontFamilies.numeralsBold
+        : fontFamilies.numerals
+      : bold
+        ? fontFamilies.fieldBold
+        : fontFamilies.field;
   const figures: TextStyle = face === 'numeral' ? { fontVariant: ['tabular-nums'] } : {};
   return <Text variant={variant} {...rest} style={[{ fontFamily: family }, figures, style]} />;
 }
