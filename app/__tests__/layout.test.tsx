@@ -87,18 +87,34 @@ jest.mock('@/boot/ownerWatch', () => ({
     };
   },
 }));
-jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+const mockAuth: { listener: ((event: string, session: unknown) => void) | null } = { listener: null };
+jest.mock('@/data/supabase/client', () => ({
+  supabase: {
+    auth: {
+      onAuthStateChange: (fn: (event: string, session: unknown) => void) => {
+        mockAuth.listener = fn;
+        return { data: { subscription: { unsubscribe: () => (mockAuth.listener = null) } } };
+      },
+    },
+  },
+}));
 
-const mockSession: { flush: (() => Promise<unknown>) | null } = { flush: null };
+const mockSession: {
+  flush: (() => Promise<unknown>) | null;
+  recording: { stop(): Promise<void>; resume(): Promise<void> } | null;
+} = { flush: null, recording: null };
 jest.mock('@/data/supabase/session', () => ({
   SessionProvider: ({
     children,
     flushBeforeSignOut,
+    recording,
   }: {
     children: ReactNode;
     flushBeforeSignOut?: () => Promise<unknown>;
+    recording?: { stop(): Promise<void>; resume(): Promise<void> };
   }) => {
     mockSession.flush = flushBeforeSignOut ?? null;
+    mockSession.recording = recording ?? null;
     return children;
   },
   useSession: () => ({ status: 'signedIn' }),
@@ -173,6 +189,8 @@ function fakeRuntime(drive: Partial<DriveState>) {
     muteCurrentAlert: jest.fn(async () => {}),
     muteForDrive: jest.fn(async () => {}),
     detectorContext: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
+    suspendForSignOut: jest.fn(async () => {}),
+    resumeAfterSignIn: jest.fn(async () => {}),
   };
   const queryClient = new QueryClient();
   const flushDeletes = jest.fn(async () => ({ sent: 1, left: 0 }));
@@ -280,5 +298,18 @@ describe('the root layout', () => {
     mockController.ensureRuntime.mockClear();
     fireEvent.press(screen.getByRole('button'));
     expect(mockController.ensureRuntime).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sign-out and sign-in reach the drive host (final review I3)', () => {
+  test('sign-out stops recording through the host; a sign-in resumes it', async () => {
+    const { host } = await renderReady();
+    await mockSession.recording?.stop();
+    expect(host.suspendForSignOut).toHaveBeenCalledTimes(1);
+    await act(async () => mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } }));
+    expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
+    // A sign-out event does not resume anything.
+    await act(async () => mockAuth.listener?.('SIGNED_OUT', null));
+    expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
   });
 });

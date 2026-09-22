@@ -872,7 +872,9 @@ describe('H2: the engine stage — the drive host, adopt after a relaunch', () =
   test("the host reads the remote flag, but only the driver's own opt-in arms auto-detect", async () => {
     await migrate(db);
     // The flag is available (nothing fetched yet), and the driver never opted in: not armed.
-    const off = relaunch(NOW);
+    // Signed in: with nobody signed in nothing arms at all (§8.2, tested below).
+    const signedIn = () => ({ supabase: createFakeSupabase({ uid: 'user-1' }) });
+    const off = relaunch(NOW, signedIn());
     runtime = await bootstrapApp(off.bootstrapDeps);
     expect(runtime.drive.snapshot().status).toBe('off');
     expect(off.driveSense.calls).not.toContain('arm');
@@ -882,7 +884,7 @@ describe('H2: the engine stage — the drive host, adopt after a relaunch', () =
     // Opted in, but the server switched the feature off: still not armed.
     await createSettingsRepo(db).set('drive.autoDetect', true);
     await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: false } });
-    const killed = relaunch(NOW);
+    const killed = relaunch(NOW, signedIn());
     runtime = await bootstrapApp(killed.bootstrapDeps);
     expect(runtime.drive.snapshot().status).toBe('off');
     expect(killed.driveSense.calls).not.toContain('arm');
@@ -891,7 +893,7 @@ describe('H2: the engine stage — the drive host, adopt after a relaunch', () =
 
     // Opted in and available: armed.
     await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: true } });
-    const on = relaunch(NOW);
+    const on = relaunch(NOW, signedIn());
     runtime = await bootstrapApp(on.bootstrapDeps);
     expect(runtime.drive.snapshot().status).toBe('armed');
     expect(on.driveSense.calls).toContain('arm');
@@ -969,7 +971,7 @@ describe('H2 r1: a config refresh that changes auto_detect re-applies the arming
     await migrate(db);
     await createSettingsRepo(db).set('drive.autoDetect', true);
     const { flag, appConfig } = serverFlag();
-    const built = deps({ appConfig });
+    const built = deps({ appConfig, supabase: createFakeSupabase({ uid: 'user-1' }) });
     runtime = await bootstrapApp(built.bootstrapDeps);
     expect(runtime.drive.snapshot().status).toBe('armed');
 
@@ -1348,5 +1350,91 @@ describe('H2: foreground jobs', () => {
     await settle();
     expect(appConfig.reads).toBe(2);
     await jobs.stop();
+  });
+});
+
+describe('M3 final review: the launch wiring', () => {
+  test('I3: a launch with nobody signed in never arms, whatever the stored opt-in (§8.2)', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    const built = deps(); // signed out
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    expect(runtime.owner).toBe('signed-out');
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(built.driveSense.calls).not.toContain('arm');
+    // The same driver signs back in: armed again.
+    await runtime.drive.resumeAfterSignIn();
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('M1: stop lets the summary notifier finish scheduling before it detaches', async () => {
+    await migrate(db);
+    const log: string[] = [];
+    let finish: () => void = () => {};
+    const { bootstrapDeps } = deps({
+      attachSummaryNotifier: () => ({
+        settled: () =>
+          new Promise<void>((resolve) => {
+            log.push('settling');
+            finish = () => {
+              log.push('settled');
+              resolve();
+            };
+          }),
+        detach: () => log.push('detach'),
+      }),
+    });
+    runtime = await bootstrapApp(bootstrapDeps);
+    const stopping = runtime.stop();
+    await settle();
+    expect(log).toEqual(['settling']);
+    finish();
+    await stopping;
+    expect(log).toEqual(['settling', 'settled', 'detach']);
+    runtime.queryClient.clear();
+    runtime = null;
+  });
+
+  test('M2: the zone is re-read after a minute, so a zone change reaches the drive', async () => {
+    await migrate(db);
+    let clock = NOW;
+    const { bootstrapDeps } = deps({ tz: undefined, now: () => clock });
+    const spy = jest.spyOn(Intl, 'DateTimeFormat');
+    runtime = await bootstrapApp(bootstrapDeps);
+    const before = spy.mock.calls.length;
+    runtime.drive.detectorContext();
+    clock += 59_000;
+    runtime.drive.detectorContext();
+    const withinMinute = spy.mock.calls.length - before;
+    clock += 61_000;
+    runtime.drive.detectorContext();
+    expect(spy.mock.calls.length - before).toBeGreaterThan(withinMinute);
+    spy.mockRestore();
+  });
+
+  test('M7: tiles decoded by recovery are freed once the launch is idle', async () => {
+    await crashedDrive();
+    const { bootstrapDeps, limits } = deps();
+    const resets: number[] = [];
+    limits.resetTrip = () => {
+      resets.push(1);
+    };
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+    expect(resets.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('M7: an adopted drive keeps its tiles', async () => {
+    const checkpoint = await crashedDrive();
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => checkpoint + 60_000 });
+    driveSense.setState({ location: 'always', motion: 'granted', capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    const { bootstrapDeps, limits } = deps({ source: driveSense, now: () => checkpoint + 60_000 });
+    let resets = 0;
+    limits.resetTrip = () => {
+      resets += 1;
+    };
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(runtime.adopted).toBe(TRIP);
+    expect(resets).toBe(0);
   });
 });

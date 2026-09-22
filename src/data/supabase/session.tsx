@@ -61,6 +61,7 @@ function withTimeout(promise: Promise<Profile>): Promise<Profile> {
 export function SessionProvider({
   children,
   flushBeforeSignOut,
+  recording,
 }: {
   children: React.ReactNode;
   /**
@@ -70,6 +71,13 @@ export function SessionProvider({
    * Absent (a tree with no runtime), sign-out ends the session directly, as before M3.
    */
   flushBeforeSignOut?: () => Promise<SignOutFlushResult>;
+  /**
+   * The drive host's sign-out hooks, wired by the root layout (§8.2 "Sign out: stops recording";
+   * final review I3). `stop` ends and finalizes an open drive under the driver who is still signed
+   * in, then disarms auto-record; `resume` undoes the disarm when the driver backs out of the
+   * sign-out. Absent (no runtime), sign-out does not touch recording.
+   */
+  recording?: { stop(): Promise<void>; resume(): Promise<void> };
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -181,6 +189,14 @@ export function SessionProvider({
       session,
       profile,
       signOut: async (opts?: { force?: boolean }): Promise<SignOutOutcome> => {
+        // First, while this driver is still signed in: an open drive is ended and finalized under
+        // them, and auto-record stops (I3). A stop that fails does not hold the sign-out — the host
+        // marked itself signed out before anything else, and the next launch starts disarmed.
+        try {
+          await recording?.stop();
+        } catch {
+          // Reported by the host; the session still ends.
+        }
         if (flushBeforeSignOut && !opts?.force) {
           let left: number | null;
           try {
@@ -189,7 +205,11 @@ export function SessionProvider({
             // The flush could not say what it sent. Unknown is not zero: ask rather than assume.
             left = null;
           }
-          if (left !== 0) return { signedOut: false, unsentDeletes: left };
+          if (left !== 0) {
+            // The driver may still back out: they are signed in, so recording arms again.
+            await recording?.resume().catch(() => {});
+            return { signedOut: false, unsentDeletes: left };
+          }
         }
         await supabase.auth.signOut();
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
@@ -198,7 +218,7 @@ export function SessionProvider({
       },
       refreshProfile: () => refreshRef.current(),
     }),
-    [status, session, profile, flushBeforeSignOut]
+    [status, session, profile, flushBeforeSignOut, recording]
   );
 
   return <SessionCtx.Provider value={value}>{children}</SessionCtx.Provider>;

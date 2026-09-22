@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import * as Notifications from 'expo-notifications';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -84,6 +84,17 @@ export default function RootLayout() {
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover });
   }, [runtime, handover]);
 
+  // §8.2 (final review I3): a driver signed in — the same one after a sign-out, or anyone on a
+  // launch that started signed out — lets auto-record follow the opt-in again. A different driver
+  // is a handover instead: the rebuild's new host decides from its own launch.
+  useEffect(() => {
+    if (runtime === null) return;
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) void runtime.drive.resumeAfterSignIn().catch(() => {});
+    });
+    return () => data.subscription.unsubscribe();
+  }, [runtime]);
+
   const fontsReady = shouldRender({ loaded, error, timedOut });
   const ready =
     fontsReady && (runtime !== null || state.error !== null || state.status === 'switching');
@@ -99,6 +110,14 @@ export default function RootLayout() {
         ? // Unknown is never zero (H2 M-1): the sign-out flow asks rather than assumes.
           Promise.reject(new Error('no runtime to flush'))
         : flushBeforeSignOut(runtime),
+    [runtime]
+  );
+  // Sign-out ends and finalizes an open drive under this driver, then stops auto-record (I3).
+  const recording = useMemo(
+    () =>
+      runtime === null
+        ? undefined
+        : { stop: () => runtime.drive.suspendForSignOut(), resume: () => runtime.drive.resumeAfterSignIn() },
     [runtime]
   );
   // Home's "Couldn't restore your drives — Retry": the restore now, throttle bypassed.
@@ -147,7 +166,7 @@ export default function RootLayout() {
           <QueryClientProvider client={runtime.queryClient}>
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
-                <SessionProvider flushBeforeSignOut={flush}>
+                <SessionProvider flushBeforeSignOut={flush} recording={recording}>
                   <RestoreRetryProvider retry={retryRestore}>
                     <AuthGate>
                       {/* A lockout covers every route, native modals included (U2, rev1: I12). */}

@@ -198,3 +198,49 @@ test('a refresh landing after sign-out does not resurrect the profile', async ()
   await act(async () => { mockProfileGate.resolve?.(ava); });
   expect(screen.getByText('signedOut:-')).toBeTruthy();
 });
+
+describe('sign-out stops recording (final review I3)', () => {
+  async function signedInWith(props: Partial<Parameters<typeof SessionProvider>[0]>) {
+    await render(
+      <SessionProvider {...props}>
+        <Probe />
+      </SessionProvider>
+    );
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  }
+
+  test('the drive is stopped (ended, finalized, disarmed) first, then the deletes flushed, then the session ends', async () => {
+    const recording = {
+      stop: jest.fn(async () => { authCalls.push('stopRecording'); }),
+      resume: jest.fn(async () => { authCalls.push('resumeRecording'); }),
+    };
+    const flush = jest.fn(async () => { authCalls.push('flush'); return { sent: 0, left: 0 }; });
+    await signedInWith({ recording, flushBeforeSignOut: flush });
+    await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+    expect(authCalls).toEqual(['stopRecording', 'flush', 'signOut', 'cancelDriveSummaries']);
+    expect(recording.resume).not.toHaveBeenCalled();
+  });
+
+  test('a sign-out the driver backs out of (deletes unsent) re-arms recording and ends nothing', async () => {
+    const recording = {
+      stop: jest.fn(async () => { authCalls.push('stopRecording'); }),
+      resume: jest.fn(async () => { authCalls.push('resumeRecording'); }),
+    };
+    const flush = jest.fn(async () => ({ sent: 0, left: 2 }));
+    await signedInWith({ recording, flushBeforeSignOut: flush });
+    await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+    expect(authCalls).toEqual(['stopRecording', 'resumeRecording']);
+  });
+
+  test('a recording stop that fails still signs out (the next launch starts disarmed anyway)', async () => {
+    const recording = {
+      stop: jest.fn(async () => { throw new Error('host gone'); }),
+      resume: jest.fn(async () => {}),
+    };
+    await signedInWith({ recording });
+    await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+    expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
+  });
+});

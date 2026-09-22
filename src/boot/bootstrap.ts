@@ -41,7 +41,7 @@ import { AppState } from 'react-native';
 
 import type { DriveSenseEvent, DriveSenseEvents, DriveSenseState, Subscription } from '@drive-sense';
 
-import { createExpoAlertPorts } from '@/core/alerts/adapters';
+import { createExpoAlertPorts, probeAlertTones } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import {
@@ -114,6 +114,9 @@ export const BOOTSTRAP_TIMEOUT_MS = 20_000;
  * background wake rather than when the radio comes back.
  */
 export const SESSION_TIMEOUT_MS = 1_500;
+
+/** How long a read of the device's time zone is trusted (final review M2). */
+export const ZONE_REREAD_MS = 60_000;
 
 /** How often the public config (feature flags) is fetched, in the foreground only (plan D2). */
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
@@ -222,7 +225,7 @@ export interface BootstrapDeps {
    * schedules its summary. Attaching twice is safe (the layout's routing hook attaches too).
    * Default: `attachSummaryNotifier`. `null`: none.
    */
-  attachSummaryNotifier?: ((host: DriveHost) => { detach(): void }) | null;
+  attachSummaryNotifier?: ((host: DriveHost) => { detach(): void; settled?(): Promise<void> }) | null;
   /** iOS backup exclusion (plan R4). Default: drive-sense's `excludeFromBackup`. */
   excludeFromBackup?: (uri: string) => Promise<void>;
   /** The directory the database lives in. Default: expo-sqlite's `defaultDatabaseDirectory`. */
@@ -341,7 +344,21 @@ async function runLaunch(
   const onError = deps.onError ?? warn;
   const appState = deps.appState ?? AppState;
   const profile = deps.profile ?? launchProfile(appState);
-  const zone = deps.tz ?? deviceZone();
+  // The device zone, re-read at most once a minute (final review M2): a process that lives across
+  // a zone change (an Android capture service, a long-lived iOS process) judges night and stamps
+  // trips in the zone the phone is in now. Read only when something asks — nothing while armed
+  // and idle — and at most one Intl lookup a minute on the 1 Hz path.
+  let zone = deps.tz ?? deviceZone();
+  let zoneReadAt = now();
+  const currentZone = (): string => {
+    if (deps.tz !== undefined) return deps.tz;
+    const at = now();
+    if (at - zoneReadAt >= ZONE_REREAD_MS || at < zoneReadAt) {
+      zone = deviceZone();
+      zoneReadAt = at;
+    }
+    return zone;
+  };
 
   enter('open');
   const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
@@ -444,11 +461,13 @@ async function runLaunch(
       traceWriter: identity.traceWriter,
       hash,
       now,
-      tz: () => zone,
+      tz: currentZone,
       newId,
       readFlag: deps.readFlag ?? ((key) => readFlag(db, key, AUTO_DETECT_FLAG_FALLBACK)),
       appState,
       alertsAvailable,
+      // §8.2: with nobody signed in, auto-record stays disarmed whatever the stored opt-in (I3).
+      signedOut: identity.owner === 'signed-out',
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
@@ -487,11 +506,14 @@ async function runLaunch(
       void drive.stop({ endOpenTrip: false });
       throw error;
     }
+    // Recovery and adopt decoded tiles through the shared cache; an armed process holds none
+    // (final review M7). A drive the host is running keeps them.
+    if (!drive.isBusy()) limits.resetTrip();
 
     // Neither can fail the launch: a failure is reported and the drive runs without it.
     const attach =
       deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
-    let notifier: { detach(): void } | null = null;
+    let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
     if (attach) {
       try {
         notifier = attach(drive);
@@ -509,8 +531,11 @@ async function runLaunch(
         onError(error, 'diagnostics battery');
       }
     }
-    const release = () => {
+    // Async: a summary still being scheduled lands before the notifier lets go (final review M1),
+    // so the next launch's wipe finds it in the OS and cancels it, rather than it landing after.
+    const release = async (): Promise<void> => {
       unmountDiagnostics();
+      await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
     };
     return { drive, limits, adopted: adopted ? newest : null, passes, release };
@@ -559,7 +584,7 @@ async function runLaunch(
     // `QueryClient` nobody will ever render — once per press, forever. The host lets go of its
     // native listeners too; a drive it adopted stays `recording` for the retry to adopt.
     void runner?.stop();
-    engine.release();
+    void engine.release();
     void engine.drive.stop({ endOpenTrip: false });
     detach();
     throw reason;
@@ -601,9 +626,10 @@ async function runLaunch(
     },
     async stop(opts = {}) {
       await Promise.all([runner.stop(), hydrator.stop()]);
-      // The drive a handover ends is still announced: the notifier lets go only after its finalize.
+      // The drive a handover ends is finalized first; the notifier then finishes whatever it was
+      // scheduling before it lets go, so the next launch's wipe can cancel it (U3 m2, M1).
       await engine.drive.stop({ endOpenTrip: opts.endOpenTrip ?? true });
-      engine.release();
+      await engine.release();
       detach();
       queryClient.clear();
     },
@@ -743,15 +769,16 @@ function defaultLimits(
 }
 
 /** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */
-function defaultSummaryNotifier(host: DriveHost): { detach(): void } {
+function defaultSummaryNotifier(host: DriveHost): { detach(): void; settled(): Promise<void> } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
   return attachSummaryNotifier(host);
 }
 
 /**
- * U5's battery recorder, only in a diagnostics build. The screen module is required lazily and only
- * here: it is where `diagnosticsEnabled()` lives, and nothing else of it runs.
+ * U5's battery recorder, only in a diagnostics build. `diagnosticsEnabled()` comes from the small
+ * `@/features/dev/flags` module (H2 ruling 5), never the screen, so no launch loads expo-router
+ * for it; the recorder module is required only when diagnostics are on.
  */
 function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) => void): () => void {
   /* eslint-disable @typescript-eslint/no-require-imports -- deferred: the dev screens' modules */
@@ -771,13 +798,18 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
 function defaultPlayer(
   onError: (error: unknown, context: string) => void
 ): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
-  return async (inputs) =>
-    createAlertPlayer({
-      ...(await createExpoAlertPorts()),
+  return async (inputs) => {
+    const ports = await createExpoAlertPorts();
+    // Each tone is loaded once here, off the drive path (final review I2): a missing or corrupt
+    // asset rejects now, so the drive records silently and says so instead of failing unseen.
+    await probeAlertTones();
+    return createAlertPlayer({
+      ...ports,
       voiceEnabled: () => true,
       ...inputs,
       onError: (error) => onError(error, 'alert player'),
     });
+  };
 }
 
 /** iOS: keep the database — the driver's whole local history — out of iCloud and Finder backups. */
