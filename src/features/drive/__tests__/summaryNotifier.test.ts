@@ -703,6 +703,40 @@ describe('M4: one copy, H6, quiet hours and the cap (the release gate)', () => {
     n.detach();
   });
 
+  test('m1: counted before it is scheduled — a schedule that fails is uncounted again', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    (port.schedule as jest.Mock).mockRejectedValueOnce(new Error('os'));
+    const order: string[] = [];
+    const record = jest.spyOn(delivery, 'record').mockImplementation(async (...args) => {
+      order.push('record');
+      return createSummaryDelivery(db, { zone: () => 'UTC' }).record(...args);
+    });
+    const onError = jest.fn();
+    const n = attach(h, port, { onError });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(port.pending()).toEqual([]);
+    expect((await localSent())?.count).toBe(0);
+    expect(await settings().get(LOCAL_LEDGER_KEY)).toEqual([]);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'summary.schedule');
+    n.detach();
+  });
+
+  test('m1: a count that cannot be written schedules nothing', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    jest.spyOn(delivery, 'record').mockRejectedValueOnce(new Error('disk'));
+    const onError = jest.fn();
+    const n = attach(h, port, { onError });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    expect(port.schedule).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'summary.schedule');
+    n.detach();
+  });
+
   test('no database and no delivery: fails closed and says so once', async () => {
     const h = stubHost(state());
     const port = fakePort();

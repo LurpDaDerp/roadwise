@@ -426,8 +426,15 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
     if (plan.kind === 'skip') return;
     const copy = await delivery.render(ids);
     const identifier = `${IDENTIFIER_PREFIX}${ids[ids.length - 1] as string}`;
-    await port.schedule({ identifier, clientTripIds: ids, copy, at: plan.at });
+    // Counted first (review m1): for a cap, over-counting is the safe side. A count that cannot be
+    // written schedules nothing; a schedule that fails is uncounted again.
     await delivery.record(identifier, plan.at, t);
+    try {
+      await port.schedule({ identifier, clientTripIds: ids, copy, at: plan.at });
+    } catch (e) {
+      await delivery.uncount(identifier, t).catch((u: unknown) => report(u, 'summary.uncount'));
+      throw e;
+    }
   }
 
   /**
