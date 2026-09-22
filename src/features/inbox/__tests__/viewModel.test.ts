@@ -1,3 +1,4 @@
+import type { PermissionSnapshot } from '@/core/permissions';
 import { eventRow, MILE_M, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { toTripEventView, type TripEventView } from '@/data/queries/rows';
 import type { TripRow } from '@/data/db/types';
@@ -122,23 +123,34 @@ describe('toItemView — a drive on this phone renders from its CURRENT state', 
 });
 
 describe('toItemView — not on this phone', () => {
-  it('uses the payload’s words and date, says so, and links nowhere', () => {
-    const row = inboxRow({
-      payload: { ...inboxRow().payload, roleUnknown: true, scorableIfDriver: false, distanceM: 2 * MILE_M },
-    });
-    const v = toItemView(row, missing, NOW, TZ);
-    expect(v?.title).toBe('Were you driving?');
-    expect(v?.body).toBe('Tell us who drove your 2.0 mi trip.');
-    expect(v?.note).toBe(inboxCopy.notOnPhone);
-    expect(v?.href).toBeNull();
-    expect(v?.when).toContain('Today');
+  it('uses the payload’s facts and date, says so, links nowhere — and asks for nothing (review m1)', () => {
+    const payload = { ...inboxRow().payload, distanceM: 2 * MILE_M };
+    const asked = toItemView(
+      inboxRow({ payload: { ...payload, roleUnknown: true, scorableIfDriver: true } }),
+      missing,
+      NOW,
+      TZ
+    );
+    const ready = toItemView(inboxRow({ payload: { ...payload, roleUnknown: false } }), missing, NOW, TZ);
+    const tiny = toItemView(inboxRow({ payload: { ...payload, distanceM: 10 } }), missing, NOW, TZ);
+    for (const v of [asked, ready]) {
+      expect(v?.title).toBe(inboxCopy.elsewhere.title);
+      expect(v?.body).toBe('A 2.0 mi trip on your account.');
+      expect(v?.note).toBe(inboxCopy.notOnPhone);
+      expect(v?.href).toBeNull();
+      expect(v?.when).toContain('Today');
+    }
+    expect(tiny?.body).toBe(inboxCopy.elsewhere.bodyNoDistance);
+    for (const v of [asked, ready, tiny]) {
+      expect(`${v?.title} ${v?.body}`).not.toMatch(/tap|tell us|scored|\?/i);
+    }
   });
 });
 
 describe('toItemView — other types', () => {
-  it('a permission lapse renders its push copy and opens B2', () => {
+  it('a permission lapse opens B2 (with no reading here it says only what was true that day)', () => {
     const v = toItemView(lapseRow(), missing, NOW, TZ);
-    expect(v?.title).toBe('Automatic recording is off');
+    expect(v?.title).toBe('Automatic recording was off');
     expect(v?.href).toBe('/permissions');
     expect(v?.note).toBeNull();
   });
@@ -200,5 +212,67 @@ describe('countServerPushesToday', () => {
   it('counts dismissed rows too: a push that arrived still arrived', () => {
     const row = { ...pushed(T0 - 60_000), dismissed_at: iso(T0) };
     expect(countServerPushesToday([row], LA, T0)).toBe(1);
+  });
+});
+
+describe('toItemView — a permission lapse renders from the phone’s CURRENT permissions (ruling T6 (1))', () => {
+  const snap = (over: Partial<PermissionSnapshot> = {}): PermissionSnapshot => ({
+    platform: 'ios',
+    location: 'foreground',
+    precise: true,
+    locationCanAskAgain: false,
+    motion: 'granted',
+    notifications: 'granted',
+    notificationsCanAskAgain: false,
+    batteryOptimization: 'unknown',
+    lowPowerMode: false,
+    checkedAt: T0,
+    ...over,
+  });
+  const here = (over: Partial<PermissionSnapshot> = {}) => ({
+    trip: null,
+    events: [],
+    permissions: { deviceId: 'dev-1', snapshot: snap(over) },
+  });
+  const lapse = (permission: string) =>
+    lapseRow({ payload: { permission, platform: 'ios', deviceId: 'dev-1' } });
+
+  it('still lapsed → present tense, as pushed', () => {
+    const v = toItemView(lapse('location_always'), here({ location: 'foreground' }), NOW, TZ);
+    expect(v?.title).toBe('Automatic recording is off');
+    expect(v?.body).toBe("RoadWise can't start drives on its own right now. Tap to fix it.");
+    expect(v?.href).toBe('/permissions');
+  });
+
+  it('fixed since → past tense, and says it is back on', () => {
+    const always = toItemView(lapse('location_always'), here({ location: 'always' }), NOW, TZ);
+    expect(always?.title).toBe('Automatic recording is back on');
+    expect(always?.body).toBe("Automatic recording was off on Mon, Jan 5. It's back on.");
+    const location = toItemView(lapse('location'), here({ location: 'foreground' }), NOW, TZ);
+    expect(location?.body).toBe("Drive recording was off on Mon, Jan 5. It's back on.");
+    const motion = toItemView(lapse('motion'), here({ motion: 'granted' }), NOW, TZ);
+    expect(motion?.body).toBe("Motion access was off on Mon, Jan 5. It's back on.");
+    for (const v of [always, location, motion]) expect(v?.body).not.toMatch(/fix it|right now/);
+  });
+
+  it('cannot be read → neither: neutral copy about that day only', () => {
+    const cases = [
+      toItemView(lapse('location_always'), missing, NOW, TZ), // no reading at all
+      toItemView(lapse('location_always'), { trip: null, events: [], permissions: { deviceId: 'dev-1', snapshot: null } }, NOW, TZ),
+      toItemView(lapse('motion'), here({ motion: null }), NOW, TZ), // motion "can't check"
+      toItemView(
+        lapse('location_always'),
+        { trip: null, events: [], permissions: { deviceId: 'other-phone', snapshot: snap({ location: 'always' }) } },
+        NOW,
+        TZ
+      ), // the lapse was on another phone
+    ];
+    expect(cases[0]?.title).toBe('Automatic recording was off');
+    expect(cases[0]?.body).toBe('On Mon, Jan 5, automatic recording was off. Open to check how it is now.');
+    expect(cases[2]?.title).toBe('Drive detection needed attention');
+    for (const v of cases) {
+      expect(v).not.toBeNull();
+      expect(`${v?.title} ${v?.body}`).not.toMatch(/\bis off\b|back on|right now|fix it/);
+    }
   });
 });

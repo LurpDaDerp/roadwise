@@ -33,6 +33,8 @@ export {
   INBOX_STALE_MS,
   inboxKey,
   loadInbox,
+  PERMISSIONS_NOW_KEY,
+  readPermissionsNow,
   readInboxLocals,
   shownRows,
   useDismiss,
@@ -48,9 +50,13 @@ export {
 export {
   countServerPushesToday,
   disputeLine,
+  lapseNow,
+  milesLabel,
   scorableIfDriver,
   toItemView,
   toTripDetail,
   type InboxItemView,
   type InboxLocal,
+  type LapseNow,
+  type PermissionsNow,
 } from './viewModel';

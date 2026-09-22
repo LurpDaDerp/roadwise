@@ -27,14 +27,19 @@ import {
 import { useCallback, useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 
+import type { PermissionsAdapter } from '@/core/permissions';
+import { readInstallId } from '@/data/devices/installId';
 import type { AppStateLike } from '@/data/foreground';
 import type { Db } from '@/data/db/driver';
+import { createSettingsRepo } from '@/data/db/settings';
 import { readTombstones } from '@/data/db/tombstones';
-import { createTripsRepo } from '@/data/db/trips';
+import { asEnum, asFlag, asNumber, asNumberOrNull, asText, asTextOrNull } from '@/data/db/row';
+import { TRIP_STATUSES, TRIP_SYNC_STATES, type EventRow, type TripRow } from '@/data/db/types';
 import { getSharedOnline } from '@/data/net/net';
 import { useOnline } from '@/data/net/useOnline';
-import { readTripEvents, useDataSource } from '@/data/queries';
+import { toTripEventView, useDataSource, type TripEventView } from '@/data/queries';
 import { useSession } from '@/data/supabase/session';
+import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { renderInboxBase, type NotificationType } from '@/notifications/catalog';
 import { INBOX_QUERY_KEY } from '@/notifications/keys';
 
@@ -55,6 +60,7 @@ import {
   toTripDetail,
   type InboxItemView,
   type InboxLocal,
+  type PermissionsNow,
 } from './viewModel';
 
 /** How long a fetched inbox is served before a mount or a foreground fetches again. */
@@ -69,6 +75,26 @@ export interface InboxSnapshot {
 export interface InboxDeps {
   api?: InboxApi;
   appState?: AppStateLike;
+  /** Where a lapse row's current state is read (T8's adapter by default). */
+  permissions?: Pick<PermissionsAdapter, 'snapshot'>;
+}
+
+/** The query that holds this phone's permissions for the lapse rows (a local OS read, no network). */
+export const PERMISSIONS_NOW_KEY = ['inbox-permissions-now'] as const;
+
+/**
+ * This install's id and its permissions now. Each half is null when it cannot be read — the row
+ * then says nothing about now (ruling T6 (1)). Never rejects.
+ */
+export async function readPermissionsNow(
+  db: Db,
+  adapter: Pick<PermissionsAdapter, 'snapshot'>
+): Promise<PermissionsNow> {
+  const [deviceId, snapshot] = await Promise.all([
+    readInstallId(createSettingsRepo(db)).catch(() => null),
+    adapter.snapshot().catch(() => null),
+  ]);
+  return { deviceId, snapshot };
 }
 
 export const inboxKey = (uid: string) => [...INBOX_QUERY_KEY, uid] as const;
@@ -105,28 +131,114 @@ export async function loadInbox(
   return { rows: await cache.list(), offline: false };
 }
 
-/** What the phone holds about each drive, for the rows' current-state copy. */
+// The row mappers of `src/data/db/trips.ts` and `events.ts` are private to those repos, which read
+// one trip at a time. The inbox reads a batch with one `IN` query each, so it maps here through the
+// same `row.ts` helpers; each literal is typed `TripRow` / `EventRow`, so a column added to either
+// type fails to compile here until it is mapped. (Exporting the repos' own mappers would remove
+// this copy — reported to the controller.)
+function toTripRowLocal(row: Record<string, unknown>): TripRow {
+  return {
+    client_trip_id: asText(row, 'client_trip_id'),
+    started_at: asNumber(row, 'started_at'),
+    ended_at: asNumberOrNull(row, 'ended_at'),
+    tz: asText(row, 'tz'),
+    distance_m: asNumber(row, 'distance_m'),
+    duration_s: asNumber(row, 'duration_s'),
+    role: asTextOrNull(row, 'role'),
+    role_confidence: asNumberOrNull(row, 'role_confidence'),
+    role_source: asTextOrNull(row, 'role_source'),
+    mode: asTextOrNull(row, 'mode'),
+    camera_session: asFlag(row, 'camera_session'),
+    score: asNumberOrNull(row, 'score'),
+    scoring_version: asTextOrNull(row, 'scoring_version'),
+    category_deductions_json: asTextOrNull(row, 'category_deductions_json'),
+    exposure: asNumberOrNull(row, 'exposure'),
+    data_quality: asTextOrNull(row, 'data_quality'),
+    conditions_json: asTextOrNull(row, 'conditions_json'),
+    limit_coverage_pct: asNumberOrNull(row, 'limit_coverage_pct'),
+    start_label: asTextOrNull(row, 'start_label'),
+    end_label: asTextOrNull(row, 'end_label'),
+    start_geohash5: asTextOrNull(row, 'start_geohash5'),
+    end_geohash5: asTextOrNull(row, 'end_geohash5'),
+    polyline: asTextOrNull(row, 'polyline'),
+    status: asEnum(row, 'status', TRIP_STATUSES),
+    sync_state: asEnum(row, 'sync_state', TRIP_SYNC_STATES),
+    checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
+    incomplete: asFlag(row, 'incomplete'),
+    server_id: asTextOrNull(row, 'server_id'),
+    sync_error: asTextOrNull(row, 'sync_error'),
+    deleted_at: asNumberOrNull(row, 'deleted_at'),
+    created_at: asNumber(row, 'created_at'),
+    updated_at: asNumber(row, 'updated_at'),
+  };
+}
+
+function toEventRowLocal(row: Record<string, unknown>): EventRow {
+  return {
+    id: asText(row, 'id'),
+    client_trip_id: asText(row, 'client_trip_id'),
+    category: asText(row, 'category'),
+    started_at: asNumber(row, 'started_at'),
+    duration_s: asNumber(row, 'duration_s'),
+    lat: asNumberOrNull(row, 'lat'),
+    lng: asNumberOrNull(row, 'lng'),
+    measured_json: asTextOrNull(row, 'measured_json'),
+    severity: asTextOrNull(row, 'severity'),
+    confidence: asNumberOrNull(row, 'confidence'),
+    context_json: asTextOrNull(row, 'context_json'),
+    deduction: asNumberOrNull(row, 'deduction'),
+    alert_shown: asFlag(row, 'alert_shown'),
+    corrected: asFlag(row, 'corrected'),
+    status: asTextOrNull(row, 'status'),
+    source: asTextOrNull(row, 'source'),
+    dispute_json: asTextOrNull(row, 'dispute_json'),
+  };
+}
+
+/**
+ * What the phone holds about each drive, for the rows' current-state copy: four statements for
+ * any number of drives (the tombstones, the scored count, the trips `IN`, their events `IN`).
+ */
 export async function readInboxLocals(
   db: Db,
   clientTripIds: readonly string[]
 ): Promise<Record<string, InboxLocal>> {
   const out: Record<string, InboxLocal> = {};
-  if (clientTripIds.length === 0) return out;
-  const trips = createTripsRepo(db);
+  const ids = [...new Set(clientTripIds)];
+  if (ids.length === 0) return out;
+  const marks = ids.map(() => '?').join(', ');
   const tombstones = await readTombstones(db);
-  const { rows } = await db.execute(
+  const { rows: countRows } = await db.execute(
     `SELECT COUNT(*) AS n FROM trips WHERE deleted_at IS NULL AND score IS NOT NULL
        AND status IN ('provisional', 'final')`
   );
-  const scored = Number(rows[0]?.n ?? 0);
-  for (const id of new Set(clientTripIds)) {
-    const row = await trips.get(id);
-    if (row === null) {
-      out[id] = { trip: null, events: [], deleted: tombstones.has(id) };
-      continue;
+  const scored = Number(countRows[0]?.n ?? 0);
+  const { rows: tripRows } = await db.execute(
+    `SELECT * FROM trips WHERE client_trip_id IN (${marks})`,
+    ids
+  );
+  const trips = new Map(tripRows.map(toTripRowLocal).map((r) => [r.client_trip_id, r]));
+  const live = ids.filter((id) => trips.get(id)?.deleted_at === null);
+  const events = new Map<string, TripEventView[]>();
+  if (live.length > 0) {
+    const { rows: eventRows } = await db.execute(
+      `SELECT * FROM trip_events WHERE client_trip_id IN (${live.map(() => '?').join(', ')})
+         ORDER BY started_at ASC, id ASC`,
+      live
+    );
+    for (const raw of eventRows) {
+      const row = toEventRowLocal(raw);
+      const list = events.get(row.client_trip_id) ?? [];
+      list.push(toTripEventView(row));
+      events.set(row.client_trip_id, list);
     }
-    const live = row.deleted_at === null;
-    out[id] = { trip: toTripDetail(row, scored), events: live ? await readTripEvents(db, id) : [] };
+  }
+  for (const id of ids) {
+    const row = trips.get(id);
+    out[id] =
+      row === undefined
+        ? { trip: null, events: [], deleted: tombstones.has(id) }
+        : { trip: toTripDetail(row, scored), events: events.get(id) ?? [] };
   }
   return out;
 }
@@ -232,17 +344,41 @@ export function useInboxItems(deps: InboxDeps = {}, tz: string = deviceZone()) {
     queryFn: () => readInboxLocals(db, tripIds),
     enabled: inbox.data !== undefined,
   });
+
+  // Lapse rows are told from the phone's permissions now: read when the list has one, on every
+  // mount (staleTime 0), and again on a return to the foreground (back from Settings).
+  const hasLapse = rows.some((row) => row.type === 'permission_lapsed');
+  const adapter = deps.permissions ?? defaultPermissionsAdapter();
+  const permissions = useQuery({
+    queryKey: PERMISSIONS_NOW_KEY,
+    queryFn: () => readPermissionsNow(db, adapter),
+    enabled: hasLapse,
+    staleTime: 0,
+  });
+  const appState = deps.appState ?? AppState;
+  const { refetch: refetchPermissions } = permissions;
+  useEffect(() => {
+    if (!hasLapse) return;
+    const sub = appState.addEventListener('change', (next) => {
+      if (next === 'active') void refetchPermissions().catch(() => undefined);
+    });
+    return () => sub.remove();
+  }, [appState, hasLapse, refetchPermissions]);
+
   const items = useMemo<InboxItemView[] | undefined>(() => {
     if (inbox.data === undefined || locals.data === undefined) return undefined;
+    if (hasLapse && permissions.data === undefined) return undefined;
     const at = now();
     const none: InboxLocal = { trip: null, events: [] };
+    const lapseLocal: InboxLocal = { trip: null, events: [], permissions: permissions.data ?? null };
     return rows
       .map((row) => {
+        if (row.type === 'permission_lapsed') return toItemView(row, lapseLocal, at, tz);
         const trip = clientTripIdOf(row);
         return toItemView(row, trip === null ? none : (locals.data[trip] ?? none), at, tz);
       })
       .filter((v): v is InboxItemView => v !== null);
-  }, [inbox.data, locals.data, rows, now, tz]);
+  }, [inbox.data, locals.data, hasLapse, permissions.data, rows, now, tz]);
   return { inbox, locals, items, offline: inbox.data?.offline === true };
 }
 

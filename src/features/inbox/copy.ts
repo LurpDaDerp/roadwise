@@ -20,6 +20,16 @@ export const inboxCopy = {
   deleted: { title: 'Drive deleted', body: 'You deleted this drive.' },
   /** A drive the server knows and this phone does not (another phone, or before a restore). */
   notOnPhone: 'Not on this phone',
+  /**
+   * That drive's row: facts only (review m1). No "Tap to see…" and no "Were you driving?" — there
+   * is nothing to open and nowhere to answer from here.
+   */
+  elsewhere: {
+    title: 'Drive summary',
+    // "trip", not "drive": the phone cannot tell who was at the wheel of a trip it does not hold.
+    body: (mi: string) => `A ${mi} mi trip on your account.`,
+    bodyNoDistance: 'A trip on your account.',
+  },
   today: 'Today',
   yesterday: 'Yesterday',
   unread: 'Unread',
@@ -34,6 +44,43 @@ export const inboxCopy = {
     reportRefused: "We couldn't apply your report.",
     reportUnsent: "Your report didn't send.",
     reportSending: 'Your report is waiting to send.',
+  },
+  /**
+   * A permission lapse told from the phone's permissions NOW (ruling T6 (1)). Still lapsed: the
+   * pushed words, present tense (from the catalog). Fixed since: past tense and "back on". Not
+   * readable here (no reading, motion "can't check", or the lapse was on another phone): only what
+   * was true that day, and nothing about now.
+   */
+  lapse: {
+    fixed: {
+      location_always: {
+        title: 'Automatic recording is back on',
+        body: (day: string) => `Automatic recording was off on ${day}. It's back on.`,
+      },
+      location: {
+        title: 'Drive recording is back on',
+        body: (day: string) => `Drive recording was off on ${day}. It's back on.`,
+      },
+      motion: {
+        title: 'Motion access is back on',
+        body: (day: string) => `Motion access was off on ${day}. It's back on.`,
+      },
+    },
+    unknown: {
+      location_always: {
+        title: 'Automatic recording was off',
+        body: (day: string) => `On ${day}, automatic recording was off. Open to check how it is now.`,
+      },
+      location: {
+        title: 'Drive recording was off',
+        body: (day: string) =>
+          `On ${day}, location access was off, so drives couldn't be recorded. Open to check how it is now.`,
+      },
+      motion: {
+        title: 'Drive detection needed attention',
+        body: (day: string) => `On ${day}, motion access was off. Open to check how it is now.`,
+      },
+    },
   },
   bell: {
     none: 'Inbox',

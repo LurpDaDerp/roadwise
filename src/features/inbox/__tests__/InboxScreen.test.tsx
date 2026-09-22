@@ -1,6 +1,9 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
+import type { PermissionSnapshot } from '@/core/permissions';
+import { createSettingsRepo } from '@/data/db/settings';
+import { INSTALL_ID_KEY } from '@/data/devices/installId';
 import { MILE_M, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createInboxCache } from '@/features/inbox/cache';
 import { inboxCopy } from '@/features/inbox/copy';
@@ -8,7 +11,7 @@ import { InboxScreen, NOTIFICATION_SETTINGS_HREF } from '@/features/inbox/InboxS
 import { routerDouble } from '@/features/trips/__fixtures__/render';
 import { TRIP_HISTORY_HREF, tripSummaryHref } from '@/features/trips/routes';
 
-import { clearInboxClients, fakeApi, inboxWorld, setOnline } from '../__fixtures__/harness';
+import { clearInboxClients, fakeApi, fakeAppState, inboxWorld, setOnline } from '../__fixtures__/harness';
 import { inboxRow, iso, lapseRow, nextId } from '../__fixtures__/rows';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -84,18 +87,77 @@ describe('InboxScreen', () => {
     const row = elsewhereRow();
     const ctx = await renderInbox([row]);
     expect(await screen.findByText(`· ${inboxCopy.notOnPhone}`)).toBeTruthy();
+    expect(screen.getByText('A 2.0 mi trip on your account.')).toBeTruthy();
+    expect(screen.queryByText(/Tap to see|Tell us who drove|Were you driving/)).toBeNull();
     const { api } = ctx;
     await press(screen.getByTestId(`inbox-row-${row.id}`));
     await waitFor(() => expect(api.markInboxRead).toHaveBeenCalledWith([row.id]));
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
-  it('a permission lapse opens B2', async () => {
-    const row = lapseRow({ id: nextId() });
-    const { api } = await renderInbox([row]);
-    await press(await screen.findByTestId(`inbox-row-${row.id}`));
-    expect(mockRouter.push).toHaveBeenCalledWith('/permissions');
-    await waitFor(() => expect(api.markInboxRead).toHaveBeenCalledWith([row.id]));
+  describe('a permission lapse, told from this phone’s permissions now', () => {
+    const DEVICE = 'install-0001';
+    const lapse = () =>
+      lapseRow({ id: nextId(), payload: { permission: 'location_always', platform: 'ios', deviceId: DEVICE } });
+    const snapshot = (location: PermissionSnapshot['location']): PermissionSnapshot => ({
+      platform: 'ios',
+      location,
+      precise: true,
+      locationCanAskAgain: false,
+      motion: 'granted',
+      notifications: 'granted',
+      notificationsCanAskAgain: false,
+      batteryOptimization: 'unknown',
+      lowPowerMode: false,
+      checkedAt: T0,
+    });
+
+    async function renderLapse(read: () => Promise<PermissionSnapshot>) {
+      const row = lapse();
+      const w = await inboxWorld();
+      await createSettingsRepo(w.db).set(INSTALL_ID_KEY, DEVICE);
+      const server = fakeApi([row]);
+      const permissions = { snapshot: jest.fn(read) };
+      await w.render(<InboxScreen deps={{ api: server.api, permissions }} tz="UTC" />);
+      return { row, api: server.api, permissions };
+    }
+
+    it('still lapsed: present tense, and the row opens B2', async () => {
+      const { row, api } = await renderLapse(async () => snapshot('foreground'));
+      expect(await screen.findByText('Automatic recording is off')).toBeTruthy();
+      await press(screen.getByTestId(`inbox-row-${row.id}`));
+      expect(mockRouter.push).toHaveBeenCalledWith('/permissions');
+      await waitFor(() => expect(api.markInboxRead).toHaveBeenCalledWith([row.id]));
+    });
+
+    it('fixed since: past tense, back on', async () => {
+      await renderLapse(async () => snapshot('always'));
+      expect(await screen.findByText('Automatic recording is back on')).toBeTruthy();
+      expect(screen.getByText("Automatic recording was off on Mon, Jan 5. It's back on.")).toBeTruthy();
+      expect(screen.queryByText('Automatic recording is off')).toBeNull();
+    });
+
+    it('unreadable: neither — only what was true that day', async () => {
+      await renderLapse(async () => {
+        throw new Error('drive-sense unavailable');
+      });
+      expect(await screen.findByText('Automatic recording was off')).toBeTruthy();
+      expect(screen.queryByText(/is off|back on/)).toBeNull();
+    });
+
+    it('reads the permissions again on a return to the foreground', async () => {
+      const appState = fakeAppState();
+      const row = lapse();
+      const w = await inboxWorld();
+      await createSettingsRepo(w.db).set(INSTALL_ID_KEY, DEVICE);
+      let location: PermissionSnapshot['location'] = 'foreground';
+      const permissions = { snapshot: jest.fn(async () => snapshot(location)) };
+      await w.render(<InboxScreen deps={{ api: fakeApi([row]).api, permissions, appState }} tz="UTC" />);
+      expect(await screen.findByText('Automatic recording is off')).toBeTruthy();
+      location = 'always';
+      await act(async () => appState.emit('active'));
+      expect(await screen.findByText('Automatic recording is back on')).toBeTruthy();
+    });
   });
 
   describe('dismissing', () => {

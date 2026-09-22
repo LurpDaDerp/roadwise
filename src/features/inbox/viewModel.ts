@@ -18,6 +18,8 @@
  */
 import type { Href } from 'expo-router';
 
+import type { PermissionSnapshot } from '@/core/permissions';
+
 import {
   tipOutcomeOf,
   toTripSummary,
@@ -41,6 +43,7 @@ import {
   type Catalog,
   type LiveType,
   type NotificationType,
+  type PermissionLapsedPayload,
 } from '@/notifications/catalog';
 import { CONSTANTS } from '@scoring';
 
@@ -53,6 +56,37 @@ export interface InboxLocal {
   events: TripEventView[];
   /** The driver deleted this drive here and the row is gone (a tombstone remembers it). */
   deleted?: boolean;
+  /** This phone's permissions now, for a `permission_lapsed` row. Absent or null: not readable. */
+  permissions?: PermissionsNow | null;
+}
+
+/** This install's device id and its current permission snapshot (either may be unreadable). */
+export interface PermissionsNow {
+  deviceId: string | null;
+  snapshot: PermissionSnapshot | null;
+}
+
+/** Whether a reported lapse still holds on this phone now. */
+export type LapseNow = 'lapsed' | 'fixed' | 'unknown';
+
+/**
+ * The lapse re-checked against the phone's current permissions, with the server's own rule for
+ * "no longer lapsed" (0007 `subject_gone`): Always is back, any location is back, motion granted.
+ * `unknown` when there is no reading, when motion reads "can't check", or when the lapse was
+ * reported by another phone — this phone's permissions say nothing about that one.
+ */
+export function lapseNow(payload: PermissionLapsedPayload, current: PermissionsNow | null | undefined): LapseNow {
+  if (!current || current.snapshot === null || current.deviceId === null) return 'unknown';
+  if (payload.deviceId !== current.deviceId) return 'unknown';
+  const s = current.snapshot;
+  switch (payload.permission) {
+    case 'location_always':
+      return s.location === 'always' ? 'fixed' : 'lapsed';
+    case 'location':
+      return s.location === 'always' || s.location === 'foreground' ? 'fixed' : 'lapsed';
+    case 'motion':
+      return s.motion === null ? 'unknown' : s.motion === 'granted' ? 'fixed' : 'lapsed';
+  }
 }
 
 export interface InboxItemView {
@@ -149,13 +183,23 @@ export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: st
 
   if (row.type === 'permission_lapsed') {
     const base = renderInboxBase('permission_lapsed', row.payload);
-    if (base === null) return null;
+    const lapse = PayloadSchemas.permission_lapsed.safeParse(row.payload);
+    if (base === null || !lapse.success) return null;
+    const at = Date.parse(row.created_at);
+    const state = lapseNow(lapse.data, local.permissions);
+    const words =
+      state === 'lapsed'
+        ? base
+        : (() => {
+            const c = copy.lapse[state][lapse.data.permission];
+            return { title: c.title, body: c.body(formatTripDate(at, tz)) };
+          })();
     return finish({
       ...common,
-      title: base.title,
-      body: base.body,
+      title: words.title,
+      body: words.body,
       dispute: null,
-      when: whenLabel(Date.parse(row.created_at), now, tz),
+      when: whenLabel(at, now, tz),
       href: PERMISSIONS_HREF,
       note: null,
       clientTripId: null,
@@ -181,12 +225,11 @@ export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: st
   }
 
   if (trip === null) {
-    const base = renderInboxBase('trip_summary', row.payload);
-    if (base === null) return null;
+    const mi = milesLabel(facts.distanceM);
     return finish({
       ...common,
-      title: base.title,
-      body: base.body,
+      title: copy.elsewhere.title,
+      body: mi === null ? copy.elsewhere.bodyNoDistance : copy.elsewhere.body(mi),
       dispute: null,
       when: whenLabel(Date.parse(facts.startedAt), now, tz),
       href: null,
@@ -212,6 +255,16 @@ export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: st
     note: null,
     clientTripId: trip.clientTripId,
   });
+}
+
+/**
+ * Miles as the catalog prints them (its `miles()` is private to the synced catalog): one decimal
+ * under ten, whole miles from ten; null under 0.05 mi, where no distance is worth naming.
+ */
+export function milesLabel(distanceM: number): string | null {
+  const mi = distanceM / 1609.344;
+  if (!Number.isFinite(mi) || mi < 0.05) return null;
+  return mi < 9.95 ? mi.toFixed(1) : String(Math.round(mi));
 }
 
 /** Rows the list shows: not dismissed. */

@@ -1,10 +1,12 @@
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
-import { T0 } from '@/data/queries/__fixtures__/rows';
+import { addTombstone } from '@/data/db/tombstones';
+import { readTrip, readTripEvents } from '@/data/queries';
+import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
+import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { InboxOfflineError } from '@/features/inbox/api';
 import { createInboxCache, flushPending } from '@/features/inbox/cache';
-import { loadInbox } from '@/features/inbox/useInbox';
+import { loadInbox, readInboxLocals } from '@/features/inbox/useInbox';
 import { OPENED_TRIPS_KEY } from '@/notifications/keys';
 
 import { fakeApi } from '../__fixtures__/harness';
@@ -136,5 +138,41 @@ describe('loadInbox', () => {
     const snap = await loadInbox(db, { api, online: true, now: T0 });
     expect(snap.rows[0]?.read_at).toBe(iso(T0));
     expect(await cache.readPending('read')).toEqual([a.id]);
+  });
+});
+
+describe('readInboxLocals — one batch read (review m2)', () => {
+  it('reads every drive and its events in a fixed number of statements, whatever the count', async () => {
+    const ids = ['t-a', 't-b', 't-c', 't-d', 't-e'];
+    await seedTrips(db, ids.map((id, i) => tripRow({ client_trip_id: id, started_at: T0 + i * 1000 })));
+    await seedTrips(db, [tripRow({ client_trip_id: 't-del', deleted_at: T0 })]);
+    await seedEvents(db, [
+      eventRow({ id: 'e2', client_trip_id: 't-b', started_at: T0 + 5000 }),
+      eventRow({ id: 'e1', client_trip_id: 't-b', started_at: T0 + 1000 }),
+      eventRow({ id: 'e3', client_trip_id: 't-c' }),
+      eventRow({ id: 'e4', client_trip_id: 't-del' }),
+    ]);
+    await addTombstone(db, 't-gone');
+    const statements: string[] = [];
+    const counting: Db = {
+      execute: (sql, params) => {
+        statements.push(sql);
+        return db.execute(sql, params);
+      },
+      transaction: (fn) => db.transaction(fn),
+    };
+    const locals = await readInboxLocals(counting, [...ids, 't-del', 't-gone', 't-away']);
+    expect(statements.length).toBeLessThanOrEqual(4);
+    expect(locals['t-a']?.trip?.trip.clientTripId).toBe('t-a');
+    expect(locals['t-a']?.trip?.scoredTripCount).toBe(5);
+    expect(locals['t-b']?.events.map((e) => e.id)).toEqual(['e1', 'e2']);
+    expect(locals['t-c']?.events.map((e) => e.id)).toEqual(['e3']);
+    expect(locals['t-del']?.trip?.trip.deletedAt).toBe(T0);
+    expect(locals['t-del']?.events).toEqual([]);
+    expect(locals['t-gone']).toEqual({ trip: null, events: [], deleted: true });
+    expect(locals['t-away']).toEqual({ trip: null, events: [], deleted: false });
+    // The same answer the per-drive readers give.
+    expect(locals['t-b']?.events).toEqual(await readTripEvents(db, 't-b'));
+    expect(locals['t-a']?.trip?.trip).toEqual((await readTrip(db, 't-a'))?.trip);
   });
 });
