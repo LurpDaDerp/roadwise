@@ -16,6 +16,7 @@ import { Platform as mockPlatform } from "react-native";
 import {
   ANDROID_RESPECT_SILENT_MODE,
   createExpoAlertPorts,
+  probeAlertTones,
   IOS_RESPECT_SILENT_MODE,
   PLAYBACK_MODE,
   TONE_FINISH_MARGIN_MS,
@@ -244,7 +245,11 @@ describe("expo alert ports", () => {
       setOS("ios");
       const { audio } = await createExpoAlertPorts();
       audioMock.setAudioModeAsync.mockRejectedValueOnce(new Error("refused"));
-      await expect(audio.activate("respectSilent")).rejects.toThrow("refused");
+      const refusal = await audio.activate("respectSilent").catch((e: unknown) => e);
+      expect(String(refusal)).toContain("refused");
+      // Marked as recovered: the player must not call the alert unavailable (final review I2).
+      expect(refusal).toMatchObject({ fellBack: true });
+      expect((refusal as { cause?: Error }).cause?.message).toBe("refused");
       expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
         [{ ...IOS_RESPECT_SILENT_MODE }],
         [{ ...PLAYBACK_MODE }],
@@ -427,5 +432,20 @@ describe("expo alert ports", () => {
       ["heavy"],
       ["heavy"],
     ]);
+  });
+});
+
+describe("probeAlertTones (final review I2)", () => {
+  it("creates and frees one player per tone, and plays nothing", async () => {
+    await probeAlertTones();
+    expect(audioMock.createAudioPlayer.mock.calls.map((c) => c[0])).toEqual(["l1.wav", "l2.wav", "l3.wav"]);
+    expect(mockPlayers.every((p) => p.remove.mock.calls.length === 1 && p.play.mock.calls.length === 0)).toBe(true);
+  });
+
+  it("rejects when a tone's player cannot be created", async () => {
+    audioMock.createAudioPlayer.mockImplementationOnce(() => {
+      throw new Error("asset missing");
+    });
+    await expect(probeAlertTones()).rejects.toThrow("asset missing");
   });
 });

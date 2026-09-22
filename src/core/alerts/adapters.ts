@@ -110,6 +110,25 @@ function toneSource(level: AlertLevel): number {
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Touch each tone once, off the drive path (final review I2): create its player and free it. A
+ * missing or corrupt asset, or a player that cannot be created, throws here — at launch, where the
+ * engine stage can record silently and mark alerts unavailable — rather than first at play time.
+ */
+export async function probeAlertTones(): Promise<void> {
+  await Promise.resolve();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+  const Audio = require("expo-audio") as typeof import("expo-audio");
+  for (const level of [1, 2, 3] as const) {
+    const player = Audio.createAudioPlayer(toneSource(level));
+    try {
+      player.remove();
+    } catch {
+      // Created, so the tone loads; a release that fails frees nothing more.
+    }
+  }
+}
+
 export async function createExpoAlertPorts(): Promise<
   Pick<AlertPlayerDeps, "audio" | "voice" | "haptics">
 > {
@@ -135,7 +154,14 @@ export async function createExpoAlertPorts(): Promise<
         await Audio.setAudioModeAsync({ ...PLAYBACK_MODE });
       }
       await Audio.setIsAudioActiveAsync(true);
-      if (refused) throw refused.err;
+      // Reported, but marked: the alert still sounds on the playback session, so the player must
+      // not call it unavailable (final review I2).
+      if (refused) {
+        throw Object.assign(new Error('audio mode refused; the playback session is used instead'), {
+          cause: refused.err,
+          fellBack: true,
+        });
+      }
     },
 
     play(level, { volume }) {

@@ -149,8 +149,17 @@ export const isStationary = (s: EngineSnapshot): boolean =>
   s.status === 'ending' || (s.status === 'recording' && s.stationarySinceTs !== null);
 
 /** What the ongoing notification shows; the End action is offered only while stationary. */
-export function notificationStateOf(s: EngineSnapshot): { stationary: boolean; startedAt: number | null } {
-  return { stationary: isStationary(s), startedAt: s.startedAt === null ? null : Math.round(s.startedAt) };
+export function notificationStateOf(s: EngineSnapshot): {
+  stationary: boolean;
+  startedAt: number | null;
+  candidate: boolean;
+} {
+  return {
+    stationary: isStationary(s),
+    startedAt: s.startedAt === null ? null : Math.round(s.startedAt),
+    // A candidate may still be discarded: the notice says "Checking for a drive" (final review M5).
+    candidate: s.status === 'candidate',
+  };
 }
 
 /** The notification's End action is honoured only while stationary (SR1: nothing while moving). */
@@ -196,12 +205,29 @@ export function createNightClock(constants: { NIGHT_START_H: number; NIGHT_END_H
 
 // --- small rules ----------------------------------------------------------------------------------
 
-/** Auto-record arms only when the feature flag, the user's setting and Always location all hold. */
+/**
+ * What the phone's permissions allow: Always location and granted motion. The one permission rule
+ * behind auto-record — the host arms on it (`shouldArm`) and the detection screen reads the same
+ * function, so the two can never disagree about what the phone allows (final review I4).
+ */
+export const permissionsAllowArming = (s: {
+  location: DriveSenseState['location'];
+  motion: DriveSenseState['motion'] | string;
+}): boolean => s.location === 'always' && s.motion === 'granted';
+
+/**
+ * Auto-record arms only when the driver opted in, the feature flag makes it available, a driver is
+ * signed in (§8.2: sign-out stops recording), and the permissions allow it. The single predicate
+ * (final review I4); the host publishes its result as `DriveState.autoDetectArmed`, which Home and
+ * the detection screen read rather than re-deriving it.
+ */
 export const shouldArm = (a: {
   intent: boolean;
   flag: boolean;
   location: DriveSenseState['location'];
-}): boolean => a.intent && a.flag && a.location === 'always';
+  motion: DriveSenseState['motion'];
+  signedIn?: boolean;
+}): boolean => a.intent && a.flag && a.signedIn !== false && permissionsAllowArming(a);
 
 /**
  * L1 may honour the silent switch only while the phone is mounted and RoadWise is frontmost and

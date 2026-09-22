@@ -85,6 +85,13 @@ export interface AlertPlayerDeps {
    */
   deliverable?(): boolean;
   onError?(err: unknown): void;
+  /**
+   * An alert could not sound: its session would not activate, or its tone would not play (or never
+   * finished). Called in addition to `onError`, so the host can mark the drive's alerts unavailable
+   * and the HUD can say so (final review I2) — a visual only, so SR9 still holds. A mode refused
+   * but recovered on the playback session (`fellBack`) is not a failure: the alert still sounded.
+   */
+  onUnavailable?(): void;
 }
 
 export interface AlertPlayer {
@@ -142,6 +149,11 @@ interface Run {
   done: Promise<void>;
 }
 
+/** An activation whose mode was refused but which then played on the playback session. */
+function isFellBack(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { fellBack?: unknown }).fellBack === true;
+}
+
 function isLevel(level: unknown): level is AlertLevel {
   return level === 1 || level === 2 || level === 3;
 }
@@ -175,8 +187,20 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
     }
   }
 
-  /** Runs `fn` bounded by the step timeout (and, when given, a run's stop). Never rejects. */
-  async function bounded(fn: () => Promise<void>, run?: Run): Promise<void> {
+  function unavailable(): void {
+    try {
+      deps.onUnavailable?.();
+    } catch (err) {
+      report(err);
+    }
+  }
+
+  /**
+   * Runs `fn` bounded by the step timeout (and, when given, a run's stop). Never rejects. Resolves
+   * false when the step failed (a rejection or a timeout), true otherwise — a step the driver
+   * stopped, or an activation that fell back to the audible playback session, is not a failure.
+   */
+  async function bounded(fn: () => Promise<void>, run?: Run): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
@@ -192,17 +216,20 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         work = Promise.reject(err);
       }
       await Promise.race(run ? [work, timeout, run.woken] : [work, timeout]);
+      return true;
     } catch (err) {
       // A port rejecting because the driver just stopped it is not a failure.
-      if (!run?.stopped) report(err);
+      if (run?.stopped) return true;
+      report(err);
+      return isFellBack(err);
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async function step(run: Run, fn: () => Promise<void>): Promise<void> {
-    if (run.stopped) return;
-    await bounded(fn, run);
+  async function step(run: Run, fn: () => Promise<void>): Promise<boolean> {
+    if (run.stopped) return true;
+    return bounded(fn, run);
   }
 
   function enqueue(task: (run: Run) => Promise<void>): Promise<void> {
@@ -249,9 +276,9 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   }
 
   /** Every release goes through here, so it settles a release an idle stopCurrent left owed. */
-  function releaseSession(): Promise<void> {
+  async function releaseSession(): Promise<void> {
     releaseOwed = false;
-    return bounded(() => audio.deactivate());
+    await bounded(() => audio.deactivate());
   }
 
   function releaseViaQueue(): Promise<void> {
@@ -268,9 +295,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         try {
           const onCall = read(() => deps.callActive(), false);
           const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
-          await step(run, () => audio.activate(kind));
+          const activated = await step(run, () => audio.activate(kind));
           const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
-          await step(run, () => audio.play(level, { volume }));
+          const played = await step(run, () => audio.play(level, { volume }));
+          // Silent for the driver, and they must be able to see that (I2).
+          if (!activated || !played) unavailable();
           const key = decision.voice;
           if (
             level >= 2 &&

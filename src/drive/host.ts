@@ -42,14 +42,13 @@ import { finalizeTrip } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
 import { rebuildFromSamples } from '@/core/engine/replay';
-import { isHabitualDriverRoute, readRolePrior } from '@/core/engine/rolePrior';
+import { roleEvidenceFor } from '@/core/engine/rolePrior';
 import type { DetectorContext, FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import type { TraceWriter } from '@/boot/traceWriter';
 import { createSettingsRepo, type Db, type TripRow, type TripStatus } from '@/data/db';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
-import { geohash5 } from '@/lib/geo';
 
 import {
   ALERT_SHOWN_MS,
@@ -102,11 +101,19 @@ export interface DriveState extends EngineSnapshot {
   /** A `persistence: 'none'` host: nothing is stored and `lastFinalized` stays null. Additive. */
   dryRun: boolean;
   /**
-   * False when the alert sound could not be loaded (H2 r1): the drive still records, silently, and
-   * the HUD must say so ("Sound alerts unavailable") rather than let the driver assume alerts.
-   * Always set by the host; optional in the type only so existing fixtures stay valid. Additive.
+   * False when the alert sound could not be loaded at launch (H2 r1), or when any sound failed
+   * during this drive — at activation or at play time (final review I2); a new drive starts
+   * hopeful again. The drive still records, silently, and the HUD says so ("Sound alerts
+   * unavailable") rather than let the driver assume alerts. Always set by the host; optional in
+   * the type only so existing fixtures stay valid. Additive.
    */
   alertsAvailable?: boolean;
+  /**
+   * Auto-record is armed right now: opted in, available, signed in and permitted (`shouldArm`,
+   * final review I4 / M3). Home and the detection screen read this, never the engine's status, so
+   * nothing says "on" while the host is not armed. Always set by the host; optional in the type.
+   */
+  autoDetectArmed?: boolean;
 }
 
 export interface DriveHost {
@@ -140,6 +147,21 @@ export interface DriveHost {
   subscribe(fn: (s: DriveState) => void): () => void;
   /** For the alert player: L1 honours the silent switch only when mounted, unlocked, in front. */
   l1RespectsSilentSwitch(): boolean;
+  /** The player could not sound an alert: `alertsAvailable` is false for the rest of this drive. */
+  reportAlertsUnavailable(): void;
+  /**
+   * Re-read the permissions and the flag and arm or disarm to match (final review I4). Also runs
+   * by itself on every transition to `active`, so a return from Settings takes effect.
+   */
+  refreshArming(): Promise<void>;
+  /**
+   * Sign-out (§8.2 "stops recording"; final review I3): an open drive is ended and finalized under
+   * the current owner, then auto-record is disarmed natively. The stored opt-in is kept, so the
+   * same driver signing back in (`resumeAfterSignIn`) is armed again.
+   */
+  suspendForSignOut(): Promise<void>;
+  /** A driver is signed in again: arming follows the opt-in once more. */
+  resumeAfterSignIn(): Promise<void>;
   /** The per-row detector context the engine is given (diagnostics). */
   detectorContext(): Omit<DetectorContext, 'mode'>;
 }
@@ -172,6 +194,8 @@ export interface DriveHostDeps {
   scheduler?: Scheduler;
   /** False when the player is a silent stand-in for sound that failed to load. Default true. */
   alertsAvailable?: boolean;
+  /** Start with no driver signed in: nothing arms until `resumeAfterSignIn` (§8.2). */
+  signedOut?: boolean;
 }
 
 /** Scored driver trips: the learning period's count (rev1: m). */
@@ -197,8 +221,11 @@ export function playerInputs(getHost: () => DriveHost | undefined): {
   callActive(): boolean;
   l1RespectsSilentSwitch(): boolean;
   deliverable(): boolean;
+  onUnavailable(): void;
 } {
   return {
+    // A sound that failed marks the drive's alerts unavailable (final review I2).
+    onUnavailable: () => getHost()?.reportAlertsUnavailable(),
     callActive: () => getHost()?.snapshot().callActive ?? false,
     // Without a host, the playback session: the audible choice.
     l1RespectsSilentSwitch: () => getHost()?.l1RespectsSilentSwitch() ?? false,
@@ -243,6 +270,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let activeAlert: { decision: AlertDecision; until: number } | null = null;
   let mutedForDrive = false;
   let adoptMuted = false;
+  /** A sound failed during this drive (I2); reset when the next trip opens. */
+  let soundFailedThisDrive = false;
+  /** The last arming decision: auto-record armed natively and in the engine (I4). */
+  let autoDetectArmed = false;
+  /** No driver signed in (§8.2, I3): arming is refused until `resumeAfterSignIn`. */
+  let signedOut = deps.signedOut === true;
   let thermal: ThermalLevel = 'nominal';
   let callActive = false;
   let screenLocked = false;
@@ -282,10 +315,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!persist) return;
     const id = session.clientTripId;
     try {
-      const cell = (f: { lat: number; lng: number } | null) => (f ? geohash5(f.lat, f.lng) : null);
-      // E2: without these every auto or moving-start drive would be asked about.
-      const rolePrior = await readRolePrior(db);
-      const habitualRoute = await isHabitualDriverRoute(db, cell(session.firstFix), cell(session.lastFix));
+      // E2: without these every auto or moving-start drive would be asked about. The same helper
+      // recovery uses (final review I1).
+      const { rolePrior, habitualRoute } = await roleEvidenceFor(db, session);
       const result = await finalizeTrip(session, {
         db,
         scoring,
@@ -353,7 +385,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       lastFinalized,
       tripIndex,
       dryRun: !persist,
-      alertsAvailable: deps.alertsAvailable ?? true,
+      alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
+      autoDetectArmed,
     });
   }
 
@@ -386,6 +419,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       // A new trip, confirmed or adopted: its own mute, and one tile batch at its first fix (S2).
       mutedForDrive = adoptMuted;
       adoptMuted = false;
+      soundFailedThisDrive = false;
       startTripPending = true;
       if (currentRow?.gnssValid) startTripNow(currentRow);
     }
@@ -608,10 +642,18 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         flag = false;
       }
     }
-    if (shouldArm({ intent, flag, location: state.location })) {
+    const arm = shouldArm({
+      intent,
+      flag,
+      location: state.location,
+      motion: state.motion,
+      signedIn: !signedOut,
+    });
+    if (arm) {
       try {
         await source.arm();
         await engine.dispatch({ type: 'arm' });
+        setArmed(true);
         return;
       } catch (e) {
         report(e, 'arm');
@@ -620,6 +662,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       await source.disarm().catch((e: unknown) => report(e, 'disarm'));
     }
     await engine.dispatch({ type: 'disarm' });
+    setArmed(false);
+  }
+
+  function setArmed(next: boolean): void {
+    if (autoDetectArmed === next) return;
+    autoDetectArmed = next;
+    publish();
   }
 
   async function adopt(trip: TripRow): Promise<boolean> {
@@ -695,6 +744,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             remover(
               deps.appState.addEventListener('change', (next) => {
                 appActive = next === 'active';
+                // A return from Settings, or any permission changed while away (I4): one
+                // `getState` read on the foreground transition — never while armed and idle.
+                if (appActive) void run(applyArming, 'arming');
               })
             )
           );
@@ -792,6 +844,31 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         listeners.delete(fn);
       };
     },
+
+    reportAlertsUnavailable() {
+      if (soundFailedThisDrive) return;
+      soundFailedThisDrive = true;
+      publish();
+    },
+
+    refreshArming: () => run(applyArming, 'arming'),
+
+    async suspendForSignOut() {
+      // Ended and finalized under the owner who is still signed in, before the session goes.
+      await run(async () => {
+        signedOut = true;
+        if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
+      }, 'signOut');
+      await this.untilIdle();
+      await run(applyArming, 'signOut');
+    },
+
+    resumeAfterSignIn: () =>
+      run(async () => {
+        if (!signedOut) return;
+        signedOut = false;
+        await applyArming();
+      }, 'signIn'),
 
     l1RespectsSilentSwitch: () =>
       l1RespectsSilentSwitch({ mode: engine.snapshot().mode, screenLocked }, appActive),

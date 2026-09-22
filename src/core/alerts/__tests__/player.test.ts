@@ -628,3 +628,76 @@ describe("alert player", () => {
     });
   });
 });
+
+describe("a sound that could not play is reported as unavailable (final review I2)", () => {
+  function withUnavailable(overrides: Parameters<typeof rig>[0] = {}) {
+    const r = rig(overrides);
+    let unavailable = 0;
+    const player = createAlertPlayer({ ...r.deps, onUnavailable: () => (unavailable += 1) });
+    return { r, player, unavailable: () => unavailable };
+  }
+
+  it("a tone that fails to play calls onUnavailable, and the session is still released", async () => {
+    const t = withUnavailable({
+      audio: {
+        play: async () => {
+          throw new Error("player could not be created");
+        },
+      },
+    });
+    await t.player.deliver(decision(2));
+    expect(t.unavailable()).toBe(1);
+    expect(t.r.calls).toContain("deactivate");
+  });
+
+  it("a session that will not activate calls it too", async () => {
+    const t = withUnavailable({
+      audio: {
+        activate: async () => {
+          throw new Error("both modes refused");
+        },
+      },
+    });
+    await t.player.deliver(decision(1));
+    expect(t.unavailable()).toBe(1);
+  });
+
+  it("a mode refused but recovered on the playback session is not unavailable: the alert still sounded", async () => {
+    const t = withUnavailable({
+      audio: {
+        activate: async () => {
+          throw Object.assign(new Error("audio mode refused"), { fellBack: true });
+        },
+      },
+    });
+    await t.player.deliver(decision(1));
+    expect(t.unavailable()).toBe(0);
+    expect(t.r.errors).toHaveLength(1);
+  });
+
+  it("a tone that never finishes (timeout) is unavailable", async () => {
+    jest.useFakeTimers();
+    try {
+      const t = withUnavailable({ audio: { play: () => new Promise<void>(() => {}) } });
+      const done = t.player.deliver(decision(3));
+      await jest.advanceTimersByTimeAsync(STEP_TIMEOUT_MS * 4);
+      await done;
+      expect(t.unavailable()).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("negative control: an alert that played, or that the driver stopped, is not unavailable", async () => {
+    const ok = withUnavailable();
+    await ok.player.deliver(decision(2));
+    expect(ok.unavailable()).toBe(0);
+
+    const held = withUnavailable({ holdPlay: true });
+    const playing = held.player.deliver(decision(2));
+    await flush();
+    await held.player.stopCurrent();
+    await playing;
+    expect(held.unavailable()).toBe(0);
+  });
+});

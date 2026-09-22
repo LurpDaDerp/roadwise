@@ -65,6 +65,8 @@ interface HarnessOptions {
   writeFailures?: number;
   platform?: 'ios' | 'android';
   readFlag?: (key: 'auto_detect') => Promise<boolean>;
+  appState?: import('@/data/foreground').AppStateLike;
+  signedOut?: boolean;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -116,6 +118,8 @@ function harness(opts: HarnessOptions = {}) {
     newId: () => `id-${(ids += 1)}`,
     persistence: opts.persistence,
     readFlag: opts.readFlag,
+    appState: opts.appState,
+    signedOut: opts.signedOut,
     scheduler,
     onError: (error, ctx) => errors.push({ error, ctx }),
   });
@@ -339,10 +343,21 @@ describe('auto-detect', () => {
   test('a refused arm leaves the host off and reports it', async () => {
     const h = harness();
     await h.host.start();
+    h.fake.arm = async () => {
+      throw new Error('E_PERMISSION');
+    };
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(h.errors.map((e) => e.ctx)).toContain('arm');
+  });
+
+  test('without motion access the shared predicate does not even try to arm (I4)', async () => {
+    const h = harness();
+    await h.host.start();
     h.fake.setState({ motion: 'denied' });
     await h.host.setAutoDetect(true);
-    expect(h.host.snapshot().status).toBe('off');
-    expect(h.errors.map((e) => e.ctx)).toContain('arm');
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(h.fake.calls).not.toContain('arm');
   });
 });
 
@@ -998,5 +1013,115 @@ describe('mode and passenger', () => {
     expect(last(h.fake.calls)).toBe('startCapture:mounted');
     await h.host.setPassenger(true);
     expect(h.host.snapshot().role).toBe('passenger');
+  });
+});
+
+// --- final review: arming follows the phone, sign-out stops recording, sound failures show ---------
+
+describe('arming is re-applied on the foreground (final review I4)', () => {
+  function withAppState() {
+    const listeners: ((s: string) => void)[] = [];
+    const appState = {
+      currentState: 'active' as string | null,
+      addEventListener: (_t: 'change', fn: (s: string) => void) => {
+        listeners.push(fn);
+        return { remove: () => listeners.splice(listeners.indexOf(fn), 1) };
+      },
+      emit: (s: string) => {
+        appState.currentState = s;
+        for (const fn of [...listeners]) fn(s);
+      },
+    };
+    return appState;
+  }
+
+  test('Always granted in Settings while away: the return to the app arms, and the state says so', async () => {
+    const appState = withAppState();
+    const h = harness({ appState });
+    h.fake.setState({ location: 'whenInUse' });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+
+    appState.emit('background');
+    h.fake.setState({ location: 'always' });
+    appState.emit('active');
+    await h.host.settled();
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('Always revoked while away: the return disarms, never left saying on', async () => {
+    const appState = withAppState();
+    const h = harness({ appState });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot().autoDetectArmed).toBe(true);
+    appState.emit('background');
+    h.fake.setState({ location: 'whenInUse' });
+    appState.emit('active');
+    await h.host.settled();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+  });
+
+  test('negative control: nothing re-reads while backgrounded (no work while armed and idle)', async () => {
+    const appState = withAppState();
+    const h = harness({ appState });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    const reads = h.fake.queries.length;
+    appState.emit('background');
+    await h.host.settled();
+    expect(h.fake.queries.length).toBe(reads);
+  });
+});
+
+describe('sign-out stops recording (final review I3)', () => {
+  test('an open drive is finalized under the current owner, then auto-record is disarmed; the opt-in is kept', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(200, { t0: h.now() + 1000 }));
+    const tripId = h.host.snapshot().clientTripId as string;
+
+    await h.host.suspendForSignOut();
+
+    expect((await trips().get(tripId))?.status).toBe('provisional');
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(last(h.fake.calls)).toBe('disarm');
+    expect(h.host.autoDetectEnabled()).toBe(true);
+    // A wake now opens nothing.
+    h.fake.setMotionHistory([automotive(h.now() - 10_000)]);
+    h.fake.emit('wake', { reason: 'significantChange', ts: h.now() });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('off');
+
+    await h.host.resumeAfterSignIn();
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('a host started with nobody signed in never arms, whatever the opt-in', async () => {
+    const h = harness({ signedOut: true });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(h.fake.calls).not.toContain('arm');
+  });
+});
+
+describe('a sound that fails during a drive marks alerts unavailable for that drive (final review I2)', () => {
+  test('reported once, published, and reset when the next drive opens', async () => {
+    const h = harness();
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(40, { t0: h.now() + 1000 }));
+    expect(h.host.snapshot().alertsAvailable).toBe(true);
+    playerInputs(() => h.host).onUnavailable();
+    expect(h.host.snapshot().alertsAvailable).toBe(false);
+    await h.host.end();
+    await h.host.untilIdle();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(40, { t0: h.now() + 1000 }));
+    expect(h.host.snapshot().alertsAvailable).toBe(true);
   });
 });

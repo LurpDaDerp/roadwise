@@ -18,6 +18,7 @@ import {
   l1RespectsSilentSwitch,
   limitOptions,
   notificationStateOf,
+  permissionsAllowArming,
   shouldArm,
   shouldSelfDispatch,
   wakeStart,
@@ -176,12 +177,14 @@ describe('post-gap self-dispatch (M1 note)', () => {
 
 describe('the drive notification', () => {
   test('stationary while stopped or in the gap window; startedAt from the trip', () => {
-    expect(notificationStateOf(snap())).toEqual({ stationary: false, startedAt: T });
-    expect(notificationStateOf(snap({ stationarySinceTs: T }))).toEqual({ stationary: true, startedAt: T });
-    expect(notificationStateOf(snap({ status: 'ending' }))).toEqual({ stationary: true, startedAt: T });
+    expect(notificationStateOf(snap())).toEqual({ stationary: false, startedAt: T, candidate: false });
+    expect(notificationStateOf(snap({ stationarySinceTs: T }))).toEqual({ stationary: true, startedAt: T, candidate: false });
+    expect(notificationStateOf(snap({ status: 'ending' }))).toEqual({ stationary: true, startedAt: T, candidate: false });
+    // A candidate may be discarded: the notice checks rather than claims a recording (M5).
     expect(notificationStateOf(snap({ status: 'candidate', startedAt: null, clientTripId: null }))).toEqual({
       stationary: false,
       startedAt: null,
+      candidate: true,
     });
   });
 
@@ -226,11 +229,18 @@ describe('small rules', () => {
     expect(isBusyStatus('off')).toBe(false);
   });
 
-  test('arming needs the flag, the user setting and Always location', () => {
-    expect(shouldArm({ intent: true, flag: true, location: 'always' })).toBe(true);
-    expect(shouldArm({ intent: false, flag: true, location: 'always' })).toBe(false);
-    expect(shouldArm({ intent: true, flag: false, location: 'always' })).toBe(false);
-    expect(shouldArm({ intent: true, flag: true, location: 'whenInUse' })).toBe(false);
+  test('arming needs the flag, the user setting, Always location, motion and a signed-in driver (one predicate, I4)', () => {
+    const ok = { intent: true, flag: true, location: 'always', motion: 'granted' } as const;
+    expect(shouldArm(ok)).toBe(true);
+    expect(shouldArm({ ...ok, intent: false })).toBe(false);
+    expect(shouldArm({ ...ok, flag: false })).toBe(false);
+    expect(shouldArm({ ...ok, location: 'whenInUse' })).toBe(false);
+    expect(shouldArm({ ...ok, motion: 'denied' })).toBe(false);
+    expect(shouldArm({ ...ok, signedIn: false })).toBe(false);
+    expect(shouldArm({ ...ok, signedIn: true })).toBe(true);
+    // The permission half is its own export, read by the detection screen too.
+    expect(permissionsAllowArming({ location: 'always', motion: 'granted' })).toBe(true);
+    expect(permissionsAllowArming({ location: 'always', motion: 'undetermined' })).toBe(false);
   });
 
   test('L1 honours the silent switch only when mounted, unlocked and RoadWise is in front', () => {
