@@ -248,6 +248,7 @@ export type Database = {
           dismissed_at: string | null
           id: string
           payload: Json
+          push_after: string
           push_attempts: number
           push_claimed_at: string | null
           push_reason: string | null
@@ -266,6 +267,7 @@ export type Database = {
           dismissed_at?: string | null
           id?: string
           payload: Json
+          push_after?: string
           push_attempts?: number
           push_claimed_at?: string | null
           push_reason?: string | null
@@ -284,6 +286,7 @@ export type Database = {
           dismissed_at?: string | null
           id?: string
           payload?: Json
+          push_after?: string
           push_attempts?: number
           push_claimed_at?: string | null
           push_reason?: string | null
@@ -939,6 +942,10 @@ export type Database = {
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
       notification_defaults: { Args: never; Returns: Json }
       push_receipts_due: { Args: { p_limit: number }; Returns: Json }
+      push_sweep_signature: {
+        Args: { p_key: string; p_ts: number }
+        Returns: string
+      }
       put_limits_cache: {
         Args: {
           p_heading: number

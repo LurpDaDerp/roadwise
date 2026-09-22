@@ -16,7 +16,7 @@ begin
 end $$;
 
 begin;
-select plan(271);
+select plan(284);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -86,11 +86,35 @@ grant select, insert, update on res to authenticated, service_role;
 -- a pending lapse row for a user, due now (the claim fixtures)
 create function pg_temp.pending(p_user uuid, p_key text, p_device text default 'a-phone', p_after interval default interval '1 minute') returns uuid
 language sql as $$
-  insert into public.inbox (user_id, type, payload, dedupe_key, deliver_after, push_state)
+  insert into public.inbox (user_id, type, payload, dedupe_key, deliver_after, push_after, push_state)
   values (p_user, 'permission_lapsed', jsonb_build_object('permission', 'location_always', 'platform', 'ios', 'deviceId', p_device),
-    p_key, now() - p_after, 'pending')
+    p_key, now() - p_after, now() - p_after, 'pending')
   returning id
 $$;
+
+-- every table (outside vault and the catalogs) whose rows contain p_needle; a table postgres cannot
+-- read is reported as unreadable:<name>
+create function pg_temp.tables_containing(p_needle text) returns text[]
+language plpgsql as $$
+declare
+  r record;
+  n int;
+  v_out text[] := '{}';
+begin
+  for r in select c.oid::regclass::text as t from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
+    where c.relkind in ('r', 'p', 'm') and ns.nspname not in ('vault', 'pg_catalog', 'information_schema', 'pg_toast')
+      and ns.nspname not like 'pg_temp%' loop
+    begin
+      execute format('select count(*) from %s x where x::text like %L', r.t, '%' || p_needle || '%') into n;
+      if n > 0 then
+        v_out := v_out || r.t;
+      end if;
+    exception when insufficient_privilege then
+      v_out := v_out || ('unreadable:' || r.t);
+    end;
+  end loop;
+  return v_out;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- 1. structure
@@ -100,7 +124,7 @@ select is((select extnamespace::regnamespace::text from pg_extension where extna
 
 select columns_are('public', 'notification_prefs', array['user_id', 'categories', 'quiet_enabled', 'quiet_start', 'quiet_end', 'tz',
   'local_sent_day', 'local_sent_count', 'created_at', 'updated_at']::name[], 'notification_prefs has exactly its columns');
-select columns_are('public', 'inbox', array['id', 'user_id', 'type', 'payload', 'ref_id', 'dedupe_key', 'deliver_after', 'read_at', 'dismissed_at',
+select columns_are('public', 'inbox', array['id', 'user_id', 'type', 'payload', 'ref_id', 'dedupe_key', 'deliver_after', 'push_after', 'read_at', 'dismissed_at',
   'push_state', 'push_reason', 'push_attempts', 'push_claimed_at', 'pushed_at', 'created_at', 'updated_at']::name[], 'inbox has exactly its columns');
 select columns_are('public', 'push_registrations', array['token', 'user_id', 'device_id', 'platform', 'last_registered_at', 'created_at', 'updated_at']::name[],
   'push_registrations has exactly its columns');
@@ -141,6 +165,10 @@ select column_privs_are('public', 'inbox', 'push_state', 'authenticated', '{}'::
 select column_privs_are('public', 'inbox', 'push_reason', 'authenticated', '{}'::name[], 'inbox.push_reason is hidden');
 select column_privs_are('public', 'inbox', 'push_attempts', 'authenticated', '{}'::name[], 'inbox.push_attempts is hidden');
 select column_privs_are('public', 'inbox', 'push_claimed_at', 'authenticated', '{}'::name[], 'inbox.push_claimed_at is hidden');
+select column_privs_are('public', 'inbox', 'push_after', 'authenticated', '{}'::name[], 'inbox.push_after is hidden');
+select is((select pg_get_indexdef('public.inbox_due_idx'::regclass)),
+  'CREATE INDEX inbox_due_idx ON public.inbox USING btree (push_after) WHERE (push_state = ANY (ARRAY[''pending''::text, ''deferred''::text]))',
+  'the due index is on push_after (ruling T2 I1)');
 select column_privs_are('public', 'inbox', 'dedupe_key', 'authenticated', '{}'::name[], 'inbox.dedupe_key is hidden');
 select column_privs_are('public', 'notification_prefs', 'user_id', 'authenticated', array['SELECT', 'INSERT']::name[], 'notification_prefs.user_id is insert-only');
 select column_privs_are('public', 'notification_prefs', 'categories', 'authenticated', array['SELECT', 'INSERT', 'UPDATE']::name[], 'categories are client-editable');
@@ -178,6 +206,7 @@ select is((select count(*)::int from pg_trigger where not tgisinternal and tgfoi
 select has_trigger('public', 'trips', 'trips_enqueue_summary', 'trips enqueue the summary history row');
 select has_trigger('public', 'devices', 'devices_enqueue_permission_lapse', 'devices enqueue a permission lapse');
 select has_trigger('public', 'devices', 'devices_drive_state_stamp', 'devices stamp drive_state_at');
+select has_trigger('public', 'devices', 'devices_drive_state_at_pin', 'devices discard a client drive_state_at');
 select has_trigger('public', 'profiles', 'profiles_minimise_underage_notifications', 'a new u13 band minimises the notification tables');
 
 select throws_ok($$ insert into public.inbox (user_id, type, payload, dedupe_key) values ('b7000000-0000-4000-8000-000000000001', 'bogus', '{}', 'k') $$,
@@ -211,9 +240,10 @@ select is((select count(*)::int from pg_proc p where p.oid in (
     'public.notification_prefs_validate()'::regprocedure, 'public.user_tz(uuid)'::regprocedure,
     'public.user_local_date(uuid, timestamptz)'::regprocedure, 'public.notification_defaults()'::regprocedure,
     'public.stamp_drive_state()'::regprocedure, 'public.enqueue_trip_summary()'::regprocedure,
+    'public.pin_drive_state_at()'::regprocedure, 'public.push_sweep_signature(bigint, text)'::regprocedure,
     'public.minimise_underage_notifications()'::regprocedure, 'public.inbox_subject_gone(uuid, text, uuid, jsonb)'::regprocedure,
     'public.dispatch_push()'::regprocedure)
-  and not p.prosecdef and p.proconfig = array['search_path=public']), 11,
+  and not p.prosecdef and p.proconfig = array['search_path=public']), 13,
   'every other function (dispatch_push included) is security invoker pinning exactly search_path=public');
 select is(array(select has_function_privilege('authenticated', f, 'execute') from unnest(array['public.mark_inbox_read(uuid[])', 'public.dismiss_inbox(uuid[])',
     'public.register_push_token(text, text)', 'public.unregister_push_token(text)', 'public.merge_own_profile_flags(jsonb)']) f),
@@ -226,15 +256,17 @@ select is((select bool_or(has_function_privilege('anon', f, 'execute')) from unn
     'public.claim_push_batch(integer, integer)', 'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(integer)', 'public.record_push_receipts(jsonb)',
     'public.dispatch_push()', 'public.enqueue_permission_lapse()', 'public.enqueue_trip_summary()', 'public.minimise_underage_notifications()',
     'public.user_tz(uuid)', 'public.notification_defaults()', 'public.inbox_subject_gone(uuid, text, uuid, jsonb)', 'public.is_known_tz(text)',
-    'public.is_short_drive(numeric, numeric)', 'public.notification_prefs_validate()', 'public.stamp_drive_state()']) f),
+    'public.is_short_drive(numeric, numeric)', 'public.notification_prefs_validate()', 'public.stamp_drive_state()',
+    'public.pin_drive_state_at()', 'public.push_sweep_signature(bigint, text)']) f),
   false, 'anon executes nothing this migration creates');
 select is((select bool_or(has_function_privilege('authenticated', f, 'execute')) from unnest(array['public.claim_push_batch(integer, integer)',
     'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(integer)', 'public.record_push_receipts(jsonb)', 'public.dispatch_push()',
     'public.enqueue_permission_lapse()', 'public.enqueue_trip_summary()', 'public.minimise_underage_notifications()', 'public.user_tz(uuid)',
     'public.notification_defaults()', 'public.inbox_subject_gone(uuid, text, uuid, jsonb)', 'public.is_known_tz(text)',
-    'public.is_short_drive(numeric, numeric)', 'public.notification_prefs_validate()', 'public.stamp_drive_state()']) f),
+    'public.is_short_drive(numeric, numeric)', 'public.notification_prefs_validate()', 'public.stamp_drive_state()',
+    'public.pin_drive_state_at()', 'public.push_sweep_signature(bigint, text)']) f),
   false, 'authenticated executes no writer, trigger, helper or dispatch_push');
-select is((select bool_or(has_function_privilege('service_role', f, 'execute')) from unnest(array['public.dispatch_push()', 'public.mark_inbox_read(uuid[])',
+select is((select bool_or(has_function_privilege('service_role', f, 'execute')) from unnest(array['public.dispatch_push()', 'public.push_sweep_signature(bigint, text)', 'public.mark_inbox_read(uuid[])',
     'public.dismiss_inbox(uuid[])', 'public.register_push_token(text, text)', 'public.unregister_push_token(text)', 'public.merge_own_profile_flags(jsonb)']) f),
   false, 'service_role runs neither dispatch_push nor the client RPCs');
 
@@ -278,6 +310,10 @@ select is(array[public.is_known_tz('America/New_York'), public.is_known_tz('Etc/
                 public.is_known_tz('Mars/Olympus'), public.is_known_tz('posix/America/New_York'), public.is_known_tz('EST5EDT'), public.is_known_tz(null)],
   array[true, true, true, false, false, false, false, false], 'is_known_tz takes IANA names the server knows, nothing else');
 
+select is(public.push_sweep_signature(1790000000, 'rw-test-vector-key-0123456789abcdef'),
+  '1790000000.c1ba00cabb1bd464447aaa98eb43cd7fffaaee9cf3809292c15c696632ca752f',
+  'the sweep signature matches an independently computed HMAC-SHA256 test vector (the contract push-sender verifies)');
+
 -- catch-alls
 select is((select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relrowsecurity), 0, 'no table in public is missing RLS');
@@ -320,7 +356,7 @@ select set_config('request.jwt.claims', '', true);
 
 select is((select count(*)::int from public.inbox where user_id = 'b7000000-0000-4000-8000-000000000001' and type = 'trip_summary'), 4,
   'four summary rows: the scored drive (once, despite the replay), both role-unknown drives and the one just ended');
-select is((select row(i.push_state, i.push_reason, i.ref_id = t.id, i.dedupe_key = 'trip_summary:' || t.id, i.deliver_after = now())::text
+select is((select row(i.push_state, i.push_reason, i.ref_id = t.id, i.dedupe_key = 'trip_summary:' || t.id, i.deliver_after = now() and i.push_after = now())::text
     from public.inbox i join public.trips t on t.id = i.ref_id where t.client_trip_id = 'a-final'),
   row('skipped', 'local', true, true, true)::text, 'the summary row is born skipped/local, keyed to its trip, due at once (ended 30 min ago)');
 select is((select i.payload - 'startedAt' - 'endedAt' from public.inbox i join public.trips t on t.id = i.ref_id where t.client_trip_id = 'a-final'),
@@ -337,8 +373,8 @@ select is((select array_agg(row(i.payload ->> 'status', i.payload -> 'roleUnknow
 select is((select count(*)::int from public.inbox i join public.trips t on t.id = i.ref_id
     where t.client_trip_id in ('a-discarded', 'a-short', 'a-short-unknown')), 0,
   'no row for a discarded drive, a too-short drive, or a short drive of unknown role (ruling I9)');
-select is((select i.deliver_after - t.ended_at from public.inbox i join public.trips t on t.id = i.ref_id where t.client_trip_id = 'a-just-ended'),
-  interval '2 minutes', 'a drive that ended just now is due two minutes after its end');
+select is((select row(i.deliver_after - t.ended_at, i.push_after = i.deliver_after)::text from public.inbox i join public.trips t on t.id = i.ref_id where t.client_trip_id = 'a-just-ended'),
+  row(interval '2 minutes', true)::text, 'a drive that ended just now is due two minutes after its end');
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
@@ -437,90 +473,124 @@ select is((select count(*)::int from public.push_registrations where user_id = '
 insert into public.devices (id, user_id, platform) values ('b-phone', 'b7000000-0000-4000-8000-000000000002', 'android');
 
 -- ---------------------------------------------------------------------------
--- 5. drive state
+-- 5. drive state (security M-1: drive_state_at is the server's, on every insert and update)
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
 select lives_ok($$ update public.devices set drive_state = 'recording', drive_state_at = '2000-01-01' where id = 'a-phone' $$, 'A reports recording');
+select lives_ok($$ update public.devices set drive_state_at = now() + interval '10 years' where id = 'a-tablet' $$, 'A writes a future drive_state_at alone');
+select lives_ok($$ update public.devices set drive_state_at = now() + interval '10 years' where id = 'a-phone' $$, 'and on the recording phone');
 reset role;
 select set_config('request.jwt.claims', '', true);
 select is((select row(drive_state, drive_state_at)::text from public.devices where id = 'a-phone'), row('recording', now())::text,
-  'the server stamps drive_state_at; the phone''s clock is ignored');
+  'the server stamps drive_state_at when drive_state is written; the phone''s value is ignored');
+select is((select array_agg(row(id, drive_state, drive_state_at = now())::text order by id) from public.devices where user_id = 'b7000000-0000-4000-8000-000000000001'),
+  array[row('a-phone', 'recording', true)::text, row('a-tablet', 'idle', true)::text],
+  'a client write of drive_state_at alone never sticks, future-dated or not (security M-1)');
 
 -- ---------------------------------------------------------------------------
--- 6. permission lapses (updated_at set by hand, so each report is its own second)
+-- 6. permission lapses: one row per (user, device, kind, the user's local day) (security M-2). A's
+--    zone is pinned by a prefs row: Pago Pago (UTC-11), then Kiritimati (UTC+14), 25 h apart, so
+--    their local dates always differ.
 -- ---------------------------------------------------------------------------
+insert into public.notification_prefs (user_id, tz) values ('b7000000-0000-4000-8000-000000000001', 'Pacific/Pago_Pago');
+-- each report below is its own second where it matters (the touch trigger would stamp now() on all)
 alter table public.devices disable trigger devices_touch;
+create temp table lday as select (now() at time zone 'Pacific/Pago_Pago')::date::text as pago, (now() at time zone 'Pacific/Kiritimati')::date::text as kir;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
-update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '1 second' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}', updated_at = now() + interval '2 seconds' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}' where id = 'a-phone';
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select array_agg(row(push_state, push_reason, payload, dedupe_key)::text) from public.inbox where type = 'permission_lapsed' and dedupe_key like 'permission_lapsed:%'),
+select is((select array_agg(row(push_state, push_reason, payload, dedupe_key)::text) from public.inbox where dedupe_key like 'permission_lapsed:%'),
   array[row('pending', null::text, '{"permission":"location_always","platform":"ios","deviceId":"a-phone"}'::jsonb,
-    'permission_lapsed:a-phone:location_always:' || extract(epoch from now() + interval '2 seconds')::bigint)::text],
-  'Always -> While Using, reported from the background: one pending location_always row, facts only');
+    'permission_lapsed:a-phone:location_always:' || (select pago from lday))::text],
+  'Always -> While Using, reported from the background: one pending location_always row, facts only, keyed to the local day');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
-update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}', updated_at = now() + interval '3 seconds' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false,"checkedAt":"x"}' where id = 'a-phone';
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%'), 1, 'a replayed identical report adds nothing');
+select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%'), 1, 'a repeated report of the same state adds nothing');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
-update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '4 seconds' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
 reset role;
 select set_config('request.jwt.claims', '', true);
 select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%'), 1, 'an improvement adds nothing');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
-update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '5 seconds' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}', updated_at = now() + interval '5 seconds' where id = 'a-phone';
 update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '6 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"denied","motion":"granted","reportedFrom":"foreground","ack":true}', updated_at = now() + interval '7 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '8 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"denied","motion":"denied","reportedFrom":"background","ack":false}', updated_at = now() + interval '9 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}', updated_at = now() + interval '10 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"always","reportedFrom":"background","ack":false}', updated_at = now() + interval '11 seconds' where id = 'a-phone';
-update public.devices set permissions = '{"v":1,"location":"always","motion":"denied","reportedFrom":"background","ack":false}', updated_at = now() + interval '12 seconds' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}', updated_at = now() + interval '7 seconds' where id = 'a-phone';
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select array_agg(row(payload ->> 'permission', push_state, push_reason)::text order by split_part(dedupe_key, ':', 4)::bigint, dedupe_key) from public.inbox where dedupe_key like 'permission_lapsed:%'),
-  array[row('location_always', 'pending', null::text)::text, row('location_always', 'skipped', 'inbox_only')::text,
-        row('location', 'pending', null::text)::text, row('motion', 'pending', null::text)::text],
-  'a restore then a foreground lapse adds a second, inbox-only row; ack adds none; Always -> denied is one location row; motion granted -> denied is one row; a missing motion key is never a lapse');
-select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%:motion:%'), 1,
-  'motion unknown -> denied is not a lapse (only granted -> denied is)');
+select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%'), 1,
+  'restoring and lapsing again the same local day adds nothing: a flipping script gets one row a day per kind (security M-2)');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"denied","motion":"granted","reportedFrom":"foreground","ack":true}' where id = 'a-phone';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select count(*)::int from public.inbox where dedupe_key like 'permission_lapsed:%'), 1, 'ack: true records nothing');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"denied","motion":"denied","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+-- a-tablet: motion missing, then denied
+update public.devices set permissions = '{"v":1,"location":"always","reportedFrom":"foreground","ack":false}' where id = 'a-tablet';
+update public.devices set permissions = '{"v":1,"location":"always","motion":"denied","reportedFrom":"background","ack":false}' where id = 'a-tablet';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array_agg(row(payload ->> 'deviceId', payload ->> 'permission', push_state, push_reason)::text order by payload ->> 'deviceId', payload ->> 'permission')
+    from public.inbox where dedupe_key like 'permission_lapsed:%'),
+  array[row('a-phone', 'location', 'skipped', 'inbox_only')::text, row('a-phone', 'location_always', 'pending', null::text)::text,
+        row('a-phone', 'motion', 'skipped', 'inbox_only')::text],
+  'Always -> denied is one location row and motion granted -> denied one motion row, both inbox-only from the foreground; a missing motion key is never a lapse');
+
+-- the next local day: a new row for the same device and kind
+update public.notification_prefs set tz = 'Pacific/Kiritimati' where user_id = 'b7000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"v":1,"location":"always","motion":"granted","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"foreground","motion":"granted","reportedFrom":"background","ack":false}' where id = 'a-phone';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array_agg(split_part(dedupe_key, ':', 4) order by split_part(dedupe_key, ':', 4)) from public.inbox where dedupe_key like 'permission_lapsed:a-phone:location_always:%'),
+  array[(select pago from lday), (select kir from lday)], 'on another local day the same lapse is recorded again');
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000002"}', true);
-select is_empty($$ update public.devices set permissions = '{"location":"denied"}', updated_at = now() + interval '20 seconds'
+select is_empty($$ update public.devices set permissions = '{"location":"denied"}'
     where user_id = 'b7000000-0000-4000-8000-000000000001' returning id $$, 'B cannot touch A''s device, so cannot create a lapse for A');
 reset role;
 select set_config('request.jwt.claims', '', true);
-select throws_ok($$ update public.devices set permissions = '{"location":"denied"}', updated_at = now() + interval '21 seconds' where id = 'a-phone' $$,
+select throws_ok($$ update public.devices set permissions = '{"location":"denied"}' where id = 'a-phone' $$,
   '42501', 'enqueue_permission_lapse requires the device owner or the service role', 'a session with neither the owner''s JWT nor the service role is refused');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select lives_ok($$ update public.devices set permissions = '{"location":"always","motion":"denied"}', updated_at = now() + interval '22 seconds' where id = 'a-phone' $$,
-  'the service role can write permissions');
-select lives_ok($$ update public.devices set permissions = '{"location":"foreground","motion":"denied"}', updated_at = now() + interval '23 seconds' where id = 'a-phone' $$,
-  'and a lapse it reports');
+select lives_ok($$ update public.devices set permissions = '{"location":"foreground","motion":"denied"}' where id = 'a-tablet' $$,
+  'the service role reports a lapse');
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select row(push_state, push_reason)::text from public.inbox where dedupe_key = 'permission_lapsed:a-phone:location_always:' || extract(epoch from now() + interval '23 seconds')::bigint),
-  row('skipped', 'inbox_only')::text, 'is recorded on the service-role path too (no reportedFrom: inbox only)');
+select is((select row(push_state, push_reason)::text from public.inbox where dedupe_key = 'permission_lapsed:a-tablet:location_always:' || (select kir from lday)),
+  row('skipped', 'inbox_only')::text, 'it is recorded on the service-role path too (no reportedFrom: inbox only)');
 insert into public.devices (id, user_id, platform, permissions) values (repeat('x', 128), 'b7000000-0000-4000-8000-000000000001', 'android', '{"location":"always"}');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
-select lives_ok($$ update public.devices set permissions = '{"location":"foreground"}', updated_at = now() + interval '24 seconds' where id = repeat('x', 128) $$,
+select lives_ok($$ update public.devices set permissions = '{"location":"foreground"}' where id = repeat('x', 128) $$,
   'a lapse on a 128-character device id is recorded');
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select row(payload ->> 'deviceId' = repeat('x', 128), char_length(dedupe_key) <= 128)::text from public.inbox where dedupe_key like 'permission_lapsed:md5-%'),
-  row(true, true)::text, 'its dedupe key stays within 128 characters (hashed device id), the payload keeps the id');
+select is((select row(payload ->> 'deviceId' = repeat('x', 128), dedupe_key = 'permission_lapsed:md5-' || md5(repeat('x', 128)) || ':location_always:' || (select kir from lday))::text
+    from public.inbox where dedupe_key like 'permission_lapsed:md5-%'),
+  row(true, true)::text, 'its dedupe key hashes the device id (within 128 characters); the payload keeps the id');
 delete from public.devices where id = repeat('x', 128);
+delete from public.notification_prefs where user_id = 'b7000000-0000-4000-8000-000000000001';
 alter table public.devices enable trigger devices_touch;
+
 
 -- ---------------------------------------------------------------------------
 -- 7. notification_prefs
@@ -584,9 +654,11 @@ select set_config('request.jwt.claims', '', true);
 
 -- a clean slate: only this section's fixtures are pending
 update public.inbox set push_state = 'skipped', push_reason = 'inbox_only' where push_state in ('pending', 'deferred');
+alter table public.devices disable trigger devices_drive_state_at_pin;
 update public.devices set drive_state_at = now() - interval '5 hours' where id = 'a-phone';
 update public.devices set drive_state = 'recording' where id = 'a-tablet';
 update public.devices set drive_state_at = now() - interval '7 hours' where id = 'a-tablet';
+alter table public.devices enable trigger devices_drive_state_at_pin;
 update public.devices set push_token = 'ExponentPushToken[legacydevice1]' where id = 'a-phone';
 update public.notification_prefs set local_sent_day = (now() at time zone 'America/New_York')::date, local_sent_count = 2 where user_id = 'b7000000-0000-4000-8000-000000000001';
 insert into public.inbox (user_id, type, payload, dedupe_key, push_state, push_reason, pushed_at) values
@@ -641,7 +713,9 @@ select is((select count(distinct e -> 'ctx')::int from res, jsonb_array_elements
 -- prefs values replace the defaults; the phone count only counts on its own day; a prefs zone wins
 update public.notification_prefs set quiet_enabled = false, quiet_start = '23:15', tz = 'Europe/Paris' where user_id = 'b7000000-0000-4000-8000-000000000001';
 update public.notification_prefs set local_sent_day = (now() at time zone 'Europe/Paris')::date - 1 where user_id = 'b7000000-0000-4000-8000-000000000001';
+alter table public.devices disable trigger devices_drive_state_at_pin;
 update public.devices set drive_state_at = now() - interval '6 hours 1 minute' where id = 'a-phone';
+alter table public.devices enable trigger devices_drive_state_at_pin;
 insert into res (k, v) select 'i5', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'i5'));
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
@@ -676,9 +750,15 @@ insert into res (k, v) select 'j1', to_jsonb(pg_temp.pending('b7000000-0000-4000
 insert into res (k, v) select 'j2', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'j2'));
 insert into res (k, v) select 'j3', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000002', 'j3', 'b-phone'));
 insert into res (k, v) select 'j4', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'j4'));
+alter table public.devices disable trigger devices_drive_state_at_pin;
+update public.devices set drive_state_at = now() + interval '10 years' where id = 'a-tablet';
+alter table public.devices enable trigger devices_drive_state_at_pin;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select lives_ok($$ select public.claim_push_batch(100, 300) $$, 'j1-j4 are claimed');
+insert into res (k, v) values ('claim5', public.claim_push_batch(100, 300));
+select is((select jsonb_agg(distinct e -> 'ctx' -> 'driving_since') from res, jsonb_array_elements(v) e
+    where k = 'claim5' and e ->> 'user_id' = 'b7000000-0000-4000-8000-000000000001'), jsonb_build_array(now()),
+  'j1-j4 are claimed; a future drive_state_at is clamped to now() (security M-1)');
 select throws_ok($$ select public.record_push_outcomes(null) $$, '22023', 'outcomes must be an array of at most 500 items', 'a null envelope is refused');
 select throws_ok($$ select public.record_push_outcomes('{"outcomes":{}}') $$, '22023', 'outcomes must be an array of at most 500 items', 'outcomes must be an array');
 select throws_ok($$ select public.record_push_outcomes(jsonb_build_object('outcomes', (select jsonb_agg('{}'::jsonb) from generate_series(1, 501)))) $$,
@@ -690,10 +770,10 @@ select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"in
 select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"inbox_id":"%s","state":"skipped","reason":"bored"}]}') $$, (select v #>> '{}' from res where k = 'j1')),
   '22023', 'unknown outcome reason', 'an unknown reason is refused');
 select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"inbox_id":"%s","state":"deferred","reason":"driving"}]}') $$, (select v #>> '{}' from res where k = 'j1')),
-  '22023', 'deferred outcome needs deliver_after within 7 days', 'a deferral needs a time');
-select throws_ok(format($$ select public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(jsonb_build_object('inbox_id', '%s', 'state', 'deferred', 'reason', 'window', 'deliver_after', now() + interval '7 days 1 minute')))) $$,
+  '22023', 'deferred outcome needs push_after within 7 days', 'a deferral needs a time');
+select throws_ok(format($$ select public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(jsonb_build_object('inbox_id', '%s', 'state', 'deferred', 'reason', 'window', 'push_after', now() + interval '7 days 1 minute')))) $$,
     (select v #>> '{}' from res where k = 'j1')),
-  '22023', 'deferred outcome needs deliver_after within 7 days', 'a deferral past 7 days is refused');
+  '22023', 'deferred outcome needs push_after within 7 days', 'a deferral past 7 days is refused');
 select throws_ok(format($$ select public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(jsonb_build_object('inbox_id', '%s', 'state', 'sent', 'reason', 'ok',
     'deliveries', (select jsonb_agg('{}'::jsonb) from generate_series(1, 11)))))) $$, (select v #>> '{}' from res where k = 'j1')),
   '22023', 'deliveries must be an array of at most 10 items', 'eleven deliveries are refused');
@@ -708,7 +788,7 @@ select is(public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build
     jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j1'), 'state', 'sent', 'reason', 'ok', 'deliveries', jsonb_build_array(
       jsonb_build_object('token', 'ExponentPushToken[aaaaaaaaaaaa3]', 'ticket_id', 'ticket-1'),
       jsonb_build_object('token', 'ExponentPushToken[deadtoken0001]', 'error', 'DeviceNotRegistered'))),
-    jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j2'), 'state', 'deferred', 'reason', 'driving', 'deliver_after', now() + interval '5 minutes'),
+    jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j2'), 'state', 'deferred', 'reason', 'driving', 'push_after', now() + interval '5 minutes'),
     jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j3'), 'state', 'skipped', 'reason', 'local'),
     jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j4'), 'state', 'failed', 'reason', 'expo_error')))), 4,
   'four outcomes are applied');
@@ -716,11 +796,21 @@ select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"in
   '22023', 'outcome for an unclaimed item', 'a replayed outcome is refused (the row is settled)');
 reset role;
 select set_config('request.jwt.claims', '', true);
-select is((select array_agg(row(dedupe_key, push_state, push_reason, pushed_at = now(), deliver_after = now() + interval '5 minutes')::text order by dedupe_key)
+select is((select array_agg(row(dedupe_key, push_state, push_reason, pushed_at = now(), push_after = now() + interval '5 minutes',
+      deliver_after = now() - interval '1 minute')::text order by dedupe_key)
     from public.inbox where dedupe_key in ('j1', 'j2', 'j3', 'j4')),
-  array[row('j1', 'sent', 'ok', true, false)::text, row('j2', 'deferred', 'driving', null::boolean, true)::text,
-        row('j3', 'skipped', 'local', null::boolean, false)::text, row('j4', 'failed', 'expo_error', null::boolean, false)::text],
-  'sent stamps pushed_at; deferred moves deliver_after; skipped local and failed are recorded');
+  array[row('j1', 'sent', 'ok', true, false, true)::text, row('j2', 'deferred', 'driving', null::boolean, true, true)::text,
+        row('j3', 'skipped', 'local', null::boolean, false, true)::text, row('j4', 'failed', 'expo_error', null::boolean, false, true)::text],
+  'sent stamps pushed_at; deferred moves push_after only (deliver_after never moves); skipped local and failed are recorded');
+-- ruling T2 I1: a deferred push never hides the row
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+select is((select count(*)::int from public.inbox where id = (select (v #>> '{}')::uuid from res where k = 'j2')), 1,
+  'a deferred row stays visible to its owner (ruling T2 I1)');
+select is(public.mark_inbox_read(array[(select (v #>> '{}')::uuid from res where k = 'j2')]), 1, 'and can be marked read');
+select is(public.dismiss_inbox(array[(select (v #>> '{}')::uuid from res where k = 'j2')]), 1, 'and dismissed');
+reset role;
+select set_config('request.jwt.claims', '', true);
 select is((select array_agg(row(token, ticket_id, error)::text order by ticket_id nulls last) from public.push_deliveries
     where inbox_id = (select (v #>> '{}')::uuid from res where k = 'j1')),
   array[row('ExponentPushToken[aaaaaaaaaaaa3]', 'ticket-1', null::text)::text, row(null::text, null::text, 'DeviceNotRegistered')::text],
@@ -785,7 +875,9 @@ select set_config('request.jwt.claims', '', true);
 select is(public.dispatch_push(), 'unconfigured', 'no vault secrets: unconfigured');
 select vault.create_secret('http://push-sender.test/functions/v1/push-sender', 'push_sender_url');
 select is(public.dispatch_push(), 'unconfigured', 'a URL without a key: still unconfigured');
-select vault.create_secret('test-push-sender-key-0007', 'push_sender_key');
+select vault.create_secret('too-short-key', 'push_sender_hmac_key');
+select is(public.dispatch_push(), 'unconfigured', 'a key shorter than 32 bytes: still unconfigured');
+select vault.update_secret((select id from vault.secrets where name = 'push_sender_hmac_key'), 'hmac-0007-9f1c2e7d4b8a6f3e5d2c1b0a99887766');
 update public.inbox set push_state = 'skipped', push_reason = 'inbox_only' where push_state in ('pending', 'deferred', 'sending');
 update public.push_deliveries set receipt_status = 'ok' where receipt_status is null;
 select is(public.dispatch_push(), 'idle', 'nothing due and no receipt owed: idle');
@@ -797,8 +889,12 @@ select pg_temp.pending('b7000000-0000-4000-8000-000000000002', 'k1', 'b-phone');
 select is(public.dispatch_push(), 'dispatched', 'a due item dispatches');
 select is((select array_agg(row(method, url, headers, convert_from(body, 'UTF8')::jsonb, timeout_milliseconds)::text) from net.http_request_queue where id > (select id from q0)),
   array_fill(row('POST', 'http://push-sender.test/functions/v1/push-sender',
-    '{"Authorization":"Bearer test-push-sender-key-0007","Content-Type":"application/json"}'::jsonb, '{"reason":"sweep"}'::jsonb, 10000)::text, array[2]),
-  'each dispatch queues one POST to the vault URL with the bearer key, a sweep body and a 10 s timeout');
+    jsonb_build_object('Content-Type', 'application/json', 'X-Sweep-Signature',
+      floor(extract(epoch from now()))::bigint::text || '.' || encode(extensions.hmac('push-sender-sweep:' || floor(extract(epoch from now()))::bigint::text,
+        'hmac-0007-9f1c2e7d4b8a6f3e5d2c1b0a99887766', 'sha256'), 'hex')), '{"reason":"sweep"}'::jsonb, 10000)::text, array[2]),
+  'each dispatch queues one POST to the vault URL with a timestamped HMAC signature (no key, no Authorization), a sweep body and a 10 s timeout');
+select is(pg_temp.tables_containing('hmac-0007-9f1c2e7d4b8a6f3e5d2c1b0a99887766'), '{}'::text[],
+  'the key appears in no table outside Vault (the request queue and the cron log included)');
 update public.inbox set push_state = 'sending', push_claimed_at = now() - interval '61 minutes' where dedupe_key = 'k1';
 select is(public.dispatch_push(), 'dispatched', 'a sending row past the longest lease dispatches (so the claim can fail it)');
 update public.inbox set push_claimed_at = now() - interval '59 minutes' where dedupe_key = 'k1';

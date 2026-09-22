@@ -20,8 +20,11 @@
 --     phone's count of non-family notifications it showed on its local day (rev1: C1), the device
 --     half of the §11.1 daily cap. A non-definer validation trigger raises fixed 22023 messages.
 --   * public.inbox (#1, #4, #10, #11): notification history. Facts, never strings: the copy is
---     rendered from current state by the app (ruling I9). The client reads its own rows once due
---     (deliver_after <= now()); only pushed_at among the push_* columns is readable (rev1: C1: the
+--     rendered from current state by the app (ruling I9). Two times (ruling T2 I1): deliver_after is
+--     set once at insert and is ONLY the inbox visibility gate (the policy, mark_inbox_read,
+--     dismiss_inbox); push_after is when push-sender may next consider the row (the claim, the due
+--     index, dispatch_push's probe, every deferral), so deferring a push never hides a row the
+--     driver can already see. Only pushed_at among the push_* columns is readable (rev1: C1: the
 --     phone counts the server's half of the day's cap). No client writes: read/dismiss go through
 --     definer RPCs.
 --   * public.push_registrations (#1, #9, #10, #11): Expo push tokens, keyed by the token itself. A
@@ -32,8 +35,9 @@
 --   * public.push_deliveries (#10, #11): one row per Expo ticket; server only (RLS on, no policies,
 --     no client grants).
 --   * public.devices.drive_state / drive_state_at: the phone reports `recording` and `idle`;
---     drive_state_at is stamped by the server whenever drive_state is written (a phone clock never
---     decides how long "driving" lasts), and a claim reads `recording` as driving for 6 h at most.
+--     drive_state_at is the server's time drive_state was last written, whatever the client sends
+--     (security M-1: a client value of drive_state_at is ignored on every insert and update), and a
+--     claim reads `recording` as driving for 6 h at most, clamped to now().
 --   * producers (#7), `on conflict (user_id, dedupe_key) do nothing`, payloads only from
 --     CHECK-constrained columns:
 --       - enqueue_trip_summary (non-definer; fires as postgres inside apply_trip): the drive-summary
@@ -49,6 +53,7 @@
 --         always -> foreground = location_always; always|foreground -> denied = location; motion
 --         granted -> denied = motion; a missing key is unknown, never a lapse); none when the phone
 --         says `ack: true`; pending only when `reportedFrom: 'background'`, else skipped/inbox_only.
+--         At most one row per (user, device, kind, the user's local day) (security M-2).
 --         Trigger adaptation of #5: runs only for the device owner's JWT or the service role.
 --   * public.minimise_underage_notifications() (non-definer trigger beside 0006's
 --     minimise_underage_account, same event): a blocked child's deliveries, inbox, registrations
@@ -59,7 +64,10 @@
 --   * service-role writers (security rule 12; definer, require_service_role first):
 --     claim_push_batch, record_push_outcomes, push_receipts_due, record_push_receipts.
 --   * public.dispatch_push() (non-definer, pg_cron as postgres, no API role may execute it) and two
---     cron jobs: `push-sender-sweep` every minute, `cron-log-purge` daily at 03:30.
+--     cron jobs: `push-sender-sweep` every minute, `cron-log-purge` daily at 03:30. The request
+--     carries no key: an HMAC-SHA256 over a timestamp, keyed by the vault secret
+--     push_sender_hmac_key (ruling T2 concern 1, condition 4), so no secret ever sits in
+--     net.http_request_queue.
 --   * user_local_date (0006) is replaced with the same signature to read public.user_tz, which
 --     prefers notification_prefs.tz over the latest drive's zone (T1 report §2).
 --   * app_config `notification_defaults`, `on conflict do nothing` (security rule 4).
@@ -120,7 +128,10 @@ create table public.inbox (
   -- the subject (trips.id for a summary); not a FK: a deleted subject is a fact push-sender reads
   ref_id uuid null,
   dedupe_key text not null check (char_length(dedupe_key) between 1 and 128),
+  -- the inbox visibility gate only: set once at insert, never moved
   deliver_after timestamptz not null default now(),
+  -- when push-sender may next consider the row: the claim and every deferral
+  push_after timestamptz not null default now(),
   read_at timestamptz null,
   dismissed_at timestamptz null,
   push_state text not null default 'pending'
@@ -136,7 +147,7 @@ create table public.inbox (
 -- the owner's list (and the auth.users cascade)
 create index inbox_user_created_idx on public.inbox (user_id, created_at desc);
 -- the claim's due scan
-create index inbox_due_idx on public.inbox (deliver_after) where push_state in ('pending', 'deferred');
+create index inbox_due_idx on public.inbox (push_after) where push_state in ('pending', 'deferred');
 -- the lease expiry scan
 create index inbox_sending_idx on public.inbox (push_claimed_at) where push_state = 'sending';
 -- ctx.recent and the phone's count of today's server pushes
@@ -278,13 +289,25 @@ alter table public.devices
 comment on column public.devices.push_token is
   'Legacy (0001). Read by no server path: push tokens live in public.push_registrations (0007).';
 
--- whenever drive_state is written, the server stamps when (the phone's clock never decides)
+-- drive_state_at is the server's (security M-1). Two BEFORE triggers, which fire in name order:
+--   devices_drive_state_at_pin (every update): a client value is discarded, the stored one kept;
+--   devices_drive_state_stamp (insert, or an update whose SET list names drive_state, including a
+--     re-sent `recording`): now().
+-- So drive_state_at is always the server time drive_state was last written.
+create or replace function public.pin_drive_state_at() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  new.drive_state_at := old.drive_state_at;
+  return new;
+end $$;
 create or replace function public.stamp_drive_state() returns trigger
 language plpgsql set search_path = public as $$
 begin
   new.drive_state_at := now();
   return new;
 end $$;
+create trigger devices_drive_state_at_pin before update on public.devices
+  for each row execute function public.pin_drive_state_at();
 create trigger devices_drive_state_stamp before insert or update of drive_state on public.devices
   for each row execute function public.stamp_drive_state();
 
@@ -296,7 +319,7 @@ create trigger devices_drive_state_stamp before insert or update of drive_state 
 create or replace function public.enqueue_trip_summary() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  insert into public.inbox (user_id, type, payload, ref_id, dedupe_key, deliver_after, push_state, push_reason)
+  insert into public.inbox (user_id, type, payload, ref_id, dedupe_key, deliver_after, push_after, push_state, push_reason)
   values (
     new.user_id, 'trip_summary',
     jsonb_build_object(
@@ -309,6 +332,7 @@ begin
       -- ruling T4 r1: the scoring gate re-run with role 'driver' (not short, not grade C)
       'scorableIfDriver', not public.is_short_drive(new.distance_m, new.duration_s) and new.data_quality <> 'C'),
     new.id, 'trip_summary:' || new.id,
+    greatest(now(), new.ended_at + interval '2 minutes'),
     greatest(now(), new.ended_at + interval '2 minutes'),
     'skipped', 'local')
   on conflict (user_id, dedupe_key) do nothing;
@@ -331,6 +355,7 @@ declare
   v_kind text;
   v_background boolean;
   v_device_key text;
+  v_day text;
 begin
   -- #5 adapted for a trigger: the device owner's own JWT, or the service role
   if not (coalesce(new.user_id = auth.uid(), false) or coalesce(auth.role() = 'service_role', false)) then
@@ -353,14 +378,17 @@ begin
     return null;
   end if;
   v_background := v_new ->> 'reportedFrom' = 'background';
-  -- the dedupe key stays within 128 characters for any device id (ids over 64 characters are hashed)
+  -- one row per (user, device, kind, the user's local day) (security M-2): a script flipping a
+  -- permission creates at most one row a day per kind per device. The key stays within 128
+  -- characters for any device id (ids over 64 characters are hashed).
   v_device_key := case when char_length(new.id) <= 64 then new.id else 'md5-' || md5(new.id) end;
+  v_day := public.user_local_date(new.user_id)::text;
   foreach v_kind in array v_kinds loop
     insert into public.inbox (user_id, type, payload, dedupe_key, push_state, push_reason)
     values (
       new.user_id, 'permission_lapsed',
       jsonb_build_object('permission', v_kind, 'platform', new.platform, 'deviceId', new.id),
-      'permission_lapsed:' || v_device_key || ':' || v_kind || ':' || extract(epoch from new.updated_at)::bigint,
+      'permission_lapsed:' || v_device_key || ':' || v_kind || ':' || v_day,
       case when v_background then 'pending' else 'skipped' end,
       case when v_background then null else 'inbox_only' end)
     on conflict (user_id, dedupe_key) do nothing;
@@ -551,7 +579,7 @@ $$;
 -- claim_push_batch(p_limit 1..500, p_lease_seconds 30..3600) returns jsonb:
 --   first marks every `sending` row whose lease has run out `failed / lease_expired` (at most once:
 --   a push that may have gone out is never sent twice); then claims up to p_limit due
---   pending/deferred rows (deliver_after <= now(), oldest first, for update skip locked), sets them
+--   pending/deferred rows (push_after <= now(), oldest push_after first, for update skip locked), sets them
 --   `sending` (push_claimed_at = now(), push_attempts + 1) and returns, oldest first:
 --   [{ inbox_id: uuid, user_id: uuid, type: text, payload: object, created_at: timestamptz,
 --      read: boolean, dismissed: boolean, subject_gone: boolean, ctx }]
@@ -563,7 +591,7 @@ $$;
 --                                    start = end means off
 --     categories: object             prefs.categories ({} when no row); a missing key is on
 --     driving_since: timestamptz|null the newest drive_state_at of a device in `recording` within
---                                    the last 6 h
+--                                    the last 6 h, clamped to now() (security M-1)
 --     recent: [{ type, pushed_at }]  up to 50 of the user's `sent` rows from the last 8 days,
 --                                    newest first
 --     local_sent_today: int          prefs.local_sent_count when local_sent_day is today in tz, else 0
@@ -590,15 +618,15 @@ begin
 
   with due as (
     select i.id from public.inbox i
-    where i.push_state in ('pending', 'deferred') and i.deliver_after <= now()
-    order by i.deliver_after, i.id
+    where i.push_state in ('pending', 'deferred') and i.push_after <= now()
+    order by i.push_after, i.id
     limit p_limit
     for update skip locked
   ), claimed as (
     update public.inbox i
       set push_state = 'sending', push_claimed_at = now(), push_attempts = i.push_attempts + 1
       from due where i.id = due.id
-      returning i.id, i.user_id, i.type, i.payload, i.ref_id, i.created_at, i.deliver_after, i.read_at, i.dismissed_at
+      returning i.id, i.user_id, i.type, i.payload, i.ref_id, i.created_at, i.push_after, i.read_at, i.dismissed_at
   ), base as (
     select u.user_id, p.categories, p.quiet_enabled, p.quiet_start, p.quiet_end, p.local_sent_day, p.local_sent_count,
       coalesce(public.user_tz(u.user_id), v_defaults ->> 'tz') as tz
@@ -612,7 +640,8 @@ begin
         'start', coalesce(left(b.quiet_start::text, 5), v_defaults ->> 'quiet_start'),
         'end', coalesce(left(b.quiet_end::text, 5), v_defaults ->> 'quiet_end')),
       'categories', coalesce(b.categories, '{}'::jsonb),
-      'driving_since', (select max(d.drive_state_at) from public.devices d
+      'driving_since', (select case when max(d.drive_state_at) is null then null else least(max(d.drive_state_at), now()) end
+                        from public.devices d
                         where d.user_id = b.user_id and d.drive_state = 'recording'
                           and d.drive_state_at > now() - interval '6 hours'),
       'recent', (select coalesce(jsonb_agg(jsonb_build_object('type', r.type, 'pushed_at', r.pushed_at) order by r.pushed_at desc), '[]'::jsonb)
@@ -630,15 +659,15 @@ begin
       'inbox_id', c.id, 'user_id', c.user_id, 'type', c.type, 'payload', c.payload, 'created_at', c.created_at,
       'read', c.read_at is not null, 'dismissed', c.dismissed_at is not null,
       'subject_gone', public.inbox_subject_gone(c.user_id, c.type, c.ref_id, c.payload),
-      'ctx', x.ctx) order by c.deliver_after, c.id), '[]'::jsonb)
+      'ctx', x.ctx) order by c.push_after, c.id), '[]'::jsonb)
     into v_out
   from claimed c join ctx x on x.user_id = c.user_id;
   return v_out;
 end $$;
 
--- record_push_outcomes({ outcomes: [{ inbox_id, state, reason, deliver_after?, deliveries? }] }) returns int
+-- record_push_outcomes({ outcomes: [{ inbox_id, state, reason, push_after?, deliveries? }] }) returns int
 --   at most 500 outcomes; state sent | deferred | skipped | failed; reason from the fixed list;
---   deferred needs deliver_after <= now() + 7 days; every inbox_id must be `sending` (claimed and not
+--   deferred needs push_after <= now() + 7 days (it moves push_after only: the row stays visible); every inbox_id must be `sending` (claimed and not
 --   yet settled) or the whole call is refused; deliveries (<= 10 per item) are
 --   { token?, ticket_id?, error? }, one push_deliveries row each (the token is linked only while it
 --   is still registered to the item's user); error DeviceNotRegistered deletes that registration.
@@ -688,15 +717,15 @@ begin
     end if;
     v_after := null;
     if v_state = 'deferred' then
-      if jsonb_typeof(v_o -> 'deliver_after') = 'string' then
+      if jsonb_typeof(v_o -> 'push_after') = 'string' then
         begin
-          v_after := (v_o ->> 'deliver_after')::timestamptz;
+          v_after := (v_o ->> 'push_after')::timestamptz;
         exception when others then
           v_after := null;
         end;
       end if;
       if v_after is null or v_after > now() + interval '7 days' then
-        raise exception 'deferred outcome needs deliver_after within 7 days' using errcode = 'invalid_parameter_value';
+        raise exception 'deferred outcome needs push_after within 7 days' using errcode = 'invalid_parameter_value';
       end if;
     end if;
     if v_o ? 'deliveries' and jsonb_typeof(v_o -> 'deliveries') <> 'null'
@@ -713,7 +742,7 @@ begin
       push_state = v_state,
       push_reason = v_reason,
       pushed_at = case when v_state = 'sent' then now() else pushed_at end,
-      deliver_after = case when v_state = 'deferred' then v_after else deliver_after end
+      push_after = case when v_state = 'deferred' then v_after else push_after end
     where id = v_id;
 
     if jsonb_typeof(v_o -> 'deliveries') = 'array' then
@@ -834,13 +863,25 @@ end $$;
 -- the sweep: pg_cron -> dispatch_push -> pg_net -> push-sender
 -- ---------------------------------------------------------------------------
 -- Non-definer, run by pg_cron as postgres; no API role may execute it. Reads the vault secrets
--- push_sender_url and push_sender_key (never logged or returned). Returns:
---   'unconfigured' either secret is missing or empty;
---   'idle'         no due inbox row (pending/deferred and due, or a `sending` row past the longest
---                  lease, 1 h) and no due receipt (the 24-h expiry in push_receipts_due guarantees
---                  receipts drain);
---   'dispatched'   one net.http_post to push-sender: Authorization Bearer <key>, body
---                  {"reason":"sweep"}, timeout 10 s.
+-- push_sender_url and push_sender_hmac_key (a dedicated random secret of at least 32 bytes, never the
+-- service-role key or the JWT secret; push-sender holds the same value as a function secret). The key
+-- itself is never sent, logged or returned (ruling T2 concern 1, condition 4). Returns:
+--   'unconfigured' the URL is missing or empty, or the key is missing or shorter than 32 bytes;
+--   'idle'         no due inbox row (pending/deferred with push_after <= now(), or a `sending` row
+--                  past the longest lease, 1 h) and no due receipt (the 24-h expiry in
+--                  push_receipts_due guarantees receipts drain);
+--   'dispatched'   one net.http_post to push-sender, body {"reason":"sweep"}, timeout 10 s, headers
+--                    Content-Type: application/json
+--                    X-Sweep-Signature: <ts>.<sig>
+--                  where <ts> = the unix time in whole seconds (decimal, no sign, no padding) and
+--                  <sig> = lower-case hex of HMAC-SHA256(key = the UTF-8 bytes of push_sender_hmac_key,
+--                  message = the UTF-8 bytes of 'push-sender-sweep:' || <ts>). push-sender verifies it
+--                  in constant time and accepts |now - ts| <= 120 s.
+create or replace function public.push_sweep_signature(p_ts bigint, p_key text) returns text
+language sql immutable set search_path = public as $$
+  select p_ts::text || '.' || encode(extensions.hmac('push-sender-sweep:' || p_ts::text, p_key, 'sha256'), 'hex')
+$$;
+
 create or replace function public.dispatch_push() returns text
 language plpgsql set search_path = public as $$
 declare
@@ -848,11 +889,11 @@ declare
   v_key text;
 begin
   select s.decrypted_secret into v_url from vault.decrypted_secrets s where s.name = 'push_sender_url';
-  select s.decrypted_secret into v_key from vault.decrypted_secrets s where s.name = 'push_sender_key';
-  if coalesce(v_url, '') = '' or coalesce(v_key, '') = '' then
+  select s.decrypted_secret into v_key from vault.decrypted_secrets s where s.name = 'push_sender_hmac_key';
+  if coalesce(v_url, '') = '' or octet_length(coalesce(v_key, '')) < 32 then
     return 'unconfigured';
   end if;
-  if not exists (select 1 from public.inbox i where i.push_state in ('pending', 'deferred') and i.deliver_after <= now())
+  if not exists (select 1 from public.inbox i where i.push_state in ('pending', 'deferred') and i.push_after <= now())
      and not exists (select 1 from public.inbox i where i.push_state = 'sending' and i.push_claimed_at < now() - interval '1 hour')
      and not exists (select 1 from public.push_deliveries d
                      where d.ticket_id is not null and d.receipt_status is null
@@ -863,7 +904,8 @@ begin
   perform net.http_post(
     url := v_url,
     body := '{"reason":"sweep"}'::jsonb,
-    headers := jsonb_build_object('Authorization', 'Bearer ' || v_key, 'Content-Type', 'application/json'),
+    headers := jsonb_build_object('Content-Type', 'application/json',
+      'X-Sweep-Signature', public.push_sweep_signature(floor(extract(epoch from now()))::bigint, v_key)),
     timeout_milliseconds := 10000);
   return 'dispatched';
 end $$;
@@ -917,6 +959,8 @@ revoke all on function public.notification_prefs_validate() from public, anon, a
 revoke all on function public.user_tz(uuid) from public, anon, authenticated;
 revoke all on function public.notification_defaults() from public, anon, authenticated;
 revoke all on function public.stamp_drive_state() from public, anon, authenticated;
+revoke all on function public.pin_drive_state_at() from public, anon, authenticated;
+revoke all on function public.push_sweep_signature(bigint, text) from public, anon, authenticated, service_role;
 revoke all on function public.enqueue_trip_summary() from public, anon, authenticated;
 revoke all on function public.enqueue_permission_lapse() from public, anon, authenticated;
 revoke all on function public.minimise_underage_notifications() from public, anon, authenticated;
