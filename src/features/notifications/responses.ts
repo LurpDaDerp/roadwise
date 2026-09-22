@@ -105,8 +105,48 @@ export interface ResponseDeps {
   onTripChanged?(clientTripId: string): void | Promise<void>;
   /** Removes the answered notification from the tray. */
   dismiss?(identifier: string): Promise<void>;
+  /** After a pushed notice's inbox row is marked read here, so the bell and the list refresh. */
+  onInboxChanged?(): void | Promise<void>;
   now?(): number;
   onError?(e: unknown, ctx: string): void;
+}
+
+/** A pushed notice names its inbox row (push-sender's `data.inboxId`, a uuid). */
+const INBOX_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function inboxIdOf(response: Notifications.NotificationResponse): string | null {
+  const data: unknown = response.notification.request.content.data;
+  if (!isRecord(data)) return null;
+  const id = data.inboxId;
+  return typeof id === 'string' && INBOX_ID.test(id) ? id : null;
+}
+
+/**
+ * Opening a pushed notice reads it (T6 carry, Task 18): its row is marked read on the phone and
+ * queued for the server, as a tap in the inbox would. Loaded on first use: the inbox cache's
+ * module brings the app client with it, which a local notification's tap never needs.
+ */
+async function markInboxRowRead(
+  response: Notifications.NotificationResponse,
+  deps: ResponseDeps,
+  now: number
+): Promise<void> {
+  const inboxId = inboxIdOf(response);
+  if (inboxId === null) return;
+  const report = deps.onError ?? (() => {});
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: see above
+    const { queueInboxRead } = require('@/features/inbox/cache') as typeof import('@/features/inbox/cache');
+    await queueInboxRead(deps.db, [inboxId], now);
+  } catch (e) {
+    report(e, 'notifications.inboxRead');
+    return;
+  }
+  try {
+    await deps.onInboxChanged?.();
+  } catch (e) {
+    report(e, 'notifications.inbox');
+  }
 }
 
 export type RoleOutcome = 'applied' | 'missing-trip' | 'failed';
@@ -172,6 +212,8 @@ export async function handleResponse(
   if (route.role !== undefined && route.clientTripId !== undefined) {
     role = await applyRole(response, route.clientTripId, route.role, deps, now);
   }
+
+  await markInboxRowRead(response, deps, now);
 
   if (route.clientTripId !== undefined) {
     await recordOpenedTrip(deps.db, route.clientTripId).catch((e: unknown) =>

@@ -12,6 +12,7 @@ import { createTestDb, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { T0 } from '@/data/queries/__fixtures__/rows';
 import { NotificationsHost } from '@/features/notifications/NotificationsHost';
 import { PENDING_HREF_KEY } from '@/features/notifications/responses';
+import { PENDING_READ_KEY } from '@/features/inbox/cache';
 import { INBOX_QUERY_KEY } from '@/notifications/keys';
 
 type Listener<T> = (e: T) => void;
@@ -21,6 +22,8 @@ const mockReceivedListeners = new Set<Listener<unknown>>();
 let mockLastResponse: unknown = null;
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+// The inbox cache's module imports the app client; nothing here reaches the server.
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 jest.mock('expo-notifications', () => ({
   DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
@@ -49,7 +52,11 @@ const response = (url: string, identifier = 'n1', actionIdentifier = DEFAULT) =>
   actionIdentifier,
   notification: {
     date: 1,
-    request: { identifier, content: { title: 't', body: 'b', data: { url } }, trigger: null },
+    request: {
+      identifier,
+      content: { title: 't', body: 'b', data: { url } as Record<string, unknown> },
+      trigger: null,
+    },
   },
 });
 
@@ -155,6 +162,20 @@ test('a notification received in the foreground refreshes the inbox', async () =
   await act(async () => {
     for (const l of mockReceivedListeners) l({});
   });
+  expect(spy).toHaveBeenCalledWith({ queryKey: INBOX_QUERY_KEY });
+});
+
+test('a tapped push marks its inbox row read and refreshes the inbox (T6 carry)', async () => {
+  const { client } = await mount();
+  const spy = jest.spyOn(client, 'invalidateQueries');
+  const inboxId = '3f1c2a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69';
+  const r = response('/permissions', 'push-1');
+  (r.notification.request.content.data as Record<string, unknown>).inboxId = inboxId;
+  await act(async () => {
+    for (const l of mockResponseListeners) l(r);
+  });
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/permissions'));
+  expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([inboxId]);
   expect(spy).toHaveBeenCalledWith({ queryKey: INBOX_QUERY_KEY });
 });
 

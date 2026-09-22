@@ -16,8 +16,11 @@ import {
   routeForResponse,
   type ResponseDeps,
 } from '@/features/notifications/responses';
+import { PENDING_READ_KEY } from '@/features/inbox/cache';
 import { OPENED_TRIPS_KEY } from '@/notifications/keys';
 
+// The inbox cache's module imports the app client; nothing here reaches the server.
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('expo-notifications', () => ({
   DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
 }));
@@ -238,6 +241,63 @@ describe('handleResponse', () => {
     expect(await replayPendingHref(deps())).toEqual({ kind: 'expired' });
     expect(navigate).not.toHaveBeenCalled();
     expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).toBeNull();
+  });
+
+  describe("a pushed notice's data.inboxId (T6 carry)", () => {
+    const INBOX_ID = '3f1c2a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69';
+
+    test('a tap queues its inbox row as read and says the inbox changed', async () => {
+      const onInboxChanged = jest.fn();
+      await handleResponse(
+        response({ url: '/permissions', inboxId: INBOX_ID }),
+        deps({ onInboxChanged })
+      );
+      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([INBOX_ID]);
+      expect(onInboxChanged).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith('/permissions');
+    });
+
+    test('a tap held during a drive still marks it read', async () => {
+      busy = true;
+      await handleResponse(response({ url: '/permissions', inboxId: INBOX_ID }), deps());
+      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([INBOX_ID]);
+    });
+
+    test.each([
+      ['not a uuid', 'abc'],
+      ['a number', 7],
+      ['a uuid with more after it', `${INBOX_ID}x`],
+    ])('an inboxId that is %s queues nothing', async (_label, inboxId) => {
+      const onInboxChanged = jest.fn();
+      await handleResponse(response({ url: '/permissions', inboxId }), deps({ onInboxChanged }));
+      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toBeNull();
+      expect(onInboxChanged).not.toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith('/permissions');
+    });
+
+    test('a dismissal marks nothing read', async () => {
+      await handleResponse(
+        response({ url: '/permissions', inboxId: INBOX_ID }, 'com.apple.UNNotificationDismissActionIdentifier'),
+        deps()
+      );
+      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toBeNull();
+    });
+
+    test('a failed read write is reported, and the tap still opens its route', async () => {
+      const failing: Db = {
+        execute: async (sql, params) => {
+          if (JSON.stringify(params ?? []).includes(PENDING_READ_KEY)) throw new Error('disk');
+          return db.execute(sql, params);
+        },
+        transaction: (fn) => db.transaction(fn),
+      };
+      await handleResponse(
+        response({ url: '/permissions', inboxId: INBOX_ID }),
+        deps({ db: failing })
+      );
+      expect(onError).toHaveBeenCalledWith(expect.any(Error), 'notifications.inboxRead');
+      expect(navigate).toHaveBeenCalledWith('/permissions');
+    });
   });
 
   test('a held href is re-checked against the allowlist on replay', async () => {

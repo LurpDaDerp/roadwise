@@ -75,6 +75,8 @@ export function NotificationsHost(props: NotificationsHostProps): null {
         isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
         onTripChanged: (id) => invalidateTrip(l.queryClient, id),
         dismiss: (identifier) => Notifications.dismissNotificationAsync(identifier),
+        // A tapped push's row was just marked read: the bell and the list refresh (T6 carry).
+        onInboxChanged: () => l.queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY }),
         onError: report,
       };
     };
