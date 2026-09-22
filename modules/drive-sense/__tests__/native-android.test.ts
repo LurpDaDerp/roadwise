@@ -98,8 +98,10 @@ describe('native-android: the bridge surface (README §1)', () => {
     const used = new Set([...code(allKotlin()).matchAll(/"(E_[A-Z_]+)"/g)].map((x) => x[1]!));
     expect(used.size).toBeGreaterThan(0);
     for (const c of used) expect(DRIVE_SENSE_ERROR_CODES as readonly string[]).toContain(c);
-    for (const c of DRIVE_SENSE_ERROR_CODES.filter((x) => x !== 'E_NOT_FOUND')) {
-      expect(used).toContain(c); // E_NOT_FOUND is iOS-only (excludeFromBackup)
+    // The codes Android can raise (README §2 "Errors"); the excludeFromBackup codes are iOS-only.
+    for (const c of ['E_PERMISSION', 'E_UNAVAILABLE', 'E_FGS_REFUSED', 'E_INVALID_INPUT']) {
+      expect(DRIVE_SENSE_ERROR_CODES as readonly string[]).toContain(c);
+      expect(used).toContain(c);
     }
   });
 
