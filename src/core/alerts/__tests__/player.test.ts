@@ -20,7 +20,12 @@ interface Rig {
   deps: AlertPlayerDeps;
   calls: Call[];
   errors: unknown[];
-  flags: { voice: boolean; call: boolean; l1Silent: boolean };
+  flags: {
+    voice: boolean;
+    call: boolean;
+    l1Silent: boolean;
+    deliverable: boolean;
+  };
   /** Resolves the tone currently held by `holdPlay`. */
   release: () => void;
 }
@@ -35,7 +40,12 @@ function rig(
 ): Rig {
   const calls: Call[] = [];
   const errors: unknown[] = [];
-  const flags = { voice: true, call: false, l1Silent: false };
+  const flags = {
+    voice: true,
+    call: false,
+    l1Silent: false,
+    deliverable: true,
+  };
   let pendingPlay: (() => void) | null = null;
 
   const audio: AudioPort = {
@@ -90,6 +100,7 @@ function rig(
       voiceEnabled: () => flags.voice,
       callActive: () => flags.call,
       l1RespectsSilentSwitch: () => flags.l1Silent,
+      deliverable: () => flags.deliverable,
       onError: (err) => errors.push(err),
     },
   };
@@ -170,7 +181,7 @@ describe("alert player", () => {
   });
 
   describe("session kind (R14)", () => {
-    it("L1 respects the silent switch only when the host says the trip is mounted with the screen on", async () => {
+    it("L1 respects the silent switch only when the host says the trip is mounted and RoadWise is frontmost (R14 as amended, P2-I1)", async () => {
       const r = rig();
       r.flags.l1Silent = true;
       const player = createAlertPlayer(r.deps);
@@ -409,6 +420,120 @@ describe("alert player", () => {
         level: 4 as AlertLevel,
       });
       expect(r.calls).toEqual([]);
+    });
+  });
+
+  describe("an idle long press cannot race the next alert (P2-M1)", () => {
+    it("a long press just after a decision is delivered leaves the release to that decision", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      const delivering = player.deliver(decision(1));
+      const stopping = player.stopCurrent();
+      await Promise.all([delivering, stopping]);
+      expect(count(r.calls, "deactivate")).toBe(1);
+      expect(r.calls.indexOf("deactivate")).toBeGreaterThan(
+        r.calls.indexOf(`play:1@${TONE_GAIN[1]}`),
+      );
+    });
+
+    it("an idle release runs through the queue, ahead of a decision delivered a moment later", async () => {
+      let finishRelease!: () => void;
+      const r = rig({
+        audio: {
+          deactivate: () =>
+            new Promise<void>((resolve) => {
+              r.calls.push("deactivate");
+              finishRelease = resolve;
+            }),
+        },
+      });
+      const player = createAlertPlayer(r.deps);
+      const stopping = player.stopCurrent();
+      await flush();
+      const delivering = player.deliver(decision(1));
+      await flush();
+      // the decision waits for the release in flight
+      expect(r.calls).toEqual(["audio.stop", "voice.stop", "deactivate"]);
+      finishRelease();
+      await stopping;
+      await flush();
+      finishRelease();
+      await delivering;
+      expect(r.calls).toEqual([
+        "audio.stop",
+        "voice.stop",
+        "deactivate",
+        "activate:playback",
+        `play:1@${TONE_GAIN[1]}`,
+        "deactivate",
+      ]);
+    });
+  });
+
+  describe("the drive-end release (P2-M2: stopCurrent at close)", () => {
+    it("after an alert whose release failed, the idle stopCurrent releases the session again", async () => {
+      let failNext = true;
+      const r = rig({
+        audio: {
+          deactivate: async () => {
+            r.calls.push("deactivate");
+            if (failNext) {
+              failNext = false;
+              throw new Error("session busy");
+            }
+          },
+        },
+      });
+      const player = createAlertPlayer(r.deps);
+      await player.deliver(decision(1));
+      expect(r.errors).toHaveLength(1);
+      await player.stopCurrent();
+      expect(count(r.calls, "deactivate")).toBe(2);
+      expect(r.errors).toHaveLength(1);
+    });
+
+    it("a failing idle release is reported once and never rejects", async () => {
+      const r = rig({
+        audio: { deactivate: () => Promise.reject(new Error("busy")) },
+      });
+      await expect(
+        createAlertPlayer(r.deps).stopCurrent(),
+      ).resolves.toBeUndefined();
+      expect(r.errors).toHaveLength(1);
+    });
+  });
+
+  describe("a role switch drops what is already queued (P2-M4, §8.15)", () => {
+    it("a decision queued when the driver becomes a passenger touches no port", async () => {
+      const r = rig({ holdPlay: true });
+      const player = createAlertPlayer(r.deps);
+      const first = player.deliver(decision(2));
+      const queued = player.deliver(decision(1, { id: "queued" }));
+      const announced = player.announce("alert.recording");
+      await flush();
+      r.flags.deliverable = false;
+      r.release();
+      await Promise.all([first, queued, announced]);
+      expect(r.calls.filter((c) => c.startsWith("play"))).toEqual([
+        `play:2@${TONE_GAIN[2]}`,
+      ]);
+      expect(r.calls.filter((c) => c.startsWith("activate"))).toHaveLength(1);
+      expect(r.calls.some((c) => c.includes(t("alert.recording")))).toBe(false);
+      expect(count(r.calls, "deactivate")).toBe(1);
+    });
+
+    it("no deliverable dependency means always deliverable; a throwing one is reported and still sounds", async () => {
+      const r = rig();
+      delete r.deps.deliverable;
+      await createAlertPlayer(r.deps).deliver(decision(1));
+      expect(r.calls).toContain(`play:1@${TONE_GAIN[1]}`);
+      const r2 = rig();
+      r2.deps.deliverable = () => {
+        throw new Error("role");
+      };
+      await createAlertPlayer(r2.deps).deliver(decision(1));
+      expect(r2.errors).toHaveLength(1);
+      expect(r2.calls).toContain(`play:1@${TONE_GAIN[1]}`);
     });
   });
 

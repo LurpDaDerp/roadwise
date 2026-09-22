@@ -3,12 +3,26 @@
 // asks for the ports, and no native player exists until an alert actually plays.
 //
 // Session mapping (confirmed against expo-audio 57.0.5's native sources):
-// - `activate(kind)` → `setAudioModeAsync({ playsInSilentMode, interruptionMode: 'duckOthers',
-//   shouldPlayInBackground: true, allowsRecording: false })` then `setIsAudioActiveAsync(true)`.
-//   iOS: `playsInSilentMode: true` is the `.playback` category with `.duckOthers`; `false` is
-//   `.ambient`, which honours the silent switch (and cannot duck — the mounted, screen-on L1 only).
-//   Android: `playsInSilentMode: false` drops `play()` while the ringer is silent or vibrate, and
-//   `setIsAudioActiveAsync(true)` must precede `play()` after a release or play is refused.
+// - `activate(kind)` → `setAudioModeAsync(audioModeFor(kind, Platform.OS))` then
+//   `setIsAudioActiveAsync(true)`.
+//   - `playback` (every platform): `{ playsInSilentMode: true, interruptionMode: 'duckOthers',
+//     shouldPlayInBackground: true, allowsRecording: false }`. iOS: the `.playback` category with
+//     `.duckOthers`, mixable, so it can start from the background with `UIBackgroundModes: audio`.
+//   - `respectSilent` on iOS: `{ playsInSilentMode: false, interruptionMode: 'mixWithOthers',
+//     shouldPlayInBackground: false, allowsRecording: false }` → the `.ambient` category: honours the
+//     silent switch and mixes with music (it cannot duck). It is the only silent-switch mode iOS
+//     accepts: `AudioUtils.validateAudioMode` (ios/AudioUtils.swift) throws when
+//     `playsInSilentMode == false` is combined with `duckOthers`, with `allowsRecording`, or with
+//     `shouldPlayInBackground` (review P2-C1). `.ambient` is silenced in the background, which is why
+//     the host asks for it only while RoadWise is mounted AND frontmost (R14 as amended, P2-I1).
+//   - `respectSilent` on Android: `{ playsInSilentMode: false, interruptionMode: 'duckOthers',
+//     shouldPlayInBackground: true, allowsRecording: false }`. Android has no validator, and
+//     `mixWithOthers` would skip the audio-focus request, so music would not duck.
+//     `playsInSilentMode: false` drops `play()` while the ringer is silent or vibrate, and
+//     `setIsAudioActiveAsync(true)` must precede `play()` after a release or play is refused.
+//   - A mode the native side refuses falls back to the `playback` mode — a defined, audible mode —
+//     never to whatever category an earlier alert left behind; `activate` then rejects with the
+//     original error so the player reports it.
 // - `deactivate()` → `setIsAudioActiveAsync(false)`. iOS: `setActive(false,
 //   .notifyOthersOnDeactivation)`, so ducked music comes back up. Android: abandons audio focus.
 // - Tone players are created with `keepAudioSessionActive: true`: otherwise iOS deactivates the
@@ -17,7 +31,8 @@
 // - Each tone player is removed as soon as its tone ends: an Android expo-audio player runs a
 //   status loop every `updateInterval` for as long as it exists, which would be a timer running
 //   while the app is armed but idle (design §3.5).
-import type { AudioPlayer as ExpoAudioPlayer } from "expo-audio";
+import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
+import { Platform } from "react-native";
 
 import type {
   AlertPlayerDeps,
@@ -47,6 +62,38 @@ export const HAPTIC_GAP_MS = 140;
 
 /** A failed iOS deactivation (the session still busy) is retried once after this long. */
 export const DEACTIVATE_RETRY_MS = 150;
+
+/** The session a `playback` activation asks for, on every platform; also the fallback mode. */
+export const PLAYBACK_MODE: Readonly<Partial<AudioMode>> = {
+  playsInSilentMode: true,
+  interruptionMode: "duckOthers",
+  shouldPlayInBackground: true,
+  allowsRecording: false,
+};
+
+/** iOS `respectSilent`: `.ambient`, the only silent-switch mode expo-audio's iOS validator accepts. */
+export const IOS_RESPECT_SILENT_MODE: Readonly<Partial<AudioMode>> = {
+  playsInSilentMode: false,
+  interruptionMode: "mixWithOthers",
+  shouldPlayInBackground: false,
+  allowsRecording: false,
+};
+
+/** Android `respectSilent`: ducks through audio focus; drops `play()` under a silent ringer. */
+export const ANDROID_RESPECT_SILENT_MODE: Readonly<Partial<AudioMode>> = {
+  playsInSilentMode: false,
+  interruptionMode: "duckOthers",
+  shouldPlayInBackground: true,
+  allowsRecording: false,
+};
+
+export function audioModeFor(
+  kind: SessionKind,
+  os: string,
+): Readonly<Partial<AudioMode>> {
+  if (kind === "playback") return PLAYBACK_MODE;
+  return os === "ios" ? IOS_RESPECT_SILENT_MODE : ANDROID_RESPECT_SILENT_MODE;
+}
 
 function toneSource(level: AlertLevel): number {
   // Static requires, so Metro bundles the three files.
@@ -79,13 +126,16 @@ export async function createExpoAlertPorts(): Promise<
 
   const audio: AudioPort = {
     async activate(kind: SessionKind) {
-      await Audio.setAudioModeAsync({
-        playsInSilentMode: kind === "playback",
-        interruptionMode: "duckOthers",
-        shouldPlayInBackground: true,
-        allowsRecording: false,
-      });
+      let refused: { err: unknown } | null = null;
+      try {
+        await Audio.setAudioModeAsync({ ...audioModeFor(kind, Platform.OS) });
+      } catch (err) {
+        // Never play in a leftover category: fall back to the defined, audible playback mode.
+        refused = { err };
+        await Audio.setAudioModeAsync({ ...PLAYBACK_MODE });
+      }
       await Audio.setIsAudioActiveAsync(true);
+      if (refused) throw refused.err;
     },
 
     play(level, { volume }) {

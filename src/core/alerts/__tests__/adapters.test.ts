@@ -1,15 +1,56 @@
 // The expo ports against mocked native modules: the session option names and order, a tone that
 // resolves on its finish event (or its bounded fallback), players freed after each tone, speech
 // resolving on done/stop, and the haptic patterns.
+//
+// `setAudioModeAsync` is mocked faithfully, not permissively (review P2-C1): on iOS it applies
+// expo-audio 57.0.5's own `AudioUtils.validateAudioMode` (ios/AudioUtils.swift), over the native
+// record's defaults for omitted fields (ios/AudioRecords.swift), and rejects exactly what the
+// native module rejects. The JS layer hands the mode to iOS unchanged (build/ExpoAudio.js).
+// Android has no validator, so there the mock accepts anything, as the native module does.
 import * as Audio from "expo-audio";
 import * as Haptics from "expo-haptics";
 import * as Speech from "expo-speech";
+// `mock` prefix: the hoisted jest.mock factory below may reference it (read at call time).
+import { Platform as mockPlatform } from "react-native";
 
 import {
+  ANDROID_RESPECT_SILENT_MODE,
   createExpoAlertPorts,
+  IOS_RESPECT_SILENT_MODE,
+  PLAYBACK_MODE,
   TONE_FINISH_MARGIN_MS,
   TONE_MS,
 } from "../adapters";
+
+/**
+ * expo-audio 57.0.5 `AudioUtils.validateAudioMode`, rule for rule, over `AudioMode`'s native
+ * defaults (`playsInSilentMode` false, `interruptionMode` mixWithOthers, `allowsRecording` false,
+ * `shouldPlayInBackground` false).
+ */
+function mockValidateAudioModeIOS(partial: Record<string, unknown>): void {
+  const mode = {
+    playsInSilentMode: false,
+    interruptionMode: "mixWithOthers",
+    allowsRecording: false,
+    shouldPlayInBackground: false,
+    ...partial,
+  };
+  if (!mode.playsInSilentMode && mode.interruptionMode === "duckOthers") {
+    throw new Error(
+      "InvalidAudioModeException: playsInSilentMode == false and duckOthers == true cannot be set on iOS",
+    );
+  }
+  if (!mode.playsInSilentMode && mode.allowsRecording) {
+    throw new Error(
+      "InvalidAudioModeException: playsInSilentMode == false and allowsRecording == true cannot be set on iOS",
+    );
+  }
+  if (!mode.playsInSilentMode && mode.shouldPlayInBackground) {
+    throw new Error(
+      "InvalidAudioModeException: playsInSilentMode == false and staysActiveInBackground == true cannot be set on iOS.",
+    );
+  }
+}
 
 type Listener = (status: { didJustFinish: boolean }) => void;
 
@@ -26,7 +67,9 @@ interface FakePlayer {
 const mockPlayers: FakePlayer[] = [];
 
 jest.mock("expo-audio", () => ({
-  setAudioModeAsync: jest.fn(async () => {}),
+  setAudioModeAsync: jest.fn(async (mode: Record<string, unknown>) => {
+    if (mockPlatform.OS === "ios") mockValidateAudioModeIOS(mode);
+  }),
   setIsAudioActiveAsync: jest.fn(async () => {}),
   createAudioPlayer: jest.fn(() => {
     const player: FakePlayer = {
@@ -95,36 +138,131 @@ describe("expo alert ports", () => {
     expect(audioMock.setAudioModeAsync).not.toHaveBeenCalled();
   });
 
-  it("activate sets a ducking, background, no-recording mode, then enables audio", async () => {
-    const { audio } = await createExpoAlertPorts();
-    await audio.activate("playback");
-    await audio.activate("respectSilent");
-    expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
-      [
-        {
-          playsInSilentMode: true,
-          interruptionMode: "duckOthers",
-          shouldPlayInBackground: true,
-          allowsRecording: false,
-        },
-      ],
-      [
-        {
+  describe("the validateAudioMode-faithful mock itself", () => {
+    it("rejects on iOS the three combinations the native validator rejects, including the old respectSilent mode", () => {
+      const oldRespectSilent = {
+        playsInSilentMode: false,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: true,
+        allowsRecording: false,
+      };
+      expect(() => mockValidateAudioModeIOS(oldRespectSilent)).toThrow(
+        "duckOthers",
+      );
+      expect(() =>
+        mockValidateAudioModeIOS({
           playsInSilentMode: false,
-          interruptionMode: "duckOthers",
+          allowsRecording: true,
+        }),
+      ).toThrow("allowsRecording");
+      expect(() =>
+        mockValidateAudioModeIOS({
+          playsInSilentMode: false,
           shouldPlayInBackground: true,
-          allowsRecording: false,
-        },
-      ],
-    ]);
-    expect(audioMock.setIsAudioActiveAsync.mock.calls).toEqual([
-      [true],
-      [true],
-    ]);
-    const order = audioMock.setAudioModeAsync.mock.invocationCallOrder[0]!;
-    expect(
-      audioMock.setIsAudioActiveAsync.mock.invocationCallOrder[0]!,
-    ).toBeGreaterThan(order);
+        }),
+      ).toThrow("staysActiveInBackground");
+      // omitted fields take the native defaults: `{}` is plain `.ambient`, which is valid
+      expect(() => mockValidateAudioModeIOS({})).not.toThrow();
+      expect(() =>
+        mockValidateAudioModeIOS({ ...PLAYBACK_MODE }),
+      ).not.toThrow();
+      expect(() =>
+        mockValidateAudioModeIOS({ ...IOS_RESPECT_SILENT_MODE }),
+      ).not.toThrow();
+    });
+  });
+
+  describe("activate", () => {
+    let restoreOS: (() => void) | null = null;
+    const setOS = (os: "ios" | "android") => {
+      restoreOS = jest.replaceProperty(mockPlatform, "OS", os).restore;
+    };
+    afterEach(() => {
+      restoreOS?.();
+      restoreOS = null;
+    });
+
+    it("iOS: playback is a ducking, background, no-recording mode, and audio is enabled after it", async () => {
+      setOS("ios");
+      const { audio } = await createExpoAlertPorts();
+      await expect(audio.activate("playback")).resolves.toBeUndefined();
+      expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
+        [
+          {
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: true,
+            allowsRecording: false,
+          },
+        ],
+      ]);
+      expect(audioMock.setIsAudioActiveAsync.mock.calls).toEqual([[true]]);
+      expect(
+        audioMock.setIsAudioActiveAsync.mock.invocationCallOrder[0]!,
+      ).toBeGreaterThan(
+        audioMock.setAudioModeAsync.mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it("iOS: respectSilent resolves on a mode the native validator accepts (.ambient: mix, no duck, no background)", async () => {
+      setOS("ios");
+      const { audio } = await createExpoAlertPorts();
+      await expect(audio.activate("respectSilent")).resolves.toBeUndefined();
+      expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
+        [
+          {
+            playsInSilentMode: false,
+            interruptionMode: "mixWithOthers",
+            shouldPlayInBackground: false,
+            allowsRecording: false,
+          },
+        ],
+      ]);
+      expect(audioMock.setIsAudioActiveAsync.mock.calls).toEqual([[true]]);
+    });
+
+    it("Android: respectSilent keeps duckOthers (audio focus) and background playback", async () => {
+      setOS("android");
+      const { audio } = await createExpoAlertPorts();
+      await expect(audio.activate("respectSilent")).resolves.toBeUndefined();
+      await expect(audio.activate("playback")).resolves.toBeUndefined();
+      expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
+        [
+          {
+            playsInSilentMode: false,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: true,
+            allowsRecording: false,
+          },
+        ],
+        [{ ...PLAYBACK_MODE }],
+      ]);
+      expect(ANDROID_RESPECT_SILENT_MODE.interruptionMode).toBe("duckOthers");
+    });
+
+    it("a refused mode falls back to the playback mode, enables audio, then rejects with the original error", async () => {
+      setOS("ios");
+      const { audio } = await createExpoAlertPorts();
+      audioMock.setAudioModeAsync.mockRejectedValueOnce(new Error("refused"));
+      await expect(audio.activate("respectSilent")).rejects.toThrow("refused");
+      expect(audioMock.setAudioModeAsync.mock.calls).toEqual([
+        [{ ...IOS_RESPECT_SILENT_MODE }],
+        [{ ...PLAYBACK_MODE }],
+      ]);
+      expect(audioMock.setIsAudioActiveAsync.mock.calls).toEqual([[true]]);
+    });
+
+    it("when even the fallback is refused, activate rejects and does not enable audio", async () => {
+      setOS("ios");
+      const { audio } = await createExpoAlertPorts();
+      audioMock.setAudioModeAsync
+        .mockRejectedValueOnce(new Error("refused"))
+        .mockRejectedValueOnce(new Error("fallback refused"));
+      await expect(audio.activate("playback")).rejects.toThrow(
+        "fallback refused",
+      );
+      expect(audioMock.setIsAudioActiveAsync).not.toHaveBeenCalled();
+    });
   });
 
   it("deactivate releases audio, retrying once if the session is busy", async () => {

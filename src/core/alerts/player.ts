@@ -5,10 +5,12 @@
 // - Level mapping: L1 is a tone only; L2 is tone, voice (when enabled) and a double pulse; L3 is
 //   tone, voice and the long pattern. Audio first, haptic last (§8.8 step 4 — the visual is the
 //   HUD's, drawn by the host from the same decision).
-// - Audio session per level (R14): L1 honours the silent switch only when the host says the trip is
-//   mounted and the screen is on. iOS silences silent-switch-respecting categories on screen lock,
-//   so a pocketed or locked L1 — the only level in the learning period — plays on the playback
-//   session instead. L2 and L3 always play on the playback session.
+// - Audio session per level (R14, as amended by ruling P2-I1): L1 honours the silent switch only
+//   when the host says the trip is mounted AND RoadWise is frontmost (`AppState.currentState ===
+//   'active'`). iOS silences silent-switch-respecting categories whenever the app is not frontmost —
+//   on screen lock, and also with the screen on behind a navigation app — so any other L1 (the only
+//   level in the learning period) plays on the playback session instead. L2 and L3 always play on
+//   the playback session.
 // - Ducking ends with the alert (rev1: I9): the session is deactivated after each decision's last
 //   sound, so music returns to full volume instead of staying ducked for the drive.
 // - Loudness: the tone files are rendered near full scale (peak 0.9, P1). Every per-level loudness,
@@ -22,7 +24,15 @@
 // What it does not decide: whether to alert, or who is driving. It plays only what it is handed;
 // the arbiter marks every passenger, muted or over-budget decision `suppressed` (product §8.15: a
 // passenger hears no alerts) and this player ignores suppressed decisions outright, touching no
-// port — so a passenger drive cannot sound even if its decisions reach the player.
+// port — so a passenger drive cannot sound even if its decisions reach the player. A decision
+// already queued when the driver switches to passenger is dropped too: `deliverable()` is re-read
+// as each queued item starts (review P2-M4).
+//
+// Releasing at drive end (review P2-M2): every alert releases the session, but a release can fail
+// (iOS "session busy"), and expo-audio re-activates the session by itself when an interruption such
+// as a phone call ends. The host therefore calls `stopCurrent()` at drive close (H1 does, in
+// `afterClose`) and may call it when a phone call ends while no alert plays: while idle it releases
+// the session once more, through the queue, so it cannot race a decision delivered a moment later.
 //
 // Failure is silent (SR9): no method rejects. A failing port is reported once through `onError`,
 // the remaining steps still run, and the session is still released. Each step is bounded by
@@ -62,15 +72,29 @@ export interface AlertPlayerDeps {
   voiceEnabled(): boolean;
   /** iOS only (drive-sense `call`): tones at `TONE_GAIN_IN_CALL`, no voice. */
   callActive(): boolean;
-  /** R14: true only when the trip is mounted and the screen is on; otherwise L1 plays on the playback session. */
+  /**
+   * R14 as amended (P2-I1): true only when the trip is mounted AND `AppState.currentState ===
+   * 'active'` (RoadWise frontmost, so the screen is on and unlocked and the HUD visible). Read live,
+   * once per decision. Otherwise L1 plays on the playback session.
+   */
   l1RespectsSilentSwitch(): boolean;
+  /**
+   * Re-read as each queued decision or announcement starts; false drops it without touching a port.
+   * H1 wires it to "not a passenger" so a decision queued at the moment of a role switch stays
+   * silent (§8.15). Omitted means always deliverable; a throwing read falls back to deliverable.
+   */
+  deliverable?(): boolean;
   onError?(err: unknown): void;
 }
 
 export interface AlertPlayer {
   /** Audio first, then haptic (§8.8); never rejects (SR9); deactivates after the last sound. */
   deliver(decision: AlertDecision): Promise<void>;
-  /** Long-press mute: silences the alert sounding now. One already waiting behind it still plays. */
+  /**
+   * Long-press mute: silences the alert sounding now. One already waiting behind it still plays.
+   * While idle it releases the audio session once more, through the queue (P2-M1) — the host's
+   * drive-end release (P2-M2). When an item is queued but not started, that item releases instead.
+   */
   stopCurrent(): Promise<void>;
   /** "Recording" at start (§8.4). Spoken on L1's session rule; silent with voice off or on a call. */
   announce(key: AlertVoiceKey): Promise<void>;
@@ -125,6 +149,8 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   const { audio, voice, haptics } = deps;
   let queue: Promise<void> = Promise.resolve();
   let current: Run | null = null;
+  /** Items enqueued whose task has not yet finished. */
+  let pending = 0;
 
   function report(err: unknown): void {
     try {
@@ -174,6 +200,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   }
 
   function enqueue(task: (run: Run) => Promise<void>): Promise<void> {
+    pending += 1;
     const next = queue.then(async () => {
       let wake!: () => void;
       const woken = new Promise<void>((resolve) => {
@@ -195,11 +222,17 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         report(err);
       } finally {
         if (current === run) current = null;
+        pending -= 1;
         finish();
       }
     });
     queue = next;
     return next;
+  }
+
+  function deliverable(): boolean {
+    const fn = deps.deliverable;
+    return fn ? read(() => fn.call(deps), true) : true;
   }
 
   function sessionForL1(): SessionKind {
@@ -208,12 +241,19 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       : "playback";
   }
 
+  function releaseViaQueue(): Promise<void> {
+    return enqueue(async () => {
+      await bounded(() => audio.deactivate());
+    });
+  }
+
   return {
     deliver(decision) {
       if (decision.suppressed || !isLevel(decision.level))
         return Promise.resolve();
       const level = decision.level;
       return enqueue(async (run) => {
+        if (!deliverable()) return;
         try {
           const onCall = read(() => deps.callActive(), false);
           const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
@@ -248,13 +288,16 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         // The run releases the session itself, once, on its way out.
         run.wake();
         await run.done;
-      } else {
-        await bounded(() => audio.deactivate());
+      } else if (pending === 0) {
+        // Through the queue, so it cannot race a decision delivered a moment later (P2-M1).
+        await releaseViaQueue();
       }
+      // Otherwise an item is queued but not yet started; it releases the session on its way out.
     },
 
     announce(key) {
       return enqueue(async (run) => {
+        if (!deliverable()) return;
         if (read(() => deps.callActive(), false)) return;
         if (!read(() => deps.voiceEnabled(), true)) return;
         try {
