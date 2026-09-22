@@ -1527,14 +1527,20 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
   const INSTALL = 'install-0001';
 
   /** The `devices` table as the drive-state reporter writes it, under the signed-in owner. */
-  function devicesClient() {
+  function devicesClient(opts: { failRecording?: number } = {}) {
     const writes: string[] = [];
+    let failures = opts.failRecording ?? 0;
     const client = {
       from: (table: string) => ({
         update: (row: { drive_state: string }) => {
           const q = {
             eq: () => q,
             select: async () => {
+              if (row.drive_state === 'recording' && failures > 0) {
+                failures -= 1;
+                writes.push(`${table}:${row.drive_state}(failed)`);
+                return { data: null, error: { message: 'offline' } };
+              }
               writes.push(`${table}:${row.drive_state}`);
               return { data: [{ id: INSTALL }], error: null };
             },
@@ -1560,7 +1566,7 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     await settle();
   }
 
-  async function launch(opts: { uid: string | null; owner?: string; pending?: string; installId?: boolean }) {
+  async function launch(opts: { uid: string | null; owner?: string; pending?: string; installId?: boolean; failRecording?: number }) {
     await migrate(db);
     const settings = createSettingsRepo(db);
     if (opts.owner) await settings.set(LAST_USER_KEY, opts.owner);
@@ -1569,7 +1575,7 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     const clock = { t: NOW };
     const driveSense = createFakeDriveSense({ platform: 'android', now: () => clock.t });
     driveSense.setState({ location: 'always', motion: 'granted' });
-    const devices = devicesClient();
+    const devices = devicesClient({ failRecording: opts.failRecording });
     const built = deps({
       supabase: createFakeSupabase({ uid: opts.uid }),
       source: driveSense,
@@ -1588,6 +1594,48 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     expect(isDriveStateReported()).toBe(true);
     await recordAndEnd(runtime!, l.driveSense, l.clock);
     expect(l.devices.writes).toEqual(['devices:recording', 'devices:idle']);
+  });
+
+  test('a recording write that fails at drive start is sent again on the host publishes, after 30 s (T10 review I1)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1', failRecording: 1 });
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    // 200 rows at 1 Hz: the retry rides a publish 30 s after the failure, then the idle at the end.
+    expect(l.devices.writes).toEqual(['devices:recording(failed)', 'devices:recording', 'devices:idle']);
+  });
+
+  test('the backoff grows: 30 s, then 2 min — no retry sooner', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1', failRecording: 2 });
+    await recordAndEnd(runtime!, l.driveSense, l.clock); // a 200 s drive
+    // Fails at start, retried at 30 s (fails), next due at 30 s + 2 min = 150 s: within the drive.
+    expect(l.devices.writes).toEqual([
+      'devices:recording(failed)',
+      'devices:recording(failed)',
+      'devices:recording',
+      'devices:idle',
+    ]);
+  });
+
+  test('a drive adopted at launch is reported recording at once (the current state is seeded)', async () => {
+    await crashedDrive();
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL);
+    const checkpoint = (await createTripsRepo(db).get(TRIP))?.checkpoint_ts as number;
+    const driveSense = createFakeDriveSense({ platform: 'android', now: () => checkpoint + 60_000 });
+    driveSense.setState({ location: 'always', motion: 'granted', capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    const devices = devicesClient();
+    runtime = await bootstrapApp(
+      deps({
+        supabase: createFakeSupabase({ uid: 'user-1' }),
+        source: driveSense,
+        now: () => checkpoint + 60_000,
+        mayDrain: () => false,
+        devicesClient: devices.client as never,
+      }).bootstrapDeps
+    );
+    expect(runtime.adopted).toBe(TRIP);
+    await settle();
+    expect(devices.writes).toEqual(['devices:recording']);
   });
 
   test('armed and idle, nothing is written (state changes only, never a timer)', async () => {
