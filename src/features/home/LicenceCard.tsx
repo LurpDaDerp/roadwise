@@ -135,13 +135,26 @@ function ScoreField({ view }: { view: LongTermScoreView }) {
   );
 }
 
-/** Safe days counted from the day rows the server wrote; an unreadable row counts for nothing. */
-function countSafeDays(days: readonly DayEntry[]): { count: number; provisional: boolean } {
+/**
+ * Safe days counted from the day rows the server wrote; an unreadable row counts for nothing.
+ *
+ * The stamp is recomputed from the current state on every read, never carried: a day row keeps the
+ * `provisional` it was written with for ever, so "any provisional day" alone would stamp a
+ * veteran's count PROVISIONAL for life (review U4 m1). It stamps only while the driver is still in
+ * the learning period (the card's own predicate) and a counted day was written provisional.
+ */
+export function countSafeDays(
+  days: readonly DayEntry[],
+  learning: boolean
+): { count: number; provisional: boolean } {
   const safe = days.filter((d) => !d.unreadable && d.safeDay);
-  return { count: safe.length, provisional: safe.some((d) => d.provisional === true) };
+  return {
+    count: safe.length,
+    provisional: learning && safe.some((d) => d.provisional === true),
+  };
 }
 
-function SafeDaysField({ restoring }: { restoring: boolean }) {
+function SafeDaysField({ restoring, learning }: { restoring: boolean; learning: boolean }) {
   const th = useTheme();
   const days = useScoreDaily(ALL_DAYS);
 
@@ -158,7 +171,7 @@ function SafeDaysField({ restoring }: { restoring: boolean }) {
       </View>
     );
   } else if (days.isSuccess) {
-    const { count, provisional } = countSafeDays(days.data);
+    const { count, provisional } = countSafeDays(days.data, learning);
     body = (
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, flexWrap: 'wrap' }}>
         <View accessible accessibilityLabel={copy.spoken.safeDays(count)} testID="licence-safe-days">
@@ -243,7 +256,7 @@ export function LicenceCard({ name }: { name: string | null | undefined }) {
             <Skeleton width={96} height={46} />
           </Field>
         )}
-        <SafeDaysField restoring={restoring} />
+        <SafeDaysField restoring={restoring} learning={learning} />
       </View>
     </Card>
   );

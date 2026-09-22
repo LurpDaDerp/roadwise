@@ -60,7 +60,9 @@ test('what the line may claim follows the intent, the host and the flag', () => 
   expect(detectionLineState(true, 'recording', true)).toBe('on');
   // `off` is not the driver's choice: asked for, but not armed.
   expect(detectionLineState(true, 'off', true)).toBe('notRunning');
-  expect(detectionLineState(true, 'off', false)).toBe('notRunning');
+  // A withdrawn flag is named as the reason even after an opt-in (review U4 m3).
+  expect(detectionLineState(true, 'off', false)).toBe('unavailable');
+  expect(detectionLineState(true, 'armed', false)).toBe('unavailable');
   expect(detectionLineState(false, 'off', true)).toBe('manual');
   expect(detectionLineState(false, 'off', null)).toBe('manual');
   // A server flag that is off makes the feature unavailable, never "turned off" (D2 M-2).
@@ -93,4 +95,10 @@ test('the server flag off: unavailable, not manual by choice', async () => {
   await renderLine('off', false, false);
   expect(await screen.findByText('Auto-record isn’t available yet')).toBeOnTheScreen();
   expect(screen.queryByText('Manual mode')).toBeNull();
+});
+
+test('opted in, then the server withdrew the flag: says unavailable, not merely not running', async () => {
+  await renderLine('off', true, false);
+  expect(await screen.findByText('Auto-record isn’t available yet')).toBeOnTheScreen();
+  expect(screen.queryByText("Auto-record is on but isn't running")).toBeNull();
 });

@@ -3,7 +3,13 @@ import { AccessibilityInfo } from 'react-native';
 
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
-import { formatAsOfDay, inLearningPeriod, LicenceCard } from '@/features/home/LicenceCard';
+import type { DayEntry } from '@/data/queries';
+import {
+  countSafeDays,
+  formatAsOfDay,
+  inLearningPeriod,
+  LicenceCard,
+} from '@/features/home/LicenceCard';
 import { clearQueryClients, routerDouble, world } from '@/features/trips/__fixtures__/render';
 
 const mockRouter = routerDouble();
@@ -188,7 +194,23 @@ describe('safe days', () => {
     expect(screen.queryByTestId('safe-days-provisional')).toBeNull();
   });
 
-  test('a safe day written while the score was provisional stamps the count provisional', async () => {
+  test('in the learning period, a safe day written provisional stamps the count provisional', async () => {
+    const w = await world(
+      {
+        trips: [drive('a', 8), drive('b', 1)],
+        days: [
+          ['2026-01-12', dayRow('2026-01-12', null, { safeDay: true, provisional: true })],
+          ['2026-01-19', dayRow('2026-01-19', null, { safeDay: true, provisional: true })],
+        ],
+      },
+      now
+    );
+    await w.renderScreen(<LicenceCard name="Maya" />);
+    expect(await screen.findByLabelText('Safe days, 2')).toBeOnTheScreen();
+    expect(screen.getByTestId('safe-days-provisional')).toBeOnTheScreen();
+  });
+
+  test('once the server prints a score, an early provisional safe day no longer stamps the count (m1)', async () => {
     const w = await world(
       {
         days: [
@@ -200,7 +222,15 @@ describe('safe days', () => {
     );
     await w.renderScreen(<LicenceCard name="Maya" />);
     expect(await screen.findByLabelText('Safe days, 2')).toBeOnTheScreen();
-    expect(screen.getByTestId('safe-days-provisional')).toBeOnTheScreen();
+    expect(screen.queryByTestId('safe-days-provisional')).toBeNull();
+  });
+
+  test('the stamp is recomputed from the current state, never carried', () => {
+    const early = { unreadable: false, safeDay: true, provisional: true } as DayEntry;
+    const later = { unreadable: false, safeDay: true, provisional: false } as DayEntry;
+    expect(countSafeDays([early, later], true)).toEqual({ count: 2, provisional: true });
+    expect(countSafeDays([early, later], false)).toEqual({ count: 2, provisional: false });
+    expect(countSafeDays([later], true)).toEqual({ count: 1, provisional: false });
   });
 
   test('none yet reads zero', async () => {

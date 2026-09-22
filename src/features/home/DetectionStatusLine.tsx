@@ -21,16 +21,19 @@ export type DetectionLineState = 'on' | 'notRunning' | 'manual' | 'unavailable';
  * `host.autoDetectEnabled()`; `status === 'off'` is not that choice — it also means a missing
  * Always location, the server flag, a refused arm, or a host not yet started. So "on" is said only
  * when the driver asked for it AND the host is not off; asked-for but off says it isn't running.
- * With the server flag off and no opt-in, auto-record is unavailable — never "turned off" by the
- * driver (D2 security M-2). `available` is null until the flag has been read.
+ * With the server flag off, auto-record is unavailable whether or not the driver opted in — never
+ * "turned off" by the driver (D2 security M-2). `available` is null until the flag has been read.
  */
 export function detectionLineState(
   autoDetect: boolean,
   status: string,
   available: boolean | null
 ): DetectionLineState {
+  // A withdrawn flag is the reason, whatever the opt-in: say that rather than "isn't running"
+  // (review U4 m3). Still never "turned off" (D2 M-2).
+  if (available === false) return 'unavailable';
   if (autoDetect) return status === 'off' ? 'notRunning' : 'on';
-  return available === false ? 'unavailable' : 'manual';
+  return 'manual';
 }
 
 /** §7.B B1 item 8: "Auto-record is on" / "Manual mode", with the way to the detection screen. */
