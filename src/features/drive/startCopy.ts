@@ -1,6 +1,6 @@
 /**
- * Every string the pre-drive sheet (C1), the end screen (C8) and the drive-summary notification
- * print, in one table.
+ * Every string the pre-drive sheet (C1) and the end screen (C8) print, in one table. The
+ * drive-summary notification's words are the catalog's (`renderLocal`, Task 19).
  *
  * `src/i18n/en.ts` is shared by every feature and is not this task's file to grow; the keys are
  * shaped so a localisation pass can lift them without touching a component. Voice (§7.0): second
@@ -56,13 +56,5 @@ export const startCopy = {
     simulation: 'Simulation finished',
     simulationBody: 'Nothing from it was saved.',
     done: 'Done',
-  },
-  notification: {
-    /** §11.2 "Trip summary ready" — no score and no places, so the lock screen shows neither. */
-    title: 'Your drive is ready',
-    body: 'Tap to see how it went',
-    batchTitle: (n: number) => `${n} drives are ready`,
-    batchBody: 'Tap to see how they went',
-    channelName: 'Drive summaries',
   },
 } as const;

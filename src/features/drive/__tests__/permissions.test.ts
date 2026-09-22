@@ -1,8 +1,9 @@
 /**
- * What a manual drive needs before it starts (C1), through Task 8's adapter and the one prompt
- * policy: a prompt the app starts itself goes through `offerPrompt` (the 14-day window), and no
- * Expo permission call is made from here. M3's rules are kept: location is asked once when
- * undetermined and never re-prompted once denied; motion is asked once and never blocks.
+ * What a manual drive needs before it starts (C1), through Task 8's adapter: no Expo permission
+ * call is made from here. Start drive is the driver's own tap (Task 19 r1 ruling), so it asks at
+ * once — never throttled — and stamps the 14-day history so the app's own offers wait. M3's rules
+ * are kept: location is asked once when undetermined and never re-prompted once denied; motion is
+ * asked once and never blocks.
  */
 import { PROMPTS_KEY, PROMPT_INTERVAL_MS, type Grant, type LocationAccess, type PermissionSnapshot } from '@/core/permissions';
 import {
@@ -90,37 +91,37 @@ describe('ensureDrivePermissions', () => {
     const { d, calls, settings } = deps({ location: 'undetermined', afterRequest: 'foreground', motion: 'undetermined' });
     await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
     expect(calls).toEqual(['snapshot', 'location:request', 'motion:request']);
-    // Both app-started prompts are recorded for the 14-day window (offerPrompt).
+    // Both prompts are stamped, so the app's own later offers wait out the window.
     expect(settings.store.get(PROMPTS_KEY)).toEqual({ location: NOW, motion: NOW });
   });
 
-  test('the 14-day window: a location prompt made 3 days ago is not made again; the drive is blocked with Settings', async () => {
-    const { d, calls } = deps({
-      location: 'undetermined',
-      prompts: { location: NOW - 3 * 86_400_000 },
-    });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'denied', motion: 'undetermined' });
-    expect(calls).toEqual(['snapshot']);
-  });
-
-  test('the 14-day window has passed: asked again', async () => {
-    const { d, calls } = deps({
+  test('the driver’s tap is never throttled: a location prompt made 3 days ago is made again, and stamped', async () => {
+    const { d, calls, settings } = deps({
       location: 'undetermined',
       afterRequest: 'foreground',
-      prompts: { location: NOW - PROMPT_INTERVAL_MS },
+      prompts: { location: NOW - 3 * 86_400_000 },
     });
+    expect(3 * 86_400_000).toBeLessThan(PROMPT_INTERVAL_MS);
     await expect(ensureDrivePermissions(d)).resolves.toMatchObject({ location: 'granted' });
     expect(calls).toContain('location:request');
+    expect(settings.store.get(PROMPTS_KEY)).toMatchObject({ location: NOW });
   });
 
-  test('a motion prompt inside the window is not made; motion stays undetermined and does not block', async () => {
-    const { d, calls } = deps({
+  test('motion too: asked at once inside the window, and stamped', async () => {
+    const { d, calls, settings } = deps({
       location: 'foreground',
       motion: 'undetermined',
       prompts: { motion: NOW - 86_400_000 },
     });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'undetermined' });
-    expect(calls).not.toContain('motion:request');
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    expect(calls).toContain('motion:request');
+    expect(settings.store.get(PROMPTS_KEY)).toMatchObject({ motion: NOW });
+  });
+
+  test('a stamp that cannot be written never blocks the drive', async () => {
+    const { d, settings } = deps({ location: 'undetermined', afterRequest: 'foreground' });
+    settings.set.mockRejectedValue(new Error('disk'));
+    await expect(ensureDrivePermissions(d)).resolves.toMatchObject({ location: 'granted' });
   });
 
   test('denied location is never re-prompted and motion is not asked', async () => {
