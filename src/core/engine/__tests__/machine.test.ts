@@ -1864,3 +1864,25 @@ describe('M3: the no-fix end (I13)', () => {
     expect(h.status()).toBe('recording');
   });
 });
+
+describe("I'm driving now (final review M4)", () => {
+  test('switching an auto trip back from passenger records the statement; a passenger switch takes it back', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    let s = await h.drive(0, AUTO_DETECT_CONFIRM_S, FAST);
+    expect(h.status()).toBe('recording');
+    await h.engine.dispatch({ type: 'setPassenger', passenger: true, ts: at(s) });
+    await h.engine.dispatch({ type: 'setPassenger', passenger: false, ts: at(s) });
+    s = await h.drive(s, 5, FAST);
+    await endNow(h, s);
+    expect(only(h.finalized)).toMatchObject({ role: 'driver', statedDriver: true, startEvidence: 'auto' });
+  });
+
+  test('a trip that never left the driver role carries no statement', async () => {
+    const h = await armed();
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    const s = await h.drive(0, AUTO_DETECT_CONFIRM_S, FAST);
+    await endNow(h, s);
+    expect(only(h.finalized).statedDriver).toBeUndefined();
+  });
+});

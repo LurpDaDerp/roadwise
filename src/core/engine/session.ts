@@ -7,6 +7,11 @@ import { haversineMeters } from '@/lib/geo';
 import type { Fix, StartEvidence, StartSource, TripRole, TripSession } from './engine.types';
 import type { DriveMode, FeatureRow, LimitSample } from './types';
 
+/** The coarse start from the finer evidence: a Start tap or a moving start is `manual`. */
+export function startSourceFor(evidence: StartEvidence): StartSource {
+  return evidence === 'auto' ? 'auto' : 'manual';
+}
+
 /** The `trips.role_source` a trip is stored with, from its start evidence. */
 export function roleSourceFor(evidence: StartEvidence): 'manual' | 'moving_start' | 'auto' {
   if (evidence === 'tap') return 'manual';
@@ -40,20 +45,24 @@ export interface SessionStart {
   clientTripId: string;
   mode: DriveMode;
   role: TripRole;
-  startSource: StartSource;
-  /** Defaults from `startSource`: `manual` → `tap`, `auto` → `auto`. */
+  /** Only consulted when `startEvidence` is absent: `manual` → `tap`, `auto` → `auto`. */
+  startSource?: StartSource;
+  /** The start's one fact; `startSource` is derived from it (final review M10c). */
   startEvidence?: StartEvidence;
   startedAt: number;
   startApproximate?: boolean;
 }
 
 export function createSession(start: SessionStart): TripSession {
+  const startEvidence: StartEvidence =
+    start.startEvidence ?? (start.startSource === 'manual' ? 'tap' : 'auto');
   return {
     clientTripId: start.clientTripId,
     mode: start.mode,
     role: start.role,
-    startSource: start.startSource,
-    startEvidence: start.startEvidence ?? (start.startSource === 'manual' ? 'tap' : 'auto'),
+    // Derived, never set by hand: the two can no longer disagree (final review M10c).
+    startSource: startSourceFor(startEvidence),
+    startEvidence,
     arbiterState: null,
     startedAt: start.startedAt,
     startApproximate: start.startApproximate === true,

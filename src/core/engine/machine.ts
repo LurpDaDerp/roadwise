@@ -149,6 +149,8 @@ export function createEngine(deps: EngineDeps): Engine {
   let suite: TripSuite | null = null;
   /** The role a trip starts with; `setPassenger` before confirmation lands here. */
   let pendingRole: TripRole = 'driver';
+  /** "I'm driving now" said before the trip confirmed (M4); carried onto the session. */
+  let pendingStatedDriver = false;
   let seen: Seen | null = null;
 
   // Per-row derived state while a trip is open. Everything here is recomputed from rows alone.
@@ -261,6 +263,7 @@ export function createEngine(deps: EngineDeps): Engine {
     session = null;
     suite = null;
     pendingRole = 'driver';
+    pendingStatedDriver = false;
     seen = null;
     prefetchedAtM = null;
     resetRun();
@@ -329,11 +332,11 @@ export function createEngine(deps: EngineDeps): Engine {
       clientTripId: deps.newId(),
       mode: c.mode,
       role: c.role,
-      startSource: c.source,
       startEvidence: c.evidence,
       startedAt,
       startApproximate: backfillTs !== null,
     });
+    if (pendingStatedDriver && c.role === 'driver') session.statedDriver = true;
     suite = made;
     candidate = null;
     resetRun();
@@ -719,9 +722,12 @@ export function createEngine(deps: EngineDeps): Engine {
     if (session !== null) {
       if (session.role === role) return;
       session.role = role;
+      // Switching back from passenger is the driver saying so ("I'm driving now", M4).
+      session.statedDriver = !passenger;
     } else {
       if (pendingRole === role) return;
       pendingRole = role;
+      pendingStatedDriver = !passenger;
     }
     touch();
   }

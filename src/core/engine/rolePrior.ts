@@ -15,6 +15,7 @@
 import { CONSTANTS } from '@scoring';
 import { knownSpeed, ROW_MS } from '@/core/detectors/common';
 import { createSettingsRepo, type Db } from '@/data/db';
+import { geohash5 } from '@/lib/geo';
 import type { DetectedEvent, FeatureRow } from './types';
 
 /** `{ driverAnswers: number; answers: number }` */
@@ -91,6 +92,21 @@ async function readRoutes(db: Db): Promise<RouteCounts> {
 export async function readRolePrior(db: Db): Promise<number> {
   const { driverAnswers, answers } = await readCounts(db);
   return (driverAnswers + 1) / (answers + 2);
+}
+
+/**
+ * The role evidence finalize is given for a trip: the prior from this device's answers, and
+ * whether the trip's first and last fix lie on a confirmed habitual driver route (E2). One helper
+ * for the host's finalize and recovery's, so the two paths cannot drift (final review I1).
+ */
+export async function roleEvidenceFor(
+  db: Db,
+  session: { firstFix: { lat: number; lng: number } | null; lastFix: { lat: number; lng: number } | null }
+): Promise<{ rolePrior: number; habitualRoute: boolean }> {
+  const cell = (f: { lat: number; lng: number } | null) => (f ? geohash5(f.lat, f.lng) : null);
+  const rolePrior = await readRolePrior(db);
+  const habitualRoute = await isHabitualDriverRoute(db, cell(session.firstFix), cell(session.lastFix));
+  return { rolePrior, habitualRoute };
 }
 
 /**

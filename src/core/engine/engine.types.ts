@@ -52,8 +52,18 @@ export interface TripSession {
   mode: DriveMode;
   role: TripRole;
   startSource: StartSource;
-  /** The finer start evidence the role inference reads (`tap` / `movingStart` / `auto`). */
+  /**
+   * The finer start evidence the role inference reads (`tap` / `movingStart` / `auto`). The one
+   * fact about the start: `startSource` is derived from it by `createSession` (final review M10c).
+   */
   startEvidence: StartEvidence;
+  /**
+   * The driver said "I'm driving now" during this trip, after it had been marked a passenger's
+   * (final review M4). A direct statement is the strongest evidence there is: finalize treats it
+   * like a Start tap. Held in memory only — a relaunch mid-drive forgets it, and the drive is then
+   * decided on the other evidence (at worst, asked about). Absent means not stated.
+   */
+  statedDriver?: boolean;
   /**
    * The arbiter's resumable state as of the last checkpoint: the engine copies `arbiter.state()`
    * here just before each `onCheckpoint`, and the recorder persists it (settings

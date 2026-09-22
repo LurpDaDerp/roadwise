@@ -137,14 +137,17 @@ export interface TripRoleDecision {
  * evidence already calls a driver's: a high prior or a habitual route sets it aside.
  */
 export function decideRole(
-  session: Pick<TripSession, 'role' | 'startEvidence'>,
+  session: Pick<TripSession, 'role' | 'startEvidence' | 'statedDriver'>,
   rows: readonly FeatureRow[],
   events: readonly DetectedEvent[],
   evidence: { rolePrior?: number; habitualRoute?: boolean }
 ): TripRoleDecision {
   const statedPassenger = session.role === 'passenger';
   let inferred: RoleInference;
-  if (session.startEvidence === 'tap') {
+  // A Start tap, or "I'm driving now" said during the drive (M4): the driver's own statement is
+  // the strongest evidence, so it is decided exactly as a manual start is.
+  const statedDriver = session.statedDriver === true && !statedPassenger;
+  if (session.startEvidence === 'tap' || statedDriver) {
     inferred = inferRole(
       {
         manualStart: true,
@@ -212,7 +215,7 @@ function replay(session: Readonly<TripSession>, rows: FeatureRow[]): TripSession
     clientTripId: session.clientTripId,
     mode: session.mode,
     role: session.role,
-    startSource: session.startSource,
+    startEvidence: session.startEvidence,
     startedAt: session.startedAt,
   });
   for (const row of rows) appendRow(check, row, UNKNOWN_LIMIT);

@@ -18,6 +18,7 @@ import { createSettingsRepo, createTripsRepo, type Db, type TripRow } from '@/da
 import { finalizeTrip, type FinalizeDeps } from './finalize';
 import { arbiterStateKey } from './recorder';
 import { rebuildFromSamples } from './replay';
+import { roleEvidenceFor } from './rolePrior';
 import { closeSession } from './session';
 import type { LimitSample } from './types';
 
@@ -102,6 +103,9 @@ export async function recoverRecordingTrips(db: Db, deps: RecoveryDeps): Promise
     // The rebuild has at least one row, so the session has a last row; the trip ends one
     // row-length after it. The finalize transaction also removes the stored arbiter state.
     const closed = closeSession(session, (session.lastRowTs as number) + ROW_MS);
+    // The same role evidence the host's finalize reads (final review I1): a recovered auto drive
+    // is decided like one that ended normally, not asked about because the process died.
+    const { rolePrior, habitualRoute } = await roleEvidenceFor(db, closed);
     await finalizeTrip(closed, {
       db,
       scoring: deps.scoring,
@@ -111,6 +115,8 @@ export async function recoverRecordingTrips(db: Db, deps: RecoveryDeps): Promise
       now: deps.now,
       cameraSession: deps.cameraSession,
       incomplete: true,
+      rolePrior,
+      habitualRoute,
     });
     return 'recovered';
   }

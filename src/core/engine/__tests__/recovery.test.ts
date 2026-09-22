@@ -22,6 +22,9 @@ import {
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { findFinalize } from '@/data/sync/queue';
+import * as finalizeModule from '@/core/engine/finalize';
+import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
+import { geohash5 } from '@/lib/geo';
 
 const { CHECKPOINT_S } = CONSTANTS;
 const TRIP = 'trip-1';
@@ -47,6 +50,8 @@ interface OrphanOptions {
   tail?: boolean;
   /** The device zone at the first checkpoint, which the recorder stores on the row. */
   tz?: string;
+  /** How the trip started (default a Start tap). */
+  evidence?: 'tap' | 'movingStart' | 'auto';
 }
 
 /**
@@ -59,7 +64,7 @@ async function orphan(id: string, rows: readonly FeatureRow[], opts: OrphanOptio
     clientTripId: id,
     mode: opts.mode ?? 'mounted',
     role: opts.role ?? 'driver',
-    startSource: 'manual',
+    startEvidence: opts.evidence ?? 'tap',
     startedAt: rows[0]?.ts ?? T0,
   });
   const checkpoint = async (): Promise<void> => {
@@ -380,5 +385,35 @@ describe('M3: skip, and the arbiter state goes with the trip', () => {
     await recoverRecordingTrips(db, recoveryDeps().deps);
     expect(await trips.get(TRIP)).toMatchObject({ role_source: 'moving_start', incomplete: 1 });
     expect((await findFinalize(db, TRIP))?.roleSource).toBe('moving_start');
+  });
+});
+
+describe('a recovered auto drive is decided on the same role evidence as one that ended normally (final review I1)', () => {
+  test('a stored driver prior of 0.9 makes it the driver\'s, not a question', async () => {
+    await createSettingsRepo(db).set(ROLE_PRIOR_KEY, { driverAnswers: 8, answers: 8 });
+    await orphan(TRIP, drive(200), { evidence: 'auto' });
+    const { deps } = recoveryDeps();
+    await recoverRecordingTrips(db, deps);
+    expect(await trips.get(TRIP)).toMatchObject({ role: 'driver', role_source: 'auto', incomplete: 1 });
+  });
+
+  test('a confirmed habitual route reaches finalize as evidence (a neutral prior with it is still asked, per E2)', async () => {
+    const spy = jest.spyOn(finalizeModule, 'finalizeTrip');
+    const rows = drive(200);
+    const first = rows[0] as FeatureRow;
+    const last = rows[rows.length - 1] as FeatureRow;
+    await createSettingsRepo(db).set(ROLE_ROUTES_KEY, {
+      [routeKey(geohash5(first.lat, first.lng), geohash5(last.lat, last.lng))]: { driver: 2, other: 0 },
+    });
+    await orphan(TRIP, rows, { evidence: 'auto' });
+    await recoverRecordingTrips(db, recoveryDeps().deps);
+    expect(spy.mock.calls[0]?.[1]).toMatchObject({ habitualRoute: true, rolePrior: 0.5 });
+    spy.mockRestore();
+  });
+
+  test('negative control: with no prior and no route it stays unknown (asked about)', async () => {
+    await orphan(TRIP, drive(200), { evidence: 'auto' });
+    await recoverRecordingTrips(db, recoveryDeps().deps);
+    expect(await trips.get(TRIP)).toMatchObject({ role: 'unknown' });
   });
 });
