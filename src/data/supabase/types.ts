@@ -210,6 +210,39 @@ export type Database = {
           },
         ]
       }
+      limits_cache: {
+        Row: {
+          created_at: string
+          expires_at: string
+          geom: unknown
+          heading_deg: number | null
+          limit_mph: number
+          provider: string
+          segment_key: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          geom: unknown
+          heading_deg?: number | null
+          limit_mph: number
+          provider?: string
+          segment_key: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          geom?: unknown
+          heading_deg?: number | null
+          limit_mph?: number
+          provider?: string
+          segment_key?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       map_feedback: {
         Row: {
           created_at: string
@@ -613,6 +646,16 @@ export type Database = {
         Args: { p_limit?: number; p_older_than?: string }
         Returns: Json
       }
+      put_limits_cache: {
+        Args: {
+          p_heading: number
+          p_key: string
+          p_limit_mph: number
+          p_line: Json
+          p_ttl_days: number
+        }
+        Returns: string
+      }
       record_dispute: {
         Args: {
           p_event_id: string
@@ -652,6 +695,23 @@ export type Database = {
       soft_delete_trip: {
         Args: { p_trip_id: string; p_user: string }
         Returns: Json
+      }
+      speed_limit_candidates: {
+        Args: { p_lat: number; p_lng: number; p_radius_m: number }
+        Returns: {
+          bearing_deg: number
+          distance_m: number
+          highway: string
+          limit_mph: number
+          oneway: number
+          provider: string
+          segment_key: string
+        }[]
+      }
+      speed_limit_tiles: { Args: { p_keys: string[] }; Returns: Json }
+      take_rate_limit: {
+        Args: { p_key: string; p_max: number; p_user: string; p_window: string }
+        Returns: boolean
       }
       upsert_baselines: {
         Args: { p_baselines: Json; p_user: string }
