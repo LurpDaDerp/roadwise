@@ -338,7 +338,10 @@ Samples and fixes are timed on the monotonic **boot clock** and converted to epo
 - **Sanity fallback:** if that `t` is more than `TIMEBASE_MAX_SKEW_MS` (2000 ms) from the item's
   arrival time, use the arrival time instead and count it for diagnostics (some older Android
   devices time sensor events on another base). Batched Android samples arrive up to 1 s late,
-  inside the margin.
+  inside the margin. **"Arrival" has a different base on each platform:** Android measures it on
+  the capture's **anchored boot clock** (next bullet), never the wall clock; iOS measures it on the
+  **wall clock** (`Date()` at delivery), the same base as its row `ts` and its `CLLocation`
+  timestamps (§7 "iOS: when a row closes, and what its `ts` is").
 - **Android: "arrival" is measured on the capture's anchored boot clock**, not the wall clock:
   `arrival = anchor.epochMs + (SystemClock.elapsedRealtimeNanos() / 1e6 − anchor.clockMs)` at
   delivery (review N2N3 I2). Row `ts` is on the same base, so a wall-clock step mid-drive (a manual
