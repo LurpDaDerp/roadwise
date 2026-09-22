@@ -1,3 +1,5 @@
+import { createFakeDriveSense } from '@drive-sense';
+
 import { bootstrapApp, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
 import { LAST_USER_KEY, readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner, type AuthWatchable } from '@/boot/ownerWatch';
@@ -84,6 +86,21 @@ function depsFor(supabase: BootstrapDeps['supabase'], over: Partial<BootstrapDep
     hash: { sha256: async (text: string) => String(text.length).padStart(64, '0') },
     newId: counterIds(),
     appState,
+    // The drive host's native module, alert player and limits: fakes (M3; none is the subject).
+    source: createFakeDriveSense({ platform: 'ios', now: () => NOW }),
+    limits: {
+      lookup: () => null,
+      prefetch: () => {},
+      lookupStored: async () => null,
+      startTrip: () => {},
+      resetTrip: () => {},
+      purgeExpired: async () => 0,
+      stats: () => ({ memoryTiles: 0, requestsThisTrip: 0, pointLookupsThisTrip: 0, sqliteLoads: 0, truncatedTiles: 0 }),
+      settled: async () => {},
+    },
+    createPlayer: async () => ({ deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} }),
+    mountDiagnostics: null,
+    attachSummaryNotifier: null,
     tz: TZ,
     now: () => NOW,
     onError: () => {},
@@ -241,7 +258,8 @@ test('a handover mid-session: the old runtime goes, and the new one starts on a 
   expect(first.queryClient.getQueryCache().getAll()).toEqual([]);
   expect(second.queryClient.getQueryData(['trips', {}])).toBeUndefined();
 
-  // One runner, never two: the old one let go of the foreground before the new one took it.
-  expect(appState.listeners).toHaveLength(1);
-  expect(appState.removals).toBe(1);
+  // One runner and one drive host, never two of each: the old runtime let go of the foreground
+  // (both its listeners) before the new one took it.
+  expect(appState.listeners).toHaveLength(2);
+  expect(appState.removals).toBe(2);
 });

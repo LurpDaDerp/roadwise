@@ -33,6 +33,10 @@ import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
 import { traceIdempotencyKey } from '@/data/sync/queue';
+import { createFakeDriveSense } from '@drive-sense';
+import type { AlertPlayer } from '@/core/alerts/player';
+import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import type { AppConfigSupabase } from '@/data/config/appConfig';
 
 /** Wall clock at launch: the morning after the drive. */
 const NOW = T0 + 36_000_000;
@@ -58,26 +62,75 @@ const fakeSha256 = async (text: string): Promise<string> =>
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
 
-/** What a process that died mid-drive leaves behind: the row and its checkpointed samples. */
-async function crashedDrive(rows = 200): Promise<void> {
+/**
+ * What a process that died mid-drive leaves behind: the row and its checkpointed samples.
+ * Returns the checkpoint's timestamp (the last durable row).
+ */
+async function crashedDrive(rows = 200, id = TRIP, t0 = T0): Promise<number> {
   await migrate(db);
-  const recorder = createRecorder(db, { tz: TZ, now: () => T0 });
+  const recorder = createRecorder(db, { tz: TZ, now: () => t0 });
   const session: TripSession = createSession({
-    clientTripId: TRIP,
+    clientTripId: id,
     mode: 'mounted',
     role: 'driver',
     startSource: 'manual',
-    startedAt: T0,
+    startedAt: t0,
   });
-  for (const row of drive(rows)) appendRow(session, row, UNKNOWN_LIMIT);
+  for (const row of drive(rows, { t0 })) appendRow(session, row, UNKNOWN_LIMIT);
   await recorder.onCheckpoint(snapshotSession(session));
+  const trip = await createTripsRepo(db).get(id);
+  return trip?.checkpoint_ts as number;
+}
+
+/** A limits client that never touches the network: every lookup is unknown. */
+function fakeLimits(): SpeedLimitClient & { purged: number } {
+  const client = {
+    purged: 0,
+    lookup: () => null,
+    prefetch: () => {},
+    lookupStored: async () => null,
+    startTrip: () => {},
+    resetTrip: () => {},
+    async purgeExpired() {
+      client.purged += 1;
+      return 0;
+    },
+    stats: () => ({ memoryTiles: 0, requestsThisTrip: 0, pointLookupsThisTrip: 0, sqliteLoads: 0, truncatedTiles: 0 }),
+    settled: async () => {},
+  };
+  return client;
+}
+
+const silentPlayer = (): AlertPlayer => ({
+  deliver: async () => {},
+  stopCurrent: async () => {},
+  announce: async () => {},
+});
+
+/** The `app_config` read, counted. */
+function fakeAppConfig(): AppConfigSupabase & { reads: number } {
+  const seam = {
+    reads: 0,
+    from: () => ({
+      select: async () => {
+        seam.reads += 1;
+        return { data: [], error: null };
+      },
+    }),
+  };
+  return seam;
 }
 
 function deps(over: Partial<BootstrapDeps> = {}) {
   const supabase = createFakeSupabase({ uid: null });
-  const appState = createFakeAppState();
+  // The app is in front unless a test says otherwise: M2's launch tests all describe a foreground.
+  const appState = Object.assign(createFakeAppState(), { currentState: 'active' as string | null });
   const traces = new Map<string, Uint8Array>();
   const errors: string[] = [];
+  const driveSense = createFakeDriveSense({ platform: 'ios', now: () => NOW });
+  driveSense.setState({ location: 'always', motion: 'granted' });
+  const limits = fakeLimits();
+  const appConfig = fakeAppConfig();
   const bootstrapDeps: BootstrapDeps = {
     openDb: async () => db,
     supabase,
@@ -98,6 +151,13 @@ function deps(over: Partial<BootstrapDeps> = {}) {
     net: { isWifi: () => false },
     excludeFromBackup: async () => {},
     databaseDirectory: '/data/SQLite',
+    source: driveSense,
+    limits,
+    createPlayer: async () => silentPlayer(),
+    // Neither the diagnostics recorder nor the summary notifier is the subject here.
+    mountDiagnostics: null,
+    attachSummaryNotifier: null,
+    appConfig,
     tz: TZ,
     now: () => NOW,
     onError: (_error, context) => {
@@ -105,7 +165,7 @@ function deps(over: Partial<BootstrapDeps> = {}) {
     },
     ...over,
   };
-  return { bootstrapDeps, supabase, appState, traces, errors };
+  return { bootstrapDeps, supabase, appState, traces, errors, driveSense, limits, appConfig };
 }
 
 test('opens, migrates, recovers the crashed drive and starts the runner on what it queued', async () => {
@@ -124,7 +184,8 @@ test('opens, migrates, recovers the crashed drive and starts the runner on what 
 
   // The runner is live: it listens to the foreground, and its first drain already met the
   // recovered trip's item — signed out, so it asked for a session and handed the claim back.
-  expect(appState.listeners).toHaveLength(1);
+  // Two foreground listeners: the runner's and the drive host's (the L1 silent-switch rule reads it).
+  expect(appState.listeners).toHaveLength(2);
   await settle();
   expect(supabase.sessions).toBeGreaterThanOrEqual(1);
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
@@ -135,7 +196,7 @@ test('with nothing to recover the launch is the same, only quieter', async () =>
   const { bootstrapDeps, appState, supabase } = deps();
   runtime = await bootstrapApp(bootstrapDeps);
   expect(runtime.recovery.recovered).toEqual([]);
-  expect(appState.listeners).toHaveLength(1);
+  expect(appState.listeners).toHaveLength(2);
   await settle();
   // Nothing was queued, so nothing was uploaded — but the session is read twice: once by the
   // owner check, and once by the drain, which is how the enqueue sites learn whose device they
@@ -160,7 +221,7 @@ test('the cache is wired to the change event, and stop() detaches everything', a
   // teardown it performs (detach, cache clear) is done when it settles.
   await runtime.stop();
   runtime = null;
-  expect(appState.removals).toBe(1);
+  expect(appState.removals).toBe(2);
   queryClient.setQueryData(key, []);
   emitDataChanged({ source: 'enqueue' });
   await settle();
@@ -253,7 +314,7 @@ test('recovery finishes before the runner starts, so nothing races the row it qu
   runtime = await bootstrapApp(bootstrapDeps);
 
   expect(listenersWhenRecovered).toBe(0);
-  expect(appState.listeners).toHaveLength(1);
+  expect(appState.listeners).toHaveLength(2);
 });
 
 test('no limit cache exists at launch, so a recovered drive is never judged for speeding', async () => {
@@ -355,7 +416,7 @@ describe('a launch that fails', () => {
     // The sequence still finishes; what it built belongs to nobody, so it is stopped.
     await new Promise<void>((resolve) => setTimeout(resolve, 150));
     expect(appState.listeners).toHaveLength(0);
-    expect(appState.removals).toBe(1);
+    expect(appState.removals).toBe(2);
     queryClient.clear();
   });
 });
@@ -664,5 +725,411 @@ describe('D2: backup exclusion, the network adapter and the drain policy', () =>
 
     expect(supabase.invokes).toHaveLength(0);
     expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+  });
+});
+
+describe('H2: the engine stage — the drive host, adopt after a relaunch', () => {
+  const automotive = (ts: number) => ({ type: 'automotive' as const, confidence: 'high' as const, ts });
+
+  /** A launch at `clock`, with its own drive-sense fake on the same clock. */
+  function relaunch(clock: number, over: Partial<BootstrapDeps> = {}) {
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const built = deps({ source: driveSense, now: () => clock, ...over });
+    return { ...built, driveSense };
+  }
+
+  test('adopts the interrupted drive when native is still capturing (the iOS relaunch restart)', async () => {
+    const checkpoint = await crashedDrive();
+    const { bootstrapDeps, driveSense } = relaunch(checkpoint + 60_000);
+    driveSense.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBe(TRIP);
+    expect(runtime.recovery).toMatchObject({ recovered: [], discarded: [], skipped: [TRIP] });
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: TRIP });
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ status: 'recording' });
+    // Capturing already answered the question: the motion history was never read.
+    expect(driveSense.queries).not.toContain('queryMotionHistory');
+  });
+
+  test('adopts it when not capturing but the motion history over the gap is automotive', async () => {
+    // iOS relaunched the app on a wake; native had not restarted capture (no capture-open flag).
+    const checkpoint = await crashedDrive();
+    const clock = checkpoint + 5 * 60_000;
+    const { bootstrapDeps, driveSense } = relaunch(clock);
+    driveSense.setMotionHistory([automotive(checkpoint + 30_000)]);
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBe(TRIP);
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: TRIP });
+    expect(driveSense.queries).toContain('queryMotionHistory');
+  });
+
+  test('a recent drive with no sign of driving since is finalized, not adopted', async () => {
+    const checkpoint = await crashedDrive();
+    const { bootstrapDeps, driveSense } = relaunch(checkpoint + 5 * 60_000);
+    driveSense.setMotionHistory([{ type: 'walking', confidence: 'high', ts: checkpoint + 30_000 }]);
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBeNull();
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+    expect(runtime.drive.snapshot().status).not.toBe('recording');
+  });
+
+  test('a checkpoint 20 minutes old is past the gap window: finalized incomplete, even while capturing', async () => {
+    const checkpoint = await crashedDrive();
+    const { bootstrapDeps, driveSense } = relaunch(checkpoint + 20 * 60_000);
+    driveSense.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBeNull();
+    expect(runtime.recovery).toMatchObject({ recovered: [TRIP], skipped: [] });
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ status: 'provisional', incomplete: 1 });
+  });
+
+  test('a buffered wake plus an adoptable trip make exactly one recording trip', async () => {
+    const checkpoint = await crashedDrive();
+    const clock = checkpoint + 60_000;
+    const { bootstrapDeps, driveSense } = relaunch(clock);
+    driveSense.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    driveSense.setMotionHistory([automotive(clock - 30_000)]);
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    // Delivered before any listener exists: native buffers it for the first subscriber.
+    driveSense.emit('wake', { reason: 'significantChange', ts: clock });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await runtime.drive.settled();
+
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: TRIP });
+    expect(await createTripsRepo(db).list({ status: 'recording' })).toHaveLength(1);
+    // The wake met a recording engine: no second trip, no history query, and the claim was sent.
+    expect(driveSense.queries).not.toContain('queryMotionHistory');
+    expect(driveSense.calls).toContain('startCapture:mounted');
+    expect(driveSense.calls).not.toContain('stopCapture');
+  });
+
+  test('of two recent orphans the newest is adopted and the older finalized at once', async () => {
+    const older = await crashedDrive(100, 'trip-old', T0);
+    const newer = await crashedDrive(100, 'trip-new', older + 120_000);
+    const { bootstrapDeps, driveSense } = relaunch(newer + 60_000);
+    driveSense.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBe('trip-new');
+    expect(runtime.recovery.recovered).toEqual(['trip-old']);
+    // Finalized (as incomplete; 100 s of driving is too short to score, which is beside the point).
+    expect(await createTripsRepo(db).get('trip-old')).toMatchObject({ status: 'unscored', incomplete: 1 });
+    expect(await createTripsRepo(db).get('trip-new')).toMatchObject({ status: 'recording' });
+  });
+
+  test('a skipped trip the host does not adopt is recovered at once (E1 adopt protocol)', async () => {
+    // A recording row with no samples: recent, capture open, but nothing to rebuild.
+    await migrate(db);
+    const clock = NOW;
+    await createTripsRepo(db).insert(
+      { client_trip_id: 'empty', started_at: clock - 60_000, tz: TZ, status: 'recording' },
+      clock - 60_000
+    );
+    await db.execute('UPDATE trips SET checkpoint_ts = ? WHERE client_trip_id = ?', [clock - 30_000, 'empty']);
+    const { bootstrapDeps, driveSense } = relaunch(clock);
+    driveSense.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.adopted).toBeNull();
+    expect(runtime.recovery.discarded).toEqual(['empty']);
+    expect(await createTripsRepo(db).list({ status: 'recording' })).toEqual([]);
+  });
+
+  test("the host reads the remote flag, but only the driver's own opt-in arms auto-detect", async () => {
+    await migrate(db);
+    // The flag is available (nothing fetched yet), and the driver never opted in: not armed.
+    const off = relaunch(NOW);
+    runtime = await bootstrapApp(off.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('off');
+    expect(off.driveSense.calls).not.toContain('arm');
+    await runtime.stop();
+    runtime.queryClient.clear();
+
+    // Opted in, but the server switched the feature off: still not armed.
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: false } });
+    const killed = relaunch(NOW);
+    runtime = await bootstrapApp(killed.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('off');
+    expect(killed.driveSense.calls).not.toContain('arm');
+    await runtime.stop();
+    runtime.queryClient.clear();
+
+    // Opted in and available: armed.
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: true } });
+    const on = relaunch(NOW);
+    runtime = await bootstrapApp(on.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('armed');
+    expect(on.driveSense.calls).toContain('arm');
+  });
+});
+
+describe('H2: the diagnostics battery recorder (U5)', () => {
+  test('is mounted on the started host, in a background launch too, and let go at stop', async () => {
+    const checkpoint = await crashedDrive();
+    const clock = checkpoint + 60_000;
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    driveSense.setState({ location: 'always', motion: 'granted', capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    const mounted: string[] = [];
+    const { bootstrapDeps, appState } = deps({
+      source: driveSense,
+      now: () => clock,
+      mountDiagnostics: (host, settingsDb) => {
+        // After start: an adopted drive is already recording, so it is not read as a new start.
+        mounted.push(`mount ${host.snapshot().status} ${settingsDb === db}`);
+        return () => mounted.push('unmount');
+      },
+    });
+    appState.currentState = 'background';
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(mounted).toEqual(['mount recording true']);
+
+    await runtime.stop({ endOpenTrip: false });
+    expect(mounted).toEqual(['mount recording true', 'unmount']);
+    runtime.queryClient.clear();
+    runtime = null;
+  });
+});
+
+describe('H2: the drive-summary notifier (U3)', () => {
+  test('is attached to the started host in every launch, and let go only after stop() ends the drive', async () => {
+    await migrate(db);
+    const log: string[] = [];
+    const { bootstrapDeps, appState } = deps({
+      attachSummaryNotifier: (host) => {
+        log.push(`attach ${typeof host.subscribe}`);
+        return { detach: () => log.push('detach') };
+      },
+    });
+    appState.currentState = 'background';
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(log).toEqual(['attach function']);
+    const stop = runtime.drive.stop.bind(runtime.drive);
+    runtime.drive.stop = async (opts) => {
+      log.push('drive stop');
+      await stop(opts);
+    };
+    await runtime.stop();
+    expect(log).toEqual(['attach function', 'drive stop', 'detach']);
+    runtime.queryClient.clear();
+    runtime = null;
+  });
+});
+
+describe('H2: a background launch', () => {
+  test('a hanging getSession costs 1.5 s at most: the engine starts with the persisted owner, nothing wiped', async () => {
+    const checkpoint = await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const clock = checkpoint + 60_000;
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    driveSense.setState({
+      location: 'always',
+      motion: 'granted',
+      capturing: true,
+      captureWasOpen: true,
+      mode: 'mounted',
+      rate: 'full',
+    });
+    const { bootstrapDeps, supabase, appState } = deps({ source: driveSense, now: () => clock });
+    appState.currentState = 'background';
+    // A token refresh with no network: it never answers.
+    supabase.auth.getSession = () => new Promise(() => {});
+
+    const started = Date.now();
+    runtime = await bootstrapApp(bootstrapDeps);
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(2_000);
+    expect(elapsed).toBeGreaterThanOrEqual(1_400);
+    expect(runtime.profile).toBe('background');
+    expect(runtime.owner).toBe('same');
+    expect(runtime.adopted).toBe(TRIP);
+    expect(runtime.drive.snapshot().status).toBe('recording');
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
+  });
+
+  test('a hanging getSession on a device nobody owns yet is signed-out: nothing wiped on a guess', async () => {
+    await crashedDrive();
+    const { bootstrapDeps, supabase } = deps();
+    supabase.auth.getSession = () => new Promise(() => {});
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(runtime.owner).toBe('signed-out');
+    expect(runtime.recovery.recovered).toEqual([TRIP]);
+  });
+
+  test('uploads nothing and reads nothing from the server while in the background', async () => {
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    const supabase = createFakeSupabase({ uid: 'user-1' });
+    const { bootstrapDeps, appState, appConfig } = deps({ supabase });
+    appState.currentState = 'background';
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(runtime.profile).toBe('background');
+    await settle();
+    emitDataChanged({ source: 'enqueue' });
+    await settle();
+
+    // The recovered drive is queued, and stays queued: no drain from a background wake (§3.5).
+    expect(supabase.invokes).toEqual([]);
+    expect(supabase.uploads).toEqual([]);
+    expect(supabase.selects).toEqual([]);
+    expect(appConfig.reads).toBe(0);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+
+    // The driver opens the app: the same runtime drains, no rebuild.
+    appState.currentState = 'active';
+    appState.emit('active');
+    await settle();
+    expect(supabase.invokes.length).toBeGreaterThan(0);
+  });
+
+  test('a wake while in the background reports permissions (M4 seam); one in front does not', async () => {
+    await migrate(db);
+    const reported: string[] = [];
+    const built = deps({
+      reportPermissionsFromBackground: async () => {
+        reported.push(built.appState.currentState ?? 'null');
+      },
+    });
+    built.appState.currentState = 'background';
+    runtime = await bootstrapApp(built.bootstrapDeps);
+
+    built.driveSense.emit('wake', { reason: 'significantChange', ts: NOW });
+    await runtime.drive.settled();
+    await settle();
+    expect(reported).toEqual(['background']);
+
+    built.appState.currentState = 'active';
+    built.driveSense.emit('wake', { reason: 'significantChange', ts: NOW });
+    await runtime.drive.settled();
+    await settle();
+    expect(reported).toEqual(['background']);
+  });
+
+  test('a failing permission report is reported and changes nothing else', async () => {
+    await migrate(db);
+    const { bootstrapDeps, appState, driveSense, errors } = deps({
+      reportPermissionsFromBackground: async () => {
+        throw new Error('no permission API');
+      },
+    });
+    appState.currentState = 'background';
+    runtime = await bootstrapApp(bootstrapDeps);
+    driveSense.emit('wake', { reason: 'significantChange', ts: NOW });
+    await runtime.drive.settled();
+    await settle();
+    expect(errors).toContain('report permissions from background');
+  });
+});
+
+describe('H2: the runner stays off the database for the whole drive', () => {
+  test('an enqueue while the drive finalizes does not drain; the finalize change does', async () => {
+    let clock = NOW;
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const statusAtInvoke: string[] = [];
+    const supabase = createFakeSupabase({
+      uid: 'user-1',
+      invoke: () => {
+        statusAtInvoke.push(runtime?.drive.snapshot().status ?? 'none');
+        return { data: null, error: { message: 'not now', context: { status: 503 } } };
+      },
+    });
+    // The trace is written inside finalize (before its transaction), while the host says
+    // `finalizing`: hold it there, and wake the runner meanwhile.
+    let duringFinalize: string[] | null = null;
+    const traceWriter = {
+      async writeGzip() {
+        emitDataChanged({ source: 'enqueue' });
+        await settle();
+        await settle();
+        duringFinalize = [...statusAtInvoke];
+      },
+      clear: async () => {},
+    };
+    const { bootstrapDeps } = deps({ supabase, source: driveSense, now: () => clock, traceWriter });
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    await runtime.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await runtime.drive.settled();
+    for (const row of drive(200, { t0: clock + 1000 })) {
+      clock = row.ts + 200;
+      driveSense.loadTrace([row]);
+      driveSense.step();
+      await runtime.drive.settled();
+    }
+    expect(runtime.drive.snapshot().status).toBe('recording');
+    // Work owed from earlier, written without a change event: any drain would send it.
+    await createQueueRepo(db).enqueue(
+      'delete-trip',
+      { action: 'delete', clientTripId: 'gone' },
+      'delete:gone',
+      clock,
+      undefined,
+      'user-1'
+    );
+    expect(supabase.invokes).toEqual([]);
+
+    await runtime.drive.end();
+    await runtime.drive.untilIdle();
+    await settle();
+
+    // A wake while the host said `finalizing` sent nothing; the finalize change afterwards did.
+    expect(duringFinalize).toEqual([]);
+    expect(statusAtInvoke.length).toBeGreaterThan(0);
+    expect(statusAtInvoke.every((s) => s === 'off' || s === 'armed')).toBe(true);
+  });
+});
+
+describe('H2: foreground jobs', () => {
+  test('the config fetch runs on the foreground, at most daily, and tiles are purged after a restore', async () => {
+    let clock = NOW;
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    await createSettingsRepo(db).set(HYDRATE_RESTORED_AT_KEY, NOW - 60_000);
+    const { bootstrapDeps, appConfig, limits } = deps({
+      supabase: createFakeSupabase({ uid: 'user-1', tables: {} }),
+      now: () => clock,
+    });
+    runtime = await bootstrapApp(bootstrapDeps);
+    const appState = Object.assign(createFakeAppState(), { currentState: 'background' as string | null });
+    const jobs = await startForegroundJobs(runtime, { appState });
+    await settle();
+    expect(appConfig.reads).toBe(0);
+    expect(limits.purged).toBe(0);
+
+    appState.currentState = 'active';
+    appState.emit('active');
+    await settle();
+    expect(appConfig.reads).toBe(1);
+    expect(limits.purged).toBe(1);
+
+    clock += 60 * 60_000;
+    appState.emit('active');
+    await settle();
+    expect(appConfig.reads).toBe(1);
+
+    clock = NOW + 24 * 60 * 60_000;
+    appState.emit('active');
+    await settle();
+    expect(appConfig.reads).toBe(2);
+    await jobs.stop();
   });
 });
