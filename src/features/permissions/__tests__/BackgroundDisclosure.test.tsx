@@ -114,9 +114,35 @@ test('no intent: Always alone never turns auto-record on', async () => {
 test('an auto-record entry (the offers, B2’s repair): Continue says the driver wants it on', async () => {
   const adapter = fakeAdapter(snap({ location: 'foreground' }));
   const { host, settings } = await renderDisclosure(adapter, { enableAutoRecord: true });
+  // Said plainly before the tap (Ruling T9 (2)).
+  expect(await screen.findByTestId('disclosure-auto-record-note')).toHaveTextContent(
+    'Continue also turns on auto-record: RoadWise will start recording your drives automatically.'
+  );
+  expect(screen.getByTestId('disclosure-continue')).toHaveProp(
+    'accessibilityHint',
+    'Asks your phone for background location and turns on auto-record'
+  );
+  expect(host.setAutoDetect).not.toHaveBeenCalled();
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
   expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBe(true);
+});
+
+test('without enableAutoRecord (onboarding’s own step), no auto-record note is shown', async () => {
+  await renderDisclosure(fakeAdapter(snap({ location: 'foreground' })));
+  expect(await screen.findByTestId('disclosure-continue')).toHaveProp(
+    'accessibilityHint',
+    'Asks your phone for background location'
+  );
+  expect(screen.queryByTestId('disclosure-auto-record-note')).toBeNull();
+});
+
+test('the Settings-only auto-record entry also says so before the tap', async () => {
+  await renderDisclosure(fakeAdapter(snap({ platform: 'ios', location: 'foreground', locationCanAskAgain: false })), {
+    enableAutoRecord: true,
+  });
+  expect(await screen.findByTestId('disclosure-auto-record-note')).toBeOnTheScreen();
+  expect(screen.getByText('Choose Always in Settings, then come back')).toBeOnTheScreen();
 });
 
 test('Not now asks nothing and marks manual by choice', async () => {

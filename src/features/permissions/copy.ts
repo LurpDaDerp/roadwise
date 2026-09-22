@@ -77,6 +77,13 @@ export const permissionsCopy = {
   disclosure: {
     continue: 'Continue',
     continueHint: 'Asks your phone for background location',
+    /**
+     * Shown before the tap on every entry whose Continue also turns auto-record on (Ruling T9 (2)):
+     * the tap is the driver's opt-in, so the screen says so first.
+     */
+    autoRecordNote:
+      'Continue also turns on auto-record: RoadWise will start recording your drives automatically.',
+    autoRecordHint: 'Asks your phone for background location and turns on auto-record',
     notNow: 'Not now',
     notNowHint: 'Keeps starting drives yourself. Nothing is asked.',
     openSettings: 'Open Settings',

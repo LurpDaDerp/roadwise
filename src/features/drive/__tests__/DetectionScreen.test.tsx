@@ -127,9 +127,14 @@ test('the one disclosure (M4 Task 9) is exported with its version, word for word
   expect(DISCLOSURE_TEXT.heading).toBe('Allow RoadWise to use your location in the background');
   // Play's prominent disclosure: what is collected, that it is collected in the background, what for.
   expect(DISCLOSURE_TEXT.body).toBe(
-    'RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. Location is saved only while a drive is being recorded. It is stored with your account to score your drives and is never sold.'
+    'RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. During a drive, your location is used to look up speed limits; where open map data has no limit, the location (without your account ID) may be sent to Amazon Location Service to find it. RoadWise also uses your phone’s motion activity to detect when a drive starts and ends. Location is saved only while a drive is being recorded. It is stored with your account to score your drives and is never sold.'
   );
   expect(DISCLOSURE_TEXT.body).toMatch(/even when the app is closed or not in use/);
+  // Ruling T9 (1): every use of background location and motion is named.
+  expect(DISCLOSURE_TEXT.body).toMatch(/look up speed limits/);
+  expect(DISCLOSURE_TEXT.body).toMatch(/Amazon Location Service/);
+  expect(DISCLOSURE_TEXT.body).toMatch(/without your account ID/);
+  expect(DISCLOSURE_TEXT.body).toMatch(/motion activity to detect when a drive starts and ends/);
 });
 
 test('the disclosure is printed first, and nothing is requested before the driver taps', async () => {

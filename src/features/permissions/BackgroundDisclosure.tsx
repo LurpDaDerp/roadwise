@@ -220,7 +220,13 @@ export function BackgroundDisclosure({
           label={settingsOnly ? copy.openSettings : copy.continue}
           onPress={() => void onContinue()}
           loading={busy}
-          accessibilityHint={settingsOnly ? copy.settingsNeeded[snapshot.platform] : copy.continueHint}
+          accessibilityHint={
+            settingsOnly
+              ? copy.settingsNeeded[snapshot.platform]
+              : enableAutoRecord
+                ? copy.autoRecordHint
+                : copy.continueHint
+          }
           testID="disclosure-continue"
         />
         <Button
@@ -249,6 +255,12 @@ export function BackgroundDisclosure({
       {notYet ? (
         <Text variant="subhead" tone="muted" testID="disclosure-not-yet">
           {beforeFirstDrive ? copy.notYet : copy.needsForeground}
+        </Text>
+      ) : null}
+      {enableAutoRecord && !loading && !readFailed && !notYet ? (
+        // Ruling T9 (2): Continue here is the driver's opt-in to auto-record, so it is said first.
+        <Text variant="headline" testID="disclosure-auto-record-note">
+          {copy.autoRecordNote}
         </Text>
       ) : null}
       {settingsOnly && !notYet ? (
