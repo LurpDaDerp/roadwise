@@ -191,7 +191,7 @@ describe('the Settings-return acknowledgement', () => {
 });
 
 describe('the background-location consent', () => {
-  const signedIn = (uid: string) => ({ sessionUid: uid, boundUid: null });
+  const signedIn = (uid: string) => ({ shownTo: uid, sessionUid: uid });
 
   test('recorded at once under the signed-in account', async () => {
     const settings = createSettingsRepo(await createTestDb());
@@ -226,22 +226,32 @@ describe('the background-location consent', () => {
     expect(record).toHaveBeenCalledWith('driver-a', { type: 'background_location', version: 'pd-1' });
   });
 
-  test('security M-3: a grant with no session is kept bound to the given account, never sent now', async () => {
+  test('session lost mid-flow: kept bound to the account shown the disclosure, never sent now', async () => {
     const settings = createSettingsRepo(await createTestDb());
     const record = jest.fn(async () => ({}));
-    expect(await recordDisclosureConsent(settings, { sessionUid: null, boundUid: 'owner-1' }, record)).toBe(false);
+    expect(await recordDisclosureConsent(settings, { shownTo: 'u1', sessionUid: null }, record)).toBe(false);
     expect(record).not.toHaveBeenCalled();
-    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'owner-1' });
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
     await flushPendingDisclosureConsent(settings, 'someone-else', record);
     expect(record).not.toHaveBeenCalled();
-    await flushPendingDisclosureConsent(settings, 'owner-1', record);
-    expect(record).toHaveBeenCalledWith('owner-1', { type: 'background_location', version: 'pd-1' });
+    await flushPendingDisclosureConsent(settings, 'u1', record);
+    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
   });
 
-  test('no session and no account to bind to: nothing kept', async () => {
+  test('security r1-M1: shown to nobody known — nothing recorded or kept, whoever is signed in', async () => {
     const settings = createSettingsRepo(await createTestDb());
     const record = jest.fn(async () => ({}));
-    await recordDisclosureConsent(settings, { sessionUid: null, boundUid: null }, record);
+    expect(await recordDisclosureConsent(settings, { shownTo: null, sessionUid: 'u1' }, record)).toBe(false);
+    expect(await recordDisclosureConsent(settings, { shownTo: null, sessionUid: null }, record)).toBe(false);
+    expect(record).not.toHaveBeenCalled();
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+  });
+
+  test('security r1-M1: a different account signed in at the grant — nothing recorded or kept', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn(async () => ({}));
+    expect(await recordDisclosureConsent(settings, { shownTo: 'driver-a', sessionUid: 'driver-b' }, record)).toBe(false);
+    expect(record).not.toHaveBeenCalled();
     expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
   });
 

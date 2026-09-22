@@ -34,6 +34,7 @@ export { bannerMessage, PERMISSIONS_HREF, PermissionHealthBanner } from './Permi
 export {
   offerDue,
   offerHref,
+  offersFinished,
   PermissionPromptsHost,
   type AlwaysOffer,
   type AlwaysOffers,

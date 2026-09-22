@@ -99,31 +99,37 @@ function parsePending(raw: unknown): PendingDisclosureConsent | null {
 /**
  * Records the background-location consent for the disclosure the driver just affirmed.
  *
- * - `sessionUid`: the signed-in account now. The consent is sent under it; a failure (offline) is
- *   kept as `{ version, userId: sessionUid }`, never dropped.
- * - With no session (lost mid-flow, security M-3), nothing can be sent; the consent is kept bound
- *   to `boundUid` — the account that saw the disclosure, else the device owner
- *   (`device.lastUserId`). With neither, there is no account to bind it to and nothing is kept.
+ * The consent binds ONLY to `shownTo`, the account the disclosure screen was shown to (security
+ * r1-M1):
+ * - no such account, or a different account signed in now: nothing is recorded or kept;
+ * - that account signed in now: sent under it; a failure (offline) is kept as
+ *   `{ version, userId: shownTo }`, never dropped;
+ * - no session now (lost mid-flow): nothing can be sent; kept bound to `shownTo`.
  *
  * Returns whether the consent was recorded now.
  */
 export async function recordDisclosureConsent(
   settings: Pick<SettingsRepo, 'set' | 'remove'>,
-  who: { sessionUid: string | null; boundUid: string | null },
+  who: { shownTo: string | null; sessionUid: string | null },
   record: RecordDisclosureConsent = recordConsent
 ): Promise<boolean> {
-  const keep = (userId: string) =>
-    settings.set(PENDING_DISCLOSURE_CONSENT_KEY, { version: DISCLOSURE_VERSION, userId } satisfies PendingDisclosureConsent);
-  if (who.sessionUid === null) {
-    if (who.boundUid !== null) await keep(who.boundUid);
+  const { shownTo, sessionUid } = who;
+  if (shownTo === null || (sessionUid !== null && sessionUid !== shownTo)) return false;
+  const keep = () =>
+    settings.set(PENDING_DISCLOSURE_CONSENT_KEY, {
+      version: DISCLOSURE_VERSION,
+      userId: shownTo,
+    } satisfies PendingDisclosureConsent);
+  if (sessionUid === null) {
+    await keep();
     return false;
   }
   try {
-    await record(who.sessionUid, { type: 'background_location', version: DISCLOSURE_VERSION });
+    await record(shownTo, { type: 'background_location', version: DISCLOSURE_VERSION });
     await settings.remove(PENDING_DISCLOSURE_CONSENT_KEY);
     return true;
   } catch {
-    await keep(who.sessionUid);
+    await keep();
     return false;
   }
 }

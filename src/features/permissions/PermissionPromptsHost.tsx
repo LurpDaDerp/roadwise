@@ -55,6 +55,21 @@ export function offerDue(i: OfferInput): AlwaysOffer | null {
   return null;
 }
 
+/**
+ * Nothing can ever be due again (review m5, n1): every offer this platform makes is stamped (iOS:
+ * both; Android: the third-drive offer, its only one), or the driver chose manual — which only a
+ * grant clears, and a grant leaves nothing to offer.
+ */
+export function offersFinished(
+  platform: PermissionPlatform,
+  offers: AlwaysOffers,
+  manualByChoice: boolean
+): boolean {
+  if (manualByChoice) return true;
+  const third = offers['third-drive'] !== undefined;
+  return platform === 'ios' ? third && offers['first-drive'] !== undefined : third;
+}
+
 export const offerHref = (offer: AlwaysOffer): Href =>
   `/permissions/background?reason=${offer}` as Href;
 
@@ -97,7 +112,7 @@ export function PermissionPromptsHost({
   const now = deps.now ?? Date.now;
   const platform = deps.platform ?? (Platform.OS === 'ios' ? 'ios' : 'android');
   const inFlight = useRef(false);
-  // Both offers made: nothing is ever due again, so the host stops reading (review m5).
+  // Nothing is ever due again (`offersFinished`): the host stops reading settings (review m5, n1).
   const finished = useRef(false);
   // The route as it is when the phone read comes back: the driver may have left (tabs) meanwhile.
   const inTabsNow = useRef(inTabs);
@@ -123,12 +138,13 @@ export function PermissionPromptsHost({
           completedDrives: drives,
           offers: (await settings.get<AlwaysOffers>(ALWAYS_OFFER_KEY)) ?? {},
         };
-        if (base.offers['first-drive'] !== undefined && base.offers['third-drive'] !== undefined) {
+        const manualByChoice = (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true;
+        if (offersFinished(platform, base.offers, manualByChoice)) {
           finished.current = true;
           return;
         }
         const more = {
-          manualByChoice: (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true,
+          manualByChoice,
           canPromptAlways: canPrompt('locationAlways', await readPromptHistory(settings), now()),
         };
         const input = { ...base, ...more };

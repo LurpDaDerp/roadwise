@@ -134,9 +134,32 @@ test('after both offers, only B2; and the host stops reading (review m5)', async
   expect(r.adapter.log).toEqual([]);
 });
 
-test('never for a driver who chose manual', async () => {
-  await renderHost({ seed: { trips: [drive(1)], settings: { [MANUAL_BY_CHOICE_KEY]: true } } });
+test('Android: finished once its only offer (third-drive) is stamped; no more reads (review n1)', async () => {
+  const r = await renderHost({
+    platform: 'android',
+    seed: { trips: [drive(1), drive(2), drive(3)], settings: { [ALWAYS_OFFER_KEY]: { 'third-drive': 1 } } },
+  });
   expect(mockRouter.push).not.toHaveBeenCalled();
+  const execute = jest.spyOn(r.db, 'execute');
+  await act(async () => r.publish({ status: 'armed' }));
+  await act(async () => r.publish({ status: 'off' }));
+  expect(execute).not.toHaveBeenCalled();
+  expect(r.adapter.log).toEqual([]);
+});
+
+test('iOS with only the third-drive offer stamped is not finished: the first-drive offer is still due', async () => {
+  await renderHost({ seed: { trips: [drive(1)], settings: { [ALWAYS_OFFER_KEY]: { 'third-drive': 1 } } } });
+  await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(offerHref('first-drive')));
+});
+
+test('never for a driver who chose manual, and the host stops reading (review n1)', async () => {
+  const r = await renderHost({ seed: { trips: [drive(1)], settings: { [MANUAL_BY_CHOICE_KEY]: true } } });
+  expect(mockRouter.push).not.toHaveBeenCalled();
+  const execute = jest.spyOn(r.db, 'execute');
+  await act(async () => r.publish({ status: 'armed' }));
+  await act(async () => r.publish({ status: 'off' }));
+  expect(execute).not.toHaveBeenCalled();
+  expect(r.adapter.log).toEqual([]);
 });
 
 test('never when Always is already granted', async () => {

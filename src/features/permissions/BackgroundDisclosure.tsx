@@ -9,7 +9,6 @@ import {
   type PermissionSnapshot,
   type PermissionsAdapter,
 } from '@/core/permissions';
-import { readDeviceOwner } from '@/boot/device';
 import { createSettingsRepo } from '@/data/db';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb, useTrips } from '@/data/queries';
@@ -112,15 +111,14 @@ export function BackgroundDisclosure({
   );
 
   const granted = useCallback(async () => {
-    const boundUid = userId === null ? (shownTo.current ?? (await readDeviceOwner(db))) : null;
-    await recordDisclosureConsent(settings, { sessionUid: userId, boundUid }, deps.recordConsent);
+    await recordDisclosureConsent(settings, { shownTo: shownTo.current, sessionUid: userId }, deps.recordConsent);
     await settings.remove(MANUAL_BY_CHOICE_KEY);
     // The intent is spent here, so an old one can never turn auto-record on after a later grant.
     const wanted = (await settings.get<boolean>(AUTO_RECORD_INTENT_KEY)) === true;
     await settings.remove(AUTO_RECORD_INTENT_KEY);
     if (wanted) await host.setAutoDetect(true);
     finish('always');
-  }, [settings, db, userId, deps.recordConsent, host, finish]);
+  }, [settings, userId, deps.recordConsent, host, finish]);
 
   /** A decline (the OS, or Not now): manual by choice, and any auto-record intent is dropped. */
   const declined = useCallback(async () => {

@@ -247,7 +247,7 @@ test('security M-3: the session is lost mid-flow; the consent is kept bound to t
   expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
 });
 
-test('security M-3: no session at all; bound to the device owner (device.lastUserId)', async () => {
+test('security r1-M1: shown with no account — nothing recorded, not even for the device owner', async () => {
   mockSession.session = null;
   const adapter = fakeAdapter(snap({ location: 'foreground' }));
   const { onResult, settings, recordConsent } = await renderDisclosure(adapter, {
@@ -256,7 +256,20 @@ test('security M-3: no session at all; bound to the device owner (device.lastUse
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
   expect(recordConsent).not.toHaveBeenCalled();
-  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'owner-1' });
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+});
+
+test('security r1-M1: another account signed in by the grant — nothing recorded for either', async () => {
+  const adapter = fakeAdapter(snap({ location: 'foreground' }));
+  const { onResult, settings, recordConsent, appState } = await renderDisclosure(adapter);
+  await screen.findByTestId('disclosure-continue');
+  mockSession.session = { user: { id: 'driver-b' } };
+  adapter.current = snap({ location: 'foreground' });
+  await act(async () => appState.foreground());
+  await press(screen.getByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(recordConsent).not.toHaveBeenCalled();
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
 });
 
 test.each(['first-drive', 'third-drive'] as const)(
