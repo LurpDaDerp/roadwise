@@ -12,6 +12,7 @@ No third-party or recorded audio is included, so no licence or attribution appli
 | `l2.wav` | 660 Hz then 990 Hz, 150 ms each, back to back | 300 ms |
 | `l3.wav` | three pairs of 1040 Hz + 780 Hz (120 ms each), 80 ms between pairs | 880 ms |
 
-All are 16-bit mono PCM at 44.1 kHz, and loudness rises with the level. The script is
+All are 16-bit mono PCM at 44.1 kHz, peaking at 0.9 of full scale. L1 is soft by its shape, not its
+level; any loudness balance between levels is a runtime gain in the alert player. The script is
 deterministic: `scripts/__tests__/make-tones.test.ts` fails if these files differ from what it
 generates, so edit the script and regenerate rather than editing the audio.

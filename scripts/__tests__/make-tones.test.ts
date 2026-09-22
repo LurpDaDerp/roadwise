@@ -47,6 +47,23 @@ function dominantHz(w: Wav): number {
   return crossings / 2 / (sounding / w.rate);
 }
 
+/** Bursts of sound separated by at least 50 ms of near-silence. */
+function soundingSegments(w: Wav): number {
+  const QUIET = 100; // ≈ −50 dBFS
+  const minGap = Math.round(0.05 * w.rate);
+  let segments = 0;
+  let quietRun = minGap; // leading silence does not split anything
+  for (const v of w.samples) {
+    if (Math.abs(v) < QUIET) {
+      quietRun++;
+      continue;
+    }
+    if (quietRun >= minGap) segments++;
+    quietRun = 0;
+  }
+  return segments;
+}
+
 describe('make-tones', () => {
   const tones = renderTones();
   const wavs = Object.fromEntries(LEVELS.map((l) => [l, parseWav(tones[l])])) as Record<
@@ -95,11 +112,19 @@ describe('make-tones', () => {
     }
   });
 
-  test('loudness rises with the level', () => {
-    const peak = (w: Wav) => w.samples.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
-    expect(peak(wavs.l1)).toBeLessThan(peak(wavs.l2));
-    expect(peak(wavs.l2)).toBeLessThan(peak(wavs.l3));
-    expect(peak(wavs.l3)).toBeLessThan(32767);
+  test('every level peaks near full scale; level balance is the player gain, not the file', () => {
+    const peak = (w: Wav) => w.samples.reduce((m, v) => Math.max(m, Math.abs(v)), 0) / 32767;
+    for (const l of LEVELS) {
+      expect(peak(wavs[l])).toBeGreaterThan(0.85);
+      expect(peak(wavs[l])).toBeLessThan(0.95);
+    }
+  });
+
+  test('rhythm: L1 and L2 are one sounding burst, L3 is three, and L3 lasts 880 ms', () => {
+    expect(soundingSegments(wavs.l1)).toBe(1);
+    expect(soundingSegments(wavs.l2)).toBe(1);
+    expect(soundingSegments(wavs.l3)).toBe(3);
+    expect(durationMs(wavs.l3)).toBeCloseTo(880, 0);
   });
 
   test('the committed WAVs are exactly what the script generates', () => {

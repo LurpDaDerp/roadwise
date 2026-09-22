@@ -7,12 +7,17 @@
  *   npm run tones:make
  *
  * Output: 16-bit mono PCM WAV at 44.1 kHz, deterministic (same bytes on every run — no dither, no
- * randomness). The levels differ in pitch, rhythm and loudness, so a driver can tell them apart
- * without looking (design §13.4, product §8.8):
+ * randomness). The levels differ in pitch and rhythm, so a driver can tell them apart without
+ * looking (design §13.4, product §8.8):
  *   L1  one soft 880 Hz tone, 180 ms, 20 ms ramps                         — a nudge
  *   L2  two tones rising 660 → 990 Hz, 150 ms each, back to back          — a warning
  *   L3  three pairs of 1040 Hz + 780 Hz (120 ms each), 80 ms between pairs — urgent
  * Every segment is shaped by a raised-cosine ramp so nothing clicks at its edges.
+ *
+ * Every level renders near full scale. Alerts must be heard over music and road noise, often
+ * through a pocketed speaker, and L1 is the level a driver hears most. L1 is "soft" by its shape
+ * (one tone, gentle ramps), not its level; any loudness balance between levels is a tunable
+ * runtime gain in the alert player (src/core/alerts/player.ts), never baked into these files.
  *
  * scripts/__tests__/make-tones.test.ts fails if the committed WAVs drift from this script, so run
  * it after any change here and commit the result.
@@ -24,8 +29,8 @@ const path = require('path');
 const SAMPLE_RATE = 44100;
 const OUT_DIR = path.resolve(__dirname, '..', 'assets', 'sounds');
 
-/** Peak level per alert level, as a fraction of full scale: louder as urgency rises. */
-const AMPLITUDE = { l1: 0.3, l2: 0.5, l3: 0.7 };
+/** Peak level of every tone, as a fraction of full scale: loud, with headroom against clipping. */
+const PEAK = 0.9;
 /** Ramp length for L1 (the brief's 20 ms) and for the shorter L2/L3 segments. */
 const L1_RAMP_MS = 20;
 const SEGMENT_RAMP_MS = 10;
@@ -84,14 +89,14 @@ function wav(samples) {
 }
 
 function renderTones() {
-  const l1 = tone(880, 180, L1_RAMP_MS, AMPLITUDE.l1);
+  const l1 = tone(880, 180, L1_RAMP_MS, PEAK);
   const l2 = concat([
-    tone(660, 150, SEGMENT_RAMP_MS, AMPLITUDE.l2),
-    tone(990, 150, SEGMENT_RAMP_MS, AMPLITUDE.l2),
+    tone(660, 150, SEGMENT_RAMP_MS, PEAK),
+    tone(990, 150, SEGMENT_RAMP_MS, PEAK),
   ]);
   const pair = () => [
-    tone(1040, 120, SEGMENT_RAMP_MS, AMPLITUDE.l3),
-    tone(780, 120, SEGMENT_RAMP_MS, AMPLITUDE.l3),
+    tone(1040, 120, SEGMENT_RAMP_MS, PEAK),
+    tone(780, 120, SEGMENT_RAMP_MS, PEAK),
   ];
   const l3 = concat([...pair(), silence(L3_GAP_MS), ...pair(), silence(L3_GAP_MS), ...pair()]);
   return { l1: wav(l1), l2: wav(l2), l3: wav(l3) };
