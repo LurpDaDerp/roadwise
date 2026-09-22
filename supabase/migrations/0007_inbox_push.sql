@@ -601,8 +601,12 @@ $$;
 --     categories: object             prefs.categories ({} when no row); a missing key is on
 --     driving_since: timestamptz|null the newest drive_state_at of a device in `recording` within
 --                                    the last 6 h, clamped to now() (security M-1)
---     recent: [{ type, pushed_at }]  up to 50 of the user's `sent` rows from the last 8 days,
---                                    newest first
+--     recent: [{ type, pushed_at, lapse_key? }]
+--                                    up to 50 of the user's `sent` rows from the last 8 days,
+--                                    newest first; lapse_key only on permission_lapsed rows:
+--                                    payload.deviceId || ':' || payload.permission (the raw device
+--                                    id, never the hashed form; ruling T3 (2)), which push-sender
+--                                    rebuilds from a claimed lapse's payload to dedupe across sweeps
 --     local_sent_today: int          prefs.local_sent_count when local_sent_day is today in tz, else 0
 --     tokens: text[]                 up to 10 Expo tokens, most recently registered first
 --   }
@@ -653,8 +657,13 @@ begin
                         from public.devices d
                         where d.user_id = b.user_id and d.drive_state = 'recording'
                           and d.drive_state_at > now() - interval '6 hours'),
-      'recent', (select coalesce(jsonb_agg(jsonb_build_object('type', r.type, 'pushed_at', r.pushed_at) order by r.pushed_at desc), '[]'::jsonb)
-                 from (select s.type, s.pushed_at from public.inbox s
+      'recent', (select coalesce(jsonb_agg(jsonb_build_object('type', r.type, 'pushed_at', r.pushed_at)
+                   || case when r.type = 'permission_lapsed' and jsonb_typeof(r.payload -> 'deviceId') = 'string'
+                             and jsonb_typeof(r.payload -> 'permission') = 'string'
+                           then jsonb_build_object('lapse_key', (r.payload ->> 'deviceId') || ':' || (r.payload ->> 'permission'))
+                           else '{}'::jsonb end
+                   order by r.pushed_at desc), '[]'::jsonb)
+                 from (select s.type, s.pushed_at, s.payload from public.inbox s
                        where s.user_id = b.user_id and s.push_state = 'sent' and s.pushed_at > now() - interval '8 days'
                        order by s.pushed_at desc limit 50) r),
       'local_sent_today', case when b.local_sent_day = (now() at time zone b.tz)::date then b.local_sent_count else 0 end,

@@ -16,7 +16,7 @@ begin
 end $$;
 
 begin;
-select plan(286);
+select plan(287);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -686,7 +686,8 @@ update public.devices set push_token = 'ExponentPushToken[legacydevice1]' where 
 update public.notification_prefs set local_sent_day = (now() at time zone 'America/New_York')::date, local_sent_count = 2 where user_id = 'b7000000-0000-4000-8000-000000000001';
 insert into public.inbox (user_id, type, payload, dedupe_key, push_state, push_reason, pushed_at) values
   ('b7000000-0000-4000-8000-000000000001', 'permission_lapsed', '{"permission":"motion","platform":"ios","deviceId":"a-phone"}', 'sent-1', 'sent', 'ok', now() - interval '1 day'),
-  ('b7000000-0000-4000-8000-000000000001', 'permission_lapsed', '{"permission":"motion","platform":"ios","deviceId":"a-phone"}', 'sent-9', 'sent', 'ok', now() - interval '9 days');
+  ('b7000000-0000-4000-8000-000000000001', 'permission_lapsed', '{"permission":"motion","platform":"ios","deviceId":"a-phone"}', 'sent-9', 'sent', 'ok', now() - interval '9 days'),
+  ('b7000000-0000-4000-8000-000000000001', 'trip_summary', '{"clientTripId":"a-sent"}', 'sent-2', 'sent', 'ok', now() - interval '2 days');
 insert into res (k, v) select 'i1', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'i1', 'a-phone', interval '2 minutes'));
 insert into res (k, v) select 'i2', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000002', 'i2', 'b-phone', interval '1 minute'));
 update public.inbox set push_state = 'deferred', push_reason = 'quiet_hours' where dedupe_key = 'i2';
@@ -722,7 +723,8 @@ select is((select e -> 'ctx' from res, jsonb_array_elements(v) e where k = 'clai
   jsonb_build_object('tz', 'America/New_York', 'quiet', '{"enabled":true,"start":"22:00","end":"07:00"}'::jsonb,
     'categories', '{"trip_summaries": true, "recording": true, "rewards": false, "family": true, "safety": true, "product": false, "weekly_recap": true, "crews": true}'::jsonb,
     'driving_since', now() - interval '5 hours',
-    'recent', jsonb_build_array(jsonb_build_object('type', 'permission_lapsed', 'pushed_at', now() - interval '1 day')),
+    'recent', jsonb_build_array(jsonb_build_object('type', 'permission_lapsed', 'pushed_at', now() - interval '1 day', 'lapse_key', 'a-phone:motion'),
+      jsonb_build_object('type', 'trip_summary', 'pushed_at', now() - interval '2 days')),
     'local_sent_today', 2, 'tokens', '["ExponentPushToken[aaaaaaaaaaaa3]"]'::jsonb),
   'A''s ctx: the drive''s zone; null quiet fields = notification_defaults; driving within 6 h (the 7-h-old one ignored); 8 days of sends; today''s phone count; tokens, never devices.push_token');
 select is((select e -> 'ctx' from res, jsonb_array_elements(v) e where k = 'claim1' and e ->> 'inbox_id' = (select v #>> '{}' from res where k = 'i2')),
@@ -730,6 +732,10 @@ select is((select e -> 'ctx' from res, jsonb_array_elements(v) e where k = 'clai
     'driving_since', null, 'recent', '[]'::jsonb, 'local_sent_today', 0, 'tokens', '[]'::jsonb),
   'B with no prefs and no drives: every default');
 select is((select count(*)::int from res where k = 'claim1' and v::text like '%legacydevice1%'), 0, 'devices.push_token never appears in a claim');
+select is((select array_agg(row(r ->> 'type', r ? 'lapse_key', r ->> 'lapse_key')::text order by r ->> 'pushed_at' desc) from res,
+    jsonb_array_elements(v -> 0 -> 'ctx' -> 'recent') r where k = 'claim1'),
+  array[row('permission_lapsed', true, 'a-phone:motion')::text, row('trip_summary', false, null::text)::text],
+  'recent carries lapse_key (deviceId:permission) on a lapse only, and no such key on any other type (ruling T3 (2))');
 select is((select count(distinct e -> 'ctx')::int from res, jsonb_array_elements(v) e where k = 'claim1' and e ->> 'user_id' = 'b7000000-0000-4000-8000-000000000001'), 1,
   'both of A''s items carry the same ctx');
 
