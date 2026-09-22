@@ -3,7 +3,7 @@
 // Everything the engine knows about the outside world comes in through `EngineDeps` and
 // `EngineEvent`; everything it decides goes out through the `EngineDeps` callbacks and
 // `EngineSnapshot`. Time is only ever the `ts` on an event or a row.
-import type { AlertDecision, Arbiter } from '../alerts/types';
+import type { AlertDecision, Arbiter, ArbiterState } from '../alerts/types';
 import type { TripDetectors } from '../detectors';
 import type { DetectedEvent, DetectorContext, DriveMode, FeatureRow, LimitSample } from './types';
 
@@ -13,6 +13,16 @@ export type TripRole = 'driver' | 'passenger';
 
 /** How the trip was confirmed: the user tapped Start (§8.4) or the auto-detect window closed (§8.5). */
 export type StartSource = 'manual' | 'auto';
+
+/**
+ * What the start says about who is driving (plan rev1 I10), finer than `StartSource`: a Start tap
+ * while parked (`tap`), a start made while already moving (`movingStart` — the one-tap start from
+ * the drive notification or a relaunch at speed), or auto-detection (`auto`). `tap` and
+ * `movingStart` are both `StartSource` `manual`. Stored on the trip row as `role_source`
+ * (`manual` / `moving_start` / `auto`, see `roleSourceFor`) and read back from it by
+ * `startFromRoleSource` when a trip is rebuilt after a relaunch.
+ */
+export type StartEvidence = 'tap' | 'movingStart' | 'auto';
 
 export interface Fix {
   lat: number;
@@ -42,6 +52,15 @@ export interface TripSession {
   mode: DriveMode;
   role: TripRole;
   startSource: StartSource;
+  /** The finer start evidence the role inference reads (`tap` / `movingStart` / `auto`). */
+  startEvidence: StartEvidence;
+  /**
+   * The arbiter's resumable state as of the last checkpoint: the engine copies `arbiter.state()`
+   * here just before each `onCheckpoint`, and the recorder persists it (settings
+   * `engine.arbiter.<clientTripId>`), so a relaunch mid-drive keeps the spent L1 budget and a
+   * drive mute. Null until the first checkpoint, and on a trip rebuilt with nothing stored.
+   */
+  arbiterState: ArbiterState | null;
   /** epoch ms — the first row of the trip, or the OS motion-history backfill (§8.5 step 4). */
   startedAt: number;
   /** `startedAt` came from the motion history rather than a fix (marked in data quality, §8.5). */
@@ -94,8 +113,21 @@ export interface EngineSnapshot {
   startedAt: number | null;
   /** epoch ms of the last row seen in `candidate`, `recording` or `ending`. */
   lastRowTs: number | null;
-  /** m/s; 0 when unknown. */
+  /** m/s; 0 when unknown — read `speedKnown` before showing it (§13.2: unknown is "—"). */
   speedMps: number;
+  /**
+   * The CURRENT row has a known speed (valid fix, not the -1 sentinel). False before the first
+   * row and on every row that lost the fix, however recent the last good one was — a tunnel shows
+   * "—", never a stale speed. `lockedOut` deliberately does not follow it (SR2: it holds at the
+   * last known speed).
+   */
+  speedKnown: boolean;
+  /**
+   * After an `adopt` or a rowless resume (automotive activity, Start inside the gap window), true
+   * until the first row with a known speed: the pre-gap speed is stale, so `lockedOut` is false
+   * meanwhile and the HUD gates touch on this instead (U2). False on an ordinary trip start.
+   */
+  awaitingSpeedAfterResume: boolean;
   limit: LimitSample;
   distanceM: number;
   /** epoch ms of the first row of the current run of speed < 0.5 m/s (C8 auto-end). */
@@ -119,8 +151,12 @@ export interface EngineDeps {
   };
   /** A fresh detector suite for each trip, made when the trip is confirmed. */
   createDetectors(): TripDetectors;
-  /** A fresh arbiter for each trip; the host closes over its `ArbiterState` (trip index, carried mute). */
-  createArbiter(): Arbiter;
+  /**
+   * A fresh arbiter for each trip; the host closes over its `ArbiterState` (trip index, carried
+   * mute). On `adopt` it is called with the state persisted at the trip's last checkpoint, which
+   * the host passes through (`createArbiter(resume ?? { tripIndex })`).
+   */
+  createArbiter(resume?: ArbiterState): Arbiter;
   onAlert(decision: AlertDecision): void;
   /** Every `CHECKPOINT_S` rows. Owns persistence; a rejection leaves the checkpoint unrecorded. */
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
@@ -150,11 +186,48 @@ export type EngineEvent =
       candidateStartTs?: number;
     }
   | { type: 'activity'; automotive: boolean; walking: boolean; ts: number; candidateStartTs?: number }
-  | { type: 'manualStart'; mode: DriveMode; passenger: boolean; ts: number }
+  | {
+      type: 'manualStart';
+      mode: DriveMode;
+      passenger: boolean;
+      ts: number;
+      /** Default `tap`. `movingStart` when the start was made while already moving. */
+      evidence?: 'tap' | 'movingStart';
+    }
   | { type: 'row'; row: FeatureRow }
   | { type: 'setPassenger'; passenger: boolean; ts: number }
+  /**
+   * The driver picks mounted or pocket mid-trip. Applied in `recording` or `ending` unless the
+   * lockout is on (SR7: no setup while moving); ignored otherwise. An `auto` trip keeps pocket
+   * semantics until this says `mounted`.
+   */
+  | { type: 'setMode'; mode: 'mounted' | 'pocket'; ts: number }
+  /**
+   * Continue a trip the previous process was recording (spec §19.1 "resume from checkpoint"),
+   * rebuilt by `rebuildFromSamples`. Applied only in `off` or `armed` — the host dispatches it
+   * before it subscribes to native events or arms, so no wake can open a second trip for the same
+   * drive first; anywhere else it is ignored and the trip stays with its owner (the host checks
+   * `snapshot().clientTripId` and finalizes the orphan itself).
+   */
+  | { type: 'adopt'; trip: AdoptedTrip; ts: number }
+  /** Long-press on the HUD: silence repeats of the alert now speaking (§8.8 step 6). */
+  | { type: 'muteCurrent'; ts: number }
+  /** C6 "Mute for this drive": nothing more is delivered on this trip. */
+  | { type: 'muteForDrive'; ts: number }
   | { type: 'end'; ts: number }
   | { type: 'tick'; ts: number };
+
+/** A trip rebuilt from its durable rows, ready for `adopt`. */
+export interface AdoptedTrip {
+  /** The rebuilt open session: accumulators, events so far, `checkpoints` = [checkpointTs]. */
+  session: TripSession;
+  /** The detector suite the durable rows were replayed through, episodes still open. */
+  detectors: TripDetectors;
+  /** epoch ms of the last durable row (`trips.checkpoint_ts`). */
+  checkpointTs: number;
+  /** What the recorder stored at that checkpoint, or null. */
+  arbiterState: ArbiterState | null;
+}
 
 export interface Engine {
   /** Serialised: a dispatch never starts before the previous one has settled. */

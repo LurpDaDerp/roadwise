@@ -7,7 +7,7 @@ import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, finalizeDeps, TZ } from '@/core/engine/__fixtures__/drives';
 import type { TripRole, TripSession } from '@/core/engine/engine.types';
 import { tracePathFor } from '@/core/engine/finalize';
-import { createRecorder } from '@/core/engine/recorder';
+import { arbiterStateKey, createRecorder } from '@/core/engine/recorder';
 import { recoverRecordingTrips, type RecoveryDeps } from '@/core/engine/recovery';
 import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
 import type { DriveMode, FeatureRow } from '@/core/engine/types';
@@ -15,6 +15,7 @@ import {
   createEventsRepo,
   createQueueRepo,
   createSamplesRepo,
+  createSettingsRepo,
   createTripsRepo,
   migrate,
   type Db,
@@ -97,7 +98,7 @@ test('an orphaned 200-row recording with a hard brake is finalized from its chec
 
   const result = await recoverRecordingTrips(db, deps);
 
-  expect(result).toEqual({ recovered: [TRIP], discarded: [], failed: [] });
+  expect(result).toEqual({ recovered: [TRIP], discarded: [], failed: [], skipped: [] });
   const trip = await trips.get(TRIP);
   expect(trip).toMatchObject({
     status: 'provisional',
@@ -243,7 +244,7 @@ test('a recording with no samples is removed and reported as discarded; settled 
 
   const result = await recoverRecordingTrips(db, recoveryDeps().deps);
 
-  expect(result).toEqual({ recovered: [], discarded: ['empty'], failed: [] });
+  expect(result).toEqual({ recovered: [], discarded: ['empty'], failed: [], skipped: [] });
   await expect(trips.get('empty')).resolves.toBeNull();
   expect(await trips.get('done')).toMatchObject({ status: 'provisional', score: 88, updated_at: T0 });
   await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
@@ -282,7 +283,7 @@ test('one trip whose finalize throws lands in failed, untouched, while its sibli
   await expect(createEventsRepo(db).countByTrip(BAD)).resolves.toBe(0);
 
   const retry = await recoverRecordingTrips(db, deps);
-  expect(retry).toEqual({ recovered: [BAD], discarded: [], failed: [] });
+  expect(retry).toEqual({ recovered: [BAD], discarded: [], failed: [], skipped: [] });
   expect(await trips.get(BAD)).toMatchObject({ status: 'provisional', sync_state: 'queued', incomplete: 1 });
   await expect(samples.count(BAD)).resolves.toBe(0);
 });
@@ -304,4 +305,80 @@ test('only the checkpointed rows exist after a crash: the trip ends one row-leng
     duration_s: 180,
   });
   expect((await findFinalize(db, TRIP))?.rowsDigest.count).toBe(180);
+});
+
+describe('M3: skip, and the arbiter state goes with the trip', () => {
+  const OLD = 'trip-old';
+  const settings = () => createSettingsRepo(db);
+
+  test('a skipped trip stays recording with its samples and its arbiter state; the others recover', async () => {
+    await orphan(OLD, drive(200));
+    await orphan(TRIP, drive(200, { t0: T0 + 3_600_000 }));
+    await settings().set(arbiterStateKey(TRIP), { tripIndex: 3, mutedAll: true });
+    const skip = jest.fn((trip: { client_trip_id: string }) => trip.client_trip_id === TRIP);
+
+    const result = await recoverRecordingTrips(db, recoveryDeps({ skip }).deps);
+
+    expect(result).toEqual({ recovered: [OLD], discarded: [], failed: [], skipped: [TRIP] });
+    expect(skip).toHaveBeenCalledTimes(2);
+    expect(await trips.get(TRIP)).toMatchObject({ status: 'recording', sync_state: 'local' });
+    await expect(samples.count(TRIP)).resolves.toBe(200);
+    await expect(settings().get(arbiterStateKey(TRIP))).resolves.toEqual({ tripIndex: 3, mutedAll: true });
+
+    // Run again without skip (the host did not adopt it): now it is finalized, state and all.
+    const again = await recoverRecordingTrips(db, recoveryDeps().deps);
+    expect(again).toEqual({ recovered: [TRIP], discarded: [], failed: [], skipped: [] });
+    await expect(settings().get(arbiterStateKey(TRIP))).resolves.toBeNull();
+  });
+
+  test('an async skip is awaited, and one that throws is that trip failing, left as found', async () => {
+    await orphan(TRIP, drive(200));
+    const boom = new Error('motion history unavailable');
+    const result = await recoverRecordingTrips(
+      db,
+      recoveryDeps({ skip: () => Promise.reject(boom) }).deps
+    );
+    expect(result).toEqual({
+      recovered: [],
+      discarded: [],
+      failed: [{ clientTripId: TRIP, error: boom }],
+      skipped: [],
+    });
+    expect((await trips.get(TRIP))?.status).toBe('recording');
+
+    const skipped = await recoverRecordingTrips(db, recoveryDeps({ skip: async () => true }).deps);
+    expect(skipped.skipped).toEqual([TRIP]);
+  });
+
+  test('a recovered trip loses its arbiter state inside the finalize; a discarded one with its row', async () => {
+    await orphan(TRIP, drive(200));
+    await trips.insert({ client_trip_id: 'empty', started_at: T0, tz: TZ, status: 'recording' }, T0);
+    await settings().set(arbiterStateKey(TRIP), { tripIndex: 1 });
+    await settings().set(arbiterStateKey('empty'), { tripIndex: 1 });
+    await settings().set('units', 'mph');
+
+    const result = await recoverRecordingTrips(db, recoveryDeps().deps);
+
+    expect(result).toEqual({ recovered: [TRIP], discarded: ['empty'], failed: [], skipped: [] });
+    await expect(settings().get(arbiterStateKey(TRIP))).resolves.toBeNull();
+    await expect(settings().get(arbiterStateKey('empty'))).resolves.toBeNull();
+    await expect(settings().get('units')).resolves.toBe('mph');
+  });
+
+  test('a recovered trip keeps the start evidence it was recorded with', async () => {
+    const recorder = createRecorder(db, { tz: TZ, now: () => T0 });
+    const s = createSession({
+      clientTripId: TRIP,
+      mode: 'pocket',
+      role: 'driver',
+      startSource: 'manual',
+      startEvidence: 'movingStart',
+      startedAt: T0,
+    });
+    for (const row of drive(150)) appendRow(s, row, UNKNOWN_LIMIT);
+    await recorder.onCheckpoint(snapshotSession(s));
+    await recoverRecordingTrips(db, recoveryDeps().deps);
+    expect(await trips.get(TRIP)).toMatchObject({ role_source: 'moving_start', incomplete: 1 });
+    expect((await findFinalize(db, TRIP))?.roleSource).toBe('moving_start');
+  });
 });

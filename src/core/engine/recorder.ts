@@ -10,8 +10,16 @@
 // mark then steps over the hole. The finalizer's metrics describe the durable rows in that case
 // (its "when checkpoints were lost" test), and what this module leaves behind is exactly what
 // `recovery.ts` finalizes from after a process death.
-import { createSamplesRepo, createTripsRepo, type Db } from '@/data/db';
+import { createSamplesRepo, createSettingsRepo, createTripsRepo, type Db } from '@/data/db';
 import type { EngineDeps, TripSession } from './engine.types';
+import { roleSourceFor } from './session';
+
+/**
+ * The settings key holding a recording trip's `ArbiterState` (the spent L1 budget, the drive
+ * mute). Written with every checkpoint, removed inside the finalize transaction — by the engine's
+ * finalize and recovery's alike — and read back by `rebuildFromSamples` for `adopt`.
+ */
+export const arbiterStateKey = (clientTripId: string): string => `engine.arbiter.${clientTripId}`;
 
 export interface RecorderOptions {
   /** IANA zone of the device, stored on the trip row when it is created. */
@@ -51,7 +59,8 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
             sync_state: 'local',
             role: session.role,
             mode: session.mode,
-            role_source: session.startSource,
+            // `manual` / `moving_start` / `auto`: rebuilt by `startFromRoleSource` after a relaunch.
+            role_source: roleSourceFor(session.startEvidence),
           },
           stamp,
           tx
@@ -77,6 +86,11 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
       // window); recovery reads them from the row, so the row follows the session.
       if (trip.role !== session.role || trip.mode !== session.mode) {
         await trips.update(id, { role: session.role, mode: session.mode }, stamp, tx);
+      }
+
+      // The arbiter's resumable state, in the same commit as the rows it goes with.
+      if (session.arbiterState !== null) {
+        await createSettingsRepo(tx).set(arbiterStateKey(id), session.arbiterState);
       }
     });
   }

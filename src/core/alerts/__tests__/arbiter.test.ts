@@ -571,7 +571,12 @@ describe('rule 9a: mute', () => {
     const h = harness();
     mutedAtL2(h);
     const saved = h.arbiter.state();
-    expect(saved).toEqual({ tripIndex: CONSTANTS.LEARNING_PERIOD_TRIPS, mutedBand: 2 });
+    // The L1 that opened the episode is in the saved budget window too (M3).
+    expect(saved).toEqual({
+      tripIndex: CONSTANTS.LEARNING_PERIOD_TRIPS,
+      mutedBand: 2,
+      l1Window: [at(ALERT_L1_SPEEDING_MIN_S)],
+    });
 
     const resumed = createArbiter(saved);
     expect(resumed.state()).toEqual(saved);
@@ -694,5 +699,66 @@ describe('rule 10: voice keys', () => {
       'break:alert.takeABreak',
       'speeding:alert.easeOff',
     ]);
+  });
+});
+
+describe('M3: drive mute, passenger silence and a budget that survives a relaunch', () => {
+  const OVER_12 = mph(12);
+  const L1_AT = ALERT_L1_SPEEDING_MIN_S;
+
+  test('muteAll: every later decision is logged suppressed, none delivered, and state() carries it', () => {
+    const h = harness();
+    h.arbiter.muteAll(at(0));
+    expect(h.tick(L1_AT, speedingRow(L1_AT, OVER_12))).toBeNull();
+    expect(h.arbiter.log()).toEqual([
+      expect.objectContaining({ kind: 'speeding', level: 1, suppressed: true, ts: at(L1_AT) }),
+    ]);
+    // Decided once, like a budget-suppressed alert: it does not come back on the next row.
+    expect(h.tick(L1_AT + 1, speedingRow(L1_AT + 1, OVER_12))).toBeNull();
+    expect(h.arbiter.log()).toHaveLength(1);
+    // Nothing heard, nothing spent.
+    expect(h.arbiter.budgetRemaining(at(L1_AT + 1))).toBe(CONSTANTS.ALERT_BUDGET_L1_PER_10MIN);
+    expect(h.arbiter.state()).toEqual({ tripIndex: CONSTANTS.LEARNING_PERIOD_TRIPS, mutedAll: true });
+  });
+
+  test('a drive mute survives a resume: the resumed arbiter stays silent, urgent alerts included', () => {
+    const saved = harness({ mutedAll: true }).arbiter.state();
+    const resumed = createArbiter(saved);
+    const OVER_20 = mph(20);
+    for (let s = 0; s <= 60; s += 1) {
+      expect(resumed.consider({ ...QUIET, ...speedingRow(s, OVER_20), ts: at(s) })).toBeNull();
+    }
+    expect(resumed.log().length).toBeGreaterThan(0);
+    expect(resumed.log().every((d) => d.suppressed === true)).toBe(true);
+    expect(resumed.log().some((d) => d.level === 3)).toBe(true);
+  });
+
+  test('the L1 budget window is saved and restored: a relaunch does not refill it', () => {
+    const h = harness({ tripIndex: 0 });
+    expect(h.tick(L1_AT, speedingRow(L1_AT, OVER_12))).toMatchObject({ level: 1 });
+    const saved = h.arbiter.state();
+    expect(saved).toEqual({ tripIndex: 0, l1Window: [at(L1_AT)] });
+    expect(createArbiter(saved).budgetRemaining(at(L1_AT + 1))).toBe(
+      CONSTANTS.ALERT_BUDGET_L1_PER_10MIN - 1
+    );
+  });
+
+  test('a resumed arbiter whose window is spent logs the next L1 silently; the window then rolls on', () => {
+    const spent = Array.from({ length: CONSTANTS.ALERT_BUDGET_L1_PER_10MIN }, (_, k) => at(k));
+    const h = harness({ l1Window: spent });
+    expect(h.arbiter.budgetRemaining(at(60))).toBe(0);
+    const s = 60 + L1_AT;
+    expect(h.tick(s, speedingRow(s, OVER_12, 60))).toBeNull();
+    expect(h.arbiter.log()).toEqual([expect.objectContaining({ level: 1, suppressed: true })]);
+    // Ten minutes after the oldest, the budget is back.
+    expect(h.arbiter.budgetRemaining(at(CONSTANTS.ALERT_BUDGET_WINDOW_S + 1))).toBe(2);
+  });
+
+  test('a silent input (a passenger trip) is decided and logged suppressed, never delivered or budgeted', () => {
+    const h = harness({ tripIndex: 0 });
+    expect(h.tick(L1_AT, { ...speedingRow(L1_AT, OVER_12), silent: true })).toBeNull();
+    expect(h.arbiter.log()).toEqual([expect.objectContaining({ level: 1, suppressed: true })]);
+    expect(h.arbiter.budgetRemaining(at(L1_AT))).toBe(CONSTANTS.ALERT_BUDGET_L1_PER_10MIN);
+    expect(h.arbiter.state().l1Window).toBeUndefined();
   });
 });

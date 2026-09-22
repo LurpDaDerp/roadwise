@@ -69,7 +69,14 @@ export function limit(
 export const NO_LIMIT: LimitSample = limit(null, 'unknown', { matchConfidence: 0 });
 
 export function ctx(overrides: Partial<DetectorContext> = {}): DetectorContext {
-  return { mode: 'mounted', night: false, precipitation: false, ...overrides };
+  return {
+    mode: 'mounted',
+    night: false,
+    precipitation: false,
+    lockReliable: true,
+    lockLagged: false,
+    ...overrides,
+  };
 }
 
 /** Deterministic ids: e1, e2, ... */

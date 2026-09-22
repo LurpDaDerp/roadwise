@@ -1,18 +1,20 @@
 /** @jest-environment node */
 import { CONSTANTS } from '@scoring';
 import { createArbiter } from '@/core/alerts/arbiter';
+import type { ArbiterState } from '@/core/alerts/types';
 import { createDetectors } from '@/core/detectors';
 import { T0, counterIds, limit, mph } from '@/core/detectors/__fixtures__/rows';
 import { drive, finalizeDeps, TZ } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip, tracePathFor, type FinalizeResult } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
-import { createRecorder } from '@/core/engine/recorder';
-import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
+import { arbiterStateKey, createRecorder } from '@/core/engine/recorder';
+import { appendRow, closeSession, createSession, snapshotSession } from '@/core/engine/session';
 import type { FeatureRow } from '@/core/engine/types';
 import {
   createQueueRepo,
   createSamplesRepo,
+  createSettingsRepo,
   createTripsRepo,
   migrate,
   type Db,
@@ -75,7 +77,7 @@ describe('with the real engine: createEngine → recorder → finalizeTrip', () 
       onError: (err) => {
         errors.push(err);
       },
-      ctx: () => ({ night: false, precipitation: false }),
+      ctx: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
     });
     async function feed(rows: readonly FeatureRow[]): Promise<void> {
       for (const row of rows) {
@@ -183,7 +185,7 @@ describe('with the real engine: createEngine → recorder → finalizeTrip', () 
       onError: (err) => {
         errors.push(err);
       },
-      ctx: () => ({ night: false, precipitation: false }),
+      ctx: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
     });
     const rows = drive(CHECKPOINT_S * 2);
     await engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(0) });
@@ -289,5 +291,128 @@ describe('onCheckpoint on its own', () => {
       pending = recorder.onCheckpoint(sessionOver(drive(2)));
     }).not.toThrow();
     await expect(pending).rejects.toThrow('closed');
+  });
+});
+
+describe('M3: the arbiter state and the start evidence on the row', () => {
+  const KEY = arbiterStateKey(TRIP);
+
+  test('the key is engine.arbiter.<clientTripId>', () => {
+    expect(arbiterStateKey('abc')).toBe('engine.arbiter.abc');
+  });
+
+  test('each checkpoint persists the arbiter state with its rows, and finalize removes it in its transaction', async () => {
+    const recorder = createRecorder(db, { tz: TZ, now: () => now });
+    const { deps } = finalizeDeps(db, () => now);
+    const engine = createEngine({
+      now: () => now,
+      newId: () => TRIP,
+      limits: { lookup: () => L35, prefetch: () => {} },
+      createDetectors: () => createDetectors(counterIds()),
+      createArbiter: (resume) => createArbiter(resume ?? { tripIndex: 0 }),
+      onAlert: () => {},
+      onCheckpoint: recorder.onCheckpoint,
+      onFinalize: async (session) => {
+        // Still there when the finalizer starts: it goes inside the finalize write.
+        await expect(createSettingsRepo(db).get(KEY)).resolves.not.toBeNull();
+        await finalizeTrip(session, deps);
+      },
+      ctx: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
+    });
+    await engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(0) });
+    const rows = drive(CHECKPOINT_S * 5, { speed: mph(50) }); // 15 over a 35: an L1 on an L1-only trip
+    for (const row of rows.slice(0, CHECKPOINT_S)) {
+      now = row.ts;
+      await engine.dispatch({ type: 'row', row });
+    }
+    const first = await createSettingsRepo(db).get<ArbiterState>(KEY);
+    expect(first).toMatchObject({ tripIndex: 0 });
+    expect(first?.l1Window).toHaveLength(1);
+
+    await engine.dispatch({ type: 'muteForDrive', ts: now });
+    for (const row of rows.slice(CHECKPOINT_S)) {
+      now = row.ts;
+      await engine.dispatch({ type: 'row', row });
+    }
+    await expect(createSettingsRepo(db).get<ArbiterState>(KEY)).resolves.toMatchObject({
+      mutedAll: true,
+    });
+
+    await engine.dispatch({ type: 'end', ts: at(rows.length) });
+    expect((await trips.get(TRIP))?.status).toBe('provisional');
+    await expect(createSettingsRepo(db).get(KEY)).resolves.toBeNull();
+  });
+
+  test('a checkpoint that fails writes no arbiter state either', async () => {
+    const recorder = createRecorder(db, { tz: TZ, now: () => now });
+    const s = createSession({
+      clientTripId: TRIP,
+      mode: 'mounted',
+      role: 'driver',
+      startSource: 'manual',
+      startedAt: at(0),
+    });
+    for (const row of drive(CHECKPOINT_S)) appendRow(s, row, L35);
+    s.arbiterState = { tripIndex: 4, mutedAll: true };
+    const failing: Db = {
+      execute: (sql, params) => db.execute(sql, params),
+      transaction: (fn) =>
+        db.transaction((tx) =>
+          fn({
+            execute: (sql, params) =>
+              sql.includes('INSERT OR REPLACE INTO settings')
+                ? Promise.reject(new Error('disk full'))
+                : tx.execute(sql, params),
+            transaction: tx.transaction,
+          })
+        ),
+    };
+    await expect(createRecorder(failing, { tz: TZ, now: () => now }).onCheckpoint(snapshotSession(s))).rejects.toThrow(
+      'disk full'
+    );
+    await expect(trips.get(TRIP)).resolves.toBeNull();
+    await expect(createSettingsRepo(db).get(KEY)).resolves.toBeNull();
+    // And the same checkpoint on a healthy handle writes both.
+    await recorder.onCheckpoint(snapshotSession(s));
+    await expect(createSettingsRepo(db).get(KEY)).resolves.toEqual({ tripIndex: 4, mutedAll: true });
+  });
+
+  test('a session with no arbiter state yet stores none', async () => {
+    const recorder = createRecorder(db, { tz: TZ, now: () => now });
+    const s = createSession({
+      clientTripId: TRIP,
+      mode: 'mounted',
+      role: 'driver',
+      startSource: 'manual',
+      startedAt: at(0),
+    });
+    for (const row of drive(CHECKPOINT_S)) appendRow(s, row, L35);
+    await recorder.onCheckpoint(snapshotSession(s));
+    await expect(createSettingsRepo(db).get(KEY)).resolves.toBeNull();
+  });
+
+  test.each([
+    ['tap', 'manual'],
+    ['movingStart', 'moving_start'],
+    ['auto', 'auto'],
+  ] as const)('start evidence %s is stored as role_source %s, on the row and in the payload', async (evidence, stored) => {
+    const recorder = createRecorder(db, { tz: TZ, now: () => now });
+    const s = createSession({
+      clientTripId: TRIP,
+      mode: 'pocket',
+      role: 'driver',
+      startSource: evidence === 'auto' ? 'auto' : 'manual',
+      startEvidence: evidence,
+      startedAt: at(0),
+    });
+    const rows = drive(150);
+    for (const row of rows) appendRow(s, row, L35);
+    await recorder.onCheckpoint(snapshotSession(s));
+    expect((await trips.get(TRIP))?.role_source).toBe(stored);
+    s.checkpoints.push(s.lastRowTs as number);
+    const { deps } = finalizeDeps(db, () => now);
+    const { trip, payload } = await finalizeTrip(closeSession(s, at(150)), deps);
+    expect(trip.role_source).toBe(stored);
+    expect(payload.roleSource).toBe(stored);
   });
 });

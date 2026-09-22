@@ -4,8 +4,30 @@
 // trip, this module decides what the trip knows once it does. Nothing here reads a clock.
 import { ROW_MS, knownSpeed } from '@/core/detectors/common';
 import { haversineMeters } from '@/lib/geo';
-import type { Fix, StartSource, TripRole, TripSession } from './engine.types';
+import type { Fix, StartEvidence, StartSource, TripRole, TripSession } from './engine.types';
 import type { DriveMode, FeatureRow, LimitSample } from './types';
+
+/** The `trips.role_source` a trip is stored with, from its start evidence. */
+export function roleSourceFor(evidence: StartEvidence): 'manual' | 'moving_start' | 'auto' {
+  if (evidence === 'tap') return 'manual';
+  if (evidence === 'movingStart') return 'moving_start';
+  return 'auto';
+}
+
+/**
+ * The start back from a stored `role_source`, for a trip rebuilt after a relaunch: `manual` →
+ * `tap`, `moving_start` → `movingStart`, `auto` → `auto`; anything else (null, a value from a
+ * later version) → `auto`, the start that claims least about who is driving. Only `recording`
+ * rows are ever rebuilt, and nothing but the recorder writes `role_source` on those — the role
+ * correction's `manual` lands on finalized trips only.
+ */
+export function startFromRoleSource(
+  roleSource: string | null
+): { startSource: StartSource; startEvidence: StartEvidence } {
+  if (roleSource === 'manual') return { startSource: 'manual', startEvidence: 'tap' };
+  if (roleSource === 'moving_start') return { startSource: 'manual', startEvidence: 'movingStart' };
+  return { startSource: 'auto', startEvidence: 'auto' };
+}
 
 /** How many seconds of rows stay in memory between checkpoints. */
 export const RING_S = 120;
@@ -19,6 +41,8 @@ export interface SessionStart {
   mode: DriveMode;
   role: TripRole;
   startSource: StartSource;
+  /** Defaults from `startSource`: `manual` → `tap`, `auto` → `auto`. */
+  startEvidence?: StartEvidence;
   startedAt: number;
   startApproximate?: boolean;
 }
@@ -29,6 +53,8 @@ export function createSession(start: SessionStart): TripSession {
     mode: start.mode,
     role: start.role,
     startSource: start.startSource,
+    startEvidence: start.startEvidence ?? (start.startSource === 'manual' ? 'tap' : 'auto'),
+    arbiterState: null,
     startedAt: start.startedAt,
     startApproximate: start.startApproximate === true,
     endedAt: null,

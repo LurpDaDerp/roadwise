@@ -72,8 +72,15 @@ export function createArbiter(state: ArbiterState): Arbiter {
   let lastDrowsyAlertTs: number | null = null;
   let breakSuggested = false;
 
-  /** `ts` of every *delivered* L1, for the rolling budget. Suppressed ones cost nothing. */
-  const deliveredL1Ts: number[] = [];
+  /**
+   * `ts` of every *delivered* L1, for the rolling budget. Suppressed ones cost nothing. A resumed
+   * arbiter starts from the window it was saved with, so a relaunch does not refill the budget.
+   */
+  const deliveredL1Ts: number[] = (state.l1Window ?? [])
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  /** The rest of the drive is muted (C6); carried across a resume. */
+  let mutedAll = state.mutedAll === true;
   /** The decision currently speaking — what a long-press mutes. */
   let speaking: AlertDecision | null = null;
   /** The speeding band a long-press silenced; cleared when the episode ends. */
@@ -257,7 +264,7 @@ export function createArbiter(state: ArbiterState): Arbiter {
    * budget-suppressed alert was still *decided*, so it lands in the log once and does not come
    * back a second later (§13.4 "log silently and summarize after the trip").
    */
-  function emit(candidate: Candidate, ts: number): AlertDecision | null {
+  function emit(candidate: Candidate, ts: number, silent: boolean): AlertDecision | null {
     candidate.commit();
     seq += 1;
     const level = levelFor(candidate);
@@ -269,8 +276,10 @@ export function createArbiter(state: ArbiterState): Arbiter {
       voice: candidate.voice,
     };
     if (candidate.eventId !== undefined) decision.eventId = candidate.eventId;
+    // A muted drive or a passenger trip: decided, on record, never played — and never counted
+    // against the budget, since nobody heard it.
     // Only L1 is rationed; a warning or an urgent alert always plays.
-    if (level === 1 && remaining(ts) === 0) {
+    if (silent || mutedAll || (level === 1 && remaining(ts) === 0)) {
       decisions.push({ ...decision, suppressed: true });
       return null;
     }
@@ -287,13 +296,19 @@ export function createArbiter(state: ArbiterState): Arbiter {
       pruneBudget(input.ts);
       track(input);
       const candidate = pick(input);
-      return candidate === null ? null : emit(candidate, input.ts);
+      return candidate === null ? null : emit(candidate, input.ts, input.silent === true);
     },
 
     mute(ts) {
       // A mute can only apply to an alert that has already spoken.
       if (speaking === null || ts < speaking.ts) return;
       if (speaking.kind === 'speeding' && alertedBand !== 0) mutedBand = alertedBand;
+    },
+
+    muteAll() {
+      mutedAll = true;
+      // Whatever was speaking is the player's to cut off; there is nothing left for a long-press.
+      speaking = null;
     },
 
     budgetRemaining(ts) {
@@ -304,6 +319,8 @@ export function createArbiter(state: ArbiterState): Arbiter {
       const snapshot: ArbiterState = { tripIndex: state.tripIndex };
       if (carriedMutedUntilTs !== undefined) snapshot.mutedUntilTs = carriedMutedUntilTs;
       if (mutedBand !== undefined) snapshot.mutedBand = mutedBand;
+      if (deliveredL1Ts.length > 0) snapshot.l1Window = deliveredL1Ts.slice();
+      if (mutedAll) snapshot.mutedAll = true;
       return snapshot;
     },
 

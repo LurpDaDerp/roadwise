@@ -18,11 +18,13 @@ import {
   limitConfidence,
 } from '@/core/detectors/common';
 import type {
+  AdoptedTrip,
   Engine,
   EngineDeps,
   EngineEvent,
   EngineSnapshot,
   EngineStatus,
+  StartEvidence,
   StartSource,
   TripRole,
   TripSession,
@@ -51,6 +53,30 @@ export const STOPPED_PANEL_CLEAR_MPS = 3 * MPH;
 export const PREFETCH_EVERY_M = 1000;
 /** Slack for the cumulative fast seconds, which are sums of row spacings. */
 const EPSILON_S = 1e-9;
+/**
+ * A trip that has had no valid fix for this long, on a phone lying still, is parked somewhere GNSS
+ * cannot reach (a garage): it goes to `ending` as a stationary one would (plan rev1 I13).
+ */
+export const NO_FIX_END_S = 600;
+/** `gravityStability` at or above this, with no handling and a quiet IMU, reads as a still phone. */
+export const STILL_GRAVITY_MIN = 0.95;
+/** Each of the six IMU extremes within this (the yaw-rate and jerk extremes on the same bound). */
+export const STILL_IMU_MAX_G = 0.05;
+
+/** A row with no fix on a phone that is not moving: the no-fix end's evidence. */
+function stillWithoutFix(row: FeatureRow): boolean {
+  return (
+    !row.gnssValid &&
+    row.gravityStability >= STILL_GRAVITY_MIN &&
+    row.handlingScore === 0 &&
+    Math.abs(row.aLonMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLonMin) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLatMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLatMin) <= STILL_IMU_MAX_G &&
+    Math.abs(row.yawRateMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.jerkMax) <= STILL_IMU_MAX_G
+  );
+}
 
 const knownLimit = (limit: LimitSample): number | null =>
   limit.source !== 'unknown' ? limit.limitMps : null;
@@ -88,6 +114,7 @@ interface Seen {
 
 interface Confirmation {
   source: StartSource;
+  evidence: StartEvidence;
   mode: DriveMode;
   role: TripRole;
   /** The confirming event's `ts`, used as the start only when no row exists yet. */
@@ -132,6 +159,10 @@ export function createEngine(deps: EngineDeps): Engine {
   let prefetchedAtM: number | null = null;
   /** Start of the current stretch of continuous driving, for the break suggestion (§8.7). */
   let continuousSinceTs = 0;
+  /** First row of the current run of fix-less rows on a still phone (the no-fix end). */
+  let noFixSinceTs: number | null = null;
+  /** Set by `adopt` and a rowless resume; cleared by the first row with a known speed. */
+  let awaitingSpeedAfterResume = false;
 
   // --- notification -----------------------------------------------------------------------------
   const listeners = new Set<(snapshot: EngineSnapshot) => void>();
@@ -171,6 +202,12 @@ export function createEngine(deps: EngineDeps): Engine {
     else throw err;
   }
 
+  /** SR2: recording as the driver, at a last known speed over the lockout. */
+  const lockedOut = (): boolean =>
+    status === 'recording' &&
+    (session?.role ?? pendingRole) === 'driver' &&
+    (lastKnownSpeedMps ?? 0) > LOCKOUT_SPEED_MPS;
+
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
     const speed = row?.speed ?? 0;
@@ -183,11 +220,13 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
       speedMps: Math.max(0, speed),
+      // The current row's own speed, never the last good one: a tunnel shows unknown (I8).
+      speedKnown: row !== null && knownSpeed(row) !== null,
+      awaitingSpeedAfterResume,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       distanceM: session?.distanceM ?? 0,
       stationarySinceTs,
-      lockedOut:
-        status === 'recording' && role === 'driver' && (lastKnownSpeedMps ?? 0) > LOCKOUT_SPEED_MPS,
+      lockedOut: lockedOut(),
       stoppedPanel: status === 'recording' && stoppedPanel,
     });
   }
@@ -202,6 +241,8 @@ export function createEngine(deps: EngineDeps): Engine {
     pausedAt = null;
     firstOverTs = null;
     lastKnownSpeedMps = null;
+    noFixSinceTs = null;
+    awaitingSpeedAfterResume = false;
   }
 
   /** Forget everything about the candidate or trip that just closed. */
@@ -251,7 +292,14 @@ export function createEngine(deps: EngineDeps): Engine {
     // Only a valid fix vouches for speed: an invalid one may carry a stale reading.
     if ((knownSpeed(row) ?? 0) > AUTO_DETECT_CONFIRM_SPEED_MPS) c.fastS += coversS;
     if (c.fastS + EPSILON_S >= AUTO_DETECT_CONFIRM_S) {
-      await confirm({ source: 'auto', mode: 'auto', role: pendingRole, ts: row.ts, liveLast: true });
+      await confirm({
+        source: 'auto',
+        evidence: 'auto',
+        mode: 'auto',
+        role: pendingRole,
+        ts: row.ts,
+        liveLast: true,
+      });
     }
   }
 
@@ -272,6 +320,7 @@ export function createEngine(deps: EngineDeps): Engine {
       mode: c.mode,
       role: c.role,
       startSource: c.source,
+      startEvidence: c.evidence,
       startedAt,
       startApproximate: backfillTs !== null,
     });
@@ -317,6 +366,8 @@ export function createEngine(deps: EngineDeps): Engine {
       q: rowQuality(row, limit),
       drivingS: (row.ts - continuousSinceTs) / 1000,
     };
+    // A passenger hears nothing (product §8.15): decided and logged, never delivered.
+    if ((session as TripSession).role === 'passenger') input.silent = true;
     const phone = detectors.openPhoneEpisode();
     if (phone !== null) input.phoneEpisode = phone;
     const cam = ctx.cameraFocus;
@@ -370,10 +421,14 @@ export function createEngine(deps: EngineDeps): Engine {
     if (speed > STOPPED_PANEL_CLEAR_MPS) stoppedPanel = false;
   }
 
-  /** Persist what the ring holds beyond the last checkpoint, if anything, and record it. */
+  /**
+   * Persist what the ring holds beyond the last checkpoint, if anything, and record it. The
+   * arbiter's state rides along, so a relaunch resumes with the budget and the mutes it had.
+   */
   async function checkpointTail(s: TripSession): Promise<void> {
     const last = s.checkpoints[s.checkpoints.length - 1] ?? null;
     if (s.lastRowTs === null || (last !== null && s.lastRowTs <= last)) return;
+    if (suite !== null) s.arbiterState = suite.arbiter.state();
     await deps.onCheckpoint(snapshotSession(s));
     s.checkpoints.push(s.lastRowTs);
   }
@@ -389,7 +444,10 @@ export function createEngine(deps: EngineDeps): Engine {
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
     seen = { row, limit };
     const speed = knownSpeed(row);
-    if (speed !== null) lastKnownSpeedMps = speed;
+    if (speed !== null) {
+      lastKnownSpeedMps = speed;
+      awaitingSpeedAfterResume = false;
+    }
     touch();
     appendRow(s, row, limit);
     maybePrefetch(row, s.distanceM);
@@ -398,12 +456,20 @@ export function createEngine(deps: EngineDeps): Engine {
     const input = arbiterInput(row, limit, full, trip.detectors);
     if (live) deliver(trip.arbiter.consider(input), row.ts, trip.detectors);
     updateFlags(row);
+    noFixSinceTs = stillWithoutFix(row) ? (noFixSinceTs ?? row.ts) : null;
     if (
       status === 'recording' &&
       stationarySinceTs !== null &&
       row.ts + ROW_MS - stationarySinceTs >= AUTO_END_STATIONARY_S * 1000
     ) {
       await beginEnding(row.ts);
+    } else if (
+      status === 'recording' &&
+      noFixSinceTs !== null &&
+      row.ts + ROW_MS - noFixSinceTs >= NO_FIX_END_S * 1000
+    ) {
+      // Driving stopped where the fix-less stillness began, as a stationary end trims its idle run.
+      await beginEnding(row.ts, noFixSinceTs);
     }
     if (s.rowsCount % CHECKPOINT_S === 0) await checkpointTail(s);
   }
@@ -420,9 +486,9 @@ export function createEngine(deps: EngineDeps): Engine {
    * Into the gap-merge window. The un-checkpointed tail is persisted now, because the ring evicts
    * by time and a gap can be far longer than the ring.
    */
-  async function beginEnding(ts: number): Promise<void> {
+  async function beginEnding(ts: number, stoppedAt?: number): Promise<void> {
     const s = session as TripSession;
-    pausedAt = drivingStoppedTs(s) ?? ts;
+    pausedAt = stoppedAt ?? drivingStoppedTs(s) ?? ts;
     endingSinceTs = ts;
     setStatus('ending');
     await checkpointTail(s);
@@ -432,7 +498,11 @@ export function createEngine(deps: EngineDeps): Engine {
     endingSinceTs !== null && ts - endingSinceTs < GAP_MERGE_S * 1000;
 
   /** Gap-merge: the same trip carries on, with the missing stretch on record (§19.1). */
-  function resume(ts: number, changes?: { mode: DriveMode; role: TripRole }): void {
+  function resume(
+    ts: number,
+    changes?: { mode: DriveMode; role: TripRole },
+    resumingSpeedMps?: number
+  ): void {
     const s = session as TripSession;
     const fromTs = pausedAt ?? s.startedAt;
     if (ts > fromTs) noteGap(s, fromTs, ts);
@@ -441,6 +511,43 @@ export function createEngine(deps: EngineDeps): Engine {
       s.role = changes.role;
     }
     resetRun();
+    if (resumingSpeedMps === undefined) {
+      // No row has spoken for the speed since the gap (U2 gates touch on this meanwhile).
+      awaitingSpeedAfterResume = true;
+    } else {
+      // The fast row that resumes is the speed: subscribers never see an unlocked moment.
+      lastKnownSpeedMps = resumingSpeedMps;
+    }
+    continuousSinceTs = ts;
+    setStatus('recording');
+  }
+
+  /**
+   * Take over a trip the previous process was recording (§19.1), rebuilt from its durable rows.
+   * The time since its last durable row is a gap — whatever happened then was not recorded — and
+   * the arbiter resumes from the state stored with that checkpoint.
+   */
+  function adopt(trip: AdoptedTrip, ts: number): void {
+    // The factory runs first: if it throws, nothing has changed.
+    const arbiter = deps.createArbiter(trip.arbiterState ?? undefined);
+    const s: TripSession = {
+      ...trip.session,
+      rows: trip.session.rows.slice(),
+      events: trip.session.events.slice(),
+      alerts: trip.session.alerts.slice(),
+      gaps: trip.session.gaps.slice(),
+      checkpoints: trip.session.checkpoints.slice(),
+      arbiterState: trip.arbiterState,
+    };
+    const fromTs = trip.checkpointTs + ROW_MS;
+    if (ts > fromTs) noteGap(s, fromTs, ts);
+    candidate = null;
+    session = s;
+    suite = { detectors: trip.detectors, arbiter };
+    seen = null;
+    prefetchedAtM = null;
+    resetRun();
+    awaitingSpeedAfterResume = true;
     continuousSinceTs = ts;
     setStatus('recording');
   }
@@ -513,7 +620,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (!withinGap(row.ts)) {
           await finalizeThen(row.ts);
         } else if ((knownSpeed(row) ?? 0) > LOCKOUT_SPEED_MPS) {
-          resume(row.ts);
+          resume(row.ts, undefined, knownSpeed(row) ?? undefined);
           await processRow(row, deps.ctx(), true);
         }
         return;
@@ -545,7 +652,14 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function onManualStart(e: Extract<EngineEvent, { type: 'manualStart' }>): Promise<void> {
     const role: TripRole = e.passenger ? 'passenger' : 'driver';
-    const start: Confirmation = { source: 'manual', mode: e.mode, role, ts: e.ts, liveLast: false };
+    const start: Confirmation = {
+      source: 'manual',
+      evidence: e.evidence ?? 'tap',
+      mode: e.mode,
+      role,
+      ts: e.ts,
+      liveLast: false,
+    };
     switch (status) {
       case 'off':
       case 'armed':
@@ -571,6 +685,16 @@ export function createEngine(deps: EngineDeps): Engine {
       if (pendingRole === role) return;
       pendingRole = role;
     }
+    touch();
+  }
+
+  /** SR7: the mode is set up only while not locked out; `auto` becomes whichever is chosen. */
+  function onSetMode(mode: 'mounted' | 'pocket'): void {
+    if (status !== 'recording' && status !== 'ending') return;
+    if (lockedOut()) return;
+    const s = session as TripSession;
+    if (s.mode === mode) return;
+    s.mode = mode;
     touch();
   }
 
@@ -622,6 +746,20 @@ export function createEngine(deps: EngineDeps): Engine {
         return;
       case 'setPassenger':
         onSetPassenger(e.passenger);
+        return;
+      case 'setMode':
+        onSetMode(e.mode);
+        return;
+      case 'adopt':
+        // Only an idle engine may take a trip over: a candidate or a trip already open owns
+        // the drive, and a second recording for the same drive must never exist.
+        if (status === 'off' || status === 'armed') adopt(e.trip, e.ts);
+        return;
+      case 'muteCurrent':
+        suite?.arbiter.mute(e.ts);
+        return;
+      case 'muteForDrive':
+        suite?.arbiter.muteAll(e.ts);
         return;
       case 'end':
         await onEnd(e.ts);

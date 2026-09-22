@@ -31,7 +31,7 @@ export const MPH = 0.44704;
 
 const mps = (mph: number): number => round(mph * MPH, 4);
 
-/** Every trace is one 2½ minute drive at 1 Hz. */
+/** Every trace is one 2½ minute drive at 1 Hz, but for `garage-no-fix`, which has to outlast `NO_FIX_END_S`. */
 const ROWS = 150;
 /** Pulling away and stopping take this long: 0.13 g, comfortably inside the harsh thresholds. */
 const RAMP_S = 12;
@@ -189,6 +189,7 @@ interface TraceParts {
   noEvents?: true;
   night?: boolean;
   precipitation?: boolean;
+  lockSignal?: 'reliable' | 'lagged' | 'unreliable';
 }
 
 const makeTrace = (parts: TraceParts): Trace => ({
@@ -196,6 +197,8 @@ const makeTrace = (parts: TraceParts): Trace => ({
   mode: parts.mode,
   night: parts.night ?? false,
   precipitation: parts.precipitation ?? false,
+  // Omitted rather than written as `reliable`, so the M1 fixtures stay byte-for-byte as they were.
+  ...(parts.lockSignal ? { lockSignal: parts.lockSignal } : {}),
   // Omitted rather than written as `false`: the schema takes the flag or nothing.
   ...(parts.noEvents ? { noEvents: parts.noEvents } : {}),
   limits: parts.limits,
@@ -212,6 +215,9 @@ const COMMUTE = [
 
 /** The row each trace's interesting stretch starts on, so the expectation reads next to the cause. */
 const EVENT_ROW = 60;
+/** `garage-no-fix`: the first row without a fix, and how many follow (eleven minutes). */
+export const GARAGE_ROW = 52;
+const GARAGE_ROWS = 660;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /**
@@ -432,6 +438,75 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
         ...absentExcept('phone'),
       ],
     }),
+
+  /**
+   * SR8: a pocket drive, the phone locked in a pocket, and at 33.6 mph RoadWise is opened on an
+   * unlocked screen for six seconds. Opening it is the phone use — one second of it, at the
+   * app-switch confidence 0.9 from the OS — and nothing else happens. Mounted, the same rows are
+   * a driver glancing at the HUD they chose to mount, and are nothing (`traces.test.ts`).
+   */
+  'pocket-open-moving': () =>
+    makeTrace({
+      name: 'pocket-open-moving',
+      mode: 'pocket',
+      speeds: COMMUTE,
+      over: windows([EVENT_ROW, EVENT_ROW + 6, { locked: false, screenOn: true }]),
+      limits: [posted(LIMIT_35)],
+      expected: [
+        {
+          category: 'phone',
+          startsNear: tsOf(EVENT_ROW),
+          toleranceS: 0,
+          qMin: 0.9,
+          durationMin: 1,
+          durationMax: 1,
+          status: 'scored',
+        },
+        ...absentExcept('phone'),
+      ],
+    }),
+
+  /**
+   * A mounted drive where the phone is locked for a minute at speed: RoadWise is backgrounded
+   * because the phone is locked, not because another app is open. A locked phone is never phone
+   * use (plan rev1 I11) — not one event of any status.
+   */
+  'mounted-locked': () =>
+    makeTrace({
+      name: 'mounted-locked',
+      mode: 'mounted',
+      speeds: COMMUTE,
+      over: windows([40, 100, { appForeground: false, locked: true, screenOn: false }]),
+      limits: [posted(LIMIT_35)],
+      noEvents: true,
+      expected: absentExcept(),
+    }),
+
+  /**
+   * Into an underground garage: the fix goes at walking pace on the ramp (row 52), the car parks,
+   * and the phone lies still with no fix for eleven minutes. No speed ever says "stopped", so the
+   * stationary auto-end never runs; the no-fix end does, ten minutes into the fix-less stillness
+   * (`traces.test.ts` replays it through the engine). The detectors see nothing at all.
+   */
+  'garage-no-fix': () =>
+    makeTrace({
+      name: 'garage-no-fix',
+      mode: 'mounted',
+      speeds: [
+        ...ramp(0, CRUISE, RAMP_S), // 0-11
+        ...hold(30, CRUISE), // 12-41
+        ...ramp(CRUISE, 3, 10), // 42-51, down the ramp
+        ...hold(GARAGE_ROWS, 0), // 52-711: no fix; 0 only keeps the position where it was lost
+      ],
+      over: windows([
+        GARAGE_ROW,
+        GARAGE_ROW + GARAGE_ROWS,
+        { speed: -1, gnssValid: false, aLonMax: 0, aLonMin: 0 },
+      ]),
+      limits: [posted(LIMIT_35)],
+      noEvents: true,
+      expected: absentExcept(),
+    }),
 };
 
 /**
@@ -453,6 +528,7 @@ export function serializeTrace(trace: Trace): string {
     `  "mode": ${JSON.stringify(trace.mode)}`,
     `  "night": ${JSON.stringify(trace.night)}`,
     `  "precipitation": ${JSON.stringify(trace.precipitation)}`,
+    ...(trace.lockSignal ? [`  "lockSignal": ${JSON.stringify(trace.lockSignal)}`] : []),
     ...(trace.noEvents ? ['  "noEvents": true'] : []),
     block('limits', trace.limits),
     block('expected', trace.expected),

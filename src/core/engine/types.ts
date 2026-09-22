@@ -69,6 +69,20 @@ export interface DetectorContext {
   night: boolean;
   precipitation: boolean;
   cameraFocus?: CameraFocusSample | null;
+  /**
+   * The row's `locked` / `screenOn` can be believed. The host sets it from drive-sense's
+   * `lockSignal !== 'unreliable'` (an iPhone without a passcode never reports locked); recovery
+   * and the adopt rebuild use false. When false, an unlocked screen is not unlock evidence and a
+   * backgrounded RoadWise on a mount is not app-switch evidence (§9.5, plan rev1 I11).
+   */
+  lockReliable: boolean;
+  /**
+   * The lock signal arrives late (drive-sense `lockSignal === 'lagged'`: iOS with a passcode,
+   * about ten seconds). A mounted app switch then needs `APP_SWITCH_CONFIRM_S` backgrounded,
+   * unlocked rows before it counts, and is dropped if a locked row turns up first — a press of
+   * the side button must not read as an app switch. False on Android and in recovery.
+   */
+  lockLagged: boolean;
 }
 
 export type EventSource = 'gnss' | 'imu' | 'both' | 'os' | 'camera';

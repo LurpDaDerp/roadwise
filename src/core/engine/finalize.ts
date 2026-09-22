@@ -28,6 +28,7 @@ import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import {
   createEventsRepo,
   createSamplesRepo,
+  createSettingsRepo,
   createTripsRepo,
   MissingTripError,
   type Db,
@@ -48,7 +49,8 @@ import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
 import { encodePolyline, simplify } from '@/lib/polyline';
 import { isNight } from '@/lib/time';
 import type { Fix, TripSession } from './engine.types';
-import { appendRow, createSession, GNSS_JUMP_MPS } from './session';
+import { arbiterStateKey } from './recorder';
+import { appendRow, createSession, GNSS_JUMP_MPS, roleSourceFor } from './session';
 import type { DetectedEvent, FeatureRow } from './types';
 
 /**
@@ -456,7 +458,7 @@ export async function finalizeTrip(
     durationS: metrics.durationS,
     role: session.role,
     roleConfidence: null,
-    roleSource: session.startSource,
+    roleSource: roleSourceFor(session.startEvidence),
     mode: session.mode,
     cameraSession: deps.cameraSession ?? false,
     provisional: scored,
@@ -489,7 +491,7 @@ export async function finalizeTrip(
         duration_s: metrics.durationS,
         role: session.role,
         role_confidence: null,
-        role_source: session.startSource,
+        role_source: roleSourceFor(session.startEvidence),
         mode: session.mode,
         camera_session: payload.cameraSession ? 1 : 0,
         score: scored.score,
@@ -514,6 +516,8 @@ export async function finalizeTrip(
     if (!trip) throw new MissingTripError(id);
     if (!discarded) await enqueueFinalize(db, payload, now(), tx);
     await samples.purgeByTrip(id, tx);
+    // The recording's arbiter state has nothing left to resume (N-m4): gone with the samples.
+    await createSettingsRepo(tx).remove(arbiterStateKey(id));
     return { trip, eventRows };
   });
 

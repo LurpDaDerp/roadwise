@@ -1,5 +1,5 @@
 import { CONSTANTS, severity } from '@scoring';
-import { createPhoneUseDetector } from '@/core/detectors/phoneUse';
+import { APP_SWITCH_CONFIRM_S, createPhoneUseDetector } from '@/core/detectors/phoneUse';
 import { NO_LIMIT, T0, counterIds, ctx, drive, only, seq } from '../__fixtures__/rows';
 
 const HAND = { handlingScore: 0.7 };
@@ -133,7 +133,8 @@ describe('speed bands', () => {
 });
 
 describe('app switch', () => {
-  const AWAY = { appForeground: false };
+  // Backgrounded on an unlocked, lit screen: M3 no longer counts a locked phone (I11).
+  const AWAY = { appForeground: false, locked: false, screenOn: true };
 
   test('in mounted mode, RoadWise in the background while moving is an episode until it returns', () => {
     const { pushed, flushed } = drive(make(), seq([4, AWAY], [3, {}]));
@@ -203,7 +204,9 @@ describe('openEpisode', () => {
 
   test('an app switch in mounted mode confirms on its first row', () => {
     const det = make();
-    const seen = seq([2, { appForeground: false }]).map((r) => step(det, r, ctx({ mode: 'mounted' })));
+    const seen = seq([2, { appForeground: false, locked: false, screenOn: true }]).map((r) =>
+      step(det, r, ctx({ mode: 'mounted' }))
+    );
     expect(seen).toEqual([
       { id: 'e1', durationS: 1 },
       { id: 'e1', durationS: 2 },
@@ -213,5 +216,115 @@ describe('openEpisode', () => {
   test('a run that breaks before confirming exposes nothing', () => {
     const det = make();
     expect(seq([2, HAND], [1, QUIET]).map((r) => step(det, r))).toEqual([null, null, null]);
+  });
+});
+
+describe('M3: a locked phone is never phone use (I11)', () => {
+  const SWITCHED = { appForeground: false, locked: false, screenOn: true };
+  const LOCKED = { appForeground: false, locked: true, screenOn: false };
+  const BACK = { appForeground: true, locked: false, screenOn: true };
+  const LAGGED = ctx({ lockLagged: true });
+  const UNRELIABLE = ctx({ lockReliable: false });
+
+  test('reliable signal: a backgrounded app on a locked phone, or a dark screen, is nothing', () => {
+    expect(drive(make(), seq([60, LOCKED], [3, {}])).all).toEqual([]);
+    expect(drive(make(), seq([5, { appForeground: false, locked: false, screenOn: false }], [3, {}])).all).toEqual([]);
+  });
+
+  test(`lagged signal: a side-button press that reports locked within ${APP_SWITCH_CONFIRM_S} s is dropped`, () => {
+    // iOS: the app backgrounds at once, `locked` arrives about ten seconds later.
+    const det = make();
+    const rows = seq([APP_SWITCH_CONFIRM_S - 1, SWITCHED], [60, LOCKED], [3, {}]);
+    const seen = rows.map((r) => {
+      const out = det.push(r, NO_LIMIT, LAGGED);
+      return { out, open: det.openEpisode() };
+    });
+    expect(seen.every((x) => x.out.length === 0 && x.open === null)).toBe(true);
+    expect(det.flush()).toEqual([]);
+  });
+
+  test('lagged signal: a switch that returns before the confirmation is dropped too', () => {
+    expect(drive(make(), seq([APP_SWITCH_CONFIRM_S - 1, SWITCHED], [5, BACK]), NO_LIMIT, LAGGED).all).toEqual([]);
+  });
+
+  test(`lagged signal: the ${APP_SWITCH_CONFIRM_S}th backgrounded, unlocked row confirms, covering every row`, () => {
+    const det = make();
+    const rows = seq([20, SWITCHED], [3, BACK]);
+    const opens = rows.map((r) => {
+      det.push(r, NO_LIMIT, LAGGED);
+      return det.openEpisode();
+    });
+    expect(opens.slice(0, APP_SWITCH_CONFIRM_S - 1).every((o) => o === null)).toBe(true);
+    expect(opens[APP_SWITCH_CONFIRM_S - 1]).toEqual({ id: 'e1', durationS: APP_SWITCH_CONFIRM_S });
+    expect(opens[19]).toEqual({ id: 'e1', durationS: 20 });
+    expect(only(drive(make(), rows, NO_LIMIT, LAGGED).all)).toMatchObject({
+      startedAt: T0,
+      durationS: 20,
+      q: 0.9,
+      source: 'os',
+      status: 'scored',
+    });
+  });
+
+  test('lagged signal: held-back rows never lengthen an episode handling already confirmed', () => {
+    // Handled for 3 s, then the side button: the ten lagging rows add nothing, the lock closes it.
+    const rows = seq([3, { ...HAND, ...BACK }], [10, SWITCHED], [3, LOCKED]);
+    expect(only(drive(make(), rows, NO_LIMIT, LAGGED).all)).toMatchObject({ durationS: 3, q: 0.9 });
+  });
+
+  test('unreliable signal: a backgrounded app is not evidence at all, however long', () => {
+    // An iPhone without a passcode never reports locked: backgrounded and locked look the same.
+    expect(drive(make(), seq([120, SWITCHED], [3, {}]), NO_LIMIT, UNRELIABLE).all).toEqual([]);
+  });
+
+  test('unreliable signal: real handling still counts, at handling confidence — a lit screen is no unlock', () => {
+    const e = only(drive(make(), seq([4, { ...HAND, ...BACK }], [3, {}]), NO_LIMIT, UNRELIABLE).all);
+    expect(e).toMatchObject({ durationS: 4, q: 0.6, source: 'imu' });
+  });
+});
+
+describe('M3: SR8 — RoadWise opened at speed on a trip that is not mounted', () => {
+  const OPEN = { appForeground: true, locked: false, screenOn: true };
+
+  test.each(['pocket', 'auto'] as const)('%s: the opening row is one q 0.9 event from the OS', (mode) => {
+    const e = only(drive(make(), seq([5, {}], [6, OPEN], [3, {}]), NO_LIMIT, ctx({ mode })).all);
+    expect(e).toMatchObject({
+      category: 'phone',
+      startedAt: T0 + 5000,
+      durationS: 1,
+      q: 0.9,
+      source: 'os',
+      status: 'scored',
+      alertable: true,
+    });
+  });
+
+  test('mounted: the same rows are a driver looking at the HUD they mounted — nothing', () => {
+    expect(drive(make(), seq([5, {}], [6, OPEN], [3, {}]), NO_LIMIT, ctx({ mode: 'mounted' })).all).toEqual([]);
+  });
+
+  test('below the lockout speed, or on the first row of a trip, opening the app is nothing', () => {
+    const slow = { speed: CONSTANTS.LOCKOUT_SPEED_MPS - 0.01 };
+    const pocket = ctx({ mode: 'pocket' });
+    expect(drive(make(), seq([5, slow], [6, { ...OPEN, ...slow }], [3, slow]), NO_LIMIT, pocket).all).toEqual([]);
+    expect(drive(make(), seq([6, OPEN], [3, {}]), NO_LIMIT, pocket).all).toEqual([]);
+  });
+
+  test('handling while it is open extends it; locking and reopening is a second episode', () => {
+    const pocket = ctx({ mode: 'pocket' });
+    const extended = drive(make(), seq([5, {}], [1, OPEN], [4, { ...OPEN, ...HAND }], [3, {}]), NO_LIMIT, pocket);
+    expect(only(extended.all)).toMatchObject({ durationS: 5, q: 0.9, source: 'both' });
+    const twice = drive(make(), seq([5, {}], [2, OPEN], [5, {}], [2, OPEN], [3, {}]), NO_LIMIT, pocket);
+    expect(twice.all.map((e) => [e.startedAt - T0, e.durationS])).toEqual([
+      [5000, 1],
+      [12000, 1],
+    ]);
+  });
+
+  test('also on an unreliable lock signal: the app coming to the front is what counts', () => {
+    const e = only(
+      drive(make(), seq([5, { appForeground: false, locked: false, screenOn: true }], [4, OPEN], [3, {}]), NO_LIMIT, ctx({ mode: 'pocket', lockReliable: false })).all
+    );
+    expect(e).toMatchObject({ durationS: 1, q: 0.9, source: 'os' });
   });
 });

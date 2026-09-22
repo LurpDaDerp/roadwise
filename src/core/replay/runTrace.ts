@@ -97,8 +97,8 @@ function checkExpectation(
 /**
  * Replay `trace` through `createDetectors` and evaluate its expectations.
  *
- * Each row is fed the limit in force at its own `ts`, and the trace's mode, night and
- * precipitation as the detector context; whatever is still open at the end is closed by `flush`.
+ * Each row is fed the limit in force at its own `ts`, and the trace's mode, night, precipitation
+ * and lock signal (reliable when the trace does not say) as the detector context; whatever is still open at the end is closed by `flush`.
  */
 export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
@@ -106,6 +106,9 @@ export function runTrace(trace: Trace): TraceResult {
     mode: trace.mode,
     night: trace.night,
     precipitation: trace.precipitation,
+    // A trace without a lock signal was recorded on a platform whose lock state can be believed.
+    lockReliable: trace.lockSignal !== 'unreliable',
+    lockLagged: trace.lockSignal === 'lagged',
   };
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) {

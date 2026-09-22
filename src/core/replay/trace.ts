@@ -92,6 +92,11 @@ export const traceSchema = z.strictObject({
   mode: driveMode,
   night: z.boolean(),
   precipitation: z.boolean(),
+  /**
+   * How far the rows' `locked` / `screenOn` can be believed (drive-sense `lockSignal`); absent
+   * means `reliable`. Becomes the detector context's `lockReliable` / `lockLagged`.
+   */
+  lockSignal: z.enum(['reliable', 'lagged', 'unreliable']).optional(),
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),
   expected: z.array(expectationSchema),

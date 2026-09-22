@@ -102,7 +102,7 @@ test('the trace context reaches the detectors', () => {
 });
 
 test('the drive mode reaches the detectors', () => {
-  const rows = seq([4, { appForeground: false }]);
+  const rows = seq([4, { appForeground: false, locked: false, screenOn: true }]);
   expect(runTrace(trace({ rows, mode: 'mounted' })).events.map((e) => e.category)).toEqual([
     'phone',
   ]);

@@ -23,7 +23,8 @@ export interface AlertDecision {
   voice?: AlertVoiceKey;
   /**
    * Decided but not delivered: the L1 budget was spent (§13.4 "log silently and summarize after
-   * the trip"). Only ever set on entries in `log()`; `consider` returns null for these.
+   * the trip"), the driver muted the drive (`muteAll`), or the trip is a passenger's
+   * (`ArbiterInput.silent`). Only ever set on entries in `log()`; `consider` returns null for these.
    */
   suppressed?: boolean;
 }
@@ -55,12 +56,20 @@ export interface ArbiterInput {
   drowsy?: boolean;
   /** seconds of continuous driving, for the break suggestion. */
   drivingS: number;
+  /**
+   * Decide as usual, but deliver nothing: the decision is logged `suppressed` and `consider`
+   * returns null. The engine sets it on every row of a passenger trip (product §8.15: a passenger
+   * hears no alerts), so a role flip back to driver finds the arbiter's bookkeeping current.
+   */
+  silent?: boolean;
 }
 
 /**
  * Everything an arbiter needs to be rebuilt mid-drive. `createArbiter(previous.state())` resumes
- * with the driver's mute intact; the per-episode bookkeeping deliberately does not survive, since
- * the detectors it mirrors do not either.
+ * with the driver's mutes and the spent L1 budget intact; the per-episode bookkeeping deliberately
+ * does not survive, since the detectors it mirrors do not either. The engine copies it into the
+ * session before every checkpoint and the recorder persists it, so a relaunch mid-drive (adopt)
+ * resumes from it too. JSON-safe by construction.
  */
 export interface ArbiterState {
   /** 0-based count of prior trips; below `LEARNING_PERIOD_TRIPS` the drive is L1-only. */
@@ -72,6 +81,13 @@ export interface ArbiterState {
    * ends; an escalation is a different alert and speaks, repeats included.
    */
   mutedBand?: AlertLevel;
+  /**
+   * epoch ms of every L1 delivered inside the rolling budget window, oldest first. A resumed
+   * arbiter starts with this budget already spent instead of a fresh one. Absent when empty.
+   */
+  l1Window?: number[];
+  /** The driver muted the rest of this drive (C6 "Mute for this drive"). Absent when not. */
+  mutedAll?: boolean;
 }
 
 export interface Arbiter {
@@ -79,6 +95,11 @@ export interface Arbiter {
   consider(input: ArbiterInput): AlertDecision | null;
   /** Long-press: mutes repeats of the alert now speaking, until its episode ends. */
   mute(ts: number): void;
+  /**
+   * "Mute for this drive" (C6): every later decision is logged `suppressed` and nothing is
+   * delivered — so no alert nobody heard can earn a correction credit. Survives `state()`.
+   */
+  muteAll(ts: number): void;
   /**
    * L1 alerts still available in the rolling `ALERT_BUDGET_WINDOW_S` ending at `ts`. A read only:
    * polling it — with any `ts`, including one ahead of the row clock — never changes a decision.
