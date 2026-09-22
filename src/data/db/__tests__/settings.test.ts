@@ -61,3 +61,20 @@ test('all returns every key with its parsed value', async () => {
 
   await expect(settings.all()).resolves.toEqual({ hudEnabled: false, units: 'mph' });
 });
+
+test('getMany reads several keys in one query; a key never set is absent', async () => {
+  await settings.set('units', 'mph');
+  await settings.set('hudEnabled', false);
+  const spy = jest.spyOn(db, 'execute');
+  await expect(settings.getMany(['units', 'hudEnabled', 'never'])).resolves.toEqual({
+    units: 'mph',
+    hudEnabled: false,
+  });
+  expect(spy).toHaveBeenCalledTimes(1);
+  await expect(settings.getMany([])).resolves.toEqual({});
+});
+
+test('getMany rejects on a read failure (the caller decides what that means)', async () => {
+  jest.spyOn(db, 'execute').mockRejectedValueOnce(new Error('disk'));
+  await expect(settings.getMany(['units'])).rejects.toThrow('disk');
+});

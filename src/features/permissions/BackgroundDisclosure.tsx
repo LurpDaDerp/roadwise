@@ -112,7 +112,7 @@ export function BackgroundDisclosure({
   );
 
   const granted = useCallback(async () => {
-    await recordDisclosureConsent(settings, { shownTo: shownTo.current, sessionUid: userId }, deps.recordConsent);
+    // The consent was recorded at Continue (round 2): a grant never records it a second time.
     await settings.remove(MANUAL_BY_CHOICE_KEY);
     // The intent is spent here, so an old one can never turn auto-record on after a later grant.
     const wanted = (await settings.get<boolean>(AUTO_RECORD_INTENT_KEY)) === true;
@@ -122,7 +122,7 @@ export function BackgroundDisclosure({
     if (wanted) await host.setAutoDetect(true);
     else await host.refreshArming();
     finish('always');
-  }, [settings, userId, deps.recordConsent, host, finish]);
+  }, [settings, host, finish]);
 
   /** A decline (the OS, or Not now): manual by choice, and any auto-record intent is dropped. */
   const declined = useCallback(async () => {
@@ -194,6 +194,16 @@ export function BackgroundDisclosure({
         shownTo.current === null
           ? { version: DISCLOSURE_VERSION, at: now() }
           : affirmationFor(DISCLOSURE_VERSION, shownTo.current, now())
+      );
+      // Continue IS the driver's affirmation of these words (round 2, security r1-M1), so the
+      // `background_location` consent is recorded now, whatever the OS answers next: a denial
+      // followed by Always set in Settings, or a Settings trip the app does not survive, would
+      // otherwise arm on an affirmation with no consent row. Bound to the account shown the
+      // words; kept and sent later when offline, like every other consent.
+      await recordDisclosureConsent(
+        settings,
+        { shownTo: shownTo.current, sessionUid: userId },
+        deps.recordConsent
       );
       if (enableAutoRecord) await settings.set(AUTO_RECORD_INTENT_KEY, true);
       if (settingsOnly) {

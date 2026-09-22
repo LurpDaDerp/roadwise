@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import {
+  affirmationCovers,
   AUTO_RECORD_INTENT_KEY,
   DISCLOSURE_AFFIRMED_KEY,
   MANUAL_BY_CHOICE_KEY,
@@ -88,16 +89,74 @@ test('Continue: affirmation stored, ONE Always request, consent recorded only on
   expect(await settings.get(PROMPTS_KEY)).toEqual({ locationAlways: T0 });
 });
 
-test('a denial records no consent and marks manual by choice', async () => {
+test('an OS denial after Continue: the consent stands (Continue is the affirmation), and manual by choice', async () => {
   const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
   const { settings, onResult, recordConsent, host } = await renderDisclosure(adapter, {
     seed: { trips: [drive(1)], settings: { [AUTO_RECORD_INTENT_KEY]: true } },
   });
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
-  expect(recordConsent).not.toHaveBeenCalled();
+  // Round 2 (security r1-M1): recorded at Continue, whatever the OS answers.
+  expect(recordConsent).toHaveBeenCalledTimes(1);
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
   expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBe(true);
   expect(host.setAutoDetect).not.toHaveBeenCalled();
+});
+
+describe('round 2 (security r1-M1): the consent is recorded at Continue', () => {
+  test('Continue, OS denies, Always then set in Settings outside the app: arming has both the affirmation and the consent row for the shown uid', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+    const { settings, onResult, recordConsent, appState } = await renderDisclosure(adapter);
+    await press(await screen.findByTestId('disclosure-continue'));
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+    // Always is granted later in the system Settings app, with no return through this screen.
+    adapter.current = snap({ location: 'always' });
+    await act(async () => appState.foreground());
+    // What the host's arming reads: this account's affirmation, at or above the minimum.
+    expect(affirmationCovers(await settings.get(DISCLOSURE_AFFIRMED_KEY), 'u1')).toBe(true);
+    // And the consent row exists for the account shown the words — recorded once, at Continue.
+    expect(recordConsent).toHaveBeenCalledTimes(1);
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  });
+
+  test('the app killed on the Settings trip: the consent was already recorded at Continue', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground', locationCanAskAgain: false }));
+    const { recordConsent } = await renderDisclosure(adapter);
+    await press(await screen.findByTestId('disclosure-continue'));
+    await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  });
+
+  test('a later grant does not record it twice', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }));
+    const { onResult, recordConsent } = await renderDisclosure(adapter);
+    await press(await screen.findByTestId('disclosure-continue'));
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+    expect(recordConsent).toHaveBeenCalledTimes(1);
+  });
+
+  test('a different uid never gets the row: the disclosure was shown to u1, u2 is signed in at Continue', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+    const { recordConsent, settings, onResult } = await renderDisclosure(adapter);
+    await screen.findByTestId('disclosure-continue');
+    mockSession.session = { user: { id: 'u2' } };
+    await press(screen.getByTestId('disclosure-continue'));
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+    expect(recordConsent.mock.calls.filter(([uid]) => uid === 'u2')).toHaveLength(0);
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+  });
+
+  test('offline at Continue: kept for the shown uid and sent later', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+    const consent = jest.fn(async () => {
+      throw new Error('offline');
+    });
+    const { settings } = await renderDisclosure(adapter, { consent });
+    await press(await screen.findByTestId('disclosure-continue'));
+    await waitFor(() =>
+      expect(settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).resolves.toEqual({ version: 'pd-1', userId: 'u1' })
+    );
+  });
 });
 
 test('the driver’s auto-record intent turns auto-record on when Always arrives', async () => {
@@ -197,14 +256,15 @@ test('Android, when the OS can no longer ask: the Android wording', async () => 
   expect(await screen.findByText('Choose Allow all the time in Settings, then come back')).toBeOnTheScreen();
 });
 
-test('back from Settings without Always: nothing recorded, nothing assumed', async () => {
+test('back from Settings without Always: nothing assumed, and only the Continue consent stands', async () => {
   const adapter = fakeAdapter(snap({ platform: 'ios', location: 'foreground', locationCanAskAgain: false }));
   const { appState, onResult, recordConsent, settings } = await renderDisclosure(adapter);
   await press(await screen.findByTestId('disclosure-continue'));
   await act(async () => appState.foreground());
   await waitFor(() => expect(adapter.log.filter((c) => c === 'snapshot').length).toBe(2));
   expect(onResult).not.toHaveBeenCalled();
-  expect(recordConsent).not.toHaveBeenCalled();
+  // Round 2: recorded once, at Continue; the return adds nothing.
+  expect(recordConsent).toHaveBeenCalledTimes(1);
   expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBeNull();
 });
 

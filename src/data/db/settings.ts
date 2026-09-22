@@ -34,6 +34,21 @@ export function createSettingsRepo(db: Db) {
       return changes > 0;
     },
 
+    /**
+     * Several keys in one read (the drive host's arming check, Task 19 r2). A key never set is
+     * absent from the result. Rejects on a read failure, like `get`.
+     */
+    async getMany(keys: readonly string[]): Promise<Record<string, unknown>> {
+      if (keys.length === 0) return {};
+      const { rows } = await db.execute(
+        `SELECT key, value_json FROM settings WHERE key IN (${keys.map(() => '?').join(', ')})`,
+        [...keys]
+      );
+      const out: Record<string, unknown> = {};
+      for (const row of rows) out[asText(row, 'key')] = JSON.parse(asText(row, 'value_json'));
+      return out;
+    },
+
     /** Every setting at once, for hydrating a store at launch. */
     async all(): Promise<Record<string, unknown>> {
       const { rows } = await db.execute('SELECT key, value_json FROM settings ORDER BY key ASC');

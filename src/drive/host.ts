@@ -687,16 +687,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * failure (the caller reports it and does not arm).
    */
   async function readArmingAffirmed(): Promise<boolean> {
-    const { rows } = await db.execute('SELECT key, value_json FROM settings WHERE key IN (?, ?)', [
-      DISCLOSURE_AFFIRMED_KEY,
-      LAST_USER_KEY,
-    ]);
-    const value = (key: string): unknown => {
-      const row = rows.find((r) => r.key === key);
-      return row ? (JSON.parse(String(row.value_json)) as unknown) : null;
-    };
-    const owner = value(LAST_USER_KEY);
-    return affirmationCovers(value(DISCLOSURE_AFFIRMED_KEY), typeof owner === 'string' ? owner : null);
+    const read = await settings.getMany([DISCLOSURE_AFFIRMED_KEY, LAST_USER_KEY]);
+    const owner = read[LAST_USER_KEY];
+    return affirmationCovers(read[DISCLOSURE_AFFIRMED_KEY] ?? null, typeof owner === 'string' ? owner : null);
   }
 
   async function applyArming(): Promise<void> {
