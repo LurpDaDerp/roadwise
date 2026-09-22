@@ -10,6 +10,7 @@ import {
   AWS_BEHIND_M,
   AWS_COVERAGE,
   AWS_GLOBAL_PER_DAY,
+  AWS_EXCLUDE,
   insideCoverage,
   tileInCoverage,
   AWS_TTL_MAX_DAYS,
@@ -391,7 +392,8 @@ Deno.test('outside every loaded state, AWS is not asked and no budget is spent',
 });
 
 Deno.test('the coverage list is pinned to Washington', () => {
-  assertEquals(AWS_COVERAGE, [{ state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -116.9 }]);
+  assertEquals(AWS_COVERAGE, [{ state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -117.03 }]);
+  assertEquals(AWS_EXCLUDE, [{ state: 'OR', minLat: 45.54, maxLat: 45.62, minLng: -122.8, maxLng: -122.47 }]);
   assertEquals(
     [
       insideCoverage({ lat: 47.6062, lng: -122.3321 }), // Seattle
@@ -404,8 +406,13 @@ Deno.test('the coverage list is pinned to Washington', () => {
       insideCoverage({ lat: 47.9, lng: -124.8 }), // Pacific, west of the coast
       insideCoverage({ lat: 47.66, lng: -116.8 }), // Coeur d'Alene, ID
       insideCoverage({ lat: 37.7749, lng: -122.4194 }), // San Francisco
+      insideCoverage({ lat: 47.6743, lng: -117.1124 }), // Liberty Lake, WA
+      insideCoverage({ lat: 47.7180, lng: -116.9516 }), // Post Falls, ID
+      insideCoverage({ lat: 45.6, lng: -122.68 }), // Hayden Island / north Portland, OR
+      insideCoverage({ lat: 45.5898, lng: -122.5951 }), // PDX airport
+      insideCoverage({ lat: 45.5876, lng: -122.3995 }), // Camas, WA (east of the carve-out)
     ],
-    [true, true, true, true, false, false, false, false, false, false]
+    [true, true, true, true, false, false, false, false, false, false, true, false, false, false, true]
   );
 });
 
@@ -650,6 +657,18 @@ Deno.test('coverage per tile: inside, outside, and a tile straddling the edge', 
   assert((x / 2 ** 15) * 360 - 180 < -124.73 && ((x + 1) / 2 ** 15) * 360 - 180 > -124.73);
   // and the tile just west of it is out
   assertEquals(tileInCoverage(`15/${x - 1}/${EDGE_TILE.split('/')[2]}`), false);
+});
+
+Deno.test('tiles wholly inside the north Portland carve-out are out; tiles reaching Vancouver are in', () => {
+  const key = (lat: number, lng: number) => {
+    const x = Math.floor(((lng + 180) / 360) * 2 ** 15);
+    const y = Math.floor(((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** 15);
+    return `15/${x}/${y}`;
+  };
+  assertEquals(tileInCoverage(key(45.6, -122.68)), false); // Hayden Island
+  assertEquals(tileInCoverage(key(45.5898, -122.5951)), false); // PDX
+  assertEquals(tileInCoverage(key(45.6387, -122.6615)), true); // downtown Vancouver, WA
+  assertEquals(tileInCoverage(key(47.718, -116.9516)), false); // Post Falls, ID
 });
 
 Deno.test('fallback is aws only when configured and some requested tile is in coverage', async () => {

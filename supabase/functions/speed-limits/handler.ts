@@ -81,24 +81,50 @@ export interface CoverageBox {
 /**
  * The states whose open data is loaded (ruling B2 M-1): AWS is asked only inside these boxes.
  * Outside them `unknown` is the honest answer anyway. Washington: the loaded data's extent clipped
- * at the state border (ruling B3 concern 3), so Vancouver, WA (about 45.63) is in, while downtown
- * Portland (about 45.52) and BC north of 49° are out. Add a state here when its import lands.
+ * at the state borders (rulings B3 concern 3, B2 r5 m1): Vancouver, WA (about 45.63) and Spokane
+ * Valley / Liberty Lake (to about -117.1) are in; downtown Portland (about 45.52), BC north of 49°
+ * and Post Falls, ID (about -116.95) are out. Add a state here when its import lands.
  */
 export const AWS_COVERAGE: readonly CoverageBox[] = [
-  { state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -116.9 },
+  { state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -117.03 },
 ];
 
-export const insideCoverage = (p: LatLng): boolean =>
-  AWS_COVERAGE.some((b) => p.lat >= b.minLat && p.lat <= b.maxLat && p.lng >= b.minLng && p.lng <= b.maxLng);
+/**
+ * Areas inside a coverage box whose roads are not loaded (review r5 m2). A box cannot follow the
+ * Columbia, so north Portland, OR (Hayden Island, Kenton, St Johns, PDX, about 45.58..45.61) sits
+ * inside WA's box; it is carved out here. Vancouver's downtown (45.63) and Camas / Washougal (east
+ * of -122.47) stay in; the thin Vancouver waterfront strip south of 45.62 is out with it.
+ */
+export const AWS_EXCLUDE: readonly CoverageBox[] = [
+  { state: 'OR', minLat: 45.54, maxLat: 45.62, minLng: -122.8, maxLng: -122.47 },
+];
 
-/** True when the z15 tile `key` overlaps any coverage box (touching edges count). */
+type Box = Pick<CoverageBox, 'minLat' | 'maxLat' | 'minLng' | 'maxLng'>;
+const holds = (b: Box, p: LatLng): boolean => p.lat >= b.minLat && p.lat <= b.maxLat && p.lng >= b.minLng && p.lng <= b.maxLng;
+
+export const insideCoverage = (p: LatLng): boolean =>
+  AWS_COVERAGE.some((b) => holds(b, p)) && !AWS_EXCLUDE.some((x) => holds(x, p));
+
+/**
+ * True when the z15 tile `key` overlaps a coverage box (touching edges count) somewhere outside the
+ * exclusions: the overlap with some box is not wholly inside an excluded area.
+ */
 export function tileInCoverage(key: string): boolean {
   const t = parseTileKey(key);
   if (!t) return false;
   const tb = tileBounds(t);
-  return AWS_COVERAGE.some(
-    (b) => tb.minLat <= b.maxLat && tb.maxLat >= b.minLat && tb.minLng <= b.maxLng && tb.maxLng >= b.minLng
-  );
+  return AWS_COVERAGE.some((b) => {
+    const o: Box = {
+      minLat: Math.max(tb.minLat, b.minLat),
+      maxLat: Math.min(tb.maxLat, b.maxLat),
+      minLng: Math.max(tb.minLng, b.minLng),
+      maxLng: Math.min(tb.maxLng, b.maxLng),
+    };
+    if (o.minLat > o.maxLat || o.minLng > o.maxLng) return false;
+    return !AWS_EXCLUDE.some(
+      (x) => o.minLat >= x.minLat && o.maxLat <= x.maxLat && o.minLng >= x.minLng && o.maxLng <= x.maxLng
+    );
+  });
 }
 
 /** AWS cache rows live a random 7 to 10 whole days (B1 security audit), never a client-given time. */

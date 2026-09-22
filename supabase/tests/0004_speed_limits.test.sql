@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(196);
+select plan(197);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -490,7 +490,12 @@ select is((select count(*)::int from b1_dense, jsonb_array_elements(t -> 'segmen
 select is((select count(*)::int from b1_dense, jsonb_array_elements(t -> 'segments') s
     where s ->> 'provider' = 'aws' and s ->> 'id' = left(encode(sha256(convert_to('dense-leg', 'UTF8')), 'hex'), 16) and (t -> 'truncated')::boolean), 1,
   'and so does the cache row: cache rows are never cut (review M2)');
-select is((select count(*)::int from public.speed_limit_candidates(47.6320, -122.3275, 5)), 20, 'candidates are capped at 20 rows');
+select is((select count(*)::int from public.speed_limit_candidates(47.6320, -122.3275, 5)), 21,
+  'candidates are capped at 21 rows: one past the matcher''s 20, so the server sees the cut the device sees (ruling B2 r5 I1)');
+select is((select bool_and(ok) from (
+    select d >= lag(d, 1, 0::double precision) over (order by ord) as ok
+    from (select distance_m as d, row_number() over () as ord from public.speed_limit_candidates(47.6320, -122.3275, 5)) q
+  ) z), true, 'and the 21 come back nearest first');
 
 reset role;
 

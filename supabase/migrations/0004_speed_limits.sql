@@ -250,7 +250,9 @@ begin
   select r.prov, r.key, r.lim, r.hw, r.ow, r.d, r.b
   from per_road r
   order by r.d, r.prov || ':' || r.key
-  limit 20;
+  -- 21, one past the shared matcher's MAX_CANDIDATES (20): the matcher keeps the nearest 20 and,
+  -- when a 21st exists, marks its answer ambiguous, exactly as the device does (ruling B2 r5 I1)
+  limit 21;
 end $$;
 
 -- ---------------------------------------------------------------------------

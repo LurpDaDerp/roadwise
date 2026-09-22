@@ -79,8 +79,12 @@ export const MATCH = {
   CONF_AWS: 0.7,
   /**
    * Only the nearest this-many candidates within `RADIUS_M` are considered (nearest first, exact ties
-   * by key), before the heading test: `speed_limit_candidates` returns at most 20 rows in that order,
-   * so the device, which sees every segment in its tiles, and the server consider the same set.
+   * by key), before the heading test. When more exist, a road left out might be the car's, so the
+   * answer is marked ambiguous: `parallelRoads: true`, confidence at most `CONF_PARALLEL` (ruling B2
+   * r5 I1). `speed_limit_candidates` returns 21 rows in the same order, one past this cap, so the
+   * server sees the cut whenever the device does. The device and the server apply the same rule;
+   * which roads fall either side of the cut can differ by the tiles' 5-decimal snap, and the
+   * ambiguity mark makes that harmless.
    */
   MAX_CANDIDATES: 20,
 } as const;
@@ -144,19 +148,29 @@ function joinFill(
   return { fill: first, limitMph };
 }
 
+/** A cut answer: another road here may be the car's, so it reads as a parallel-road situation. */
+const ambiguous = (r: MatchResult): MatchResult =>
+  r.source === 'unknown'
+    ? { ...r, parallelRoads: true }
+    : { ...r, matchConfidence: Math.min(r.matchConfidence, MATCH.CONF_PARALLEL), parallelRoads: true };
+
 export function matchLimit(courseDeg: number | null, candidates: readonly Candidate[]): MatchResult {
   // An unknown course (null, the platforms' negative "invalid", or garbage) cannot pass a heading
   // test, so no road can be chosen.
   if (courseDeg === null || !Number.isFinite(courseDeg) || courseDeg < 0) return unknown(false);
   const course = normalizeDeg(courseDeg);
 
-  // The nearest MAX_CANDIDATES within the radius, whatever their heading: the server's query caps
-  // before any heading test, so capping here after it would let the device see roads the server
-  // never returned (a 31-road interchange is real: I-205 at Vancouver, WA).
-  const nearest = candidates
+  // The nearest MAX_CANDIDATES within the radius, whatever their heading, as the server returns them
+  // (a 31-road interchange is real: I-205 at Vancouver, WA). A cut marks the answer ambiguous.
+  const inRadius = candidates
     .filter((c) => Number.isFinite(c.distanceM) && c.distanceM >= 0 && c.distanceM <= MATCH.RADIUS_M)
-    .sort(byDistance)
-    .slice(0, MATCH.MAX_CANDIDATES);
+    .sort(byDistance);
+  const result = matchNearest(course, inRadius.slice(0, MATCH.MAX_CANDIDATES));
+  return inRadius.length > MATCH.MAX_CANDIDATES ? ambiguous(result) : result;
+}
+
+/** The match over the (already capped, nearest-first) candidates, for a valid course. */
+function matchNearest(course: number, nearest: readonly Candidate[]): MatchResult {
   const passing = nearest.filter((c) => headingPasses(course, c));
   const roads = passing.filter((c) => c.provider === 'osm');
   const hpms = passing.filter((c) => c.provider === 'hpms' && validLimit(c.limitMph) !== null);

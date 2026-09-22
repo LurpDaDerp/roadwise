@@ -392,10 +392,25 @@ describe('the candidate cap (the server returns at most 20 nearest)', () => {
     return [...far, own, ...ramps];
   };
 
-  it('considers only the nearest 20, before the heading test, so the farther parallels do not count', () => {
+  it('a cut is ambiguous: the 31-road interchange answers its pick at 0.6 with the parallel flag', () => {
     const cs = interchange();
     expect(cs).toHaveLength(31);
+    // Among the nearest 20 the car's road stands alone (the ramps cross its course), which would be
+    // 0.95; but 11 roads were cut, and one of them might be the car's.
     expect(matchLimit(90, cs)).toEqual({
+      limitMph: 35,
+      source: 'posted',
+      matchConfidence: 0.6,
+      parallelRoads: true,
+      provider: 'osm',
+      key: 'osm:own',
+    });
+  });
+
+  it('exactly 20 in radius is not a cut: the same pick is uncapped', () => {
+    const nearest20 = [...interchange()].sort((a, b) => a.distanceM - b.distanceM).slice(0, 20);
+    expect(nearest20.map((c) => c.key)).toContain('osm:own');
+    expect(matchLimit(90, nearest20)).toEqual({
       limitMph: 35,
       source: 'posted',
       matchConfidence: 0.95,
@@ -405,12 +420,22 @@ describe('the candidate cap (the server returns at most 20 nearest)', () => {
     });
   });
 
-  it('would have flagged parallel roads without the cap (the 21st onward change the outcome)', () => {
+  it('the server-shaped 21 rows and the device-shaped 31 candidates give the same answer', () => {
     const cs = interchange();
-    // Only the 20 the server would return, plus one of the farther parallels: now it counts.
-    const nearest20 = [...cs].sort((a, b) => a.distanceM - b.distanceM).slice(0, 20);
-    const withOneMore = [...nearest20.slice(1), cs.find((c) => c.key === 'osm:far00')!];
-    expect(matchLimit(90, withOneMore)).toMatchObject({ limitMph: 35, parallelRoads: true, matchConfidence: 0.6 });
+    // what speed_limit_candidates returns: the nearest 21, nearest first, ties by key
+    const server21 = [...cs].sort((a, b) => a.distanceM - b.distanceM || (a.key < b.key ? -1 : 1)).slice(0, 21);
+    expect(matchLimit(90, server21)).toEqual(matchLimit(90, cs));
+    // and a cut unknown is flagged too
+    const crossing = cs.map((c) => ({ ...c, bearingDeg: 0 }));
+    expect(matchLimit(90, crossing)).toEqual({ ...UNKNOWN, parallelRoads: true });
+    expect(matchLimit(90, crossing.slice(0, 21))).toEqual(matchLimit(90, crossing));
+  });
+
+  it('a cut never raises a confidence that is already lower (a ramp stays at 0.6, not above)', () => {
+    const cs = interchange().map((c) => (c.key === 'osm:own' ? { ...c, highway: 'primary_link' } : c));
+    expect(matchLimit(90, cs)).toMatchObject({ key: 'osm:own', matchConfidence: 0.6, parallelRoads: true });
+    const lone = cand({ key: 'osm:solo', highway: 'primary_link', distanceM: 3 });
+    expect(matchLimit(90, [lone])).toMatchObject({ matchConfidence: 0.65, parallelRoads: false });
   });
 
   it('answers the same whatever order the candidates arrive in, ties broken by key', () => {
@@ -420,7 +445,7 @@ describe('the candidate cap (the server returns at most 20 nearest)', () => {
     const forward = matchLimit(90, [...cs, tie]);
     const backward = matchLimit(90, [tie, ...cs].reverse());
     expect(backward).toEqual(forward);
-    expect(forward).toMatchObject({ key: 'osm:own', parallelRoads: false });
+    expect(forward).toMatchObject({ key: 'osm:own', parallelRoads: true, matchConfidence: 0.6 });
   });
 
   it('never lets out-of-radius or broken candidates take a slot', () => {
