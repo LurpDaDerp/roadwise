@@ -52,18 +52,22 @@ export const inboxCopy = {
    * was true that day, and nothing about now.
    */
   lapse: {
+    /**
+     * Only the permission was checked (review n1): these say the permission is back, never that
+     * recording or detection works — other things (battery, the auto-record switch) can still stop it.
+     */
     fixed: {
       location_always: {
-        title: 'Automatic recording is back on',
-        body: (day: string) => `Automatic recording was off on ${day}. It's back on.`,
+        title: 'Location is set to Always again',
+        body: (day: string) => `On ${day}, location was changed from Always. It's set to Always again.`,
       },
       location: {
-        title: 'Drive recording is back on',
-        body: (day: string) => `Drive recording was off on ${day}. It's back on.`,
+        title: 'Location access is back',
+        body: (day: string) => `On ${day}, location access was turned off. Location access is back.`,
       },
       motion: {
-        title: 'Motion access is back on',
-        body: (day: string) => `Motion access was off on ${day}. It's back on.`,
+        title: 'Motion access is back',
+        body: (day: string) => `On ${day}, motion access was turned off. Motion access is back.`,
       },
     },
     unknown: {
@@ -79,6 +83,25 @@ export const inboxCopy = {
       motion: {
         title: 'Drive detection needed attention',
         body: (day: string) => `On ${day}, motion access was off. Open to check how it is now.`,
+      },
+    },
+    /**
+     * Reported by another phone on the account (review n2): this phone's permissions say nothing
+     * about that one, so there is nothing here to check.
+     */
+    elsewhere: {
+      location_always: {
+        title: 'Automatic recording was off',
+        body: (day: string) => `On ${day}, automatic recording was off on another phone signed in to your account.`,
+      },
+      location: {
+        title: 'Drive recording was off',
+        body: (day: string) =>
+          `On ${day}, location access was off on another phone signed in to your account, so drives couldn't be recorded there.`,
+      },
+      motion: {
+        title: 'Drive detection needed attention',
+        body: (day: string) => `On ${day}, motion access was off on another phone signed in to your account.`,
       },
     },
   },

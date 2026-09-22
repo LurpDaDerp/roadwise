@@ -136,10 +136,10 @@ describe('InboxScreen', () => {
       await waitFor(() => expect(api.markInboxRead).toHaveBeenCalledWith([row.id]));
     });
 
-    it('fixed since: past tense, back on', async () => {
+    it('fixed since: past tense, only the permission', async () => {
       await renderLapse(async () => snapshot('always'));
-      expect(await screen.findByText('Automatic recording is back on')).toBeTruthy();
-      expect(screen.getByText("Automatic recording was off on Mon, Jan 5. It's back on.")).toBeTruthy();
+      expect(await screen.findByText('Location is set to Always again')).toBeTruthy();
+      expect(screen.getByText("On Mon, Jan 5, location was changed from Always. It's set to Always again.")).toBeTruthy();
       expect(screen.queryByText('Automatic recording is off')).toBeNull();
     });
 
@@ -148,7 +148,7 @@ describe('InboxScreen', () => {
         throw new Error('drive-sense unavailable');
       });
       expect(await screen.findByText('Automatic recording was off')).toBeTruthy();
-      expect(screen.queryByText(/is off|back on/)).toBeNull();
+      expect(screen.queryByText(/is off|back on|again/)).toBeNull();
     });
 
     it('reads the permissions again on a return to the foreground', async () => {
@@ -163,7 +163,7 @@ describe('InboxScreen', () => {
       location = 'always';
       await act(async () => appState.emit('active'));
       await settleInbox();
-      expect(await screen.findByText('Automatic recording is back on')).toBeTruthy();
+      expect(await screen.findByText('Location is set to Always again')).toBeTruthy();
     });
   });
 

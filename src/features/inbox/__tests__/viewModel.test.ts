@@ -5,12 +5,13 @@ import type { TripRow } from '@/data/db/types';
 import { inboxCopy } from '@/features/inbox/copy';
 import {
   countServerPushesToday,
+  milesLabel,
   toItemView,
   toTripDetail,
   type InboxItemView,
 } from '@/features/inbox/viewModel';
 import { tripSummaryHref } from '@/features/trips/routes';
-import { buildCatalog } from '@/notifications/catalog';
+import { buildCatalog, renderLocal } from '@/notifications/catalog';
 
 import { inboxRow, iso, lapseRow, nextId } from '../__fixtures__/rows';
 
@@ -244,35 +245,81 @@ describe('toItemView — a permission lapse renders from the phone’s CURRENT p
     expect(v?.href).toBe('/permissions');
   });
 
-  it('fixed since → past tense, and says it is back on', () => {
+  it('fixed since → past tense, claiming only the permission that was checked (review n1)', () => {
     const always = toItemView(lapse('location_always'), here({ location: 'always' }), NOW, TZ);
-    expect(always?.title).toBe('Automatic recording is back on');
-    expect(always?.body).toBe("Automatic recording was off on Mon, Jan 5. It's back on.");
+    expect(always?.title).toBe('Location is set to Always again');
+    expect(always?.body).toBe("On Mon, Jan 5, location was changed from Always. It's set to Always again.");
     const location = toItemView(lapse('location'), here({ location: 'foreground' }), NOW, TZ);
-    expect(location?.body).toBe("Drive recording was off on Mon, Jan 5. It's back on.");
+    expect(location?.title).toBe('Location access is back');
+    expect(location?.body).toBe('On Mon, Jan 5, location access was turned off. Location access is back.');
     const motion = toItemView(lapse('motion'), here({ motion: 'granted' }), NOW, TZ);
-    expect(motion?.body).toBe("Motion access was off on Mon, Jan 5. It's back on.");
+    expect(motion?.title).toBe('Motion access is back');
+    expect(motion?.body).toBe('On Mon, Jan 5, motion access was turned off. Motion access is back.');
     for (const v of [always, location, motion]) expect(v?.body).not.toMatch(/fix it|right now/);
   });
 
-  it('cannot be read → neither: neutral copy about that day only', () => {
+  it('no "fixed" string claims recording or detection works — only the permission was checked', () => {
+    for (const kind of Object.keys(inboxCopy.lapse.fixed) as (keyof typeof inboxCopy.lapse.fixed)[]) {
+      const c = inboxCopy.lapse.fixed[kind];
+      expect(`${c.title} | ${c.body('Mon, Jan 5')}`).not.toMatch(/record|detect|drive|working|back on/i);
+    }
+  });
+
+  it('cannot be read on this phone → neither: neutral copy about that day only', () => {
     const cases = [
       toItemView(lapse('location_always'), missing, NOW, TZ), // no reading at all
       toItemView(lapse('location_always'), { trip: null, events: [], permissions: { deviceId: 'dev-1', snapshot: null } }, NOW, TZ),
       toItemView(lapse('motion'), here({ motion: null }), NOW, TZ), // motion "can't check"
-      toItemView(
-        lapse('location_always'),
-        { trip: null, events: [], permissions: { deviceId: 'other-phone', snapshot: snap({ location: 'always' }) } },
-        NOW,
-        TZ
-      ), // the lapse was on another phone
+      toItemView(lapse('location_always'), { trip: null, events: [], permissions: { deviceId: null, snapshot: snap({ location: 'always' }) } }, NOW, TZ), // which phone this is is unknown
     ];
     expect(cases[0]?.title).toBe('Automatic recording was off');
     expect(cases[0]?.body).toBe('On Mon, Jan 5, automatic recording was off. Open to check how it is now.');
     expect(cases[2]?.title).toBe('Drive detection needed attention');
     for (const v of cases) {
       expect(v).not.toBeNull();
-      expect(`${v?.title} ${v?.body}`).not.toMatch(/\bis off\b|back on|right now|fix it/);
+      expect(`${v?.title} ${v?.body}`).not.toMatch(/\bis off\b|back on|again|right now|fix it|another phone/);
     }
+  });
+
+  it('reported by ANOTHER phone → says so, and does not send the driver to check this one (review n2)', () => {
+    const other = (permission: string, snapshot: PermissionSnapshot | null) =>
+      toItemView(lapse(permission), { trip: null, events: [], permissions: { deviceId: 'other-phone', snapshot } }, NOW, TZ);
+    const cases = [
+      other('location_always', snap({ location: 'always' })),
+      other('location', snap({ location: 'denied' })),
+      other('motion', null),
+    ];
+    expect(cases[0]?.body).toBe('On Mon, Jan 5, automatic recording was off on another phone signed in to your account.');
+    for (const v of cases) {
+      expect(v?.body).toContain('another phone');
+      expect(`${v?.title} ${v?.body}`).not.toMatch(/open to check|how it is now|\bis off\b|back|again|fix it/i);
+    }
+  });
+});
+
+describe('milesLabel — parity with the catalog’s own distance (review n3)', () => {
+  const MI = 1609.344;
+  it.each([0.04, 0.05, 9.94, 9.95, 12.4])('%p mi prints as the notification prints it', (mi) => {
+    const distanceM = mi * MI;
+    const body = renderLocal('trip_summary', {
+      clientTripId: 'x',
+      distanceM,
+      roleUnknown: false,
+      scorableIfDriver: false,
+      count: 1,
+    }).body;
+    const label = milesLabel(distanceM);
+    expect(body).toBe(
+      label === null
+        ? 'Your drive is ready. Tap to see how it went.'
+        : `Your ${label} mi drive is ready. Tap to see how it went.`
+    );
+  });
+
+  it('the boundaries fall where the catalog puts them', () => {
+    expect(milesLabel(0.04 * MI)).toBeNull();
+    expect(milesLabel(9.94 * MI)).toBe('9.9');
+    expect(milesLabel(9.95 * MI)).toBe('10');
+    expect(milesLabel(12.4 * MI)).toBe('12');
   });
 });
