@@ -28,6 +28,27 @@ jest.mock('../steps/GuardianStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { GuardianStep: (p: object) => <PlaceholderStep {...p} step="guardian" /> };
 });
+// Task 14's steps read the phone and the server; the same stand-ins.
+jest.mock('../steps/LocationStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { LocationStep: (p: object) => <PlaceholderStep {...p} step="location" /> };
+});
+jest.mock('../steps/MotionStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { MotionStep: (p: object) => <PlaceholderStep {...p} step="motion" /> };
+});
+jest.mock('../steps/NotificationsStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { NotificationsStep: (p: object) => <PlaceholderStep {...p} step="notifications" /> };
+});
+jest.mock('../steps/AutoDetectStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { AutoDetectStep: (p: object) => <PlaceholderStep {...p} step="auto-detect" /> };
+});
+jest.mock('../steps/ReadyStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { ReadyStep: (p: object) => <PlaceholderStep {...p} step="ready" /> };
+});
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => {

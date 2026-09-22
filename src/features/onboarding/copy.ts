@@ -143,6 +143,134 @@ export const onboardingCopy = {
     },
   },
   /**
+   * A6. The primer and its first line are the brief's words (rev1: m). iOS asks While Using only
+   * (design §5.3), so the Always question is announced for after the first drive and nothing more.
+   */
+  location: {
+    title: 'Measure your drives',
+    body: 'We use location to measure speed and distance during drives.',
+    promise: "Only records while you're on a drive · Never sold",
+    iosLater: "After your first drive, we'll ask whether drives can start on their own.",
+    allow: 'Allow location',
+    notNow: 'Not now',
+    continue: 'Continue',
+    openSettings: 'Open Settings',
+    allowed: 'Location is allowed.',
+    denied:
+      "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
+    approximate:
+      "Location is set to approximate, so speed and distance can't be measured accurately. Turn on Precise Location in Settings.",
+    failed: "Your phone didn't answer. Try again.",
+  },
+  /** A7. `unavailable` is the brief's line: no claim about when the phone will ask. */
+  motion: {
+    title: { ios: 'Motion & Fitness', android: 'Physical activity' },
+    body: "RoadWise uses your phone's motion activity to notice when a drive starts and ends, and to tell driving apart from walking.",
+    allow: 'Allow motion access',
+    notNow: 'Not now',
+    continue: 'Continue',
+    openSettings: 'Open Settings',
+    allowed: 'Motion access is allowed.',
+    denied:
+      'Motion access is off, so drives may not end on their own. You can turn it on in Settings.',
+    unavailable: "Your phone didn't let us ask here. You can turn it on in Settings.",
+    cantCheck: "We couldn't check motion access on this phone.",
+    failed: "Your phone didn't answer. Try again.",
+  },
+  /**
+   * A8. The previews are the catalog's own copy (`renderLocal`, `renderPush`), never text written
+   * here, so an example can't promise a notification the app doesn't send. The promise line is
+   * printed only while this phone reports when it is driving (rev1: C1).
+   */
+  notifications: {
+    title: 'Notifications',
+    body: "RoadWise lets you know when a drive summary is ready, and when something stops your drives from being recorded.",
+    examples: 'Examples',
+    promise: "We hold them while you're driving.",
+    allow: 'Allow notifications',
+    notNow: 'Not now',
+    continue: 'Continue',
+    openSettings: 'Open Settings',
+    allowed: 'Notifications are allowed.',
+    quiet: 'Notifications are delivered quietly.',
+    denied: 'Notifications are off. Updates wait in your Inbox instead.',
+    failed: "Your phone didn't answer. Try again.",
+  },
+  /**
+   * A9 and the auto-record screen (Task 19). The toggle's own line says plainly that it turns on
+   * automatic recording, before any tap (Ruling T9 (2)).
+   */
+  autoRecord: {
+    title: 'Record drives automatically',
+    body: 'RoadWise can start recording when it detects a drive, so you never have to remember to tap.',
+    toggle: 'Record drives automatically',
+    toggleOn: 'RoadWise starts recording your drives automatically.',
+    toggleOff: 'Off. You start each drive yourself with Drive.',
+    iosAfterFirstDrive: 'Turns on after your first drive, once you allow it.',
+    needs: {
+      location: "Auto-record needs location access, which is off on this phone.",
+      always: {
+        ios: 'Auto-record needs location set to Always.',
+        android: 'Auto-record needs location set to Allow all the time.',
+      },
+      motion: 'Auto-record needs motion access, which is off on this phone.',
+    },
+    turnOn: 'Turn on',
+    skip: 'Skip',
+    continue: 'Continue',
+    failed: "That didn't work. Try again.",
+    loadFailed: "Couldn't check this phone's permissions.",
+    retry: 'Try again',
+    battery: {
+      label: 'Battery',
+      exempt: 'Your phone lets RoadWise run in the background.',
+      optimized: 'Your phone may stop RoadWise in the background, so drives may be missed.',
+      open: 'Open battery settings',
+    },
+  },
+  /**
+   * A12. Every row says what the phone reported just now; "On" for auto-record only when it is
+   * armed. The "just drive" tip only when auto-record is armed (rev1: I8).
+   */
+  ready: {
+    title: "You're set up",
+    body: "Here's what's on for this phone.",
+    rows: {
+      autoRecord: 'Auto-record',
+      location: 'Location',
+      motion: 'Motion',
+      notifications: 'Notifications',
+      guardian: 'Guardian',
+    },
+    status: {
+      armed: 'On',
+      notAvailable: 'Not available',
+      afterFirstDrive: 'After your first drive',
+      notArmed: "On, but it can't start drives yet",
+      cantCheck: "Can't check",
+      off: 'Off',
+      locationAlways: 'Allowed all the time',
+      locationWhileUsing: 'Allowed while using the app',
+      approximate: 'Approximate only',
+      notAllowed: 'Not allowed',
+      allowed: 'Allowed',
+      notOnPhone: 'Not on this phone',
+      quiet: 'Delivered quietly',
+      guardianLinked: 'Linked',
+      guardianPending: 'Invite sent',
+      guardianNone: 'Not invited',
+      guardianDeclined: 'Invite declined',
+      guardianExpired: 'Invite expired',
+    },
+    tipArmed: "Next time you drive, just drive. We'll have a summary ready when you park.",
+    tipManual: "Tap Drive before you set off — we'll have a summary ready when you park.",
+    readFailed: "Couldn't check this phone's permissions.",
+    retry: 'Try again',
+    home: 'Go to Home',
+    startDrive: 'Start a drive now',
+    finishFailed: "Couldn't finish setting up. Check your connection and try again.",
+  },
+  /**
    * The under-13 block. "We've kept only what we need" is printed only after the removal it
    * describes has succeeded (rev1: I5).
    */
