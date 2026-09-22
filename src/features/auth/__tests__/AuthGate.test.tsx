@@ -8,7 +8,12 @@ import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { AuthGate, flushSignedInConsents, mergeOwnProfileFlags } from '@/features/auth/AuthGate';
 import { DISCLAIMER_VERSION, legalState } from '@/features/auth/legal';
 import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY, startSignInVisit } from '@/features/auth/pendingConsent';
-import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
+import { finishOnboarding } from '@/features/onboarding/finish';
+import {
+  ONBOARDING_PENDING_HREF_KEY,
+  PENDING_PERMISSION_CONSENTS_KEY,
+  PERMISSION_CONSENT_VERSION,
+} from '@/features/onboarding/state';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
 
@@ -68,8 +73,12 @@ jest.mock('@/data/queries', () => ({
   useDb: () => mockWorld.db,
 }));
 const mockRpc = jest.fn(async (..._args: unknown[]) => ({ data: {} as unknown, error: null as unknown }));
+const mockFrom = jest.fn((..._args: unknown[]): unknown => ({}));
 jest.mock('@/data/supabase/client', () => ({
-  supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
+  supabase: {
+    rpc: (...args: unknown[]) => mockRpc(...args),
+    from: (...args: unknown[]) => mockFrom(...args),
+  },
 }));
 
 const READY = { id: 'u1', age_band: '18_plus', flags: { onboarded: true } };
@@ -95,8 +104,9 @@ beforeEach(async () => {
     update: 'ok',
     db,
   });
-  mockReplace.mockClear();
+  mockReplace.mockReset();
   mockRefresh.mockClear();
+  mockFrom.mockReset();
   mockRpc.mockClear();
 });
 
@@ -402,5 +412,155 @@ describe('mergeOwnProfileFlags', () => {
   test('a refused call rejects', async () => {
     mockRpc.mockResolvedValueOnce({ data: null, error: { code: '22023', message: 'bad key' } });
     await expect(mergeOwnProfileFlags({ disclaimerAcknowledged: 'v' })).rejects.toMatchObject({ code: '22023' });
+  });
+});
+
+describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
+  const SEGMENTS: Record<string, string[]> = {
+    '/inbox': ['(app)', 'inbox'],
+    '/trips/t_1/summary': ['(app)', 'trips', '[id]', 'summary'],
+    '/(tabs)/home': ['(tabs)', 'home'],
+    '/(onboarding)/start': ['(onboarding)', 'start'],
+  };
+  const PATHS: Record<string, string> = {
+    '/inbox': '/inbox',
+    '/trips/t_1/summary': '/trips/t_1/summary',
+    '/(tabs)/home': '/home',
+    '/(onboarding)/start': '/start',
+  };
+  /** The navigator: a replace moves the world to that route, which the next render reads. */
+  function navigate() {
+    mockReplace.mockImplementation((href: string) => {
+      mockWorld.segments = SEGMENTS[href] ?? ['unknown'];
+      mockWorld.pathname = PATHS[href] ?? href;
+    });
+  }
+  const replaced = () => mockReplace.mock.calls.map(([href]) => href as string);
+
+  async function atReady(held: string | null) {
+    if (held) await settings.set(ONBOARDING_PENDING_HREF_KEY, held);
+    navigate();
+    const view = await mount({
+      status: 'signedIn',
+      profile: OWED,
+      profileSource: 'network',
+      segments: ['(onboarding)', '[step]'],
+      pathname: '/ready',
+    });
+    await act(async () => {});
+    return view;
+  }
+
+  test('the whole finish: a held /inbox lands on /inbox, never Home, and nothing is held again', async () => {
+    const view = await atReady('/inbox');
+    await act(async () => {
+      await finishOnboarding({
+        settings,
+        userId: 'u1',
+        router: { replace: mockReplace, push: jest.fn() },
+        // The server's row arrives; the replace that follows is rendered in the same pass.
+        refreshProfile: async () => {
+          mockWorld.profile = READY;
+        },
+        mergeFlags: async () => ({}),
+      });
+    });
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).toEqual(['/inbox']);
+    expect(mockWorld.segments).toEqual(['(app)', 'inbox']);
+    expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+  });
+
+  test('a render between the refresh and the replace still lands on /inbox, never Home', async () => {
+    const view = await atReady('/inbox');
+    let gateMovedFirst: string[] = [];
+    // Not wrapped in one act: the render inside the refresh must commit, and its effects run, before
+    // finishOnboarding gets to navigate.
+    await finishOnboarding({
+      settings,
+      userId: 'u1',
+      router: { replace: mockReplace, push: jest.fn() },
+      refreshProfile: async () => {
+        mockWorld.profile = READY;
+        await view.rerender(gate());
+        await act(async () => {});
+        gateMovedFirst = replaced();
+      },
+      mergeFlags: async () => ({}),
+    });
+    // The gate itself answered the ready profile inside onboarding, with the held link.
+    expect(gateMovedFirst).toEqual(['/inbox']);
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).not.toContain('/(tabs)/home');
+    expect(replaced()).not.toContain('/(onboarding)/start');
+    expect(replaced()[0]).toBe('/inbox');
+    expect(mockWorld.segments).toEqual(['(app)', 'inbox']);
+    expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+  });
+
+  test('a profile that turns ready inside onboarding opens the held link once, then clears it', async () => {
+    const view = await atReady('/trips/t_1/summary');
+    mockWorld.profile = READY;
+    await view.rerender(gate());
+    await act(async () => {});
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).toEqual(['/trips/t_1/summary']);
+    expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+  });
+
+  test('with nothing held, Home', async () => {
+    const view = await atReady(null);
+    mockWorld.profile = READY;
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).toEqual(['/(tabs)/home']);
+  });
+});
+
+describe('owed permission consents (T14 review m2)', () => {
+  const unpublished = legalState(null);
+
+  test('sent under their own account, then cleared', async () => {
+    await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u1', types: ['location', 'notifications'] });
+    const record = jest.fn(async (_u: string, _c: { type: string; version: string }) => ({}));
+    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, recordPermissionConsent: record });
+    expect(record.mock.calls).toEqual([
+      ['u1', { type: 'location', version: PERMISSION_CONSENT_VERSION }],
+      ['u1', { type: 'notifications', version: PERMISSION_CONSENT_VERSION }],
+    ]);
+    expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toBeNull();
+  });
+
+  test('never under another account, and kept for it', async () => {
+    await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u2', types: ['motion'] });
+    const record = jest.fn(async () => ({}));
+    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, recordPermissionConsent: record });
+    expect(record).not.toHaveBeenCalled();
+    expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toEqual({ userId: 'u2', types: ['motion'] });
+  });
+
+  test('a failure keeps what was not sent and rejects, so the next session tries again', async () => {
+    await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u1', types: ['location', 'motion'] });
+    const record = jest.fn(async (_u: string, c: { type: string }) => {
+      if (c.type === 'motion') throw new Error('offline');
+    });
+    await expect(
+      flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, recordPermissionConsent: record })
+    ).rejects.toThrow('offline');
+    expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toEqual({ userId: 'u1', types: ['motion'] });
+  });
+
+  test('the gate sends them once per signed-in session, against the network row', async () => {
+    await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u1', types: ['location'] });
+    const insert = jest.fn((_row: unknown) => ({
+      select: () => ({ single: async () => ({ data: {}, error: null }) }),
+    }));
+    mockFrom.mockImplementation(() => ({ insert }));
+    await mount({ status: 'signedIn', profile: READY, profileSource: 'network', segments: ['(tabs)', 'home'] });
+    await waitFor(async () => expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toBeNull());
+    expect(insert).toHaveBeenCalledWith({ user_id: 'u1', type: 'location', version: PERMISSION_CONSENT_VERSION });
   });
 });

@@ -192,7 +192,9 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
         {view === 'granted' ? <StatusLine tone="ok">{copy.allowed}</StatusLine> : null}
         {view === 'denied' ? <StatusLine tone="off">{copy.denied}</StatusLine> : null}
         {view === 'approximate' ? <StatusLine tone="attention">{copy.approximate}</StatusLine> : null}
-        {ios && (view === 'ask' || view === 'granted') ? (
+        {/* The question comes from the post-drive offer, which exists only while auto-record does
+            (Ruling T9 (3)): with the flag off, nothing is promised about later (T14 review m1). */}
+        {ios && ctx.features.autoDetect && (view === 'ask' || view === 'granted') ? (
           <Text variant="subhead" tone="muted" testID="location-ios-later">
             {copy.iosLater}
           </Text>

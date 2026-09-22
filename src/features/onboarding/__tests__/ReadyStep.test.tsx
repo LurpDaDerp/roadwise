@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import { AUTO_RECORD_INTENT_KEY, type Readiness } from '@/core/permissions';
 import { T0 } from '@/data/queries/__fixtures__/rows';
@@ -168,6 +168,9 @@ test('Go to Home finishes onboarding; Start a drive now finishes into the drive 
   expect(finish.mock.calls[0][0]).toMatchObject({ userId: 'u1', router: mockRouter });
   expect(finish.mock.calls[0][1]).toEqual({ startDrive: false });
 
+  // Unmount the first tree before its client is cleared: a mounted observer would re-arm a gc
+  // timer on a client no longer tracked, and keep Jest from exiting (T14 review m3).
+  await cleanup();
   clearQueryClients();
   const again = await renderStep(ctx(), fakeAdapter(snap()));
   await press(await screen.findByTestId('ready-start-drive'));
@@ -193,6 +196,9 @@ test('the guardian row only when that step ran', async () => {
   expect(screen.queryByTestId('ready-row-guardian')).toBeNull();
   expect(off.readGuardianLink).not.toHaveBeenCalled();
 
+  // Unmount the first tree before its client is cleared: a mounted observer would re-arm a gc
+  // timer on a client no longer tracked, and keep Jest from exiting (T14 review m3).
+  await cleanup();
   clearQueryClients();
   const on = await renderStep(
     ctx({ ageBand: '13_17', features: { autoDetect: true, guardianInvites: true } }),

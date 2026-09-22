@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
 import { registerDriveStateSource } from '@/data/devices/driveStateStore';
@@ -100,6 +100,9 @@ test('the promise is printed only while this phone reports when it is driving', 
   await screen.findByTestId('notifications-allow');
   expect(screen.queryByText("We hold them while you're driving.")).toBeNull();
 
+  // Unmount the first tree before its client is cleared: a mounted observer would re-arm a gc
+  // timer on a client no longer tracked, and keep Jest from exiting (T14 review m3).
+  await cleanup();
   clearQueryClients();
   release = registerDriveStateSource();
   await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));

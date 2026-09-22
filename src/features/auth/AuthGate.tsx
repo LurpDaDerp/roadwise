@@ -7,13 +7,24 @@ import type { Db } from '@/data/db/driver';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
+import { recordConsent } from '@/data/supabase/profile';
 import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
+import {
+  ONBOARDING_PENDING_HREF_KEY,
+  PERMISSION_CONSENT_VERSION,
+  readPendingPermissionConsents,
+  savePendingPermissionConsents,
+  type PermissionConsentType,
+} from '@/features/onboarding/state';
 
 import {
+  HOME,
   ONBOARDING_START,
   driveFacts,
+  pendingHrefFor,
   profileGate,
+  readPendingHref,
   resolveGate,
   savePendingHref,
 } from './authGuard';
@@ -36,6 +47,11 @@ export interface SignedInConsentDeps {
   consentApi?: ConsentApi;
   /** Merges `patch` into the caller's own `profiles.flags` on the server (Task 2's RPC). */
   mergeFlags?: (patch: { disclaimerAcknowledged: string }) => Promise<unknown>;
+  /** Records one A6–A8 permission consent (default: M0's `recordConsent`). */
+  recordPermissionConsent?: (
+    userId: string,
+    consent: { type: PermissionConsentType; version: string }
+  ) => Promise<unknown>;
 }
 
 /**
@@ -56,7 +72,10 @@ export async function mergeOwnProfileFlags(patch: { disclaimerAcknowledged: stri
  *   (`merge_own_profile_flags`, never a read-modify-write) so the Terms step
  *   does not ask a second time (ruling T15). Only the current `DISCLAIMER_VERSION` is copied, and
  *   only when the account does not already hold it, so an older tick never downgrades the row.
- * Both are attempted whatever happens to the other; if either fails this rejects, after both ran.
+ * - the A6–A8 permission consents a step could not send (offline) and `finishOnboarding` could not
+ *   either (T14 review m2): only those held for THIS account, each sent once; what is sent is
+ *   dropped from the owed record, what fails stays for the next session.
+ * All are attempted whatever happens to the others; if any fails this rejects, after all ran.
  */
 export async function flushSignedInConsents(
   deps: SignedInConsentDeps
@@ -82,6 +101,25 @@ export async function flushSignedInConsents(
       // Only the one key goes up: the server merges it into whatever the row holds now.
       await mergeFlags({ disclaimerAcknowledged: DISCLAIMER_VERSION });
       disclaimerMerged = true;
+    }
+  } catch (error) {
+    failure ??= error;
+  }
+
+  try {
+    const owed = await readPendingPermissionConsents(settings, userId);
+    if (owed.length > 0) {
+      const record = deps.recordPermissionConsent ?? recordConsent;
+      const left: PermissionConsentType[] = [];
+      for (const type of owed) {
+        try {
+          await record(userId, { type, version: PERMISSION_CONSENT_VERSION });
+        } catch (error) {
+          left.push(type);
+          failure ??= error;
+        }
+      }
+      await savePendingPermissionConsents(settings, userId, left);
     }
   } catch (error) {
     failure ??= error;
@@ -115,14 +153,44 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const gate = profileGate(profile);
 
+  // The deep link held while setup is owed, known here before the moment it is needed, so the
+  // exit from onboarding below can use it without waiting on a read (T14 review, ruling 1).
+  const held = useRef<string | null>(null);
+  // The generated route types may not list the group yet; the gate compares plain strings.
+  const inOnboarding = (segments as readonly string[])[0] === '(onboarding)';
+  useEffect(() => {
+    if (gate !== 'onboarding') return;
+    let live = true;
+    void readPendingHref(settings).then((href) => {
+      if (live) held.current = href;
+    });
+    return () => {
+      live = false;
+    };
+  }, [gate, settings]);
+
   useEffect(() => {
     const to = resolveGate(status, gate, update, segments, { busy, mode, tripOpen });
     if (!to) return;
     // A deep link that arrived while setup is owed is held (allowlisted) and opened when
     // onboarding finishes, instead of Home.
-    if (to === ONBOARDING_START) void savePendingHref(settings, pathname).catch(() => {});
+    if (to === ONBOARDING_START) {
+      const href = pendingHrefFor(pathname);
+      if (href !== null) held.current = href;
+      void savePendingHref(settings, pathname).catch(() => {});
+    }
+    // Setup has just finished while the driver is still inside onboarding: the held link has one
+    // owner, this gate, so a render landing between `finishOnboarding`'s refresh and its own
+    // replace can't send the driver Home and lose it. Used once, then cleared; Home otherwise.
+    if (to === HOME && gate === 'ready' && inOnboarding) {
+      const href = held.current;
+      held.current = null;
+      if (href !== null) void settings.remove(ONBOARDING_PENDING_HREF_KEY).catch(() => {});
+      router.replace((href ?? HOME) as Href);
+      return;
+    }
     router.replace(to as Href);
-  }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings]);
+  }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings, inOnboarding]);
 
   // Once per signed-in session, against the server's row (a cached row may be stale).
   const userId = session?.user.id ?? null;

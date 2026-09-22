@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { MANUAL_BY_CHOICE_KEY, PROMPTS_KEY } from '@/core/permissions';
 import { T0 } from '@/data/queries/__fixtures__/rows';
@@ -28,14 +28,14 @@ jest.mock('@/data/supabase/profile', () => ({
 
 const copy = onboardingCopy.location;
 
-const ctx = (platform: 'ios' | 'android'): FlowContext => ({
+const ctx = (platform: 'ios' | 'android', autoDetect = true): FlowContext => ({
   platform,
   ageBand: '18_plus',
   drivingStage: 'new',
   termsCurrent: true,
   termsPublished: false,
   minorConsentMode: 'guardian_link_optional',
-  features: { autoDetect: true, guardianInvites: false },
+  features: { autoDetect, guardianInvites: false },
 });
 
 const press = (el: Parameters<typeof fireEvent.press>[0]) =>
@@ -52,12 +52,12 @@ afterEach(() => {
   mockRecordConsent.mockImplementation(async () => ({}));
 });
 
-async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter, seed: Seed = {}) {
+async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter, seed: Seed = {}, autoDetect = true) {
   const w = await permissionsWorld(seed);
   const onNext = jest.fn();
   const appState = fakeAppState();
   await w.render(
-    <LocationStep ctx={ctx(platform)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} />,
+    <LocationStep ctx={ctx(platform, autoDetect)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} />,
     fakeHost().host
   );
   return { ...w, onNext, appState };
@@ -90,6 +90,14 @@ describe('iOS', () => {
     expect(consents('location')).toEqual([['u1', { type: 'location', version: PERMISSION_CONSENT_VERSION }]]);
     // The driver's own tap: stamped so the app's own offers wait.
     expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
+  });
+
+  test('with auto-record withdrawn, nothing is promised about after the first drive', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'ios', location: 'undetermined', precise: null }));
+    await renderStep('ios', adapter, {}, false);
+    expect(await screen.findByTestId('location-allow')).toBeOnTheScreen();
+    expect(screen.queryByTestId('location-ios-later')).toBeNull();
+    expect(screen.queryByText(copy.iosLater)).toBeNull();
   });
 
   test('the iOS line announces the Always question for after the first drive', () => {
@@ -135,6 +143,9 @@ describe('Android', () => {
     await renderStep('android', adapter);
     expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
 
+    // Unmount the first tree before its client is cleared: a mounted observer would re-arm a gc
+    // timer on a client no longer tracked, and keep Jest from exiting (T14 review m3).
+    await cleanup();
     clearQueryClients();
     const again = fakeAdapter(snap({ platform: 'android', location: 'foreground' }));
     await renderStep('android', again, { settings: { [MANUAL_BY_CHOICE_KEY]: true } });
