@@ -18,7 +18,7 @@ begin
 end $$;
 
 begin;
-select plan(296);
+select plan(300);
 
 -- ---------------------------------------------------------------------------
 -- 0. client writes in FRESH sessions (fix round 4). PL/pgSQL checks EXECUTE on a function a trigger
@@ -53,6 +53,7 @@ begin
   return v;
 end $$;
 select extensions.dblink_connect('rw7_pg', pg_temp.conn());
+-- self-healing (n2): a user left committed by an aborted earlier run is deleted before it is created
 select extensions.dblink_exec('rw7_pg', $q$delete from auth.users where id = 'b7000000-0000-4000-8000-0000000000f1'$q$);
 select extensions.dblink_exec('rw7_pg', $q$insert into auth.users (id, email) values ('b7000000-0000-4000-8000-0000000000f1', 'f7@example.com')$q$);
 select is(pg_temp.fresh_client_write($q$insert into public.notification_prefs (user_id, categories, tz, local_sent_day, local_sent_count)
@@ -412,25 +413,31 @@ begin
     from pg_attrdef ad join writable w on w.oid = ad.adrelid
     join pg_depend d on d.classid = 'pg_attrdef'::regclass and d.objid = ad.oid and d.refclassid = 'pg_proc'::regclass
   ),
-  -- calls from invoker function bodies into public functions, followed through invoker callees
+  -- calls from invoker function bodies: ANY schema-qualified `<schema>.<name>(` (fix round 5, n1),
+  -- resolved through pg_namespace + pg_proc to EVERY overload of that name, followed through invoker
+  -- callees (a definer callee is still checked for EXECUTE, but runs as its owner beyond that).
+  -- Unqualified calls are not seen: the conventions require every name to be schema-qualified.
   body_calls(via, caller, callee) as (
     select it.via, it.fid, p2.oid
     from inv_trig it join pg_proc p on p.oid = it.fid
-    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
-    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+    cross join lateral regexp_matches(p.prosrc, '\m([a-z_][a-z_0-9]*)\.([a-z_][a-z_0-9]*)\s*\(', 'g') m
+    join pg_namespace n2 on n2.nspname = m[1]
+    join pg_proc p2 on p2.pronamespace = n2.oid and p2.proname = m[2]
     union
     select bc.via, bc.callee, p2.oid
     from body_calls bc join pg_proc p on p.oid = bc.callee and not p.prosecdef
-    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
-    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+    cross join lateral regexp_matches(p.prosrc, '\m([a-z_][a-z_0-9]*)\.([a-z_][a-z_0-9]*)\s*\(', 'g') m
+    join pg_namespace n2 on n2.nspname = m[1]
+    join pg_proc p2 on p2.pronamespace = n2.oid and p2.proname = m[2]
   ),
   expr_calls(via, callee) as (
     select e.via, e.fid from expr e
     union
     select ec.via, p2.oid
     from expr_calls ec join pg_proc p on p.oid = ec.callee and not p.prosecdef
-    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
-    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+    cross join lateral regexp_matches(p.prosrc, '\m([a-z_][a-z_0-9]*)\.([a-z_][a-z_0-9]*)\s*\(', 'g') m
+    join pg_namespace n2 on n2.nspname = m[1]
+    join pg_proc p2 on p2.pronamespace = n2.oid and p2.proname = m[2]
   )
   select distinct x.via, x.callee::regprocedure, has_function_privilege(r, x.callee, 'execute')
   from (select b.via, b.callee from body_calls b union select e.via, e.callee from expr_calls e) x
@@ -440,8 +447,36 @@ select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn:
   '{}'::text[], 'every function an authenticated write reaches (trigger bodies, WHEN, policies, CHECKs, defaults) is executable by authenticated');
 select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('anon') where not can_execute),
   '{}'::text[], 'and every function an anon write reaches is executable by anon');
+select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('service_role') where not can_execute),
+  '{}'::text[], 'and every function a service_role write reaches is executable by service_role');
 select is((select count(*)::int from pg_temp.client_reach('authenticated') where via = 'notification_prefs.notification_prefs_validate' and fn = 'public.is_known_tz(text)'::regprocedure), 1,
   'the audit does see the trigger''s call into is_known_tz (it is not vacuous)');
+-- n1 plant (rolled back, then dropped): a client-writable table whose invoker trigger calls pgcrypto
+-- (extensions.digest, two overloads; extensions.gen_random_bytes) and a probe in extensions that
+-- authenticated may not execute
+create table public.zz_audit7 (id int);
+alter table public.zz_audit7 enable row level security;
+grant insert on public.zz_audit7 to authenticated;
+create function extensions.zz_audit7_probe() returns int language sql as 'select 1';
+revoke all on function extensions.zz_audit7_probe() from public, anon, authenticated;
+create function public.zz_audit7_fn() returns trigger language plpgsql set search_path = public as $$
+begin
+  perform extensions.digest('x', 'sha256'), extensions.gen_random_bytes(4), extensions.zz_audit7_probe();
+  return new;
+end $$;
+create trigger zz_audit7_trg before insert on public.zz_audit7 for each row execute function public.zz_audit7_fn();
+select is((select array_agg(row(fn::text, can_execute)::text order by fn::text) from pg_temp.client_reach('authenticated') where via = 'zz_audit7.zz_audit7_trg'),
+  array[row('extensions.digest(bytea,text)'::regprocedure, true)::text, row('extensions.digest(text,text)'::regprocedure, true)::text,
+        row('extensions.gen_random_bytes(integer)'::regprocedure, true)::text, row('extensions.zz_audit7_probe()'::regprocedure, false)::text],
+  'the audit resolves calls into other schemas, every overload of each name, and flags one the writer cannot execute (n1)');
+select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('authenticated') where not can_execute),
+  array['zz_audit7.zz_audit7_trg -> ' || 'extensions.zz_audit7_probe()'::regprocedure::text], 'so the client-write audit would fail on it');
+drop trigger zz_audit7_trg on public.zz_audit7;
+drop function public.zz_audit7_fn();
+drop function extensions.zz_audit7_probe();
+drop table public.zz_audit7;
+select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('authenticated') where not can_execute),
+  '{}'::text[], 'with the plant dropped, the real schema is clean again');
 
 -- catch-alls
 select is((select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
