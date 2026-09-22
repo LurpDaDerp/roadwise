@@ -104,16 +104,29 @@ export function createDriveHeadlessTask(
     const leave = enterHeadless();
     let notifier: ReturnType<AttachNotifier> | null = null;
     try {
-      const rt = await deps.ensureRuntime('background');
+      let rt: AppRuntime;
+      try {
+        rt = await deps.ensureRuntime('background');
+      } catch (error) {
+        // Only a boot that failed stops the capture: nobody would record it otherwise.
+        await deps.stopCapture().catch(() => {});
+        throw error;
+      }
+      // Past boot, the runtime is shared (the app may be open on it): an error here is reported,
+      // and a live drive is never stopped over it (H2 r1 m1).
       notifier = deps.attachNotifier?.(rt.drive) ?? null;
       await untilDriveDone(rt.drive);
+      // A drain the finalize already woke is waited for before this task's own bounded pass, so
+      // the task never settles mid-upload (H2 r1 m2). The whole wait is inside the bound.
       await bounded(
-        Promise.all([rt.runner.drainOnce(), notifier?.settled()]),
+        (async () => {
+          await rt.runner.idle();
+          await Promise.all([rt.runner.drainOnce(), notifier?.settled()]);
+        })(),
         HEADLESS_DRAIN_TIMEOUT_MS,
         deps.report
       );
     } catch (error) {
-      await deps.stopCapture().catch(() => {});
       deps.report(error);
     } finally {
       notifier?.detach();

@@ -44,12 +44,19 @@ export interface RuntimeState {
 export interface RuntimeController {
   /** The current generation's runtime, booting it (as `profile`, default from AppState) if needed. */
   ensureRuntime(profile?: LaunchProfile): Promise<AppRuntime>;
-  /** Tear the current runtime down (awaited) and boot the next generation. */
-  rebuild(): Promise<AppRuntime>;
+  /**
+   * Tear the current runtime down (awaited) and boot the next generation. `expectedUid`: the new
+   * driver a handover already knows — the launch wipes on it with no session read (H2 I-1 a).
+   */
+  rebuild(opts?: RebuildOptions): Promise<AppRuntime>;
   state(): RuntimeState;
   subscribe(fn: (state: RuntimeState) => void): () => void;
   /** The live runtime's foreground jobs, once started (U4's restore Retry calls `runNow`). */
   foregroundJobs(): ForegroundJobs | null;
+}
+
+export interface RebuildOptions {
+  expectedUid?: string;
 }
 
 export interface RuntimeControllerDeps {
@@ -58,8 +65,8 @@ export interface RuntimeControllerDeps {
     currentState?: string | null;
     addEventListener(type: 'change', listener: (state: string) => void): { remove(): void };
   };
-  /** Default: `bootstrapApp({ profile })` with the device adapters. */
-  bootstrap?: (profile: LaunchProfile) => Promise<AppRuntime>;
+  /** Default: `bootstrapApp({ profile, expectedUid })` with the device adapters. */
+  bootstrap?: (profile: LaunchProfile, opts?: RebuildOptions) => Promise<AppRuntime>;
   /** Default: `startForegroundJobs(runtime)`. */
   startForegroundJobs?: (runtime: AppRuntime) => Promise<ForegroundJobs>;
   onError?: (error: unknown, context: string) => void;
@@ -85,7 +92,10 @@ const toError = (reason: unknown): Error =>
 
 export function createRuntimeController(deps: RuntimeControllerDeps = {}): RuntimeController {
   const appState = deps.appState ?? AppState;
-  const boot = deps.bootstrap ?? ((profile: LaunchProfile) => bootstrapApp({ profile }));
+  const boot =
+    deps.bootstrap ??
+    ((profile: LaunchProfile, opts?: RebuildOptions) =>
+      bootstrapApp({ profile, expectedUid: opts?.expectedUid }));
   const startJobs = deps.startForegroundJobs ?? ((runtime: AppRuntime) => startForegroundJobs(runtime));
   const onError = deps.onError ?? warn;
 
@@ -133,7 +143,7 @@ export function createRuntimeController(deps: RuntimeControllerDeps = {}): Runti
     gen.unlisten = () => subscription.remove();
   }
 
-  function launch(profile: LaunchProfile): Generation {
+  function launch(profile: LaunchProfile, opts?: RebuildOptions): Generation {
     const gen: Generation = {
       id: generation,
       promise: Promise.resolve() as unknown as Promise<AppRuntime>,
@@ -145,7 +155,7 @@ export function createRuntimeController(deps: RuntimeControllerDeps = {}): Runti
     // A retry keeps showing what failed, as "retrying", until it lands one way or the other.
     const carried = state.status === 'failed' ? state.error : null;
     publish({ status: 'booting', runtime: null, error: carried, generation: gen.id });
-    gen.promise = boot(profile).then(
+    gen.promise = boot(profile, opts).then(
       (runtime) => {
         if (gen.retired) return runtime; // its teardown awaits this promise and stops it
         publish({ status: 'ready', runtime, error: null, generation: gen.id });
@@ -180,7 +190,7 @@ export function createRuntimeController(deps: RuntimeControllerDeps = {}): Runti
     return current.promise;
   }
 
-  function rebuild(): Promise<AppRuntime> {
+  function rebuild(opts?: RebuildOptions): Promise<AppRuntime> {
     if (rebuilding) return rebuilding;
     const run = (async () => {
       generation += 1;
@@ -188,7 +198,7 @@ export function createRuntimeController(deps: RuntimeControllerDeps = {}): Runti
       current = null;
       publish({ status: 'switching', runtime: null, error: null, generation });
       if (old) await teardown(old);
-      current = launch(launchProfile(appState));
+      current = launch(launchProfile(appState), opts);
       return current.promise;
     })();
     rebuilding = run;
@@ -218,7 +228,8 @@ export const runtimeController: RuntimeController = createRuntimeController();
 
 export const ensureRuntime = (profile?: LaunchProfile): Promise<AppRuntime> =>
   runtimeController.ensureRuntime(profile);
-export const rebuild = (): Promise<AppRuntime> => runtimeController.rebuild();
+export const rebuild = (opts?: RebuildOptions): Promise<AppRuntime> =>
+  runtimeController.rebuild(opts);
 export const subscribe = (fn: (state: RuntimeState) => void): (() => void) =>
   runtimeController.subscribe(fn);
 export const getRuntimeState = (): RuntimeState => runtimeController.state();

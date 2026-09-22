@@ -47,12 +47,20 @@ export const SESSION_UID_KEY = 'session.uid';
  */
 export const DEVICE_OWNER_KEY = 'device.lastUserId';
 
-/** The owner to stamp on work queued now, or null when this device has never had a user. */
+/**
+ * The owner to stamp on work queued now, or null when this device has never had a user.
+ *
+ * The device owner first (security review H2 I-1 c): it changes only where the owner legitimately
+ * changes (`rememberDeviceOwner`, which writes both keys), whereas `session.uid` is rewritten by
+ * whichever runner last read a session — during a handover's teardown, the next driver's. Work
+ * queued then (the open drive the teardown finalizes) must carry the previous driver's uid. The
+ * session uid is only a fallback for a device that has never recorded an owner at all.
+ */
 export async function currentOwnerUid(db: Db): Promise<string | null> {
   const settings = createSettingsRepo(db);
   return (
-    (await settings.get<string>(SESSION_UID_KEY)) ??
-    (await settings.get<string>(DEVICE_OWNER_KEY))
+    (await settings.get<string>(DEVICE_OWNER_KEY)) ??
+    (await settings.get<string>(SESSION_UID_KEY))
   );
 }
 

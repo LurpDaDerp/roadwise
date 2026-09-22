@@ -64,8 +64,10 @@ export default function RootLayout() {
   // drive is ended first and queued under the previous owner, then removed by that wipe (M2 open
   // decision 2: the known trade, not a rescue). The old runtime leaves the tree at once
   // (`switching`), so nobody reads a row of it meanwhile.
-  const handover = useCallback(() => {
-    void controller.rebuild().catch(() => {});
+  // The watch names the new driver, and the rebuild wipes on that uid with no session read: a slow
+  // session can never make a handover mount the previous driver's database (H2 I-1 a).
+  const handover = useCallback((uid: string) => {
+    void controller.rebuild({ expectedUid: uid }).catch(() => {});
   }, []);
 
   // A face that never resolves — no network on a cold install, a corrupt cache — must cost the
@@ -94,7 +96,8 @@ export default function RootLayout() {
   const flush = useCallback(
     () =>
       runtime === null
-        ? Promise.resolve({ sent: 0, left: 0 })
+        ? // Unknown is never zero (H2 M-1): the sign-out flow asks rather than assumes.
+          Promise.reject(new Error('no runtime to flush'))
         : flushBeforeSignOut(runtime),
     [runtime]
   );

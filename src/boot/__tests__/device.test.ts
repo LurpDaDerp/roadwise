@@ -1,4 +1,5 @@
 import {
+  CANCEL_SUMMARIES_TIMEOUT_MS,
   DEVICE_TABLES,
   ensureDeviceOwner,
   LAST_USER_KEY,
@@ -97,6 +98,23 @@ test('the wipe cancels the pending drive summaries first, and goes on if that fa
 
   expect(cancelDriveSummaries).toHaveBeenCalledWith();
   expect(rowsWhenCancelled).toBeGreaterThan(0);
+  expect(await totals()).toEqual(emptyTotals);
+});
+
+test('a cancel that never answers costs at most 2 s: the wipe goes on without it', async () => {
+  await seedEverything();
+  const { cancelDriveSummaries } = jest.requireMock('@/features/drive/summaryNotifier') as {
+    cancelDriveSummaries: jest.Mock;
+  };
+  cancelDriveSummaries.mockImplementationOnce(() => new Promise(() => {}));
+  expect(CANCEL_SUMMARIES_TIMEOUT_MS).toBe(2_000);
+
+  const started = Date.now();
+  await wipeDevice(db, { traces: fakeTraces().traces });
+  const elapsed = Date.now() - started;
+
+  expect(elapsed).toBeGreaterThanOrEqual(1_900);
+  expect(elapsed).toBeLessThan(3_000);
   expect(await totals()).toEqual(emptyTotals);
 });
 

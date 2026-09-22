@@ -224,6 +224,49 @@ test('the object key comes from the session, never from the payload', async () =
   expect(supabase.uploads[0]?.path).toBe(`someone-else/${TRIP_ID}.bin.gz`);
 });
 
+test('an item stamped with the signed-in user is not sent while the device still records someone else (H2 I-1 d)', async () => {
+  // The slow-session handover: the device is still A's (no wipe yet), B is signed in, and an item
+  // somehow carries B's uid. The session alone would let it through; the device owner does not.
+  await seedTrip();
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?, ?)',
+    ['finalize-trip', JSON.stringify(tripPayload()), finalizeIdempotencyKey(TRIP_ID), T0, 'user-b', T0]
+  );
+  supabase.setUid('user-b');
+
+  await runner().drainOnce(T0);
+
+  expect(supabase.uploads).toHaveLength(0);
+  expect(supabase.invokes).toHaveLength(0);
+  expect(await finalizeItem()).toMatchObject({ status: 'pending', attempts: 0 });
+});
+
+test('idle() resolves once no drain is in flight, a drain it woke included (H2 r1 m2)', async () => {
+  await seedQueuedTrip();
+  let release: () => void = () => {};
+  supabase = createFakeSupabase({
+    uid: UID,
+    invoke: () =>
+      new Promise((resolve) => {
+        release = () => resolve(invokeOk(SERVER_OK));
+      }),
+  });
+  const r = runner();
+  await expect(r.idle()).resolves.toBeUndefined();
+  const draining = r.drainOnce(T0);
+  let idle = false;
+  const waiting = r.idle().then(() => {
+    idle = true;
+  });
+  await waitFor(() => supabase.invokes.length === 1);
+  expect(idle).toBe(false);
+  release();
+  await draining;
+  await waiting;
+  expect(idle).toBe(true);
+});
+
 test('work this build cannot attribute is refused, never sent under whoever is signed in', async () => {
   // A database from before `owner_uid` existed: every queued item reads null.
   await seedTrip();

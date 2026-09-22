@@ -22,11 +22,11 @@ import { asNumber, asText } from '@/data/db/row';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { useDb } from '@/data/queries/context';
 import type { DriveHost } from '@/drive/host';
-import { env } from '@/lib/env';
 import { mpsToMph } from '@/lib/units';
 import { Banner, Button, Card, fontFamilies, Screen, Text, useTheme } from '@/ui';
 
 import { formatLevel, readDriveBattery, type BatteryReading, type DriveBatteryRecord } from './battery';
+import { diagnosticsEnabled } from './flags';
 import { SelfTestPanel } from './SelfTestPanel';
 import { SimulationPanel } from './SimulationPanel';
 
@@ -85,11 +85,9 @@ export const diagCopy = {
   noDrive: 'No drive recorded with diagnostics on yet.',
 } as const;
 
-/** The route guard: a developer build, or a build made with the diagnostics flag. */
-export function diagnosticsEnabled(): boolean {
-  const dev = typeof __DEV__ !== 'undefined' && __DEV__;
-  return dev || env.diagnostics;
-}
+/** The route guard: a developer build, or a build made with the diagnostics flag (`./flags`). */
+export { diagnosticsEnabled };
+
 
 type DiagSource = Pick<
   DriveSenseApi,

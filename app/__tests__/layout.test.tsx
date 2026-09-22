@@ -12,7 +12,7 @@ const mockController = {
   state: { status: 'booting', runtime: null, error: null, generation: 0 } as RuntimeState,
   listeners: new Set<() => void>(),
   ensureRuntime: jest.fn(async () => undefined),
-  rebuild: jest.fn(async () => undefined),
+  rebuild: jest.fn(async (_opts?: { expectedUid?: string }) => undefined),
   runNow: jest.fn(async () => true),
   set(next: Partial<RuntimeState>) {
     mockController.state = { ...mockController.state, ...next };
@@ -27,7 +27,7 @@ jest.mock('@/boot/controller', () => ({
       return () => mockController.listeners.delete(fn);
     },
     ensureRuntime: (...args: unknown[]) => mockController.ensureRuntime(...(args as [])),
-    rebuild: () => mockController.rebuild(),
+    rebuild: (opts?: { expectedUid?: string }) => mockController.rebuild(opts),
     foregroundJobs: () => ({ runNow: mockController.runNow, stop: async () => {} }),
   },
 }));
@@ -78,9 +78,9 @@ jest.mock('@/ui/fonts', () => ({
   useAppFonts: () => ({ loaded: true, error: null }),
 }));
 
-const mockHandover: { fire: (() => void) | null } = { fire: null };
+const mockHandover: { fire: ((uid: string) => void) | null } = { fire: null };
 jest.mock('@/boot/ownerWatch', () => ({
-  watchDeviceOwner: (_db: unknown, deps: { onHandover: () => void }) => {
+  watchDeviceOwner: (_db: unknown, deps: { onHandover: (uid: string) => void }) => {
     mockHandover.fire = deps.onHandover;
     return () => {
       mockHandover.fire = null;
@@ -265,8 +265,9 @@ describe('the root layout', () => {
   test('a handover rebuilds through the controller, showing "switching" meanwhile', async () => {
     await renderReady();
     expect(mockHandover.fire).not.toBeNull();
-    await act(async () => mockHandover.fire?.());
-    expect(mockController.rebuild).toHaveBeenCalledTimes(1);
+    await act(async () => mockHandover.fire?.('user-b'));
+    // The new driver's uid goes into the rebuild: it wipes without reading the session (H2 I-1 a).
+    expect(mockController.rebuild).toHaveBeenCalledWith({ expectedUid: 'user-b' });
 
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
     expect(screen.queryByTestId('lockout-underlay')).toBeNull();

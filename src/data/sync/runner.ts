@@ -222,6 +222,12 @@ export interface SyncRunner {
    * bring those drives back. Waits for a pass in flight first; never runs while recording.
    */
   flushDeletes(now?: number): Promise<FlushResult>;
+  /**
+   * Resolves once no drain is in flight — including one a finishing drain started for a wake it
+   * held. The Android headless task awaits it before its own bounded pass, so it never settles
+   * (and lets the service end) in the middle of an upload a finalize already woke (H2 r1 m2).
+   */
+  idle(): Promise<void>;
   start(): void;
   /**
    * Ends this runner's lifetime. The returned promise settles when a pass already in flight has
@@ -333,13 +339,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   /**
-   * Whether this item may still be acted on: its pass belongs to the live runner, and the session
-   * is still the user the item was queued for. Read fresh — it is the check that follows an await.
+   * Whether this item may still be acted on: its pass belongs to the live runner, the session is
+   * still the user the item was queued for, AND the device still records that user as its owner.
+   * Read fresh — it is the check that follows an await, and the one before every upload.
+   *
+   * The device-owner half (security review H2 I-1 d): the session can change hands before the
+   * device is wiped — a handover whose rebuild has not run yet — and an item that somehow carries
+   * the new driver's uid on a device still recorded as the previous driver's must not go up.
    */
   async function ownerHolds(item: QueueItem, of: number): Promise<boolean> {
     if (stale(of) || item.owner_uid === null) return false;
     const uid = await currentUid();
-    return !stale(of) && uid === item.owner_uid;
+    if (stale(of) || uid !== item.owner_uid) return false;
+    return deviceOwnerIs(db, item.owner_uid);
   }
 
   /** Inside a write's own transaction: the device still records the item's owner. */
@@ -511,6 +523,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // Re-asserted after the session read, not only before it: `runItem`'s check happened before
     // this round trip, and the object key below comes from whoever is signed in *now*.
     if (stale(state.generation) || item.owner_uid !== uid) return { kind: 'defer' };
+    // And the device still records that owner, before anything leaves it (H2 I-1 d).
+    if (!(await deviceOwnerIs(db, uid))) return { kind: 'defer' };
 
     if (payload.tracePath !== null && state.traceUploadedAt === null) {
       if (await traceWaitsForWifi()) {
@@ -581,6 +595,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const uid = await currentUid();
     if (uid === null) return { kind: 'defer' };
     if (stale(state.generation) || item.owner_uid !== uid) return { kind: 'defer' };
+    if (!(await deviceOwnerIs(db, uid))) return { kind: 'defer' };
     // Waiting for Wi-Fi is not a failed attempt: it must not walk the item towards MAX_ATTEMPTS.
     if (await traceWaitsForWifi()) return { kind: 'defer', until: at + WIFI_RETRY_S * 1000 };
 
@@ -1031,6 +1046,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   return {
     drainOnce,
     flushDeletes,
+
+    async idle(): Promise<void> {
+      while (inFlight) await inFlight;
+    },
 
     start(): void {
       if (started) return;

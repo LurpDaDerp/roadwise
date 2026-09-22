@@ -126,18 +126,24 @@ describe('the watch alone', () => {
   function watching(uid: string | null) {
     const auth = authFake(uid);
     const handovers: number[] = [];
+    const handoverUids: string[] = [];
     const stop = watchDeviceOwner(db, {
       supabase: auth.supabase,
-      onHandover: () => handovers.push(Date.now()),
+      onHandover: (uid: string) => {
+        handovers.push(Date.now());
+        handoverUids.push(uid);
+      },
     });
-    return { auth, handovers, stop };
+    return { auth, handovers, handoverUids, stop };
   }
 
-  test('a different driver signing in raises a handover', async () => {
-    const { auth, handovers, stop } = watching('user-a');
+  test('a different driver signing in raises a handover, naming them (H2 I-1 a)', async () => {
+    const { auth, handovers, handoverUids, stop } = watching('user-a');
     auth.emit('user-b');
     await settle();
     expect(handovers).toHaveLength(1);
+    // The rebuild wipes on this uid without reading the session again.
+    expect(handoverUids).toEqual(['user-b']);
     stop();
   });
 

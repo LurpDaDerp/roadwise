@@ -101,6 +101,12 @@ export interface DriveState extends EngineSnapshot {
   tripIndex: number;
   /** A `persistence: 'none'` host: nothing is stored and `lastFinalized` stays null. Additive. */
   dryRun: boolean;
+  /**
+   * False when the alert sound could not be loaded (H2 r1): the drive still records, silently, and
+   * the HUD must say so ("Sound alerts unavailable") rather than let the driver assume alerts.
+   * Always set by the host; optional in the type only so existing fixtures stay valid. Additive.
+   */
+  alertsAvailable?: boolean;
 }
 
 export interface DriveHost {
@@ -164,6 +170,8 @@ export interface DriveHostDeps {
   onError?: (e: unknown, ctx: string) => void;
   /** The tick timer's clock; tests pass a manual one. Defaults to the global timers. */
   scheduler?: Scheduler;
+  /** False when the player is a silent stand-in for sound that failed to load. Default true. */
+  alertsAvailable?: boolean;
 }
 
 /** Scored driver trips: the learning period's count (rev1: m). */
@@ -345,6 +353,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       lastFinalized,
       tripIndex,
       dryRun: !persist,
+      alertsAvailable: deps.alertsAvailable ?? true,
     });
   }
 

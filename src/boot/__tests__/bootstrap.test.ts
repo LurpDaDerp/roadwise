@@ -7,7 +7,7 @@ import {
   type BootstrapDeps,
 } from '@/boot/bootstrap';
 import { LAST_USER_KEY } from '@/boot/device';
-import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
+import { T0, counterIds, limit, mph } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
@@ -32,7 +32,7 @@ import {
 import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
-import { traceIdempotencyKey } from '@/data/sync/queue';
+import { finalizeIdempotencyKey, SESSION_UID_KEY, traceIdempotencyKey } from '@/data/sync/queue';
 import { createFakeDriveSense } from '@drive-sense';
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
@@ -317,17 +317,39 @@ test('recovery finishes before the runner starts, so nothing races the row it qu
   expect(appState.listeners).toHaveLength(2);
 });
 
-test('no limit cache exists at launch, so a recovered drive is never judged for speeding', async () => {
+test('a road with no stored tile is judged against an unknown limit: no speeding', async () => {
   await crashedDrive();
   const { bootstrapDeps } = deps();
 
   runtime = await bootstrapApp(bootstrapDeps);
 
-  // `limits` is deliberately not passed to `recoverRecordingTrips`: every replayed row is judged
-  // against UNKNOWN_LIMIT, so none of the drive is covered and nothing can cost speeding points.
+  // The fake's `lookupStored` holds nothing: every replayed row is judged against UNKNOWN_LIMIT,
+  // so none of the drive is covered and nothing can cost speeding points.
   const trip = await createTripsRepo(db).get(TRIP);
   expect(trip?.limit_coverage_pct).toBe(0);
   expect(JSON.parse(trip?.category_deductions_json ?? '{}')).toMatchObject({ speeding: 0 });
+});
+
+test('a crash-recovered drive is judged against the stored tiles, as an adopted one is (H2 r1)', async () => {
+  await crashedDrive(); // 22 mph throughout
+  const limits = fakeLimits();
+  const asked: string[] = [];
+  limits.lookupStored = async (lat, lng, course) => {
+    asked.push(`${lat.toFixed(3)},${lng.toFixed(3)},${course}`);
+    return limit(mph(15));
+  };
+  limits.lookup = () => {
+    throw new Error('recovery must read only the stored tiles');
+  };
+  const { bootstrapDeps } = deps({ limits });
+
+  runtime = await bootstrapApp(bootstrapDeps);
+
+  expect(runtime.recovery.recovered).toEqual([TRIP]);
+  expect(asked.length).toBeGreaterThan(0);
+  const trip = await createTripsRepo(db).get(TRIP);
+  expect(trip?.limit_coverage_pct).toBeGreaterThan(0);
+  expect(JSON.parse(trip?.category_deductions_json ?? '{}').speeding).toBeGreaterThan(0);
 });
 
 describe('a launch that fails', () => {
@@ -926,6 +948,172 @@ describe('H2: the drive-summary notifier (U3)', () => {
     expect(log).toEqual(['attach function', 'drive stop', 'detach']);
     runtime.queryClient.clear();
     runtime = null;
+  });
+});
+
+describe('H2 r1: a config refresh that changes auto_detect re-applies the arming', () => {
+  function serverFlag() {
+    const flag = { on: true };
+    const appConfig: AppConfigSupabase = {
+      from: () => ({
+        select: async () => ({
+          data: [{ key: 'feature_flags', value: { auto_detect: flag.on } }],
+          error: null,
+        }),
+      }),
+    };
+    return { flag, appConfig };
+  }
+
+  test('a withdrawn flag disarms; a restored one re-arms the driver who opted in', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    const { flag, appConfig } = serverFlag();
+    const built = deps({ appConfig });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('armed');
+
+    flag.on = false;
+    await runtime.refreshConfig();
+    await runtime.drive.settled();
+    expect(runtime.drive.snapshot().status).toBe('off');
+    expect(built.driveSense.calls).toContain('disarm');
+    // The driver's own choice is untouched: the flag only withdrew availability.
+    expect(runtime.drive.autoDetectEnabled()).toBe(true);
+
+    flag.on = true;
+    await runtime.refreshConfig();
+    await runtime.drive.settled();
+    expect(runtime.drive.snapshot().status).toBe('armed');
+  });
+
+  test('a restored flag does not arm a driver who never opted in', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: false } });
+    const { flag, appConfig } = serverFlag();
+    const built = deps({ appConfig });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('off');
+
+    flag.on = true;
+    await runtime.refreshConfig();
+    await runtime.drive.settled();
+    expect(runtime.drive.snapshot().status).toBe('off');
+    expect(built.driveSense.calls).not.toContain('arm');
+    expect(runtime.drive.autoDetectEnabled()).toBe(false);
+  });
+
+  test('an unchanged flag touches nothing', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    const { appConfig } = serverFlag();
+    const built = deps({ appConfig });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    const calls = built.driveSense.calls.length;
+    await runtime.refreshConfig();
+    await runtime.drive.settled();
+    expect(built.driveSense.calls.length).toBe(calls);
+  });
+});
+
+describe('H2 I-1: a handover whose session read is slow', () => {
+  /** The first `getSession` answers after `ms`; later ones at once (the storage lock has cleared). */
+  function slowFirstSession(supabase: ReturnType<typeof createFakeSupabase>, ms: number) {
+    const real = supabase.auth.getSession.bind(supabase.auth);
+    let first = true;
+    supabase.auth.getSession = () => {
+      if (!first) return real();
+      first = false;
+      return new Promise((resolve) => setTimeout(() => resolve(real()), ms));
+    };
+  }
+
+  test('a rebuild given the new uid wipes on it, with no session read at all (a)', async () => {
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    const supabase = createFakeSupabase({ uid: 'user-b' });
+    supabase.auth.getSession = () => new Promise(() => {});
+    const { bootstrapDeps } = deps({ supabase, expectedUid: 'user-b', timeoutMs: 1_000 });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.owner).toBe('wiped');
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-b');
+  });
+
+  test('a session that answers late, while the session uid says the owner changed, is waited for and wipes — nothing of A goes up under B (b, c, d)', async () => {
+    // A's drive, interrupted; the old runner had already read B's session (session.uid = B).
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    await createSettingsRepo(db).set(SESSION_UID_KEY, 'user-b');
+    const supabase = createFakeSupabase({ uid: 'user-b' });
+    slowFirstSession(supabase, 1_800);
+    // On Wi-Fi, so the trace would go with the summary: the widest path out of the phone.
+    const { bootstrapDeps } = deps({ supabase, net: { isWifi: () => true } });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    // Nothing of A's left the phone under B's session (with the old code: A's finalize-trip and
+    // trace went up — the negative control in the H2 report).
+    expect(supabase.invokes).toEqual([]);
+    expect(supabase.uploads).toEqual([]);
+    // Not `same` on a timeout: the launch waited for the answer, and B's answer wiped A's device.
+    expect(runtime.owner).toBe('wiped');
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    expect(await createQueueRepo(db).byKey(finalizeIdempotencyKey(TRIP))).toBeNull();
+  });
+
+  test('if that session never answers, nothing is mounted: the launch fails at identity', async () => {
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    await createSettingsRepo(db).set(SESSION_UID_KEY, 'user-b');
+    const supabase = createFakeSupabase({ uid: 'user-b' });
+    supabase.auth.getSession = () => new Promise(() => {});
+    const { bootstrapDeps } = deps({ supabase, timeoutMs: 2_500 });
+
+    const failure = await bootstrapApp(bootstrapDeps).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BootstrapError);
+    expect(failure).toMatchObject({ stage: 'identity' });
+    // A's drive was neither recovered nor shown: it waits, `recording`, for a launch that knows.
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ status: 'recording' });
+    expect(supabase.invokes).toEqual([]);
+  });
+});
+
+describe('H2 r1: alert sound that will not load', () => {
+  test('the drive still records, the failure is reported, and the host says alerts are unavailable', async () => {
+    await migrate(db);
+    const reported: { message: string; context: string }[] = [];
+    const { bootstrapDeps, errors } = deps({
+      createPlayer: async () => {
+        throw new Error('Cannot find native module ExpoAudio at 47.6062,-122.3321 for trip-1');
+      },
+      onError: (error, context) => {
+        errors.push(context);
+        reported.push({ message: error instanceof Error ? error.message : String(error), context });
+      },
+    });
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(errors).toContain('alert ports');
+    // M-3: the report carries the error's kind and the context, never what its message held.
+    expect(reported.find((r) => r.context === 'alert ports')?.message).toBe(
+      'alert sound could not be loaded (Error)'
+    );
+    expect(runtime.drive.snapshot().alertsAvailable).toBe(false);
+    // Recording is unaffected.
+    await runtime.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await runtime.drive.settled();
+    expect(runtime.drive.isBusy()).toBe(true);
+    expect(runtime.drive.snapshot().alertsAvailable).toBe(false);
+  });
+
+  test('with the player loaded, alerts are available', async () => {
+    await migrate(db);
+    runtime = await bootstrapApp(deps().bootstrapDeps);
+    expect(runtime.drive.snapshot().alertsAvailable).toBe(true);
   });
 });
 

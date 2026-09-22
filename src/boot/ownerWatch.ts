@@ -29,8 +29,11 @@ export interface AuthWatchable {
 
 export interface OwnerWatchDeps {
   supabase: AuthWatchable;
-  /** The device changed hands. Stop the runtime and bootstrap again; that is what wipes. */
-  onHandover: () => void;
+  /**
+   * The device changed hands, to `uid`. Stop the runtime and bootstrap again with that uid — the
+   * new launch wipes on it without reading the session again (security review H2 I-1 a).
+   */
+  onHandover: (uid: string) => void;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -60,7 +63,7 @@ export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
       await rememberDeviceOwner(db, uid);
       return;
     }
-    if (live) deps.onHandover();
+    if (live) deps.onHandover(uid);
   };
 
   const { data } = deps.supabase.auth.onAuthStateChange((_event, session) => {

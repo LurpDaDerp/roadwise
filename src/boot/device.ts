@@ -20,7 +20,6 @@
  */
 import { createSettingsRepo, type Db } from '@/data/db';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
-import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -44,6 +43,31 @@ export const DEVICE_TABLES: readonly string[] = [
   'trips',
 ];
 
+/** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
+export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
+
+/**
+ * Cancel the drive summaries still scheduled (U3), bounded: a notifications call that hangs must
+ * not hold the launch's identity stage. U3's module (expo-notifications) is loaded only here.
+ */
+async function cancelSummariesBounded(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+    const { cancelDriveSummaries } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
+    await Promise.race([
+      cancelDriveSummaries().catch(() => {}),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CANCEL_SUMMARIES_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    // No notifications module: nothing is scheduled that could fire.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** What the launch found. `wiped` is the only one that destroyed anything. */
 export type DeviceOwnerOutcome = 'same' | 'first' | 'wiped' | 'signed-out';
 
@@ -63,7 +87,7 @@ export interface DeviceOwnerDeps {
  */
 export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<void> {
   // A "your drive is ready" scheduled for the last driver must not fire for the next one (U3).
-  await cancelDriveSummaries().catch(() => {});
+  await cancelSummariesBounded();
   await db.transaction(async (tx) => {
     for (const table of DEVICE_TABLES) await tx.execute(`DELETE FROM ${table}`);
   });

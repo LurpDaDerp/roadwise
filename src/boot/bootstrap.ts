@@ -14,8 +14,9 @@
  *      checkpoint, before any engine exists to own a `recording` row. A drive that looks to be
  *      still going on (`adoptable`: checkpointed inside the gap window while capture is running,
  *      was open, or the motion history since says automotive) is **skipped**, left for step 5
- *      (rev1: I2). No speed-limit cache is consulted: a recovered drive is judged against an
- *      unknown limit — no speeding, everything else;
+ *      (rev1: I2). Recovery reads the tiles already stored on the device (`lookupStored`), the
+ *      same source an adopted drive's rebuild uses — never the network; a road with no stored
+ *      tile is judged against an unknown limit: no speeding there, everything else;
  *   5. `engine` — the drive host (H1) is built and started. It adopts the newest skipped drive
  *      *before* it subscribes to native events or arms, so a buffered wake cannot open a second
  *      trip for the same drive; anything skipped that it did not adopt is recovered at once (E1
@@ -86,6 +87,7 @@ import {
   type SyncSupabase,
   type TraceFs,
 } from '@/data/sync/runner';
+import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 
 import { ensureDeviceOwner, readDeviceOwner, type DeviceOwnerOutcome } from './device';
@@ -194,6 +196,12 @@ export interface BootstrapDeps {
   reportPermissionsFromBackground?: () => void | Promise<void>;
   /** The identity stage's bound on `getSession()`. Default: `SESSION_TIMEOUT_MS`. */
   sessionTimeoutMs?: number;
+  /**
+   * The driver a handover already knows (the owner watch saw them sign in). The identity stage
+   * decides on this uid with no session read and no timeout, so a handover always wipes (security
+   * review H2 I-1 a).
+   */
+  expectedUid?: string;
   /**
    * U5's battery recorder, mounted on the started host in every launch profile; returns its
    * unsubscribe, called at `stop()`. Default: in a diagnostics build only (`diagnosticsEnabled()`),
@@ -349,20 +357,31 @@ async function runLaunch(
       : appSeams((await import('@/data/supabase/client')).supabase);
     const traceWriter =
       deps.traceWriter ?? (await createExpoTraceWriter(undefined, undefined, undefined, onError));
+    const decide = (uid: string | null) =>
+      ensureDeviceOwner(db, uid, { traces: traceWriter, onError });
+    if (deps.expectedUid !== undefined) {
+      // A handover's rebuild: the new driver is known. No network, no timeout — it always wipes.
+      return { supabase, hydrateSupabase, traceWriter, owner: await decide(deps.expectedUid) };
+    }
     const sessionMs = deps.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
-    const session = await withinMs(supabase.auth.getSession(), sessionMs);
+    const reading = supabase.auth.getSession();
+    const session = await withinMs(reading, sessionMs);
     let owner: DeviceOwnerOutcome;
-    if (session === TIMED_OUT) {
-      // No answer (a token refresh with no network, typically on a background wake). The engine
-      // must not wait for the radio, and a guess must never wipe: the device stays whoever's it
-      // was. The live owner watch (foreground) and the next launch settle the real answer.
+    if (session !== TIMED_OUT) {
+      owner = await decide(session.data.session?.user.id ?? null);
+    } else if (await ownerMayHaveChanged(db)) {
+      // A timeout is `same` only when nothing says the owner changed (H2 I-1 b). Here something
+      // does — a runner has seen a different signed-in user — so nothing is mounted, recovered or
+      // started until the session answers; the launch deadline bounds the wait, and a launch
+      // that fails here fails closed, with its retry.
+      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
+      owner = await decide((await reading).data.session?.user.id ?? null);
+    } else {
+      // No answer (a token refresh with no network, typically on a background wake) and no sign
+      // of another driver. The engine must not wait for the radio, and a guess never wipes: the
+      // device stays whoever's it was. The live owner watch and the next launch settle it.
       owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
-    } else {
-      owner = await ensureDeviceOwner(db, session.data.session?.user.id ?? null, {
-        traces: traceWriter,
-        onError,
-      });
     }
     return { supabase, hydrateSupabase, traceWriter, owner };
   });
@@ -370,6 +389,9 @@ async function runLaunch(
   const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
   const hash = deps.hash ?? { sha256: (await import('@/lib/hash')).sha256Hex };
   const source = deps.source ?? nativeDriveSource;
+  // Built before recovery (H2 r1): a crash-recovered drive is judged against the stored tiles
+  // exactly as an adopted one is. Building it makes no request; only a drive's `startTrip` does.
+  const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
   const recoveryDeps: Omit<RecoveryDeps, 'skip'> = {
     scoring,
     tz: zone,
@@ -377,8 +399,8 @@ async function runLaunch(
     hash,
     now,
     createDetectors: () => createDetectors(newId),
-    // `limits` is deliberately absent: recovery never fetches, and every replayed row is judged
-    // against `UNKNOWN_LIMIT` — no speeding without a limit, everything else.
+    // SQLite only, never the network: `lookupStored` reads what the device already holds.
+    limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
   };
 
   enter('recover');
@@ -389,9 +411,20 @@ async function runLaunch(
 
   enter('engine');
   const engine = await stage('engine', async () => {
-    const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
     let host: DriveHost | undefined;
-    const player = await (deps.createPlayer ?? defaultPlayer(onError))(playerInputs(() => host));
+    // Sound that will not load must not cost the drive, and must not be silent to the driver
+    // either: the host publishes `alertsAvailable: false` and the HUD says so (H2 r1).
+    let player: AlertPlayer;
+    let alertsAvailable = true;
+    try {
+      player = await (deps.createPlayer ?? defaultPlayer(onError))(playerInputs(() => host));
+    } catch (error) {
+      // M-3: the error's kind only — nothing its message might carry (a position, a trip id).
+      const kind = error instanceof Error ? error.name : typeof error;
+      onError(new Error(`alert sound could not be loaded (${kind})`), 'alert ports');
+      alertsAvailable = false;
+      player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+    }
     const drive = createDriveHost({
       db,
       source: withBackgroundWakeReport(
@@ -410,6 +443,7 @@ async function runLaunch(
       newId,
       readFlag: deps.readFlag ?? ((key) => readFlag(db, key, AUTO_DETECT_FLAG_FALLBACK)),
       appState,
+      alertsAvailable,
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
@@ -552,7 +586,13 @@ async function runLaunch(
     now,
     async refreshConfig() {
       const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
+      const flag = () => readFlag(db, 'auto_detect', AUTO_DETECT_FLAG_FALLBACK);
+      const before = await flag();
       await refreshAppConfig(seam, db, now);
+      // A changed flag re-applies the host's arming, so Home and the host never disagree: a
+      // withdrawn flag disarms; a restored one re-arms only a driver who opted in. The driver's
+      // own choice is re-stated unchanged, never altered by the server.
+      if ((await flag()) !== before) await engine.drive.setAutoDetect(engine.drive.autoDetectEnabled());
     },
     async stop(opts = {}) {
       await Promise.all([runner.stop(), hydrator.stop()]);
@@ -566,6 +606,17 @@ async function runLaunch(
 }
 
 const TIMED_OUT = Symbol('timed out');
+
+/**
+ * Whether anything on the device says its owner may have changed: a runner recorded a signed-in
+ * user (`session.uid`) other than the recorded owner. The one signal that makes a session timeout
+ * unsafe to read as `same` (H2 I-1 b).
+ */
+async function ownerMayHaveChanged(db: Db): Promise<boolean> {
+  const settings = createSettingsRepo(db);
+  const seen = await settings.get<string>(SESSION_UID_KEY);
+  return seen !== null && seen !== (await readDeviceOwner(db));
+}
 
 /** `promise`, or `TIMED_OUT` after `ms`; the timer is cleared either way (no timer outlives it). */
 async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -696,7 +747,7 @@ function defaultSummaryNotifier(host: DriveHost): { detach(): void } {
 function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) => void): () => void {
   /* eslint-disable @typescript-eslint/no-require-imports -- deferred: the dev screens' modules */
   const { diagnosticsEnabled } =
-    require('@/features/dev/DriveDiagnosticsScreen') as typeof import('@/features/dev/DriveDiagnosticsScreen');
+    require('@/features/dev/flags') as typeof import('@/features/dev/flags');
   if (!diagnosticsEnabled()) return () => {};
   const { createDriveBatteryRecorder } =
     require('@/features/dev/battery') as typeof import('@/features/dev/battery');
@@ -705,29 +756,19 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
 }
 
 /**
- * P2's player over the device ports. A build whose audio modules cannot load still records the
- * drive: the failure is reported and the drive runs without sound rather than not at all.
+ * P2's player over the device ports. A port that will not load rejects; the engine stage then
+ * records without sound and says so (`alertsAvailable: false`).
  */
 function defaultPlayer(
   onError: (error: unknown, context: string) => void
 ): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
-  return async (inputs) => {
-    try {
-      return createAlertPlayer({
-        ...(await createExpoAlertPorts()),
-        voiceEnabled: () => true,
-        ...inputs,
-        onError: (error) => onError(error, 'alert player'),
-      });
-    } catch (error) {
-      onError(error, 'alert ports');
-      return {
-        deliver: async () => {},
-        stopCurrent: async () => {},
-        announce: async () => {},
-      };
-    }
-  };
+  return async (inputs) =>
+    createAlertPlayer({
+      ...(await createExpoAlertPorts()),
+      voiceEnabled: () => true,
+      ...inputs,
+      onError: (error) => onError(error, 'alert player'),
+    });
 }
 
 /** iOS: keep the database — the driver's whole local history — out of iCloud and Finder backups. */

@@ -42,13 +42,15 @@ function unitHarness(opts: { currentState?: string } = {}) {
   });
   const built: FakeRuntime[] = [];
   const profiles: LaunchProfile[] = [];
+  const expectedUids: (string | null)[] = [];
   let failNext: Error | null = null;
   let gate: Promise<void> | null = null;
   const jobsStops: number[] = [];
   const controller = createRuntimeController({
     appState,
-    async bootstrap(profile) {
+    async bootstrap(profile, opts) {
       profiles.push(profile);
+      expectedUids.push(opts?.expectedUid ?? null);
       log.push(`boot ${built.length + 1}`);
       if (gate) await gate;
       if (failNext) {
@@ -78,6 +80,7 @@ function unitHarness(opts: { currentState?: string } = {}) {
     appState,
     built,
     profiles,
+    expectedUids,
     log,
     jobsStops,
     failNextBoot(error: Error) {
@@ -179,6 +182,13 @@ describe('rebuild', () => {
     expect(await h.controller.ensureRuntime()).toBe(second);
   });
 
+  test('a handover rebuild carries the new driver\'s uid into the launch (H2 I-1 a)', async () => {
+    const h = unitHarness();
+    await h.controller.ensureRuntime();
+    await h.controller.rebuild({ expectedUid: 'user-b' });
+    expect(h.expectedUids).toEqual([null, 'user-b']);
+  });
+
   test('callers during a rebuild get the new runtime, not the old one', async () => {
     const h = unitHarness();
     await h.controller.ensureRuntime();
@@ -269,7 +279,7 @@ describe('with the real launch', () => {
       limits: tiles,
       createPlayer: async () => ({ deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} }),
       mountDiagnostics: null,
-    attachSummaryNotifier: null,
+      attachSummaryNotifier: null,
       appConfig: {
         from: () => ({
           select: async () => {
@@ -322,7 +332,7 @@ describe('with the real launch', () => {
     const d = launchDeps({ uid: 'user-a', currentState: 'active', clock: () => clock });
     controller = createRuntimeController({
       appState: d.appState,
-      bootstrap: (profile) => bootstrapApp({ ...d.base, profile }),
+      bootstrap: (profile, opts) => bootstrapApp({ ...d.base, profile, ...opts }),
       startForegroundJobs: (runtime) => startForegroundJobs(runtime, { appState: d.appState }),
     });
     const first = await controller.ensureRuntime();
@@ -348,12 +358,24 @@ describe('with the real launch', () => {
       between = { status: (await trips.get(tripId))?.status, owner: item?.owner_uid };
     };
 
-    // User B signs in on this phone: the layout's owner watch calls rebuild().
+    // User B signs in on this phone: the layout's owner watch calls rebuild() with B's uid. B's
+    // session read is slow (it never answers here): the launch wipes on the uid it was given.
     d.supabase.setUid('user-b');
-    const second = await controller.rebuild();
+    const realSession = d.supabase.auth.getSession.bind(d.supabase.auth);
+    let answerSession: () => void = () => {};
+    const sessionGate = new Promise<void>((resolve) => {
+      answerSession = resolve;
+    });
+    d.supabase.auth.getSession = async () => {
+      await sessionGate;
+      return realSession();
+    };
+    const second = await controller.rebuild({ expectedUid: 'user-b' });
 
     expect(between).toEqual({ status: 'provisional', owner: 'user-a' });
     expect(second.owner).toBe('wiped');
+    answerSession();
+    await settle();
     expect(await trips.get(tripId)).toBeNull();
     expect(await queue.countByStatus('pending')).toBe(0);
     // Nothing of A's went up under B's session.

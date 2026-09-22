@@ -17,6 +17,7 @@ function scriptedRuntime() {
   const log: string[] = [];
   let idle: () => void = () => {};
   let drained: () => void = () => {};
+  let runnerIdle: () => void = () => {};
   let capturing = false;
   const subscribers = new Set<() => void>();
   const runtime = {
@@ -36,6 +37,14 @@ function scriptedRuntime() {
         }),
     },
     runner: {
+      idle: () =>
+        new Promise<void>((resolve) => {
+          log.push('runner idle?');
+          runnerIdle = () => {
+            log.push('runner idle');
+            resolve();
+          };
+        }),
       drainOnce: () =>
         new Promise((resolve) => {
           log.push(`drain (headless active: ${isHeadlessActive()})`);
@@ -48,6 +57,7 @@ function scriptedRuntime() {
     log,
     idle: () => idle(),
     drained: () => drained(),
+    runnerIdle: () => runnerIdle(),
     setCapturing(on: boolean) {
       capturing = on;
     },
@@ -117,8 +127,13 @@ describe('the DriveSenseTask body', () => {
 
     script.idle();
     await flush();
+    // A drain the finalize already woke is waited for first (m2), then one bounded pass of its own.
+    expect(script.log).toEqual(['untilIdle', 'idle', 'runner idle?']);
+    expect(settled).toBe(false);
+    script.runnerIdle();
+    await flush();
     // The upload runs from the service (§3.5): the drain policy sees the headless task.
-    expect(script.log).toEqual(['untilIdle', 'idle', 'drain (headless active: true)']);
+    expect(script.log).toEqual(['untilIdle', 'idle', 'runner idle?', 'runner idle', 'drain (headless active: true)']);
     expect(settled).toBe(false);
 
     script.drained();
@@ -143,6 +158,8 @@ describe('the DriveSenseTask body', () => {
       await flush();
       script.idle();
       await flush();
+      script.runnerIdle();
+      await flush();
       expect(HEADLESS_DRAIN_TIMEOUT_MS).toBe(60_000);
       jest.advanceTimersByTime(59_999);
       await flush();
@@ -158,6 +175,20 @@ describe('the DriveSenseTask body', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('stopCapture only for a boot that failed (H2 r1 m1)', () => {
+  test('an error after the runtime booted is reported, and never stops a live drive', async () => {
+    const script = scriptedRuntime();
+    (script.runtime.drive as unknown as { untilIdle: () => Promise<void> }).untilIdle = async () => {
+      throw new Error('the host went wrong mid-drive');
+    };
+    const { deps: d, reports } = deps({ ensureRuntime: jest.fn(async () => script.runtime) });
+    await expect(createDriveHeadlessTask(d)({})).resolves.toBeUndefined();
+    expect(d.stopCapture).not.toHaveBeenCalled();
+    expect(reports).toEqual(['the host went wrong mid-drive']);
+    expect(isHeadlessActive()).toBe(false);
   });
 });
 
@@ -184,6 +215,8 @@ describe('a capture native started before its wake arrived', () => {
     script.setCapturing(false);
     script.idle(); // the drive ended and was finalized
     await flush();
+    script.runnerIdle();
+    await flush();
     script.drained();
     await run;
     expect(settled).toBe(true);
@@ -203,6 +236,8 @@ describe('a capture native started before its wake arrived', () => {
       jest.advanceTimersByTime(INHERITED_CAPTURE_WAIT_MS);
       await flush();
       script.idle();
+      await flush();
+      script.runnerIdle();
       await flush();
       script.drained();
       await run;

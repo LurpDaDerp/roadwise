@@ -8,6 +8,7 @@ import { onDataChanged } from '@/data/events';
 import type { FinalizeTripPayload } from '@/data/sync/payload';
 import { isSyncKind, SYNC_KINDS } from '@/data/sync/kinds';
 import {
+  currentOwnerUid,
   DEVICE_OWNER_KEY,
   deviceOwnerIs,
   enqueueFinalize,
@@ -15,6 +16,7 @@ import {
   FINALIZE_KIND,
   finalizeIdempotencyKey,
   findFinalize,
+  SESSION_UID_KEY,
   TRACE_UPLOAD_KIND,
   traceIdempotencyKey,
 } from '@/data/sync/queue';
@@ -238,5 +240,24 @@ test('deviceOwnerIs answers for the recorded owner only, on the handle it is giv
     await tx.execute('DELETE FROM settings');
     // Mid-wipe: nobody owns the device, so nobody's write may land.
     await expect(deviceOwnerIs(tx, 'user-1')).resolves.toBe(false);
+  });
+});
+
+describe('whose work this is (H2 I-1 c)', () => {
+  test('work is stamped with the device owner, never the session uid a runner last saw', async () => {
+    const db = await createSqlJsDb();
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    await settings.set(DEVICE_OWNER_KEY, 'user-a');
+    // The old runner read B's session during a handover's teardown.
+    await settings.set(SESSION_UID_KEY, 'user-b');
+    await expect(currentOwnerUid(db)).resolves.toBe('user-a');
+  });
+
+  test('a device that has never recorded an owner falls back to the session uid', async () => {
+    const db = await createSqlJsDb();
+    await migrate(db);
+    await createSettingsRepo(db).set(SESSION_UID_KEY, 'user-1');
+    await expect(currentOwnerUid(db)).resolves.toBe('user-1');
   });
 });
