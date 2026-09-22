@@ -20,6 +20,8 @@ export interface StoredTrip {
   status: string;
   score: number | null;
   role: TripMetrics['role'];
+  /** `trips.scoring_version`: the version the trip was first scored under, which every re-score keeps. */
+  scoringVersion: number;
   localDay: string;
   tz: string;
   /** epoch ms */
@@ -160,7 +162,7 @@ export interface ActionsDb extends Db {
 }
 
 const TRIP_COLUMNS =
-  'id, client_trip_id, status, score, role, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, category_deductions, limit_coverage_pct, rows_digest, trace_path, incomplete, had_severe_event, camera_session, deleted_at';
+  'id, client_trip_id, status, score, role, scoring_version, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, category_deductions, limit_coverage_pct, rows_digest, trace_path, incomplete, had_severe_event, camera_session, deleted_at';
 const EVENT_COLUMNS =
   'id, trip_id, client_event_id, category, started_at, duration_ms, confidence, corrected, status, measured, context';
 
@@ -170,6 +172,7 @@ interface TripRecord {
   status: string;
   score: number | null;
   role: TripMetrics['role'];
+  scoring_version: number | string;
   local_day: string;
   tz: string;
   started_at: string;
@@ -208,6 +211,7 @@ const toStoredTrip = (row: TripRecord): StoredTrip => ({
   status: row.status,
   score: row.score,
   role: row.role,
+  scoringVersion: Number(row.scoring_version),
   localDay: row.local_day,
   tz: row.tz,
   startedAt: Date.parse(row.started_at),

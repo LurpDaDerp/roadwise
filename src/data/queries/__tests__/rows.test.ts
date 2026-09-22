@@ -167,13 +167,29 @@ describe('why a trip has no score, and which card D1 shows', () => {
     expect(unscoredReasonOf(trip)).toBe('implausible_speed');
   });
 
-  test('a role the row does not know explains nothing, and never blames the driver', () => {
-    // `toTripSummary` maps a null `role` column to 'unknown'. Calling that a passenger trip
-    // would be an assertion about who was driving over a row that records nothing; the screens
-    // have a facts-only variant for it, and C10's question is what fills it in.
+  test('an unclear role is asked about, never blamed on the driver or called a passenger trip', () => {
+    // An auto-detected drive uploads as role 'unknown' and the scorer leaves it unscored as
+    // `role_unknown` (§9.7); `toTripSummary` also maps a null or unrecognised `role` column to
+    // 'unknown'. Either way the row records nothing about who was driving, so the reason is the
+    // one whose copy asks C10's question instead of asserting an answer.
+    const auto = summary({ status: 'unscored', score: null, role: 'unknown' });
+    expect(unscoredReasonOf(auto)).toBe('role_unknown');
     const unknown = summary({ status: 'unscored', score: null, role: null });
     expect(unknown.role).toBe('unknown');
-    expect(unscoredReasonOf(unknown)).toBeNull();
+    expect(unscoredReasonOf(unknown)).toBe('role_unknown');
+    // In the scorer's order: an unclear role comes before the trip's length
+    expect(
+      unscoredReasonOf(
+        summary({ status: 'unscored', score: null, role: 'unknown', distance_m: 100, duration_s: 60 })
+      )
+    ).toBe('role_unknown');
+    // and a discarded drive is still implausible first
+    expect(unscoredReasonOf(summary({ status: 'discarded', score: null, role: 'unknown' }))).toBe(
+      'implausible_speed'
+    );
+    // `toScoredTrip` carries the same reason, so the coaching layer sees an unscored trip
+    expect(toScoredTrip(auto, []).reason).toBe('role_unknown');
+    expect(tipOutcomeOf(auto)).toBe('facts_only');
   });
 
   test('a passenger, a short trip and grade C each explain themselves', () => {

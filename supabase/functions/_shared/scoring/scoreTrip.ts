@@ -47,6 +47,8 @@ export function scoreTrip(m: TripMetrics, events: ScorableEvent[]): ScoredTrip {
   if (m.maxSustainedSpeedMps > CONSTANTS.DISCARD_SPEED_MPS) {
     return unscored('implausible_speed', 'discarded');
   }
+  // An unclear role is asked, never assumed (§9.7): it is not a passenger trip either.
+  if (m.role === 'unknown') return unscored('role_unknown');
   if (m.role !== 'driver') return unscored('passenger');
   if (m.distanceM < CONSTANTS.MIN_SCORED_DISTANCE_M || m.durationS < CONSTANTS.MIN_SCORED_DURATION_S) {
     return unscored('too_short');

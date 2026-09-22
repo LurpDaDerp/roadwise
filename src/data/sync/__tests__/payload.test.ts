@@ -100,6 +100,24 @@ test('an unscored payload carries a null score, a reason and a null trace path',
   expect(FinalizeTripPayloadSchema.parse(p)).toEqual(p);
 });
 
+test('an auto-detected drive whose role is unclear travels as role unknown, unscored as role_unknown', () => {
+  const p = payload({
+    provisional: {
+      ...provisional,
+      score: null,
+      status: 'unscored',
+      reason: 'role_unknown',
+      eventDeductions: {},
+    },
+    events: [event({ deduction: null })],
+    role: 'unknown',
+    roleConfidence: 0.5,
+    roleSource: 'auto',
+  });
+  expect(FinalizeTripPayloadSchema.parse(p)).toEqual(p);
+  expect(FinalizeTripPayloadSchema.parse(JSON.parse(JSON.stringify(p)))).toEqual(p);
+});
+
 test('an empty trip is valid: no events, no path, no geohash, a digest over zero rows', () => {
   const p = payload({
     events: [],
@@ -145,7 +163,15 @@ describe('rejects', () => {
   rejects('a negative distance', payload({ distanceM: -1 }));
   rejects('a non-finite duration', payload({ durationS: Number.POSITIVE_INFINITY }));
   rejects('an end before the start', payload({ endedAt: T0 - 1 }));
+  // `other` is a role the driver states later (C10), never one an upload is recorded under
   rejects('an unknown role', payload({ role: 'other' as never }));
+  rejects('a role that is not a trip role', payload({ role: 'co-pilot' as never }));
+  rejects(
+    'an unscored reason the scorer does not produce',
+    payload({
+      provisional: { ...provisional, score: null, status: 'unscored', reason: 'role_unclear' as never },
+    })
+  );
   rejects('an unknown mode', payload({ mode: 'dash' as never }));
   rejects(
     'a score on an unscored trip',

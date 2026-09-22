@@ -22,6 +22,7 @@ import {
   MAX_BODY_BYTES,
   MAX_DENIED_PER_DAY,
   RETRY_AFTER_DENIED_S,
+  SCORERS,
   type ActionsDeps,
 } from './handler.ts';
 
@@ -915,6 +916,22 @@ Deno.test('set-role driver re-scores from the stored digest and events', async (
   assertEquals(r.days, e.day);
 });
 
+Deno.test('answering Yes, I drove on a drive left unscored as role_unknown scores it under its stored version', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ role: 'unknown', status: 'unscored', score: null, scoring_version: 1 })],
+      trip_events: [storedEventRow({ deduction: null })],
+      event_disputes: [],
+    },
+  });
+  const expected = scoreTrip(storedMetrics('driver'), [storedEvent('scored')]);
+  const r = await split(await handleTripAction(post(setRole('driver')), h.deps));
+  assertEquals(r.status, 200);
+  assertEquals(r.body.status, 'final');
+  assertEquals(recompute(h).scored, { ...expected, hadSevereEvent: false });
+  assertEquals(recompute(h).scored?.reason, undefined);
+});
+
 Deno.test('a role change keeps the stored severe flag, whichever way it goes', async () => {
   for (const role of ['passenger', 'driver']) {
     const h = harness({
@@ -964,6 +981,77 @@ Deno.test('set-role on a trip the user has since deleted is 200 replayed and wri
   );
   assertEquals(r.days, [storedDayRow]);
   assertEquals(h.fake.calls.length, 0);
+});
+
+// --- scoring version ----------------------------------------------------------------------------
+
+Deno.test('the re-score dispatches on the stored scoring version: version 1 is the package scorer', () => {
+  assertEquals(Object.keys(SCORERS), ['1']);
+  assertEquals(SCORERS[1], scoreTrip);
+});
+
+Deno.test('a dispute on a trip scored under version 1 re-scores it under version 1', async () => {
+  const h = harness({
+    tables: { trips: [storedTripRow({ scoring_version: 1 })], trip_events: [storedEventRow()], event_disputes: [] },
+  });
+  assertEquals((await handleTripAction(post(dispute()), h.deps)).status, 200);
+  assertEquals(recompute(h).scored?.scoringVersion, 1);
+});
+
+Deno.test('a dispute on a trip stored under a version with no scorer is 409 and records nothing', async () => {
+  const h = harness({
+    tables: { trips: [storedTripRow({ scoring_version: 2 })], trip_events: [storedEventRow()], event_disputes: [] },
+  });
+  assertEquals(await json(await handleTripAction(post(dispute()), h.deps)), {
+    status: 409,
+    body: { code: 'scoring_version_unsupported' },
+  });
+  // the allowance pre-check is a read; neither the dispute nor any recompute was written
+  assertEquals(rpcNames(h), ['count_dispute_allowance']);
+  assertEquals(h.errors.length, 1);
+  assertEquals((h.errors[0][1] as { scoringVersion: number }).scoringVersion, 2);
+});
+
+Deno.test('a role change on a trip stored under a version with no scorer is 409 and writes nothing', async () => {
+  for (const role of ['driver', 'passenger', 'other']) {
+    const h = harness({
+      tables: { trips: [storedTripRow({ scoring_version: 7 })], trip_events: [storedEventRow()], event_disputes: [] },
+    });
+    assertEquals(
+      await json(await handleTripAction(post(setRole(role)), h.deps)),
+      { status: 409, body: { code: 'scoring_version_unsupported' } },
+      role
+    );
+    assertEquals(h.fake.calls.length, 0, role);
+  }
+});
+
+Deno.test('a trip under an unsupported version can still be deleted, and a deleted one still replays', async () => {
+  const del1 = harness({
+    tables: { trips: [storedTripRow({ scoring_version: 2 })], trip_events: [storedEventRow()], event_disputes: [] },
+  });
+  assertEquals((await handleTripAction(post(del()), del1.deps)).status, 200);
+  assertEquals(recompute(del1).scored, null);
+  const gone = harness({
+    tables: {
+      trips: [storedTripRow({ scoring_version: 2, deleted_at: new Date(T0 + DAY_MS).toISOString() })],
+      trip_events: [storedEventRow()],
+      event_disputes: [],
+    },
+  });
+  assertEquals((await json(await handleTripAction(post(setRole('passenger')), gone.deps))).body.replayed, true);
+  assertEquals(gone.fake.calls.length, 0);
+});
+
+Deno.test("the writer's version-pin refusal is the same 409, never a 400 the queue would drop as drift", async () => {
+  const h = harness({
+    rpc: { apply_recompute: () => ({ error: { code: '22023', message: 'scoring_version_mismatch' } }) },
+  });
+  assertEquals(await json(await handleTripAction(post(setRole('driver')), h.deps)), {
+    status: 409,
+    body: { code: 'scoring_version_unsupported' },
+  });
+  assertEquals(h.errors.length, 1);
 });
 
 // --- delete -------------------------------------------------------------------------------------

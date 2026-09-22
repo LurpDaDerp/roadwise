@@ -20,6 +20,11 @@ export const tripCopy = {
     calculating: 'Calculating…',
   },
   unscored: {
+    /**
+     * The "tell us whether you drove" variant: role `unknown`, reason `role_unknown` (§9.7). An
+     * auto-detected drive whose evidence was ambiguous is asked about, never assumed, and C10's
+     * chips are the answer.
+     */
     unknownRole: 'Tell us who was driving and this drive gets scored.',
     passenger: "You weren't driving, so this drive isn't scored.",
     tooShort: "Too short to score fairly. Drives under half a mile or two minutes aren't scored.",

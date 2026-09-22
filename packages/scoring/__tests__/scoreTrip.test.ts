@@ -58,3 +58,8 @@ test('one unusable event does not disturb the others', () => {
   expect(r.categoryDeductions.phone).toBeCloseTo(14.545, 2);
   expect(Object.keys(r.eventDeductions).sort()).toEqual(['b1', 'p1', 's1']);
 });
+test('a drive whose role is unclear stays unscored as role_unknown; passenger and other are passenger', () => {
+  expect(scoreTrip({ ...metrics, role: 'unknown' }, events)).toMatchObject({ status: 'unscored', reason: 'role_unknown', score: null });
+  expect(scoreTrip({ ...metrics, role: 'other' }, events)).toMatchObject({ status: 'unscored', reason: 'passenger', score: null });
+  expect(scoreTrip({ ...metrics, role: 'passenger' }, events)).toMatchObject({ status: 'unscored', reason: 'passenger', score: null });
+});

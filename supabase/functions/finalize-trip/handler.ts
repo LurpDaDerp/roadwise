@@ -164,6 +164,11 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         device: { score: p.provisional.score, status: p.provisional.status },
         server: { score: scored.score, status: scored.status },
         downgrades: plausible.downgrades,
+        // Monitoring: a night-boundary mismatch is expected and is not a defect signal.
+        // True when any event's night flag as the device sent it differs from the trip-start
+        // clock rule the server scored with, which is what a drive crossing 23:00 or 05:00 does;
+        // count the mismatch rate with these set apart (M2 final review, carry-over 5).
+        nightBoundary: p.events.some((e) => e.context.night !== night),
       });
     }
 

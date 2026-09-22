@@ -29,6 +29,7 @@ Deno.test('findTripRow looks the trip up by the JWT user and the client id, dele
     status: 'final',
     score: STORED_SCORE,
     role: 'driver',
+    scoringVersion: 1,
     localDay: TRIP_DAY,
     tz: TZ,
     startedAt: T0,
@@ -56,9 +57,12 @@ Deno.test('findTripRow looks the trip up by the JWT user and the client id, dele
 
 Deno.test('numeric columns PostgREST returns as strings are numbers on the way out', async () => {
   const fake = fakeActionsClient({
-    tables: { trips: [storedTripRow({ distance_m: '13200', duration_s: '1320.5', exposure: '1.1' })] },
+    tables: {
+      trips: [storedTripRow({ distance_m: '13200', duration_s: '1320.5', exposure: '1.1', scoring_version: '1' })],
+    },
   });
   const row = await createActionsDb(fake.client).findTripRow(UID, CLIENT_TRIP_ID);
+  assertEquals(row?.scoringVersion, 1);
   assertEquals(row?.distanceM, 13_200);
   assertEquals(row?.durationS, 1320.5);
   assertEquals(row?.exposure, 1.1);

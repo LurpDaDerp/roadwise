@@ -62,6 +62,7 @@ export const storedTripRow = (overrides: Record<string, unknown> = {}): Record<s
   distance_m: STORED_METRICS.distanceM,
   duration_s: STORED_METRICS.durationS,
   role: 'driver',
+  scoring_version: STORED_SCORED.scoringVersion,
   score: STORED_SCORE,
   status: 'final',
   exposure: STORED_SCORED.exposure,

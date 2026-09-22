@@ -85,7 +85,7 @@ export const ScoredTripSchema = z
   .object({
     score: z.number().int().min(0).max(100).nullable(),
     status: z.enum(['final', 'unscored', 'discarded']),
-    reason: z.enum(['passenger', 'too_short', 'grade_c', 'implausible_speed']).optional(),
+    reason: z.enum(['passenger', 'role_unknown', 'too_short', 'grade_c', 'implausible_speed']).optional(),
     exposure: z.number().positive(),
     dataQuality: z.enum(['A', 'B', 'C']),
     categoryDeductions: z
@@ -135,7 +135,12 @@ export const FinalizeTripPayloadSchema = z
      * well below it.
      */
     durationS: nonNegative,
-    role: z.enum(['driver', 'passenger']),
+    /**
+     * Who was driving as the device decided it. `unknown` is an auto-detected drive whose
+     * evidence was ambiguous (§9.7): the scorer leaves it unscored as `role_unknown` until the
+     * driver answers C10. `other` is only ever stated afterwards, through trip-actions.
+     */
+    role: z.enum(['driver', 'passenger', 'unknown']),
     roleConfidence: unit.nullable(),
     /** How the role was decided: `manual`, `auto`, or what a later milestone adds. */
     roleSource: z.string().min(1).max(32).nullable(),

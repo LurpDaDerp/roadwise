@@ -27,9 +27,17 @@
 // not it saw the earlier one's. Both derive the flag by the same rule (`severeAfter`), so the
 // loser's value differs only by what it had read, and the next recompute of the trip settles it.
 //
+// Scoring versions (M2 final review M-5): a re-score runs the scorer of the version the trip was
+// first scored under (`trips.scoring_version`), looked up in `SCORERS`, never whatever is deployed;
+// the scoring explainer promises that a model change leaves already-scored trips as they were. A
+// trip whose version has no scorer here is refused 409 `scoring_version_unsupported` before any
+// writer runs, and `apply_recompute` backs this up by refusing a result under any other version.
+// Delete re-scores nothing and is never refused for it.
+//
 // Order of refusal, cheapest first: method, JWT, size, JSON, contract, then the one lookup that
-// decides 404 / replay, the stored digest (so a row this function cannot score from fails before
-// anything is written), then the writers. Structured logs carry ids and codes only (§4.7).
+// decides 404 / replay, the stored digest and the stored scoring version (so a row this function
+// cannot score fails before anything is written), then the writers. Structured logs carry ids and
+// codes only (§4.7).
 import { emptyDayRow, type DayRow, type TripFields } from '../_shared/aggregate.ts';
 import { StorageFailure } from '../_shared/actions_db.ts';
 import type { ActionsDb, RecomputeResult, StoredEvent, StoredTrip } from '../_shared/actions_db.ts';
@@ -57,6 +65,13 @@ import {
 import { scoreTrip } from '../_shared/scoring/index';
 import type { TripMetrics } from '../_shared/scoring/index';
 import { TripActionSchema, type DeleteAction, type DisputeAction, type SetRoleAction } from './schema.ts';
+
+/**
+ * The scorer for each scoring version a stored trip can carry. A new model version adds an entry
+ * (its own copy of the scorer) and keeps every older one, so a dispute or a role answer on an old
+ * trip is re-scored under the rules that trip was scored by.
+ */
+export const SCORERS: Record<number, typeof scoreTrip> = { 1: scoreTrip };
 
 /** An action body is a few ids and a note; anything larger is not one. */
 export const MAX_BODY_BYTES = 16_384;
@@ -132,6 +147,14 @@ class IntegrityFailure extends Error {
   }
 }
 
+/** A stored trip scored under a version this deployment has no scorer for; answered 409. */
+class VersionUnsupported extends Error {
+  constructor(readonly tripId: string, readonly scoringVersion: number) {
+    super('scoring_version_unsupported');
+    this.name = 'VersionUnsupported';
+  }
+}
+
 interface Ctx {
   requestId: string;
   action: string;
@@ -151,7 +174,21 @@ function failure(err: unknown, log: Logger, ctx: Ctx): Response {
     log.error(`trip-actions ${err.code}`, ctx);
     return json(500, { code: err.code });
   }
+  if (err instanceof VersionUnsupported) {
+    // Not the client's to fix and not transient: an operator has to ship that version's scorer.
+    log.error('trip-actions scoring version unsupported', {
+      ...ctx,
+      tripId: err.tripId,
+      scoringVersion: err.scoringVersion,
+    });
+    return json(409, { code: 'scoring_version_unsupported' });
+  }
   if (isPgError(err)) {
+    if (err.code === '22023' && err.message === 'scoring_version_mismatch') {
+      // The writer's backstop to `requireScorer`; reachable only if the two ever disagree.
+      log.error('trip-actions scoring version refused by the writer', ctx);
+      return json(409, { code: 'scoring_version_unsupported' });
+    }
     if (err.code === '22023' && INPUT_REFUSALS[err.message]) return json(422, { code: INPUT_REFUSALS[err.message] });
     if (err.code === '42501' && err.message === 'trip already deleted') return json(409, { code: 'trip_deleted' });
   }
@@ -171,6 +208,13 @@ function requireMetrics(trip: StoredTrip, role: TripMetrics['role']): TripMetric
   const metrics = storedMetrics(trip, role);
   if (!metrics) throw new IntegrityFailure('rows_digest_invalid');
   return metrics;
+}
+
+/** The scorer of the version the trip was stored under, or the 409; checked before anything is written. */
+function requireScorer(trip: StoredTrip): typeof scoreTrip {
+  const scorer = Object.hasOwn(SCORERS, trip.scoringVersion) ? SCORERS[trip.scoringVersion] : undefined;
+  if (!scorer) throw new VersionUnsupported(trip.id, trip.scoringVersion);
+  return scorer;
 }
 
 /** The trip fields as stored, for a reply that recomputed nothing. */
@@ -197,19 +241,21 @@ interface Recomputed {
 }
 
 /**
- * Score the trip again under `metrics` over `events` (statuses as they should be; `disputed`
- * settles to `removed`), re-derive the severe flag over the same events, rebuild the aggregates
- * around the result, and apply it all in one writer call.
+ * Score the trip again with `scorer` (the stored version's, from `requireScorer`) under `metrics`
+ * over `events` (statuses as they should be; `disputed` settles to `removed`), re-derive the
+ * severe flag over the same events, rebuild the aggregates around the result, and apply it all in
+ * one writer call.
  */
 async function rescore(
   run: Run,
   trip: StoredTrip,
+  scorer: typeof scoreTrip,
   metrics: TripMetrics,
   events: StoredEvent[]
 ): Promise<Recomputed> {
   const settled = settleDisputed(events);
   const hadSevereEvent = severeAfter(events, trip.hadSevereEvent);
-  const scored = scoreTrip(metrics, settled.map(toScorableEvent));
+  const scored = scorer(metrics, settled.map(toScorableEvent));
   if (scored.dataQuality !== trip.dataQuality) {
     run.log.warn('trip-actions quality re-derived differently', {
       ...run.ctx,
@@ -286,6 +332,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
 
   // a row this function cannot re-score from must fail before the writer consumes allowance
   const metrics = requireMetrics(trip, trip.role);
+  const scorer = requireScorer(trip);
 
   if (!preview.can_auto_accept) {
     const denied = await db.countDeniedDisputes(userId, run.nowMs - DAY_MS);
@@ -310,7 +357,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
     const events = (await db.listTripEvents(userId, trip.id)).map((e) =>
       e.id === event.id ? { ...e, status: 'disputed' } : e
     );
-    const done = await rescore(run, trip, metrics, events);
+    const done = await rescore(run, trip, scorer, metrics, events);
     score = done.result.score;
     status = done.result.status;
     hadSevereEvent = done.hadSevereEvent;
@@ -351,12 +398,13 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
     return json(200, replay);
   }
   const metrics = requireMetrics(trip, a.role);
+  const scorer = requireScorer(trip);
   const set = await db.setTripRole(userId, trip.id, a.role);
   // The writer has already unscored a passenger/other trip; the recompute writes the same result
   // (the scorer's own `unscored` / `passenger`) and refreshes the day rows and baselines, so both
   // roles go through the one path. The role does not touch the severe flag, but this recompute
   // settles any `disputed` event it finds, so the flag is re-derived over what survives.
-  const done = await rescore(run, trip, metrics, await db.listTripEvents(userId, trip.id));
+  const done = await rescore(run, trip, scorer, metrics, await db.listTripEvents(userId, trip.id));
   const response: SetRoleResponse = {
     tripId: trip.id,
     role: set.role,

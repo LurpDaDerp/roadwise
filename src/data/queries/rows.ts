@@ -236,9 +236,9 @@ export type UnscoredReason = NonNullable<ScoredTrip['reason']>;
 
 /**
  * Re-derive the reason a trip carries no score, in the order `scoreTrip` decides it: a discarded
- * trip was implausibly fast, then a non-driver, then a trip too short, then data the phone could
- * not grade. Null for a scored trip, and null when nothing in the row explains it — better than
- * telling the driver a reason that is not theirs.
+ * trip was implausibly fast, then an unclear role, then a non-driver, then a trip too short, then
+ * data the phone could not grade. Null for a scored trip, and null when nothing in the row
+ * explains it — better than telling the driver a reason that is not theirs.
  *
  * A *missing* `data_quality` is such a row: the scorer always writes a grade (§9.4), so a null
  * one is a row this build did not write, and calling it grade C would be a guess.
@@ -246,10 +246,11 @@ export type UnscoredReason = NonNullable<ScoredTrip['reason']>;
 export function unscoredReasonOf(summary: TripSummary): UnscoredReason | null {
   if (summary.scored) return null;
   if (summary.status === 'discarded') return 'implausible_speed';
-  // `'unknown'` is a row that records nothing about who was driving, so "you weren't driving"
-  // would be an assertion this build cannot make. The screens have a facts-only variant for it,
-  // and C10's question is what fills it in.
-  if (summary.role === 'unknown') return null;
+  // `'unknown'` records nothing about who was driving: an auto-detected drive the evidence could
+  // not settle (§9.7, uploaded as role 'unknown' and left unscored as `role_unknown`), or a row
+  // whose role column this build does not recognise. "You weren't driving" would be an assertion
+  // the row cannot support, so the reason is the one whose copy asks C10's question instead.
+  if (summary.role === 'unknown') return 'role_unknown';
   if (summary.role !== 'driver') return 'passenger';
   if (
     summary.distanceM < CONSTANTS.MIN_SCORED_DISTANCE_M ||

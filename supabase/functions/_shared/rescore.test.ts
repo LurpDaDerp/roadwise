@@ -25,6 +25,7 @@ const trip = (overrides: Partial<StoredTrip> = {}): StoredTrip => ({
   status: 'final',
   score: 90,
   role: 'driver',
+  scoringVersion: 1,
   localDay: TRIP_DAY,
   tz: TZ,
   startedAt: T0,

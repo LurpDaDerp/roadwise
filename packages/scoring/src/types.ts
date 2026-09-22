@@ -41,7 +41,12 @@ export interface TripMetrics {
 export interface ScoredTrip {
   score: number | null;
   status: 'final' | 'unscored' | 'discarded';
-  reason?: 'passenger' | 'too_short' | 'grade_c' | 'implausible_speed';
+  /**
+   * Why there is no score. `role_unknown` is an auto-detected drive whose evidence could not say
+   * who was driving (§9.7): it stays unscored until the driver answers, and is never assumed to
+   * be theirs.
+   */
+  reason?: 'passenger' | 'role_unknown' | 'too_short' | 'grade_c' | 'implausible_speed';
   exposure: number;
   dataQuality: 'A' | 'B' | 'C';
   /** Deduction per category after its per-trip cap, in score points. */

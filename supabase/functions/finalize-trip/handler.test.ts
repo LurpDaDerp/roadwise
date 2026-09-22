@@ -444,6 +444,45 @@ Deno.test('per-event night is the trip\'s clock rule in its zone; a device flag 
   );
 });
 
+Deno.test('an auto-detected drive uploaded as role unknown is stored unscored as role_unknown, with no mismatch', async () => {
+  const h = harness();
+  const unclear = payload({ role: 'unknown', roleConfidence: 0.5, roleSource: 'auto' });
+  assertEquals(unclear.provisional.reason, 'role_unknown');
+  const { status, body } = await json(await handleFinalizeTrip(post(unclear), h.deps));
+  assertEquals(status, 200);
+  assertEquals(body.status, 'unscored');
+  assertEquals(body.score, null);
+  assertEquals(body.provisionalMismatch, false);
+  const e = envelope(h);
+  assertEquals(e.payload.role, 'unknown');
+  assertEquals(e.scored.reason, 'role_unknown');
+  assertEquals(e.day[0].tripsScored, 0);
+  assertEquals(h.warnings.length, 0);
+});
+
+Deno.test('a mismatch the night boundary explains is flagged nightBoundary, so monitoring can set it apart', async () => {
+  // The device flagged the pickup by its own clock; the server applies the clock rule at trip
+  // start to every event. A drive that starts at 23:30 and whose device called the event daytime
+  // is the legitimate 23:00/05:00 divergence (M2 final review, carry-over 5), not a defect.
+  const start = Date.UTC(2023, 10, 15, 7, 30); // 23:30 in Los Angeles on the 14th
+  const h = harness({ now: start + 2 * HOUR });
+  const crossing = payload({
+    startedAt: start,
+    endedAt: start + 1_320_000,
+    events: [event({ startedAt: start + 300_000, durationS: 24, durationMs: 24_000, context: { night: false, precipitation: false } })],
+  });
+  assertEquals((await json(await handleFinalizeTrip(post(crossing), h.deps))).body.provisionalMismatch, true);
+  const [message, fields] = h.warnings[0] as [string, { nightBoundary: boolean }];
+  assertEquals(message, 'finalize-trip mismatch');
+  assertEquals(fields.nightBoundary, true);
+
+  // a mismatch with every night flag agreeing is not explained by the boundary
+  const off = harness();
+  const p = payload();
+  await handleFinalizeTrip(post({ ...p, provisional: { ...p.provisional, score: (p.provisional.score as number) - 3 } }), off.deps);
+  assertEquals((off.warnings[0][1] as { nightBoundary: boolean }).nightBoundary, false);
+});
+
 Deno.test('a provisional score more than 2 points off is reported and logged; the server score wins', async () => {
   const h = harness();
   const p = payload();
