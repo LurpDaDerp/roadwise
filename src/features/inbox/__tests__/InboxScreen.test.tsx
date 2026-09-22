@@ -147,7 +147,7 @@ describe('InboxScreen', () => {
       await renderLapse(async () => {
         throw new Error('drive-sense unavailable');
       });
-      expect(await screen.findByText('Automatic recording was off')).toBeTruthy();
+      expect(await screen.findByText('Location was changed from Always')).toBeTruthy();
       expect(screen.queryByText(/is off|back on|again/)).toBeNull();
     });
 

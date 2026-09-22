@@ -151,7 +151,7 @@ describe('toItemView — not on this phone', () => {
 describe('toItemView — other types', () => {
   it('a permission lapse opens B2 (with no reading here it says only what was true that day)', () => {
     const v = toItemView(lapseRow(), missing, NOW, TZ);
-    expect(v?.title).toBe('Automatic recording was off');
+    expect(v?.title).toBe('Location was changed from Always');
     expect(v?.href).toBe('/permissions');
     expect(v?.note).toBeNull();
   });
@@ -258,12 +258,16 @@ describe('toItemView — a permission lapse renders from the phone’s CURRENT p
     for (const v of [always, location, motion]) expect(v?.body).not.toMatch(/fix it|right now/);
   });
 
-  it('no "fixed" string claims recording or detection works — only the permission was checked', () => {
-    for (const kind of Object.keys(inboxCopy.lapse.fixed) as (keyof typeof inboxCopy.lapse.fixed)[]) {
-      const c = inboxCopy.lapse.fixed[kind];
-      expect(`${c.title} | ${c.body('Mon, Jan 5')}`).not.toMatch(/record|detect|drive|working|back on/i);
+  it.each(['fixed', 'unknown', 'elsewhere'] as const)(
+    'no %s lapse string claims anything about recording or detection — only the permission (n1, n5)',
+    (state) => {
+      const table = inboxCopy.lapse[state];
+      for (const kind of Object.keys(table) as (keyof typeof table)[]) {
+        const c = table[kind];
+        expect(`${c.title} | ${c.body('Mon, Jan 5')}`).not.toMatch(/record|detect|drive|working|back on/i);
+      }
     }
-  });
+  );
 
   it('cannot be read on this phone → neither: neutral copy about that day only', () => {
     const cases = [
@@ -272,12 +276,12 @@ describe('toItemView — a permission lapse renders from the phone’s CURRENT p
       toItemView(lapse('motion'), here({ motion: null }), NOW, TZ), // motion "can't check"
       toItemView(lapse('location_always'), { trip: null, events: [], permissions: { deviceId: null, snapshot: snap({ location: 'always' }) } }, NOW, TZ), // which phone this is is unknown
     ];
-    expect(cases[0]?.title).toBe('Automatic recording was off');
-    expect(cases[0]?.body).toBe('On Mon, Jan 5, automatic recording was off. Open to check how it is now.');
-    expect(cases[2]?.title).toBe('Drive detection needed attention');
+    expect(cases[0]?.title).toBe('Location was changed from Always');
+    expect(cases[0]?.body).toBe('On Mon, Jan 5, location was changed from Always. Open to check how it is now.');
+    expect(cases[2]?.title).toBe('Motion access was turned off');
     for (const v of cases) {
       expect(v).not.toBeNull();
-      expect(`${v?.title} ${v?.body}`).not.toMatch(/\bis off\b|back on|again|right now|fix it|another phone/);
+      expect(`${v?.title} ${v?.body}`).not.toMatch(/\bis off\b|back on|again|right now|fix it|phone signed in/);
     }
   });
 
@@ -289,9 +293,11 @@ describe('toItemView — a permission lapse renders from the phone’s CURRENT p
       other('location', snap({ location: 'denied' })),
       other('motion', null),
     ];
-    expect(cases[0]?.body).toBe('On Mon, Jan 5, automatic recording was off on another phone signed in to your account.');
+    expect(cases[0]?.body).toBe('On Mon, Jan 5, location was changed from Always on a phone signed in to your account.');
     for (const v of cases) {
-      expect(v?.body).toContain('another phone');
+      expect(v?.body).toContain('on a phone signed in to your account');
+      // A reinstall or handover on THIS phone also gets a new install id: never say "another".
+      expect(v?.body).not.toMatch(/another|other phone/i);
       expect(`${v?.title} ${v?.body}`).not.toMatch(/open to check|how it is now|\bis off\b|back|again|fix it/i);
     }
   });

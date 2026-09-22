@@ -72,9 +72,9 @@ export type LapseNow = 'lapsed' | 'fixed' | 'unknown' | 'elsewhere';
 /**
  * The lapse re-checked against the phone's current permissions, with the server's own rule for
  * "no longer lapsed" (0007 `subject_gone`): Always is back, any location is back, motion granted.
- * `elsewhere` when another phone reported it — this phone's permissions say nothing about that
- * one. `unknown` when there is no reading, when this install's id cannot be read, or when motion
- * reads "can't check".
+ * `elsewhere` when a different install id reported it (another phone, or this one before a
+ * reinstall or handover) — this install's permissions say nothing about that one. `unknown` when
+ * there is no reading, when this install's id cannot be read, or when motion reads "can't check".
  */
 export function lapseNow(payload: PermissionLapsedPayload, current: PermissionsNow | null | undefined): LapseNow {
   if (!current || current.deviceId === null) return 'unknown';

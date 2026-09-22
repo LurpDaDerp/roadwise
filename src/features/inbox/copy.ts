@@ -47,9 +47,9 @@ export const inboxCopy = {
   },
   /**
    * A permission lapse told from the phone's permissions NOW (ruling T6 (1)). Still lapsed: the
-   * pushed words, present tense (from the catalog). Fixed since: past tense and "back on". Not
-   * readable here (no reading, motion "can't check", or the lapse was on another phone): only what
-   * was true that day, and nothing about now.
+   * pushed words, present tense (from the catalog). Fixed since: past tense, naming only the
+   * permission. Not readable here (no reading, motion "can't check", or a different install id):
+   * only what was true that day, and nothing about now.
    */
   lapse: {
     /**
@@ -72,36 +72,35 @@ export const inboxCopy = {
     },
     unknown: {
       location_always: {
-        title: 'Automatic recording was off',
-        body: (day: string) => `On ${day}, automatic recording was off. Open to check how it is now.`,
+        title: 'Location was changed from Always',
+        body: (day: string) => `On ${day}, location was changed from Always. Open to check how it is now.`,
       },
       location: {
-        title: 'Drive recording was off',
-        body: (day: string) =>
-          `On ${day}, location access was off, so drives couldn't be recorded. Open to check how it is now.`,
+        title: 'Location access was turned off',
+        body: (day: string) => `On ${day}, location access was turned off. Open to check how it is now.`,
       },
       motion: {
-        title: 'Drive detection needed attention',
-        body: (day: string) => `On ${day}, motion access was off. Open to check how it is now.`,
+        title: 'Motion access was turned off',
+        body: (day: string) => `On ${day}, motion access was turned off. Open to check how it is now.`,
       },
     },
     /**
-     * Reported by another phone on the account (review n2): this phone's permissions say nothing
-     * about that one, so there is nothing here to check.
+     * Reported under a different install id (review n2, n4): a phone signed in to the account —
+     * possibly this one before a reinstall or a handover, so never "another phone". This phone's
+     * permissions say nothing about it, so there is nothing here to check.
      */
     elsewhere: {
       location_always: {
-        title: 'Automatic recording was off',
-        body: (day: string) => `On ${day}, automatic recording was off on another phone signed in to your account.`,
+        title: 'Location was changed from Always',
+        body: (day: string) => `On ${day}, location was changed from Always on a phone signed in to your account.`,
       },
       location: {
-        title: 'Drive recording was off',
-        body: (day: string) =>
-          `On ${day}, location access was off on another phone signed in to your account, so drives couldn't be recorded there.`,
+        title: 'Location access was turned off',
+        body: (day: string) => `On ${day}, location access was turned off on a phone signed in to your account.`,
       },
       motion: {
-        title: 'Drive detection needed attention',
-        body: (day: string) => `On ${day}, motion access was off on another phone signed in to your account.`,
+        title: 'Motion access was turned off',
+        body: (day: string) => `On ${day}, motion access was turned off on a phone signed in to your account.`,
       },
     },
   },
