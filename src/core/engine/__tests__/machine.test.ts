@@ -950,6 +950,14 @@ describe('lockedOut and stoppedPanel', () => {
 });
 
 describe('ending', () => {
+  test('E1 M1: a slow row in the gap window shows its speed with no limit, never the road just left', async () => {
+    const h = await endingAt10();
+    expect(h.engine.snapshot().limit).toMatchObject({ source: 'posted' });
+    await h.drive(11, 1, { speed: 2 }); // under the lockout: the trip stays in ending
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', speedKnown: true, speedMps: 2 });
+    expect(h.engine.snapshot().limit).toMatchObject({ source: 'unknown', limitMps: null });
+  });
+
   test('stationary for AUTO_END_STATIONARY_S ends the trip on that row and trims the idle tail', async () => {
     const h = await recording();
     let s = await h.drive(0, 10, FAST);
@@ -1609,10 +1617,52 @@ describe('M3: passenger trips and the mutes', () => {
     await h.drive(0, 20, OVER); // an L1-only trip: the speeding L1 speaks
     await h.engine.dispatch({ type: 'muteForDrive', ts: at(20) });
     await h.drive(20, CHECKPOINT_S - 20, FAST);
-    const cp = only(h.checkpoints);
+    // The mute's own checkpoint, then the cadence's.
+    expect(h.checkpoints).toHaveLength(2);
+    const cp = h.checkpoints[1]!;
     expect(cp.arbiterState).toEqual(only(h.arbiters).state());
     expect(cp.arbiterState).toMatchObject({ tripIndex: 0, mutedAll: true });
     expect(cp.arbiterState?.l1Window).toHaveLength(1);
+  });
+});
+
+describe('E1 M4: "Mute for this drive" is durable at once', () => {
+  test('the tap checkpoints the tail and the arbiter state, not the next cadence point', async () => {
+    const h = await recording();
+    await h.drive(0, 5, FAST);
+    expect(h.checkpoints).toHaveLength(0);
+    await h.engine.dispatch({ type: 'muteForDrive', ts: at(5) });
+    const cp = only(h.checkpoints);
+    expect(cp.arbiterState).toMatchObject({ mutedAll: true });
+    expect(rowsSince(cp)).toEqual(range(0, 5));
+  });
+
+  test('with no new rows since the last checkpoint the state is still written, and no checkpoint is double-counted', async () => {
+    const h = await recording();
+    await h.drive(0, 5, FAST);
+    await h.engine.dispatch({ type: 'muteCurrent', ts: at(5) }); // negative control: the long-press persists nothing
+    expect(h.checkpoints).toHaveLength(0);
+    await h.engine.dispatch({ type: 'muteForDrive', ts: at(5) });
+    await h.engine.dispatch({ type: 'muteForDrive', ts: at(5) });
+    expect(h.checkpoints).toHaveLength(2);
+    expect(h.checkpoints[1]!.arbiterState).toMatchObject({ mutedAll: true });
+    expect(h.checkpoints[1]!.checkpoints).toEqual([at(4)]);
+  });
+
+  test('before the first row there is nothing to resume, so nothing is written', async () => {
+    const h = await recording();
+    await h.engine.dispatch({ type: 'muteForDrive', ts: at(0) });
+    expect(h.checkpoints).toHaveLength(0);
+  });
+
+  test('a failed write keeps the mute and reports the failure', async () => {
+    const h = await recording({ onError: true });
+    await h.drive(0, 5, FAST);
+    h.onCheckpoint.mockRejectedValueOnce(new Error('disk full'));
+    await h.engine.dispatch({ type: 'muteForDrive', ts: at(5) });
+    expect(h.errors).toEqual([new Error('disk full')]);
+    await h.drive(5, 30, OVER);
+    expect(h.alerts).toEqual([]);
   });
 });
 
@@ -1733,6 +1783,33 @@ describe('M3: adopt after a relaunch', () => {
     const e = await endingAt10();
     await e.engine.dispatch({ type: 'adopt', trip: rebuilt(), ts: at(20) });
     expect(e.engine.snapshot()).toMatchObject({ status: 'ending', clientTripId: 'trip-1' });
+  });
+
+  describe('E1 M3: the break clock (§8.7) survives a relaunch', () => {
+    async function firstDrivingS(trip: AdoptedTrip, adoptAt: number): Promise<number> {
+      const h = await armed();
+      await h.engine.dispatch({ type: 'adopt', trip, ts: at(adoptAt) });
+      const consider = jest.spyOn(only(h.arbiters), 'consider');
+      await h.drive(adoptAt, 1, FAST);
+      return consider.mock.calls[0]![0].drivingS;
+    }
+
+    test('a short relaunch is not a break: the clock runs from the trip start', async () => {
+      // Checkpointed through second 59, relaunched at 120: a 61 s hole, driving time.
+      expect(await firstDrivingS(rebuilt(), 120)).toBe(120);
+    });
+
+    test('from the end of the last real gap when there was one', async () => {
+      const trip = rebuilt();
+      trip.session.gaps.push({ fromTs: at(20), toTs: at(30) });
+      expect(await firstDrivingS(trip, 120)).toBe(90);
+    });
+
+    test(`a hole of AUTO_END_STATIONARY_S or more is a stop, as ending would have made it: the clock restarts`, async () => {
+      // The adopt gap starts one row after the checkpoint (second 60).
+      expect(await firstDrivingS(rebuilt(), 60 + AUTO_END_STATIONARY_S)).toBe(0);
+      expect(await firstDrivingS(rebuilt(), 60 + AUTO_END_STATIONARY_S - 1)).toBe(60 + AUTO_END_STATIONARY_S - 1);
+    });
   });
 
   test('a throwing arbiter factory leaves the engine idle and the trip unadopted', async () => {

@@ -56,6 +56,12 @@ const EPSILON_S = 1e-9;
 /**
  * A trip that has had no valid fix for this long, on a phone lying still, is parked somewhere GNSS
  * cannot reach (a garage): it goes to `ending` as a stationary one would (plan rev1 I13).
+ *
+ * Known limitation (E1 review M5, kept by ruling; device-pass item 6): a tunnel longer than this,
+ * driven smoothly enough that a mounted phone passes the stillness test, ends the same way. If the
+ * drive then resumes inside the gap window, the tunnel's rows become a gap: the events detected in
+ * it stay, but its time leaves the exposure, so the per-hour rate reads slightly high. Rare, and
+ * the thresholds are tuning-sensitive; revisit with device traces rather than by rule here.
  */
 export const NO_FIX_END_S = 600;
 /** `gravityStability` at or above this, with no handling and a quiet IMU, reads as a still phone. */
@@ -437,6 +443,27 @@ export function createEngine(deps: EngineDeps): Engine {
     s.checkpoints.push(s.lastRowTs);
   }
 
+  /**
+   * "Mute for this drive" is an explicit choice, so it is made durable now rather than at the next
+   * cadence point (E1 review M4): a checkpoint of whatever tail there is, carrying the arbiter
+   * state — the recorder writes the state even when no row is new. Nothing is written before the
+   * trip's first row (there is nothing to adopt). A failed write keeps the mute in memory and is
+   * reported; the next checkpoint carries it again.
+   */
+  async function persistMute(): Promise<void> {
+    const s = session;
+    if (s === null || suite === null || s.lastRowTs === null) return;
+    const last = s.checkpoints[s.checkpoints.length - 1] ?? null;
+    s.arbiterState = suite.arbiter.state();
+    try {
+      await deps.onCheckpoint(snapshotSession(s));
+    } catch (err) {
+      report(err);
+      return;
+    }
+    if (last === null || s.lastRowTs > last) s.checkpoints.push(s.lastRowTs);
+  }
+
   /** One row of the open trip. `live` is false for a replayed candidate row. */
   async function processRow(
     row: FeatureRow,
@@ -544,6 +571,12 @@ export function createEngine(deps: EngineDeps): Engine {
       arbiterState: trip.arbiterState,
     };
     const fromTs = trip.checkpointTs + ROW_MS;
+    // The break clock (§8.7, E1 review M3): a relaunch is not a stop. The current stretch began
+    // where the last real gap ended, or at the trip start; the hole the relaunch left counts as
+    // driving unless it is as long as a stationary auto-end, which would have ended the stretch.
+    const lastGap = s.gaps[s.gaps.length - 1];
+    const stretchStart = lastGap?.toTs ?? s.startedAt;
+    continuousSinceTs = ts - fromTs >= AUTO_END_STATIONARY_S * 1000 ? ts : stretchStart;
     if (ts > fromTs) noteGap(s, fromTs, ts);
     candidate = null;
     session = s;
@@ -552,7 +585,6 @@ export function createEngine(deps: EngineDeps): Engine {
     prefetchedAtM = null;
     resetRun();
     awaitingSpeedAfterResume = true;
-    continuousSinceTs = ts;
     setStatus('recording');
   }
 
@@ -619,7 +651,9 @@ export function createEngine(deps: EngineDeps): Engine {
       case 'ending': {
         const s = session as TripSession;
         if (s.lastRowTs !== null && row.ts <= s.lastRowTs) return;
-        seen = { row, limit: seen?.limit ?? UNKNOWN_LIMIT };
+        // Not processed, so not looked up: the limit of the road the trip left is not this row's
+        // (E1 review M1). A row that resumes the trip is looked up by `processRow` below.
+        seen = { row, limit: UNKNOWN_LIMIT };
         touch();
         if (!withinGap(row.ts)) {
           await finalizeThen(row.ts);
@@ -763,7 +797,9 @@ export function createEngine(deps: EngineDeps): Engine {
         suite?.arbiter.mute(e.ts);
         return;
       case 'muteForDrive':
-        suite?.arbiter.muteAll(e.ts);
+        if (suite === null) return;
+        suite.arbiter.muteAll(e.ts);
+        await persistMute();
         return;
       case 'end':
         await onEnd(e.ts);

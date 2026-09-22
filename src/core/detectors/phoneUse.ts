@@ -76,6 +76,8 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
   let switchRun = 0;
   /** Whether the previous row showed RoadWise open on an unlocked screen; null before the first. */
   let prevInApp: boolean | null = null;
+  /** Whether RoadWise was in the foreground on the previous row; null before the first. */
+  let prevForeground: boolean | null = null;
 
   const newEpisode = (row: FeatureRow, phase: Phase, ctx: DetectorContext): Episode => ({
     id: newId(),
@@ -149,14 +151,19 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       // SR8: RoadWise brought to the front at speed on a trip that is not mounted. The row that
       // opens it is the evidence — the transition, not the state, so a screen left lit afterwards
       // does not keep charging; handling while it is open extends the episode as usual.
+      // Without a lock signal to believe (E1 review M2), only RoadWise itself coming to the front
+      // is an opening: a screen that lights over it (a notification on a phone with no keyguard)
+      // says nothing about anyone unlocking it.
       const inApp = row.appForeground && unlockedScreen;
+      const opened = ctx.lockReliable ? prevInApp === false : prevForeground === false;
       const openedRow =
         ctx.mode !== 'mounted' &&
         speed !== null &&
         speed >= CONSTANTS.LOCKOUT_SPEED_MPS &&
         inApp &&
-        prevInApp === false;
+        opened;
       prevInApp = inApp;
+      prevForeground = row.appForeground;
 
       const evidenceRow = appSwitchRow || openedRow;
       // Without a lock signal to believe, a lit screen says nothing about an unlock.

@@ -73,7 +73,7 @@ describe('recordRoleAnswer updates the prior and the route', () => {
     await recordRoleAnswer(db, 'driver', route);
     const settings = createSettingsRepo(db);
     await expect(settings.get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toEqual({
+    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
       [routeKey('9q8yy', 'c23nb')]: { driver: 1, other: 0 },
     });
     await expect(readRolePrior(db)).resolves.toBeCloseTo(2 / 3);
@@ -84,7 +84,7 @@ describe('recordRoleAnswer updates the prior and the route', () => {
     await recordRoleAnswer(db, 'other', { start: 'c23nb', end: '9q8yy' });
     const settings = createSettingsRepo(db);
     await expect(settings.get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 0, answers: 2 });
-    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toEqual({
+    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
       [routeKey('9q8yy', 'c23nb')]: { driver: 0, other: 2 },
     });
     await expect(readRolePrior(db)).resolves.toBeCloseTo(0.25);
@@ -109,8 +109,8 @@ describe('recordRoleAnswer updates the prior and the route', () => {
     const routes = (await createSettingsRepo(db).get<Record<string, unknown>>(ROLE_ROUTES_KEY)) ?? {};
     expect(Object.keys(routes)).toHaveLength(ROLE_ROUTES_MAX);
     expect(routes[routeKey(cell(1), 'zzzzz')]).toBeUndefined();
-    expect(routes[routeKey(cell(0), 'zzzzz')]).toEqual({ driver: 2, other: 0 });
-    expect(routes[routeKey(cell(ROLE_ROUTES_MAX), 'zzzzz')]).toEqual({ driver: 1, other: 0 });
+    expect(routes[routeKey(cell(0), 'zzzzz')]).toMatchObject({ driver: 2, other: 0 });
+    expect(routes[routeKey(cell(ROLE_ROUTES_MAX), 'zzzzz')]).toMatchObject({ driver: 1, other: 0 });
   });
 });
 
@@ -128,22 +128,22 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
     await recordRoleAnswer(db, 'passenger', route, 'trip-1');
     await recordRoleAnswer(db, 'driver', route, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
-    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toEqual({ drove: true, route: KEY });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 1, other: 0 } });
+    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toMatchObject({ drove: true, route: KEY });
   });
 
   test('driver then passenger reverses the same way', async () => {
     await recordRoleAnswer(db, 'driver', route, 'trip-1');
     await recordRoleAnswer(db, 'passenger', route, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 0, answers: 1 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 0, other: 1 } });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 0, other: 1 } });
   });
 
   test('driver then driver counts once, in the prior and on the route', async () => {
     await recordRoleAnswer(db, 'driver', route, 'trip-1');
     await recordRoleAnswer(db, 'driver', route, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 1, other: 0 } });
     await expect(isHabitualDriverRoute(db, route.start, route.end)).resolves.toBe(false);
   });
 
@@ -151,7 +151,7 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
     await recordRoleAnswer(db, 'passenger', route, 'trip-1');
     await recordRoleAnswer(db, 'other', route, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 0, answers: 1 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 0, other: 1 } });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 0, other: 1 } });
   });
 
   test('negative control: the same answers on different trips all count', async () => {
@@ -159,7 +159,7 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
     await recordRoleAnswer(db, 'driver', route, 'trip-2');
     await recordRoleAnswer(db, 'driver', route, 'trip-3');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 2, answers: 3 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 2, other: 1 } });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 2, other: 1 } });
     await expect(isHabitualDriverRoute(db, route.start, route.end)).resolves.toBe(true);
   });
 
@@ -176,7 +176,35 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
     await settings().set(ROLE_ROUTES_KEY, {});
     await recordRoleAnswer(db, 'driver', route, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 1, other: 0 } });
+  });
+
+  test('E2 M1: after an eviction and re-creation, a change takes back only its own vote, never another trip\'s', async () => {
+    await recordRoleAnswer(db, 'driver', route, 'trip-A');
+    // 200 newer routes evict R.
+    for (let i = 0; i < ROLE_ROUTES_MAX; i += 1) {
+      await recordRoleAnswer(db, 'passenger', { start: `s${String(i).padStart(4, '0')}`, end: 'zzzzz' });
+    }
+    expect((await settings().get<Record<string, unknown>>(ROLE_ROUTES_KEY))?.[KEY]).toBeUndefined();
+    // Trip B re-creates R with its own vote.
+    await recordRoleAnswer(db, 'driver', route, 'trip-B');
+    await recordRoleAnswer(db, 'passenger', route, 'trip-A');
+    const routes = (await settings().get<Record<string, { driver: number; other: number }>>(ROLE_ROUTES_KEY)) ?? {};
+    expect(routes[KEY]).toMatchObject({ driver: 1, other: 1 });
+    // The prior is not subject to eviction: A's driver answer is taken back there.
+    const prior = await settings().get<{ driverAnswers: number; answers: number }>(ROLE_PRIOR_KEY);
+    expect(prior).toEqual({ driverAnswers: 1, answers: ROLE_ROUTES_MAX + 2 });
+  });
+
+  test('negative control for E2 M1: with no eviction between, the change does take its vote back', async () => {
+    await recordRoleAnswer(db, 'driver', route, 'trip-A');
+    await recordRoleAnswer(db, 'driver', route, 'trip-B');
+    await recordRoleAnswer(db, 'passenger', route, 'trip-A');
+    const routes = (await settings().get<Record<string, { driver: number; other: number }>>(ROLE_ROUTES_KEY)) ?? {};
+    expect(routes[KEY]).toMatchObject({ driver: 1, other: 1 });
+    await recordRoleAnswer(db, 'passenger', route, 'trip-B');
+    const after = (await settings().get<Record<string, { driver: number; other: number }>>(ROLE_ROUTES_KEY)) ?? {};
+    expect(after[KEY]).toMatchObject({ driver: 0, other: 2 });
   });
 
   test('a trip with no geohash is recorded with no route and changes only the prior', async () => {
@@ -184,7 +212,7 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
     await recordRoleAnswer(db, 'driver', { start: null, end: null }, 'trip-1');
     await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
     await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toBeNull();
-    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toEqual({ drove: true, route: null });
+    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toMatchObject({ drove: true, route: null });
   });
 
   describe('forgetRoleAnswer (a trip deleted locally)', () => {
@@ -194,16 +222,17 @@ describe('one trip counts once: its counted answer is kept and a changed answer 
       await forgetRoleAnswer(db, 'trip-1');
       await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toBeNull();
       await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({
+      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
         [routeKey('aaaaa', 'bbbbb')]: { driver: 1, other: 0 },
       });
+      expect(Object.keys((await settings().get<object>(ROLE_ROUTES_KEY)) ?? {})).toEqual([routeKey('aaaaa', 'bbbbb')]);
     });
 
     test('is a no-op for a trip never answered', async () => {
       await recordRoleAnswer(db, 'driver', route, 'trip-1');
       await forgetRoleAnswer(db, 'trip-9');
       await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toMatchObject({ [KEY]: { driver: 1, other: 0 } });
     });
   });
 });

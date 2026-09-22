@@ -100,7 +100,7 @@ describe('an answer trains the per-user prior and the route (spec 9.7: answers t
     await setTripRole(db, 'school', 'driver', NOW);
     const settings = createSettingsRepo(db);
     await expect(settings.get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toEqual({
+    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
       [routeKey('9q8yy', 'c23nb')]: { driver: 1, other: 0 },
     });
   });
@@ -115,7 +115,7 @@ describe('an answer trains the per-user prior and the route (spec 9.7: answers t
   test('passenger and transit answers count as not driving', async () => {
     await setTripRole(db, 'school', 'passenger', NOW);
     await setTripRole(db, 'home', 'other', NOW + 1);
-    await expect(createSettingsRepo(db).get(ROLE_ROUTES_KEY)).resolves.toEqual({
+    await expect(createSettingsRepo(db).get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
       [routeKey('9q8yy', 'c23nb')]: { driver: 0, other: 2 },
     });
     await expect(readRolePrior(db)).resolves.toBeCloseTo(0.25);
@@ -133,7 +133,7 @@ describe('an answer trains the per-user prior and the route (spec 9.7: answers t
     await setTripRole(db, 'school', 'driver', NOW + 1);
     const settings = createSettingsRepo(db);
     await expect(settings.get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
-    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toEqual({
+    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toMatchObject({
       [routeKey('9q8yy', 'c23nb')]: { driver: 1, other: 0 },
     });
   });

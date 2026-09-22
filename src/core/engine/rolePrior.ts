@@ -19,8 +19,17 @@ import type { DetectedEvent, FeatureRow } from './types';
 
 /** `{ driverAnswers: number; answers: number }` */
 export const ROLE_PRIOR_KEY = 'role.prior';
-/** `Record<routeKey, { driver: number; other: number }>`, at most `ROLE_ROUTES_MAX` keys. */
+/**
+ * `Record<routeKey, { driver: number; other: number; gen?: number }>`, at most `ROLE_ROUTES_MAX`
+ * keys. `gen` identifies one lifetime of the entry (see `ROLE_ROUTES_GEN_KEY`).
+ */
 export const ROLE_ROUTES_KEY = 'role.routes';
+/**
+ * A counter that only rises: each route entry takes the next value when it is created, and a
+ * trip's counted answer remembers it, so an answer changed after its route was evicted and then
+ * re-created by another trip takes nothing back from the new entry (E2 review M1).
+ */
+export const ROLE_ROUTES_GEN_KEY = 'role.routes.gen';
 /** Driver answers a route needs before it counts as habitual (and more than the other answers). */
 export const HABITUAL_MIN_CONFIRMATIONS = 2;
 /**
@@ -40,7 +49,7 @@ export interface RolePriorCounts {
   answers: number;
 }
 
-export type RouteCounts = Record<string, { driver: number; other: number }>;
+export type RouteCounts = Record<string, { driver: number; other: number; gen?: number }>;
 
 /**
  * The route a trip belongs to: its start and end geohash-5 cells as an unordered pair, so the
@@ -113,13 +122,17 @@ export const roleAnswerKey = (clientTripId: string): string => `${ROLE_ANSWER_KE
 export interface CountedAnswer {
   drove: boolean;
   route: string | null;
+  /** The route entry's `gen` when the answer was counted; absent on records and entries from before it. */
+  gen?: number;
 }
 
 const asCounted = (v: unknown): CountedAnswer | null => {
   if (v === null || typeof v !== 'object') return null;
-  const { drove, route } = v as Partial<CountedAnswer>;
+  const { drove, route, gen } = v as Partial<CountedAnswer>;
   if (typeof drove !== 'boolean') return null;
-  return { drove, route: typeof route === 'string' ? route : null };
+  const counted: CountedAnswer = { drove, route: typeof route === 'string' ? route : null };
+  if (count(gen) !== null) counted.gen = gen;
+  return counted;
 };
 
 /** Add (`sign` 1) or take back (`sign` -1) one answer's share of the prior. Never below zero. */
@@ -130,35 +143,53 @@ async function shiftPrior(db: Db, drove: boolean, sign: 1 | -1): Promise<void> {
   await createSettingsRepo(db).set(ROLE_PRIOR_KEY, { driverAnswers, answers } satisfies RolePriorCounts);
 }
 
-/** Add one answer to a route, making it the most recent and evicting past `ROLE_ROUTES_MAX`. */
-async function addToRoute(db: Db, key: string, drove: boolean): Promise<void> {
+/**
+ * Add one answer to a route, making it the most recent and evicting past `ROLE_ROUTES_MAX`.
+ * Returns the entry's `gen`: its own if it existed, the next counter value if this creates it
+ * (undefined for an entry from before generations, which keeps none).
+ */
+async function addToRoute(db: Db, key: string, drove: boolean): Promise<number | undefined> {
   const routes = await readRoutes(db);
   const was = routes[key];
-  const next = {
+  let gen: number | undefined;
+  if (was) {
+    gen = count(was.gen) ?? undefined;
+  } else {
+    const settings = createSettingsRepo(db);
+    gen = (count(await settings.get<unknown>(ROLE_ROUTES_GEN_KEY)) ?? 0) + 1;
+    await settings.set(ROLE_ROUTES_GEN_KEY, gen);
+  }
+  const next: RouteCounts[string] = {
     driver: (count(was?.driver) ?? 0) + (drove ? 1 : 0),
     other: (count(was?.other) ?? 0) + (drove ? 0 : 1),
   };
+  if (gen !== undefined) next.gen = gen;
   // Re-insert at the end: key order is recency order.
   delete routes[key];
   routes[key] = next;
   const keys = Object.keys(routes);
   for (const stale of keys.slice(0, Math.max(0, keys.length - ROLE_ROUTES_MAX))) delete routes[stale];
   await createSettingsRepo(db).set(ROLE_ROUTES_KEY, routes);
+  return gen;
 }
 
 /**
- * Take one answer back from a route, where it still is (an evicted route has nothing to take
- * back). Its recency is left alone — taking back is not answering — and a route left with no
- * answers is dropped, so a deleted trip's route does not linger.
+ * Take one answer back from a route, where it still is and is still the entry the answer was
+ * counted on: an evicted route has nothing to take back, and one re-created since (a different
+ * `gen`) holds other trips' votes, not this one's (E2 review M1). Its recency is left alone —
+ * taking back is not answering — and a route left with no answers is dropped, so a deleted trip's
+ * route does not linger.
  */
-async function takeFromRoute(db: Db, key: string, drove: boolean): Promise<void> {
+async function takeFromRoute(db: Db, key: string, drove: boolean, gen: number | undefined): Promise<void> {
   const routes = await readRoutes(db);
   const was = routes[key];
   if (!was) return;
-  const next = {
+  if ((count(was.gen) ?? undefined) !== gen) return;
+  const next: RouteCounts[string] = {
     driver: Math.max(0, (count(was.driver) ?? 0) - (drove ? 1 : 0)),
     other: Math.max(0, (count(was.other) ?? 0) - (drove ? 0 : 1)),
   };
+  if (gen !== undefined) next.gen = gen;
   if (next.driver === 0 && next.other === 0) delete routes[key];
   else routes[key] = next;
   await createSettingsRepo(db).set(ROLE_ROUTES_KEY, routes);
@@ -166,7 +197,7 @@ async function takeFromRoute(db: Db, key: string, drove: boolean): Promise<void>
 
 async function takeBack(db: Db, counted: CountedAnswer): Promise<void> {
   await shiftPrior(db, counted.drove, -1);
-  if (counted.route !== null) await takeFromRoute(db, counted.route, counted.drove);
+  if (counted.route !== null) await takeFromRoute(db, counted.route, counted.drove, counted.gen);
 }
 
 /**
@@ -196,9 +227,11 @@ export async function recordRoleAnswer(
   }
 
   await shiftPrior(db, drove, 1);
-  if (key !== null) await addToRoute(db, key, drove);
+  const gen = key !== null ? await addToRoute(db, key, drove) : undefined;
   if (clientTripId !== undefined) {
-    await settings.set(roleAnswerKey(clientTripId), { drove, route: key } satisfies CountedAnswer);
+    const record: CountedAnswer = { drove, route: key };
+    if (gen !== undefined) record.gen = gen;
+    await settings.set(roleAnswerKey(clientTripId), record);
   }
 }
 

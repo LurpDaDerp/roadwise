@@ -321,6 +321,19 @@ describe('M3: SR8 — RoadWise opened at speed on a trip that is not mounted', (
     ]);
   });
 
+  test('E1 M2: on an unreliable lock signal a screen waking over RoadWise is not an opening', () => {
+    // An Android phone with no keyguard: `locked` never turns true, RoadWise stays in front with
+    // the screen off, and a notification lights it at speed. Nobody opened anything.
+    const dark = { appForeground: true, locked: false, screenOn: false };
+    const lit = { appForeground: true, locked: false, screenOn: true };
+    const unreliable = ctx({ mode: 'pocket', lockReliable: false });
+    expect(drive(make(), seq([5, dark], [4, lit], [3, dark]), NO_LIMIT, unreliable).all).toEqual([]);
+    // Negative control: with a lock signal to believe, the same lit screen is an unlock-and-open.
+    const reliable = ctx({ mode: 'pocket', lockReliable: true });
+    const locked = { appForeground: true, locked: true, screenOn: false };
+    expect(drive(make(), seq([5, locked], [4, lit], [3, locked]), NO_LIMIT, reliable).all).toHaveLength(1);
+  });
+
   test('also on an unreliable lock signal: the app coming to the front is what counts', () => {
     const e = only(
       drive(make(), seq([5, { appForeground: false, locked: false, screenOn: true }], [4, OPEN], [3, {}]), NO_LIMIT, ctx({ mode: 'pocket', lockReliable: false })).all

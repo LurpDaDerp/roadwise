@@ -129,6 +129,12 @@ export interface TripRoleDecision {
  * `role_unknown` meanwhile — and such an upload always carries `roleSource` `auto` or
  * `moving_start`, the only sources finalize-trip accepts `unknown` from (B4). `other` (transit)
  * becomes passenger: M3 has no transit classifier, so it cannot arise, but it must not score.
+ *
+ * Scope of the phone rule (E2 review M3): phone use never unscores a *manual* drive. On an
+ * inferred drive with thin evidence it is evidence — one continuous run of three minutes or more
+ * halves P(driver), which can make the drive `unknown` (unscored until the driver answers) or,
+ * on a prior of 0.4 or less, `passenger` (§9.7). It never removes a score from a drive the
+ * evidence already calls a driver's: a high prior or a habitual route sets it aside.
  */
 export function decideRole(
   session: Pick<TripSession, 'role' | 'startEvidence'>,
