@@ -574,7 +574,8 @@ end $$;
 -- service-role writers (push-sender)
 -- ---------------------------------------------------------------------------
 -- Whether an item's subject is gone: a summary whose trip is deleted; a lapse whose device is gone
--- or whose permission is no longer lapsed on that device (T3 re-checks a cap-deferred lapse this way).
+-- or whose permission is no longer lapsed on that device (T3 re-checks a cap-deferred lapse this way); a location_always
+-- lapse is also gone once the device reports alwaysExcused: true.
 create or replace function public.inbox_subject_gone(p_user uuid, p_type text, p_ref uuid, p_payload jsonb) returns boolean
 language sql stable set search_path = public as $$
   select case p_type
@@ -584,7 +585,10 @@ language sql stable set search_path = public as $$
       select 1 from public.devices d
       where d.user_id = p_user and d.id = p_payload ->> 'deviceId'
         and case p_payload ->> 'permission'
+              -- a device that now reports Always as excused (final review I4) no longer wants it: a
+              -- lapse raised before the excuse resolves as gone rather than being pushed later
               when 'location_always' then coalesce(d.permissions ->> 'location' <> 'always', true)
+                and coalesce(d.permissions ->> 'alwaysExcused', 'false') <> 'true'
               when 'location' then coalesce(d.permissions ->> 'location' not in ('always', 'foreground'), true)
               when 'motion' then coalesce(d.permissions ->> 'motion' <> 'granted', true)
               else true end)

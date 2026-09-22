@@ -18,7 +18,7 @@ begin
 end $$;
 
 begin;
-select plan(306);
+select plan(308);
 
 -- ---------------------------------------------------------------------------
 -- 0. client writes in FRESH sessions (fix round 4). PL/pgSQL checks EXECUTE on a function a trigger
@@ -797,6 +797,18 @@ reset role;
 select set_config('request.jwt.claims', '', true);
 select is((select array_agg(payload ->> 'permission') from public.inbox where payload ->> 'deviceId' = 'a-watch-excused'), array['location'],
   'the excuse covers only location_always: losing location altogether is still a lapse');
+-- a lapse raised before the driver became excused resolves as subject_gone (final review I4)
+select is(array(select public.inbox_subject_gone(i.user_id, i.type, i.ref_id, i.payload) from public.inbox i
+    where i.payload ->> 'deviceId' in ('a-watch-wanted', 'a-watch-older') order by i.payload ->> 'deviceId'), array[false, false],
+  'both unexcused location_always lapses are current (not subject_gone)');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"location":"foreground","alwaysExcused":true,"reportedFrom":"foreground"}' where id = 'a-watch-wanted';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is(array(select public.inbox_subject_gone(i.user_id, i.type, i.ref_id, i.payload) from public.inbox i
+    where i.payload ->> 'deviceId' in ('a-watch-wanted', 'a-watch-older') order by i.payload ->> 'deviceId'), array[false, true],
+  'once its device reports alwaysExcused: true, the earlier location_always lapse is subject_gone; the other device''s stays current');
 delete from public.devices where id like 'a-watch-%';
 delete from public.devices where id = repeat('x', 128);
 delete from public.notification_prefs where user_id = 'b7000000-0000-4000-8000-000000000001';
