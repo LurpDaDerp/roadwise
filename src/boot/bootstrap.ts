@@ -556,8 +556,6 @@ async function runLaunch(
             db,
             drive,
             appState,
-            sessionUid: async () =>
-              (await identity.supabase.auth.getSession()).data.session?.user.id ?? null,
             client: deps.devicesClient,
             now,
             onError,
@@ -838,30 +836,47 @@ function defaultBackgroundPermissionReport(
   };
 }
 
-/** A failed `recording` write is sent again after these gaps (T10 review I1), then every 5 min. */
+/** A failed drive-state report is sent again after these gaps (T10 review I1), then every 5 min. */
 export const DRIVE_STATE_RETRY_MS: readonly number[] = [30_000, 120_000, 300_000];
 
+type Reported = 'idle' | 'recording';
+
 /**
- * The runtime's drive-state reporting (ruling T10 (4)): the host is subscribed for the process's
- * life, and each status change is handed to T10's reporter (`recording` once, `idle` once). The
- * current state is seeded at attach — a drive adopted at launch is already `recording`, and
- * `subscribe` does not replay it (T10 review I1 (3)). The reporter is made at the first `recording`,
- * and only when every guard holds: the device owner is known, no other owner's handover is pending,
- * this install is registered (an install id exists), and the signed-in session is that owner.
+ * What the server should be told for an engine status: a trip open (`recording`, or `ending` in its
+ * gap window) is `recording`; `finalizing` and idle are `idle`; a candidate changes nothing
+ * (review m2 for the seed; T10's reporter rules for the transitions).
+ */
+function desiredFor(status: string): Reported | null {
+  if (status === 'recording' || status === 'ending') return 'recording';
+  if (status === 'finalizing' || status === 'armed' || status === 'off') return 'idle';
+  return null;
+}
+
+/**
+ * The runtime's drive-state reporting (ruling T10 (4); T10 review I1 and the r1 review): the host
+ * is subscribed for the process's life, and the server is kept told `recording` while a trip is
+ * open and `idle` otherwise, through T10's reporter.
  *
- * A `recording` write that fails is sent again, riding the host's own publishes (about 1 Hz while
- * recording) with a wall-clock backoff of 30 s, 2 min, then every 5 min — no timer (T10 review I1
- * (1)). Each retry is a fresh reporter fed `recording` (T10's reporter sends it once per instance).
+ * - **Desired versus confirmed.** Each status maps to a desired state; a write that reached the row
+ *   confirms it. Whatever is outstanding — a failed write, a create that could not happen yet
+ *   (offline, no local identity), a fenced-out change — is kept and sent later, so neither a
+ *   `recording` nor an `idle` is ever lost (r1 I1).
+ * - **Retries** ride the host's own publishes (about 1 Hz while recording) with a wall-clock
+ *   backoff of 30 s, 2 min, then every 5 min, and the next foreground — never a timer. A new
+ *   status change is tried at once.
+ * - **The owner fence is local** (r1 I1): the stored session user id (`session.uid`) must be the
+ *   recorded device owner, with no other owner's handover pending. No network read: a session
+ *   refresh offline would read as signed out and lose the report.
+ * - **Seeded** at attach with the current status: a drive adopted at launch is `recording` at
+ *   once, and one relaunched mid-finalize is told `idle` (r1 m2).
  *
- * Battery (§3.5): nothing runs on a timer. An armed, idle phone publishes nothing and so costs
- * nothing; a drive costs a few local reads at its first `recording` and two writes. A failed `idle`
- * is sent again at the next foreground (one AppState listener, attached only once a reporter exists).
+ * Battery (§3.5): an armed, idle phone publishes nothing and has nothing outstanding, so it costs
+ * nothing; the foreground listener exists only while something is outstanding.
  */
 function attachDriveStateReporting(opts: {
   db: Db;
   drive: DriveHost;
   appState: { addEventListener(type: 'change', fn: (s: string) => void): { remove(): void } };
-  sessionUid: () => Promise<string | null>;
   client?: import('@/data/devices/register').DevicesClient;
   now: () => number;
   onError: (error: unknown, context: string) => void;
@@ -874,134 +889,157 @@ function attachDriveStateReporting(opts: {
   const { readInstallId } = require('@/data/devices/installId') as typeof import('@/data/devices/installId');
   /* eslint-enable @typescript-eslint/no-require-imports */
   type Reporter = ReturnType<typeof createDriveStateReporter>;
+  type Client = import('@/data/devices/register').DevicesClient;
   const settings = createSettingsRepo(opts.db);
+
   let live = true;
-  let reporter: Reporter | null = null;
   let chain: Promise<void> = Promise.resolve();
   let lastStatus: string | null = null;
+  /** What the server should hold, and what it is known to hold (null: unknown). */
+  let desired: Reported | null = null;
+  let confirmed: Reported | null = null;
+  /** The reporter, its target, and what the reporter itself believes it last sent. */
+  let reporter: Reporter | null = null;
+  let believes: Reported = 'idle';
+  let target: { owner: string; deviceId: string; client: Client } | null = null;
+  /** The backoff after a failed attempt: when, and how many retries have been spent. */
+  let backoff: { at: number; retries: number } | null = null;
   let offForeground: (() => void) | null = null;
-  /** Who and where the reporter writes for; every write is fenced on the session being them. */
-  let target: { owner: string; deviceId: string; client: import('@/data/devices/register').DevicesClient } | null = null;
-  /** The last `recording` write failed: when, and how many retries have been spent since. */
-  let recordingFailed: { at: number; retries: number } | null = null;
 
-  /**
-   * The client as the reporter uses it, observed: a `recording` write that errs or reaches no row
-   * arms the retry; one that lands clears it. Only the outcome is read, never the payload.
-   */
-  const observed = (client: import('@/data/devices/register').DevicesClient) =>
-    ({
-      from: (table: string) => {
-        const builder = (client.from as (t: string) => { update(row: unknown): unknown })(table);
-        return {
-          update: (row: { drive_state?: string }) => {
-            const q = builder.update(row) as { eq(...a: unknown[]): unknown; select(c: string): Promise<{ data: unknown; error: unknown }> };
-            const wrap = (inner: typeof q): typeof q =>
-              ({
-                eq: (...a: unknown[]) => wrap(inner.eq(...a) as typeof q),
-                select: async (c: string) => {
-                  const result = await inner.select(c);
-                  if (row.drive_state === 'recording') {
-                    const ok = !result.error && Array.isArray(result.data) && result.data.length > 0;
-                    recordingFailed = ok
-                      ? null
-                      : { at: opts.now(), retries: recordingFailed ? recordingFailed.retries : 0 };
-                  }
-                  return result;
-                },
-              }) as typeof q;
-            return wrap(q);
-          },
-        };
-      },
-    }) as unknown as import('@/data/devices/register').DevicesClient;
+  /** A write's outcome, from T10's reporter (`onWrite`, round 2): retries included. */
+  function onOutcome(state: Reported, ok: boolean): void {
+    if (ok) {
+      confirmed = state;
+      if (confirmed === desired) backoff = null;
+    } else {
+      backoff = { at: opts.now(), retries: backoff ? backoff.retries : 0 };
+    }
+  }
 
-  function makeReporter(): Reporter {
+  function freshReporter(): Reporter {
     const t = target as NonNullable<typeof target>;
+    believes = 'idle';
     return createDriveStateReporter({
-      supabase: observed(t.client),
+      supabase: t.client,
+      onWrite: onOutcome,
       userId: t.owner,
       deviceId: t.deviceId,
       onError: opts.onError,
     });
   }
 
-  async function create(): Promise<Reporter | null> {
+  /** The owner fence, local only: the stored session is the recorded owner, no handover pending. */
+  async function fence(): Promise<string | null> {
     const owner = await readDeviceOwner(opts.db);
     if (owner === null) return null;
     const pending = await settings.get<string>(PENDING_OWNER_KEY);
     if (pending !== null && pending !== owner) return null;
-    const deviceId = await readInstallId(settings);
-    if (deviceId === null) return null;
-    if ((await opts.sessionUid()) !== owner) return null;
-    const client = opts.client ?? (await import('@/data/supabase/client')).supabase;
-    if (!live) return null;
-    target = { owner, deviceId, client };
-    const sub = opts.appState.addEventListener('change', (next) => {
-      if (next === 'active') void reporter?.retryPending().catch(() => {});
-    });
-    offForeground = () => sub.remove();
-    return makeReporter();
+    if ((await settings.get<string>(SESSION_UID_KEY)) !== owner) return null;
+    return owner;
   }
 
-  const fenced = async (): Promise<boolean> =>
-    target !== null && (await opts.sessionUid()) === target.owner;
-
-  function onPublish(status: string): void {
-    if (status === lastStatus) {
-      // The host publishes about once a second while recording: a failed `recording` rides it.
-      const failed = recordingFailed;
-      if (status !== 'recording' || failed === null) return;
-      const gap = DRIVE_STATE_RETRY_MS[Math.min(failed.retries, DRIVE_STATE_RETRY_MS.length - 1)] as number;
-      if (opts.now() - failed.at < gap) return;
-      recordingFailed = { at: opts.now(), retries: failed.retries + 1 };
-      chain = chain
-        .then(async () => {
-          if (!live || !(await fenced())) return;
-          reporter = makeReporter();
-          reporter.onDriveState({ status: 'recording' });
-          await reporter.settled();
-        })
-        .catch((error: unknown) => opts.onError(error, 'devices drive state'));
+  /** One attempt to bring the server to `desired`. A failure to even try arms the backoff. */
+  async function attempt(): Promise<void> {
+    if (!live || desired === null || desired === confirmed) return;
+    const want = desired;
+    const owner = await fence();
+    if (owner === null || (target !== null && target.owner !== owner)) {
+      backoff = { at: opts.now(), retries: backoff ? backoff.retries : 0 };
       return;
     }
-    lastStatus = status;
-    chain = chain
-      .then(async () => {
-        // A reporter is needed only once a drive records; until then there is nothing to say.
-        if (reporter === null && status === 'recording') reporter = await create();
-        if (reporter === null) return;
-        // The owner fence (T10 security): a write goes out only under the owner's own session. At
-        // a handover the session is already the next driver's, so nothing is written for them.
-        if (!(await fenced())) return;
-        if (status !== 'recording') recordingFailed = null;
-        reporter.onDriveState({ status: status as never });
-        await reporter.settled();
-      })
-      .catch((error: unknown) => opts.onError(error, 'devices drive state'));
+    if (target === null) {
+      const deviceId = await readInstallId(settings);
+      if (deviceId === null) return; // not registered: nothing to report to, and nothing to retry
+      const client = opts.client ?? (await import('@/data/supabase/client')).supabase;
+      if (!live) return;
+      target = { owner, deviceId, client };
+    }
+    if (want === 'recording') {
+      // T10's reporter sends `recording` once per instance: a failed one needs a fresh reporter.
+      if (reporter === null || believes === 'recording') reporter = freshReporter();
+      reporter.onDriveState({ status: 'recording' });
+      believes = 'recording';
+    } else if (reporter !== null && believes === 'recording') {
+      reporter.onDriveState({ status: 'armed' });
+      believes = 'idle';
+    } else if (reporter !== null) {
+      // A failed idle: the reporter keeps it and sends it again.
+      await reporter.retryPending();
+    } else {
+      // Nothing sent in this process, and the server may hold a `recording` from before (a
+      // relaunch mid-finalize, r1 m2): the reporter only sends `idle` after `recording`.
+      reporter = freshReporter();
+      reporter.onDriveState({ status: 'recording' });
+      reporter.onDriveState({ status: 'armed' });
+      believes = 'idle';
+    }
+    await reporter.settled();
+  }
+
+  function schedule(): void {
+    chain = chain.then(attempt).catch((error: unknown) => opts.onError(error, 'devices drive state'));
+    void chain.then(watchForeground);
+  }
+
+  /** While something is outstanding, the next foreground tries again (no timer). */
+  function watchForeground(): void {
+    const outstanding = live && desired !== null && desired !== confirmed && backoff !== null;
+    if (outstanding && offForeground === null) {
+      const sub = opts.appState.addEventListener('change', (next) => {
+        if (next === 'active') schedule();
+      });
+      offForeground = () => sub.remove();
+    } else if (!outstanding && offForeground !== null) {
+      offForeground();
+      offForeground = null;
+    }
+  }
+
+  function onPublish(status: string): void {
+    if (status !== lastStatus) {
+      lastStatus = status;
+      const next = desiredFor(status);
+      if (next !== null && next !== desired) {
+        desired = next;
+        backoff = null;
+        schedule();
+        return;
+      }
+    }
+    // The same state again (about 1 Hz while recording): something outstanding rides it, on the
+    // backoff.
+    if (backoff === null || desired === null || desired === confirmed) return;
+    const gap = DRIVE_STATE_RETRY_MS[Math.min(backoff.retries, DRIVE_STATE_RETRY_MS.length - 1)] as number;
+    if (opts.now() - backoff.at < gap) return;
+    backoff = { at: opts.now(), retries: backoff.retries + 1 };
+    schedule();
   }
 
   const releaseSource = registerDriveStateSource();
   const unsubscribe = opts.drive.subscribe((s) => onPublish(s.status));
-  // Seeded: a drive the launch adopted is already recording, and `subscribe` does not replay it.
-  onPublish(opts.drive.snapshot().status);
+  // Seeded: `subscribe` does not replay the current status. An idle seed is not sent: launching
+  // tells the server nothing unless a trip is open or was left open (a finalizing relaunch).
+  const seed = opts.drive.snapshot().status;
+  if (seed === 'armed' || seed === 'off') lastStatus = seed;
+  else onPublish(seed);
   return {
     release() {
       live = false;
       unsubscribe();
       offForeground?.();
+      offForeground = null;
       releaseSource();
     },
     /**
-     * Every state change handed over so far has been written, and a failed `idle` has been tried
-     * once more — while the owner's session is still valid (T10 security: the sign-out awaits this
-     * so the server never keeps a stale "driving" that holds pushes).
+     * Everything handed over so far has been attempted once more and settled, while the owner's
+     * session is still valid (T10 security: the sign-out awaits this so the server never keeps a
+     * stale "driving" that holds pushes).
      */
     async settled() {
       await chain;
-      if (reporter === null || !(await fenced())) return;
-      await reporter.retryPending();
-      await reporter.settled();
+      if (desired !== null && desired !== confirmed) {
+        await attempt().catch((error: unknown) => opts.onError(error, 'devices drive state'));
+      }
     },
   };
 }

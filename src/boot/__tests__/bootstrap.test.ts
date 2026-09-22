@@ -1719,13 +1719,86 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     runtime = await bootstrapApp(built.bootstrapDeps);
     await recordOnly({ driveSense, clock, devices, built });
     expect(devices.writes).toEqual(['devices:recording']);
-    // B signs in on this phone: the rebuild's teardown ends A's drive under B's session.
+    // B signs in on this phone: the owner watch marks the handover before the rebuild, whose
+    // teardown ends A's drive under B's session.
     supabase.setUid('user-2');
+    await createSettingsRepo(db).set('device.pendingOwner', 'user-2');
     await runtime.stop();
     await settle();
     expect(devices.writes).toEqual(['devices:recording']);
     runtime.queryClient.clear();
     runtime = null;
+  });
+
+  test('offline at drive start (no local identity yet): recording reaches the server later on the backoff', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    // The stored session is unreadable at the start (a phone parked overnight, a garage).
+    const settings = createSettingsRepo(db);
+    await settings.remove('session.uid');
+    await runtime!.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await runtime!.drive.settled();
+    const rows = drive(200, { t0: l.clock.t + 1000 });
+    for (const [i, row] of rows.entries()) {
+      l.clock.t = row.ts + 200;
+      if (i === 20) await settings.set('session.uid', 'user-1'); // the identity is back
+      l.driveSense.loadTrace([row]);
+      l.driveSense.step();
+      await runtime!.drive.settled();
+    }
+    await settle();
+    expect(l.devices.writes).toEqual(['devices:recording']);
+  });
+
+  test('offline at drive end: the idle is kept and sent at the next foreground', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await recordOnly(l);
+    expect(l.devices.writes).toEqual(['devices:recording']);
+    const settings = createSettingsRepo(db);
+    await settings.remove('session.uid');
+    await runtime!.drive.end();
+    await runtime!.drive.untilIdle();
+    await settle();
+    expect(l.devices.writes).toEqual(['devices:recording']);
+    // Back: the driver opens the app.
+    await settings.set('session.uid', 'user-1');
+    l.built.appState.emit('active');
+    await settle();
+    await settle();
+    expect(l.devices.writes).toEqual(['devices:recording', 'devices:idle']);
+  });
+
+  test('an idle launch tells the server nothing (review m2: only an open or finalizing trip is news)', async () => {
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL);
+    const devices = devicesClient();
+    const built = deps({ supabase: createFakeSupabase({ uid: 'user-1' }), mayDrain: () => false, devicesClient: devices.client as never });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    await settle();
+    expect(devices.writes).toEqual([]);
+  });
+
+  test('the background permission hook is never awaited: a hook that never answers does not hold the wake (review m3)', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    await createSettingsRepo(db).set('drive.autoDetect', true);
+    const clock = { t: NOW };
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock.t });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const built = deps({
+      supabase: createFakeSupabase({ uid: 'user-1' }),
+      source: driveSense,
+      now: () => clock.t,
+      reportPermissionsFromBackground: () => new Promise<void>(() => {}),
+    });
+    built.appState.currentState = 'background';
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    expect(runtime.drive.snapshot().status).toBe('armed');
+    driveSense.setMotionHistory([{ type: 'automotive', confidence: 'high', ts: clock.t - 10_000 }]);
+    driveSense.emit('wake', { reason: 'significantChange', ts: clock.t });
+    await runtime.drive.settled();
+    expect(runtime.drive.snapshot().status).toBe('candidate');
   });
 
   test('the default background wake hook is T10\'s permission reporter', async () => {
