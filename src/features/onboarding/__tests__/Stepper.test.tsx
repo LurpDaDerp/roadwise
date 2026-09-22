@@ -6,13 +6,16 @@ import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import { ThemeProvider } from '@/ui/theme';
 
 import type { FlowContext, StepId } from '../flow';
-import { readSavedStep, saveStep } from '../state';
+import { readSavedPlan, readSavedStep, savePlan, saveStep } from '../state';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => {
   const { Text: MockText } = jest.requireActual<typeof import('react-native')>('react-native');
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
   return {
+    // Every screen in these suites is focused; `Stepper.router.test.tsx` covers a covered one.
+    useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]),
     useRouter: () => mockRouter,
     Redirect: ({ href }: { href: string }) => <MockText testID="redirect">{href}</MockText>,
   };
@@ -175,17 +178,51 @@ describe('OnboardingStepper', () => {
     await act(async () => {});
   });
 
-  it('starts the count afresh on each pass through start', async () => {
-    const view = await renderStepper('terms', ctx({ termsCurrent: false }));
+  it('carries the saved count across a restart, through start', async () => {
+    // Killed at "Step 3 of 7": Terms and the profile were passed, and have since left the flow.
+    await saveStep(settings, 'location');
+    await savePlan(settings, [
+      'terms',
+      'profile',
+      'location',
+      'motion',
+      'notifications',
+      'auto-detect',
+      'ready',
+    ]);
+    const view = await renderStepper('start', ctx());
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/location'));
     await view.rerender(
       <ThemeProvider>
-        <OnboardingStepper step="start" ctx={ctx()} settings={settings} />
+        <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
+      </ThemeProvider>
+    );
+    expect(screen.getByText('Step 3 of 7')).toBeOnTheScreen();
+    await waitFor(async () =>
+      expect(await readSavedPlan(settings)).toEqual([
+        'terms',
+        'profile',
+        'location',
+        'motion',
+        'notifications',
+        'auto-detect',
+        'ready',
+      ])
+    );
+  });
+
+  it('starts the count afresh through start when nothing is saved', async () => {
+    const view = await renderStepper('terms', ctx({ termsCurrent: false }));
+    const fresh = createSettingsRepo(await createTestDb());
+    await view.rerender(
+      <ThemeProvider>
+        <OnboardingStepper step="start" ctx={ctx()} settings={fresh} />
       </ThemeProvider>
     );
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
     await view.rerender(
       <ThemeProvider>
-        <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
+        <OnboardingStepper step="location" ctx={ctx()} settings={fresh} />
       </ThemeProvider>
     );
     expect(screen.getByText('Step 1 of 5')).toBeOnTheScreen();

@@ -1,4 +1,4 @@
-import { Redirect, useRouter, type Href } from 'expo-router';
+import { Redirect, useFocusEffect, useRouter, type Href } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { BackHandler, View } from 'react-native';
 
@@ -18,7 +18,7 @@ import {
   type FlowContext,
   type StepId,
 } from './flow';
-import { readSavedStep, saveStep } from './state';
+import { readSavedPlan, readSavedStep, savePlan, saveStep } from './state';
 import { STEP_REGISTRY } from './stepRegistry';
 import { StepPositionProvider } from './StepFrame';
 
@@ -32,11 +32,12 @@ const AFTER_LAST_STEP = '/(tabs)/home' as Href;
 /**
  * The steps passed this session, so "Step n of total" survives a step being replaced by the next.
  * Module state on purpose: each step is its own screen, and the count belongs to the walk, not to
- * one screen. Every pass through `start` begins a new walk.
+ * one screen. It is also saved beside the step (`onboarding.plan`), so `start` can carry the count
+ * across a restart.
  */
 let sessionShown: StepId[] = [];
 
-/** For tests, and for `start`. */
+/** For tests. */
 export function resetSessionPlan(): void {
   sessionShown = [];
 }
@@ -77,20 +78,28 @@ export function OnboardingStepper({
 function ResumeFromStart({ ctx, settings }: { ctx: FlowContext | null; settings: SettingsRepo }) {
   const router = useRouter();
 
-  useEffect(() => {
-    if (ctx === null) return;
-    let cancelled = false;
-    void readSavedStep(settings)
-      .catch(() => null)
-      .then((saved) => {
+  // Focus-scoped (review T11 I1): while another screen covers `start` — the background
+  // disclosure, a drive — nothing is replaced under it (I10). The resume runs when onboarding is
+  // focused again, with the context as it is then.
+  useFocusEffect(
+    useCallback(() => {
+      if (ctx === null) return;
+      let cancelled = false;
+      void Promise.all([
+        readSavedStep(settings).catch(() => null),
+        readSavedPlan(settings).catch(() => []),
+      ]).then(([saved, passed]) => {
         if (cancelled) return;
-        resetSessionPlan();
+        // A resumed walk keeps the steps it had already passed, so the count carries across a
+        // restart instead of starting again at 1 (review T11 m1).
+        sessionShown = saved === null ? [] : passed;
         router.replace(onboardingHref(resumeStep(ctx, saved)));
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [ctx, settings, router]);
+      return () => {
+        cancelled = true;
+      };
+    }, [ctx, settings, router])
+  );
 
   return <StepLoading />;
 }
@@ -119,10 +128,11 @@ function ActiveStep({
   }, [plan]);
 
   useEffect(() => {
-    void saveStep(settings, step).catch(() => {
-      // Resume falls back to the first step of the flow; nothing is lost but a few taps.
-    });
-  }, [settings, step]);
+    // Resume falls back to the first step of the flow on a failed write; nothing is lost but a
+    // few taps.
+    void saveStep(settings, step).catch(() => {});
+    void savePlan(settings, plan).catch(() => {});
+  }, [settings, step, plan]);
 
   const onNext = useCallback(() => {
     const next = nextStep(latest.current, step);
@@ -135,14 +145,20 @@ function ActiveStep({
     [back, router]
   );
 
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (!onBack) return false;
-      onBack();
-      return true;
-    });
-    return () => sub.remove();
-  }, [onBack]);
+  // Live only while this step is focused (review T11 I1). A screen presented over the step — the
+  // background disclosure, a drive screen — owns the back button; a listener left live under it
+  // would replace a route onboarding does not show, and on a drive route that is a reroute
+  // during a recording (I10).
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (!onBack) return false;
+        onBack();
+        return true;
+      });
+      return () => sub.remove();
+    }, [onBack])
+  );
 
   const Step = STEP_REGISTRY[step];
   return (

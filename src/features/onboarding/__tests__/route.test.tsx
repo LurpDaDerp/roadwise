@@ -17,7 +17,10 @@ let mockProfile: { age_band: string; driving_stage: string } | null = null;
 
 jest.mock('expo-router', () => {
   const { Text: MockText } = jest.requireActual<typeof import('react-native')>('react-native');
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
   return {
+    // Every screen in these suites is focused; `Stepper.router.test.tsx` covers a covered one.
+    useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]),
     useRouter: () => mockRouter,
     useLocalSearchParams: () => mockParams,
     Redirect: ({ href }: { href: string }) => <MockText testID="redirect">{href}</MockText>,
