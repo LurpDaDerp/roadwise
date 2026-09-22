@@ -1142,6 +1142,21 @@ Deno.test('a writer lock or serialization failure is 503 with Retry-After', asyn
   }
 });
 
+Deno.test('an under-13 account is refused for good; an unanswered age question is retryable (0006)', async () => {
+  const blocked = harness({
+    rpc: { record_dispute: () => ({ error: { code: '42501', message: 'account not eligible' } }) },
+  });
+  assertEquals(await json(await handleTripAction(post(dispute()), blocked.deps)), {
+    status: 403,
+    body: { code: 'forbidden' },
+  });
+  const pending = harness({ rpc: { set_trip_role_row: () => ({ error: { code: '55000', message: 'age not confirmed yet' } }) } });
+  const res = await handleTripAction(post(setRole('driver')), pending.deps);
+  assertEquals(res.status, 503);
+  assertEquals(res.headers.get('retry-after'), '900');
+  assertEquals((await res.json()).code, 'age_pending');
+});
+
 Deno.test("the writers' authorization refusals map to 403, 409 and 500", async () => {
   const notOwned = harness({
     rpc: { set_trip_role_row: () => ({ error: { code: '42501', message: 'trip not owned by user' } }) },

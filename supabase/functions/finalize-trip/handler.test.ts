@@ -681,6 +681,22 @@ Deno.test('a writer envelope or row refusal is 400 with the code only; the messa
   }
 });
 
+Deno.test('a drive from an account with no age answer yet is retryable (0006), never a 403', async () => {
+  const h = harness({ rpcError: { code: '55000', message: 'age not confirmed yet' } });
+  const res = await handleFinalizeTrip(post(payload()), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals(res.headers.get('retry-after'), '900');
+  assertEquals(await res.json(), { code: 'age_pending' });
+});
+
+Deno.test('a drive from an under-13 account is refused for good (0006)', async () => {
+  const h = harness({ rpcError: { code: '42501', message: 'account not eligible' } });
+  assertEquals(await json(await handleFinalizeTrip(post(payload()), h.deps)), {
+    status: 403,
+    body: { code: 'forbidden' },
+  });
+});
+
 Deno.test('a writer that refuses the service role is a server misconfiguration', async () => {
   const h = harness({ rpcError: { code: '42501', message: 'apply_trip requires the service role' } });
   assertEquals(await json(await handleFinalizeTrip(post(payload()), h.deps)), {

@@ -17,6 +17,14 @@ export const MAX_EVENTS = 500;
 /** The server refuses a longer polyline; the finalizer re-simplifies until it fits. */
 export const MAX_POLYLINE_BYTES = 16_384;
 
+/**
+ * A time zone NAME (IANA: `America/New_York`, `Etc/GMT+5`, `UTC`), never a fixed offset such as
+ * `+05:00` or `UTC+5`: V8 and Postgres read an offset's sign oppositely, so an offset would put the
+ * server's local day, and the age-band rollover that follows it, a day away from the device's.
+ * The first segment is letters only; 0006's `trips_tz_iana` CHECK holds the same rule in SQL.
+ */
+export const TZ_NAME_PATTERN = /^[A-Za-z][A-Za-z_]*(?:\/[A-Za-z0-9_+-]+)*$/;
+
 const EVENT_CATEGORIES = ['phone', 'speeding', 'braking', 'accel', 'cornering', 'focus'] as const;
 
 const epochMs = z.number().int().nonnegative();
@@ -124,8 +132,8 @@ export const FinalizeTripPayloadSchema = z
     clientTripId: z.string().min(1).max(64),
     startedAt: epochMs,
     endedAt: epochMs,
-    /** IANA time zone the trip was recorded in. */
-    tz: z.string().min(1).max(64),
+    /** IANA time zone the trip was recorded in: a name, never an offset (`TZ_NAME_PATTERN`). */
+    tz: z.string().min(1).max(64).regex(TZ_NAME_PATTERN),
     distanceM: nonNegative,
     /**
      * Net of gap-merge gaps on a trip the engine closed. On a recovered trip (`incomplete`) the

@@ -82,6 +82,13 @@ Deno.test('an unknown IANA zone is refused before the database sees it', () => {
   assertEquals(failure(payload({ tz: 'Mars/Olympus' })), { code: 'invalid_timezone', field: 'tz' });
 });
 
+Deno.test('a fixed offset, which Intl accepts but Postgres reads with the opposite sign, is refused (M4 security M-4)', () => {
+  for (const tz of ['+23:59', '-23:59', '+05:00']) {
+    assertEquals(failure(payload({ tz })), { code: 'invalid_timezone', field: 'tz' }, tz);
+  }
+  assert(passes(payload({ tz: 'Etc/GMT+5' })));
+});
+
 Deno.test('a trip more than thirty days old, or ahead of the server clock, is implausible in time', () => {
   const old = NOW - 30 * DAY - 60_000;
   assertEquals(failure(payload({ startedAt: old, endedAt: old + 1_320_000, events: [event({ startedAt: old + 1000 })] })), {

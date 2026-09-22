@@ -22,6 +22,17 @@ export const RETRYABLE_CODES: ReadonlySet<string> = new Set(['55P03', '40P01', '
  */
 export const ROW_CODES: ReadonlySet<string> = new Set(['23514', '23505', '22P02', '23502', '22003']);
 
+/**
+ * 0006's refusal of a new drive from an account that has not answered the age question yet
+ * (`enforce_trip_age_policy`, SQLSTATE 55000 with exactly this message). It is not a refusal of the
+ * drive: once the birth date is set the same upload is accepted, so it answers as retryable (503
+ * `age_pending`, Retry-After 15 min) and never as a 403 that would make the device drop the drive.
+ * Only this message: any other 55000 is not ours to excuse and stays a 500.
+ */
+export const AGE_PENDING_STATE = '55000';
+export const AGE_PENDING_MESSAGE = 'age not confirmed yet';
+export const AGE_PENDING_RETRY_AFTER_S = 900;
+
 export const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
@@ -101,13 +112,17 @@ export const invalidPayload = (error: ZodError): Response =>
 
 /**
  * The shared mapping of a failure to a response, logged under `name`:
- * retryable → 503 + Retry-After; 22023 → 400 `invalid_envelope` (server-side drift after zod);
+ * retryable → 503 + Retry-After; the age question unanswered → 503 `age_pending` + Retry-After;
+ * 22023 → 400 `invalid_envelope` (server-side drift after zod);
  * row codes → 400 `invalid_event_rows`; 42501 → 500 `misconfigured` when the service role is
  * missing, else 403; anything else → 500. Bodies carry the mapped code only.
  */
 export function pgFailure(err: unknown, log: Logger, ctx: object, name: string): Response {
   if (isPgError(err)) {
     if (RETRYABLE_CODES.has(err.code)) return json(503, { code: 'retry' }, { 'retry-after': '2' });
+    if (err.code === AGE_PENDING_STATE && err.message === AGE_PENDING_MESSAGE) {
+      return json(503, { code: 'age_pending' }, { 'retry-after': String(AGE_PENDING_RETRY_AFTER_S) });
+    }
     if (err.code === '22023') {
       log.error(`${name} envelope refused`, { ...ctx, message: err.message });
       return json(400, { code: 'invalid_envelope' });

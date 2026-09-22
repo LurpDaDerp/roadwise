@@ -15,7 +15,7 @@
 // capped grade itself is persisted as `trips.data_quality`.
 import { CONSTANTS, dataQualityGrade } from './scoring/index';
 import type { TripMetrics } from './scoring/index';
-import { MAX_EVENTS, MAX_POLYLINE_BYTES, type FinalizeTripPayload } from './payload.ts';
+import { MAX_EVENTS, MAX_POLYLINE_BYTES, TZ_NAME_PATTERN, type FinalizeTripPayload } from './payload.ts';
 
 /** Mirrors the `trips.client_trip_id` CHECK, so a bad id is a 400 here rather than a 23514 there. */
 export const CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -95,8 +95,12 @@ const fail = (code: PlausibilityCode, field: string): PlausibilityResult => ({
  * Whether Intl (ICU) knows the zone. Postgres derives `local_day` from its own tz table; a zone one
  * side knows and the other does not (an alias, a zone newer than one side's tzdata) is refused
  * here or fails closed as 22023 there, and the 22023 log carries the zone so drift is visible.
+ * A name only: Intl also accepts a fixed offset ('+23:59'), whose sign Postgres reads the other way
+ * (M4 security M-4), so the shared pattern is checked first. The schema already refuses one; this
+ * holds even for a caller that skipped it.
  */
 function knownZone(tz: string): boolean {
+  if (!TZ_NAME_PATTERN.test(tz)) return false;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
     return true;

@@ -93,14 +93,24 @@ Deno.test('pgFailure answers with the mapped code only; the database message goe
     assertEquals(await res.json(), { code: 'retry' });
   }
 
+  // 0006: an account that has not answered the age question yet is told to come back, not refused
+  const pending = pgFailure(new PgError('55000', 'age not confirmed yet'), log, {}, 'fn');
+  assertEquals(pending.status, 503);
+  assertEquals(pending.headers.get('retry-after'), '900');
+  assertEquals(await pending.json(), { code: 'age_pending' });
+  // any other 55000 is not the age refusal and is not excused as retryable
+  assertEquals((await pgFailure(new PgError('55000', 'something else'), log, {}, 'fn')).status, 500);
+  // the under-13 block is a permanent refusal
+  assertEquals(await pgFailure(new PgError('42501', 'account not eligible'), log, {}, 'fn').json(), { code: 'forbidden' });
+
   assertEquals(await pgFailure(new PgError('42501', 'fn requires the service role'), log, {}, 'fn').json(), { code: 'misconfigured' });
   assertEquals(await pgFailure(new PgError('42501', 'trip not owned by user'), log, {}, 'fn').json(), { code: 'forbidden' });
   assertEquals(await pgFailure(new PgError('XX000', 'kaboom'), log, {}, 'fn').json(), { code: 'internal' });
   assertEquals(await pgFailure(new Error('plain'), log, {}, 'fn').json(), { code: 'internal' });
   assertEquals(await pgFailure('string', log, {}, 'fn').json(), { code: 'internal' });
   // every non-retryable failure was logged (retryable ones are not: nothing to act on), and none
-  // of the bodies above carried a database message
-  assertEquals(errors.length, 11);
+  // of the bodies above carried a database message; age_pending is retryable and so not logged
+  assertEquals(errors.length, 13);
 });
 
 Deno.test('asPgError keeps the SQLSTATE, message, details and hint; isPgError recognises the shape from any module', () => {

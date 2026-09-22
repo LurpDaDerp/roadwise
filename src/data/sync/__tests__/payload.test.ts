@@ -142,6 +142,12 @@ test('an empty trip is valid: no events, no path, no geohash, a digest over zero
   expect(FinalizeTripPayloadSchema.parse(p)).toEqual(p);
 });
 
+test('tz accepts IANA zone names, including Etc/GMT+5 and UTC', () => {
+  for (const tz of ['America/Los_Angeles', 'America/Argentina/Buenos_Aires', 'America/Port-au-Prince', 'Etc/GMT+5', 'UTC']) {
+    expect(FinalizeTripPayloadSchema.safeParse(payload({ tz })).success).toBe(true);
+  }
+});
+
 describe('rejects', () => {
   const rejects = (name: string, bad: unknown) =>
     test(name, () => expect(FinalizeTripPayloadSchema.safeParse(bad).success).toBe(false));
@@ -153,6 +159,10 @@ describe('rejects', () => {
   const digest = (sha256: string) => ({ ...payload().rowsDigest, sha256 });
 
   rejects('a missing field', missing());
+  // a fixed offset is not a zone name: V8 and Postgres read its sign oppositely (M4 security M-4)
+  rejects('a fixed-offset tz (+23:59)', payload({ tz: '+23:59' }));
+  rejects('a fixed-offset tz (-05:00)', payload({ tz: '-05:00' }));
+  rejects('a UTC-relative offset tz (UTC+5)', payload({ tz: 'UTC+5' }));
   rejects('a missing incomplete flag', (() => {
     const { incomplete: _drop, ...rest } = payload();
     return rest;
