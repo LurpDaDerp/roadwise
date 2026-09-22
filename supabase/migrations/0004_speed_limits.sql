@@ -81,8 +81,9 @@ create table hpms.sections (
 -- AWS Location answers, kept at most 30 days. The key is put_limits_cache's short hash, never the
 -- caller's raw identifier, so the tile id built from it fits the device's 24 characters.
 -- Each row exists because some driver's lookup caused it, so it keeps no time of day: created_at
--- and updated_at are stored floored to the UTC day (limits_cache_touch), and the tile answer floors
--- a row's expiry to the UTC day too (security review I-1). The 30-day CHECK is measured from the
+-- and updated_at are stored floored to the UTC day (limits_cache_touch), and so is expires_at: the
+-- ttls are whole days, so an exact expiry would give the lookup's time of day back (re-audit R-M1).
+-- The tile answer floors a row's expiry to the UTC day as well (security review I-1). The 30-day CHECK is measured from the
 -- floored created_at, so it is never looser than 30 days from the lookup.
 create table public.limits_cache (
   segment_key text primary key
@@ -116,6 +117,8 @@ begin
     new.created_at := date_trunc('day', new.created_at, 'UTC');
   end if;
   new.updated_at := date_trunc('day', now(), 'UTC');
+  -- floored, so never later than the expiry asked for; the queries keep `expires_at > now()`
+  new.expires_at := date_trunc('day', new.expires_at, 'UTC');
   return new;
 end $$;
 create trigger limits_cache_touch before insert or update on public.limits_cache for each row execute function public.limits_cache_day_stamps();
@@ -213,8 +216,11 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- speed_limit_tiles: up to four z15 tiles of segments for the device's prefetch
 -- ---------------------------------------------------------------------------
+-- statement_timeout is in the function's config because PostgREST (v12+) applies a function's
+-- statement_timeout to the RPC transaction: B2 abandons a call after 5 s, and this ends the query
+-- then too, so one dense four-tile call cannot hold a pooled connection (security M-3)
 create or replace function public.speed_limit_tiles(p_keys text[]) returns jsonb
-language plpgsql stable security invoker set search_path = public, extensions as $$
+language plpgsql stable security invoker set search_path = public, extensions set statement_timeout = '5s' as $$
 declare
   v_key text;
   v_x int;

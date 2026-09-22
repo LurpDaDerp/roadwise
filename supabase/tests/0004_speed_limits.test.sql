@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(159);
+select plan(161);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -101,11 +101,13 @@ select is(array[has_function_privilege('anon', 'public.take_rate_limit(uuid, tex
   array[false, false, true], 'take_rate_limit executes for service_role only');
 select is((select count(*)::int from pg_proc where oid in (
     'public.speed_limit_candidates(double precision, double precision, integer)'::regprocedure,
-    'public.speed_limit_tiles(text[])'::regprocedure,
     'public.put_limits_cache(text, jsonb, integer, numeric, integer)'::regprocedure,
     'public.take_rate_limit(uuid, text, interval, integer)'::regprocedure)
-    and not prosecdef and proconfig = array['search_path=public, extensions']), 4,
-  'all four functions are security invoker and pin search_path = public, extensions');
+    and not prosecdef and proconfig = array['search_path=public, extensions']), 3,
+  'candidates, put_limits_cache and take_rate_limit are security invoker and pin exactly search_path = public, extensions');
+select is((select row(prosecdef, proconfig)::text from pg_proc where oid = 'public.speed_limit_tiles(text[])'::regprocedure),
+  row(false, array['search_path=public, extensions', 'statement_timeout=5s'])::text,
+  'speed_limit_tiles is security invoker with exactly search_path and a 5 s statement_timeout');
 select is(
   (select count(*)::int from pg_proc p join pg_roles r on r.oid = p.proowner
     where p.pronamespace = 'public'::regnamespace and p.prosecdef
@@ -287,7 +289,9 @@ select matches(public.put_limits_cache('aws-leg-47.6170,-122.3100', '{"type":"Li
   '^[0-9a-f]{16}$', 'put_limits_cache stores the answer under a 16-hex key and returns it');
 select is((select count(*)::int from public.limits_cache), 1, 'one cache row');
 select is((select segment_key from public.limits_cache), left(encode(sha256(convert_to('aws-leg-47.6170,-122.3100', 'UTF8')), 'hex'), 16), 'the key is the first 16 hex digits of sha256 of the caller key');
-select is((select expires_at from public.limits_cache), now() + interval '7 days', 'it expires after the ttl');
+select is((select expires_at from public.limits_cache), date_trunc('day', now() + interval '7 days', 'UTC'), 'it expires after the ttl, at the start of that UTC day');
+select is((select expires_at = date_trunc('day', expires_at, 'UTC') and expires_at <= now() + interval '7 days' from public.limits_cache), true,
+  'the stored expires_at is midnight UTC and never later than the expiry asked for (it keeps no time of the lookup)');
 select is((select array[created_at, updated_at] from public.limits_cache), array[date_trunc('day', now(), 'UTC'), date_trunc('day', now(), 'UTC')],
   'its created_at and updated_at keep only the UTC day, not the time of the lookup');
 select is((select row(provider, limit_mph, oneway)::text from public.speed_limit_candidates(47.6170, -122.3090, 25)), row('aws', 45, 1)::text,
