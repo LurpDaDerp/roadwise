@@ -97,6 +97,8 @@ export function PermissionPromptsHost({
   const now = deps.now ?? Date.now;
   const platform = deps.platform ?? (Platform.OS === 'ios' ? 'ios' : 'android');
   const inFlight = useRef(false);
+  // Both offers made: nothing is ever due again, so the host stops reading (review m5).
+  const finished = useRef(false);
   // The route as it is when the phone read comes back: the driver may have left (tabs) meanwhile.
   const inTabsNow = useRef(inTabs);
 
@@ -109,7 +111,7 @@ export function PermissionPromptsHost({
   }, [inTabs]);
 
   useEffect(() => {
-    if (inFlight.current || drives === null || drives < 1 || !driver || !available || !inTabs) return;
+    if (finished.current || inFlight.current || drives === null || drives < 1 || !driver || !available || !inTabs) return;
     if (isBusy()) return;
     inFlight.current = true;
     void (async () => {
@@ -120,13 +122,20 @@ export function PermissionPromptsHost({
           autoDetectAvailable: available,
           completedDrives: drives,
           offers: (await settings.get<AlwaysOffers>(ALWAYS_OFFER_KEY)) ?? {},
+        };
+        if (base.offers['first-drive'] !== undefined && base.offers['third-drive'] !== undefined) {
+          finished.current = true;
+          return;
+        }
+        const more = {
           manualByChoice: (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true,
           canPromptAlways: canPrompt('locationAlways', await readPromptHistory(settings), now()),
         };
+        const input = { ...base, ...more };
         // Cheap checks first: nothing native is read unless an offer could be due.
-        if (offerDue({ ...base, location: null }) === null) return;
+        if (offerDue({ ...input, location: null }) === null) return;
         const snapshot = await adapter.snapshot();
-        const due = offerDue({ ...base, location: snapshot.location });
+        const due = offerDue({ ...input, location: snapshot.location });
         if (due === null || isBusy() || !inTabsNow.current) return;
         await offerPrompt(settings, 'locationAlways', now(), async () => {
           await settings.set(ALWAYS_OFFER_KEY, { ...base.offers, [due]: now() });

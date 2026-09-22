@@ -72,8 +72,8 @@ export async function takeSettingsReturnAck(
 // ─── A background-location consent that could not be sent ──────────────────────────────────────
 
 /**
- * The disclosure version whose consent is still owed to the server: set when Always was granted
- * but `recordConsent` failed (offline), cleared once it is sent.
+ * A consent still owed to the server, `{ version, userId }`: set when Always was granted but
+ * `recordConsent` failed (offline) or no session was left to send it under; cleared once sent.
  */
 export const PENDING_DISCLOSURE_CONSENT_KEY = 'permissions.pendingDisclosureConsent';
 
@@ -82,34 +82,72 @@ export type RecordDisclosureConsent = (
   consent: { type: 'background_location'; version: string }
 ) => Promise<unknown>;
 
+/** A consent still owed, bound to the account that affirmed the disclosure (security M-1). */
+export interface PendingDisclosureConsent {
+  version: string;
+  userId: string;
+}
+
+function parsePending(raw: unknown): PendingDisclosureConsent | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const { version, userId } = raw as Record<string, unknown>;
+  return typeof version === 'string' && typeof userId === 'string' && userId !== ''
+    ? { version, userId }
+    : null;
+}
+
 /**
- * Records the background-location consent for the disclosure the driver just affirmed. A failure
- * is kept (never dropped) and sent by `flushPendingDisclosureConsent` on a later read.
+ * Records the background-location consent for the disclosure the driver just affirmed.
+ *
+ * - `sessionUid`: the signed-in account now. The consent is sent under it; a failure (offline) is
+ *   kept as `{ version, userId: sessionUid }`, never dropped.
+ * - With no session (lost mid-flow, security M-3), nothing can be sent; the consent is kept bound
+ *   to `boundUid` — the account that saw the disclosure, else the device owner
+ *   (`device.lastUserId`). With neither, there is no account to bind it to and nothing is kept.
+ *
+ * Returns whether the consent was recorded now.
  */
 export async function recordDisclosureConsent(
   settings: Pick<SettingsRepo, 'set' | 'remove'>,
-  userId: string,
+  who: { sessionUid: string | null; boundUid: string | null },
   record: RecordDisclosureConsent = recordConsent
 ): Promise<boolean> {
+  const keep = (userId: string) =>
+    settings.set(PENDING_DISCLOSURE_CONSENT_KEY, { version: DISCLOSURE_VERSION, userId } satisfies PendingDisclosureConsent);
+  if (who.sessionUid === null) {
+    if (who.boundUid !== null) await keep(who.boundUid);
+    return false;
+  }
   try {
-    await record(userId, { type: 'background_location', version: DISCLOSURE_VERSION });
+    await record(who.sessionUid, { type: 'background_location', version: DISCLOSURE_VERSION });
     await settings.remove(PENDING_DISCLOSURE_CONSENT_KEY);
     return true;
   } catch {
-    await settings.set(PENDING_DISCLOSURE_CONSENT_KEY, DISCLOSURE_VERSION);
+    await keep(who.sessionUid);
     return false;
   }
 }
 
-/** Sends a consent `recordDisclosureConsent` could not; a no-op when none is owed. */
+/**
+ * Sends a consent `recordDisclosureConsent` could not — only under the account it is bound to
+ * (security M-1). Under any other account it is neither sent nor removed: a different driver's
+ * sign-in is a handover, whose wipe empties `settings` and drops it. A malformed record (no
+ * account to bind it to) is removed unsent.
+ */
 export async function flushPendingDisclosureConsent(
   settings: Pick<SettingsRepo, 'get' | 'remove'>,
-  userId: string,
+  sessionUid: string,
   record: RecordDisclosureConsent = recordConsent
 ): Promise<void> {
-  const version = await settings.get<unknown>(PENDING_DISCLOSURE_CONSENT_KEY);
-  if (typeof version !== 'string') return;
-  await record(userId, { type: 'background_location', version });
+  const raw = await settings.get<unknown>(PENDING_DISCLOSURE_CONSENT_KEY);
+  if (raw === null) return;
+  const pending = parsePending(raw);
+  if (pending === null) {
+    await settings.remove(PENDING_DISCLOSURE_CONSENT_KEY);
+    return;
+  }
+  if (pending.userId !== sessionUid) return;
+  await record(sessionUid, { type: 'background_location', version: pending.version });
   await settings.remove(PENDING_DISCLOSURE_CONSENT_KEY);
 }
 

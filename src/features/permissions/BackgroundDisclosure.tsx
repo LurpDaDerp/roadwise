@@ -9,6 +9,7 @@ import {
   type PermissionSnapshot,
   type PermissionsAdapter,
 } from '@/core/permissions';
+import { readDeviceOwner } from '@/boot/device';
 import { createSettingsRepo } from '@/data/db';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb, useTrips } from '@/data/queries';
@@ -81,6 +82,9 @@ export function BackgroundDisclosure({
   const host = useDriveHost();
   const { session } = useSession();
   const userId = session?.user.id ?? null;
+  // The account that is shown the disclosure: a grant after the session is lost mid-flow still
+  // binds its consent to it (security M-3).
+  const shownTo = useRef(userId);
   const trips = useTrips();
   const adapter = deps.adapter ?? defaultPermissionsAdapter();
   const appState = deps.appState ?? AppState;
@@ -93,10 +97,10 @@ export function BackgroundDisclosure({
   const awaitingSettings = useRef(false);
   const done = useRef(false);
 
-  // The first drive: post-drive offers exist only after one; otherwise the trip list says.
+  // The first completed drive, from the trip list ONLY — never from the route's `reason`, so a
+  // deep link can't spend iOS's one-shot Always prompt before the first drive (review m2).
   const tripList = trips.data ?? (trips.isError ? [] : undefined);
-  const firstDriveDone =
-    reason === 'first-drive' || reason === 'third-drive' || (tripList !== undefined && completedDrives(tripList) > 0);
+  const firstDriveDone = tripList !== undefined && completedDrives(tripList) > 0;
 
   const finish = useCallback(
     (result: DisclosureResult) => {
@@ -108,11 +112,22 @@ export function BackgroundDisclosure({
   );
 
   const granted = useCallback(async () => {
-    if (userId !== null) await recordDisclosureConsent(settings, userId, deps.recordConsent);
+    const boundUid = userId === null ? (shownTo.current ?? (await readDeviceOwner(db))) : null;
+    await recordDisclosureConsent(settings, { sessionUid: userId, boundUid }, deps.recordConsent);
     await settings.remove(MANUAL_BY_CHOICE_KEY);
-    if ((await settings.get<boolean>(AUTO_RECORD_INTENT_KEY)) === true) await host.setAutoDetect(true);
+    // The intent is spent here, so an old one can never turn auto-record on after a later grant.
+    const wanted = (await settings.get<boolean>(AUTO_RECORD_INTENT_KEY)) === true;
+    await settings.remove(AUTO_RECORD_INTENT_KEY);
+    if (wanted) await host.setAutoDetect(true);
     finish('always');
-  }, [settings, userId, deps.recordConsent, host, finish]);
+  }, [settings, db, userId, deps.recordConsent, host, finish]);
+
+  /** A decline (the OS, or Not now): manual by choice, and any auto-record intent is dropped. */
+  const declined = useCallback(async () => {
+    await settings.set(MANUAL_BY_CHOICE_KEY, true);
+    await settings.remove(AUTO_RECORD_INTENT_KEY);
+    finish('declined');
+  }, [settings, finish]);
 
   /** A read of the phone; null when it can't be read. Never a prompt. */
   const fetchSnapshot = useCallback(async (): Promise<PermissionSnapshot | null> => {
@@ -183,8 +198,7 @@ export function BackgroundDisclosure({
       if (access === 'always') {
         await granted();
       } else {
-        await settings.set(MANUAL_BY_CHOICE_KEY, true);
-        finish('declined');
+        await declined();
       }
     } catch {
       setRequestFailed(true);
@@ -197,8 +211,7 @@ export function BackgroundDisclosure({
     if (busy) return;
     setBusy(true);
     try {
-      await settings.set(MANUAL_BY_CHOICE_KEY, true);
-      finish('declined');
+      await declined();
     } catch {
       setRequestFailed(true);
     } finally {
@@ -242,7 +255,7 @@ export function BackgroundDisclosure({
   }
 
   return (
-    <View style={{ flexGrow: 1, gap: th.space.lg }} testID="background-disclosure">
+    <View style={{ flexGrow: 1, gap: th.space.lg }} testID={`background-disclosure-${reason}`}>
       <Card variant="license">
         <Text variant="title2" accessibilityRole="header">
           {DISCLOSURE_TEXT.heading}

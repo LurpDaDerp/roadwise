@@ -119,14 +119,19 @@ test('Android: no first-drive offer (A6 asked during onboarding)', async () => {
   expect(adapter.log).toEqual([]);
 });
 
-test('after both offers, only B2', async () => {
-  await renderHost({
+test('after both offers, only B2; and the host stops reading (review m5)', async () => {
+  const r = await renderHost({
     seed: {
       trips: [drive(1), drive(2), drive(3), drive(4)],
       settings: { [ALWAYS_OFFER_KEY]: { 'first-drive': 1, 'third-drive': 2 } },
     },
   });
   expect(mockRouter.push).not.toHaveBeenCalled();
+  const execute = jest.spyOn(r.db, 'execute');
+  await act(async () => r.publish({ status: 'armed' }));
+  await act(async () => r.publish({ status: 'off' }));
+  expect(execute).not.toHaveBeenCalled();
+  expect(r.adapter.log).toEqual([]);
 });
 
 test('never for a driver who chose manual', async () => {

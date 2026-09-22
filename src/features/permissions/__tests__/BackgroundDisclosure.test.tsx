@@ -22,7 +22,10 @@ import { BackgroundDisclosure, type DisclosureReason } from '@/features/permissi
 import { PENDING_DISCLOSURE_CONSENT_KEY } from '@/features/permissions/usePermissionHealth';
 import { clearQueryClients } from '@/features/trips/__fixtures__/render';
 
-const mockSession = { session: { user: { id: 'u1' } }, profile: { driving_stage: 'new' } };
+const mockSession = {
+  session: { user: { id: 'u1' } } as { user: { id: string } } | null,
+  profile: { driving_stage: 'new' },
+};
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 jest.mock('@/data/supabase/profile', () => ({ recordConsent: jest.fn(async () => ({})) }));
 
@@ -31,7 +34,10 @@ const press = (el: Parameters<typeof fireEvent.press>[0]) =>
     fireEvent.press(el);
   });
 
-afterEach(clearQueryClients);
+afterEach(() => {
+  clearQueryClients();
+  mockSession.session = { user: { id: 'u1' } };
+});
 
 const requests = (a: FakeAdapter) => a.log.filter((c) => c !== 'snapshot');
 
@@ -125,7 +131,8 @@ test('an auto-record entry (the offers, B2’s repair): Continue says the driver
   expect(host.setAutoDetect).not.toHaveBeenCalled();
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
-  expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBe(true);
+  // Set by Continue, then spent by the grant (review m1).
+  expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBeNull();
 });
 
 test('without enableAutoRecord (onboarding’s own step), no auto-record note is shown', async () => {
@@ -223,7 +230,75 @@ test('offline: the grant still counts, and the consent is kept to send later', a
   const { onResult, settings } = await renderDisclosure(adapter, { consent });
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
-  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBe('pd-1');
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+});
+
+test('security M-3: the session is lost mid-flow; the consent is kept bound to the account shown the disclosure', async () => {
+  const adapter = fakeAdapter(snap({ location: 'foreground' }));
+  const { onResult, settings, recordConsent, appState } = await renderDisclosure(adapter);
+  await screen.findByTestId('disclosure-continue');
+  // The session goes; a return to the front re-renders the screen with it gone.
+  mockSession.session = null;
+  adapter.current = snap({ location: 'foreground' });
+  await act(async () => appState.foreground());
+  await press(screen.getByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(recordConsent).not.toHaveBeenCalled();
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+});
+
+test('security M-3: no session at all; bound to the device owner (device.lastUserId)', async () => {
+  mockSession.session = null;
+  const adapter = fakeAdapter(snap({ location: 'foreground' }));
+  const { onResult, settings, recordConsent } = await renderDisclosure(adapter, {
+    seed: { trips: [drive(1)], settings: { 'device.lastUserId': 'owner-1' } },
+  });
+  await press(await screen.findByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(recordConsent).not.toHaveBeenCalled();
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'owner-1' });
+});
+
+test.each(['first-drive', 'third-drive'] as const)(
+  'review m2: iOS, a %s link with no completed drive asks nothing (design 5.3)',
+  async (reason) => {
+    const adapter = fakeAdapter(snap({ platform: 'ios', location: 'foreground' }));
+    const { onResult } = await renderDisclosure(adapter, { reason, seed: { trips: [] }, enableAutoRecord: true });
+    expect(await screen.findByTestId('disclosure-not-yet')).toBeOnTheScreen();
+    expect(screen.queryByTestId('disclosure-continue')).toBeNull();
+    expect(requests(adapter)).toEqual([]);
+    expect(onResult).not.toHaveBeenCalled();
+  }
+);
+
+test('review m1: the intent is spent by a grant, so it cannot act on a later one', async () => {
+  const adapter = fakeAdapter(snap({ location: 'foreground' }));
+  const { settings, host, onResult } = await renderDisclosure(adapter, {
+    seed: { trips: [drive(1)], settings: { [AUTO_RECORD_INTENT_KEY]: true } },
+  });
+  await press(await screen.findByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(host.setAutoDetect).toHaveBeenCalledWith(true);
+  expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBeNull();
+});
+
+test('review m1: an OS decline drops the intent', async () => {
+  const denied = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+  const { settings, onResult } = await renderDisclosure(denied, {
+    seed: { trips: [drive(1)], settings: { [AUTO_RECORD_INTENT_KEY]: true } },
+  });
+  await press(await screen.findByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+  expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBeNull();
+});
+
+test('review m1: Not now drops the intent', async () => {
+  const { settings, onResult } = await renderDisclosure(fakeAdapter(snap({ location: 'foreground' })), {
+    seed: { trips: [drive(1)], settings: { [AUTO_RECORD_INTENT_KEY]: true } },
+  });
+  await press(await screen.findByTestId('disclosure-not-now'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+  expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBeNull();
 });
 
 test('a read failure is an inline error with a retry', async () => {

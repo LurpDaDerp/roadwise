@@ -191,16 +191,67 @@ describe('the Settings-return acknowledgement', () => {
 });
 
 describe('the background-location consent', () => {
-  test('records the disclosure version; an offline failure is kept and sent later', async () => {
+  const signedIn = (uid: string) => ({ sessionUid: uid, boundUid: null });
+
+  test('recorded at once under the signed-in account', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn(async () => ({}));
+    expect(await recordDisclosureConsent(settings, signedIn('u1'), record)).toBe(true);
+    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+  });
+
+  test('an offline failure is kept bound to its account and sent later under it', async () => {
     const settings = createSettingsRepo(await createTestDb());
     const record = jest.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({});
-    expect(await recordDisclosureConsent(settings, 'u1', record)).toBe(false);
-    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBe('pd-1');
+    expect(await recordDisclosureConsent(settings, signedIn('u1'), record)).toBe(false);
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
     await flushPendingDisclosureConsent(settings, 'u1', record);
     expect(record).toHaveBeenLastCalledWith('u1', { type: 'background_location', version: 'pd-1' });
     expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
     await flushPendingDisclosureConsent(settings, 'u1', record);
     expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  test('security M-1: never sent under another account (left for the handover wipe)', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({});
+    await recordDisclosureConsent(settings, signedIn('driver-a'), record);
+    record.mockClear();
+    await flushPendingDisclosureConsent(settings, 'driver-b', record);
+    expect(record).not.toHaveBeenCalled();
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'driver-a' });
+    // Negative control: under its own account it goes.
+    await flushPendingDisclosureConsent(settings, 'driver-a', record);
+    expect(record).toHaveBeenCalledWith('driver-a', { type: 'background_location', version: 'pd-1' });
+  });
+
+  test('security M-3: a grant with no session is kept bound to the given account, never sent now', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn(async () => ({}));
+    expect(await recordDisclosureConsent(settings, { sessionUid: null, boundUid: 'owner-1' }, record)).toBe(false);
+    expect(record).not.toHaveBeenCalled();
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'owner-1' });
+    await flushPendingDisclosureConsent(settings, 'someone-else', record);
+    expect(record).not.toHaveBeenCalled();
+    await flushPendingDisclosureConsent(settings, 'owner-1', record);
+    expect(record).toHaveBeenCalledWith('owner-1', { type: 'background_location', version: 'pd-1' });
+  });
+
+  test('no session and no account to bind to: nothing kept', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn(async () => ({}));
+    await recordDisclosureConsent(settings, { sessionUid: null, boundUid: null }, record);
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+  });
+
+  test('an unbound (malformed) pending record is removed, never sent', async () => {
+    const settings = createSettingsRepo(await createTestDb());
+    const record = jest.fn(async () => ({}));
+    await settings.set(PENDING_DISCLOSURE_CONSENT_KEY, 'pd-1');
+    await flushPendingDisclosureConsent(settings, 'u1', record);
+    expect(record).not.toHaveBeenCalled();
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
   });
 });
 
