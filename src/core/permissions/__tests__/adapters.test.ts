@@ -177,10 +177,19 @@ describe('snapshot', () => {
     expect((await createPermissionsAdapter(deps).snapshot()).batteryOptimization).toBe('unknown');
   });
 
-  it('no drive-sense (Expo Go): motion unavailable, battery unknown; low power failure → null', async () => {
+  it("a failing drive-sense read: motion null (can't check), not unavailable", async () => {
+    const port: DriveSensePort = {
+      getState: () => Promise.reject(new Error('bridge')),
+      requestMotionPermission: () => Promise.resolve('denied'),
+    };
+    const { deps } = makeDeps('ios', { driveSense: port });
+    expect((await createPermissionsAdapter(deps).snapshot()).motion).toBeNull();
+  });
+
+  it('no drive-sense (Expo Go): motion null, battery unknown; low power failure → null', async () => {
     const { deps } = makeDeps('android', { driveSense: null, lowPower: new Error('x') });
     const s = await createPermissionsAdapter(deps).snapshot();
-    expect(s.motion).toBe('unavailable');
+    expect(s.motion).toBeNull();
     expect(s.batteryOptimization).toBe('unknown');
     expect(s.lowPowerMode).toBeNull();
   });
@@ -255,9 +264,18 @@ describe('requestMotion — through the drive-sense port on both platforms', () 
     expect(ds.calls).toEqual([]);
   });
 
-  it('no drive-sense → unavailable', async () => {
+  it('no drive-sense → null (could not ask), not unavailable', async () => {
     const { deps } = makeDeps('ios', { driveSense: null });
-    expect(await createPermissionsAdapter(deps).requestMotion()).toBe('unavailable');
+    expect(await createPermissionsAdapter(deps).requestMotion()).toBeNull();
+  });
+
+  it('a failed request whose re-read also fails → null', async () => {
+    const port: DriveSensePort = {
+      getState: () => Promise.reject(new Error('x')),
+      requestMotionPermission: () => Promise.reject(new Error('y')),
+    };
+    const { deps } = makeDeps('android', { driveSense: port });
+    expect(await createPermissionsAdapter(deps).requestMotion()).toBeNull();
   });
 
   it('a failed request re-reads the state rather than inventing an answer', async () => {

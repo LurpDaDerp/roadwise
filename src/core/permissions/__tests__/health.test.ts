@@ -209,14 +209,33 @@ describe('assessHealth', () => {
       expect(r.overall).toBe('broken');
     });
 
-    it('Android foreground-only, auto-record never asked: attention with a request, no banner', () => {
-      const r = assessHealth(snap({ location: 'foreground' }), ctx({ autoDetectOn: false }));
+    it('Android foreground-only with auto-record off (its opt-in default): no Always nag', () => {
+      const r = assessHealth(
+        snap({ location: 'foreground', batteryOptimization: 'optimized' }),
+        ctx({ autoDetectOn: false })
+      );
+      expect(row(r.rows, 'locationAlways')).toEqual({
+        id: 'locationAlways',
+        status: 'info',
+        fix: 'none',
+        reason: 'choice',
+      });
+      expect(row(r.rows, 'autoRecord')).toMatchObject({ status: 'info', reason: 'choice' });
+      expect(row(r.rows, 'battery')).toEqual({ id: 'battery', status: 'info', fix: 'none', reason: 'choice' });
+      expect(r.showBanner).toBe(false);
+      expect(r.overall).toBe('ok');
+    });
+
+    it('negative control: auto-record wanted, Always never granted → attention with a request, no banner', () => {
+      const r = assessHealth(snap({ location: 'foreground' }), ctx({ autoDetectOn: true }));
       expect(row(r.rows, 'locationAlways')).toEqual({
         id: 'locationAlways',
         status: 'attention',
         fix: 'request',
       });
+      expect(row(r.rows, 'autoRecord')).toEqual({ id: 'autoRecord', status: 'attention', fix: 'request' });
       expect(r.showBanner).toBe(false);
+      expect(r.overall).toBe('attention');
     });
 
     it('Always lapsed but auto-record turned off by the driver: no banner', () => {
@@ -263,11 +282,45 @@ describe('assessHealth', () => {
       expect(r.overall).toBe('ok');
     });
 
-    it('optimized → attention, battery settings', () => {
+    it('optimized while auto-record is wanted → attention, battery settings (negative control)', () => {
       const r = assessHealth(snap({ batteryOptimization: 'optimized' }), ctx());
       expect(row(r.rows, 'battery')).toEqual({ id: 'battery', status: 'attention', fix: 'openBatterySettings' });
       expect(r.overall).toBe('attention');
       expect(r.showBanner).toBe(false);
+    });
+  });
+
+  describe('auto-record withdrawn by the server (flag off)', () => {
+    const c = ctx({ autoDetectAvailable: false, autoDetectOn: true, everGranted: { locationAlways: true } });
+
+    it('Always, auto-record and battery rows are info notAvailable — no "tap to fix", no banner', () => {
+      const r = assessHealth(snap({ location: 'foreground', batteryOptimization: 'optimized' }), c);
+      for (const id of ['locationAlways', 'autoRecord', 'battery'] as const) {
+        expect(row(r.rows, id)).toEqual({ id, status: 'info', fix: 'none', reason: 'notAvailable' });
+      }
+      expect(r.showBanner).toBe(false);
+      expect(r.overall).toBe('ok');
+    });
+
+    it('iOS before the first drive says notAvailable, not "after your first drive"', () => {
+      const r = assessHealth(snap({ platform: 'ios', location: 'foreground' }), { ...c, firstDriveDone: false });
+      expect(row(r.rows, 'locationAlways')?.reason).toBe('notAvailable');
+    });
+
+    it('negative control: the same lapse with the flag on raises the banner', () => {
+      const r = assessHealth(snap({ location: 'foreground' }), { ...c, autoDetectAvailable: true });
+      expect(r.showBanner).toBe(true);
+      expect(row(r.rows, 'locationAlways')?.status).toBe('attention');
+    });
+  });
+
+  describe('motion that could not be checked', () => {
+    it('is info cantCheck, raises no banner, and does not decide the recording mode', () => {
+      const r = assessHealth(snap({ motion: null }), ctx({ everGranted: { motion: true } }));
+      expect(row(r.rows, 'motion')).toEqual({ id: 'motion', status: 'info', fix: 'none', reason: 'cantCheck' });
+      expect(r.showBanner).toBe(false);
+      expect(r.recordingMode).toBe('automatic');
+      expect(r.overall).toBe('ok');
     });
   });
 
@@ -282,7 +335,12 @@ describe('assessHealth', () => {
     it('never automatic while the server withdraws auto-record', () => {
       const r = assessHealth(snap(), ctx({ autoDetectAvailable: false }));
       expect(r.recordingMode).toBe('manual');
-      expect(row(r.rows, 'autoRecord')).toEqual({ id: 'autoRecord', status: 'info', fix: 'none' });
+      expect(row(r.rows, 'autoRecord')).toEqual({
+        id: 'autoRecord',
+        status: 'info',
+        fix: 'none',
+        reason: 'notAvailable',
+      });
     });
 
     it('auto-record on but motion missing: the auto-record row points at the motion fix', () => {

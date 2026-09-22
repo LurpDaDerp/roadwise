@@ -1,6 +1,6 @@
 // What the phone reports in `devices.permissions` (Task 10 writes it; migration 0007's lapse
-// trigger reads `location`, `motion`, `reportedFrom` and `ack`). Small by construction: nine
-// scalar fields, far under the column's 2048-byte limit.
+// trigger reads `location`, `motion`, `reportedFrom` and `ack`). Small by construction: at most
+// nine scalar fields, far under the column's 2048-byte limit.
 import type { PermissionSnapshot, ReportedFrom, ServerPermissions } from './types';
 
 export function toServerPermissions(
@@ -12,7 +12,8 @@ export function toServerPermissions(
     v: 1,
     location: s.location,
     precise: s.precise,
-    motion: s.motion,
+    // A motion state that could not be checked is left out: a missing key is unknown, never a lapse.
+    ...(s.motion === null ? {} : { motion: s.motion }),
     notifications: s.notifications,
     batteryOptimization: s.batteryOptimization,
     reportedFrom,
@@ -23,8 +24,8 @@ export function toServerPermissions(
 
 type Fingerprinted = Pick<
   PermissionSnapshot,
-  'location' | 'precise' | 'motion' | 'notifications' | 'batteryOptimization'
->;
+  'location' | 'precise' | 'notifications' | 'batteryOptimization'
+> & { motion?: PermissionSnapshot['motion'] };
 
 /**
  * A stable key over the reported permission states only — not the time, Low Power Mode,
@@ -36,7 +37,7 @@ export function permissionsFingerprint(p: Fingerprinted): string {
     'v1',
     p.location,
     p.precise === null ? 'null' : String(p.precise),
-    p.motion,
+    p.motion ?? 'null',
     p.notifications,
     p.batteryOptimization,
   ].join('|');

@@ -1,5 +1,5 @@
 import { PROMPTS_KEY } from '../keys';
-import { canPrompt, PROMPT_INTERVAL_MS, readPromptHistory, recordPrompt } from '../policy';
+import { canPrompt, offerPrompt, PROMPT_INTERVAL_MS, readPromptHistory, recordPrompt } from '../policy';
 import type { SettingsStore } from '../types';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -59,5 +59,33 @@ describe('recordPrompt / readPromptHistory', () => {
     expect(
       await readPromptHistory(memorySettings({ [PROMPTS_KEY]: { location: 'x', motion: T0, other: 1 } }))
     ).toEqual({ motion: T0 });
+  });
+});
+
+describe('offerPrompt (app-initiated prompts)', () => {
+  it('asks and records when the window is open', async () => {
+    const s = memorySettings();
+    const request = jest.fn(async () => 'granted' as const);
+    expect(await offerPrompt(s, 'locationAlways', T0, request)).toBe('granted');
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(s.data[PROMPTS_KEY]).toEqual({ locationAlways: T0 });
+  });
+
+  it('skips without calling the OS inside 14 days, and asks again at 14 days', async () => {
+    const s = memorySettings({ [PROMPTS_KEY]: { notifications: T0 } });
+    const request = jest.fn(async () => 'denied' as const);
+    expect(await offerPrompt(s, 'notifications', T0 + 14 * DAY - 1, request)).toBe('skipped');
+    expect(request).not.toHaveBeenCalled();
+    expect(s.data[PROMPTS_KEY]).toEqual({ notifications: T0 });
+    expect(await offerPrompt(s, 'notifications', T0 + 14 * DAY, request)).toBe('denied');
+    expect(s.data[PROMPTS_KEY]).toEqual({ notifications: T0 + 14 * DAY });
+  });
+
+  it('a request that throws is not recorded and the error propagates', async () => {
+    const s = memorySettings();
+    await expect(offerPrompt(s, 'motion', T0, () => Promise.reject(new Error('bridge')))).rejects.toThrow(
+      'bridge'
+    );
+    expect(s.data[PROMPTS_KEY]).toBeUndefined();
   });
 });

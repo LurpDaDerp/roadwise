@@ -1,6 +1,16 @@
 // The one prompt policy (product §8.3: "never re-prompt more than once per 14 days"). Every OS
-// permission request in the app goes through `createPermissionsAdapter` AND `canPrompt` first,
-// then `recordPrompt` (rev1: I3). Pure apart from the settings read/write.
+// permission request in the app goes through `createPermissionsAdapter` (rev1: I3). Which throttle
+// applies depends on who starts it:
+//
+// - **The app starts it** (PermissionPromptsHost's post-drive offers, onboarding re-offers,
+//   `ensureDrivePermissions` at drive start): use `offerPrompt` only — it checks `canPrompt`,
+//   makes the request and records it, so no caller can check the window and forget to record.
+// - **The driver taps it** (B2's Fix buttons, an onboarding primer's own "Allow" button): call the
+//   adapter directly, unthrottled. Throttling a tap the driver just made would turn the button
+//   into a dead control. Such a tap may still `recordPrompt`, so a later app-started offer waits.
+//
+// `canPrompt` / `recordPrompt` stay exported for reads (e.g. whether to show an offer at all).
+// Pure apart from the settings read/write.
 import { PROMPTS_KEY } from './keys';
 import type { PromptHistory, PromptPermission, SettingsStore } from './types';
 
@@ -45,4 +55,21 @@ export async function recordPrompt(
   const next = { ...(await readPromptHistory(settings)), [permission]: now };
   await settings.set(PROMPTS_KEY, next);
   return next;
+}
+
+/**
+ * An app-initiated prompt under the 14-day rule: `'skipped'` (no OS call) when `permission` was
+ * prompted less than 14 days ago; otherwise runs `request`, records the prompt and returns its
+ * result. A request that throws is not recorded (nothing was shown) and the error propagates.
+ */
+export async function offerPrompt<T>(
+  settings: SettingsStore,
+  permission: PromptPermission,
+  now: number,
+  request: () => Promise<T>
+): Promise<T | 'skipped'> {
+  if (!canPrompt(permission, await readPromptHistory(settings), now)) return 'skipped';
+  const result = await request();
+  await recordPrompt(settings, permission, now);
+  return result;
 }

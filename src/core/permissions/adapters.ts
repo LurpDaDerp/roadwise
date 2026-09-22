@@ -85,8 +85,11 @@ export interface PermissionsAdapter {
    * foreground comes first), or when Always is already granted.
    */
   requestLocationAlways(opts: { firstDriveDone: boolean }): Promise<LocationAccess>;
-  /** Through drive-sense `requestMotionPermission()` on both platforms; `unavailable` stays so. */
-  requestMotion(): Promise<Grant>;
+  /**
+   * Through drive-sense `requestMotionPermission()` on both platforms; `unavailable` stays so.
+   * null when it could not be asked or checked (no drive-sense, or the request and re-read failed).
+   */
+  requestMotion(): Promise<Grant | null>;
   /** Alert, badge and sound — never a provisional (quiet) authorisation. */
   requestNotifications(): Promise<NotificationAccess>;
   openAppSettings(): Promise<void>;
@@ -185,12 +188,13 @@ export function createPermissionsAdapter(
     return toLocationAccess(fg, bg);
   };
 
-  async function readMotion(port: DriveSensePort | null): Promise<Grant> {
-    if (!port) return 'unavailable';
+  /** null = could not be checked (no drive-sense in this build, or its read failed). */
+  async function readMotion(port: DriveSensePort | null): Promise<Grant | null> {
+    if (!port) return null;
     try {
       return (await port.getState()).motion;
     } catch {
-      return 'unavailable';
+      return null;
     }
   }
 
@@ -252,9 +256,10 @@ export function createPermissionsAdapter(
 
     async requestMotion() {
       const port = await deps.driveSense();
-      if (!port) return 'unavailable';
+      if (!port) return null;
       const current = await readMotion(port);
       if (current === 'unavailable' || current === 'granted') return current;
+      // A state that could not be read is still asked: the request itself reports the answer.
       try {
         return await port.requestMotionPermission();
       } catch {

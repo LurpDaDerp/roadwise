@@ -26,7 +26,11 @@ export interface PermissionSnapshot {
    * False means only Settings can change it (e.g. iOS after "Keep Only While Using").
    */
   locationCanAskAgain: boolean;
-  motion: Grant;
+  /**
+   * null = could not be checked (drive-sense absent or its read failed) — "can't check", never
+   * reported as `unavailable` (a statement about the device) and left out of the server report.
+   */
+  motion: Grant | null;
   notifications: NotificationAccess;
   notificationsCanAskAgain: boolean;
   batteryOptimization: BatteryOptimization;
@@ -54,7 +58,13 @@ export type HealthStatus = 'ok' | 'attention' | 'off' | 'info';
 
 export type FixAction = 'request' | 'openSettings' | 'openBatterySettings' | 'none';
 
-export type HealthReason = 'choice' | 'afterFirstDrive' | 'lapsed' | 'cantCheck';
+/**
+ * `choice`: the driver chose manual (A9 Skip, Always declined, or auto-record turned off);
+ * `notAvailable`: the server has withdrawn auto-record (the `auto_detect` flag) — nothing to fix;
+ * `afterFirstDrive`: iOS Always is offered only after the first completed drive;
+ * `lapsed`: previously granted, now lost; `cantCheck`: the state could not be read.
+ */
+export type HealthReason = 'choice' | 'notAvailable' | 'afterFirstDrive' | 'lapsed' | 'cantCheck';
 
 export interface HealthRow {
   id: HealthRowId;
@@ -111,7 +121,8 @@ export interface ServerPermissions {
   v: 1;
   location: LocationAccess;
   precise: boolean | null;
-  motion: Grant;
+  /** Absent when motion could not be checked (the lapse trigger reads a missing key as unknown). */
+  motion?: Grant;
   notifications: NotificationAccess;
   batteryOptimization: BatteryOptimization;
   reportedFrom: ReportedFrom;

@@ -3,8 +3,11 @@
 //
 // - iOS before the first completed drive, Always is "Available after your first drive" — `info`,
 //   no fix, and never a request (design §5.3: iOS Always is asked only after the first drive).
-// - Manual mode by choice (A9 Skip, Always declined) makes the Always / auto-record rows `info`
-//   with reason `choice`; the UI may offer an informational "Turn on" link, never a Fix.
+// - Manual mode by choice (A9 Skip, Always declined, or auto-record simply off — it is opt-in)
+//   makes the Always / auto-record / battery rows `info` with reason `choice`; the UI may offer an
+//   informational "Turn on" link, never a Fix.
+// - With auto-record withdrawn by the server (`autoDetectAvailable === false`) those rows are
+//   `info` with reason `notAvailable`: no "tap to fix" for a feature that fixing would not enable.
 // - `showBanner` is only for states the driver did not choose: location denied or approximate,
 //   or a lapse from a previously granted state (`everGranted`).
 // - A fix is `request` only while the OS can still ask; otherwise `openSettings`.
@@ -42,10 +45,17 @@ function preciseRow(s: PermissionSnapshot): HealthRow {
   return { id: 'precise', status: 'attention', fix: 'openSettings' };
 }
 
-/** Why Always is not something to fix right now, if it is not. */
-function alwaysExcuse(s: PermissionSnapshot, c: HealthContext): 'afterFirstDrive' | 'choice' | null {
+type Excuse = 'notAvailable' | 'afterFirstDrive' | 'choice';
+
+/**
+ * Why background detection (Always, auto-record, battery exemption) is not something to fix right
+ * now, if it is not. The withdrawn flag comes first: "after your first drive" would promise what
+ * the server is not offering.
+ */
+function alwaysExcuse(s: PermissionSnapshot, c: HealthContext): Excuse | null {
+  if (c.autoDetectAvailable === false) return 'notAvailable';
   if (s.platform === 'ios' && !c.firstDriveDone) return 'afterFirstDrive';
-  if (c.manualByChoice) return 'choice';
+  if (c.manualByChoice || !c.autoDetectOn) return 'choice';
   return null;
 }
 
@@ -63,6 +73,8 @@ function alwaysRow(s: PermissionSnapshot, c: HealthContext): HealthRow {
 
 function motionRow(s: PermissionSnapshot, c: HealthContext): HealthRow {
   switch (s.motion) {
+    case null:
+      return { id: 'motion', status: 'info', fix: 'none', reason: 'cantCheck' };
     case 'granted':
       return { id: 'motion', status: 'ok', fix: 'none' };
     case 'unavailable':
@@ -85,13 +97,14 @@ function autoRecordRow(
   mode: RecordingMode
 ): HealthRow {
   if (mode === 'automatic') return { id: 'autoRecord', status: 'ok', fix: 'none' };
-  if (c.autoDetectAvailable === false) return { id: 'autoRecord', status: 'info', fix: 'none' };
   const excuse = alwaysExcuse(s, c);
   if (excuse) return { id: 'autoRecord', status: 'info', fix: 'none', reason: excuse };
-  if (!c.autoDetectOn) return { id: 'autoRecord', status: 'info', fix: 'none', reason: 'choice' };
   // Wanted but blocked: point at whatever blocks it, Always first (the host needs both).
   const blocker = always.status !== 'ok' ? always : motion;
-  if (blocker.status === 'info') return { id: 'autoRecord', status: 'info', fix: 'none' };
+  if (blocker.status === 'info') {
+    const info: HealthRow = { id: 'autoRecord', status: 'info', fix: 'none' };
+    return blocker.reason ? { ...info, reason: blocker.reason } : info;
+  }
   const row: HealthRow = { id: 'autoRecord', status: 'attention', fix: blocker.fix };
   return blocker.reason === 'lapsed' ? { ...row, reason: 'lapsed' } : row;
 }
@@ -114,11 +127,13 @@ function batteryRow(s: PermissionSnapshot, c: HealthContext): HealthRow {
       return { id: 'battery', status: 'ok', fix: 'none' };
     case 'unknown':
       return { id: 'battery', status: 'info', fix: 'none', reason: 'cantCheck' };
-    case 'optimized':
-      // It matters to background detection only, which a manual-by-choice driver declined.
-      return c.manualByChoice
-        ? { id: 'battery', status: 'info', fix: 'none', reason: 'choice' }
+    case 'optimized': {
+      // It matters to background detection only: not a fault while that is chosen off or withdrawn.
+      const excuse = alwaysExcuse(s, c);
+      return excuse
+        ? { id: 'battery', status: 'info', fix: 'none', reason: excuse }
         : { id: 'battery', status: 'attention', fix: 'openBatterySettings' };
+    }
   }
 }
 
@@ -130,11 +145,13 @@ function lowPowerRow(s: PermissionSnapshot): HealthRow {
 
 function recordingModeOf(s: PermissionSnapshot, c: HealthContext): RecordingMode {
   if (!c.drives || !hasLocation(s)) return 'unavailable';
+  // Motion that could not be checked (null) does not decide the mode: the host arms only with
+  // motion granted, so a failed read here must not contradict an armed host.
   const automatic =
     c.autoDetectAvailable !== false &&
     c.autoDetectOn &&
     s.location === 'always' &&
-    s.motion === 'granted';
+    (s.motion === 'granted' || s.motion === null);
   return automatic ? 'automatic' : 'manual';
 }
 
@@ -142,12 +159,11 @@ function bannerFor(s: PermissionSnapshot, c: HealthContext): boolean {
   if (!c.drives) return false;
   if (s.location === 'denied') return true;
   if (hasLocation(s) && s.precise === false) return true;
-  // Lapses. Always only matters while the driver wants auto-record, and never before an iOS
-  // driver's first drive or after a choice of manual mode.
+  // Lapses. Always only matters while auto-record is offered and wanted: never before an iOS
+  // driver's first drive, after a choice of manual mode, or with the flag withdrawn.
   if (
     s.location === 'foreground' &&
     c.everGranted.locationAlways === true &&
-    c.autoDetectOn &&
     alwaysExcuse(s, c) === null
   ) {
     return true;

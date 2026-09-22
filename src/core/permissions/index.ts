@@ -1,7 +1,13 @@
 export * from './types';
 export * from './keys';
 export { assessHealth, nextEverGranted } from './health';
-export { canPrompt, PROMPT_INTERVAL_MS, readPromptHistory, recordPrompt } from './policy';
+export {
+  canPrompt,
+  offerPrompt,
+  PROMPT_INTERVAL_MS,
+  readPromptHistory,
+  recordPrompt,
+} from './policy';
 export { permissionsFingerprint, toServerPermissions } from './serverShape';
 export { createDriveSenseResolver, resolveDriveSense } from './driveSensePort';
 export type { DriveSenseLoaders, DriveSensePort } from './driveSensePort';

@@ -36,6 +36,12 @@ describe('toServerPermissions', () => {
     expect(p.reportedFrom).toBe('background');
   });
 
+  it('leaves motion out when it could not be checked (a missing key is unknown, never a lapse)', () => {
+    const p = toServerPermissions(snap({ motion: null }), 'foreground');
+    expect('motion' in p).toBe(false);
+    expect(permissionsFingerprint(p)).toBe(permissionsFingerprint(snap({ motion: null })));
+  });
+
   it('fits in 2048 bytes', () => {
     const bytes = new TextEncoder().encode(JSON.stringify(toServerPermissions(snap(), 'background', true)));
     expect(bytes.length).toBeLessThanOrEqual(2048);
@@ -58,6 +64,7 @@ describe('permissionsFingerprint', () => {
       { precise: false },
       { precise: null },
       { motion: 'denied' },
+      { motion: null },
       { notifications: 'granted' },
       { batteryOptimization: 'unknown' },
     ] as Partial<PermissionSnapshot>[]) {
