@@ -11,7 +11,9 @@
  * Each answer also trains the device's own evidence about who drives (§9.7 "user answers train a
  * per-user prior on device"): the prior and the count for the trip's start/end route
  * (`recordRoleAnswer`), written in the same transaction so the answer and what it taught commit
- * together. A changed answer counts again — the counts are answers given, not trips.
+ * together. Each trip counts once: a changed answer replaces the one counted before, and the
+ * same answer again changes nothing (ruling E2 concern 1) — though it is still queued, so the
+ * server hears every answer in order.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
@@ -97,7 +99,12 @@ export async function setTripRole(
       tx,
       owner
     );
-    await recordRoleAnswer(tx, role, { start: current.start_geohash5, end: current.end_geohash5 });
+    await recordRoleAnswer(
+      tx,
+      role,
+      { start: current.start_geohash5, end: current.end_geohash5 },
+      clientTripId
+    );
     return updated;
   });
   // After the commit, so a listener that drains meets the row, not the lock.

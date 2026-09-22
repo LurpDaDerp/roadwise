@@ -3,6 +3,9 @@ import { CONSTANTS } from '@scoring';
 import { seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import {
   HABITUAL_MIN_CONFIRMATIONS,
+  forgetRoleAnswer,
+  ROLE_ANSWER_KEY_PREFIX,
+  roleAnswerKey,
   ROLE_PRIOR_KEY,
   ROLE_ROUTES_KEY,
   ROLE_ROUTES_MAX,
@@ -108,6 +111,100 @@ describe('recordRoleAnswer updates the prior and the route', () => {
     expect(routes[routeKey(cell(1), 'zzzzz')]).toBeUndefined();
     expect(routes[routeKey(cell(0), 'zzzzz')]).toEqual({ driver: 2, other: 0 });
     expect(routes[routeKey(cell(ROLE_ROUTES_MAX), 'zzzzz')]).toEqual({ driver: 1, other: 0 });
+  });
+});
+
+describe('one trip counts once: its counted answer is kept and a changed answer replaces it (E2 fix round 1)', () => {
+  const route = { start: '9q8yy', end: 'c23nb' };
+  const KEY = routeKey('9q8yy', 'c23nb');
+  const settings = () => createSettingsRepo(db);
+
+  test('the record is keyed by trip id', () => {
+    expect(ROLE_ANSWER_KEY_PREFIX).toBe('role.answer.');
+    expect(roleAnswerKey('trip-1')).toBe('role.answer.trip-1');
+  });
+
+  test('passenger then driver leaves the prior and the route as if only driver had been answered', async () => {
+    await recordRoleAnswer(db, 'passenger', route, 'trip-1');
+    await recordRoleAnswer(db, 'driver', route, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toEqual({ drove: true, route: KEY });
+  });
+
+  test('driver then passenger reverses the same way', async () => {
+    await recordRoleAnswer(db, 'driver', route, 'trip-1');
+    await recordRoleAnswer(db, 'passenger', route, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 0, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 0, other: 1 } });
+  });
+
+  test('driver then driver counts once, in the prior and on the route', async () => {
+    await recordRoleAnswer(db, 'driver', route, 'trip-1');
+    await recordRoleAnswer(db, 'driver', route, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+    await expect(isHabitualDriverRoute(db, route.start, route.end)).resolves.toBe(false);
+  });
+
+  test('passenger then transit is the same "not driving" answer: counted once', async () => {
+    await recordRoleAnswer(db, 'passenger', route, 'trip-1');
+    await recordRoleAnswer(db, 'other', route, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 0, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 0, other: 1 } });
+  });
+
+  test('negative control: the same answers on different trips all count', async () => {
+    await recordRoleAnswer(db, 'passenger', route, 'trip-1');
+    await recordRoleAnswer(db, 'driver', route, 'trip-2');
+    await recordRoleAnswer(db, 'driver', route, 'trip-3');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 2, answers: 3 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 2, other: 1 } });
+    await expect(isHabitualDriverRoute(db, route.start, route.end)).resolves.toBe(true);
+  });
+
+  test('a flip-flopping answer on one trip never makes a route habitual', async () => {
+    for (const role of ['driver', 'passenger', 'driver', 'passenger', 'driver'] as const) {
+      await recordRoleAnswer(db, role, route, 'trip-1');
+    }
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(isHabitualDriverRoute(db, route.start, route.end)).resolves.toBe(false);
+  });
+
+  test('a change on a trip whose route has since been evicted still corrects the prior', async () => {
+    await recordRoleAnswer(db, 'passenger', route, 'trip-1');
+    await settings().set(ROLE_ROUTES_KEY, {});
+    await recordRoleAnswer(db, 'driver', route, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+  });
+
+  test('a trip with no geohash is recorded with no route and changes only the prior', async () => {
+    await recordRoleAnswer(db, 'passenger', { start: null, end: null }, 'trip-1');
+    await recordRoleAnswer(db, 'driver', { start: null, end: null }, 'trip-1');
+    await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toBeNull();
+    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toEqual({ drove: true, route: null });
+  });
+
+  describe('forgetRoleAnswer (a trip deleted locally)', () => {
+    test('removes the record and what it counted, dropping a route left with no answers', async () => {
+      await recordRoleAnswer(db, 'driver', route, 'trip-1');
+      await recordRoleAnswer(db, 'driver', { start: 'aaaaa', end: 'bbbbb' }, 'trip-2');
+      await forgetRoleAnswer(db, 'trip-1');
+      await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toBeNull();
+      await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({
+        [routeKey('aaaaa', 'bbbbb')]: { driver: 1, other: 0 },
+      });
+    });
+
+    test('is a no-op for a trip never answered', async () => {
+      await recordRoleAnswer(db, 'driver', route, 'trip-1');
+      await forgetRoleAnswer(db, 'trip-9');
+      await expect(settings().get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+      await expect(settings().get(ROLE_ROUTES_KEY)).resolves.toEqual({ [KEY]: { driver: 1, other: 0 } });
+    });
   });
 });
 

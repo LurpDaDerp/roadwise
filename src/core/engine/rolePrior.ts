@@ -102,26 +102,36 @@ export async function isHabitualDriverRoute(
 }
 
 /**
- * Train both on one answer. `passenger` and `other` (transit) both count as "not driving". A trip
- * with either geohash unknown trains the prior only. Pass the transaction the answer is written
- * in, so the answer and what it taught commit together.
+ * The answer a trip has already contributed, so a changed answer replaces it rather than counting
+ * twice (ruling E2 concern 1): `{ drove, route }`, where `route` is the `routeKey` that was
+ * counted, or null when the trip had no geohashes. One settings key per trip, so a delete can
+ * remove exactly its own (`forgetRoleAnswer`).
  */
-export async function recordRoleAnswer(
-  db: Db,
-  role: 'driver' | 'passenger' | 'other',
-  route: { start: string | null; end: string | null }
-): Promise<void> {
-  const settings = createSettingsRepo(db);
-  const drove = role === 'driver';
+export const ROLE_ANSWER_KEY_PREFIX = 'role.answer.';
+export const roleAnswerKey = (clientTripId: string): string => `${ROLE_ANSWER_KEY_PREFIX}${clientTripId}`;
 
+export interface CountedAnswer {
+  drove: boolean;
+  route: string | null;
+}
+
+const asCounted = (v: unknown): CountedAnswer | null => {
+  if (v === null || typeof v !== 'object') return null;
+  const { drove, route } = v as Partial<CountedAnswer>;
+  if (typeof drove !== 'boolean') return null;
+  return { drove, route: typeof route === 'string' ? route : null };
+};
+
+/** Add (`sign` 1) or take back (`sign` -1) one answer's share of the prior. Never below zero. */
+async function shiftPrior(db: Db, drove: boolean, sign: 1 | -1): Promise<void> {
   const prior = await readCounts(db);
-  await settings.set(ROLE_PRIOR_KEY, {
-    driverAnswers: prior.driverAnswers + (drove ? 1 : 0),
-    answers: prior.answers + 1,
-  } satisfies RolePriorCounts);
+  const answers = Math.max(0, prior.answers + sign);
+  const driverAnswers = Math.min(answers, Math.max(0, prior.driverAnswers + (drove ? sign : 0)));
+  await createSettingsRepo(db).set(ROLE_PRIOR_KEY, { driverAnswers, answers } satisfies RolePriorCounts);
+}
 
-  if (route.start === null || route.end === null) return;
-  const key = routeKey(route.start, route.end);
+/** Add one answer to a route, making it the most recent and evicting past `ROLE_ROUTES_MAX`. */
+async function addToRoute(db: Db, key: string, drove: boolean): Promise<void> {
   const routes = await readRoutes(db);
   const was = routes[key];
   const next = {
@@ -133,7 +143,75 @@ export async function recordRoleAnswer(
   routes[key] = next;
   const keys = Object.keys(routes);
   for (const stale of keys.slice(0, Math.max(0, keys.length - ROLE_ROUTES_MAX))) delete routes[stale];
-  await settings.set(ROLE_ROUTES_KEY, routes);
+  await createSettingsRepo(db).set(ROLE_ROUTES_KEY, routes);
+}
+
+/**
+ * Take one answer back from a route, where it still is (an evicted route has nothing to take
+ * back). Its recency is left alone — taking back is not answering — and a route left with no
+ * answers is dropped, so a deleted trip's route does not linger.
+ */
+async function takeFromRoute(db: Db, key: string, drove: boolean): Promise<void> {
+  const routes = await readRoutes(db);
+  const was = routes[key];
+  if (!was) return;
+  const next = {
+    driver: Math.max(0, (count(was.driver) ?? 0) - (drove ? 1 : 0)),
+    other: Math.max(0, (count(was.other) ?? 0) - (drove ? 0 : 1)),
+  };
+  if (next.driver === 0 && next.other === 0) delete routes[key];
+  else routes[key] = next;
+  await createSettingsRepo(db).set(ROLE_ROUTES_KEY, routes);
+}
+
+async function takeBack(db: Db, counted: CountedAnswer): Promise<void> {
+  await shiftPrior(db, counted.drove, -1);
+  if (counted.route !== null) await takeFromRoute(db, counted.route, counted.drove);
+}
+
+/**
+ * Train both on one answer. `passenger` and `other` (transit) both count as "not driving". A trip
+ * with either geohash unknown trains the prior only. Pass the transaction the answer is written
+ * in, so the answer and what it taught commit together.
+ *
+ * With `clientTripId` (as `roleActions.ts` always passes), each trip counts once: an answer that
+ * says the same as the one already counted for the trip changes nothing (passenger and transit
+ * are the same "not driving"), and a changed answer takes the earlier one back from the prior and
+ * its route before adding itself. Without it, every call counts.
+ */
+export async function recordRoleAnswer(
+  db: Db,
+  role: 'driver' | 'passenger' | 'other',
+  route: { start: string | null; end: string | null },
+  clientTripId?: string
+): Promise<void> {
+  const settings = createSettingsRepo(db);
+  const drove = role === 'driver';
+  const key = route.start === null || route.end === null ? null : routeKey(route.start, route.end);
+
+  if (clientTripId !== undefined) {
+    const counted = asCounted(await settings.get<unknown>(roleAnswerKey(clientTripId)));
+    if (counted !== null && counted.drove === drove) return;
+    if (counted !== null) await takeBack(db, counted);
+  }
+
+  await shiftPrior(db, drove, 1);
+  if (key !== null) await addToRoute(db, key, drove);
+  if (clientTripId !== undefined) {
+    await settings.set(roleAnswerKey(clientTripId), { drove, route: key } satisfies CountedAnswer);
+  }
+}
+
+/**
+ * A trip deleted locally: take back what its answer counted and remove the record, so nothing
+ * about the drive — its route key included — outlives the delete. A no-op for a trip never
+ * answered. Call it inside the delete's transaction.
+ */
+export async function forgetRoleAnswer(db: Db, clientTripId: string): Promise<void> {
+  const settings = createSettingsRepo(db);
+  const counted = asCounted(await settings.get<unknown>(roleAnswerKey(clientTripId)));
+  if (counted !== null) await takeBack(db, counted);
+  await settings.remove(roleAnswerKey(clientTripId));
 }
 
 /** A row the phone was being held and used on while the car moved. */

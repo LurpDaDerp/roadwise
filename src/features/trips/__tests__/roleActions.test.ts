@@ -128,6 +128,24 @@ describe('an answer trains the per-user prior and the route (spec 9.7: answers t
     await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toBeNull();
   });
 
+  test('a changed answer replaces the earlier one: passenger then driver counts as one driver answer', async () => {
+    await setTripRole(db, 'school', 'passenger', NOW);
+    await setTripRole(db, 'school', 'driver', NOW + 1);
+    const settings = createSettingsRepo(db);
+    await expect(settings.get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(settings.get(ROLE_ROUTES_KEY)).resolves.toEqual({
+      [routeKey('9q8yy', 'c23nb')]: { driver: 1, other: 0 },
+    });
+  });
+
+  test('the same answer twice counts once, though both are still queued for the server', async () => {
+    await setTripRole(db, 'school', 'driver', NOW);
+    await setTripRole(db, 'school', 'driver', NOW + 1);
+    await expect(createSettingsRepo(db).get(ROLE_PRIOR_KEY)).resolves.toEqual({ driverAnswers: 1, answers: 1 });
+    await expect(isHabitualDriverRoute(db, '9q8yy', 'c23nb')).resolves.toBe(false);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(2);
+  });
+
   test('a refused answer trains nothing', async () => {
     await expect(setTripRole(db, 'ghost', 'driver', NOW)).rejects.toBeInstanceOf(MissingTripError);
     await expect(createSettingsRepo(db).get(ROLE_PRIOR_KEY)).resolves.toBeNull();
