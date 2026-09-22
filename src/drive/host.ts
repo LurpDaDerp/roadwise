@@ -144,7 +144,9 @@ export interface DriveHostDeps {
   /**
    * The speed-limit client. A dry run (`persistence: 'none'`) never calls `startTrip` or `prefetch`,
    * the only calls that fetch and store tiles, so it cannot persist or use the network whatever
-   * client it is given (review M2); U5 may still pass `persist: false` or a fake for clarity.
+   * client it is given (review M2). It therefore gets limits only through `lookup()`: a real
+   * client built with `persist: false` answers nothing in a dry run, so a simulation must pass a
+   * source that answers from `lookup()` itself, such as U5's `fakeLimits`.
    */
   limits: SpeedLimitClient;
   player: AlertPlayer;
