@@ -84,8 +84,10 @@ export const GRAVITY_TAU_S = 5;
 /**
  * The accelerometer corrects gravity only while its magnitude is within this (g) of 1 g, so
  * dynamic acceleration (a hard brake, a corner) never tilts the estimate; the gyro alone carries it.
+ * A horizontal acceleration h moves |a| by √(1 + h²) − 1 ≈ h²/2, so this gate trips at
+ * h = √((1 + GATE)² − 1) ≈ 0.2 g — it must stay below HARSH_ACCEL_G (0.28; a test enforces it).
  */
-export const GRAVITY_GATE_G = 0.05;
+export const GRAVITY_GATE_G = 0.02;
 /** A gap between raw samples longer than this (s), or a non-increasing timestamp, re-seeds gravity from the accelerometer. */
 export const GRAVITY_RESET_GAP_S = 1;
 

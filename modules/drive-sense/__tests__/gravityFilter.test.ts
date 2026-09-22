@@ -1,6 +1,7 @@
 /** @jest-environment node */
 // The Android complementary gravity filter (R1): gyro propagation + an accelerometer low-pass with
 // time constant GRAVITY_TAU_S, in the reference sign convention.
+import { CONSTANTS } from '@scoring';
 import { G_MPS2, GRAVITY_GATE_G, GRAVITY_TAU_S } from '../src/extract/constants';
 import { extractSecond, initialExtractState } from '../src/extract/extract';
 import {
@@ -46,6 +47,14 @@ test(`a wrong seed decays with time constant GRAVITY_TAU_S (${GRAVITY_TAU_S} s)`
   const alpha = GRAVITY_TAU_S / (GRAVITY_TAU_S + 0.04);
   expect(err1s / err0).toBeCloseTo(alpha ** 25, 9);
   expect(norm(sub(imu[n]!.g, truth))).toBeLessThan(0.06 * err0);
+});
+
+test('the gate trips, in horizontal acceleration, below the harsh-acceleration threshold', () => {
+  // |a| = √(1 + h²), so the gate closes once h > √((1 + GATE)² − 1). Above HARSH_ACCEL_G that
+  // would leave harsh accelerations between the two ungated, and absorbed into gravity.
+  const tripG = Math.sqrt((1 + GRAVITY_GATE_G) ** 2 - 1);
+  expect(tripG).toBeLessThan(CONSTANTS.HARSH_ACCEL_G);
+  expect(tripG).toBeLessThan(CONSTANTS.HARSH_BRAKE_G);
 });
 
 test(`the accelerometer is ignored while |‖a‖ − 1| > GRAVITY_GATE_G (${GRAVITY_GATE_G} g)`, () => {
@@ -153,6 +162,36 @@ describe('through the extractor (N1 fix round: GRAVITY_TAU_S 0.5 → 5 s plus th
       expect(alignment.aligned).toBe(true);
       expect(alignment.gravityDevS).toBe(0);
     }
+  });
+
+  test(`a 0.30 g acceleration held 3 s reads ≥ HARSH_ACCEL_G throughout, and nothing false follows`, () => {
+    // align at 0.25 g, cruise 10 s, then 0.30 g from 18.8 s to 21.8 s
+    const rows = pipeline(
+      rawDriveSeconds({
+        seconds: 26,
+        seed: 12,
+        v0: 5,
+        aLon: profile([
+          [0, 0],
+          [0.3, 0.25],
+          [7.5, 0.25],
+          [7.8, 0],
+          [18.5, 0],
+          [18.8, 0.3],
+          [21.8, 0.3],
+          [22.1, 0],
+        ]),
+        aLat: () => 0,
+      })
+    ).map((r) => r.row);
+    // The harsh-acceleration detector reads each row's aLonMax against HARSH_ACCEL_G
+    // (src/core/detectors/harsh.ts). Every row of the hold (seconds 20–22; the hold ends at 21.8 s)
+    // must reach it — with the gate at 0.05 these rows read 0.27, 0.23, 0.20 as gravity absorbed
+    // the acceleration. The row minima show there is no decay either: within 0.03 g of 0.30.
+    for (const row of rows.slice(19, 22)) expect(row.aLonMax).toBeGreaterThanOrEqual(CONSTANTS.HARSH_ACCEL_G);
+    for (const row of rows.slice(19, 21)) expect(row.aLonMin).toBeGreaterThanOrEqual(0.27);
+    // after the release (from second 23): no false brake beyond 0.05 g
+    for (const row of rows.slice(22)) expect(row.aLonMin).toBeGreaterThanOrEqual(-0.05);
   });
 
   test('a real reorientation is still absorbed: the gyro carries it at once', () => {
