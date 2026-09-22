@@ -18,9 +18,13 @@
 --     line longer than the schema's 4096 characters (parts are chunked at 256 vertices).
 --   * candidate distance and bearing are measured the way the device's nearestOnPolyline measures
 --     them (equirectangular metres at the query point's latitude, the bearing of the nearest
---     segment in digitised order), so device and server rank the same roads the same way.
---   * a truncated tile keeps its most important roads: past 2000 segments the cut falls on minor
---     classes first (S2 review), so the car's own road outlives a parallel side street.
+--     segment in digitised order), so device and server rank the same roads the same way to within
+--     the 1e-5 degree encoding: the device measures the tile's snapped, clipped, precision-5 lines,
+--     the server the full-precision geometry, so distances can differ by up to about 0.8 m. Exact
+--     ties (the same geometry on both paths) still break on the shared key.
+--   * a truncated tile keeps its most important road classes: past 2000 segments the cut falls on
+--     minor classes first (S2 review), so a major road outlives the side streets beside it. The cut
+--     counts chunks, so it can fall inside one road; the device caps a truncated tile's confidence.
 
 create extension if not exists postgis with schema extensions;
 
@@ -112,12 +116,21 @@ create trigger sections_touch before update on hpms.sections for each row execut
 -- the row, and the line is stored in one canonical orientation (rulings B2 I-1, B1 R2-M1)
 create or replace function public.limits_cache_normalize() returns trigger
 language plpgsql set search_path = public as $$
+declare
+  v_a extensions.geometry := extensions.st_startpoint(new.geom);
+  v_b extensions.geometry := extensions.st_endpoint(new.geom);
+  v_n int := extensions.st_npoints(new.geom);
 begin
   -- the vertex order must not say which way the driver behind the lookup was going: reversed when
-  -- the first vertex sorts after the last, by lng then lat. A heading (one-way roads only) keeps the
-  -- direction of traffic; the queries serve it as oneway 1 or -1 against this orientation
-  if (extensions.st_x(extensions.st_startpoint(new.geom)), extensions.st_y(extensions.st_startpoint(new.geom)))
-     > (extensions.st_x(extensions.st_endpoint(new.geom)), extensions.st_y(extensions.st_endpoint(new.geom))) then
+  -- the first vertex sorts after the last, by lng then lat. A closed line (first point = last) ties
+  -- there, so it is ordered by its second and penultimate points instead (security R3-M1). A heading
+  -- (one-way roads only) keeps the direction of traffic; the queries serve it as oneway 1 or -1
+  -- against this orientation, and 0 on a closed line
+  if (extensions.st_x(v_a), extensions.st_y(v_a)) = (extensions.st_x(v_b), extensions.st_y(v_b)) and v_n >= 3 then
+    v_a := extensions.st_pointn(new.geom, 2);
+    v_b := extensions.st_pointn(new.geom, v_n - 1);
+  end if;
+  if (extensions.st_x(v_a), extensions.st_y(v_a)) > (extensions.st_x(v_b), extensions.st_y(v_b)) then
     new.geom := extensions.st_reverse(new.geom);
   end if;
   if tg_op = 'INSERT' then
@@ -192,6 +205,8 @@ begin
     -- canonical orientation, so the heading says which way along it traffic runs: 1 with, -1 against
     select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text,
       case when c.heading_deg is null then 0
+      -- a closed line (a loop) has no start-to-end direction to hold the heading against
+      when extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom)) is null then 0
       when abs(mod((c.heading_deg::double precision - degrees(extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom))))::numeric + 540, 360) - 180) <= 90 then 1
       else -1 end, c.geom
       from public.limits_cache c
@@ -301,6 +316,8 @@ begin
       -- cache rows are few and are the only answer their road has: they are never cut
       select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text,
       case when c.heading_deg is null then 0
+      -- a closed line (a loop) has no start-to-end direction to hold the heading against
+      when extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom)) is null then 0
       when abs(mod((c.heading_deg::double precision - degrees(extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom))))::numeric + 540, 360) - 180) <= 90 then 1
       else -1 end,
         0, 1, c.geom, c.expires_at
@@ -315,14 +332,34 @@ begin
       cross join lateral extensions.st_dump(extensions.st_clipbybox2d(s.g, v_box::extensions.box2d)) cp
       where extensions.st_geometrytype(cp.geom) = 'ST_LineString'
     ),
-    parts as (
-      -- chunks of at most 256 vertices keep every encoded line far under the schema's 4096 characters
-      select c.prov, c.key, c.lim, c.hw, c.ow, c.rank, c.part, c.cpart, ch.i,
-        extensions.st_makeline(array(
-          select extensions.st_pointn(c.cg, j) from generate_series(ch.i, least(ch.i + 255, extensions.st_npoints(c.cg))) j order by j)) as pg
+    lines as (
+      select c.*, row_number() over () as lid
       from clipped c
-      cross join lateral generate_series(1, extensions.st_npoints(c.cg) - 1, 255) ch(i)
       where extensions.st_geometrytype(c.cg) = 'ST_LineString' and extensions.st_npoints(c.cg) >= 2 and extensions.st_length(c.cg) > 0
+    ),
+    pts as (
+      -- each line's points dumped once. Chunks of at most 256 vertices keep every encoded line far
+      -- under the schema's 4096 characters: point n is in chunk (n-1)/255, and a chunk's first point
+      -- also ends the chunk before it, so consecutive chunks share a vertex and leave no gap
+      select l.lid, d.path[1] as n, d.geom, ((d.path[1] - 1) / 255) as i
+      from lines l
+      cross join lateral extensions.st_dumppoints(l.cg) d
+      union all
+      select l.lid, d.path[1], d.geom, ((d.path[1] - 1) / 255) - 1
+      from lines l
+      cross join lateral extensions.st_dumppoints(l.cg) d
+      where d.path[1] > 1 and (d.path[1] - 1) % 255 = 0
+    ),
+    chunks as (
+      select pt.lid, pt.i, extensions.st_makeline(pt.geom order by pt.n) as pg
+      from pts pt
+      group by pt.lid, pt.i
+      having count(*) >= 2
+    ),
+    parts as (
+      select l.prov, l.key, l.lim, l.hw, l.ow, l.rank, l.part, l.cpart, ch.i, ch.pg
+      from lines l
+      join chunks ch on ch.lid = l.lid
     ),
     ranked as (
       select p.*, row_number() over (order by p.rank, p.prov, p.key, p.part, p.cpart, p.i) as rn, count(*) over () as total

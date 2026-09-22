@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(189);
+select plan(196);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -383,6 +383,26 @@ update public.limits_cache set geom = extensions.st_geomfromtext('LINESTRING(-12
 select is((select extensions.st_asewkt(geom) from public.limits_cache where segment_key = '0000000000000d01'),
   'SRID=4326;LINESTRING(-122.307 47.6425,-122.305 47.6425)', 'and so is a direct update');
 
+-- a closed line ties on its end points: it is ordered by its second and penultimate points (security R3-M1)
+select lives_ok($$ select public.put_limits_cache('loop-a', '{"type":"LineString","coordinates":[[-122.3300,47.6450],[-122.3290,47.6455],[-122.3280,47.6450],[-122.3290,47.6445],[-122.3300,47.6450]]}', 20, 90, 7) $$,
+  'a loop written one way round');
+select lives_ok($$ select public.put_limits_cache('loop-b', '{"type":"LineString","coordinates":[[-122.3300,47.6450],[-122.3290,47.6445],[-122.3280,47.6450],[-122.3290,47.6455],[-122.3300,47.6450]]}', 20, 90, 7) $$,
+  'the same loop written the other way round');
+select is((select array_agg(distinct extensions.st_asewkt(geom)) from public.limits_cache
+    where segment_key in (left(encode(sha256(convert_to('loop-a', 'UTF8')), 'hex'), 16), left(encode(sha256(convert_to('loop-b', 'UTF8')), 'hex'), 16))),
+  array['SRID=4326;LINESTRING(-122.33 47.645,-122.329 47.6445,-122.328 47.645,-122.329 47.6455,-122.33 47.645)'],
+  'is stored identically either way round, second point sorting before the penultimate');
+select is((select array_agg(distinct oneway) from public.speed_limit_candidates(47.6450, -122.3280, 10) where provider = 'aws'), array[0],
+  'a headed loop has no start-to-end direction and is served two-way (review M6)');
+
+-- the tile's expiry invariant (review M8): every tile holding a live cache row expires in the future
+select is((select bool_and((t -> 'expiresAt')::bigint > floor(extract(epoch from now()) * 1000)::bigint) and count(*) > 0
+    from jsonb_array_elements(public.speed_limit_tiles(array(
+      select distinct pg_temp.tile_of(extensions.st_y(extensions.st_startpoint(geom)), extensions.st_x(extensions.st_startpoint(geom)))
+      from public.limits_cache where expires_at > now() limit 4)) -> 'tiles') t
+    where exists (select 1 from jsonb_array_elements(t -> 'segments') s where s ->> 'provider' = 'aws')),
+  true, 'every tile with a live cache row has expiresAt after now');
+
 -- the bounded purge: each put_limits_cache call deletes at most 100 expired rows (review M-1)
 reset role;
 delete from public.limits_cache;
@@ -460,11 +480,16 @@ insert into osm.ways (osm_id, geom, highway, maxspeed_mph)
 insert into osm.ways (osm_id, geom, highway, maxspeed_mph)
   values (9999999999, extensions.st_geomfromtext('LINESTRING(-122.3285 47.6320, -122.3265 47.6320)', 4326), 'motorway', 60);
 set local role service_role;
+select lives_ok($$ select public.put_limits_cache('dense-leg', '{"type":"LineString","coordinates":[[-122.3279,47.6305],[-122.3272,47.6305]]}', 20, null, 7) $$,
+  'an unexpired cache row inside the dense tile');
 create temporary table b1_dense as select pg_temp.tile(public.speed_limit_tiles(array[pg_temp.tile_of(47.6320, -122.3275)]), pg_temp.tile_of(47.6320, -122.3275)) as t;
 select is((select (t -> 'truncated')::boolean from b1_dense), true, 'a tile past 2000 segments says it is truncated');
 select is((select jsonb_array_length(t -> 'segments') from b1_dense), 2000, 'and carries exactly 2000');
 select is((select count(*)::int from b1_dense, jsonb_array_elements(t -> 'segments') s where s ->> 'id' = '9999999999'), 1,
   'the motorway survives the cut although its key sorts last');
+select is((select count(*)::int from b1_dense, jsonb_array_elements(t -> 'segments') s
+    where s ->> 'provider' = 'aws' and s ->> 'id' = left(encode(sha256(convert_to('dense-leg', 'UTF8')), 'hex'), 16) and (t -> 'truncated')::boolean), 1,
+  'and so does the cache row: cache rows are never cut (review M2)');
 select is((select count(*)::int from public.speed_limit_candidates(47.6320, -122.3275, 5)), 20, 'candidates are capped at 20 rows');
 
 reset role;
