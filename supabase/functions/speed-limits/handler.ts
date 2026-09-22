@@ -3,7 +3,8 @@
 // Two routes, one function:
 //
 //   GET  ?tiles=15/x/y,…  (1..4 keys) → `TileBatchResponse`: `speed_limit_tiles`' JSON as the
-//        database built it, plus `fallback: 'aws' | null` (`'aws'` iff the AWS client is configured).
+//        database built it, plus `fallback: 'aws' | null` (`'aws'` iff the AWS client is configured
+//        and at least one requested tile overlaps `AWS_COVERAGE`).
 //        Validated against the device's own schema before it is sent: the device refuses a whole
 //        batch for one bad segment, so a batch this end would send wrongly is a 500, never a
 //        half-good 200. `truncated` is passed through as the database set it.
@@ -37,6 +38,7 @@ import {
 import { asPgError } from '../_shared/pg.ts';
 import { nearestOnPolyline, type LatLng } from '../_shared/speedLimits/geometry';
 import { matchLimit, type Candidate, type MatchResult } from '../_shared/speedLimits/match';
+import { parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
 import {
   PointRequestSchema,
   PointResponseSchema,
@@ -49,23 +51,17 @@ import type { RoutesClient, SpanLimit } from './aws.ts';
 
 /**
  * Every rate-limit budget this function spends, in one place (B1 security audit; rulings B2 M-1,
- * M-2). Each is one `take_rate_limit(user, key, window, max)` row; handler.test.ts pins the values.
+ * M-2, F1). Each per-user budget is one `take_rate_limit(user, key, window, max)` row; the global
+ * one is one `take_global_rate_limit(key, window, max)` row. handler.test.ts pins the values.
  *   aws:       AWS lookups per user per day. Each costs money, so a spent budget is `unknown`.
  *   awsGlobal: AWS lookups per day across every user (`AWS_GLOBAL_PER_DAY`), so N accounts cannot
- *              make 100·N paid calls. One row, owned by `AWS_GLOBAL_SENTINEL_USER`. Spent or
- *              unreadable, it is `unknown`: the check fails closed.
+ *              make 100·N paid calls. Spent or unreadable, it is `unknown`: the check fails closed.
  *   tiles:     tile batches per user per hour. The device asks for one batch per kilometre (about
  *              two a minute at highway speed), so 240 an hour is double that with room for retries.
  *   point:     point lookups per user per hour (429 when spent). The device asks at most one per
  *              prefetch window, about one a kilometre, so 600 an hour is far above any honest drive.
  */
 export const AWS_GLOBAL_PER_DAY = 2000;
-/**
- * The owner of the global AWS row: the nil uuid, which `gen_random_uuid()` never produces, so it can
- * never be a real user's budget. `rate_limits.user_id` references `auth.users`, so the row needs an
- * `auth.users` entry with this id (see the task report); until one exists the check fails closed.
- */
-export const AWS_GLOBAL_SENTINEL_USER = '00000000-0000-0000-0000-000000000000';
 export const RATE_LIMITS = {
   aws: { key: 'aws_limits', window: '1 day', max: 100 },
   awsGlobal: { key: 'aws_global', window: '1 day', max: AWS_GLOBAL_PER_DAY },
@@ -92,6 +88,16 @@ export const AWS_COVERAGE: readonly CoverageBox[] = [
 
 export const insideCoverage = (p: LatLng): boolean =>
   AWS_COVERAGE.some((b) => p.lat >= b.minLat && p.lat <= b.maxLat && p.lng >= b.minLng && p.lng <= b.maxLng);
+
+/** True when the z15 tile `key` overlaps any coverage box (touching edges count). */
+export function tileInCoverage(key: string): boolean {
+  const t = parseTileKey(key);
+  if (!t) return false;
+  const tb = tileBounds(t);
+  return AWS_COVERAGE.some(
+    (b) => tb.minLat <= b.maxLat && tb.maxLat >= b.minLat && tb.minLng <= b.maxLng && tb.maxLng >= b.minLng
+  );
+}
 
 /** AWS cache rows live a random 7 to 10 whole days (B1 security audit), never a client-given time. */
 export const AWS_TTL_MIN_DAYS = 7;
@@ -127,6 +133,8 @@ export interface SpeedLimitsDb {
   /** `speed_limit_tiles` verbatim; the handler validates it. */
   tiles(keys: string[]): Promise<unknown>;
   takeRateLimit(userId: string, key: string, window: string, max: number): Promise<boolean>;
+  /** The app-wide budget row (`take_global_rate_limit`), shared by every user. */
+  takeGlobalRateLimit(key: string, window: string, max: number): Promise<boolean>;
   /** The stored (hashed) key. */
   putLimitsCache(write: CacheWrite): Promise<string>;
 }
@@ -193,6 +201,11 @@ export function createSpeedLimitsDb(client: SupabaseClient, log: Logger = consol
         p_window: window,
         p_max: max,
       });
+      if (error) throw asPgError(error);
+      return data === true;
+    },
+    async takeGlobalRateLimit(key, window, max) {
+      const { data, error } = await client.rpc('take_global_rate_limit', { p_key: key, p_window: window, p_max: max });
       if (error) throw asPgError(error);
       return data === true;
     },
@@ -363,10 +376,10 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
   }
 
   const raw = await deps.db.tiles(parsed.data);
-  const batch =
-    raw !== null && typeof raw === 'object' && !Array.isArray(raw)
-      ? { ...(raw as Row), fallback: deps.routes ? 'aws' : null }
-      : raw;
+  // A point lookup can reach AWS only inside coverage (ruling B2 F2), so the batch promises the
+  // fallback only when the client is configured and some requested tile overlaps a coverage box.
+  const fallback = deps.routes && parsed.data.some(tileInCoverage) ? 'aws' : null;
+  const batch = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Row), fallback } : raw;
   const checked = TileBatchResponseSchema.safeParse(batch);
   const inOrder =
     checked.success &&
@@ -421,15 +434,16 @@ async function point(req: Request, run: Run): Promise<Outcome> {
   if (!insideCoverage(here)) return unknown('outside_coverage');
 
   // The user's budget first, so a user whose own budget is spent never draws on everyone's.
+  const { aws, awsGlobal } = RATE_LIMITS;
   const budgets = [
-    [RATE_LIMITS.aws, userId, 'rate_limited'],
-    [RATE_LIMITS.awsGlobal, AWS_GLOBAL_SENTINEL_USER, 'global_rate_limited'],
+    [aws.key, 'rate_limited', () => deps.db.takeRateLimit(userId, aws.key, aws.window, aws.max)],
+    [awsGlobal.key, 'global_rate_limited', () => deps.db.takeGlobalRateLimit(awsGlobal.key, awsGlobal.window, awsGlobal.max)],
   ] as const;
-  for (const [b, owner, refused] of budgets) {
+  for (const [key, refused, take] of budgets) {
     try {
-      if (!(await deps.db.takeRateLimit(owner, b.key, b.window, b.max))) return unknown(refused);
+      if (!(await take())) return unknown(refused);
     } catch (err) {
-      log.error('speed-limits aws budget check failed', { requestId: id, route: 'point', budget: b.key, error: errorText(err) });
+      log.error('speed-limits aws budget check failed', { requestId: id, route: 'point', budget: key, error: errorText(err) });
       return unknown('rate_limit_failed');
     }
   }

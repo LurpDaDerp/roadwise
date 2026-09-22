@@ -10,8 +10,8 @@ import {
   AWS_BEHIND_M,
   AWS_COVERAGE,
   AWS_GLOBAL_PER_DAY,
-  AWS_GLOBAL_SENTINEL_USER,
   insideCoverage,
+  tileInCoverage,
   AWS_TTL_MAX_DAYS,
   AWS_TTL_MIN_DAYS,
   awsCacheKey,
@@ -137,6 +137,7 @@ function harness(opts: {
         case 'speed_limit_tiles':
           return { data: opts.tiles ?? tileBatch() };
         case 'take_rate_limit':
+        case 'take_global_rate_limit':
           return { data: true };
         case 'put_limits_cache':
           return { data: '0123456789abcdef' };
@@ -276,9 +277,9 @@ Deno.test('an untagged way with AWS answers 45 mph cached at 0.7 and caches the 
   assert(Math.abs((dest.lat - 47.606) * 111_320 - (150 + 0.99 * 150)) < 0.01);
   assert(Math.abs(origin.lng - -122.32) < 1e-9 && Math.abs(dest.lng - -122.32) < 1e-9);
 
-  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit', 'take_rate_limit', 'put_limits_cache']);
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit', 'take_global_rate_limit', 'put_limits_cache']);
   assertEquals(h.rpc[2].args, { p_user: UID, p_key: 'aws_limits', p_window: '1 day', p_max: 100 });
-  assertEquals(h.rpc[3].args, { p_user: AWS_GLOBAL_SENTINEL_USER, p_key: 'aws_global', p_window: '1 day', p_max: 2000 });
+  assertEquals(h.rpc[3].args, { p_key: 'aws_global', p_window: '1 day', p_max: 2000 });
   assertEquals(h.rpc[4].args, {
     p_key: awsCacheKey(leg),
     p_line: { type: 'LineString', coordinates: leg.map((p) => [p.lng, p.lat]) },
@@ -356,7 +357,7 @@ Deno.test('a spent global AWS budget is unknown without calling AWS', async () =
   const h = harness({
     candidates: [untaggedRow],
     routes,
-    rpc: { take_rate_limit: (args) => ({ data: args.p_key !== 'aws_global' }) },
+    rpc: { take_global_rate_limit: () => ({ data: false }) },
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
@@ -366,15 +367,11 @@ Deno.test('a spent global AWS budget is unknown without calling AWS', async () =
 });
 
 Deno.test('the global budget check fails closed: an error there is unknown without calling AWS', async () => {
-  // e.g. 23503 while the sentinel owner has no auth.users row
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({
     candidates: [untaggedRow],
     routes,
-    rpc: {
-      take_rate_limit: (args) =>
-        args.p_key === 'aws_global' ? { error: { code: '23503', message: 'fk' } } : { data: true },
-    },
+    rpc: { take_global_rate_limit: () => ({ error: { code: '42501', message: 'permission denied' } }) },
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
@@ -433,6 +430,7 @@ Deno.test('a spent AWS budget is unknown without calling AWS', async () => {
   assertEquals(routes.calls.length, 0);
   // the user's refusal never reaches the global row
   assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit']);
+  assert(!fns(h).includes('take_global_rate_limit'));
 });
 
 Deno.test('a failed budget check is unknown without calling AWS, never a 5xx', async () => {
@@ -485,7 +483,6 @@ Deno.test('a candidate lookup failure maps through the shared SQLSTATE mapping',
 
 Deno.test('the rate-limit budgets are pinned', () => {
   assertEquals(AWS_GLOBAL_PER_DAY, 2000);
-  assertEquals(AWS_GLOBAL_SENTINEL_USER, '00000000-0000-0000-0000-000000000000');
   assertEquals(RATE_LIMITS, {
     aws: { key: 'aws_limits', window: '1 day', max: 100 },
     awsGlobal: { key: 'aws_global', window: '1 day', max: 2000 },
@@ -575,6 +572,44 @@ Deno.test('a tile batch answers B1 JSON plus fallback aws, validated, cacheable,
   assertEquals(fns(h), ['take_rate_limit', 'speed_limit_tiles']);
   assertEquals(h.rpc[0].args, { p_user: UID, p_key: 'speed_tiles', p_window: '1 hour', p_max: 240 });
   assertEquals(h.rpc[1].args, { p_keys: TILE_KEYS });
+});
+
+// Seattle's corridor tiles are inside Washington's box; these are well outside it.
+const SF_TILE = '15/5241/12663'; // San Francisco
+const NYC_TILE = '15/9647/12320'; // New York
+// Straddling WA's western edge (lng -124.9): the tile spans about -124.91..-124.90.
+const EDGE_TILE = (() => {
+  const x = Math.floor(((-124.9 + 180) / 360) * 2 ** 15);
+  const y = Math.floor(((1 - Math.asinh(Math.tan((47 * Math.PI) / 180)) / Math.PI) / 2) * 2 ** 15);
+  return `15/${x}/${y}`;
+})();
+
+Deno.test('coverage per tile: inside, outside, and a tile straddling the edge', () => {
+  assertEquals(TILE_KEYS.map(tileInCoverage), [true, true, true]);
+  assertEquals([SF_TILE, NYC_TILE].map(tileInCoverage), [false, false]);
+  assertEquals(tileInCoverage(EDGE_TILE), true);
+  // the straddling tile really does reach west of the box
+  const x = Number(EDGE_TILE.split('/')[1]);
+  assert((x / 2 ** 15) * 360 - 180 < -124.9);
+});
+
+Deno.test('fallback is aws only when configured and some requested tile is in coverage', async () => {
+  const routes = stubRoutes(() => Promise.resolve(null));
+  const cases: [string[], 'aws' | null][] = [
+    [TILE_KEYS, 'aws'], // inside
+    [[SF_TILE, NYC_TILE], null], // outside
+    [[SF_TILE, TILE_KEYS[0]], 'aws'], // a mixed batch: one inside
+    [[EDGE_TILE], 'aws'], // straddling the box edge
+  ];
+  for (const [keys, want] of cases) {
+    const h = harness({ routes, tiles: tileBatch(keys) });
+    const res = await handleSpeedLimits(get(tilesQuery(keys)), h.deps);
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).fallback, want, keys.join(','));
+  }
+  // not configured: null even inside coverage
+  const h = harness({ routes: null, tiles: tileBatch(TILE_KEYS) });
+  assertEquals((await (await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps)).json()).fallback, null);
 });
 
 Deno.test('five tile keys, a bad key, a duplicate or none are 400 before any database call', async () => {
