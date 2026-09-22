@@ -133,10 +133,12 @@ function hydrator(over: Partial<HydratorDeps> = {}) {
   return createHydrator({ db, supabase, now: () => NOW, isBusy: () => busy, ...over });
 }
 
+/** The reconciliation's listing columns. */
+const LISTING = 'id,client_trip_id';
 /** Reads of `table`, the reconciliation's id listing (`select('id')`) left out. */
 const countOf = (table: string) =>
-  supabase.selects.filter((s) => s.table === table && s.columns !== 'id').length;
-const tripPages = () => supabase.selects.filter((s) => s.table === 'trips' && s.columns !== 'id');
+  supabase.selects.filter((s) => s.table === table && s.columns !== LISTING).length;
+const tripPages = () => supabase.selects.filter((s) => s.table === 'trips' && s.columns !== LISTING);
 const allTrips = async (): Promise<TripRow[]> => trips().list();
 
 beforeEach(async () => {
@@ -181,6 +183,7 @@ describe('a full restore on an empty device', () => {
       skippedLocal: 0,
       removed: 0,
       redeleted: 0,
+      refetched: 0,
       baseline: true,
       complete: true,
     });
@@ -638,7 +641,7 @@ describe('fix round 1', () => {
       uid: UID,
       tables: supabase.tables,
       onSelect: (select) => {
-        if (select.table === 'trips' && select.columns !== 'id') {
+        if (select.table === 'trips' && select.columns !== LISTING) {
           pages += 1;
           // A drive starts while page 3 is loading: its commit is refused.
           if (pages === 3) busy = true;
@@ -718,7 +721,7 @@ describe('fix round 1', () => {
         uid: UID,
         tables: { trips: [serverTrip(1)] },
         onSelect: async (select) => {
-          if (select.columns !== 'id') return null;
+          if (select.columns !== LISTING) return null;
           // The runner applies a finalize answer mid-listing: a new synced drive the list
           // cannot contain yet.
           await trips().insert(
@@ -740,7 +743,7 @@ describe('fix round 1', () => {
       supabase = createFakeSupabase({
         uid: UID,
         tables: { trips: [serverTrip(2)] },
-        onSelect: (select) => (select.columns === 'id' ? { message: 'network' } : null),
+        onSelect: (select) => (select.columns === LISTING ? { message: 'network' } : null),
       });
       const errors: string[] = [];
       const result = await hydrator({ onError: (_e, ctx) => errors.push(ctx) }).run({ full: false });
@@ -768,12 +771,13 @@ describe('fix round 1', () => {
     test('outside a full restore it lists ids at most once a day', async () => {
       supabase.tables = { trips: [serverTrip(1)] };
       await hydrator().run({ full: true });
-      const idListings = () => supabase.selects.filter((s) => s.columns === 'id').length;
-      expect(idListings()).toBe(1);
-      await hydrator({ now: () => NOW + 6 * 3600 * 1000 }).run({ full: false });
-      expect(idListings()).toBe(1);
-      await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+      const idListings = () => supabase.selects.filter((s) => s.columns === LISTING).length;
+      // One page, then the empty page that proves it was the last.
       expect(idListings()).toBe(2);
+      await hydrator({ now: () => NOW + 6 * 3600 * 1000 }).run({ full: false });
+      expect(idListings()).toBe(2);
+      await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+      expect(idListings()).toBe(4);
     });
   });
 
@@ -865,5 +869,99 @@ describe('fix round 1', () => {
     expect(result.events).toBe(1);
     expect(await createEventsRepo(db).get('ev-1')).toMatchObject({ client_trip_id: 'mine', category: 'braking' });
     expect(await createEventsRepo(db).get('ev-2')).toMatchObject({ client_trip_id: 'trip-1' });
+  });
+});
+
+describe('fix round 2 (re-audit R-I1): the live listing ends only on an empty page', () => {
+  const five = () => [1, 2, 3, 4, 5].map((n) => serverTrip(n, { updated_at: `2026-09-21T10:00:0${n}+00:00` }));
+
+  async function restoreFive() {
+    supabase.tables = { trips: five() };
+    await hydrator().run({ full: true });
+    expect(await allTrips()).toHaveLength(5);
+  }
+
+  test('a page shorter than the row cap in mid-list does not end the listing', async () => {
+    await restoreFive();
+    // The server's max_rows is 2: every response is silently cut to two rows.
+    supabase = createFakeSupabase({ uid: UID, tables: { trips: five() }, maxRows: 2 });
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+    expect(result.removed).toBe(0);
+    expect(await allTrips()).toHaveLength(5);
+    // Pages of 2, 2 and 1, then the empty page that ends it.
+    expect(supabase.selects.filter((s) => s.columns === LISTING)).toHaveLength(4);
+  });
+
+  test('a listing that errors after a short page removes nothing', async () => {
+    await restoreFive();
+    let listings = 0;
+    supabase = createFakeSupabase({
+      uid: UID,
+      tables: { trips: five() },
+      maxRows: 2,
+      onSelect: (select) => {
+        if (select.columns !== LISTING) return null;
+        listings += 1;
+        return listings === 2 ? { message: 'network' } : null;
+      },
+    });
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS, onError: () => undefined }).run({
+      full: false,
+    });
+    expect(result.removed).toBe(0);
+    expect(await allTrips()).toHaveLength(5);
+  });
+
+  test('an out-of-order page leaves the listing incomplete', async () => {
+    await restoreFive();
+    // A server that ignores the keyset answers every listing page with the same rows.
+    const base = createFakeSupabase({ uid: UID, tables: { trips: five() }, maxRows: 2 });
+    const noGt = (q: HydrateQuery): HydrateQuery => {
+      const w: HydrateQuery = {
+        eq: (c, v) => noGt(q.eq(c, v)),
+        is: (c, v) => noGt(q.is(c, v)),
+        in: (c, v) => noGt(q.in(c, v)),
+        or: (f) => noGt(q.or(f)),
+        gt: () => w,
+        gte: (c, v) => noGt(q.gte(c, v)),
+        order: (c, o) => noGt(q.order(c, o)),
+        limit: (n) => noGt(q.limit(n)),
+        then: (a, b) => q.then(a, b),
+      };
+      return w;
+    };
+    const broken: HydrateSupabase = {
+      auth: base.auth,
+      from: (table) => ({ select: (columns) => noGt(base.from(table).select(columns)) }),
+    };
+    supabase = base;
+    const result = await hydrator({ supabase: broken, now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+    expect(result.removed).toBe(0);
+    expect(await allTrips()).toHaveLength(5);
+    await expect(settings().get(HYDRATE_RECONCILED_AT_KEY)).resolves.toBe(NOW);
+  });
+
+  test('self-heal: a live drive missing here, behind the cursor, is fetched again with its events', async () => {
+    supabase.tables = { trips: five(), trip_events: [serverEvent(1, 1)] };
+    await hydrator().run({ full: true });
+    // Removed earlier by mistake: no incremental restore will ever meet it again.
+    await trips().remove('trip-1');
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+    expect(result).toMatchObject({ refetched: 1, removed: 0 });
+    expect(await trips().get('trip-1')).toMatchObject({ sync_state: 'synced', server_id: sid(1) });
+    expect((await createEventsRepo(db).listByTrip('trip-1')).map((e) => e.id)).toEqual(['ev-1']);
+  });
+
+  test('self-heal never fetches a drive this device deleted', async () => {
+    supabase.tables = { trips: five() };
+    await hydrator().run({ full: true });
+    await trips().remove('trip-1');
+    await addTombstone(db, 'trip-1');
+    const before = tripPages().length;
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+    expect(result.refetched).toBe(0);
+    expect(await trips().get('trip-1')).toBeNull();
+    // Only the (empty) incremental page: no fetch by id.
+    expect(tripPages().slice(before).some((s) => s.calls.some((c) => c.startsWith('in id')))).toBe(false);
   });
 });

@@ -60,7 +60,7 @@ import { addTombstone, readTombstones } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { BASELINE_SETTING_KEY } from '@/data/queries/hooks';
-import { deviceOwnerIs } from '@/data/sync/queue';
+import { CLIENT_TRIP_ID, deviceOwnerIs } from '@/data/sync/queue';
 
 import {
   BASELINE_COLUMNS,
@@ -139,6 +139,8 @@ export interface HydrateResult {
   removed: number;
   /** Deletes this device made that the server had not applied, sent again (M-2). */
   redeleted: number;
+  /** Live drives missing here, fetched again by the reconciliation's self-heal (R-I1). */
+  refetched: number;
   /** The server's baseline medians were stored. */
   baseline: boolean;
   /** The run reached the end of the server's rows; false when it stopped early for any reason. */
@@ -264,6 +266,7 @@ const emptyResult = (): HydrateResult => ({
   skippedLocal: 0,
   removed: 0,
   redeleted: 0,
+  refetched: 0,
   baseline: false,
   complete: false,
 });
@@ -675,6 +678,86 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     }
   }
 
+  /**
+   * Parse one page of server trips, fetch its events and reports in bulk, and commit whatever
+   * `decide` allows, together with `alsoInCommit` (the paging cursor, for the restore). Shared by
+   * the paged restore and the reconciliation's re-fetch of live drives missing here.
+   */
+  async function applyPage(
+    rawTrips: readonly unknown[],
+    fetchedAt: number,
+    uid: string,
+    fence: Fence,
+    result: HydrateResult,
+    alsoInCommit?: (tx: Db) => Promise<void>
+  ): Promise<void> {
+    const trips: ServerTrip[] = [];
+    for (const raw of rawTrips) {
+      const parsed = parseRow(ServerTripSchema, raw);
+      if (parsed === null) report(new Error('unreadable trip row'), 'hydrate trip');
+      else trips.push(parsed);
+    }
+
+    const tripIds = trips.map((t) => t.id);
+    const events: ServerEvent[] = [];
+    for (const raw of await fetchChildren(
+      'trip_events',
+      EVENT_COLUMNS,
+      'trip_id',
+      tripIds,
+      uid,
+      'id',
+      fence
+    )) {
+      const parsed = parseRow(ServerEventSchema, raw);
+      if (parsed === null) report(new Error('unreadable event row'), 'hydrate event');
+      else events.push(parsed);
+    }
+    const disputes = new Map<string, ServerDispute>();
+    if (events.length > 0) {
+      for (const raw of await fetchChildren(
+        'event_disputes',
+        DISPUTE_COLUMNS,
+        'event_id',
+        events.map((e) => e.id),
+        uid,
+        'event_id',
+        fence
+      )) {
+        const parsed = parseRow(ServerDisputeSchema, raw);
+        if (parsed === null) report(new Error('unreadable dispute row'), 'hydrate dispute');
+        else disputes.set(parsed.event_id, parsed);
+      }
+    }
+    const eventsByTrip = new Map<string, ServerEvent[]>();
+    for (const event of events) {
+      const list = eventsByTrip.get(event.trip_id) ?? [];
+      list.push(event);
+      eventsByTrip.set(event.trip_id, list);
+    }
+
+    const redeletedBefore = result.redeleted;
+    await commit(fence, uid, async (tx) => {
+      const pending = await tripsWithPendingWork(tx);
+      const tombstones = await readTombstones(tx);
+      for (const trip of trips) {
+        const decision = await decide(tx, trip, pending, tombstones, fetchedAt);
+        if (decision === 'write') {
+          await writeTrip(tx, trip, eventsByTrip.get(trip.id) ?? [], disputes, result);
+          continue;
+        }
+        result.skippedLocal += 1;
+        if (decision === 'redelete') {
+          await redelete(tx, trip.client_trip_id, uid);
+          result.redeleted += 1;
+        }
+      }
+      await alsoInCommit?.(tx);
+    });
+    // A re-sent delete wakes the runner, after the commit.
+    if (result.redeleted > redeletedBefore) emitDataChanged({ source: 'enqueue' });
+  }
+
   async function restoreTrips(
     full: boolean,
     uid: string,
@@ -724,76 +807,14 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         throw new Error('hydration: the page did not advance the cursor');
       }
 
-      const trips: ServerTrip[] = [];
-      for (const raw of rawTrips) {
-        const parsed = parseRow(ServerTripSchema, raw);
-        if (parsed === null) report(new Error('unreadable trip row'), 'hydrate trip');
-        else trips.push(parsed);
-      }
-
-      const tripIds = trips.map((t) => t.id);
-      const events: ServerEvent[] = [];
-      for (const raw of await fetchChildren(
-        'trip_events',
-        EVENT_COLUMNS,
-        'trip_id',
-        tripIds,
-        uid,
-        'id',
-        fence
-      )) {
-        const parsed = parseRow(ServerEventSchema, raw);
-        if (parsed === null) report(new Error('unreadable event row'), 'hydrate event');
-        else events.push(parsed);
-      }
-      const disputes = new Map<string, ServerDispute>();
-      if (events.length > 0) {
-        for (const raw of await fetchChildren(
-          'event_disputes',
-          DISPUTE_COLUMNS,
-          'event_id',
-          events.map((e) => e.id),
-          uid,
-          'event_id',
-          fence
-        )) {
-          const parsed = parseRow(ServerDisputeSchema, raw);
-          if (parsed === null) report(new Error('unreadable dispute row'), 'hydrate dispute');
-          else disputes.set(parsed.event_id, parsed);
-        }
-      }
-      const eventsByTrip = new Map<string, ServerEvent[]>();
-      for (const event of events) {
-        const list = eventsByTrip.get(event.trip_id) ?? [];
-        list.push(event);
-        eventsByTrip.set(event.trip_id, list);
-      }
-
       const before = result.trips;
-      const redeletedBefore = result.redeleted;
-      await commit(fence, uid, async (tx) => {
-        const pending = await tripsWithPendingWork(tx);
-        const tombstones = await readTombstones(tx);
-        for (const trip of trips) {
-          const decision = await decide(tx, trip, pending, tombstones, fetchedAt);
-          if (decision === 'write') {
-            await writeTrip(tx, trip, eventsByTrip.get(trip.id) ?? [], disputes, result);
-            continue;
-          }
-          result.skippedLocal += 1;
-          if (decision === 'redelete') {
-            await redelete(tx, trip.client_trip_id, uid);
-            result.redeleted += 1;
-          }
-        }
+      await applyPage(rawTrips, fetchedAt, uid, fence, result, async (tx) => {
         await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
           HYDRATE_CURSOR_KEY,
           JSON.stringify(nextCursor),
         ]);
       });
       cursor = nextCursor;
-      // A re-sent delete wakes the runner, after the commit.
-      if (result.redeleted > redeletedBefore) emitDataChanged({ source: 'enqueue' });
       if (result.trips > before) {
         progress();
         pagesSinceEmit += 1;
@@ -808,28 +829,43 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
   }
 
   /**
-   * Remove the local copies of drives deleted elsewhere (I-1). Acts only on a complete listing of
-   * the user's live server ids; returns false (and removes nothing) otherwise.
+   * Remove the local copies of drives deleted elsewhere (I-1), and bring back live drives missing
+   * here (R-I1). Acts only on a complete listing of the user's live server trips; returns false
+   * (and changes nothing) otherwise.
+   *
+   * **Complete means an empty page came back.** A short page is never taken as the end: PostgREST
+   * caps a response at `max_rows` without saying so, and that cap is a dashboard setting that can
+   * sit below `RECONCILE_LIMIT` — a listing that stopped at the first short page would judge
+   * everything past the cap deleted (security re-audit R-I1). The cost is one empty request.
+   * Every page must also be in strictly increasing id order, starting past the previous one; an
+   * error, an unreadable row or an out-of-order page leaves the listing incomplete.
    */
   async function reconcile(uid: string, fence: Fence, result: HydrateResult): Promise<boolean> {
     const listedFrom = now();
-    const live = new Set<string>();
+    /** Live server id → its client id. */
+    const live = new Map<string, string>();
     let after: string | null = null;
     for (;;) {
-      let query = supabase.from('trips').select('id').eq('user_id', uid).is('deleted_at', null);
+      let query = supabase
+        .from('trips')
+        .select('id,client_trip_id')
+        .eq('user_id', uid)
+        .is('deleted_at', null);
       if (after !== null) query = query.gt('id', after);
       const rows = await request('trips', query.order('id').limit(RECONCILE_LIMIT));
       await fence.quick();
+      if (rows.length === 0) break;
       for (const raw of rows) {
-        const id = (raw as Record<string, unknown>).id;
-        // An id this build cannot read makes the listing untrustworthy: act on none of it.
+        const { id, client_trip_id: clientId } = raw as Record<string, unknown>;
+        // A row this build cannot read makes the listing untrustworthy: act on none of it.
         if (typeof id !== 'string' || !isUuid(id)) return false;
-        live.add(id.toLowerCase());
+        if (typeof clientId !== 'string' || !CLIENT_TRIP_ID.test(clientId)) return false;
+        const key = id.toLowerCase();
+        // Out of order, or not past the previous page: the keyset was not honoured.
+        if (after !== null && key <= after) return false;
+        after = key;
+        live.set(key, clientId);
       }
-      if (rows.length < RECONCILE_LIMIT) break;
-      const next = (rows[rows.length - 1] as Record<string, unknown>).id as string;
-      if (after !== null && next.toLowerCase() <= after) return false;
-      after = next.toLowerCase();
     }
 
     const removed: string[] = [];
@@ -844,7 +880,11 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         const id = String(row.client_trip_id);
         if (live.has(String(row.server_id).toLowerCase())) continue;
         if (pending.has(id)) continue;
-        // Written after the listing began — the runner just synced it: not ours to judge.
+        // Written after the listing began — the runner just synced it: not ours to judge. Both
+        // times are the device's clock; a clock jumping backwards mid-listing can defeat this,
+        // and such a drive is then removed while live. The self-heal below (or the next pass)
+        // re-fetches it from the server, but what only this device held — its labels, and any
+        // report record the server never kept — is lost with it (re-audit R-M1).
         if (typeof row.updated_at === 'number' && row.updated_at > listedFrom) continue;
         // Exactly what a local delete destroys, with nothing queued: the server already did it.
         await tx.execute('DELETE FROM samples WHERE client_trip_id = ?', [id]);
@@ -870,7 +910,50 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         report(error, 'hydrate remove trace');
       }
     }
-    if (removed.length > 0) {
+
+    // Self-heal: a live drive this device lacks — removed earlier by mistake, or behind the
+    // restore cursor when it was missed — is fetched again through the ordinary restore path. A
+    // drive this device deleted (tombstoned) is not fetched: the restore path re-sends its delete
+    // when the paged restore meets it.
+    const tombstones = await readTombstones(db);
+    const { rows: localRows } = await db.execute(
+      'SELECT client_trip_id, server_id FROM trips'
+    );
+    await fence.quick();
+    const { rows: deleteItems } = await db.execute(
+      "SELECT idempotency_key FROM sync_queue WHERE kind = 'delete-trip'"
+    );
+    await fence.quick();
+    const heldServer = new Set(localRows.map((r) => String(r.server_id ?? '').toLowerCase()));
+    const heldClient = new Set(localRows.map((r) => String(r.client_trip_id)));
+    // A delete this device queued, in any state, is as good as a tombstone here.
+    const deletedHere = new Set(
+      deleteItems.map((r) => String(r.idempotency_key).replace(/^delete:/, ''))
+    );
+    const missing = [...live.entries()]
+      .filter(([serverId, clientId]) => !heldServer.has(serverId) && !heldClient.has(clientId))
+      .filter(([, clientId]) => !tombstones.has(clientId) && !deletedHere.has(clientId))
+      .map(([serverId]) => serverId);
+    const before = result.trips;
+    for (const group of chunks(missing, pageSize)) {
+      const fetchedAt = now();
+      const rawTrips = await request(
+        'trips',
+        supabase
+          .from('trips')
+          .select(TRIP_COLUMNS)
+          .eq('user_id', uid)
+          .is('deleted_at', null)
+          .in('id', group)
+          .order('id')
+          .limit(group.length)
+      );
+      await fence.quick();
+      if (rawTrips.length > 0) await applyPage(rawTrips, fetchedAt, uid, fence, result);
+    }
+    result.refetched += result.trips - before;
+
+    if (removed.length > 0 || result.trips > before) {
       emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
     }
     return true;

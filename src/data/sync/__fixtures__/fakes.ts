@@ -45,6 +45,8 @@ export interface FakeSupabaseOptions {
   onSelect?: (select: RecordedSelect, index: number) => unknown;
   /** Give the fake `auth.onAuthStateChange`, fired by `setUid`, as the real client has. */
   authEvents?: boolean;
+  /** PostgREST's `max_rows`: every response is silently cut to this many rows. */
+  maxRows?: number;
 }
 
 /** One PostgREST read, as the emulator saw it: table, columns and every filter call in order. */
@@ -102,7 +104,7 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
       return {
         select(columns: string) {
           const record: RecordedSelect = { table, columns, calls: [] };
-          return emulatedQuery(record, () => fake.tables[table] ?? [], async () => {
+          return emulatedQuery(record, () => fake.tables[table] ?? [], options.maxRows ?? null, async () => {
             const index = fake.selects.length;
             fake.selects.push(record);
             return options.onSelect ? await options.onSelect(record, index) : null;
@@ -340,6 +342,7 @@ function parseTerm(term: string): Predicate {
 function emulatedQuery(
   record: RecordedSelect,
   rows: () => Record<string, unknown>[],
+  maxRows: number | null,
   before: () => Promise<unknown>
 ): HydrateQuery {
   const predicates: Predicate[] = [];
@@ -359,6 +362,7 @@ function emulatedQuery(
       return 0;
     });
     if (limit !== null) out = out.slice(0, limit);
+    if (maxRows !== null) out = out.slice(0, maxRows);
     // A copy per row, as a network response would be.
     return { data: out.map((row) => JSON.parse(JSON.stringify(row)) as unknown), error: null };
   };
