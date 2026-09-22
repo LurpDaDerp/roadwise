@@ -15,6 +15,7 @@
 import * as Notifications from 'expo-notifications';
 
 import { createSettingsRepo, MissingTripError, type Db } from '@/data/db';
+import { DRIVE_SUMMARY_KIND } from '@/features/drive/summaryNotifier';
 import {
   setTripRole as defaultSetTripRole,
   type ChosenRole,
@@ -40,7 +41,7 @@ export const ALLOWED_HREFS: readonly RegExp[] = [
 ];
 
 /** M3's interim drive-summary data (`summaryNotifier.ts`, until Task 19 gives it a `url`). */
-const LEGACY_SUMMARY_KIND = 'driveSummary';
+const LEGACY_SUMMARY_KIND = DRIVE_SUMMARY_KIND;
 
 export interface NotificationRoute {
   /** One of `ALLOWED_HREFS`. */

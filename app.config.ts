@@ -1,8 +1,33 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
+// The app's tsconfig carries no Node types: local shapes, as the repo's other Node reads do.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config runs in Node only
+const fs = require('node:fs') as { existsSync(file: string): boolean };
+
 const EAS_PROJECT_ID = 'eb9c484d-45ef-4125-b146-3132b49af806';
 
-export default ({ config }: ConfigContext): ExpoConfig => ({
+/**
+ * FCM, for server pushes (Task 18, round 1 ruling): the EAS file variable, else a local
+ * `google-services.json` beside this file (git-ignored, never committed), else nothing. Without
+ * one, Android builds still work and Android push stays off until Firebase is set up.
+ */
+export function googleServicesFile(
+  projectRoot: string,
+  env: Record<string, string | undefined> = process.env,
+  exists: (file: string) => boolean = (file) => fs.existsSync(file)
+): string | undefined {
+  const fromEnv = env.GOOGLE_SERVICES_JSON;
+  if (fromEnv) return fromEnv;
+  const local = `${projectRoot.replace(/[\\/]+$/, '')}/google-services.json`;
+  return exists(local) ? './google-services.json' : undefined;
+}
+
+/** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
+function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
+  return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
+}
+
+export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'RoadWise',
   slug: 'SafeDriveApp',
@@ -47,9 +72,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // tile and nothing crashes. iOS uses Apple Maps and needs no key.
     config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000000' },
-    // FCM, for server pushes (Task 18). Never committed (.gitignore): an EAS build gets it from the
-    // GOOGLE_SERVICES_JSON file variable, a local build from the file beside this one.
-    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
+    // Left out when there is no FCM credential: see `googleServicesFile` above.
+    ...optional('googleServicesFile', googleServicesFile(projectRoot)),
     permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'],
   },
   extra: { eas: { projectId: EAS_PROJECT_ID } },
