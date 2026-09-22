@@ -107,12 +107,25 @@ export const onboardingCopy = {
     send: 'Send invite',
     /** Pending, declined or expired with no code on screen: a new invite replaces the old code. */
     sendNew: 'Send a new invite',
+    /**
+     * Shown under a live code the screen no longer holds (T13 review m1): the parent may already
+     * have it, and a new invite revokes it on the server.
+     */
+    replaceNote: 'Sending a new invite cancels the code you sent before.',
+    /** The tap on "Send a new invite" over a live code confirms first (T13 review m1). */
+    confirmReplace: {
+      title: 'Cancel your old code?',
+      body: 'The code you sent before will stop working. Only the new code will work.',
+      confirm: 'Send a new invite',
+      cancel: 'Keep the old code',
+    },
     later: "I'll do this later",
     continue: 'Continue',
     /** Required mode only: the screen waits for the link, so the teen can ask the server again. */
     checkAgain: 'Check again',
     status: {
-      pending: (date: string) => `Your invite code works until ${date}.`,
+      /** `when` is `formatInviteExpiry`: day, date and time, "Tue Sep 29, 3:40 pm" (m3). */
+      pending: (when: string) => `Your invite code works until ${when}.`,
       pendingUndated: 'Your invite code is still active.',
       linked: 'A guardian is linked to your account.',
       declined: 'Your last invite was declined. You can send a new one.',
@@ -122,7 +135,10 @@ export const onboardingCopy = {
     errors: {
       rateLimited: "You've made as many invites as you can in a day. Try again later.",
       notAvailable: "Guardian invites aren't available right now.",
-      failed: "Couldn't create an invite. Check your connection and try again.",
+      /** Only when the request never reached the server (m4). */
+      offline: "Couldn't reach RoadWise. Check your connection and try again.",
+      /** Anything else the server refused: not the connection's fault (m4). */
+      failed: "Couldn't create an invite. Try again later.",
       shareFailed: "Couldn't open sharing. Your code is above, so you can send it another way.",
     },
   },
@@ -167,11 +183,20 @@ export function formatBirthDate(iso: string): string {
   return `${MONTH_NAMES[m - 1] ?? ''} ${d}, ${y}`;
 }
 
-/** A timestamp as the local calendar day in words, "September 29" (the invite's expiry). */
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+/**
+ * The invite's expiry as the phone's local day, date and time — "Tue Sep 29, 3:40 pm". The code
+ * stops at the minute it was issued a week later, so a bare date would read as the whole day
+ * (T13 review m3). Built by hand, not `Intl`, so it reads the same on every engine.
+ */
 export function formatInviteExpiry(iso: string): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return '';
-  return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}`;
+  const h = at.getHours();
+  const mm = String(at.getMinutes()).padStart(2, '0');
+  const clock = `${h % 12 === 0 ? 12 : h % 12}:${mm} ${h < 12 ? 'am' : 'pm'}`;
+  return `${WEEKDAYS[at.getDay()]} ${MONTH_NAMES[at.getMonth()]!.slice(0, 3)} ${at.getDate()}, ${clock}`;
 }
 
 /**
@@ -179,5 +204,5 @@ export function formatInviteExpiry(iso: string): string {
  * no page to open until M6 builds redemption, so a URL would lead nowhere.
  */
 export function guardianShareMessage(code: string, expires: string): string {
-  return `I'd like to add you as my guardian on RoadWise. My invite code is ${code}. It can be used once and expires on ${expires}.`;
+  return `I'd like to add you as my guardian on RoadWise. My invite code is ${code}. It can be used once, until ${expires}.`;
 }

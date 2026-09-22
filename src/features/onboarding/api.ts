@@ -209,6 +209,20 @@ export async function createGuardianInvite(): Promise<GuardianInvite> {
   return { code: reply.code, expiresAt: reply.expires_at };
 }
 
+/**
+ * Whether a failed call never reached the server (T13 review m4). PostgREST answers every refusal
+ * with a SQLSTATE or a PGRST code; supabase-js reports a fetch that failed (offline, DNS, a
+ * timeout) as an error with an empty `code`. A thrown `TypeError` from `fetch` counts too.
+ */
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof GuardianInviteError) return false;
+  if (error instanceof TypeError) return true;
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, message } = error as PgError;
+  if (code === '') return true;
+  return code === undefined && /fetch|network|abort|timed? ?out/i.test(message ?? '');
+}
+
 /** The caller's guardian link as the server sees it. Rejects on an error or a status it doesn't know. */
 export async function readGuardianLink(): Promise<GuardianLink> {
   const { data, error } = await supabase.rpc('guardian_link_state');

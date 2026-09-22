@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Share, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, Share, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { fontFamilies, Text, useTheme } from '@/ui';
 
 import {
   createGuardianInvite,
   GuardianInviteError,
+  isNetworkFailure,
   readGuardianLink,
   type GuardianInvite,
   type GuardianLink,
@@ -47,6 +48,12 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
   const running = useRef(false);
+  /**
+   * Bumped whenever the screen learns the link state first-hand (a create, an already-linked
+   * refusal, a read). A read started under an older number lands on nothing, so a slow arrival
+   * read can never print "expired" under a code just issued (T13 review m2).
+   */
+  const epoch = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -55,17 +62,31 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
     };
   }, []);
 
-  /** The server's link state into the status line; a failed read is said, never guessed. */
-  const applyLink = useCallback((next: GuardianLink | null) => {
-    if (!mounted.current) return;
-    if (next) setLink(next);
-    setLinkFailed(next === null);
+  /**
+   * Read the server's link state into the status line, unless something newer has been learned
+   * since the read began. A failed read is said, never guessed.
+   */
+  const refreshLink = useCallback((): Promise<void> => {
+    const started = ++epoch.current;
+    const land = (next: GuardianLink | null) => {
+      if (!mounted.current || started !== epoch.current) return;
+      if (next) setLink(next);
+      setLinkFailed(next === null);
+    };
+    return readGuardianLink().then(land, () => land(null));
   }, []);
+
+  /** A state the screen was told directly (a create, a refusal): it wins over any read in flight. */
+  const learnLink = (next: GuardianLink) => {
+    epoch.current += 1;
+    setLink(next);
+    setLinkFailed(false);
+  };
 
   useEffect(() => {
     // Once on arrival, in the foreground; nothing polls.
-    void readGuardianLink().then(applyLink, () => applyLink(null));
-  }, [applyLink]);
+    void refreshLink();
+  }, [refreshLink]);
 
   const share = async (invite: GuardianInvite) => {
     try {
@@ -91,22 +112,21 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
           if (!mounted.current) return;
           if (e instanceof GuardianInviteError && e.reason === 'already-linked') {
             // The server's answer is the link state: nothing to send, and the way on is Continue.
-            setLink({ status: 'linked', expiresAt: null });
-            setLinkFailed(false);
+            learnLink({ status: 'linked', expiresAt: null });
           } else if (e instanceof GuardianInviteError && e.reason === 'rate-limited') {
             setError(copy.errors.rateLimited);
           } else if (e instanceof GuardianInviteError) {
             setError(copy.errors.notAvailable);
           } else {
-            setError(copy.errors.failed);
+            // Only a request that never arrived is the connection's fault (m4).
+            setError(isNetworkFailure(e) ? copy.errors.offline : copy.errors.failed);
           }
           return;
         }
         if (!mounted.current) return;
         setIssued(invite);
         // The invite set the link to pending on the server; no second read is needed to say so.
-        setLink({ status: 'pending', expiresAt: invite.expiresAt });
-        setLinkFailed(false);
+        learnLink({ status: 'pending', expiresAt: invite.expiresAt });
       }
       await share(invite);
     } finally {
@@ -120,7 +140,7 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
     running.current = true;
     setBusy('check');
     setError(null);
-    applyLink(await readGuardianLink().catch(() => null));
+    await refreshLink();
     running.current = false;
     if (mounted.current) setBusy(null);
   };
@@ -131,12 +151,26 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
   const replaces =
     issued === null &&
     (link?.status === 'pending' || link?.status === 'declined' || link?.status === 'expired');
+  /** A code that still works is out there, and this screen no longer holds it (m1). */
+  const replacesLive = issued === null && link?.status === 'pending';
+
+  /** Over a live code, the tap confirms that the old code dies before anything is sent (m1). */
+  const onSend = () => {
+    if (!replacesLive) {
+      void send();
+      return;
+    }
+    Alert.alert(copy.confirmReplace.title, copy.confirmReplace.body, [
+      { text: copy.confirmReplace.cancel, style: 'cancel' },
+      { text: copy.confirmReplace.confirm, style: 'destructive', onPress: () => void send() },
+    ]);
+  };
 
   const primary = linked
     ? { label: copy.continue, onPress: onNext, testID: 'guardian-continue' }
     : {
         label: replaces ? copy.sendNew : copy.send,
-        onPress: () => void send(),
+        onPress: onSend,
         loading: busy === 'send',
         disabled: busy !== null,
         testID: 'guardian-send',
@@ -193,6 +227,11 @@ export function GuardianStep({ ctx, onNext, onBack }: StepProps) {
         ) : null}
         <View accessibilityLiveRegion="polite" style={{ gap: th.space.sm }}>
           <StatusLine link={link} failed={linkFailed} />
+          {replacesLive && !linkFailed ? (
+            <Text variant="callout" tone="muted" testID="guardian-replace-note">
+              {copy.replaceNote}
+            </Text>
+          ) : null}
           {error ? (
             <Text variant="callout" tone="danger" accessibilityRole="alert">
               {error}

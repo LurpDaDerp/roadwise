@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Share } from 'react-native';
+import { Alert, Share } from 'react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
@@ -9,10 +9,11 @@ import { ThemeProvider } from '@/ui/theme';
 import {
   createGuardianInvite,
   GuardianInviteError,
+  isNetworkFailure,
   readGuardianLink,
   type GuardianInviteFailure,
 } from '../api';
-import { guardianShareMessage, onboardingCopy } from '../copy';
+import { formatInviteExpiry, guardianShareMessage, onboardingCopy } from '../copy';
 import { stepsFor, type FlowContext } from '../flow';
 import { STEP_REGISTRY } from '../stepRegistry';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
@@ -43,9 +44,9 @@ jest.mock('expo-router', () => {
   };
 });
 
-/** Noon UTC, so the printed day is the same in every zone the suite could run in. */
-const EXPIRES = '2026-09-29T12:00:00+00:00';
-const EXPIRES_WORDS = 'September 29';
+/** 3:40 pm on Tue 29 September 2026 by the suite's own clock, so the words hold in any zone. */
+const EXPIRES = new Date(2026, 8, 29, 15, 40).toISOString();
+const EXPIRES_WORDS = 'Tue Sep 29, 3:40 pm';
 
 function teen(over: Partial<FlowContext> = {}): FlowContext {
   return {
@@ -357,7 +358,14 @@ describe('GuardianStep', () => {
     it.each<[string, RpcReply, string]>([
       ['rate-limited', pgError('42501', 'invite limit reached'), copy.errors.rateLimited],
       ['not-available', pgError('42501', 'guardian invites are not available yet'), copy.errors.notAvailable],
-      ['anything else', pgError('XX000', 'boom'), copy.errors.failed],
+      ['a server error', pgError('XX000', 'boom'), copy.errors.failed],
+      // 0006's missing private profile: the server answered, so the connection is not blamed (m4).
+      ['a missing profile', pgError('P0002', 'no private profile for user'), copy.errors.failed],
+      [
+        'a request that never arrived',
+        { data: null, error: { code: '', message: 'TypeError: Network request failed' } },
+        copy.errors.offline,
+      ],
     ])('%s is said plainly and nothing is shared', async (_name, reply, line) => {
       serve({ link: link('none'), invite: reply });
       await renderStep();
@@ -410,5 +418,180 @@ describe('guardian copy', () => {
     expect(copy.explainer).toBe(
       'A guardian sees only what you choose to share. Nothing is shared until you set it up.'
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fix round 1 (T13 review m1–m4).
+// ---------------------------------------------------------------------------------------------
+
+describe('m3: the expiry names the day, the date and the time', () => {
+  it.each<[Date, string]>([
+    [new Date(2026, 8, 29, 15, 40), 'Tue Sep 29, 3:40 pm'],
+    [new Date(2026, 9, 3, 0, 5), 'Sat Oct 3, 12:05 am'],
+    [new Date(2026, 11, 31, 12, 0), 'Thu Dec 31, 12:00 pm'],
+    [new Date(2027, 0, 1, 9, 7), 'Fri Jan 1, 9:07 am'],
+  ])('%s', (at, words) => {
+    expect(formatInviteExpiry(at.toISOString())).toBe(words);
+  });
+
+  it('an unreadable timestamp prints nothing rather than a wrong day', () => {
+    expect(formatInviteExpiry('not a date')).toBe('');
+  });
+
+  it('the status line and the share message both carry the time', async () => {
+    serve({ link: link('none'), invite: invite() });
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.send }));
+    expect(
+      await screen.findByText(`Your invite code works until ${EXPIRES_WORDS}.`)
+    ).toBeOnTheScreen();
+    const [content] = shareSpy.mock.calls[0] as [{ message: string }];
+    expect(content.message).toContain('until Tue Sep 29, 3:40 pm');
+  });
+});
+
+describe('m1: a new invite over a live code says so, and the tap confirms', () => {
+  let alertSpy: jest.SpyInstance;
+  beforeEach(() => {
+    alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  });
+  afterEach(() => alertSpy.mockRestore());
+
+  const creates = () =>
+    mockRpc.mock.calls.filter(([fn]) => fn === 'create_guardian_invite').length;
+  type AlertButton = { text: string; style?: string; onPress?: () => void };
+  const pressAlert = async (label: string) => {
+    const buttons = alertSpy.mock.calls.at(-1)![2] as AlertButton[];
+    await act(async () => buttons.find((b) => b.text === label)!.onPress?.());
+  };
+
+  it.each<[string, RpcReply, boolean]>([
+    ['pending (a live code the screen does not hold)', link('pending', EXPIRES), true],
+    ['declined', link('declined'), false],
+    ['expired', link('expired'), false],
+    ['none', link('none'), false],
+  ])('the note shows only over a live code: %s', async (_name, reply, shown) => {
+    serve({ link: reply });
+    await renderStep();
+    await act(async () => {});
+    if (shown) expect(screen.getByText(copy.replaceNote)).toBeOnTheScreen();
+    else expect(screen.queryByText(copy.replaceNote)).toBeNull();
+  });
+
+  it('not once this screen holds the code it just issued', async () => {
+    serve({ link: link('none'), invite: invite() });
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.send }));
+    await screen.findByText('K7QX2M');
+    expect(screen.queryByText(copy.replaceNote)).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: copy.send }));
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('over a live code, the tap asks first; keeping the old code sends nothing', async () => {
+    serve({ link: link('pending', EXPIRES), invite: invite() });
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.sendNew }));
+    expect(alertSpy).toHaveBeenCalledWith(
+      copy.confirmReplace.title,
+      copy.confirmReplace.body,
+      expect.any(Array)
+    );
+    expect(creates()).toBe(0);
+    await pressAlert(copy.confirmReplace.cancel);
+    expect(creates()).toBe(0);
+    expect(shareSpy).not.toHaveBeenCalled();
+  });
+
+  it('confirming creates the new invite and shares it', async () => {
+    serve({ link: link('pending', EXPIRES), invite: invite('P4RT9Z') });
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.sendNew }));
+    await pressAlert(copy.confirmReplace.confirm);
+    expect(await screen.findByText('P4RT9Z')).toBeOnTheScreen();
+    expect(creates()).toBe(1);
+    expect(shareSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('an expired code is replaced without asking (nothing live is cancelled)', async () => {
+    serve({ link: link('expired'), invite: invite() });
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.sendNew }));
+    await screen.findByText('K7QX2M');
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('the note and the confirmation say the old code stops working', () => {
+    expect(copy.confirmReplace.body).toMatch(/stop working/);
+    expect(copy.replaceNote).toMatch(/cancels the code you sent before/);
+  });
+});
+
+describe('m2: a slow arrival read never overwrites what a create just said', () => {
+  function slowRead(): { finish: (r: RpcReply) => void } {
+    const handle = { finish: (_r: RpcReply) => {} };
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'guardian_link_state') {
+        return new Promise<RpcReply>((resolve) => {
+          handle.finish = resolve;
+        });
+      }
+      return invite();
+    });
+    return handle;
+  }
+
+  it.each(['expired', 'none'])('a late %s lands on nothing', async (late) => {
+    const read = slowRead();
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.send }));
+    await screen.findByText(copy.status.pending(EXPIRES_WORDS));
+    await act(async () => read.finish(link(late)));
+    expect(screen.getByText(copy.status.pending(EXPIRES_WORDS))).toBeOnTheScreen();
+    expect(screen.queryByText(copy.status.expired)).toBeNull();
+    expect(screen.getByText('K7QX2M')).toBeOnTheScreen();
+  });
+
+  it('a late failed read does not report a failure over the fresh state either', async () => {
+    const read = slowRead();
+    await renderStep();
+    await act(async () => {});
+    await fireEvent.press(screen.getByRole('button', { name: copy.send }));
+    await screen.findByText(copy.status.pending(EXPIRES_WORDS));
+    await act(async () => read.finish(pgError('XX000', 'late')));
+    expect(screen.queryByText(copy.status.loadFailed)).toBeNull();
+    expect(screen.getByText(copy.status.pending(EXPIRES_WORDS))).toBeOnTheScreen();
+  });
+});
+
+describe('m4: only a request that never arrived blames the connection', () => {
+  it.each<[string, unknown, boolean]>([
+    [
+      'a fetch that failed (supabase-js: empty code)',
+      { code: '', message: 'TypeError: Network request failed' },
+      true,
+    ],
+    ['an aborted request', { code: '', message: 'AbortError: Aborted' }, true],
+    ['a thrown TypeError from fetch', new TypeError('Network request failed'), true],
+    ['a SQLSTATE refusal', { code: 'P0002', message: 'no private profile for user' }, false],
+    ['a unique violation', { code: '23505', message: 'duplicate key value' }, false],
+    ['a PostgREST error', { code: 'PGRST202', message: 'Could not find the function' }, false],
+    ['a mapped refusal', new GuardianInviteError('rate-limited'), false],
+    ['a plain Error', new Error('create_guardian_invite returned no usable code'), false],
+    ['nothing', null, false],
+  ])('%s', (_name, error, network) => {
+    expect(isNetworkFailure(error)).toBe(network);
+  });
+
+  it('only the offline line names the connection', () => {
+    expect(copy.errors.failed).not.toMatch(/connection/i);
+    expect(copy.errors.offline).toMatch(/connection/i);
   });
 });
