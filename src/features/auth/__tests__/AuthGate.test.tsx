@@ -475,6 +475,31 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
     expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
   });
 
+  test('after the normal finish, a later visit to an onboarding route never replays the link', async () => {
+    const view = await atReady('/inbox');
+    await act(async () => {
+      await finishOnboarding({
+        settings,
+        userId: 'u1',
+        router: { replace: mockReplace, push: jest.fn() },
+        refreshProfile: async () => {
+          mockWorld.profile = READY;
+        },
+        mergeFlags: async () => ({}),
+      });
+    });
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).toEqual(['/inbox']);
+    // Some time later, the same account opens an onboarding route (a stray link, a back stack).
+    mockReplace.mockClear();
+    Object.assign(mockWorld, { segments: ['(onboarding)', '[step]'], pathname: '/location' });
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(replaced()).toEqual(['/(tabs)/home']);
+    expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+  });
+
   test('a render between the refresh and the replace still lands on /inbox, never Home', async () => {
     const view = await atReady('/inbox');
     let gateMovedFirst: string[] = [];

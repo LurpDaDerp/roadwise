@@ -172,6 +172,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [status, userId]);
   // The generated route types may not list the group yet; the gate compares plain strings.
   const inOnboarding = (segments as readonly string[])[0] === '(onboarding)';
+  // Ready and outside onboarding: the finish has landed (normally `finishOnboarding`'s own
+  // replace, in the same render as the refresh, so the consuming branch below never ran). The held
+  // link is spent, so a later visit to an onboarding route can't replay it (T14 r2 review nit).
+  // The stored key goes too, once per account — a remove is idempotent.
+  const spentFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (gate !== 'ready' || inOnboarding) return;
+    held.current = null;
+    if (userId !== null && spentFor.current !== userId) {
+      spentFor.current = userId;
+      void settings.remove(ONBOARDING_PENDING_HREF_KEY).catch(() => {});
+    }
+  }, [gate, inOnboarding, userId, settings]);
   useEffect(() => {
     if (gate !== 'onboarding') return;
     let live = true;
