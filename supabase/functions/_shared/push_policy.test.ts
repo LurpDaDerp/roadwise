@@ -9,6 +9,7 @@ import {
   DRIVING_RETRY_MS,
   firstSlotAfter,
   inQuietHours,
+  lapseKeyOf,
   localDate,
   type Decision,
   type PushItem,
@@ -340,12 +341,63 @@ Deno.test('batch: a lapse of another kind or another device is not a duplicate',
   assertEquals(decideBatch([a, otherDevice], NOW, CATALOG).map(reason), ['send', 'send']);
 });
 
-Deno.test('a lapse raised before a lapse push already delivered resolves subject_gone (the fresh one went first)', () => {
-  const deferred = item({ createdAt: NOW - 20 * H }, { recent: [{ type: 'permission_lapsed', pushedAt: NOW - H }] });
+// The default item's lapse: device phone-a, permission location_always.
+const SAME_KEY = 'phone-a:location_always';
+const lapsePush = (pushedAt: number, lapseKey?: string) =>
+  lapseKey === undefined ? { type: 'permission_lapsed', pushedAt } : { type: 'permission_lapsed', pushedAt, lapseKey };
+
+Deno.test('lapseKeyOf builds <deviceId>:<permission> exactly, colons and all, and only for a lapse', () => {
+  assertEquals(lapseKeyOf('permission_lapsed', { permission: 'motion', platform: 'ios', deviceId: 'a-phone' }), 'a-phone:motion');
+  assertEquals(
+    lapseKeyOf('permission_lapsed', { permission: 'location', platform: 'android', deviceId: 'dev:with:colons' }),
+    'dev:with:colons:location'
+  );
+  assertEquals(lapseKeyOf('trip_summary', { permission: 'motion', platform: 'ios', deviceId: 'a-phone' }), null);
+  assertEquals(lapseKeyOf('permission_lapsed', { permission: 'camera', platform: 'ios', deviceId: 'a' }), null);
+});
+
+Deno.test('across sweeps: a push with the same lapse_key since this lapse was raised supersedes it', () => {
+  const deferred = item({ createdAt: NOW - 20 * H }, { recent: [lapsePush(NOW - H, SAME_KEY)] });
   assertEquals(decide(deferred, NOW, CATALOG), { kind: 'skip', reason: 'subject_gone' });
-  // A lapse raised after that push is a new one.
-  const later = item({ createdAt: NOW - 30 * MIN }, { recent: [{ type: 'permission_lapsed', pushedAt: NOW - H }] });
+  // Pushed exactly when the lapse was raised still counts (>=).
+  const atCreation = item({ createdAt: NOW - H }, { recent: [lapsePush(NOW - H, SAME_KEY)] });
+  assertEquals(reason(decide(atCreation, NOW, CATALOG)), 'subject_gone');
+  // A same-key push before this lapse was raised was for an earlier lapse: this one is new.
+  const later = item({ createdAt: NOW - 30 * MIN }, { recent: [lapsePush(NOW - H, SAME_KEY)] });
   assertEquals(reason(decide(later, NOW, CATALOG)), 'send');
+});
+
+Deno.test('across sweeps: a different lapse_key does not supersede — another kind, another device, a colon-shifted id', () => {
+  for (const other of ['phone-a:motion', 'phone-b:location_always', 'phone:a:location_always', 'phone-a:location_always ']) {
+    const it = item({ createdAt: NOW - 20 * H }, { recent: [lapsePush(NOW - H, other)] });
+    assertEquals(reason(decide(it, NOW, CATALOG)), 'send', other);
+  }
+});
+
+Deno.test('across sweeps: a recent entry with no lapse_key never supersedes', () => {
+  const noKey = item({ createdAt: NOW - 20 * H }, { recent: [lapsePush(NOW - H)] });
+  assertEquals(reason(decide(noKey, NOW, CATALOG)), 'send');
+  const otherType = item({ createdAt: NOW - 20 * H }, { recent: [{ type: 'family_digest', pushedAt: NOW - H }] });
+  assertEquals(reason(decide(otherType, NOW, CATALOG)), 'send');
+});
+
+Deno.test('a cap-deferred lapse and a fresh lapse of the same device and kind in one batch → exactly one is sent', () => {
+  // The deferred one was capped yesterday; the fresh one was raised this morning. One slot is free.
+  const capDeferred = item({ createdAt: NOW - 20 * H }, { localSentToday: 1 });
+  const fresh = item({ createdAt: NOW - 10 * MIN }, { localSentToday: 1 });
+  for (const batch of [
+    [capDeferred, fresh],
+    [fresh, capDeferred],
+  ]) {
+    const out = decideBatch(batch, NOW, CATALOG);
+    assertEquals(out.filter((d) => d.kind === 'send').length, 1);
+    const sent = batch[out.findIndex((d) => d.kind === 'send')];
+    assertEquals(sent.inboxId, fresh.inboxId);
+    assertEquals(reason(out[batch.indexOf(capDeferred)]), 'subject_gone');
+  }
+  // The next sweep: the fresh one's push is in recent with its key, so a straggler of the same lapse is dropped.
+  const straggler = item({ createdAt: NOW - 20 * H }, { recent: [lapsePush(NOW, SAME_KEY)] });
+  assertEquals(reason(decide(straggler, NOW + MIN, CATALOG)), 'subject_gone');
 });
 
 // ——— send ———

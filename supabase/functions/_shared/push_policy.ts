@@ -69,8 +69,11 @@ export interface PushItem {
     categories: Record<string, boolean>;
     /** epoch ms, or null when no device is recording. */
     drivingSince: number | null;
-    /** The user's server pushes of the last 8 days. */
-    recent: { type: string; pushedAt: number }[];
+    /**
+     * The user's server pushes of the last 8 days. `lapseKey` (0007 round 3) is present only on a
+     * `permission_lapsed` push: `<deviceId>:<permission>` of the lapse it was for.
+     */
+    recent: { type: string; pushedAt: number; lapseKey?: string }[];
     localSentToday: number;
     tokens: string[];
   };
@@ -267,15 +270,27 @@ interface BatchState {
 const emptyState = (): BatchState => ({ sentTypes: new Map(), superseded: new Set() });
 
 /**
- * A lapse the user has already been told about. In one batch: a newer lapse of the same device and
- * kind replaces the older (T2 r1 n3: a cap-deferred lapse and a fresh one are never both pushed).
- * Across sweeps the claim's `recent` carries only types and times, so the check there is coarser:
- * a lapse push has reached the user since this lapse was raised.
+ * A lapse's identity, device and kind without the day: `<deviceId>:<permission>`, built exactly as
+ * 0007's claim builds `recent[].lapse_key`. Only ever compared, never split (a device id may hold
+ * `:`). Null for anything that is not a well-formed lapse.
+ */
+export function lapseKeyOf(type: string, payload: unknown): string | null {
+  if (type !== 'permission_lapsed') return null;
+  const p = PayloadSchemas.permission_lapsed.safeParse(payload);
+  return p.success ? `${p.data.deviceId}:${p.data.permission}` : null;
+}
+
+/**
+ * A lapse the user has already been told about (T2 r1 n3: a cap-deferred lapse and a fresh one of
+ * the same device and kind are never both pushed). In one batch: a newer lapse with the same key
+ * replaces the older. Across sweeps: a push in `recent` with exactly this `lapseKey`, sent at or
+ * after this lapse was raised. A recent entry without a key never matches.
  */
 function lapseSuperseded(item: PushItem, state: BatchState): boolean {
-  if (item.type !== 'permission_lapsed') return false;
+  const key = lapseKeyOf(item.type, item.payload);
+  if (key === null) return false;
   if (state.superseded.has(item.inboxId)) return true;
-  return item.ctx.recent.some((r) => r.type === 'permission_lapsed' && r.pushedAt >= item.createdAt);
+  return item.ctx.recent.some((r) => r.lapseKey !== undefined && r.lapseKey === key && r.pushedAt >= item.createdAt);
 }
 
 function decideWith(item: PushItem, now: number, catalog: Catalog, state: BatchState): Decision {
@@ -353,10 +368,9 @@ export function decideBatch(items: PushItem[], now: number, catalog: Catalog = C
   const state = emptyState();
   const newest = new Map<string, PushItem>();
   for (const it of items) {
-    if (it.type !== 'permission_lapsed') continue;
-    const p = PayloadSchemas.permission_lapsed.safeParse(it.payload);
-    if (!p.success) continue;
-    const key = `${it.userId}|${p.data.deviceId}|${p.data.permission}`;
+    const lapse = lapseKeyOf(it.type, it.payload);
+    if (lapse === null) continue;
+    const key = `${it.userId}|${lapse}`;
     const held = newest.get(key);
     if (!held) {
       newest.set(key, it);

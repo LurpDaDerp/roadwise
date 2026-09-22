@@ -109,7 +109,8 @@ const ClaimRow = z
       quiet: z.object({ enabled: z.boolean(), start: HhMm, end: HhMm }),
       categories: z.record(z.string(), z.boolean()),
       driving_since: Instant.nullable(),
-      recent: z.array(z.object({ type: z.string(), pushed_at: Instant })),
+      // `lapse_key` (0007 round 3) only on permission_lapsed entries; zod would strip it unlisted.
+      recent: z.array(z.object({ type: z.string(), pushed_at: Instant, lapse_key: z.string().optional() })),
       local_sent_today: z.number().int().min(0),
       tokens: z.array(z.string().min(1).max(256)).max(10),
     }),
@@ -129,7 +130,11 @@ const ClaimRow = z
         quiet: r.ctx.quiet,
         categories: r.ctx.categories,
         drivingSince: r.ctx.driving_since,
-        recent: r.ctx.recent.map((x) => ({ type: x.type, pushedAt: x.pushed_at })),
+        recent: r.ctx.recent.map((x) =>
+          x.lapse_key === undefined
+            ? { type: x.type, pushedAt: x.pushed_at }
+            : { type: x.type, pushedAt: x.pushed_at, lapseKey: x.lapse_key }
+        ),
         localSentToday: r.ctx.local_sent_today,
         tokens: r.ctx.tokens,
       },

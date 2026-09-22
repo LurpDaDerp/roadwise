@@ -21,7 +21,10 @@ const claimRow = (overrides: Record<string, unknown> = {}) => ({
     quiet: { enabled: true, start: '22:00', end: '07:00' },
     categories: { recording: true, rewards: false },
     driving_since: '2026-09-22T17:00:00+00:00',
-    recent: [{ type: 'permission_lapsed', pushed_at: '2026-09-21T12:00:00+00:00' }],
+    recent: [
+      { type: 'permission_lapsed', pushed_at: '2026-09-21T12:00:00+00:00', lapse_key: 'dev-1:location' },
+      { type: 'trip_summary', pushed_at: '2026-09-20T12:00:00+00:00' },
+    ],
     local_sent_today: 1,
     tokens: ['ExponentPushToken[abc]'],
   },
@@ -53,7 +56,11 @@ Deno.test('claim calls claim_push_batch with the limit and lease and camel-cases
         quiet: { enabled: true, start: '22:00', end: '07:00' },
         categories: { recording: true, rewards: false },
         drivingSince: Date.parse('2026-09-22T17:00:00Z'),
-        recent: [{ type: 'permission_lapsed', pushedAt: Date.parse('2026-09-21T12:00:00Z') }],
+        // lapse_key survives the parse (zod strips unlisted keys) and stays absent where it was absent.
+        recent: [
+          { type: 'permission_lapsed', pushedAt: Date.parse('2026-09-21T12:00:00Z'), lapseKey: 'dev-1:location' },
+          { type: 'trip_summary', pushedAt: Date.parse('2026-09-20T12:00:00Z') },
+        ],
         localSentToday: 1,
         tokens: ['ExponentPushToken[abc]'],
       },
