@@ -8,7 +8,7 @@ import { contrastRatio, ThemeProvider } from '@/ui';
 import { countWords } from '@/ui/drive';
 
 import { hudCopy } from '../hudCopy';
-import { ParkedOnlyCard } from '../ParkedOnlyCard';
+import { ParkedOnlyCard, POCKET_INK } from '../ParkedOnlyCard';
 
 function state(over: Partial<DriveState> = {}): DriveState {
   return {
@@ -102,5 +102,25 @@ describe('ParkedOnlyCard (SR8)', () => {
   test('announces itself to a screen reader as one element', async () => {
     await renderCard();
     expect(screen.getByTestId('parked-only-card').props.accessible).toBe(true);
+  });
+});
+
+describe('ParkedOnlyCard: sound alerts unavailable (review follow-up n1)', () => {
+  test.each([
+    [true, false],
+    [undefined, false],
+    [false, true],
+  ] as const)('alertsAvailable %s → mark shown: %s', async (alertsAvailable, shown) => {
+    await renderCard({ alertsAvailable });
+    expect(!!screen.queryByTestId('hud-alerts-unavailable')).toBe(shown);
+    const label = screen.getByTestId('parked-only-card').props.accessibilityLabel as string;
+    expect(label.includes(hudCopy.alerts.unavailable)).toBe(shown);
+  });
+
+  test('drawn in the dim pocket print, with no control added', async () => {
+    await renderCard({ alertsAvailable: false });
+    const words = screen.getByText(hudCopy.alerts.unavailable, { includeHiddenElements: true });
+    expect(StyleSheet.flatten(words.props.style).color).toBe(POCKET_INK);
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });

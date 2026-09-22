@@ -6,6 +6,7 @@ import { tokens } from '@/ui';
 import { fontFamilies } from '@/ui/fonts';
 import { HUD, hudLabelScale } from '@/ui/drive';
 
+import { AlertsUnavailableMark, useAlertsUnavailable } from './AlertsUnavailableMark';
 import { hudCopy } from './hudCopy';
 
 /**
@@ -27,6 +28,8 @@ const LINE_PT = 20;
  */
 export function ParkedOnlyCard() {
   const recording = useDrive((s) => s.status === 'recording');
+  // At speed this card is all a pocket driver can see, so a silent drive says so here too (U2 n1).
+  const alertsUnavailable = useAlertsUnavailable();
   const { fontScale } = useWindowDimensions();
   const scale = hudLabelScale(fontScale);
   const ink = HUD.day.ink;
@@ -36,7 +39,10 @@ export function ParkedOnlyCard() {
       testID="parked-only-card"
       accessible
       accessibilityRole="text"
-      accessibilityLabel={recording ? hudCopy.parked.labelRecording : hudCopy.parked.label}
+      accessibilityLabel={
+        (recording ? hudCopy.parked.labelRecording : hudCopy.parked.label) +
+        (alertsUnavailable ? ` ${hudCopy.alerts.unavailable}.` : '')
+      }
       style={styles.root}
     >
       <MaterialCommunityIcons name="parking" size={72} color={ink} />
@@ -64,6 +70,7 @@ export function ParkedOnlyCard() {
           {hudCopy.parked.recording}
         </Text>
       ) : null}
+      {alertsUnavailable ? <AlertsUnavailableMark ink={POCKET_INK} /> : null}
     </View>
   );
 }

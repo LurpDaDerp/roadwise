@@ -5,12 +5,11 @@ import { tokens, useTheme } from '@/ui';
 import { fontFamilies } from '@/ui/fonts';
 import { hudLabelScale } from '@/ui/drive';
 
+import { AlertsUnavailableMark, useAlertsUnavailable } from './AlertsUnavailableMark';
 import { hudCopy } from './hudCopy';
 import { POCKET_INK } from './ParkedOnlyCard';
 import {
-  AlertsUnavailableMark,
   mayRevealControls,
-  useAlertsUnavailable,
   useEndOfDriveRouting,
   useStoppedActions,
   useStoppedPanel,

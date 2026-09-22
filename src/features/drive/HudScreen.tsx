@@ -1,4 +1,3 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -7,7 +6,6 @@ import {
   type GestureResponderEvent,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -19,19 +17,18 @@ import { isBusyStatus, isIdleStatus } from '@/drive/policy';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
 import { sunIsDown } from '@/lib/time';
 import { tokens, useTheme } from '@/ui';
-import { fontFamilies } from '@/ui/fonts';
 import {
   AlertOverlay,
   HazardChip,
   HudIndicators,
   type HudStatusLevel,
-  hudLabelScale,
   hudPalette,
   SpeedReadout,
   SpeedSign,
   StatusRing,
 } from '@/ui/drive';
 
+import { AlertsUnavailableMark, useAlertsUnavailable } from './AlertsUnavailableMark';
 import { DRIVE_ROUTES, driveHref, hudCopy } from './hudCopy';
 import { StoppedPanel } from './StoppedPanel';
 
@@ -227,40 +224,6 @@ function TouchShield({ onHold }: { onHold: () => void }) {
   );
 }
 
-/** Only an explicit false means the alert audio failed; absent (older hosts) counts as available. */
-export const useAlertsUnavailable = (): boolean => useDrive((s) => s.alertsAvailable === false);
-
-/**
- * "Sound alerts unavailable" (ruling H2 item 6): the alert audio failed to load, the drive still
- * records, and the driver must not believe they would hear a warning. A drawn mark and three words
- * in the quiet indicator ink — calm, no colour alarm, no motion — and not a control: nothing to
- * press at speed. `ink` lets the pocket screen draw it in its own dim print.
- */
-export const AlertsUnavailableMark = memo(function AlertsUnavailableMark({ ink }: { ink: string }) {
-  const { fontScale } = useWindowDimensions();
-  const size = 15 * hudLabelScale(fontScale);
-  return (
-    <View
-      testID="hud-alerts-unavailable"
-      accessible
-      accessibilityRole="text"
-      accessibilityLabel={hudCopy.alerts.label}
-      style={styles.alertsMark}
-    >
-      <MaterialCommunityIcons name="volume-off" size={22} color={ink} />
-      <Text
-        allowFontScaling={false}
-        style={[
-          styles.alertsWords,
-          { color: ink, fontSize: size, lineHeight: Math.round(size * 1.25) },
-        ]}
-      >
-        {hudCopy.alerts.unavailable}
-      </Text>
-    </View>
-  );
-});
-
 export type HudScreenProps = {
   /**
    * Drawn by the lockout gate over another route rather than as the `/drive/hud` route: it only
@@ -363,13 +326,6 @@ const styles = StyleSheet.create({
   fill: { flex: 1, justifyContent: 'space-between' },
   topRow: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
   spacer: { flex: 1 },
-  alertsMark: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.space.sm,
-  },
-  alertsWords: { fontFamily: fontFamilies.field, textAlign: 'center' },
   gauges: {
     flexDirection: 'row',
     flexWrap: 'wrap',
