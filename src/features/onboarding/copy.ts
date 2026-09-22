@@ -94,6 +94,39 @@ export const onboardingCopy = {
     saveFailed: "Couldn't save your birth date. Try again.",
   },
   /**
+   * A5, the guardian invite (rev1: I6 — shown only while `guardian_invites` is on). Limited to what
+   * this build can back: nothing here says what a guardian can see, because nothing is shared with
+   * one until M6 builds it (G7's "see exactly what they see" clause is left out until G7 exists).
+   * Dates are "September 29" from `formatInviteExpiry`.
+   */
+  guardian: {
+    title: 'Invite a parent or guardian',
+    explainer:
+      'A guardian sees only what you choose to share. Nothing is shared until you set it up.',
+    codeLabel: 'Invite code',
+    send: 'Send invite',
+    /** Pending, declined or expired with no code on screen: a new invite replaces the old code. */
+    sendNew: 'Send a new invite',
+    later: "I'll do this later",
+    continue: 'Continue',
+    /** Required mode only: the screen waits for the link, so the teen can ask the server again. */
+    checkAgain: 'Check again',
+    status: {
+      pending: (date: string) => `Your invite code works until ${date}.`,
+      pendingUndated: 'Your invite code is still active.',
+      linked: 'A guardian is linked to your account.',
+      declined: 'Your last invite was declined. You can send a new one.',
+      expired: 'Your last invite code expired. You can send a new one.',
+      loadFailed: "Couldn't check your invite. You can still send one.",
+    },
+    errors: {
+      rateLimited: "You've made as many invites as you can in a day. Try again later.",
+      notAvailable: "Guardian invites aren't available right now.",
+      failed: "Couldn't create an invite. Check your connection and try again.",
+      shareFailed: "Couldn't open sharing. Your code is above, so you can send it another way.",
+    },
+  },
+  /**
    * The under-13 block. "We've kept only what we need" is printed only after the removal it
    * describes has succeeded (rev1: I5).
    */
@@ -132,4 +165,19 @@ export const MONTH_NAMES = [
 export function formatBirthDate(iso: string): string {
   const [y = NaN, m = NaN, d = NaN] = iso.split('-').map((part) => Number.parseInt(part, 10));
   return `${MONTH_NAMES[m - 1] ?? ''} ${d}, ${y}`;
+}
+
+/** A timestamp as the local calendar day in words, "September 29" (the invite's expiry). */
+export function formatInviteExpiry(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}`;
+}
+
+/**
+ * What the teen's share sheet sends: the code and when it stops working, and no link — there is
+ * no page to open until M6 builds redemption, so a URL would lead nowhere.
+ */
+export function guardianShareMessage(code: string, expires: string): string {
+  return `I'd like to add you as my guardian on RoadWise. My invite code is ${code}. It can be used once and expires on ${expires}.`;
 }

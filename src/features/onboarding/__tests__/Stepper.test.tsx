@@ -23,6 +23,11 @@ jest.mock('../steps/NotEligibleStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { NotEligibleStep: (p: object) => <PlaceholderStep {...p} step="not-eligible" /> };
 });
+// Task 13's guardian step reads the server too; the same stand-in.
+jest.mock('../steps/GuardianStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { GuardianStep: (p: object) => <PlaceholderStep {...p} step="guardian" /> };
+});
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => {

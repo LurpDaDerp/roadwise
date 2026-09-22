@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 
 import type { FlowContext, StepId } from './flow';
+import { GuardianStep } from './steps/GuardianStep';
 import { NotEligibleStep } from './steps/NotEligibleStep';
 import { PlaceholderStep } from './steps/PlaceholderStep';
 import { ProfileStep } from './steps/ProfileStep';
@@ -36,7 +37,8 @@ export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> =
   terms: TermsStep,
   profile: ProfileStep,
   'not-eligible': NotEligibleStep,
-  guardian: placeholderFor('guardian'),
+  // Dark until M6: `stepsFor` lists it only while `guardian_invites` is on (rev1: I6).
+  guardian: GuardianStep,
   location: placeholderFor('location'),
   motion: placeholderFor('motion'),
   notifications: placeholderFor('notifications'),

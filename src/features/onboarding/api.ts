@@ -1,6 +1,6 @@
 /**
  * The onboarding steps' server and device calls: the write-once birth date, the profile basics,
- * and the under-13 clean-up (Task 12).
+ * the under-13 clean-up (Task 12) and the guardian invite (Task 13).
  *
  * Every Supabase call goes through the app client and the M0 wrappers, so the column lists and the
  * RLS scoping are the ones the rest of the app already relies on. Nothing here decides a route;
@@ -139,6 +139,84 @@ export async function recordCurrentTerms(userId: string, legal: LegalState): Pro
     recorded.push(type);
   }
   return recorded;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A5: the guardian invite (0006 `create_guardian_invite` / `guardian_link_state`). Dark: the step
+// that calls these is in the flow only while `feature_flags.guardian_invites` is on, which M6 sets
+// when redemption ships (rev1: I6); the server refuses the invite while the flag is off, too.
+// ---------------------------------------------------------------------------------------------
+
+export type GuardianLinkStatus = 'none' | 'pending' | 'linked' | 'declined' | 'expired';
+
+export interface GuardianLink {
+  status: GuardianLinkStatus;
+  /** When the live code stops working; null unless the server has one to report. */
+  expiresAt: string | null;
+}
+
+export interface GuardianInvite {
+  /** Six characters from 0006's alphabet. Shown and shared once; the server keeps only a hash. */
+  code: string;
+  expiresAt: string;
+}
+
+/**
+ * The refusals the step says something specific about. Anything else rejects as it came and is
+ * reported as a plain failure.
+ */
+export type GuardianInviteFailure = 'rate-limited' | 'already-linked' | 'not-available';
+
+export class GuardianInviteError extends Error {
+  readonly reason: GuardianInviteFailure;
+  constructor(reason: GuardianInviteFailure) {
+    super(`guardian invite refused: ${reason}`);
+    this.name = 'GuardianInviteError';
+    this.reason = reason;
+  }
+}
+
+/** 0006's refusals, matched on code AND the exact message (a 42501 alone says nothing). */
+const GUARDIAN_REFUSALS: readonly { code: string; message: string; reason: GuardianInviteFailure }[] = [
+  { code: '42501', message: 'invite limit reached', reason: 'rate-limited' },
+  { code: '22023', message: 'guardian already linked', reason: 'already-linked' },
+  { code: '42501', message: 'guardian invites are not available yet', reason: 'not-available' },
+  // An account that is not 13–17 (an adult, or a band the step's context had not caught up with).
+  { code: '42501', message: 'guardian invites are for drivers under 18', reason: 'not-available' },
+];
+
+/** `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, six of them: what 0006 draws from. */
+const INVITE_CODE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
+const LINK_STATUSES: readonly GuardianLinkStatus[] = ['none', 'pending', 'linked', 'declined', 'expired'];
+
+/**
+ * Issue a guardian invite for the caller. The server revokes any earlier live code, so a caller
+ * that still holds a code should share that one again rather than call this. Rejects with a
+ * `GuardianInviteError` for a refusal the step can name, or with the error as it came.
+ */
+export async function createGuardianInvite(): Promise<GuardianInvite> {
+  const { data, error } = await supabase.rpc('create_guardian_invite');
+  if (error) {
+    const pg = error as PgError;
+    const known = GUARDIAN_REFUSALS.find((r) => r.code === pg.code && r.message === pg.message);
+    if (known) throw new GuardianInviteError(known.reason);
+    throw error;
+  }
+  const reply = (data ?? {}) as { code?: unknown; expires_at?: unknown };
+  if (typeof reply.code !== 'string' || !INVITE_CODE.test(reply.code) || typeof reply.expires_at !== 'string') {
+    throw new Error('create_guardian_invite returned no usable code');
+  }
+  return { code: reply.code, expiresAt: reply.expires_at };
+}
+
+/** The caller's guardian link as the server sees it. Rejects on an error or a status it doesn't know. */
+export async function readGuardianLink(): Promise<GuardianLink> {
+  const { data, error } = await supabase.rpc('guardian_link_state');
+  if (error) throw error;
+  const reply = (data ?? {}) as { status?: unknown; expires_at?: unknown };
+  const status = LINK_STATUSES.find((s) => s === reply.status);
+  if (!status) throw new Error('guardian_link_state returned an unknown status');
+  return { status, expiresAt: typeof reply.expires_at === 'string' ? reply.expires_at : null };
 }
 
 // ---------------------------------------------------------------------------------------------
