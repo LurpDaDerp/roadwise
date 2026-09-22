@@ -324,3 +324,16 @@ export async function readBlockPurged(db: Db, userId: string): Promise<boolean> 
 export async function markBlockPurged(db: Db, userId: string, now: () => number = Date.now): Promise<void> {
   await createSettingsRepo(db).set(BLOCK_PURGED_KEY, { userId, at: now() });
 }
+
+/**
+ * Forget the stamp: the account has been seen with a band other than u13 (released at 13, or a
+ * support correction). If it is ever blocked again, the block screen runs the whole removal again
+ * rather than trusting a stamp from the earlier block (T12 r1 review n1). Never rejects.
+ */
+export async function clearBlockPurged(db: Db): Promise<void> {
+  try {
+    await createSettingsRepo(db).remove(BLOCK_PURGED_KEY);
+  } catch {
+    // The next sighting of the band tries again.
+  }
+}

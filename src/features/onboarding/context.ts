@@ -13,7 +13,7 @@
  * T11 carry), so the Terms step leaves the flow the moment it has been ticked.
  */
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Platform } from 'react-native';
 
 import { useAppConfig, type AppConfig } from '@/data/config/appConfig';
@@ -23,7 +23,7 @@ import { useSession } from '@/data/supabase/session';
 import { legalState, type LegalState } from '@/features/auth/legal';
 import { hasCurrentTerms, type ConsentRow } from '@/features/auth/pendingConsent';
 
-import { fetchOwnConsents } from './api';
+import { clearBlockPurged, fetchOwnConsents } from './api';
 import { asAgeBand, asDrivingStage, type FlowContext } from './flow';
 
 /** Settings key: `{ userId, rows }`, the account's last-read Terms and Privacy consents. */
@@ -149,6 +149,14 @@ export function useFlowContext(): FlowContext | null {
     },
     enabled: wantConsents,
   });
+
+  // A band other than u13 for this account ends any earlier block: its removal stamp goes, so a
+  // later re-block runs the full removal again (T12 r1 n1). Unknown says nothing either way.
+  const band = profile ? asAgeBand(profile.age_band) : null;
+  const released = userId !== null && band !== null && band !== 'u13' && band !== 'unknown';
+  useEffect(() => {
+    if (released) void clearBlockPurged(db);
+  }, [released, db]);
 
   const consents = network.data ?? cached.data ?? null;
   const waiting = wantConsents && !cached.isFetched && network.data === undefined;

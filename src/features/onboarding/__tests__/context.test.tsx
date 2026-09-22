@@ -17,6 +17,7 @@ import {
   useFlowContext,
   writeCachedConsents,
 } from '../context';
+import { markBlockPurged, readBlockPurged } from '../api';
 
 const USER = 'user-1';
 const mockConfig: { config: AppConfig; ready: boolean } = {
@@ -189,5 +190,35 @@ describe('useFlowContext', () => {
     const { result } = await renderHook(() => useFlowContext(), { wrapper });
     await waitFor(() => expect(result.current?.termsCurrent).toBe(true));
     expect(await readCachedConsents(createSettingsRepo(db), USER)).toEqual(HELD);
+  });
+});
+
+describe('the block removal stamp (T12 r1 n1)', () => {
+  it('release then re-block: the stamp goes on release, so the full removal runs again', async () => {
+    // Blocked, and the removal finished.
+    await markBlockPurged(db, USER);
+    mockSession.profile = { id: USER, age_band: 'u13', driving_stage: 'unknown', flags: {} };
+    const { rerender } = await renderHook(() => useFlowContext(), { wrapper });
+    await act(async () => {});
+    expect(await readBlockPurged(db, USER)).toBe(true);
+
+    // Released at 13 (or corrected by support): the account is seen as 13_17.
+    mockSession.profile = { id: USER, age_band: '13_17', driving_stage: 'unknown', flags: {} };
+    await rerender({});
+    await waitFor(async () => expect(await readBlockPurged(db, USER)).toBe(false));
+
+    // Blocked again: nothing stamped, so the block screen runs the whole removal.
+    mockSession.profile = { id: USER, age_band: 'u13', driving_stage: 'unknown', flags: {} };
+    await rerender({});
+    await act(async () => {});
+    expect(await readBlockPurged(db, USER)).toBe(false);
+  });
+
+  it('an unknown band leaves the stamp alone', async () => {
+    await markBlockPurged(db, USER);
+    mockSession.profile = { id: USER, age_band: 'unknown', driving_stage: 'unknown', flags: {} };
+    await renderHook(() => useFlowContext(), { wrapper });
+    await act(async () => {});
+    expect(await readBlockPurged(db, USER)).toBe(true);
   });
 });
