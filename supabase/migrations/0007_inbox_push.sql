@@ -38,7 +38,7 @@
 --     drive_state_at is the server's time drive_state was last written, whatever the client sends
 --     (security M-1: a client value of drive_state_at is ignored on every insert and update), and a
 --     claim reads `recording` as driving for 6 h at most, clamped to now().
---   * producers (#7), `on conflict (user_id, dedupe_key) do nothing`, payloads only from
+--   * producers (#7), deduped on (user_id, dedupe_key) (the summary `do nothing`; the lapse see below), payloads only from
 --     CHECK-constrained columns:
 --       - enqueue_trip_summary (non-definer; fires as postgres inside apply_trip): the drive-summary
 --         history row, created already push_state skipped / push_reason local (rev1: C1: the phone
@@ -54,6 +54,8 @@
 --         granted -> denied = motion; a missing key is unknown, never a lapse); none when the phone
 --         says `ack: true`; pending only when `reportedFrom: 'background'`, else skipped/inbox_only.
 --         At most one row per (user, device, kind, the user's local day) (security M-2).
+--         A background lapse later the same day upgrades that day's inbox_only row to pending
+--         (ruling T2 n1); a row in any other state is never touched.
 --         Trigger adaptation of #5: runs only for the device owner's JWT or the service role.
 --   * public.minimise_underage_notifications() (non-definer trigger beside 0006's
 --     minimise_underage_account, same event): a blocked child's deliveries, inbox, registrations
@@ -391,7 +393,14 @@ begin
       'permission_lapsed:' || v_device_key || ':' || v_kind || ':' || v_day,
       case when v_background then 'pending' else 'skipped' end,
       case when v_background then null else 'inbox_only' end)
-    on conflict (user_id, dedupe_key) do nothing;
+    -- still one row a day, but a background lapse later the same day upgrades a foreground
+    -- (inbox_only) row to push-eligible (ruling T2 n1); a row in any other state (pending,
+    -- sending, deferred, sent, failed) is never touched, so nothing already pushed is downgraded
+    -- or pushed twice. deliver_after and read/dismissed stay as they were.
+    on conflict (user_id, dedupe_key) do update
+      set push_state = 'pending', push_reason = null, push_after = now()
+      where excluded.push_state = 'pending'
+        and public.inbox.push_state = 'skipped' and public.inbox.push_reason = 'inbox_only';
   end loop;
   return null;
 end $$;

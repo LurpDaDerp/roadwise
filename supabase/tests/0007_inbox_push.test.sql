@@ -16,7 +16,7 @@ begin
 end $$;
 
 begin;
-select plan(284);
+select plan(286);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -549,6 +549,29 @@ select is((select array_agg(row(payload ->> 'deviceId', payload ->> 'permission'
   array[row('a-phone', 'location', 'skipped', 'inbox_only')::text, row('a-phone', 'location_always', 'pending', null::text)::text,
         row('a-phone', 'motion', 'skipped', 'inbox_only')::text],
   'Always -> denied is one location row and motion granted -> denied one motion row, both inbox-only from the foreground; a missing motion key is never a lapse');
+
+-- ruling T2 n1: a background lapse later the same day upgrades the day's inbox_only row to pending
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"v":1,"location":"always","motion":"denied","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"denied","motion":"denied","reportedFrom":"background","ack":false}' where id = 'a-phone';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array_agg(row(payload ->> 'permission', push_state, push_reason, push_after = now(), deliver_after = now())::text order by payload ->> 'permission')
+    from public.inbox where dedupe_key like 'permission_lapsed:a-phone:%' and payload ->> 'permission' in ('location', 'motion')),
+  array[row('location', 'pending', null::text, true, true)::text, row('motion', 'skipped', 'inbox_only', true, true)::text],
+  'a background lapse the same day upgrades the morning inbox_only row to pending, still one row; the untouched kind stays inbox_only (ruling T2 n1)');
+update public.inbox set push_state = 'sent', push_reason = 'ok', pushed_at = now() - interval '10 days'
+  where dedupe_key like 'permission_lapsed:a-phone:location:%';
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"v":1,"location":"always","motion":"denied","reportedFrom":"foreground","ack":false}' where id = 'a-phone';
+update public.devices set permissions = '{"v":1,"location":"denied","motion":"denied","reportedFrom":"background","ack":false}' where id = 'a-phone';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select row(count(*), min(push_state), min(push_reason), min(pushed_at) = now() - interval '10 days')::text
+    from public.inbox where dedupe_key like 'permission_lapsed:a-phone:location:%'),
+  row(1, 'sent', 'ok', true)::text, 'an already-sent row is never downgraded or re-queued by a later lapse the same day');
 
 -- the next local day: a new row for the same device and kind
 update public.notification_prefs set tz = 'Pacific/Kiritimati' where user_id = 'b7000000-0000-4000-8000-000000000001';
