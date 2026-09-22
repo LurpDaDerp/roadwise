@@ -1,4 +1,6 @@
--- osm.parse_maxspeed_mph: an OSM `maxspeed` value to a posted limit in mph, or null (plan task B3).
+-- osm.parse_maxspeed_mph: an OSM `maxspeed` value to a posted limit in mph, or null (plan task B3);
+-- osm.way_limit_mph: the limit transform.sql stores for one way, which adds the Canadian km/h guard
+-- (ruling B3 concerns 4-6, review m1) and the directional-tag rule (review m6) on top of the parser.
 --
 -- Only an explicit mph value, or a bare integer that reads as a US posted limit (a multiple of 5 in
 -- 5..85), is a limit. Everything else answers null, so the road stays "unknown" rather than getting
@@ -7,7 +9,7 @@
 --
 -- Run by tests/run.sh inside one transaction that is rolled back; the function under test is
 -- loaded from sql/parse_maxspeed.sql first, in the same transaction.
-select plan(44);
+select plan(69);
 
 -- the function exists where the pipeline expects it, is immutable (so the transform can call it per
 -- row with no cost surprise) and strict on nulls
@@ -67,5 +69,43 @@ select is(osm.parse_maxspeed_mph('25 mph @ (school)'), null::smallint, 'a school
 select is(osm.parse_maxspeed_mph(null), null::smallint, 'null is null');
 select is(osm.parse_maxspeed_mph(''), null::smallint, 'an empty string is null');
 select is(osm.parse_maxspeed_mph('   '), null::smallint, 'whitespace alone is null');
+
+-- ---------------------------------------------------------------------------------------------
+-- osm.way_limit_mph(maxspeed, maxspeed:forward, maxspeed:backward, way's northmost latitude,
+--                   km/h line or null)
+-- ---------------------------------------------------------------------------------------------
+select has_function('osm', 'way_limit_mph', array['text', 'text', 'text', 'double precision', 'double precision'],
+  'osm.way_limit_mph(text, text, text, float8, float8) exists');
+select volatility_is('osm', 'way_limit_mph', array['text', 'text', 'text', 'double precision', 'double precision'],
+  'immutable', 'the way-level rule is immutable');
+
+-- the km/h guard: a bare number on a road reaching north of the line is Canadian km/h
+select is(osm.way_limit_mph('50', null, null, 49.01, 49), null::smallint, 'a bare 50 on a BC road is null (50 km/h)');
+select is(osm.way_limit_mph(E'50	', null, null, 49.01, 49), null::smallint, 'a bare 50 with a trailing tab on a BC road is null');
+select is(osm.way_limit_mph(E'50
+', null, null, 49.01, 49), null::smallint, 'a bare 50 with a trailing CR LF on a BC road is null');
+select is(osm.way_limit_mph(E' 30
+', null, null, 49.2, 49), null::smallint, 'a padded bare 30 on a BC road is null');
+select is(osm.way_limit_mph('30 mph', null, null, 49.01, 49), 30::smallint, 'an explicit "30 mph" on a road reaching into BC is kept');
+select is(osm.way_limit_mph(E'30 MPH	', null, null, 49.01, 49), 30::smallint, 'an explicit mph value is kept whatever its case and padding');
+select is(osm.way_limit_mph('60', null, null, 48.99, 49), 60::smallint, 'a bare 60 wholly south of the line is 60 mph');
+select is(osm.way_limit_mph('60', null, null, 49, 49), 60::smallint, 'a way that reaches exactly the line is not north of it');
+select is(osm.way_limit_mph('50', null, null, 49.5, null), 50::smallint, 'with no km/h line every bare value is kept');
+select is(osm.way_limit_mph(E'50	', null, null, 49.5, null), 50::smallint, 'with no km/h line a padded bare value is parsed as usual');
+select is(osm.way_limit_mph('50 km/h', null, null, 48, 49), null::smallint, 'km/h stays null south of the line too');
+select is(osm.way_limit_mph(null, null, null, 49.5, 49), null::smallint, 'an untagged way is null');
+
+-- directional tags: a road with more than one limit gets none (the parser's ;-list rule)
+select is(osm.way_limit_mph('35 mph', '35 mph', null, 47, 49), 35::smallint, 'a forward limit equal to the base keeps the base');
+select is(osm.way_limit_mph('35 mph', '35', '35 mph', 47, 49), 35::smallint, 'directional limits equal to the base keep it');
+select is(osm.way_limit_mph('35 mph', '45 mph', null, 47, 49), null::smallint, 'a differing forward limit makes the way null');
+select is(osm.way_limit_mph('35 mph', null, '25 mph', 47, 49), null::smallint, 'a differing backward limit makes the way null');
+select is(osm.way_limit_mph('35 mph', 'none', null, 47, 49), null::smallint, 'an unparseable forward value makes the way null');
+select is(osm.way_limit_mph(null, '45 mph', '35 mph', 47, 49), null::smallint, 'directional limits alone are not used');
+select is(osm.way_limit_mph('50', '50', null, 49.1, 49), null::smallint, 'a BC way with bare base and forward values is null');
+select is(osm.way_limit_mph('30 mph', '30', null, 49.1, 49), null::smallint, 'a BC way whose forward value is a bare number (km/h) is null');
+select is(osm.way_limit_mph('45 mph', '', null, 47, 49), null::smallint, 'an empty directional tag is not a matching limit');
+select is(osm.way_limit_mph('45 mph', null, null, 47, 49), 45::smallint, 'a plain tagged US way keeps its limit');
+select is(osm.way_limit_mph('42', null, null, 47, 49), null::smallint, 'the parser rules still apply (a bare 42 is null)');
 
 select * from finish();

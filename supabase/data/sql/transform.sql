@@ -11,6 +11,7 @@
 --               A bare-integer limit on any way reaching north of this line is dropped (the road
 --               stays, unknown); an explicit '... mph' is kept. Washington's border with British
 --               Columbia is the 49th parallel along its whole length, so the import passes 49.
+--               The rule is osm.way_limit_mph (sql/parse_maxspeed.sql), tested with the parser.
 --
 -- Nothing reaches the tables that the device's all-or-nothing tile schema would reject: 0004's
 -- CHECKs hold the classes, the 5..85 range and the text bounds, and the filters below drop what
@@ -27,13 +28,11 @@ begin;
 
 \if :is_osm
 -- -----------------------------------------------------------------------------------------------
--- OSM: ogr2ogr's `lines` layer, with name/highway/maxspeed/oneway/junction as columns
+-- OSM: ogr2ogr's `lines` layer, with name/highway/maxspeed/maxspeed_forward/maxspeed_backward/
+-- oneway/junction as columns
 -- -----------------------------------------------------------------------------------------------
-select :'kmh_north_of' = '' as no_kmh_line, :'kmh_north_of' ~ '^-?[0-9]{1,2}(\.[0-9]+)?$' as kmh_line_ok \gset
-\if :no_kmh_line
-select 91 as kmh_lat \gset
-\elif :kmh_line_ok
-select :'kmh_north_of'::double precision as kmh_lat \gset
+select :'kmh_north_of' = '' or :'kmh_north_of' ~ '^-?[0-9]{1,2}(\.[0-9]+)?$' as kmh_line_ok \gset
+\if :kmh_line_ok
 \else
 do $$ begin raise exception 'kmh_north_of must be a latitude or empty'; end $$;
 \endif
@@ -46,11 +45,12 @@ select distinct on (l.osm_id::bigint)
   l.osm_id::bigint as osm_id,
   extensions.st_setsrid(extensions.st_force2d(l.geom), 4326) as geom,
   l.highway,
-  case
-    -- a bare number on a road reaching into Canada is km/h: never read it as mph
-    when btrim(l.maxspeed) ~ '^[0-9]+$' and extensions.st_ymax(l.geom) > :kmh_lat then null
-    else osm.parse_maxspeed_mph(l.maxspeed)
-  end as maxspeed_mph,
+  -- the parser, plus the km/h guard north of the line and the directional-tag rule
+  osm.way_limit_mph(l.maxspeed, l.maxspeed_forward, l.maxspeed_backward, extensions.st_ymax(l.geom),
+    nullif(:'kmh_north_of', '')::double precision) as maxspeed_mph,
+  -- kept for the run's report only: what the parser alone would have made of the tag
+  osm.parse_maxspeed_mph(l.maxspeed) as parsed_alone,
+  (l.maxspeed_forward is not null or l.maxspeed_backward is not null) as directional,
   -- the raw tag is kept for audit; a value past the column's 64 characters is never a limit anyway
   case when char_length(l.maxspeed) <= 64 then l.maxspeed end as maxspeed_raw,
   left(l.name, 128) as name,
@@ -82,12 +82,13 @@ on conflict (osm_id) do update
   where (osm.ways.geom, osm.ways.highway, osm.ways.maxspeed_mph, osm.ways.maxspeed_raw, osm.ways.name, osm.ways.oneway)
     is distinct from (excluded.geom, excluded.highway, excluded.maxspeed_mph, excluded.maxspeed_raw, excluded.name, excluded.oneway);
 
-\echo 'osm: staged / accepted / with a limit / tagged but not a limit / bare number dropped as km/h'
+\echo 'osm: staged / accepted / with a limit / tagged but not a limit / dropped by the km/h guard / dropped for a differing directional limit'
 select (select count(*) from roadwise_stage.osm_lines) as staged,
        (select count(*) from osm_in) as accepted,
        (select count(*) from osm_in where maxspeed_mph is not null) as with_limit,
        (select count(*) from osm_in where maxspeed_mph is null and maxspeed_raw is not null) as tag_not_a_limit,
-       (select count(*) from osm_in where maxspeed_mph is null and osm.parse_maxspeed_mph(maxspeed_raw) is not null) as kmh_dropped;
+       (select count(*) from osm_in where maxspeed_mph is null and parsed_alone is not null and not directional) as kmh_dropped,
+       (select count(*) from osm_in where maxspeed_mph is null and parsed_alone is not null and directional) as directional_dropped;
 
 \echo 'osm: maxspeed values the parser refused, most common first'
 select maxspeed_raw, count(*) as ways from osm_in
@@ -98,10 +99,11 @@ group by maxspeed_raw order by count(*) desc, maxspeed_raw limit 25;
 -- -----------------------------------------------------------------------------------------------
 -- HPMS: download.sh's extract, already filtered to speed_limit IS NOT NULL AND < 999
 -- -----------------------------------------------------------------------------------------------
-select :'state_code' ~ '^[1-9][0-9]?$' as state_ok \gset
+-- 0004's CHECK is 1..78: anything else is refused here, before any row is touched (review m5)
+select case when :'state_code' ~ '^[1-9][0-9]?$' then :'state_code'::int <= 78 else false end as state_ok \gset
 \if :state_ok
 \else
-do $$ begin raise exception 'state_code must be a FIPS state code such as 53'; end $$;
+do $$ begin raise exception 'state_code must be a FIPS state code from 1 to 78, such as 53'; end $$;
 \endif
 
 -- a staged row from another state means the wrong extract was loaded: stop before deleting anything
