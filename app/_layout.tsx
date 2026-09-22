@@ -9,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { flushBeforeSignOut } from '@/boot/bootstrap';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
+import { readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
 import { DataProvider } from '@/data/queries';
@@ -84,15 +85,31 @@ export default function RootLayout() {
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover });
   }, [runtime, handover]);
 
-  // §8.2 (final review I3): a driver signed in — the same one after a sign-out, or anyone on a
-  // launch that started signed out — lets auto-record follow the opt-in again. A different driver
-  // is a handover instead: the rebuild's new host decides from its own launch.
+  // §8.2 (final review I3; final-fix security I-1): only a real sign-in by this device's owner —
+  // a `SIGNED_IN` event whose uid is the recorded owner (or a device nobody owns yet) — lets
+  // auto-record follow the opt-in again. A token refresh, the initial session or any other event
+  // never does, and the host ignores even `SIGNED_IN` while its sign-out is still in progress. A
+  // different driver is a handover: the rebuild's new host decides from its own launch.
   useEffect(() => {
     if (runtime === null) return;
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) void runtime.drive.resumeAfterSignIn().catch(() => {});
+    let live = true;
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        runtime.drive.signOutCompleted();
+        return;
+      }
+      if (event !== 'SIGNED_IN' || !session) return;
+      const uid = session.user.id;
+      void readDeviceOwner(runtime.db)
+        .then((owner) => {
+          if (live && (owner === uid || owner === null)) return runtime.drive.signedInAgain();
+        })
+        .catch(() => {});
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      live = false;
+      data.subscription.unsubscribe();
+    };
   }, [runtime]);
 
   const fontsReady = shouldRender({ loaded, error, timedOut });

@@ -160,8 +160,20 @@ export interface DriveHost {
    * same driver signing back in (`resumeAfterSignIn`) is armed again.
    */
   suspendForSignOut(): Promise<void>;
-  /** A driver is signed in again: arming follows the opt-in once more. */
+  /**
+   * The driver backed out of the sign-out (it did not happen): arming follows the opt-in again.
+   * Explicit, from the sign-out flow only — never from an auth event.
+   */
   resumeAfterSignIn(): Promise<void>;
+  /**
+   * The device owner signed in (a `SIGNED_IN` auth event whose uid is the device owner; the root
+   * layout filters). Ignored while a sign-out is in progress — until `signOutCompleted` — so an
+   * auth event landing during the sign-out's flush can never re-arm a host nobody is signed in to
+   * (final-fix security I-1).
+   */
+  signedInAgain(): Promise<void>;
+  /** The session has ended (`SIGNED_OUT`): the sign-out is over, and the host stays disarmed. */
+  signOutCompleted(): void;
   /** The per-row detector context the engine is given (diagnostics). */
   detectorContext(): Omit<DetectorContext, 'mode'>;
 }
@@ -274,8 +286,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let soundFailedThisDrive = false;
   /** The last arming decision: auto-record armed natively and in the engine (I4). */
   let autoDetectArmed = false;
-  /** No driver signed in (§8.2, I3): arming is refused until `resumeAfterSignIn`. */
+  /** No driver signed in (§8.2, I3): arming, wakes and manual starts are refused. */
   let signedOut = deps.signedOut === true;
+  /** Between `suspendForSignOut` and `signOutCompleted` (or a back-out): auth events are ignored. */
+  let signingOut = false;
   let thermal: ThermalLevel = 'nominal';
   let callActive = false;
   let screenLocked = false;
@@ -535,8 +549,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   async function onWake(reason: 'significantChange' | 'activityTransition' | 'boot' | 'geofence'): Promise<void> {
     try {
-      // Only an armed engine opens a candidate; anything else owns the drive already.
-      if (engine.snapshot().status !== 'armed') return;
+      // Only an armed engine opens a candidate; anything else owns the drive already. And nothing
+      // is opened with nobody signed in (final-fix security M-1), whatever the engine says.
+      if (signedOut || engine.snapshot().status !== 'armed') return;
       const t = now();
       const history = await source.queryMotionHistory(t - WAKE_HISTORY_S * 1000, t);
       const candidateStartTs = wakeStart(history);
@@ -780,7 +795,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     },
 
     manualStart: ({ mode, passenger, evidence }) =>
-      dispatch('manualStart', { type: 'manualStart', mode, passenger, evidence, ts: now() }),
+      run(async () => {
+        // No drive is recorded for nobody (§8.2; final-fix security M-1).
+        if (signedOut) return;
+        await engine.dispatch({ type: 'manualStart', mode, passenger, evidence, ts: now() });
+      }, 'manualStart'),
 
     end: () => dispatch('end', { type: 'end', ts: now() }),
 
@@ -854,10 +873,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     refreshArming: () => run(applyArming, 'arming'),
 
     async suspendForSignOut() {
-      // Ended and finalized under the owner who is still signed in, before the session goes.
+      // Ended and finalized under the owner who is still signed in, before the session goes; and
+      // disarmed in the same task, so nothing can open a trip between the two (security M-1).
       await run(async () => {
         signedOut = true;
+        signingOut = true;
         if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
+        await engine.dispatch({ type: 'disarm' });
       }, 'signOut');
       await this.untilIdle();
       await run(applyArming, 'signOut');
@@ -865,10 +887,22 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     resumeAfterSignIn: () =>
       run(async () => {
+        signingOut = false;
         if (!signedOut) return;
         signedOut = false;
         await applyArming();
       }, 'signIn'),
+
+    signedInAgain: () =>
+      run(async () => {
+        if (signingOut || !signedOut) return;
+        signedOut = false;
+        await applyArming();
+      }, 'signIn'),
+
+    signOutCompleted() {
+      signingOut = false;
+    },
 
     l1RespectsSilentSwitch: () =>
       l1RespectsSilentSwitch({ mode: engine.snapshot().mode, screenLocked }, appActive),

@@ -1125,3 +1125,43 @@ describe('a sound that fails during a drive marks alerts unavailable for that dr
     expect(h.host.snapshot().alertsAvailable).toBe(true);
   });
 });
+
+describe('a sign-out in progress ignores auth events; a signed-out host records nothing (final-fix security I-1, M-1)', () => {
+  test('a SIGNED_IN (or a token refresh passed through as one) during the sign-out never re-arms', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.suspendForSignOut();
+    // The flush is running: an auth event arrives now.
+    await h.host.signedInAgain();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+
+    // The sign-out completes (SIGNED_OUT): only after that does the owner's next sign-in re-arm.
+    h.host.signOutCompleted();
+    await h.host.signedInAgain();
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('backing out of the sign-out resumes explicitly', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.suspendForSignOut();
+    await h.host.resumeAfterSignIn();
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('while signed out, a wake opens nothing and a manual start is refused (M-1)', async () => {
+    const h = harness({ signedOut: true });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    h.fake.setMotionHistory([automotive(h.now() - 10_000)]);
+    h.fake.emit('wake', { reason: 'significantChange', ts: h.now() });
+    await h.host.settled();
+    expect(h.fake.queries).not.toContain('queryMotionHistory');
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('off');
+    expect(h.fake.calls.filter((c) => c.startsWith('startCapture'))).toEqual([]);
+  });
+});

@@ -1119,6 +1119,8 @@ describe('H2 r1: alert sound that will not load', () => {
     await migrate(db);
     const reported: { message: string; context: string }[] = [];
     const { bootstrapDeps, errors } = deps({
+      // Signed in: nobody records a drive while signed out (§8.2).
+      supabase: createFakeSupabase({ uid: 'user-1' }),
       createPlayer: async () => {
         throw new Error('Cannot find native module ExpoAudio at 47.6062,-122.3321 for trip-1');
       },

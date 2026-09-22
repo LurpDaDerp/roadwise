@@ -79,6 +79,10 @@ jest.mock('@/ui/fonts', () => ({
 }));
 
 const mockHandover: { fire: ((uid: string) => void) | null } = { fire: null };
+const mockOwner: { uid: string | null } = { uid: null };
+jest.mock('@/boot/device', () => ({
+  readDeviceOwner: async () => mockOwner.uid,
+}));
 jest.mock('@/boot/ownerWatch', () => ({
   watchDeviceOwner: (_db: unknown, deps: { onHandover: (uid: string) => void }) => {
     mockHandover.fire = deps.onHandover;
@@ -191,6 +195,8 @@ function fakeRuntime(drive: Partial<DriveState>) {
     detectorContext: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
     suspendForSignOut: jest.fn(async () => {}),
     resumeAfterSignIn: jest.fn(async () => {}),
+    signedInAgain: jest.fn(async () => {}),
+    signOutCompleted: jest.fn(() => {}),
   };
   const queryClient = new QueryClient();
   const flushDeletes = jest.fn(async () => ({ sent: 1, left: 0 }));
@@ -301,15 +307,49 @@ describe('the root layout', () => {
   });
 });
 
-describe('sign-out and sign-in reach the drive host (final review I3)', () => {
-  test('sign-out stops recording through the host; a sign-in resumes it', async () => {
+describe('sign-out and sign-in reach the drive host (final review I3; final-fix security I-1)', () => {
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  test('sign-out stops recording through the host; backing out resumes it explicitly', async () => {
     const { host } = await renderReady();
     await mockSession.recording?.stop();
     expect(host.suspendForSignOut).toHaveBeenCalledTimes(1);
-    await act(async () => mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } }));
+    await mockSession.recording?.resume();
     expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
-    // A sign-out event does not resume anything.
+  });
+
+  test('only SIGNED_IN by the device owner re-arms; a token refresh never does', async () => {
+    mockOwner.uid = 'u1';
+    const { host } = await renderReady();
+    await act(async () => {
+      mockAuth.listener?.('TOKEN_REFRESHED', { user: { id: 'u1' } });
+      mockAuth.listener?.('INITIAL_SESSION', { user: { id: 'u1' } });
+      await settle();
+    });
+    expect(host.signedInAgain).not.toHaveBeenCalled();
+    expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } });
+      await settle();
+    });
+    expect(host.signedInAgain).toHaveBeenCalledTimes(1);
+  });
+
+  test("a different driver's SIGNED_IN never re-arms the old host (a handover rebuilds instead)", async () => {
+    mockOwner.uid = 'u1';
+    const { host } = await renderReady();
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_IN', { user: { id: 'u2' } });
+      await settle();
+    });
+    expect(host.signedInAgain).not.toHaveBeenCalled();
+    expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
+  });
+
+  test('SIGNED_OUT tells the host its sign-out is complete', async () => {
+    const { host } = await renderReady();
     await act(async () => mockAuth.listener?.('SIGNED_OUT', null));
-    expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
+    expect(host.signOutCompleted).toHaveBeenCalledTimes(1);
   });
 });
