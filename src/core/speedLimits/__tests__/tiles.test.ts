@@ -104,7 +104,16 @@ describe('prefetchSet (rev1: I6)', () => {
     const set = keys(prefetchSet(lat, lng, 90));
     expect(set[0]).toBe(tileKey(t));
     expect(set).toContain(tileKey({ ...t, x: t.x + 1 }));
-    expect(TILE_LOOKAHEAD_M).toBe(900);
+    expect(TILE_LOOKAHEAD_M).toBe(1200);
+  });
+
+  it('looks past the 1000 m prefetch interval: two edges within 1200 m are both requested', () => {
+    const t = tileFor(47.6062, -122.32);
+    const lat = midLat(t);
+    // 300 m short of the east edge: the edges ahead are at ~300 m and ~1120 m.
+    const set = keys(prefetchSet(lat, lngInsideEast(t, lat, 300), 90));
+    expect(set).toContain(tileKey({ ...t, x: t.x + 1 }));
+    expect(set).toContain(tileKey({ ...t, x: t.x + 2 }));
   });
 
   it('heading west, the next tile is the western neighbour', () => {

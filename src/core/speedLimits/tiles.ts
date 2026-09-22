@@ -5,7 +5,7 @@
 //
 // Everything is done in continuous tile space (Web Mercator scaled so one tile is one unit),
 // where the tile grid is a plain integer lattice and a straight course is a straight line — so
-// "which tiles does the next 900 m pass through" is an exact grid traversal, not a sampling.
+// "which tiles does the next 1200 m pass through" is an exact grid traversal, not a sampling.
 
 import type { BBox } from './geometry';
 import { normalizeDeg } from './geometry';
@@ -19,9 +19,11 @@ export interface TileXY {
 
 /**
  * How far ahead along the course `prefetchSet` looks. A z15 tile is ~0.82 km across at 47.6° N,
- * so 900 m always reaches the next tile on a straight course (rev1: I6).
+ * so the lookahead always reaches the next tile on a straight course (rev1: I6). It is longer than
+ * the engine's 1000 m prefetch interval (controller ruling on S1 concern 4), so on a straight course
+ * every tile entered before the next prefetch fires was already in this one.
  */
-export const TILE_LOOKAHEAD_M = 900;
+export const TILE_LOOKAHEAD_M = 1200;
 
 const DEG = Math.PI / 180;
 const MAX_LAT = 85.05112878; // Web Mercator's limit
@@ -98,7 +100,7 @@ function traverse(fx: number, fy: number, dx: number, dy: number, len: number): 
   let tMaxY = dy > 0 ? (cy + 1 - fy) / dy : dy < 0 ? (fy - cy) / -dy : Infinity;
   const tDeltaX = dx !== 0 ? 1 / Math.abs(dx) : Infinity;
   const tDeltaY = dy !== 0 ? 1 / Math.abs(dy) : Infinity;
-  // A 900 m ray crosses at most a handful of z15 edges; the bound only guards degenerate input.
+  // A 1200 m ray crosses at most a handful of z15 edges; the bound only guards degenerate input.
   for (let guard = 0; guard < 64 && Math.min(tMaxX, tMaxY) <= len; guard += 1) {
     if (tMaxX <= tMaxY) {
       cx += sx;

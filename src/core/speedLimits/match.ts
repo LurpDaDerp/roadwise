@@ -20,7 +20,7 @@
 //   5. Otherwise `unknown`.
 
 import { angleDiffDeg, normalizeDeg } from './geometry';
-import { type Provider, sourceOf } from './wire';
+import type { Provider } from './wire';
 
 export interface Candidate {
   provider: Provider;
@@ -36,14 +36,35 @@ export interface Candidate {
   bearingDeg: number;
 }
 
-export interface MatchResult {
-  limitMph: number | null;
-  source: 'posted' | 'cached' | 'unknown';
-  matchConfidence: number;
-  parallelRoads: boolean;
-  provider: Candidate['provider'] | null;
-  key: string | null;
-}
+/**
+ * The matcher's answer. A union on `source`, so an unknown answer with a limit (or a known one
+ * without) is a compile-time error, not only a runtime one. `matchConfidence` is 0 when unknown.
+ */
+export type MatchResult =
+  | {
+      limitMph: null;
+      source: 'unknown';
+      matchConfidence: 0;
+      parallelRoads: boolean;
+      provider: null;
+      key: null;
+    }
+  | {
+      limitMph: number;
+      source: 'posted';
+      matchConfidence: number;
+      parallelRoads: boolean;
+      provider: 'osm' | 'hpms';
+      key: string;
+    }
+  | {
+      limitMph: number;
+      source: 'cached';
+      matchConfidence: number;
+      parallelRoads: boolean;
+      provider: 'aws';
+      key: string;
+    };
 
 export const MATCH = {
   RADIUS_M: 25,
@@ -87,14 +108,13 @@ const unknown = (parallelRoads: boolean): MatchResult => ({
   key: null,
 });
 
-const known = (c: Candidate, limitMph: number, confidence: number, parallelRoads: boolean): MatchResult => ({
-  limitMph,
-  source: sourceOf(c.provider),
-  matchConfidence: round2(confidence),
-  parallelRoads,
-  provider: c.provider,
-  key: c.key,
-});
+const known = (c: Candidate, limitMph: number, confidence: number, parallelRoads: boolean): MatchResult => {
+  const common = { limitMph, matchConfidence: round2(confidence), parallelRoads, key: c.key };
+  // The AWS cache is `cached`; open data is `posted` (`sourceOf`, spelled out so the union narrows).
+  return c.provider === 'aws'
+    ? { ...common, source: 'cached', provider: 'aws' }
+    : { ...common, source: 'posted', provider: c.provider };
+};
 
 /**
  * The fill-in (HPMS section or cache segment) that joins `road`: within `HPMS_JOIN_M` of the

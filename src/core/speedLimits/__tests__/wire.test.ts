@@ -4,6 +4,7 @@ import {
   MAX_TILE_TTL_MS,
   MAX_TILES_PER_REQUEST,
   PointRequestSchema,
+  type PointResponse,
   PointResponseSchema,
   sourceOf,
   TILE_ZOOM,
@@ -55,6 +56,8 @@ describe('LimitSegmentSchema', () => {
     ['oneway 2', { ...segment, oneway: 2 }],
     ['a line over 4096 chars', { ...segment, line: 'a'.repeat(4097) }],
     ['an empty line', { ...segment, line: '' }],
+    ['an HPMS section with no limit', { ...segment, provider: 'hpms', limitMph: null }],
+    ['an AWS cache segment with no limit', { ...segment, provider: 'aws', limitMph: null }],
   ])('refuses %s', (_label, value) => {
     expect(ok(LimitSegmentSchema, value)).toBe(false);
   });
@@ -165,6 +168,7 @@ describe('PointResponseSchema', () => {
   it.each([
     ['unknown carrying a limit', { ...unknown, limitMph: 25 }],
     ['unknown naming a provider', { ...unknown, provider: 'osm' }],
+    ['unknown with any confidence', { ...unknown, matchConfidence: 0.3 }],
     ['posted without a limit', { ...posted, limitMph: null }],
     ['cached without a limit', { ...posted, source: 'cached', provider: 'aws', limitMph: null }],
     ['posted from the aws cache', { ...posted, provider: 'aws' }],
@@ -176,6 +180,25 @@ describe('PointResponseSchema', () => {
     ['an unknown key', { ...posted, key: 'osm:1' }],
   ])('refuses %s', (_label, value) => {
     expect(ok(PointResponseSchema, value)).toBe(false);
+  });
+});
+
+describe('PointResponse (type level)', () => {
+  it('makes the states the schema forbids compile-time errors', () => {
+    const fine: PointResponse[] = [
+      { limitMph: null, source: 'unknown', matchConfidence: 0, parallelRoads: false, provider: null },
+      { limitMph: 35, source: 'posted', matchConfidence: 0.95, parallelRoads: false, provider: 'osm' },
+      { limitMph: 40, source: 'cached', matchConfidence: 0.7, parallelRoads: false, provider: 'aws' },
+    ];
+    // @ts-expect-error an unknown answer carries no limit
+    const a: PointResponse = { limitMph: 25, source: 'unknown', matchConfidence: 0, parallelRoads: false, provider: null };
+    // @ts-expect-error a posted answer needs one
+    const b: PointResponse = { limitMph: null, source: 'posted', matchConfidence: 0.9, parallelRoads: false, provider: 'osm' };
+    // @ts-expect-error cached comes only from the AWS cache
+    const c: PointResponse = { limitMph: 40, source: 'cached', matchConfidence: 0.7, parallelRoads: false, provider: 'osm' };
+    // @ts-expect-error unknown is confidence 0
+    const d: PointResponse = { limitMph: null, source: 'unknown', matchConfidence: 0.5, parallelRoads: false, provider: null };
+    expect([...fine, a, b, c, d]).toHaveLength(7);
   });
 });
 

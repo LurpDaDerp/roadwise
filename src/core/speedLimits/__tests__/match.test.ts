@@ -301,6 +301,27 @@ describe('matchLimit — the AWS cache', () => {
   });
 });
 
+describe('MatchResult (type level)', () => {
+  it('makes an unknown answer with a limit, or a known one without, a compile-time error', () => {
+    const r = matchLimit(90, []);
+    if (r.source === 'unknown') {
+      const none: null = r.limitMph;
+      const zero: 0 = r.matchConfidence;
+      expect([none, zero]).toEqual([null, 0]);
+    } else {
+      const mph: number = r.limitMph;
+      expect(mph).toBeGreaterThan(0);
+    }
+    // @ts-expect-error unknown carries no limit
+    const a: MatchResult = { limitMph: 25, source: 'unknown', matchConfidence: 0, parallelRoads: false, provider: null, key: null };
+    // @ts-expect-error posted needs a limit
+    const b: MatchResult = { limitMph: null, source: 'posted', matchConfidence: 0.9, parallelRoads: false, provider: 'osm', key: 'osm:1' };
+    // @ts-expect-error cached comes only from the AWS cache
+    const c: MatchResult = { limitMph: 40, source: 'cached', matchConfidence: 0.7, parallelRoads: false, provider: 'hpms', key: 'hpms:1' };
+    expect([a, b, c]).toHaveLength(3);
+  });
+});
+
 describe('matchLimit — invariants', () => {
   it('never produces statutory, never a limit with unknown, confidence always in 0..1 (R17, honesty)', () => {
     // Deterministic pseudo-random candidate sets.

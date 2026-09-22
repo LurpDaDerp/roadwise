@@ -55,7 +55,13 @@ export const LimitSegmentSchema = z
     /** Google encoded polyline, precision 5, a single LineString. */
     line: z.string().min(1).max(4096),
   })
-  .strict();
+  .strict()
+  // Only an OSM way may be untagged: it is sent so the matcher can see the road. An HPMS section or
+  // a cache segment exists only to supply a limit, so one without a limit is drift.
+  .refine((s) => s.provider === 'osm' || s.limitMph !== null, {
+    message: 'only an OSM way may carry no limit',
+    path: ['limitMph'],
+  });
 export type LimitSegment = z.infer<typeof LimitSegmentSchema>;
 
 export const TileSchema = z
@@ -98,31 +104,29 @@ export type PointRequestInput = z.input<typeof PointRequestSchema>;
 export const PointSourceSchema = z.enum(['posted', 'statutory', 'cached', 'unknown']);
 export type PointSource = z.infer<typeof PointSourceSchema>;
 
-export const PointResponseSchema = z
-  .object({
-    limitMph: limitMph.nullable(),
-    /** `statutory` is never produced in M3 (R17) but stays in the contract for the server. */
-    source: PointSourceSchema,
-    matchConfidence: z.number().min(0).max(1),
+const pointAnswer = {
+  matchConfidence: z.number().min(0).max(1),
+  parallelRoads: z.boolean(),
+};
+
+/**
+ * One answer per `source`, so the states honesty forbids cannot even be typed: an unknown answer
+ * carries no number, no provider and confidence 0; every other source carries a limit; `posted`
+ * comes from open data (`osm`, `hpms`) and `cached` from the AWS cache. `statutory` is never
+ * produced in M3 (R17) but stays in the contract for the server, with any provider.
+ */
+export const PointResponseSchema = z.discriminatedUnion('source', [
+  z.strictObject({
+    source: z.literal('unknown'),
+    limitMph: z.null(),
+    matchConfidence: z.literal(0),
     parallelRoads: z.boolean(),
-    provider: ProviderSchema.nullable(),
-  })
-  .strict()
-  .superRefine((r, ctx) => {
-    // Honesty at the contract: an unknown answer carries no number, and a known one always does.
-    if (r.source === 'unknown') {
-      if (r.limitMph !== null) ctx.addIssue({ code: 'custom', message: 'unknown carries no limit', path: ['limitMph'] });
-      if (r.provider !== null) ctx.addIssue({ code: 'custom', message: 'unknown names no provider', path: ['provider'] });
-      return;
-    }
-    if (r.limitMph === null) ctx.addIssue({ code: 'custom', message: `${r.source} needs a limit`, path: ['limitMph'] });
-    if (r.source === 'posted' && r.provider !== 'osm' && r.provider !== 'hpms') {
-      ctx.addIssue({ code: 'custom', message: 'posted comes from open data', path: ['provider'] });
-    }
-    if (r.source === 'cached' && r.provider !== 'aws') {
-      ctx.addIssue({ code: 'custom', message: 'cached comes from the AWS cache', path: ['provider'] });
-    }
-  });
+    provider: z.null(),
+  }),
+  z.strictObject({ source: z.literal('posted'), limitMph, ...pointAnswer, provider: z.enum(['osm', 'hpms']) }),
+  z.strictObject({ source: z.literal('cached'), limitMph, ...pointAnswer, provider: z.literal('aws') }),
+  z.strictObject({ source: z.literal('statutory'), limitMph, ...pointAnswer, provider: ProviderSchema.nullable() }),
+]);
 export type PointResponse = z.infer<typeof PointResponseSchema>;
 
 /** A tile segment's source is derived from its provider on the client: open data is posted. */
