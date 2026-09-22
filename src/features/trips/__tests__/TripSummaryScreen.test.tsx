@@ -243,7 +243,7 @@ describe('an unclassified drive', () => {
   test('asks who was driving, in the spec words, and answers Passenger on the spot', async () => {
     const w = await world({ trips: [unknown] }, () => NOW);
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
-    expect(await screen.findByText('Not scored yet')).toBeOnTheScreen();
+    expect(await screen.findByText('Who was driving?')).toBeOnTheScreen();
     expect(screen.getByText('Were you driving?')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Yes, I drove' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Bus, train, other' })).toBeOnTheScreen();
