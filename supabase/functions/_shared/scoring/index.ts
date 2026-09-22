@@ -5,6 +5,7 @@ export * from './day';
 export * from './exposure';
 export * from './longTerm';
 export * from './quality';
+export * from './rewards';
 export * from './scoreTrip';
 export * from './severity';
 export * from './types';

@@ -8,6 +8,7 @@
     "./_shared/scoring/index": "./_shared/scoring/index.ts",
     "./_shared/scoring/longTerm": "./_shared/scoring/longTerm.ts",
     "./_shared/scoring/quality": "./_shared/scoring/quality.ts",
+    "./_shared/scoring/rewards": "./_shared/scoring/rewards.ts",
     "./_shared/scoring/scoreTrip": "./_shared/scoring/scoreTrip.ts",
     "./_shared/scoring/severity": "./_shared/scoring/severity.ts",
     "./_shared/scoring/types": "./_shared/scoring/types.ts",
