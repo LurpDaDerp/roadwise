@@ -147,6 +147,26 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
     expect(outcome.unchanged).toBe(false);
   });
 
+  test.each([
+    ['a plain cancel releases the audio session as a drive close does', false, true],
+    ['a cancel for a real drive never touches the audio session (r1 n2)', true, false],
+  ])('%s', async (_name, realDrive, released) => {
+    const player = fakePlayer();
+    jest.useFakeTimers();
+    const sim = createSimulation({ db, trace: loadSimTrace('speeding-corrected'), speed: 1, player: () => player });
+    const run = sim.run();
+    await jest.advanceTimersByTimeAsync(10_000);
+    player.stopCurrent.mockClear();
+    player.deliver.mockClear();
+    sim.cancel({ realDrive });
+    const outcome = await runToEnd(run);
+    jest.useRealTimers();
+    expect(outcome.cancelled).toBe(true);
+    expect(sim.host.isBusy()).toBe(false);
+    expect(player.stopCurrent.mock.calls.length > 0).toBe(released);
+    if (realDrive) expect(player.deliver).not.toHaveBeenCalled();
+  });
+
   test('at 1x a row takes a second; at 5x a fifth of one', async () => {
     jest.useFakeTimers();
     const slow = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 1, player: fakePlayer });
@@ -281,13 +301,14 @@ describe('SimulationPanel', () => {
 
     test('a real lockout closes the simulation modal at once and ends the simulation', async () => {
       const real = realHostStub({ status: 'armed' });
-      await renderPanelUnder(real.host);
+      const player = await renderPanelUnder(real.host);
       jest.useFakeTimers();
       await fireEvent.press(screen.getByRole('button', { name: 'Simulate a drive' }));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(3000);
       });
       expect(screen.getByTestId('stub-hud')).toBeTruthy();
+      player.stopCurrent.mockClear();
       await real.push({ status: 'recording', lockedOut: true });
       expect(screen.queryByTestId('stub-hud')).toBeNull();
       for (let i = 0; i < 50 && !screen.queryByText(/Stopped early/); i += 1) {
@@ -297,6 +318,8 @@ describe('SimulationPanel', () => {
       }
       jest.useRealTimers();
       expect(screen.getByText(/Stopped early/)).toBeTruthy();
+      // The real drive owns the audio session now: the simulated close released nothing.
+      expect(player.stopCurrent).not.toHaveBeenCalled();
     });
   });
 

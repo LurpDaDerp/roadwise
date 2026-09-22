@@ -167,8 +167,12 @@ export interface SimulationOptions {
 export interface Simulation {
   host: DriveHost;
   run(): Promise<SimulationOutcome>;
-  /** Stop after the row in flight; `run` then ends the drive and resolves. */
-  cancel(): void;
+  /**
+   * Stop after the row in flight; `run` then ends the drive and resolves. `realDrive: true` (a real
+   * drive has started) also silences the simulation's player first, so closing the simulated drive
+   * does not release the shared audio session under the real drive's first alert (review r1 n2).
+   */
+  cancel(opts?: { realDrive?: boolean }): void;
   rowsPlayed(): number;
 }
 
@@ -193,13 +197,16 @@ export function createSimulation(opts: SimulationOptions): Simulation {
   const errors: string[] = [];
   let host: DriveHost | undefined;
   const inner = opts.player(() => host);
+  /** Set when a real drive takes over: the simulation's player then never touches audio again. */
+  let yielded = false;
   const player: AlertPlayer = {
     deliver(decision) {
+      if (yielded) return Promise.resolve();
       if (!decision.suppressed) alerts[decision.level] += 1;
       return inner.deliver(decision);
     },
-    stopCurrent: () => inner.stopCurrent(),
-    announce: (key) => inner.announce(key),
+    stopCurrent: () => (yielded ? Promise.resolve() : inner.stopCurrent()),
+    announce: (key) => (yielded ? Promise.resolve() : inner.announce(key)),
   };
 
   let ids = 0;
@@ -236,7 +243,8 @@ export function createSimulation(opts: SimulationOptions): Simulation {
   return {
     host: created,
     rowsPlayed: () => played,
-    cancel() {
+    cancel(o) {
+      if (o?.realDrive) yielded = true;
       cancelled = true;
       if (pending) {
         clearTimeout(pending.timer);
@@ -344,7 +352,7 @@ export function SimulationPanel({
   // A real drive that opens, or locks out, while a simulation runs ends the simulation at once:
   // two hosts must not drive two players, and the modal must never sit above the real lockout.
   useEffect(() => {
-    if (real.state !== 'idle') running.current?.cancel();
+    if (real.state !== 'idle') running.current?.cancel({ realDrive: true });
   }, [real.state]);
 
   useEffect(() => {
