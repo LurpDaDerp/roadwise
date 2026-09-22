@@ -10,6 +10,7 @@ import {
   formatTimeSpan,
   formatTripDate,
   highlightsFor,
+  isLimitUncertain,
   isPerfect,
   LIMIT_KNOWN_PCT,
   routeLine,
@@ -216,4 +217,42 @@ describe('events in plain language', () => {
 // `MILE_M` keeps the fixture import honest: the summaries above are 10-mile drives.
 test('the fixture drive is ten miles', () => {
   expect(summary().distanceM).toBe(10 * MILE_M);
+});
+
+describe('limit uncertain (§9.5 partial weight; U1 re-review ruling)', () => {
+  const ev = (over: Parameters<typeof eventRow>[0]) => toTripEventView(eventRow(over));
+
+  test('a speeding event below the action line is limit-uncertain; at or above it, or another category, is not', () => {
+    expect(isLimitUncertain(ev({ category: 'speeding', confidence: 0.6 }))).toBe(true);
+    expect(isLimitUncertain(ev({ category: 'speeding', confidence: 0.3, status: 'possible' }))).toBe(true);
+    // Negative controls.
+    expect(isLimitUncertain(ev({ category: 'speeding', confidence: 0.8 }))).toBe(false);
+    expect(isLimitUncertain(ev({ category: 'speeding', confidence: 0.95 }))).toBe(false);
+    expect(isLimitUncertain(ev({ category: 'phone', confidence: 0.6 }))).toBe(false);
+    expect(isLimitUncertain(ev({ category: 'speeding', confidence: null }))).toBe(false);
+  });
+
+  test('the speeding highlight says how many of its counted episodes had an uncertain limit', () => {
+    const trip = summary({
+      score: 85,
+      category_deductions_json: JSON.stringify(deductions({ speeding: 9 })),
+    });
+    const rows = highlightsFor(trip, [
+      ev({ id: 'sure', category: 'speeding', confidence: 0.9, deduction: 6 }),
+      ev({ id: 'unsure', category: 'speeding', confidence: 0.6, deduction: 3 }),
+    ]);
+    expect(rows.at(-1)?.text).toBe('Speeding: 2 episodes, 1 limit uncertain');
+  });
+
+  test('negative control: every counted episode against a confident limit — no label', () => {
+    const trip = summary({
+      score: 85,
+      category_deductions_json: JSON.stringify(deductions({ speeding: 9 })),
+    });
+    const rows = highlightsFor(trip, [
+      ev({ id: 'a', category: 'speeding', confidence: 0.9, deduction: 6 }),
+      ev({ id: 'b', category: 'speeding', confidence: 0.85, deduction: 3 }),
+    ]);
+    expect(rows.at(-1)?.text).toBe('Speeding: 2 episodes');
+  });
 });

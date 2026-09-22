@@ -195,6 +195,12 @@ export const tripCopy = {
   },
   severity: { moderate: 'Moderate', severe: 'Severe', none: 'Not counted' },
   confidence: { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' },
+  /**
+   * A speeding event measured against a limit below the action line (§9.5, confidence under
+   * `Q_FULL_AT`): the HUD sign showed "—" there, so the summary never implies a limit the driver
+   * was shown (U1 re-review ruling).
+   */
+  limitUncertain: 'limit uncertain',
   standing: {
     possible: 'Detected, not counted',
     /** §9.4: below the confidence floor an event is shown and deliberately costs nothing. */

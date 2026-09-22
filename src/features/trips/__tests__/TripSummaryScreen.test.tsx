@@ -57,6 +57,33 @@ describe('while the row is read', () => {
   });
 });
 
+describe('limit uncertain in the highlights', () => {
+  const drive = tripRow({
+    client_trip_id: ID,
+    score: 88,
+    category_deductions_json: JSON.stringify(deductions({ speeding: 6 })),
+  });
+
+  test('the speeding highlight names the episodes whose limit was uncertain', async () => {
+    const w = await world({
+      trips: [drive],
+      events: [speedingEvent('s1', { confidence: 0.9 }), speedingEvent('s2', { confidence: 0.6 })],
+    });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText('Speeding: 2 episodes, 1 limit uncertain')).toBeOnTheScreen();
+  });
+
+  test('negative control: confident limits only — no label', async () => {
+    const w = await world({
+      trips: [drive],
+      events: [speedingEvent('s1', { confidence: 0.9 }), speedingEvent('s2', { confidence: 0.85 })],
+    });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText('Speeding: 2 episodes')).toBeOnTheScreen();
+    expect(screen.queryByText(/limit uncertain/)).toBeNull();
+  });
+});
+
 describe('a scored drive', () => {
   const scored = tripRow({
     client_trip_id: ID,

@@ -15,7 +15,7 @@ import { decodePolyline } from '@/lib/polyline';
 import { mpsToMph } from '@/lib/units';
 
 import { tripCopy as copy } from './copy';
-import { categoryLabel, describeEvent, formatClock } from './format';
+import { categoryLabel, describeEvent, formatClock, isLimitUncertain } from './format';
 
 const mph = (mps: number): number => Math.round(mpsToMph(mps));
 const seconds = (s: number): string => `${Math.max(1, Math.round(s))} s`;
@@ -319,6 +319,8 @@ export interface TimelineRow {
   standing: EventStanding;
   /** Points this event cost, or null when it cost nothing. */
   points: number | null;
+  /** A speeding event against a limit below the action line: labelled "limit uncertain". */
+  limitUncertain: boolean;
 }
 
 /** The D2 timeline, oldest first — the order the drive happened and the order the repo returns. */
@@ -341,6 +343,7 @@ export function timelineRows(
       // standing: a report that was recorded but not applied leaves the event scored, and saying
       // it cost nothing would be the opposite of honest.
       points: costs.get(event.id) ?? null,
+      limitUncertain: isLimitUncertain(event),
     };
   });
 }

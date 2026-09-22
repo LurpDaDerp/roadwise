@@ -76,6 +76,19 @@ export type Highlight =
 export const MAX_HIGHLIGHTS = 3;
 
 /**
+ * A speeding event whose stored confidence is below `Q_FULL_AT`: its limit was one the HUD showed
+ * as "—" (§9.5 partial weight, or not counted at all), so every surface labels it "limit
+ * uncertain". An event with no stored confidence makes no claim either way.
+ */
+export function isLimitUncertain(event: Pick<TripEventView, 'category' | 'confidence'>): boolean {
+  return (
+    event.category === 'speeding' &&
+    event.confidence !== null &&
+    event.confidence < CONSTANTS.Q_FULL_AT
+  );
+}
+
+/**
  * Below this share of the drive with a known limit, "kept to the limit" would be a claim about
  * roads the app could not see; speeding is not scored where the limit is unknown (§9.3).
  */
@@ -108,12 +121,18 @@ export function highlightsFor(trip: TripSummary, events: readonly TripEventView[
     worst === null
       ? null
       : (() => {
-          const episodes = events.filter((e) => e.category === worst && e.affectsScore).length;
+          const counted = events.filter((e) => e.category === worst && e.affectsScore);
+          const episodes = counted.length;
+          const uncertain = counted.filter(isLimitUncertain).length;
           const label = categoryLabel(worst);
+          const count =
+            uncertain > 0
+              ? `${copy.highlights.episodes(episodes)}, ${uncertain} ${copy.limitUncertain}`
+              : copy.highlights.episodes(episodes);
           return {
             kind: 'cost',
             category: worst,
-            text: episodes > 0 ? `${label}: ${copy.highlights.episodes(episodes)}` : label,
+            text: episodes > 0 ? `${label}: ${count}` : label,
             points: trip.categoryDeductions[worst],
             episodes,
           };

@@ -26,6 +26,7 @@ const GLYPH: Record<EventStanding, keyof typeof Ionicons.glyphMap> = {
 /** Everything one row says, in the order it is spoken. */
 export function spokenRow(row: TimelineRow): string {
   const parts: string[] = [row.clock, row.title, row.measured];
+  if (row.limitUncertain) parts.push(copy.limitUncertain);
   if (row.severity !== 'none') parts.push(copy.severity[row.severity]);
   if (row.points !== null) parts.push(copy.highlights.lost(formatPoints(row.points)));
   const standing = standingLabel(row.standing);
@@ -92,6 +93,11 @@ function Row({
         <Text variant="subhead" tone="muted">
           {row.measured}
         </Text>
+        {row.limitUncertain ? (
+          <Text variant="caption" tone="muted" testID={`limit-uncertain-${row.event.id}`}>
+            {copy.limitUncertain}
+          </Text>
+        ) : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: th.space.sm }}>
           {standing !== null ? (
             <Text variant="caption" tone="subtle">

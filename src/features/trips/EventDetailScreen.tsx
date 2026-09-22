@@ -21,7 +21,7 @@ import {
 } from './detail';
 import { DisputeSheet } from './DisputeSheet';
 import { Field, FieldText } from './Field';
-import { categoryLabel, dateLine, formatClock } from './format';
+import { categoryLabel, dateLine, formatClock, isLimitUncertain } from './format';
 import { NOTICE_BORDER, TIGHT } from './layout';
 import { HOME_HREF, tripEditHref } from './routes';
 import { TripTopBar } from './TopBar';
@@ -199,6 +199,11 @@ export function EventDetailScreen({
           {severity !== 'none' ? (
             <Text variant="subhead" tone="muted">
               {copy.severity[severity]}
+            </Text>
+          ) : null}
+          {isLimitUncertain(event) ? (
+            <Text variant="subhead" tone="muted" testID="limit-uncertain">
+              {copy.limitUncertain}
             </Text>
           ) : null}
         </Field>
