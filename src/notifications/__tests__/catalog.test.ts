@@ -93,7 +93,7 @@ describe('the catalog', () => {
       delivery: 'push',
       producer: 'M4',
       live: true,
-      ttlHours: 24,
+      ttlHours: 48,
     });
   });
 

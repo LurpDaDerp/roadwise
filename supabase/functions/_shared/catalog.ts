@@ -149,7 +149,7 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     delivery: 'push',
     producer: 'M4',
     live: true,
-    ttlHours: 24,
+    ttlHours: 48, // ruling T4 r1: a cap-deferred lapse survives to the next day's first slot
   }),
   // Reserved: no producer, no copy yet.
   missed_drive: entry({
