@@ -36,7 +36,12 @@ export function AutoDetectStep({ onNext, onBack, deps }: StepProps & { deps?: Au
   let secondary: StepAction | undefined;
   if (model.status === 'loading') {
     primary = { ...cont, disabled: true };
-  } else if (model.status === 'ready' && model.mode !== 'blocked' && !model.on) {
+  } else if (
+    model.status === 'ready' &&
+    model.mode !== 'blocked' &&
+    model.mode !== 'notAvailable' &&
+    !model.on
+  ) {
     primary = {
       label: copy.turnOn,
       onPress: () => void go(() => model.setOn(true))(),

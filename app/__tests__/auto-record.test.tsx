@@ -124,3 +124,14 @@ test('nothing blocks: no Fix button', async () => {
   expect(screen.queryByTestId('auto-record-fix-always')).toBeNull();
   expect(screen.queryByTestId('auto-record-fix-permissions')).toBeNull();
 });
+
+test('final review I3: with auto-record withdrawn it says so, as Home does, and offers no Fix or disclosure', async () => {
+  await renderScreen(fakeAdapter(snap({ location: 'foreground' })), {
+    seed: { trips: [drive(1)], autoDetect: false },
+    intent: true,
+  });
+  expect(screen.getByTestId('auto-record-line')).toHaveTextContent(/isn’t available yet/);
+  expect(screen.getByTestId('auto-record-toggle').props.disabled).toBe(true);
+  expect(screen.queryByTestId('auto-record-fix-always')).toBeNull();
+  expect(screen.queryByTestId('auto-record-fix-permissions')).toBeNull();
+});

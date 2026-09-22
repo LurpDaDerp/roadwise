@@ -209,6 +209,10 @@ export const onboardingCopy = {
     /** On, but this account hasn't affirmed the background-location disclosure (Task 19 r1). */
     needsOk: 'Turned on, but it can’t start drives until you review how RoadWise uses background location.',
     review: 'Review background location',
+    /** The server has withdrawn auto-record (final review I3): Home's words. */
+    notAvailable: 'Auto-record isn’t available yet. Start each drive yourself with Drive.',
+    /** Chosen, but the host is not armed right now: never "on". */
+    notRunning: 'Turned on, but it isn’t running right now.',
     reviewHint: 'Shows how RoadWise uses background location, then turns auto-record on',
     iosAfterFirstDrive: 'Turns on after your first drive, once you allow it.',
     needs: {

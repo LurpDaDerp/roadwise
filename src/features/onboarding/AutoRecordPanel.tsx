@@ -74,8 +74,12 @@ export type AutoRecordModel =
       /**
        * `host`: the toggle goes through `setAutoDetect`. `intent`: iOS before the first drive, the
        * toggle stores the wish. `blocked`: it can't be turned on here; `blocker` says why.
+       * `notAvailable`: the server has withdrawn auto-record (`auto_detect` off, final review I3):
+       * nothing can be turned on and nothing is asked, whatever the stored choice.
        */
-      mode: 'host' | 'intent' | 'blocked';
+      mode: 'host' | 'intent' | 'blocked' | 'notAvailable';
+      /** The host is armed right now (`autoDetectArmed`): the only state in which it says "on". */
+      armed: boolean;
       blocker: AutoRecordBlocker | null;
       on: boolean;
       busy: boolean;
@@ -111,8 +115,9 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
   const { settings, adapter, appState, now } = useStepDeps(deps);
   const phone = usePhone(adapter, appState);
   const host = useDriveHost();
-  // Re-render when the host arms or disarms, so the choice read below stays current.
-  useDrive((s) => s.autoDetectArmed === true);
+  // Re-render when the host arms or disarms, so the choice read below stays current; and the
+  // panel says "on" only while it is armed (final review I3).
+  const armed = useDrive((s) => s.autoDetectArmed === true);
   const trips = useTrips();
   const { config } = useAppConfig(deps.appConfig);
   const manufacturer = deps.manufacturer === undefined ? Device.manufacturer : deps.manufacturer;
@@ -159,9 +164,12 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
   const snapshot = phone.status === 'ready' ? phone.snapshot : null;
   const firstDriveDone = tripList !== undefined && completedDrives(tripList) > 0;
   const intentMode = snapshot?.platform === 'ios' && !firstDriveDone;
+  // The server's kill switch (final review I3): with it off nothing is turned on or asked here.
+  const available = config.flags.auto_detect;
 
   const setOn = useCallback(
     async (enabled: boolean): Promise<boolean> => {
+      if (enabled && !available) return false;
       setBusy(true);
       setFailed(false);
       try {
@@ -178,7 +186,10 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
           await host.setAutoDetect(enabled);
           setVersion((v) => v + 1);
         }
+        // An explicit toggle-off is the driver's choice (final review m5): the post-drive offers and
+        // the health model stop asking, exactly as after A9's Skip. Turning on clears it.
         if (enabled) await settings.remove(MANUAL_BY_CHOICE_KEY);
+        else await settings.set(MANUAL_BY_CHOICE_KEY, true);
         return true;
       } catch {
         setFailed(true);
@@ -187,7 +198,7 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
         setBusy(false);
       }
     },
-    [intentMode, settings, host, affirmed]
+    [intentMode, settings, host, affirmed, available]
   );
 
   const onDisclosureResult = useCallback(() => {
@@ -217,7 +228,7 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
   }
 
   const blocker = blockerOf(snapshot, !intentMode);
-  const mode = blocker !== null ? 'blocked' : intentMode ? 'intent' : 'host';
+  const mode = !available ? 'notAvailable' : blocker !== null ? 'blocked' : intentMode ? 'intent' : 'host';
   const on = intentMode ? intent : host.autoDetectEnabled();
   const battery =
     snapshot.platform === 'android'
@@ -236,6 +247,7 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
     busy,
     failed,
     affirmed,
+    armed,
     disclosure: disclosureOpen
       ? { reason: deps.disclosureReason ?? 'repair', deps: { adapter, appState, now }, onResult: onDisclosureResult }
       : null,
@@ -282,12 +294,17 @@ export function AutoRecordPanel({ model }: { model: AutoRecordModel }) {
   const { mode, blocker, on, busy, platform, battery } = model;
   // On, but the host cannot arm until this account affirms the disclosure: never "on" (honesty).
   const awaitingOk = mode === 'host' && on && !model.affirmed;
+  // Chosen, but the host is not armed (a refused arm, a moment after Settings): not "on" either.
+  const notRunning = mode === 'host' && on && model.affirmed && !model.armed;
+  const locked = mode === 'blocked' || mode === 'notAvailable' || busy;
   let line: string;
-  if (blocker === 'location') line = copy.needs.location;
+  if (mode === 'notAvailable') line = copy.notAvailable;
+  else if (blocker === 'location') line = copy.needs.location;
   else if (blocker === 'always') line = copy.needs.always[platform];
   else if (blocker === 'motion') line = copy.needs.motion;
   else if (mode === 'intent') line = copy.iosAfterFirstDrive;
   else if (awaitingOk) line = copy.needsOk;
+  else if (notRunning) line = copy.notRunning;
   else line = on ? copy.toggleOn : copy.toggleOff;
 
   return (
@@ -309,15 +326,26 @@ export function AutoRecordPanel({ model }: { model: AutoRecordModel }) {
             accessibilityRole="switch"
             accessibilityLabel={copy.toggle}
             accessibilityHint={line}
-            accessibilityState={{ checked: on, disabled: mode === 'blocked' || busy }}
+            accessibilityState={{ checked: on, disabled: locked }}
             value={on}
-            disabled={mode === 'blocked' || busy}
+            disabled={locked}
             onValueChange={(next) => void model.setOn(next)}
             trackColor={{ true: th.colors.accent, false: th.colors.border }}
           />
         </View>
         {/* Before any tap: what the toggle does, or why it can't (Ruling T9 (2)). */}
-        <StatusLine tone={blocker || awaitingOk ? 'attention' : on ? 'ok' : 'info'} testID="auto-record-line">
+        <StatusLine
+          tone={
+            mode === 'notAvailable'
+              ? 'info'
+              : blocker || awaitingOk || notRunning
+                ? 'attention'
+                : on
+                  ? 'ok'
+                  : 'info'
+          }
+          testID="auto-record-line"
+        >
           {line}
         </StatusLine>
         {awaitingOk ? (

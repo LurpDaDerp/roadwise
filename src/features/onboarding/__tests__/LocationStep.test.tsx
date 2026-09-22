@@ -180,6 +180,29 @@ describe('Android', () => {
       expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
     });
 
+    test('final review I3: Android with auto-record withdrawn — a foreground grant moves on with no disclosure and no Always ask', async () => {
+      const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }), {
+        foreground: 'foreground',
+      });
+      const { onNext } = await renderStep('android', adapter, {}, false);
+      await press(await screen.findByTestId('location-allow'));
+      await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+      expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+      expect(requests(adapter)).toEqual(['requestLocationForeground']);
+    });
+
+    test('final review I3: Android, flag withdrawn, While Using or an inherited Always already on: no disclosure', async () => {
+      for (const location of ['foreground', 'always'] as const) {
+        await cleanup();
+        clearQueryClients();
+        const adapter = fakeAdapter(snap({ platform: 'android', location }));
+        await renderStep('android', adapter, {}, false);
+        expect(await screen.findByText(copy.allowed)).toBeOnTheScreen();
+        expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+        expect(requests(adapter)).toEqual([]);
+      }
+    });
+
     test('iOS: no disclosure here (design §5.3); turning auto-record on is gated instead', async () => {
       const adapter = fakeAdapter(snap({ platform: 'ios', location: 'always' }));
       await renderStep('ios', adapter);

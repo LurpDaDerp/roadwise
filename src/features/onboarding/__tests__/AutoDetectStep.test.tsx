@@ -70,7 +70,7 @@ async function renderStep(
   );
   const keys = async () =>
     (await w.db.execute('SELECT key FROM settings')).rows.map((r) => (r as { key: string }).key);
-  return { ...w, onNext, host: fh.host, appState, keys };
+  return { ...w, onNext, host: fh.host, publish: fh.publish, appState, keys };
 }
 
 const autoDetectKeys = (keys: string[]) => keys.filter((k) => /auto.?detect|auto.?record/i.test(k));
@@ -91,7 +91,9 @@ describe('Android with Always and motion', () => {
 
   test('the toggle says plainly that it turns on automatic recording, and reads the host choice, not the status', async () => {
     const adapter = fakeAdapter(snap({ platform: 'android' }));
-    const { host } = await renderStep('android', adapter, { intent: true, status: 'off', seed: { affirmed: true } });
+    const { host, publish } = await renderStep('android', adapter, { intent: true, status: 'off', seed: { affirmed: true } });
+    // Armed (the one thing that makes it "on"), while the engine's status still says off.
+    await act(async () => publish({ autoDetectArmed: true }));
     const toggle = await screen.findByTestId('auto-record-toggle');
     expect(toggle.props.value).toBe(true);
     expect(screen.getByText(copy.toggleOn)).toBeOnTheScreen();
@@ -248,5 +250,51 @@ describe('this account has not affirmed the disclosure (Task 19 r1, security I-1
     });
     expect(host.setAutoDetect).toHaveBeenCalledWith(false);
     expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+  });
+});
+
+describe('final review I3 and m5', () => {
+  test('the auto_detect flag withdrawn: "not available", the toggle locked, nothing asked, whatever the stored choice', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { host } = await renderStep('android', adapter, { intent: true, seed: { autoDetect: false, affirmed: true } });
+    expect(await screen.findByText(copy.notAvailable)).toBeOnTheScreen();
+    expect(screen.queryByText(copy.toggleOn)).toBeNull();
+    const toggle = screen.getByTestId('auto-record-toggle');
+    expect(toggle.props.disabled).toBe(true);
+    // No Turn on; and a forced change asks nothing and opens no disclosure.
+    expect(screen.queryByTestId('auto-record-turn-on')).toBeNull();
+    await act(async () => {
+      fireEvent(toggle, 'valueChange', true);
+    });
+    expect(host.setAutoDetect).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+  });
+
+  test('chosen and affirmed, but the host is not armed: never "on", says it is not running', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { publish } = await renderStep('android', adapter, { intent: true, seed: { affirmed: true } });
+    expect(await screen.findByText(copy.notRunning)).toBeOnTheScreen();
+    expect(screen.queryByText(copy.toggleOn)).toBeNull();
+    await act(async () => publish({ autoDetectArmed: true }));
+    expect(await screen.findByText(copy.toggleOn)).toBeOnTheScreen();
+  });
+
+  test('m5: an explicit toggle-off is the driver’s choice (manual by choice), and turning on clears it', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { settings } = await renderStep('android', adapter, { intent: true, seed: { affirmed: true } });
+    await act(async () => {
+      fireEvent(await screen.findByTestId('auto-record-toggle'), 'valueChange', false);
+    });
+    await waitFor(async () => expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBe(true));
+  });
+
+  test('m5 (iOS): turning the before-first-drive wish off is a choice too', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'ios' }));
+    const { settings } = await renderStep('ios', adapter, { seed: { settings: { [AUTO_RECORD_INTENT_KEY]: true } } });
+    await act(async () => {
+      fireEvent(await screen.findByTestId('auto-record-toggle'), 'valueChange', false);
+    });
+    await waitFor(async () => expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBe(true));
+    expect(await settings.get(AUTO_RECORD_INTENT_KEY)).toBeNull();
   });
 });

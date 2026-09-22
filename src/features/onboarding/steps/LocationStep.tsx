@@ -50,6 +50,9 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
   const phone = usePhone(adapter, appState);
   const grantConsent = useGrantConsent(settings);
   const ios = ctx.platform === 'ios';
+  // Background location is only ever for auto-record: with the server's kill switch off
+  // (final review I3) Android behaves like iOS here — no disclosure, no "Allow all the time".
+  const offersBackground = !ios && ctx.features.autoDetect;
   const { session } = useSession();
   const uid = session?.user.id ?? null;
 
@@ -79,7 +82,7 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
   if (phone.status === 'error') view = 'error';
   else if (snapshot === null || disclosureDone === null) view = 'loading';
   else if (granted(snapshot)) {
-    if (!ios && !disclosureDone) view = 'disclosure';
+    if (offersBackground && !disclosureDone) view = 'disclosure';
     else if (snapshot.precise === false) view = 'approximate';
     else view = 'granted';
   } else if (snapshot.location === 'denied' && (answered || !snapshot.locationCanAskAgain)) view = 'denied';
@@ -106,7 +109,7 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
         await grantConsent('location');
         // Android With While Using: the disclosure renders next (derived above). Otherwise move
         // on, unless approximate location has something to say first.
-        const disclosureNext = !ios && !disclosureDone;
+        const disclosureNext = offersBackground && !disclosureDone;
         if (!disclosureNext && next?.precise !== false) await leave(next);
       }
     } catch {
