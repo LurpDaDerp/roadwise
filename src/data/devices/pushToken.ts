@@ -5,7 +5,10 @@
  * - Registered when the token changed, when the last registration is more than 7 days old, or
  *   when forced: `DeviceHost` forces its first sync of every launch (T2 security M-3: a token is
  *   re-registered at every launch; a takeover by another account on this phone is by design).
- * - Never without notification permission, and never from a simulator.
+ * - Never without notification permission, and never from a simulator. With the permission off,
+ *   a registration this account holds for this install is released (review m2), so push-sender
+ *   has no token to "send" to and nothing is counted toward the day's cap; the next sync after a
+ *   grant registers again.
  * - The token is kept on the phone only (settings), to compare and to release. It is never
  *   returned, logged or put in an error: every result is a status word.
  *
@@ -90,7 +93,7 @@ export type SyncPushResult = 'registered' | 'unchanged' | 'no-permission' | 'not
 export interface SyncPushDeps {
   userId: string;
   deviceId: string;
-  settings: Pick<SettingsRepo, 'get' | 'set'>;
+  settings: Pick<SettingsRepo, 'get' | 'set' | 'remove'>;
   supabase: DevicesClient;
   port: PushPort;
   projectId: string | null;
@@ -112,17 +115,35 @@ const failure = (what: string, error: unknown): Error => {
 export async function syncPushToken(deps: SyncPushDeps): Promise<SyncPushResult> {
   const { userId, deviceId, settings, port } = deps;
   const report = (what: string, error: unknown) => deps.onError?.(failure(what, error), 'devices push token');
+  let permitted: boolean;
   try {
     if (!port.isDevice()) return 'not-a-device';
-    if (!(await port.permitted())) return 'no-permission';
+    permitted = await port.permitted();
   } catch (error) {
     report('push permission could not be read', error);
     return 'error';
   }
 
-  const now = deps.now();
   const last = parseRegistration(await settings.get<unknown>(PUSH_REGISTRATION_KEY));
   const same = last !== null && last.userId === userId && last.deviceId === deviceId;
+
+  if (!permitted) {
+    // Review m2: a phone that shows nothing must not stay registered, or push-sender "sends" to it
+    // (Expo acks, iOS drops) and counts it toward the day's cap. Released once; kept on a failure
+    // so the next sync tries again. A grant registers afresh (no record → not "unchanged").
+    if (same) {
+      try {
+        const { error } = await deps.supabase.rpc('unregister_push_token', { p_token: last.token });
+        if (error) throw error;
+        await settings.remove(PUSH_REGISTRATION_KEY);
+      } catch (error) {
+        report('push token release failed', error);
+      }
+    }
+    return 'no-permission';
+  }
+
+  const now = deps.now();
   // Fresh: no token fetch at all (getExpoPushTokenAsync is a request to Expo). A new OS token
   // arrives through the listener, which forces.
   if (!deps.force && same && last.at <= now && now - last.at < PUSH_REFRESH_MS) return 'unchanged';

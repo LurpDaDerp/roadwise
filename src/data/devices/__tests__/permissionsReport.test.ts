@@ -1,4 +1,10 @@
-import { EVER_GRANTED_KEY, type PermissionSnapshot, type ServerPermissions } from '@/core/permissions';
+import {
+  EVER_GRANTED_KEY,
+  permissionsFingerprint,
+  toServerPermissions,
+  type PermissionSnapshot,
+  type ServerPermissions,
+} from '@/core/permissions';
 import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
@@ -167,6 +173,14 @@ describe('reportPermissionsFromBackground', () => {
     await s.set(LAST_USER_KEY, owner);
     await s.set(INSTALL_ID_KEY, 'install-1');
     await s.set(LAST_UPSERT_KEY, { userId: owner, deviceId: 'install-1', at: T0, appVersion: '2.0.0', fingerprint: null });
+    // the foreground has reported once: only an onboarded account's host does that
+    const permissions = toServerPermissions(snap(), 'foreground');
+    await s.set(REPORTED_PERMISSIONS_KEY, {
+      userId: owner,
+      deviceId: 'install-1',
+      fingerprint: permissionsFingerprint(permissions),
+      permissions,
+    });
   }
   const bg = (snapshot: PermissionSnapshot | (() => Promise<PermissionSnapshot>)) =>
     reportPermissionsFromBackground({
@@ -178,18 +192,16 @@ describe('reportPermissionsFromBackground', () => {
 
   it('reports a change as reportedFrom background, with the day count written first (N-I1)', async () => {
     await seedDevice();
-    await reportPermissions(input(snap()), deps());
     await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 2 });
     expect(await bg(snap({ location: 'foreground' }))).toBe('reported');
     const order = fake.calls.map((c) => `${c.target}:${c.op}`);
-    expect(order.slice(1)).toEqual(['notification_prefs:update', 'devices:update']);
+    expect(order).toEqual(['notification_prefs:update', 'devices:update']);
     expect(fake.to('notification_prefs')[0]?.values).toEqual({ local_sent_day: '2026-09-22', local_sent_count: 2 });
-    expect(written()[1]).toMatchObject({ location: 'foreground', reportedFrom: 'background', ack: false });
+    expect(written()[0]).toMatchObject({ location: 'foreground', reportedFrom: 'background', ack: false });
   });
 
   it('inserts the count row when the account has none yet', async () => {
     await seedDevice();
-    await reportPermissions(input(snap()), deps());
     await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 1 });
     fake.respond = (c) =>
       c.target === 'notification_prefs' && c.op === 'update'
@@ -204,9 +216,33 @@ describe('reportPermissionsFromBackground', () => {
     });
   });
 
+  it('an insert that lost the race to another writer (23505) is retried as an update', async () => {
+    await seedDevice();
+    await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 2 });
+    let updates = 0;
+    fake.respond = (c) => {
+      if (c.target !== 'notification_prefs') return { data: c.columns ? [{ id: 'x' }] : null, error: null };
+      if (c.op === 'insert') return { data: null, error: { code: '23505', message: 'duplicate key' } };
+      updates += 1;
+      return { data: updates === 1 ? [] : [{ user_id: 'user-a' }], error: null };
+    };
+    const onError = jest.fn();
+    expect(
+      await reportPermissionsFromBackground({
+        db,
+        supabase: fake.client,
+        now: () => now,
+        onError,
+        adapter: { snapshot: async () => snap({ location: 'foreground' }) },
+      })
+    ).toBe('reported');
+    expect(fake.to('notification_prefs').map((c) => c.op)).toEqual(['update', 'insert', 'update']);
+    expect(fake.to('notification_prefs')[2]?.values).toEqual({ local_sent_day: '2026-09-22', local_sent_count: 2 });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('a count that fails to send does not hold back the lapse report', async () => {
     await seedDevice();
-    await reportPermissions(input(snap()), deps());
     await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 1 });
     fake.respond = (c) =>
       c.target === 'notification_prefs'
@@ -217,7 +253,6 @@ describe('reportPermissionsFromBackground', () => {
 
   it('no change: no network at all (no session read, no request)', async () => {
     await seedDevice();
-    await reportPermissions(input(snap()), deps());
     const getSession = jest.spyOn(fake.client.auth, 'getSession');
     const before = fake.calls.length;
     expect(await bg(snap({ checkedAt: T0 + 5_000 }))).toBe('unchanged');
@@ -235,7 +270,7 @@ describe('reportPermissionsFromBackground', () => {
     expect(fake.calls).toHaveLength(0);
   });
 
-  it('skipped with no owner, a pending handover, no install id or no registered device', async () => {
+  it('skipped with no owner, a pending handover, no install id, no device row or no foreground report yet', async () => {
     expect(await bg(snap())).toBe('skipped');
     await seedDevice();
     await settings().set(PENDING_OWNER_KEY, 'user-b');
@@ -243,13 +278,17 @@ describe('reportPermissionsFromBackground', () => {
     await settings().remove(PENDING_OWNER_KEY);
     await settings().remove(LAST_UPSERT_KEY);
     expect(await bg(snap())).toBe('skipped');
+    await seedDevice();
+    // registered for the push token while onboarding, but never reported from the foreground
+    await settings().remove(REPORTED_PERMISSIONS_KEY);
+    expect(await bg(snap({ location: 'foreground' }))).toBe('skipped');
     expect(fake.calls).toHaveLength(0);
   });
 
   it('never writes under a session that is not the device owner', async () => {
     await seedDevice();
     fake.sessionUid = 'user-b';
-    expect(await bg(snap())).toBe('skipped');
+    expect(await bg(snap({ location: 'foreground' }))).toBe('skipped');
     expect(fake.calls).toHaveLength(0);
   });
 

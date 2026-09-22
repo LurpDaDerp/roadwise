@@ -2,9 +2,13 @@
  * Keeps this install's server-side presence current: the `devices` row, the permission report,
  * the push token and the drive state. Renders nothing; mounted once by the root layout (Task 18).
  *
- * Runs only while signed in and onboarded (not under 13, not still in setup), and only while this
- * account is the device owner with no handover pending (M3 H2's owner fence), so nothing is ever
- * written for one driver from another's phone state.
+ * Runs only while signed in, and only while this account is the device owner with no handover
+ * pending (M3 H2's owner fence), so nothing is ever written for one driver from another's phone
+ * state. Never for an under-13 account, nor before the profile is known.
+ * - **Still in setup:** the device row and the push token only (security M-1: the phone stops
+ *   receiving the previous owner's pushes as soon as the new owner signs in). No permission
+ *   report, no drive state, no `onForeground`.
+ * - **Onboarded:** everything below.
  *
  * - **On mount and on every `AppState → active`:** the throttled upsert, a permission snapshot →
  *   `reportPermissions`, `syncPushToken` (forced on the first successful sync of the launch: T2
@@ -82,18 +86,31 @@ export function DeviceHost(props: DeviceHostProps): null {
   const { db, now } = useDataSource();
   const { status, session, profile } = useSession();
   const userId = status === 'signedIn' ? (session?.user.id ?? null) : null;
-  const active = (props.enabled ?? true) && userId !== null && profileGate(profile) === 'ready';
+  const gate = profileGate(profile);
+  // Security M-1: the token is taken as soon as the account is known and not under 13, so a
+  // previous owner's pushes stop reaching this phone before the new owner finishes setup.
+  const mode: 'off' | 'token' | 'full' =
+    !(props.enabled ?? true) || userId === null
+      ? 'off'
+      : gate === 'ready'
+        ? 'full'
+        : gate === 'onboarding'
+          ? 'token'
+          : 'off';
 
   const latest = useRef(props);
   useLayoutEffect(() => {
     latest.current = props;
   });
+  /** The account whose token this launch has already force-registered (T2 M-3: once per launch). */
+  const tokenForcedFor = useRef<string | null>(null);
 
   const hasSource = props.subscribeDrive !== undefined;
   useEffect(() => (hasSource ? registerDriveStateSource() : undefined), [hasSource]);
 
   useEffect(() => {
-    if (!active || userId === null) return;
+    if (mode === 'off' || userId === null) return;
+    const full = mode === 'full';
     let live = true;
     const cleanups: (() => void)[] = [];
     const d = resolveDeps(latest.current.deps);
@@ -111,8 +128,6 @@ export function DeviceHost(props: DeviceHostProps): null {
 
     let deviceId: string | null = null;
     let reporter: DriveStateReporter | null = null;
-    /** The first sync of a launch registers even when fresh; cleared once one gets an answer. */
-    let forceToken = true;
     let running = false;
     let again = false;
 
@@ -137,21 +152,54 @@ export function DeviceHost(props: DeviceHostProps): null {
       });
     };
 
+    /**
+     * Once the owner fence holds: the install id and the listeners. Tried again on every run until
+     * it does (a handover's rebuild settles the owner after this host mounted).
+     */
+    const init = async (): Promise<boolean> => {
+      if (deviceId !== null) return true;
+      if (!(await ownerHolds())) return false;
+      const id = await getInstallId(settings, d.newId);
+      if (!live) return false;
+      deviceId = id;
+      // Attached synchronously after the last await, so an unmount in between leaves nothing.
+      const subscribeDrive = latest.current.subscribeDrive;
+      if (full && subscribeDrive) {
+        const r = createDriveStateReporter({ supabase: d.supabase, userId, deviceId: id, onError: report });
+        reporter = r;
+        cleanups.push(subscribeDrive((s) => r.onDriveState(s)));
+      }
+      cleanups.push(
+        onDeviceSyncRequested(() => {
+          void step('devices push token', () => syncToken(false));
+        })
+      );
+      const tokenSub = d.push.addPushTokenListener(() => {
+        void step('devices push token', () => syncToken(true));
+      });
+      cleanups.push(() => tokenSub.remove());
+      return true;
+    };
+
     const foreground = async (): Promise<void> => {
-      if (!live || deviceId === null || d.appState.currentState !== 'active') return;
+      if (!live || !(await init()) || !live) return;
+      if (d.appState.currentState !== 'active' || deviceId === null) return;
       if (!(await ownerHolds())) return;
       const id = deviceId;
       const deps = { supabase: d.supabase, settings, now, onError: report };
 
       let snapshot = null;
-      try {
-        snapshot = await d.adapter.snapshot();
-      } catch (error) {
-        // a failed read reports nothing, never a made-up state (T8)
-        report(error, 'devices permissions snapshot');
+      if (full) {
+        try {
+          snapshot = await d.adapter.snapshot();
+        } catch (error) {
+          // a failed read reports nothing, never a made-up state (T8)
+          report(error, 'devices permissions snapshot');
+        }
+        if (!live) return;
       }
-      if (!live) return;
 
+      // The row register_push_token needs, in both modes.
       await step('devices upsert', async () => {
         const info = d.deviceInfo();
         if (!info) return;
@@ -174,10 +222,10 @@ export function DeviceHost(props: DeviceHostProps): null {
       if (!live) return;
 
       await step('devices push token', async () => {
-        const result = await syncToken(forceToken);
-        if (result !== null && result !== 'error') forceToken = false;
+        const result = await syncToken(tokenForcedFor.current !== userId);
+        if (result !== null && result !== 'error') tokenForcedFor.current = userId;
       });
-      if (!live) return;
+      if (!live || !full) return;
 
       await step('devices drive state retry', async () => reporter?.retryPending());
       if (!live) return;
@@ -201,42 +249,17 @@ export function DeviceHost(props: DeviceHostProps): null {
       }
     };
 
-    void (async () => {
-      if (!(await ownerHolds())) return;
-      const id = await getInstallId(settings, d.newId);
-      if (!live) return;
-      deviceId = id;
-
-      // Everything below is attached synchronously, after the last await, so an unmount in the
-      // meantime leaves nothing behind.
-      const subscribeDrive = latest.current.subscribeDrive;
-      if (subscribeDrive) {
-        const r = createDriveStateReporter({ supabase: d.supabase, userId, deviceId: id, onError: report });
-        reporter = r;
-        cleanups.push(subscribeDrive((s) => r.onDriveState(s)));
-      }
-      cleanups.push(
-        onDeviceSyncRequested(() => {
-          void step('devices push token', () => syncToken(false));
-        })
-      );
-      const tokenSub = d.push.addPushTokenListener(() => {
-        void step('devices push token', () => syncToken(true));
-      });
-      cleanups.push(() => tokenSub.remove());
-      const appSub = d.appState.addEventListener('change', (next) => {
-        if (next === 'active') void run();
-      });
-      cleanups.push(() => appSub.remove());
-
-      await run();
-    })().catch((error: unknown) => report(error, 'devices host'));
+    const appSub = d.appState.addEventListener('change', (next) => {
+      if (next === 'active') void run();
+    });
+    cleanups.push(() => appSub.remove());
+    void run().catch((error: unknown) => report(error, 'devices host'));
 
     return () => {
       live = false;
       for (const cleanup of cleanups.splice(0)) cleanup();
     };
-  }, [active, userId, db, now]);
+  }, [mode, userId, db, now]);
 
   return null;
 }

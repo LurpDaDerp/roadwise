@@ -190,7 +190,6 @@ describe('DeviceHost', () => {
 
   it.each<[string, () => void]>([
     ['signed out', () => (mockSession = { status: 'signedOut', session: null, profile: null })],
-    ['not onboarded', () => (mockSession.profile = { age_band: 'adult', flags: {} })],
     ['under 13', () => (mockSession.profile = { age_band: 'u13', flags: { onboarded: true } })],
     ['no profile yet', () => (mockSession.profile = null)],
   ])('%s: nothing runs', async (_name, arrange) => {
@@ -202,6 +201,65 @@ describe('DeviceHost', () => {
     });
     expect(fake.calls).toHaveLength(0);
     expect(onForeground).not.toHaveBeenCalled();
+  });
+
+  describe('the push token before onboarding finishes (security M-1)', () => {
+    const settle = () =>
+      act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+    it('not onboarded yet: the device row and the token only, no report and no onForeground', async () => {
+      mockSession.profile = { age_band: 'adult', flags: {} };
+      const onForeground = jest.fn();
+      await render(<DeviceHost deps={deps()} onForeground={onForeground} subscribeDrive={subscribeDrive} />, {
+        wrapper: Wrapper,
+      });
+      await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
+      await settle();
+      expect(ops()).toEqual(['devices:upsert', 'register_push_token:rpc']);
+      expect(fake.to('devices')[0]?.values).not.toHaveProperty('permissions');
+      expect(onForeground).not.toHaveBeenCalled();
+      expect(driveListeners.size).toBe(0);
+    });
+
+    it('a handover: the new owner takes the token before onboarding, once the rebuild has settled the owner', async () => {
+      // B signed in on A's phone; the owner watch marked the handover, the rebuild has not run yet
+      mockSession = { status: 'signedIn', session: { user: { id: 'user-b' } }, profile: { age_band: 'adult', flags: {} } };
+      fake.sessionUid = 'user-b';
+      await createSettingsRepo(db).set(PENDING_OWNER_KEY, 'user-b');
+      await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
+      await settle();
+      expect(fake.calls).toHaveLength(0);
+
+      // the rebuild wiped A's settings and recorded B as the owner
+      await db.execute('DELETE FROM settings');
+      await createSettingsRepo(db).set(LAST_USER_KEY, 'user-b');
+      await setAppState('background');
+      await setAppState('active');
+      await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
+      expect(fake.to('devices')[0]?.values).toMatchObject({ user_id: 'user-b' });
+      expect(fake.to('register_push_token')[0]?.values).toEqual({ p_device_id: 'install-0000-0001', p_token: TOKEN });
+    });
+
+    it('finishing onboarding adds the rest without registering the token a second time', async () => {
+      mockSession.profile = { age_band: 'adult', flags: {} };
+      const onForeground = jest.fn();
+      const view = await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
+      await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
+      mockSession = { ...mockSession, profile: { age_band: 'adult', flags: { onboarded: true } } };
+      await view.rerender(<DeviceHost deps={deps()} onForeground={onForeground} />);
+      await waitFor(() => expect(onForeground).toHaveBeenCalledWith('user-a'));
+      expect(fake.to('register_push_token')).toHaveLength(1);
+      expect(fake.to('devices').filter((c) => c.op === 'update')).toHaveLength(1);
+    });
+
+    it('under 13: never registered, onboarded or not', async () => {
+      mockSession.profile = { age_band: 'u13', flags: {} };
+      await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
+      await settle();
+      expect(fake.calls).toHaveLength(0);
+    });
   });
 
   it('enabled={false}: nothing runs', async () => {

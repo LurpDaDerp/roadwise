@@ -196,16 +196,30 @@ async function sendDayCount(
   const count = await readDayCount(settings);
   if (!count) return;
   const values = { local_sent_day: count.day, local_sent_count: count.count };
-  const { data, error } = await supabase
-    .from('notification_prefs')
-    .update(values)
-    .eq('user_id', userId)
-    .select('user_id');
-  if (error) throw error;
-  if (Array.isArray(data) && data.length > 0) return;
+  const update = async (): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('notification_prefs')
+      .update(values)
+      .eq('user_id', userId)
+      .select('user_id');
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
+  };
+  if (await update()) return;
   const inserted = await supabase.from('notification_prefs').insert({ user_id: userId, ...values });
-  if (inserted.error) throw inserted.error;
+  if (!inserted.error) return;
+  // Review m3: another writer (T7's foreground sync) created the row between our update and our
+  // insert. The row exists now, so the update is the right write; tried once.
+  if (codeOf(inserted.error) === UNIQUE_VIOLATION && (await update())) return;
+  throw inserted.error;
 }
+
+const UNIQUE_VIOLATION = '23505';
+
+const codeOf = (error: unknown): string | null =>
+  error !== null && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : null;
 
 export interface BackgroundReportDeps {
   db: Db;
@@ -223,8 +237,8 @@ let defaultAdapter: PermissionsAdapter | null = null;
  * For M3's wake handler (`BootstrapDeps.reportPermissionsFromBackground`): read the permissions
  * and, if they changed, report them as `reportedFrom: 'background'` (the lapse is then pushed).
  *
- * Runs only for the device's owner, with no handover pending, on an install whose row the
- * foreground has already registered (so an account still onboarding reports nothing), and writes
+ * Runs only for the device's owner, with no handover pending, on an install the foreground has
+ * already registered and reported from (so an account still onboarding reports nothing), and writes
  * only under a session that is that owner. Never throws.
  */
 export async function reportPermissionsFromBackground(deps: BackgroundReportDeps): Promise<ReportResult> {
@@ -236,6 +250,9 @@ export async function reportPermissionsFromBackground(deps: BackgroundReportDeps
     if (typeof owner !== 'string' || (pending !== null && pending !== owner)) return 'skipped';
     const deviceId = await readInstallId(settings);
     if (deviceId === null || !(await readLastUpsert(settings, owner, deviceId))) return 'skipped';
+    // The device row now exists from sign-in (the push token, security M-1); a foreground report
+    // exists only once the account is onboarded, so an account still in setup reports nothing.
+    if (!(await readReportedPermissions(settings, owner, deviceId))) return 'skipped';
 
     let snapshot: PermissionSnapshot;
     try {

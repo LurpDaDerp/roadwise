@@ -67,6 +67,50 @@ describe('syncPushToken', () => {
     expect(fake.calls).toHaveLength(0);
   });
 
+  it('notifications turned off: the server registration is released once (no sends, nothing counted)', async () => {
+    const { fake, deps, settings, push } = setup();
+    await syncPushToken(deps());
+    push.permitted = jest.fn(async () => false);
+    expect(await syncPushToken(deps())).toBe('no-permission');
+    expect(fake.to('unregister_push_token')).toHaveLength(1);
+    expect(fake.to('unregister_push_token')[0]?.values).toEqual({ p_token: TOKEN });
+    expect(await settings.get(PUSH_REGISTRATION_KEY)).toBeNull();
+    // still off: nothing left to release
+    expect(await syncPushToken(deps())).toBe('no-permission');
+    expect(fake.to('unregister_push_token')).toHaveLength(1);
+  });
+
+  it('notifications back on: registered again at the next sync, however recent the last one was', async () => {
+    const { fake, deps, push } = setup();
+    await syncPushToken(deps());
+    push.permitted = jest.fn(async () => false);
+    await syncPushToken(deps());
+    push.permitted = jest.fn(async () => true);
+    expect(await syncPushToken(deps())).toBe('registered');
+    expect(fake.to('register_push_token')).toHaveLength(2);
+  });
+
+  it('a release that fails is kept and tried again at the next sync', async () => {
+    const { fake, deps, settings, push } = setup();
+    await syncPushToken(deps());
+    push.permitted = jest.fn(async () => false);
+    fake.respond = () => ({ data: null, error: { message: 'offline' } });
+    expect(await syncPushToken(deps())).toBe('no-permission');
+    expect(await settings.get(PUSH_REGISTRATION_KEY)).not.toBeNull();
+    fake.respond = () => ({ data: true, error: null });
+    await syncPushToken(deps());
+    expect(fake.to('unregister_push_token')).toHaveLength(2);
+    expect(await settings.get(PUSH_REGISTRATION_KEY)).toBeNull();
+  });
+
+  it("notifications off never releases another account's or install's registration", async () => {
+    const { fake, deps, push } = setup();
+    await syncPushToken(deps());
+    push.permitted = jest.fn(async () => false);
+    expect(await syncPushToken(deps({ userId: 'user-b' }))).toBe('no-permission');
+    expect(fake.to('unregister_push_token')).toHaveLength(0);
+  });
+
   it('unchanged within 7 days: no token fetch and no request', async () => {
     const { fake, deps, push, advance } = setup();
     await syncPushToken(deps());
