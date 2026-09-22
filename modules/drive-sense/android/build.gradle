@@ -1,8 +1,18 @@
-// DriveSense - the RoadWise background drive-capture module.
+// DriveSense - the RoadWise background drive-capture module (Android side, task N3).
 //
-// M0 ships the shell only; the capture pipeline lands in M3. play-services-location is the
-// pinned source of the activity-transition and location APIs that pipeline will use.
-// Do NOT use dynamic versions ('21.+', 'latest.integration'): EAS builds must be reproducible.
+// Pinned native dependencies. Do NOT use dynamic versions ('21.+', 'latest.integration'): EAS
+// builds must be reproducible.
+//   com.google.android.gms:play-services-location 21.3.0  activity transitions + fused location
+//   androidx.core:core                           1.17.0  NotificationCompat, ServiceCompat,
+//                                                          ContextCompat (the version
+//                                                          expo-modules-core 57 already ships)
+//   com.facebook.react:react-android              (none)  HeadlessJsTaskService. Deliberately
+//                                                          versionless: React Native's Gradle plugin
+//                                                          substitutes the exact installed
+//                                                          react-native (0.86.x) for this coordinate,
+//                                                          the same form expo-modules-core and
+//                                                          expo-file-system use. A literal version
+//                                                          here could only disagree with it.
 //
 // compileSdk / minSdk / targetSdk / the Kotlin version come from expo-module-gradle-plugin,
 // which reads the root project's Expo SDK 57 extras - the same proven form as
@@ -13,17 +23,19 @@ apply plugin: 'kotlin-android'
 apply plugin: 'expo-module-gradle-plugin'
 
 group = 'expo.modules.drivesense'
-version = '0.1.0'
+version = '0.2.0'
 
 android {
   namespace 'expo.modules.drivesense'
 
   defaultConfig {
-    versionCode 1
-    versionName '0.1.0'
+    versionCode 2
+    versionName '0.2.0'
   }
 }
 
 dependencies {
   implementation 'com.google.android.gms:play-services-location:21.3.0'
+  implementation 'androidx.core:core:1.17.0'
+  implementation 'com.facebook.react:react-android'
 }
