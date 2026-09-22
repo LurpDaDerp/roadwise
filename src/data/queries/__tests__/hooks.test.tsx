@@ -12,6 +12,8 @@ import {
 import { deductions, eventRow, MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createQueryClient } from '@/data/queries/client';
 import { MissingDataProviderError } from '@/data/queries/context';
+import { isScoredRow } from '@/data/queries/rows';
+import type { TripRow } from '@/data/db/types';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import {
   readLongTermScore,
@@ -425,6 +427,36 @@ describe('useLongTermScore (R9)', () => {
       expect(sql).not.toMatch(/polyline/i);
       expect(sql).not.toMatch(/SELECT \* FROM trips/i);
     }
+  });
+
+  test('N1: the SQL counts agree with isScoredRow over every combination of the fields it reads', async () => {
+    const rows: TripRow[] = [];
+    let n = 0;
+    for (const status of ['recording', 'provisional', 'final', 'unscored', 'discarded'] as const)
+      for (const score of [null, 70])
+        for (const role of ['driver', 'passenger', 'other', 'unknown', null])
+          for (const deleted of [null, NOW])
+            for (const sync of ['local', 'queued', 'uploading', 'synced', 'failed'] as const) {
+              n += 1;
+              rows.push(
+                tripRow({
+                  client_trip_id: `m${n}`,
+                  started_at: NOW - n * 60_000,
+                  status,
+                  score,
+                  role,
+                  deleted_at: deleted,
+                  sync_state: sync,
+                })
+              );
+            }
+    await seedTrips(db, rows);
+    const scored = rows.filter((r) => r.deleted_at === null && r.role === 'driver' && isScoredRow(r));
+    const pending = scored.filter((r) => ['local', 'queued', 'uploading'].includes(r.sync_state));
+    const inputs = await readLongTermScore(db);
+    expect(inputs.scoredDrives).toBe(scored.length);
+    expect(inputs.pendingDrives).toBe(pending.length);
+    expect(scored.length).toBeGreaterThan(0);
   });
 
   test('pending counts only drives that can still move the score', async () => {

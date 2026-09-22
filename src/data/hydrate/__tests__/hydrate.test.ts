@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { createClient } from '@supabase/supabase-js';
 
+import { readRolePrior, recordRoleAnswer, roleAnswerKey } from '@/core/engine/rolePrior';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo } from '@/data/db/events';
@@ -18,6 +19,7 @@ import {
   HYDRATE_DAYS_CURSOR_KEY,
   HYDRATE_RECONCILED_AT_KEY,
   HYDRATE_RESTORED_AT_KEY,
+  HYDRATE_UNREADABLE_KEY,
   hydrateSeam,
   RECONCILE_INTERVAL_MS,
   type HydrateQuery,
@@ -963,5 +965,62 @@ describe('fix round 2 (re-audit R-I1): the live listing ends only on an empty pa
     expect(await trips().get('trip-1')).toBeNull();
     // Only the (empty) incremental page: no fetch by id.
     expect(tripPages().slice(before).some((s) => s.calls.some((c) => c.startsWith('in id')))).toBe(false);
+  });
+});
+
+describe('fix round 3', () => {
+  const five = () => [1, 2, 3, 4, 5].map((n) => serverTrip(n, { updated_at: `2026-09-21T10:00:0${n}+00:00` }));
+
+  test("E2 delete hook: a drive removed by reconciliation stops counting in the role prior", async () => {
+    supabase.tables = { trips: five() };
+    await hydrator().run({ full: true });
+    const neutral = await readRolePrior(db);
+    await recordRoleAnswer(db, 'passenger', { start: '9q8yy', end: '9q8yz' }, 'trip-1');
+    expect(await readRolePrior(db)).not.toBe(neutral);
+
+    supabase.tables.trips = five().slice(1);
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+    expect(result.removed).toBe(1);
+    expect(await readRolePrior(db)).toBe(neutral);
+    await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toBeNull();
+  });
+
+  test('R2-M1: a self-heal cut short is not recorded, so the next run heals without waiting a day', async () => {
+    supabase.tables = { trips: five() };
+    await hydrator().run({ full: true });
+    await trips().remove('trip-1');
+    await trips().remove('trip-2');
+    // A drive starts as the heal fetches the first missing drive by id.
+    supabase = createFakeSupabase({
+      uid: UID,
+      tables: { trips: five() },
+      onSelect: (select) => {
+        if (select.calls.some((c) => c.startsWith('in id'))) busy = true;
+        return null;
+      },
+    });
+    const later = NOW + RECONCILE_INTERVAL_MS;
+    const cut = await hydrator({ now: () => later }).run({ full: false });
+    expect(cut.refetched).toBe(0);
+    await expect(settings().get(HYDRATE_RECONCILED_AT_KEY)).resolves.toBe(NOW);
+
+    // Minutes later, not a day: the pass is still due, and heals.
+    busy = false;
+    supabase = createFakeSupabase({ uid: UID, tables: { trips: five() } });
+    const healed = await hydrator({ now: () => later + 60_000 }).run({ full: false });
+    expect(healed.refetched).toBe(2);
+    await expect(settings().get(HYDRATE_RECONCILED_AT_KEY)).resolves.toBe(later + 60_000);
+  });
+
+  test('N2: a live trip this build cannot read is fetched by the self-heal once, not every day', async () => {
+    const broken = serverTrip(9, { data_quality: 'Z' });
+    supabase.tables = { trips: [...five(), broken] };
+    await hydrator({ onError: () => undefined }).run({ full: true });
+    await expect(settings().get(HYDRATE_UNREADABLE_KEY)).resolves.toEqual({ version: 1, ids: [sid(9)] });
+    const idFetches = () => supabase.selects.filter((s) => s.calls.some((c) => c.startsWith('in id'))).length;
+    const before = idFetches();
+    await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS, onError: () => undefined }).run({ full: false });
+    await hydrator({ now: () => NOW + 2 * RECONCILE_INTERVAL_MS, onError: () => undefined }).run({ full: false });
+    expect(idFetches() - before).toBe(0);
   });
 });

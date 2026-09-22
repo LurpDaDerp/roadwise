@@ -29,6 +29,7 @@ import {
   type TripRow,
 } from '@/data/db';
 import { invalidateAfterSync, invalidateTrip, useDb } from '@/data/queries';
+import { forgetRoleAnswer } from '@/core/engine/rolePrior';
 import { addTombstone } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
 import { DisputePayloadSchema } from '@/data/sync/actions';
@@ -244,6 +245,9 @@ export async function deleteTrip(
     // Kept for the life of the install, unlike the queue item: a restore that later meets this
     // drive on the server re-sends the delete instead of writing the drive back.
     await addTombstone(tx, clientTripId);
+    // The drive's role answer stops counting toward the prior, and its route key goes with it
+    // (ruling E2 delete hook).
+    await forgetRoleAnswer(tx, clientTripId);
     return updated;
   });
 

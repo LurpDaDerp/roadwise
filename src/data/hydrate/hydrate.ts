@@ -42,7 +42,12 @@
  * **Paging (review I19).** Trips are read in keyset order on `(updated_at, id)` — `updated_at`
  * alone would drop the rest of a tie group that straddles a page boundary, and `touch_updated_at`
  * stamps every row of one statement with the same transaction time. The cursor is the last row's
- * pair, kept exactly as the server wrote it, and it moves only after the page has committed. Every
+ * pair, kept exactly as the server wrote it, and it moves only after the page has committed.
+ * Known limitation (review D1 N4): `updated_at` is the transaction's start time, so an update
+ * whose transaction commits after a later-stamped one can fall behind a cursor that has already
+ * passed it. The self-heal covers a trip missing here, not a stale copy; for one user's write rate
+ * and a 6-hour cadence the window is milliseconds, and the next change to that trip re-stamps it.
+ * Every
  * run — full or not — resumes from it (review D1 I1): the wipe clears it and a first sign-in has
  * none, so a cursor that exists is this owner's and names committed pages, and an interrupted
  * restore continues where it stopped rather than from page one. A page whose last row does not
@@ -58,6 +63,7 @@ import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { addTombstone, readTombstones } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
+import { forgetRoleAnswer } from '@/core/engine/rolePrior';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { BASELINE_SETTING_KEY } from '@/data/queries/hooks';
 import { CLIENT_TRIP_ID, deviceOwnerIs } from '@/data/sync/queue';
@@ -98,6 +104,13 @@ export const HYDRATE_DAYS_CURSOR_KEY = 'hydrate.daysCursor';
 export const HYDRATE_RESTORED_AT_KEY = 'hydrate.restoredAt';
 /** Settings key: when the live-id reconciliation last completed (epoch ms). */
 export const HYDRATE_RECONCILED_AT_KEY = 'hydrate.reconciledAt';
+/**
+ * Settings key: live server trips this build could not read, `{ version, ids }`, so the daily
+ * self-heal does not fetch and fail on the same row for ever (review D1 N2). Ignored — and so
+ * retried — once `UNREADABLE_VERSION` moves, which it must whenever `ServerTripSchema` changes.
+ */
+export const HYDRATE_UNREADABLE_KEY = 'hydrate.unreadable';
+export const UNREADABLE_VERSION = 1;
 /** At most once a day outside a full restore: one narrow listing of ids. */
 export const RECONCILE_INTERVAL_MS = 24 * 3600 * 1000;
 /** Ids per reconciliation request; each is ~40 bytes on the wire. */
@@ -692,10 +705,16 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     alsoInCommit?: (tx: Db) => Promise<void>
   ): Promise<void> {
     const trips: ServerTrip[] = [];
+    const unreadable: string[] = [];
     for (const raw of rawTrips) {
       const parsed = parseRow(ServerTripSchema, raw);
-      if (parsed === null) report(new Error('unreadable trip row'), 'hydrate trip');
-      else trips.push(parsed);
+      if (parsed !== null) {
+        trips.push(parsed);
+        continue;
+      }
+      report(new Error('unreadable trip row'), 'hydrate trip');
+      const id = (raw as Record<string, unknown> | null)?.id;
+      if (typeof id === 'string' && isUuid(id)) unreadable.push(id.toLowerCase());
     }
 
     const tripIds = trips.map((t) => t.id);
@@ -752,6 +771,7 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
           result.redeleted += 1;
         }
       }
+      if (unreadable.length > 0) await rememberUnreadable(tx, unreadable);
       await alsoInCommit?.(tx);
     });
     // A re-sent delete wakes the runner, after the commit.
@@ -890,6 +910,9 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         await tx.execute('DELETE FROM samples WHERE client_trip_id = ?', [id]);
         await tx.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [id]);
         await tx.execute('DELETE FROM trips WHERE client_trip_id = ?', [id]);
+        // Its role answer stops counting toward the prior, and its route key goes with it
+        // (ruling E2 delete hook).
+        await forgetRoleAnswer(tx, id);
         // A settled finalize body is the drive itself (its route); it goes too.
         await tx.execute(
           "DELETE FROM sync_queue WHERE idempotency_key IN (?, ?) AND status = 'done'",
@@ -897,10 +920,6 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         );
         removed.push(id);
       }
-      await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
-        HYDRATE_RECONCILED_AT_KEY,
-        JSON.stringify(now()),
-      ]);
     });
     result.removed += removed.length;
     for (const id of removed) {
@@ -909,6 +928,9 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
       } catch (error) {
         report(error, 'hydrate remove trace');
       }
+    }
+    if (removed.length > 0) {
+      emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
     }
 
     // Self-heal: a live drive this device lacks — removed earlier by mistake, or behind the
@@ -930,9 +952,12 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     const deletedHere = new Set(
       deleteItems.map((r) => String(r.idempotency_key).replace(/^delete:/, ''))
     );
+    const skipUnreadable = await readUnreadable(db);
+    await fence.quick();
     const missing = [...live.entries()]
       .filter(([serverId, clientId]) => !heldServer.has(serverId) && !heldClient.has(clientId))
       .filter(([, clientId]) => !tombstones.has(clientId) && !deletedHere.has(clientId))
+      .filter(([serverId]) => !skipUnreadable.has(serverId))
       .map(([serverId]) => serverId);
     const before = result.trips;
     for (const group of chunks(missing, pageSize)) {
@@ -952,11 +977,46 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
       if (rawTrips.length > 0) await applyPage(rawTrips, fetchedAt, uid, fence, result);
     }
     result.refetched += result.trips - before;
-
-    if (removed.length > 0 || result.trips > before) {
+    if (result.trips > before) {
       emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
     }
+
+    // Recorded only now, after the self-heal too (security R2-M1, review N3): a pass cut short
+    // anywhere above — a drive starting mid-heal included — is tried again at the next
+    // opportunity, not a day later.
+    await commit(fence, uid, async (tx) => {
+      await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
+        HYDRATE_RECONCILED_AT_KEY,
+        JSON.stringify(now()),
+      ]);
+    });
     return true;
+  }
+
+  /** The unreadable ids recorded for this build's schema, or none. */
+  async function readUnreadable(on: Db): Promise<Set<string>> {
+    const { rows } = await on.execute('SELECT value_json FROM settings WHERE key = ?', [
+      HYDRATE_UNREADABLE_KEY,
+    ]);
+    try {
+      const value = JSON.parse(String(rows[0]?.value_json ?? 'null')) as {
+        version?: unknown;
+        ids?: unknown;
+      } | null;
+      if (value?.version !== UNREADABLE_VERSION || !Array.isArray(value.ids)) return new Set();
+      return new Set(value.ids.filter((id): id is string => typeof id === 'string'));
+    } catch {
+      return new Set();
+    }
+  }
+
+  async function rememberUnreadable(tx: Db, ids: readonly string[]): Promise<void> {
+    const known = await readUnreadable(tx);
+    for (const id of ids) known.add(id);
+    await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
+      HYDRATE_UNREADABLE_KEY,
+      JSON.stringify({ version: UNREADABLE_VERSION, ids: [...known] }),
+    ]);
   }
 
   /** Reconcile when due; a failure is reported and tried again later, never fails the restore. */
