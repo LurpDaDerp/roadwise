@@ -178,6 +178,30 @@ export interface DeleteTripDeps {
   fs?: TraceFs;
 }
 
+/** Every `dispute` item naming one of the trip's events, and every `set-role` item for the trip. */
+async function dropQueuedAbout(tx: Db, clientTripId: string): Promise<void> {
+  const queue = createQueueRepo(tx);
+  const { rows: events } = await tx.execute('SELECT id FROM trip_events WHERE client_trip_id = ?', [
+    clientTripId,
+  ]);
+  for (const event of events) {
+    if (typeof event.id === 'string') await queue.dropByKey(disputeIdempotencyKey(event.id), tx);
+  }
+  // A role answer's key carries a stamp, so it is found by its body.
+  const { rows: answers } = await tx.execute(
+    "SELECT id, payload_json FROM sync_queue WHERE kind = 'set-role'"
+  );
+  for (const answer of answers) {
+    let about: unknown = null;
+    try {
+      about = (JSON.parse(String(answer.payload_json)) as { clientTripId?: unknown }).clientTripId;
+    } catch {
+      // A body this build cannot read names no drive.
+    }
+    if (about === clientTripId) await tx.execute('DELETE FROM sync_queue WHERE id = ?', [answer.id]);
+  }
+}
+
 /**
  * Delete a drive (§7.D D5).
  *
@@ -222,6 +246,10 @@ export async function deleteTrip(
     );
     if (updated === null) throw new MissingTripError(clientTripId);
 
+    // Before the events go, while they still name the reports (security review D2 I-1): a queued
+    // report carries the driver's note about this drive, and a role answer is about it too. Any
+    // status — a `failed` row is never purged, and a reconnect could otherwise reopen it.
+    await dropQueuedAbout(tx, clientTripId);
     await createEventsRepo(db).removeByTrip(clientTripId, tx);
     await createSamplesRepo(db).purgeByTrip(clientTripId, tx);
 

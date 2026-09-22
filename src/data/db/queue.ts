@@ -58,6 +58,31 @@ function parseBody(json: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * Whether the thing a queued item is about has gone from the device (security review D2 I-1): a
+ * trip deleted, discarded or removed, or a report's event removed with its drive. Such an item is
+ * never reopened — its body can hold the driver's own words about a drive they asked to destroy.
+ * A `delete-trip` item is always live: its husk may be gone, and the server still has to hear it.
+ * A body this build cannot read names nothing, so it is not "gone" (the runner fails it unsent).
+ */
+async function subjectGone(tx: Db, item: QueueItem): Promise<boolean> {
+  if (item.kind === 'delete-trip') return false;
+  const body = parseBody(item.payload_json);
+  if (body === null) return false;
+  if (item.kind === 'dispute') {
+    if (typeof body.clientEventId !== 'string') return false;
+    const { rows } = await tx.execute('SELECT 1 FROM trip_events WHERE id = ?', [body.clientEventId]);
+    return rows.length === 0;
+  }
+  if (typeof body.clientTripId !== 'string') return false;
+  const { rows } = await tx.execute(
+    'SELECT status, deleted_at FROM trips WHERE client_trip_id = ?',
+    [body.clientTripId]
+  );
+  const row = rows[0];
+  return !row || row.status === 'discarded' || (row.deleted_at !== null && row.deleted_at !== undefined);
+}
+
 /** Take back what a reopened item's give-up recorded for the driver (see `reopenRetryable`). */
 async function undoGiveUp(tx: Db, item: QueueItem, now: number): Promise<void> {
   const body = parseBody(item.payload_json);
@@ -362,6 +387,9 @@ export function createQueueRepo(db: Db) {
      * `retries_exhausted` is still its recorded reason, so a trip refused for another reason keeps
      * it — and a reopened report goes back to "sending" on its event.
      *
+     * An item whose trip or event has gone from the device is left failed (security review D2
+     * I-1; see `subjectGone`).
+     *
      * Returns how many items were reopened.
      */
     reopenRetryable(now: number = Date.now()): Promise<number> {
@@ -371,8 +399,10 @@ export function createQueueRepo(db: Db) {
             WHERE status = 'failed' AND attempts >= ? AND next_attempt_at <> ?`,
           [MAX_ATTEMPTS, REFUSED_NEVER]
         );
-        const items = rows.map(toQueueItem);
-        for (const item of items) {
+        let reopened = 0;
+        for (const item of rows.map(toQueueItem)) {
+          if (await subjectGone(tx, item)) continue;
+          reopened += 1;
           await tx.execute(
             `UPDATE sync_queue
                 SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
@@ -382,7 +412,7 @@ export function createQueueRepo(db: Db) {
           );
           await undoGiveUp(tx, item, now);
         }
-        return items.length;
+        return reopened;
       });
     },
 

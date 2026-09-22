@@ -387,6 +387,11 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
   }
   const payload = parsed.data;
 
+  // The event went with its drive while the report waited (security review D2 I-1). Posting now
+  // would send the driver's own words about a drive they asked to destroy; the server would only
+  // refuse it anyway. Settled, never sent — as `tripIsGone` does for an upload.
+  if ((await createEventsRepo(ctx.db).get(payload.clientEventId)) === null) return { kind: 'done' };
+
   const sent = await post(ctx, payload);
   if (!sent.ok) {
     // A refusal is an answer, and D3 has a state for it — "Reports close 14 days after a drive".

@@ -380,6 +380,7 @@ async function refuse(id: number, code: string, at = T0): Promise<void> {
 
 describe('reopenRetryable', () => {
   test('an exhausted ladder goes back to pending with a clean ladder, due now', async () => {
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'a' }), T0);
     const item = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0, undefined, 'u1');
     await exhaust(item.id);
     expect(await queue.get(item.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
@@ -533,6 +534,34 @@ describe('reopenRetryable', () => {
     const two = await events.get('e2');
     expect(two?.status).toBe('scored');
     expect(JSON.parse(two?.dispute_json ?? 'null').outcome).toBe('window_closed');
+  });
+
+  test('an item whose trip or event is gone stays failed (security review D2 I-1)', async () => {
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'kept' }), T0);
+    await createEventsRepo(db).insertMany([eventRow({ id: 'e-kept', client_trip_id: 'kept' })]);
+    const items = [
+      await queue.enqueue('dispute', { clientEventId: 'e-gone', note: 'private words' }, 'dispute:e-gone', T0),
+      await queue.enqueue('set-role', { clientTripId: 'gone' }, 'role:gone:1', T0),
+      await queue.enqueue('finalize-trip', { clientTripId: 'gone' }, 'trip:gone', T0),
+      await queue.enqueue('dispute', { clientEventId: 'e-kept' }, 'dispute:e-kept', T0),
+      await queue.enqueue('set-role', { clientTripId: 'kept' }, 'role:kept:1', T0),
+    ];
+    for (const item of items) await exhaust(item.id);
+
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(2);
+
+    const status = async (key: string) => (await queue.byKey(key))?.status;
+    expect(await status('dispute:e-gone')).toBe('failed');
+    expect(await status('role:gone:1')).toBe('failed');
+    expect(await status('trip:gone')).toBe('failed');
+    expect(await status('dispute:e-kept')).toBe('pending');
+    expect(await status('role:kept:1')).toBe('pending');
+  });
+
+  test('a delete-trip item is reopened even though its trip row is a husk or gone: the server still has to hear it', async () => {
+    const item = await queue.enqueue('delete-trip', { clientTripId: 'husk' }, 'delete:husk', T0);
+    await exhaust(item.id);
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(1);
   });
 
   test('an item whose body this build cannot read is still reopened, and touches no row', async () => {

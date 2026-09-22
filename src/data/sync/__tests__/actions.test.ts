@@ -506,7 +506,16 @@ describe('reporting an event', () => {
   });
 
   test('a report whose drive was deleted under it still caches the days it came back with', async () => {
-    supabase = createFakeSupabase({ invoke: () => disputeReply({ replayed: true }) });
+    // The drive is deleted while the request is in flight (a report whose event is already gone
+    // is never sent at all: security review D2 I-1, below).
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: async () => {
+        await db.execute('DELETE FROM trip_events');
+        await db.execute('DELETE FROM trips');
+        return disputeReply({ replayed: true });
+      },
+    });
 
     await expect(runDispute(disputeBody, ctx())).resolves.toEqual({ kind: 'done' });
 
@@ -949,5 +958,29 @@ describe('owner re-checks before every local write (carry-over 4)', () => {
     await expect(runDeleteTrip(deleteBody, refused())).resolves.toEqual({ kind: 'defer' });
     expect(await readTrip()).toMatchObject({ score: 77 });
     expect(await readEvent()).toMatchObject({ status: 'scored', dispute_json: null });
+  });
+});
+
+describe('security review D2 I-1: a report whose event is gone is never sent', () => {
+  test('a report on an event that no longer exists settles without a request', async () => {
+    // The drive (and its events) went while the report was queued.
+    await seed({}, null);
+    const noted = JSON.stringify({
+      action: 'dispute',
+      clientEventId: EVENT,
+      reason: 'hazard',
+      note: 'I was avoiding a cyclist near school',
+    });
+
+    await expect(runDispute(noted, ctx())).resolves.toEqual({ kind: 'done' });
+
+    expect(supabase.invokes).toEqual([]);
+  });
+
+  test('a report on an event that still exists is sent (the check reads the event, not the trip)', async () => {
+    await seed();
+    supabase = createFakeSupabase({ invoke: () => disputeReply() });
+    await runDispute(disputeBody, ctx());
+    expect(supabase.invokes).toHaveLength(1);
   });
 });
