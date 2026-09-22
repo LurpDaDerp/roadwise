@@ -1,8 +1,6 @@
--- `feature_flags` is not seeded here: migration 0005_app_config_flags.sql inserts it on every
--- database, hosted ones included (`db push` never runs this file)
-insert into public.app_config (key, value, is_public) values
-  ('min_app_version', '"2.0.0"', true)
-on conflict (key) do update set value = excluded.value;
+-- app_config (`feature_flags`, `min_app_version`) is not seeded here: migration
+-- 0005_app_config_flags.sql inserts both rows on every database, hosted ones included
+-- (`db push` never runs this file)
 
 -- Synthetic speed-limit fixture (plan R6), laid along the replay traces in Seattle. Nothing here is
 -- real OSM or HPMS data: the ids sit far above any real OSM way id and the geometry is drawn by hand.

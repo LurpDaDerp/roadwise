@@ -1,7 +1,8 @@
--- 0005_app_config_flags: the `feature_flags` app_config row, on every database (ruling D2 m5).
+-- 0005_app_config_flags: the `feature_flags` and `min_app_version` app_config rows, on every
+-- database (ruling D2 m5 and its addendum).
 --
--- Until now the row existed only in seed.sql, and `supabase db push` never runs seeds, so a hosted
--- database had no flags. The values are the M3 defaults seed.sql carried. A flag only makes a
+-- Until now both rows existed only in seed.sql, and `supabase db push` never runs seeds, so a hosted
+-- database had neither. The values are the ones seed.sql carried. A flag only makes a
 -- feature available; the user's own opt-in still gates it.
 --
 -- `on conflict do nothing`: a value an operator has already set on a hosted database is never
@@ -9,5 +10,7 @@
 -- its `app_config_public` read policy (anon and authenticated read rows where is_public) and its
 -- select-only grants, which the test file re-asserts.
 insert into public.app_config (key, value, is_public)
-values ('feature_flags', '{"camera_beta": true, "auto_detect": true, "referral": true}'::jsonb, true)
+values
+  ('feature_flags', '{"camera_beta": true, "auto_detect": true, "referral": true}'::jsonb, true),
+  ('min_app_version', '"2.0.0"'::jsonb, true)
 on conflict (key) do nothing;
