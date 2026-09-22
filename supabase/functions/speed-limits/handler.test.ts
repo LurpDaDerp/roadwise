@@ -345,15 +345,37 @@ Deno.test('a limit change just behind the car: the car span answers, not Spans[0
   assertEquals(body.limitMph, 45);
   // a different limit within 10 m is a parallel-road situation to the matcher: less confident
   assertEquals([body.source, body.parallelRoads, body.matchConfidence], ['cached', true, 0.6]);
-  const cached = h.rpc.filter((c) => c.fn === 'put_limits_cache');
-  assertEquals(cached.map((c) => c.args.p_limit_mph), [45]);
-  assertEquals(cached[0].args.p_key, awsCacheKey(spans[1].leg));
+  // re-review N1: a parallel pick is answered but never cached
+  assert(!h.rpc.some((c) => c.fn === 'put_limits_cache'));
+  assertEquals(h.infos.at(-1)?.outcome, 'aws_parallel_uncached');
 
   // With an untagged OSM way under the car, both spans join it and disagree: unknown, never 25.
   const withRoad = harness({ candidates: [untaggedRow], routes });
   const r = await (await handleSpeedLimits(post(UNTAGGED_POINT), withRoad.deps)).json();
   assertEquals(r.source, 'unknown');
   assert(!withRoad.rpc.some((c) => c.fn === 'put_limits_cache'));
+});
+
+Deno.test('re-review N1: a parallel pick is answered uncached; a clear pick is answered and cached', async () => {
+  const at = (m: number): LatLng => ({ lat: 47.606 + m / 111_320, lng: -122.32 });
+  // parallel: a differing limit ends 5 m behind the car, within the matcher's 10 m margin
+  const parallel = harness({
+    candidates: [],
+    routes: stubRoutes(() => Promise.resolve([{ mph: 30, leg: [at(-120), at(-5)] }, { mph: 40, leg: [at(-5), at(150)] }])),
+  });
+  const p = await (await handleSpeedLimits(post(UNTAGGED_POINT), parallel.deps)).json();
+  assertEquals(p, { source: 'cached', limitMph: 40, matchConfidence: 0.6, parallelRoads: true, provider: 'aws' });
+  assert(!parallel.rpc.some((c) => c.fn === 'put_limits_cache'));
+
+  // clear: the change is 40 m behind, beyond the margin
+  const clearSpans: SpanLimit[] = [{ mph: 30, leg: [at(-120), at(-40)] }, { mph: 40, leg: [at(-40), at(150)] }];
+  const clear = harness({ candidates: [], routes: stubRoutes(() => Promise.resolve(clearSpans)) });
+  const c = await (await handleSpeedLimits(post(UNTAGGED_POINT), clear.deps)).json();
+  assertEquals(c, { source: 'cached', limitMph: 40, matchConfidence: 0.7, parallelRoads: false, provider: 'aws' });
+  const writes = clear.rpc.filter((r) => r.fn === 'put_limits_cache');
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].args.p_key, awsCacheKey(clearSpans[1].leg));
+  assertEquals(clear.infos.at(-1)?.outcome, 'aws');
 });
 
 Deno.test('outside every loaded state, AWS is not asked and no budget is spent', async () => {

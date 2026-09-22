@@ -489,6 +489,11 @@ async function point(req: Request, run: Run): Promise<Outcome> {
   const withAws = matchLimit(heading, [...candidates, ...keyed.map((k) => k.candidate)]);
   const chosen = withAws.source === 'cached' ? keyed.find((k) => k.candidate.key === withAws.key) : undefined;
   if (!chosen) return unknown('aws_unmatched');
+  // A pick the matcher could only make beside a differing limit within reach (a limit change at
+  // the car, or a neighbouring road) is answered at its lowered confidence but never cached: the
+  // row alone would later read from the tile at full cache confidence with no parallel flag, up to
+  // 25 m into the neighbouring limit's zone (re-review N1). It also stores less route near the car.
+  if (withAws.parallelRoads) return answer(toAnswer(withAws), 'aws_parallel_uncached');
 
   try {
     await deps.db.putLimitsCache({
