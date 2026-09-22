@@ -212,11 +212,14 @@ function fakeRuntime(drive: Partial<DriveState>) {
   const driveStateSettled = jest.fn(async () => {
     log.push('driveStateSettled');
   });
+  const driveStateAbandon = jest.fn(async () => {
+    log.push('driveStateAbandon');
+  });
   host.suspendForSignOut.mockImplementation(async () => {
     log.push('suspendForSignOut');
   });
   return {
-    runtime: { db: {}, queryClient, drive: host, runner: { flushDeletes }, driveStateSettled } as unknown as NonNullable<
+    runtime: { db: {}, queryClient, drive: host, runner: { flushDeletes }, driveStateSettled, driveStateAbandon } as unknown as NonNullable<
       RuntimeState['runtime']
     >,
     host,
@@ -381,9 +384,14 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
   });
 
   test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends recording through the host (r2-M2)', async () => {
-    const { host } = await renderReady();
+    const { host, log } = await renderReady();
+    host.sessionEnded.mockImplementation(async () => {
+      log.push('sessionEnded');
+    });
     await act(async () => mockAuth.listener?.('SIGNED_OUT', null));
     expect(host.sessionEnded).toHaveBeenCalledTimes(1);
+    // Then the drive state's outstanding write is dropped (r2 n1).
+    expect(log).toEqual(['sessionEnded', 'driveStateAbandon']);
   });
 
   test('no owner recorded: a SIGNED_IN arms only on a device with no drive data (r2-M1)', async () => {

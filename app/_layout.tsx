@@ -113,7 +113,12 @@ export default function RootLayout() {
       if (event === 'SIGNED_OUT') {
         // The driver's sign-out, or one they did not start (a revoked or expired session): either
         // way recording stops, an open drive finalized under the owner first (security r2-M2).
-        void runtime.drive.sessionEnded().catch(() => {});
+        // Then, once the drive-state attempts already started have run, nothing more is retried:
+        // with the session gone, a retry is only an RLS refusal at every foreground (r2 n1).
+        void runtime.drive
+          .sessionEnded()
+          .then(() => runtime.driveStateAbandon())
+          .catch(() => {});
         return;
       }
       if (!session) return;

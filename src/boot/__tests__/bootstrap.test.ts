@@ -1527,9 +1527,10 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
   const INSTALL = 'install-0001';
 
   /** The `devices` table as the drive-state reporter writes it, under the signed-in owner. */
-  function devicesClient(opts: { failRecording?: number } = {}) {
+  function devicesClient(opts: { failRecording?: number; failIdle?: boolean } = {}) {
     const writes: string[] = [];
     let failures = opts.failRecording ?? 0;
+    const control = { failIdle: opts.failIdle === true };
     const client = {
       from: (table: string) => ({
         update: (row: { drive_state: string }) => {
@@ -1541,6 +1542,10 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
                 writes.push(`${table}:${row.drive_state}(failed)`);
                 return { data: null, error: { message: 'offline' } };
               }
+              if (row.drive_state === 'idle' && control.failIdle) {
+                writes.push(`${table}:idle(failed)`);
+                return { data: null, error: { message: 'refused' } };
+              }
               writes.push(`${table}:${row.drive_state}`);
               return { data: [{ id: INSTALL }], error: null };
             },
@@ -1549,7 +1554,7 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
         },
       }),
     };
-    return { client, writes };
+    return { client, writes, control };
   }
 
   async function recordAndEnd(run: AppRuntime, driveSense: ReturnType<typeof createFakeDriveSense>, clock: { t: number }) {
@@ -1799,6 +1804,38 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     driveSense.emit('wake', { reason: 'significantChange', ts: clock.t });
     await runtime.drive.settled();
     expect(runtime.drive.snapshot().status).toBe('candidate');
+  });
+
+  test('after sign-out, an idle the settle could not deliver is dropped: no retry at each foreground (r2 n1)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await recordOnly(l);
+    l.devices.control.failIdle = true;
+    // The sign-out: stop recording, settle (the idle fails), the session ends, then abandon.
+    await runtime!.drive.suspendForSignOut();
+    await runtime!.driveStateSettled();
+    const listenersBefore = l.built.appState.listeners.length;
+    await runtime!.driveStateAbandon();
+    const attempts = l.devices.writes.length;
+    expect(l.devices.writes.filter((w) => w === 'devices:idle(failed)').length).toBeGreaterThan(0);
+    expect(l.built.appState.listeners.length).toBe(listenersBefore - 1);
+
+    l.built.appState.emit('active');
+    l.built.appState.emit('active');
+    await settle();
+    expect(l.devices.writes.length).toBe(attempts);
+  });
+
+  test('negative control: without the abandon, the failed idle is tried again at the foreground', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await recordOnly(l);
+    l.devices.control.failIdle = true;
+    await runtime!.drive.suspendForSignOut();
+    await runtime!.driveStateSettled();
+    const attempts = l.devices.writes.length;
+    l.built.appState.emit('active');
+    await settle();
+    await settle();
+    expect(l.devices.writes.length).toBeGreaterThan(attempts);
   });
 
   test('the default background wake hook is T10\'s permission reporter', async () => {

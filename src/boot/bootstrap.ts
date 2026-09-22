@@ -285,6 +285,11 @@ export interface AppRuntime {
    */
   driveStateSettled(): Promise<void>;
   /**
+   * The session ended: drop any drive-state write still outstanding and stop retrying it at each
+   * foreground (review r2 n1). Called after the sign-out's settle has made its attempt.
+   */
+  driveStateAbandon(): Promise<void>;
+  /**
    * Stops the runner and the hydrator, then the drive host, detaches the cache from the change
    * event and empties it. For teardown; never mid-session. The cache is emptied rather than left to
    * its gc timers because one reason to tear a runtime down is that the device changed hands, and
@@ -658,6 +663,7 @@ async function runLaunch(
     schemaVersion,
     now,
     driveStateSettled: () => engine.driveReports?.settled() ?? Promise.resolve(),
+    driveStateAbandon: () => engine.driveReports?.abandon() ?? Promise.resolve(),
     async refreshConfig() {
       const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
       const flag = () => readFlag(db, 'auto_detect', AUTO_DETECT_FLAG_FALLBACK);
@@ -880,7 +886,7 @@ function attachDriveStateReporting(opts: {
   client?: import('@/data/devices/register').DevicesClient;
   now: () => number;
   onError: (error: unknown, context: string) => void;
-}): { release(): void; settled(): Promise<void> } {
+}): { release(): void; settled(): Promise<void>; abandon(): Promise<void> } {
   /* eslint-disable @typescript-eslint/no-require-imports -- data modules, loaded with the runtime */
   const { createDriveStateReporter } =
     require('@/data/devices/driveState') as typeof import('@/data/devices/driveState');
@@ -1040,6 +1046,21 @@ function attachDriveStateReporting(opts: {
       if (desired !== null && desired !== confirmed) {
         await attempt().catch((error: unknown) => opts.onError(error, 'devices drive state'));
       }
+    },
+    /**
+     * The session has ended (review r2 n1): once the attempts already started have run, whatever is
+     * still outstanding is dropped and the foreground retry detached. Retried under the anon key it
+     * would be refused by RLS on every foreground, forever. The server's stale `recording` is
+     * bounded by `drive_state_at` pinning and clamping. A later drive, signed in again, starts
+     * afresh.
+     */
+    async abandon() {
+      await chain;
+      desired = confirmed;
+      backoff = null;
+      reporter = null;
+      offForeground?.();
+      offForeground = null;
     },
   };
 }
