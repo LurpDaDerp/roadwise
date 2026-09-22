@@ -40,6 +40,7 @@ import { createTripsRepo } from '@/data/db/trips';
 import type { QueueItem, TripPatch } from '@/data/db/types';
 import {
   ACTION_HANDLERS,
+  agePendingDefer,
   isActionKind,
   recordActionGiveUp,
   RETRIES_EXHAUSTED,
@@ -563,7 +564,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // into the next driver's account is another.
     if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
     const { data, error } = await supabase.functions.invoke(FINALIZE_FUNCTION, { body: payload });
-    if (error) return failureOutcome(await classifyInvokeError(error, at));
+    if (error) {
+      const failure = await classifyInvokeError(error, at);
+      // An account with no age answer yet: the drive waits, uncounted, for the birth date (0006)
+      return agePendingDefer(failure, at) ?? failureOutcome(failure);
+    }
 
     const applied = await applyFinalize(item, payload, data, at, state.generation);
     if (applied.kind !== 'done') return applied;

@@ -251,12 +251,34 @@ function parseJson(text: string): unknown {
   }
 }
 
-const failureOutcome = (failure: Failure): ActionOutcome =>
-  failure.kind === 'terminal'
+/**
+ * The server's `age_pending` (migration 0006, `_shared/http.ts`): the account has not answered the
+ * age question yet, so a new drive cannot be stored *yet*. The work is fine and will be accepted
+ * as soon as the birth date is set, so the item waits without counting an attempt — a counted
+ * retry would walk it to MAX_ATTEMPTS (about 14 h) and lose a pre-onboarding driver's drives.
+ * The wait follows the server's Retry-After, held to between one minute and one hour.
+ */
+export const AGE_PENDING_CODE = 'age_pending';
+export const AGE_PENDING_WAIT_S = 900;
+const AGE_PENDING_MIN_WAIT_S = 60;
+const AGE_PENDING_MAX_WAIT_S = 3600;
+
+export function agePendingDefer(failure: Failure, at: number): { kind: 'defer'; until: number } | null {
+  if (failure.kind !== 'retryable' || failure.code !== AGE_PENDING_CODE) return null;
+  const waitS = Math.min(
+    AGE_PENDING_MAX_WAIT_S,
+    Math.max(AGE_PENDING_MIN_WAIT_S, failure.retryAfterS ?? AGE_PENDING_WAIT_S)
+  );
+  return { kind: 'defer', until: at + waitS * 1000 };
+}
+
+const failureOutcome = (failure: Failure, at: number): ActionOutcome =>
+  agePendingDefer(failure, at) ??
+  (failure.kind === 'terminal'
     ? { kind: 'failed', code: failure.code }
     : failure.kind === 'unauthorized'
       ? { kind: 'unauthorized', code: failure.code }
-      : { kind: 'retry', code: failure.code, retryAfterS: failure.retryAfterS };
+      : { kind: 'retry', code: failure.code, retryAfterS: failure.retryAfterS });
 
 /**
  * `classifyInvokeError` with the one difference the `trip-actions` contract makes: a 409 is the
@@ -337,7 +359,7 @@ async function post(
   body: Record<string, unknown>
 ): Promise<{ ok: true; data: unknown } | { ok: false; outcome: ActionOutcome }> {
   const { data, error } = await ctx.supabase.functions.invoke(TRIP_ACTIONS_FUNCTION, { body });
-  if (error) return { ok: false, outcome: failureOutcome(await classifyActionError(error, ctx.now)) };
+  if (error) return { ok: false, outcome: failureOutcome(await classifyActionError(error, ctx.now), ctx.now) };
   return { ok: true, data };
 }
 

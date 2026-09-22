@@ -832,6 +832,75 @@ test('exhausted retries fail the trip with retries_exhausted', async () => {
   });
 });
 
+// 0006: a driver who has not answered the age question yet gets 503 `age_pending`. Their drives
+// must wait for the birth date, however long onboarding takes, and never walk the retry ladder.
+describe('age_pending (0006)', () => {
+  const HOUR = 3_600_000;
+  const pendingThen = (accepted: () => boolean) => () =>
+    accepted()
+      ? invokeOk(SERVER_OK)
+      : functionsHttpError(503, { code: 'age_pending' }, { 'Retry-After': '900' });
+
+  test('thirty age_pending replies never exhaust or fail the item, and it goes up once the server accepts', async () => {
+    await seedQueuedTrip();
+    let accepted = false;
+    supabase = createFakeSupabase({ uid: UID, invoke: pendingThen(() => accepted) });
+    const r = runner();
+
+    for (let i = 0; i < 30; i += 1) {
+      const at = T0 + i * HOUR;
+      await expect(r.drainOnce(at)).resolves.toEqual({ done: 0, failed: 0, deferred: 1 });
+      // Handed back uncounted, due again after the server's Retry-After
+      expect(await finalizeItem()).toMatchObject({
+        status: 'pending',
+        attempts: 0,
+        next_attempt_at: at + 900_000,
+      });
+    }
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'queued', sync_error: null });
+
+    accepted = true;
+    const at = T0 + 30 * HOUR;
+    await expect(r.drainOnce(at)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced' });
+  });
+
+  test('negative control: the same wait as a plain 503 walks the ladder and fails the trip', async () => {
+    await seedQueuedTrip();
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => functionsHttpError(503, { code: 'retry' }, { 'Retry-After': '900' }),
+    });
+    const r = runner();
+
+    let failed = 0;
+    for (let i = 0; i < 30; i += 1) failed += (await r.drainOnce(T0 + i * HOUR)).failed;
+
+    expect(failed).toBe(1);
+    expect(await finalizeItem()).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+    expect(await trips().get(TRIP_ID)).toMatchObject({
+      sync_state: 'failed',
+      sync_error: 'retries_exhausted',
+    });
+  });
+
+  test('the wait follows Retry-After, held to between one minute and one hour', async () => {
+    await seedQueuedTrip();
+    let header = '86400';
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => functionsHttpError(503, { code: 'age_pending' }, { 'Retry-After': header }),
+    });
+    await runner().drainOnce(T0);
+    expect((await finalizeItem())?.next_attempt_at).toBe(T0 + HOUR);
+
+    header = '1';
+    await runner().drainOnce(T0 + HOUR);
+    expect((await finalizeItem())?.next_attempt_at).toBe(T0 + HOUR + 60_000);
+    expect((await finalizeItem())?.attempts).toBe(0);
+  });
+});
+
 test('a wake during a drain runs exactly one more pass when that drain ends', async () => {
   await seedQueuedTrip();
   let queuedSecond = false;

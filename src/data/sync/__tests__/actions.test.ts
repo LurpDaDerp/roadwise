@@ -425,6 +425,19 @@ describe('reporting an event', () => {
     expect((await readEvent()).dispute_json).toBeNull();
   });
 
+  test('age_pending (0006) waits for the age answer without counting an attempt', async () => {
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: () => functionsHttpError(503, { code: 'age_pending' }, { 'Retry-After': '900' }),
+    });
+
+    await expect(runDispute(disputeBody, ctx())).resolves.toEqual({
+      kind: 'defer',
+      until: NOW + 900_000,
+    });
+    expect((await readEvent()).dispute_json).toBeNull();
+  });
+
   test('a rate limit is retried later, not failed', async () => {
     await seed();
     supabase = createFakeSupabase({

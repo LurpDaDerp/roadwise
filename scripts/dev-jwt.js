@@ -15,7 +15,9 @@
  *
  * `--ensure-user` creates the auth user for `--sub` through the local admin API (with the
  * service key from the same status output) when it does not exist yet: `auth.getUser()` looks
- * the subject up, so a minted token for a subject that is not in `auth.users` is refused.
+ * the subject up, so a minted token for a subject that is not in `auth.users` is refused. It also
+ * gives a user with no birth date an adult one (1990-01-01): since migration 0006 a drive is only
+ * accepted once the age question is answered.
  *
  * Local only: the effective API URL (env or status output) must be 127.0.0.1 or localhost, so
  * neither a remote SUPABASE_URL nor a linked project can be minted for or written to.
@@ -84,14 +86,26 @@ async function ensureUser(apiUrl, serviceKey) {
     'Content-Type': 'application/json',
   };
   const existing = await fetch(`${apiUrl}/auth/v1/admin/users/${sub}`, { headers });
-  if (existing.ok) return;
-  const created = await fetch(`${apiUrl}/auth/v1/admin/users`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ id: sub, email, email_confirm: true }),
+  if (!existing.ok) {
+    const created = await fetch(`${apiUrl}/auth/v1/admin/users`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: sub, email, email_confirm: true }),
+    });
+    if (!created.ok) {
+      throw new Error(`dev-jwt: creating the user failed: ${created.status} ${await created.text()}`);
+    }
+  }
+  // Migration 0006 accepts a drive only once its driver has answered the age question (an
+  // `unknown` band is refused as retryable `age_pending`), so a dev user is an adult. Only a
+  // missing birth date is filled: a date already set (a test that wants a minor) is left alone.
+  const aged = await fetch(`${apiUrl}/rest/v1/private_profiles?user_id=eq.${sub}&birth_date=is.null`, {
+    method: 'PATCH',
+    headers: { ...headers, Prefer: 'return=minimal' },
+    body: JSON.stringify({ birth_date: '1990-01-01' }),
   });
-  if (!created.ok) {
-    throw new Error(`dev-jwt: creating the user failed: ${created.status} ${await created.text()}`);
+  if (!aged.ok) {
+    throw new Error(`dev-jwt: setting the birth date failed: ${aged.status} ${await aged.text()}`);
   }
 }
 
