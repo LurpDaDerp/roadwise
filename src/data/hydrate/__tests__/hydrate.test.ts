@@ -21,12 +21,15 @@ import {
   HYDRATE_RESTORED_AT_KEY,
   HYDRATE_UNREADABLE_KEY,
   hydrateSeam,
+  UNREADABLE_TTL_MS,
+  UNREADABLE_VERSION,
   RECONCILE_INTERVAL_MS,
   type HydrateQuery,
   type HydrateSupabase,
   type HydrateResult,
   type HydratorDeps,
 } from '@/data/hydrate/hydrate';
+import { UNKNOWN_BUILD } from '@/data/hydrate/build';
 import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { BASELINE_SETTING_KEY } from '@/data/queries/hooks';
 import { parseStoredBaseline } from '@/data/queries/insights';
@@ -1016,11 +1019,53 @@ describe('fix round 3', () => {
     const broken = serverTrip(9, { data_quality: 'Z' });
     supabase.tables = { trips: [...five(), broken] };
     await hydrator({ onError: () => undefined }).run({ full: true });
-    await expect(settings().get(HYDRATE_UNREADABLE_KEY)).resolves.toEqual({ version: 1, ids: [sid(9)] });
+    await expect(settings().get(HYDRATE_UNREADABLE_KEY)).resolves.toEqual({
+      version: UNREADABLE_VERSION,
+      build: UNKNOWN_BUILD,
+      ids: { [sid(9)]: NOW },
+    });
     const idFetches = () => supabase.selects.filter((s) => s.calls.some((c) => c.startsWith('in id'))).length;
     const before = idFetches();
     await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS, onError: () => undefined }).run({ full: false });
     await hydrator({ now: () => NOW + 2 * RECONCILE_INTERVAL_MS, onError: () => undefined }).run({ full: false });
     expect(idFetches() - before).toBe(0);
+  });
+});
+
+describe('fix round 4 (security R3-M1): the unreadable list cannot hide a live drive for good', () => {
+  const five = () => [1, 2, 3, 4, 5].map((n) => serverTrip(n, { updated_at: `2026-09-21T10:00:0${n}+00:00` }));
+  const broken = () => serverTrip(9, { data_quality: 'Z' });
+  const idFetches = () =>
+    supabase.selects.filter((s) => s.calls.some((c) => c.startsWith(`in id ${sid(9)}`))).length;
+
+  async function recordBroken(buildId: () => Promise<string>) {
+    supabase.tables = { trips: [...five(), broken()] };
+    await hydrator({ buildId, onError: () => undefined }).run({ full: true });
+  }
+
+  test('a new app build releases the list: the row is fetched again', async () => {
+    await recordBroken(async () => '2.0.0:update-a');
+    const before = idFetches();
+    await hydrator({
+      buildId: async () => '2.0.0:update-b',
+      now: () => NOW + RECONCILE_INTERVAL_MS,
+      onError: () => undefined,
+    }).run({ full: false });
+    expect(idFetches() - before).toBe(1);
+  });
+
+  test('the same build keeps skipping it until 30 days have passed, then fetches it again', async () => {
+    const buildId = async () => '2.0.0:update-a';
+    await recordBroken(buildId);
+    const before = idFetches();
+    await hydrator({ buildId, now: () => NOW + RECONCILE_INTERVAL_MS, onError: () => undefined }).run({ full: false });
+    expect(idFetches() - before).toBe(0);
+    await hydrator({ buildId, now: () => NOW + UNREADABLE_TTL_MS, onError: () => undefined }).run({ full: false });
+    expect(idFetches() - before).toBe(1);
+  });
+
+  test('without expo-updates (Jest, a development build) the build is a fixed id, never a crash', async () => {
+    const { appBuildId } = jest.requireActual<typeof import('@/data/hydrate/build')>('@/data/hydrate/build');
+    await expect(appBuildId()).resolves.toEqual(expect.any(String));
   });
 });

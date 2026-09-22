@@ -64,6 +64,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { addTombstone, readTombstones } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
 import { forgetRoleAnswer } from '@/core/engine/rolePrior';
+import { appBuildId } from '@/data/hydrate/build';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { BASELINE_SETTING_KEY } from '@/data/queries/hooks';
 import { CLIENT_TRIP_ID, deviceOwnerIs } from '@/data/sync/queue';
@@ -105,12 +106,18 @@ export const HYDRATE_RESTORED_AT_KEY = 'hydrate.restoredAt';
 /** Settings key: when the live-id reconciliation last completed (epoch ms). */
 export const HYDRATE_RECONCILED_AT_KEY = 'hydrate.reconciledAt';
 /**
- * Settings key: live server trips this build could not read, `{ version, ids }`, so the daily
- * self-heal does not fetch and fail on the same row for ever (review D1 N2). Ignored — and so
- * retried — once `UNREADABLE_VERSION` moves, which it must whenever `ServerTripSchema` changes.
+ * Settings key: live server trips this build could not read, `{ version, build, ids: { id:
+ * firstSeenMs } }`, so the daily self-heal does not fetch and fail on the same row for ever
+ * (review D1 N2). Three things release an entry, so a forgotten step can never hide a live drive
+ * for good (security R3-M1):
+ * - a different app build (`appBuildId`: the native line and the running update);
+ * - `UNREADABLE_VERSION` moving — it must whenever `ServerTripSchema` changes, and a test holds
+ *   the schema's shape to the version;
+ * - age: an entry older than `UNREADABLE_TTL_MS` is retried.
  */
 export const HYDRATE_UNREADABLE_KEY = 'hydrate.unreadable';
 export const UNREADABLE_VERSION = 1;
+export const UNREADABLE_TTL_MS = 30 * 24 * 3600 * 1000;
 /** At most once a day outside a full restore: one narrow listing of ids. */
 export const RECONCILE_INTERVAL_MS = 24 * 3600 * 1000;
 /** Ids per reconciliation request; each is ~40 bytes on the wire. */
@@ -240,6 +247,8 @@ export interface HydratorDeps {
   onError?: (e: unknown, ctx: string) => void;
   /** The traces directory, so a drive removed by reconciliation loses its file too. */
   fs?: { remove(path: string): Promise<void> };
+  /** Which app build is running. Default: `appBuildId` (expo-updates, guarded). */
+  buildId?: () => Promise<string>;
 }
 
 /**
@@ -993,29 +1002,49 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     return true;
   }
 
-  /** The unreadable ids recorded for this build's schema, or none. */
-  async function readUnreadable(on: Db): Promise<Set<string>> {
+  let build: Promise<string> | null = null;
+  const currentBuild = (): Promise<string> => (build ??= (deps.buildId ?? appBuildId)());
+
+  /**
+   * The unreadable ids still held for this schema version and this build, each with when it was
+   * first seen; entries past `UNREADABLE_TTL_MS` are dropped, so they are fetched again.
+   */
+  async function readUnreadable(on: Db): Promise<Map<string, number>> {
     const { rows } = await on.execute('SELECT value_json FROM settings WHERE key = ?', [
       HYDRATE_UNREADABLE_KEY,
     ]);
+    const held = new Map<string, number>();
     try {
       const value = JSON.parse(String(rows[0]?.value_json ?? 'null')) as {
         version?: unknown;
+        build?: unknown;
         ids?: unknown;
       } | null;
-      if (value?.version !== UNREADABLE_VERSION || !Array.isArray(value.ids)) return new Set();
-      return new Set(value.ids.filter((id): id is string => typeof id === 'string'));
+      if (value?.version !== UNREADABLE_VERSION || value.build !== (await currentBuild())) {
+        return held;
+      }
+      if (typeof value.ids !== 'object' || value.ids === null || Array.isArray(value.ids)) return held;
+      const at = now();
+      for (const [id, seen] of Object.entries(value.ids as Record<string, unknown>)) {
+        if (typeof seen === 'number' && at - seen < UNREADABLE_TTL_MS && seen <= at) held.set(id, seen);
+      }
     } catch {
-      return new Set();
+      // An unreadable record holds nothing back.
     }
+    return held;
   }
 
   async function rememberUnreadable(tx: Db, ids: readonly string[]): Promise<void> {
-    const known = await readUnreadable(tx);
-    for (const id of ids) known.add(id);
+    const held = await readUnreadable(tx);
+    const at = now();
+    for (const id of ids) if (!held.has(id)) held.set(id, at);
     await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
       HYDRATE_UNREADABLE_KEY,
-      JSON.stringify({ version: UNREADABLE_VERSION, ids: [...known] }),
+      JSON.stringify({
+        version: UNREADABLE_VERSION,
+        build: await currentBuild(),
+        ids: Object.fromEntries(held),
+      }),
     ]);
   }
 

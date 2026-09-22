@@ -1,5 +1,6 @@
 /** @jest-environment node */
 import * as scoring from '@scoring';
+import { z } from 'zod';
 
 import type { AlertDecision } from '@/core/alerts/types';
 import { limit, mph, NO_LIMIT, row, T0 } from '@/core/detectors/__fixtures__/rows';
@@ -13,7 +14,7 @@ import { migrate } from '@/data/db/migrate';
 import { createSamplesRepo } from '@/data/db/samples';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
-import { createHydrator } from '@/data/hydrate/hydrate';
+import { createHydrator, UNREADABLE_VERSION } from '@/data/hydrate/hydrate';
 import {
   parseRow,
   parseTimestamp,
@@ -328,3 +329,25 @@ function minimalPayload(): FinalizeTripPayload {
     incomplete: false,
   } as FinalizeTripPayload;
 }
+
+describe('the unreadable list is keyed to the schema it was judged by (security R3-M1)', () => {
+  /**
+   * The fingerprint of `ServerTripSchema` each `UNREADABLE_VERSION` was cut at. A schema change
+   * fails this test until the version is bumped and its new fingerprint added here — which is
+   * what releases the rows the old schema could not read.
+   */
+  const SCHEMA_AT_VERSION: Record<number, string> = {
+    1: '2968-a76c73dc',
+  };
+
+  const fingerprint = (): string => {
+    const text = JSON.stringify(z.toJSONSchema(ServerTripSchema, { unrepresentable: 'any', io: 'input' }));
+    let h = 5381;
+    for (let i = 0; i < text.length; i += 1) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    return `${text.length}-${h.toString(16)}`;
+  };
+
+  test('ServerTripSchema has not changed since UNREADABLE_VERSION was last bumped', () => {
+    expect(SCHEMA_AT_VERSION[UNREADABLE_VERSION]).toBe(fingerprint());
+  });
+});
