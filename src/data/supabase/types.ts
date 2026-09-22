@@ -938,6 +938,7 @@ export type Database = {
         Args: { p_lease_seconds: number; p_limit: number }
         Returns: Json
       }
+      clear_trace_paths: { Args: { p_keys: string[] }; Returns: number }
       count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
       create_guardian_invite: { Args: never; Returns: Json }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
@@ -952,7 +953,10 @@ export type Database = {
         Args: { p_limit?: number; p_older_than?: string }
         Returns: Json
       }
-      expired_trace_object_keys: { Args: { p_limit: number }; Returns: Json }
+      expired_trace_object_keys: {
+        Args: { p_after_name: string; p_limit: number }
+        Returns: Json
+      }
       guardian_link_state: { Args: never; Returns: Json }
       inbox_subject_gone: {
         Args: { p_payload: Json; p_ref: string; p_type: string; p_user: string }
@@ -1062,8 +1066,13 @@ export type Database = {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
+      trace_drive_ended_at: { Args: { p_name: string }; Returns: string }
       underage_identity_keys: { Args: { p_data: Json }; Returns: Json }
       underage_object_keys: { Args: { p_limit: number }; Returns: Json }
+      underage_object_keys_after: {
+        Args: { p_after_bucket: string; p_after_name: string; p_limit: number }
+        Returns: Json
+      }
       unregister_push_token: { Args: { p_token: string }; Returns: boolean }
       upsert_baselines: {
         Args: { p_baselines: Json; p_user: string }
