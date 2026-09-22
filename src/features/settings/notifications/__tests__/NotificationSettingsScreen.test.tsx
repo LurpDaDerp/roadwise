@@ -15,7 +15,7 @@ import {
   stepHour,
   type OsNotificationsPort,
 } from '@/features/settings/notifications';
-import { buildCatalog } from '@/notifications/catalog';
+import { buildCatalog, countsTowardDailyCap } from '@/notifications/catalog';
 import { PREFS_CACHE_KEY } from '@/notifications/keys';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -131,7 +131,7 @@ const press = async (testID: string) => {
 
 describe('helpers', () => {
   it('liveCategories: only the categories with a live type', () => {
-    expect(liveCategories()).toEqual(['trip_summaries', 'recording']);
+    expect(liveCategories()).toEqual(['trip_summaries', 'recording', 'rewards']);
   });
 
   it('clockLabel', () => {
@@ -156,7 +156,8 @@ describe('NotificationSettingsScreen', () => {
     await loaded();
     expect(screen.getByTestId('prefs-category-trip_summaries').props.value).toBe(true);
     expect(screen.getByTestId('prefs-category-recording').props.value).toBe(true);
-    for (const c of ['rewards', 'family', 'safety', 'product', 'weekly_recap', 'crews']) {
+    expect(screen.getByTestId('prefs-category-rewards').props.value).toBe(true);
+    for (const c of ['family', 'safety', 'product', 'weekly_recap', 'crews']) {
       expect(screen.queryByTestId(`prefs-category-${c}`)).toBeNull();
     }
     expect(screen.getByTestId('prefs-quiet-toggle').props.value).toBe(true);
@@ -260,11 +261,30 @@ describe('NotificationSettingsScreen', () => {
     });
   });
 
+  it('shows a Rewards switch whose hint states its consequence in either position (M5)', async () => {
+    expect(copy.categories.rewards).toEqual({
+      title: 'Rewards',
+      on: 'Streaks, weekly goals, challenges, new classes and badges. At most one a day.',
+      off: 'No notification. Streaks, goals, challenges, classes and badges still appear in your inbox.',
+    });
+    await renderScreen({ rows: [{ user_id: UID, categories: { rewards: false } }] });
+    await loaded();
+    expect(screen.getByText('Rewards')).toBeTruthy();
+    expect(screen.getByTestId('prefs-category-rewards').props.value).toBe(false);
+    expect(screen.getByTestId('prefs-category-rewards-hint')).toHaveTextContent(copy.categories.rewards!.off);
+  });
+
   describe('the cap line', () => {
     it('shows while every live type counts toward the daily cap', async () => {
       await renderScreen();
       await loaded();
       expect(screen.getByTestId('prefs-cap')).toHaveTextContent(copy.cap);
+    });
+
+    it('stays true with the rewards types live: each of them counts toward the cap', () => {
+      for (const t of ['streak_milestone', 'goal_completed', 'level_up', 'referral_qualified'] as const) {
+        expect(countsTowardDailyCap(t)).toBe(true);
+      }
     });
 
     it('is hidden when drive summaries are exempt (buildCatalog(false))', async () => {

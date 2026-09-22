@@ -30,6 +30,11 @@ export const notificationSettingsCopy = {
       on: 'A notification if a phone setting stops RoadWise recording or detecting your drives.',
       off: 'No notification. Recording problems still appear in your inbox.',
     },
+    rewards: {
+      title: 'Rewards',
+      on: 'Streaks, weekly goals, challenges, new classes and badges. At most one a day.',
+      off: 'No notification. Streaks, goals, challenges, classes and badges still appear in your inbox.',
+    },
   } as Partial<Record<NotificationCategory, CategoryCopy>>,
   /** Shown while a switched-on category counts toward §11.1's daily cap. */
   cap: 'At most 2 of these a day, counted together.',

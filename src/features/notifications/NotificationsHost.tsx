@@ -5,7 +5,7 @@
  * On mount: the channels and the "Were you driving?" category (`ensureNotificationSetup`), the one
  * foreground handler, the response listener, the tap that launched the app (read once with the
  * SDK 57 `getLastNotificationResponse`, then cleared so a remount does not act on it again), and
- * the received listener, which marks the inbox stale. A tap is acted on by `handleResponse`; one
+ * the received listener, which marks the inbox and the rewards data stale. A tap is acted on by `handleResponse`; one
  * that lands during a drive, or before the navigator is mounted, is held and replayed when the
  * drive's busy signal says it is over.
  *
@@ -21,7 +21,7 @@ import { router, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { invalidateTrip, useDataSource } from '@/data/queries';
-import { INBOX_QUERY_KEY } from '@/notifications/keys';
+import { INBOX_QUERY_KEY, REWARDS_QUERY_KEY } from '@/notifications/keys';
 
 import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
@@ -112,9 +112,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     const responses = Notifications.addNotificationResponseReceivedListener(take);
     take(Notifications.getLastNotificationResponse());
     const received = Notifications.addNotificationReceivedListener(() => {
-      latest.current.queryClient
-        .invalidateQueries({ queryKey: INBOX_QUERY_KEY })
-        .catch((e: unknown) => report(e, 'notifications.inbox'));
+      const client = latest.current.queryClient;
+      client.invalidateQueries({ queryKey: INBOX_QUERY_KEY }).catch((e: unknown) => report(e, 'notifications.inbox'));
+      // A rewards notification announces a settled value: an open rewards screen refetches it.
+      client.invalidateQueries({ queryKey: REWARDS_QUERY_KEY }).catch((e: unknown) => report(e, 'notifications.rewards'));
     });
 
     return () => {

@@ -12,7 +12,11 @@
  * - Deleted by the driver (the row, or its tombstone once the delete has synced): says so, no link.
  * - Not on the phone: the payload's words and date, "Not on this phone", no link — D1 would have
  *   nothing to show.
- * - A type this build cannot render (not live, unknown, or a payload that fails its schema): null.
+ * - A rewards notification (M5: streak, goal or challenge, class or badge, referral): the words it
+ *   was pushed with (`renderInboxBase`) and a link to its rewards screen. Its subject never changes
+ *   — settlement is final and value is never taken back — so nothing is re-derived.
+ * - A type this build cannot render (not live, unknown, or a payload that fails its schema — a
+ *   badge or challenge from a newer server included): null.
  *
  * No score anywhere: not a number, not a band.
  */
@@ -29,6 +33,7 @@ import {
   type TripSummary,
 } from '@/data/queries';
 import type { TripRow } from '@/data/db/types';
+import { isAllowedHref } from '@/features/notifications/hrefs';
 import { eventStanding } from '@/features/trips/detail';
 import { formatClock, formatTripDate } from '@/features/trips/format';
 import { tripSummaryHref } from '@/features/trips/routes';
@@ -123,6 +128,11 @@ const PERMISSIONS_HREF = '/permissions' as Href;
 
 const isLive = (type: string): type is LiveType => (LIVE_TYPES as readonly string[]).includes(type);
 
+/** The M5 rewards types: rendered from their payload alone. */
+const REWARDS_TYPES = ['streak_milestone', 'goal_completed', 'level_up', 'referral_qualified'] as const;
+type RewardsType = (typeof REWARDS_TYPES)[number];
+const isRewardsType = (type: LiveType): type is RewardsType => (REWARDS_TYPES as readonly string[]).includes(type);
+
 /** A `TripDetail` straight from a row — the loader's batch read, including a deleted row. */
 export function toTripDetail(row: TripRow, scoredTripCount: number): TripDetail {
   const trip = toTripSummary(row);
@@ -212,6 +222,22 @@ export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: st
       dispute: null,
       when: whenLabel(at, now, tz),
       href: PERMISSIONS_HREF,
+      note: null,
+      clientTripId: null,
+    });
+  }
+
+  if (isRewardsType(row.type)) {
+    const base = renderInboxBase(row.type, row.payload);
+    if (base === null) return null;
+    return finish({
+      ...common,
+      title: base.title,
+      body: base.body,
+      dispute: null,
+      when: whenLabel(Date.parse(row.created_at), now, tz),
+      // The catalog's url is one of the allowlisted rewards routes; anything else opens nothing.
+      href: isAllowedHref(base.url) ? (base.url as Href) : null,
       note: null,
       clientTripId: null,
     });

@@ -102,6 +102,82 @@ describe('renderPush — permission lapsed', () => {
   });
 });
 
+describe('renderPush — the rewards notifications', () => {
+  test('a streak milestone', () => {
+    expect(renderPush('streak_milestone', { days: 30, reachedOn: '2026-09-21' })).toEqual({
+      title: '30-day safe streak',
+      body: 'Your safe-day streak just reached 30. Tap to see it.',
+      url: '/rewards',
+      channelId: 'rewards',
+    });
+  });
+
+  test('a weekly goal, met on target and prorated', () => {
+    const weekly = (prorated: boolean) =>
+      renderPush('goal_completed', { kind: 'weekly_goal', category: 'speeding', weekStart: '2026-09-14', points: 150, prorated });
+    expect(weekly(false)).toEqual({
+      title: 'Weekly goal done',
+      body: "You met this week's goal. +150 points.",
+      url: '/rewards/goal',
+      channelId: 'rewards',
+    });
+    expect(weekly(true)).toEqual({
+      title: 'Weekly goal done',
+      body: 'You met your goal on every day you drove this week. +150 points.',
+      url: '/rewards/goal',
+      channelId: 'rewards',
+    });
+  });
+
+  test('a challenge', () => {
+    expect(renderPush('goal_completed', { kind: 'challenge', challengeId: 'safe_run', points: 300 })).toEqual({
+      title: 'Challenge complete',
+      body: 'You finished a challenge. +300 points.',
+      url: '/rewards/challenges',
+      channelId: 'rewards',
+    });
+  });
+
+  test('a new class', () => {
+    expect(renderPush('level_up', { kind: 'level', level: 5, name: 'Road-wise' })).toEqual({
+      title: 'New class: Road-wise',
+      body: 'Your RoadWise card now shows Road-wise.',
+      url: '/rewards',
+      channelId: 'rewards',
+    });
+  });
+
+  test('a new badge names its tier and nothing else', () => {
+    expect(renderPush('level_up', { kind: 'badge', badgeId: 'phone_free_days_50', tier: 'silver' })).toEqual({
+      title: 'New badge',
+      body: 'You earned a silver badge. Tap to see it.',
+      url: '/rewards/badges',
+      channelId: 'rewards',
+    });
+  });
+
+  test('a referral, for each side, names neither person', () => {
+    expect(renderPush('referral_qualified', { role: 'invitee', points: 500 })).toEqual({
+      title: "Your friend's code counts",
+      body: 'You finished 3 scored drives. +500 points.',
+      url: '/rewards/invite',
+      channelId: 'rewards',
+    });
+    expect(renderPush('referral_qualified', { role: 'referrer', points: 500 })).toEqual({
+      title: 'An invite counts',
+      body: 'One of your invites counts now. +500 points.',
+      url: '/rewards/invite',
+      channelId: 'rewards',
+    });
+  });
+
+  test('the inbox uses the same words and link as the push', () => {
+    const payload = { kind: 'badge', badgeId: 'challenges_1', tier: 'bronze' };
+    const pushed = renderPush('level_up', payload);
+    expect(renderInboxBase('level_up', payload)).toEqual({ title: pushed?.title, body: pushed?.body, url: pushed?.url });
+  });
+});
+
 describe('renderInboxBase', () => {
   const tripPayload = {
     clientTripId: 'trip_01-A',
@@ -149,7 +225,33 @@ describe('every string', () => {
       renderPush('permission_lapsed', { permission, platform, deviceId: 'd' })
     )
   );
-  const all = [...locals, ...pushes].map((c) => {
+  const rewards = [
+    ...[7, 14, 30, 50, 100, 150, 200, 250, 300, 365, 10000].map((days) =>
+      renderPush('streak_milestone', { days, reachedOn: '2026-09-21' })
+    ),
+    ...(['phone', 'speeding', 'braking', 'cornering', 'accel'] as const).flatMap((category) =>
+      [false, true].map((prorated) =>
+        renderPush('goal_completed', { kind: 'weekly_goal', category, weekStart: '2026-09-14', points: 1000, prorated })
+      )
+    ),
+    ...(['phone_down', 'within_limit', 'smooth_ride', 'safe_run'] as const).map((challengeId) =>
+      renderPush('goal_completed', { kind: 'challenge', challengeId, points: 1000 })
+    ),
+    ...(
+      [
+        [2, 'Steady'],
+        [3, 'Smooth'],
+        [4, 'Focused'],
+        [5, 'Road-wise'],
+        [6, 'Mentor'],
+      ] as const
+    ).map(([level, name]) => renderPush('level_up', { kind: 'level', level, name })),
+    ...(['bronze', 'silver', 'gold'] as const).map((tier) =>
+      renderPush('level_up', { kind: 'badge', badgeId: 'safe_days_100', tier })
+    ),
+    ...(['invitee', 'referrer'] as const).map((role) => renderPush('referral_qualified', { role, points: 1000 })),
+  ];
+  const all = [...locals, ...pushes, ...rewards].map((c) => {
     if (!c) throw new Error('a live variant rendered nothing');
     return c;
   });
@@ -187,11 +289,33 @@ describe('every string', () => {
       'Download your data',
       "You're about to lose your streak",
       'Last chance',
-      'Earn rewards',
-      '50 points',
       'Great drive!',
+      '+150 points you can redeem',
+      'worth $5',
+      "Don't lose your streak!",
+      'Earn cash',
+      'Points are money',
+      'Win a gift card',
+      'A prize for you',
+      'Lower insurance',
+      'A discount',
+      '10 dollars',
     ]) {
       expect(caught(s)).toBe(true);
+    }
+  });
+
+  test('rewards words themselves are allowed now that M5 builds them', () => {
+    const caught = (s: string) => BANNED_COPY.some((re) => re.test(s));
+    for (const s of ['+150 points', 'Rewards', 'Your safe-day streak just reached 7', 'A window of time']) {
+      expect(caught(s)).toBe(false);
+    }
+  });
+
+  test('no rewards string names a place, a drive or a person', () => {
+    for (const c of rewards) {
+      if (!c) throw new Error('a rewards variant rendered nothing');
+      for (const s of [c.title, c.body]) expect(s).not.toMatch(/\b(at|near|on) [A-Z]|mi\b|miles?|\d{1,2}:\d{2}|\bAM\b|\bPM\b/);
     }
   });
 });

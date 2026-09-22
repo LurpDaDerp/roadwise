@@ -115,6 +115,12 @@ export const DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP = true;
 /** The drive summary's Android channel, stated once for the entry and for `renderLocal`. */
 const TRIP_CHANNEL = 'trips' as const;
 
+/**
+ * Goal, class, badge and referral news arrives only in the daytime (rev1: R-I m5), so a settlement
+ * at 02:05 never buzzes a user whose quiet hours are off; the 48 h TTL covers the wait to 09:00.
+ */
+const DAYTIME_WINDOW: DeliveryWindow = { start: '09:00', end: '20:30' };
+
 const entry = <T extends NotificationType>(e: CatalogEntry & { type: T }): CatalogEntry & { type: T } => e;
 
 export type Catalog = { readonly [K in NotificationType]: CatalogEntry & { type: K } };
@@ -161,6 +167,7 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     window: { start: '08:00', end: '11:00' },
     weeklyLimit: 1,
   }),
+  // Live (M5): produced by settlement, at most one pushed per user per local day (§R9).
   streak_milestone: entry({
     type: 'streak_milestone',
     category: 'rewards',
@@ -169,7 +176,7 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     androidChannel: 'rewards',
     delivery: 'push',
     producer: 'M5',
-    live: false,
+    live: true,
     ttlHours: 24,
     window: { start: '18:00', end: '20:30' },
   }),
@@ -181,8 +188,9 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     androidChannel: 'rewards',
     delivery: 'push',
     producer: 'M5',
-    live: false,
+    live: true,
     ttlHours: 48,
+    window: DAYTIME_WINDOW,
   }),
   level_up: entry({
     type: 'level_up',
@@ -192,8 +200,9 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     androidChannel: 'rewards',
     delivery: 'push',
     producer: 'M5',
-    live: false,
+    live: true,
     ttlHours: 48,
+    window: DAYTIME_WINDOW,
   }),
   referral_qualified: entry({
     type: 'referral_qualified',
@@ -203,9 +212,11 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     androidChannel: 'rewards',
     delivery: 'push',
     producer: 'M5',
-    live: false,
+    live: true,
     ttlHours: 48,
+    window: DAYTIME_WINDOW,
   }),
+  // Reserved: no producer, no copy yet.
   family_membership: entry({
     type: 'family_membership',
     category: 'family',
@@ -266,7 +277,14 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
 export const CATALOG: Catalog = buildCatalog(DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP);
 
 /** The live types, in catalog order. Equals the `inbox.type` CHECK (Task 20 asserts it). */
-export const LIVE_TYPES = ['trip_summary', 'permission_lapsed'] as const;
+export const LIVE_TYPES = [
+  'trip_summary',
+  'permission_lapsed',
+  'streak_milestone',
+  'goal_completed',
+  'level_up',
+  'referral_qualified',
+] as const;
 export type LiveType = (typeof LIVE_TYPES)[number];
 
 /**
@@ -278,6 +296,42 @@ export function countsTowardDailyCap(type: NotificationType, catalog: Catalog = 
 }
 
 // ——— payloads (live types only) ———
+
+/*
+ * The rewards vocabulary, written out here because the catalog imports nothing but `zod` (its Deno
+ * copy needs no import rewrite). `src/notifications/__tests__/rewardsParity.test.ts` pins each list
+ * to the rewards rules in `packages/scoring` (`GOAL_CATEGORIES`, `CHALLENGES`, `BADGES`, `LEVELS`).
+ */
+
+/** The weekly goal's categories, in the rules' tie order. */
+export const REWARD_GOAL_CATEGORIES = ['phone', 'speeding', 'braking', 'cornering', 'accel'] as const;
+/** The four personal challenges. */
+export const REWARD_CHALLENGE_IDS = ['phone_down', 'within_limit', 'smooth_ride', 'safe_run'] as const;
+/** The 16 badges. An id this build does not know (a newer server) fails the schema: no copy. */
+export const REWARD_BADGE_IDS = [
+  'safe_days_7',
+  'safe_days_30',
+  'safe_days_100',
+  'phone_free_days_10',
+  'phone_free_days_50',
+  'phone_free_days_200',
+  'smooth_days_7',
+  'smooth_days_30',
+  'smooth_days_100',
+  'weekly_goals_1',
+  'weekly_goals_5',
+  'weekly_goals_20',
+  'challenges_1',
+  'challenges_3',
+  'challenges_10',
+  'referrals_1',
+] as const;
+export const REWARD_BADGE_TIERS = ['bronze', 'silver', 'gold'] as const;
+/** The six classes, level 1 first; `REWARD_LEVEL_NAMES[level - 1]` is a level's name. */
+export const REWARD_LEVEL_NAMES = ['Learner', 'Steady', 'Smooth', 'Focused', 'Road-wise', 'Mentor'] as const;
+
+const dayKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const pointsSchema = z.number().int().min(1).max(1000);
 
 export const PayloadSchemas = {
   trip_summary: z
@@ -302,10 +356,64 @@ export const PayloadSchemas = {
       deviceId: z.string().max(128),
     })
     .strict(),
+  streak_milestone: z
+    .object({
+      days: z.number().int().min(1).max(10000),
+      reachedOn: dayKeySchema,
+    })
+    .strict(),
+  goal_completed: z.discriminatedUnion('kind', [
+    z
+      .object({
+        kind: z.literal('weekly_goal'),
+        category: z.enum(REWARD_GOAL_CATEGORIES),
+        weekStart: dayKeySchema,
+        points: pointsSchema,
+        /** Met on every day driven rather than on four (§R5's prorated close). */
+        prorated: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('challenge'),
+        challengeId: z.enum(REWARD_CHALLENGE_IDS),
+        points: pointsSchema,
+      })
+      .strict(),
+  ]),
+  level_up: z
+    .discriminatedUnion('kind', [
+      z
+        .object({
+          kind: z.literal('level'),
+          level: z.number().int().min(2).max(6),
+          name: z.enum(REWARD_LEVEL_NAMES),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal('badge'),
+          badgeId: z.enum(REWARD_BADGE_IDS),
+          tier: z.enum(REWARD_BADGE_TIERS),
+        })
+        .strict(),
+    ])
+    // A class is announced by its own name: a mismatched pair has nothing true to say.
+    .refine((p) => p.kind !== 'level' || REWARD_LEVEL_NAMES[p.level - 1] === p.name),
+  referral_qualified: z
+    .object({
+      role: z.enum(['invitee', 'referrer']),
+      points: pointsSchema,
+    })
+    .strict(),
 } as const;
 
 export type TripSummaryPayload = z.infer<typeof PayloadSchemas.trip_summary>;
 export type PermissionLapsedPayload = z.infer<typeof PayloadSchemas.permission_lapsed>;
+export type StreakMilestonePayload = z.infer<typeof PayloadSchemas.streak_milestone>;
+export type GoalCompletedPayload = z.infer<typeof PayloadSchemas.goal_completed>;
+export type LevelUpPayload = z.infer<typeof PayloadSchemas.level_up>;
+export type ReferralQualifiedPayload = z.infer<typeof PayloadSchemas.referral_qualified>;
 
 // ——— copy ———
 
@@ -409,6 +517,72 @@ const LAPSE_COPY: Record<PermissionLapsedPayload['permission'], { title: string;
 };
 
 /**
+ * The rewards notifications' words and screens. Each names a settled value only (settlement is
+ * final, so the words never go stale), and no place, drive or person (§11.1 rule 5).
+ */
+function rewardsCopy(type: NotificationType, payload: unknown): { title: string; body: string; url: string } | null {
+  switch (type) {
+    case 'streak_milestone': {
+      const p = PayloadSchemas.streak_milestone.safeParse(payload);
+      if (!p.success) return null;
+      const n = p.data.days;
+      return { title: `${n}-day safe streak`, body: `Your safe-day streak just reached ${n}. Tap to see it.`, url: '/rewards' };
+    }
+    case 'goal_completed': {
+      const p = PayloadSchemas.goal_completed.safeParse(payload);
+      if (!p.success) return null;
+      if (p.data.kind === 'challenge') {
+        return {
+          title: 'Challenge complete',
+          body: `You finished a challenge. +${p.data.points} points.`,
+          url: '/rewards/challenges',
+        };
+      }
+      return {
+        title: 'Weekly goal done',
+        body: p.data.prorated
+          ? `You met your goal on every day you drove this week. +${p.data.points} points.`
+          : `You met this week's goal. +${p.data.points} points.`,
+        url: '/rewards/goal',
+      };
+    }
+    case 'level_up': {
+      const p = PayloadSchemas.level_up.safeParse(payload);
+      if (!p.success) return null;
+      if (p.data.kind === 'badge') {
+        return {
+          title: 'New badge',
+          body: `You earned a ${p.data.tier} badge. Tap to see it.`,
+          url: '/rewards/badges',
+        };
+      }
+      return {
+        title: `New class: ${p.data.name}`,
+        body: `Your RoadWise card now shows ${p.data.name}.`,
+        url: '/rewards',
+      };
+    }
+    case 'referral_qualified': {
+      const p = PayloadSchemas.referral_qualified.safeParse(payload);
+      if (!p.success) return null;
+      return p.data.role === 'invitee'
+        ? {
+          title: "Your friend's code counts",
+          body: `You finished 3 scored drives. +${p.data.points} points.`,
+          url: '/rewards/invite',
+        }
+        : {
+          title: 'An invite counts',
+          body: `One of your invites counts now. +${p.data.points} points.`,
+          url: '/rewards/invite',
+        };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
  * Push copy for a live `delivery: 'push'` type. Null for a local type (never pushed), a non-live
  * type (no copy yet) and a payload that fails its schema (nothing true to say).
  */
@@ -420,7 +594,8 @@ export function renderPush(type: NotificationType, payload: unknown, catalog: Ca
     if (!p.success) return null;
     return { ...LAPSE_COPY[p.data.permission], url: '/permissions', channelId: e.androidChannel };
   }
-  return null;
+  const words = rewardsCopy(type, payload);
+  return words === null ? null : { ...words, channelId: e.androidChannel };
 }
 
 /**
@@ -447,13 +622,15 @@ export function renderInboxBase(type: NotificationType, payload: unknown): Inbox
 
 /**
  * Promises and claims no notification may make (rev1: m, narrowed to promises): score guarantees,
- * deletion and export (M8 is not built), streak pressure (§11.1 rule 6), rewards (M5 is not
- * built), and exclamation marks (factual and warm, not loud).
+ * deletion and export (M8 is not built), streak pressure (§11.1 rule 6), points as money or
+ * anything redeemable (Global Constraints, honesty b: points track progress, they aren't money),
+ * and exclamation marks (factual and warm, not loud). Rewards and points themselves are named
+ * freely now that M5 builds them.
  */
 export const BANNED_COPY: readonly RegExp[] = [
   /never lowers|driving less|nothing is lost|can(no|')t go down|never decays/i,
   /(can|will) delete|delete (everything|your)|export your|download your data/i,
   /lose your streak|about to lose|hurry|last chance/i,
-  /reward|points/i,
+  /\$|\bcash\b|money|dollars?|gift ?cards?|redeem|prizes?|insurance|discounts?|\bworth\b|\bwin\b/i,
   /!/,
 ];

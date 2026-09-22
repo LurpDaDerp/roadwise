@@ -13,7 +13,7 @@ import { T0 } from '@/data/queries/__fixtures__/rows';
 import { NotificationsHost } from '@/features/notifications/NotificationsHost';
 import { PENDING_HREF_KEY } from '@/features/notifications/responses';
 import { PENDING_READ_KEY } from '@/features/inbox/cache';
-import { INBOX_QUERY_KEY } from '@/notifications/keys';
+import { INBOX_QUERY_KEY, REWARDS_QUERY_KEY } from '@/notifications/keys';
 
 type Listener<T> = (e: T) => void;
 
@@ -156,13 +156,15 @@ test('the tap that launched the app is handled once, even when the listener deli
   expect(Notifications.clearLastNotificationResponse).toHaveBeenCalled();
 });
 
-test('a notification received in the foreground refreshes the inbox', async () => {
+test('a notification received in the foreground refreshes the inbox and the rewards', async () => {
   const { client } = await mount();
   const spy = jest.spyOn(client, 'invalidateQueries');
   await act(async () => {
     for (const l of mockReceivedListeners) l({});
   });
   expect(spy).toHaveBeenCalledWith({ queryKey: INBOX_QUERY_KEY });
+  expect(spy).toHaveBeenCalledWith({ queryKey: REWARDS_QUERY_KEY });
+  expect(spy).toHaveBeenCalledTimes(2);
 });
 
 test('a tapped push marks its inbox row read and refreshes the inbox (T6 carry)', async () => {

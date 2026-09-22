@@ -6,6 +6,12 @@
 /** React Query key of the server inbox. */
 export const INBOX_QUERY_KEY = ['inbox'] as const;
 
+/**
+ * React Query key of the rewards data (M5). The notification host invalidates it when a
+ * notification arrives, so a rewards screen that is open shows the settled value it announces.
+ */
+export const REWARDS_QUERY_KEY = ['rewards'] as const;
+
 /** React Query key of the user's notification preferences. */
 export const PREFS_QUERY_KEY = ['notificationPrefs'] as const;
 

@@ -157,7 +157,9 @@ describe('toItemView — other types', () => {
   });
 
   it('unknown, non-live and malformed rows render nothing', () => {
+    // A rewards type carrying some other type's payload fails its schema.
     expect(toItemView(inboxRow({ type: 'streak_milestone' }), missing, NOW, TZ)).toBeNull();
+    expect(toItemView(inboxRow({ type: 'family_digest', payload: {} }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(inboxRow({ type: 'something_new' }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(inboxRow({ payload: { clientTripId: 'trip-1' } }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(lapseRow({ payload: { permission: 'camera' } }), missing, NOW, TZ)).toBeNull();
@@ -300,6 +302,57 @@ describe('toItemView — a permission lapse renders from the phone’s CURRENT p
       expect(v?.body).not.toMatch(/another|other phone/i);
       expect(`${v?.title} ${v?.body}`).not.toMatch(/open to check|how it is now|\bis off\b|back|again|fix it/i);
     }
+  });
+});
+
+describe('toItemView — the rewards notifications (M5)', () => {
+  const rewardRow = (type: string, payload: Record<string, unknown>) =>
+    inboxRow({ id: nextId(), type, payload, created_at: iso(T0) });
+
+  it.each([
+    ['streak_milestone', { days: 7, reachedOn: '2026-01-04' }, '7-day safe streak', 'Your safe-day streak just reached 7. Tap to see it.', '/rewards'],
+    [
+      'goal_completed',
+      { kind: 'weekly_goal', category: 'phone', weekStart: '2025-12-29', points: 150, prorated: false },
+      'Weekly goal done',
+      "You met this week's goal. +150 points.",
+      '/rewards/goal',
+    ],
+    [
+      'goal_completed',
+      { kind: 'weekly_goal', category: 'braking', weekStart: '2025-12-29', points: 150, prorated: true },
+      'Weekly goal done',
+      'You met your goal on every day you drove this week. +150 points.',
+      '/rewards/goal',
+    ],
+    ['goal_completed', { kind: 'challenge', challengeId: 'smooth_ride', points: 150 }, 'Challenge complete', 'You finished a challenge. +150 points.', '/rewards/challenges'],
+    ['level_up', { kind: 'level', level: 2, name: 'Steady' }, 'New class: Steady', 'Your RoadWise card now shows Steady.', '/rewards'],
+    ['level_up', { kind: 'badge', badgeId: 'weekly_goals_1', tier: 'bronze' }, 'New badge', 'You earned a bronze badge. Tap to see it.', '/rewards/badges'],
+    ['referral_qualified', { role: 'invitee', points: 500 }, "Your friend's code counts", 'You finished 3 scored drives. +500 points.', '/rewards/invite'],
+    ['referral_qualified', { role: 'referrer', points: 500 }, 'An invite counts', 'One of your invites counts now. +500 points.', '/rewards/invite'],
+  ] as const)('%s renders its words and opens its screen', (type, payload, title, body, href) => {
+    const v = toItemView(rewardRow(type, payload), missing, NOW, TZ);
+    expect(v).toMatchObject({ type, title, body, href, note: null, dispute: null, clientTripId: null, unread: true });
+    expect(v?.when).toBe('Today · 12:00 PM');
+    expect(v?.accessibilityLabel).toBe(`Unread. ${title}. ${body} Today · 12:00 PM`);
+  });
+
+  it('renders the same whatever the phone holds (the subject never changes: value is never taken back)', () => {
+    const row = rewardRow('level_up', { kind: 'level', level: 3, name: 'Smooth' });
+    expect(toItemView(row, onPhone(), NOW, TZ)).toEqual(toItemView(row, missing, NOW, TZ));
+  });
+
+  it('an unknown badge or challenge (a newer server) renders nothing, and never throws', () => {
+    expect(toItemView(rewardRow('level_up', { kind: 'badge', badgeId: 'night_owl_7', tier: 'bronze' }), missing, NOW, TZ)).toBeNull();
+    expect(toItemView(rewardRow('goal_completed', { kind: 'challenge', challengeId: 'crew_week', points: 200 }), missing, NOW, TZ)).toBeNull();
+    expect(toItemView(rewardRow('level_up', { kind: 'level', level: 7, name: 'Legend' }), missing, NOW, TZ)).toBeNull();
+    expect(toItemView(inboxRow({ type: 'referral_qualified', payload: null as unknown as Record<string, unknown> }), missing, NOW, TZ)).toBeNull();
+  });
+
+  it('read rows say nothing about being unread', () => {
+    const v = toItemView({ ...rewardRow('streak_milestone', { days: 14, reachedOn: '2026-01-04' }), read_at: iso(T0) }, missing, NOW, TZ);
+    expect(v?.unread).toBe(false);
+    expect(v?.accessibilityLabel.startsWith('14-day safe streak.')).toBe(true);
   });
 });
 
