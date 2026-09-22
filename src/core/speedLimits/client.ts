@@ -20,8 +20,13 @@
 //   without a valid fix is null; a lookup whose tile is not in memory is null (and loads it from
 //   SQLite for the next row); a loaded tile with no established road is `unknown`. The one
 //   carry-over: stopped (valid fix, no course, under 2 m/s) within 30 m of the last match.
-// - **Confidence.** `matchConfidence` is the matcher's, unaltered. The HUD shows a limit only at
-//   ≥ 0.8; ramp and parallel-road matches come back at 0.6–0.65 and show "—".
+// - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
+//   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
+//   a dense tile in key order, not by place, so the car's own road can be the one dropped while a
+//   parallel road survives, and the matcher would name the neighbour's limit at 0.85. The HUD shows
+//   a limit only at ≥ 0.8; ramp, parallel-road and truncated-tile matches (0.6–0.65) show "—".
+// - **Simulation (`persist: false`).** Nothing is written to SQLite: no tile is stored and
+//   `purgeExpired` does nothing. Reading tiles already there is harmless and stays allowed.
 
 import type { LimitSample } from '@/core/engine/types';
 import type { Db } from '@/data/db/driver';
@@ -31,7 +36,14 @@ import { mphToMps } from '@/lib/units';
 import type { SpeedLimitApi } from './api';
 import { angleDiffDeg, bboxOf, type BBox, nearBBox, nearestOnPolyline, normalizeDeg } from './geometry';
 import { MATCH, matchLimit, type MatchResult } from './match';
-import { candidatesNear, createTileLru, decodeTile, type DecodedTile } from './store';
+import {
+  candidatesNear,
+  createTileLru,
+  decodeTile,
+  type DecodedTile,
+  type StoredTilePayload,
+  truncatedNear,
+} from './store';
 import { prefetchSet, tileFor, tileKey } from './tiles';
 import { MAX_TILE_TTL_MS, type PointResponse } from './wire';
 
@@ -49,6 +61,13 @@ export const POINT_ANSWER_BEHIND_M = 30;
 export const POINT_ANSWER_AHEAD_M = 150;
 /** Point answers held in memory (a few dozen bytes each). */
 export const MAX_POINT_ANSWERS = 16;
+/** The most confidence a match near a truncated tile may carry — under the HUD's 0.8 gate. */
+export const TRUNCATED_CONFIDENCE_CAP = 0.6;
+/**
+ * A truncated tile is kept this long at most. Truncation is deterministic, so re-requesting it
+ * every kilometre would re-download the same cut tile; a day lets a server-side fix arrive.
+ */
+export const TRUNCATED_TILE_TTL_MS = 24 * 3600 * 1000;
 
 export interface SpeedLimitClient {
   /**
@@ -78,9 +97,16 @@ export interface SpeedLimitClient {
   purgeExpired(): Promise<number>;
   /**
    * `requestsThisTrip` counts every network request (batches and point lookups);
-   * `pointLookupsThisTrip` the point lookups among them; `sqliteLoads` the tile reads from SQLite.
+   * `pointLookupsThisTrip` the point lookups among them; `sqliteLoads` the tile reads from SQLite;
+   * `truncatedTiles` how many of the tiles in memory the server truncated (for diagnostics).
    */
-  stats(): { memoryTiles: number; requestsThisTrip: number; pointLookupsThisTrip: number; sqliteLoads: number };
+  stats(): {
+    memoryTiles: number;
+    requestsThisTrip: number;
+    pointLookupsThisTrip: number;
+    sqliteLoads: number;
+    truncatedTiles: number;
+  };
   /** Resolves once no load or request is in flight. For tests and orderly shutdown; never needed per row. */
   settled(): Promise<void>;
 }
@@ -93,6 +119,11 @@ export interface SpeedLimitClientDeps {
   online?: () => boolean;
   /** Told about a failed request, a rejected reply, or a storage error. Never thrown. */
   onError?: (e: unknown) => void;
+  /**
+   * False for a simulated drive: nothing is written to SQLite (no tile stored, `purgeExpired` a
+   * no-op). Tiles already stored may still be read. Defaults to true.
+   */
+  persist?: boolean;
 }
 
 interface PointAnswer {
@@ -139,6 +170,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   const { db, api, now } = deps;
   const repo = createTilesRepo(db);
   const isOnline = (): boolean => deps.online?.() ?? true;
+  const persist = deps.persist ?? true;
   const report = (e: unknown): void => {
     try {
       deps.onError?.(e);
@@ -246,7 +278,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         if (gen !== generation) return;
         if (!(await loadFromSqlite(k))) need.push(k);
       }
-      // A trip reset while SQLite was checked: the request would serve nobody.
+      // Offline, the SQLite preload above still ran (the tiles ahead serve an offline drive); only
+      // the request is skipped. And a trip reset meanwhile: the request would serve nobody.
       if (need.length === 0 || gen !== generation || !isOnline()) return;
 
       trip.requests += 1;
@@ -255,13 +288,19 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       const t = now();
       for (const tile of res.tiles) {
         if (!need.includes(tile.tile)) continue; // not asked for: not trusted
-        const expiresAt = Math.min(tile.expiresAt, t + MAX_TILE_TTL_MS);
-        try {
-          await repo.putTile(tile.tile, expiresAt, tile.segments);
-        } catch (e) {
-          report(e); // still usable from memory for this trip
+        const expiresAt = Math.min(
+          tile.expiresAt,
+          t + (tile.truncated ? TRUNCATED_TILE_TTL_MS : MAX_TILE_TTL_MS)
+        );
+        const payload: StoredTilePayload = { truncated: tile.truncated, segments: tile.segments };
+        if (persist) {
+          try {
+            await repo.putTile(tile.tile, expiresAt, payload);
+          } catch (e) {
+            report(e); // still usable from memory for this trip
+          }
         }
-        const decoded = decodeTile(tile.tile, expiresAt, tile.segments, true);
+        const decoded = decodeTile(tile.tile, expiresAt, payload, true);
         if (!decoded) continue;
         absent.delete(tile.tile);
         hold(decoded, gen);
@@ -275,7 +314,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
 
   function batch(lat: number, lng: number, course: number): void {
     pointAllowed = true;
-    if (!finite(lat, lng) || !isOnline()) return;
+    // Not gated on being online: `runBatch` preloads the tiles ahead from SQLite either way.
+    if (!finite(lat, lng)) return;
     const keys = prefetchSet(lat, lng, course).map(tileKey);
     void track(runBatch(keys, generation, counters));
   }
@@ -337,14 +377,37 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     );
   }
 
-  /** Match against every tile in memory near the point, then any point answer. */
-  function evaluate(lat: number, lng: number, course: number): LimitSample {
-    const result = matchLimit(course, candidatesNear(freshTiles(), { lat, lng }, MATCH.RADIUS_M));
-    if (result.source === 'unknown' && course >= 0) {
-      const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
-      if (fromPoint) return fromPoint;
+  /**
+   * Match against every fresh tile in memory near the point (plus `own`, when given, even if it
+   * has since been evicted), then any point answer. `capped` is true when a truncated tile nearby
+   * held the match to `TRUNCATED_CONFIDENCE_CAP` — the point-lookup trigger counts that row as
+   * unknown.
+   */
+  function evaluate(
+    lat: number,
+    lng: number,
+    course: number,
+    own?: DecodedTile
+  ): { sample: LimitSample; capped: boolean } {
+    const tiles = freshTiles();
+    if (own && own.expiresAt > now() && !tiles.includes(own)) tiles.push(own);
+    const p = { lat, lng };
+    const result = matchLimit(course, candidatesNear(tiles, p, MATCH.RADIUS_M));
+    if (result.source === 'unknown') {
+      if (course >= 0) {
+        const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
+        if (fromPoint) return { sample: fromPoint, capped: false };
+      }
+      return { sample: toSample(result), capped: false };
     }
-    return toSample(result);
+    const sample = toSample(result);
+    if (truncatedNear(tiles, p, MATCH.RADIUS_M)) {
+      return {
+        sample: { ...sample, matchConfidence: Math.min(sample.matchConfidence, TRUNCATED_CONFIDENCE_CAP) },
+        capped: true,
+      };
+    }
+    return { sample, capped: false };
   }
 
   return {
@@ -368,7 +431,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       const key = tileKey(tileFor(lat, lng));
       const loaded = memoryTile(key) !== undefined;
       if (!loaded) void loadFromSqlite(key); // never charged to the network budget
-      const sample = evaluate(lat, lng, course);
+      const { sample, capped } = evaluate(lat, lng, course);
 
       if (!loaded) {
         // The car's own tile is not here yet. A neighbour's buffered segment may still establish
@@ -380,7 +443,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       }
 
       last = { lat, lng, sample };
-      if (sample.source === 'unknown' && moving) {
+      if ((sample.source === 'unknown' || capped) && moving) {
         unknownRun += 1;
         if (unknownRun >= UNKNOWN_ROWS_BEFORE_POINT_LOOKUP) maybePointLookup(lat, lng, course);
       } else {
@@ -393,11 +456,16 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       batch(lat, lng, course);
     },
 
+    // Evaluates against the LRU as it stands when the read resumes, plus the row's own tile
+    // explicitly. The own tile is therefore always matched, but its neighbours are whatever is
+    // held at that moment: with more than 12 tiles' rows in flight at once, a neighbour's buffered
+    // segment can have been evicted. Recovery awaits rows sequentially, which is exact; a future
+    // parallel caller must keep to that, or batch rows by tile.
     async lookupStored(lat, lng, course) {
       if (!finite(lat, lng)) return null;
       const tile = await loadFromSqlite(tileKey(tileFor(lat, lng)));
       if (!tile) return null;
-      return evaluate(lat, lng, course);
+      return evaluate(lat, lng, course, tile).sample;
     },
 
     startTrip(lat, lng, course) {
@@ -416,7 +484,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     },
 
     purgeExpired() {
-      return repo.purgeExpired(now());
+      return persist ? repo.purgeExpired(now()) : Promise.resolve(0);
     },
 
     stats() {
@@ -425,6 +493,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         requestsThisTrip: counters.requests,
         pointLookupsThisTrip: counters.points,
         sqliteLoads: counters.sqliteLoads,
+        truncatedTiles: [...lru.values()].filter((t) => t.truncated).length,
       };
     },
 

@@ -1,6 +1,13 @@
 /** @jest-environment node */
 import { encodePolyline } from '@/lib/polyline';
-import { candidatesNear, createTileLru, decodeTile, MEMORY_TILES } from '@/core/speedLimits/store';
+import {
+  candidatesNear,
+  createTileLru,
+  decodeTile,
+  MEMORY_TILES,
+  readStoredPayload,
+  truncatedNear,
+} from '@/core/speedLimits/store';
 import type { LimitSegment } from '@/core/speedLimits/wire';
 
 const M_PER_DEG = 111_320;
@@ -111,5 +118,23 @@ describe('createTileLru', () => {
     lru.peek('15/5000/11443');
     lru.set(tile(2));
     expect(lru.peek('15/5000/11443')).toBeUndefined();
+  });
+});
+
+describe('truncation (fix round 1)', () => {
+  it('reads the stored envelope and a legacy plain array alike', () => {
+    expect(readStoredPayload({ truncated: true, segments: [] })).toEqual({ truncated: true, segments: [] });
+    expect(readStoredPayload([seg()])).toEqual({ truncated: false, segments: [seg()] });
+    expect(readStoredPayload({ truncated: 'yes', segments: [] })).toBeNull();
+    expect(decodeTile(KEY, 0, { truncated: true, segments: [seg()] })!.truncated).toBe(true);
+    expect(decodeTile(KEY, 0, [seg()])!.truncated).toBe(false);
+  });
+
+  it('truncatedNear sees a truncated tile whose area reaches the point, and only then', () => {
+    const t = decodeTile(KEY, 0, { truncated: true, segments: [] })!;
+    const clean = decodeTile(KEY, 0, [])!;
+    expect(truncatedNear([t], { lat: LAT, lng: -122.33 }, 25)).toBe(true);
+    expect(truncatedNear([clean], { lat: LAT, lng: -122.33 }, 25)).toBe(false);
+    expect(truncatedNear([t], { lat: LAT + 0.05, lng: -122.33 }, 25)).toBe(false);
   });
 });

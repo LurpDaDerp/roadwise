@@ -4,6 +4,8 @@ import {
   createSpeedLimitClient,
   MIN_MOVING_MPS,
   STICKY_RADIUS_M,
+  TRUNCATED_CONFIDENCE_CAP,
+  TRUNCATED_TILE_TTL_MS,
   UNKNOWN_ROWS_BEFORE_POINT_LOOKUP,
   type SpeedLimitClient,
 } from '@/core/speedLimits/client';
@@ -46,12 +48,14 @@ const STOPPED = { gnssValid: true, speedMps: 0.5 };
 let clock: number;
 let db: Db;
 let selects: number;
+let writes: number;
 let client: SpeedLimitClient;
 let errors: unknown[];
 let online: boolean;
 
 interface FakeOptions {
   segmentsFor?: (key: string) => LimitSegment[];
+  truncated?: boolean;
   fallback?: 'aws' | null;
   point?: PointResponse;
   expiresIn?: number;
@@ -64,7 +68,7 @@ function fakeApi(opts: FakeOptions = {}) {
       tiles: keys.map((tile) => ({
         tile,
         expiresAt: clock + (opts.expiresIn ?? DAY),
-        truncated: false,
+        truncated: opts.truncated ?? false,
         segments: segmentsFor(tile),
       })),
       fallback: opts.fallback ?? null,
@@ -77,8 +81,9 @@ function fakeApi(opts: FakeOptions = {}) {
   return { api: { getTiles, lookupPoint } satisfies SpeedLimitApi, getTiles, lookupPoint };
 }
 
-function make(api: SpeedLimitApi): SpeedLimitClient {
+function make(api: SpeedLimitApi, extra: { persist?: boolean } = {}): SpeedLimitClient {
   client = createSpeedLimitClient({
+    ...extra,
     db,
     api,
     now: () => clock,
@@ -93,12 +98,14 @@ beforeEach(async () => {
   errors = [];
   online = true;
   selects = 0;
+  writes = 0;
   const raw = await createSqlJsDb();
   await migrate(raw);
   // Count every tile read (`getTile`'s SELECT) — the recovery test's measure (rev1: I7).
   db = {
     execute: (sql, params) => {
       if (/SELECT \* FROM speed_limit_tiles/.test(sql)) selects += 1;
+      if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)/i.test(sql)) writes += 1;
       return raw.execute(sql, params);
     },
     transaction: (fn) => raw.transaction(fn),
@@ -494,7 +501,13 @@ describe('lifecycle', () => {
     release();
     await client.settled();
     expect(await createTilesRepo(db).count()).toBe(4);
-    expect(client.stats()).toEqual({ memoryTiles: 0, requestsThisTrip: 0, pointLookupsThisTrip: 0, sqliteLoads: 0 });
+    expect(client.stats()).toEqual({
+      memoryTiles: 0,
+      requestsThisTrip: 0,
+      pointLookupsThisTrip: 0,
+      sqliteLoads: 0,
+      truncatedTiles: 0,
+    });
     expect(client.lookup(LAT, LNG0, EAST, MOVING)).toBeNull();
   });
 
@@ -503,6 +516,121 @@ describe('lifecycle', () => {
     make(api).startTrip(LAT, LNG0, EAST); // still checking SQLite
     client.resetTrip();
     await client.settled();
+    expect(getTiles).not.toHaveBeenCalled();
+  });
+});
+
+describe('fix round 1', () => {
+  /** A tagged 25 mph frontage road 8 m north of the corridor — the car's own road is the corridor. */
+  const frontage = () =>
+    road({
+      id: 'frontage',
+      limitMph: 25,
+      highway: 'service',
+      line: encodePolyline([
+        { lat: LAT + mLat(8), lng: -122.333 },
+        { lat: LAT + mLat(8), lng: -122.299 },
+      ]),
+    });
+
+  it('C-R1: a simulated drive (persist: false) writes nothing to SQLite, and still reads it', async () => {
+    await store(keyAt(LAT, LNG0), [road()]);
+    await store('15/1/1', [], clock - 1);
+    writes = 0;
+    const { api, getTiles } = fakeApi();
+    make(api, { persist: false }).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let m = 0; m <= 2000; m += 25) {
+      if (m % 1000 === 0) client.prefetch(LAT, LNG0 + mLng(m), EAST);
+      client.lookup(LAT, LNG0 + mLng(m), EAST, MOVING);
+      await client.settled();
+    }
+    expect(getTiles).toHaveBeenCalled(); // tiles were fetched and used in memory…
+    expect(client.lookup(LAT, LNG0 + mLng(2000), EAST, MOVING)?.limitMps).toBeCloseTo(mphToMps(35));
+    await expect(client.purgeExpired()).resolves.toBe(0);
+    expect(writes).toBe(0); // …but nothing was stored or deleted
+    expect(await createTilesRepo(db).count()).toBe(2);
+    expect(client.stats().sqliteLoads).toBeGreaterThan(0); // the stored tile was read
+  });
+
+  it('C-R4: a truncated tile keeps its flag in the stored payload and lives about a day', async () => {
+    const { api } = fakeApi({ truncated: true, expiresIn: 20 * DAY });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    const { rows } = await db.execute('SELECT expires_at, segments_json FROM speed_limit_tiles');
+    expect(rows).toHaveLength(4);
+    for (const r of rows) {
+      expect(r.expires_at).toBe(T0 + TRUNCATED_TILE_TTL_MS);
+      expect(JSON.parse(r.segments_json as string)).toEqual({ truncated: true, segments: [road()] });
+    }
+    expect(TRUNCATED_TILE_TTL_MS).toBe(24 * 3600 * 1000);
+    expect(client.stats().truncatedTiles).toBe(4);
+  });
+
+  it('C-R4: a truncated tile is not refetched each kilometre, nor on the next trip that day', async () => {
+    const { api, getTiles } = fakeApi({ truncated: true });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    client.prefetch(LAT, LNG0, EAST);
+    await client.settled();
+    client.resetTrip();
+    clock += 12 * 3600 * 1000;
+    client.startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+    expect(client.stats().truncatedTiles).toBe(4); // reloaded from SQLite with the flag
+  });
+
+  it('C-R4: a stored plain segment array (before the envelope) reads as not truncated', async () => {
+    await store(keyAt(LAT, LNG0), [road()]);
+    make(fakeApi().api);
+    const s = await client.lookupStored(LAT, LNG0, EAST);
+    expect(s?.matchConfidence).toBe(0.95);
+    expect(client.stats().truncatedTiles).toBe(0);
+  });
+
+  it("I1: a truncated tile that dropped the car's road but kept a parallel one never answers confidently", async () => {
+    // Untruncated, the same tile would name the frontage road's 25 mph at 0.95 — the wrong limit,
+    // confidently. That is exactly what truncation can produce, so the flag must hold it down.
+    const own = keyAt(LAT, LNG0);
+    await createTilesRepo(db).putTile(own, clock + DAY, { truncated: false, segments: [frontage()] });
+    make(fakeApi().api);
+    expect((await client.lookupStored(LAT, LNG0, EAST))?.matchConfidence).toBe(0.95);
+
+    await createTilesRepo(db).putTile(own, clock + DAY, { truncated: true, segments: [frontage()] });
+    make(fakeApi().api);
+    await client.lookupStored(LAT, LNG0, EAST);
+    const s = client.lookup(LAT, LNG0, EAST, MOVING);
+    expect(s?.limitMps).toBeCloseTo(mphToMps(25));
+    expect(s!.matchConfidence).toBeLessThanOrEqual(TRUNCATED_CONFIDENCE_CAP);
+    expect(TRUNCATED_CONFIDENCE_CAP).toBe(0.6);
+  });
+
+  it('I1: a truncated tile holds the confidence down however the tile came, and rows near it count toward a point lookup', async () => {
+    const { api, lookupPoint } = fakeApi({ truncated: true, fallback: 'aws', segmentsFor: () => [frontage()] });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < 5; i += 1) {
+      const s = client.lookup(LAT, LNG0 + mLng(i * 20), EAST, MOVING);
+      expect(s!.matchConfidence).toBeLessThanOrEqual(0.6);
+      await client.settled();
+    }
+    expect(lookupPoint).toHaveBeenCalledTimes(1);
+  });
+
+  it('M2: offline, a prefetch preloads the tiles ahead from SQLite, so a tile edge costs no null row', async () => {
+    online = false;
+    const set = prefetchSet(LAT, LNG0, EAST).map(tileKey);
+    for (const k of set) await store(k, [road()]);
+    const { api, getTiles } = fakeApi();
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(client.stats().memoryTiles).toBe(4);
+    // The next tile east, entered for the first time: answered at once, not null.
+    const next = tileBounds(tileFor(LAT, LNG0));
+    const lng = next.maxLng + mLng(5);
+    expect(keyAt(LAT, lng)).toBe(set[1]);
+    expect(client.lookup(LAT, lng, EAST, MOVING)?.limitMps).toBeCloseTo(mphToMps(35));
     expect(getTiles).not.toHaveBeenCalled();
   });
 });

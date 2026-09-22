@@ -32,6 +32,11 @@ export interface DecodedTile {
   expiresAt: number;
   /** The tile's own extent (segments may reach `TILE_BUFFER_M` beyond it). */
   bounds: BBox;
+  /**
+   * The server cut this tile at `MAX_SEGMENTS_PER_TILE`. Its cut order is not spatial, so any road
+   * may be missing — including the car's own, next to a surviving parallel road.
+   */
+  truncated: boolean;
   count: number;
   /** `osm:<id>` etc. — the matcher's candidate key, so one road clipped into two tiles dedupes. */
   keys: string[];
@@ -53,21 +58,44 @@ interface Unpacked {
 }
 
 /**
+ * What a tile row stores in `segments_json`: the segments plus the server's `truncated` flag, in
+ * one envelope, so the flag survives without a schema change. Rows written before the envelope
+ * are a plain segment array and read as not truncated.
+ */
+export interface StoredTilePayload {
+  truncated: boolean;
+  segments: unknown[];
+}
+
+/** The segments and flag of a stored row, or null for a corrupt one. */
+export function readStoredPayload(payload: unknown): StoredTilePayload | null {
+  if (Array.isArray(payload)) return { truncated: false, segments: payload };
+  if (payload !== null && typeof payload === 'object') {
+    const { truncated, segments } = payload as { truncated?: unknown; segments?: unknown };
+    if (typeof truncated === 'boolean' && Array.isArray(segments)) return { truncated, segments };
+  }
+  return null;
+}
+
+/**
  * Decode one tile's segments. A segment that fails the contract or whose polyline will not decode
  * is dropped on its own, so one bad segment never costs the whole tile.
  *
  * `trusted` skips the per-segment schema check for segments that were just validated as part of a
  * `TileBatchResponse`; rows read back from SQLite are always re-checked (they may predate this
- * build). Returns null when `segments` is not an array at all — a corrupt row, treated as absent.
+ * build). `payload` is a `StoredTilePayload` or a legacy plain segment array. Returns null for a
+ * corrupt payload — treated as absent.
  */
 export function decodeTile(
   key: string,
   expiresAt: number,
-  segments: unknown,
+  payload: unknown,
   trusted = false
 ): DecodedTile | null {
   const xy = parseTileKey(key);
-  if (!xy || !Array.isArray(segments)) return null;
+  const stored = readStoredPayload(payload);
+  if (!xy || !stored) return null;
+  const { segments } = stored;
 
   const kept: Unpacked[] = [];
   let total = 0;
@@ -95,6 +123,7 @@ export function decodeTile(
     key,
     expiresAt,
     bounds: tileBounds(xy),
+    truncated: stored.truncated,
     count,
     keys: new Array<string>(count),
     providers: new Array<Provider>(count),
@@ -163,6 +192,15 @@ export function candidatesNear(tiles: Iterable<DecodedTile>, p: LatLng, radiusM:
     }
   }
   return [...best.values()];
+}
+
+/**
+ * True when any tile whose area (with its buffer) reaches within `radiusM` of `p` is truncated:
+ * the road the car is on may be one the server dropped, so no match here may be confident.
+ */
+export function truncatedNear(tiles: Iterable<DecodedTile>, p: LatLng, radiusM: number): boolean {
+  for (const t of tiles) if (t.truncated && nearBBox(p, t.bounds, radiusM + TILE_BUFFER_M)) return true;
+  return false;
 }
 
 /** A least-recently-used map of decoded tiles. `get` counts as a use; `peek` does not. */
