@@ -428,6 +428,7 @@ declare
   v_start timestamptz;
   v_count int;
 begin
+  perform public.require_service_role('take_rate_limit');
   if p_user is null then
     raise exception 'user is required' using errcode = 'invalid_parameter_value';
   end if;

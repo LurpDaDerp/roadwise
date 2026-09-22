@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(188);
+select plan(189);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -422,6 +422,10 @@ select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '0 seconds', 2) $$, '22023', 'window must be between 1 second and 31 days', 'an empty window is refused');
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'dispute_7d', '1 day', 2) $$, '22023', 'key must be a rate-limit key', 'the dispute mutex row is not a rate-limit key');
 select throws_ok($$ select public.take_rate_limit(null, 'aws_limits', '1 day', 2) $$, '22023', 'user is required', 'a missing user is refused');
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
+select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '1 day', 2) $$, '42501', 'take_rate_limit requires the service role',
+  'its first statement refuses any JWT role but service_role, even for the caller''s own uid');
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 -- take_global_rate_limit: the same budget semantics with no user (ruling B2 F1)
 select is(array[public.take_global_rate_limit('aws_limits_global', '1 day', 2),
