@@ -3,9 +3,12 @@
 //
 // finalize-trip scored the upload from the payload; a dispute or a role change scores the same
 // trip again from what was stored. The trip-level inputs are `rows_digest` (kept verbatim for this
-// purpose) and the quality cap finalize-trip applied, which is not persisted and is re-derived
-// here from the same stored columns (`trace_path`, `incomplete`, `duration_s` against the wall
-// span, `distance_m / duration_s` against the sustained maximum). Per event only the measurements
+// purpose) and the quality cap finalize-trip applied, which is re-derived here from the stored
+// columns (`scored_without_trace`, `incomplete`, `duration_s` against the wall span,
+// `distance_m / duration_s` against the sustained maximum). `no_trace` reads
+// `scored_without_trace`, the recording as it was scored, never `trace_path`: the trace purge
+// clears the path after 14 days, and a role correction must never lower a grade for that
+// (ruling B6 r2). Per event only the measurements
 // and the context are read; severity and the context multiplier are recomputed by the scoring
 // package, never taken from the stored (client-asserted) columns. The trace object is not read:
 // no rule here needs it.
@@ -29,7 +32,7 @@ const DAY_MS = 86_400_000;
 /** The quality downgrades finalize-trip applied to this trip, from the columns it stored. */
 export function storedDowngrades(t: StoredTrip): QualityDowngrade[] {
   const out: QualityDowngrade[] = [];
-  if (t.tracePath === null) out.push('no_trace');
+  if (t.scoredWithoutTrace) out.push('no_trace');
   if (t.incomplete) out.push('incomplete');
   const spanS = (t.endedAt - t.startedAt) / 1000;
   if (t.durationS > spanS + SPAN_SLACK_S) out.push('duration_exceeds_span');

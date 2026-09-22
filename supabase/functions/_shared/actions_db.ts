@@ -37,6 +37,11 @@ export interface StoredTrip {
   /** `trips.rows_digest` verbatim; validated against the contract before it is scored with. */
   rowsDigest: unknown;
   tracePath: string | null;
+  /**
+   * `trips.scored_without_trace` (0008): whether the drive was scored without a trace, finalize-trip's
+   * `no_trace` condition at scoring time. Never changed by retention clearing `trace_path`.
+   */
+  scoredWithoutTrace: boolean;
   incomplete: boolean;
   hadSevereEvent: boolean;
   cameraSession: boolean;
@@ -162,7 +167,7 @@ export interface ActionsDb extends Db {
 }
 
 const TRIP_COLUMNS =
-  'id, client_trip_id, status, score, role, scoring_version, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, category_deductions, limit_coverage_pct, rows_digest, trace_path, incomplete, had_severe_event, camera_session, deleted_at';
+  'id, client_trip_id, status, score, role, scoring_version, local_day, tz, started_at, ended_at, distance_m, duration_s, exposure, data_quality, category_deductions, limit_coverage_pct, rows_digest, trace_path, scored_without_trace, incomplete, had_severe_event, camera_session, deleted_at';
 const EVENT_COLUMNS =
   'id, trip_id, client_event_id, category, started_at, duration_ms, confidence, corrected, status, measured, context';
 
@@ -185,6 +190,7 @@ interface TripRecord {
   limit_coverage_pct: number | string | null;
   rows_digest: unknown;
   trace_path: string | null;
+  scored_without_trace: boolean;
   incomplete: boolean;
   had_severe_event: boolean;
   camera_session: boolean;
@@ -224,6 +230,7 @@ const toStoredTrip = (row: TripRecord): StoredTrip => ({
   limitCoveragePct: row.limit_coverage_pct === null ? null : Number(row.limit_coverage_pct),
   rowsDigest: row.rows_digest,
   tracePath: row.trace_path,
+  scoredWithoutTrace: row.scored_without_trace === true,
   incomplete: row.incomplete,
   hadSevereEvent: row.had_severe_event,
   cameraSession: row.camera_session,

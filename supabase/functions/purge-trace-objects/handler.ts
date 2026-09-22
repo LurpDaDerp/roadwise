@@ -10,7 +10,8 @@
 //     where a trips row exists and from the upload otherwise (`expired_trace_object_keys`), found
 //     by object metadata, so an orphan of any cause (a blocked child, M8's delete-account, a trips
 //     row lost some other way) is still found. Each expired trace deleted also stops being named by
-//     its trips row (`clear_trace_paths`), so a re-score honestly gets `no_trace`.
+//     its trips row (`clear_trace_paths`); a re-score reads `scored_without_trace` (the recording
+//     as it was scored), so clearing the path never lowers a grade (ruling B6 r2).
 //
 // The contract:
 //   * POST only (405). Woken by pg_cron through pg_net every 15 minutes (0008
@@ -171,7 +172,8 @@ export async function handlePurge(req: Request, deps: PurgeDeps): Promise<Respon
       null,
       overBudget
     );
-    // An expired trace that is deleted stops being named by its trips row (ruling B6 retention).
+    // An expired trace that is deleted stops being named by its trips row (ruling B6 retention);
+    // the drive's scored_without_trace is untouched, so its grade is not.
     const expired = await purgeList<string>(
       (after, limit) => deps.db.expiredKeys(after, limit),
       (k) => k.name,

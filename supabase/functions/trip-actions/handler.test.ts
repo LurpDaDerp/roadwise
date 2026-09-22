@@ -722,7 +722,7 @@ Deno.test('a stored digest the contract does not recognise is refused before the
 
 Deno.test('a trip stored without a trace is re-scored at grade B at best, and a grade drift is logged', async () => {
   const h = harness({
-    tables: { trips: [storedTripRow({ trace_path: null, data_quality: 'A' })], trip_events: [storedEventRow()], event_disputes: [] },
+    tables: { trips: [storedTripRow({ trace_path: null, scored_without_trace: true, data_quality: 'A' })], trip_events: [storedEventRow()], event_disputes: [] },
   });
   assertEquals((await handleTripAction(post(dispute()), h.deps)).status, 200);
   const e = recompute(h);
@@ -888,6 +888,36 @@ Deno.test('set-role passenger unscores the trip and applies an unscored envelope
   // both trips are inside the current four weeks: the window behind them holds nothing
   assertEquals(e.baselines?.medians, {});
   assertEquals(r.days, e.day);
+});
+
+Deno.test('a traced drive whose path the purge cleared keeps grade A on a re-score 15 days later (ruling B6 r2)', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ role: 'passenger', status: 'unscored', score: null, data_quality: 'A', trace_path: null, scored_without_trace: false })],
+      trip_events: [storedEventRow({ deduction: null })],
+      event_disputes: [],
+    },
+    now: T0 + 1_320_000 + 15 * 86_400_000,
+  });
+  assertEquals((await handleTripAction(post(setRole('driver')), h.deps)).status, 200);
+  const e = recompute(h);
+  assertEquals(e.scored?.dataQuality, 'A');
+  assertEquals(e.scored, { ...scoreTrip(storedMetrics('driver'), [storedEvent('scored')]), hadSevereEvent: false });
+});
+
+Deno.test('a drive scored without a trace still takes no_trace on that re-score (negative control)', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ role: 'passenger', status: 'unscored', score: null, data_quality: 'A', trace_path: null, scored_without_trace: true })],
+      trip_events: [storedEventRow({ deduction: null })],
+      event_disputes: [],
+    },
+    now: T0 + 1_320_000 + 15 * 86_400_000,
+  });
+  assertEquals((await handleTripAction(post(setRole('driver')), h.deps)).status, 200);
+  const e = recompute(h);
+  assertEquals(e.scored?.dataQuality, 'B');
+  assertEquals(e.scored, { ...scoreTrip(storedMetrics('driver', false), [storedEvent('scored')]), hadSevereEvent: false });
 });
 
 Deno.test('set-role driver re-scores from the stored digest and events', async () => {

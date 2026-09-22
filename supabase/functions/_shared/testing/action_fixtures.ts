@@ -72,6 +72,7 @@ export const storedTripRow = (overrides: Record<string, unknown> = {}): Record<s
   camera_session: false,
   rows_digest: ROWS_DIGEST,
   trace_path: TRACE_KEY,
+  scored_without_trace: false,
   incomplete: false,
   deleted_at: null,
   created_at: new Date(T0 + 1_400_000).toISOString(),

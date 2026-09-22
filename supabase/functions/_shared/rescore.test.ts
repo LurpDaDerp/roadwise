@@ -38,6 +38,7 @@ const trip = (overrides: Partial<StoredTrip> = {}): StoredTrip => ({
   limitCoveragePct: 80,
   rowsDigest: ROWS_DIGEST,
   tracePath: TRACE_KEY,
+  scoredWithoutTrace: false,
   incomplete: false,
   hadSevereEvent: false,
   cameraSession: false,
@@ -60,18 +61,36 @@ const event = (overrides: Partial<StoredEvent> = {}): StoredEvent => ({
   ...overrides,
 });
 
+Deno.test('no_trace is the recording as scored, never the path retention cleared later (ruling B6 r2)', () => {
+  // a traced drive whose path the purge cleared after 14 days keeps its full grade on a re-score
+  assertEquals(storedDowngrades(trip({ tracePath: null, scoredWithoutTrace: false })), []);
+  // a drive scored without a trace keeps the downgrade, whatever the column says later
+  assertEquals(storedDowngrades(trip({ tracePath: TRACE_KEY, scoredWithoutTrace: true })), ['no_trace']);
+});
+
+Deno.test("parity: the stored flag and finalize-trip's no_trace are one condition (payload tracePath null)", () => {
+  // finalize-trip (plausibility.ts) downgrades exactly when the payload's tracePath is null;
+  // apply_trip stores that payload as trace_path null, and 0008's trigger stamps
+  // scored_without_trace = (trace_path is null) at insert. The re-score must agree with both.
+  for (const tracePath of [null, TRACE_KEY]) {
+    const scoredWithoutTrace = tracePath === null; // 0008 trips_scored_without_trace, at insert
+    const atFinalize = tracePath === null; // plausibility.ts: if (p.tracePath === null) no_trace
+    assertEquals(storedDowngrades(trip({ tracePath: null, scoredWithoutTrace })).includes('no_trace'), atFinalize);
+  }
+});
+
 Deno.test('a consistent stored trip re-derives no downgrade', () => {
   assertEquals(storedDowngrades(trip()), []);
 });
 
 Deno.test('the downgrades finalize-trip applied are re-derived from the stored columns, in rule order', () => {
-  assertEquals(storedDowngrades(trip({ tracePath: null })), ['no_trace']);
+  assertEquals(storedDowngrades(trip({ tracePath: null, scoredWithoutTrace: true })), ['no_trace']);
   assertEquals(storedDowngrades(trip({ incomplete: true })), ['incomplete']);
   assertEquals(storedDowngrades(trip({ durationS: 1322 })), ['duration_exceeds_span']);
   assertEquals(storedDowngrades(trip({ durationS: 1321 })), []);
   // 13.2 km in 400 s is 33 m/s against a 20 m/s sustained maximum (allowed up to 25)
   assertEquals(storedDowngrades(trip({ durationS: 400 })), ['distance_exceeds_speed']);
-  assertEquals(storedDowngrades(trip({ tracePath: null, incomplete: true, durationS: 400 })), [
+  assertEquals(storedDowngrades(trip({ tracePath: null, scoredWithoutTrace: true, incomplete: true, durationS: 400 })), [
     'no_trace',
     'incomplete',
     'distance_exceeds_speed',
@@ -87,8 +106,8 @@ Deno.test("storedMetrics carries the stored digest and the caller's role, and wi
     role: 'driver',
     maxSustainedSpeedMps: ROWS_DIGEST.maxSustainedSpeedMps,
   });
-  assertEquals(storedMetrics(trip({ tracePath: null }), 'passenger')?.imuPresent, false);
-  assertEquals(storedMetrics(trip({ tracePath: null }), 'passenger')?.role, 'passenger');
+  assertEquals(storedMetrics(trip({ tracePath: null, scoredWithoutTrace: true }), 'passenger')?.imuPresent, false);
+  assertEquals(storedMetrics(trip({ tracePath: null, scoredWithoutTrace: true }), 'passenger')?.role, 'passenger');
 });
 
 Deno.test('a stored digest the contract does not recognise yields no metrics', () => {
