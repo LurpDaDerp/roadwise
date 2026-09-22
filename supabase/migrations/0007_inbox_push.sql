@@ -1004,6 +1004,10 @@ grant execute on function public.push_receipts_due(int) to service_role;
 grant execute on function public.record_push_receipts(jsonb) to service_role;
 -- sync_age_band runs as the service role on a support correction: user_local_date -> user_tz
 grant execute on function public.user_tz(uuid) to service_role;
+-- notification_prefs_validate is an invoker trigger, so the client's own INSERT/UPDATE of its prefs
+-- executes is_known_tz as `authenticated` (fix round 4: without this grant every client write of
+-- notification_prefs failed 42501). A pure, bounded lookup of pg_timezone_names; it reads no user data.
+grant execute on function public.is_known_tz(text) to authenticated;
 
 -- the extension schemas: nothing for the API roles (see the header for what postgres can revoke)
 revoke usage on schema net from public, anon, authenticated;

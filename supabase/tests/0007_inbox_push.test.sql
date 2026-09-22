@@ -13,10 +13,64 @@ begin
   if coalesce(current_setting('app.settings.jwt_secret', true), '') <> 'super-secret-jwt-token-with-at-least-32-characters-long' then
     raise exception '0007_inbox_push.test.sql runs only against the local Supabase stack';
   end if;
+  -- test-only, like 0006's: fresh sessions for the client writes (section 0); dropped at the end
+  create extension if not exists dblink with schema extensions;
 end $$;
 
 begin;
-select plan(287);
+select plan(296);
+
+-- ---------------------------------------------------------------------------
+-- 0. client writes in FRESH sessions (fix round 4). PL/pgSQL checks EXECUTE on a function a trigger
+--    calls when it first initialises the expression in a transaction, so a write that runs after
+--    postgres has already fired the trigger in the same transaction can pass while every real
+--    client request (a fresh transaction) fails. Each write below is the first statement of its own
+--    new connection, as the signed-in user. The fixture user is committed in a separate session and
+--    deleted again; a run that dies midway leaves it, and the next run deletes it first.
+-- ---------------------------------------------------------------------------
+create function pg_temp.conn() returns text language sql as $$
+  select 'host=' || host(inet_server_addr()) || ' port=' || current_setting('port')
+    || ' dbname=' || current_database() || ' user=postgres password=postgres'
+$$;
+-- a remote statement's command tag, or the remote error's SQLSTATE and message
+create function pg_temp.remote(p_conn text, p_sql text) returns text language plpgsql as $$
+begin
+  return extensions.dblink_exec(p_conn, p_sql);
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end $$;
+-- one fresh connection: sign in as the fixture user, run p_sql first, roll back, disconnect
+create function pg_temp.fresh_client_write(p_sql text) returns text language plpgsql as $$
+declare
+  v text;
+begin
+  perform extensions.dblink_connect('rw7_client', pg_temp.conn());
+  perform extensions.dblink_exec('rw7_client', $q$begin; set local role authenticated;
+    set local request.jwt.claims = '{"role":"authenticated","sub":"b7000000-0000-4000-8000-0000000000f1"}'$q$);
+  v := pg_temp.remote('rw7_client', p_sql);
+  perform extensions.dblink_exec('rw7_client', 'rollback');
+  perform extensions.dblink_disconnect('rw7_client');
+  return v;
+end $$;
+select extensions.dblink_connect('rw7_pg', pg_temp.conn());
+select extensions.dblink_exec('rw7_pg', $q$delete from auth.users where id = 'b7000000-0000-4000-8000-0000000000f1'$q$);
+select extensions.dblink_exec('rw7_pg', $q$insert into auth.users (id, email) values ('b7000000-0000-4000-8000-0000000000f1', 'f7@example.com')$q$);
+select is(pg_temp.fresh_client_write($q$insert into public.notification_prefs (user_id, categories, tz, local_sent_day, local_sent_count)
+    values ('b7000000-0000-4000-8000-0000000000f1', '{"rewards": false}', 'America/New_York', current_date, 1)$q$), 'INSERT 0 1',
+  'a client INSERT of notification_prefs succeeds as the first statement of a fresh session (T20 defect)');
+select is(pg_temp.fresh_client_write($q$insert into public.notification_prefs (user_id) values ('b7000000-0000-4000-8000-0000000000f1')$q$), 'INSERT 0 1',
+  'so does one with no zone (the check is taken when the expression is set up, not only when tz is set)');
+select extensions.dblink_exec('rw7_pg', $q$insert into public.notification_prefs (user_id) values ('b7000000-0000-4000-8000-0000000000f1')$q$);
+select is(pg_temp.fresh_client_write($q$update public.notification_prefs set local_sent_day = current_date, local_sent_count = 2
+    where user_id = 'b7000000-0000-4000-8000-0000000000f1'$q$), 'UPDATE 1',
+  'a client UPDATE of only the day count succeeds in a fresh session (the phone''s report, T10)');
+select is(pg_temp.fresh_client_write($q$update public.notification_prefs set tz = 'Europe/Paris', quiet_enabled = false, categories = '{"recording": false}'
+    where user_id = 'b7000000-0000-4000-8000-0000000000f1'$q$), 'UPDATE 1',
+  'a client UPDATE of zone, quiet hours and categories succeeds in a fresh session (H6, T7)');
+select is(pg_temp.fresh_client_write($q$update public.notification_prefs set tz = 'Mars/Olympus' where user_id = 'b7000000-0000-4000-8000-0000000000f1'$q$),
+  '22023 unknown time zone', 'and the validation still refuses an unknown zone there');
+select extensions.dblink_exec('rw7_pg', $q$delete from auth.users where id = 'b7000000-0000-4000-8000-0000000000f1'$q$);
+select extensions.dblink_disconnect('rw7_pg');
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -262,10 +316,12 @@ select is((select bool_or(has_function_privilege('anon', f, 'execute')) from unn
 select is((select bool_or(has_function_privilege('authenticated', f, 'execute')) from unnest(array['public.claim_push_batch(integer, integer)',
     'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(integer)', 'public.record_push_receipts(jsonb)', 'public.dispatch_push()',
     'public.enqueue_permission_lapse()', 'public.enqueue_trip_summary()', 'public.minimise_underage_notifications()', 'public.user_tz(uuid)',
-    'public.notification_defaults()', 'public.inbox_subject_gone(uuid, text, uuid, jsonb)', 'public.is_known_tz(text)',
+    'public.notification_defaults()', 'public.inbox_subject_gone(uuid, text, uuid, jsonb)',
     'public.is_short_drive(numeric, numeric)', 'public.notification_prefs_validate()', 'public.stamp_drive_state()',
     'public.pin_drive_state_at()', 'public.push_sweep_signature(bigint, text)']) f),
   false, 'authenticated executes no writer, trigger, helper or dispatch_push');
+select is(has_function_privilege('authenticated', 'public.is_known_tz(text)', 'execute'), true,
+  'authenticated executes is_known_tz, which its own notification_prefs writes reach through the invoker trigger (fix round 4)');
 select is((select bool_or(has_function_privilege('service_role', f, 'execute')) from unnest(array['public.dispatch_push()', 'public.push_sweep_signature(bigint, text)', 'public.mark_inbox_read(uuid[])',
     'public.dismiss_inbox(uuid[])', 'public.register_push_token(text, text)', 'public.unregister_push_token(text)', 'public.merge_own_profile_flags(jsonb)']) f),
   false, 'service_role runs neither dispatch_push nor the client RPCs');
@@ -313,6 +369,79 @@ select is(array[public.is_known_tz('America/New_York'), public.is_known_tz('Etc/
 select is(public.push_sweep_signature(1790000000, 'rw-test-vector-key-0123456789abcdef'),
   '1790000000.c1ba00cabb1bd464447aaa98eb43cd7fffaaee9cf3809292c15c696632ca752f',
   'the sweep signature matches an independently computed HMAC-SHA256 test vector (the contract push-sender verifies)');
+
+-- fix round 4: every function a client write can reach is executable by that client. Catalog-only,
+-- so the order of earlier statements cannot mask it: for each table anon or authenticated may
+-- INSERT, UPDATE or DELETE (public and storage), the invoker trigger functions' bodies (followed
+-- through invoker callees; definer callees still need EXECUTE), the trigger WHEN clauses, the policies
+-- that apply to the role, the CHECKs and the defaults.
+-- every function a client (role r) write can reach, and whether r may execute it
+create function pg_temp.client_reach(r text) returns table (via text, fn regprocedure, can_execute boolean)
+language plpgsql as $$
+begin
+  return query
+  with recursive writable as (
+    select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind in ('r', 'p') and n.nspname in ('public', 'storage')
+      and (has_any_column_privilege(r, c.oid, 'INSERT') or has_any_column_privilege(r, c.oid, 'UPDATE')
+           or has_table_privilege(r, c.oid, 'DELETE'))
+  ),
+  -- trigger functions that run as the writer (invoker), on client-writable tables
+  inv_trig as (
+    select t.tgrelid::regclass::text || '.' || t.tgname as via, t.tgfoid as fid
+    from pg_trigger t join writable w on w.oid = t.tgrelid join pg_proc p on p.oid = t.tgfoid
+    where not t.tgisinternal and not p.prosecdef
+  ),
+  -- direct expression dependencies: trigger WHEN, policies, CHECKs, defaults (pg_depend)
+  expr as (
+    select 'trigger WHEN ' || t.tgrelid::regclass::text || '.' || t.tgname as via, d.refobjid as fid
+    from pg_trigger t join writable w on w.oid = t.tgrelid
+    join pg_depend d on d.classid = 'pg_trigger'::regclass and d.objid = t.oid and d.refclassid = 'pg_proc'::regclass
+    where not t.tgisinternal and d.refobjid <> t.tgfoid
+    union all
+    select 'policy ' || pol.polrelid::regclass::text || '.' || pol.polname, d.refobjid
+    from pg_policy pol join writable w on w.oid = pol.polrelid
+      and (pol.polroles @> array[r::regrole::oid] or pol.polroles = array[0::oid])
+    join pg_depend d on d.classid = 'pg_policy'::regclass and d.objid = pol.oid and d.refclassid = 'pg_proc'::regclass
+    union all
+    select 'check ' || con.conrelid::regclass::text || '.' || con.conname, d.refobjid
+    from pg_constraint con join writable w on w.oid = con.conrelid
+    join pg_depend d on d.classid = 'pg_constraint'::regclass and d.objid = con.oid and d.refclassid = 'pg_proc'::regclass
+    union all
+    select 'default ' || ad.adrelid::regclass::text, d.refobjid
+    from pg_attrdef ad join writable w on w.oid = ad.adrelid
+    join pg_depend d on d.classid = 'pg_attrdef'::regclass and d.objid = ad.oid and d.refclassid = 'pg_proc'::regclass
+  ),
+  -- calls from invoker function bodies into public functions, followed through invoker callees
+  body_calls(via, caller, callee) as (
+    select it.via, it.fid, p2.oid
+    from inv_trig it join pg_proc p on p.oid = it.fid
+    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
+    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+    union
+    select bc.via, bc.callee, p2.oid
+    from body_calls bc join pg_proc p on p.oid = bc.callee and not p.prosecdef
+    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
+    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+  ),
+  expr_calls(via, callee) as (
+    select e.via, e.fid from expr e
+    union
+    select ec.via, p2.oid
+    from expr_calls ec join pg_proc p on p.oid = ec.callee and not p.prosecdef
+    cross join lateral regexp_matches(p.prosrc, 'public\.([a-z_0-9]+)\s*\(', 'g') m
+    join pg_proc p2 on p2.pronamespace = 'public'::regnamespace and p2.proname = m[1]
+  )
+  select distinct x.via, x.callee::regprocedure, has_function_privilege(r, x.callee, 'execute')
+  from (select b.via, b.callee from body_calls b union select e.via, e.callee from expr_calls e) x
+  order by 1, 2;
+end $$;
+select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('authenticated') where not can_execute),
+  '{}'::text[], 'every function an authenticated write reaches (trigger bodies, WHEN, policies, CHECKs, defaults) is executable by authenticated');
+select is((select coalesce(array_agg(via || ' -> ' || fn::text order by via, fn::text), '{}') from pg_temp.client_reach('anon') where not can_execute),
+  '{}'::text[], 'and every function an anon write reaches is executable by anon');
+select is((select count(*)::int from pg_temp.client_reach('authenticated') where via = 'notification_prefs.notification_prefs_validate' and fn = 'public.is_known_tz(text)'::regprocedure), 1,
+  'the audit does see the trigger''s call into is_known_tz (it is not vacuous)');
 
 -- catch-alls
 select is((select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -1012,3 +1141,4 @@ select is((select array[(select count(*) from public.inbox where user_id = 'b700
 
 select * from finish();
 rollback;
+drop extension if exists dblink;
