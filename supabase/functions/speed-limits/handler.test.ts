@@ -510,6 +510,29 @@ Deno.test('the cache key comes from the snapped leg, never the query origin', ()
   assertEquals(awsCacheKey(over), 'aws:3:47.60600,-122.32000;47.60735,-122.32000');
 });
 
+Deno.test('a leg and its exact reverse give the same cache key (canonical ends: lng, then lat)', () => {
+  const diagonal: LatLng[] = [{ lat: 47.61, lng: -122.3 }, { lat: 47.6, lng: -122.31 }, { lat: 47.605, lng: -122.305 }];
+  for (const leg of [NORTH_LEG, diagonal]) {
+    assertEquals(awsCacheKey([...leg].reverse()), awsCacheKey(leg));
+  }
+  // the western end leads; on equal lng, the southern end
+  assertEquals(awsCacheKey(diagonal), 'aws:3:47.60500,-122.30500;47.61000,-122.30000');
+});
+
+Deno.test('driving either way along the same stretch writes the same p_key', async () => {
+  const keys: unknown[] = [];
+  for (const heading of [0, 180]) {
+    const routes = stubRoutes(() =>
+      Promise.resolve({ mph: 45, leg: heading === 0 ? NORTH_LEG : [...NORTH_LEG].reverse() })
+    );
+    const h = harness({ candidates: [untaggedRow], routes });
+    await (await handleSpeedLimits(post({ ...UNTAGGED_POINT, heading }), h.deps)).body?.cancel();
+    keys.push(h.rpc.find((c) => c.fn === 'put_limits_cache')?.args.p_key);
+  }
+  assert(keys[0] !== undefined);
+  assertEquals(keys[0], keys[1]);
+});
+
 Deno.test('ahead() moves the given metres along the compass bearing', () => {
   const p = { lat: 47.6, lng: -122.3 };
   const east = ahead(p, 90, 150);

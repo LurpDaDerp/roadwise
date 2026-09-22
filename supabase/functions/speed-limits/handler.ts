@@ -250,9 +250,18 @@ const fix5 = (p: LatLng): string => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
  * The cache identity of an AWS answer. The geo-routes v2 span carries no road or segment id, so it
  * is the snapped leg AWS returned (its point count and both ends), never the query origin: two roads
  * near one point (an overpass) snap to different legs and never share a row.
+ *
+ * The ends are put in canonical order first (the one that sorts first by lng, then by lat, leads),
+ * the order `put_limits_cache` stores the line in. The database serves the key's hash as the tile
+ * segment id, so a key in travel order would let anyone who decodes the line hash both orders and
+ * learn which way the car went (security finding X-I1). A leg and its reverse share one key.
  */
 export function awsCacheKey(leg: readonly LatLng[]): string {
-  return `aws:${leg.length}:${fix5(leg[0]!)};${fix5(leg[leg.length - 1]!)}`;
+  const a = leg[0]!;
+  const b = leg[leg.length - 1]!;
+  const aFirst = a.lng < b.lng || (a.lng === b.lng && a.lat <= b.lat);
+  const [first, last] = aFirst ? [a, b] : [b, a];
+  return `aws:${leg.length}:${fix5(first)};${fix5(last)}`;
 }
 
 async function sha16(text: string): Promise<string> {
