@@ -24,6 +24,7 @@
 // settled.
 import type { ScorableEvent, ScoredTrip, TripMetrics } from '@scoring';
 import { mergeEvents } from '@/core/detectors';
+import { inferRole, type RoleInference } from '@/core/detectors/role';
 import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import {
   createEventsRepo,
@@ -50,6 +51,7 @@ import { encodePolyline, simplify } from '@/lib/polyline';
 import { isNight } from '@/lib/time';
 import type { Fix, TripSession } from './engine.types';
 import { arbiterStateKey } from './recorder';
+import { longestHandlingRunMinutes } from './rolePrior';
 import { appendRow, createSession, GNSS_JUMP_MPS, roleSourceFor } from './session';
 import type { DetectedEvent, FeatureRow } from './types';
 
@@ -65,6 +67,9 @@ export const SIMPLIFY_CHUNK = 1000;
 
 /** The trace's name, relative to the traces directory; the sync runner prefixes `<uid>/` in storage. */
 export const tracePathFor = (clientTripId: string): string => `${clientTripId}.bin.gz`;
+
+const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
+const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 export interface FinalizeDeps {
   db: Db;
@@ -91,6 +96,78 @@ export interface FinalizeDeps {
    * from the first row to the close. Defaults to false — the engine's own finalize never sets it.
    */
   incomplete?: boolean;
+  /**
+   * P(driver) before this trip's evidence: `readRolePrior(db)`, read by the host before the call.
+   * Only an auto or moving start reads it; absent, it is 0.5 — neutral, never "driver".
+   */
+  rolePrior?: number;
+  /**
+   * The trip's start/end cells are a route this user has confirmed driving
+   * (`isHabitualDriverRoute` over the session's first and last fixes' geohash-5, computed by the
+   * host). Only an auto or moving start reads it; absent, false.
+   */
+  habitualRoute?: boolean;
+}
+
+/** What the finalizer decided about who drove (§9.7): what the row and the payload carry. */
+export interface TripRoleDecision {
+  role: 'driver' | 'passenger' | 'unknown';
+  /** P(driver), 0..1. */
+  roleConfidence: number;
+}
+
+/**
+ * Who drove (§9.7, R11, rev1 C1).
+ *
+ * A **manual start** (`tap`) is a declared drive: the stated role stands — driver at 0.95, or
+ * passenger — and the trip's phone handling is never evidence against it, so using the phone
+ * costs a driver points, never the score itself. The prior and the route are not read.
+ *
+ * An **auto or moving start** is inferred. High evidence (a habitual route, or a prior at or
+ * above 0.8) sets the handling evidence aside; otherwise the longest single handling run is the
+ * evidence. What `inferRole` cannot settle is `unknown` — asked (C10), unscored as
+ * `role_unknown` meanwhile — and such an upload always carries `roleSource` `auto` or
+ * `moving_start`, the only sources finalize-trip accepts `unknown` from (B4). `other` (transit)
+ * becomes passenger: M3 has no transit classifier, so it cannot arise, but it must not score.
+ */
+export function decideRole(
+  session: Pick<TripSession, 'role' | 'startEvidence'>,
+  rows: readonly FeatureRow[],
+  events: readonly DetectedEvent[],
+  evidence: { rolePrior?: number; habitualRoute?: boolean }
+): TripRoleDecision {
+  const statedPassenger = session.role === 'passenger';
+  let inferred: RoleInference;
+  if (session.startEvidence === 'tap') {
+    inferred = inferRole(
+      {
+        manualStart: true,
+        statedPassenger,
+        continuousHandlingMinutes: 0,
+        habitualDriverRoute: false,
+        transitPattern: false,
+        cameraFaceDriverSeat: false,
+      },
+      0.5
+    );
+  } else {
+    const prior = evidence.rolePrior ?? 0.5;
+    const habitualRoute = evidence.habitualRoute === true;
+    const highEvidence = habitualRoute || prior >= 0.8;
+    inferred = inferRole(
+      {
+        manualStart: false,
+        statedPassenger,
+        continuousHandlingMinutes: highEvidence ? 0 : longestHandlingRunMinutes(rows, events),
+        habitualDriverRoute: habitualRoute,
+        transitPattern: false,
+        cameraFaceDriverSeat: false,
+      },
+      prior
+    );
+  }
+  const role = inferred.role === 'other' ? 'passenger' : inferred.role;
+  return { role, roleConfidence: clamp(finite(inferred.pDriver, 0.5), 0, 1) };
 }
 
 export interface FinalizeResult {
@@ -109,8 +186,6 @@ export interface FinalizeResult {
   payload: FinalizeTripPayload;
 }
 
-const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 /** JSON with every object's keys sorted, so the digest is the same whatever order the rows were stored in. */
 export function canonicalJson(value: unknown): string {
@@ -361,12 +436,14 @@ export async function finalizeTrip(
   // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is
   //    written out as 0 so the trip is kept rather than refused by the contract.
   const merged = mergeEvents(session.events.map((e) => sanitizeEvent(e, startedAt)));
+  // Who drove decides whether there is a score at all: `unknown` is unscored as role_unknown.
+  const decided = decideRole(session, rows, merged, deps);
   const measured: TripMetrics = {
     distanceM: recheck.distanceM,
     durationS: session.durationS,
     validGnssPct: recheck.validGnssPct,
     imuPresent: imuPresent(rows),
-    role: session.role,
+    role: decided.role,
     maxSustainedSpeedMps: recheck.maxSustainedSpeedMps,
   };
   const scored = scoring.scoreTrip(measured, merged);
@@ -456,8 +533,8 @@ export async function finalizeTrip(
     tz,
     distanceM: metrics.distanceM,
     durationS: metrics.durationS,
-    role: session.role,
-    roleConfidence: null,
+    role: decided.role,
+    roleConfidence: decided.roleConfidence,
     roleSource: roleSourceFor(session.startEvidence),
     mode: session.mode,
     cameraSession: deps.cameraSession ?? false,
@@ -489,8 +566,8 @@ export async function finalizeTrip(
         tz,
         distance_m: metrics.distanceM,
         duration_s: metrics.durationS,
-        role: session.role,
-        role_confidence: null,
+        role: decided.role,
+        role_confidence: decided.roleConfidence,
         role_source: roleSourceFor(session.startEvidence),
         mode: session.mode,
         camera_session: payload.cameraSession ? 1 : 0,

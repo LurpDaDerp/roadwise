@@ -7,10 +7,16 @@
  * the runner's handler for this kind (Task 7) can send it as it is, the way `finalize-trip`
  * payloads are sent. Until that handler lands the runner leaves the item queued, and nothing is
  * lost. Every change is its own item, in order, so the last answer is the one the server keeps.
+ *
+ * Each answer also trains the device's own evidence about who drives (§9.7 "user answers train a
+ * per-user prior on device"): the prior and the count for the trip's start/end route
+ * (`recordRoleAnswer`), written in the same transaction so the answer and what it taught commit
+ * together. A changed answer counts again — the counts are answers given, not trips.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 
+import { recordRoleAnswer } from '@/core/engine/rolePrior';
 import {
   createQueueRepo,
   createTripsRepo,
@@ -91,6 +97,7 @@ export async function setTripRole(
       tx,
       owner
     );
+    await recordRoleAnswer(tx, role, { start: current.start_geohash5, end: current.end_geohash5 });
     return updated;
   });
   // After the commit, so a listener that drains meets the row, not the lock.

@@ -2,7 +2,7 @@
 import * as scoring from '@scoring';
 import type { AlertDecision } from '@/core/alerts/types';
 import { NO_LIMIT, T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
-import type { TripRole, TripSession } from '@/core/engine/engine.types';
+import type { StartEvidence, TripRole, TripSession } from '@/core/engine/engine.types';
 import {
   finalizeTrip,
   POLYLINE_EPSILON_M,
@@ -11,6 +11,7 @@ import {
   tracePathFor,
   type FinalizeDeps,
 } from '@/core/engine/finalize';
+import { isHabitualDriverRoute, readRolePrior, recordRoleAnswer } from '@/core/engine/rolePrior';
 import { appendRow, closeSession, createSession } from '@/core/engine/session';
 import type { DetectedEvent, FeatureRow } from '@/core/engine/types';
 import {
@@ -64,6 +65,8 @@ interface SessionOpts {
   alerts?: AlertDecision[];
   startedAt?: number;
   endedAt?: number;
+  /** Default `tap`, the parked Start tap the worked example was recorded with. */
+  evidence?: StartEvidence;
 }
 
 /** The closed session the engine hands over: accumulators over every row, the ring holding the tail. */
@@ -73,7 +76,8 @@ function session(rows: FeatureRow[], opts: SessionOpts = {}): Readonly<TripSessi
     clientTripId: TRIP,
     mode: 'mounted',
     role: opts.role ?? 'driver',
-    startSource: 'manual',
+    startSource: (opts.evidence ?? 'tap') === 'auto' ? 'auto' : 'manual',
+    startEvidence: opts.evidence ?? 'tap',
     startedAt,
   });
   // Every tenth row has no known limit, for limit_coverage_pct.
@@ -171,7 +175,7 @@ describe('the worked example (spec §9.4): 22 minutes, 13.2 km, the three golden
       data_quality: 'A',
       tz: TZ,
       role: 'driver',
-      role_confidence: null,
+      role_confidence: 0.95,
       role_source: 'manual',
       mode: 'mounted',
       camera_session: 0,
@@ -256,7 +260,7 @@ describe('the worked example (spec §9.4): 22 minutes, 13.2 km, the three golden
       tz: TZ,
       durationS: N,
       role: 'driver',
-      roleConfidence: null,
+      roleConfidence: 0.95,
       roleSource: 'manual',
       mode: 'mounted',
       cameraSession: false,
@@ -645,6 +649,164 @@ describe('other outcomes', () => {
     expect(pts.length).toBeGreaterThanOrEqual(2);
     expect(pts.every((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))).toBe(true);
     expect(pts.every((p) => haversineMeters(p, SF) < 5000)).toBe(true);
+  });
+});
+
+describe('who was driving (spec §9.7, R11, rev1 C1)', () => {
+  const N = 1320;
+  /**
+   * Rows `[from, from + count)` of the track held and used: screen on, unlocked, handling, with a
+   * fix (the track's every-50th dropout would split the run: a row of unknown speed is not proven
+   * moving).
+   */
+  const withHandling = (rows: FeatureRow[], runs: readonly (readonly [from: number, count: number])[]) =>
+    rows.map((r, i) =>
+      runs.some(([from, count]) => i >= from && i < from + count)
+        ? { ...r, handlingScore: 0.8, screenOn: true, locked: false, gnssValid: true }
+        : r
+    );
+  const phoneAt = (id: string, fromRow: number, seconds: number): DetectedEvent =>
+    ev({ id, category: 'phone', startedAt: T0 + fromRow * 1000, durationS: seconds, q: 0.9, measured: { speedMps: SPEED }, source: 'os' });
+
+  async function finalizeWith(
+    rows: FeatureRow[],
+    opts: SessionOpts,
+    extra: Partial<Pick<FinalizeDeps, 'rolePrior' | 'habitualRoute'>> = {}
+  ) {
+    await persisted(rows, rows.length);
+    return finalizeTrip(session(rows, opts), { ...deps, ...extra });
+  }
+
+  test('(a) a manual trip containing a 4-minute phone episode stays driver and scored', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip, scored, payload } = await finalizeWith(rows, {
+      evidence: 'tap',
+      events: [phoneAt('p4', 300, 240)],
+    });
+
+    expect(scored.status).toBe('final');
+    expect(scored.score).toEqual(expect.any(Number));
+    expect(scored.categoryDeductions.phone).toBeGreaterThan(0);
+    expect(trip).toMatchObject({ role: 'driver', role_confidence: 0.95, role_source: 'manual', status: 'provisional' });
+    expect(payload).toMatchObject({ role: 'driver', roleConfidence: 0.95, roleSource: 'manual' });
+  });
+
+  test('a manual start ignores the prior and the route: a low prior still leaves it driver at 0.95', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip, scored } = await finalizeWith(rows, { evidence: 'tap' }, { rolePrior: 0.05, habitualRoute: true });
+    expect(trip).toMatchObject({ role: 'driver', role_confidence: 0.95 });
+    expect(scored.status).toBe('final');
+  });
+
+  test('a manual passenger start is a passenger trip', async () => {
+    const { trip, payload } = await finalizeWith(track(N), { evidence: 'tap', role: 'passenger' });
+    expect(trip).toMatchObject({ role: 'passenger', role_confidence: 0.02, status: 'unscored' });
+    expect(payload).toMatchObject({ role: 'passenger', roleSource: 'manual', provisional: { reason: 'passenger' } });
+  });
+
+  test('(b) an auto trip with prior 0.9 and three separate 1-minute phone events stays driver', async () => {
+    const rows = withHandling(track(N), [[200, 60], [500, 60], [800, 60]]);
+    const { trip, scored, payload } = await finalizeWith(
+      rows,
+      { evidence: 'auto', events: [phoneAt('pa', 200, 60), phoneAt('pb', 500, 60), phoneAt('pc', 800, 60)] },
+      { rolePrior: 0.9 }
+    );
+
+    expect(scored.status).toBe('final');
+    expect(trip).toMatchObject({ role: 'driver', role_source: 'auto', status: 'provisional' });
+    expect(trip.role_confidence).toBeCloseTo(0.9);
+    expect(payload).toMatchObject({ role: 'driver', roleSource: 'auto' });
+  });
+
+  test('a high prior is high evidence: even one 4-minute run leaves the drive with the driver', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip } = await finalizeWith(rows, { evidence: 'auto' }, { rolePrior: 0.85 });
+    expect(trip.role).toBe('driver');
+    expect(trip.role_confidence).toBeCloseTo(0.85);
+  });
+
+  test('an auto trip with a neutral prior and no route history is unknown, role_unknown, and validates', async () => {
+    const { trip, scored, payload } = await finalizeWith(track(N), { evidence: 'auto', events: WORKED });
+
+    expect(scored).toMatchObject({ status: 'unscored', reason: 'role_unknown', score: null });
+    expect(trip).toMatchObject({ role: 'unknown', role_confidence: 0.5, role_source: 'auto', status: 'unscored', sync_state: 'queued' });
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+    // finalize-trip accepts `unknown` only with an inferred source (B4: unknown_role_not_inferred).
+    expect(payload).toMatchObject({ role: 'unknown', roleConfidence: 0.5, roleSource: 'auto' });
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1);
+  });
+
+  test('with no prior given the finalizer assumes neutral, not driver', async () => {
+    const { trip } = await finalizeWith(track(N), { evidence: 'auto' });
+    expect(trip).toMatchObject({ role: 'unknown', role_confidence: 0.5 });
+  });
+
+  test('the same trip on a route confirmed twice as driver is driver', async () => {
+    const rows = track(N);
+    const start = geohash5(rows[0]!.lat, rows[0]!.lng);
+    const end = geohash5(rows[N - 1]!.lat, rows[N - 1]!.lng);
+    await recordRoleAnswer(db, 'driver', { start, end });
+    await recordRoleAnswer(db, 'driver', { start: end, end: start });
+
+    // What the host does before calling finalize: the stored prior and the route's history.
+    const rolePrior = await readRolePrior(db);
+    const habitualRoute = await isHabitualDriverRoute(db, start, end);
+    expect(rolePrior).toBeCloseTo(0.75);
+    expect(habitualRoute).toBe(true);
+
+    const { trip, scored, payload } = await finalizeWith(rows, { evidence: 'auto', events: WORKED }, { rolePrior, habitualRoute });
+    expect(scored.status).toBe('final');
+    expect(trip.role).toBe('driver');
+    expect(trip.role_confidence).toBeCloseTo(0.9);
+    expect(payload.startGeohash5).toBe(start);
+    expect(payload.endGeohash5).toBe(end);
+  });
+
+  test('a habitual route is high evidence: a 4-minute run on it is not counted', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip } = await finalizeWith(rows, { evidence: 'auto' }, { rolePrior: 0.75, habitualRoute: true });
+    expect(trip.role).toBe('driver');
+    expect(trip.role_confidence).toBeCloseTo(0.9);
+  });
+
+  test('a neutral-evidence auto trip with one continuous 4-minute handling run is unknown, not passenger', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip, scored, payload } = await finalizeWith(rows, { evidence: 'auto' }, { rolePrior: 0.5 });
+    expect(trip.role).toBe('unknown');
+    expect(trip.role_confidence).toBeCloseTo(0.25);
+    expect(scored.reason).toBe('role_unknown');
+    expect(FinalizeTripPayloadSchema.parse(payload).roleSource).toBe('auto');
+  });
+
+  test('the same minutes split into three runs do not lean passenger at all', async () => {
+    const rows = withHandling(track(N), [[200, 80], [400, 80], [600, 80]]);
+    const { trip } = await finalizeWith(rows, { evidence: 'auto' }, { rolePrior: 0.5 });
+    expect(trip.role_confidence).toBeCloseTo(0.5);
+  });
+
+  test('a moving start is not manual evidence: neutral, it is unknown with source moving_start', async () => {
+    const { trip, scored, payload } = await finalizeWith(track(N), { evidence: 'movingStart' });
+    expect(trip).toMatchObject({ role: 'unknown', role_confidence: 0.5, role_source: 'moving_start' });
+    expect(scored.reason).toBe('role_unknown');
+    expect(FinalizeTripPayloadSchema.parse(payload)).toMatchObject({ role: 'unknown', roleSource: 'moving_start' });
+  });
+
+  test('a moving start with a strong prior is driver', async () => {
+    const { trip } = await finalizeWith(track(N), { evidence: 'movingStart' }, { rolePrior: 0.9 });
+    expect(trip).toMatchObject({ role: 'driver', role_source: 'moving_start' });
+  });
+
+  test('passenger mode on an auto drive is authoritative', async () => {
+    const { trip, payload } = await finalizeWith(track(N), { evidence: 'auto', role: 'passenger' }, { rolePrior: 0.95, habitualRoute: true });
+    expect(trip).toMatchObject({ role: 'passenger', role_confidence: 0.02, status: 'unscored' });
+    expect(payload.provisional.reason).toBe('passenger');
+  });
+
+  test('a low prior and a long run on an auto drive infer passenger (the §9.7 threshold)', async () => {
+    const rows = withHandling(track(N), [[300, 240]]);
+    const { trip } = await finalizeWith(rows, { evidence: 'auto' }, { rolePrior: 0.3 });
+    expect(trip.role).toBe('passenger');
+    expect(trip.role_confidence).toBeCloseTo(0.15);
   });
 });
 
