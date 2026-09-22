@@ -1,0 +1,764 @@
+// The drive host (design §3.1–§3.5; M3 plan task H1).
+//
+// One object wires the native capture module, the trip engine, the detectors and alert arbiter,
+// the speed-limit client, the alert player and persistence (recorder + finalizer) together, and
+// publishes one `DriveState` for the UI. Every rule it applies is a pure function in `policy.ts`;
+// this file is the plumbing and the ordering:
+//
+// - **One queue.** Every engine dispatch, and every native command that follows from it, runs on
+//   one serial chain. After each task the host reconciles native capture with the engine's state
+//   (`capturePlan`), sends the drive notification if it changed, and updates the single tick
+//   timer. So a burst of transitions inside one task (finalize → armed → a new candidate) issues
+//   the commands for where it ended up, never a stop followed by a start.
+// - **Battery (§3.5).** While armed and idle nothing runs: no timer (`ticks.ts` keeps one only in
+//   `candidate` and `ending`), no read, no command. Native wakes are the only input; a wake reads
+//   the motion history once. Nothing heavy runs per row: the night rule is computed once a minute,
+//   the notification is sent on change only, the tick timer is not re-armed per row.
+// - **Honesty.** Unknown stays unknown: the snapshot carries the engine's raw limit and
+//   `speedKnown`; whether a limit may be shown or acted on is decided in one place,
+//   `limitActionable` in `src/core/detectors/common.ts`, which the HUD, the alerts and scoring all
+//   use. The host does not re-gate it. A drive that failed to save says so
+//   (`lastFinalized.ok: false`) and is never re-finalized here; it stays `recording` for recovery
+//   at the next launch.
+// - **Never raises the app.** Nothing here brings RoadWise to the foreground (no full-screen
+//   intent, no deep link without a tap): SR8 would charge the driver for the app's own behaviour
+//   (E1 review M6). Starts, ends and alerts are audio and the notification only.
+// - **Finalize is observable.** `untilIdle()` resolves once the snapshot is armed/off after a close,
+//   with `lastFinalized` already set; H2's Android headless task settles on it (N3 README §6).
+//
+// `DriveState.status === 'off'` means the engine is idle with auto-detect NOT armed — which is the
+// user's choice being off, OR the feature flag being off, OR Always location missing, OR the arm
+// having been refused. It does not mean "the user turned auto-record off"; that intent is
+// `autoDetectEnabled()` (M4 seam ruling N-m2).
+import type { ThermalLevel } from '@drive-sense';
+import { parseRow } from '@drive-sense';
+
+import { createArbiter } from '@/core/alerts/arbiter';
+import type { AlertPlayer } from '@/core/alerts/player';
+import type { AlertDecision, AlertVoiceKey } from '@/core/alerts/types';
+import { createDetectors } from '@/core/detectors';
+import type { EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
+import { finalizeTrip } from '@/core/engine/finalize';
+import { createEngine } from '@/core/engine/machine';
+import { createRecorder } from '@/core/engine/recorder';
+import { rebuildFromSamples } from '@/core/engine/replay';
+import { isHabitualDriverRoute, readRolePrior } from '@/core/engine/rolePrior';
+import type { DetectorContext, FeatureRow } from '@/core/engine/types';
+import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import type { TraceWriter } from '@/boot/traceWriter';
+import { createSettingsRepo, type Db, type TripRow, type TripStatus } from '@/data/db';
+import { emitDataChanged, onDataChanged } from '@/data/events';
+import type { AppStateLike } from '@/data/foreground';
+import { geohash5 } from '@/lib/geo';
+
+import {
+  ALERT_SHOWN_MS,
+  AUTO_DETECT_SETTING_KEY,
+  activityEvent,
+  captureCommands,
+  capturePlan,
+  createNightClock,
+  detectorContext,
+  endDriveAllowed,
+  gpsQuality,
+  isBusyStatus,
+  isIdleStatus,
+  isShortDrive,
+  l1RespectsSilentSwitch,
+  limitOptions,
+  notificationStateOf,
+  shouldArm,
+  shouldSelfDispatch,
+  wakeStart,
+  WAKE_HISTORY_S,
+  type CaptureBelief,
+  type CaptureCommand,
+} from './policy';
+import type { DriveSource } from './source';
+import { createTicker, type Scheduler } from './ticks';
+
+export type { DriveSource } from './source';
+
+/** The outcome of the last finalize (rev1: I16), for the end screen (C8). */
+export type LastFinalized =
+  | { clientTripId: string; ok: true; status: TripStatus; short: boolean; at: number }
+  | { clientTripId: string; ok: false; at: number }
+  | null;
+
+export interface DriveState extends EngineSnapshot {
+  /** The alert whose overlay is showing: L1 3 s, L2 5 s, L3 8 s on the row clock. */
+  activeAlert: AlertDecision | null;
+  /** C6 "Mute alerts for this drive" is on for the open trip. */
+  mutedForDrive: boolean;
+  /** From the current row: none without a valid fix, weak when too loose to judge speed. */
+  gps: 'good' | 'weak' | 'none';
+  thermal: ThermalLevel;
+  /** iOS only (drive-sense `call`); always false on Android, which has no source. */
+  callActive: boolean;
+  screenLocked: boolean;
+  lastFinalized: LastFinalized;
+  /** Scored driver trips so far (the arbiter's learning period reads it). Additive. */
+  tripIndex: number;
+  /** A `persistence: 'none'` host: nothing is stored and `lastFinalized` stays null. Additive. */
+  dryRun: boolean;
+}
+
+export interface DriveHost {
+  /** rev1: I2 — adopts the given trip BEFORE subscribing to native events or arming; returns whether it adopted. */
+  start(opts?: { adopt?: TripRow | null }): Promise<{ adopted: boolean }>;
+  stop(opts: { endOpenTrip: boolean }): Promise<void>;
+  manualStart(opts: {
+    mode: 'mounted' | 'pocket';
+    passenger: boolean;
+    evidence: 'tap' | 'movingStart';
+  }): Promise<void>;
+  end(): Promise<void>;
+  setPassenger(passenger: boolean): Promise<void>;
+  setMode(mode: 'mounted' | 'pocket'): Promise<void>;
+  muteCurrentAlert(): Promise<void>;
+  muteForDrive(): Promise<void>;
+  announce(key: AlertVoiceKey): Promise<void>;
+  /** Persists the user's choice, then arms only if the flag and Always location also allow it. */
+  setAutoDetect(enabled: boolean): Promise<void>;
+  /** The user's auto-record choice (loaded at `start`), independent of whether capture is armed. */
+  autoDetectEnabled(): boolean;
+  /** candidate | recording | ending | finalizing */
+  isBusy(): boolean;
+  /** native capture believed on */
+  captureActive(): boolean;
+  /** Resolves once no drive is open or closing and the host's queue has drained. */
+  untilIdle(): Promise<void>;
+  /** Resolves once the host's queue has drained (tests, diagnostics, orderly shutdown). */
+  settled(): Promise<void>;
+  snapshot(): DriveState;
+  subscribe(fn: (s: DriveState) => void): () => void;
+  /** For the alert player: L1 honours the silent switch only when mounted, unlocked, in front. */
+  l1RespectsSilentSwitch(): boolean;
+  /** The per-row detector context the engine is given (diagnostics). */
+  detectorContext(): Omit<DetectorContext, 'mode'>;
+}
+
+export interface DriveHostDeps {
+  db: Db;
+  source: DriveSource;
+  /** A simulated drive must be given a client made with `persist: false` or a fake (S2 ruling). */
+  limits: SpeedLimitClient;
+  player: AlertPlayer;
+  scoring: typeof import('@scoring');
+  traceWriter: TraceWriter | Pick<TraceWriter, 'writeGzip'>;
+  hash: { sha256(t: string): Promise<string> };
+  now: () => number;
+  tz: () => string;
+  newId: () => string;
+  /** `none`: a dry run (parked simulation) — no checkpoint, finalize, setting or change event. */
+  persistence?: 'full' | 'none';
+  /** The remote feature flag (D2). Absent: treated as on. */
+  readFlag?: (key: 'auto_detect') => Promise<boolean>;
+  appState?: AppStateLike;
+  onError?: (e: unknown, ctx: string) => void;
+  /** The tick timer's clock; tests pass a manual one. Defaults to the global timers. */
+  scheduler?: Scheduler;
+}
+
+/** Scored driver trips: the learning period's count (rev1: m). */
+export const TRIP_INDEX_SQL =
+  "SELECT COUNT(*) AS n FROM trips WHERE role = 'driver' AND status IN ('provisional', 'final')";
+
+/** Rows kept to answer the limit lookups of a candidate's replayed rows (≤ the 3-min window). */
+const RECENT_ROWS = 200;
+
+const noop = (): void => {};
+
+/**
+ * The alert player's live inputs, late-bound to a host that does not exist yet when the player is
+ * built (the host takes the player as a dependency):
+ *
+ * ```ts
+ * let host: DriveHost | undefined;
+ * const player = createAlertPlayer({ ...ports, voiceEnabled, ...playerInputs(() => host) });
+ * host = createDriveHost({ player, ... });
+ * ```
+ */
+export function playerInputs(getHost: () => DriveHost | undefined): {
+  callActive(): boolean;
+  l1RespectsSilentSwitch(): boolean;
+  deliverable(): boolean;
+} {
+  return {
+    callActive: () => getHost()?.snapshot().callActive ?? false,
+    // Without a host, the playback session: the audible choice.
+    l1RespectsSilentSwitch: () => getHost()?.l1RespectsSilentSwitch() ?? false,
+    // Re-read by the player as each queued decision starts: a passenger hears nothing (§8.15),
+    // including a decision queued just before the switch (P2 review M4).
+    deliverable: () => getHost()?.snapshot().role !== 'passenger',
+  };
+}
+
+export function createDriveHost(deps: DriveHostDeps): DriveHost {
+  const { db, source, limits, player, scoring, now, tz, newId } = deps;
+  const persist = (deps.persistence ?? 'full') === 'full';
+  const settings = createSettingsRepo(db);
+
+  function report(error: unknown, ctx: string): void {
+    try {
+      deps.onError?.(error, ctx);
+    } catch {
+      // A reporter that throws has nobody left to report to.
+    }
+  }
+
+  // --- host-owned state ---------------------------------------------------------------------------
+  let started = false;
+  let intent = false;
+  let tripIndex = 0;
+  /** Until `getState` says otherwise, the signal that is never phone-use evidence. */
+  let lockSignal: 'reliable' | 'lagged' | 'unreliable' = 'unreliable';
+  let platform: 'ios' | 'android' = 'ios';
+  let appActive = deps.appState?.currentState === 'active';
+  let belief: CaptureBelief = { on: false, rate: null, mode: null };
+  /** The plan a `startCapture` was refused for: not retried until the plan changes. */
+  let refusedPlan: string | null = null;
+  let notified: string | null = null;
+  let activeAlert: { decision: AlertDecision; until: number } | null = null;
+  let mutedForDrive = false;
+  let adoptMuted = false;
+  let thermal: ThermalLevel = 'nominal';
+  let callActive = false;
+  let screenLocked = false;
+  let lastFinalized: LastFinalized = null;
+  let currentRow: FeatureRow | null = null;
+  const recent: FeatureRow[] = [];
+  let startTripPending = false;
+  let finalizedPending = false;
+  let prevStatus: EngineStatus = 'off';
+  let prevTripId: string | null = null;
+  let subscriptions: (() => void)[] = [];
+  const idleWaiters = new Set<() => void>();
+  const listeners = new Set<(s: DriveState) => void>();
+  const nightClock = createNightClock(scoring.CONSTANTS);
+  let ctxCache: { key: string; value: Omit<DetectorContext, 'mode'> } | null = null;
+
+  // --- engine wiring -------------------------------------------------------------------------------
+
+  /** The row a limit lookup is for: the current one, or a replayed candidate row. */
+  function rowAt(lat: number, lng: number): FeatureRow | null {
+    if (currentRow && currentRow.lat === lat && currentRow.lng === lng) return currentRow;
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const r = recent[i] as FeatureRow;
+      if (r.lat === lat && r.lng === lng) return r;
+    }
+    return null;
+  }
+
+  function ctx(): Omit<DetectorContext, 'mode'> {
+    const night = nightClock.at(now(), tz());
+    const key = `${night}|${lockSignal}`;
+    if (ctxCache?.key !== key) ctxCache = { key, value: detectorContext(night, lockSignal) };
+    return ctxCache.value;
+  }
+
+  async function onFinalize(session: Readonly<TripSession>): Promise<void> {
+    if (!persist) return;
+    const id = session.clientTripId;
+    try {
+      const cell = (f: { lat: number; lng: number } | null) => (f ? geohash5(f.lat, f.lng) : null);
+      // E2: without these every auto or moving-start drive would be asked about.
+      const rolePrior = await readRolePrior(db);
+      const habitualRoute = await isHabitualDriverRoute(db, cell(session.firstFix), cell(session.lastFix));
+      const result = await finalizeTrip(session, {
+        db,
+        scoring,
+        tz: tz(),
+        fs: deps.traceWriter,
+        hash: deps.hash,
+        now,
+        rolePrior,
+        habitualRoute,
+      });
+      lastFinalized = {
+        clientTripId: id,
+        ok: true,
+        status: result.trip.status,
+        short: isShortDrive(result.trip, scoring.CONSTANTS),
+        at: now(),
+      };
+      finalizedPending = true;
+    } catch (error) {
+      // rev1: I16 — said honestly; the row stays `recording` for the next launch's recovery. The
+      // engine reports the error through `onError`.
+      lastFinalized = { clientTripId: id, ok: false, at: now() };
+      throw error;
+    }
+  }
+
+  const engine = createEngine({
+    now,
+    newId,
+    limits: {
+      lookup: (lat, lng, course) => {
+        const r = rowAt(lat, lng);
+        return limits.lookup(lat, lng, course, r ? limitOptions(r) : { gnssValid: false, speedMps: null });
+      },
+      prefetch: (lat, lng, course) => limits.prefetch(lat, lng, course),
+    },
+    createDetectors: () => createDetectors(newId),
+    createArbiter: (resume) => createArbiter(resume ?? { tripIndex }),
+    onAlert(decision) {
+      activeAlert = { decision, until: decision.ts + ALERT_SHOWN_MS[decision.level] };
+      player.deliver(decision).catch((e: unknown) => report(e, 'player'));
+    },
+    onCheckpoint: (session) =>
+      persist ? createRecorder(db, { tz: tz(), now }).onCheckpoint(session) : Promise.resolve(),
+    onFinalize,
+    onError: (e) => report(e, 'engine'),
+    ctx,
+  });
+
+  // --- the published state ------------------------------------------------------------------------
+
+  function build(): DriveState {
+    return Object.freeze({
+      ...engine.snapshot(),
+      activeAlert: activeAlert?.decision ?? null,
+      mutedForDrive,
+      gps: gpsQuality(currentRow),
+      thermal,
+      callActive,
+      screenLocked,
+      lastFinalized,
+      tripIndex,
+      dryRun: !persist,
+    });
+  }
+
+  let current: DriveState = build();
+
+  function publish(): void {
+    current = build();
+    for (const fn of [...listeners]) {
+      try {
+        fn(current);
+      } catch (e) {
+        report(e, 'subscriber');
+      }
+    }
+  }
+
+  engine.subscribe((s) => {
+    let opened = false;
+    let closed = false;
+    if (s.clientTripId !== prevTripId) {
+      if (s.clientTripId !== null) opened = true;
+      prevTripId = s.clientTripId;
+    }
+    if (s.status !== prevStatus) {
+      if (s.status !== 'recording') activeAlert = null;
+      if (isIdleStatus(s.status) && isBusyStatus(prevStatus)) closed = true;
+      prevStatus = s.status;
+    }
+    if (opened) {
+      // A new trip, confirmed or adopted: its own mute, and one tile batch at its first fix (S2).
+      mutedForDrive = adoptMuted;
+      adoptMuted = false;
+      startTripPending = true;
+      if (currentRow?.gnssValid) startTripNow(currentRow);
+    }
+    if (closed) {
+      limits.resetTrip(); // frees the decoded tiles: an armed process holds none
+      startTripPending = false;
+      currentRow = null;
+      recent.length = 0;
+    }
+    publish();
+    if (closed) afterClose();
+  });
+
+  function startTripNow(row: FeatureRow): void {
+    startTripPending = false;
+    limits.startTrip(row.lat, row.lng, row.course);
+  }
+
+  /** The drive has closed and the snapshot already says armed/off. */
+  function afterClose(): void {
+    // Release the audio session: nothing guarantees the last alert's release worked (P2 M2).
+    player.stopCurrent().catch((e: unknown) => report(e, 'player'));
+    if (finalizedPending) {
+      finalizedPending = false;
+      // Now the runner may drain (rev1: m): the snapshot is armed/off, not finalizing.
+      emitDataChanged({ source: 'finalize' }, (e) => report(e, 'dataChanged'));
+      void run(refreshTripIndex, 'tripIndex');
+    }
+    for (const resolve of [...idleWaiters]) resolve();
+    idleWaiters.clear();
+  }
+
+  // --- the queue ---------------------------------------------------------------------------------
+
+  let chain: Promise<void> = Promise.resolve();
+
+  /** Run `fn` after everything queued before it, then reconcile. Never rejects: failures are reported. */
+  function run(fn: () => Promise<void> | void, what: string): Promise<void> {
+    const task = chain
+      .then(fn)
+      .catch((e: unknown) => report(e, what))
+      .then(afterTask);
+    chain = task.then(noop, noop);
+    return task;
+  }
+
+  const ticker = createTicker({
+    now,
+    scheduler: deps.scheduler,
+    onTick: (ts) => {
+      void run(() => engine.dispatch({ type: 'tick', ts }), 'tick');
+    },
+  });
+
+  async function afterTask(): Promise<void> {
+    if (!started) return;
+    const s = engine.snapshot();
+    await reconcileCapture(s);
+    await reconcileNotification(s);
+    ticker.update(s.status);
+  }
+
+  async function runCommand(cmd: CaptureCommand): Promise<void> {
+    switch (cmd.type) {
+      case 'startCapture':
+        await source.startCapture(cmd.mode);
+        belief = { on: true, rate: belief.on ? belief.rate : null, mode: cmd.mode };
+        return;
+      case 'setCaptureRate':
+        await source.setCaptureRate(cmd.rate);
+        belief = { ...belief, rate: cmd.rate };
+        return;
+      case 'stopCapture':
+        await source.stopCapture();
+        belief = { on: false, rate: null, mode: null };
+        return;
+    }
+  }
+
+  async function reconcileCapture(s: EngineSnapshot): Promise<void> {
+    const plan = capturePlan(s.status, s.mode);
+    const key = plan === 'keep' ? 'keep' : plan.on ? `${plan.rate}|${plan.mode}` : 'off';
+    if (key === refusedPlan) return;
+    refusedPlan = null;
+    for (const cmd of captureCommands(belief, plan)) {
+      try {
+        await runCommand(cmd);
+      } catch (e) {
+        report(e, cmd.type);
+        // Not retried on every event: only once the plan changes (a permission prompt, SR9 silent).
+        if (cmd.type === 'startCapture') refusedPlan = key;
+        return;
+      }
+    }
+  }
+
+  /** Android S3: the notification follows the drive, sent on change only; iOS has none. */
+  async function reconcileNotification(s: EngineSnapshot): Promise<void> {
+    if (platform !== 'android' || !belief.on || !isBusyStatus(s.status)) {
+      if (!belief.on) notified = null;
+      return;
+    }
+    const state = notificationStateOf(s);
+    const key = `${state.stationary}|${state.startedAt}`;
+    if (key === notified) return;
+    notified = key;
+    await source.setNotificationState(state).catch((e: unknown) => report(e, 'setNotificationState'));
+  }
+
+  // --- native events -------------------------------------------------------------------------------
+
+  async function onWake(reason: 'significantChange' | 'activityTransition' | 'boot' | 'geofence'): Promise<void> {
+    // Only an armed engine opens a candidate; anything else owns the drive already.
+    if (engine.snapshot().status !== 'armed') return;
+    const t = now();
+    const history = await source.queryMotionHistory(t - WAKE_HISTORY_S * 1000, t);
+    const candidateStartTs = wakeStart(history);
+    if (candidateStartTs === null) return;
+    await engine.dispatch({ type: 'wake', reason, ts: now(), candidateStartTs });
+  }
+
+  async function onRow(row: FeatureRow): Promise<void> {
+    currentRow = row;
+    recent.push(row);
+    if (recent.length > RECENT_ROWS) recent.shift();
+    screenLocked = row.locked;
+    if (activeAlert !== null && row.ts >= activeAlert.until) activeAlert = null;
+    if (startTripPending && row.gnssValid) startTripNow(row);
+    await engine.dispatch({ type: 'row', row });
+    if (shouldSelfDispatch(engine.snapshot().status, row)) {
+      // M1 post-gap note: the engine went back to armed on this very row; it opens the next drive.
+      await engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: row.ts });
+      await engine.dispatch({ type: 'row', row });
+    }
+  }
+
+  function attachNative(): void {
+    subscriptions.push(
+      remover(source.addListener('wake', (p) => void run(() => onWake(p.reason), 'wake'))),
+      remover(
+        source.addListener('activity', (a) => {
+          void run(async () => {
+            const e = activityEvent(a, now());
+            if (e) await engine.dispatch(e);
+          }, 'activity');
+        })
+      ),
+      remover(
+        source.addListener('row', (raw) => {
+          const row = parseRow(raw);
+          if (row === null) return; // the contract says drop it, never throw on the hot path
+          void run(() => onRow(row), 'row');
+        })
+      ),
+      remover(
+        source.addListener('screen', (p) => {
+          screenLocked = p.locked;
+          publish();
+        })
+      ),
+      remover(
+        source.addListener('thermal', (p) => {
+          thermal = p.level;
+          publish();
+        })
+      ),
+      remover(
+        source.addListener('call', (p) => {
+          const ended = callActive && !p.active;
+          callActive = p.active;
+          publish();
+          // expo-audio re-activates the session by itself when an interruption ends (P2-M2): with
+          // no alert showing, an idle stop releases it so music is not left ducked.
+          if (ended && activeAlert === null) {
+            player.stopCurrent().catch((e: unknown) => report(e, 'player'));
+          }
+        })
+      ),
+      remover(
+        source.addListener('notificationAction', (p) => {
+          if (p.action !== 'endDrive') return;
+          void run(async () => {
+            if (endDriveAllowed(engine.snapshot())) await engine.dispatch({ type: 'end', ts: now() });
+          }, 'notificationAction');
+        })
+      )
+    );
+  }
+
+  const remover = (sub: { remove(): void }) => () => sub.remove();
+
+  // --- arming, trip index, adopt -------------------------------------------------------------------
+
+  async function refreshTripIndex(): Promise<void> {
+    const { rows } = await db.execute(TRIP_INDEX_SQL);
+    const n = Number(rows[0]?.n ?? 0);
+    if (n !== tripIndex) {
+      tripIndex = n;
+      publish();
+    }
+  }
+
+  async function applyArming(): Promise<void> {
+    if (!started) return;
+    const state = await source.getState();
+    lockSignal = state.lockSignal;
+    let flag = true;
+    if (deps.readFlag) {
+      try {
+        flag = await deps.readFlag('auto_detect');
+      } catch (e) {
+        report(e, 'readFlag');
+        flag = false;
+      }
+    }
+    if (shouldArm({ intent, flag, location: state.location })) {
+      try {
+        await source.arm();
+        await engine.dispatch({ type: 'arm' });
+        return;
+      } catch (e) {
+        report(e, 'arm');
+      }
+    } else if (state.armed) {
+      await source.disarm().catch((e: unknown) => report(e, 'disarm'));
+    }
+    await engine.dispatch({ type: 'disarm' });
+  }
+
+  async function adopt(trip: TripRow): Promise<boolean> {
+    const rebuilt = await rebuildFromSamples(db, trip, {
+      createDetectors: () => createDetectors(newId),
+      limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
+      tz: tz(),
+      constants: scoring.CONSTANTS,
+    });
+    if (rebuilt === null) return false;
+    adoptMuted = rebuilt.arbiterState?.mutedAll === true;
+    await engine.dispatch({
+      type: 'adopt',
+      trip: {
+        session: rebuilt.session,
+        detectors: rebuilt.detectors,
+        checkpointTs: trip.checkpoint_ts ?? rebuilt.session.lastRowTs ?? trip.started_at,
+        arbiterState: rebuilt.arbiterState,
+      },
+      ts: now(),
+    });
+    // E1 adopt protocol: adopt is ignored unless the engine was idle; the caller finalizes an orphan.
+    const adopted = engine.snapshot().clientTripId === trip.client_trip_id;
+    adoptMuted = false;
+    return adopted;
+  }
+
+  // --- the host ------------------------------------------------------------------------------------
+
+  const dispatch = (what: string, e: Parameters<typeof engine.dispatch>[0]) =>
+    run(() => engine.dispatch(e), what);
+
+  async function settled(): Promise<void> {
+    let seen: Promise<void>;
+    do {
+      seen = chain;
+      await seen;
+    } while (seen !== chain);
+  }
+
+  return {
+    async start(opts = {}) {
+      if (started) return { adopted: false };
+      started = true;
+      let adopted = false;
+      await run(async () => {
+        try {
+          const state = await source.getState();
+          lockSignal = state.lockSignal;
+          platform = state.platform;
+          belief = { on: state.capturing, rate: state.rate, mode: state.mode };
+        } catch (e) {
+          report(e, 'getState');
+        }
+        if (persist) intent = (await settings.get<boolean>(AUTO_DETECT_SETTING_KEY)) === true;
+        await refreshTripIndex().catch((e: unknown) => report(e, 'tripIndex'));
+        // rev1: I2 — before any native listener exists and before arming, so a buffered wake
+        // cannot open a second trip for the same drive.
+        if (opts.adopt && persist) {
+          try {
+            adopted = await adopt(opts.adopt);
+          } catch (e) {
+            report(e, 'adopt');
+          }
+        }
+        attachNative();
+        if (deps.appState) {
+          subscriptions.push(
+            remover(
+              deps.appState.addEventListener('change', (next) => {
+                appActive = next === 'active';
+              })
+            )
+          );
+        }
+        if (persist) {
+          subscriptions.push(
+            onDataChanged((e) => {
+              if (e.source === 'hydrate') void run(refreshTripIndex, 'tripIndex');
+            })
+          );
+        }
+        await applyArming();
+      }, 'start');
+      return { adopted };
+    },
+
+    async stop({ endOpenTrip }) {
+      if (!started) return;
+      if (endOpenTrip) {
+        await run(async () => {
+          if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
+        }, 'stop');
+      }
+      await settled();
+      for (const unsubscribe of subscriptions) unsubscribe();
+      subscriptions = [];
+      ticker.stop();
+      started = false;
+      for (const resolve of [...idleWaiters]) resolve();
+      idleWaiters.clear();
+    },
+
+    manualStart: ({ mode, passenger, evidence }) =>
+      dispatch('manualStart', { type: 'manualStart', mode, passenger, evidence, ts: now() }),
+
+    end: () => dispatch('end', { type: 'end', ts: now() }),
+
+    setPassenger: (passenger) => dispatch('setPassenger', { type: 'setPassenger', passenger, ts: now() }),
+
+    setMode: (mode) => dispatch('setMode', { type: 'setMode', mode, ts: now() }),
+
+    async muteCurrentAlert() {
+      // The sound stops first, before anything queued; then the arbiter mutes the repeats.
+      activeAlert = null;
+      publish();
+      await Promise.all([
+        player.stopCurrent().catch((e: unknown) => report(e, 'player')),
+        dispatch('muteCurrent', { type: 'muteCurrent', ts: now() }),
+      ]);
+    },
+
+    async muteForDrive() {
+      await Promise.all([
+        player.stopCurrent().catch((e: unknown) => report(e, 'player')),
+        run(async () => {
+          if (engine.snapshot().clientTripId === null) return;
+          await engine.dispatch({ type: 'muteForDrive', ts: now() });
+          mutedForDrive = true;
+          activeAlert = null;
+          publish();
+        }, 'muteForDrive'),
+      ]);
+    },
+
+    announce: (key) => player.announce(key).catch((e: unknown) => report(e, 'player')),
+
+    setAutoDetect: (enabled) =>
+      run(async () => {
+        intent = enabled;
+        if (persist) await settings.set(AUTO_DETECT_SETTING_KEY, enabled);
+        await applyArming();
+      }, 'setAutoDetect'),
+
+    autoDetectEnabled: () => intent,
+    isBusy: () => isBusyStatus(engine.snapshot().status),
+    captureActive: () => belief.on,
+
+    async untilIdle() {
+      for (;;) {
+        await settled();
+        if (!isBusyStatus(engine.snapshot().status) || !started) {
+          await settled();
+          return;
+        }
+        await new Promise<void>((resolve) => idleWaiters.add(resolve));
+      }
+    },
+
+    settled,
+    snapshot: () => current,
+
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
+    },
+
+    l1RespectsSilentSwitch: () =>
+      l1RespectsSilentSwitch({ mode: engine.snapshot().mode, screenLocked }, appActive),
+
+    detectorContext: ctx,
+  };
+}
