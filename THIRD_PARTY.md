@@ -73,4 +73,16 @@ SOFTWARE.
 
 ## Map data
 
-Speed-limit data © OpenStreetMap contributors, ODbL 1.0 (https://www.openstreetmap.org/copyright); FHWA HPMS data is public domain.
+Speed-limit data comes from two open sources, loaded by `supabase/data` (see its README):
+
+- **OpenStreetMap.** Map data © OpenStreetMap contributors, available under the Open Database
+  License 1.0 (https://opendatacommons.org/licenses/odbl/1-0/; https://www.openstreetmap.org/copyright).
+  Extracts from Geofabrik (https://download.geofabrik.de/). The app shows the attribution
+  "© OpenStreetMap contributors"; the `osm.ways` table and the tiles served from it are a derivative
+  database subject to the ODbL's attribution and share-alike terms.
+- **HPMS.** Highway Performance Monitoring System (HPMS) 2024, Federal Highway Administration (FHWA),
+  distributed by the Bureau of Transportation Statistics (BTS) in the National Transportation Atlas
+  Database (https://geodata.bts.gov/datasets/5e6a977c2d7c4ec1bdc82e684d3384f2). A work of the U.S.
+  Government (17 U.S.C. § 105), not protected by copyright and available for unrestricted public use;
+  acknowledgement requested: "Federal Highway Administration (FHWA) and Bureau of Transportation
+  Statistics (BTS)".
