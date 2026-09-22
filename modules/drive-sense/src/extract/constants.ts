@@ -88,6 +88,13 @@ export const GRAVITY_TAU_S = 5;
  * h = √((1 + GATE)² − 1) ≈ 0.2 g — it must stay below HARSH_ACCEL_G (0.28; a test enforces it).
  */
 export const GRAVITY_GATE_G = 0.02;
+/**
+ * The gate reads the MEAN |a| over this many samples (the current one and the previous ones;
+ * 200 ms at 25 Hz), not each sample: per-sample noise (σ ≈ 0.01 g) would otherwise open the gate
+ * on a fraction of the samples of a held 0.25 g acceleration and leak it into gravity
+ * (N1 fix round 4). The mean restarts when the filter re-seeds.
+ */
+export const GRAVITY_GATE_SAMPLES = 5;
 /** A gap between raw samples longer than this (s), or a non-increasing timestamp, re-seeds gravity from the accelerometer. */
 export const GRAVITY_RESET_GAP_S = 1;
 

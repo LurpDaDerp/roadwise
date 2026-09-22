@@ -253,14 +253,16 @@ throughout, constants under the names in `src/extract/constants.ts`. The golden 
 
 ### Gravity filter (Android only; `gravityFilter.ts`)
 
-State `{ g, t }`, initially `{ null, null }`, carried across batches. Per raw sample, in order:
+State `{ g, t, mags }`, initially `{ null, null, [] }`, carried across batches (`mags` = |a| of
+the last ≤ 4 samples, oldest first). Per raw sample, in order:
 
 ```
 dt = (t − t_prev) / 1000                       (0 when t_prev is null)
-if g is null or dt ≤ 0 or dt > GRAVITY_RESET_GAP_S (1 s):   g = a            (seed)
+if g is null or dt ≤ 0 or dt > GRAVITY_RESET_GAP_S (1 s):   g = a, mags = [|a|]      (seed)
 else:
+    mags ← the last GRAVITY_GATE_SAMPLES (5) of mags + [|a|];  m = mean(mags) (summed oldest first)
     g_pred = g + (g × w)·dt                    (dg/dt = −w × g: gravity is fixed in the world)
-    if | |a| − 1 | ≤ GRAVITY_GATE_G (0.02 g):              (no dynamic acceleration)
+    if | m − 1 | ≤ GRAVITY_GATE_G (0.02 g):                (no dynamic acceleration)
         α = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt)           (GRAVITY_TAU_S = 5 s)
         g = α·g_pred + (1 − α)·a
     else:                                                  (braking, cornering, a bump)
@@ -278,7 +280,17 @@ filter is now gyro-dominant (5 s), and the accelerometer does not correct gravit
 magnitude says the car is accelerating. A phone genuinely repositioned in its mount is still
 followed: the gyro carries the rotation at once, and anything the gyro missed is pulled in by the
 accelerometer within a few time constants; a gap longer than `GRAVITY_RESET_GAP_S` re-seeds.
-The gate: a horizontal acceleration h changes |a| by √(1 + h²) − 1 ≈ h²/2, so the gate trips at
+The gate reads the **mean |a| over the last 5 samples** (200 ms), not each sample (N1 fix
+round 4): with per-sample gating, accelerometer noise (σ ≈ 0.01 g) opened the gate on about 15 %
+of the samples of a held 0.25 g acceleration (|a| − 1 ≈ 0.031, just above the gate), so 7.5 s of
+it tilted gravity ≈ 0.035–0.047 rad and the brake after it read −0.52 g for a true −0.45 g —
+enough to push a gentle 0.25 g brake past `HARSH_BRAKE_G`. Averaging five samples cuts the noise
+on the gated quantity by √5, and the same test now keeps the tilt under 0.01 rad and reads that
+brake within 0.02 g. A sustained acceleration gives every sample, and so the mean, the same |a|,
+so the trip point below is unchanged. Seed on a steady phone: a capture that seeds mid-acceleration
+keeps that tilt until the car cruises, because the gate then holds it.
+
+The gate: a sustained horizontal acceleration h changes |a| by √(1 + h²) − 1 ≈ h²/2, so the gate trips at
 h = √((1 + GRAVITY_GATE_G)² − 1) ≈ 0.2 g — below `HARSH_ACCEL_G` (0.28) and `HARSH_BRAKE_G`
 (0.30), which a test enforces. (At 0.05 it tripped only above 0.32 g, and a harsh 0.30 g
 acceleration faded below the threshold as it was absorbed.)
@@ -409,7 +421,8 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `HANDLING_STABLE_GS` | 0.95 | steady-gravity threshold |
 | `HANDLING_STABLE_FACTOR` | 0.5 | handling multiplier when steady |
 | `GRAVITY_TAU_S` | 5 | gravity filter time constant |
-| `GRAVITY_GATE_G` | 0.02 | accelerometer correction only while \|‖a‖ − 1\| ≤ this |
+| `GRAVITY_GATE_G` | 0.02 | accelerometer correction only while \|mean ‖a‖ − 1\| ≤ this |
+| `GRAVITY_GATE_SAMPLES` | 5 | samples averaged for the gate (200 ms) |
 | `GRAVITY_RESET_GAP_S` | 1 | gravity filter re-seed gap |
 | `EPS` | 1e-9 | `normalize` zero threshold |
 | `SELF_TEST_TOLERANCE` | 1e-6 | self-test per-field tolerance |

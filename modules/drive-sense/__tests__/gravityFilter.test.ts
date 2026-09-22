@@ -2,7 +2,12 @@
 // The Android complementary gravity filter (R1): gyro propagation + an accelerometer low-pass with
 // time constant GRAVITY_TAU_S, in the reference sign convention.
 import { CONSTANTS } from '@scoring';
-import { G_MPS2, GRAVITY_GATE_G, GRAVITY_TAU_S } from '../src/extract/constants';
+import {
+  G_MPS2,
+  GRAVITY_GATE_G,
+  GRAVITY_GATE_SAMPLES,
+  GRAVITY_TAU_S,
+} from '../src/extract/constants';
 import { extractSecond, initialExtractState } from '../src/extract/extract';
 import {
   androidAccelToReference,
@@ -11,7 +16,13 @@ import {
 } from '../src/extract/gravityFilter';
 import type { RawImuSample } from '../src/extract/types';
 import { angle, norm, sub, type Vec3 } from '../src/extract/vec';
-import { gravityRawBatches, profile, rawDriveSeconds, T0 } from '../scripts/scenarios';
+import {
+  gravityRawBatches,
+  MOUNT_GRAVITY,
+  profile,
+  rawDriveSeconds,
+  T0,
+} from '../scripts/scenarios';
 
 const at = (k: number, a: Vec3, w: Vec3 = [0, 0, 0], dtMs = 40): RawImuSample => ({ t: T0 + k * dtMs, a, w });
 
@@ -25,7 +36,7 @@ test('Android accelerometer values convert to the reference sign', () => {
 test('the first sample seeds gravity: g = a, ua = 0', () => {
   const { imu, state } = gravityFilter([at(0, [0.1, -0.9, -0.4], [0.2, 0, 0])], initialGravityState());
   expect(imu[0]).toEqual({ t: T0, ua: [0, 0, 0], g: [0.1, -0.9, -0.4], w: [0.2, 0, 0] });
-  expect(state).toEqual({ g: [0.1, -0.9, -0.4], t: T0 });
+  expect(state).toEqual({ g: [0.1, -0.9, -0.4], t: T0, mags: [norm([0.1, -0.9, -0.4])] });
 });
 
 test('at rest with a steady accelerometer, gravity stays put and ua is 0', () => {
@@ -50,11 +61,25 @@ test(`a wrong seed decays with time constant GRAVITY_TAU_S (${GRAVITY_TAU_S} s)`
 });
 
 test('the gate trips, in horizontal acceleration, below the harsh-acceleration threshold', () => {
-  // |a| = √(1 + h²), so the gate closes once h > √((1 + GATE)² − 1). Above HARSH_ACCEL_G that
-  // would leave harsh accelerations between the two ungated, and absorbed into gravity.
+  // A SUSTAINED horizontal acceleration h makes every |a| — and so their 5-sample mean — equal
+  // √(1 + h²), so the gate closes once h > √((1 + GATE)² − 1). Above HARSH_ACCEL_G that would
+  // leave harsh accelerations between the two ungated, and absorbed into gravity.
   const tripG = Math.sqrt((1 + GRAVITY_GATE_G) ** 2 - 1);
   expect(tripG).toBeLessThan(CONSTANTS.HARSH_ACCEL_G);
   expect(tripG).toBeLessThan(CONSTANTS.HARSH_BRAKE_G);
+});
+
+test(`the gate reads the mean |a| of the last ${GRAVITY_GATE_SAMPLES} samples, not each sample`, () => {
+  const g0: Vec3 = [0, 0, -1];
+  const { state } = gravityFilter([at(0, g0)], initialGravityState());
+  // one 1.08 g sample among 1 g samples: the 5-sample mean (1.016) is inside the gate, so it is
+  // still corrected — a per-sample gate would have closed; two of them (mean 1.032) close it
+  const spike: Vec3 = [0, 0.4079, -1]; // |a| ≈ 1.08
+  const one = gravityFilter([at(1, g0), at(2, g0), at(3, g0), at(4, spike)], state);
+  expect(one.state.mags).toHaveLength(GRAVITY_GATE_SAMPLES - 1);
+  expect(one.imu[3]!.g).not.toEqual(g0); // corrected toward the spike
+  const two = gravityFilter([at(1, g0), at(2, g0), at(3, spike), at(4, spike)], state);
+  expect(two.imu[3]!.g).toEqual(two.imu[2]!.g); // gated: the gyro alone (w = 0) carries g
 });
 
 test(`the accelerometer is ignored while |‖a‖ − 1| > GRAVITY_GATE_G (${GRAVITY_GATE_G} g)`, () => {
@@ -192,6 +217,39 @@ describe('through the extractor (N1 fix round: GRAVITY_TAU_S 0.5 → 5 s plus th
     for (const row of rows.slice(19, 21)) expect(row.aLonMin).toBeGreaterThanOrEqual(0.27);
     // after the release (from second 23): no false brake beyond 0.05 g
     for (const row of rows.slice(22)) expect(row.aLonMin).toBeGreaterThanOrEqual(-0.05);
+  });
+
+  test('noise cannot leak a held 0.25 g acceleration into gravity; the brake after it reads true (fix round 4)', () => {
+    // cruise 1 s (true seed), 0.25 g for 7.5 s with 0.01 g accelerometer noise, cruise, then 0.45 g
+    // from 10.8 s to 13.5 s. With a per-sample gate about 15 % of the samples opened it and the
+    // brake read −0.52.
+    const out = rawDriveSeconds({
+      seconds: 14,
+      seed: 21,
+      v0: 5,
+      accelNoise: 0.01,
+      aLon: profile([
+        [1, 0],
+        [1.3, 0.25],
+        [8.5, 0.25],
+        [8.8, 0],
+        [10.5, 0],
+        [10.8, -0.45],
+        [13.5, -0.45],
+      ]),
+      aLat: () => 0,
+    });
+    const rows = pipeline(out);
+    // gravity after 7.5 s of acceleration: still the true gravity
+    expect(angle(rows[8]!.g, MOUNT_GRAVITY)).toBeLessThan(0.01);
+    expect(rows[8]!.alignment.aligned).toBe(true);
+    // seconds 12 and 13 lie wholly inside the brake
+    for (const { row } of rows.slice(11, 13)) {
+      expect(row.aLonMin).toBeGreaterThanOrEqual(-0.47);
+      expect(row.aLonMin).toBeLessThanOrEqual(-0.43);
+      expect(row.aLonMax).toBeGreaterThanOrEqual(-0.47);
+      expect(row.aLonMax).toBeLessThanOrEqual(-0.43);
+    }
   });
 
   test('a real reorientation is still absorbed: the gyro carries it at once', () => {

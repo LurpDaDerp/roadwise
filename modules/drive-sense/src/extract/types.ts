@@ -42,6 +42,8 @@ export interface GravityState {
   g: Vec3 | null;
   /** epoch ms of the last sample consumed; null before the first sample */
   t: number | null;
+  /** |a| of the last ≤ GRAVITY_GATE_SAMPLES − 1 samples, oldest first, for the smoothed gate */
+  mags: number[];
 }
 
 /** One GNSS fix as the platform delivered it (unknowns as negative numbers). */

@@ -128,6 +128,9 @@ const MOUNT: Mat3 = matMul(
   rot([0, 0, 1], (15 * Math.PI) / 180)
 );
 
+/** True gravity in the device frame for the base mount (no phone motion), g. */
+export const MOUNT_GRAVITY: Vec3 = mul(MOUNT, [0, 0, -1]);
+
 // ——— the simulator ———
 
 export interface PhoneMotion {
@@ -598,15 +601,17 @@ export function androidRawInputs(d: Drive) {
   };
 }
 
+// Cruises for the first second so the filter seeds on true gravity (a capture that seeds during an
+// acceleration keeps that tilt: the gate then holds it), aligns at 0.25 g, then brakes.
 export const ANDROID_RAW_DRIVE: Drive = {
   seconds: 10,
   seed: 10,
   v0: 5,
   aLon: profile([
-    [0, 0],
-    [0.3, 0.25],
-    [7.5, 0.25],
-    [7.8, 0],
+    [1, 0],
+    [1.3, 0.25],
+    [7.6, 0.25],
+    [7.9, 0],
     [8, 0],
     [8.2, -0.45],
     [9.8, -0.45],
@@ -619,7 +624,7 @@ function androidRaw(): GoldenVector {
   const v: AndroidRawVector = {
     name: 'android-raw',
     description:
-      'Android units in, rows out: raw TYPE_ACCELEROMETER values (m/s², Android sign) and gyroscope for a tilted mount aligning at 0.25 g and braking at 0.45 g from 8.2 s. The port must convert (a = −values / G_MPS2), filter and extract with its production classes; skipping the division or the sign fails every row.',
+      'Android units in, rows out: raw TYPE_ACCELEROMETER values (m/s², Android sign) and gyroscope for a tilted mount cruising 1 s, aligning at 0.25 g and braking at 0.45 g from 8.2 s. The port must convert (a = −values / G_MPS2), filter and extract with its production classes; skipping the division or the sign fails every row.',
     kind: 'androidRaw',
     inputs,
     expected: { rows: withMarginCheck('android-raw', () => runAndroidRawInputs(inputs)) },
