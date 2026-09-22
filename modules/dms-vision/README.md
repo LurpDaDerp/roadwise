@@ -1,5 +1,11 @@
 # `modules/dms-vision`
 
+> **Carried over from V1.** This module was kept intact for the camera-coaching milestone. The
+> JavaScript side it describes below — `dms/gaze_inputs.js`, the rule engine under `dms/`, the
+> parity fixture `dms/tests/fixtures/onnx_parity.json` and the design notes in
+> `docs/dms/NATIVE_LAYER.md` — belonged to the V1 app and does not exist in V2 yet; it is rebuilt
+> when camera coaching is wired in. The native API documented here is unchanged.
+
 The on-device inference layer of the driver-monitoring feature: one local Expo Module that owns
 the front camera, runs MediaPipe `FaceLandmarker` once per processed frame and runs the
 `gaze_direct` network through ONNX Runtime. JavaScript never sees a pixel — it receives one
@@ -7,14 +13,13 @@ the front camera, runs MediaPipe `FaceLandmarker` once per processed frame and r
 network needs, and calls `predictGaze` with the tensors `dms/gaze_inputs.js` assembles.
 
 Autolinked from `./modules` (Expo autolinking's default `nativeModulesDir`); nothing needs to be
-added to `app.json`. Requires a development build — it cannot work in Expo Go or on web.
+added to `app.config.ts`. Requires a development build — it cannot work in Expo Go or on web.
 
 ```
 modules/dms-vision/
   expo-module.config.json                      platforms + module class names
   index.js                                     re-exports src/index.js
   src/index.js                                 the JS wrapper (this file's API section)
-  scripts/check-bundle.js                      sha256 check of the three model copies
   ios/DmsVision.podspec                        pinned pods + resource_bundles
   ios/DmsVisionModule.swift                    module definition, events, status timer
   ios/DmsVisionPipeline.swift                  AVCaptureSession + FaceLandmarker
@@ -66,7 +71,7 @@ The three files are **native resources**, not downloads and not `expo-asset` cop
 promoted checkpoint, re-copy it into both native locations and run:
 
 ```
-node modules/dms-vision/scripts/check-bundle.js
+node scripts/check-models.js
 ```
 
 which fails loudly if the three copies differ or if `gaze_direct.onnx` no longer matches
