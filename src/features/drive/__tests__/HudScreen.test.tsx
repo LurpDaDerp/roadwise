@@ -8,7 +8,7 @@ import type { LimitSample } from '@/core/engine/types';
 import { DriveProvider } from '@/drive/DriveProvider';
 import type { DriveHost, DriveState } from '@/drive/host';
 import { ThemeProvider } from '@/ui';
-import { HUD } from '@/ui/drive';
+import { countWords, HUD } from '@/ui/drive';
 
 import { hudCopy } from '../hudCopy';
 import { HUD_MUTE_HOLD_MS, HudScreen } from '../HudScreen';
@@ -125,7 +125,8 @@ const decision = (level: 1 | 2 | 3): AlertDecision => ({
   voice: level === 3 ? 'alert.drowsy' : level === 2 ? 'alert.phoneDown' : 'alert.easeOff',
 });
 
-const inkOf = (id: string) => StyleSheet.flatten(screen.getByTestId(id).props.style).color;
+const inkOf = (id: string, text?: string) =>
+  StyleSheet.flatten((text ? screen.getByText(text) : screen.getByTestId(id)).props.style).color;
 
 function wrap(host: unknown, children: ReactNode) {
   return (
@@ -436,5 +437,29 @@ describe('HudScreen: fix round 1', () => {
     await h.push({ speedMps: 22 * MPH, lastRowTs: T + 2000 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('22');
     expect(mockRenders).toEqual(before);
+  });
+});
+
+describe('HudScreen: sound alerts unavailable (ruling H2 item 6)', () => {
+  test.each([
+    [true, false],
+    [undefined, false],
+    [false, true],
+  ] as const)('alertsAvailable %s → indicator shown: %s', async (alertsAvailable, shown) => {
+    await renderHud({ alertsAvailable });
+    expect(!!screen.queryByTestId('hud-alerts-unavailable')).toBe(shown);
+  });
+
+  test('calm, three words, drawn in the quiet indicator ink, and not a control', async () => {
+    await renderHud({ alertsAvailable: false, lockedOut: true });
+    const mark = screen.getByTestId('hud-alerts-unavailable');
+    expect(mark.props.accessibilityLabel).toBe(hudCopy.alerts.label);
+    expect(mark.props.accessibilityRole).toBe('text');
+    expect(mark.props.onPress).toBeUndefined();
+    expect(countWords(hudCopy.alerts.unavailable)).toBeLessThanOrEqual(3);
+    expect(inkOf('hud-alerts-unavailable', 'Sound alerts unavailable')).toBe(HUD.day.inkMuted);
+    expect(screen.queryByRole('button')).toBeNull();
+    // Still under the shield at speed: every touch lands on the shield.
+    expect(screen.getByTestId('hud-touch-shield')).toBeTruthy();
   });
 });

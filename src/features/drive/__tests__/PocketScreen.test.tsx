@@ -171,3 +171,22 @@ describe('PocketScreen (C4c)', () => {
     expect(mockRouter.replace).toHaveBeenCalledWith('/drive/end');
   });
 });
+
+describe('PocketScreen: sound alerts unavailable (ruling H2 item 6)', () => {
+  test.each([
+    [true, false],
+    [undefined, false],
+    [false, true],
+  ] as const)('alertsAvailable %s → indicator shown: %s', async (alertsAvailable, shown) => {
+    await renderPocket({ alertsAvailable });
+    expect(!!screen.queryByTestId('hud-alerts-unavailable')).toBe(shown);
+  });
+
+  test("drawn in the pocket screen's dim print; a tap at speed still does nothing", async () => {
+    await renderPocket({ alertsAvailable: false, lockedOut: true });
+    const words = screen.getByText(hudCopy.alerts.unavailable);
+    expect(StyleSheet.flatten(words.props.style).color).toBe('#7F7F7F');
+    await fireEvent.press(screen.getByTestId('pocket-tap-area'));
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});

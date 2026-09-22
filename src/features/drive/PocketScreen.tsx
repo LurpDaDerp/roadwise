@@ -8,7 +8,9 @@ import { hudLabelScale } from '@/ui/drive';
 import { hudCopy } from './hudCopy';
 import { POCKET_INK } from './ParkedOnlyCard';
 import {
+  AlertsUnavailableMark,
   mayRevealControls,
+  useAlertsUnavailable,
   useEndOfDriveRouting,
   useStoppedActions,
   useStoppedPanel,
@@ -38,6 +40,7 @@ export function PocketScreen() {
     speedKnown: d.speedKnown,
     speedMps: d.speedMps,
   }));
+  const alertsUnavailable = useAlertsUnavailable();
   useEndOfDriveRouting(true);
   const panel = useStoppedPanel(false);
   const actions = useStoppedActions();
@@ -69,6 +72,7 @@ export function PocketScreen() {
             {hudCopy.pocket.passenger}
           </Text>
         ) : null}
+        {alertsUnavailable ? <AlertsUnavailableMark ink={POCKET_INK} /> : null}
       </Pressable>
       <StoppedPanel
         visible={panel.visible}

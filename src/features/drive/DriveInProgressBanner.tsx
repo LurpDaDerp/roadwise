@@ -31,6 +31,7 @@ export function DriveInProgressBanner() {
     passenger: d.role === 'passenger',
     mode: d.mode,
     stationary: isStationary(d),
+    alertsUnavailable: d.alertsAvailable === false,
   }));
 
   const open = (s.status === 'recording' || s.status === 'ending') && !s.lockedOut;
@@ -82,6 +83,19 @@ export function DriveInProgressBanner() {
           </Text>
         ) : null}
       </View>
+      {s.alertsUnavailable ? (
+        <View
+          testID="banner-alerts-unavailable"
+          accessible
+          accessibilityLabel={hudCopy.alerts.label}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm }}
+        >
+          <MaterialCommunityIcons name="volume-off" size={18} color={th.colors.textMuted} />
+          <Text variant="subhead" tone="muted">
+            {hudCopy.alerts.unavailable}
+          </Text>
+        </View>
+      ) : null}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: th.space.sm }}>
         <Button label={hudCopy.banner.openHud} size="md" onPress={openHud} />
         {s.stationary && s.mode !== 'mounted' ? (

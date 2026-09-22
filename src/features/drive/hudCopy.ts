@@ -15,6 +15,11 @@ export const hudCopy = {
     /** The full-screen shield while locked: a screen reader's name for it. */
     shieldLabel: 'Drive screen. Touch and hold to mute the alert.',
   },
+  alerts: {
+    /** SR3: three words; shown when the alert sounds failed to load (ruling H2 item 6). */
+    unavailable: 'Sound alerts unavailable',
+    label: 'Sound alerts unavailable. This drive is still recording.',
+  },
   stopped: {
     endDrive: 'End drive',
     muteDrive: 'Mute alerts for this drive',

@@ -181,3 +181,15 @@ describe('DriveInProgressBanner (rev1 I10)', () => {
     }
   });
 });
+
+describe('DriveInProgressBanner: sound alerts unavailable (ruling H2 item 6)', () => {
+  test.each([
+    [true, false],
+    [undefined, false],
+    [false, true],
+  ] as const)('alertsAvailable %s → line shown: %s', async (alertsAvailable, shown) => {
+    await renderBanner({ alertsAvailable });
+    expect(!!screen.queryByTestId('banner-alerts-unavailable')).toBe(shown);
+    if (shown) expect(screen.getByText(hudCopy.alerts.unavailable)).toBeTruthy();
+  });
+});
