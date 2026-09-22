@@ -1,4 +1,5 @@
 import {
+  attachDriveStateReporting,
   bootstrapApp,
   BootstrapError,
   flushBeforeSignOut,
@@ -12,6 +13,7 @@ import { T0, counterIds, limit, mph } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
+import type { DriveHost, DriveState } from '@/drive/host';
 import { createRecorder } from '@/core/engine/recorder';
 import { appendRow, createSession, snapshotSession } from '@/core/engine/session';
 import {
@@ -1917,5 +1919,97 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     await runtime!.drive.settled();
     await settle();
     expect(mockBackgroundReports).toEqual(['report']);
+  });
+});
+
+describe('client re-review R1 and R3: the drive-state reporter', () => {
+  const INSTALL2 = 'install-0002';
+
+  function devices() {
+    const writes: string[] = [];
+    const client = {
+      from: (table: string) => ({
+        update: (row: { drive_state: string }) => {
+          const q = {
+            eq: () => q,
+            select: async () => {
+              writes.push(`${table}:${row.drive_state}`);
+              return { data: [{ id: INSTALL2 }], error: null };
+            },
+          };
+          return q;
+        },
+      }),
+    };
+    return { client, writes };
+  }
+
+  test('R1: a signed-out launch that adopts an open trip writes nothing and leaves no foreground retry', async () => {
+    const checkpoint = await crashedDrive();
+    const settings = createSettingsRepo(db);
+    // The owner and `session.uid` are left from before the sign-out (never cleared there).
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set('session.uid', 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL2);
+    const driveSense = createFakeDriveSense({ platform: 'android', now: () => checkpoint + 60_000 });
+    driveSense.setState({ location: 'always', motion: 'granted', capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    const d = devices();
+    const built = deps({ source: driveSense, now: () => checkpoint + 60_000, mayDrain: () => false, devicesClient: d.client as never });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    expect(runtime.owner).toBe('signed-out');
+    expect(runtime.adopted).toBe(TRIP);
+    await settle();
+    const listeners = built.appState.listeners.length;
+    built.appState.emit('active');
+    await settle();
+    expect(d.writes).toEqual([]);
+    // Only the runner's and the host's own listeners: no drive-state foreground retry.
+    expect(built.appState.listeners.length).toBe(listeners);
+    expect(listeners).toBe(2);
+  });
+
+  /** A host at a given status, publishing on demand. */
+  function fakeHost(status: string, signedIn = true) {
+    let current = { status } as DriveState;
+    const listeners = new Set<(s: DriveState) => void>();
+    return {
+      host: {
+        snapshot: () => current,
+        subscribe: (fn: (s: DriveState) => void) => {
+          listeners.add(fn);
+          return () => listeners.delete(fn);
+        },
+        signedIn: () => signedIn,
+      } as unknown as DriveHost,
+      publish(next: string) {
+        current = { ...current, status: next } as DriveState;
+        for (const fn of [...listeners]) fn(current);
+      },
+    };
+  }
+
+  test('R3: a relaunch seeded as finalizing sends the owed idle', async () => {
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set('session.uid', 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL2);
+    const d = devices();
+    const h = fakeHost('finalizing');
+    const reporting = attachDriveStateReporting({
+      db,
+      drive: h.host,
+      appState: createFakeAppState(),
+      client: d.client as never,
+      now: () => NOW,
+      onError: () => {},
+    });
+    await reporting.settled();
+    h.publish('armed');
+    await reporting.settled();
+    // T10's reporter sends `idle` only after `recording`, so the owed idle is walked through both.
+    expect(d.writes).toContain('devices:idle');
+    expect(d.writes[d.writes.length - 1]).toBe('devices:idle');
+    reporting.release();
   });
 });

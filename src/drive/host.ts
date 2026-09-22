@@ -137,6 +137,14 @@ export interface DriveHost {
   setAutoDetect(enabled: boolean): Promise<void>;
   /** The user's auto-record choice (loaded at `start`), independent of whether capture is armed. */
   autoDetectEnabled(): boolean;
+  /**
+   * A driver's session is live, as far as this host knows: signed in (not launched signed out, or
+   * signed in again since), or a sign-out the driver started is still settling, the session
+   * ending only after it (T10 security: the idle is written first). False once that sign-out
+   * completes, and during a session end the driver did not start. Local and synchronous: the
+   * drive-state reporter's owner check reads it (client re-review R1), never the network. Additive.
+   */
+  signedIn(): boolean;
   /** candidate | recording | ending | finalizing */
   isBusy(): boolean;
   /** native capture believed on */
@@ -919,6 +927,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       }, 'setAutoDetect'),
 
     autoDetectEnabled: () => intent,
+    signedIn: () => !signedOut || (signingOut && !involuntaryEnd),
     isBusy: () => isBusyStatus(engine.snapshot().status),
     captureActive: () => belief.on,
 

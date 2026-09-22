@@ -882,7 +882,7 @@ function desiredFor(status: string): Reported | null {
  * Battery (§3.5): an armed, idle phone publishes nothing and has nothing outstanding, so it costs
  * nothing; the foreground listener exists only while something is outstanding.
  */
-function attachDriveStateReporting(opts: {
+export function attachDriveStateReporting(opts: {
   db: Db;
   drive: DriveHost;
   appState: { addEventListener(type: 'change', fn: (s: string) => void): { remove(): void } };
@@ -921,6 +921,8 @@ function attachDriveStateReporting(opts: {
    * with no drive) writes nothing — an armed, idle phone costs nothing.
    */
   let mayHoldRecording = false;
+  /** The host's signed-in state at the last publish (re-review R1). */
+  let lastSignedIn = opts.drive.signedIn();
 
   /** A write's outcome, from T10's reporter (`onWrite`, round 2): retries included. */
   function onOutcome(state: Reported, ok: boolean): void {
@@ -958,6 +960,13 @@ function attachDriveStateReporting(opts: {
   async function attempt(): Promise<void> {
     if (!live || desired === null || desired === confirmed) return;
     const want = desired;
+    // No live signed-in session (client re-review R1): `session.uid` is never cleared at sign-out,
+    // so it alone would let a signed-out process retry under the anon key forever. Nothing is owed
+    // to a server nobody can write to: drop it, as `abandon()` does. A later sign-in re-evaluates.
+    if (!opts.drive.signedIn()) {
+      dropOutstanding();
+      return;
+    }
     const owner = await fence();
     if (owner === null || (target !== null && target.owner !== owner)) {
       backoff = { at: opts.now(), retries: backoff ? backoff.retries : 0 };
@@ -1011,7 +1020,21 @@ function attachDriveStateReporting(opts: {
     }
   }
 
+  /** Forget what is outstanding and stop retrying it (a session gone, r2 n1 / re-review R1). */
+  function dropOutstanding(): void {
+    desired = confirmed;
+    backoff = null;
+    reporter = null;
+    offForeground?.();
+    offForeground = null;
+  }
+
   function onPublish(status: string): void {
+    // A driver signed in since the last publish: the current status is looked at afresh, so a
+    // trip that was open while signed out is reported once someone can write for it (R1).
+    const signedNow = opts.drive.signedIn();
+    if (signedNow && !lastSignedIn) lastStatus = null;
+    lastSignedIn = signedNow;
     if (status !== lastStatus) {
       lastStatus = status;
       const next = desiredFor(status);
@@ -1072,11 +1095,7 @@ function attachDriveStateReporting(opts: {
      */
     async abandon() {
       await chain;
-      desired = confirmed;
-      backoff = null;
-      reporter = null;
-      offForeground?.();
-      offForeground = null;
+      dropOutstanding();
     },
   };
 }
