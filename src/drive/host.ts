@@ -372,7 +372,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       };
       finalizedPending = true;
     } catch (error) {
-      // rev1: I16 — said honestly; the row stays `recording` for the next launch's recovery. The
+      // rev1: I16 — said honestly. A transient failure leaves the row `recording` for the next
+      // launch's recovery; a payload the upload contract refuses (FinalizePayloadRefusedError) has
+      // already been ended as `failed` with `invalid_payload`, so recovery never retries it. The
       // engine reports the error through `onError`.
       lastFinalized = { clientTripId: id, ok: false, at: now() };
       throw error;
