@@ -664,6 +664,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // (`finalize-trip` and `trace-upload` do their own deferring, after the housekeeping that has
     // to run signed out — dropping the trace of a drive that is gone.)
     if (uid === null && isActionKind(item.kind)) return { kind: 'defer' };
+    // Every kind, before any post (H2 R1-M2): the device must still record the item's owner. The
+    // session can change hands before the device is wiped, and a dispute's free text, a role
+    // answer or a delete must no more go into another account than a trip may. Deferred, not
+    // failed: the rebuild's wipe settles it.
+    if (uid !== null && !(await deviceOwnerIs(db, uid))) return { kind: 'defer' };
 
     const state: ItemState = { traceUploadedAt: item.trace_uploaded_at, generation };
     let refreshed = false;

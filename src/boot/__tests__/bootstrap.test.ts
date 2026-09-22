@@ -6,7 +6,7 @@ import {
   type AppRuntime,
   type BootstrapDeps,
 } from '@/boot/bootstrap';
-import { LAST_USER_KEY } from '@/boot/device';
+import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
 import { T0, counterIds, limit, mph } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
@@ -1063,6 +1063,35 @@ describe('H2 I-1: a handover whose session read is slow', () => {
     expect(runtime.owner).toBe('wiped');
     expect(await createTripsRepo(db).get(TRIP)).toBeNull();
     expect(await createQueueRepo(db).byKey(finalizeIdempotencyKey(TRIP))).toBeNull();
+  });
+
+  test('B signed in and the app died before the rebuild: a cold launch that times out waits, then wipes (R1-M1)', async () => {
+    // No runner ever read B's session (no session.uid); only the owner watch's marker remains.
+    await crashedDrive();
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    await createSettingsRepo(db).set(PENDING_OWNER_KEY, 'user-b');
+    const supabase = createFakeSupabase({ uid: 'user-b' });
+    slowFirstSession(supabase, 1_800);
+    const { bootstrapDeps } = deps({ supabase, net: { isWifi: () => true } });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    expect(supabase.invokes).toEqual([]);
+    expect(runtime.owner).toBe('wiped');
+    expect(await createTripsRepo(db).get(TRIP)).toBeNull();
+    // The wipe took the marker with everything else.
+    expect(await createSettingsRepo(db).get(PENDING_OWNER_KEY)).toBeNull();
+  });
+
+  test('a marker left by a handover the same owner then undid is cleared, and no longer holds a launch', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-a');
+    await createSettingsRepo(db).set(PENDING_OWNER_KEY, 'user-b');
+    const { bootstrapDeps } = deps({ supabase: createFakeSupabase({ uid: 'user-a' }) });
+    runtime = await bootstrapApp(bootstrapDeps);
+    expect(runtime.owner).toBe('same');
+    expect(await createSettingsRepo(db).get(PENDING_OWNER_KEY)).toBeNull();
   });
 
   test('if that session never answers, nothing is mounted: the launch fails at identity', async () => {

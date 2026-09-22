@@ -16,7 +16,9 @@
  */
 import type { Db } from '@/data/db';
 
-import { hasDriverData, readDeviceOwner, rememberDeviceOwner } from './device';
+import { createSettingsRepo } from '@/data/db';
+
+import { hasDriverData, PENDING_OWNER_KEY, readDeviceOwner, rememberDeviceOwner } from './device';
 
 /** The slice of the Supabase client this needs. Structural: the real client is assignable. */
 export interface AuthWatchable {
@@ -62,6 +64,13 @@ export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
     if (owner === null && !(await hasDriverData(db))) {
       await rememberDeviceOwner(db, uid);
       return;
+    }
+    if (!live) return;
+    // Durable first (R1-M1): if the process dies before the rebuild, the next launch still knows.
+    try {
+      await createSettingsRepo(db).set(PENDING_OWNER_KEY, uid);
+    } catch (error) {
+      deps.onError?.(error, 'owner watch: pending handover');
     }
     if (live) deps.onHandover(uid);
   };

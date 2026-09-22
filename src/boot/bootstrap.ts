@@ -90,7 +90,12 @@ import {
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 
-import { ensureDeviceOwner, readDeviceOwner, type DeviceOwnerOutcome } from './device';
+import {
+  ensureDeviceOwner,
+  PENDING_OWNER_KEY,
+  readDeviceOwner,
+  type DeviceOwnerOutcome,
+} from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
 import { createExpoTraceWriter, type TraceWriter } from './traceWriter';
 
@@ -608,14 +613,18 @@ async function runLaunch(
 const TIMED_OUT = Symbol('timed out');
 
 /**
- * Whether anything on the device says its owner may have changed: a runner recorded a signed-in
- * user (`session.uid`) other than the recorded owner. The one signal that makes a session timeout
- * unsafe to read as `same` (H2 I-1 b).
+ * Whether anything on the device says its owner may have changed — the signals that make a
+ * session timeout unsafe to read as `same` (H2 I-1 b, R1-M1):
+ *   - a runner recorded a signed-in user (`session.uid`) other than the recorded owner, or
+ *   - the owner watch marked a handover that no launch has settled (`PENDING_OWNER_KEY`), which
+ *     covers a process killed between the sign-in and its rebuild, before any runner read B.
  */
 async function ownerMayHaveChanged(db: Db): Promise<boolean> {
   const settings = createSettingsRepo(db);
+  const owner = await readDeviceOwner(db);
   const seen = await settings.get<string>(SESSION_UID_KEY);
-  return seen !== null && seen !== (await readDeviceOwner(db));
+  const pending = await settings.get<string>(PENDING_OWNER_KEY);
+  return (seen !== null && seen !== owner) || (pending !== null && pending !== owner);
 }
 
 /** `promise`, or `TIMED_OUT` after `ms`; the timer is cleared either way (no timer outlives it). */

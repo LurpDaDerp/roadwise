@@ -25,6 +25,15 @@ import { SESSION_UID_KEY } from '@/data/sync/queue';
 export const LAST_USER_KEY = 'device.lastUserId';
 
 /**
+ * A handover the owner watch has seen but no launch has settled yet: the new driver's uid,
+ * written durably BEFORE the rebuild is raised (security review H2 R1-M1). A process killed
+ * between the sign-in and the rebuild leaves it behind, so the next cold launch knows the owner
+ * may have changed even though no runner ever read the new session. Cleared whenever an owner is
+ * decided (`rememberDeviceOwner`), and by the wipe with every other setting.
+ */
+export const PENDING_OWNER_KEY = 'device.pendingOwner';
+
+/**
  * Every table the wipe empties, children before parents so a foreign key never stands in the way.
  *
  * `schema_version` is the only one left alone: the schema is the app's, not the driver's.
@@ -135,6 +144,8 @@ export async function rememberDeviceOwner(db: Db, uid: string): Promise<void> {
   const settings = createSettingsRepo(db);
   await settings.set(LAST_USER_KEY, uid);
   await settings.set(SESSION_UID_KEY, uid);
+  // The owner is decided: any handover still marked as pending is settled by this.
+  await settings.remove(PENDING_OWNER_KEY);
 }
 
 /**

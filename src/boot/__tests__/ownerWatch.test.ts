@@ -1,7 +1,7 @@
 import { createFakeDriveSense } from '@drive-sense';
 
 import { bootstrapApp, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
-import { LAST_USER_KEY, readDeviceOwner } from '@/boot/device';
+import { LAST_USER_KEY, PENDING_OWNER_KEY, readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner, type AuthWatchable } from '@/boot/ownerWatch';
 import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
 import { TZ } from '@/core/engine/__fixtures__/drives';
@@ -144,6 +144,8 @@ describe('the watch alone', () => {
     expect(handovers).toHaveLength(1);
     // The rebuild wipes on this uid without reading the session again.
     expect(handoverUids).toEqual(['user-b']);
+    // Durable before the handover is raised: a process killed before its rebuild still knows.
+    expect(await createSettingsRepo(db).get(PENDING_OWNER_KEY)).toBe('user-b');
     stop();
   });
 

@@ -242,6 +242,27 @@ test('an item stamped with the signed-in user is not sent while the device still
   expect(await finalizeItem()).toMatchObject({ status: 'pending', attempts: 0 });
 });
 
+test('a dispute stamped with the signed-in user is not posted while the device records someone else (H2 R1-M2)', async () => {
+  await db.execute(
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?, ?)',
+    [
+      'dispute',
+      JSON.stringify({ action: 'dispute', clientEventId: 'event-1', reason: 'hazard' }),
+      'dispute:event-1',
+      T0,
+      'user-b',
+      T0,
+    ]
+  );
+  supabase.setUid('user-b');
+
+  await runner().drainOnce(T0);
+
+  expect(supabase.invokes).toHaveLength(0);
+  expect(await itemByKey('dispute:event-1')).toMatchObject({ status: 'pending', attempts: 0 });
+});
+
 test('idle() resolves once no drain is in flight, a drain it woke included (H2 r1 m2)', async () => {
   await seedQueuedTrip();
   let release: () => void = () => {};
