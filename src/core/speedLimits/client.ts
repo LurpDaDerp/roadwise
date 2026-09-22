@@ -23,10 +23,11 @@
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
 //   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
 //   a dense tile by road class (minor classes first), not by place, so the car's own road can be
-//   the one dropped while a more important parallel road survives, and the matcher would name the neighbour's limit at 0.85. The HUD, the
-//   alerts and full-weight scoring act on a limit exactly when `limitActionable` holds, and any match below
-//   `MATCH_CONFIDENCE_MIN` (0.7) fails it, so ramp, parallel-road and truncated-tile matches
-//   (0.6–0.65) show "—" and are never acted on.
+//   the one dropped while a more important parallel road survives, and the matcher would name the
+//   neighbour's limit at 0.85. The HUD, the alerts and full-weight scoring act on a limit exactly
+//   when `limitActionable` holds, and any match below `MATCH_CONFIDENCE_MIN` (0.7) fails it, so
+//   ramp, parallel-road and truncated-tile matches (0.6–0.65) show "—" and never alert; §9.5 may
+//   still score them at reduced weight.
 // - **Simulation (`persist: false`).** Nothing is written to SQLite: no tile is stored and
 //   `purgeExpired` does nothing. Reading tiles already there is harmless and stays allowed.
 
