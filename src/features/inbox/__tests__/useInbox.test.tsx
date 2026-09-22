@@ -23,8 +23,8 @@ beforeEach(() => {
   clock = T0;
   jest.spyOn(Date, 'now').mockImplementation(() => clock);
 });
-afterEach(() => {
-  clearInboxClients();
+afterEach(async () => {
+  await clearInboxClients();
   setOnline(null);
   mockSession.session = { user: { id: 'u1' } };
   jest.restoreAllMocks();

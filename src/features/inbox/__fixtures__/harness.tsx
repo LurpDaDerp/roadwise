@@ -4,7 +4,7 @@
  * the swipeable themselves (Jest hoists `jest.mock` per file).
  */
 import { QueryClient } from '@tanstack/react-query';
-import { render } from '@testing-library/react-native';
+import { act, cleanup, render } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
 import type { TripRow } from '@/data/db/types';
@@ -100,7 +100,31 @@ export function testQueryClient(): QueryClient {
   return client;
 }
 
-export function clearInboxClients(): void {
+/**
+ * Wait, inside `act`, until no fetch or mutation of the test's clients is running, then deliver
+ * React Query's batched notifications (a `setTimeout(0)`). A test that asserts on a state which
+ * does not change when the fetch lands (the bell's plain "Inbox") must call this, or the landing
+ * re-renders outside `act`.
+ */
+export async function settleInbox(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 50; i += 1) {
+      const busy = [...clients].some((c) => c.isFetching() > 0 || c.isMutating() > 0);
+      await new Promise((resolve) => setTimeout(resolve, busy ? 5 : 0));
+      if (!busy) break;
+    }
+  });
+}
+
+/**
+ * Call (and await) from `afterEach`. Settles, unmounts, then empties the clients: `client.clear()`
+ * with a tree still mounted notifies its observers, and React Query delivers that on a
+ * `setTimeout(0)` — a re-render outside `act` that lands in the NEXT test (the act() warning).
+ * RNTL's own cleanup runs after this hook, too late for that.
+ */
+export async function clearInboxClients(): Promise<void> {
+  await settleInbox();
+  await cleanup();
   for (const client of clients) client.clear();
   clients.clear();
 }

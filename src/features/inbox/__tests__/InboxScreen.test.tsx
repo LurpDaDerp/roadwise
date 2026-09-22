@@ -11,7 +11,7 @@ import { InboxScreen, NOTIFICATION_SETTINGS_HREF } from '@/features/inbox/InboxS
 import { routerDouble } from '@/features/trips/__fixtures__/render';
 import { TRIP_HISTORY_HREF, tripSummaryHref } from '@/features/trips/routes';
 
-import { clearInboxClients, fakeApi, fakeAppState, inboxWorld, setOnline } from '../__fixtures__/harness';
+import { clearInboxClients, fakeApi, fakeAppState, inboxWorld, setOnline, settleInbox } from '../__fixtures__/harness';
 import { inboxRow, iso, lapseRow, nextId } from '../__fixtures__/rows';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -27,13 +27,19 @@ jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
   };
 });
 
-const press = (el: Parameters<typeof fireEvent.press>[0]) =>
-  act(async () => {
+/**
+ * A tap, then everything it started (a read or dismiss mutation, its cache publish and flush)
+ * settled inside `act` — so no re-render lands between a test's assertions, outside `act`.
+ */
+const press = async (el: Parameters<typeof fireEvent.press>[0]) => {
+  await act(async () => {
     fireEvent.press(el);
   });
+  await settleInbox();
+};
 
-afterEach(() => {
-  clearInboxClients();
+afterEach(async () => {
+  await clearInboxClients();
   setOnline(null);
   jest.clearAllMocks();
 });
@@ -156,6 +162,7 @@ describe('InboxScreen', () => {
       expect(await screen.findByText('Automatic recording is off')).toBeTruthy();
       location = 'always';
       await act(async () => appState.emit('active'));
+      await settleInbox();
       expect(await screen.findByText('Automatic recording is back on')).toBeTruthy();
     });
   });
@@ -179,6 +186,7 @@ describe('InboxScreen', () => {
       await act(async () => {
         fireEvent(el, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } });
       });
+      await settleInbox();
       await waitFor(() => expect(screen.queryByTestId(`inbox-row-${row.id}`)).toBeNull());
       await waitFor(() => expect(api.dismissInbox).toHaveBeenCalledWith([row.id]));
     });
@@ -190,6 +198,7 @@ describe('InboxScreen', () => {
       await act(async () => {
         fireEvent(swipe, 'swipeableOpen', 'left');
       });
+      await settleInbox();
       await waitFor(() => expect(screen.queryByTestId(`inbox-row-${row.id}`)).toBeNull());
       await waitFor(() => expect(api.dismissInbox).toHaveBeenCalledWith([row.id]));
     });

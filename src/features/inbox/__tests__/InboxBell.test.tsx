@@ -4,7 +4,7 @@ import { T0 } from '@/data/queries/__fixtures__/rows';
 import { INBOX_HREF, InboxBell } from '@/features/inbox/InboxBell';
 import { routerDouble } from '@/features/trips/__fixtures__/render';
 
-import { clearInboxClients, fakeApi, inboxWorld } from '../__fixtures__/harness';
+import { clearInboxClients, fakeApi, inboxWorld, settleInbox } from '../__fixtures__/harness';
 import { inboxRow, iso, lapseRow, nextId } from '../__fixtures__/rows';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -12,8 +12,8 @@ const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: { user: { id: 'u1' } } }) }));
 
-afterEach(() => {
-  clearInboxClients();
+afterEach(async () => {
+  await clearInboxClients();
   jest.clearAllMocks();
 });
 
@@ -45,9 +45,8 @@ describe('InboxBell', () => {
 
   it('with nothing unread it is just "Inbox", with no badge', async () => {
     const api = await renderBell([inboxRow({ id: nextId(), read_at: iso(T0) })]);
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // "Inbox" is also the label before the fetch lands: wait for it to land.
+    await settleInbox();
     expect(api.fetchInbox).toHaveBeenCalled();
     expect(screen.getByLabelText('Inbox')).toBeTruthy();
     expect(screen.queryByTestId('inbox-bell-badge')).toBeNull();
@@ -61,6 +60,7 @@ describe('InboxBell', () => {
 
   it('opens the inbox', async () => {
     await renderBell([]);
+    await settleInbox();
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-bell'));
     });

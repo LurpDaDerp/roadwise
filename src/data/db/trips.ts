@@ -61,7 +61,7 @@ const PATCHABLE = COLUMNS.filter(
   (column) => column !== 'client_trip_id' && column !== 'created_at'
 );
 
-function toTripRow(row: Record<string, unknown>): TripRow {
+export function toTripRow(row: Record<string, unknown>): TripRow {
   return {
     client_trip_id: asText(row, 'client_trip_id'),
     started_at: asNumber(row, 'started_at'),

@@ -34,7 +34,7 @@ const COLUMNS = [
 /** An event never changes which trip it belongs to, and its id is its identity. */
 const PATCHABLE = COLUMNS.filter((column) => column !== 'id' && column !== 'client_trip_id');
 
-function toEventRow(row: Record<string, unknown>): EventRow {
+export function toEventRow(row: Record<string, unknown>): EventRow {
   return {
     id: asText(row, 'id'),
     client_trip_id: asText(row, 'client_trip_id'),

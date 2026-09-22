@@ -33,8 +33,8 @@ import type { AppStateLike } from '@/data/foreground';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { readTombstones } from '@/data/db/tombstones';
-import { asEnum, asFlag, asNumber, asNumberOrNull, asText, asTextOrNull } from '@/data/db/row';
-import { TRIP_STATUSES, TRIP_SYNC_STATES, type EventRow, type TripRow } from '@/data/db/types';
+import { toEventRow } from '@/data/db/events';
+import { toTripRow } from '@/data/db/trips';
 import { getSharedOnline } from '@/data/net/net';
 import { useOnline } from '@/data/net/useOnline';
 import { toTripEventView, useDataSource, type TripEventView } from '@/data/queries';
@@ -131,70 +131,6 @@ export async function loadInbox(
   return { rows: await cache.list(), offline: false };
 }
 
-// The row mappers of `src/data/db/trips.ts` and `events.ts` are private to those repos, which read
-// one trip at a time. The inbox reads a batch with one `IN` query each, so it maps here through the
-// same `row.ts` helpers; each literal is typed `TripRow` / `EventRow`, so a column added to either
-// type fails to compile here until it is mapped. (Exporting the repos' own mappers would remove
-// this copy — reported to the controller.)
-function toTripRowLocal(row: Record<string, unknown>): TripRow {
-  return {
-    client_trip_id: asText(row, 'client_trip_id'),
-    started_at: asNumber(row, 'started_at'),
-    ended_at: asNumberOrNull(row, 'ended_at'),
-    tz: asText(row, 'tz'),
-    distance_m: asNumber(row, 'distance_m'),
-    duration_s: asNumber(row, 'duration_s'),
-    role: asTextOrNull(row, 'role'),
-    role_confidence: asNumberOrNull(row, 'role_confidence'),
-    role_source: asTextOrNull(row, 'role_source'),
-    mode: asTextOrNull(row, 'mode'),
-    camera_session: asFlag(row, 'camera_session'),
-    score: asNumberOrNull(row, 'score'),
-    scoring_version: asTextOrNull(row, 'scoring_version'),
-    category_deductions_json: asTextOrNull(row, 'category_deductions_json'),
-    exposure: asNumberOrNull(row, 'exposure'),
-    data_quality: asTextOrNull(row, 'data_quality'),
-    conditions_json: asTextOrNull(row, 'conditions_json'),
-    limit_coverage_pct: asNumberOrNull(row, 'limit_coverage_pct'),
-    start_label: asTextOrNull(row, 'start_label'),
-    end_label: asTextOrNull(row, 'end_label'),
-    start_geohash5: asTextOrNull(row, 'start_geohash5'),
-    end_geohash5: asTextOrNull(row, 'end_geohash5'),
-    polyline: asTextOrNull(row, 'polyline'),
-    status: asEnum(row, 'status', TRIP_STATUSES),
-    sync_state: asEnum(row, 'sync_state', TRIP_SYNC_STATES),
-    checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
-    incomplete: asFlag(row, 'incomplete'),
-    server_id: asTextOrNull(row, 'server_id'),
-    sync_error: asTextOrNull(row, 'sync_error'),
-    deleted_at: asNumberOrNull(row, 'deleted_at'),
-    created_at: asNumber(row, 'created_at'),
-    updated_at: asNumber(row, 'updated_at'),
-  };
-}
-
-function toEventRowLocal(row: Record<string, unknown>): EventRow {
-  return {
-    id: asText(row, 'id'),
-    client_trip_id: asText(row, 'client_trip_id'),
-    category: asText(row, 'category'),
-    started_at: asNumber(row, 'started_at'),
-    duration_s: asNumber(row, 'duration_s'),
-    lat: asNumberOrNull(row, 'lat'),
-    lng: asNumberOrNull(row, 'lng'),
-    measured_json: asTextOrNull(row, 'measured_json'),
-    severity: asTextOrNull(row, 'severity'),
-    confidence: asNumberOrNull(row, 'confidence'),
-    context_json: asTextOrNull(row, 'context_json'),
-    deduction: asNumberOrNull(row, 'deduction'),
-    alert_shown: asFlag(row, 'alert_shown'),
-    corrected: asFlag(row, 'corrected'),
-    status: asTextOrNull(row, 'status'),
-    source: asTextOrNull(row, 'source'),
-    dispute_json: asTextOrNull(row, 'dispute_json'),
-  };
-}
-
 /**
  * What the phone holds about each drive, for the rows' current-state copy: four statements for
  * any number of drives (the tombstones, the scored count, the trips `IN`, their events `IN`).
@@ -217,7 +153,7 @@ export async function readInboxLocals(
     `SELECT * FROM trips WHERE client_trip_id IN (${marks})`,
     ids
   );
-  const trips = new Map(tripRows.map(toTripRowLocal).map((r) => [r.client_trip_id, r]));
+  const trips = new Map(tripRows.map(toTripRow).map((r) => [r.client_trip_id, r]));
   const live = ids.filter((id) => trips.get(id)?.deleted_at === null);
   const events = new Map<string, TripEventView[]>();
   if (live.length > 0) {
@@ -227,7 +163,7 @@ export async function readInboxLocals(
       live
     );
     for (const raw of eventRows) {
-      const row = toEventRowLocal(raw);
+      const row = toEventRow(raw);
       const list = events.get(row.client_trip_id) ?? [];
       list.push(toTripEventView(row));
       events.set(row.client_trip_id, list);
