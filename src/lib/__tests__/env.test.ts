@@ -19,4 +19,26 @@ describe('env', () => {
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'k';
     expect(require('@/lib/env').env.supabaseUrl).toBe('https://x.supabase.co');
   });
+
+  describe('diagnostics flag', () => {
+    beforeEach(() => {
+      process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'k';
+    });
+
+    test('is off when unset', () => {
+      delete process.env.EXPO_PUBLIC_DIAGNOSTICS;
+      expect(require('@/lib/env').env.diagnostics).toBe(false);
+    });
+
+    test("is on only for '1'", () => {
+      process.env.EXPO_PUBLIC_DIAGNOSTICS = '1';
+      expect(require('@/lib/env').env.diagnostics).toBe(true);
+    });
+
+    test.each(['0', 'true', 'yes', ''])("stays off for %p", (value) => {
+      process.env.EXPO_PUBLIC_DIAGNOSTICS = value;
+      expect(require('@/lib/env').env.diagnostics).toBe(false);
+    });
+  });
 });

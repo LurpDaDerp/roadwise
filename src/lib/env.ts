@@ -7,6 +7,9 @@ const schema = z.object({
   EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: z.string().optional(),
   EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: z.string().optional(),
   EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY: z.string().optional(),
+  // Set to '1' by eas.json on the development and preview profiles only: it unlocks the drive
+  // diagnostics screen in a build that is not __DEV__. Any other value, or none, leaves it off.
+  EXPO_PUBLIC_DIAGNOSTICS: z.string().optional(),
 });
 
 // Expo inlines `process.env.EXPO_PUBLIC_*` at build time only where each name is spelled out
@@ -18,6 +21,7 @@ const parsed = schema.safeParse({
   EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
   EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
   EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY,
+  EXPO_PUBLIC_DIAGNOSTICS: process.env.EXPO_PUBLIC_DIAGNOSTICS,
 });
 
 if (!parsed.success) {
@@ -36,4 +40,5 @@ export const env = {
   googleIosClientId: parsed.data.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
   googleAndroidClientId: parsed.data.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
   googleMapsAndroidKey: parsed.data.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY,
+  diagnostics: parsed.data.EXPO_PUBLIC_DIAGNOSTICS === '1',
 };

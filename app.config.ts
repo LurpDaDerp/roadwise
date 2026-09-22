@@ -8,7 +8,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: 'SafeDriveApp',
   scheme: 'roadwise',
   version: '2.0.0',
-  orientation: 'portrait',
+  // Not locked at the app level: the root Stack pins every screen to portrait and only the drive
+  // HUD route opts into landscape, for a phone mounted sideways on the dash (plan rev1: I17).
+  orientation: 'default',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
   updates: { url: `https://u.expo.dev/${EAS_PROJECT_ID}` },
@@ -53,7 +55,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     'expo-apple-authentication',
     'expo-secure-store',
     'expo-sqlite',
-    'expo-audio',
+    // Alerts must sound with the screen locked (plan R14): background playback adds the iOS
+    // `audio` background mode. The app never records, so no microphone prompt and no
+    // RECORD_AUDIO permission.
+    ['expo-audio', { microphonePermission: false, recordAudioAndroid: false, enableBackgroundPlayback: true }],
     'expo-notifications',
     'expo-font',
     'expo-web-browser',

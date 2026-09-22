@@ -7,7 +7,9 @@
     "paths": {
       "@/*": ["./src/*"],
       "@scoring": ["./packages/scoring/src/index.ts"],
-      "@scoring/*": ["./packages/scoring/src/*"]
+      "@scoring/*": ["./packages/scoring/src/*"],
+      "@drive-sense": ["./modules/drive-sense/index.ts"],
+      "@drive-sense/*": ["./modules/drive-sense/src/*"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
