@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, View } from 'react-native';
 
 import { useScoreDaily, useTrip } from '@/data/queries';
+import { useLockout } from '@/features/drive/useLockout';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
@@ -96,9 +97,11 @@ function DeleteSheet({
   onCancel: () => void;
 }) {
   const th = useTheme();
+  // A native Modal sits above the lockout overlay, so it closes itself while driving (rev1: I12).
+  const lockedOut = useLockout();
   return (
     <Modal
-      visible={visible}
+      visible={visible && !lockedOut}
       transparent
       animationType={th.reduceMotion ? 'none' : 'slide'}
       onRequestClose={onCancel}

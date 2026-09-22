@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { DISPUTE_REASONS, type DisputeReason } from '@/data/db';
+import { useLockout } from '@/features/drive/useLockout';
 import { Banner, Button, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
@@ -174,9 +175,12 @@ export function DisputeSheet({
   testID?: string;
 }) {
   const th = useTheme();
+  // A native Modal sits above the lockout overlay, so it closes itself while driving (rev1: I12).
+  const lockedOut = useLockout();
+  const open = visible && !lockedOut;
   return (
     <Modal
-      visible={visible}
+      visible={open}
       transparent
       animationType={th.reduceMotion ? 'none' : 'slide'}
       onRequestClose={onClose}
@@ -184,7 +188,7 @@ export function DisputeSheet({
     >
       {/* Mounted only while the sheet is open, which is what makes a dismissed sheet an abandoned
           one: the answers live in this child's state and go with it. */}
-      {visible ? (
+      {open ? (
         <DisputeForm
           busy={busy}
           failed={failed}
