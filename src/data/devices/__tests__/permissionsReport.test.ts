@@ -10,6 +10,7 @@ import { createSettingsRepo, type Db } from '@/data/db';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import { SETTINGS_RETURN_ACK_KEY } from '@/features/permissions/usePermissionHealth';
 import { LOCAL_SENT_KEY } from '@/notifications/keys';
+import { recordLocalSent } from '@/notifications/localDelivery';
 
 import { createFakeSupabase, type FakeSupabase } from '../__fixtures__/fakeSupabase';
 import { INSTALL_ID_KEY } from '../installId';
@@ -187,6 +188,7 @@ describe('reportPermissionsFromBackground', () => {
       db,
       supabase: fake.client,
       now: () => now,
+      zone: () => 'UTC',
       adapter: { snapshot: typeof snapshot === 'function' ? snapshot : async () => snapshot },
     });
 
@@ -196,7 +198,11 @@ describe('reportPermissionsFromBackground', () => {
     expect(await bg(snap({ location: 'foreground' }))).toBe('reported');
     const order = fake.calls.map((c) => `${c.target}:${c.op}`);
     expect(order).toEqual(['notification_prefs:update', 'devices:update']);
-    expect(fake.to('notification_prefs')[0]?.values).toEqual({ local_sent_day: '2026-09-22', local_sent_count: 2 });
+    expect(fake.to('notification_prefs')[0]?.values).toEqual({
+      local_sent_day: '2026-09-22',
+      local_sent_count: 2,
+      tz: 'UTC',
+    });
     expect(written()[0]).toMatchObject({ location: 'foreground', reportedFrom: 'background', ack: false });
   });
 
@@ -213,6 +219,7 @@ describe('reportPermissionsFromBackground', () => {
       user_id: 'user-a',
       local_sent_day: '2026-09-22',
       local_sent_count: 1,
+      tz: 'UTC',
     });
   });
 
@@ -232,12 +239,87 @@ describe('reportPermissionsFromBackground', () => {
         db,
         supabase: fake.client,
         now: () => now,
+        zone: () => 'UTC',
         onError,
         adapter: { snapshot: async () => snap({ location: 'foreground' }) },
       })
     ).toBe('reported');
     expect(fake.to('notification_prefs').map((c) => c.op)).toEqual(['update', 'insert', 'update']);
-    expect(fake.to('notification_prefs')[2]?.values).toEqual({ local_sent_day: '2026-09-22', local_sent_count: 2 });
+    expect(fake.to('notification_prefs')[2]?.values).toEqual({
+      local_sent_day: '2026-09-22',
+      local_sent_count: 2,
+      tz: 'UTC',
+    });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('a summary deferred into today counts, though the exported key still names yesterday (T7 concern 2)', async () => {
+    await seedDevice();
+    // Last night at 23:52 two summaries had been shown and a third was deferred to 07:00 today;
+    // the app has not been opened since, so the export was last written yesterday.
+    const LA = 'America/Los_Angeles';
+    const lastNight = Date.parse('2026-09-22T06:52:00Z'); // 23:52 PDT on 09-21
+    await recordLocalSent(settings(), LA, lastNight - 120_000);
+    await recordLocalSent(settings(), LA, lastNight - 60_000);
+    await recordLocalSent(settings(), LA, lastNight, {
+      id: 'drive-summary:x',
+      at: Date.parse('2026-09-22T14:00:00Z'), // 07:00 PDT on 09-22
+    });
+    expect(await settings().get(LOCAL_SENT_KEY)).toEqual({ day: '2026-09-21', count: 2 });
+    now = Date.parse('2026-09-22T16:00:00Z'); // 09:00 PDT
+    expect(
+      await reportPermissionsFromBackground({
+        db,
+        supabase: fake.client,
+        now: () => now,
+        zone: () => LA,
+        adapter: { snapshot: async () => snap({ location: 'foreground' }) },
+      })
+    ).toBe('reported');
+    expect(fake.to('notification_prefs')[0]?.values).toEqual({
+      local_sent_day: '2026-09-22',
+      local_sent_count: 1,
+      tz: LA,
+    });
+    expect(await settings().get(LOCAL_SENT_KEY)).toEqual({ day: '2026-09-22', count: 1 });
+  });
+
+  it('sends the normalised zone with the count (T7 review m1)', async () => {
+    await seedDevice();
+    await reportPermissionsFromBackground({
+      db,
+      supabase: fake.client,
+      now: () => now,
+      zone: () => 'GMT+5',
+      adapter: { snapshot: async () => snap({ location: 'foreground' }) },
+    });
+    expect(fake.to('notification_prefs')[0]?.values).toMatchObject({ tz: 'Etc/GMT-5' });
+  });
+
+  it('a zone the server refuses (22023) is dropped and the count is sent alone', async () => {
+    await seedDevice();
+    await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 1 });
+    fake.respond = (c) => {
+      if (c.target !== 'notification_prefs') return { data: c.columns ? [{ id: 'x' }] : null, error: null };
+      const values = c.values as Record<string, unknown>;
+      if ('tz' in values) return { data: null, error: { code: '22023', message: 'unknown time zone' } };
+      return { data: [{ user_id: 'user-a' }], error: null };
+    };
+    const onError = jest.fn();
+    expect(
+      await reportPermissionsFromBackground({
+        db,
+        supabase: fake.client,
+        now: () => now,
+        zone: () => 'UTC',
+        onError,
+        adapter: { snapshot: async () => snap({ location: 'foreground' }) },
+      })
+    ).toBe('reported');
+    expect(fake.to('notification_prefs').map((c) => c.values)).toEqual([
+      { local_sent_day: '2026-09-22', local_sent_count: 1, tz: 'UTC' },
+      { local_sent_day: '2026-09-22', local_sent_count: 1 },
+    ]);
     expect(onError).not.toHaveBeenCalled();
   });
 

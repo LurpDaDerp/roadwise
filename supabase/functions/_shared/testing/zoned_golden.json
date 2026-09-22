@@ -1,0 +1,39 @@
+{
+  "about": "One golden table of zoned-time cases, run by the phone's local delivery plan (src/notifications/__tests__/localDelivery.test.ts) and by push-sender's policy (_shared/push_policy_zoned.test.ts), so the two implementations of quiet hours and the local day cannot drift (T7 review n2). quiet: 'in' is whether t falls in [start, end); 'deferTo' is where a notification due at t is held to (the next quiet end), null when it is not in quiet hours. day: the local calendar day of t. Only zones that both Intl and the server know are used; an unknown zone is left out on purpose (the phone normalises it to UTC, the server falls back to its default zone).",
+  "quiet": [
+    { "name": "14:00 PDT, outside", "t": "2026-09-22T21:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": false, "deferTo": null },
+    { "name": "22:00 PDT, the start is inside", "t": "2026-09-23T05:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-09-23T14:00:00Z" },
+    { "name": "21:59 PDT, just before the start", "t": "2026-09-23T04:59:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": false, "deferTo": null },
+    { "name": "06:59 PDT, across midnight, still inside", "t": "2026-09-23T13:59:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-09-23T14:00:00Z" },
+    { "name": "07:00 PDT, the end is outside", "t": "2026-09-23T14:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": false, "deferTo": null },
+    { "name": "fall back: quiet starts 22:00 PDT on 10-31, held to 07:00 PST", "t": "2026-11-01T05:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-11-01T15:00:00Z" },
+    { "name": "fall back: 23:30 PDT to 07:00 PST", "t": "2026-11-01T06:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-11-01T15:00:00Z" },
+    { "name": "fall back: the first 01:30 (PDT)", "t": "2026-11-01T08:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-11-01T15:00:00Z" },
+    { "name": "fall back: the second 01:30 (PST)", "t": "2026-11-01T09:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-11-01T15:00:00Z" },
+    { "name": "fall back: quiet starts 22:00 PST on 11-01", "t": "2026-11-02T06:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-11-02T15:00:00Z" },
+    { "name": "spring forward: 23:30 PST on 03-13 to 07:00 PDT", "t": "2027-03-14T07:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2027-03-14T14:00:00Z" },
+    { "name": "spring forward: 03:30 PDT, just past the gap", "t": "2027-03-14T10:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2027-03-14T14:00:00Z" },
+    { "name": "spring forward: quiet starts 22:00 PDT on 03-14", "t": "2027-03-15T05:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2027-03-15T14:00:00Z" },
+    { "name": "spring forward: a quiet end in the gap (02:30) resolves just past it (03:30 PDT)", "t": "2027-03-14T08:30:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "02:30" }, "in": true, "deferTo": "2027-03-14T10:30:00Z" },
+    { "name": "start = end is off", "t": "2026-09-23T06:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "22:00", "end": "22:00" }, "in": false, "deferTo": null },
+    { "name": "disabled is off", "t": "2026-09-23T06:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": false, "start": "22:00", "end": "07:00" }, "in": false, "deferTo": null },
+    { "name": "a same-day span, inside", "t": "2026-09-22T21:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "13:00", "end": "15:00" }, "in": true, "deferTo": "2026-09-22T22:00:00Z" },
+    { "name": "a same-day span, outside", "t": "2026-09-22T19:00:00Z", "tz": "America/Los_Angeles", "quiet": { "enabled": true, "start": "13:00", "end": "15:00" }, "in": false, "deferTo": null },
+    { "name": "Paris, across midnight", "t": "2026-09-22T21:00:00Z", "tz": "Europe/Paris", "quiet": { "enabled": true, "start": "22:00", "end": "07:00" }, "in": true, "deferTo": "2026-09-23T05:00:00Z" }
+  ],
+  "day": [
+    { "t": "2026-09-23T06:59:59Z", "tz": "America/Los_Angeles", "day": "2026-09-22" },
+    { "t": "2026-09-23T07:00:00Z", "tz": "America/Los_Angeles", "day": "2026-09-23" },
+    { "t": "2026-11-01T06:59:59Z", "tz": "America/Los_Angeles", "day": "2026-10-31" },
+    { "t": "2026-11-01T07:00:00Z", "tz": "America/Los_Angeles", "day": "2026-11-01" },
+    { "t": "2026-11-02T07:59:59Z", "tz": "America/Los_Angeles", "day": "2026-11-01" },
+    { "t": "2026-11-02T08:00:00Z", "tz": "America/Los_Angeles", "day": "2026-11-02" },
+    { "t": "2027-03-14T07:59:59Z", "tz": "America/Los_Angeles", "day": "2027-03-13" },
+    { "t": "2027-03-14T08:00:00Z", "tz": "America/Los_Angeles", "day": "2027-03-14" },
+    { "t": "2027-03-15T06:59:59Z", "tz": "America/Los_Angeles", "day": "2027-03-14" },
+    { "t": "2027-03-15T07:00:00Z", "tz": "America/Los_Angeles", "day": "2027-03-15" },
+    { "t": "2026-09-22T23:59:59Z", "tz": "UTC", "day": "2026-09-22" },
+    { "t": "2026-09-22T22:00:00Z", "tz": "Europe/Paris", "day": "2026-09-23" },
+    { "t": "2026-09-22T19:00:00Z", "tz": "Etc/GMT-5", "day": "2026-09-23" }
+  ]
+}

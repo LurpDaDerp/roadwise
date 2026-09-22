@@ -3,9 +3,11 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, Pressable, StyleSheet, Switch, View } from 'react-native';
 
-import type { NotificationAccess, PermissionsAdapter } from '@/core/permissions';
+import { recordPrompt, type NotificationAccess, type PermissionsAdapter } from '@/core/permissions';
+import { createSettingsRepo } from '@/data/db/settings';
 import { useDriveStateReported } from '@/data/devices/driveStateStore';
 import type { AppStateLike } from '@/data/foreground';
+import { useDataSource } from '@/data/queries';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { ICON, TOUCH } from '@/features/trips/layout';
 import { TripTopBar } from '@/features/trips/TopBar';
@@ -109,6 +111,14 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
   const reported = useDriveStateReported();
   const [os] = useState(() => deps.os ?? adapterPort(defaultPermissionsAdapter()));
   const { access, read } = useOsAccess(os, deps.appState ?? AppState);
+  const { db, now } = useDataSource();
+  // A tap, so the request goes straight to the OS (never throttled, Ruling T8 r1); it is still
+  // stamped, as T14's steps do, so a later app-started offer respects the 14-day window.
+  const allow = () =>
+    void os
+      .request()
+      .then(() => recordPrompt(createSettingsRepo(db), 'notifications', now()).catch(() => undefined))
+      .then(read, read);
 
   const back = router.canGoBack() ? () => router.back() : null;
   const categories = liveCategories(catalog);
@@ -240,7 +250,7 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
           message={copy.os.undetermined}
           action={{
             label: copy.os.allow,
-            onPress: () => void os.request().then(read, read),
+            onPress: allow,
           }}
         />
       ) : null}

@@ -2,7 +2,9 @@ import { buildCatalog, NOTIFICATION_CATEGORIES, type NotificationCategory } from
 import { LOCAL_SENT_KEY, PREFS_CACHE_KEY } from '@/notifications/keys';
 import {
   effectivePrefs,
+  inQuietHours,
   LOCAL_LEDGER_KEY,
+  localDay,
   localDeliveryPlan,
   readCachedPrefs,
   readLocalCounts,
@@ -378,5 +380,47 @@ describe('effective prefs', () => {
     expect(await readCachedPrefs(s, defaults)).toEqual(custom);
     await s.set(PREFS_CACHE_KEY, { nonsense: true });
     expect(await readCachedPrefs(s, defaults)).toEqual(prefs());
+  });
+});
+
+// ——— the zoned-time golden table, shared with push-sender (T7 review n2) ———
+
+interface GoldenQuiet {
+  name: string;
+  t: string;
+  tz: string;
+  quiet: { enabled: boolean; start: string; end: string };
+  in: boolean;
+  deferTo: string | null;
+}
+interface GoldenDay {
+  t: string;
+  tz: string;
+  day: string;
+}
+
+// The same JSON push-sender's `_shared/push_policy_zoned.test.ts` imports.
+const golden = require('../../../supabase/functions/_shared/testing/zoned_golden.json') as {
+  quiet: GoldenQuiet[];
+  day: GoldenDay[];
+};
+
+describe('the zoned-time golden table (shared with push-sender)', () => {
+  it('has cases', () => {
+    expect(golden.quiet.length).toBeGreaterThan(10);
+    expect(golden.day.length).toBeGreaterThan(10);
+  });
+
+  it.each(golden.quiet.map((c) => [c.name, c] as const))('quiet: %s', (_name, c) => {
+    const t = Date.parse(c.t);
+    expect(inQuietHours(t, c.tz, c.quiet)).toBe(c.in);
+    const plan = localDeliveryPlan(
+      input({ endedAt: t - SUMMARY_DELAY_MS, now: t, tz: c.tz, prefs: prefs({ quiet: c.quiet }) })
+    );
+    expect(plan).toEqual({ kind: 'schedule', at: c.deferTo === null ? t : Date.parse(c.deferTo) });
+  });
+
+  it.each(golden.day.map((c) => [`${c.t} in ${c.tz}`, c] as const))('day: %s', (_name, c) => {
+    expect(localDay(Date.parse(c.t), c.tz)).toBe(c.day);
   });
 });

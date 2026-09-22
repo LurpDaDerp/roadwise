@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
-import type { NotificationAccess } from '@/core/permissions';
+import { readPromptHistory, type NotificationAccess } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Db } from '@/data/db/driver';
 import { registerDriveStateSource } from '@/data/devices/driveStateStore';
@@ -353,7 +353,7 @@ describe('NotificationSettingsScreen', () => {
 
     it('offers to ask when it has never been asked, only on a tap', async () => {
       const os = fakeOs('undetermined');
-      await renderScreen({ os });
+      const { db } = await renderScreen({ os });
       await waitFor(() => expect(screen.getByTestId('prefs-os-undetermined')).toBeTruthy());
       expect(os.request).not.toHaveBeenCalled();
       await act(async () => {
@@ -361,6 +361,9 @@ describe('NotificationSettingsScreen', () => {
       });
       await waitFor(() => expect(screen.queryByTestId('prefs-os-undetermined')).toBeNull());
       expect(os.request).toHaveBeenCalledTimes(1);
+      expect(await readPromptHistory(createSettingsRepo(db))).toEqual({
+        notifications: Date.parse('2026-09-22T21:00:00Z'),
+      });
     });
 
     it('granted shows no banner', async () => {

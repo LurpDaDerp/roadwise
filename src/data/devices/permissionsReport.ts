@@ -35,7 +35,8 @@ import type { Db } from '@/data/db/driver';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import type { Database } from '@/data/supabase/types';
 import { markSettingsReturn, takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
-import { LOCAL_SENT_KEY } from '@/notifications/keys';
+import { normaliseZone } from '@/core/engine/finalize';
+import { readLocalSent } from '@/notifications/localDelivery';
 
 import { readInstallId } from './installId';
 import { asError, noteReportedFingerprint, readLastUpsert, type DevicesClient } from './register';
@@ -170,11 +171,19 @@ export async function reportPermissions(
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** T7's `{ day, count }` (LOCAL_SENT_KEY), or null when absent or unreadable. */
-async function readDayCount(settings: Pick<SettingsRepo, 'get'>): Promise<{ day: string; count: number } | null> {
-  const raw = await settings.get<unknown>(LOCAL_SENT_KEY);
-  if (raw === null || typeof raw !== 'object') return null;
-  const { day, count } = raw as Record<string, unknown>;
+/**
+ * T7's `{ day, count }` for today in `tz`, through `readLocalSent`: it rolls the day over and counts
+ * a delivery deferred into today (quiet hours), rewriting `LOCAL_SENT_KEY` as it goes — a raw read
+ * of the key would still name yesterday until the next foreground (T7 review, concern 2). Null when
+ * it cannot be read.
+ */
+async function readDayCount(
+  settings: Pick<SettingsRepo, 'get' | 'set'>,
+  tz: string,
+  now: number
+): Promise<{ day: string; count: number } | null> {
+  const raw = await readLocalSent(settings, tz, now);
+  const { day, count } = raw as unknown as Record<string, unknown>;
   if (typeof day !== 'string' || !DAY.test(day) || typeof count !== 'number' || !Number.isInteger(count)) {
     return null;
   }
@@ -185,17 +194,35 @@ async function readDayCount(settings: Pick<SettingsRepo, 'get'>): Promise<{ day:
 /**
  * N-I1: the only live server push in M4 is a lapse reported from a background wake — exactly when
  * a foreground-only count would be stale. So the count goes up first, where the push sweep reads
- * it. Only the two count columns are written (quiet hours stay null, so the defaults keep
- * applying); an update, then an insert when the account has no row yet.
+ * it, together with the phone's zone (T7 review m1): after travel with no foreground, the server
+ * then decides the lapse push's quiet hours and "today" in the zone the phone is in. Only these
+ * columns are written (quiet hours stay null, so the defaults keep applying); an update, then an
+ * insert when the account has no row yet. A zone the server refuses (22023) is dropped and the count
+ * sent alone.
  */
 async function sendDayCount(
   supabase: DevicesClient,
   userId: string,
-  settings: Pick<SettingsRepo, 'get'>
+  settings: Pick<SettingsRepo, 'get' | 'set'>,
+  tz: string,
+  now: number
 ): Promise<void> {
-  const count = await readDayCount(settings);
+  const count = await readDayCount(settings, tz, now);
   if (!count) return;
-  const values = { local_sent_day: count.day, local_sent_count: count.count };
+  const counted = { local_sent_day: count.day, local_sent_count: count.count };
+  try {
+    await writePrefs(supabase, userId, { ...counted, tz });
+  } catch (error) {
+    if (codeOf(error) !== INVALID_PARAMETER) throw error;
+    await writePrefs(supabase, userId, counted);
+  }
+}
+
+async function writePrefs(
+  supabase: DevicesClient,
+  userId: string,
+  values: { local_sent_day: string; local_sent_count: number; tz?: string }
+): Promise<void> {
   const update = async (): Promise<boolean> => {
     const { data, error } = await supabase
       .from('notification_prefs')
@@ -214,6 +241,7 @@ async function sendDayCount(
   throw inserted.error;
 }
 
+const INVALID_PARAMETER = '22023';
 const UNIQUE_VIOLATION = '23505';
 
 const codeOf = (error: unknown): string | null =>
@@ -228,8 +256,18 @@ export interface BackgroundReportDeps {
   /** Default: the device adapter (it reads; it never prompts). */
   adapter?: Pick<PermissionsAdapter, 'snapshot'>;
   now?: () => number;
+  /** Default: the phone's zone. Normalised either way (the zone a drive is stamped in). */
+  zone?: () => string;
   onError?: (error: unknown, context: string) => void;
 }
+
+const deviceZone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return 'UTC';
+  }
+};
 
 let defaultAdapter: PermissionsAdapter | null = null;
 
@@ -278,7 +316,8 @@ export async function reportPermissionsFromBackground(deps: BackgroundReportDeps
           const { data } = await supabase.auth.getSession();
           if (data.session?.user.id !== owner) return false;
           try {
-            await sendDayCount(supabase, owner, settings);
+            const now = (deps.now ?? Date.now)();
+            await sendDayCount(supabase, owner, settings, normaliseZone((deps.zone ?? deviceZone)()), now);
           } catch (error) {
             // the lapse matters more than the count: report it anyway
             onError(asError(error, 'day count failed'), 'devices day count');
