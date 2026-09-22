@@ -62,7 +62,6 @@ import {
   storedMetrics,
   toScorableEvent,
 } from '../_shared/rescore.ts';
-import { traceRetained } from '../_shared/retention.ts';
 import { scoreTrip } from '../_shared/scoring/index';
 import type { TripMetrics } from '../_shared/scoring/index';
 import { TripActionSchema, type DeleteAction, type DisputeAction, type SetRoleAction } from './schema.ts';
@@ -204,13 +203,9 @@ interface Run {
   ctx: Ctx;
 }
 
-/**
- * The scorer's inputs from the row, or the integrity failure — checked before anything is written.
- * Past trace retention the trace is gone by policy, whatever `trace_path` still says, so the
- * re-score takes `no_trace` (_shared/retention.ts; review B6 r1 n3).
- */
-function requireMetrics(trip: StoredTrip, role: TripMetrics['role'], nowMs: number): TripMetrics {
-  const metrics = storedMetrics(traceRetained(trip, nowMs) ? trip : { ...trip, tracePath: null }, role);
+/** The scorer's inputs from the row, or the integrity failure — checked before anything is written. */
+function requireMetrics(trip: StoredTrip, role: TripMetrics['role']): TripMetrics {
+  const metrics = storedMetrics(trip, role);
   if (!metrics) throw new IntegrityFailure('rows_digest_invalid');
   return metrics;
 }
@@ -336,7 +331,7 @@ async function dispute(run: Run, a: DisputeAction): Promise<Response> {
   }
 
   // a row this function cannot re-score from must fail before the writer consumes allowance
-  const metrics = requireMetrics(trip, trip.role, run.nowMs);
+  const metrics = requireMetrics(trip, trip.role);
   const scorer = requireScorer(trip);
 
   if (!preview.can_auto_accept) {
@@ -402,7 +397,7 @@ async function setRole(run: Run, a: SetRoleAction): Promise<Response> {
     };
     return json(200, replay);
   }
-  const metrics = requireMetrics(trip, a.role, run.nowMs);
+  const metrics = requireMetrics(trip, a.role);
   const scorer = requireScorer(trip);
   const set = await db.setTripRole(userId, trip.id, a.role);
   // The writer has already unscored a passenger/other trip; the recompute writes the same result
