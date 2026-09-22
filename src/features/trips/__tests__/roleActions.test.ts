@@ -7,7 +7,7 @@ import {
 } from '@/data/db';
 import { createTestDb, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
-import { onQueueChanged } from '@/data/sync/queue';
+import { onDataChanged } from '@/data/events';
 
 import { setRoleIdempotencyKey, setTripRole } from '@/features/trips/roleActions';
 
@@ -68,13 +68,13 @@ test('every answer is its own queue item, in order, so the last one is what the 
 });
 
 test('wakes the sync runner after the write has committed', async () => {
-  const wakes: number[] = [];
-  const off = onQueueChanged(() => wakes.push(Date.now()));
+  const wakes: string[] = [];
+  const off = onDataChanged((e) => wakes.push(e.source));
   try {
     await setTripRole(db, 'unknown', 'passenger', NOW);
     expect(wakes).toHaveLength(0);
     await nextMacrotask();
-    expect(wakes).toHaveLength(1);
+    expect(wakes).toEqual(['enqueue']);
   } finally {
     off();
   }

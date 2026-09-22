@@ -9,19 +9,41 @@
  *   4. `recoverRecordingTrips` — a drive the last process died in is finalized from its last
  *      checkpoint, before any engine exists to own a `recording` row. No speed-limit cache yet,
  *      so a recovered drive is judged against an unknown limit: no speeding, everything else;
- *   5. the query client, wired to the queue's events so a sync pass refreshes what is on screen;
- *   6. the sync runner, started — whatever recovery just queued goes up now.
+ *   5. the query client, wired to the one change event so a sync pass, a restore or a finalize
+ *      refreshes what is on screen;
+ *   6. the sync runner, started — whatever recovery just queued goes up now;
+ *   7. the hydrator, built but **not** started: restoring history from the server is network
+ *      work, and a background launch (an iOS location wake, the Android headless task) must not
+ *      do it (R13). The host calls `startForegroundJobs(runtime)` from the foreground path, which
+ *      runs it only while the app is active and at most every `HYDRATE_INTERVAL_MS`.
  *
  * Everything platform-shaped is injectable, so the whole sequence runs under Jest against
  * sql.js; the defaults are the device adapters, imported lazily where they carry a native module.
  */
 import * as scoring from '@scoring';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { QueryClient } from '@tanstack/react-query';
 import { AppState } from 'react-native';
 
 import { createDetectors } from '@/core/detectors';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createExpoDb, migrate, type Db } from '@/data/db';
+import { createSettingsRepo } from '@/data/db/settings';
+import type { Database } from '@/data/supabase/types';
+import {
+  foregroundStampKey,
+  runWhenForeground,
+  type AppStateLike as ForegroundAppState,
+} from '@/data/foreground';
+import {
+  createHydrator,
+  HYDRATE_INTERVAL_MS,
+  HYDRATE_RESTORED_AT_KEY,
+  hydrateSeam,
+  type Hydrator,
+  type HydrateSupabase,
+} from '@/data/hydrate/hydrate';
+import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient, subscribeInvalidation } from '@/data/queries';
 import {
   createSyncRunner,
@@ -64,8 +86,8 @@ export class BootstrapError extends Error {
 export interface BootstrapDeps {
   /** Opens the database. Default: `createExpoDb(DB_NAME)`. */
   openDb?: () => Promise<Db>;
-  /** Default: the app's Supabase client. */
-  supabase?: SyncSupabase;
+  /** Default: the app's Supabase client. The runner and the hydrator each use their own slice. */
+  supabase?: SyncSupabase & HydrateSupabase;
   /** The traces directory as the runner reads it. Default: `createExpoTraceFs()`. */
   traceFs?: TraceFs;
   /** The traces directory as the finalizer writes it. Default: `createExpoTraceWriter()`. */
@@ -97,12 +119,16 @@ export interface AppRuntime {
   db: Db;
   queryClient: QueryClient;
   runner: SyncRunner;
+  /** Restores the driver's history from the server. Idle until `startForegroundJobs`. */
+  hydrator: Hydrator;
   recovery: RecoveryResult;
   /** What the owner check found. `wiped` means this launch emptied a previous driver's device. */
   owner: DeviceOwnerOutcome;
   schemaVersion: number;
+  /** The clock the launch was built with; the foreground jobs throttle by it. */
+  now: () => number;
   /**
-   * Stops the runner, detaches the cache from the queue and empties it. For teardown; never
+   * Stops the runner and the hydrator, detaches the cache from the change event and empties it. For teardown; never
    * mid-session. The cache is emptied rather than left to its gc timers because one reason to
    * tear a runtime down is that the device changed hands, and the last driver's rows must not
    * sit in memory for five more minutes.
@@ -180,14 +206,16 @@ async function runLaunch(
   // finalize the last driver's interrupted drive into this one's account (`src/boot/device.ts`).
   enter('identity');
   const identity = await stage('identity', async () => {
-    const supabase = deps.supabase ?? (await import('@/data/supabase/client')).supabase;
+    const { supabase, hydrateSupabase } = deps.supabase
+      ? { supabase: deps.supabase, hydrateSupabase: deps.supabase }
+      : appSeams((await import('@/data/supabase/client')).supabase);
     const traceWriter = deps.traceWriter ?? (await createExpoTraceWriter());
     const { data } = await supabase.auth.getSession();
     const owner = await ensureDeviceOwner(db, data.session?.user.id ?? null, {
       traces: traceWriter,
       onError,
     });
-    return { supabase, traceWriter, owner };
+    return { supabase, hydrateSupabase, traceWriter, owner };
   });
 
   enter('recover');
@@ -237,17 +265,89 @@ async function runLaunch(
     throw reason;
   }
 
+  // Built here so it shares the launch's identity, clock and busy signal; started by nobody here.
+  const hydrator = createHydrator({
+    db,
+    supabase: identity.hydrateSupabase,
+    now,
+    isBusy: deps.isRecording ?? (() => false),
+    onError,
+  });
+
   return {
     db,
     queryClient,
     runner,
+    hydrator,
     recovery,
     owner: identity.owner,
     schemaVersion,
+    now,
     async stop() {
-      await runner.stop();
+      await Promise.all([runner.stop(), hydrator.stop()]);
       detach();
       queryClient.clear();
     },
   };
+}
+
+/**
+ * The app client as the two seams the launch hands out. The runner's is a plain structural
+ * assignment (its test proves the client fits). The hydrator's goes through `hydrateSeam`, the one
+ * place the generated client's schema-resolved builder is narrowed to the restore's six calls.
+ */
+function appSeams(client: SupabaseClient<Database>): {
+  supabase: SyncSupabase;
+  hydrateSupabase: HydrateSupabase;
+} {
+  return { supabase: client, hydrateSupabase: hydrateSeam(client) };
+}
+
+export interface ForegroundJobsDeps {
+  /** Default: React Native's `AppState`. */
+  appState?: ForegroundAppState;
+  onError?: (error: unknown, context: string) => void;
+}
+
+/**
+ * The work that runs only while the driver has the app open (R10, R13; review I3). H2 calls this
+ * from the foreground path of the launch — never from a background wake — and calls the returned
+ * function when the runtime is torn down.
+ *
+ * Today that is hydration: every `HYDRATE_INTERVAL_MS`, on a transition to `active`, an
+ * incremental top-up from the stored cursor. A **full** restore is owed once — the throttle
+ * bypassed — when this launch found a new owner (`first`, `wiped`) or the device has never
+ * completed a restore (an M2 install, or one whose restores were all cut short); it stays owed until a full run completes, so a restore cut short by a
+ * tunnel or a drive is resumed at the next foreground rather than six hours later. While it is
+ * owed, the score slot says "Restoring…" rather than "Building your score" (R9).
+ */
+export async function startForegroundJobs(
+  runtime: AppRuntime,
+  deps: ForegroundJobsDeps = {}
+): Promise<() => void> {
+  const settings = createSettingsRepo(runtime.db);
+  const neverRestored = (await settings.get<unknown>(HYDRATE_RESTORED_AT_KEY)) === null;
+  let fullOwed = runtime.owner === 'first' || runtime.owner === 'wiped' || neverRestored;
+  if (fullOwed) {
+    // Bypass the throttle once: a stamp left by an earlier install or owner is not this restore's.
+    await settings.remove(foregroundStampKey('hydrate'));
+    if (getHydrationStatus().state === 'idle') setHydrationStatus({ state: 'restoring', restored: 0 });
+  }
+
+  return runWhenForeground(
+    'hydrate',
+    HYDRATE_INTERVAL_MS,
+    async () => {
+      const result = await runtime.hydrator.run({ full: fullOwed });
+      // An incomplete run stamps nothing, so the next foreground tries again.
+      if (!result.complete) throw new Error('hydration did not complete');
+      fullOwed = false;
+    },
+    {
+      appState: deps.appState ?? AppState,
+      now: runtime.now,
+      db: runtime.db,
+      onError: deps.onError ?? warn,
+    }
+  );
 }

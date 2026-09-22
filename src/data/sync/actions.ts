@@ -45,7 +45,7 @@ import {
   type TripStatus,
 } from '@/data/db/types';
 import type { SyncKind } from '@/data/sync/kinds';
-import { CLIENT_TRIP_ID } from '@/data/sync/queue';
+import { CLIENT_TRIP_ID, deviceOwnerIs } from '@/data/sync/queue';
 import {
   classifyInvokeError,
   DayRowSchema,
@@ -99,6 +99,18 @@ export interface ActionContext {
    * and would otherwise appear in the new driver's empty cache.
    */
   stale?: () => boolean;
+  /**
+   * Re-reads the session and answers whether it is still the user this item was queued for
+   * (M2 carry-over 4). Asked after the round trip and before every local write; a handler that
+   * hears `false` writes nothing and hands the claim back.
+   */
+  ownerHolds?: () => Promise<boolean>;
+  /**
+   * The item's owner, asserted once more *inside* each write's transaction against the device's
+   * own record of whose it is — the record a handover's wipe rewrites. Absent in a context that
+   * has no queue item behind it (a unit test calling a handler directly).
+   */
+  owner?: string | null;
 }
 
 export type ActionHandler = (payloadJson: string, ctx: ActionContext) => Promise<ActionOutcome>;
@@ -271,6 +283,45 @@ export function tripFieldsPatch(fields: TripFields, conditionsJson: string | nul
   };
 }
 
+/**
+ * May this handler write to the device now? The generation fence, then a fresh read of the session
+ * against the item's owner. Every local write in this file is behind it.
+ */
+async function mayWrite(ctx: ActionContext): Promise<boolean> {
+  if (ctx.stale?.() === true) return false;
+  if (ctx.ownerHolds !== undefined && !(await ctx.ownerHolds())) return false;
+  return ctx.stale?.() !== true;
+}
+
+/** Thrown inside a write's transaction when the device no longer records the item's owner. */
+class OwnerChanged extends Error {
+  constructor() {
+    super('the device changed hands under this write');
+    this.name = 'OwnerChanged';
+  }
+}
+
+/** The in-transaction half of the fence; a rollback, then a `defer`. */
+async function assertOwner(ctx: ActionContext, tx: Db): Promise<void> {
+  if (ctx.owner === undefined) return;
+  if (ctx.owner === null || !(await deviceOwnerIs(tx, ctx.owner))) throw new OwnerChanged();
+}
+
+/** Run a write transaction behind both halves of the fence. False: nothing was written. */
+async function fencedWrite(ctx: ActionContext, fn: (tx: Db) => Promise<void>): Promise<boolean> {
+  if (!(await mayWrite(ctx))) return false;
+  try {
+    await ctx.db.transaction(async (tx) => {
+      await assertOwner(ctx, tx);
+      await fn(tx);
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof OwnerChanged) return false;
+    throw error;
+  }
+}
+
 /** Upsert every day the server recomputed. Runs inside the caller's transaction. */
 async function cacheDays(db: Db, tx: Db, days: readonly DayRow[], at: number): Promise<void> {
   const cache = createScoreDailyCacheRepo(db);
@@ -326,7 +377,9 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
   if (!parsed.success) {
     // The one terminal outcome the driver can do nothing about, so it must still leave a record:
     // without it D3 says "sending" for ever about a body that will never be sent.
-    await recordRefusalFor(ctx, storedEventId(payloadJson), 'invalid_payload');
+    if (!(await recordRefusalFor(ctx, storedEventId(payloadJson), 'invalid_payload'))) {
+      return { kind: 'defer' };
+    }
     return { kind: 'failed', code: 'invalid_payload' };
   }
   const payload = parsed.data;
@@ -337,7 +390,9 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
     // Without this the item would fail with its code on the queue row and the screen would go on
     // saying "sending" forever, because a terminal outcome never reaches the apply step below.
     if (sent.outcome.kind === 'failed') {
-      await recordRefusalFor(ctx, payload.clientEventId, sent.outcome.code, payload);
+      if (!(await recordRefusalFor(ctx, payload.clientEventId, sent.outcome.code, payload))) {
+        return { kind: 'defer' };
+      }
     }
     return sent.outcome;
   }
@@ -349,13 +404,11 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
   }
   const result = reply.data;
 
-  if (ctx.stale?.() === true) return { kind: 'defer' };
-
   const events = createEventsRepo(ctx.db);
   const trips = createTripsRepo(ctx.db);
   const event = await events.get(payload.clientEventId);
 
-  await ctx.db.transaction(async (tx) => {
+  const written = await fencedWrite(ctx, async (tx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
     // The event (and its trip) can be gone: the driver deleted the trip while the report was
     // queued. The day rows above are still the server's latest word and are still worth caching.
@@ -393,7 +446,7 @@ export const runDispute: ActionHandler = async (payloadJson, ctx) => {
     );
   });
 
-  return { kind: 'done' };
+  return written ? { kind: 'done' } : { kind: 'defer' };
 };
 
 /** The server's refusal of a report, as §7.D D3 has to show it. */
@@ -429,11 +482,14 @@ async function recordRefusalFor(
   clientEventId: string | null,
   code: string,
   from?: Pick<DisputePayload, 'reason' | 'note' | 'statedLimitMph'>
-): Promise<void> {
-  if (clientEventId === null) return;
+): Promise<boolean> {
+  // False only when the device changed hands under the call: the refusal belongs to a database
+  // that is no longer this one, so nothing is written and the claim is handed back.
+  if (!(await mayWrite(ctx))) return false;
+  if (clientEventId === null) return true;
   const events = createEventsRepo(ctx.db);
   const event = await events.get(clientEventId);
-  if (event === null) return;
+  if (event === null) return true;
 
   const base =
     parseStoredDispute(event.dispute_json) ??
@@ -465,7 +521,10 @@ async function recordRefusalFor(
   }
   // Whatever else is known, the event must stop looking as though a report were on its way.
   if (event.status === 'disputed') patch.status = 'scored';
-  if (Object.keys(patch).length > 0) await events.update(event.id, patch);
+  if (Object.keys(patch).length === 0) return true;
+  return fencedWrite(ctx, async (tx) => {
+    await events.update(event.id, patch, tx);
+  });
 }
 
 /**
@@ -560,10 +619,8 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
   }
   const result = reply.data;
 
-  if (ctx.stale?.() === true) return { kind: 'defer' };
-
   const trips = createTripsRepo(ctx.db);
-  await ctx.db.transaction(async (tx) => {
+  const written = await fencedWrite(ctx, async (tx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
     const trip = await trips.get(payload.clientTripId, tx);
     if (trip === null) return;
@@ -584,7 +641,7 @@ export const runSetRole: ActionHandler = async (payloadJson, ctx) => {
     );
   });
 
-  return { kind: 'done' };
+  return written ? { kind: 'done' } : { kind: 'defer' };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -614,10 +671,10 @@ export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
     // to retry: finish the delete here rather than tell the driver their drive is still on a
     // server that never had it.
     if (sent.outcome.kind === 'failed' && sent.outcome.code === NOT_FOUND) {
-      await ctx.db.transaction(async (tx) => {
+      const removed = await fencedWrite(ctx, async (tx) => {
         await createTripsRepo(ctx.db).remove(payload.clientTripId, tx);
       });
-      return { kind: 'done' };
+      return removed ? { kind: 'done' } : { kind: 'defer' };
     }
     return sent.outcome;
   }
@@ -629,17 +686,15 @@ export const runDeleteTrip: ActionHandler = async (payloadJson, ctx) => {
   }
   const result = reply.data;
 
-  if (ctx.stale?.() === true) return { kind: 'defer' };
-
   const trips = createTripsRepo(ctx.db);
-  await ctx.db.transaction(async (tx) => {
+  const written = await fencedWrite(ctx, async (tx) => {
     await cacheDays(ctx.db, tx, result.days, ctx.now);
     // Explicit rather than left to ON DELETE CASCADE, which may not be enforced inside a
     // transaction on device; `remove` takes the events and the samples with the row.
     await trips.remove(payload.clientTripId, tx);
   });
 
-  return { kind: 'done' };
+  return written ? { kind: 'done' } : { kind: 'defer' };
 };
 
 /** The three handlers, by the queue kind that dispatches to them. */

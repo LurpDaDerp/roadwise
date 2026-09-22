@@ -1,27 +1,27 @@
 /**
  * Telling the cache that SQLite moved.
  *
- * Two things change a row under a mounted screen: the sync runner writing back what
- * `finalize-trip` answered, and the engine finalizing a drive. Neither may import this module
- * (the runner is below the UI; the engine must stay free of React), so the wiring runs the other
- * way — the host calls `subscribeInvalidation` once and hands it the two sources.
+ * Four things change a row under a mounted screen: work being queued, the sync runner writing
+ * back what the server answered, hydration restoring history from the server, and the drive host
+ * finalizing a trip. None of them may import this module (the runner and the hydrator are below
+ * the UI; the engine must stay free of React), so the wiring runs the other way — each announces
+ * itself on the one change event (`@/data/events`) and this module listens.
  *
- * The queue's own `queue:changed` emitter is the default source, because it already fires after
- * the transaction that wrote the row commits and coalesces a batch into one macrotask. The
- * engine's finalize is injected as `onTripChanged` rather than imported, so this file's module
- * graph stops at `src/data`.
+ * The change event is the default source because it already fires after the transaction that
+ * wrote the row commits, and coalesces a burst into one macrotask. The host may still inject
+ * `onTripChanged` to narrow a refresh to one trip it can name.
  */
 import type { QueryClient } from '@tanstack/react-query';
 
+import { onDataChanged, type DataChange } from '@/data/events';
 import { queryKeys, QUERY_ROOTS } from '@/data/queries/keys';
-import { onQueueChanged } from '@/data/sync/queue';
 
 /** Refetching a query whose statement is failing changes nothing here; the screen shows its error. */
 const ignore = () => undefined;
 
 /**
- * Everything this layer caches is now suspect. Called after a sync pass writes trips, scores and
- * day rows back — all five families at once, because one finalize response can move all of them.
+ * Everything this layer caches is now suspect. Called after a sync pass or a restore writes trips,
+ * scores and day rows — every family at once, because one response can move all of them.
  */
 export async function invalidateAfterSync(queryClient: QueryClient): Promise<void> {
   await Promise.all(
@@ -48,6 +48,7 @@ export async function invalidateTrip(
     queryClient.invalidateQueries({ queryKey: ['trips'] }).catch(ignore),
     queryClient.invalidateQueries({ queryKey: ['scoreDaily'] }).catch(ignore),
     queryClient.invalidateQueries({ queryKey: ['insights'] }).catch(ignore),
+    queryClient.invalidateQueries({ queryKey: ['longTermScore'] }).catch(ignore),
   ]);
 }
 
@@ -55,10 +56,11 @@ export type Unsubscribe = () => void;
 
 export interface InvalidationSources {
   /**
-   * Subscribe to the sync queue. Defaults to `onQueueChanged`, which fires when work is queued —
-   * and, through the runner, after every pass that settles a trip.
+   * Subscribe to data changes. Defaults to `onDataChanged`, which fires when work is queued, after
+   * every pass that settles something, after each page a restore commits, and when the host
+   * finalizes a drive.
    */
-  queueEvents?: (listener: () => void) => Unsubscribe;
+  changes?: (listener: (change: DataChange) => void) => Unsubscribe;
   /**
    * Subscribe to the engine finalizing a drive. The listener is given the trip's client id when
    * the host knows it, and invalidates everything when it does not.
@@ -74,9 +76,9 @@ export function subscribeInvalidation(
   queryClient: QueryClient,
   sources: InvalidationSources = {}
 ): Unsubscribe {
-  const subscribeQueue = sources.queueEvents ?? onQueueChanged;
+  const subscribe = sources.changes ?? onDataChanged;
   const offs: Unsubscribe[] = [
-    subscribeQueue(() => {
+    subscribe(() => {
       void invalidateAfterSync(queryClient);
     }),
   ];

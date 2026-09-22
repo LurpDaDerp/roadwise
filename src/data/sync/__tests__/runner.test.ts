@@ -20,16 +20,13 @@ import {
   type FakeSupabase,
 } from '@/data/sync/__fixtures__/fakes';
 import { T0, TRIP_ID, tripPayload } from '@/data/sync/__fixtures__/payload';
+import { emitDataChanged, onDataChanged, type DataChange, type SyncApplied } from '@/data/events';
 import {
   DEVICE_OWNER_KEY,
-  emitQueueChanged,
   enqueueFinalize,
   enqueueTraceUpload,
   finalizeIdempotencyKey,
-  onQueueChanged,
-  onSyncApplied,
   traceIdempotencyKey,
-  type SyncApplied,
 } from '@/data/sync/queue';
 import {
   createSyncRunner,
@@ -546,7 +543,7 @@ test('a trip whose trace file is gone still finalizes', async () => {
   expect(supabase.invokes).toHaveLength(1);
 });
 
-test('start drains at once, on app foreground and on queue:changed; stop unsubscribes', async () => {
+test('start drains at once, on app foreground and on an enqueue change; stop unsubscribes', async () => {
   const appState = createFakeAppState();
   const sync = runner({ appState });
 
@@ -592,9 +589,41 @@ test('start drains at once, on app foreground and on queue:changed; stop unsubsc
 
   // Nothing is drained after stop().
   const before = supabase.invokes.length;
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   await tick();
   expect(supabase.invokes).toHaveLength(before);
+});
+
+test('one change event: the runner drains on enqueue and finalize, never on sync or hydrate', async () => {
+  const sync = runner();
+  sync.start();
+  await tick();
+  await tick();
+
+  const queueRaw = async (id: string) => {
+    await trips().insert({ client_trip_id: id, started_at: T0, tz: 'UTC', status: 'provisional' }, T0);
+    // Straight into the table, so no enqueue change is fired by the queueing itself.
+    await db.execute(
+      'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid,' +
+        ' created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['finalize-trip', JSON.stringify(tripPayload({ clientTripId: id, tracePath: null })), `trip:${id}`, T0, UID, T0]
+    );
+  };
+
+  await queueRaw('trip-a');
+  emitDataChanged({ source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
+  emitDataChanged({ source: 'hydrate' });
+  await tick();
+  await tick();
+  expect(supabase.invokes).toHaveLength(0);
+
+  emitDataChanged({ source: 'finalize' });
+  await waitFor(() => supabase.invokes.length === 1);
+
+  await queueRaw('trip-b');
+  emitDataChanged({ source: 'enqueue' });
+  await waitFor(() => supabase.invokes.length === 2);
+  await sync.stop();
 });
 
 test('a wake while the engine records is retried once the drive ends', async () => {
@@ -753,14 +782,18 @@ test('a wake during a drain runs exactly one more pass when that drain ends', as
 
 test('a pass that settled something announces it; one that settled nothing does not', async () => {
   const seen: SyncApplied[] = [];
-  const unsubscribe = onSyncApplied((result) => seen.push(result));
+  const unsubscribe = onDataChanged((change) => {
+    if (change.source === 'sync' && change.result) seen.push(change.result);
+  });
   try {
     await seedQueuedTrip();
     await runner().drainOnce(T0);
+    await tick();
     expect(seen).toEqual([{ done: 1, failed: 0, deferred: 0 }]);
 
     // Nothing due: no announcement.
     await runner().drainOnce(T0);
+    await tick();
     expect(seen).toHaveLength(1);
 
     // Deferred-only is not "applied" either.
@@ -771,40 +804,33 @@ test('a pass that settled something announces it; one that settled nothing does 
     await enqueueFinalize(db, tripPayload({ clientTripId: 'trip-2', tracePath: null }), T0);
     supabase = createFakeSupabase({ uid: UID, invoke: () => functionsFetchError() });
     await expect(runner().drainOnce(T0)).resolves.toMatchObject({ deferred: 1 });
+    await tick();
     expect(seen).toHaveLength(1);
   } finally {
     unsubscribe();
   }
 });
 
-test('queue:changed fires after a settled pass too, for subscribers wired to the queue', async () => {
-  let wakes = 0;
-  const unsubscribe = onQueueChanged(() => {
-    wakes += 1;
-  });
+test('a settled pass sends one change, not two: no second event and no self-wake', async () => {
+  const changes: DataChange[] = [];
+  const unsubscribe = onDataChanged((change) => changes.push(change));
   try {
     await seedQueuedTrip();
-    // The enqueue's own wake. Let it land, or the pass's emit coalesces into it and proves nothing.
-    await waitFor(() => wakes === 1);
+    await tick();
+    changes.length = 0;
 
     await runner().drainOnce(T0);
-    await waitFor(() => wakes === 2);
-    await tick();
-    expect(wakes).toBe(2);
-
-    // A pass that settles nothing says nothing.
-    await runner().drainOnce(T0);
     await tick();
     await tick();
-    expect(wakes).toBe(2);
+    expect(changes).toEqual([{ source: 'sync', result: { done: 1, failed: 0, deferred: 0 } }]);
   } finally {
     unsubscribe();
   }
 });
 
 test('a listener that throws does not break the drain that told it', async () => {
-  const unsubscribe = onSyncApplied(() => {
-    throw new Error('boom');
+  const unsubscribe = onDataChanged((change) => {
+    if (change.source === 'sync') throw new Error('boom');
   });
   const errors: string[] = [];
   try {
@@ -812,7 +838,8 @@ test('a listener that throws does not break the drain that told it', async () =>
     await expect(
       runner({ onError: (_error, context) => errors.push(context) }).drainOnce(T0)
     ).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
-    expect(errors).toContain('sync:applied listener');
+    await tick();
+    expect(errors).toContain('data change listener');
   } finally {
     unsubscribe();
   }
@@ -1127,5 +1154,74 @@ describe('a device that changes hands mid-pass', () => {
     // The trace was already in flight when the handover landed; what must not follow it is the
     // summary, which would be stored as the new user's trip.
     expect(supabase.invokes).toHaveLength(0);
+  });
+});
+
+describe('owner re-checks inside a pass (carry-over 4)', () => {
+  test('a session that changes while the finalize call is in flight: the answer is not written', async () => {
+    // No stop(), no generation change: only the session moved, which is all the owner check sees.
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => {
+        supabase.setUid('the-next-driver');
+        return invokeOk(SERVER_OK);
+      },
+    });
+    await seedQueuedTrip();
+
+    await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 0, failed: 0, deferred: 1 });
+    expect(await allCachedDays()).toEqual([]);
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'queued', server_id: null });
+    expect(await finalizeItem()).toMatchObject({ status: 'pending', attempts: 0 });
+  });
+
+  test('a wipe that lands while the call is in flight: the commit sees the new owner and writes nothing', async () => {
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: async () => {
+        // The handover's identity stage, with the old session object still answering: the
+        // device now records someone else. Only the in-transaction fence can see this.
+        await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'the-next-driver');
+        return invokeOk(SERVER_OK);
+      },
+    });
+    await seedQueuedTrip();
+
+    await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(await allCachedDays()).toEqual([]);
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'queued', server_id: null });
+  });
+
+  test('a session that changes while the trace uploads: no upload mark, and no summary', async () => {
+    supabase = createFakeSupabase({
+      uid: UID,
+      upload: () => {
+        supabase.setUid('the-next-driver');
+        return { data: { path: 'x' }, error: null };
+      },
+      invoke: () => invokeOk(SERVER_OK),
+    });
+    await seedQueuedTrip();
+
+    await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(supabase.invokes).toHaveLength(0);
+    expect(await finalizeItem()).toMatchObject({ trace_uploaded_at: null });
+  });
+
+  test('a deferred trace: a session change during its upload leaves the item unmarked', async () => {
+    await seedTrip();
+    await enqueueTraceUpload(db, { clientTripId: TRIP_ID, tracePath: TRACE }, T0);
+    supabase = createFakeSupabase({
+      uid: UID,
+      upload: () => {
+        supabase.setUid('the-next-driver');
+        return { data: { path: 'x' }, error: null };
+      },
+    });
+
+    await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(await traceItem()).toMatchObject({ status: 'pending', trace_uploaded_at: null });
+    // The file is kept for the owner it belongs to.
+    expect(fs.files.has(TRACE)).toBe(true);
   });
 });

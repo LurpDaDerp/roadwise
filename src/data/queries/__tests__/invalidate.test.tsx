@@ -13,7 +13,7 @@ import {
   subscribeInvalidation,
   type Unsubscribe,
 } from '@/data/queries/invalidate';
-import { emitQueueChanged } from '@/data/sync/queue';
+import { emitDataChanged, type ChangeSource, type DataChange } from '@/data/events';
 
 const NOW = Date.UTC(2026, 0, 20, 12, 0, 0);
 
@@ -88,28 +88,42 @@ test('invalidateAfterSync refetches a mounted list, which then sees the new row'
   expect(result.current.data?.map((t) => t.clientTripId)).toEqual(['b', 'a']);
 });
 
-test('a queue:changed wake refetches through the default wiring', async () => {
-  await seedTrips(db, [A]);
-  detach = subscribeInvalidation(client);
-  const { result } = await renderHook(() => useTrips(), { wrapper });
-  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+test.each<ChangeSource>(['enqueue', 'sync', 'hydrate', 'finalize'])(
+  'a %s change refetches through the default wiring',
+  async (source) => {
+    await seedTrips(db, [A]);
+    detach = subscribeInvalidation(client);
+    const { result } = await renderHook(() => useTrips(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-  await seedTrips(db, [B]);
-  // The emitter fires its listeners on a macrotask, after the transaction that queued the work.
-  emitQueueChanged();
+    await seedTrips(db, [B]);
+    // Delivered on a macrotask, after the transaction that wrote the row.
+    emitDataChanged(
+      source === 'sync' ? { source, result: { done: 1, failed: 0, deferred: 0 } } : { source }
+    );
 
-  await waitFor(() => expect(result.current.data).toHaveLength(2));
+    await waitFor(() => expect(result.current.data).toHaveLength(2));
+  }
+);
+
+test('a change marks the long-term score stale too', async () => {
+  const changes = fakeEmitter<[DataChange]>();
+  detach = subscribeInvalidation(client, { changes: changes.subscribe });
+  client.setQueryData(queryKeys.longTermScore(), { latest: null, scoredDrives: 0, pendingDrives: 0 });
+  changes.emit({ source: 'hydrate' });
+  expect(client.getQueryState(queryKeys.longTermScore())?.isInvalidated).toBe(true);
+  await invalidateTrip(client, 'a');
 });
 
-test('an injected queue emitter is used in place of the default', async () => {
-  const queue = fakeEmitter<[]>();
+test('an injected change source is used in place of the default', async () => {
+  const queue = fakeEmitter<[DataChange]>();
   await seedTrips(db, [A]);
-  detach = subscribeInvalidation(client, { queueEvents: queue.subscribe });
+  detach = subscribeInvalidation(client, { changes: queue.subscribe });
   const { result } = await renderHook(() => useTrips(), { wrapper });
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
   await seedTrips(db, [B]);
-  queue.emit();
+  queue.emit({ source: 'enqueue' });
 
   await waitFor(() => expect(result.current.data).toHaveLength(2));
 });
@@ -118,7 +132,7 @@ test('onTripChanged refreshes every open trip detail, because the trip count mov
   await seedTrips(db, [A, B]);
   const engine = fakeEmitter<[string | undefined]>();
   detach = subscribeInvalidation(client, {
-    queueEvents: fakeEmitter<[]>().subscribe,
+    changes: fakeEmitter<[DataChange]>().subscribe,
     onTripChanged: engine.subscribe,
   });
 
@@ -145,7 +159,7 @@ test('a trip change with no id falls back to invalidating everything', async () 
   await seedTrips(db, [A, B]);
   const engine = fakeEmitter<[string | undefined]>();
   detach = subscribeInvalidation(client, {
-    queueEvents: fakeEmitter<[]>().subscribe,
+    changes: fakeEmitter<[DataChange]>().subscribe,
     onTripChanged: engine.subscribe,
   });
 
@@ -179,10 +193,10 @@ test('invalidateTrip sweeps the trip root but only the named timeline', async ()
 });
 
 test('the unsubscribe detaches both sources and is safe to call twice', () => {
-  const queue = fakeEmitter<[]>();
+  const queue = fakeEmitter<[DataChange]>();
   const engine = fakeEmitter<[string | undefined]>();
   const off = subscribeInvalidation(client, {
-    queueEvents: queue.subscribe,
+    changes: queue.subscribe,
     onTripChanged: engine.subscribe,
   });
   expect(queue.size).toBe(1);
@@ -198,19 +212,19 @@ test('the unsubscribe detaches both sources and is safe to call twice', () => {
 });
 
 test('a wake after unsubscribing does not mark anything stale', async () => {
-  const queue = fakeEmitter<[]>();
+  const queue = fakeEmitter<[DataChange]>();
   await seedTrips(db, [A]);
-  const off = subscribeInvalidation(client, { queueEvents: queue.subscribe });
+  const off = subscribeInvalidation(client, { changes: queue.subscribe });
   const { result } = await renderHook(() => useTrips(), { wrapper });
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
   // `invalidateQueries` marks its matches synchronously, so the flag is the crisp signal for
   // "the wake reached the cache" — and the positive case is covered by the tests above.
-  queue.emit();
+  queue.emit({ source: 'enqueue' });
   expect(client.getQueryState(queryKeys.trips())?.isInvalidated).toBe(true);
 
   await waitFor(() => expect(client.getQueryState(queryKeys.trips())?.isInvalidated).toBe(false));
   off();
-  queue.emit();
+  queue.emit({ source: 'enqueue' });
   expect(client.getQueryState(queryKeys.trips())?.isInvalidated).toBe(false);
 });

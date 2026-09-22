@@ -8,19 +8,27 @@ export {
 } from '@/data/queries/context';
 export {
   BASELINE_SETTING_KEY,
+  isRestoring,
   readInsights,
+  readLongTermScore,
   readScoreDaily,
   readTrip,
   readTripEvents,
   readTrips,
+  toLongTermScoreView,
   useInsights,
+  useLongTermScore,
   useScoreDaily,
   useTrip,
   useTripEvents,
   useTrips,
+  type LatestDay,
+  type LongTermScoreInputs,
+  type LongTermScoreView,
   type TripDetail,
   type TripStage,
 } from '@/data/queries/hooks';
+export { useHydrationStatus, type HydrationStatus } from '@/data/hydrate/status';
 export {
   buildInsights,
   baselineMedians,

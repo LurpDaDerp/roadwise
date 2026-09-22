@@ -855,3 +855,99 @@ describe('through the runner', () => {
     expect(await readTrip()).toMatchObject({ role: 'passenger', sync_state: 'synced' });
   });
 });
+
+describe('owner re-checks before every local write (carry-over 4)', () => {
+  const runnerFor = () =>
+    createSyncRunner({
+      db,
+      supabase,
+      fs: createFakeFs(),
+      net: { isWifi: () => true },
+      isRecording: () => false,
+      now: () => NOW,
+    });
+
+  const queue = (kind: string, body: string, key: string) =>
+    createQueueRepo(db).enqueue(kind, JSON.parse(body) as object, key, T0, undefined, 'user-1');
+
+  test('a session that changes while a report is in flight: the answer writes nothing', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+    supabase = createFakeSupabase({
+      invoke: () => {
+        supabase.setUid('user-b');
+        return disputeReply();
+      },
+    });
+    await queue('dispute', disputeBody, `dispute:${EVENT}`);
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toEqual({ done: 0, failed: 0, deferred: 1 });
+    expect(await readEvent()).toMatchObject({ status: 'disputed' });
+    expect(await readDispute()).toMatchObject({ outcome: 'queued' });
+    expect(await createScoreDailyCacheRepo(db).range('2026-01-01', '2026-01-31')).toEqual([]);
+  });
+
+  test('a refusal that arrives after the session changed is not recorded either', async () => {
+    await seed({}, { status: 'disputed', dispute_json: queuedRecord() });
+    supabase = createFakeSupabase({
+      invoke: () => {
+        supabase.setUid('user-b');
+        return functionsHttpError(422, { code: 'dispute_window_closed' });
+      },
+    });
+    await queue('dispute', disputeBody, `dispute:${EVENT}`);
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toEqual({ done: 0, failed: 0, deferred: 1 });
+    expect(await readDispute()).toMatchObject({ outcome: 'queued' });
+  });
+
+  test('a wipe that lands while a role change is in flight: the transaction sees it and writes nothing', async () => {
+    await seed();
+    supabase = createFakeSupabase({
+      invoke: async () => {
+        await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'user-b');
+        return {
+          data: {
+            tripId: SERVER_TRIP,
+            role: 'passenger',
+            score: null,
+            status: 'unscored',
+            trip: tripFields(),
+            days: [day()],
+            replayed: false,
+          },
+          error: null,
+        };
+      },
+    });
+    await queue('set-role', setRoleBody, 'role:trip-1:1');
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(await readTrip()).toMatchObject({ role: 'driver', score: 77, sync_state: 'queued' });
+    expect(await createScoreDailyCacheRepo(db).range('2026-01-01', '2026-01-31')).toEqual([]);
+  });
+
+  test('a delete whose not-found answer lands after the session changed leaves the husk', async () => {
+    await seed({ deleted_at: NOW });
+    supabase = createFakeSupabase({
+      invoke: () => {
+        supabase.setUid('user-b');
+        return functionsHttpError(404, { code: 'not_found' });
+      },
+    });
+    await queue('delete-trip', deleteBody, 'delete:trip-1');
+
+    await expect(runnerFor().drainOnce(NOW)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(await createTripsRepo(db).get(TRIP)).not.toBeNull();
+  });
+
+  test('a handler told the owner no longer holds defers without writing, on every path', async () => {
+    await seed();
+    const refused = () => ctx({ ownerHolds: async () => false, owner: 'user-1' });
+    supabase = createFakeSupabase({ invoke: () => disputeReply() });
+    await expect(runDispute(disputeBody, refused())).resolves.toEqual({ kind: 'defer' });
+    supabase = createFakeSupabase({ invoke: () => functionsHttpError(404, { code: 'not_found' }) });
+    await expect(runDeleteTrip(deleteBody, refused())).resolves.toEqual({ kind: 'defer' });
+    expect(await readTrip()).toMatchObject({ score: 77 });
+    expect(await readEvent()).toMatchObject({ status: 'scored', dispute_json: null });
+  });
+});

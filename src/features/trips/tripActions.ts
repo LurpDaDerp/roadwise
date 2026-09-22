@@ -29,11 +29,11 @@ import {
   type TripRow,
 } from '@/data/db';
 import { invalidateAfterSync, invalidateTrip, useDb } from '@/data/queries';
+import { emitDataChanged } from '@/data/events';
 import { DisputePayloadSchema } from '@/data/sync/actions';
 import type { SyncKind } from '@/data/sync/kinds';
 import {
   currentOwnerUid,
-  emitQueueChanged,
   finalizeIdempotencyKey,
   traceIdempotencyKey,
 } from '@/data/sync/queue';
@@ -143,7 +143,7 @@ export async function disputeEvent(
     return updated;
   });
   // After the commit, so a listener that drains meets the row and not the lock.
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   return row;
 }
 
@@ -246,7 +246,7 @@ export async function deleteTrip(
   // Outside the transaction: the file system is not in it, and a delete that committed must not
   // be undone by a file that would not go.
   await removeTraceFile(clientTripId, deps.fs);
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   return row;
 }
 
@@ -284,7 +284,7 @@ export async function retryFailedDeletes(
     await trips.update(id, { sync_error: null, sync_state: 'queued' } satisfies TripPatch, now);
     await queue.reopen(deleteIdempotencyKey(id), now);
   }
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
 }
 
 type Phase = 'idle' | 'busy' | 'done' | 'error';

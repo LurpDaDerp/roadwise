@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import type { Db } from '@/data/db/driver';
 import {
@@ -12,7 +12,15 @@ import {
 import { deductions, eventRow, MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createQueryClient } from '@/data/queries/client';
 import { MissingDataProviderError } from '@/data/queries/context';
-import { useInsights, useScoreDaily, useTrip, useTripEvents, useTrips } from '@/data/queries/hooks';
+import { setHydrationStatus } from '@/data/hydrate/status';
+import {
+  useInsights,
+  useLongTermScore,
+  useScoreDaily,
+  useTrip,
+  useTripEvents,
+  useTrips,
+} from '@/data/queries/hooks';
 
 const NOW = Date.UTC(2026, 0, 20, 12, 0, 0);
 
@@ -305,3 +313,119 @@ describe('the client and the provider', () => {
     }
   });
 })
+
+describe('useLongTermScore (R9)', () => {
+  const dayRow = (day: string, longTermScore: number | null, over: Record<string, unknown> = {}) => ({
+    day,
+    longTermScore,
+    band: longTermScore === null ? null : 'good',
+    provisional: false,
+    safeDay: true,
+    goodDay: false,
+    phoneFreeDay: true,
+    cameraDay: false,
+    exposure: 1,
+    drivingS: 1800,
+    tripsScored: 1,
+    severeEvents: 0,
+    ...over,
+  });
+
+  afterEach(async () => {
+    // A hook from this test may still be mounted; the reset re-renders it.
+    await act(async () => {
+      setHydrationStatus({ state: 'idle' });
+    });
+  });
+
+  async function render() {
+    const hook = await renderHook(() => useLongTermScore(), { wrapper });
+    await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
+    return hook;
+  }
+
+  test("the newest day's score, with its band and the day it was computed", async () => {
+    await seedDay(db, '2026-01-12', dayRow('2026-01-12', 79), NOW);
+    await seedDay(db, '2026-01-19', dayRow('2026-01-19', 84, { provisional: true }), NOW);
+    await seedTrips(db, [C]);
+    const { result } = await render();
+    expect(result.current.data).toEqual({
+      state: 'score',
+      score: 84,
+      band: 'good',
+      asOfDay: '2026-01-19',
+      provisional: true,
+      scoredDrives: 1,
+      pendingDrives: 0,
+    });
+  });
+
+  test('a newer day with no score beats an older day that has one: the server says building', async () => {
+    await seedDay(db, '2026-01-12', dayRow('2026-01-12', 79), NOW);
+    await seedDay(db, '2026-01-19', dayRow('2026-01-19', null), NOW);
+    const { result } = await render();
+    expect(result.current.data).toMatchObject({
+      state: 'building',
+      score: null,
+      band: null,
+      asOfDay: '2026-01-19',
+    });
+  });
+
+  test('no day row and no drives: building from zero', async () => {
+    const { result } = await render();
+    expect(result.current.data).toMatchObject({ state: 'building', score: null, asOfDay: null, scoredDrives: 0 });
+  });
+
+  test('no day row but scored drives on the device: waiting for them to sync', async () => {
+    await seedTrips(db, [A, B]);
+    const { result } = await render();
+    expect(result.current.data).toMatchObject({ state: 'waiting', scoredDrives: 2 });
+  });
+
+  test('during a restore with no day row yet the slot says restoring, never building', async () => {
+    setHydrationStatus({ state: 'restoring', restored: 0 });
+    const { result } = await render();
+    expect(result.current.data?.state).toBe('restoring');
+
+    // A restore that stopped early is still owed, and the device still does not know.
+    await act(async () => {
+      setHydrationStatus({ state: 'failed', at: NOW });
+    });
+    expect(result.current.data?.state).toBe('restoring');
+
+    // Finished: now "building" is the truth.
+    await act(async () => {
+      setHydrationStatus({ state: 'idle' });
+    });
+    await waitFor(() => expect(result.current.data?.state).toBe('building'));
+  });
+
+  test('a day row that exists during a restore is shown, not hidden behind restoring', async () => {
+    setHydrationStatus({ state: 'restoring', restored: 3 });
+    await seedDay(db, '2026-01-19', dayRow('2026-01-19', 84), NOW);
+    const { result } = await render();
+    expect(result.current.data?.state).toBe('score');
+  });
+
+  test('pending counts only drives that can still move the score', async () => {
+    const at = (n: number) => Date.UTC(2026, 0, 10 + n, 12, 0, 0);
+    await seedTrips(db, [
+      // Counted: a scored driver drive on its way, in each state that is still on its way.
+      tripRow({ client_trip_id: 'queued', started_at: at(0), sync_state: 'queued' }),
+      tripRow({ client_trip_id: 'local', started_at: at(1), sync_state: 'local' }),
+      tripRow({ client_trip_id: 'uploading', started_at: at(2), sync_state: 'uploading' }),
+      // Not counted:
+      tripRow({ client_trip_id: 'passenger', started_at: at(3), role: 'passenger', status: 'unscored', score: null }),
+      tripRow({ client_trip_id: 'short', started_at: at(4), status: 'unscored', score: null }),
+      tripRow({ client_trip_id: 'train', started_at: at(5), status: 'discarded', score: null }),
+      tripRow({ client_trip_id: 'deleted', started_at: at(6), deleted_at: at(7) }),
+      tripRow({ client_trip_id: 'refused', started_at: at(8), sync_state: 'failed', sync_error: 'trip_too_old' }),
+      tripRow({ client_trip_id: 'synced', started_at: at(9), sync_state: 'synced', server_id: 's' }),
+      tripRow({ client_trip_id: 'unknown', started_at: at(10), role: 'unknown', status: 'unscored', score: null }),
+    ]);
+    await seedDay(db, '2026-01-19', dayRow('2026-01-19', 84), NOW);
+    const { result } = await render();
+    expect(result.current.data).toMatchObject({ state: 'score', pendingDrives: 3, scoredDrives: 5 });
+  });
+});

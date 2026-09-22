@@ -1,4 +1,10 @@
-import { bootstrapApp, BootstrapError, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
+import {
+  bootstrapApp,
+  BootstrapError,
+  startForegroundJobs,
+  type AppRuntime,
+  type BootstrapDeps,
+} from '@/boot/bootstrap';
 import { LAST_USER_KEY } from '@/boot/device';
 import { T0, counterIds } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -15,9 +21,16 @@ import {
   type Db,
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { emitDataChanged } from '@/data/events';
+import { foregroundStampKey } from '@/data/foreground';
+import {
+  HYDRATE_CURSOR_KEY,
+  HYDRATE_INTERVAL_MS,
+  HYDRATE_RESTORED_AT_KEY,
+} from '@/data/hydrate/hydrate';
+import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
-import { emitQueueChanged } from '@/data/sync/queue';
 
 /** Wall clock at launch: the morning after the drive. */
 const NOW = T0 + 36_000_000;
@@ -95,7 +108,7 @@ test('opens, migrates, recovers the crashed drive and starts the runner on what 
   runtime = await bootstrapApp(bootstrapDeps);
 
   expect(runtime.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-  expect(runtime.recovery).toEqual({ recovered: [TRIP], discarded: [], failed: [] });
+  expect(runtime.recovery).toMatchObject({ recovered: [TRIP], discarded: [], failed: [] });
   // Finalized from its checkpoint, scored, flagged, and queued for upload.
   const trip = await createTripsRepo(db).get(TRIP);
   expect(trip).toMatchObject({ status: 'provisional', incomplete: 1, sync_state: 'queued' });
@@ -125,14 +138,14 @@ test('with nothing to recover the launch is the same, only quieter', async () =>
   expect(supabase.sessions).toBe(2);
 });
 
-test('the cache is wired to the queue, and stop() detaches everything', async () => {
+test('the cache is wired to the change event, and stop() detaches everything', async () => {
   const { bootstrapDeps, appState } = deps();
   runtime = await bootstrapApp(bootstrapDeps);
   const { queryClient } = runtime;
   const key = ['trips', {}];
 
   queryClient.setQueryData(key, []);
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   await settle();
   expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
 
@@ -142,7 +155,7 @@ test('the cache is wired to the queue, and stop() detaches everything', async ()
   runtime = null;
   expect(appState.removals).toBe(1);
   queryClient.setQueryData(key, []);
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   await settle();
   expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
   // `afterEach` no longer holds this runtime; the cache's gc timers are this test's to drop.
@@ -172,7 +185,7 @@ describe('whose device this is', () => {
 
     expect(runtime.owner).toBe('wiped');
     // The wipe runs before recovery, so A's interrupted drive is never finalized into B's account.
-    expect(runtime.recovery).toEqual({ recovered: [], discarded: [], failed: [] });
+    expect(runtime.recovery).toMatchObject({ recovered: [], discarded: [], failed: [] });
     expect(await createTripsRepo(db).get(TRIP)).toBeNull();
     expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
     expect([...traces.keys()]).toEqual([]);
@@ -199,7 +212,7 @@ describe('whose device this is', () => {
     runtime = await bootstrapApp(bootstrapDeps);
 
     expect(runtime.owner).toBe('wiped');
-    expect(runtime.recovery).toEqual({ recovered: [], discarded: [], failed: [] });
+    expect(runtime.recovery).toMatchObject({ recovered: [], discarded: [], failed: [] });
     expect(await createTripsRepo(db).get(TRIP)).toBeNull();
     expect(await createSettingsRepo(db).get(LAST_USER_KEY)).toBe('user-a');
   });
@@ -310,7 +323,7 @@ describe('a launch that fails', () => {
     // the queue, nor the runner's own — a retry must not stack a second of each.
     const key = ['trips', {}];
     queryClient.setQueryData(key, []);
-    emitQueueChanged();
+    emitDataChanged({ source: 'enqueue' });
     await settle();
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
     // The one read is the owner check, which ran before the failure; no drain ever started.
@@ -353,4 +366,151 @@ test('a drive recovery cannot finalize is reported, and the launch goes on witho
   expect(errors).toEqual([`recover ${TRIP}`]);
   // Left exactly as found, for the next launch to retry.
   expect(await createTripsRepo(db).get(TRIP)).toMatchObject({ status: 'recording' });
+});
+
+describe('hydration runs only in the foreground (R10, R13)', () => {
+  const UID = '0b9f7a52-7a8e-4a4f-8f38-3f1c1f5a9d10';
+  const serverTrip = {
+    id: '00000000-0000-4000-8000-000000000001',
+    user_id: UID,
+    client_trip_id: 'restored-1',
+    started_at: '2026-09-01T08:00:00+00:00',
+    ended_at: '2026-09-01T08:30:00+00:00',
+    tz: 'UTC',
+    distance_m: 16093.44,
+    duration_s: 1800,
+    role: 'driver',
+    role_confidence: null,
+    role_source: 'manual',
+    mode: 'mounted',
+    camera_session: false,
+    score: 88,
+    scoring_version: 1,
+    category_deductions: { phone: 0, speeding: 6, braking: 0, accel: 0, cornering: 0, focus: 0 },
+    exposure: 1,
+    data_quality: 'A',
+    conditions: { night: false, precipitation: false },
+    had_severe_event: false,
+    limit_coverage_pct: 80,
+    start_label: null,
+    end_label: null,
+    start_geohash5: null,
+    end_geohash5: null,
+    polyline: '',
+    status: 'provisional',
+    incomplete: false,
+    deleted_at: null,
+    updated_at: '2026-09-21T10:00:00.123456+00:00',
+  };
+
+  afterEach(() => {
+    setHydrationStatus({ state: 'idle' });
+  });
+
+  async function launch(uid: string, owner?: string) {
+    await migrate(db);
+    if (owner !== undefined) await createSettingsRepo(db).set(LAST_USER_KEY, owner);
+    const supabase = createFakeSupabase({ uid, tables: { trips: [serverTrip] } });
+    const built = deps({ supabase });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    await settle();
+    return { ...built, supabase };
+  }
+
+  test('the launch sequence itself reads nothing from the server', async () => {
+    const { supabase } = await launch(UID);
+    expect(runtime?.owner).toBe('first');
+    expect(supabase.selects).toEqual([]);
+    expect(await createTripsRepo(db).get('restored-1')).toBeNull();
+  });
+
+  test('a first sign-in owes a full restore: "restoring" at once, the run on the next foreground', async () => {
+    const { supabase } = await launch(UID);
+    const appState = createFakeAppState();
+    const off = await startForegroundJobs(runtime!, { appState });
+    expect(getHydrationStatus()).toEqual({ state: 'restoring', restored: 0 });
+    // Not active yet (a background wake): nothing is read.
+    appState.emit('background');
+    await settle();
+    expect(supabase.selects).toEqual([]);
+
+    appState.emit('active');
+    await settle();
+    expect(await createTripsRepo(db).get('restored-1')).toMatchObject({ sync_state: 'synced' });
+    expect(getHydrationStatus()).toEqual({ state: 'idle' });
+    const days = supabase.selects.find((s) => s.table === 'score_daily');
+    // Full: the newest days, not a top-up since a cursor.
+    expect(days?.calls).toContain('order day desc');
+    off();
+  });
+
+  test('a restored device tops up at most every six hours, from its cursor', async () => {
+    let clock = NOW;
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, UID);
+    await createSettingsRepo(db).set(HYDRATE_CURSOR_KEY, {
+      updatedAt: '2026-09-21T09:00:00+00:00',
+      id: '00000000-0000-4000-8000-000000000000',
+    });
+    await createSettingsRepo(db).set(foregroundStampKey('hydrate'), NOW - 60_000);
+    await createSettingsRepo(db).set(HYDRATE_RESTORED_AT_KEY, NOW - 60_000);
+    const supabase = createFakeSupabase({ uid: UID, tables: { trips: [serverTrip] } });
+    runtime = await bootstrapApp(deps({ supabase, now: () => clock }).bootstrapDeps);
+    expect(runtime.owner).toBe('same');
+
+    const appState = createFakeAppState();
+    const off = await startForegroundJobs(runtime, { appState });
+    expect(getHydrationStatus()).toEqual({ state: 'idle' });
+    appState.emit('active');
+    await settle();
+    expect(supabase.selects).toEqual([]);
+
+    clock = NOW + HYDRATE_INTERVAL_MS;
+    appState.emit('active');
+    await settle();
+    const tripsRead = supabase.selects.find((s) => s.table === 'trips');
+    expect(tripsRead?.calls.some((c) => c.startsWith('or updated_at.gt.2026-09-21T09:00:00+00:00'))).toBe(true);
+    expect(await createTripsRepo(db).get('restored-1')).not.toBeNull();
+    off();
+  });
+
+  test('a restore that completed is not owed again, even when the server held no trips', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, UID);
+    const supabase = createFakeSupabase({ uid: UID, tables: {} });
+    runtime = await bootstrapApp(deps({ supabase }).bootstrapDeps);
+    const appState = createFakeAppState();
+    const off = await startForegroundJobs(runtime, { appState });
+    // Never restored (an M2 install): owed, even though the owner is the same.
+    expect(getHydrationStatus()).toEqual({ state: 'restoring', restored: 0 });
+    appState.emit('active');
+    await settle();
+    expect(getHydrationStatus()).toEqual({ state: 'idle' });
+    off();
+    await runtime.stop();
+    runtime.queryClient.clear();
+
+    // The next launch: nothing owed, nothing claimed.
+    runtime = await bootstrapApp(deps({ supabase }).bootstrapDeps);
+    const again = await startForegroundJobs(runtime, { appState: createFakeAppState() });
+    expect(getHydrationStatus()).toEqual({ state: 'idle' });
+    again();
+  });
+
+  test('stop() stops the hydrator: a foreground after teardown restores nothing', async () => {
+    const { supabase } = await launch(UID);
+    const appState = createFakeAppState();
+    const errors: string[] = [];
+    await startForegroundJobs(runtime!, { appState, onError: (_e, ctx) => errors.push(ctx) });
+    await runtime!.stop();
+    const stopped = runtime!;
+    runtime = null;
+    appState.emit('active');
+    await settle();
+    expect(supabase.selects).toEqual([]);
+    expect(await createTripsRepo(db).get('restored-1')).toBeNull();
+    // An incomplete run stamps nothing: said so, and tried again at the next foreground.
+    expect(errors).toEqual(['foreground job hydrate']);
+    stopped.queryClient.clear();
+  });
 });

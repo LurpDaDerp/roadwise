@@ -3,17 +3,18 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createQueueRepo } from '@/data/db/queue';
+import { createSettingsRepo } from '@/data/db/settings';
+import { onDataChanged } from '@/data/events';
 import type { FinalizeTripPayload } from '@/data/sync/payload';
 import { isSyncKind, SYNC_KINDS } from '@/data/sync/kinds';
 import {
-  emitSyncApplied,
+  DEVICE_OWNER_KEY,
+  deviceOwnerIs,
   enqueueFinalize,
   enqueueTraceUpload,
   FINALIZE_KIND,
   finalizeIdempotencyKey,
   findFinalize,
-  onQueueChanged,
-  onSyncApplied,
   TRACE_UPLOAD_KIND,
   traceIdempotencyKey,
 } from '@/data/sync/queue';
@@ -184,9 +185,9 @@ test('every queued kind is one the runner knows about', () => {
   expect(isSyncKind('nonsense')).toBe(false);
 });
 
-test('queue:changed fires once per batch, after the enqueueing transaction commits', async () => {
-  const seen: number[] = [];
-  const unsubscribe = onQueueChanged(() => seen.push(Date.now()));
+test('an enqueue change fires once per batch, after the enqueueing transaction commits', async () => {
+  const seen: string[] = [];
+  const unsubscribe = onDataChanged((e) => seen.push(e.source));
   try {
     await db.transaction(async (tx) => {
       await enqueueFinalize(db, payload(), T0, tx);
@@ -197,7 +198,7 @@ test('queue:changed fires once per batch, after the enqueueing transaction commi
     expect(seen).toHaveLength(0);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(seen).toHaveLength(1);
+    expect(seen).toEqual(['enqueue']);
   } finally {
     unsubscribe();
   }
@@ -205,7 +206,7 @@ test('queue:changed fires once per batch, after the enqueueing transaction commi
 
 test('a listener that has unsubscribed is not called again', async () => {
   let calls = 0;
-  const unsubscribe = onQueueChanged(() => {
+  const unsubscribe = onDataChanged(() => {
     calls += 1;
   });
   unsubscribe();
@@ -228,21 +229,14 @@ test('a trace-upload payload must name a trip id the server would accept', async
   await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
 });
 
-test('sync:applied reaches its listeners and survives one that throws', () => {
-  const seen: number[] = [];
-  const errors: unknown[] = [];
-  const first = onSyncApplied(() => {
-    throw new Error('boom');
+test('deviceOwnerIs answers for the recorded owner only, on the handle it is given', async () => {
+  await expect(deviceOwnerIs(db, 'user-1')).resolves.toBe(false);
+  await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'user-1');
+  await expect(deviceOwnerIs(db, 'user-1')).resolves.toBe(true);
+  await expect(deviceOwnerIs(db, 'user-2')).resolves.toBe(false);
+  await db.transaction(async (tx) => {
+    await tx.execute('DELETE FROM settings');
+    // Mid-wipe: nobody owns the device, so nobody's write may land.
+    await expect(deviceOwnerIs(tx, 'user-1')).resolves.toBe(false);
   });
-  const second = onSyncApplied((result) => seen.push(result.done));
-  try {
-    emitSyncApplied({ done: 2, failed: 1, deferred: 0 }, (error) => errors.push(error));
-    expect(seen).toEqual([2]);
-    expect(errors).toHaveLength(1);
-  } finally {
-    first();
-    second();
-  }
-  emitSyncApplied({ done: 1, failed: 0, deferred: 0 });
-  expect(seen).toEqual([2]);
 });

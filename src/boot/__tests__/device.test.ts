@@ -90,6 +90,18 @@ test('a traces directory that will not clear is reported, and the rows are gone 
   expect(reported).toEqual(['wipe traces']);
 });
 
+test('every table the schema creates is one the wipe empties, except the schema version', async () => {
+  // The guard M2 lacked: a table added by a later migration and not listed in DEVICE_TABLES would
+  // survive a handover with the previous driver's rows in it. SQLite's own bookkeeping
+  // (`sqlite_sequence`, the AUTOINCREMENT counter) holds no driver data and is not the app's.
+  const { rows } = await db.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+  );
+  const tables = rows.map((row) => String(row.name)).filter((name) => name !== 'schema_version');
+  expect(tables.length).toBeGreaterThan(0);
+  expect([...DEVICE_TABLES].sort()).toEqual(tables);
+});
+
 describe('the owner check', () => {
   test('the first sign-in on an empty device adopts it', async () => {
     const { store, traces } = fakeTraces();

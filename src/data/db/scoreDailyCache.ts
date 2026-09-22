@@ -42,6 +42,17 @@ export function createScoreDailyCacheRepo(db: Db) {
       return row ? toEntry<T>(row) : null;
     },
 
+    /**
+     * The newest day on record — the highest `day`, whenever it was written. The long-term score
+     * is read from this row alone (R9): an older row may have been overwritten by a later sync
+     * with a value that is no longer current, so there is no fallback walk to it.
+     */
+    async latest<T>(): Promise<ScoreDailyCache<T> | null> {
+      const { rows } = await db.execute('SELECT * FROM score_daily_cache ORDER BY day DESC LIMIT 1');
+      const row = rows[0];
+      return row ? toEntry<T>(row) : null;
+    },
+
     /** Both ends inclusive, oldest first — the order a week strip renders in. */
     async range<T>(fromDay: string, toDay: string): Promise<ScoreDailyCache<T>[]> {
       const { rows } = await db.execute(

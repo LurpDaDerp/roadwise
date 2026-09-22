@@ -22,6 +22,13 @@
 // - **Never while the engine is recording or finalizing.** A drain competes for SQLite's single
 //   write lock with the 1 Hz recorder; `database is locked` is treated as "later", never as a
 //   failed attempt, and stops the pass.
+// - **The owner is re-checked after every session read and before every local write** (M2 I-3,
+//   carry-over 4). A pass carries the generation it started in (`stop()` moves it) *and* the uid
+//   its item was queued under; after each round trip both are asserted again, and a commit also
+//   asserts, inside its own transaction, that the device still records that owner. A reply that
+//   arrives after the phone changed hands writes nothing, whichever of the three moved first.
+//   The one exemption is housekeeping that only ever *removes* — the trace of a drive that is
+//   gone — which has to run signed out and cannot put anybody's data anywhere.
 // - **A claim is only ever closed by the pass that holds it.** `markAttempt` returns null when
 //   another pass has closed it, and the item is then abandoned untouched — no failure recorded,
 //   no trip row rewritten.
@@ -42,12 +49,11 @@ import {
 } from '@/data/sync/actions';
 import { isSyncKind, type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
+import { emitDataChanged, onDataChanged } from '@/data/events';
 import {
   CLIENT_TRIP_ID,
-  emitQueueChanged,
-  emitSyncApplied,
+  deviceOwnerIs,
   enqueueTraceUpload,
-  onQueueChanged,
   SESSION_UID_KEY,
   TraceUploadPayloadSchema,
   type TraceUploadPayload,
@@ -268,6 +274,21 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     return uid;
   }
 
+  /**
+   * Whether this item may still be acted on: its pass belongs to the live runner, and the session
+   * is still the user the item was queued for. Read fresh — it is the check that follows an await.
+   */
+  async function ownerHolds(item: QueueItem, of: number): Promise<boolean> {
+    if (stale(of) || item.owner_uid === null) return false;
+    const uid = await currentUid();
+    return !stale(of) && uid === item.owner_uid;
+  }
+
+  /** Inside a write's own transaction: the device still records the item's owner. */
+  async function ownerStill(tx: Db, item: QueueItem): Promise<boolean> {
+    return item.owner_uid !== null && (await deviceOwnerIs(tx, item.owner_uid));
+  }
+
   async function refreshSession(): Promise<boolean> {
     try {
       const { data } = await supabase.auth.refreshSession();
@@ -347,6 +368,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
    * retryable `invalid_response`, which a new build or a server correction resolves.
    */
   async function applyFinalize(
+    item: QueueItem,
     payload: FinalizeTripPayload,
     response: unknown,
     at: number,
@@ -360,9 +382,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const result = parsed.data;
     // The device may have changed hands while this call was in flight; a wiped database must not
     // be given the previous driver's day row (`days.put` inserts, so it would create one).
-    if (stale(generation)) return { kind: 'defer' };
+    if (!(await ownerHolds(item, generation))) return { kind: 'defer' };
 
-    await db.transaction(async (tx) => {
+    const applied = await db.transaction(async (tx) => {
+      // The last fence, inside the write: the wipe records the new owner in this same table.
+      if (!(await ownerStill(tx, item))) return false;
       const stored = await trips.get(payload.clientTripId, tx);
       // A reply that names a different server trip must not re-point this row: every later
       // finalize and trace upload would follow it. The same guard the action handlers carry.
@@ -371,7 +395,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           new Error(`finalize-trip answered a different server trip for ${payload.clientTripId}`),
           'server id mismatch'
         );
-        return;
+        return true;
       }
       await trips.update(
         payload.clientTripId,
@@ -392,8 +416,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       // The day row is the server's own §9.9 evaluation over every trip it holds for that date;
       // it is filed under its own `day`, which is the trip's local date, not the device's.
       await days.put(result.day.day, result.day, at, tx);
+      return true;
     });
-    return { kind: 'done' };
+    return applied ? { kind: 'done' } : { kind: 'defer' };
   }
 
   /** Per-item state that survives the one retry a 401 buys. */
@@ -431,6 +456,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     if (payload.tracePath !== null && state.traceUploadedAt === null) {
       if (await traceWaitsForWifi()) {
+        // A local write: the trace item is stamped with whoever owns the device now.
+        if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
         // The summary goes up now; the file follows under its own key on the next Wi-Fi.
         await enqueueTraceUpload(
           db,
@@ -441,6 +468,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         const upload = await uploadTrace(uid, payload.clientTripId, payload.tracePath);
         if (upload.kind !== 'ok') return upload;
         if (upload.uploaded) {
+          if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
           await queue.markTraceUploaded(item.id, at);
           state.traceUploadedAt = at;
         }
@@ -450,11 +478,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // The invoke travels under whatever token the client holds *now*, so the fence is checked
     // one last time here: an upload that was already in flight is one thing, a whole trip posted
     // into the next driver's account is another.
-    if (stale(state.generation)) return { kind: 'defer' };
+    if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
     const { data, error } = await supabase.functions.invoke(FINALIZE_FUNCTION, { body: payload });
     if (error) return failureOutcome(await classifyInvokeError(error, at));
 
-    const applied = await applyFinalize(payload, data, at, state.generation);
+    const applied = await applyFinalize(item, payload, data, at, state.generation);
     if (applied.kind !== 'done') return applied;
     // Only this item's own upload licenses the delete; a trace still waiting under `trace:<id>`
     // is the other item's to remove once it has actually sent it.
@@ -491,6 +519,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       const upload = await uploadTrace(uid, payload.clientTripId, payload.tracePath);
       if (upload.kind !== 'ok') return upload;
       if (upload.uploaded) {
+        if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
         await queue.markTraceUploaded(item.id, at);
         state.traceUploadedAt = at;
       }
@@ -516,6 +545,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           now: at,
           report,
           stale: () => stale(state.generation),
+          ownerHolds: () => ownerHolds(item, state.generation),
+          owner: item.owner_uid,
         });
     }
     return null;
@@ -803,15 +834,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     await purgeSettled(at);
     await sweepOrphanTraces();
 
-    // Trips have changed state and a day row may have landed: tell whoever is showing them.
+    // Trips have changed state and a day row may have landed: tell whoever is showing them. One
+    // event, carrying the counts, and only for a pass that settled something. The runner's own
+    // listener ignores `sync`, so this no longer costs an empty self-wake.
     if (total.done + total.failed > 0) {
-      emitSyncApplied(total, (error) => report(error, 'sync:applied listener'));
-      // `sync:applied` is the precise event — it carries the counts and fires only on a settled
-      // pass. `queue:changed` is fired too because the queue genuinely did change (items moved to
-      // `done`/`failed`) and it is what a subscriber wired to "the sync queue" already listens to.
-      // The self-wake that follows costs one empty claim pass, held by `wakePending` until this
-      // drain ends and then finding nothing due.
-      emitQueueChanged();
+      emitDataChanged({ source: 'sync', result: { ...total } }, (error) =>
+        report(error, 'data change listener')
+      );
     }
     return total;
   }
@@ -879,7 +908,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     start(): void {
       if (started) return;
       started = true;
-      unsubscribes.push(onQueueChanged(wake));
+      // New work: something was queued, or the host finalized a drive. A `sync` change is this
+      // runner's own pass and a `hydrate` change queues nothing, so neither wakes it.
+      unsubscribes.push(
+        onDataChanged((change) => {
+          if (change.source === 'enqueue' || change.source === 'finalize') wake();
+        })
+      );
       if (deps.appState) {
         const subscription = deps.appState.addEventListener('change', (state) => {
           if (state === 'active') wake();

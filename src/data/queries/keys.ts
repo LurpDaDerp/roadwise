@@ -75,11 +75,19 @@ export const queryKeys = {
   tripEvents: (clientTripId: string) => ['tripEvents', clientTripId] as const,
   scoreDaily: (range: DayRange) => ['scoreDaily', { from: range.from, to: range.to }] as const,
   insights: (period: InsightsPeriod) => ['insights', period] as const,
+  longTermScore: () => ['longTermScore'] as const,
 };
 
 /**
  * Every root the data layer owns. `invalidateAfterSync` walks this list, so a new family added
  * above is refreshed after a sync the moment its root is named here.
  */
-export const QUERY_ROOTS = ['trips', 'trip', 'tripEvents', 'scoreDaily', 'insights'] as const;
+export const QUERY_ROOTS = [
+  'trips',
+  'trip',
+  'tripEvents',
+  'scoreDaily',
+  'insights',
+  'longTermScore',
+] as const;
 export type QueryRoot = (typeof QUERY_ROOTS)[number];

@@ -8,14 +8,17 @@
  * The readers are exported beside the hooks because they are the useful unit under a sql.js
  * database: a test can call `readTrips(db, filter)` directly, and the hook adds only React Query.
  */
-import { CONSTANTS } from '@scoring';
+import { CONSTANTS, type ScoreBand } from '@scoring';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useCallback } from 'react';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo } from '@/data/db/events';
 import { createScoreDailyCacheRepo } from '@/data/db/scoreDailyCache';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
+import type { TripRow } from '@/data/db/types';
+import { useHydrationStatus, type HydrationStatus } from '@/data/hydrate/status';
 import { useDataSource } from '@/data/queries/context';
 import {
   buildInsights,
@@ -206,5 +209,143 @@ export function useInsights(period: InsightsPeriod = '4w'): UseQueryResult<Insig
   return useQuery({
     queryKey: queryKeys.insights(period),
     queryFn: () => readInsights(db, period, now()),
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The long-term score (R9)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What Home's licence card and E1's ring show for the long-term score.
+ *
+ * The number is **the server's**: `longTermScore` from the highest-`day` row of the day cache,
+ * which finalize, every trip action and hydration all write. It is always shown with the day it
+ * was computed (`asOfDay`), because it is a value as of that day, not a live one — offline for a
+ * week, the card honestly says "as of" a week ago. The device's own `buildInsights().longTerm` is
+ * computed from a different set of trips and is not to be rendered beside it.
+ *
+ * - `score` — the newest row carries a score.
+ * - `building` — the newest row says there is not enough driving for one yet (the server decided
+ *   that, not a local count), or there is no row and no scored drive at all.
+ * - `waiting` — no row yet, but this device holds scored drives: the score appears when they sync.
+ * - `restoring` — no row yet and a restore from the server is owed or running. Never "building"
+ *   in that state: for an experienced driver on a new phone that would be false.
+ */
+export interface LongTermScoreView {
+  state: 'restoring' | 'building' | 'score' | 'waiting';
+  score: number | null;
+  band: ScoreBand | null;
+  /** The `YYYY-MM-DD` the score was computed for — the newest day row's own date. */
+  asOfDay: string | null;
+  /** The newest day row is still provisional (more trips for that day may yet arrive). */
+  provisional: boolean;
+  /** Local scored driver drives, for "Building your score: N of 3". */
+  scoredDrives: number;
+  /**
+   * Drives that can still move the score and have not reached the server: driver role, scored on
+   * this device (so neither too short, nor discarded, nor graded out), not deleted, and still on
+   * their way (`local | queued | uploading`). A `failed` upload is not counted — it will not
+   * arrive, so "waiting to sync" would promise a change that is not coming.
+   */
+  pendingDrives: number;
+}
+
+const SCORE_BANDS: readonly ScoreBand[] = ['excellent', 'good', 'getting_there', 'needs_focus'];
+
+/** The newest day row, read leniently: this app wrote it from a strictly parsed server reply. */
+export interface LatestDay {
+  day: string;
+  longTermScore: number | null;
+  band: ScoreBand | null;
+  provisional: boolean;
+}
+
+/** What the reader found; the restore state is folded in by the hook. */
+export interface LongTermScoreInputs {
+  latest: LatestDay | null;
+  scoredDrives: number;
+  pendingDrives: number;
+}
+
+function toLatestDay(day: string, payload: unknown): LatestDay {
+  const raw =
+    typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+  const score = raw.longTermScore;
+  const band = raw.band;
+  return {
+    day,
+    longTermScore:
+      typeof score === 'number' && Number.isInteger(score) && score >= 0 && score <= 100
+        ? score
+        : null,
+    band:
+      typeof band === 'string' && (SCORE_BANDS as readonly string[]).includes(band)
+        ? (band as ScoreBand)
+        : null,
+    // A row that does not say is treated as provisional: that is the claim that promises less.
+    provisional: raw.provisional !== false,
+  };
+}
+
+const isDriverScored = (row: TripRow): boolean =>
+  row.deleted_at === null && row.role === 'driver' && isScoredRow(row);
+
+const PENDING_STATES: readonly TripRow['sync_state'][] = ['local', 'queued', 'uploading'];
+
+export async function readLongTermScore(db: Db): Promise<LongTermScoreInputs> {
+  const entry = await createScoreDailyCacheRepo(db).latest<unknown>();
+  const rows = await createTripsRepo(db).list();
+  const scored = rows.filter(isDriverScored);
+  return {
+    latest: entry === null ? null : toLatestDay(entry.day, entry.payload),
+    scoredDrives: scored.length,
+    pendingDrives: scored.filter((row) => PENDING_STATES.includes(row.sync_state)).length,
+  };
+}
+
+/**
+ * Whether a restore is owed and not yet finished. A failed full restore counts: it is retried at
+ * the next foreground, and until it completes the device does not know the driver's history.
+ */
+export const isRestoring = (status: HydrationStatus): boolean =>
+  status.state === 'restoring' || status.state === 'failed';
+
+export function toLongTermScoreView(
+  inputs: LongTermScoreInputs,
+  restoring: boolean
+): LongTermScoreView {
+  const { latest, scoredDrives, pendingDrives } = inputs;
+  const counts = { scoredDrives, pendingDrives };
+  if (latest !== null) {
+    const hasScore = latest.longTermScore !== null;
+    return {
+      state: hasScore ? 'score' : 'building',
+      score: latest.longTermScore,
+      band: hasScore ? latest.band : null,
+      asOfDay: latest.day,
+      provisional: latest.provisional,
+      ...counts,
+    };
+  }
+  const empty = { score: null, band: null, asOfDay: null, provisional: false, ...counts };
+  if (restoring) return { state: 'restoring', ...empty };
+  return { state: scoredDrives > 0 ? 'waiting' : 'building', ...empty };
+}
+
+/** The long-term score for Home and E1 (R9). Re-renders when a restore starts or ends. */
+export function useLongTermScore(): UseQueryResult<LongTermScoreView> {
+  const { db } = useDataSource();
+  const restoring = isRestoring(useHydrationStatus());
+  const select = useCallback(
+    (inputs: LongTermScoreInputs) => toLongTermScoreView(inputs, restoring),
+    [restoring]
+  );
+  return useQuery({
+    queryKey: queryKeys.longTermScore(),
+    queryFn: () => readLongTermScore(db),
+    select,
   });
 }

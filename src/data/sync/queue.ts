@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Db } from '@/data/db/driver';
 import { createQueueRepo } from '@/data/db/queue';
 import { createSettingsRepo } from '@/data/db/settings';
+import { emitDataChanged } from '@/data/events';
 import type { QueueItem } from '@/data/db/types';
 import { type SyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
@@ -56,6 +57,28 @@ export async function currentOwnerUid(db: Db): Promise<string | null> {
 }
 
 /**
+ * Whether the device's recorded owner is `uid`, read on `on` — a transaction handle, so the check
+ * and the write that follows it see the same database.
+ *
+ * The fence every writer that crossed a network round trip uses before it commits (M2 I-3): a
+ * handover wipes the database and records the new owner, so a reply that arrives for the previous
+ * owner finds a different uid here (or none, mid-wipe) and writes nothing. Stronger than the
+ * session alone, because the session can change hands before the host has rebuilt anything.
+ */
+export async function deviceOwnerIs(on: Db, uid: string): Promise<boolean> {
+  const { rows } = await on.execute('SELECT value_json FROM settings WHERE key = ?', [
+    DEVICE_OWNER_KEY,
+  ]);
+  const raw = rows[0]?.value_json;
+  if (typeof raw !== 'string') return false;
+  try {
+    return JSON.parse(raw) === uid;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The characters a `client_trip_id` may contain — the server's own rule, enforced here too.
  *
  * Defence in depth: the id is embedded in a Storage object key and in a local file path, and while
@@ -82,70 +105,6 @@ export const TraceUploadPayloadSchema = z
 
 export type TraceUploadPayload = z.infer<typeof TraceUploadPayloadSchema>;
 
-// The `queue:changed` emitter. The sync runner subscribes in `start()` so a trip queued while
-// the app is open uploads at once instead of waiting for the next foreground.
-//
-// Listeners are called on a macrotask rather than inline, because the one caller that matters —
-// `finalizeTrip` — enqueues inside the transaction that also writes the trip row. Waking a drain
-// inside that transaction would have it meet SQLite's write lock (or, under sql.js, an illegal
-// nested BEGIN); by the time a `setTimeout(0)` runs, the transaction has committed and the row
-// the runner is about to read is there. Nothing is scheduled while no one is listening.
-type QueueChangedListener = () => void;
-
-const queueChangedListeners = new Set<QueueChangedListener>();
-let queueChangedScheduled = false;
-
-/** Subscribe to "something was queued"; the returned function unsubscribes. */
-export function onQueueChanged(listener: QueueChangedListener): () => void {
-  queueChangedListeners.add(listener);
-  return () => {
-    queueChangedListeners.delete(listener);
-  };
-}
-
-/** Wake every listener once, after the current transaction has had its chance to commit. */
-export function emitQueueChanged(): void {
-  if (queueChangedScheduled || queueChangedListeners.size === 0) return;
-  queueChangedScheduled = true;
-  setTimeout(() => {
-    queueChangedScheduled = false;
-    for (const listener of [...queueChangedListeners]) listener();
-  }, 0);
-}
-
-// `sync:applied`: a drain pass has finished and at least one item was settled — a trip is now
-// `synced` or `failed`, and a day row may have landed in `score_daily_cache`. This is the precise
-// signal for the query hooks: it carries the counts and fires only on a pass that changed
-// something. (The runner also re-emits `queue:changed` on such a pass, since the queue genuinely
-// did change and that is what a subscriber wired to "the sync queue" already listens to.)
-//
-// Fired synchronously at the end of the pass, once every write has committed and no transaction is
-// open, so a listener sees the settled rows. Each listener is guarded: one that throws must not
-// fail the drain that told it the good news.
-export type SyncApplied = Readonly<{ done: number; failed: number; deferred: number }>;
-
-type SyncAppliedListener = (result: SyncApplied) => void;
-
-const syncAppliedListeners = new Set<SyncAppliedListener>();
-
-/** Subscribe to "a pass settled something"; the returned function unsubscribes. */
-export function onSyncApplied(listener: SyncAppliedListener): () => void {
-  syncAppliedListeners.add(listener);
-  return () => {
-    syncAppliedListeners.delete(listener);
-  };
-}
-
-export function emitSyncApplied(result: SyncApplied, onError?: (error: unknown) => void): void {
-  for (const listener of [...syncAppliedListeners]) {
-    try {
-      listener(result);
-    } catch (error) {
-      onError?.(error);
-    }
-  }
-}
-
 /**
  * Validate the payload against the contract, then queue it. Idempotent: a trip already in the
  * queue keeps its first item, whatever state it has reached. Given a transaction handle `on`,
@@ -167,7 +126,8 @@ export async function enqueueFinalize(
     on,
     owner
   );
-  emitQueueChanged();
+  // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
+  emitDataChanged({ source: 'enqueue' });
   return item;
 }
 
@@ -192,7 +152,8 @@ export async function enqueueTraceUpload(
     on,
     owner
   );
-  emitQueueChanged();
+  // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
+  emitDataChanged({ source: 'enqueue' });
   return item;
 }
 

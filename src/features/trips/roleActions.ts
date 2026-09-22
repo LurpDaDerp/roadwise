@@ -21,7 +21,8 @@ import {
 } from '@/data/db';
 import { invalidateTrip, useDb } from '@/data/queries';
 import type { SyncKind } from '@/data/sync/kinds';
-import { currentOwnerUid, emitQueueChanged } from '@/data/sync/queue';
+import { emitDataChanged } from '@/data/events';
+import { currentOwnerUid } from '@/data/sync/queue';
 
 /** The three answers the chips offer; `trips.role` stores the same words. */
 export type ChosenRole = 'driver' | 'passenger' | 'other';
@@ -93,7 +94,7 @@ export async function setTripRole(
     return updated;
   });
   // After the commit, so a listener that drains meets the row, not the lock.
-  emitQueueChanged();
+  emitDataChanged({ source: 'enqueue' });
   return row;
 }
 
