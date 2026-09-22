@@ -39,8 +39,10 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 - **Silence while moving (SR9).** A failed sensor, a refused foreground-service start or a lost
   fix never produces a notification, sound or modal. Record it (Android: for `getLastExitInfo`)
   and carry on or stop.
-- **Battery (design §3.5, binding).** Armed = OS-delivered wakes only, no GPS, no timers, no
-  sensors. GPS 1 Hz only while capturing. IMU 25 Hz batched natively and reduced per second —
+- **Battery (design §3.5, binding).** Armed = OS-delivered wakes only: no GPS, no IMU, no timers.
+  The one thing that runs while armed is the OS's own motion-activity feed (iOS live
+  `CMMotionActivityManager` updates, Android activity transitions), which the motion coprocessor
+  delivers at no app cost. GPS 1 Hz only while capturing. IMU 25 Hz batched natively and reduced per second —
   never per sample to JS. No WorkManager jobs.
 
 ---
@@ -52,21 +54,45 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING enter/exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. |
+| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING enter/exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. **Requires** `location: 'always'` and `motion: 'granted'` on both platforms, else rejects `E_PERMISSION` and stays unarmed (without Always, iOS region and significant-change wakes do not relaunch the app and Android cannot start a location service from the background; without motion, iOS cannot confirm a wake as automotive and Android's transitions API throws `SecurityException`). `motion: 'unavailable'` or (Android) no Google Play services → `E_UNAVAILABLE`. |
 | `disarm()` | Stop the wakes and clear the persisted armed flag. Does **not** stop a capture in progress. Idempotent. |
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: the OS refusing the location foreground service for lack of background location (started from the background with only `whenInUse`) → `E_PERMISSION`; refusing it for any other reason (background-start restrictions) → `E_FGS_REFUSED`. |
 | `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service. Idempotent. |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
 | `queryMotionHistory(fromTs, toTs)` | Activities with `fromTs ≤ ts ≤ toTs`, oldest first. iOS: `queryActivityStarting`. Android: the transitions buffered natively over the last 24 h (`TransitionStore`). |
 | `getScreenState()` | `{ locked, on }` now (same derivation as the `screen` event). |
 | `getThermalState()` | `nominal`/`fair`/`serious`/`critical` (iOS `ProcessInfo.thermalState`; Android `PowerManager` thermal status: NONE/LIGHT → nominal, MODERATE → fair, SEVERE → serious, CRITICAL and above → critical). |
-| `requestMotionPermission()` | iOS: triggers the motion prompt with a one-minute activity query; Android API 29+: requests `ACTIVITY_RECOGNITION` (below 29 it is install-time: `granted`). Resolves `granted`/`denied`/`unavailable` (hardware without motion activity). |
-| `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects if the file does not exist (iOS). JS callers treat a rejection as non-fatal. |
+| `requestMotionPermission()` | iOS: triggers the motion prompt with a one-minute activity query; Android API 29+: requests `ACTIVITY_RECOGNITION` (below 29 it is install-time: `granted`). Resolves `granted`/`denied`/`unavailable` (hardware without motion activity). **Never rejects.** Already granted → `granted` without a prompt. When the OS will not ask again (iOS `denied`/`restricted`; Android refused with `shouldShowRequestPermissionRationale` false after a request, i.e. "don't ask again") → `denied` **without prompting**; the app must send the user to Settings. |
+| `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects `E_NOT_FOUND` if nothing exists at `uri` (iOS). JS callers treat a rejection as non-fatal. |
 | `setNotificationState({ stationary, startedAt })` | Android S3: `stationary: true` adds the **End drive** action (→ `notificationAction`); `false` removes it. `startedAt` drives "Recording drive · N min" (updated once a minute). iOS: no-op, resolves. |
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether background drive detection survives Doze (M4 permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
-| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors; resolves a JSON string (§8). |
+| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
+
+### Errors
+
+Rejections are Expo `CodedError`s with one of the codes in `DRIVE_SENSE_ERROR_CODES`
+(`src/types.ts`); the wrapper passes them through unchanged, and `isDriveSenseError(e, code)`
+tests for one. Anything else a native method throws is a bug.
+
+| Code | Methods | Meaning |
+|---|---|---|
+| `E_PERMISSION` | `arm`, `startCapture` | the authorisation the method needs is missing (see each row above) |
+| `E_UNAVAILABLE` | `arm` | no motion-activity hardware, or (Android) no Google Play services |
+| `E_FGS_REFUSED` | `startCapture` (Android) | the OS refused the foreground service for a reason other than permission |
+| `E_NOT_FOUND` | `excludeFromBackup` (iOS) | nothing at the URI |
+| `E_INVALID_INPUT` | `selfTest` | the vectors JSON is unparseable |
+
+Every other method never rejects: `disarm`, `stopCapture`, `setCaptureRate`, `getState`,
+`queryMotionHistory` (an empty list when motion is not granted), `getScreenState`,
+`getThermalState`, `requestMotionPermission`, `setNotificationState`, `getLastExitInfo` (`null`
+below Android 11), `isIgnoringBatteryOptimizations`.
+
+`armed` in `getState()` is the **effective** arming: false after a rejected `arm()`, and false
+again once a permission it needs is revoked (native re-checks the authorisation on every
+`getState()`; iOS also on `locationManagerDidChangeAuthorization`). The persisted armed flag is
+cleared then too, so `BootReceiver` does not re-arm without permission.
 
 ### `DriveSenseState`
 
@@ -75,8 +101,8 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `armed`, `capturing` | as set by the methods above (and by a native restart, §6) |
 | `rate`, `mode` | the current capture's; `null` while not capturing |
 | `platform` | `ios` / `android` |
-| `location` | `none` / `whenInUse` / `always` (the OS authorisation) |
-| `motion` | `granted` / `denied` / `undetermined` / `unavailable` |
+| `location` | the OS location authorisation. iOS: `authorizedAlways` → `always`, `authorizedWhenInUse` → `whenInUse`, `notDetermined`/`denied`/`restricted` → `none`; reduced (approximate) accuracy reports its authorisation unchanged. Android: `ACCESS_BACKGROUND_LOCATION` granted (or API < 29 with fine or coarse granted) → `always`; fine or coarse foreground only → `whenInUse`; neither → `none` |
+| `motion` | iOS: `CMMotionActivityManager.isActivityAvailable()` false → `unavailable`, else `authorizationStatus()` `authorized` → `granted`, `denied`/`restricted` → `denied`, `notDetermined` → `undetermined`. Android: no Google Play services → `unavailable`; API < 29 → `granted` (install-time); else `ACTIVITY_RECOGNITION` granted → `granted`, requested and refused → `denied`, never requested → `undetermined` (persist a "requested once" flag to tell these apart) |
 | `lockSignal` | how far `locked` can be trusted: Android `reliable`; iOS `lagged` with a passcode, `unreliable` without (§5) |
 | `captureWasOpen` | the persisted capture-open flag was set when this process started — a capture was open when the previous process ended (rev1: I2) |
 | `captureStartedAt` | integer epoch ms of the current capture's start; `null` while not capturing |
@@ -96,6 +122,30 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
 
+**Motion-activity mapping** (the `activity` event and `queryMotionHistory` alike). The drive host
+acts on `automotive` (any confidence) and on `walking`/`running` only at confidence `medium` or
+above, so these mappings decide whether walking can end a trip.
+
+- **iOS** (`CMMotionActivity`): confidence maps 1:1 (`.low` → `low`, `.medium` → `medium`,
+  `.high` → `high`). Several flags can be set at once; `type` is the first set flag in this order:
+  `walking` → `running` → `cycling` → `automotive` → `stationary` → `unknown` (the `unknown` flag,
+  or no flag at all). So `automotive && stationary` (a red light) is `automotive`. An update equal
+  in type and confidence to the previous one is not re-emitted.
+- **Android** (Activity Recognition Transitions API, which carries no confidence): the module
+  subscribes to IN_VEHICLE and WALKING, ENTER and EXIT.
+
+  | Transition | Emitted |
+  |---|---|
+  | ENTER IN_VEHICLE | `{ type: 'automotive', confidence: 'high' }` |
+  | ENTER WALKING | `{ type: 'walking', confidence: 'high' }` |
+  | EXIT IN_VEHICLE | nothing |
+  | EXIT WALKING | nothing |
+
+  `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
+  read when the transition is received). `TransitionStore` keeps the same mapped entries (ENTER
+  only) for 24 h for `queryMotionHistory`. `createFakeDriveSense` has no mapping to do: tests emit
+  `MotionActivity` values directly.
+
 **Buffering.** Every event emitted while **no JS listener for that event** is attached is
 buffered natively and delivered, in order, when the first listener for it attaches (Expo
 `OnStartObserving`), after `addListener` returns. The buffer holds at most **300** events across
@@ -113,11 +163,12 @@ non-negative integer epoch ms. The encodings:
 
 | Situation | Encoding |
 |---|---|
-| `ts` | the end of the second the row closes, integer epoch ms |
+| `ts` | the end of the window the row closes, integer epoch ms, strictly increasing within a capture |
 | unknown `speed` / `speedAcc` / `course` | `-1` |
 | no fix in the second | `lat`/`lng`/`alt` of the last fix of any quality (`0`/`0`/`0` before any), `hAcc = 9999`, `speed = speedAcc = course = -1`, `gnssValid = false` |
 | fix with unknown accuracy (platform reports negative) | `hAcc = 9999`, `gnssValid = false` |
-| `gnssValid` | a fix arrived in the second ∧ `0 ≤ hAcc ≤ GNSS_MAX_HACC_M` (50 m) ∧ age at `ts` ≤ `GNSS_MAX_AGE_S` (1.5 s) |
+| platform unknowns | **Android:** `hasSpeed()` false → `speed = -1`; `hasSpeedAccuracy()` false → `speedAcc = -1`; `hasBearing()` false → `course = -1`; `hasAccuracy()` false → `hAcc = 9999`; `hasAltitude()` false → `alt` of the last fix (0 before any). Never read `getSpeed()` and the rest without the `has…()` check: they return 0.0, not −1. **iOS:** `speed`, `speedAccuracy`, `course` < 0 → −1; `horizontalAccuracy` < 0 → 9999 |
+| `gnssValid` | the window has a fix (chosen by fix timestamp, §7 "Windows") ∧ `0 ≤ hAcc ≤ GNSS_MAX_HACC_M` (50 m) ∧ age at `ts` ≤ `GNSS_MAX_AGE_S` (1.5 s) |
 | fewer than `MIN_IMU_SAMPLES` (10) IMU samples in the second, or IMU stopped (`low` rate) | **IMU absent**: `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `yawRateMax`, `jerkMax`, `gravityStability`, `orientationDelta`, `handlingScore` all `0` (M1's `finalize.ts` reads "IMU present" from the six extremes) |
 | IMU present, frame not aligned | `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `jerkMax` are `0`; `yawRateMax`, `gravityStability`, `orientationDelta`, `handlingScore` are computed |
 | `locked` / `screenOn` / `appForeground` | the phone state at the end of the second (§5) |
@@ -235,13 +286,41 @@ Accepted cost (device-pass item): on a rough road |a| leaves the ±0.02 g band m
 accelerometer correction runs less and the gyro carries gravity for longer; drift is corrected at
 cruise, when |a| ≈ 1 g.
 
-### Grouping samples into seconds
+### Time base (`src/extract/timebase.ts`)
 
-Every second closes at `tsMs` (the timer instant, rounded to an integer for the row). Its IMU
-samples are those with sensor timestamp `t` in `(tsMs − 1000, tsMs]`, oldest first — group by the
-**sensor timestamp** converted to epoch ms, not by arrival time (Android batches up to 1 s late:
-the row for a second may be emitted up to ~1 s after it closes, with the same `ts`). Its fix is
-the **last fix that arrived during the second**, or none. Never reuse a fix in a later second.
+Samples and fixes are timed on the monotonic **boot clock** and converted to epoch ms through
+**one anchor per capture**, so a wall-clock change mid-drive cannot reorder them:
+
+- A new capture (`startCapture` when not capturing, or a native restart) takes a
+  `ClockAnchor { epochMs, clockMs }`, reading both clocks back to back: Android
+  `System.currentTimeMillis()` and `SystemClock.elapsedRealtimeNanos() / 1e6`; iOS
+  `Date().timeIntervalSince1970 × 1000` and `ProcessInfo.processInfo.systemUptime × 1000`.
+- The boot-clock time of each item: Android `SensorEvent.timestamp / 1e6` (nanoseconds, on the
+  `elapsedRealtimeNanos` base) and `Location.getElapsedRealtimeNanos() / 1e6` (not `getTime()`);
+  iOS `CMLogItem.timestamp × 1000` (device motion, on the `systemUptime` base). iOS
+  `CLLocation.timestamp` is already a `Date`: use `timeIntervalSince1970 × 1000` directly.
+- `t = anchor.epochMs + (clockMs − anchor.clockMs)` (`toEpochMs`).
+- **Sanity fallback:** if that `t` is more than `TIMEBASE_MAX_SKEW_MS` (2000 ms) from the item's
+  arrival time (the wall clock when native received it), use the arrival time instead and count it
+  for diagnostics (some older Android devices time sensor events on another base). Batched Android
+  samples arrive up to 1 s late, inside the margin.
+
+### Windows: which samples and which fix belong to a row
+
+- Rows close on a 1 s timer, `ts` = the timer instant rounded to an integer. A row's window is
+  **`(previous row's ts, ts]`** (`windowStart`). Only a capture's first row, and the first row after
+  a gap between row timestamps longer than `MAX_ROW_GAP_MS` (2000 ms: a stalled timer, a suspended
+  process), use `(ts − FIRST_WINDOW_MS, ts]` = `(ts − 1000, ts]`. A late timer makes one longer
+  window and the next one shorter; no sample is dropped or counted twice.
+- The window's IMU samples are those with converted `t` in the window, sorted oldest first
+  (`takeWindow`). Samples with `t > ts` wait for the next window; samples at or before the window
+  start (a window already closed) are dropped and counted.
+- The window's fix is the one with the **latest fix timestamp** in the window (`pickFix`), whatever
+  order the fixes arrived in. No fix is used by two rows.
+- Android batches IMU up to 1 s late: compute a row once a sample with `t > ts` has arrived, or
+  1.5 s after `ts`, whichever comes first. The row keeps its `ts`.
+- At `low` rate a row is emitted per fix, with `ts` = the fix's converted time rounded, and skipped
+  if it is not greater than the previous row's `ts`.
 
 ### Per second: `extractSecond(imu, fix, phone, tsMs, state)`
 
@@ -358,6 +437,15 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 { "name": "gravity-filter", "description": "…", "kind": "gravityFilter",
   "inputs": { "batches": [ [ { "t", "a": [x,y,z], "w": [x,y,z] }, … ], … ] },
   "expected": { "batches": [ [ { "t", "ua", "g", "w" }, … ], … ] } }
+// kind "androidRaw": the Android production path end to end. For each second in order: convert
+// every raw sample with a = −values / G_MPS2 (androidAccelToReference), run gravityFilter over
+// the converted samples (its state carried across seconds), then extractSecond(imu, fix, phone,
+// tsMs) (its state carried too); both states start fresh.
+{ "name": "android-raw", "description": "…", "kind": "androidRaw",
+  "inputs": { "seconds": [ { "tsMs",
+      "raw": [ { "t", "values": [x,y,z] /* TYPE_ACCELEROMETER, m/s², Android sign */, "w": [x,y,z] }, … ],
+      "fix": { … } | null, "phone": { … } }, … ] },
+  "expected": { "rows": [ FeatureRow, … ] } }
 ```
 
 | Vector | What it pins |
@@ -371,6 +459,7 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `no-imu` | IMU-absent encoding and every GNSS encoding of §4 |
 | `unaligned-start` | frame-free fields populated, frame-dependent fields 0 |
 | `gravity-filter` | the Android filter on raw accel + gyro, with a re-seeding gap |
+| `android-raw` | Android units and sign in, rows out: the conversion, the filter and the extractor together (a port that skips `/ G_MPS2` or the sign fails it) |
 
 Regenerate after changing the reference or a constant (never by hand):
 
@@ -386,24 +475,32 @@ diagnostics screen (U5) — never by a production code path.
 
 1. JS (U5) reads the vector files and calls `DriveSense.selfTest(JSON.stringify(vectors))` —
    a JSON **array** of vector objects as above (`parseVectors` validates them first).
-2. Native parses the array, and for each vector runs its own port over `inputs` exactly as
+2. **`selfTest` must call the same classes and conversion functions the capture path uses**:
+   the production `FeatureExtractor`, `GravityFilter` and (Android) accelerometer conversion
+   (`a = −values / G_MPS2`), never a copy kept for testing. A port that forgot the conversion or
+   its sign must fail the `android-raw` vector: kind `androidRaw`, whose inputs are raw
+   `TYPE_ACCELEROMETER` values in m/s² with Android's sign plus the gyroscope, per second with a
+   fix. Android converts, filters and extracts, and returns `rows`; iOS answers `skipped`.
+3. Native parses the array, and for each vector runs its own port over `inputs` exactly as
    `runVector` in `src/extract/vectors.ts` does (fresh state per vector). `expected` is ignored.
-   Android runs every vector. iOS has no gravity filter (CoreMotion supplies gravity), so it
-   answers each `gravityFilter` vector with the `skipped` form and runs every `extract` vector.
-3. Native resolves a JSON string:
+   Android runs every vector. iOS has no gravity filter and no raw-accelerometer path
+   (CoreMotion supplies gravity and user acceleration), so it answers each `gravityFilter` and
+   `androidRaw` vector with the `skipped` form and runs every `extract` vector.
+4. Native resolves a JSON string:
    ```jsonc
    { "version": 1, "platform": "ios" | "android",
      "results": [ { "name", "kind": "extract", "rows": [FeatureRow, …] }
                 | { "name", "kind": "gravityFilter", "batches": [[ImuSample, …], …] }
                 | { "name", "kind", "error": "message" }
-                | { "name", "kind": "gravityFilter", "skipped": "reason" } ] }   // one per input vector, in order
+                | { "name", "kind": "gravityFilter" | "androidRaw", "skipped": "reason" } ] }   // one per input vector, in order
    ```
    A vector that throws natively yields the `error` form; the promise rejects only if the input
    is not parseable at all.
-4. JS diffs with `diffSelfTest(vectors, outputJson)` (`src/selfTest.ts`): every number within
+5. JS diffs with `diffSelfTest(vectors, outputJson)` (`src/selfTest.ts`): every number within
    `SELF_TEST_TOLERANCE`, every boolean and array length exact, no missing or extra keys; the
    first 20 mismatches per vector are listed by path (`rows[8].aLonMin`). A `skipped` result is
-   accepted only for a `gravityFilter` vector on `platform: "ios"`; anywhere else it fails.
+   accepted only for a `gravityFilter` or `androidRaw` vector on `platform: "ios"`; anywhere else
+   it fails.
 
 ---
 

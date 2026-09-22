@@ -102,6 +102,37 @@ export const DRIVE_SENSE_METHODS = [
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
 
+/**
+ * The `CodedError` codes a native method may reject with (README §2 "Errors"). Anything else a
+ * native method throws is a bug. The wrapper passes these through with their `code`.
+ */
+export const DRIVE_SENSE_ERROR_CODES = [
+  /** `arm()`: location is not 'always' or motion is not 'granted'. `startCapture()`: no location
+   * permission at all, or (Android) the OS refused a location foreground service for lack of it. */
+  'E_PERMISSION',
+  /** The hardware or service is missing: no motion-activity support, no Google Play services. */
+  'E_UNAVAILABLE',
+  /** Android `startCapture()`: the OS refused to start the foreground service for another reason
+   * (background-start restrictions). */
+  'E_FGS_REFUSED',
+  /** `excludeFromBackup()` (iOS): nothing exists at the URI. */
+  'E_NOT_FOUND',
+  /** `selfTest()`: the vectors JSON could not be parsed at all. */
+  'E_INVALID_INPUT',
+] as const;
+
+export type DriveSenseErrorCode = (typeof DRIVE_SENSE_ERROR_CODES)[number];
+
+/** Whether `e` is a drive-sense rejection with `code` (Expo `CodedError` carries `.code`). */
+export function isDriveSenseError(e: unknown, code?: DriveSenseErrorCode): boolean {
+  const c = (e as { code?: unknown } | null)?.code;
+  return (
+    typeof c === 'string' &&
+    (DRIVE_SENSE_ERROR_CODES as readonly string[]).includes(c) &&
+    (code === undefined || c === code)
+  );
+}
+
 export interface Subscription {
   remove(): void;
 }
