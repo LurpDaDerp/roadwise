@@ -119,17 +119,20 @@ export async function flushPendingConsents(
 }
 
 /**
- * Whether the account has agreed to what there is to agree to now. Published: live `tos` and
- * `privacy` consents at the current versions (the disclaimer alone is not acceptance of the Terms).
- * Unpublished: the current disclaimer acknowledged in `flags`.
+ * Whether the account has agreed to what there is to agree to now. The disclaimer is tracked at its
+ * own version and is always required: the current `DISCLAIMER_VERSION` acknowledged in `flags`, so
+ * a new disclaimer asks again even when the Terms have not changed (ruling T15). Published, the
+ * account also needs live `tos` and `privacy` consents at the current versions; the disclaimer
+ * alone is never acceptance of the Terms.
  */
 export function hasCurrentTerms(
   consents: readonly ConsentRow[],
   flags: { disclaimerAcknowledged?: unknown } | null | undefined,
   legal: LegalState
 ): boolean {
+  if (flags?.disclaimerAcknowledged !== DISCLAIMER_VERSION) return false;
   if (legal.published && legal.tos && legal.privacy) {
     return holds(consents, 'tos', legal.tos.version) && holds(consents, 'privacy', legal.privacy.version);
   }
-  return flags?.disclaimerAcknowledged === DISCLAIMER_VERSION;
+  return true;
 }

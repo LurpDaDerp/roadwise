@@ -178,17 +178,31 @@ describe('hasCurrentTerms', () => {
   const tos: ConsentRow = { type: 'tos', version: 't-2', revoked_at: null };
   const privacy: ConsentRow = { type: 'privacy', version: 'p-3', revoked_at: null };
 
-  test('published: both consents at the current versions, not revoked', () => {
-    expect(hasCurrentTerms([tos, privacy], {}, published)).toBe(true);
-    expect(hasCurrentTerms([tos], {}, published)).toBe(false);
-    expect(hasCurrentTerms([tos, { ...privacy, version: 'p-2' }], {}, published)).toBe(false);
-    expect(hasCurrentTerms([tos, { ...privacy, revoked_at: '2026-09-10T00:00:00Z' }], {}, published)).toBe(
+  const ack = { disclaimerAcknowledged: DISCLAIMER_VERSION };
+
+  test('published: both consents at the current versions, not revoked, and the current disclaimer', () => {
+    expect(hasCurrentTerms([tos, privacy], ack, published)).toBe(true);
+    expect(hasCurrentTerms([tos], ack, published)).toBe(false);
+    expect(hasCurrentTerms([tos, { ...privacy, version: 'p-2' }], ack, published)).toBe(false);
+    expect(hasCurrentTerms([tos, { ...privacy, revoked_at: '2026-09-10T00:00:00Z' }], ack, published)).toBe(
       false
     );
     // An older revoked row beside a current live one still counts as current.
     expect(
-      hasCurrentTerms([{ ...tos, revoked_at: '2026-09-10T00:00:00Z' }, tos, privacy], {}, published)
+      hasCurrentTerms([{ ...tos, revoked_at: '2026-09-10T00:00:00Z' }, tos, privacy], ack, published)
     ).toBe(true);
+  });
+
+  test('published: current Terms and Privacy without the disclaimer acknowledgement are not enough', () => {
+    expect(hasCurrentTerms([tos, privacy], {}, published)).toBe(false);
+    expect(hasCurrentTerms([tos, privacy], null, published)).toBe(false);
+  });
+
+  test('a disclaimer bump asks again even though the Terms and Privacy are unchanged', () => {
+    // The account acknowledged an earlier disclaimer and holds the current Terms and Privacy.
+    const earlier = { disclaimerAcknowledged: '2026-01-01' };
+    expect(hasCurrentTerms([tos, privacy], earlier, published)).toBe(false);
+    expect(hasCurrentTerms([tos, privacy], earlier, unpublished)).toBe(false);
   });
 
   test('published: the disclaimer acknowledgement alone is not acceptance of the Terms', () => {

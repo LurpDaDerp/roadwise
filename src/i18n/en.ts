@@ -1,8 +1,6 @@
 export const en = {
   'app.name': 'RoadWise',
   'welcome.headline': 'Put your phone down.\nDrive. Get better.',
-  'welcome.body':
-    'RoadWise coaches you quietly while you drive and rewards you when you get home.',
   'welcome.privacy': 'Your drives are yours. Nothing is shared unless you choose to.',
   'welcome.getStarted': 'Get started',
   'welcome.signIn': 'I already have an account',
