@@ -20,6 +20,7 @@
  */
 import { createSettingsRepo, type Db } from '@/data/db';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
+import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -61,6 +62,8 @@ export interface DeviceOwnerDeps {
  * rows pointing at traces that are gone, which the sync runner would carry as real work.
  */
 export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<void> {
+  // A "your drive is ready" scheduled for the last driver must not fire for the next one (U3).
+  await cancelDriveSummaries().catch(() => {});
   await db.transaction(async (tx) => {
     for (const table of DEVICE_TABLES) await tx.execute(`DELETE FROM ${table}`);
   });

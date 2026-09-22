@@ -28,6 +28,12 @@ jest.mock('@/data/supabase/client', () => ({
     },
   },
 }));
+// A scheduled "your drive is ready" must not fire after its driver signed out (U3).
+jest.mock('@/features/drive/summaryNotifier', () => ({
+  cancelDriveSummaries: jest.fn(async () => {
+    authCalls.push('cancelDriveSummaries');
+  }),
+}));
 jest.mock('@/data/supabase/profile', () => ({
   fetchProfile: jest.fn((userId: string) => new Promise((resolve, reject) => {
     profileCalls.push(userId);
@@ -147,7 +153,8 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
   await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
 
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
-  expect(authCalls).toEqual(['signOut']);
+  // The session ends first; then the pending drive summaries are cancelled.
+  expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
 
   await act(async () => { emit('SIGNED_OUT', null); });
   await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());

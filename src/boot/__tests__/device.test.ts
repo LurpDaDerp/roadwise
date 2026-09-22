@@ -16,6 +16,11 @@ import { currentOwnerUid, enqueueTraceUpload, SESSION_UID_KEY } from '@/data/syn
 
 const TRIP = 'trip-1';
 
+// A summary scheduled for the last driver's drive must not fire for the next one (U3).
+jest.mock('@/features/drive/summaryNotifier', () => ({
+  cancelDriveSummaries: jest.fn(async () => {}),
+}));
+
 let db: Db;
 
 beforeEach(async () => {
@@ -75,6 +80,24 @@ test('a device with data in every table is emptied, traces and all — but not i
   expect(store.cleared).toBe(1);
   // The schema is the app's, not the driver's: migrations must not run again on the next launch.
   expect(await countOf('schema_version')).toBe(1);
+});
+
+test('the wipe cancels the pending drive summaries first, and goes on if that fails', async () => {
+  await seedEverything();
+  let rowsWhenCancelled = -1;
+  const { cancelDriveSummaries } = jest.requireMock('@/features/drive/summaryNotifier') as {
+    cancelDriveSummaries: jest.Mock;
+  };
+  cancelDriveSummaries.mockImplementationOnce(async () => {
+    rowsWhenCancelled = await countOf('trips');
+    throw new Error('notifications unavailable');
+  });
+
+  await wipeDevice(db, { traces: fakeTraces().traces });
+
+  expect(cancelDriveSummaries).toHaveBeenCalledWith();
+  expect(rowsWhenCancelled).toBeGreaterThan(0);
+  expect(await totals()).toEqual(emptyTotals);
 });
 
 test('a traces directory that will not clear is reported, and the rows are gone anyway', async () => {

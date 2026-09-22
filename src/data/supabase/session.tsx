@@ -1,6 +1,8 @@
 import type { Session } from '@supabase/supabase-js';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
+import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
+
 import { supabase } from './client';
 import { fetchProfile, type Profile } from './profile';
 
@@ -190,6 +192,8 @@ export function SessionProvider({
           if (left !== 0) return { signedOut: false, unsentDeletes: left };
         }
         await supabase.auth.signOut();
+        // A summary scheduled for this driver's last drive must not fire once they have left (U3).
+        void cancelDriveSummaries().catch(() => {});
         return { signedOut: true };
       },
       refreshProfile: () => refreshRef.current(),
