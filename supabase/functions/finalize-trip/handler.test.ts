@@ -460,6 +460,16 @@ Deno.test('an auto-detected drive uploaded as role unknown is stored unscored as
   assertEquals(h.warnings.length, 0);
 });
 
+Deno.test('a manual start uploaded as role unknown is refused 400 and nothing is written', async () => {
+  const h = harness();
+  const manual = payload({ role: 'unknown', roleConfidence: null, roleSource: 'manual' });
+  assertEquals(await json(await handleFinalizeTrip(post(manual), h.deps)), {
+    status: 400,
+    body: { code: 'unknown_role_not_inferred', field: 'role' },
+  });
+  assertEquals(h.fake.rpcCalls.length, 0);
+});
+
 Deno.test('a mismatch the night boundary explains is flagged nightBoundary, so monitoring can set it apart', async () => {
   // The device flagged the pickup by its own clock; the server applies the clock rule at trip
   // start to every event. A drive that starts at 23:30 and whose device called the event daytime

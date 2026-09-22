@@ -137,7 +137,7 @@ describe('the unscored field', () => {
   test('an unclassified trip asks its question before any reason', () => {
     expect(unscored({ role: 'unknown' })).toEqual({
       title: 'Who was driving?',
-      body: "We couldn't tell who was driving. A drive is scored only once you confirm you drove it; a passenger drive stays unscored.",
+      body: "We couldn't tell who was driving. This drive is scored only once you confirm you drove it; if you were a passenger, it stays unscored.",
       stamp: null,
     });
   });

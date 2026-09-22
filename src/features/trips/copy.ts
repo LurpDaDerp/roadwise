@@ -25,12 +25,13 @@ export const tripCopy = {
     /**
      * The "tell us whether you drove" variant: role `unknown`, reason `role_unknown` (§9.7). An
      * auto-detected drive whose evidence was ambiguous is asked about, never assumed, and C10's
-     * chips are the answer. It states the rule, not an outcome: confirming you drove is necessary
-     * for a score (a short or grade-C drive still stays unscored), and a passenger answer never
-     * produces one.
+     * chips are the answer. It speaks of this drive only (manual starts and high-evidence auto
+     * drives are scored without asking) and states a condition, not an outcome: confirming you
+     * drove is necessary for a score (a short or grade-C drive still stays unscored), and a
+     * passenger answer never produces one.
      */
     unknownRole:
-      "We couldn't tell who was driving. A drive is scored only once you confirm you drove it; a passenger drive stays unscored.",
+      "We couldn't tell who was driving. This drive is scored only once you confirm you drove it; if you were a passenger, it stays unscored.",
     passenger: "You weren't driving, so this drive isn't scored.",
     tooShort: "Too short to score fairly. Drives under half a mile or two minutes aren't scored.",
     /** §7.D D1, verbatim. */

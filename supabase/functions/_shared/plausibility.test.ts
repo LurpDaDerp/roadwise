@@ -26,6 +26,18 @@ Deno.test('a consistent upload passes with no downgrade', () => {
   assertEquals(checkPlausibility(payload(), NOW), { ok: true, downgrades: [] });
 });
 
+Deno.test('role unknown is accepted only from a drive whose role was inferred (auto or moving start), never from a manual start', () => {
+  for (const roleSource of ['auto', 'moving_start']) {
+    assert(passes(payload({ role: 'unknown', roleSource })), roleSource);
+  }
+  for (const roleSource of ['manual', null, 'tap', 'AUTO']) {
+    assertEquals(failure(payload({ role: 'unknown', roleSource })), { code: 'unknown_role_not_inferred', field: 'role' }, String(roleSource));
+  }
+  // the rule is about `unknown` only: a manual driver or passenger upload is untouched
+  assert(passes(payload({ role: 'driver', roleSource: 'manual' })));
+  assert(passes(payload({ role: 'passenger', roleSource: 'manual' })));
+});
+
 Deno.test('the client trip id must match the storage-key character class', () => {
   assertEquals(failure(payload({ clientTripId: '../x' })), {
     code: 'invalid_client_trip_id',

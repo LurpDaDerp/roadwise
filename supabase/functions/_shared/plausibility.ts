@@ -44,9 +44,17 @@ export const SPEED_DIVERGENCE_FACTOR = 1.25;
 export const SPEED_DIVERGENCE_SLACK_MPS = 2;
 /** `durationS` may exceed the wall span by this much (the finalizer adds one row's second). */
 export const SPAN_SLACK_S = 1;
+/**
+ * The role sources whose role was inferred rather than declared (R11, spec §9.7): an auto-detected
+ * drive, and a start tapped while already moving (not manual-start evidence). Only these may upload
+ * role `unknown`. A manual start is a declared driver drive; letting it arrive as `unknown` would
+ * keep it unscored for ever while reading, to a parent, as a question still awaiting an answer.
+ */
+export const INFERRED_ROLE_SOURCES: readonly string[] = ['auto', 'moving_start'];
 
 export type PlausibilityCode =
   | 'invalid_client_trip_id'
+  | 'unknown_role_not_inferred'
   | 'invalid_event_id'
   | 'duplicate_event_id'
   | 'too_many_events'
@@ -100,6 +108,9 @@ function knownZone(tz: string): boolean {
 /** `nowMs` is the server clock: the temporal rules are the only ones that read it. */
 export function checkPlausibility(p: FinalizeTripPayload, nowMs: number): PlausibilityResult {
   if (!CLIENT_ID_PATTERN.test(p.clientTripId)) return fail('invalid_client_trip_id', 'clientTripId');
+  if (p.role === 'unknown' && !(p.roleSource !== null && INFERRED_ROLE_SOURCES.includes(p.roleSource))) {
+    return fail('unknown_role_not_inferred', 'role');
+  }
   if (p.events.length > MAX_EVENTS) return fail('too_many_events', 'events');
 
   const seen = new Set<string>();
@@ -179,8 +190,9 @@ export function checkPlausibility(p: FinalizeTripPayload, nowMs: number): Plausi
  * `trips.data_quality`; a later re-score (Task 2b) reproduces it from the row with
  * `imuPresent = rows_digest.imuPresent && data_quality === 'A'`.
  *
- * `role` is the scorer's, not the upload contract's: an upload can only say `driver` or
- * `passenger`, while the stored role a re-score works from is also `other` or `unknown`.
+ * `role` is the scorer's, not the upload contract's: an upload says `driver`, `passenger` or (from
+ * an inferred role source only) `unknown`, while the stored role a re-score works from can also be
+ * `other`.
  */
 export function tripMetrics(
   p: Pick<FinalizeTripPayload, 'distanceM' | 'durationS' | 'rowsDigest'> & { role: TripMetrics['role'] },

@@ -154,6 +154,9 @@ export function toTripSummary(row: TripRow): TripSummary {
     day: dayKey(new Date(row.started_at), row.tz),
     distanceM: row.distance_m,
     durationS: row.duration_s,
+    // Defensive, not an expected state: finalize always writes a role and the server column is
+    // NOT NULL. A null or unrecognised value is shown as `unknown` (C10's question) rather than
+    // leaking the stored string or guessing an answer.
     role:
       row.role !== null && (TRIP_ROLES as readonly string[]).includes(row.role)
         ? (row.role as TripRole)

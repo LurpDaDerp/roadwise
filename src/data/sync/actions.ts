@@ -26,7 +26,10 @@
  *   outcome — including a denied dispute and a replay.
  * - **A 409 is terminal here, unlike `finalize-trip`.** `classifyStatus` treats 409 as retryable
  *   because finalize-trip answers 409 when it wants the trace re-sent. `trip-actions` answers 409
- *   only for `ambiguous_event` and `trip_deleted`, neither of which a retry can fix.
+ *   only for `ambiguous_event`, `trip_deleted` and `scoring_version_unsupported` (a trip stored
+ *   under a scoring version this deployment has no scorer for), none of which a retry can fix.
+ *   After a model change, a terminal set-role would leave the optimistic local role in place
+ *   while the server keeps the old one; unreachable while every trip is version 1.
  * - **The queue kind is not the wire action.** `delete-trip` is the kind; `delete` is the action
  *   in the body.
  */

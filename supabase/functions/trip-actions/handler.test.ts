@@ -990,6 +990,14 @@ Deno.test('the re-score dispatches on the stored scoring version: version 1 is t
   assertEquals(SCORERS[1], scoreTrip);
 });
 
+Deno.test('every registered scorer reports its own version, so a model bump cannot silently rebind an old one', () => {
+  // When scoreTrip moves to version 2, SCORERS[1] must become a frozen copy of the version-1
+  // scorer; until it does, this fails CI instead of every old trip's dispute failing in production.
+  for (const [version, scorer] of Object.entries(SCORERS)) {
+    assertEquals(scorer(storedMetrics(), [storedEvent()]).scoringVersion, Number(version), `SCORERS[${version}]`);
+  }
+});
+
 Deno.test('a dispute on a trip scored under version 1 re-scores it under version 1', async () => {
   const h = harness({
     tables: { trips: [storedTripRow({ scoring_version: 1 })], trip_events: [storedEventRow()], event_disputes: [] },
