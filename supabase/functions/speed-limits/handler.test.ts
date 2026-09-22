@@ -379,6 +379,29 @@ Deno.test('re-review N1: a parallel pick is answered uncached; a clear pick is a
   assertEquals(clear.infos.at(-1)?.outcome, 'aws');
 });
 
+Deno.test('review r6 n1: at an ambiguous cut (21 candidates) AWS is not asked and no budget is spent', async () => {
+  const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
+  // 21 rows as the server returns them: untagged roads crossing the car's course, all within 25 m
+  const rows = Array.from({ length: 21 }, (_, i) => ({
+    ...untaggedRow,
+    segment_key: String(9100000000 + i),
+    distance_m: 1 + i,
+    bearing_deg: 90,
+  }));
+  const h = harness({ candidates: rows, routes });
+  const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { source: 'unknown', limitMph: null, matchConfidence: 0, parallelRoads: true, provider: null });
+  assertEquals(routes.calls.length, 0);
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates']);
+  assertEquals(h.infos.at(-1)?.outcome, 'cut_no_aws');
+
+  // exactly 20 is not a cut: AWS is asked as usual
+  const h20 = harness({ candidates: rows.slice(0, 20), routes });
+  await (await handleSpeedLimits(post(UNTAGGED_POINT), h20.deps)).body?.cancel();
+  assertEquals(routes.calls.length, 1);
+});
+
 Deno.test('outside every loaded state, AWS is not asked and no budget is spent', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({ candidates: [], routes });

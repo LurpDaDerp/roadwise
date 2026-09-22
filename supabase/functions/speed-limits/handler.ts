@@ -38,7 +38,7 @@ import {
 } from '../_shared/http.ts';
 import { asPgError } from '../_shared/pg.ts';
 import { nearestOnPolyline, type LatLng } from '../_shared/speedLimits/geometry';
-import { matchLimit, type Candidate, type MatchResult } from '../_shared/speedLimits/match';
+import { MATCH, matchLimit, type Candidate, type MatchResult } from '../_shared/speedLimits/match';
 import { parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
 import {
   PointRequestSchema,
@@ -90,10 +90,12 @@ export const AWS_COVERAGE: readonly CoverageBox[] = [
 ];
 
 /**
- * Areas inside a coverage box whose roads are not loaded (review r5 m2). A box cannot follow the
+ * Areas inside a coverage box where AWS is not asked (review r5 m2). A box cannot follow the
  * Columbia, so north Portland, OR (Hayden Island, Kenton, St Johns, PDX, about 45.58..45.61) sits
- * inside WA's box; it is carved out here. Vancouver's downtown (45.63) and Camas / Washougal (east
- * of -122.47) stay in; the thin Vancouver waterfront strip south of 45.62 is out with it.
+ * inside WA's box, and this carves it out. It also removes about 15 km of the Vancouver, WA
+ * riverfront south of 45.62, SR-14 included, whose roads ARE loaded: there a point the open data
+ * cannot answer gets `unknown` rather than an AWS lookup (accepted, review r6 n2). Vancouver's
+ * downtown north of 45.62 and Camas / Washougal east of -122.47 stay in.
  */
 export const AWS_EXCLUDE: readonly CoverageBox[] = [
   { state: 'OR', minLat: 45.54, maxLat: 45.62, minLng: -122.8, maxLng: -122.47 },
@@ -474,6 +476,10 @@ async function point(req: Request, run: Run): Promise<Outcome> {
 
   const unknown = (outcome: string) => answer(unknownAnswer(match.parallelRoads), outcome);
   if (!deps.routes) return unknown('no_fallback');
+  // More roads within reach than the matcher considers (its ambiguous cut): an AWS answer would be
+  // flagged ambiguous too, and so never cached (review r6 n1). Answer the ambiguity, spend nothing.
+  const inRadius = candidates.filter((c) => Number.isFinite(c.distanceM) && c.distanceM >= 0 && c.distanceM <= MATCH.RADIUS_M);
+  if (inRadius.length > MATCH.MAX_CANDIDATES) return unknown('cut_no_aws');
   if (!insideCoverage(here)) return unknown('outside_coverage');
 
   // The user's budget first, so a user whose own budget is spent never draws on everyone's.
