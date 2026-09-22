@@ -17,8 +17,9 @@ jest.mock('expo-router', () => {
   };
 });
 
-function fakeHost(status: DriveState['status'], intent: boolean) {
-  let state = { status } as DriveState;
+/** `armed` defaults to what an idle host would publish: armed exactly when its status is. */
+function fakeHost(status: DriveState['status'], intent: boolean, armed = status === 'armed') {
+  let state = { status, autoDetectArmed: armed } as DriveState;
   const listeners = new Set<(s: DriveState) => void>();
   const host = {
     snapshot: () => state,
@@ -30,19 +31,19 @@ function fakeHost(status: DriveState['status'], intent: boolean) {
   } as unknown as DriveHost;
   return {
     host,
-    move(next: DriveState['status']) {
-      state = { ...state, status: next };
+    move(next: DriveState['status'], nextArmed = next === 'armed') {
+      state = { ...state, status: next, autoDetectArmed: nextArmed };
       for (const l of listeners) l(state);
     },
   };
 }
 
-async function renderLine(status: DriveState['status'], intent: boolean, flag?: boolean) {
+async function renderLine(status: DriveState['status'], intent: boolean, flag?: boolean, armed?: boolean) {
   const w = await world();
   if (flag !== undefined) {
     await createSettingsRepo(w.db).set(APP_CONFIG_KEY, { fetchedAt: 1, flags: { auto_detect: flag } });
   }
-  const fake = fakeHost(status, intent);
+  const fake = fakeHost(status, intent, armed);
   const store = createDriveStore(fake.host, { currentState: 'active', addEventListener: () => ({ remove() {} }) });
   await w.renderScreen(
     <DriveContext.Provider value={{ host: fake.host, store }}>
@@ -55,18 +56,24 @@ async function renderLine(status: DriveState['status'], intent: boolean, flag?: 
 beforeEach(() => mockRouter.push.mockClear());
 afterEach(clearQueryClients);
 
-test('what the line may claim follows the intent, the host and the flag', () => {
-  expect(detectionLineState(true, 'armed', true)).toBe('on');
-  expect(detectionLineState(true, 'recording', true)).toBe('on');
-  // `off` is not the driver's choice: asked for, but not armed.
-  expect(detectionLineState(true, 'off', true)).toBe('notRunning');
+test('what the line may claim follows the intent, the host\'s published arming and the flag', () => {
+  expect(detectionLineState(true, true, true)).toBe('on');
+  // Asked for, but the host is not armed (permissions, a refused arm, signed out).
+  expect(detectionLineState(true, false, true)).toBe('notRunning');
   // A withdrawn flag is named as the reason even after an opt-in (review U4 m3).
-  expect(detectionLineState(true, 'off', false)).toBe('unavailable');
-  expect(detectionLineState(true, 'armed', false)).toBe('unavailable');
-  expect(detectionLineState(false, 'off', true)).toBe('manual');
-  expect(detectionLineState(false, 'off', null)).toBe('manual');
+  expect(detectionLineState(true, false, false)).toBe('unavailable');
+  expect(detectionLineState(true, true, false)).toBe('unavailable');
+  expect(detectionLineState(false, false, true)).toBe('manual');
+  expect(detectionLineState(false, false, null)).toBe('manual');
   // A server flag that is off makes the feature unavailable, never "turned off" (D2 M-2).
-  expect(detectionLineState(false, 'off', false)).toBe('unavailable');
+  expect(detectionLineState(false, false, false)).toBe('unavailable');
+});
+
+test('a manual drive while auto-record is not armed never says "on" (final review M3)', async () => {
+  const fake = await renderLine('recording', true, undefined, false);
+  expect(await screen.findByText("Auto-record is on but isn't running")).toBeOnTheScreen();
+  await act(async () => fake.move('recording', true));
+  expect(screen.getByText('Auto-record is on')).toBeOnTheScreen();
 });
 
 test('opted in and armed: "Auto-record is on", and the row opens the detection screen', async () => {

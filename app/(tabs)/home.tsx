@@ -5,7 +5,7 @@ import { Alert, ScrollView, View } from 'react-native';
 import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
-import { diagnosticsEnabled } from '@/features/dev/DriveDiagnosticsScreen';
+import { diagnosticsEnabled } from '@/features/dev/flags';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import {
   DetectionStatusLine,

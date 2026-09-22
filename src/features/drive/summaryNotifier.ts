@@ -32,6 +32,7 @@ import { AppState, Platform } from 'react-native';
 
 import type { EngineStatus } from '@/core/engine/engine.types';
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
+import { isBusyStatus, isDrivingStatus } from '@/drive/policy';
 import { TRIP_HISTORY_HREF, tripSummaryHref } from '@/features/trips/routes';
 
 import { startCopy } from './startCopy';
@@ -174,13 +175,7 @@ export function createExpoSummaryPort(os: string = Platform.OS): SummaryNotifica
 
 // ——— the rules ———
 
-const DRIVING: ReadonlySet<EngineStatus> = new Set<EngineStatus>(['candidate', 'recording']);
-const BUSY: ReadonlySet<EngineStatus> = new Set<EngineStatus>([
-  'candidate',
-  'recording',
-  'ending',
-  'finalizing',
-]);
+// The status sets are policy's, one copy for the app (final review M10b).
 
 /** A finalize worth announcing: saved, long enough to score, and a drive at all. */
 const announceable = (lf: LastFinalized): lf is Extract<LastFinalized, { ok: true }> =>
@@ -288,7 +283,7 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
   const initial = host.snapshot();
   let prevStatus: EngineStatus = initial.status;
   /** The trip this notifier saw being recorded: the only one whose outcome is news. */
-  let watchedTripId: string | null = BUSY.has(initial.status) ? initial.clientTripId : null;
+  let watchedTripId: string | null = isBusyStatus(initial.status) ? initial.clientTripId : null;
   /** A carried-over value from before the attach is not news. */
   let seenFinalized: LastFinalized = initial.lastFinalized;
   /** Drives awaiting their notification: cancelled by a new drive, or finalized mid-candidate. */
@@ -331,7 +326,7 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
       return;
     }
     // Re-read at the last moment: a drive may have begun while the reads above were in flight.
-    if (DRIVING.has(host.snapshot().status)) return;
+    if (isDrivingStatus(host.snapshot().status)) return;
     const pending = await port.scheduled();
     addCarried(pending.flatMap((p) => p.clientTripIds));
     const ids = carried;
@@ -368,7 +363,7 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
             clientTripId === undefined ? [] : carried.filter((id) => id !== clientTripId);
           if (keep.length > 0) {
             addCarried(keep);
-            if (!BUSY.has(host.snapshot().status)) await scheduleCarriedNow();
+            if (!isBusyStatus(host.snapshot().status)) await scheduleCarriedNow();
           }
         } finally {
           resolve();
@@ -382,8 +377,8 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
     const finalizedChanged = s.lastFinalized !== seenFinalized;
     // The 1 Hz path: a row changes neither, so it costs two comparisons.
     if (!statusChanged && !finalizedChanged) return;
-    const wasBusy = BUSY.has(prevStatus);
-    const wasDriving = DRIVING.has(prevStatus);
+    const wasBusy = isBusyStatus(prevStatus);
+    const wasDriving = isDrivingStatus(prevStatus);
     prevStatus = status;
 
     if (finalizedChanged) {
@@ -398,14 +393,14 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
       if (lf !== null && lf.clientTripId === watchedTripId) watchedTripId = null;
     }
 
-    if (BUSY.has(status) && s.clientTripId !== null) watchedTripId = s.clientTripId;
+    if (isBusyStatus(status) && s.clientTripId !== null) watchedTripId = s.clientTripId;
 
-    if (DRIVING.has(status) && !wasDriving) {
+    if (isDrivingStatus(status) && !wasDriving) {
       cancelPending();
       return;
     }
 
-    if (wasBusy && !BUSY.has(status)) {
+    if (wasBusy && !isBusyStatus(status)) {
       // Back to idle: the drive finalized, or the candidate was a false start. Read the foreground
       // and the end screen now, synchronously — the screen may route away within the frame.
       watchedTripId = null;

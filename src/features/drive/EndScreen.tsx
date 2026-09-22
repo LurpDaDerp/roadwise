@@ -25,6 +25,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, View } from 'react-native';
 
+import { isIdleStatus } from '@/drive/policy';
 import type { DriveState } from '@/drive/host';
 import { useDriveHost } from '@/drive/useDrive';
 import { HOME_HREF, tripSummaryHref } from '@/features/trips/routes';
@@ -38,7 +39,6 @@ export const END_WAIT_MS = 10_000;
 
 type Outcome = 'waiting' | 'slow' | 'short' | 'failed' | 'simulation';
 
-const IDLE = new Set<DriveState['status']>(['armed', 'off']);
 
 export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) {
   const router = useRouter();
@@ -68,7 +68,7 @@ export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) 
 
     const judge = (s: DriveState) => {
       if (s.dryRun) {
-        if (IDLE.has(s.status)) settle('simulation');
+        if (isIdleStatus(s.status)) settle('simulation');
         return;
       }
       if (tripId === null) {

@@ -17,22 +17,24 @@ export const DETECTION_HREF = '/detection' as Href;
 export type DetectionLineState = 'on' | 'notRunning' | 'manual' | 'unavailable';
 
 /**
- * What the line may claim (M4 seam N-m2). The toggle is the driver's intent,
- * `host.autoDetectEnabled()`; `status === 'off'` is not that choice — it also means a missing
- * Always location, the server flag, a refused arm, or a host not yet started. So "on" is said only
- * when the driver asked for it AND the host is not off; asked-for but off says it isn't running.
+ * What the line may claim (M4 seam N-m2; final review I4 / M3). The toggle is the driver's intent,
+ * `host.autoDetectEnabled()`. Whether auto-record is actually running is the host's published
+ * `autoDetectArmed` — the result of the one arming predicate (opt-in, flag, signed in, permissions)
+ * the detection screen reads too — never the engine's status, which says `recording` during a
+ * manual drive whatever the arming. So "on" is said only when the driver asked for it AND the host
+ * is armed; asked-for but not armed says it isn't running.
  * With the server flag off, auto-record is unavailable whether or not the driver opted in — never
  * "turned off" by the driver (D2 security M-2). `available` is null until the flag has been read.
  */
 export function detectionLineState(
   autoDetect: boolean,
-  status: string,
+  armed: boolean,
   available: boolean | null
 ): DetectionLineState {
   // A withdrawn flag is the reason, whatever the opt-in: say that rather than "isn't running"
   // (review U4 m3). Still never "turned off" (D2 M-2).
   if (available === false) return 'unavailable';
-  if (autoDetect) return status === 'off' ? 'notRunning' : 'on';
+  if (autoDetect) return armed ? 'on' : 'notRunning';
   return 'manual';
 }
 
@@ -41,7 +43,7 @@ export function DetectionStatusLine() {
   const th = useTheme();
   const router = useRouter();
   const host = useDriveHost();
-  const status = useDrive((s) => s.status);
+  const armed = useDrive((s) => s.autoDetectArmed === true);
   // The intent is not in the store (it is not drive state); re-read it whenever Home comes back
   // into focus, which is when the detection screen may have changed it.
   // The flag is re-read on the same beat: a local settings read, off the drive path.
@@ -61,7 +63,7 @@ export function DetectionStatusLine() {
     }, [db])
   );
 
-  const state = detectionLineState(host.autoDetectEnabled(), status, available);
+  const state = detectionLineState(host.autoDetectEnabled(), armed, available);
   const glyph: Record<DetectionLineState, { name: keyof typeof Ionicons.glyphMap; color: string }> = {
     on: { name: 'radio-button-on', color: th.colors.success },
     notRunning: { name: 'alert-circle', color: th.colors.warning },

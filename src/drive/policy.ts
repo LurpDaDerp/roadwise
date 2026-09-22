@@ -38,6 +38,17 @@ export const isBusyStatus = (status: EngineStatus): boolean =>
 
 export const isIdleStatus = (status: EngineStatus): boolean => status === 'armed' || status === 'off';
 
+/**
+ * A drive is under way on the road: a candidate or a confirmed recording (not the gap window, not
+ * finalizing). The summary notifier cancels a pending "drive ready" on it. The status sets live
+ * here, once (final review M10b), so no screen keeps its own copy.
+ */
+export const isDrivingStatus = (status: EngineStatus): boolean =>
+  status === 'candidate' || status === 'recording';
+
+/** A confirmed trip is open: recording, or in its gap window (keep-awake, Android back). */
+export const tripRecords = (status: EngineStatus): boolean => status === 'recording' || status === 'ending';
+
 // --- capture ------------------------------------------------------------------------------------
 
 export type CapturePlan = { on: false } | { on: true; rate: CaptureRate; mode: CaptureMode };

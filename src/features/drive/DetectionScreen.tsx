@@ -3,12 +3,13 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Linking, Platform, View } from 'react-native';
+import { AppState, Linking, Platform, View } from 'react-native';
 
 import { readFlag } from '@/data/config/appConfig';
 import type { Db } from '@/data/db';
 import { useDb, useTrips } from '@/data/queries';
-import { useDriveHost } from '@/drive/useDrive';
+import { permissionsAllowArming } from '@/drive/policy';
+import { useDrive, useDriveHost } from '@/drive/useDrive';
 import { TripTopBar } from '@/features/trips';
 import { Banner, Button, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
@@ -53,6 +54,8 @@ export interface DetectionDeps {
   /** Android 13+: POST_NOTIFICATIONS, so the ongoing "Recording your drive" notice is visible. */
   requestNotifications(): Promise<boolean>;
   openSettings(): Promise<void>;
+  /** The app's foreground transitions: the screen re-reads access on each `active` (M9). */
+  appState: { addEventListener(type: 'change', fn: (state: string) => void): { remove(): void } };
 }
 
 export const expoDetectionDeps: DetectionDeps = {
@@ -75,13 +78,13 @@ export const expoDetectionDeps: DetectionDeps = {
     return (await Notifications.requestPermissionsAsync()).granted;
   },
   openSettings: () => Linking.openSettings(),
+  appState: AppState,
 };
 
 type Outcome = null | 'denied' | 'unsupported';
 
-/** Auto-record can run only with Always location and granted motion (the host's `shouldArm`). */
-const canRun = (access: DeviceAccess | null): boolean =>
-  access !== null && access.location === 'always' && access.motion === 'granted';
+/** What the phone allows: the same function the host's `shouldArm` uses (final review I4). */
+const canRun = (access: DeviceAccess | null): boolean => access !== null && permissionsAllowArming(access);
 
 function Message({ title, body, testID }: { title: string; body: string; testID?: string }) {
   const th = useTheme();
@@ -113,6 +116,8 @@ export function DetectionScreen({ deps = expoDetectionDeps }: { deps?: Detection
   const trips = useTrips({ limit: 5 });
 
   const [intent, setIntent] = useState(() => host.autoDetectEnabled());
+  // Whether the host is armed right now — its one predicate, published (I4). "On" needs this.
+  const armed = useDrive((s) => s.autoDetectArmed === true);
   const [flag, setFlag] = useState<boolean | null>(null);
   const [access, setAccess] = useState<DeviceAccess | null>(null);
   const [readFailed, setReadFailed] = useState(false);
@@ -141,13 +146,21 @@ export function DetectionScreen({ deps = expoDetectionDeps }: { deps?: Detection
 
   useEffect(() => {
     let live = true;
-    void read().then((r) => {
-      if (live) apply(r);
+    const load = () =>
+      void read().then((r) => {
+        if (live) apply(r);
+      });
+    load();
+    // A return from Settings (M9): read again, so a permission granted there shows at once. The
+    // host re-applies its own arming on the same transition.
+    const sub = deps.appState.addEventListener('change', (next) => {
+      if (next === 'active') load();
     });
     return () => {
       live = false;
+      sub.remove();
     };
-  }, [read, apply]);
+  }, [read, apply, deps]);
 
   const turnOn = async () => {
     if (busy) return;
@@ -208,15 +221,24 @@ export function DetectionScreen({ deps = expoDetectionDeps }: { deps?: Detection
     body = <Message {...copy.notAvailable} testID="detection-not-available" />;
     if (intent) actions = <Button label={copy.turnOff} variant="secondary" onPress={() => void turnOff()} loading={busy} />;
   } else if (intent) {
-    const running = canRun(access);
+    // "On" only when the phone allows it AND the host is armed (one predicate, I4): the screen
+    // never says on while nothing is running, nor blames permissions the phone has granted.
+    const allowed = canRun(access);
+    const running = allowed && armed;
     body = running ? (
       <Message {...copy.on} testID="detection-on" />
+    ) : allowed ? (
+      <Message {...copy.notRunning} testID="detection-not-running" />
     ) : (
       <Message {...copy.blocked} testID="detection-blocked" />
     );
     actions = (
       <>
-        {running ? null : <Button label={copy.openSettings} onPress={openSettings} />}
+        {running ? null : allowed ? (
+          <Button label={copy.retry} onPress={() => void host.refreshArming().catch(() => setFailed(true))} />
+        ) : (
+          <Button label={copy.openSettings} onPress={openSettings} />
+        )}
         <Button label={copy.turnOff} variant="secondary" onPress={() => void turnOff()} loading={busy} />
       </>
     );
@@ -224,7 +246,19 @@ export function DetectionScreen({ deps = expoDetectionDeps }: { deps?: Detection
     body = <Message {...copy.unsupported} testID="detection-unsupported" />;
   } else if (outcome === 'denied') {
     body = <Message {...copy.denied} testID="detection-denied" />;
-    actions = <Button label={copy.openSettings} onPress={openSettings} />;
+    // After allowing it in Settings, the driver can try again from here (M9).
+    actions = (
+      <>
+        <Button label={copy.openSettings} onPress={openSettings} />
+        <Button
+          label={copy.turnOnAgain}
+          variant="secondary"
+          onPress={() => void turnOn()}
+          loading={busy}
+          testID="detection-turn-on-again"
+        />
+      </>
+    );
   } else if (deps.os === 'ios' && !hasCompletedDrive) {
     body = <Message {...copy.firstDrive} testID="detection-first-drive" />;
   } else {

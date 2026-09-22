@@ -36,6 +36,11 @@ export const detectionCopy = {
     title: "Auto-record can't run yet",
     body: 'It needs location access set to Always (Allow all the time on Android) and motion access. You can change both in Settings.',
   },
+  /** Asked for and permitted, but the host is not armed (a refused arm, a moment after Settings). */
+  notRunning: {
+    title: "Auto-record isn't running",
+    body: 'Your phone allows it, but it hasn’t started. Try again, or turn it off and on.',
+  },
   denied: {
     title: 'Auto-record needs your permission',
     body: 'Without Always location and motion access, RoadWise can’t notice when you start driving. You can allow both in Settings, or keep starting drives yourself.',
@@ -56,6 +61,7 @@ export const detectionCopy = {
   notificationsNote:
     'Notifications are off, so you won’t see the notice that a drive is being recorded. You can turn them on in Settings.',
   openSettings: 'Open Settings',
+  turnOnAgain: 'Turn on again',
   readError: "Couldn't check auto-record on this phone.",
   retry: 'Try again',
 } as const;

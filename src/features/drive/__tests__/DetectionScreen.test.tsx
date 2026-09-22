@@ -19,21 +19,38 @@ jest.mock('expo-location', () => ({
   requestBackgroundPermissionsAsync: jest.fn(),
 }));
 
-/** A host that only answers what the screen asks: the intent, and setting it. */
-function fakeHost(initialIntent = false) {
+/**
+ * A host that answers what the screen asks: the intent, setting it, and its published arming
+ * (`autoDetectArmed`, the one predicate — final review I4). By default it arms exactly when the
+ * driver opts in; `armOnOptIn: false` models a host that could not arm.
+ */
+function fakeHost(initialIntent = false, opts: { armOnOptIn?: boolean } = {}) {
   let intent = initialIntent;
+  const armOnOptIn = opts.armOnOptIn ?? true;
   const log: string[] = [];
-  const state = { status: initialIntent ? 'armed' : 'off' } as DriveState;
+  let state = { status: initialIntent ? 'armed' : 'off', autoDetectArmed: initialIntent && armOnOptIn } as DriveState;
+  const listeners = new Set<(s: DriveState) => void>();
+  const publish = (armed: boolean) => {
+    state = { ...state, status: armed ? 'armed' : 'off', autoDetectArmed: armed };
+    for (const fn of [...listeners]) fn(state);
+  };
   const host = {
     snapshot: () => state,
-    subscribe: () => () => {},
+    subscribe: (fn: (s: DriveState) => void) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
     autoDetectEnabled: () => intent,
     setAutoDetect: jest.fn(async (enabled: boolean) => {
       log.push(`setAutoDetect:${enabled}`);
       intent = enabled;
+      publish(enabled && armOnOptIn);
+    }),
+    refreshArming: jest.fn(async () => {
+      log.push('refreshArming');
     }),
   } as unknown as DriveHost;
-  return { host, log };
+  return { host, log, publish };
 }
 
 type Answers = {
@@ -48,9 +65,25 @@ type Answers = {
 /** Every prompt is logged in order, into the same log the host writes to. */
 function fakeDeps(log: string[], os: string, androidApi: number, a: Answers = {}) {
   let access = a.access ?? { location: 'whenInUse' as const, motion: 'undetermined' };
-  const deps: DetectionDeps = {
+  const appListeners = new Set<(s: string) => void>();
+  const deps: DetectionDeps & {
+    grant(next: { location: 'none' | 'whenInUse' | 'always'; motion: string }): void;
+    foreground(): void;
+  } = {
     os,
     androidApi,
+    appState: {
+      addEventListener: (_t: 'change', fn: (s: string) => void) => {
+        appListeners.add(fn);
+        return { remove: () => appListeners.delete(fn) };
+      },
+    },
+    grant(next) {
+      access = next;
+    },
+    foreground() {
+      for (const fn of [...appListeners]) fn('active');
+    },
     readAccess: jest.fn(async () => access),
     readFlag: jest.fn(async () => a.flag ?? true),
     requestMotion: jest.fn(async () => {
@@ -214,4 +247,44 @@ test('turned on but a permission was taken away since: says it cannot run, with 
   expect(screen.getByRole('button', { name: 'Open Settings' })).toBeOnTheScreen();
   expect(screen.getByRole('button', { name: 'Turn off auto-record' })).toBeOnTheScreen();
   expect(log).toEqual([]);
+});
+
+describe('the screen follows the host and the phone (final review I4, M9)', () => {
+  test('opted in and permitted, but the host could not arm: never "on"; Try again re-applies the arming', async () => {
+    const { host, log } = fakeHost(true, { armOnOptIn: false });
+    const deps = fakeDeps(log, 'android', 34, { access: { location: 'always', motion: 'granted' } });
+    await renderScreen(<DetectionScreen deps={deps} />, host);
+    expect(await screen.findByText("Auto-record isn't running")).toBeOnTheScreen();
+    expect(screen.queryByText('Auto-record is on')).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(host.refreshArming).toHaveBeenCalledTimes(1);
+  });
+
+  test('back from Settings with Always granted: the screen re-reads on the foreground and shows the host armed', async () => {
+    const { host, log, publish } = fakeHost(true, { armOnOptIn: false });
+    const deps = fakeDeps(log, 'ios', 0, { access: { location: 'whenInUse', motion: 'granted' } });
+    await renderScreen(<DetectionScreen deps={deps} />, host);
+    expect(await screen.findByText("Auto-record can't run yet")).toBeOnTheScreen();
+
+    deps.grant({ location: 'always', motion: 'granted' });
+    // The host re-applies its arming on the same foreground transition (tested in the host).
+    publish(true);
+    deps.foreground();
+    expect(await screen.findByText('Auto-record is on')).toBeOnTheScreen();
+  });
+
+  test('denied, then allowed in Settings: back on the screen it offers Turn on again', async () => {
+    const { host, log } = fakeHost();
+    const deps = fakeDeps(log, 'ios', 0, { motion: 'denied' });
+    await renderScreen(<DetectionScreen deps={deps} />, host);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Turn on auto-record' }));
+    expect(await screen.findByText('Auto-record needs your permission')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Open Settings' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Turn on again' })).toBeOnTheScreen();
+
+    (deps.requestMotion as jest.Mock).mockResolvedValueOnce('granted');
+    await fireEvent.press(screen.getByRole('button', { name: 'Turn on again' }));
+    await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
+    expect(await screen.findByText('Auto-record is on')).toBeOnTheScreen();
+  });
 });

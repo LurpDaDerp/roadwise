@@ -3,6 +3,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { type ReactNode, useEffect, useRef } from 'react';
 import { BackHandler, StyleSheet, View } from 'react-native';
 
+import { tripRecords } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
 
 import { DRIVE_GROUP_PREFIX, DRIVE_ROUTES, driveHref } from './hudCopy';
@@ -17,7 +18,6 @@ const HUD_ROUTE = DRIVE_ROUTES.hud;
 const POCKET_ROUTE = DRIVE_ROUTES.pocket;
 
 /** A recorded trip, whatever its screen: rows are being kept (`recording`) or may resume (`ending`). */
-const tripRecords = (status: string): boolean => status === 'recording' || status === 'ending';
 
 /**
  * The driving lockout (design §3.4, SR2, SR7, SR8), wrapped around the root `Stack` (H2).
