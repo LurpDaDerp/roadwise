@@ -1,25 +1,25 @@
-import { useRouter, type Href } from "expo-router";
-import { useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
+import { useRouter, type Href } from 'expo-router';
+import { useState } from 'react';
+import { Alert, ScrollView, View } from 'react-native';
 
-import { useSession } from "@/data/supabase/session";
-import { isBusyStatus } from "@/drive/policy";
-import { useDrive } from "@/drive/useDrive";
-import { DriveInProgressBanner } from "@/features/drive/DriveInProgressBanner";
+import { useSession } from '@/data/supabase/session';
+import { isBusyStatus } from '@/drive/policy';
+import { useDrive } from '@/drive/useDrive';
+import { diagnosticsEnabled } from '@/features/dev/DriveDiagnosticsScreen';
+import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import {
   DetectionStatusLine,
   HomeBanners,
   homeCopy,
   LastTripCard,
   LicenceCard,
-} from "@/features/home";
-import { t } from "@/i18n";
-import { env } from "@/lib/env";
-import { Button, Screen, Text, useTheme } from "@/ui";
+} from '@/features/home';
+import { t } from '@/i18n';
+import { Button, Screen, Text, useTheme } from '@/ui';
 
 /** Typed routes are generated at `expo start`; these two land with U3 and U5. */
-const DRIVE_START_HREF = "/drive/start" as Href;
-const DIAGNOSTICS_HREF = "/dev/drive" as Href;
+const DRIVE_START_HREF = '/drive/start' as Href;
+const DIAGNOSTICS_HREF = '/dev/drive' as Href;
 
 /**
  * The one place a sign-out asks before it acts. Today it asks only when the flush left deletes
@@ -32,10 +32,10 @@ function confirmSignOut(message: string): Promise<boolean> {
       c.title,
       message,
       [
-        { text: c.cancel, style: "cancel", onPress: () => resolve(false) },
-        { text: c.confirm, style: "destructive", onPress: () => resolve(true) },
+        { text: c.cancel, style: 'cancel', onPress: () => resolve(false) },
+        { text: c.confirm, style: 'destructive', onPress: () => resolve(true) },
       ],
-      { cancelable: true, onDismiss: () => resolve(false) },
+      { cancelable: true, onDismiss: () => resolve(false) }
     );
   });
 }
@@ -63,9 +63,7 @@ export default function Home() {
       if (outcome.signedOut) return;
       const c = homeCopy.signOutCheck;
       const message =
-        outcome.unsentDeletes === null
-          ? c.unknown
-          : c.unsentDeletes(outcome.unsentDeletes);
+        outcome.unsentDeletes === null ? c.unknown : c.unsentDeletes(outcome.unsentDeletes);
       if (await confirmSignOut(message)) await signOut({ force: true });
     } catch {
       // Supabase ends the local session even when the revoke request fails; the auth event, not
@@ -98,7 +96,7 @@ export default function Home() {
             sign-in by anyone else clears this phone, and an un-uploaded drive is nowhere else. */}
           <View style={{ gap: 4 }}>
             <Button
-              label={t("home.signOut")}
+              label={t('home.signOut')}
               variant="ghost"
               onPress={() => void onSignOut()}
               loading={signingOut}
@@ -108,7 +106,8 @@ export default function Home() {
               {homeCopy.signOutWarning}
             </Text>
           </View>
-          {__DEV__ || env.diagnostics ? (
+          {/* The same guard as the route itself (U5), so the link never leads to a redirect. */}
+          {diagnosticsEnabled() ? (
             <Button
               label={homeCopy.diagnostics}
               variant="ghost"
