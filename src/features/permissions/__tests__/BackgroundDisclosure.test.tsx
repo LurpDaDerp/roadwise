@@ -137,13 +137,40 @@ describe('round 2 (security r1-M1): the consent is recorded at Continue', () => 
 
   test('a different uid never gets the row: the disclosure was shown to u1, u2 is signed in at Continue', async () => {
     const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
-    const { recordConsent, settings, onResult } = await renderDisclosure(adapter);
+    const { recordConsent, settings, onResult, appState } = await renderDisclosure(adapter);
     await screen.findByTestId('disclosure-continue');
     mockSession.session = { user: { id: 'u2' } };
+    // A return to the front re-renders the screen with the session as it is now.
+    adapter.current = snap({ location: 'foreground' });
+    await act(async () => appState.foreground());
     await press(screen.getByTestId('disclosure-continue'));
     await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
     expect(recordConsent.mock.calls.filter(([uid]) => uid === 'u2')).toHaveLength(0);
     expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
+  });
+
+  test('the affirmation is gated like the consent: shown to u1 with u2 signed in, no affirmation is written', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+    const { settings, onResult, appState } = await renderDisclosure(adapter);
+    await screen.findByTestId('disclosure-continue');
+    mockSession.session = { user: { id: 'u2' } };
+    adapter.current = snap({ location: 'foreground' });
+    await act(async () => appState.foreground());
+    await press(screen.getByTestId('disclosure-continue'));
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+    expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toBeNull();
+  });
+
+  test('and with no account signed in at Continue, none either', async () => {
+    const adapter = fakeAdapter(snap({ location: 'foreground' }), { always: 'foreground' });
+    const { settings, onResult, appState } = await renderDisclosure(adapter);
+    await screen.findByTestId('disclosure-continue');
+    mockSession.session = null;
+    adapter.current = snap({ location: 'foreground' });
+    await act(async () => appState.foreground());
+    await press(screen.getByTestId('disclosure-continue'));
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
+    expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toBeNull();
   });
 
   test('offline at Continue: kept for the shown uid and sent later', async () => {

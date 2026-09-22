@@ -189,12 +189,12 @@ export function BackgroundDisclosure({
     try {
       // Bound to the account shown the words (Task 19 r1): arming checks it against the device
       // owner. With no account (lost mid-flow) it is stored without one and covers nobody.
-      await settings.set(
-        DISCLOSURE_AFFIRMED_KEY,
-        shownTo.current === null
-          ? { version: DISCLOSURE_VERSION, at: now() }
-          : affirmationFor(DISCLOSURE_VERSION, shownTo.current, now())
-      );
+      // Gated exactly like the consent below (round 2 nit): only for the account shown the words,
+      // and only while that account is the one signed in. Otherwise nothing is written, so an
+      // affirmation can never exist for an account whose consent was refused.
+      if (shownTo.current !== null && shownTo.current === userId) {
+        await settings.set(DISCLOSURE_AFFIRMED_KEY, affirmationFor(DISCLOSURE_VERSION, shownTo.current, now()));
+      }
       // Continue IS the driver's affirmation of these words (round 2, security r1-M1), so the
       // `background_location` consent is recorded now, whatever the OS answers next: a denial
       // followed by Always set in Settings, or a Settings trip the app does not survive, would
