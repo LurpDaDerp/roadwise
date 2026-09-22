@@ -160,7 +160,9 @@ export function fakeSupabase(
     rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
       const reply = opts.rpc ? opts.rpc(fn, args) : {};
-      return Promise.resolve({ data: reply.data ?? null, error: reply.error ?? null });
+      // `abortSignal` as the real builder has it, so an adapter that bounds a call can chain it.
+      const settled = Promise.resolve({ data: reply.data ?? null, error: reply.error ?? null });
+      return Object.assign(settled, { abortSignal: () => settled });
     },
     get storage(): never {
       touched = true;

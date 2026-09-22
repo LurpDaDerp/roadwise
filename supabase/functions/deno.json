@@ -11,8 +11,13 @@
     "./_shared/scoring/scoreTrip": "./_shared/scoring/scoreTrip.ts",
     "./_shared/scoring/severity": "./_shared/scoring/severity.ts",
     "./_shared/scoring/types": "./_shared/scoring/types.ts",
+    "./_shared/speedLimits/geometry": "./_shared/speedLimits/geometry.ts",
+    "./_shared/speedLimits/match": "./_shared/speedLimits/match.ts",
+    "./_shared/speedLimits/tiles": "./_shared/speedLimits/tiles.ts",
+    "./_shared/speedLimits/wire": "./_shared/speedLimits/wire.ts",
     "@std/assert": "jsr:@std/assert@^1.0.0",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.116.0",
+    "aws4fetch": "npm:aws4fetch@1.0.20",
     "zod": "npm:zod@4.6.5"
   }
 }

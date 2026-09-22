@@ -4,6 +4,7 @@
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "npm:@supabase/supabase-js@2.116.0": "2.116.0",
+    "npm:aws4fetch@1.0.20": "1.0.20",
     "npm:zod@4.6.5": "4.6.5"
   },
   "jsr": {
@@ -63,6 +64,9 @@
         "@supabase/storage-js"
       ]
     },
+    "aws4fetch@1.0.20": {
+      "integrity": "sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g=="
+    },
     "iceberg-js@0.8.1": {
       "integrity": "sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA=="
     },
@@ -77,6 +81,7 @@
     "dependencies": [
       "jsr:@std/assert@1",
       "npm:@supabase/supabase-js@2.116.0",
+      "npm:aws4fetch@1.0.20",
       "npm:zod@4.6.5"
     ]
   }

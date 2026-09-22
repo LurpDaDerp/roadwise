@@ -49,3 +49,31 @@ test('deno.json pins zod to the version the app has installed', () => {
   }).version;
   expect(denoConfig().imports?.zod).toBe(`npm:zod@${installed}`);
 });
+
+const SPEED_FILES = ['geometry.ts', 'match.ts', 'tiles.ts', 'wire.ts'];
+const speedSrc = join(root, 'src', 'core', 'speedLimits');
+const speedDst = join(functions, '_shared', 'speedLimits');
+
+test('the edge-function copies of the four shared speed-limit modules are byte-identical', () => {
+  for (const f of SPEED_FILES) {
+    expect(readFileSync(join(speedDst, f), 'utf8')).toBe(readFileSync(join(speedSrc, f), 'utf8'));
+  }
+});
+
+test('the speed-limit copy holds exactly the four shared modules, never the device-only ones', () => {
+  expect(modules(speedDst)).toEqual(SPEED_FILES);
+});
+
+test('deno.json maps each of the four speed-limit modules to its .ts file, and nothing else', () => {
+  const speed = Object.entries(denoConfig().imports ?? {}).filter(([k]) => k.startsWith('./_shared/speedLimits/'));
+  expect(Object.fromEntries(speed)).toEqual({
+    './_shared/speedLimits/geometry': './_shared/speedLimits/geometry.ts',
+    './_shared/speedLimits/match': './_shared/speedLimits/match.ts',
+    './_shared/speedLimits/tiles': './_shared/speedLimits/tiles.ts',
+    './_shared/speedLimits/wire': './_shared/speedLimits/wire.ts',
+  });
+});
+
+test('deno.json pins aws4fetch to an exact npm version', () => {
+  expect(denoConfig().imports?.aws4fetch).toMatch(/^npm:aws4fetch@\d+\.\d+\.\d+$/);
+});
