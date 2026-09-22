@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(161);
+select plan(169);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -335,6 +335,32 @@ select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","c
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.31,97.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a position off the globe is refused');
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.21,47.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a 7.5 km line is refused');
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.31,47.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a zero-length line is refused');
+
+-- one canonical orientation (ruling B2 I-1): the vertex order of a stored line says nothing about the driver
+select lives_ok($$ select public.put_limits_cache('orient-east', '{"type":"LineString","coordinates":[[-122.3100,47.6400],[-122.3090,47.6401],[-122.3080,47.6400]]}', 45, null, 7) $$,
+  'a line written west to east');
+select lives_ok($$ select public.put_limits_cache('orient-west', '{"type":"LineString","coordinates":[[-122.3080,47.6400],[-122.3090,47.6401],[-122.3100,47.6400]]}', 45, null, 7) $$,
+  'the same line written east to west');
+select is((select extensions.st_asewkt(geom) from public.limits_cache where segment_key = left(encode(sha256(convert_to('orient-west', 'UTF8')), 'hex'), 16)),
+  (select extensions.st_asewkt(geom) from public.limits_cache where segment_key = left(encode(sha256(convert_to('orient-east', 'UTF8')), 'hex'), 16)),
+  'is stored identically, vertex for vertex');
+select is((select extensions.st_asewkt(geom) from public.limits_cache where segment_key = left(encode(sha256(convert_to('orient-west', 'UTF8')), 'hex'), 16)),
+  'SRID=4326;LINESTRING(-122.31 47.64,-122.309 47.6401,-122.308 47.64)', 'in the canonical orientation (first vertex sorts first, by lng then lat)');
+select lives_ok($$ select public.put_limits_cache('orient-oneway-north', '{"type":"LineString","coordinates":[[-122.3200,47.6410],[-122.3200,47.6400]]}', 25, 180, 7) $$,
+  'a one-way road answered heading south, digitised north to south');
+select is((select (extensions.st_y(extensions.st_startpoint(lc.geom)) < extensions.st_y(extensions.st_endpoint(lc.geom)))::text || '/' || c.oneway
+    from public.limits_cache lc join public.speed_limit_candidates(47.6405, -122.3200, 10) c on c.segment_key = lc.segment_key
+    where lc.segment_key = left(encode(sha256(convert_to('orient-oneway-north', 'UTF8')), 'hex'), 16) and c.provider = 'aws'),
+  'true/-1', 'is stored south to north, and served one-way against its digitised direction (traffic still runs south)');
+select is((select count(*)::int
+    from jsonb_array_elements(public.speed_limit_tiles(array[pg_temp.tile_of(47.6400, -122.3090), pg_temp.tile_of(47.6405, -122.3200)]) -> 'tiles') t,
+    jsonb_array_elements(t -> 'segments') s,
+    lateral (select extensions.st_linefromencodedpolyline(s ->> 'line', 5) g) x
+    where s ->> 'provider' = 'aws'
+      and (extensions.st_x(extensions.st_startpoint(g)), extensions.st_y(extensions.st_startpoint(g))) <= (extensions.st_x(extensions.st_endpoint(g)), extensions.st_y(extensions.st_endpoint(g)))), 3,
+  'every cache line the tiles serve (all three) is canonical');
+select is((select (s -> 'oneway')::int from pg_temp.segs(public.speed_limit_tiles(array[pg_temp.tile_of(47.6405, -122.3200)]), pg_temp.tile_of(47.6405, -122.3200)) s
+    where s ->> 'id' = left(encode(sha256(convert_to('orient-oneway-north', 'UTF8')), 'hex'), 16)), -1, 'and the tile carries the one-way road as -1 too');
 
 -- the bounded purge: each put_limits_cache call deletes at most 100 expired rows (review M-1)
 reset role;

@@ -167,8 +167,12 @@ begin
       where s.geom operator(extensions.&&) v_box
         and extensions.st_dwithin(d.geom::extensions.geography, v_pt::extensions.geography, p_radius_m)
     union all
-    -- a cache answer was asked for one heading: it is one-way along its digitised direction
-    select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text, case when c.heading_deg is null then 0 else 1 end, c.geom
+    -- a cache row with a heading is a one-way road (B2 stores one only then). Its line is stored in
+    -- canonical orientation, so the heading says which way along it traffic runs: 1 with, -1 against
+    select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text,
+      case when c.heading_deg is null then 0
+      when abs(mod((c.heading_deg::double precision - degrees(extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom))))::numeric + 540, 360) - 180) <= 90 then 1
+      else -1 end, c.geom
       from public.limits_cache c
       where c.expires_at > now()
         and c.geom operator(extensions.&&) v_box
@@ -274,7 +278,10 @@ begin
       where s.geom operator(extensions.&&) v_box and extensions.st_intersects(d.geom, v_box)
       union all
       -- cache rows are few and are the only answer their road has: they are never cut
-      select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text, case when c.heading_deg is null then 0 else 1 end,
+      select 'aws'::text, c.segment_key, c.limit_mph::int, 'road'::text,
+      case when c.heading_deg is null then 0
+      when abs(mod((c.heading_deg::double precision - degrees(extensions.st_azimuth(extensions.st_startpoint(c.geom), extensions.st_endpoint(c.geom))))::numeric + 540, 360) - 180) <= 90 then 1
+      else -1 end,
         0, 1, c.geom, c.expires_at
       from public.limits_cache c
       where c.expires_at > now() and c.geom operator(extensions.&&) v_box and extensions.st_intersects(c.geom, v_box)
@@ -373,6 +380,14 @@ begin
       order by c.expires_at
       limit 100
       for update skip locked);
+
+  -- one canonical orientation (ruling B2 I-1): the vertex order of a stored line must not say which
+  -- way the driver behind the lookup was going. Reversed when the first vertex sorts after the last,
+  -- by lng then lat; the heading (one-way roads only) keeps the direction of traffic
+  if (extensions.st_x(extensions.st_startpoint(v_geom)), extensions.st_y(extensions.st_startpoint(v_geom)))
+     > (extensions.st_x(extensions.st_endpoint(v_geom)), extensions.st_y(extensions.st_endpoint(v_geom))) then
+    v_geom := extensions.st_reverse(v_geom);
+  end if;
 
   v_key := left(encode(sha256(convert_to(p_key, 'UTF8')), 'hex'), 16);
   -- a refresh is a new answer: created_at restarts with it (floored to the day by the trigger), so
