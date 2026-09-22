@@ -176,6 +176,14 @@ export interface DriveHost {
   signedInAgain(opts?: { initial?: boolean }): Promise<void>;
   /** The session has ended (`SIGNED_OUT`): the sign-out is over, and the host stays disarmed. */
   signOutCompleted(): void;
+  /**
+   * The session ended, whoever ended it (a `SIGNED_OUT` auth event; security r2-M2). A sign-out
+   * the driver started has already stopped recording, and this only closes it. One they did not
+   * start — a revoked or expired token, a password changed elsewhere — is handled exactly like
+   * theirs (§8.2): an open drive is finalized under the device's owner, then auto-record is
+   * disarmed, and only the owner's next real sign-in re-arms.
+   */
+  sessionEnded(): Promise<void>;
   /** The per-row detector context the engine is given (diagnostics). */
   detectorContext(): Omit<DetectorContext, 'mode'>;
 }
@@ -921,6 +929,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     signOutCompleted() {
       signingOut = false;
       signOutDone = true;
+    },
+
+    async sessionEnded() {
+      // Recording is still on (no sign-out stopped it, or the owner signed in again since).
+      if (!signingOut && !signedOut) await this.suspendForSignOut();
+      this.signOutCompleted();
     },
 
     l1RespectsSilentSwitch: () =>

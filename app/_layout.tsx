@@ -9,7 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { flushBeforeSignOut } from '@/boot/bootstrap';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
-import { readDeviceOwner } from '@/boot/device';
+import { hasDriverData, readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
 import { DataProvider } from '@/data/queries';
@@ -95,17 +95,24 @@ export default function RootLayout() {
     let live = true;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        runtime.drive.signOutCompleted();
+        // The driver's sign-out, or one they did not start (a revoked or expired session): either
+        // way recording stops, an open drive finalized under the owner first (security r2-M2).
+        void runtime.drive.sessionEnded().catch(() => {});
         return;
       }
       if (!session) return;
       const uid = session.user.id;
       if (event === 'SIGNED_IN') {
-        void readDeviceOwner(runtime.db)
-          .then((owner) => {
-            if (live && (owner === uid || owner === null)) return runtime.drive.signedInAgain();
-          })
-          .catch(() => {});
+        void (async () => {
+          const owner = await readDeviceOwner(runtime.db);
+          if (!live) return;
+          if (owner === uid) return runtime.drive.signedInAgain();
+          // No owner recorded: arm only on a device holding no drive data. One that holds some is
+          // a pre-owner device with somebody's drives, and the handover decides (security r2-M1).
+          if (owner === null && !(await hasDriverData(runtime.db)) && live) {
+            return runtime.drive.signedInAgain();
+          }
+        })().catch(() => {});
         return;
       }
       // A cold launch whose session arrived only now (a slow keychain): the device owner's own

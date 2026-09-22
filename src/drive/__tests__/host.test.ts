@@ -1205,3 +1205,46 @@ describe('a slow keychain at launch does not leave the host disarmed for the pro
     expect(h.host.snapshot().status).toBe('armed');
   });
 });
+
+describe('a session that ends without the driver signing out (security r2-M2)', () => {
+  test('a revoked or expired session stops recording: the open drive is finalized under the owner, then disarmed', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(200, { t0: h.now() + 1000 }));
+    const tripId = h.host.snapshot().clientTripId as string;
+
+    await h.host.sessionEnded();
+
+    expect((await trips().get(tripId))?.status).toBe('provisional');
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    // Only a real sign-in re-arms now; a restored session does not.
+    await h.host.signedInAgain({ initial: true });
+    expect(h.host.snapshot().status).toBe('off');
+    await h.host.signedInAgain();
+    expect(h.host.snapshot().status).toBe('armed');
+  });
+
+  test('a second unexpected session end, after the owner signed back in, stops recording again', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.sessionEnded();
+    await h.host.signedInAgain();
+    expect(h.host.snapshot().status).toBe('armed');
+    await h.host.sessionEnded();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+  });
+
+  test("the driver's own sign-out already stopped recording: the end of the session only closes it", async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.suspendForSignOut();
+    const calls = h.fake.calls.length;
+    await h.host.sessionEnded();
+    expect(h.fake.calls.length).toBe(calls);
+    expect(h.host.snapshot().status).toBe('off');
+  });
+});

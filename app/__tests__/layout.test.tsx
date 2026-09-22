@@ -79,13 +79,14 @@ jest.mock('@/ui/fonts', () => ({
 }));
 
 const mockHandover: { fire: ((uid: string) => void) | null } = { fire: null };
-const mockOwner: { uid: string | null } = { uid: null };
+const mockOwner: { uid: string | null; hasData: boolean } = { uid: null, hasData: false };
 // The layout's subject is its own wiring, not the auth gate's routing (tested in its own suite).
 jest.mock('@/features/auth/AuthGate', () => ({
   AuthGate: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => mockOwner.uid,
+  hasDriverData: async () => mockOwner.hasData,
 }));
 jest.mock('@/boot/ownerWatch', () => ({
   watchDeviceOwner: (_db: unknown, deps: { onHandover: (uid: string) => void }) => {
@@ -201,6 +202,7 @@ function fakeRuntime(drive: Partial<DriveState>) {
     resumeAfterSignIn: jest.fn(async () => {}),
     signedInAgain: jest.fn(async () => {}),
     signOutCompleted: jest.fn(() => {}),
+    sessionEnded: jest.fn(async () => {}),
   };
   const queryClient = new QueryClient();
   const flushDeletes = jest.fn(async () => ({ sent: 1, left: 0 }));
@@ -367,9 +369,28 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
   });
 
-  test('SIGNED_OUT tells the host its sign-out is complete', async () => {
+  test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends recording through the host (r2-M2)', async () => {
     const { host } = await renderReady();
     await act(async () => mockAuth.listener?.('SIGNED_OUT', null));
-    expect(host.signOutCompleted).toHaveBeenCalledTimes(1);
+    expect(host.sessionEnded).toHaveBeenCalledTimes(1);
+  });
+
+  test('no owner recorded: a SIGNED_IN arms only on a device with no drive data (r2-M1)', async () => {
+    mockOwner.uid = null;
+    mockOwner.hasData = true;
+    const { host } = await renderReady();
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } });
+      await settle();
+    });
+    // A pre-owner device holding somebody's drives: the handover decides, not this listener.
+    expect(host.signedInAgain).not.toHaveBeenCalled();
+
+    mockOwner.hasData = false;
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } });
+      await settle();
+    });
+    expect(host.signedInAgain).toHaveBeenCalledTimes(1);
   });
 });
