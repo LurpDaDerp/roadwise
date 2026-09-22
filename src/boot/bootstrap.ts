@@ -2,7 +2,8 @@
  * What has to be true before the first screen reads anything (M2 ruling; M3 adds the engine).
  *
  * In order, because each step needs the one before:
- *   1. open SQLite — WAL, foreign keys, the busy timeout (`createExpoDb`);
+ *   1. open SQLite — WAL, foreign keys, the busy timeout (`createExpoDb`) — and exclude its
+ *      directory from iOS backups (plan R4, D2; not awaited, and a failure is only reported);
  *   2. `migrate` to the current schema;
  *   3. whose device this is — a sign-in by a different user empties it, rows and traces alike,
  *      before any of the last owner's data can be read, recovered or uploaded (`./device.ts`);
@@ -29,6 +30,7 @@ import { createDetectors } from '@/core/detectors';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createExpoDb, migrate, type Db } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
+import { createExpoNet } from '@/data/net/net';
 import type { Database } from '@/data/supabase/types';
 import {
   foregroundStampKey,
@@ -50,6 +52,7 @@ import {
   type AppStateLike,
   type FlushResult,
   type NetStatus,
+  type NetSubscribable,
   type SyncRunner,
   type SyncSupabase,
   type TraceFs,
@@ -100,10 +103,21 @@ export interface BootstrapDeps {
   /** Default: React Native's `AppState`. */
   appState?: AppStateLike;
   /**
-   * Default: never on Wi-Fi — no network package is installed yet, and `() => false` is the
-   * safe stub (Task 3): traces wait, summaries go up.
+   * The network the runner reads. Default: `createNet()`; if that fails (a build without
+   * `expo-network`), never on Wi-Fi — the safe answer: traces wait, summaries go up.
    */
-  net?: NetStatus;
+  net?: NetStatus | NetSubscribable;
+  /** Default: `createExpoNet` — one adapter per process, shared with the screens (plan D2). */
+  createNet?: () => Promise<NetStatus | NetSubscribable>;
+  /**
+   * The host's background drain policy, handed to the runner (plan D2, review I3). Default: the
+   * runner's own, which is always.
+   */
+  mayDrain?: () => boolean;
+  /** iOS backup exclusion (plan R4). Default: drive-sense's `excludeFromBackup`. */
+  excludeFromBackup?: (uri: string) => Promise<void>;
+  /** The directory the database lives in. Default: expo-sqlite's `defaultDatabaseDirectory`. */
+  databaseDirectory?: string;
   /** Default: no engine exists yet, so nothing is ever recording. M3 hands over the engine's status. */
   isRecording?: () => boolean;
   queryClient?: QueryClient;
@@ -200,6 +214,11 @@ async function runLaunch(
 
   enter('open');
   const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
+  // The directory exists now. Not awaited: an attribute on a folder must not hold the splash, and
+  // a refusal (drive-sense E_NOT_FOUND/E_IO, or no native module) only costs a backup copy.
+  void excludeDatabaseFromBackup(deps).catch((error: unknown) =>
+    onError(error, 'exclude database from backup')
+  );
   enter('migrate');
   const schemaVersion = await stage('migrate', () => migrate(db));
 
@@ -210,7 +229,8 @@ async function runLaunch(
     const { supabase, hydrateSupabase } = deps.supabase
       ? { supabase: deps.supabase, hydrateSupabase: deps.supabase }
       : appSeams((await import('@/data/supabase/client')).supabase);
-    const traceWriter = deps.traceWriter ?? (await createExpoTraceWriter());
+    const traceWriter =
+      deps.traceWriter ?? (await createExpoTraceWriter(undefined, undefined, undefined, onError));
     const { data } = await supabase.auth.getSession();
     const owner = await ensureDeviceOwner(db, data.session?.user.id ?? null, {
       traces: traceWriter,
@@ -244,11 +264,13 @@ async function runLaunch(
   try {
     const created = await stage('sync', async () => {
       traceFs = deps.traceFs ?? (await createExpoTraceFs());
+      const net = deps.net ?? (await networkOrNeverWifi(deps.createNet ?? createExpoNet, onError));
       return createSyncRunner({
         db,
         supabase: identity.supabase,
         fs: traceFs,
-        net: deps.net ?? { isWifi: () => false },
+        net,
+        mayDrain: deps.mayDrain,
         isRecording: deps.isRecording ?? (() => false),
         appState: deps.appState ?? AppState,
         now,
@@ -294,6 +316,29 @@ async function runLaunch(
       queryClient.clear();
     },
   };
+}
+
+/** iOS: keep the database — the driver's whole local history — out of iCloud and Finder backups. */
+async function excludeDatabaseFromBackup(deps: BootstrapDeps): Promise<void> {
+  const directory =
+    deps.databaseDirectory ?? ((await import('expo-sqlite')).defaultDatabaseDirectory as string);
+  const exclude =
+    deps.excludeFromBackup ??
+    (async (uri: string) => (await import('@drive-sense')).default.excludeFromBackup(uri));
+  await exclude(directory);
+}
+
+/** The network adapter, or — when it cannot be made — a network that is never on Wi-Fi. */
+async function networkOrNeverWifi(
+  create: () => Promise<NetStatus | NetSubscribable>,
+  onError: (error: unknown, context: string) => void
+): Promise<NetStatus | NetSubscribable> {
+  try {
+    return await create();
+  } catch (error) {
+    onError(error, 'network adapter');
+    return { isWifi: () => false };
+  }
 }
 
 /**

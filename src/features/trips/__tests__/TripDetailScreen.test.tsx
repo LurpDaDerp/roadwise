@@ -9,6 +9,7 @@ import {
   slowDb,
   world,
 } from '@/features/trips/__fixtures__/render';
+import { resetNetForTests, setSharedNet, type NetAdapter } from '@/data/net/net';
 import { TripDetailScreen } from '@/features/trips/TripDetailScreen';
 import type { LatLng } from '@/lib/geo';
 import { encodePolyline } from '@/lib/polyline';
@@ -88,6 +89,30 @@ beforeEach(() => {
   mockRouter.dismissTo.mockClear();
 });
 afterEach(clearQueryClients);
+afterEach(() => resetNetForTests());
+
+/** The network adapter the launch shares with the screens, held in a state the test flips. */
+function networkIs(initial: boolean) {
+  let online = initial;
+  const listeners = new Set<(s: { online: boolean; wifi: boolean }) => void>();
+  const adapter: NetAdapter = {
+    isOnline: () => online,
+    isWifi: () => false,
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
+    },
+  };
+  setSharedNet(adapter);
+  return {
+    set(next: boolean) {
+      online = next;
+      for (const l of [...listeners]) l({ online, wifi: false });
+    },
+  };
+}
 
 describe('while the drive is read', () => {
   test('the screen is drawn as a skeleton, never a spinner', async () => {
@@ -311,5 +336,42 @@ describe('the conditions and the data behind them', () => {
 
     expect(screen.getByTestId('quality-recovered')).toBeOnTheScreen();
     expect(screen.getByText(/the tail of this drive is missing/)).toBeOnTheScreen();
+  });
+});
+
+describe('the network (plan D2)', () => {
+  test('offline, the route field says so instead of drawing a map that cannot load', async () => {
+    networkIs(false);
+    const w = await world({ trips: [scored], events: [speeding, possible] });
+    await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
+    await screen.findByTestId('trip-detail');
+
+    expect(screen.getByTestId('map-offline')).toBeOnTheScreen();
+    expect(
+      screen.getByText("You're offline, so the map is off. The timeline below has every moment.")
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('map-view', hidden)).toBeNull();
+    // The timeline is the whole account either way.
+    expect(screen.getByTestId('timeline')).toBeOnTheScreen();
+  });
+
+  test('coming back online brings the map back without leaving the screen', async () => {
+    const net = networkIs(false);
+    const w = await world({ trips: [scored], events: [speeding, possible] });
+    await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
+    await screen.findByTestId('map-offline');
+
+    await act(async () => net.set(true));
+
+    expect(screen.queryByTestId('map-offline')).toBeNull();
+    expect(screen.getByTestId('map-view', hidden)).toBeOnTheScreen();
+  });
+
+  test('with no network state read yet, the screen does not claim to be offline', async () => {
+    const w = await world({ trips: [scored], events: [speeding, possible] });
+    await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
+    await screen.findByTestId('trip-detail');
+    expect(screen.queryByTestId('map-offline')).toBeNull();
+    expect(screen.getByTestId('map-view', hidden)).toBeOnTheScreen();
   });
 });

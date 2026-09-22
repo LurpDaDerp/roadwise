@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 
 import { categoryCaps } from '@/content/scoring-explainer';
+import { useOnline } from '@/data/net/useOnline';
 import {
   useTrip,
   useTripEvents,
@@ -86,6 +87,8 @@ export function TripDetailScreen({ clientTripId }: { clientTripId: string }) {
   const th = useTheme();
   const detailQuery = useTrip(clientTripId);
   const eventsQuery = useTripEvents(clientTripId);
+  // Read here, above every early return, so the hook order never changes between renders.
+  const online = useOnline();
 
   const back = () => (router.canGoBack() ? router.back() : router.dismissTo(HOME_HREF));
 
@@ -149,6 +152,7 @@ export function TripDetailScreen({ clientTripId }: { clientTripId: string }) {
         points={route}
         events={events}
         hasRoute={trip.polyline !== null && trip.polyline.length > 0}
+        online={online}
         testID="route-field"
       />
 

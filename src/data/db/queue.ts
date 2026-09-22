@@ -30,6 +30,68 @@ export function backoffSeconds(attempts: number): number {
   return Math.min(MAX_DELAY_S, FIRST_DELAY_S * 2 ** Math.max(0, attempts));
 }
 
+/**
+ * `next_attempt_at` of an item the server refused for good: never. A failed item's retry time is
+ * otherwise meaningless, so this is the one mark that separates a refusal from an exhausted
+ * ladder without a schema change.
+ */
+export const REFUSED_NEVER = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The reason the sync runner records on a trip or a report whose item ran out of retries. Kept
+ * equal to `RETRIES_EXHAUSTED` in `src/data/sync/actions.ts` (a test pins it); declared here so the
+ * database layer does not import the sync layer.
+ */
+const RETRIES_EXHAUSTED = 'retries_exhausted';
+
+/** Queue kinds whose body names a trip, and whose give-up marks that trip failed. */
+const TRIP_KINDS = new Set(['finalize-trip', 'set-role', 'delete-trip']);
+
+function parseBody(json: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(json);
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Take back what a reopened item's give-up recorded for the driver (see `reopenRetryable`). */
+async function undoGiveUp(tx: Db, item: QueueItem, now: number): Promise<void> {
+  const body = parseBody(item.payload_json);
+  if (body === null) return;
+
+  if (TRIP_KINDS.has(item.kind) && typeof body.clientTripId === 'string') {
+    await tx.execute(
+      `UPDATE trips SET sync_state = 'queued', sync_error = NULL, updated_at = ?
+        WHERE client_trip_id = ? AND sync_state = 'failed' AND sync_error = ?`,
+      [now, body.clientTripId, RETRIES_EXHAUSTED]
+    );
+    return;
+  }
+
+  if (item.kind === 'dispute' && typeof body.clientEventId === 'string') {
+    const { rows } = await tx.execute('SELECT status, dispute_json FROM trip_events WHERE id = ?', [
+      body.clientEventId,
+    ]);
+    const row = rows[0];
+    const record = typeof row?.dispute_json === 'string' ? parseBody(row.dispute_json) : null;
+    if (!row || record === null) return;
+    if (record.outcome !== 'refused' || record.code !== RETRIES_EXHAUSTED) return;
+    const sending = { ...record, outcome: 'queued', code: null, decidedAt: null };
+    // Only a `scored` event is ever marked `disputed` while a report travels (a `possible` one
+    // cost nothing and stays as it is), and the give-up put it back to `scored`.
+    const status = row.status === 'scored' ? 'disputed' : row.status;
+    await tx.execute('UPDATE trip_events SET status = ?, dispute_json = ? WHERE id = ?', [
+      status,
+      JSON.stringify(sending),
+      body.clientEventId,
+    ]);
+  }
+}
+
 function toQueueItem(row: Record<string, unknown>): QueueItem {
   return {
     id: asNumber(row, 'id'),
@@ -276,12 +338,52 @@ export function createQueueRepo(db: Db) {
      * the states that attempt can have left behind: a fresh claim by another pass is not stomped.
      */
     async markFailed(id: number, error: string, on: Db = db): Promise<QueueItem | null> {
+      // `next_attempt_at = REFUSED_NEVER` is what tells this refusal apart from a ladder that ran
+      // out (`reopenRetryable`): a refusal on the twentieth attempt has the same count and status.
       const { changes } = await on.execute(
-        `UPDATE sync_queue SET status = 'failed', last_error = ?, claimed_at = NULL
+        `UPDATE sync_queue SET status = 'failed', last_error = ?, claimed_at = NULL,
+                next_attempt_at = ?
           WHERE id = ? AND status IN ('pending', 'failed')`,
-        [error, id]
+        [error, REFUSED_NEVER, id]
       );
       return changes === 0 ? null : get(id, on);
+    },
+
+    /**
+     * Put back every item that gave up only because its retries ran out — the device was offline,
+     * or the server kept answering 5xx or 429 — for when the network comes back (plan D2). Each
+     * gets a clean ladder, due at `now`. An item the server **refused** (a 4xx other than 401,
+     * 408, 409, 425, 429 — `markFailed`) stays failed: retrying would send the same bytes to the
+     * same answer.
+     *
+     * What the give-up left for the driver to read is taken back in the same transaction, so a
+     * screen does not keep saying "this will never upload" about work that is on its way again:
+     * the trip of a reopened upload, role answer or delete goes back to `queued` — only while
+     * `retries_exhausted` is still its recorded reason, so a trip refused for another reason keeps
+     * it — and a reopened report goes back to "sending" on its event.
+     *
+     * Returns how many items were reopened.
+     */
+    reopenRetryable(now: number = Date.now()): Promise<number> {
+      return db.transaction(async (tx) => {
+        const { rows } = await tx.execute(
+          `SELECT * FROM sync_queue
+            WHERE status = 'failed' AND attempts >= ? AND next_attempt_at <> ?`,
+          [MAX_ATTEMPTS, REFUSED_NEVER]
+        );
+        const items = rows.map(toQueueItem);
+        for (const item of items) {
+          await tx.execute(
+            `UPDATE sync_queue
+                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+                    claimed_at = NULL
+              WHERE id = ? AND status = 'failed'`,
+            [now, item.id]
+          );
+          await undoGiveUp(tx, item, now);
+        }
+        return items.length;
+      });
     },
 
     /**

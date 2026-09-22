@@ -122,6 +122,19 @@ export interface NetStatus {
   isWifi(): boolean | Promise<boolean>;
 }
 
+/**
+ * A `NetStatus` that also reports connectivity and its changes (`src/data/net/net.ts`). Declared
+ * structurally here so the runner does not import the adapter; `NetAdapter` satisfies it.
+ */
+export interface NetSubscribable extends NetStatus {
+  isOnline(): boolean;
+  subscribe(fn: (s: { online: boolean; wifi: boolean }) => void): () => void;
+}
+
+const canSubscribe = (net: NetStatus): net is NetSubscribable =>
+  typeof (net as Partial<NetSubscribable>).subscribe === 'function' &&
+  typeof (net as Partial<NetSubscribable>).isOnline === 'function';
+
 /** The shape of React Native's `AppState`, so the host can pass it straight in. */
 export interface AppStateLike {
   addEventListener(type: 'change', listener: (state: string) => void): { remove(): void };
@@ -157,7 +170,20 @@ export interface SyncRunnerDeps {
   db: Db;
   supabase: SyncSupabase;
   fs: TraceFs;
-  net: NetStatus;
+  /**
+   * The network. A plain `NetStatus` answers only "on Wi-Fi?"; an adapter that can also be
+   * subscribed to (`createExpoNet`) adds reconnect recovery: on an offline → online transition the
+   * items that gave up only because their retries ran out are reopened and drained (plan D2).
+   */
+  net: NetStatus | NetSubscribable;
+  /**
+   * Whether a drain may run now — the host's background policy (plan D2, review I3; H2 supplies
+   * it). False: the runner claims nothing and sends nothing, so no attempt is counted and the work
+   * waits for the next wake the policy allows (a foreground, or the Android service's lifetime).
+   * Checked on every wake and every `drainOnce`. Default: always. `flushDeletes` does not consult
+   * it — the driver asked to sign out, in the foreground, and that flush is the last chance.
+   */
+  mayDrain?: () => boolean;
   /**
    * True while the engine is recording *or finalizing* — the runner stays off the database.
    * Required, not defaulted: a host that forgot it would drain into the 1 Hz recorder in silence.
@@ -238,6 +264,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const now = deps.now ?? Date.now;
   const { isRecording } = deps;
   const batchSize = deps.batchSize ?? DEFAULT_BATCH;
+  const mayDrain = deps.mayDrain ?? (() => true);
   const report = (error: unknown, context: string): void => deps.onError?.(error, context);
 
   const queue = createQueueRepo(db);
@@ -265,6 +292,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   let wakePending = false;
   let recordingRetry: ReturnType<typeof setTimeout> | null = null;
   const unsubscribes: (() => void)[] = [];
+  /**
+   * The network came back since the last drain: the next drain the host allows reopens the
+   * retry-class failures first. A flag rather than an immediate write, because the transition can
+   * arrive while a drive is recording (the runner stays off the database) or while the app is
+   * armed and idle in the background (no query, no request — design §3.5).
+   */
+  let reconnectPending = false;
 
   /**
    * The signed-in user's id, or null when there is no session to upload under.
@@ -876,7 +910,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function drainOnce(at: number = now()): Promise<DrainResult> {
     const empty: DrainResult = { done: 0, failed: 0, deferred: 0 };
     // One drain at a time: two passes claiming the same items would race on every `markAttempt`.
-    if (draining || isRecording()) return empty;
+    // And none the host's policy forbids: nothing claimed means no attempt counted.
+    if (draining || isRecording() || !mayDrain()) return empty;
     draining = true;
     // Held so `stop()` can be awaited: the generation fence already refuses a dead pass's writes,
     // but a host rebuilding the runtime (a handover) wants the old pass's network work finished
@@ -886,6 +921,16 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       settled = resolve;
     });
     try {
+      if (reconnectPending) {
+        reconnectPending = false;
+        try {
+          await queue.reopenRetryable(at);
+        } catch (error) {
+          // Kept for the next drain; this one still sends whatever is already due.
+          reconnectPending = true;
+          report(error, 'reopen retryable items');
+        }
+      }
       return await pass(at);
     } finally {
       draining = false;
@@ -940,6 +985,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   function wake(): void {
     if (!started) return;
+    // Before anything else, the recording retry timer included: a drain the policy forbids is not
+    // postponed, it is dropped, and the next wake the policy allows (a foreground) picks it up.
+    if (!mayDrain()) return;
     // Not dropped: `drainOnce`'s `finally` runs it. `pass()` claims its batch once at the start,
     // so an item enqueued mid-drain is not picked up by the drain that is already running.
     if (draining) {
@@ -980,6 +1028,20 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           if (state === 'active') wake();
         });
         unsubscribes.push(() => subscription.remove());
+      }
+      // Reconnect recovery: only an offline → online transition counts. A better link while
+      // already online (cellular → Wi-Fi) reopens nothing; what waits for Wi-Fi has its own time.
+      if (canSubscribe(net)) {
+        let online = net.isOnline();
+        unsubscribes.push(
+          net.subscribe((state) => {
+            const reconnected = state.online && !online;
+            online = state.online;
+            if (!reconnected) return;
+            reconnectPending = true;
+            wake();
+          })
+        );
       }
       // Whatever is already queued goes now, rather than at the next foreground.
       wake();

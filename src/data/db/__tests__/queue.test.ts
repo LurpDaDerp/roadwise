@@ -2,7 +2,11 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
+import { createEventsRepo } from '@/data/db/events';
 import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S } from '@/data/db/queue';
+import { createTripsRepo } from '@/data/db/trips';
+import { eventRow, tripRow } from '@/data/queries/__fixtures__/rows';
+import { RETRIES_EXHAUSTED } from '@/data/sync/actions';
 
 const T0 = 1_700_000_000_000;
 const SECOND = 1000;
@@ -351,4 +355,189 @@ test('markTraceUploaded records the object once and keeps the first time', async
   await queue.nextDue(T0);
   await queue.markAttempt(item.id, false, 'network', T0);
   expect((await queue.get(item.id))?.trace_uploaded_at).toBe(T0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// reopenRetryable (plan D2): what an offline -> online transition puts back in the queue
+// ---------------------------------------------------------------------------------------------
+
+/** Walk an item down the whole ladder, as a device offline for days does. */
+async function exhaust(id: number, code = 'network'): Promise<void> {
+  const kind = (await queue.get(id))?.kind ?? '';
+  for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+    await queue.nextDueOfKind(kind, T0 + i);
+    await queue.markAttempt(id, false, code, T0 + i);
+  }
+}
+
+/** A terminal refusal as the runner records one: the attempt closed, then given up. */
+async function refuse(id: number, code: string, at = T0): Promise<void> {
+  const kind = (await queue.get(id))?.kind ?? '';
+  await queue.nextDueOfKind(kind, at);
+  await queue.markAttempt(id, false, code, at);
+  await queue.markFailed(id, code);
+}
+
+describe('reopenRetryable', () => {
+  test('an exhausted ladder goes back to pending with a clean ladder, due now', async () => {
+    const item = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0, undefined, 'u1');
+    await exhaust(item.id);
+    expect(await queue.get(item.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+
+    const later = T0 + 7 * 24 * 3600 * SECOND;
+    await expect(queue.reopenRetryable(later)).resolves.toBe(1);
+
+    expect(await queue.get(item.id)).toMatchObject({
+      status: 'pending',
+      attempts: 0,
+      next_attempt_at: later,
+      last_error: null,
+      claimed_at: null,
+      owner_uid: 'u1',
+    });
+    expect((await queue.nextDue(later)).map((i) => i.id)).toEqual([item.id]);
+  });
+
+  test('a 4xx refusal stays failed: retrying sends the same bytes to the same answer', async () => {
+    const item = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+    await refuse(item.id, 'implausible_speed');
+
+    await expect(queue.reopenRetryable(T0 + 1)).resolves.toBe(0);
+    expect(await queue.get(item.id)).toMatchObject({
+      status: 'failed',
+      last_error: 'implausible_speed',
+    });
+  });
+
+  test('a refusal that arrives on the last rung is still a refusal, not an exhausted ladder', async () => {
+    const item = await queue.enqueue('dispute', { clientEventId: 'e1' }, 'dispute:e1', T0);
+    // Nineteen retryable failures, then the server decides against it on the twentieth.
+    for (let i = 0; i < MAX_ATTEMPTS - 1; i += 1) {
+      await queue.nextDueOfKind('dispute', T0 + i);
+      await queue.markAttempt(item.id, false, 'http_503', T0 + i);
+    }
+    await refuse(item.id, 'dispute_window_closed', T0 + 100);
+    expect(await queue.get(item.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+
+    await expect(queue.reopenRetryable(T0 + 200)).resolves.toBe(0);
+    expect((await queue.get(item.id))?.status).toBe('failed');
+  });
+
+  test('pending, in-flight, backed-off and done items are left exactly as they are', async () => {
+    const done = await queue.enqueue('a', {}, 'k-done', T0 - 2);
+    const inflight = await queue.enqueue('a', {}, 'k-inflight', T0 - 1);
+    await queue.nextDue(T0, 2);
+    await queue.markAttempt(done.id, true, null, T0);
+    const pending = await queue.enqueue('a', {}, 'k-pending', T0);
+    const backedOff = await queue.enqueue('b', {}, 'k-backoff', T0);
+    await queue.nextDueOfKind('b', T0);
+    await queue.markAttempt(backedOff.id, false, 'network', T0);
+    const ids = [pending, inflight, done, backedOff].map((i) => i.id);
+    const before = await Promise.all(ids.map((id) => queue.get(id)));
+    expect(before.map((i) => i?.status)).toEqual(['pending', 'inflight', 'done', 'pending']);
+
+    await expect(queue.reopenRetryable(T0 + 1)).resolves.toBe(0);
+
+    expect(await Promise.all(ids.map((id) => queue.get(id)))).toEqual(before);
+  });
+
+  test('the trip of a reopened upload, role answer or delete stops saying it failed', async () => {
+    const trips = createTripsRepo(db);
+    const failed = { sync_state: 'failed' as const, sync_error: RETRIES_EXHAUSTED };
+    await trips.insert(tripRow({ client_trip_id: 'up', ...failed }), T0);
+    await trips.insert(tripRow({ client_trip_id: 'role', ...failed }), T0);
+    await trips.insert(tripRow({ client_trip_id: 'del', ...failed }), T0);
+    // Refused for good: its trip keeps the reason the server gave.
+    await trips.insert(
+      tripRow({ client_trip_id: 'bad', sync_state: 'failed', sync_error: 'implausible_speed' }),
+      T0
+    );
+
+    const up = await queue.enqueue('finalize-trip', { clientTripId: 'up' }, 'trip:up', T0);
+    const role = await queue.enqueue('set-role', { clientTripId: 'role' }, 'role:role', T0);
+    const del = await queue.enqueue('delete-trip', { clientTripId: 'del' }, 'delete:del', T0);
+    const bad = await queue.enqueue('finalize-trip', { clientTripId: 'bad' }, 'trip:bad', T0);
+    for (const item of [up, role, del]) await exhaust(item.id);
+    await refuse(bad.id, 'implausible_speed');
+
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(3);
+
+    for (const id of ['up', 'role', 'del']) {
+      expect(await trips.get(id)).toMatchObject({ sync_state: 'queued', sync_error: null });
+    }
+    expect(await trips.get('bad')).toMatchObject({
+      sync_state: 'failed',
+      sync_error: 'implausible_speed',
+    });
+  });
+
+  test('a trip whose failure came from somewhere else is not touched by a reopened item', async () => {
+    const trips = createTripsRepo(db);
+    // The upload was refused for good; a later role answer on the same trip ran out of retries.
+    await trips.insert(
+      tripRow({ client_trip_id: 't', sync_state: 'failed', sync_error: 'implausible_speed' }),
+      T0
+    );
+    const role = await queue.enqueue('set-role', { clientTripId: 't' }, 'role:t', T0);
+    await exhaust(role.id);
+
+    await queue.reopenRetryable(T0 + 1000);
+    expect(await trips.get('t')).toMatchObject({
+      sync_state: 'failed',
+      sync_error: 'implausible_speed',
+    });
+  });
+
+  test('a reopened report goes back to "sending" on its event', async () => {
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'trip-1', sync_state: 'synced' }), T0);
+    const refused = {
+      reason: 'wrong_limit',
+      note: null,
+      statedLimitMph: 35,
+      submittedAt: T0,
+      outcome: 'refused',
+      deniedReason: null,
+      remainingAllowance: null,
+      code: RETRIES_EXHAUSTED,
+      decidedAt: T0 + 5000,
+    };
+    await createEventsRepo(db).insertMany([
+      eventRow({ id: 'e1', status: 'scored', dispute_json: JSON.stringify(refused) }),
+      // Refused by the server for good: stays as it is.
+      eventRow({
+        id: 'e2',
+        status: 'scored',
+        dispute_json: JSON.stringify({
+          ...refused,
+          code: 'dispute_window_closed',
+          outcome: 'window_closed',
+        }),
+      }),
+    ]);
+    const e1 = await queue.enqueue('dispute', { clientEventId: 'e1' }, 'dispute:e1', T0);
+    const e2 = await queue.enqueue('dispute', { clientEventId: 'e2' }, 'dispute:e2', T0);
+    await exhaust(e1.id);
+    await refuse(e2.id, 'dispute_window_closed');
+
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(1);
+
+    const events = createEventsRepo(db);
+    const one = await events.get('e1');
+    expect(one?.status).toBe('disputed');
+    expect(JSON.parse(one?.dispute_json ?? 'null')).toEqual({
+      ...refused,
+      outcome: 'queued',
+      code: null,
+      decidedAt: null,
+    });
+    const two = await events.get('e2');
+    expect(two?.status).toBe('scored');
+    expect(JSON.parse(two?.dispute_json ?? 'null').outcome).toBe('window_closed');
+  });
+
+  test('an item whose body this build cannot read is still reopened, and touches no row', async () => {
+    const item = await queue.enqueue('finalize-trip', 'not an object', 'trip:odd', T0);
+    await exhaust(item.id);
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(1);
+  });
 });

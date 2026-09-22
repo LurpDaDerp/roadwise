@@ -1278,3 +1278,204 @@ describe('fix round 1', () => {
     expect(supabase.invokes).toHaveLength(0);
   });
 });
+
+describe('D2: network state and the drain policy', () => {
+  /** A `NetAdapter` a test can flip, with its subscribers visible. */
+  function fakeNet(initial: { online: boolean; wifi: boolean }) {
+    let state = { ...initial };
+    const listeners = new Set<(s: { online: boolean; wifi: boolean }) => void>();
+    return {
+      isOnline: () => state.online,
+      isWifi: () => state.wifi,
+      subscribe(fn: (s: { online: boolean; wifi: boolean }) => void) {
+        listeners.add(fn);
+        return () => {
+          listeners.delete(fn);
+        };
+      },
+      listeners,
+      set(next: { online: boolean; wifi: boolean }) {
+        state = { ...next };
+        for (const l of [...listeners]) l(state);
+      },
+    };
+  }
+
+  const OFFLINE = { online: false, wifi: false };
+  const WIFI = { online: true, wifi: true };
+  const CELL = { online: true, wifi: false };
+
+  /** An upload that gave up because the device stayed offline for its whole ladder. */
+  async function exhaustedUpload(): Promise<QueueItem> {
+    const item = await seedQueuedTrip();
+    await db.execute(
+      "UPDATE sync_queue SET status = 'failed', attempts = ?, last_error = 'network' WHERE id = ?",
+      [MAX_ATTEMPTS, item.id]
+    );
+    await trips().update(TRIP_ID, { sync_state: 'failed', sync_error: 'retries_exhausted' }, T0);
+    return item;
+  }
+
+  /** A role answer the server refused for good. */
+  async function refusedRoleAnswer(): Promise<QueueItem> {
+    const item = await queue().enqueue(
+      'set-role',
+      { action: 'set-role', clientTripId: 'other', role: 'driver' },
+      'role:other',
+      T0,
+      undefined,
+      UID
+    );
+    await queue().nextDueOfKind('set-role', T0);
+    await queue().markAttempt(item.id, false, 'trip_not_found', T0);
+    await queue().markFailed(item.id, 'trip_not_found');
+    return item;
+  }
+
+  test('mayDrain false: nothing is claimed, sent or counted', async () => {
+    const item = await seedQueuedTrip();
+    const r = runner({ mayDrain: () => false });
+
+    await expect(r.drainOnce(T0)).resolves.toEqual({ done: 0, failed: 0, deferred: 0 });
+
+    expect(supabase.invokes).toHaveLength(0);
+    expect(supabase.uploads).toHaveLength(0);
+    expect(await queue().get(item.id)).toMatchObject({
+      status: 'pending',
+      attempts: 0,
+      claimed_at: null,
+    });
+  });
+
+  test('mayDrain false: a wake from new work or the foreground does nothing, and no timer is left', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'queueMicrotask', 'nextTick'] });
+    try {
+      let allowed = false;
+      const appState = createFakeAppState();
+      const r = runner({ mayDrain: () => allowed, appState });
+      r.start();
+      await seedQueuedTrip();
+      emitDataChanged({ source: 'enqueue' });
+      appState.emit('active');
+      await jest.advanceTimersByTimeAsync(RECORDING_RETRY_MS * 4);
+      expect(supabase.invokes).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+
+      // Nor during a drive: the wake that would otherwise retry in 15 s is dropped, not postponed.
+      recording = true;
+      emitDataChanged({ source: 'enqueue' });
+      await jest.advanceTimersByTimeAsync(10);
+      expect(jest.getTimerCount()).toBe(0);
+      recording = false;
+
+      // The host's policy allows it again (the app came to the foreground): the next wake drains.
+      allowed = true;
+      appState.emit('active');
+      await jest.advanceTimersByTimeAsync(10);
+      await waitFor(() => supabase.invokes.length === 1);
+      await r.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('mayDrain defaults to always', async () => {
+    await seedQueuedTrip();
+    await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 1 });
+  });
+
+  test('offline to online reopens only the retry-class items, and drains them once', async () => {
+    const exhausted = await exhaustedUpload();
+    const refused = await refusedRoleAnswer();
+    const net = fakeNet(OFFLINE);
+    const r = runner({ net });
+    r.start();
+    await waitFor(() => supabase.sessions > 0);
+    await tick();
+    // Offline: the start-up drain found nothing due (both items are failed).
+    expect(supabase.invokes).toHaveLength(0);
+
+    net.set(WIFI);
+    await waitFor(() => supabase.invokes.length > 0);
+    for (let i = 0; i < 5; i += 1) await tick();
+
+    expect(supabase.invokes).toEqual([{ name: 'finalize-trip', body: tripPayload() }]);
+    expect(supabase.uploads).toHaveLength(1);
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'done', attempts: 0 });
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced', sync_error: null });
+    expect(await queue().get(refused.id)).toMatchObject({
+      status: 'failed',
+      last_error: 'trip_not_found',
+    });
+    await r.stop();
+  });
+
+  test('a change that is not offline to online reopens nothing', async () => {
+    const exhausted = await exhaustedUpload();
+    const net = fakeNet(CELL);
+    const r = runner({ net });
+    r.start();
+    await tick();
+
+    net.set(WIFI); // online already: a better link, not a reconnect
+    net.set(CELL);
+    for (let i = 0; i < 5; i += 1) await tick();
+
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'failed' });
+    expect(supabase.invokes).toHaveLength(0);
+    await r.stop();
+  });
+
+  test('a reconnect while mayDrain is false touches nothing until the host allows a drain', async () => {
+    const exhausted = await exhaustedUpload();
+    let allowed = false;
+    const appState = createFakeAppState();
+    const net = fakeNet(OFFLINE);
+    const r = runner({ net, appState, mayDrain: () => allowed });
+    r.start();
+
+    net.set(WIFI);
+    for (let i = 0; i < 5; i += 1) await tick();
+    // Armed and idle in the background: no query and no request (design §3.5).
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+    expect(supabase.invokes).toHaveLength(0);
+
+    // The reconnect is remembered: the next drain the host allows reopens first, then sends.
+    allowed = true;
+    appState.emit('active');
+    await waitFor(() => supabase.invokes.length === 1);
+    await r.stop();
+  });
+
+  test('a reconnect during a drive is remembered and handled at the next drain', async () => {
+    const exhausted = await exhaustedUpload();
+    recording = true;
+    const net = fakeNet(OFFLINE);
+    const r = runner({ net });
+    r.start();
+    net.set(CELL);
+    for (let i = 0; i < 5; i += 1) await tick();
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'failed' });
+
+    recording = false;
+    await r.drainOnce(T0);
+    expect(supabase.invokes).toHaveLength(1);
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'done' });
+    await r.stop();
+  });
+
+  test('stop() lets go of the network subscription', async () => {
+    const net = fakeNet(WIFI);
+    const r = runner({ net });
+    r.start();
+    expect(net.listeners.size).toBe(1);
+    await r.stop();
+    expect(net.listeners.size).toBe(0);
+  });
+
+  test('a plain NetStatus (no subscribe) still works: no reconnect handling, same drain', async () => {
+    await seedQueuedTrip();
+    const r = runner({ net: { isWifi: () => true } });
+    await expect(r.drainOnce(T0)).resolves.toMatchObject({ done: 1 });
+  });
+});

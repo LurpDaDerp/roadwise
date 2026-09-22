@@ -32,6 +32,7 @@ import {
 import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
+import { traceIdempotencyKey } from '@/data/sync/queue';
 
 /** Wall clock at launch: the morning after the drive. */
 const NOW = T0 + 36_000_000;
@@ -92,6 +93,11 @@ function deps(over: Partial<BootstrapDeps> = {}) {
     hash: { sha256: fakeSha256 },
     newId: counterIds(),
     appState,
+    // The device adapters default to native modules Jest does not have; the D2 tests below
+    // replace these to exercise them.
+    net: { isWifi: () => false },
+    excludeFromBackup: async () => {},
+    databaseDirectory: '/data/SQLite',
     tz: TZ,
     now: () => NOW,
     onError: (_error, context) => {
@@ -561,5 +567,102 @@ describe('hydration runs only in the foreground (R10, R13)', () => {
     // An incomplete run stamps nothing: said so, and tried again at the next foreground.
     expect(errors).toEqual(['foreground job hydrate']);
     stopped.queryClient.clear();
+  });
+});
+
+describe('D2: backup exclusion, the network adapter and the drain policy', () => {
+  test('the open stage excludes the database directory from backup, once the database is open', async () => {
+    const order: string[] = [];
+    const { bootstrapDeps, errors } = deps({
+      openDb: async () => {
+        order.push('open');
+        return db;
+      },
+      databaseDirectory: '/var/mobile/Documents/SQLite',
+      excludeFromBackup: async (uri) => {
+        order.push(`exclude ${uri}`);
+      },
+    });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(order).toEqual(['open', 'exclude /var/mobile/Documents/SQLite']);
+    expect(errors).toEqual([]);
+  });
+
+  test('an exclusion that fails is reported and the launch carries on', async () => {
+    const { bootstrapDeps, errors } = deps({
+      excludeFromBackup: async () => {
+        throw Object.assign(new Error('attribute could not be set'), { code: 'E_IO' });
+      },
+    });
+
+    runtime = await bootstrapApp(bootstrapDeps);
+
+    expect(runtime.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(errors).toEqual(['exclude database from backup']);
+  });
+
+  test('an exclusion that never answers does not hold the launch', async () => {
+    const { bootstrapDeps } = deps({ excludeFromBackup: () => new Promise<void>(() => {}) });
+    runtime = await bootstrapApp({ ...bootstrapDeps, timeoutMs: 2_000 });
+    expect(runtime.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  test('without an injected network the launch creates the adapter and the runner uses it', async () => {
+    await crashedDrive();
+    const created = jest.fn(async () => ({
+      isWifi: () => true,
+      isOnline: () => true,
+      subscribe: () => () => {},
+    }));
+    const { bootstrapDeps, supabase, errors } = deps({ net: undefined, createNet: created });
+    supabase.setUid('user-1');
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    expect(created).toHaveBeenCalledTimes(1);
+    // On Wi-Fi, per the adapter: the trace goes with the summary, so no trace waits in the queue.
+    expect(supabase.invokes).toHaveLength(1);
+    expect(await createQueueRepo(db).byKey(traceIdempotencyKey(TRIP))).toBeNull();
+    expect(errors).not.toContain('network adapter');
+  });
+
+  test('a network adapter that cannot be created is reported, and traces wait (never on Wi-Fi)', async () => {
+    await crashedDrive();
+    const { bootstrapDeps, supabase, errors } = deps({
+      net: undefined,
+      createNet: async () => {
+        throw new Error('Cannot find native module ExpoNetwork');
+      },
+    });
+    supabase.setUid('user-1');
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    expect(errors).toContain('network adapter');
+    // The summary went up; the megabytes wait for a Wi-Fi the launch could not see.
+    expect(supabase.invokes).toHaveLength(1);
+    expect(supabase.uploads).toHaveLength(0);
+    expect(await createQueueRepo(db).byKey(traceIdempotencyKey(TRIP))).toMatchObject({
+      status: 'pending',
+    });
+  });
+
+  test('the host drain policy reaches the runner', async () => {
+    await crashedDrive();
+    const { bootstrapDeps, supabase } = deps({ mayDrain: () => false });
+    supabase.setUid('user-1');
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+
+    runtime = await bootstrapApp(bootstrapDeps);
+    await settle();
+
+    expect(supabase.invokes).toHaveLength(0);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   });
 });
