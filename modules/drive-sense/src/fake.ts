@@ -1,13 +1,19 @@
 // In-memory drive-sense for tests and the diagnostics simulation. It follows README.md's native
-// contract — including buffering events nobody is listening for (bounded, oldest row dropped
-// first) and delivering them asynchronously when the first listener attaches — so host tests
-// exercise the same orderings a device produces.
+// contract so host tests exercise what a device does:
+// - rows flow only while capturing (`step` refuses otherwise — review I5);
+// - `arm`/`startCapture` reject with the README's `CodedError` codes (review I4), and `armed` in
+//   `getState` is the effective arming;
+// - events nobody listens for are buffered (bounded, oldest row dropped first) and delivered
+//   asynchronously when the first listener attaches;
+// - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
+//   always does; the default is synchronous delivery, for step-by-step tests (review M4).
 import { runSelfTest } from './extract/vectors';
 import { parseVectors } from './selfTest';
 import type {
   CaptureMode,
   CaptureRate,
   DriveSenseApi,
+  DriveSenseErrorCode,
   DriveSenseEvent,
   DriveSenseEvents,
   DriveSenseState,
@@ -29,11 +35,23 @@ export interface FakeOptions {
   platform?: 'ios' | 'android';
   /** clock for `captureStartedAt`; `Date.now` by default */
   now?: () => number;
+  /**
+   * Deliver every event on a microtask, as native does (the bridge is always asynchronous). Use it
+   * in integration tests, so a host that depends on synchronous delivery fails here and not on a
+   * device. Default false: `emit`/`step` call listeners before returning.
+   */
+  asyncDelivery?: boolean;
+}
+
+/** An Error carrying a drive-sense `code`, as an Expo `CodedError` does. */
+export function driveSenseError(code: DriveSenseErrorCode, message: string): Error & { code: DriveSenseErrorCode } {
+  return Object.assign(new Error(message), { code });
 }
 
 export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & FakeControls {
   const platform = opts.platform ?? 'ios';
   const now = opts.now ?? Date.now;
+  const asyncDelivery = opts.asyncDelivery ?? false;
   let state: DriveSenseState = {
     armed: false,
     capturing: false,
@@ -57,8 +75,14 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
   const calls: string[] = [];
+  const queries: string[] = [];
 
-  const log = (name: string, arg?: string) => calls.push(arg === undefined ? name : `${name}:${arg}`);
+  const command = (name: string, arg?: string) =>
+    calls.push(arg === undefined ? name : `${name}:${arg}`);
+  const query = (name: string) => queries.push(name);
+
+  /** The README's arming requirement: effective only with Always location and granted motion. */
+  const armPermitted = () => state.location === 'always' && state.motion === 'granted';
 
   function observe(event: DriveSenseEvent, payload: unknown) {
     if (event === 'screen') {
@@ -72,7 +96,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     }
   }
 
-  function deliver(event: DriveSenseEvent, payload: unknown) {
+  function deliverNow(event: DriveSenseEvent, payload: unknown) {
     const set = listeners.get(event);
     if (!set || set.size === 0) {
       buffer.push({ event, payload });
@@ -87,7 +111,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
 
   function emitRaw(event: DriveSenseEvent, payload: unknown) {
     observe(event, payload);
-    deliver(event, payload);
+    if (asyncDelivery) void Promise.resolve().then(() => deliverNow(event, payload));
+    else deliverNow(event, payload);
   }
 
   const resolve = <T>(v: T): Promise<T> => Promise.resolve(v);
@@ -95,76 +120,92 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   const api: DriveSenseApi & FakeControls = {
     // ——— DriveSenseApi ———
     arm() {
-      log('arm');
+      command('arm');
+      if (state.motion === 'unavailable') {
+        return Promise.reject(driveSenseError('E_UNAVAILABLE', 'motion activity is unavailable'));
+      }
+      if (!armPermitted()) {
+        state = { ...state, armed: false };
+        return Promise.reject(
+          driveSenseError('E_PERMISSION', `arm needs location 'always' and motion 'granted' (have ${state.location}, ${state.motion})`)
+        );
+      }
       state = { ...state, armed: true };
       return resolve(undefined);
     },
     disarm() {
-      log('disarm');
+      command('disarm');
       state = { ...state, armed: false };
       return resolve(undefined);
     },
     startCapture(mode: CaptureMode) {
-      log('startCapture', mode);
+      command('startCapture', mode);
+      if (state.location === 'none') {
+        return Promise.reject(driveSenseError('E_PERMISSION', 'startCapture needs location permission'));
+      }
       state = state.capturing
         ? { ...state, mode }
         : { ...state, capturing: true, mode, rate: 'full', captureStartedAt: now() };
       return resolve(undefined);
     },
     stopCapture() {
-      log('stopCapture');
+      command('stopCapture');
       state = { ...state, capturing: false, mode: null, rate: null, captureStartedAt: null };
       return resolve(undefined);
     },
     setCaptureRate(rate: CaptureRate) {
-      log('setCaptureRate', rate);
+      command('setCaptureRate', rate);
       if (state.capturing) state = { ...state, rate };
       return resolve(undefined);
     },
     getState() {
-      log('getState');
+      query('getState');
+      // `armed` is the effective arming: a revoked permission disarms (README §2 "Errors").
+      if (state.armed && !armPermitted()) state = { ...state, armed: false };
       return resolve({ ...state });
     },
     queryMotionHistory(fromTs: number, toTs: number) {
-      log('queryMotionHistory');
+      query('queryMotionHistory');
+      if (state.motion !== 'granted') return resolve([]);
       return resolve(history.filter((a) => a.ts >= fromTs && a.ts <= toTs).map((a) => ({ ...a })));
     },
     getScreenState() {
-      log('getScreenState');
+      query('getScreenState');
       return resolve({ ...screen });
     },
     getThermalState() {
-      log('getThermalState');
+      query('getThermalState');
       return resolve(thermal);
     },
     requestMotionPermission() {
-      log('requestMotionPermission');
+      command('requestMotionPermission');
+      // 'undetermined' → the user accepts the prompt; 'denied' → no prompt, stays denied.
       if (state.motion === 'undetermined') state = { ...state, motion: 'granted' };
       return resolve(state.motion === 'granted' ? 'granted' : state.motion === 'denied' ? 'denied' : 'unavailable');
     },
     excludeFromBackup(uri: string) {
-      log('excludeFromBackup', uri);
+      command('excludeFromBackup', uri);
       return resolve(undefined);
     },
     setNotificationState(s) {
-      log('setNotificationState');
+      command('setNotificationState');
       notificationState = { stationary: s.stationary, startedAt: s.startedAt };
       return resolve(undefined);
     },
     getLastExitInfo() {
-      log('getLastExitInfo');
+      query('getLastExitInfo');
       return resolve(exitInfo ? { ...exitInfo } : null);
     },
     isIgnoringBatteryOptimizations() {
-      log('isIgnoringBatteryOptimizations');
+      query('isIgnoringBatteryOptimizations');
       return resolve(ignoringBatteryOptimizations);
     },
     selfTest(vectorsJson: string) {
-      log('selfTest');
+      command('selfTest');
       try {
         return resolve(JSON.stringify(runSelfTest(parseVectors(vectorsJson), 'reference')));
       } catch (e) {
-        return Promise.reject(e);
+        return Promise.reject(driveSenseError('E_INVALID_INPUT', e instanceof Error ? e.message : String(e)));
       }
     },
     addListener<E extends DriveSenseEvent>(
@@ -185,7 +226,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
           buffer = buffer.filter((b) => b.event !== event);
           // Like the native bridge: delivered after addListener returns, not inside it.
           void Promise.resolve().then(() => {
-            for (const b of pending) deliver(b.event, b.payload);
+            for (const b of pending) deliverNow(b.event, b.payload);
           });
         }
       }
@@ -203,18 +244,25 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     loadTrace(rows) {
       queue = rows.map((r) => ({ ...r }));
     },
-    step() {
+    step(o) {
+      // Native emits rows only while capturing (README §3); a host that never started capture
+      // must not see its engine fed. `force` is for tests of that edge itself.
+      if (!state.capturing && !o?.force) return false;
       const next = queue.shift();
       if (!next) return false;
       emitRaw('row', { ...next });
       return true;
     },
-    drain() {
-      while (api.step()) {
-        // step until the queue is empty
+    drain(o) {
+      while (api.step(o)) {
+        // step until the queue is empty (or capture is not running)
       }
     },
+    pendingRows() {
+      return queue.length;
+    },
     calls,
+    queries,
     setMotionHistory(a) {
       history = a.map((x) => ({ ...x }));
     },

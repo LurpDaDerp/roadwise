@@ -36,6 +36,22 @@ const vectorSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     name: z.string().min(1),
     description: z.string(),
+    kind: z.literal('androidRaw'),
+    inputs: z.strictObject({
+      seconds: z.array(
+        z.strictObject({
+          tsMs: z.number(),
+          raw: z.array(z.strictObject({ t: z.number(), values: vec3, w: vec3 })),
+          fix: fix.nullable(),
+          phone,
+        })
+      ),
+    }),
+    expected: z.strictObject({ rows: z.array(rowWireSchema) }),
+  }),
+  z.strictObject({
+    name: z.string().min(1),
+    description: z.string(),
     kind: z.literal('gravityFilter'),
     inputs: z.strictObject({ batches: z.array(z.array(rawSample)) }),
     expected: z.strictObject({ batches: z.array(z.array(imuSample)) }),
@@ -73,7 +89,7 @@ export interface VectorDiff {
   ok: boolean;
   /** why the vector could not be compared at all (missing, native error, shape) */
   error?: string;
-  /** the platform legitimately did not run it (iOS, gravity-filter vectors) */
+  /** the platform legitimately did not run it (iOS: gravity-filter and android-raw vectors) */
   skipped?: string;
   /** the first MISMATCH_CAP mismatches */
   mismatches: Mismatch[];
@@ -157,13 +173,13 @@ export function diffSelfTest(
     if (!r) return failed('missing from the native output');
     if (typeof r.error === 'string') return failed(r.error);
     if (typeof r.skipped === 'string') {
-      return parsed.data.platform === 'ios' && v.kind === 'gravityFilter'
+      return parsed.data.platform === 'ios' && v.kind !== 'extract'
         ? { name: v.name, ok: true, skipped: r.skipped, mismatches: [], mismatchCount: 0 }
-        : failed(`skipped (${r.skipped}), which only iOS may do and only for gravity-filter vectors`);
+        : failed(`skipped (${r.skipped}), which only iOS may do and only for gravity-filter and android-raw vectors`);
     }
     if (r.kind !== v.kind) return failed(`kind ${String(r.kind)} returned, ${v.kind} expected`);
-    const key = v.kind === 'extract' ? 'rows' : 'batches';
-    const expected: unknown[] = v.kind === 'extract' ? v.expected.rows : v.expected.batches;
+    const key = v.kind === 'gravityFilter' ? 'batches' : 'rows';
+    const expected: unknown[] = v.kind === 'gravityFilter' ? v.expected.batches : v.expected.rows;
     const actual = r[key];
     if (!Array.isArray(actual) || actual.length !== expected.length) {
       return failed(

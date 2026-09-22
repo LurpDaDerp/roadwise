@@ -467,6 +467,12 @@ Regenerate after changing the reference or a constant (never by hand):
 node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON modules/drive-sense/scripts/make-vectors.ts
 ```
 
+The generator refuses a vector in which any computed value compared with a threshold lies
+within `MARGIN_MIN` (1e-7) of it (`src/extract/probe.ts`): there a different `atan2`/`sqrt`
+rounding in Swift or Kotlin could take the other branch. The `probe(...)` calls in the reference
+are that test instrumentation — **ports do not port them**. The closest approach in the committed
+vectors is 4.3e-5 (the gravity gate).
+
 `__tests__/vectors.test.ts` fails if a committed file differs from a fresh generation or if any
 `expected` differs from the reference over its `inputs`. Vectors are loaded only by the
 diagnostics screen (U5) — never by a production code path.
@@ -519,7 +525,21 @@ The wrapper checks arguments before they cross the bridge and validates every re
 native bug surfaces as a rejected promise naming the method (`DriveSense.getState: invalid
 result …`). Where the native module is absent (Jest, Expo Go, web), importing is safe, every
 method rejects with "DriveSense native module is not available", and `addListener` returns an
-inert subscription — tests inject `createFakeDriveSense({ platform, now })` instead. The fake's
-extra controls (`emit`, `loadTrace`/`step`/`drain`, `calls`, `setState`, `setMotionHistory`,
-`listenerCount`, `setLastExitInfo`, `setIgnoringBatteryOptimizations`, `notificationState`) are
-documented on `FakeControls` in `src/types.ts`.
+inert subscription — tests inject `createFakeDriveSense({ platform, now, asyncDelivery })`
+instead. The fake follows this contract where host tests depend on it:
+
+- rows flow only while capturing: `step`/`drain` emit nothing before `startCapture` or after
+  `stopCapture` (`{ force: true }` overrides, for tests of that edge), and `pendingRows()` shows
+  what was left;
+- `arm()` rejects `E_PERMISSION` unless `location: 'always'` and `motion: 'granted'` (set them with
+  `setState`), `E_UNAVAILABLE` with `motion: 'unavailable'`; `startCapture` rejects `E_PERMISSION`
+  with `location: 'none'`; `getState().armed` is the effective arming;
+- `calls` logs commands and `queries` logs read-only calls, so tests can assert command order;
+- delivery is synchronous by default; `asyncDelivery: true` delivers every event on a microtask
+  as native always does — use it in integration tests so a host that relies on synchronous
+  delivery fails in Jest rather than on a device;
+- buffering before the first listener and the 300-event cap are native's.
+
+The other controls (`emit`, `loadTrace`, `setMotionHistory`, `listenerCount`, `setLastExitInfo`,
+`setIgnoringBatteryOptimizations`, `notificationState`) are documented on `FakeControls` in
+`src/types.ts`; `driveSenseError(code, message)` builds a coded rejection for a hand-rolled stub.

@@ -3,17 +3,25 @@
 // contract in README.md, or every host test built on it proves the wrong thing.
 import trace from '../../../src/core/__fixtures__/traces/speeding-corrected.json';
 import { parseTrace } from '../../../src/core/replay/trace';
-import { createFakeDriveSense } from '../src/fake';
+import { createFakeDriveSense, driveSenseError } from '../src/fake';
 import { parseRow } from '../src/rowSchema';
 import { VECTOR_BUILDERS } from '../scripts/scenarios';
 import type { ExtractVector } from '../src/extract/vectors';
-import { DRIVE_SENSE_METHODS, type FeatureRow } from '../src/types';
+import { DRIVE_SENSE_METHODS, isDriveSenseError, type FeatureRow } from '../src/types';
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const rows = parseTrace(trace).rows;
 
-test('replays speeding-corrected.json row for row through a row listener', () => {
-  const fake = createFakeDriveSense();
+/** A fake with the permissions a drive needs, already capturing. */
+async function capturing(opts: Parameters<typeof createFakeDriveSense>[0] = {}) {
+  const fake = createFakeDriveSense(opts);
+  fake.setState({ location: 'always', motion: 'granted' });
+  await fake.startCapture('mounted');
+  return fake;
+}
+
+test('replays speeding-corrected.json row for row through a row listener', async () => {
+  const fake = await capturing();
   const got: FeatureRow[] = [];
   fake.addListener('row', (raw) => {
     const row = parseRow(raw);
@@ -26,7 +34,7 @@ test('replays speeding-corrected.json row for row through a row listener', () =>
 });
 
 test('step emits one row at a time and tracks lastRowTs', async () => {
-  const fake = createFakeDriveSense();
+  const fake = await capturing();
   const seen: unknown[] = [];
   fake.addListener('row', (r) => seen.push(r));
   fake.loadTrace(rows.slice(0, 2));
@@ -38,8 +46,8 @@ test('step emits one row at a time and tracks lastRowTs', async () => {
   expect((await fake.getState()).lastRowTs).toBe(rows[1]!.ts);
 });
 
-test('emitted rows are copies — a listener mutating one cannot change the trace', () => {
-  const fake = createFakeDriveSense();
+test('emitted rows are copies — a listener mutating one cannot change the trace', async () => {
+  const fake = await capturing();
   fake.addListener('row', (r) => {
     (r as FeatureRow).speed = 999;
   });
@@ -49,9 +57,107 @@ test('emitted rows are copies — a listener mutating one cannot change the trac
   expect(input[0]!.speed).toBe(rows[0]!.speed);
 });
 
+describe('rows only while capturing (review I5)', () => {
+  test('a host that never starts capture sees no rows', () => {
+    const fake = createFakeDriveSense();
+    const got = jest.fn();
+    fake.addListener('row', got);
+    fake.loadTrace(rows.slice(0, 3));
+    expect(fake.step()).toBe(false);
+    fake.drain();
+    expect(got).not.toHaveBeenCalled();
+    expect(fake.pendingRows()).toBe(3);
+  });
+
+  test('stopCapture mid-trace stops the rows; the rest stay queued', async () => {
+    const fake = await capturing();
+    const got = jest.fn();
+    fake.addListener('row', got);
+    fake.loadTrace(rows.slice(0, 5));
+    fake.step();
+    fake.step();
+    await fake.stopCapture();
+    fake.drain();
+    expect(got).toHaveBeenCalledTimes(2);
+    expect(fake.pendingRows()).toBe(3);
+  });
+
+  test('{ force: true } emits regardless, for tests of that edge', () => {
+    const fake = createFakeDriveSense();
+    const got = jest.fn();
+    fake.addListener('row', got);
+    fake.loadTrace(rows.slice(0, 2));
+    fake.drain({ force: true });
+    expect(got).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('errors and permissions (review I4, README §2 "Errors")', () => {
+  const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string }) => e.code);
+
+  test.each([
+    ['none', 'granted'],
+    ['whenInUse', 'granted'],
+    ['always', 'undetermined'],
+    ['always', 'denied'],
+  ] as const)('arm with location %s and motion %s rejects E_PERMISSION and stays unarmed', async (location, motion) => {
+    const fake = createFakeDriveSense();
+    fake.setState({ location, motion });
+    await expect(codeOf(fake.arm())).resolves.toBe('E_PERMISSION');
+    expect((await fake.getState()).armed).toBe(false);
+    expect(fake.calls).toEqual(['arm']);
+  });
+
+  test('arm with motion unavailable rejects E_UNAVAILABLE', async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    fake.setState({ location: 'always', motion: 'unavailable' });
+    await expect(codeOf(fake.arm())).resolves.toBe('E_UNAVAILABLE');
+  });
+
+  test('arm succeeds with always + granted; a later revocation disarms (effective arming)', async () => {
+    const fake = createFakeDriveSense();
+    fake.setState({ location: 'always', motion: 'granted' });
+    await fake.arm();
+    expect((await fake.getState()).armed).toBe(true);
+    fake.setState({ location: 'whenInUse' });
+    expect((await fake.getState()).armed).toBe(false);
+  });
+
+  test('startCapture needs some location permission, not motion', async () => {
+    const fake = createFakeDriveSense();
+    await expect(codeOf(fake.startCapture('mounted'))).resolves.toBe('E_PERMISSION');
+    expect((await fake.getState()).capturing).toBe(false);
+    fake.setState({ location: 'whenInUse', motion: 'denied' });
+    await expect(fake.startCapture('mounted')).resolves.toBeUndefined();
+    expect((await fake.getState()).capturing).toBe(true);
+  });
+
+  test('isDriveSenseError recognises the codes', async () => {
+    const fake = createFakeDriveSense();
+    const e = await fake.arm().catch((x: unknown) => x);
+    expect(isDriveSenseError(e)).toBe(true);
+    expect(isDriveSenseError(e, 'E_PERMISSION')).toBe(true);
+    expect(isDriveSenseError(e, 'E_UNAVAILABLE')).toBe(false);
+    expect(isDriveSenseError(new Error('x'))).toBe(false);
+    expect(isDriveSenseError(driveSenseError('E_NOT_FOUND', 'x'), 'E_NOT_FOUND')).toBe(true);
+  });
+
+  test('queryMotionHistory is empty, never rejects, without motion permission', async () => {
+    const fake = createFakeDriveSense();
+    fake.setMotionHistory([{ type: 'automotive', confidence: 'high', ts: 5 }]);
+    await expect(fake.queryMotionHistory(0, 10)).resolves.toEqual([]);
+  });
+
+  test('selfTest rejects E_INVALID_INPUT on unparseable vectors', async () => {
+    const fake = createFakeDriveSense();
+    await expect(codeOf(fake.selfTest('not json'))).resolves.toBe('E_INVALID_INPUT');
+  });
+});
+
 test('capture lifecycle and the calls log', async () => {
   let now = 1_700_000_000_000;
   const fake = createFakeDriveSense({ platform: 'android', now: () => now });
+  fake.setState({ location: 'always', motion: 'granted' });
   await fake.arm();
   await fake.startCapture('mounted');
   let s = await fake.getState();
@@ -76,20 +182,18 @@ test('capture lifecycle and the calls log', async () => {
   await fake.disarm();
   expect((await fake.getState()).armed).toBe(false);
   await fake.excludeFromBackup('file:///x');
+  // commands and queries are logged apart (review M6), so hosts can assert command order
   expect(fake.calls).toEqual([
     'arm',
     'startCapture:mounted',
-    'getState',
     'startCapture:pocket',
     'setCaptureRate:low',
-    'getState',
     'stopCapture',
     'setCaptureRate:full',
-    'getState',
     'disarm',
-    'getState',
     'excludeFromBackup:file:///x',
   ]);
+  expect(fake.queries).toEqual(['getState', 'getState', 'getState', 'getState']);
 });
 
 test('every bridged method is implemented and logged', async () => {
@@ -104,17 +208,15 @@ test('every bridged method is implemented and logged', async () => {
   await fake.requestMotionPermission();
   await fake.setNotificationState({ stationary: false, startedAt: null });
   await fake.selfTest('[]');
-  expect(fake.calls).toEqual([
+  expect(fake.queries).toEqual([
     'getState',
     'getScreenState',
     'getThermalState',
     'getLastExitInfo',
     'isIgnoringBatteryOptimizations',
     'queryMotionHistory',
-    'requestMotionPermission',
-    'setNotificationState',
-    'selfTest',
   ]);
+  expect(fake.calls).toEqual(['requestMotionPermission', 'setNotificationState', 'selfTest']);
 });
 
 test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
@@ -140,6 +242,7 @@ test('setState overrides, getState returns a copy', async () => {
 
 test('motion history is filtered to [from, to]', async () => {
   const fake = createFakeDriveSense();
+  fake.setState({ motion: 'granted' });
   fake.setMotionHistory([
     { type: 'walking', confidence: 'high', ts: 100 },
     { type: 'automotive', confidence: 'medium', ts: 200 },
@@ -216,7 +319,7 @@ describe('listeners and buffering (README §Buffering)', () => {
   });
 
   test('the buffer holds 300 events and drops the oldest row first', async () => {
-    const fake = createFakeDriveSense();
+    const fake = await capturing();
     fake.emit('wake', { reason: 'boot', ts: 0 });
     fake.loadTrace(rows.slice(0, 150));
     fake.drain(); // 150 rows buffered (no row listener)
@@ -243,6 +346,29 @@ describe('listeners and buffering (README §Buffering)', () => {
     await flush();
     expect(acts).toHaveLength(300);
     expect(acts[0]!.ts).toBe(1);
+  });
+
+  test('asyncDelivery: listeners run on a microtask, after emit/step return — as on a device (review M4)', async () => {
+    const fake = await capturing({ asyncDelivery: true });
+    const order: string[] = [];
+    fake.addListener('row', () => order.push('row'));
+    fake.addListener('wake', () => order.push('wake'));
+    fake.loadTrace(rows.slice(0, 1));
+    fake.step();
+    fake.emit('wake', { reason: 'boot', ts: 1 });
+    order.push('returned');
+    await flush();
+    expect(order).toEqual(['returned', 'row', 'wake']);
+    // lastRowTs is updated at emission, as native updates it when it emits
+    expect((await fake.getState()).lastRowTs).toBe(rows[0]!.ts);
+  });
+
+  test('default delivery is synchronous', () => {
+    const fake = createFakeDriveSense();
+    const got = jest.fn();
+    fake.addListener('screen', got);
+    fake.emit('screen', { locked: false, on: true, ts: 1 });
+    expect(got).toHaveBeenCalledTimes(1);
   });
 
   test('a listener removed during delivery does not break the others', () => {

@@ -180,16 +180,32 @@ export interface DriveSenseApi {
 }
 
 export interface FakeControls {
-  /** Deliver an event as native would. With no listener for it attached, it is buffered (README §Buffering). */
+  /**
+   * Deliver an event as native would. With no listener for it attached, it is buffered (README
+   * §Buffering). Delivery is synchronous unless the fake was created with `asyncDelivery: true`
+   * (native delivery is always asynchronous — use that option in integration tests).
+   */
   emit<E extends DriveSenseEvent>(event: E, payload: DriveSenseEvents[E]): void;
   /** Queue rows for `step`/`drain` (replaces any rows still queued). */
   loadTrace(rows: readonly FeatureRow[]): void;
-  /** Emit the next queued row as a `row` event; false when the queue is empty. */
-  step(): boolean;
-  /** `step` until the queue is empty. */
-  drain(): void;
-  /** Every API method call, in order: the method name, plus `:<arg>` for startCapture, setCaptureRate and excludeFromBackup. */
+  /**
+   * Emit the next queued row as a `row` event. Like native, only while capturing: returns false
+   * (emitting nothing) when not capturing or when the queue is empty. `{ force: true }` emits
+   * regardless, for tests of that edge.
+   */
+  step(opts?: { force?: boolean }): boolean;
+  /** `step` until it returns false. */
+  drain(opts?: { force?: boolean }): void;
+  /** Rows still queued (e.g. to see that a host stopped capture early). */
+  pendingRows(): number;
+  /**
+   * Commands, in order: arm, disarm, startCapture, stopCapture, setCaptureRate,
+   * requestMotionPermission, excludeFromBackup, setNotificationState, selfTest — the method name,
+   * plus `:<arg>` for startCapture, setCaptureRate and excludeFromBackup. Rejected calls are logged too.
+   */
   calls: string[];
+  /** Read-only calls, in order: getState, queryMotionHistory, getScreenState, getThermalState, getLastExitInfo, isIgnoringBatteryOptimizations. */
+  queries: string[];
   setMotionHistory(a: MotionActivity[]): void;
   setState(s: Partial<DriveSenseState>): void;
   // ——— additions beyond the brief (see the N1 report) ———

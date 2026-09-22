@@ -6,6 +6,7 @@ import {
   HANDLING_W_FLOOR,
   HANDLING_W_SPAN,
 } from './constants';
+import { probe } from './probe';
 import type { ImuSample } from './types';
 import { angle, clamp, dot, norm, reject, type Vec3 } from './vec';
 
@@ -45,6 +46,7 @@ export function frameFree(
   }
   const gravityStability = 1 - clamp(maxAngle / GRAVITY_STABILITY_RAD, 0, 1);
   const rms = Math.sqrt(sumSq / imu.length);
+  probe('HANDLING_STABLE_GS', gravityStability, HANDLING_STABLE_GS);
   const handlingScore =
     clamp((rms - HANDLING_W_FLOOR) / HANDLING_W_SPAN, 0, 1) *
     (gravityStability < HANDLING_STABLE_GS ? 1 : HANDLING_STABLE_FACTOR);

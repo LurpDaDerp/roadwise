@@ -10,7 +10,12 @@ import {
 } from '../src/extract/constants';
 import { extractSecond, initialExtractState } from '../src/extract/extract';
 import type { ExtractState, FixSample, ImuSample } from '../src/extract/types';
-import { runExtractInputs, type ExtractVector } from '../src/extract/vectors';
+import {
+  runAndroidRawInputs,
+  runExtractInputs,
+  type AndroidRawVector,
+  type ExtractVector,
+} from '../src/extract/vectors';
 import type { Vec3 } from '../src/extract/vec';
 import { FIRST_ALIGNED_ROW, T0, VECTOR_BUILDERS, turnInputs } from '../scripts/scenarios';
 import type { FeatureRow } from '../src/types';
@@ -360,6 +365,16 @@ describe('the simulated drives (brief assertions)', () => {
     expect(rows[0]).toMatchObject({ lat: 0, lng: 0, hAcc: 9999, speed: -1 });
     expect(rows[3]!.lat).toBe(rows[2]!.lat);
     expect(rows[5]).toMatchObject({ hAcc: 9999, speed: -1, speedAcc: -1, course: -1 });
+  });
+
+  test('android-raw: Android units through conversion, filter and extractor read the brake', () => {
+    const v = VECTOR_BUILDERS['android-raw']() as AndroidRawVector;
+    const rows = runAndroidRawInputs(v.inputs);
+    expect(rows[6]!.aLonMax).toBeGreaterThan(0.15); // aligned in second 7
+    // a full brake second (9–10 s): 0.45 g, read within 0.08 g — see the report on the gate's leak under noise
+    expect(rows[9]!.aLonMin).toBeLessThanOrEqual(-0.4);
+    expect(rows[9]!.aLonMin).toBeGreaterThanOrEqual(-0.53);
+    for (const r of rows) expect(r.gravityStability).toBeGreaterThan(0.9);
   });
 
   test('unaligned start: frame-free fields populated, extremes zero', () => {

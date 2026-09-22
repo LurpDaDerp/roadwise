@@ -26,8 +26,9 @@ const onDisk = readdirSync(DIR)
   .sort();
 const text = (name: string): string => readFileSync(join(DIR, `${name}.json`), 'utf8');
 
-test('the nine vectors of the brief are on disk, one builder each', () => {
+test('the nine vectors of the brief plus android-raw (review I1) are on disk, one builder each', () => {
   expect(onDisk).toEqual([
+    'android-raw',
     'corner-left',
     'cruise',
     'gravity-filter',
@@ -51,8 +52,8 @@ describe.each(VECTOR_NAMES)('%s', (name) => {
 
   test('expected equals the reference over the inputs', () => {
     const out = runVector(vector);
-    if (vector.kind === 'extract') expect(out).toEqual({ name, kind: 'extract', rows: vector.expected.rows });
-    else expect(out).toEqual({ name, kind: 'gravityFilter', batches: vector.expected.batches });
+    if (vector.kind === 'gravityFilter') expect(out).toEqual({ name, kind: 'gravityFilter', batches: vector.expected.batches });
+    else expect(out).toEqual({ name, kind: vector.kind, rows: vector.expected.rows });
   });
 
   test('at most 10 s of 25 Hz input', () => {
@@ -60,13 +61,17 @@ describe.each(VECTOR_NAMES)('%s', (name) => {
       expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
       for (const s of vector.inputs.seconds) expect(s.imu.length).toBeLessThanOrEqual(25);
       for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(row);
+    } else if (vector.kind === 'androidRaw') {
+      expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
+      for (const s of vector.inputs.seconds) expect(s.raw.length).toBeLessThanOrEqual(25);
+      for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(row);
     } else {
       expect(vector.inputs.batches.flat().length).toBeLessThanOrEqual(250);
     }
   });
 });
 
-test('the bundle stays small (under 450 KB for all nine)', () => {
+test('the bundle stays small (under 450 KB for all ten)', () => {
   const bytes = VECTOR_NAMES.reduce((n, name) => n + text(name).length, 0);
   expect(bytes).toBeLessThan(450_000);
 });

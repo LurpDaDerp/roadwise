@@ -5,7 +5,12 @@
 // Only the `DriveSense` lookup is stubbed. Replacing the whole of `expo-modules-core` strips the
 // native classes Expo's winter runtime extends at load time, and the suite then dies with "Super
 // expression must either be null or a function" before a single test runs.
-import DriveSense, { DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, type DriveSenseApi } from '../src';
+import DriveSense, {
+  DRIVE_SENSE_EVENTS,
+  DRIVE_SENSE_METHODS,
+  isDriveSenseError,
+  type DriveSenseApi,
+} from '../src';
 
 // `jest.mock` is hoisted above the import by babel-jest, and its factory runs before any of this
 // file's own statements — so the stub native module is built inside the factory and reached
@@ -151,6 +156,14 @@ test.each(DRIVE_SENSE_EVENTS)('addListener(%s) subscribes natively and removes',
   expect(fn).toHaveBeenCalledWith({ some: 'payload' });
   sub.remove();
   expect(mockRemove).toHaveBeenCalledTimes(1);
+});
+
+test('a native CodedError passes through with its code (README §2 "Errors")', async () => {
+  const coded = Object.assign(new Error('arm needs Always'), { code: 'E_PERMISSION' });
+  mockNative.arm!.mockRejectedValueOnce(coded);
+  const e = await DriveSense.arm().catch((x: unknown) => x);
+  expect(e).toBe(coded);
+  expect(isDriveSenseError(e, 'E_PERMISSION')).toBe(true);
 });
 
 describe('bridge validation', () => {

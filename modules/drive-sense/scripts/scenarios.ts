@@ -16,10 +16,13 @@ import type {
   PhoneSample,
   RawImuSample,
 } from '../src/extract/types';
+import { getMarginProbe, MARGIN_MIN, setMarginProbe } from '../src/extract/probe';
 import { add, dot, normalize, scale, type Vec3 } from '../src/extract/vec';
 import {
+  runAndroidRawInputs,
   runExtractInputs,
   runGravityInputs,
+  type AndroidRawVector,
   type ExtractVector,
   type ExtractVectorSecond,
   type GoldenVector,
@@ -259,6 +262,37 @@ export function rawDriveSeconds(d: Drive) {
   });
 }
 
+/**
+ * Run `fn` (which runs the reference) with a margin probe installed, and return the closest
+ * approach of any computed value to each threshold it was compared with (review M3).
+ */
+export function measureMargins<T>(fn: () => T): { result: T; margins: Map<string, number> } {
+  const margins = new Map<string, number>();
+  const outer = getMarginProbe(); // nested measurements forward to the enclosing one
+  setMarginProbe((name, value, threshold) => {
+    const m = Math.abs(value - threshold);
+    const prev = margins.get(name);
+    if (prev === undefined || m < prev) margins.set(name, m);
+    outer?.(name, value, threshold);
+  });
+  try {
+    return { result: fn(), margins };
+  } finally {
+    setMarginProbe(outer);
+  }
+}
+
+/** `measureMargins`, refusing a vector whose any comparison lies within MARGIN_MIN of its threshold. */
+export function withMarginCheck<T>(vectorName: string, fn: () => T): T {
+  const { result, margins } = measureMargins(fn);
+  for (const [name, m] of margins) {
+    if (m < MARGIN_MIN) {
+      throw new Error(`vector ${vectorName}: a ${name} comparison is ${m} from its threshold (< ${MARGIN_MIN}); change the scenario`);
+    }
+  }
+  return result;
+}
+
 const PHONE_MOUNTED: PhoneSample = { locked: true, screenOn: false, appForeground: true };
 
 /** One row per second: 25 samples, a fix FIX_LEAD_MS before the second closes. */
@@ -281,7 +315,8 @@ function extractVector(
   description: string,
   inputs: { seconds: ExtractVectorSecond[] }
 ): ExtractVector {
-  return { name, description, kind: 'extract', inputs, expected: { rows: runExtractInputs(inputs) } };
+  const rows = withMarginCheck(name, () => runExtractInputs(inputs));
+  return { name, description, kind: 'extract', inputs, expected: { rows } };
 }
 
 /** 0.2 g from rest-ish (5 m/s) for ALIGN_PHASE_S seconds, then `after` from t = 7 s. */
@@ -535,7 +570,59 @@ function gravityFilterVector(): GoldenVector {
       'Raw accelerometer (reference sign, g) + gyroscope in one-second batches: at rest, accelerating at 0.2 g while turning, then the phone rotating 0.9 rad about its x axis, with second 6 missing (a gap longer than GRAVITY_RESET_GAP_S re-seeds gravity from the accelerometer).',
     kind: 'gravityFilter',
     inputs,
-    expected: { batches: runGravityInputs(inputs) },
+    expected: { batches: withMarginCheck('gravity-filter', () => runGravityInputs(inputs)) },
+  };
+  return v;
+}
+
+/**
+ * The Android production path in Android's own units (review I1): `TYPE_ACCELEROMETER` values in
+ * m/s² with Android's sign (= −a_reference × G_MPS2) and the gyroscope, per second with a fix.
+ */
+export function androidRawInputs(d: Drive) {
+  return {
+    seconds: rawDriveSeconds(d).map((s) => ({
+      tsMs: s.tsMs,
+      raw: s.raw.map((r) => ({
+        t: r.t,
+        values: [
+          round(-r.a[0] * G_MPS2, 5),
+          round(-r.a[1] * G_MPS2, 5),
+          round(-r.a[2] * G_MPS2, 5),
+        ] as Vec3,
+        w: r.w,
+      })),
+      fix: s.fix,
+      phone: PHONE_MOUNTED,
+    })),
+  };
+}
+
+export const ANDROID_RAW_DRIVE: Drive = {
+  seconds: 10,
+  seed: 10,
+  v0: 5,
+  aLon: profile([
+    [0, 0],
+    [0.3, 0.25],
+    [7.5, 0.25],
+    [7.8, 0],
+    [8, 0],
+    [8.2, -0.45],
+    [9.8, -0.45],
+  ]),
+  aLat: zero,
+};
+
+function androidRaw(): GoldenVector {
+  const inputs = androidRawInputs(ANDROID_RAW_DRIVE);
+  const v: AndroidRawVector = {
+    name: 'android-raw',
+    description:
+      'Android units in, rows out: raw TYPE_ACCELEROMETER values (m/s², Android sign) and gyroscope for a tilted mount aligning at 0.25 g and braking at 0.45 g from 8.2 s. The port must convert (a = −values / G_MPS2), filter and extract with its production classes; skipping the division or the sign fails every row.',
+    kind: 'androidRaw',
+    inputs,
+    expected: { rows: withMarginCheck('android-raw', () => runAndroidRawInputs(inputs)) },
   };
   return v;
 }
@@ -550,6 +637,7 @@ export const VECTOR_BUILDERS = {
   'no-imu': noImu,
   'unaligned-start': unalignedStart,
   'gravity-filter': gravityFilterVector,
+  'android-raw': androidRaw,
 } as const satisfies Record<string, () => GoldenVector>;
 
 export type VectorName = keyof typeof VECTOR_BUILDERS;

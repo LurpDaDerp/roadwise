@@ -14,6 +14,7 @@
 //   ua = a − g
 // Pure; the Kotlin port (`GravityFilter.kt`) follows these lines in this order.
 import { G_MPS2, GRAVITY_GATE_G, GRAVITY_RESET_GAP_S, GRAVITY_TAU_S } from './constants';
+import { probe } from './probe';
 import type { GravityState, ImuSample, RawImuSample } from './types';
 import { add, cross, norm, scale, sub, type Vec3 } from './vec';
 
@@ -35,11 +36,14 @@ export function gravityFilter(
   const imu: ImuSample[] = [];
   for (const s of samples) {
     const dt = tPrev === null ? 0 : (s.t - tPrev) / 1000;
+    if (tPrev !== null) probe('GRAVITY_RESET_GAP_S', dt, GRAVITY_RESET_GAP_S);
     if (g === null || dt <= 0 || dt > GRAVITY_RESET_GAP_S) {
       g = s.a;
     } else {
       const predicted = add(g, scale(cross(g, s.w), dt));
-      if (Math.abs(norm(s.a) - 1) <= GRAVITY_GATE_G) {
+      const off = Math.abs(norm(s.a) - 1);
+      probe('GRAVITY_GATE_G', off, GRAVITY_GATE_G);
+      if (off <= GRAVITY_GATE_G) {
         const alpha = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt);
         g = add(scale(predicted, alpha), scale(s.a, 1 - alpha));
       } else {

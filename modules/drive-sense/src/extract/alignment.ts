@@ -15,6 +15,7 @@ import {
   RESET_GRAVITY_S,
   RESET_ORIENT_RAD,
 } from './constants';
+import { probe } from './probe';
 import type { AlignmentState } from './types';
 import { add, angle, isZero, norm, normalize, reject, scale, type Vec3 } from './vec';
 
@@ -42,7 +43,9 @@ export function checkReset(
     let sum: Vec3 = [0, 0, 0];
     for (const v of s.gravityRing) sum = add(sum, v);
     dev = angle(gMean, normalize(sum));
+    probe('RESET_GRAVITY_RAD', dev, RESET_GRAVITY_RAD);
   }
+  probe('RESET_ORIENT_RAD', orientationDelta, RESET_ORIENT_RAD);
   const gravityDevS = dev > RESET_GRAVITY_RAD ? s.gravityDevS + 1 : 0;
   const reset = orientationDelta > RESET_ORIENT_RAD || gravityDevS >= RESET_GRAVITY_S;
   const base = reset ? cleared() : { ...s, gravityDevS };
@@ -68,12 +71,17 @@ export function updateAlignment(
   gMean: Vec3,
   dvG: number | null
 ): AlignmentState {
-  if (dvG === null || Math.abs(dvG) < ALIGN_MIN_G) return s;
+  if (dvG === null) return s;
+  probe('ALIGN_MIN_G', Math.abs(dvG), ALIGN_MIN_G);
+  if (Math.abs(dvG) < ALIGN_MIN_G) return s;
   const h = reject(meanH, gMean);
+  probe('ALIGN_MIN_H_G', norm(h), ALIGN_MIN_H_G);
   if (norm(h) < ALIGN_MIN_H_G) return s;
   const u = scale(normalize(h), dvG > 0 ? 1 : -1);
   if (s.f === null) return { ...s, f: u, agree: 0 };
-  const agree = angle(u, s.f) <= ALIGN_TOL_RAD ? s.agree + 1 : 0;
+  const off = angle(u, s.f);
+  probe('ALIGN_TOL_RAD', off, ALIGN_TOL_RAD);
+  const agree = off <= ALIGN_TOL_RAD ? s.agree + 1 : 0;
   const f = normalize(reject(add(scale(s.f, 1 - ALIGN_ALPHA), scale(u, ALIGN_ALPHA)), gMean));
   if (isZero(f)) return { ...s, f: null, agree: 0, aligned: false };
   return { ...s, f, agree, aligned: s.aligned || agree >= ALIGN_MIN_UPDATES };

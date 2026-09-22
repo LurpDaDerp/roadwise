@@ -13,6 +13,7 @@ import {
   UNKNOWN,
 } from './constants';
 import { frameFree } from './handling';
+import { probe } from './probe';
 import type { ExtractState, ExtractedRow, FixSample, ImuSample, PhoneSample } from './types';
 import { add, clamp, cross, dot, normalize, reject, scale, type Vec3 } from './vec';
 
@@ -58,8 +59,10 @@ function gnss(fix: FixSample | null, ts: number, state: ExtractState): Gnss {
     };
   }
   const hAcc = fix.hAcc >= 0 ? fix.hAcc : NO_FIX_HACC_M;
-  const gnssValid =
-    fix.hAcc >= 0 && fix.hAcc <= GNSS_MAX_HACC_M && (ts - fix.t) / 1000 <= GNSS_MAX_AGE_S;
+  const age = (ts - fix.t) / 1000;
+  if (fix.hAcc >= 0) probe('GNSS_MAX_HACC_M', fix.hAcc, GNSS_MAX_HACC_M);
+  probe('GNSS_MAX_AGE_S', age, GNSS_MAX_AGE_S);
+  const gnssValid = fix.hAcc >= 0 && fix.hAcc <= GNSS_MAX_HACC_M && age <= GNSS_MAX_AGE_S;
   const speed = known(fix.speed);
   let dvG: number | null = null;
   let prevValidFix: Gnss['prevValidFix'] = null;

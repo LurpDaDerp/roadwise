@@ -25,7 +25,8 @@ import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } f
 
 export * from './types';
 export { parseRow } from './rowSchema';
-export { createFakeDriveSense } from './fake';
+export { createFakeDriveSense, driveSenseError } from './fake';
+export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';
 export type { SelfTestDiff, VectorDiff, Mismatch } from './selfTest';
 export { extractSecond, initialExtractState } from './extract/extract';
