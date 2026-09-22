@@ -42,6 +42,7 @@ import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
 import { isBusyStatus, isDrivingStatus } from '@/drive/policy';
 import { countServerPushesToday, scorableIfDriver } from '@/features/inbox/viewModel';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
+import { deviceZone } from '@/lib/deviceZone';
 import { renderLocal, type Catalog, type LocalCopy, type TripSummaryFacts } from '@/notifications/catalog';
 import {
   localDeliveryPlan,
@@ -113,14 +114,6 @@ export interface SummaryNotifier {
 
 // ——— the M4 delivery, from the phone's database ———
 
-/** The phone's zone, normalised the way a drive's zone is. */
-function deviceZone(): string {
-  try {
-    return normaliseZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  } catch {
-    return 'UTC';
-  }
-}
 
 /**
  * The facts `renderLocal` needs for one drive. `scorableIfDriver` re-runs the scoring gate with

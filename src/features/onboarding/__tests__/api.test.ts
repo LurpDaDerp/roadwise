@@ -22,6 +22,7 @@ import {
   recordCurrentTerms,
   saveProfileBasics,
   setBirthDate,
+  writeOnboardingZone,
 } from '../api';
 
 // ---------------------------------------------------------------------------------------------
@@ -97,6 +98,21 @@ beforeEach(() => {
   mockCalls.length = 0;
   mockBuckets.length = 0;
   for (const key of Object.keys(mockTables)) delete mockTables[key];
+});
+
+describe('writeOnboardingZone (backend m3)', () => {
+  test('writes the normalised zone through the prefs write', async () => {
+    const save = jest.fn(async () => ({}));
+    await expect(writeOnboardingZone('u1', { save, zone: () => 'Asia/Tokyo' })).resolves.toBe(true);
+    expect(save).toHaveBeenCalledWith('u1', { tz: 'Asia/Tokyo' });
+  });
+
+  test('a failure resolves false and never throws (the hourly band pass corrects it)', async () => {
+    const save = jest.fn(async () => {
+      throw new Error('offline');
+    });
+    await expect(writeOnboardingZone('u1', { save, zone: () => 'UTC' })).resolves.toBe(false);
+  });
 });
 
 describe('setBirthDate', () => {

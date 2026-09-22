@@ -23,6 +23,7 @@ import {
 import { OPENED_TRIPS_KEY } from '@/notifications/keys';
 
 import { ROLE_ACTIONS } from './categories';
+import { ALLOWED_HREFS, isAllowedHref, SUMMARY_HREF } from './hrefs';
 
 /** Settings key: `{ href, at }` of a tap held while the app could not navigate. */
 export const PENDING_HREF_KEY = 'notifications.pendingHref';
@@ -32,13 +33,8 @@ export const OPENED_TRIPS_MAX = 50;
 export const FALLBACK_HREF = '/inbox';
 
 const TRIP_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const SUMMARY_HREF = /^\/trips\/([A-Za-z0-9_-]{1,64})\/summary$/;
-export const ALLOWED_HREFS: readonly RegExp[] = [
-  SUMMARY_HREF,
-  /^\/trips$/,
-  /^\/permissions$/,
-  /^\/inbox$/,
-];
+/** The one allowlist, shared with onboarding's held link (final review m1). */
+export { ALLOWED_HREFS };
 
 /** M3's interim drive-summary data (`summaryNotifier.ts`, until Task 19 gives it a `url`). */
 const LEGACY_SUMMARY_KIND = DRIVE_SUMMARY_KIND;
@@ -54,7 +50,7 @@ export interface NotificationRoute {
 
 /** The url if allowlisted, else the inbox. */
 export function allowHref(url: unknown): string {
-  return typeof url === 'string' && ALLOWED_HREFS.some((re) => re.test(url)) ? url : FALLBACK_HREF;
+  return isAllowedHref(url) ? url : FALLBACK_HREF;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;

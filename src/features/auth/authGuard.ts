@@ -2,6 +2,7 @@ import type { EngineStatus } from '@/core/engine/engine.types';
 import type { SettingsRepo } from '@/data/db/settings';
 import { isBusyStatus, tripRecords } from '@/drive/policy';
 import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
+import { ALLOWED_HREFS, isAllowedHref } from '@/features/notifications/hrefs';
 
 import type { UpdateStatus } from './version';
 
@@ -175,16 +176,10 @@ export function resolveGate(
  * `finishOnboarding` opens instead of Home. The same shapes the notification router allows
  * (Task 5), anchored, so a held value can only ever be one of these screens.
  */
-export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = [
-  /^\/trips\/[A-Za-z0-9_-]{1,64}\/summary$/,
-  /^\/trips$/,
-  /^\/inbox$/,
-  /^\/permissions$/,
-];
+export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = ALLOWED_HREFS;
 
 export function pendingHrefFor(pathname: unknown): string | null {
-  if (typeof pathname !== 'string') return null;
-  return PENDING_HREF_ALLOWLIST.some((re) => re.test(pathname)) ? pathname : null;
+  return isAllowedHref(pathname) ? pathname : null;
 }
 
 /** Holds an allowlisted deep link for `finishOnboarding`; anything else is ignored. */

@@ -6,7 +6,7 @@ import { useSession } from '@/data/supabase/session';
 import { clean, NAME_MAX_CHARS, prefillName } from '@/features/auth/prefillName';
 import { Banner, Skeleton, Text, useTheme } from '@/ui';
 
-import { readAgeBand, readPrivateProfile, saveProfileBasics, setBirthDate } from '../api';
+import { readAgeBand, readPrivateProfile, saveProfileBasics, setBirthDate, writeOnboardingZone } from '../api';
 import { onboardingCopy } from '../copy';
 import { onboardingHref, type DrivingStage } from '../flow';
 import type { StepProps } from '../stepRegistry';
@@ -176,6 +176,9 @@ export function ProfileStep({ onNext, onBack }: StepProps) {
     setConfirmFailed(false);
     let stored: 'set' | 'already-set' | null = null;
     try {
+      // The zone first, so the server derives the band on this driver's own date (backend m3); a
+      // failure is ignored — the hourly band pass corrects it.
+      await writeOnboardingZone(userId);
       // 'already-set' means the account already has one; that one counts, whatever was typed.
       stored = await setBirthDate(check.iso);
       await proceed();

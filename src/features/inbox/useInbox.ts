@@ -29,6 +29,8 @@ import { AppState } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { readInstallId } from '@/data/devices/installId';
+import { readAlwaysExcused } from '@/data/devices/permissionsReport';
+import { deviceZone } from '@/lib/deviceZone';
 import type { AppStateLike } from '@/data/foreground';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -54,7 +56,6 @@ import {
   reapplyPending,
 } from './cache';
 import {
-  countServerPushesToday,
   isVisibleRow,
   toItemView,
   toTripDetail,
@@ -94,7 +95,9 @@ export async function readPermissionsNow(
     readInstallId(createSettingsRepo(db)).catch(() => null),
     adapter.snapshot().catch(() => null),
   ]);
-  return { deviceId, snapshot };
+  // The report's own excuse (final review I4), so the row and the server agree on "not a fault".
+  const alwaysExcused = snapshot === null ? null : await readAlwaysExcused(db, snapshot);
+  return { deviceId, snapshot, alwaysExcused };
 }
 
 export const inboxKey = (uid: string) => [...INBOX_QUERY_KEY, uid] as const;
@@ -252,16 +255,6 @@ export function useUnreadCount(deps: InboxDeps = {}): number {
 }
 
 /**
- * The server's half of the §11.1 cap for today in `tz` (for Tasks 7 and 19): 0 until the inbox is
- * known. The pure counter is `countServerPushesToday` (viewModel.ts).
- */
-export function useServerPushesToday(tz: string, deps: InboxDeps = {}): number {
-  const { now } = useDataSource();
-  const select = useCallback((s: InboxSnapshot) => countServerPushesToday(s.rows, tz, now()), [tz, now]);
-  return useInbox(deps, select).data ?? 0;
-}
-
-/**
  * The list's items: the shown rows, each rendered from its drive's current state. The locals are
  * read under the `['trip']` root, so every trip change (a role answered, a delete, a sync, a
  * restore) refreshes them through the data layer's own invalidation.
@@ -318,14 +311,8 @@ export function useInboxItems(deps: InboxDeps = {}, tz: string = deviceZone()) {
   return { inbox, locals, items, offline: inbox.data?.offline === true };
 }
 
-/** The device's zone, the one "Today" is decided in. */
-export function deviceZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
+/** The device's zone, the one "Today" is decided in: normalised, as the cap and push-sender use (m2). */
+export { deviceZone };
 
 // ---------------------------------------------------------------------------------------------
 // Mutations

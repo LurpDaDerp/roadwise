@@ -19,6 +19,7 @@ import { createExpoTraceFs } from '@/data/sync/traceFs';
 import type { LegalState } from '@/features/auth/legal';
 import { DISCLAIMER_ACK_KEY, type ConsentRow, type TermsType } from '@/features/auth/pendingConsent';
 import { PROFILE_CACHE_KEY } from '@/features/auth/profileCache';
+import { deviceZone } from '@/lib/deviceZone';
 
 import type { AgeBand, DrivingStage } from './flow';
 import { ONBOARDING_PLAN_KEY, ONBOARDING_STEP_KEY } from './state';
@@ -28,6 +29,29 @@ import { ONBOARDING_PLAN_KEY, ONBOARDING_STEP_KEY } from './state';
 // ---------------------------------------------------------------------------------------------
 
 export type SetBirthDateResult = 'set' | 'already-set';
+
+/**
+ * The phone's zone into `notification_prefs.tz`, written just BEFORE `set_birth_date` (final review,
+ * backend m3): the server derives the age band on the account's local date, and at onboarding it
+ * knows no zone yet, so without this a 13th birthday is decided on UTC — hours early or late. The
+ * same normalised zone and update-then-insert as every prefs write. A failure never holds the step
+ * back: the hourly band pass corrects it. Resolves whether it was written.
+ */
+export async function writeOnboardingZone(
+  userId: string,
+  deps: { save?: (userId: string, patch: { tz: string }) => Promise<unknown>; zone?: () => string } = {}
+): Promise<boolean> {
+  try {
+    const save =
+      deps.save ??
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- the prefs module, only when used
+      (require('@/features/settings/notifications/api') as typeof import('@/features/settings/notifications/api')).savePrefs;
+    await save(userId, { tz: (deps.zone ?? deviceZone)() });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** 0001's refusal of a second write: `insufficient_privilege` with exactly this message. */
 const ALREADY_SET = 'birth date already set';

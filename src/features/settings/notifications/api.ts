@@ -13,7 +13,7 @@
  */
 import { z } from 'zod';
 
-import { normaliseZone } from '@/core/engine/finalize';
+import { deviceZone } from '@/lib/deviceZone';
 import { supabase } from '@/data/supabase/client';
 import type { TablesUpdate } from '@/data/supabase/types';
 import { NOTIFICATION_CATEGORIES, type NotificationCategory } from '@/notifications/catalog';
@@ -179,9 +179,5 @@ const EMPTY_ROW = {
 
 /** The phone's zone as the server will accept it (the same normalisation as a drive's zone). */
 export function currentZone(): string {
-  try {
-    return normaliseZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  } catch {
-    return 'UTC';
-  }
+  return deviceZone();
 }

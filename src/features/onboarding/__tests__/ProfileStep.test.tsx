@@ -18,8 +18,16 @@ const mockSession = {
   },
   refreshProfile: jest.fn(async () => {}),
 };
+const mockOrder: string[] = [];
 const mockApi = {
-  setBirthDate: jest.fn(async (_iso: string) => 'set' as 'set' | 'already-set'),
+  setBirthDate: jest.fn(async (_iso: string) => {
+    mockOrder.push('setBirthDate');
+    return 'set' as 'set' | 'already-set';
+  }),
+  writeOnboardingZone: jest.fn(async (_id: string) => {
+    mockOrder.push('writeOnboardingZone');
+    return true;
+  }),
   readAgeBand: jest.fn(async (_id: string) => '18_plus'),
   readPrivateProfile: jest.fn(async (_id: string) => ({ birthDate: null as string | null })),
 };
@@ -36,6 +44,7 @@ jest.mock('@/data/supabase/profile', () => ({
 jest.mock('../api', () => ({
   ...jest.requireActual('../api'),
   setBirthDate: (iso: string) => mockApi.setBirthDate(iso),
+  writeOnboardingZone: (id: string) => mockApi.writeOnboardingZone(id),
   readAgeBand: (id: string) => mockApi.readAgeBand(id),
   readPrivateProfile: (id: string) => mockApi.readPrivateProfile(id),
 }));
@@ -82,7 +91,15 @@ beforeEach(() => {
   mockSession.refreshProfile.mockReset().mockResolvedValue(undefined);
   mockSession.profile = { id: USER, display_name: '', driving_stage: 'unknown' };
   mockSession.session = { user: { id: USER, user_metadata: { full_name: 'Avery Provider' } } };
-  mockApi.setBirthDate.mockReset().mockResolvedValue('set');
+  mockApi.setBirthDate.mockReset().mockImplementation(async () => {
+    mockOrder.push('setBirthDate');
+    return 'set';
+  });
+  mockApi.writeOnboardingZone.mockReset().mockImplementation(async () => {
+    mockOrder.push('writeOnboardingZone');
+    return true;
+  });
+  mockOrder.length = 0;
   mockApi.readAgeBand.mockReset().mockResolvedValue('18_plus');
   mockApi.readPrivateProfile.mockReset().mockResolvedValue({ birthDate: null });
 });
@@ -167,6 +184,29 @@ describe('ProfileStep', () => {
     expect(sheet()).toBeNull();
     expect(mockApi.setBirthDate).not.toHaveBeenCalled();
     expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+  });
+
+  it('backend m3: the zone is written BEFORE the birth date, so the band is derived on the driver’s own date', async () => {
+    await renderStep();
+    await fillValid();
+    await fireEvent.press(screen.getByTestId('profile-continue'));
+    await fireEvent.press(screen.getByRole('button', { name: "Yes, that's right" }));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(mockApi.writeOnboardingZone).toHaveBeenCalledWith(USER);
+    expect(mockOrder).toEqual(['writeOnboardingZone', 'setBirthDate']);
+  });
+
+  it('backend m3: a zone that could not be written never holds the step back', async () => {
+    mockApi.writeOnboardingZone.mockImplementation(async () => {
+      mockOrder.push('writeOnboardingZone');
+      return false;
+    });
+    await renderStep();
+    await fillValid();
+    await fireEvent.press(screen.getByTestId('profile-continue'));
+    await fireEvent.press(screen.getByRole('button', { name: "Yes, that's right" }));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(mockApi.setBirthDate).toHaveBeenCalledWith('2008-03-04');
   });
 
   it('confirmed, not under 13: sets the date, saves the name and stage, refreshes, moves on', async () => {

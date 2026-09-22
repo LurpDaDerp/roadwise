@@ -2,7 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import { T0 } from '@/data/queries/__fixtures__/rows';
 import { wrapperFor } from '@/data/queries/__fixtures__/harness';
-import { INBOX_STALE_MS, useInbox, useServerPushesToday } from '@/features/inbox/useInbox';
+import { INBOX_STALE_MS, useInbox } from '@/features/inbox/useInbox';
+import { countServerPushesToday } from '@/features/inbox/viewModel';
 import { INBOX_QUERY_KEY } from '@/notifications/keys';
 
 import {
@@ -106,19 +107,16 @@ describe('useInbox freshness — no polling', () => {
   });
 });
 
-describe('useServerPushesToday', () => {
-  it('counts today’s capped pushes in the zone asked for', async () => {
-    const w = await inboxWorld({}, () => clock);
-    const { api } = fakeApi([
+// Final review m3: the `useServerPushesToday` hook is gone (it read 0 until its query resolved, the
+// misuse ruling T6 m3 forbids for the cap). Its assertion stays, on the pure counter every cap
+// decision uses: `countServerPushesToday(await createInboxCache(db).list(), …)`.
+describe('countServerPushesToday (the cap’s server half)', () => {
+  it('counts today’s capped pushes in the zone asked for', () => {
+    const rows = [
       lapseRow({ id: nextId(), pushed_at: iso(T0 - 60_000) }),
       lapseRow({ id: nextId(), pushed_at: iso(T0 - 2 * 86_400_000) }),
       inboxRow({ id: nextId(), type: 'family_digest', pushed_at: iso(T0 - 60_000) }),
-    ]);
-    const wrapper = wrapperFor(w.db, w.client, () => clock);
-    const hook = await renderHook(() => useServerPushesToday('UTC', { api, appState: fakeAppState() }), {
-      wrapper,
-    });
-    await waitFor(() => expect(hook.result.current).toBe(1));
-    await hook.unmount();
+    ];
+    expect(countServerPushesToday(rows, 'UTC', T0)).toBe(1);
   });
 });
