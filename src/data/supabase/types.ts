@@ -210,6 +210,30 @@ export type Database = {
           },
         ]
       }
+      global_rate_limits: {
+        Row: {
+          count: number
+          created_at: string
+          key: string
+          updated_at: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          created_at?: string
+          key: string
+          updated_at?: string
+          window_start?: string
+        }
+        Update: {
+          count?: number
+          created_at?: string
+          key?: string
+          updated_at?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       limits_cache: {
         Row: {
           created_at: string
@@ -709,6 +733,10 @@ export type Database = {
         }[]
       }
       speed_limit_tiles: { Args: { p_keys: string[] }; Returns: Json }
+      take_global_rate_limit: {
+        Args: { p_key: string; p_max: number; p_window: string }
+        Returns: boolean
+      }
       take_rate_limit: {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean

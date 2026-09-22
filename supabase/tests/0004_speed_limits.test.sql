@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(169);
+select plan(188);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -99,6 +99,18 @@ select is(array[has_function_privilege('anon', 'public.take_rate_limit(uuid, tex
                 has_function_privilege('authenticated', 'public.take_rate_limit(uuid, text, interval, integer)', 'execute'),
                 has_function_privilege('service_role', 'public.take_rate_limit(uuid, text, interval, integer)', 'execute')],
   array[false, false, true], 'take_rate_limit executes for service_role only');
+select is(array[has_function_privilege('anon', 'public.take_global_rate_limit(text, interval, integer)', 'execute'),
+                has_function_privilege('authenticated', 'public.take_global_rate_limit(text, interval, integer)', 'execute'),
+                has_function_privilege('service_role', 'public.take_global_rate_limit(text, interval, integer)', 'execute')],
+  array[false, false, true], 'take_global_rate_limit executes for service_role only');
+select is((select row(prosecdef, proconfig)::text from pg_proc where oid = 'public.take_global_rate_limit(text, interval, integer)'::regprocedure),
+  row(false, array['search_path=public, extensions'])::text, 'take_global_rate_limit is security invoker and pins exactly search_path = public, extensions');
+select has_table('public', 'global_rate_limits', 'public.global_rate_limits exists');
+select is((select relrowsecurity from pg_class where oid = 'public.global_rate_limits'::regclass), true, 'global_rate_limits has RLS enabled');
+select policies_are('public', 'global_rate_limits', '{}'::name[], 'global_rate_limits has no policies (server only)');
+select table_privs_are('public', 'global_rate_limits', 'anon', '{}'::name[], 'anon has no privileges on global_rate_limits');
+select table_privs_are('public', 'global_rate_limits', 'authenticated', '{}'::name[], 'authenticated has no privileges on global_rate_limits');
+select table_privs_are('public', 'global_rate_limits', 'service_role', array['INSERT', 'SELECT', 'UPDATE']::name[], 'service_role has exactly select/insert/update on global_rate_limits');
 select is((select count(*)::int from pg_proc where oid in (
     'public.speed_limit_candidates(double precision, double precision, integer)'::regprocedure,
     'public.put_limits_cache(text, jsonb, integer, numeric, integer)'::regprocedure,
@@ -362,6 +374,15 @@ select is((select count(*)::int
 select is((select (s -> 'oneway')::int from pg_temp.segs(public.speed_limit_tiles(array[pg_temp.tile_of(47.6405, -122.3200)]), pg_temp.tile_of(47.6405, -122.3200)) s
     where s ->> 'id' = left(encode(sha256(convert_to('orient-oneway-north', 'UTF8')), 'hex'), 16)), -1, 'and the tile carries the one-way road as -1 too');
 
+-- the orientation is the table's, not the writer's (ruling B1 R2-M1): a direct service-role write is normalised too
+insert into public.limits_cache (segment_key, geom, limit_mph, expires_at)
+  values ('0000000000000d01', extensions.st_geomfromtext('LINESTRING(-122.3050 47.6420, -122.3060 47.6421, -122.3070 47.6420)', 4326), 30, now() + interval '2 days');
+select is((select extensions.st_asewkt(geom) from public.limits_cache where segment_key = '0000000000000d01'),
+  'SRID=4326;LINESTRING(-122.307 47.642,-122.306 47.6421,-122.305 47.642)', 'a direct insert written east to west is stored canonical');
+update public.limits_cache set geom = extensions.st_geomfromtext('LINESTRING(-122.3050 47.6425, -122.3070 47.6425)', 4326) where segment_key = '0000000000000d01';
+select is((select extensions.st_asewkt(geom) from public.limits_cache where segment_key = '0000000000000d01'),
+  'SRID=4326;LINESTRING(-122.307 47.6425,-122.305 47.6425)', 'and so is a direct update');
+
 -- the bounded purge: each put_limits_cache call deletes at most 100 expired rows (review M-1)
 reset role;
 delete from public.limits_cache;
@@ -401,6 +422,27 @@ select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '0 seconds', 2) $$, '22023', 'window must be between 1 second and 31 days', 'an empty window is refused');
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'dispute_7d', '1 day', 2) $$, '22023', 'key must be a rate-limit key', 'the dispute mutex row is not a rate-limit key');
 select throws_ok($$ select public.take_rate_limit(null, 'aws_limits', '1 day', 2) $$, '22023', 'user is required', 'a missing user is refused');
+
+-- take_global_rate_limit: the same budget semantics with no user (ruling B2 F1)
+select is(array[public.take_global_rate_limit('aws_limits_global', '1 day', 2),
+                public.take_global_rate_limit('aws_limits_global', '1 day', 2),
+                public.take_global_rate_limit('aws_limits_global', '1 day', 2)],
+  array[true, true, false], 'global: two takes pass and the third in the window is refused');
+select is((select count from public.global_rate_limits where key = 'aws_limits_global'), 2, 'global: a refused take is not counted');
+select is(public.take_global_rate_limit('other_global', '1 day', 2), true, 'global: another key has its own budget');
+reset role;
+update public.global_rate_limits set window_start = now() - interval '1 day' where key = 'aws_limits_global';
+set local role service_role;
+select is(public.take_global_rate_limit('aws_limits_global', '1 day', 2), true, 'global: once the window has passed the budget is fresh');
+select is((select row(count, window_start = now())::text from public.global_rate_limits where key = 'aws_limits_global'), row(1, true)::text,
+  'global: the new window starts now with one take');
+select throws_ok($$ select public.take_global_rate_limit('aws_limits_global', '1 day', 0) $$, '22023', 'max must be between 1 and 100000', 'global: a zero budget is refused');
+select throws_ok($$ select public.take_global_rate_limit('aws_limits_global', '32 days', 2) $$, '22023', 'window must be between 1 second and 31 days', 'global: a window over 31 days is refused');
+select throws_ok($$ select public.take_global_rate_limit('AWS-limits', '1 day', 2) $$, '22023', 'key must be a rate-limit key', 'global: a malformed key is refused');
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
+select throws_ok($$ select public.take_global_rate_limit('aws_limits_global', '1 day', 2) $$, '42501', 'take_global_rate_limit requires the service role',
+  'global: its first statement refuses any JWT role but service_role');
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 -- ---------------------------------------------------------------------------
 -- truncation: past 2000 segments minor roads are cut first, and the tile says so

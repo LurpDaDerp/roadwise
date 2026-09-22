@@ -107,10 +107,19 @@ create index limits_cache_expires_at_idx on public.limits_cache (expires_at);
 
 create trigger ways_touch before update on osm.ways for each row execute function public.touch_updated_at();
 create trigger sections_touch before update on hpms.sections for each row execute function public.touch_updated_at();
--- the cache's stamps carry the day, never the moment of the lookup that caused the row
-create or replace function public.limits_cache_day_stamps() returns trigger
+-- every write to the cache, whichever path makes it (put_limits_cache or a direct service-role
+-- write), is normalised here: the stamps carry the day, never the moment of the lookup that caused
+-- the row, and the line is stored in one canonical orientation (rulings B2 I-1, B1 R2-M1)
+create or replace function public.limits_cache_normalize() returns trigger
 language plpgsql set search_path = public as $$
 begin
+  -- the vertex order must not say which way the driver behind the lookup was going: reversed when
+  -- the first vertex sorts after the last, by lng then lat. A heading (one-way roads only) keeps the
+  -- direction of traffic; the queries serve it as oneway 1 or -1 against this orientation
+  if (extensions.st_x(extensions.st_startpoint(new.geom)), extensions.st_y(extensions.st_startpoint(new.geom)))
+     > (extensions.st_x(extensions.st_endpoint(new.geom)), extensions.st_y(extensions.st_endpoint(new.geom))) then
+    new.geom := extensions.st_reverse(new.geom);
+  end if;
   if tg_op = 'INSERT' then
     new.created_at := date_trunc('day', coalesce(new.created_at, now()), 'UTC');
   else
@@ -121,7 +130,19 @@ begin
   new.expires_at := date_trunc('day', new.expires_at, 'UTC');
   return new;
 end $$;
-create trigger limits_cache_touch before insert or update on public.limits_cache for each row execute function public.limits_cache_day_stamps();
+create trigger limits_cache_touch before insert or update on public.limits_cache for each row execute function public.limits_cache_normalize();
+
+-- app-wide budgets (ruling B2 F1), such as the AWS lookups all users share. rate_limits is per
+-- user and its user_id references auth.users, so a global budget has its own table: one row per key,
+-- no owner, no fake auth user
+create table public.global_rate_limits (
+  key text primary key check (char_length(key) between 1 and 64 and key ~ '^[a-z][a-z0-9_]{0,63}$'),
+  window_start timestamptz not null default now(),
+  count int not null default 0 check (count >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create trigger global_rate_limits_touch before update on public.global_rate_limits for each row execute function public.touch_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- speed_limit_candidates: every road near a point, one row per road, nearest first
@@ -381,14 +402,7 @@ begin
       limit 100
       for update skip locked);
 
-  -- one canonical orientation (ruling B2 I-1): the vertex order of a stored line must not say which
-  -- way the driver behind the lookup was going. Reversed when the first vertex sorts after the last,
-  -- by lng then lat; the heading (one-way roads only) keeps the direction of traffic
-  if (extensions.st_x(extensions.st_startpoint(v_geom)), extensions.st_y(extensions.st_startpoint(v_geom)))
-     > (extensions.st_x(extensions.st_endpoint(v_geom)), extensions.st_y(extensions.st_endpoint(v_geom))) then
-    v_geom := extensions.st_reverse(v_geom);
-  end if;
-
+  -- the canonical orientation and the day stamps are applied by limits_cache_normalize (the trigger)
   v_key := left(encode(sha256(convert_to(p_key, 'UTF8')), 'hex'), 16);
   -- a refresh is a new answer: created_at restarts with it (floored to the day by the trigger), so
   -- the 30-day CHECK bounds each answer. Measured from that floor, a 30-day ttl ends at the start of
@@ -445,17 +459,55 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- take_global_rate_limit: take_rate_limit's semantics over an app-wide budget (ruling B2 F1)
+-- ---------------------------------------------------------------------------
+create or replace function public.take_global_rate_limit(p_key text, p_window interval, p_max int) returns boolean
+language plpgsql volatile security invoker set search_path = public, extensions as $$
+declare
+  v_start timestamptz;
+  v_count int;
+begin
+  perform public.require_service_role('take_global_rate_limit');
+  if p_key is null or p_key !~ '^[a-z][a-z0-9_]{0,63}$' then
+    raise exception 'key must be a rate-limit key' using errcode = 'invalid_parameter_value';
+  end if;
+  if p_window is null or p_window < interval '1 second' or p_window > interval '31 days' then
+    raise exception 'window must be between 1 second and 31 days' using errcode = 'invalid_parameter_value';
+  end if;
+  if p_max is null or p_max < 1 or p_max > 100000 then
+    raise exception 'max must be between 1 and 100000' using errcode = 'invalid_parameter_value';
+  end if;
+
+  insert into public.global_rate_limits (key, window_start, count) values (p_key, now(), 0)
+    on conflict (key) do nothing;
+  select window_start, count into v_start, v_count
+    from public.global_rate_limits where key = p_key for update;
+  if v_start + p_window <= now() then
+    v_start := now();
+    v_count := 0;
+  end if;
+  if v_count >= p_max then
+    update public.global_rate_limits set window_start = v_start, count = v_count where key = p_key;
+    return false;
+  end if;
+  update public.global_rate_limits set window_start = v_start, count = v_count + 1 where key = p_key;
+  return true;
+end $$;
+
+-- ---------------------------------------------------------------------------
 -- function grants: the edge function's service-role client only
 -- ---------------------------------------------------------------------------
 revoke all on function public.speed_limit_candidates(double precision, double precision, int) from public, anon, authenticated;
 revoke all on function public.speed_limit_tiles(text[]) from public, anon, authenticated;
 revoke all on function public.put_limits_cache(text, jsonb, int, numeric, int) from public, anon, authenticated;
 revoke all on function public.take_rate_limit(uuid, text, interval, int) from public, anon, authenticated;
-revoke all on function public.limits_cache_day_stamps() from public, anon, authenticated;
+revoke all on function public.limits_cache_normalize() from public, anon, authenticated;
 grant execute on function public.speed_limit_candidates(double precision, double precision, int) to service_role;
 grant execute on function public.speed_limit_tiles(text[]) to service_role;
 grant execute on function public.put_limits_cache(text, jsonb, int, numeric, int) to service_role;
 grant execute on function public.take_rate_limit(uuid, text, interval, int) to service_role;
+revoke all on function public.take_global_rate_limit(text, interval, int) from public, anon, authenticated;
+grant execute on function public.take_global_rate_limit(text, interval, int) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- RLS: on everywhere, no policies (service_role bypasses RLS; nothing else has a grant)
@@ -463,6 +515,7 @@ grant execute on function public.take_rate_limit(uuid, text, interval, int) to s
 alter table osm.ways enable row level security;
 alter table hpms.sections enable row level security;
 alter table public.limits_cache enable row level security;
+alter table public.global_rate_limits enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- table grants (convention 14): no anon/authenticated grants; service_role reads the road data and
@@ -472,3 +525,5 @@ revoke all on osm.ways, hpms.sections, public.limits_cache from public, anon, au
 grant select on osm.ways to service_role;
 grant select on hpms.sections to service_role;
 grant select, insert, update, delete on public.limits_cache to service_role;
+revoke all on public.global_rate_limits from public, anon, authenticated, service_role;
+grant select, insert, update on public.global_rate_limits to service_role;
