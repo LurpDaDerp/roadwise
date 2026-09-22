@@ -62,6 +62,14 @@ Deno.test('countTripsSince counts the user\'s rows created in the window, delete
   ]);
 });
 
+Deno.test('getDayRow reads trips_all when the row has it', async () => {
+  const fake = fakeSupabase({ tables: { score_daily: [dayRowRecord({ trips_scored: 0, trips_all: 1, safe_day: false })] } });
+  const row = await createDb(fake.client).getDayRow(UID, TRIP_DAY);
+  assertEquals(row?.tripsScored, 0);
+  assertEquals(row?.tripsAll, 1);
+  assertEquals((fake.queries[0].select ?? '').split(', ').includes('trips_all'), true);
+});
+
 Deno.test('getDayRow maps the stored day row, or null when the day has none', async () => {
   const fake = fakeSupabase({ tables: { score_daily: [dayRowRecord(), dayRowRecord({ user_id: OTHER_UID, day: TRIP_DAY, long_term_score: 5 })] } });
   const db = createDb(fake.client);
@@ -77,6 +85,8 @@ Deno.test('getDayRow maps the stored day row, or null when the day has none', as
     exposure: 2.5,
     drivingS: 2400,
     tripsScored: 2,
+    // a row stored before trips_all existed reads as M2 did: every final trip was a kept one
+    tripsAll: 2,
     severeEvents: 0,
   });
   assertEquals(await db.getDayRow(UID, '2023-11-15'), null);

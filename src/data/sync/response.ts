@@ -187,6 +187,12 @@ export const DayRowSchema = z
     exposure: z.number().nonnegative(),
     drivingS: z.number().nonnegative(),
     tripsScored: z.number().int().nonnegative(),
+    /**
+     * The day's final drives including deleted ones (0009, D2): 0 is a day with no counted drive;
+     * above 0 with `tripsScored` 0 is a day whose only drives were deleted. Absent from an older
+     * server, where a reader falls back to `tripsScored`.
+     */
+    tripsAll: z.number().int().nonnegative().optional(),
     severeEvents: z.number().int().nonnegative(),
   })
   .strict();

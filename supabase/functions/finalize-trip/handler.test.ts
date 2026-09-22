@@ -240,6 +240,7 @@ Deno.test('the happy path re-scores, builds the envelope from the JWT user and a
     exposure: expected.exposure,
     drivingS: 1320,
     tripsScored: 1,
+    tripsAll: 1,
     severeEvents: 0,
   });
   // the trip is in the current four weeks, and the baseline is the eight weeks behind them
@@ -327,6 +328,7 @@ Deno.test('a new safe drive on a day holding a deleted bad drive does not make t
   assertEquals(e.day[0].safeDay, false);
   // the counts are the kept drives': the new one alone
   assertEquals(e.day[0].tripsScored, 1);
+  assertEquals(e.day[0].tripsAll, 2);
   assertEquals(e.day[0].drivingS, 1320);
   // the deleted drive is not in the long-term score either: one trip, still withheld
   assertEquals(e.day[0].longTermScore, null);
@@ -582,6 +584,7 @@ Deno.test('a trip already stored replays its result and its stored day row witho
       exposure: 2.5,
       drivingS: 2400,
       tripsScored: 2,
+      tripsAll: 2,
       severeEvents: 0,
     },
     trip: {

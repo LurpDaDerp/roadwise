@@ -421,23 +421,36 @@ describe('totals', () => {
     expect(longestSafeStreak([])).toBe(0);
   });
 
-  // A row with no counted drive (every drive deleted, or only unscored ones; D2 writes such rows)
-  // is a day without counted driving, not an unsafe day: it neither adds nor breaks the run.
-  test('a day row with no counted drive neither adds to nor breaks the streak', () => {
-    const empty = (d: string) =>
-      toDayEntry({ day: d, payload: { day: d, safeDay: false, goodDay: false, tripsScored: 0 }, updated_at: T0 });
-    expect(
-      longestSafeStreak([day('2026-01-05', true), empty('2026-01-06'), day('2026-01-07', true)])
-    ).toBe(2);
-    // negative control: a day with a counted drive that was not safe still breaks the run
-    const unsafe = toDayEntry({
-      day: '2026-01-06',
-      payload: { day: '2026-01-06', safeDay: false, goodDay: true, tripsScored: 1 },
-      updated_at: T0,
-    });
-    expect(longestSafeStreak([day('2026-01-05', true), unsafe, day('2026-01-07', true)])).toBe(1);
-    // and one with no count at all (an older payload) is read as before: not safe, so it breaks
+  // Round 2 (the review's ruling): a day is classified by `tripsAll`, the final drives including
+  // deleted ones. 0 is no counted drive (neither adds nor breaks); a day whose only drives were
+  // deleted has tripsAll > 0 and is not safe, so it breaks the run: deleting never saves it (D2).
+  const row = (d: string, payload: Record<string, unknown>) =>
+    toDayEntry({ day: d, payload: { day: d, goodDay: false, ...payload }, updated_at: T0 });
+
+  test('a day whose only drive was deleted breaks the run of safe days', () => {
+    const deletedOnly = row('2026-01-06', { safeDay: false, tripsScored: 0, tripsAll: 1 });
+    expect(longestSafeStreak([day('2026-01-05', true), deletedOnly, day('2026-01-07', true)])).toBe(1);
+  });
+
+  test('a day with no counted drive at all neither adds to nor breaks the run', () => {
+    const empty = row('2026-01-06', { safeDay: false, tripsScored: 0, tripsAll: 0 });
+    expect(longestSafeStreak([day('2026-01-05', true), empty, day('2026-01-07', true)])).toBe(2);
+    // negative control: it never adds either
+    expect(longestSafeStreak([empty])).toBe(0);
+  });
+
+  test('an older row without tripsAll falls back to tripsScored', () => {
+    const olderEmpty = row('2026-01-06', { safeDay: false, tripsScored: 0 });
+    expect(longestSafeStreak([day('2026-01-05', true), olderEmpty, day('2026-01-07', true)])).toBe(2);
+    // negative controls: a counted unsafe day breaks, and a row with no count at all is not safe
+    const olderUnsafe = row('2026-01-06', { safeDay: false, tripsScored: 1 });
+    expect(longestSafeStreak([day('2026-01-05', true), olderUnsafe, day('2026-01-07', true)])).toBe(1);
     expect(longestSafeStreak([day('2026-01-05', true), day('2026-01-06', false), day('2026-01-07', true)])).toBe(1);
+  });
+
+  test('a safe day extends the run whatever its counts say', () => {
+    const safe = row('2026-01-06', { safeDay: true, tripsScored: 1, tripsAll: 2 });
+    expect(longestSafeStreak([day('2026-01-05', true), safe, day('2026-01-07', true)])).toBe(3);
   });
 
   test('the best week is the highest scored week, the later one on a tie, and none without scores', () => {

@@ -67,6 +67,7 @@ Deno.test('a day row aggregates only that day\'s final trips and carries the lon
       exposure: 2,
       drivingS: 700,
       tripsScored: 2,
+      tripsAll: 2,
       severeEvents: 0,
     },
   ]);
@@ -114,6 +115,7 @@ Deno.test('a day with no trips is all zeros but still carries the long-term scor
     exposure: 0,
     drivingS: 0,
     tripsScored: 0,
+    tripsAll: 0,
     severeEvents: 0,
   });
 });
@@ -152,6 +154,8 @@ Deno.test('a day whose only drive is a deleted 95 is not safe and counts no trip
   assertEquals(row.phoneFreeDay, false);
   assertEquals(row.cameraDay, false);
   assertEquals(row.tripsScored, 0);
+  // the deleted drive still counts as a final drive on the day: the day had a counted drive
+  assertEquals(row.tripsAll, 1);
   assertEquals(row.drivingS, 0);
   assertEquals(row.exposure, 0);
   assertEquals(row.severeEvents, 0);
@@ -199,6 +203,27 @@ Deno.test('a deleted drive that is not final changes nothing', () => {
     dayRows([TRIP_DAY], [...kept, trip({ score: null, status: 'unscored', deleted: true })], good),
     dayRows([TRIP_DAY], kept, good)
   );
+});
+
+Deno.test('a day with only drives too short to score has no counted drive, kept or deleted', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: null, status: 'unscored', durationS: 90 }), trip({ score: null, status: 'unscored', durationS: 60, deleted: true })],
+    good
+  );
+  assertEquals(row.tripsScored, 0);
+  assertEquals(row.tripsAll, 0);
+  assertEquals(row.safeDay, false);
+});
+
+Deno.test('tripsAll counts final drives with the deleted ones, and equals tripsScored when none are deleted', () => {
+  const kept = [trip({ score: 95, durationS: 1200 }), trip({ score: null, status: 'unscored' })];
+  const [plain] = dayRows([TRIP_DAY], kept, good);
+  assertEquals(plain.tripsAll, plain.tripsScored);
+  assertEquals(plain.tripsAll, 1);
+  const [mixed] = dayRows([TRIP_DAY], [...kept, trip({ score: 40, deleted: true }), trip({ score: 90, deleted: true })], good);
+  assertEquals(mixed.tripsScored, 1);
+  assertEquals(mixed.tripsAll, 3);
 });
 
 Deno.test('median of an even count is the mean of the middle pair', () => {

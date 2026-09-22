@@ -288,6 +288,11 @@ describe('toDayEntry', () => {
     });
   });
 
+  test('tripsAll is read when the day carries it, and null for an older payload', () => {
+    expect(toDayEntry({ day: '2026-01-05', payload: { ...dayRow, tripsAll: 3 }, updated_at: T0 }).tripsAll).toBe(3);
+    expect(toDayEntry({ day: '2026-01-05', payload: dayRow, updated_at: T0 }).tripsAll).toBeNull();
+  });
+
   test('an array payload is read as the day rows the server sends', () => {
     const entry = toDayEntry({ day: '2026-01-05', payload: [dayRow], updated_at: null });
     expect(entry.safeDay).toBe(true);

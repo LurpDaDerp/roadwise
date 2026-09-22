@@ -245,6 +245,7 @@ const storedDayRow: DayRow = {
   exposure: 3.3,
   drivingS: 3960,
   tripsScored: 3,
+  tripsAll: 3,
   severeEvents: 0,
 };
 
@@ -1158,6 +1159,7 @@ Deno.test('deleting the 50 drive leaves its day as it was with the drive: not sa
   assertEquals(e.day[0].safeDay, false);
   assertEquals(e.day[0].goodDay, true);
   assertEquals(e.day[0].tripsScored, 1);
+  assertEquals(e.day[0].tripsAll, 2);
   assertEquals(e.day[0].drivingS, 1200);
   const kept = [
     { endedAt: T0 - 2_400_000, score: 95, exposure: 1.2, durationS: 1200 },

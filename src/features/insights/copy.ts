@@ -258,7 +258,7 @@ export const insightsCopy = {
       miles: 'Miles',
       hours: 'Driving time',
       safeDays: 'Safe days',
-      streak: 'Longest safe streak',
+      streak: 'Longest run of safe days',
       bestWeek: 'Best week',
       phoneFreeMiles: 'Phone-free miles',
       nightMiles: 'Night miles',
@@ -269,7 +269,7 @@ export const insightsCopy = {
     /** §10.1: totals are descriptive. */
     note: 'These describe your driving. Nothing here earns points, badges or levels.',
     asDriver: 'Drives where you were the driver.',
-    daysNote: 'Safe days and streaks count once a day has synced.',
+    daysNote: 'Safe days and runs of safe days count once a day has synced.',
     empty: {
       title: 'Nothing on the record yet',
       body: 'Drives you take as the driver are totalled here.',

@@ -89,7 +89,7 @@ test('the record prints miles, hours, safe days, the streak and the best week', 
   expect(screen.getByLabelText('Driving time, 2 h 00 min')).toBeOnTheScreen();
   expect(screen.getByLabelText('Safe days, 3 days')).toBeOnTheScreen();
   // Two consecutive safe driving days; the unsafe one in between resets the run.
-  expect(screen.getByLabelText('Longest safe streak, 2 days')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Longest run of safe days, 2 days')).toBeOnTheScreen();
   expect(screen.getByLabelText('Best week, 91 · Week of Jan 19')).toBeOnTheScreen();
   // Phone cost points on the 20-mile drive, so only the two clean ones are phone-free miles.
   expect(screen.getByLabelText('Phone-free miles, 20 mi')).toBeOnTheScreen();
@@ -105,7 +105,7 @@ test('nothing on the record is a target, a comparison or a reward', async () => 
     screen.getByText('These describe your driving. Nothing here earns points, badges or levels.')
   ).toBeOnTheScreen();
   expect(screen.getByText('Drives where you were the driver.')).toBeOnTheScreen();
-  expect(screen.getByText('Safe days and streaks count once a day has synced.')).toBeOnTheScreen();
+  expect(screen.getByText('Safe days and runs of safe days count once a day has synced.')).toBeOnTheScreen();
   // Descriptive only: no other driver appears anywhere on the page.
   expect(screen.queryByText(/average|other drivers|than you|rank/i)).toBeNull();
 });

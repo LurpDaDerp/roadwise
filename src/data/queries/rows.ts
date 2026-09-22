@@ -470,6 +470,11 @@ export interface DayEntry {
   points: number;
   drivingS: number | null;
   tripsScored: number | null;
+  /**
+   * The day's final drives including deleted ones (0009, D2), or null on an older payload. 0 is a
+   * day with no counted drive; above 0 with `tripsScored` 0, a day whose only drives were deleted.
+   */
+  tripsAll: number | null;
   severeEvents: number | null;
   exposure: number | null;
   longTermScore: number | null;
@@ -522,6 +527,7 @@ export function toDayEntry(entry: ScoreDailyCache<unknown>): DayEntry {
       (cameraDay ? POINTS.cameraDay : 0),
     drivingS: optionalNumber(raw.drivingS),
     tripsScored: optionalNumber(raw.tripsScored),
+    tripsAll: optionalNumber(raw.tripsAll),
     severeEvents: optionalNumber(raw.severeEvents),
     exposure: optionalNumber(raw.exposure),
     longTermScore: optionalNumber(raw.longTermScore),

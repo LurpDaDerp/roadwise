@@ -110,6 +110,8 @@ interface DayRecord {
   exposure: number;
   driving_s: number;
   trips_scored: number;
+  /** 0009; absent on a row read before the column exists, which reads as `trips_scored` (M2). */
+  trips_all?: number | null;
   severe_events: number;
 }
 
@@ -175,7 +177,7 @@ export function createDb(client: SupabaseClient): Db {
       const { data, error } = await client
         .from('score_daily')
         .select(
-          'day, long_term_score, band, provisional, safe_day, good_day, phone_free_day, camera_day, exposure, driving_s, trips_scored, severe_events'
+          'day, long_term_score, band, provisional, safe_day, good_day, phone_free_day, camera_day, exposure, driving_s, trips_scored, trips_all, severe_events'
         )
         .eq('user_id', userId)
         .eq('day', day)
@@ -195,6 +197,7 @@ export function createDb(client: SupabaseClient): Db {
         exposure: Number(row.exposure),
         drivingS: row.driving_s,
         tripsScored: row.trips_scored,
+        tripsAll: row.trips_all ?? row.trips_scored,
         severeEvents: row.severe_events,
       };
     },

@@ -105,6 +105,7 @@ export const DAY_COLUMNS = [
   'exposure',
   'driving_s',
   'trips_scored',
+  'trips_all',
   'severe_events',
   'updated_at',
 ].join(',');
@@ -238,6 +239,8 @@ export const ServerDaySchema = z.object({
   exposure: num,
   driving_s: num,
   trips_scored: num,
+  /** 0009 (D2); null or absent on a row from before it, which the reader treats as M2 did. */
+  trips_all: num.nullable().optional(),
   severe_events: num,
   updated_at: TimestampText,
 });
@@ -369,6 +372,7 @@ export function toDayRow(day: ServerDay): DayRow | null {
     exposure: day.exposure,
     drivingS: day.driving_s,
     tripsScored: day.trips_scored,
+    ...(day.trips_all === null || day.trips_all === undefined ? {} : { tripsAll: day.trips_all }),
     severeEvents: day.severe_events,
   });
   return parsed.success ? parsed.data : null;

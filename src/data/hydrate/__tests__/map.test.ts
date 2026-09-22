@@ -16,6 +16,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import { createHydrator, UNREADABLE_VERSION } from '@/data/hydrate/hydrate';
 import {
+  DAY_COLUMNS,
   parseRow,
   parseTimestamp,
   ServerDisputeSchema,
@@ -281,6 +282,28 @@ describe('disputes, days and the baseline', () => {
       tripsScored: 2,
       severeEvents: 0,
     });
+  });
+
+  test('a day row carries trips_all as tripsAll when the server stores it, and leaves it out when not', () => {
+    const base = {
+      day: '2026-09-21',
+      long_term_score: 81,
+      band: 'good',
+      provisional: false,
+      safe_day: false,
+      good_day: false,
+      phone_free_day: false,
+      camera_day: false,
+      exposure: 0,
+      driving_s: 0,
+      trips_scored: 0,
+      severe_events: 0,
+      updated_at: '2026-09-21T10:00:00+00:00',
+    };
+    expect(toDayRow({ ...base, trips_all: 1 })).toMatchObject({ tripsScored: 0, tripsAll: 1 });
+    expect(toDayRow(base)).not.toHaveProperty('tripsAll');
+    expect(toDayRow({ ...base, trips_all: null })).not.toHaveProperty('tripsAll');
+    expect(DAY_COLUMNS.split(',')).toContain('trips_all');
   });
 
   test('the baseline lands in the envelope E1 reads', () => {

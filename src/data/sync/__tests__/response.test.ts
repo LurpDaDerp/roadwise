@@ -178,3 +178,10 @@ test('every number in a day row is finite', () => {
   expect(DayRowSchema.safeParse({ ...DAY_ROW, longTermScore: null, band: null }).success).toBe(true);
   expect(DayRowSchema.safeParse({ ...DAY_ROW, tripsScored: -1 }).success).toBe(false);
 });
+
+test('a day row may carry tripsAll (0009, D2): a count, and absent on an older server', () => {
+  expect(DayRowSchema.safeParse({ ...DAY_ROW, tripsAll: 3 }).success).toBe(true);
+  expect(DayRowSchema.safeParse(DAY_ROW).success).toBe(true);
+  expect(DayRowSchema.safeParse({ ...DAY_ROW, tripsAll: -1 }).success).toBe(false);
+  expect(DayRowSchema.safeParse({ ...DAY_ROW, tripsAll: 1.5 }).success).toBe(false);
+});

@@ -614,16 +614,26 @@ export interface Totals {
 
 /**
  * The longest run of *driving days* that were safe days (§10.3): a day without a cached entry is
- * a day without driving and neither adds nor breaks; a driving day that was not safe resets. A row
- * the server wrote with no counted drive (`tripsScored` 0: every drive deleted, or only unscored
- * ones) is a day without counted driving too, never an unsafe day.
+ * a day without driving and neither adds nor breaks; a driving day that was not safe resets.
+ *
+ * A row is classified by `tripsAll`, the day's final drives *including* deleted ones (D2): 0 is a
+ * day with no counted drive, which neither adds nor breaks; a day whose only drives were deleted
+ * has `tripsAll` above 0 and is not safe, so it breaks the run — deleting never saves it. An older
+ * row without `tripsAll` falls back to `tripsScored`, as M2 wrote it. Shown as "Longest run of safe
+ * days", never a streak: the rewards streak (shields and all) is the server's, not this.
  */
+export function dayKind(day: DayEntry): 'none' | 'safe' | 'not_safe' {
+  const counted = day.tripsAll ?? day.tripsScored;
+  if (counted === 0) return 'none';
+  return day.safeDay ? 'safe' : 'not_safe';
+}
+
 export function longestSafeStreak(days: readonly DayEntry[]): number {
   let run = 0;
   let best = 0;
-  const counted = days.filter((d) => d.safeDay || d.tripsScored !== 0);
+  const counted = days.filter((d) => dayKind(d) !== 'none');
   for (const day of [...counted].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))) {
-    run = day.safeDay ? run + 1 : 0;
+    run = dayKind(day) === 'safe' ? run + 1 : 0;
     if (run > best) best = run;
   }
   return best;

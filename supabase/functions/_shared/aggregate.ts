@@ -58,6 +58,12 @@ export interface DayRow {
   exposure: number;
   drivingS: number;
   tripsScored: number;
+  /**
+   * The day's final trips *including* soft-deleted ones (D2): what tells a day with no counted
+   * drive (0) from one whose only drives were deleted (> 0, with `tripsScored` 0). Stored as
+   * `score_daily.trips_all` (0009); a reader classifies a day by it, never by `tripsScored`.
+   */
+  tripsAll: number;
   severeEvents: number;
 }
 
@@ -155,7 +161,8 @@ export function dayRows(
     const kept = evaluateDay({ trips: live.map(toDayTrip) });
     const safeDay = all.safeDay && kept.safeDay;
     const goodDay = !safeDay && (all.safeDay || all.goodDay) && (kept.safeDay || kept.goodDay);
-    const scored = live.filter((t) => t.status === 'final' && t.score !== null);
+    const isScored = (t: DayTripInput) => t.status === 'final' && t.score !== null;
+    const scored = live.filter(isScored);
     return {
       day,
       longTermScore: lt.score === null ? null : Math.round(lt.score),
@@ -168,6 +175,7 @@ export function dayRows(
       exposure: round6(scored.reduce((sum, t) => sum + t.exposure, 0)),
       drivingS: Math.round(kept.drivingS),
       tripsScored: scored.length,
+      tripsAll: own.filter(isScored).length,
       severeEvents: scored.filter((t) => t.hadSevereEvent).length,
     };
   });
