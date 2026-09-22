@@ -9,11 +9,21 @@
 -- the container's network address with the local passwords. That section commits its three
 -- fixture users in those sessions and deletes them again before the main transaction goes on; a
 -- run that dies midway leaves them behind, and the next run deletes them first.
+--
+-- Local stack only (security M-3): the file refuses to run anywhere whose JWT secret is not the
+-- local stack's well-known default, before it installs anything, and drops dblink at the end, so a
+-- `test db --linked` can neither log in with local passwords nor leave dblink behind.
 create extension if not exists pgtap with schema extensions;
-create extension if not exists dblink with schema extensions;
+do $$
+begin
+  if coalesce(current_setting('app.settings.jwt_secret', true), '') <> 'super-secret-jwt-token-with-at-least-32-characters-long' then
+    raise exception '0006_onboarding.test.sql runs only against the local Supabase stack';
+  end if;
+  create extension if not exists dblink with schema extensions;
+end $$;
 
 begin;
-select plan(145);
+select plan(164);
 
 -- ---------------------------------------------------------------------------
 -- 1. supabase_auth_admin: an OAuth sign-in (GoTrue's UPDATE of raw_user_meta_data and
@@ -43,24 +53,25 @@ select is((select cu from extensions.dblink('rw_auth', 'select current_user::tex
     where claims = ''), 'supabase_auth_admin', 'the sign-in session is supabase_auth_admin with no JWT');
 
 -- the adult signs in again: GoTrue rewrites the metadata and the identity
-select is(extensions.dblink_exec('rw_auth', $q$update auth.users set raw_user_meta_data = '{"full_name":"Xavier Q. Adult","name":"Xavier","avatar_url":"https://example.com/x2.png","picture":"https://example.com/x2.png","email":"xa@example.com","sub":"g-xa","iss":"https://accounts.google.com"}', last_sign_in_at = now()
+select is(extensions.dblink_exec('rw_auth', $q$update auth.users set raw_user_meta_data = '{"full_name":"Xavier Q. Adult","name":"Xavier","avatar_url":"https://example.com/x2.png","picture":"https://example.com/x2.png","preferred_username":"xq","email":"xa@example.com","sub":"g-xa","iss":"https://accounts.google.com"}', last_sign_in_at = now()
   where id = 'a1a1a1a1-0000-4000-8000-0000000000f1'$q$), 'UPDATE 1', 'an adult OAuth sign-in (user metadata) succeeds as supabase_auth_admin');
 select is(extensions.dblink_exec('rw_auth', $q$update auth.identities set identity_data = '{"sub":"g-xa","email":"xa@example.com","full_name":"Xavier Q. Adult","name":"Xavier","given_name":"Xavier","family_name":"Adult","picture":"https://example.com/x2.png"}', last_sign_in_at = now()
   where provider_id = 'g-xa' and provider = 'google'$q$), 'UPDATE 1', 'and its identity update succeeds too');
 select is((select v::jsonb from extensions.dblink('rw_pg', $q$select raw_user_meta_data::text from auth.users where id = 'a1a1a1a1-0000-4000-8000-0000000000f1'$q$) as t(v text)),
-  '{"full_name":"Xavier Q. Adult","name":"Xavier","avatar_url":"https://example.com/x2.png","picture":"https://example.com/x2.png","email":"xa@example.com","sub":"g-xa","iss":"https://accounts.google.com"}'::jsonb,
+  '{"full_name":"Xavier Q. Adult","name":"Xavier","avatar_url":"https://example.com/x2.png","picture":"https://example.com/x2.png","preferred_username":"xq","email":"xa@example.com","sub":"g-xa","iss":"https://accounts.google.com"}'::jsonb,
   'the adult''s metadata is exactly what GoTrue wrote');
 select is((select v::jsonb from extensions.dblink('rw_pg', $q$select identity_data::text from auth.identities where provider_id = 'g-xa'$q$) as t(v text)),
   '{"sub":"g-xa","email":"xa@example.com","full_name":"Xavier Q. Adult","name":"Xavier","given_name":"Xavier","family_name":"Adult","picture":"https://example.com/x2.png"}'::jsonb,
   'the adult''s identity is exactly what GoTrue wrote');
 
 -- the blocked child signs in: the sign-in succeeds and the name is gone again
-select is(extensions.dblink_exec('rw_auth', $q$update auth.users set raw_user_meta_data = '{"full_name":"Yara Child","name":"Yara","avatar_url":"https://example.com/y.png","picture":"https://example.com/y.png","email":"yc@example.com","sub":"g-yc","iss":"https://accounts.google.com"}', last_sign_in_at = now()
+select is(extensions.dblink_exec('rw_auth', $q$update auth.users set raw_user_meta_data = '{"full_name":"Yara Child","name":"Yara","avatar_url":"https://example.com/y.png","picture":"https://example.com/y.png","preferred_username":"yara_c","nickname":"Yaya","custom_claims":{"hd":"school.example.edu"},"email":"yc@example.com","email_verified":true,"sub":"g-yc","iss":"https://accounts.google.com"}', last_sign_in_at = now()
   where id = 'a1a1a1a1-0000-4000-8000-0000000000f2'$q$), 'UPDATE 1', 'a blocked child''s OAuth sign-in succeeds as supabase_auth_admin');
-select is(extensions.dblink_exec('rw_auth', $q$update auth.identities set identity_data = '{"sub":"g-yc","email":"yc@example.com","full_name":"Yara Child","name":"Yara","picture":"https://example.com/y.png"}'
+select is(extensions.dblink_exec('rw_auth', $q$update auth.identities set identity_data = '{"sub":"g-yc","email":"yc@example.com","full_name":"Yara Child","name":"Yara","user_name":"yarac","picture":"https://example.com/y.png"}'
   where provider_id = 'g-yc' and provider = 'google'$q$), 'UPDATE 1', 'and its identity update succeeds');
 select is((select v::jsonb from extensions.dblink('rw_pg', $q$select raw_user_meta_data::text from auth.users where id = 'a1a1a1a1-0000-4000-8000-0000000000f2'$q$) as t(v text)),
-  '{"email":"yc@example.com","sub":"g-yc","iss":"https://accounts.google.com"}'::jsonb, 'the child''s refreshed metadata is stripped to the non-name keys');
+  '{"email":"yc@example.com","email_verified":true,"sub":"g-yc","iss":"https://accounts.google.com"}'::jsonb,
+  'the child''s refreshed metadata keeps only the allowlisted keys (no username, nickname or custom claims)');
 select is((select v::jsonb from extensions.dblink('rw_pg', $q$select identity_data::text from auth.identities where provider_id = 'g-yc'$q$) as t(v text)),
   '{"sub":"g-yc","email":"yc@example.com"}'::jsonb, 'and so is the refreshed identity');
 -- linking a second provider inserts an identity carrying the name
@@ -99,14 +110,15 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('a1a1a1a1-0000-4000-8000-000000000002', 't6@example.com', '{"display_name":"Tia"}'),
   ('a1a1a1a1-0000-4000-8000-000000000003', 'b6@example.com', '{"display_name":"Bo"}'),
   ('a1a1a1a1-0000-4000-8000-000000000004', 'u6@example.com',
-    '{"display_name":"Uma","full_name":"Uma Child","name":"Uma","avatar_url":"https://example.com/u.png","picture":"https://example.com/u.png","given_name":"Uma","family_name":"Child","email":"u6@example.com","sub":"g-u6"}'),
+    '{"display_name":"Uma","full_name":"Uma Child","name":"Uma","nickname":"Umi","avatar_url":"https://example.com/u.png","picture":"https://example.com/u.png","given_name":"Uma","family_name":"Child","email":"u6@example.com","sub":"g-u6"}'),
   ('a1a1a1a1-0000-4000-8000-000000000005', 'k6@example.com', '{"display_name":"Kai"}'),
   ('a1a1a1a1-0000-4000-8000-000000000006', 's6@example.com', '{"display_name":"Sam"}'),
   ('a1a1a1a1-0000-4000-8000-000000000007', 'n6@example.com', '{"display_name":"Nia"}'),
   ('a1a1a1a1-0000-4000-8000-000000000008', 'l16@example.com', '{}'),
   ('a1a1a1a1-0000-4000-8000-000000000009', 'l26@example.com', '{}'),
   ('a1a1a1a1-0000-4000-8000-00000000000a', 'm16@example.com', '{}'),
-  ('a1a1a1a1-0000-4000-8000-00000000000b', 'm26@example.com', '{}');
+  ('a1a1a1a1-0000-4000-8000-00000000000b', 'm26@example.com', '{}'),
+  ('a1a1a1a1-0000-4000-8000-00000000000c', 'r6@example.com', '{}');
 insert into auth.identities (provider_id, user_id, identity_data, provider) values
   ('g-u6', 'a1a1a1a1-0000-4000-8000-000000000004',
     '{"sub":"g-u6","email":"u6@example.com","full_name":"Uma Child","name":"Uma","avatar_url":"https://example.com/u.png","picture":"https://example.com/u.png"}', 'google');
@@ -117,6 +129,10 @@ update public.private_profiles set birth_date = (select utc from d) - interval '
 update public.private_profiles set birth_date = (select utc from d) - interval '40 years' where user_id = 'a1a1a1a1-0000-4000-8000-000000000003';
 update public.private_profiles set birth_date = ((select utc from d) - interval '13 years')::date + 1 where user_id = 'a1a1a1a1-0000-4000-8000-000000000005';
 update public.private_profiles set birth_date = ((select utc from d) - interval '18 years')::date + 1 where user_id = 'a1a1a1a1-0000-4000-8000-000000000006';
+-- a drive is accepted only once the age question is answered, so section 8's drivers start as
+-- adults; their real birth dates are written after their drives exist
+update public.private_profiles set birth_date = date '1990-01-01' where user_id in ('a1a1a1a1-0000-4000-8000-000000000008', 'a1a1a1a1-0000-4000-8000-000000000009',
+  'a1a1a1a1-0000-4000-8000-00000000000a', 'a1a1a1a1-0000-4000-8000-00000000000b', 'a1a1a1a1-0000-4000-8000-00000000000c');
 
 -- U's footprint before the block: a phone, a consent and a stored object under U's prefix; A's object for contrast
 insert into public.devices (id, user_id, platform) values ('u-phone', 'a1a1a1a1-0000-4000-8000-000000000004', 'android');
@@ -128,7 +144,7 @@ insert into storage.objects (bucket_id, name, owner_id) values
 -- apply_trip envelopes, shaped like 0002's test fixtures (FinalizeTripPayload at HEAD)
 create function pg_temp.at_la(p_days_ago int, p_hour int) returns timestamptz
 language sql as $$ select (((now() at time zone 'America/Los_Angeles')::date - p_days_ago)::timestamp + make_interval(hours => p_hour)) at time zone 'America/Los_Angeles' $$;
-create function pg_temp.envelope(p_user uuid, p_client text, p_hour int) returns jsonb
+create function pg_temp.envelope(p_user uuid, p_client text, p_hour int, p_events int default 0) returns jsonb
 language sql as $$
   select jsonb_build_object(
     'userId', p_user,
@@ -138,13 +154,20 @@ language sql as $$
       'endedAt', floor(extract(epoch from pg_temp.at_la(2, p_hour) + interval '15 minutes') * 1000)::bigint,
       'tz', 'America/Los_Angeles', 'distanceM', 12500.5, 'durationS', 900,
       'role', 'driver', 'roleConfidence', null, 'roleSource', 'manual', 'mode', 'mounted', 'cameraSession', false,
-      'events', '[]'::jsonb,
+      'events', (select coalesce(jsonb_agg(jsonb_build_object(
+          'id', 'ev-' || i, 'category', 'speeding', 'startedAt', floor(extract(epoch from pg_temp.at_la(2, p_hour)) * 1000)::bigint + i * 10000,
+          'durationS', 8.5, 'durationMs', 8500, 'q', 0.9, 'corrected', false, 'status', 'scored',
+          'measured', jsonb_build_object('speedMps', 21.0, 'limitMps', 15.6, 'overMps', 5.4),
+          'context', jsonb_build_object('night', false, 'precipitation', false),
+          'contextMultiplier', 1, 'severity', 1, 'deduction', 2,
+          'lat', 47.606, 'lng', -122.332, 'alertShown', true, 'source', 'gnss') order by i), '[]'::jsonb)
+        from generate_series(1, p_events) i),
       'rowsDigest', jsonb_build_object('count', 900, 'validGnssPct', 98.5, 'imuPresent', true, 'maxSustainedSpeedMps', 31.2, 'sha256', repeat('a', 64)),
       'startGeohash5', 'c23nb', 'endGeohash5', 'c23nb', 'polyline', '_p~iF~ps|U', 'tracePath', null,
       'hadSevereEvent', false, 'incomplete', false),
     'scored', jsonb_build_object('score', 80, 'status', 'final', 'exposure', 1.25, 'dataQuality', 'A',
       'categoryDeductions', '{"phone":0,"speeding":20,"braking":0,"accel":0,"cornering":0,"focus":0}'::jsonb,
-      'eventDeductions', '{}'::jsonb, 'scoringVersion', 1),
+      'eventDeductions', (select coalesce(jsonb_object_agg('ev-' || i, 2), '{}'::jsonb) from generate_series(1, p_events) i), 'scoringVersion', 1),
     'day', jsonb_build_object('day', (pg_temp.at_la(2, p_hour) at time zone 'America/Los_Angeles')::date,
       'longTermScore', 80, 'band', 'good', 'provisional', false, 'safeDay', false, 'goodDay', true, 'phoneFreeDay', true,
       'cameraDay', false, 'exposure', 1.25, 'drivingS', 900, 'tripsScored', 1, 'severeEvents', 0),
@@ -154,7 +177,8 @@ create temp table fx (name text primary key, p jsonb not null);
 insert into fx values
   ('u', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000004', 'u-trip-1', 9)),
   ('t-pending', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000002', 't-trip-1', 9)),
-  ('t-linked', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000002', 't-trip-2', 10)),
+  ('t-linked', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000002', 't-trip-2', 10, 1)),
+  ('t-after', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000002', 't-trip-4', 12)),
   ('t-optional', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000002', 't-trip-3', 11)),
   ('n', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000007', 'n-trip-1', 9)),
   ('a', pg_temp.envelope('a1a1a1a1-0000-4000-8000-000000000001', 'a-trip-1', 9));
@@ -211,8 +235,9 @@ select is((select count(*)::int from pg_proc p where p.oid in (
     'public.is_underage(uuid)'::regprocedure, 'public.refuse_underage_writes()'::regprocedure,
     'public.enforce_trip_age_policy()'::regprocedure, 'public.rederive_age_bands()'::regprocedure,
     'public.underage_object_keys(integer)'::regprocedure, 'public.user_local_date(uuid, timestamptz)'::regprocedure,
-    'public.derive_age_band_on(date, date)'::regprocedure, 'public.sync_age_band()'::regprocedure)
-  and not p.prosecdef and p.proconfig = array['search_path=public']), 8,
+    'public.derive_age_band_on(date, date)'::regprocedure, 'public.sync_age_band()'::regprocedure,
+    'public.age_band_rank(text)'::regprocedure, 'public.underage_identity_keys(jsonb)'::regprocedure)
+  and not p.prosecdef and p.proconfig = array['search_path=public']), 10,
   'every other function this migration creates or replaces is security invoker pinning exactly search_path=public');
 select is(array[has_function_privilege('authenticated', 'public.create_guardian_invite()', 'execute'),
                 has_function_privilege('authenticated', 'public.guardian_link_state()', 'execute'),
@@ -222,13 +247,16 @@ select is(array[has_function_privilege('authenticated', 'public.create_guardian_
 select is((select bool_or(has_function_privilege('anon', f, 'execute')) from unnest(array[
     'public.create_guardian_invite()', 'public.guardian_link_state()', 'public.is_underage(uuid)', 'public.underage_object_keys(integer)',
     'public.rederive_age_bands()', 'public.refuse_underage_writes()', 'public.enforce_trip_age_policy()', 'public.minimise_underage_account()',
-    'public.rescrub_underage_metadata()', 'public.rescrub_underage_identity()', 'public.user_local_date(uuid, timestamptz)', 'public.derive_age_band_on(date, date)']) f),
+    'public.rescrub_underage_metadata()', 'public.rescrub_underage_identity()', 'public.user_local_date(uuid, timestamptz)', 'public.derive_age_band_on(date, date)',
+    'public.age_band_rank(text)', 'public.underage_identity_keys(jsonb)']) f),
   false, 'anon executes nothing this migration creates');
 select is((select bool_or(has_function_privilege('authenticated', f, 'execute')) from unnest(array[
     'public.underage_object_keys(integer)', 'public.rederive_age_bands()', 'public.refuse_underage_writes()', 'public.enforce_trip_age_policy()',
     'public.minimise_underage_account()', 'public.rescrub_underage_metadata()', 'public.rescrub_underage_identity()',
-    'public.user_local_date(uuid, timestamptz)', 'public.derive_age_band_on(date, date)']) f),
+    'public.user_local_date(uuid, timestamptz)', 'public.derive_age_band_on(date, date)', 'public.age_band_rank(text)', 'public.underage_identity_keys(jsonb)']) f),
   false, 'authenticated executes no writer, trigger or date helper');
+select is(has_function_privilege('authenticated', 'public.derive_age_band(date)', 'execute'), false,
+  '0001''s UTC derive_age_band is no longer client-callable (m2)');
 select is(array[has_function_privilege('service_role', 'public.rederive_age_bands()', 'execute'),
                 has_function_privilege('service_role', 'public.create_guardian_invite()', 'execute')],
   array[false, false], 'service_role cannot run the re-derivation or issue invites');
@@ -238,6 +266,14 @@ select has_trigger('public', 'consents', 'consents_refuse_underage', 'consents r
 select has_trigger('public', 'profiles', 'profiles_refuse_underage', 'a blocked profile is read-only for the client');
 select has_trigger('public', 'profiles', 'profiles_minimise_underage', 'a new u13 band minimises the account');
 select has_trigger('public', 'trips', 'trips_age_policy', 'trips enforce the age policy');
+select is((select count(*)::int from pg_trigger t where not t.tgisinternal and t.tgfoid = 'public.refuse_underage_writes()'::regprocedure
+    and (t.tgrelid::regclass::text, t.tgname::text) in (('trips', 'trips_refuse_underage'), ('trip_events', 'trip_events_refuse_underage'),
+      ('event_disputes', 'event_disputes_refuse_underage'), ('score_daily', 'score_daily_refuse_underage'), ('baselines', 'baselines_refuse_underage'))), 5,
+  'every drive table refuses an under-13 account''s writes');
+select has_index('public', 'private_profiles', 'private_profiles_birth_date_idx', 'the hourly pass reads birth dates through an index');
+select throws_ok($$ insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason)
+    values ('a1a1a1a1-0000-4000-8000-000000000001', 'offset-tz', now(), now(), '+23:59', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short') $$,
+  '23514', null, 'a fixed-offset tz such as +23:59 is refused on every write path (M-4)');
 select has_trigger('auth', 'users', 'rescrub_underage_metadata', 'auth.users re-strips a blocked child''s name');
 select has_trigger('auth', 'identities', 'rescrub_underage_identity', 'auth.identities re-strips it too');
 select policies_are('storage', 'objects', array['traces_insert_own', 'traces_select_own', 'traces_delete_own', 'storage_refuse_underage']::name[],
@@ -284,6 +320,11 @@ select is((select bool_and(jsonb_typeof(g->'title') = 'string' and jsonb_typeof(
   'each guide is a public { title, steps } with one to eight string steps');
 select is((select row(value, is_public)::text from public.app_config where key = 'min_app_version'), row('"2.0.0"'::jsonb, true)::text, 'min_app_version is still "2.0.0"');
 select is((select value -> 'guardian_invites' from public.app_config where key = 'feature_flags'), 'false'::jsonb, 'feature_flags.guardian_invites is false');
+-- the row as it is stored once 0005 and 0006 have both applied: exactly the app's CONFIG_DEFAULTS.flags
+-- (src/data/config/appConfig.ts), so a fresh database and a first launch with no config agree
+select is((select value from public.app_config where key = 'feature_flags'),
+  '{"auto_detect": true, "camera_beta": false, "referral": false, "guardian_invites": false}'::jsonb,
+  'the effective feature_flags row is exactly CONFIG_DEFAULTS.flags: only auto_detect on');
 -- an operator's value survives the migration's merge
 update public.app_config set value = value || '{"guardian_invites": true}' where key = 'feature_flags';
 update public.app_config set value = value || '{"guardian_invites": false}' where key = 'feature_flags' and not value ? 'guardian_invites';
@@ -356,7 +397,8 @@ select throws_ok($$ select public.create_guardian_invite() $$, '42501', 'invite 
 reset role;
 select set_config('request.jwt.claims', '', true);
 select is((select count(*)::int from public.invites where issuer_id = 'a1a1a1a1-0000-4000-8000-000000000002'), 10, 'ten invites exist, nine of them revoked');
-select is((select count(*)::int from public.rate_limits where user_id = 'a1a1a1a1-0000-4000-8000-000000000002' and key = 'invite_day'), 1, 'the invite_day rate-limit row serialises issuance');
+select is((select row(count, window_start)::text from public.rate_limits where user_id = 'a1a1a1a1-0000-4000-8000-000000000002' and key = 'invite_day'),
+  row(10, now())::text, 'the invite_day row holds the true rolling count and the oldest issue time in the window (m3)');
 
 -- expiry
 update public.invites set expires_at = now() - interval '1 minute' where issuer_id = 'a1a1a1a1-0000-4000-8000-000000000002' and not revoked;
@@ -386,8 +428,8 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok($$ select public.apply_trip((select p from fx where name = 't-pending')) $$, '42501', 'guardian consent required',
   'consent required: a teen whose link is pending cannot upload');
-select throws_ok($$ select public.apply_trip((select p from fx where name = 'n')) $$, '42501', 'guardian consent required',
-  'nor can a user of unknown age');
+select throws_ok($$ select public.apply_trip((select p from fx where name = 'n')) $$, '55000', 'age not confirmed yet',
+  'a user of unknown age is refused as retryable (55000), not as a permanent 403');
 select lives_ok($$ select public.apply_trip((select p from fx where name = 'a')) $$, 'an adult can');
 reset role;
 update public.private_profiles set guardian_link_status = 'linked' where user_id = 'a1a1a1a1-0000-4000-8000-000000000002';
@@ -398,6 +440,8 @@ update public.private_profiles set guardian_link_status = 'pending' where user_i
 update public.app_config set value = '"guardian_link_optional"' where key = 'minor_consent_mode';
 set local role service_role;
 select lives_ok($$ select public.apply_trip((select p from fx where name = 't-optional')) $$, 'consent optional: a pending teen uploads');
+select throws_ok($$ select public.apply_trip((select p from fx where name = 'n')) $$, '55000', 'age not confirmed yet',
+  'consent optional: a user of unknown age still waits, retryably, for the age answer');
 reset role;
 select set_config('request.jwt.claims', '', true);
 select is((select count(*)::int from public.trips where user_id in ('a1a1a1a1-0000-4000-8000-000000000001', 'a1a1a1a1-0000-4000-8000-000000000002')), 3,
@@ -417,7 +461,7 @@ select is((select row(age_band, display_name, avatar_path, flags, driving_stage)
 select is((select count(*)::int from public.devices where user_id = 'a1a1a1a1-0000-4000-8000-000000000004'), 0, 'U''s devices are deleted');
 select is((select count(*)::int from public.consents where user_id = 'a1a1a1a1-0000-4000-8000-000000000004'), 0, 'U''s consents are deleted');
 select is((select raw_user_meta_data from auth.users where id = 'a1a1a1a1-0000-4000-8000-000000000004'),
-  '{"email":"u6@example.com","sub":"g-u6"}'::jsonb, 'the auth metadata keeps no name, display name or picture');
+  '{"email":"u6@example.com","sub":"g-u6"}'::jsonb, 'the auth metadata keeps only allowlisted keys: no name, nickname, display name or picture');
 select is((select identity_data from auth.identities where user_id = 'a1a1a1a1-0000-4000-8000-000000000004'),
   '{"sub":"g-u6","email":"u6@example.com"}'::jsonb, 'nor does the identity');
 select is((select row(u.email, pp.birth_date is not null)::text from auth.users u join public.private_profiles pp on pp.user_id = u.id
@@ -465,6 +509,46 @@ set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a1a1a1a1-0000-4000-8000-000000000004"}', true);
 select throws_ok($$ select public.underage_object_keys(100) $$, '42501', null, 'authenticated cannot list leftover objects');
 reset role;
+
+-- ---------------------------------------------------------------------------
+-- 6b. a blocked account keeps no drive (security I-1): T, with drives, an event, a dispute, day
+--     rows, baselines, invites, a rate-limit row, a guardian link and a trace object, is
+--     corrected by support to a child's birth date
+-- ---------------------------------------------------------------------------
+insert into public.event_disputes (event_id, user_id, reason, note)
+  select e.id, e.user_id, 'other', 'we were parked at the school' from public.trip_events e where e.user_id = 'a1a1a1a1-0000-4000-8000-000000000002' limit 1;
+update public.private_profiles set guardian_link_status = 'linked', guardian_user_id = 'a1a1a1a1-0000-4000-8000-000000000001' where user_id = 'a1a1a1a1-0000-4000-8000-000000000002';
+insert into storage.objects (bucket_id, name, owner_id) values ('traces', 'a1a1a1a1-0000-4000-8000-000000000002/t-trip-2.bin.gz', 'a1a1a1a1-0000-4000-8000-000000000002');
+select is((select array[(select count(*) from public.trips where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.trip_events where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.event_disputes where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.score_daily where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.baselines where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.invites where issuer_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.rate_limits where user_id = 'a1a1a1a1-0000-4000-8000-000000000002')]::int[]),
+  array[2, 1, 1, 1, 1, 10, 1], 'T starts with drives, an event, a dispute, a day row, baselines, ten invites and a rate-limit row');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+update public.private_profiles set birth_date = current_date - interval '10 years' where user_id = 'a1a1a1a1-0000-4000-8000-000000000002';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array[(select count(*) from public.trips where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.trip_events where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.event_disputes where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.score_daily where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.baselines where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), (select count(*) from public.invites where issuer_id = 'a1a1a1a1-0000-4000-8000-000000000002'),
+                        (select count(*) from public.rate_limits where user_id = 'a1a1a1a1-0000-4000-8000-000000000002')]::int[]),
+  array[0, 0, 0, 0, 0, 0, 0], 'the block deletes every drive, event, dispute, day row, baseline, invite and rate-limit row');
+select is((select row(guardian_link_status, guardian_user_id)::text from public.private_profiles where user_id = 'a1a1a1a1-0000-4000-8000-000000000002'), row('none', null::uuid)::text,
+  'and resets the guardian link');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is(public.underage_object_keys(100), '[{"bucket":"traces","name":"a1a1a1a1-0000-4000-8000-000000000002/t-trip-2.bin.gz"},{"bucket":"traces","name":"a1a1a1a1-0000-4000-8000-000000000004/u-trip.bin.gz"}]'::jsonb,
+  'the trace bytes SQL cannot delete are listed for the Storage-API removal');
+select throws_ok($$ select public.apply_trip((select p from fx where name = 't-after')) $$, '42501', 'account not eligible', 'a blocked account uploads no new drive');
+reset role;
+select set_config('request.jwt.claims', '', true);
+select throws_ok($$ insert into public.trip_events (trip_id, user_id) values (gen_random_uuid(), 'a1a1a1a1-0000-4000-8000-000000000002') $$, '42501', 'account not eligible',
+  'no event row may be written for a blocked account, by any writer');
+select throws_ok($$ insert into public.event_disputes (event_id, user_id, reason) values (gen_random_uuid(), 'a1a1a1a1-0000-4000-8000-000000000002', 'other') $$, '42501', 'account not eligible',
+  'nor a dispute');
+select throws_ok($$ insert into public.score_daily (user_id, day) values ('a1a1a1a1-0000-4000-8000-000000000002', current_date) $$, '42501', 'account not eligible', 'nor a day row');
+select throws_ok($$ insert into public.baselines (user_id) values ('a1a1a1a1-0000-4000-8000-000000000002') $$, '42501', 'account not eligible', 'nor baselines');
 
 -- the minimisation refuses a band change made under someone else's JWT (a future definer bug)
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a1a1a1a1-0000-4000-8000-000000000003"}', true);
@@ -538,6 +622,25 @@ select is(public.rederive_age_bands(), 2, 'the hourly pass finds both stale band
 select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-000000000008', 'a1a1a1a1-0000-4000-8000-000000000009')),
   array['18_plus', '13_17'], 'and turns each over on the driver''s local date, not the UTC date');
 
+-- monotonic (ruling T1 I1): R turns 13 on the Kiritimati date and is released; a later drive in
+-- Pago Pago (still the day before there) must not re-block R or re-run the minimisation
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason) values
+  ('a1a1a1a1-0000-4000-8000-00000000000c', 'r-trip-1', now() - interval '3 days', now() - interval '3 days' + interval '10 minutes', 'Pacific/Kiritimati', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short');
+update public.private_profiles set birth_date = (select kir from d) - interval '13 years' where user_id = 'a1a1a1a1-0000-4000-8000-00000000000c';
+insert into public.devices (id, user_id, platform) values ('r-phone', 'a1a1a1a1-0000-4000-8000-00000000000c', 'android');
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason) values
+  ('a1a1a1a1-0000-4000-8000-00000000000c', 'r-trip-2', now() - interval '1 hour', now() - interval '50 minutes', 'Pacific/Pago_Pago', 100, 600, 'passenger', 'mounted', 1, 'A', 'unscored', 'too_short');
+select is(public.derive_age_band_on((select birth_date from public.private_profiles where user_id = 'a1a1a1a1-0000-4000-8000-00000000000c'),
+    public.user_local_date('a1a1a1a1-0000-4000-8000-00000000000c')), 'u13', 'R''s newest drive puts R''s local date back on the day before the birthday');
+select is(public.rederive_age_bands(), 0, 'the pass never moves a band younger');
+select is((select row(p.age_band, (select count(*) from public.devices v where v.user_id = p.id))::text from public.profiles p where p.id = 'a1a1a1a1-0000-4000-8000-00000000000c'),
+  row('13_17', 1)::text, 'R stays 13_17 and keeps the device: no re-block, no re-minimisation');
+
+-- narrowed (m1): an adult far from any 13th or 18th birthday is not read, even with a stale band
+update public.profiles set age_band = '13_17' where id = 'a1a1a1a1-0000-4000-8000-000000000003';
+select is(public.rederive_age_bands(), 0, 'the pass reads only birth dates near a 13th or 18th birthday');
+update public.profiles set age_band = '18_plus' where id = 'a1a1a1a1-0000-4000-8000-000000000003';
+
 -- ---------------------------------------------------------------------------
 -- 9. support correction: a mistyped adult (U) is released by a service-role birth-date update
 -- ---------------------------------------------------------------------------
@@ -556,3 +659,4 @@ select set_config('request.jwt.claims', '', true);
 
 select * from finish();
 rollback;
+drop extension if exists dblink;

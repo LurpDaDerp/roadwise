@@ -24,6 +24,9 @@ insert into auth.users (id, email, raw_user_meta_data) values
   -- R owns only the trace-retention fixtures; no other assertion in this file mentions R, so the
   -- expire_trace_objects section can write trips and objects without moving any other count
   ('11111111-1111-4111-8111-111111111111', 'tr@example.com', '{"display_name":"Ro"}');
+-- 0006: a drive is accepted only once its driver has answered the age question (an `unknown`
+-- band is refused as retryable), so every fixture user here is an adult
+update public.private_profiles set birth_date = date '1990-01-01' where birth_date is null;
 
 -- calendar day N days ago in Los Angeles, and a fixed hour of that day
 create function pg_temp.la_day(p_days_ago int) returns date

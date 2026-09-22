@@ -92,6 +92,10 @@ select col_has_check('public', 'devices', 'permissions', 'devices.permissions is
 select is(has_function_privilege('anon', 'public.set_birth_date(date)', 'execute'), false, 'anon cannot execute set_birth_date');
 select is(has_function_privilege('authenticated', 'public.set_birth_date(date)', 'execute'), true, 'authenticated can execute set_birth_date');
 select is(has_function_privilege('anon', 'public.derive_age_band(date)', 'execute'), false, 'anon cannot execute derive_age_band');
+-- derive_age_band's rule, checked as the owner: 0006 made it server-internal (the band is derived on the local date)
+select is(public.derive_age_band(date '2015-01-01'), 'u13', 'under-13 band');
+select is(public.derive_age_band(date '2000-01-01'), '18_plus', '18-plus band');
+select is(public.derive_age_band(null), 'unknown', 'null birth date is the unknown band');
 select is(has_function_privilege('authenticated', 'public.handle_new_user()', 'execute'), false, 'authenticated cannot call handle_new_user');
 select is(has_function_privilege('authenticated', 'public.touch_updated_at()', 'execute'), false, 'authenticated cannot call touch_updated_at');
 select is(has_function_privilege('authenticated', 'public.sync_age_band()', 'execute'), false, 'authenticated cannot call sync_age_band');
@@ -159,9 +163,6 @@ select is((select age_band from public.profiles where id = '00000000-0000-0000-0
 select throws_ok($$ select public.set_birth_date(date '2000-01-01') $$, '42501', 'birth date already set', 'birth date is write-once for the client');
 select is((select birth_date from public.private_profiles where user_id = '00000000-0000-0000-0000-000000000001'), date '2010-06-01', 'birth date unchanged by the second call');
 select is((select age_band from public.profiles where id = '00000000-0000-0000-0000-000000000001'), '13_17', 'band unchanged by the second call');
-select is(public.derive_age_band(date '2015-01-01'), 'u13', 'under-13 band');
-select is(public.derive_age_band(date '2000-01-01'), '18_plus', '18-plus band');
-select is(public.derive_age_band(null), 'unknown', 'null birth date is the unknown band');
 
 -- own profile: editable columns yes; server-owned columns no; bounds enforced
 select lives_ok($$ update public.profiles set display_name = 'Ava Prime', units = 'kmh' where id = '00000000-0000-0000-0000-000000000001' $$, 'A updates own profile fields');

@@ -15,6 +15,9 @@ select plan(39);
 insert into auth.users (id, email, raw_user_meta_data) values
   ('a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3', 'w3a@example.com', '{"display_name":"Ada"}'),
   ('b3b3b3b3-b3b3-4b3b-8b3b-b3b3b3b3b3b3', 'w3b@example.com', '{"display_name":"Bo"}');
+-- 0006: a drive is accepted only once its driver has answered the age question (an `unknown`
+-- band is refused as retryable), so every fixture user here is an adult
+update public.private_profiles set birth_date = date '1990-01-01' where birth_date is null;
 
 create function pg_temp.at_la(p_days_ago int, p_hour int) returns timestamptz
 language sql as $$

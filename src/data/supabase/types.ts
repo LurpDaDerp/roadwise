@@ -697,6 +697,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      age_band_rank: { Args: { p_band: string }; Returns: number }
       apply_recompute: {
         Args: {
           p_baselines: Json
@@ -794,6 +795,7 @@ export type Database = {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
+      underage_identity_keys: { Args: { p_data: Json }; Returns: Json }
       underage_object_keys: { Args: { p_limit: number }; Returns: Json }
       upsert_baselines: {
         Args: { p_baselines: Json; p_user: string }
