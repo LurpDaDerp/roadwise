@@ -15,6 +15,7 @@
     "tones:make": "node scripts/make-tones.js",
     "traces:make": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/make-traces.js",
     "e2e:trip": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/e2e-trip.js",
+    "e2e:drive": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/e2e-drive.js",
     "db:start": "supabase start",
     "db:test": "supabase db reset && supabase test db",
     "db:types": "supabase gen types typescript --local > src/data/supabase/types.ts",
