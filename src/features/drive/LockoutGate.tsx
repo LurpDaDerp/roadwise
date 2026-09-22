@@ -8,6 +8,7 @@ import { useDrive } from '@/drive/useDrive';
 import { DRIVE_GROUP_PREFIX, DRIVE_ROUTES, driveHref } from './hudCopy';
 import { HudScreen } from './HudScreen';
 import { ParkedOnlyCard } from './ParkedOnlyCard';
+import { PocketScreen } from './PocketScreen';
 
 /** The keep-awake tag the gate holds for a mounted trip. */
 export const KEEP_AWAKE_TAG = 'roadwise-mounted-drive';
@@ -104,6 +105,18 @@ export function LockoutGate({ children }: { children: ReactNode }) {
       ) : null}
     </View>
   );
+}
+
+/**
+ * What the `/drive/hud` route shows (ruling U2 m2, safety). The banner's *Open HUD* may open the
+ * HUD on a pocket or auto-detected trip without changing its mode; the moment that trip is locked
+ * out (a driver above the lockout speed, SR2) the pocket rule wins and the route shows the pocket
+ * screen instead — never the mounted HUD at speed on a trip the engine treats as pocket. Back at a
+ * stop the HUD returns. A mounted trip, and a passenger (never locked out), keep the HUD.
+ */
+export function HudRouteScreen() {
+  const pocketAtSpeed = useDrive((s) => s.mode !== 'mounted' && s.lockedOut);
+  return pocketAtSpeed ? <PocketScreen /> : <HudScreen />;
 }
 
 const styles = StyleSheet.create({

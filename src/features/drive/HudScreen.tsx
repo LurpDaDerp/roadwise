@@ -1,7 +1,7 @@
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type GestureResponderEvent,
   Pressable,
@@ -42,14 +42,17 @@ const BATTERY_LOW = 0.15;
 
 /**
  * The whole screen goes dark-adapted at night, judged by the sun at the phone's last known position
- * (`sunIsDown`, civil twilight). The position is the OS's cached fix — reading it starts no GPS and
+ * (`sunIsDown`, civil twilight), starting from the host's clock-based night on the first paint.
+ * The position is the OS's cached fix — reading it starts no GPS and
  * costs no battery beyond the drive's own capture. With no cached fix the host's own night rule
  * (the detectors' clock-based night) decides, so the HUD never guesses a location.
  *
  * Re-checked every few minutes while the HUD is on screen; nothing runs when it is not.
  */
 function useHudNight(host: Pick<DriveHost, 'detectorContext'>): boolean {
-  const [night, setNight] = useState(false);
+  // The first paint already has an answer — the host's synchronous clock-based night — so a HUD
+  // mounting in a dark cabin never flashes the day palette while the position is read (review m1).
+  const [night, setNight] = useState(() => host.detectorContext().night);
   useEffect(() => {
     const fallback = () => host.detectorContext().night;
     let live = true;
@@ -118,15 +121,11 @@ export function mayRevealControls(
  * holds, and the ask lapses the moment that stops holding, so stopping again later needs a new tap.
  */
 export function useStoppedPanel(auto: boolean): { visible: boolean; reveal: () => void } {
-  const s = useDrive((d) => ({
-    status: d.status,
-    lockedOut: d.lockedOut,
-    awaitingSpeedAfterResume: d.awaitingSpeedAfterResume,
-    speedKnown: d.speedKnown,
-    speedMps: d.speedMps,
-    stoppedPanel: d.stoppedPanel,
+  // Booleans only, so a row that changes nothing here re-renders nothing (review m3).
+  const { allowed, engineSays } = useDrive((d) => ({
+    allowed: mayRevealControls(d),
+    engineSays: d.stoppedPanel || (d.status === 'ending' && !d.lockedOut),
   }));
-  const allowed = mayRevealControls(s);
   const [asked, setAsked] = useState(false);
   // The ask lapses as soon as it is no longer allowed (adjusting state while rendering, not in an
   // effect, so the panel never shows for a frame after the car moves off).
@@ -135,7 +134,6 @@ export function useStoppedPanel(auto: boolean): { visible: boolean; reveal: () =
     setWasAllowed(allowed);
     if (!allowed) setAsked(false);
   }
-  const engineSays = s.stoppedPanel || (s.status === 'ending' && !s.lockedOut);
   const reveal = useCallback(() => {
     if (allowed) setAsked(true);
   }, [allowed]);
@@ -146,16 +144,44 @@ export function useStoppedPanel(auto: boolean): { visible: boolean; reveal: () =
 export function useStoppedActions() {
   const host = useDriveHost();
   const router = useRouter();
-  return {
-    // The end screen captures the trip id as it mounts, so it opens while the trip is still set.
-    onEnd: () => {
-      router.replace(driveHref(DRIVE_ROUTES.end));
-      void host.end();
-    },
-    onMuteForDrive: () => void host.muteForDrive(),
-    onSetPassenger: (passenger: boolean) => void host.setPassenger(passenger),
-  };
+  return useMemo(
+    () => ({
+      // The end screen captures the trip id as it mounts, so it opens while the trip is still set.
+      onEnd: () => {
+        router.replace(driveHref(DRIVE_ROUTES.end));
+        void host.end();
+      },
+      onMuteForDrive: () => void host.muteForDrive(),
+      onSetPassenger: (passenger: boolean) => void host.setPassenger(passenger),
+    }),
+    [host, router]
+  );
 }
+
+/**
+ * Zones 1 and 2. The only part of the HUD that reads the 1 Hz speed, so a row re-renders the
+ * readout and the sign and nothing else (review m3). Both are memoised on what they display.
+ */
+const SpeedGauges = memo(function SpeedGauges({
+  landscape,
+  night,
+}: {
+  landscape: boolean;
+  night: boolean;
+}) {
+  const speedMps = useDrive((s) => s.speedMps);
+  const speedKnown = useDrive((s) => s.speedKnown);
+  const limit = useDrive((s) => s.limit);
+  return (
+    <View
+      testID={landscape ? 'hud-layout-landscape' : 'hud-layout-portrait'}
+      style={[styles.gauges, landscape ? styles.gaugesLandscape : styles.gaugesPortrait]}
+    >
+      <SpeedReadout speedMps={speedMps} speedKnown={speedKnown} limit={limit} night={night} />
+      <SpeedSign limit={limit} speedKnown={speedKnown} night={night} />
+    </View>
+  );
+});
 
 function statusLevel(level: 1 | 2 | 3 | undefined): HudStatusLevel {
   if (level === 3) return 'critical';
@@ -222,9 +248,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const landscape = width > height;
 
   const status = useDrive((s) => s.status);
-  const speedMps = useDrive((s) => s.speedMps);
-  const speedKnown = useDrive((s) => s.speedKnown);
-  const limit = useDrive((s) => s.limit);
   const activeAlert = useDrive((s) => s.activeAlert);
   const ind = useDrive((s) => ({
     gps: s.gps,
@@ -243,6 +266,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const actions = useStoppedActions();
   const panelVisible = !overlay && !shielded && panel.visible;
 
+  const muteCurrent = useCallback(() => void host.muteCurrentAlert(), [host]);
   const p = hudPalette(night);
   const recording = status === 'recording';
 
@@ -273,13 +297,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             night={night}
           />
         </View>
-        <View
-          testID={landscape ? 'hud-layout-landscape' : 'hud-layout-portrait'}
-          style={[styles.gauges, landscape ? styles.gaugesLandscape : styles.gaugesPortrait]}
-        >
-          <SpeedReadout speedMps={speedMps} speedKnown={speedKnown} limit={limit} night={night} />
-          <SpeedSign limit={limit} speedKnown={speedKnown} night={night} />
-        </View>
+        <SpeedGauges landscape={landscape} night={night} />
         {recording ? (
           <StatusRing level={statusLevel(activeAlert?.level)} recording night={night} />
         ) : (
@@ -295,7 +313,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         {...actions}
       />
       <AlertOverlay decision={activeAlert} night={night} reduceMotion={th.reduceMotion} />
-      {shielded ? <TouchShield onHold={() => void host.muteCurrentAlert()} /> : null}
+      {shielded ? <TouchShield onHold={muteCurrent} /> : null}
     </View>
   );
 }

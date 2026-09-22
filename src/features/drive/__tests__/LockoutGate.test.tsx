@@ -15,8 +15,7 @@ import { DisputeSheet } from '@/features/trips/DisputeSheet';
 import { ThemeProvider } from '@/ui';
 
 import { hudCopy } from '../hudCopy';
-import { HudScreen } from '../HudScreen';
-import { KEEP_AWAKE_TAG, LockoutGate } from '../LockoutGate';
+import { HudRouteScreen, KEEP_AWAKE_TAG, LockoutGate } from '../LockoutGate';
 import { PocketScreen } from '../PocketScreen';
 
 // ---- a small navigator standing in for expo-router ----------------------------------------------
@@ -135,7 +134,7 @@ function Routes() {
   const path = (require('expo-router') as { usePathname: () => string }).usePathname();
   switch (path) {
     case '/drive/hud':
-      return <HudScreen />;
+      return <HudRouteScreen />;
     case '/drive/pocket':
       return <PocketScreen />;
     case '/drive/start':
@@ -371,4 +370,40 @@ test('the overlay HUD is the black HUD world', async () => {
   expect(root.backgroundColor).toBe('#000000');
   await fireEvent.press(screen.getByTestId('hud-touch-shield'));
   expect(app.host.end).not.toHaveBeenCalled();
+});
+
+describe('ruling U2 m2: the pocket rule wins on the HUD route', () => {
+  test.each(['pocket', 'auto'] as const)(
+    'a %s trip with the HUD open shows the pocket screen at speed, and the HUD again at the stop',
+    async (mode) => {
+      const app = await renderApp({ ...STOPPED, mode }, ['/home', '/drive/hud']);
+      expect(screen.getByTestId('hud-screen')).toBeTruthy();
+      await app.push({ ...MOVING, mode });
+      expect(screen.queryByTestId('hud-screen')).toBeNull();
+      expect(screen.getByTestId('pocket-screen')).toBeTruthy();
+      expect(screen.queryByTestId('parked-only-card')).toBeNull();
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(path()).toBe('/drive/hud');
+      expect(mockRouter.dismissAll).not.toHaveBeenCalled();
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      await app.push({ ...STOPPED, mode });
+      expect(screen.getByTestId('hud-screen')).toBeTruthy();
+    }
+  );
+
+  test('a mounted trip keeps the HUD at speed', async () => {
+    const app = await renderApp(STOPPED, ['/home', '/drive/hud']);
+    await app.push(MOVING);
+    expect(screen.getByTestId('hud-screen')).toBeTruthy();
+    expect(screen.queryByTestId('pocket-screen')).toBeNull();
+  });
+
+  test('a passenger on a pocket trip (never locked out) keeps the HUD they opened', async () => {
+    const app = await renderApp({ ...STOPPED, mode: 'pocket', role: 'passenger' }, [
+      '/home',
+      '/drive/hud',
+    ]);
+    await app.push({ ...MOVING, mode: 'pocket', role: 'passenger', lockedOut: false });
+    expect(screen.getByTestId('hud-screen')).toBeTruthy();
+  });
 });

@@ -21,12 +21,34 @@ const mockRouter = {
 };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter, usePathname: () => '/drive/hud' }));
 
-const mockPosition: { current: { coords: { latitude: number; longitude: number } } | null } = {
-  current: null,
-};
+const mockPosition: {
+  current: { coords: { latitude: number; longitude: number } } | null;
+  pending: boolean;
+} = { current: null, pending: false };
 jest.mock('expo-location', () => ({
-  getLastKnownPositionAsync: jest.fn(async () => mockPosition.current),
+  getLastKnownPositionAsync: jest.fn(() =>
+    mockPosition.pending ? new Promise(() => {}) : Promise.resolve(mockPosition.current)
+  ),
 }));
+
+// Counts how often the HUD root re-renders its quiet children (review m3). The wrappers are not
+// memoised, so each count is one render of the HUD body.
+const mockRenders = { indicators: 0, ring: 0 };
+jest.mock('@/ui/drive', () => {
+  const actual = jest.requireActual<typeof import('@/ui/drive')>('@/ui/drive');
+  const { createElement } = jest.requireActual<typeof import('react')>('react');
+  return {
+    ...actual,
+    HudIndicators: (p: import('@/ui/drive').HudIndicatorsProps) => {
+      mockRenders.indicators += 1;
+      return createElement(actual.HudIndicators, p);
+    },
+    StatusRing: (p: import('@/ui/drive').StatusRingProps) => {
+      mockRenders.ring += 1;
+      return createElement(actual.StatusRing, p);
+    },
+  };
+});
 jest.mock('expo-battery', () => ({ useBatteryLevel: () => 0.8 }));
 
 const T = Date.UTC(2026, 8, 22, 19, 0, 0); // noon in Seattle (PDT, UTC−7)
@@ -130,6 +152,7 @@ beforeAll(() => {
 beforeEach(() => {
   jest.useFakeTimers({ now: T });
   mockPosition.current = null;
+  mockPosition.pending = false;
   jest.clearAllMocks();
 });
 afterEach(() => {
@@ -387,5 +410,31 @@ describe('HudScreen: landscape', () => {
   test('portrait by default', async () => {
     await renderHud();
     expect(screen.getByTestId('hud-layout-portrait')).toBeTruthy();
+  });
+});
+
+describe('HudScreen: fix round 1', () => {
+  test('m1: at night the very first paint is already the night palette (no day flash while the position is read)', async () => {
+    mockPosition.pending = true; // the OS never answers during this test
+    const h = stubHost(state(), true);
+    await render(wrap(h.host, <HudScreen />));
+    expect(inkOf('hud-speed-numeral')).toBe(HUD.night.ink);
+    expect(screen.getByTestId('hud-hazard')).toBeTruthy();
+  });
+
+  test('m1: by day the first paint is the day palette', async () => {
+    mockPosition.pending = true;
+    const h = stubHost(state(), false);
+    await render(wrap(h.host, <HudScreen />));
+    expect(inkOf('hud-speed-numeral')).toBe(HUD.day.ink);
+  });
+
+  test('m3: a speed-only row re-renders the gauges, not the rest of the HUD', async () => {
+    const h = await renderHud({ speedMps: 20 * MPH });
+    const before = { ...mockRenders };
+    await h.push({ speedMps: 21 * MPH, lastRowTs: T + 1000 });
+    await h.push({ speedMps: 22 * MPH, lastRowTs: T + 2000 });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('22');
+    expect(mockRenders).toEqual(before);
   });
 });

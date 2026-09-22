@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   Animated,
@@ -50,7 +50,7 @@ const ICON_PT = 28;
  * a tap that lands just as the car rolls off does nothing. One action at a time: a second tap while
  * one is pending is ignored.
  */
-export function StoppedPanel({
+export const StoppedPanel = memo(function StoppedPanel({
   visible,
   passenger,
   mutedForDrive,
@@ -152,7 +152,7 @@ export function StoppedPanel({
       </View>
     </Animated.View>
   );
-}
+});
 
 function PanelButton({
   label,
