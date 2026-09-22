@@ -43,6 +43,8 @@ export interface FakeSupabaseOptions {
    * test pausing a request mid-run, or changing the session while it is in flight).
    */
   onSelect?: (select: RecordedSelect, index: number) => unknown;
+  /** Give the fake `auth.onAuthStateChange`, fired by `setUid`, as the real client has. */
+  authEvents?: boolean;
 }
 
 /** One PostgREST read, as the emulator saw it: table, columns and every filter call in order. */
@@ -70,6 +72,9 @@ export interface FakeSupabase {
       data: { session: { user: { id: string } } | null };
       error: unknown;
     }>;
+    onAuthStateChange?(
+      callback: (event: string, session: { user: { id: string } } | null) => void
+    ): { data: { subscription: { unsubscribe(): void } } };
   };
   storage: {
     from(bucket: string): {
@@ -89,6 +94,7 @@ const ok = (data: unknown): SupabaseReply => ({ data, error: null });
 
 export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupabase {
   let uid = options.uid === undefined ? 'user-1' : options.uid;
+  const authListeners = new Set<(event: string, session: { user: { id: string } } | null) => void>();
   const fake: FakeSupabase = {
     selects: [],
     tables: options.tables ?? {},
@@ -110,6 +116,8 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
     sessions: 0,
     setUid(next: string | null) {
       uid = next;
+      const session = next === null ? null : { user: { id: next } };
+      for (const listener of [...authListeners]) listener(next === null ? 'SIGNED_OUT' : 'SIGNED_IN', session);
     },
     auth: {
       async getSession() {
@@ -122,6 +130,16 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
         if (options.refresh) return options.refresh(index) as never;
         return { data: { session: uid === null ? null : { user: { id: uid } } }, error: null };
       },
+      ...(options.authEvents
+        ? {
+            onAuthStateChange(
+              callback: (event: string, session: { user: { id: string } } | null) => void
+            ) {
+              authListeners.add(callback);
+              return { data: { subscription: { unsubscribe: () => authListeners.delete(callback) } } };
+            },
+          }
+        : {}),
     },
     storage: {
       from(bucket: string) {

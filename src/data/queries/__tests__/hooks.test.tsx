@@ -14,6 +14,7 @@ import { createQueryClient } from '@/data/queries/client';
 import { MissingDataProviderError } from '@/data/queries/context';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import {
+  readLongTermScore,
   useInsights,
   useLongTermScore,
   useScoreDaily,
@@ -406,6 +407,24 @@ describe('useLongTermScore (R9)', () => {
     await seedDay(db, '2026-01-19', dayRow('2026-01-19', 84), NOW);
     const { result } = await render();
     expect(result.current.data?.state).toBe('score');
+  });
+
+  test('the counts are read in SQL: no row, and no polyline, crosses the bridge', async () => {
+    await seedTrips(db, [A, B, C]);
+    const statements: string[] = [];
+    const recording: Db = {
+      execute: (sql, params) => {
+        statements.push(sql);
+        return db.execute(sql, params);
+      },
+      transaction: (fn) => db.transaction(fn),
+    };
+    const inputs = await readLongTermScore(recording);
+    expect(inputs).toMatchObject({ scoredDrives: 3 });
+    for (const sql of statements) {
+      expect(sql).not.toMatch(/polyline/i);
+      expect(sql).not.toMatch(/SELECT \* FROM trips/i);
+    }
   });
 
   test('pending counts only drives that can still move the score', async () => {

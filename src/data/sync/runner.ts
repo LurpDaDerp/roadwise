@@ -180,8 +180,22 @@ export interface DrainResult {
   deferred: number;
 }
 
+/** What a sign-out flush achieved: deletes the server confirmed, and deletes still owed. */
+export interface FlushResult {
+  sent: number;
+  /** Pending, in flight or given up: what the sign-out warning must name. */
+  left: number;
+}
+
 export interface SyncRunner {
   drainOnce(now?: number): Promise<DrainResult>;
+  /**
+   * Send every delete the device still owes, now, whatever its retry time (security review D1
+   * M-1). Called at sign-out while the outgoing session is still valid: once it has gone, and a
+   * different driver's sign-in wipes the device, nobody can send them and the next restore would
+   * bring those drives back. Waits for a pass in flight first; never runs while recording.
+   */
+  flushDeletes(now?: number): Promise<FlushResult>;
   start(): void;
   /**
    * Ends this runner's lifetime. The returned promise settles when a pass already in flight has
@@ -456,14 +470,25 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     if (payload.tracePath !== null && state.traceUploadedAt === null) {
       if (await traceWaitsForWifi()) {
-        // A local write: the trace item is stamped with whoever owns the device now.
         if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
-        // The summary goes up now; the file follows under its own key on the next Wi-Fi.
-        await enqueueTraceUpload(
-          db,
-          { clientTripId: payload.clientTripId, tracePath: payload.tracePath },
-          at
-        );
+        // The summary goes up now; the file follows under its own key on the next Wi-Fi. The new
+        // item carries *this* item's owner, and is written only while the device still records
+        // that owner (security review D1 M-3): a handover between the check above and this write
+        // must not stamp the previous driver's trace with the next driver's uid.
+        const owner = item.owner_uid as string;
+        const trace = { clientTripId: payload.clientTripId, tracePath: payload.tracePath };
+        const queued = await db.transaction(async (tx) => {
+          if (!(await ownerStill(tx, item))) return false;
+          await enqueueTraceUpload(
+            db,
+            trace,
+            at,
+            tx,
+            owner
+          );
+          return true;
+        });
+        if (!queued) return { kind: 'defer' };
       } else {
         const upload = await uploadTrace(uid, payload.clientTripId, payload.tracePath);
         if (upload.kind !== 'ok') return upload;
@@ -699,8 +724,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     stopped: boolean;
   }
 
-  /** Claim one batch and work it. */
-  async function claimAndRun(at: number, generation: number): Promise<Round> {
+  /** Claim one batch — of every kind, or only `kind`, due or not — and work it. */
+  async function claimAndRun(at: number, generation: number, kind?: SyncKind): Promise<Round> {
     const round: Round = { done: 0, failed: 0, deferred: 0, claimed: 0, stopped: false };
     let items: QueueItem[];
     try {
@@ -708,7 +733,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       // repeats this inside its own claim transaction; doing it here first means a stale claim is
       // released even when this pass then finds nothing else to do.
       await queue.reclaimInflight(RECLAIM_AFTER_S, at);
-      items = await queue.nextDue(at, batchSize);
+      items =
+        kind === undefined
+          ? await queue.nextDue(at, batchSize)
+          : await queue.nextDueOfKind(kind, at, batchSize);
     } catch (error) {
       if (isDatabaseLocked(error)) return { ...round, stopped: true };
       throw error;
@@ -809,7 +837,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
    * settled item leaves the pending set. A round that only deferred never loops: `release` makes
    * those items due immediately, and looping on them would spin.
    */
-  async function pass(at: number): Promise<DrainResult> {
+  async function pass(at: number, kind?: SyncKind): Promise<DrainResult> {
     const mine = generation;
     const total: DrainResult = { done: 0, failed: 0, deferred: 0 };
     // Once per pass, whether or not there is work: this is what teaches the enqueue sites whose
@@ -820,7 +848,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       report(error, 'read session');
     }
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
-      const worked = await claimAndRun(at, mine);
+      const worked = await claimAndRun(at, mine, kind);
       total.done += worked.done;
       total.failed += worked.failed;
       total.deferred += worked.deferred;
@@ -873,6 +901,37 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     }
   }
 
+  async function flushDeletes(at: number = now()): Promise<FlushResult> {
+    // One pass at a time: wait out any in flight, then hold the lock ourselves.
+    while (inFlight !== null) await inFlight;
+    let sent = 0;
+    if (!isRecording() && !draining) {
+      draining = true;
+      let settled: () => void = () => {};
+      inFlight = new Promise<void>((resolve) => {
+        settled = resolve;
+      });
+      try {
+        sent = (await pass(at, 'delete-trip')).done;
+      } catch (error) {
+        report(error, 'flush deletes');
+      } finally {
+        draining = false;
+        inFlight = null;
+        settled();
+        // A wake held while the flush ran is run now, as `drainOnce` does.
+        if (wakePending) {
+          wakePending = false;
+          wake();
+        }
+      }
+    }
+    const { rows } = await db.execute(
+      "SELECT COUNT(*) AS n FROM sync_queue WHERE kind = 'delete-trip' AND status IN ('pending', 'inflight', 'failed')"
+    );
+    return { sent, left: Number(rows[0]?.n ?? 0) };
+  }
+
   function clearRecordingRetry(): void {
     if (recordingRetry === null) return;
     clearTimeout(recordingRetry);
@@ -904,6 +963,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   return {
     drainOnce,
+    flushDeletes,
 
     start(): void {
       if (started) return;

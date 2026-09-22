@@ -17,7 +17,6 @@ import { createEventsRepo } from '@/data/db/events';
 import { createScoreDailyCacheRepo } from '@/data/db/scoreDailyCache';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
-import type { TripRow } from '@/data/db/types';
 import { useHydrationStatus, type HydrationStatus } from '@/data/hydrate/status';
 import { useDataSource } from '@/data/queries/context';
 import {
@@ -245,8 +244,9 @@ export interface LongTermScoreView {
   /**
    * Drives that can still move the score and have not reached the server: driver role, scored on
    * this device (so neither too short, nor discarded, nor graded out), not deleted, and still on
-   * their way (`local | queued | uploading`). A `failed` upload is not counted — it will not
-   * arrive, so "waiting to sync" would promise a change that is not coming.
+   * their way (`local | queued | uploading`). A `failed` upload is not counted — it may not
+   * arrive (only a reconnect re-queue can revive it), so "waiting to sync" would promise a change
+   * that may not come.
    */
   pendingDrives: number;
 }
@@ -290,19 +290,27 @@ function toLatestDay(day: string, payload: unknown): LatestDay {
   };
 }
 
-const isDriverScored = (row: TripRow): boolean =>
-  row.deleted_at === null && row.role === 'driver' && isScoredRow(row);
-
-const PENDING_STATES: readonly TripRow['sync_state'][] = ['local', 'queued', 'uploading'];
+/**
+ * The two counts, in SQL over narrow columns (review D1 I2): this query refetches on every change
+ * event, and an established driver holds thousands of trips whose rows carry polylines. The
+ * predicate is `isScoredRow` (a score, and `provisional | final`) for a live driver drive.
+ */
+export const LONG_TERM_COUNTS_SQL = `SELECT
+    COUNT(*) AS scored,
+    COALESCE(SUM(CASE WHEN sync_state IN ('local', 'queued', 'uploading') THEN 1 ELSE 0 END), 0)
+      AS pending
+  FROM trips
+  WHERE deleted_at IS NULL AND role = 'driver' AND score IS NOT NULL
+    AND status IN ('provisional', 'final')`;
 
 export async function readLongTermScore(db: Db): Promise<LongTermScoreInputs> {
   const entry = await createScoreDailyCacheRepo(db).latest<unknown>();
-  const rows = await createTripsRepo(db).list();
-  const scored = rows.filter(isDriverScored);
+  const { rows } = await db.execute(LONG_TERM_COUNTS_SQL);
+  const counts = rows[0] ?? {};
   return {
     latest: entry === null ? null : toLatestDay(entry.day, entry.payload),
-    scoredDrives: scored.length,
-    pendingDrives: scored.filter((row) => PENDING_STATES.includes(row.sync_state)).length,
+    scoredDrives: Number(counts.scored ?? 0),
+    pendingDrives: Number(counts.pending ?? 0),
   };
 }
 

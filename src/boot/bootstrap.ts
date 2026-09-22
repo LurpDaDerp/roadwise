@@ -48,6 +48,7 @@ import { createQueryClient, subscribeInvalidation } from '@/data/queries';
 import {
   createSyncRunner,
   type AppStateLike,
+  type FlushResult,
   type NetStatus,
   type SyncRunner,
   type SyncSupabase,
@@ -239,19 +240,21 @@ async function runLaunch(
 
   enter('sync');
   let runner: SyncRunner | null = null;
+  let traceFs: TraceFs | null = null;
   try {
-    const created = await stage('sync', async () =>
-      createSyncRunner({
+    const created = await stage('sync', async () => {
+      traceFs = deps.traceFs ?? (await createExpoTraceFs());
+      return createSyncRunner({
         db,
         supabase: identity.supabase,
-        fs: deps.traceFs ?? (await createExpoTraceFs()),
+        fs: traceFs,
         net: deps.net ?? { isWifi: () => false },
         isRecording: deps.isRecording ?? (() => false),
         appState: deps.appState ?? AppState,
         now,
         onError,
-      })
-    );
+      });
+    });
     runner = created;
     // Inside the stage as well: a `start()` that throws is a launch that failed at `sync`, not
     // an untagged error escaping the sequence.
@@ -272,6 +275,8 @@ async function runLaunch(
     now,
     isBusy: deps.isRecording ?? (() => false),
     onError,
+    // Reconciliation removes a drive deleted elsewhere, trace file included.
+    fs: traceFs ?? undefined,
   });
 
   return {
@@ -321,10 +326,22 @@ export interface ForegroundJobsDeps {
  * tunnel or a drive is resumed at the next foreground rather than six hours later. While it is
  * owed, the score slot says "Restoring…" rather than "Building your score" (R9).
  */
+/** What `startForegroundJobs` hands the host. */
+export interface ForegroundJobs {
+  /** Detach from AppState; call at teardown. */
+  stop(): void;
+  /**
+   * Run the restore now, throttle bypassed — U4's "Couldn't restore your drives — Retry" (review
+   * D1 M4). Joins a run already in flight. Resolves true when the run reached the end; never
+   * rejects (a failure is reported and the status store says `failed`).
+   */
+  runNow(): Promise<boolean>;
+}
+
 export async function startForegroundJobs(
   runtime: AppRuntime,
   deps: ForegroundJobsDeps = {}
-): Promise<() => void> {
+): Promise<ForegroundJobs> {
   const settings = createSettingsRepo(runtime.db);
   const neverRestored = (await settings.get<unknown>(HYDRATE_RESTORED_AT_KEY)) === null;
   let fullOwed = runtime.owner === 'first' || runtime.owner === 'wiped' || neverRestored;
@@ -334,20 +351,40 @@ export async function startForegroundJobs(
     if (getHydrationStatus().state === 'idle') setHydrationStatus({ state: 'restoring', restored: 0 });
   }
 
-  return runWhenForeground(
-    'hydrate',
-    HYDRATE_INTERVAL_MS,
-    async () => {
-      const result = await runtime.hydrator.run({ full: fullOwed });
-      // An incomplete run stamps nothing, so the next foreground tries again.
-      if (!result.complete) throw new Error('hydration did not complete');
-      fullOwed = false;
+  const onError = deps.onError ?? warn;
+  const job = async (): Promise<void> => {
+    const result = await runtime.hydrator.run({ full: fullOwed });
+    // An incomplete run stamps nothing, so the next foreground tries again.
+    if (!result.complete) throw new Error('hydration did not complete');
+    fullOwed = false;
+  };
+  const stop = runWhenForeground('hydrate', HYDRATE_INTERVAL_MS, job, {
+    appState: deps.appState ?? AppState,
+    now: runtime.now,
+    db: runtime.db,
+    onError,
+  });
+  return {
+    stop,
+    async runNow() {
+      try {
+        await job();
+        return true;
+      } catch (error) {
+        onError(error, 'foreground job hydrate (run now)');
+        return false;
+      }
     },
-    {
-      appState: deps.appState ?? AppState,
-      now: runtime.now,
-      db: runtime.db,
-      onError: deps.onError ?? warn,
-    }
-  );
+  };
+}
+
+/**
+ * Before the session ends at sign-out, while it can still send them: every delete this device
+ * owes the server (security review D1 M-1). A different driver's sign-in later wipes the device,
+ * and with it any delete still queued — which the next restore would then undo. The host calls
+ * this from the sign-out action before `supabase.auth.signOut()`; `left` is what the sign-out
+ * warning must name (deletes that could not be sent: offline, or given up).
+ */
+export function flushBeforeSignOut(runtime: AppRuntime): Promise<FlushResult> {
+  return runtime.runner.flushDeletes();
 }

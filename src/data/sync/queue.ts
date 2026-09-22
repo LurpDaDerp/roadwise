@@ -135,22 +135,27 @@ export async function enqueueFinalize(
  * Queue a trace the runner chose not to upload with its trip — cellular, with
  * `sync.wifiOnlyTraces` on. Idempotent on `trace:<clientTripId>`, so a finalize item retried
  * before the trace goes up does not queue a second one.
+ *
+ * `owner`, when given, is stamped instead of the settings record: the runner passes the finalize
+ * item's own owner, so a handover landing between its owner check and this write cannot stamp the
+ * previous driver's trace with the next driver's uid (security review D1 M-3).
  */
 export async function enqueueTraceUpload(
   db: Db,
   payload: TraceUploadPayload,
   now: number = Date.now(),
-  on?: Db
+  on?: Db,
+  owner?: string
 ): Promise<QueueItem> {
   const valid = TraceUploadPayloadSchema.parse(payload);
-  const owner = await currentOwnerUid(db);
+  const stamp = owner ?? (await currentOwnerUid(db));
   const item = await createQueueRepo(db).enqueue(
     TRACE_UPLOAD_KIND,
     valid,
     traceIdempotencyKey(valid.clientTripId),
     now,
     on,
-    owner
+    stamp
   );
   // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
   emitDataChanged({ source: 'enqueue' });

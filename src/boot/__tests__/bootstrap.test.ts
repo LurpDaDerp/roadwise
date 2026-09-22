@@ -1,6 +1,7 @@
 import {
   bootstrapApp,
   BootstrapError,
+  flushBeforeSignOut,
   startForegroundJobs,
   type AppRuntime,
   type BootstrapDeps,
@@ -441,7 +442,7 @@ describe('hydration runs only in the foreground (R10, R13)', () => {
     const days = supabase.selects.find((s) => s.table === 'score_daily');
     // Full: the newest days, not a top-up since a cursor.
     expect(days?.calls).toContain('order day desc');
-    off();
+    off.stop();
   });
 
   test('a restored device tops up at most every six hours, from its cursor', async () => {
@@ -471,7 +472,7 @@ describe('hydration runs only in the foreground (R10, R13)', () => {
     const tripsRead = supabase.selects.find((s) => s.table === 'trips');
     expect(tripsRead?.calls.some((c) => c.startsWith('or updated_at.gt.2026-09-21T09:00:00+00:00'))).toBe(true);
     expect(await createTripsRepo(db).get('restored-1')).not.toBeNull();
-    off();
+    off.stop();
   });
 
   test('a restore that completed is not owed again, even when the server held no trips', async () => {
@@ -486,7 +487,7 @@ describe('hydration runs only in the foreground (R10, R13)', () => {
     appState.emit('active');
     await settle();
     expect(getHydrationStatus()).toEqual({ state: 'idle' });
-    off();
+    off.stop();
     await runtime.stop();
     runtime.queryClient.clear();
 
@@ -494,7 +495,55 @@ describe('hydration runs only in the foreground (R10, R13)', () => {
     runtime = await bootstrapApp(deps({ supabase }).bootstrapDeps);
     const again = await startForegroundJobs(runtime, { appState: createFakeAppState() });
     expect(getHydrationStatus()).toEqual({ state: 'idle' });
-    again();
+    again.stop();
+  });
+
+  test('runNow restores at once, throttle or not — the Retry a failed restore offers', async () => {
+    const { supabase } = await launch(UID);
+    const jobs = await startForegroundJobs(runtime!, { appState: createFakeAppState() });
+    // No foreground transition at all: only the button.
+    await expect(jobs.runNow()).resolves.toBe(true);
+    expect(await createTripsRepo(db).get('restored-1')).not.toBeNull();
+    expect(supabase.selects.length).toBeGreaterThan(0);
+
+    const errors: string[] = [];
+    await runtime!.stop();
+    const stopped = runtime!;
+    runtime = null;
+    const late = await startForegroundJobs(stopped, { appState: createFakeAppState(), onError: (_e, ctx) => errors.push(ctx) });
+    await expect(late.runNow()).resolves.toBe(false);
+    expect(errors).toEqual(['foreground job hydrate (run now)']);
+    late.stop();
+    stopped.queryClient.clear();
+  });
+
+  test('sign-out flushes the deletes still owed, while the session can send them', async () => {
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, UID);
+    const supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => ({
+        data: {
+          tripId: '00000000-0000-4000-8000-000000000009',
+          deleted: true,
+          days: [
+            {
+              day: '2026-09-21', longTermScore: null, band: null, provisional: true, safeDay: false,
+              goodDay: false, phoneFreeDay: false, cameraDay: false, exposure: 0, drivingS: 0,
+              tripsScored: 0, severeEvents: 0,
+            },
+          ],
+          replayed: false,
+        },
+        error: null,
+      }),
+    });
+    runtime = await bootstrapApp(deps({ supabase }).bootstrapDeps);
+    await settle();
+    // A delete in backoff, due an hour from now: sign-out is its last chance.
+    await createQueueRepo(db).enqueue('delete-trip', { action: 'delete', clientTripId: 'gone' }, 'delete:gone', NOW + 3_600_000, undefined, UID);
+    await expect(flushBeforeSignOut(runtime)).resolves.toEqual({ sent: 1, left: 0 });
+    expect(supabase.invokes.map((call) => call.body)).toEqual([{ action: 'delete', clientTripId: 'gone' }]);
   });
 
   test('stop() stops the hydrator: a foreground after teardown restores nothing', async () => {

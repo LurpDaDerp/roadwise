@@ -153,6 +153,39 @@ export function createQueueRepo(db: Db) {
     },
 
     /**
+     * Claim every pending item of one `kind`, whatever its retry time — the last chance to send
+     * it (sign-out flushes the deletes still owed while the outgoing session can still send
+     * them). Same claim transaction and reclaim as `nextDue`.
+     */
+    nextDueOfKind(
+      kind: string,
+      now: number = Date.now(),
+      limit = 10,
+      reclaimAfterS: number = RECLAIM_AFTER_S
+    ): Promise<QueueItem[]> {
+      return db.transaction(async (tx) => {
+        await reclaimInflight(reclaimAfterS, now, tx);
+        const { rows } = await tx.execute(
+          `SELECT * FROM sync_queue
+            WHERE status = 'pending' AND kind = ?
+            ORDER BY next_attempt_at ASC, id ASC
+            LIMIT ?`,
+          [kind, limit]
+        );
+        const claimed: QueueItem[] = [];
+        for (const row of rows) {
+          const item = toQueueItem(row);
+          await tx.execute(
+            "UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?",
+            [now, item.id]
+          );
+          claimed.push({ ...item, status: 'inflight', claimed_at: now });
+        }
+        return claimed;
+      });
+    },
+
+    /**
      * Close out one attempt. Success marks the item `done` and clears the error; failure records
      * it and schedules the next try, or gives up at `MAX_ATTEMPTS`.
      *

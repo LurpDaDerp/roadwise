@@ -25,13 +25,28 @@
  *    events); also when the local row changed after the page was requested — the runner applied
  *    a fresher answer in between.
  *
- * **Additive.** A server-side deletion is not propagated: the only delete path is this device's
- * own, and it already removed the rows.
+ * **Additive, and a delete made elsewhere is mirrored** (security review D1 I-1, amending plan
+ * R10). Restoring puts a copy of every drive on every device the account signs in on, so a drive
+ * deleted on one device must also leave the others. After a complete restore run, and at most once
+ * a day otherwise, the device reads the ids of the user's live server trips (ids only, under RLS)
+ * and — **only when that listing reached its end** — removes every local *synced* drive missing
+ * from it, exactly as a local delete removes it (row, events, samples, trace file) but with
+ * nothing queued. A drive with local work pending, still recording, or changed locally after the
+ * listing began, is never removed.
+ *
+ * **A delete this device made is never undone by a restore** (M-2). A server trip this device
+ * holds a tombstone for (`trips.deletedIds`, kept for the life of the install) or a settled
+ * `delete:` item for is skipped — and, since the server evidently still has it, the delete is
+ * sent again.
  *
  * **Paging (review I19).** Trips are read in keyset order on `(updated_at, id)` — `updated_at`
  * alone would drop the rest of a tie group that straddles a page boundary, and `touch_updated_at`
  * stamps every row of one statement with the same transaction time. The cursor is the last row's
- * pair, kept exactly as the server wrote it, and it moves only after the page has committed. Each
+ * pair, kept exactly as the server wrote it, and it moves only after the page has committed. Every
+ * run — full or not — resumes from it (review D1 I1): the wipe clears it and a first sign-in has
+ * none, so a cursor that exists is this owner's and names committed pages, and an interrupted
+ * restore continues where it stopped rather than from page one. A page whose last row does not
+ * strictly advance the cursor ends the run (M-5), so a misbehaving response cannot loop. Each
  * page's events and disputes are fetched with `in(...)` (chunked at 100 ids): three requests per
  * page, not two per trip. `score_daily` and `baselines` are read once per run.
  *
@@ -41,6 +56,7 @@
  */
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
+import { addTombstone, readTombstones } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { BASELINE_SETTING_KEY } from '@/data/queries/hooks';
@@ -63,6 +79,7 @@ import {
   toDisputeRecord,
   toEventRow,
   toStoredBaseline,
+  parseTimestamp,
   toTripFields,
   TRIP_COLUMNS,
   type ServerDispute,
@@ -79,6 +96,18 @@ export const HYDRATE_DAYS_CURSOR_KEY = 'hydrate.daysCursor';
  * never completed one — which is what makes the next foreground owe a full run. The wipe clears it.
  */
 export const HYDRATE_RESTORED_AT_KEY = 'hydrate.restoredAt';
+/** Settings key: when the live-id reconciliation last completed (epoch ms). */
+export const HYDRATE_RECONCILED_AT_KEY = 'hydrate.reconciledAt';
+/** At most once a day outside a full restore: one narrow listing of ids. */
+export const RECONCILE_INTERVAL_MS = 24 * 3600 * 1000;
+/** Ids per reconciliation request; each is ~40 bytes on the wire. */
+export const RECONCILE_LIMIT = 1000;
+/**
+ * A restore announces what it wrote every this many committed pages (and once at the end), not
+ * after every page: each announcement refetches every mounted query (review D1 I2). Progress for
+ * the "Restoring…" slot goes through the status store, which costs nothing.
+ */
+export const EMIT_EVERY_PAGES = 5;
 /** How often the foreground top-up may run (H2 registers it with `runWhenForeground`). */
 export const HYDRATE_INTERVAL_MS = 6 * 3600 * 1000;
 /** Trips per page. Small enough that one page's events fit well inside PostgREST's row cap. */
@@ -106,6 +135,10 @@ export interface HydrateResult {
   days: number;
   /** Server trips left alone because the device holds newer or unfinished work for them. */
   skippedLocal: number;
+  /** Local synced drives removed because the server no longer holds them live (I-1). */
+  removed: number;
+  /** Deletes this device made that the server had not applied, sent again (M-2). */
+  redeleted: number;
   /** The server's baseline medians were stored. */
   baseline: boolean;
   /** The run reached the end of the server's rows; false when it stopped early for any reason. */
@@ -144,6 +177,13 @@ export type HydrateTable = 'trips' | 'trip_events' | 'event_disputes' | 'score_d
 export interface HydrateSupabase {
   auth: {
     getSession(): Promise<{ data: { session: { user: { id: string } } | null } }>;
+    /**
+     * Optional: when present, a run caches its uid and learns of a session change from here
+     * instead of re-reading the session (a Keychain read) after every await (review D1 M2).
+     */
+    onAuthStateChange?(
+      callback: (event: string, session: { user: { id: string } } | null) => void
+    ): { data: { subscription: { unsubscribe(): void } } };
   };
   from(table: HydrateTable): { select(columns: string): HydrateQuery };
 }
@@ -183,6 +223,19 @@ export interface HydratorDeps {
   isBusy: () => boolean;
   pageSize?: number;
   onError?: (e: unknown, ctx: string) => void;
+  /** The traces directory, so a drive removed by reconciliation loses its file too. */
+  fs?: { remove(path: string): Promise<void> };
+}
+
+/**
+ * One run's fence. `quick` is asked after every await: the lifetime unchanged and no session
+ * change announced (or, with no announcer to listen to, a fresh session read). `thorough` is asked
+ * before every commit and always re-reads the session.
+ */
+interface Fence {
+  quick(): Promise<void>;
+  thorough(): Promise<void>;
+  close(): void;
 }
 
 /** Thrown to end a run quietly: the device changed hands, the hydrator stopped, or the engine is busy. */
@@ -209,9 +262,28 @@ const emptyResult = (): HydrateResult => ({
   events: 0,
   days: 0,
   skippedLocal: 0,
+  removed: 0,
+  redeleted: 0,
   baseline: false,
   complete: false,
 });
+
+/** Whether cursor `next` is strictly after `prev` in `(updated_at, id)` order. */
+export function cursorAdvances(prev: HydrateCursor | null, next: HydrateCursor): boolean {
+  if (prev === null) return true;
+  if (next.updatedAt !== prev.updatedAt) {
+    const a = parseTimestamp(next.updatedAt);
+    const b = parseTimestamp(prev.updatedAt);
+    if (a === null || b === null) return false;
+    if (a !== b) return a > b;
+    // Same millisecond, different text: compare what lies past it (the server's microseconds).
+    const micros = (t: string) => (/\.(\d+)/.exec(t)?.[1] ?? '').padEnd(9, '0').slice(3);
+    const x = micros(next.updatedAt);
+    const y = micros(prev.updatedAt);
+    if (x !== y) return x > y;
+  }
+  return next.id > prev.id;
+}
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
@@ -279,13 +351,30 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
 
   /**
    * One run's fence: the hydrator still in the lifetime the run began in, and the session still
-   * the user it began for. Called after every await.
+   * the user it began for.
    */
-  function fenceFor(of: number, uid: string) {
-    return async (): Promise<void> => {
-      if (of !== generation) throw new Halt('fenced');
+  function fenceFor(of: number, uid: string): Fence {
+    let changed = false;
+    let close = (): void => {};
+    const listen = supabase.auth.onAuthStateChange;
+    if (listen) {
+      const { data } = listen.call(supabase.auth, (_event, session) => {
+        if ((session?.user.id ?? null) !== uid) changed = true;
+      });
+      close = () => data.subscription.unsubscribe();
+    }
+    const thorough = async (): Promise<void> => {
+      if (of !== generation || changed) throw new Halt('fenced');
       const current = await sessionUid();
-      if (of !== generation || current !== uid) throw new Halt('fenced');
+      if (of !== generation || changed || current !== uid) throw new Halt('fenced');
+    };
+    return {
+      async quick() {
+        if (of !== generation || changed) throw new Halt('fenced');
+        if (!listen) await thorough();
+      },
+      thorough,
+      close,
     };
   }
 
@@ -299,20 +388,24 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
    * A commit behind every fence: the engine idle, the lifetime and session unchanged, and — inside
    * the transaction — the device still recording this owner.
    */
-  async function commit(
-    fence: () => Promise<void>,
-    uid: string,
-    fn: (tx: Db) => Promise<void>
-  ): Promise<void> {
+  async function commit(fence: Fence, uid: string, fn: (tx: Db) => Promise<void>): Promise<void> {
     if (isBusy()) throw new Halt('busy');
-    await fence();
+    await fence.thorough();
     await db.transaction(async (tx) => {
       if (!(await deviceOwnerIs(tx, uid))) throw new Halt('fenced');
       await fn(tx);
     });
   }
 
-  /** Every row of `table` whose `column` is in `ids`, read in bounded, id-ordered requests. */
+  /**
+   * Every row of `table` whose `column` is in `ids`, read in bounded, id-ordered requests.
+   *
+   * Paging on `orderBy` with `gt` is exact only while that column is unique within the result:
+   * `trip_events.id` is the primary key, and `event_disputes.event_id` is `unique (event_id)`
+   * (0002_trips.sql). If a later schema allowed several reports per event, the disputes read must
+   * page on the dispute's own id instead, or rows sharing an `event_id` at a page boundary are
+   * lost (review D1 M3).
+   */
   async function fetchChildren(
     table: 'trip_events' | 'event_disputes',
     columns: string,
@@ -320,7 +413,7 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     ids: readonly string[],
     uid: string,
     orderBy: string,
-    fence: () => Promise<void>
+    fence: Fence
   ): Promise<unknown[]> {
     const out: unknown[] = [];
     for (const group of chunks(ids, IN_CHUNK)) {
@@ -333,7 +426,7 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
           .in(column, group);
         if (after !== null) query = query.gt(orderBy, after);
         const rows = await request(table, query.order(orderBy).limit(CHILD_LIMIT));
-        await fence();
+        await fence.quick();
         out.push(...rows);
         if (rows.length < CHILD_LIMIT) break;
         const last = rows[rows.length - 1] as Record<string, unknown> | undefined;
@@ -350,13 +443,13 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     full: boolean,
     uid: string,
     startedAt: number,
-    fence: () => Promise<void>,
+    fence: Fence,
     result: HydrateResult
   ): Promise<void> {
     const since = full ? null : await settings.get<unknown>(HYDRATE_DAYS_CURSOR_KEY);
     const sinceText =
       typeof since === 'string' && TimestampText.safeParse(since).success ? since : null;
-    await fence();
+    await fence.quick();
 
     let daysQuery = supabase.from('score_daily').select(DAY_COLUMNS).eq('user_id', uid);
     daysQuery =
@@ -365,12 +458,12 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         : // `gte`, not `gt`: re-writing a day is idempotent, and a tie at the boundary is not lost.
           daysQuery.gte('updated_at', sinceText).order('updated_at').limit(DAY_LIMIT);
     const rawDays = await request('score_daily', daysQuery);
-    await fence();
+    await fence.quick();
     const rawBaselines = await request(
       'baselines',
       supabase.from('baselines').select(BASELINE_COLUMNS).eq('user_id', uid).limit(1)
     );
-    await fence();
+    await fence.quick();
 
     const days = rawDays.flatMap((raw) => {
       const parsed = parseRow(ServerDaySchema, raw);
@@ -418,20 +511,34 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     });
   }
 
-  /** Why a server trip is left alone, or null when it may be written. */
-  async function localWins(
+  /**
+   * What to do with one server trip: write it, leave it (local work wins), or send again a delete
+   * this device made that the server has not applied.
+   */
+  async function decide(
     tx: Db,
     trip: ServerTrip,
     pending: ReadonlySet<string>,
+    tombstones: ReadonlySet<string>,
     fetchedAt: number
-  ): Promise<boolean> {
+  ): Promise<'write' | 'skip' | 'redelete'> {
     const id = trip.client_trip_id;
-    if (pending.has(id)) return true;
-    // The tombstone: a delete this device made, in whatever state its item is now.
-    const tomb = await tx.execute('SELECT 1 FROM sync_queue WHERE idempotency_key = ?', [
+    if (pending.has(id)) return 'skip';
+    const item = await tx.execute('SELECT status FROM sync_queue WHERE idempotency_key = ?', [
       `delete:${id}`,
     ]);
-    if (tomb.rows.length > 0) return true;
+    const deleteStatus = item.rows[0]?.status;
+    // A delete that gave up is the driver's to retry (the failed-delete banner): leave it be.
+    if (deleteStatus === 'failed') return 'skip';
+    // Settled here, or remembered by the tombstone after the item was purged — and yet the
+    // server still has it live. Never write it back; send the delete again.
+    if (deleteStatus === 'done' || tombstones.has(id)) return 'redelete';
+    return (await localWins(tx, trip, fetchedAt)) ? 'skip' : 'write';
+  }
+
+  /** Whether the device's own row wins over the server's. */
+  async function localWins(tx: Db, trip: ServerTrip, fetchedAt: number): Promise<boolean> {
+    const id = trip.client_trip_id;
     const { rows } = await tx.execute(
       'SELECT sync_state, deleted_at, status, server_id, updated_at FROM trips WHERE client_trip_id = ?',
       [id]
@@ -443,6 +550,28 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     if (local.sync_state !== 'synced') return true;
     if (local.server_id !== null && local.server_id !== trip.id) return true;
     return typeof local.updated_at === 'number' && local.updated_at > fetchedAt;
+  }
+
+  /** Queue the delete again, owned by the restoring user; the tombstone is (re)recorded too. */
+  async function redelete(tx: Db, clientTripId: string, uid: string): Promise<void> {
+    const key = `delete:${clientTripId}`;
+    const at = now();
+    const reopened = await tx.execute(
+      `UPDATE sync_queue
+          SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+              claimed_at = NULL, owner_uid = ?
+        WHERE idempotency_key = ? AND status = 'done'`,
+      [at, uid, key]
+    );
+    if (reopened.changes === 0) {
+      await tx.execute(
+        `INSERT OR IGNORE INTO sync_queue
+           (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, owner_uid, created_at)
+         VALUES ('delete-trip', ?, ?, 'pending', 0, ?, ?, ?)`,
+        [JSON.stringify({ action: 'delete', clientTripId }), key, at, uid, at]
+      );
+    }
+    await addTombstone(tx, clientTripId);
   }
 
   /** Write one server trip and its events; the caller has already decided it may. */
@@ -503,68 +632,45 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         report(new Error('unreadable event timestamp'), 'hydrate event');
         continue;
       }
-      const found = await tx.execute(
-        'SELECT client_trip_id, dispute_json FROM trip_events WHERE id = ?',
-        [row.id]
+      // One statement: insert, or refresh an event this trip already holds. The WHERE keeps an id
+      // that belongs to another local trip from ever being re-parented, and a report the server
+      // never recorded (a closed window, a refusal) lives only here (carry-over 7), so it is kept
+      // unless the server has a record of its own (review D1 M1).
+      const { changes } = await tx.execute(
+        `INSERT INTO trip_events (id, client_trip_id, category, started_at, duration_s, lat, lng,
+           measured_json, severity, confidence, context_json, deduction, alert_shown, corrected,
+           status, source, dispute_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           category = excluded.category, started_at = excluded.started_at,
+           duration_s = excluded.duration_s, lat = excluded.lat, lng = excluded.lng,
+           measured_json = excluded.measured_json, severity = excluded.severity,
+           confidence = excluded.confidence, context_json = excluded.context_json,
+           deduction = excluded.deduction, alert_shown = excluded.alert_shown,
+           corrected = excluded.corrected, status = excluded.status, source = excluded.source,
+           dispute_json = COALESCE(excluded.dispute_json, trip_events.dispute_json)
+         WHERE trip_events.client_trip_id = excluded.client_trip_id`,
+        [
+          row.id,
+          row.client_trip_id,
+          row.category,
+          row.started_at,
+          row.duration_s,
+          row.lat,
+          row.lng,
+          row.measured_json,
+          row.severity,
+          row.confidence,
+          row.context_json,
+          row.deduction,
+          row.alert_shown,
+          row.corrected,
+          row.status,
+          row.source,
+          row.dispute_json,
+        ]
       );
-      const local = found.rows[0];
-      if (local) {
-        // An id is a trip's own: never re-parent an event that belongs to another trip.
-        if (local.client_trip_id !== trip.client_trip_id) continue;
-        // A report the server never recorded (a closed window, a refusal) lives only here
-        // (carry-over 7): keep it unless the server has a record of its own.
-        const dispute = row.dispute_json ?? (local.dispute_json as string | null) ?? null;
-        await tx.execute(
-          `UPDATE trip_events SET category = ?, started_at = ?, duration_s = ?, lat = ?, lng = ?,
-             measured_json = ?, severity = ?, confidence = ?, context_json = ?, deduction = ?,
-             alert_shown = ?, corrected = ?, status = ?, source = ?, dispute_json = ?
-           WHERE id = ?`,
-          [
-            row.category,
-            row.started_at,
-            row.duration_s,
-            row.lat,
-            row.lng,
-            row.measured_json,
-            row.severity,
-            row.confidence,
-            row.context_json,
-            row.deduction,
-            row.alert_shown,
-            row.corrected,
-            row.status,
-            row.source,
-            dispute,
-            row.id,
-          ]
-        );
-      } else {
-        await tx.execute(
-          `INSERT INTO trip_events (id, client_trip_id, category, started_at, duration_s, lat, lng,
-             measured_json, severity, confidence, context_json, deduction, alert_shown, corrected,
-             status, source, dispute_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            row.id,
-            row.client_trip_id,
-            row.category,
-            row.started_at,
-            row.duration_s,
-            row.lat,
-            row.lng,
-            row.measured_json,
-            row.severity,
-            row.confidence,
-            row.context_json,
-            row.deduction,
-            row.alert_shown,
-            row.corrected,
-            row.status,
-            row.source,
-            row.dispute_json,
-          ]
-        );
-      }
+      if (changes === 0) continue;
       result.events += 1;
     }
   }
@@ -572,12 +678,18 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
   async function restoreTrips(
     full: boolean,
     uid: string,
-    fence: () => Promise<void>,
+    fence: Fence,
     result: HydrateResult,
     progress: () => void
   ): Promise<void> {
-    let cursor = full ? null : readCursor(await settings.get<unknown>(HYDRATE_CURSOR_KEY));
-    await fence();
+    // Always from the committed cursor, full run or not (review D1 I1).
+    let cursor = readCursor(await settings.get<unknown>(HYDRATE_CURSOR_KEY));
+    await fence.quick();
+    let pagesSinceEmit = 0;
+    const announce = (): void => {
+      pagesSinceEmit = 0;
+      emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
+    };
 
     for (;;) {
       const fetchedAt = now();
@@ -595,8 +707,9 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         'trips',
         query.order('updated_at').order('id').limit(pageSize)
       );
-      await fence();
+      await fence.quick();
       if (rawTrips.length === 0) {
+        if (pagesSinceEmit > 0) announce();
         result.complete = true;
         return;
       }
@@ -606,6 +719,10 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
       const lastRaw = rawTrips[rawTrips.length - 1] as Record<string, unknown>;
       const nextCursor = readCursor({ updatedAt: lastRaw.updated_at, id: lastRaw.id });
       if (nextCursor === null) throw new Error('hydration: the page ended on a row with no cursor');
+      // A response that did not move past the cursor would be asked for again for ever (M-5).
+      if (!cursorAdvances(cursor, nextCursor)) {
+        throw new Error('hydration: the page did not advance the cursor');
+      }
 
       const trips: ServerTrip[] = [];
       for (const raw of rawTrips) {
@@ -653,14 +770,21 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
       }
 
       const before = result.trips;
+      const redeletedBefore = result.redeleted;
       await commit(fence, uid, async (tx) => {
         const pending = await tripsWithPendingWork(tx);
+        const tombstones = await readTombstones(tx);
         for (const trip of trips) {
-          if (await localWins(tx, trip, pending, fetchedAt)) {
-            result.skippedLocal += 1;
+          const decision = await decide(tx, trip, pending, tombstones, fetchedAt);
+          if (decision === 'write') {
+            await writeTrip(tx, trip, eventsByTrip.get(trip.id) ?? [], disputes, result);
             continue;
           }
-          await writeTrip(tx, trip, eventsByTrip.get(trip.id) ?? [], disputes, result);
+          result.skippedLocal += 1;
+          if (decision === 'redelete') {
+            await redelete(tx, trip.client_trip_id, uid);
+            result.redeleted += 1;
+          }
         }
         await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
           HYDRATE_CURSOR_KEY,
@@ -668,20 +792,113 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         ]);
       });
       cursor = nextCursor;
+      // A re-sent delete wakes the runner, after the commit.
+      if (result.redeleted > redeletedBefore) emitDataChanged({ source: 'enqueue' });
       if (result.trips > before) {
         progress();
-        emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
+        pagesSinceEmit += 1;
+        if (pagesSinceEmit >= EMIT_EVERY_PAGES) announce();
       }
       if (rawTrips.length < pageSize) {
+        if (pagesSinceEmit > 0) announce();
         result.complete = true;
         return;
       }
     }
   }
 
+  /**
+   * Remove the local copies of drives deleted elsewhere (I-1). Acts only on a complete listing of
+   * the user's live server ids; returns false (and removes nothing) otherwise.
+   */
+  async function reconcile(uid: string, fence: Fence, result: HydrateResult): Promise<boolean> {
+    const listedFrom = now();
+    const live = new Set<string>();
+    let after: string | null = null;
+    for (;;) {
+      let query = supabase.from('trips').select('id').eq('user_id', uid).is('deleted_at', null);
+      if (after !== null) query = query.gt('id', after);
+      const rows = await request('trips', query.order('id').limit(RECONCILE_LIMIT));
+      await fence.quick();
+      for (const raw of rows) {
+        const id = (raw as Record<string, unknown>).id;
+        // An id this build cannot read makes the listing untrustworthy: act on none of it.
+        if (typeof id !== 'string' || !isUuid(id)) return false;
+        live.add(id.toLowerCase());
+      }
+      if (rows.length < RECONCILE_LIMIT) break;
+      const next = (rows[rows.length - 1] as Record<string, unknown>).id as string;
+      if (after !== null && next.toLowerCase() <= after) return false;
+      after = next.toLowerCase();
+    }
+
+    const removed: string[] = [];
+    await commit(fence, uid, async (tx) => {
+      const pending = await tripsWithPendingWork(tx);
+      const { rows } = await tx.execute(
+        `SELECT client_trip_id, server_id, updated_at FROM trips
+          WHERE sync_state = 'synced' AND server_id IS NOT NULL AND deleted_at IS NULL
+            AND status != 'recording'`
+      );
+      for (const row of rows) {
+        const id = String(row.client_trip_id);
+        if (live.has(String(row.server_id).toLowerCase())) continue;
+        if (pending.has(id)) continue;
+        // Written after the listing began — the runner just synced it: not ours to judge.
+        if (typeof row.updated_at === 'number' && row.updated_at > listedFrom) continue;
+        // Exactly what a local delete destroys, with nothing queued: the server already did it.
+        await tx.execute('DELETE FROM samples WHERE client_trip_id = ?', [id]);
+        await tx.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [id]);
+        await tx.execute('DELETE FROM trips WHERE client_trip_id = ?', [id]);
+        // A settled finalize body is the drive itself (its route); it goes too.
+        await tx.execute(
+          "DELETE FROM sync_queue WHERE idempotency_key IN (?, ?) AND status = 'done'",
+          [`trip:${id}`, `trace:${id}`]
+        );
+        removed.push(id);
+      }
+      await tx.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
+        HYDRATE_RECONCILED_AT_KEY,
+        JSON.stringify(now()),
+      ]);
+    });
+    result.removed += removed.length;
+    for (const id of removed) {
+      try {
+        await deps.fs?.remove(`${id}.bin.gz`);
+      } catch (error) {
+        report(error, 'hydrate remove trace');
+      }
+    }
+    if (removed.length > 0) {
+      emitDataChanged({ source: 'hydrate' }, (error) => report(error, 'data change listener'));
+    }
+    return true;
+  }
+
+  /** Reconcile when due; a failure is reported and tried again later, never fails the restore. */
+  async function reconcileIfDue(
+    full: boolean,
+    uid: string,
+    fence: Fence,
+    result: HydrateResult
+  ): Promise<void> {
+    const last = await settings.get<unknown>(HYDRATE_RECONCILED_AT_KEY);
+    await fence.quick();
+    const due =
+      full || typeof last !== 'number' || now() - last >= RECONCILE_INTERVAL_MS || now() < last;
+    if (!due) return;
+    try {
+      await reconcile(uid, fence, result);
+    } catch (error) {
+      if (!(error instanceof Halt)) report(error, 'hydrate reconcile');
+    }
+  }
+
   async function execute(full: boolean, of: number): Promise<HydrateResult> {
     const result = emptyResult();
     const startedAt = now();
+    let fence: Fence | null = null;
     try {
       const uid = await sessionUid();
       // Only the device's own owner is ever restored into it: a session that is somebody else's
@@ -690,8 +907,8 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         if (full && of === generation) setHydrationStatus({ state: 'failed', at: now() });
         return result;
       }
-      const fence = fenceFor(of, uid);
-      await fence();
+      fence = fenceFor(of, uid);
+      await fence.thorough();
 
       if (full) setHydrationStatus({ state: 'restoring', restored: 0 });
       await restoreDaysAndBaseline(full, uid, startedAt, fence, result);
@@ -713,6 +930,8 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         });
         if (of === generation) setHydrationStatus({ state: 'idle' });
       }
+      // After a complete restore run, and at most once a day otherwise.
+      await reconcileIfDue(full, uid, fence, result);
       return result;
     } catch (error) {
       result.complete = false;
@@ -725,6 +944,8 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
       report(error, 'hydrate');
       if (full && of === generation) setHydrationStatus({ state: 'failed', at: now() });
       return result;
+    } finally {
+      fence?.close();
     }
   }
 

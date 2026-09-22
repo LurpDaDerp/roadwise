@@ -1225,3 +1225,56 @@ describe('owner re-checks inside a pass (carry-over 4)', () => {
     expect(fs.files.has(TRACE)).toBe(true);
   });
 });
+
+describe('fix round 1', () => {
+  const deleteOk = () =>
+    invokeOk({
+      tripId: SERVER_TRIP_ID,
+      deleted: true,
+      days: [DAY_ROW],
+      replayed: false,
+    });
+
+  test('M-1: flushDeletes sends every delete owed, due or not, and nothing else', async () => {
+    supabase = createFakeSupabase({ uid: UID, invoke: () => deleteOk() });
+    await seedQueuedTrip();
+    await queue().enqueue('delete-trip', { action: 'delete', clientTripId: 'a' }, 'delete:a', T0 + 3_600_000, undefined, UID);
+    await queue().enqueue('delete-trip', { action: 'delete', clientTripId: 'b' }, 'delete:b', T0, undefined, UID);
+
+    await expect(runner().flushDeletes(T0)).resolves.toEqual({ sent: 2, left: 0 });
+    expect(supabase.invokes.map((call) => (call.body as { action: string }).action)).toEqual(['delete', 'delete']);
+    // The trip's own upload is not the flush's business.
+    expect(await finalizeItem()).toMatchObject({ status: 'pending', attempts: 0 });
+  });
+
+  test('M-1: what cannot be sent is counted for the sign-out warning', async () => {
+    supabase = createFakeSupabase({ uid: UID, invoke: () => functionsFetchError() });
+    await queue().enqueue('delete-trip', { action: 'delete', clientTripId: 'a' }, 'delete:a', T0, undefined, UID);
+    await expect(runner().flushDeletes(T0)).resolves.toEqual({ sent: 0, left: 1 });
+  });
+
+  test('M-1: a flush never runs over a drive, and waits for a pass in flight', async () => {
+    recording = true;
+    await queue().enqueue('delete-trip', { action: 'delete', clientTripId: 'a' }, 'delete:a', T0, undefined, UID);
+    await expect(runner().flushDeletes(T0)).resolves.toEqual({ sent: 0, left: 1 });
+    expect(supabase.invokes).toHaveLength(0);
+  });
+
+  test('M-3: a trace item carries the finalize item owner, and is not written past a handover', async () => {
+    wifi = false;
+    await seedQueuedTrip();
+    await runner().drainOnce(T0);
+    expect(await traceItem()).toMatchObject({ owner_uid: UID });
+  });
+
+  test('M-3: the device changing hands before the trace item is written leaves none', async () => {
+    wifi = false;
+    // The finalize item is still the session user's, but the device now records someone else:
+    // only the in-transaction check sees it.
+    await seedQueuedTrip();
+    await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'the-next-driver');
+    await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 0, deferred: 1 });
+    expect(await traceItem()).toBeNull();
+    expect(supabase.invokes).toHaveLength(0);
+  });
+});
