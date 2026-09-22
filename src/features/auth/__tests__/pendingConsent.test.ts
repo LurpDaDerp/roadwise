@@ -8,6 +8,7 @@ import {
   DISCLAIMER_ACK_KEY,
   PENDING_TERMS_KEY,
   PENDING_TERMS_TTL_MS,
+  bindPendingTerms,
   clearTermsAccepted,
   flushPendingConsents,
   hasCurrentTerms,
@@ -271,5 +272,48 @@ describe('hasCurrentTerms', () => {
     expect(hasCurrentTerms([], { disclaimerAcknowledged: '2026-01-01' }, unpublished)).toBe(false);
     expect(hasCurrentTerms([], null, unpublished)).toBe(false);
     expect(hasCurrentTerms([], undefined, unpublished)).toBe(false);
+  });
+});
+
+describe('a tick is bound to the account it was given for (T17 security M-1)', () => {
+  test('a waiting tick binds to the first account that signs in, and is recorded for it', async () => {
+    await markTermsAccepted(settings, published);
+    await bindPendingTerms(settings, 'u1');
+    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ tos: 't-2', privacy: 'p-3', uid: 'u1' });
+    const { api, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['tos', 'privacy'] });
+    expect(recordConsent).toHaveBeenCalledTimes(2);
+  });
+
+  test('binding again for the same account changes nothing', async () => {
+    await markTermsAccepted(settings, published);
+    await bindPendingTerms(settings, 'u1');
+    await bindPendingTerms(settings, 'u1');
+    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ uid: 'u1' });
+  });
+
+  test('a tick bound to one account is never recorded for another', async () => {
+    await markTermsAccepted(settings, published);
+    await bindPendingTerms(settings, 'u1');
+    const { api, fetchConsents, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u2', published, api)).resolves.toEqual({ recorded: [] });
+    expect(fetchConsents).not.toHaveBeenCalled();
+    expect(recordConsent).not.toHaveBeenCalled();
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+
+  test('another account signing in drops a tick bound to the first', async () => {
+    await markTermsAccepted(settings, published);
+    await bindPendingTerms(settings, 'u1');
+    await bindPendingTerms(settings, 'u2');
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+
+  test('binding with nothing pending, or a malformed value, stores nothing', async () => {
+    await bindPendingTerms(settings, 'u1');
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+    await settings.set(PENDING_TERMS_KEY, { tos: 1 });
+    await bindPendingTerms(settings, 'u1');
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
   });
 });

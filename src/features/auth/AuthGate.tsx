@@ -119,6 +119,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (status === 'signedOut') flushedFor.current = null;
     if (status !== 'signedIn' || userId === null || !configReady) return;
     if (profileSource !== 'network' || profile === null) return;
+    // The row must be this account's own, or nothing is written (T17 security M-2).
+    if (profile.id !== userId) return;
     // The server refuses consent writes for an under-13 account, and there is nothing to record.
     if (gate === 'blocked') return;
     if (flushedFor.current === userId) return;

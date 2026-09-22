@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
-import { clearTermsAccepted } from '@/features/auth/pendingConsent';
+import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 
@@ -231,29 +231,39 @@ export function SessionProvider({
         setStatus('signedIn');
       }
 
+      // A Terms tick waiting for its sign-in becomes this account's, and only this account's
+      // (T17 security M-1).
+      void bindPendingTerms(settings, userId);
+
       ticket += 1;
       const mineTicket = ticket;
+      // Started before the cache is read, so the cache costs the server read nothing.
+      const read = profileFor(userId);
+
+      // The device's cache of the last read for this same user goes on screen at once (rev1: I11,
+      // T17 m1), so a cold start is as fast offline — failing or hanging — as online; the server
+      // row replaces it when it lands. Only a first launch with no cache waits with no profile.
+      if (!loadedProfile) {
+        const cached = await readProfileCache(settings, userId);
+        if (superseded()) return;
+        if (cached && !loadedProfile && loadedUserId === userId) {
+          loadedProfile = cached;
+          loadedFromCache = true;
+          setProfile(cached);
+          setProfileSource('cache');
+          setStatus('signedIn');
+        }
+      }
+
       try {
-        const row = await profileFor(userId);
+        const row = await read;
         if (superseded()) return;
         apply(row, mineTicket);
       } catch {
         if (superseded()) return;
         // The row can lag sign-up (the handle_new_user trigger races the first read), and a later
-        // read can fail or time out. After a success the last known row stands, so a blip cannot
-        // bounce an onboarded user back into onboarding. Before one, the device's cache of the
-        // last read for this same user stands in (rev1: I11), so an offline cold start lands on
-        // Home. Only a first launch with no cache leaves the profile null.
-        if (!loadedProfile) {
-          const cached = await readProfileCache(settings, userId);
-          if (superseded()) return;
-          if (cached && !loadedProfile && loadedUserId === userId) {
-            loadedProfile = cached;
-            loadedFromCache = true;
-            setProfile(cached);
-            setProfileSource('cache');
-          }
-        }
+        // read can fail or time out. The last known row — the server's, or the cache's — stands,
+        // so a blip cannot bounce an onboarded user back into onboarding.
       }
 
       if (superseded()) return;
@@ -281,7 +291,11 @@ export function SessionProvider({
       // signed out; leaving the app on 'loading' would strand it on the splash screen.
       () => load(null)
     );
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      // Every end of a session — the driver's own sign-out, a revoked or expired one — forgets a
+      // Terms tick not yet recorded (T17 security M-1). Only the event: a launch that simply
+      // starts signed out keeps a tick made on the sign-in screen for the link it is waiting on.
+      if (event === 'SIGNED_OUT') void clearTermsAccepted(settings).catch(() => {});
       void load(next as Session | null);
     });
 

@@ -73,9 +73,9 @@ jest.mock('@/data/supabase/profile', () => ({
   updateOwnProfile: (...args: unknown[]) => mockUpdateOwnProfile(...args),
 }));
 
-const READY = { age_band: '18_plus', flags: { onboarded: true } };
-const OWED = { age_band: '18_plus', flags: {} };
-const U13 = { age_band: 'u13', flags: {} };
+const READY = { id: 'u1', age_band: '18_plus', flags: { onboarded: true } };
+const OWED = { id: 'u1', age_band: '18_plus', flags: {} };
+const U13 = { id: 'u1', age_band: 'u13', flags: {} };
 
 let db: Db;
 let settings: SettingsRepo;
@@ -251,7 +251,7 @@ describe('the sign-in flush', () => {
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     const view = await mount({
       status: 'signedIn',
-      profile: { age_band: '18_plus', flags: { onboarded: false, other: 1 } },
+      profile: { id: 'u1', age_band: '18_plus', flags: { onboarded: false, other: 1 } },
       profileSource: 'network',
       segments: ['(onboarding)', '[step]'],
     });
@@ -262,7 +262,7 @@ describe('the sign-in flush', () => {
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
 
     // The refreshed row arrives: nothing more is written this session.
-    mockWorld.profile = { age_band: '18_plus', flags: { disclaimerAcknowledged: DISCLAIMER_VERSION } };
+    mockWorld.profile = { id: 'u1', age_band: '18_plus', flags: { disclaimerAcknowledged: DISCLAIMER_VERSION } };
     await view.rerender(gate());
     await act(async () => {});
     expect(mockUpdateOwnProfile).toHaveBeenCalledTimes(1);
@@ -275,6 +275,18 @@ describe('the sign-in flush', () => {
     expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
 
     await mount({ status: 'signedIn', profile: U13, profileSource: 'network', segments: ['(onboarding)', '[step]'] });
+    await act(async () => {});
+    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+  });
+
+  test('a row that is not this account’s own is never written from (security M-2)', async () => {
+    await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
+    await mount({
+      status: 'signedIn',
+      profile: { id: 'u2', age_band: '18_plus', flags: { onboarded: true, someoneElse: true } },
+      profileSource: 'network',
+      segments: ['(tabs)', 'home'],
+    });
     await act(async () => {});
     expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
   });

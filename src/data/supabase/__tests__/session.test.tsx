@@ -326,13 +326,12 @@ describe('the profile cache (rev1: I11)', () => {
     expect(screen.getByText('source:cache')).toBeTruthy();
   });
 
-  test('a timed-out read falls back to the cache as well', async () => {
+  test('a read that times out leaves the cached row standing', async () => {
     await writeProfileCache(settings(), ava as never);
     jest.useFakeTimers();
     try {
       await mount();
       await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
-      expect(screen.getByText('loading:-')).toBeTruthy();
       await act(async () => { jest.advanceTimersByTime(10_000); });
     } finally {
       jest.useRealTimers();
@@ -480,5 +479,64 @@ describe('registerBeforeSignOut', () => {
     }
     await render(<DataProvider db={db}><SessionProvider><Grab /></SessionProvider></DataProvider>);
     expect(seen).toHaveBeenLastCalledWith(registerBeforeSignOut);
+  });
+});
+
+describe('fix round 1', () => {
+  test('a hanging read serves the same user’s cache at once, and the server row replaces it (m1)', async () => {
+    await writeProfileCache(createSettingsRepo(db), ava as never);
+    jest.useFakeTimers();
+    try {
+      await mount();
+      await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+      // The read is still hanging: no 10 s wait for the cached row.
+      await act(async () => { jest.advanceTimersByTime(100); });
+      expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+      expect(screen.getByText('source:cache')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+    await act(async () => { mockProfileGate.resolve?.({ ...ava, display_name: 'Ava Stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:Ava Stone')).toBeTruthy());
+    expect(screen.getByText('source:network')).toBeTruthy();
+  });
+
+  test('a hanging read with only another user’s cache still waits with no profile', async () => {
+    await writeProfileCache(createSettingsRepo(db), { ...ava, id: 'u2', display_name: 'Ben' } as never);
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    expect(screen.getByText('loading:-')).toBeTruthy();
+  });
+
+  test('a SIGNED_OUT the driver did not start (revoked, expired) clears a pending Terms tick (M-1)', async () => {
+    const settings = createSettingsRepo(db);
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now(), uid: 'u1' });
+    await settings.set(DISCLAIMER_ACK_KEY, '2026-09-21');
+    await act(async () => { emit('SIGNED_OUT', null); });
+    await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());
+    expect(await settings.get(DISCLAIMER_ACK_KEY)).toBe('2026-09-21');
+  });
+
+  test('a launch that simply starts signed out keeps a tick waiting for its sign-in', async () => {
+    const settings = createSettingsRepo(db);
+    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
+    await act(async () => { emit('INITIAL_SESSION', null); });
+    await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+    expect(await settings.get(PENDING_TERMS_KEY)).not.toBeNull();
+  });
+
+  test('a sign-in binds a waiting tick to that account (M-1)', async () => {
+    const settings = createSettingsRepo(db);
+    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
+    await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
+    await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ uid: 'u1' }));
   });
 });

@@ -20,7 +20,12 @@ import { recordConsent } from '@/data/supabase/profile';
 
 import { DISCLAIMER_VERSION, type LegalState } from './legal';
 
-/** Settings key: `{ tos, privacy, at }`, the versions accepted on this phone and not yet recorded. */
+/**
+ * Settings key: `{ tos, privacy, at, uid? }`, the versions accepted on this phone and not yet
+ * recorded. `uid` is absent while the tick waits for its sign-in, and is bound to the account that
+ * sign-in brings (`bindPendingTerms`); from then on it is recorded for that account only (T17
+ * security M-1).
+ */
 export const PENDING_TERMS_KEY = 'auth.pendingTerms';
 /** How long a stored acceptance stays good for: one sign-in, a magic link opened later that day included. */
 export const PENDING_TERMS_TTL_MS = 24 * 60 * 60 * 1000;
@@ -49,7 +54,7 @@ export interface ConsentApi {
 }
 
 /** The accepted versions, and when (epoch ms) they were accepted. */
-type PendingTerms = Record<TermsType, string> & { at: number };
+type PendingTerms = Record<TermsType, string> & { at: number; uid?: string };
 
 const defaultApi: ConsentApi = {
   async fetchConsents(userId) {
@@ -69,7 +74,29 @@ const isPendingTerms = (v: unknown): v is PendingTerms =>
   v !== null &&
   typeof (v as Record<string, unknown>).tos === 'string' &&
   typeof (v as Record<string, unknown>).privacy === 'string' &&
-  typeof (v as Record<string, unknown>).at === 'number';
+  typeof (v as Record<string, unknown>).at === 'number' &&
+  ((v as Record<string, unknown>).uid === undefined ||
+    typeof (v as Record<string, unknown>).uid === 'string');
+
+/**
+ * A driver signed in: a tick still waiting for its sign-in becomes this account's. A tick already
+ * bound to a different account is someone else's and is dropped, never recorded here. Never rejects.
+ */
+export async function bindPendingTerms(settings: SettingsRepo, uid: string): Promise<void> {
+  try {
+    const pending = await settings.get<unknown>(PENDING_TERMS_KEY);
+    if (pending === null) return;
+    if (!isPendingTerms(pending)) {
+      await settings.remove(PENDING_TERMS_KEY);
+      return;
+    }
+    if (pending.uid === uid) return;
+    if (pending.uid === undefined) await settings.set(PENDING_TERMS_KEY, { ...pending, uid });
+    else await settings.remove(PENDING_TERMS_KEY);
+  } catch {
+    // Unreadable: the flush's own checks still hold.
+  }
+}
 
 /** A live consent of `type` at exactly `version`. */
 const holds = (consents: readonly ConsentRow[], type: TermsType, version: string): boolean =>
@@ -128,6 +155,9 @@ export async function flushPendingConsents(
     isPendingTerms(pending) &&
     age >= 0 &&
     age <= PENDING_TERMS_TTL_MS &&
+    // Bound to another account: never this account's consent. Unbound: this is the sign-in it
+    // was ticked for.
+    (pending.uid === undefined || pending.uid === userId) &&
     TERMS_TYPES.every((type) => pending[type] === current[type]);
   if (!usable) {
     await settings.remove(PENDING_TERMS_KEY);
