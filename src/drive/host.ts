@@ -141,7 +141,11 @@ export interface DriveHost {
 export interface DriveHostDeps {
   db: Db;
   source: DriveSource;
-  /** A simulated drive must be given a client made with `persist: false` or a fake (S2 ruling). */
+  /**
+   * The speed-limit client. A dry run (`persistence: 'none'`) never calls `startTrip` or `prefetch`,
+   * the only calls that fetch and store tiles, so it cannot persist or use the network whatever
+   * client it is given (review M2); U5 may still pass `persist: false` or a fake for clarity.
+   */
   limits: SpeedLimitClient;
   player: AlertPlayer;
   scoring: typeof import('@scoring');
@@ -162,7 +166,7 @@ export interface DriveHostDeps {
 
 /** Scored driver trips: the learning period's count (rev1: m). */
 export const TRIP_INDEX_SQL =
-  "SELECT COUNT(*) AS n FROM trips WHERE role = 'driver' AND status IN ('provisional', 'final')";
+  "SELECT COUNT(*) AS n FROM trips WHERE role = 'driver' AND status IN ('provisional', 'final') AND deleted_at IS NULL";
 
 /** Rows kept to answer the limit lookups of a candidate's replayed rows (≤ the 3-min window). */
 const RECENT_ROWS = 200;
@@ -218,6 +222,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let belief: CaptureBelief = { on: false, rate: null, mode: null };
   /** The plan a `startCapture` was refused for: not retried until the plan changes. */
   let refusedPlan: string | null = null;
+  /**
+   * A capture native started by itself (Android receiver or sticky restart, iOS relaunch) found
+   * running at `start()`. It is not stopped while its trigger — the buffered wake — is still to be
+   * judged: stopping and restarting a foreground service from the background can be refused.
+   * Cleared by the first wake handled, or by the claim.
+   */
+  let inheritedCapture = false;
   let notified: string | null = null;
   let activeAlert: { decision: AlertDecision; until: number } | null = null;
   let mutedForDrive = false;
@@ -299,7 +310,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         const r = rowAt(lat, lng);
         return limits.lookup(lat, lng, course, r ? limitOptions(r) : { gnssValid: false, speedMps: null });
       },
-      prefetch: (lat, lng, course) => limits.prefetch(lat, lng, course),
+      // M2: a dry run never fetches, so no client — whatever it was built with — stores a tile or
+      // touches the network; lookups still read what memory and SQLite already hold.
+      prefetch: (lat, lng, course) => {
+        if (persist) limits.prefetch(lat, lng, course);
+      },
     },
     createDetectors: () => createDetectors(newId),
     createArbiter: (resume) => createArbiter(resume ?? { tripIndex }),
@@ -375,7 +390,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   function startTripNow(row: FeatureRow): void {
     startTripPending = false;
-    limits.startTrip(row.lat, row.lng, row.course);
+    if (persist) limits.startTrip(row.lat, row.lng, row.course);
   }
 
   /** The drive has closed and the snapshot already says armed/off. */
@@ -426,6 +441,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     switch (cmd.type) {
       case 'startCapture':
         await source.startCapture(cmd.mode);
+        inheritedCapture = false;
         belief = { on: true, rate: belief.on ? belief.rate : null, mode: cmd.mode };
         return;
       case 'setCaptureRate':
@@ -441,6 +457,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   async function reconcileCapture(s: EngineSnapshot): Promise<void> {
     const plan = capturePlan(s.status, s.mode);
+    if (inheritedCapture && plan !== 'keep' && !plan.on) return;
     const key = plan === 'keep' ? 'keep' : plan.on ? `${plan.rate}|${plan.mode}` : 'off';
     if (key === refusedPlan) return;
     refusedPlan = null;
@@ -472,13 +489,18 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- native events -------------------------------------------------------------------------------
 
   async function onWake(reason: 'significantChange' | 'activityTransition' | 'boot' | 'geofence'): Promise<void> {
-    // Only an armed engine opens a candidate; anything else owns the drive already.
-    if (engine.snapshot().status !== 'armed') return;
-    const t = now();
-    const history = await source.queryMotionHistory(t - WAKE_HISTORY_S * 1000, t);
-    const candidateStartTs = wakeStart(history);
-    if (candidateStartTs === null) return;
-    await engine.dispatch({ type: 'wake', reason, ts: now(), candidateStartTs });
+    try {
+      // Only an armed engine opens a candidate; anything else owns the drive already.
+      if (engine.snapshot().status !== 'armed') return;
+      const t = now();
+      const history = await source.queryMotionHistory(t - WAKE_HISTORY_S * 1000, t);
+      const candidateStartTs = wakeStart(history);
+      if (candidateStartTs === null) return;
+      await engine.dispatch({ type: 'wake', reason, ts: now(), candidateStartTs });
+    } finally {
+      // The wake that explains an inherited capture has been judged: claimed, or now stopped.
+      inheritedCapture = false;
+    }
   }
 
   async function onRow(row: FeatureRow): Promise<void> {
@@ -637,7 +659,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           const state = await source.getState();
           lockSignal = state.lockSignal;
           platform = state.platform;
-          belief = { on: state.capturing, rate: state.rate, mode: state.mode };
+          // C1: a capture found running is UNCLAIMED — mode null — so the first reconcile sends the
+          // JS claim (`startCapture`, README §6) even when native already runs in the plan's mode;
+          // without it native's 60 s watchdog stops the capture and the drive is lost.
+          belief = { on: state.capturing, rate: state.capturing ? state.rate : null, mode: null };
+          inheritedCapture = state.capturing;
         } catch (e) {
           report(e, 'getState');
         }

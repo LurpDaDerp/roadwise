@@ -8,7 +8,7 @@ import { drive, sha256, TZ } from '@/core/engine/__fixtures__/drives';
 import * as finalizeModule from '@/core/engine/finalize';
 import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
 import type { FeatureRow, LimitSample } from '@/core/engine/types';
-import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import {
   createSettingsRepo,
   createTripsRepo,
@@ -478,7 +478,8 @@ describe('start({ adopt }) (rev1: I2)', () => {
     const { trip, rows } = await orphan();
     const h = harness();
     h.setClock(last(rows).ts + 20_000);
-    h.fake.setState({ capturing: true, captureWasOpen: true });
+    // iOS relaunch: native restarted capture in the stored mode (N1: mode and rate are set while capturing).
+    h.fake.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
     h.fake.setMotionHistory([automotive(h.now() - 60_000)]);
     h.fake.emit('wake', { reason: 'significantChange', ts: h.now() });
     const seen: { status: string; wakeListeners: number }[] = [];
@@ -498,7 +499,9 @@ describe('start({ adopt }) (rev1: I2)', () => {
     expect(await trips().list({ status: 'recording' })).toHaveLength(1);
     // The buffered wake met a recording engine: no history query, no candidate.
     expect(h.fake.queries).not.toContain('queryMotionHistory');
-    expect(h.fake.calls).toContain('startCapture:mounted');
+    // The JS claim (README §6): sent although native already captures in this very mode (C1).
+    expect(h.fake.calls.filter((c) => c === 'startCapture:mounted')).toHaveLength(1);
+    expect(h.fake.calls).not.toContain('stopCapture');
     expect(h.limits.client.lookupStored).toHaveBeenCalled();
 
     await h.feed(drive(60, { t0: h.now() + 1000 }));
@@ -518,6 +521,37 @@ describe('start({ adopt }) (rev1: I2)', () => {
     await h.host.untilIdle();
     expect(((await trips().get(trip.client_trip_id)) as TripRow).role_source).toBe('moving_start');
     expect(await createSettingsRepo(db).get(`engine.arbiter.${trip.client_trip_id}`)).toBeNull();
+  });
+
+  test('Android killed-app auto start: the native capture is claimed, never stopped first (C1)', async () => {
+    const h = harness({ platform: 'android' });
+    await h.host.setAutoDetect(true);
+    // ActivityTransitionReceiver started 'auto' capture natively; the headless task boots the host.
+    h.fake.setState({ capturing: true, captureWasOpen: false, mode: 'auto', rate: 'full' });
+    h.fake.setMotionHistory([automotive(h.now() - 20_000)]);
+    h.fake.emit('wake', { reason: 'activityTransition', ts: h.now() });
+    await h.host.start();
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('candidate');
+    expect(h.fake.calls.filter((c) => c.startsWith('startCapture'))).toEqual(['startCapture:auto']);
+    expect(h.fake.calls).not.toContain('stopCapture');
+    // Rows flow on the claimed capture and the drive confirms.
+    await h.feed(drive(40, { t0: h.now() + 1000 }));
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.fake.calls).not.toContain('stopCapture');
+  });
+
+  test('a capture found running is stopped once its wake turns out not to be a drive', async () => {
+    const h = harness({ platform: 'android' });
+    await h.host.setAutoDetect(true);
+    h.fake.setState({ capturing: true, mode: 'auto', rate: 'full' });
+    h.fake.setMotionHistory([{ type: 'walking', confidence: 'high', ts: h.now() - 5000 }]);
+    h.fake.emit('wake', { reason: 'activityTransition', ts: h.now() });
+    await h.host.start();
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('armed');
+    expect(last(h.fake.calls)).toBe('stopCapture');
+    expect(h.host.captureActive()).toBe(false);
   });
 
   test('a trip with no samples is not adopted', async () => {
@@ -542,6 +576,8 @@ describe('the learning period counts scored driver trips only', () => {
     await add('e', 'discarded', 'driver');
     await add('f', 'recording', 'driver');
     await add('g', 'final', 'unknown');
+    await add('del', 'final', 'driver');
+    await trips().update('del', { deleted_at: T0 }, T0);
     const h = harness();
     await h.host.start();
     expect(h.host.snapshot().tripIndex).toBe(2);
@@ -799,6 +835,31 @@ describe('persistence', () => {
     expect(h.writes).toEqual([]);
     expect(h.host.snapshot().lastFinalized).toBeNull();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  test('a dry run cannot persist even when handed a storing limits client (M2)', async () => {
+    const api = {
+      getTiles: jest.fn(async () => {
+        throw new Error('a dry run must not ask');
+      }),
+      lookupPoint: jest.fn(async () => {
+        throw new Error('a dry run must not ask');
+      }),
+    };
+    const real = createSpeedLimitClient({ db, api, now: () => T0 });
+    const h = harness({ persistence: 'none' });
+    const host = createDriveHost({ ...hostDeps(h), limits: real, persistence: 'none' });
+    await host.start();
+    await host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    h.fake.loadTrace(drive(150));
+    while (h.fake.step()) await host.settled();
+    await host.end();
+    await host.untilIdle();
+    await real.settled();
+    expect(api.getTiles).not.toHaveBeenCalled();
+    expect(api.lookupPoint).not.toHaveBeenCalled();
+    const { rows } = await db.execute('SELECT COUNT(*) AS n FROM speed_limit_tiles');
+    expect(Number(rows[0]?.n)).toBe(0);
   });
 
   test('a finalize failure: ok false, the trip row still recording, reported', async () => {
