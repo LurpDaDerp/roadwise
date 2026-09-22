@@ -42,6 +42,7 @@ import {
   FinalizeTripPayloadSchema,
   MAX_EVENTS,
   MAX_POLYLINE_BYTES,
+  TZ_NAME_PATTERN,
   type FinalizeTripPayload,
   type PayloadEvent,
 } from '@/data/sync/payload';
@@ -392,11 +393,66 @@ const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
   source: e.source,
 });
 
+/** A whole-hour `GMT+5`, `UTC-3`, `GMT+05:00` or `UTC+0500`, the offset forms a phone can report. */
+const HOUR_OFFSET_ZONE = /^(?:GMT|UTC)([+-])(\d{1,2})(?::?(\d{2}))?$/;
+
+/**
+ * The zone a trip can carry: the device's id when it is a zone NAME the wire contract accepts
+ * (`TZ_NAME_PATTERN`) and Intl knows. Otherwise:
+ * - a whole-hour `GMT±H` / `UTC±H` becomes `Etc/GMT∓H`. The sign is INVERTED in Etc names (POSIX):
+ *   `GMT+5` (five hours ahead of UTC) is `Etc/GMT-5`. Etc covers UTC+14 to UTC−12.
+ * - anything else (`GMT+05:30`, `EST5EDT`, an id this build's Intl does not know, an empty value)
+ *   becomes `UTC`.
+ * The drive is then always stored, at worst with its night rule and local day read in UTC, and
+ * never refused by the device's own contract (M4 T1 r2 re-review I1).
+ */
+export function normaliseZone(raw: string | null | undefined): string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 64) return 'UTC';
+  let zone = 'UTC';
+  if (TZ_NAME_PATTERN.test(raw)) {
+    zone = raw;
+  } else {
+    const m = HOUR_OFFSET_ZONE.exec(raw);
+    const hours = m ? Number(m[2]) : NaN;
+    const minutes = m?.[3] === undefined ? 0 : Number(m[3]);
+    if (m && minutes === 0 && hours === 0) zone = 'UTC';
+    else if (m && minutes === 0 && m[1] === '+' && hours <= 14) zone = `Etc/GMT-${hours}`;
+    else if (m && minutes === 0 && m[1] === '-' && hours <= 12) zone = `Etc/GMT+${hours}`;
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return zone;
+  } catch {
+    return 'UTC';
+  }
+}
+
+/** `trips.sync_error` for a drive this build could not put into the upload contract. */
+export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
+
+/**
+ * Thrown after a drive whose payload failed the contract has been ENDED locally: stored with its
+ * measurements, `sync_state: 'failed'` and `sync_error: 'invalid_payload'`, so it is never left
+ * `recording` for a recovery that would only fail the same way, and history shows why it will not
+ * upload. The caller reports it like any finalize failure.
+ */
+export class FinalizePayloadRefusedError extends Error {
+  constructor(
+    readonly clientTripId: string,
+    readonly paths: string[]
+  ) {
+    super(`trip ${clientTripId} does not fit the upload contract (${paths.join(', ') || 'root'}); stored as failed`);
+    this.name = 'FinalizePayloadRefusedError';
+  }
+}
+
 export async function finalizeTrip(
   session: Readonly<TripSession>,
   deps: FinalizeDeps
 ): Promise<FinalizeResult> {
-  const { db, scoring, tz } = deps;
+  const { db, scoring } = deps;
+  // The one zone this drive is stamped, judged and uploaded in; see normaliseZone.
+  const tz = normaliseZone(deps.tz);
   const now = deps.now ?? Date.now;
   const trips = createTripsRepo(db);
   const events = createEventsRepo(db);
@@ -535,7 +591,7 @@ export async function finalizeTrip(
   const incomplete = deps.incomplete === true;
   const limitCoveragePct =
     session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0;
-  const payload = FinalizeTripPayloadSchema.parse({
+  const candidate = {
     clientTripId: id,
     startedAt,
     endedAt,
@@ -557,10 +613,65 @@ export async function finalizeTrip(
     tracePath,
     hadSevereEvent,
     incomplete,
-  } satisfies FinalizeTripPayload);
+  } satisfies FinalizeTripPayload;
+  const parsed = FinalizeTripPayloadSchema.safeParse(candidate);
 
   // 4. One transaction: the events, the trip row, the queue item and the purge commit together,
   //    so no state exists in which the trip says `queued` and nothing is queued.
+  const tripPatch = {
+    started_at: startedAt,
+    ended_at: endedAt,
+    tz,
+    distance_m: metrics.distanceM,
+    duration_s: metrics.durationS,
+    role: decided.role,
+    role_confidence: decided.roleConfidence,
+    role_source: roleSourceFor(session.startEvidence),
+    mode: session.mode,
+    camera_session: candidate.cameraSession ? 1 : 0,
+    score: scored.score,
+    scoring_version: String(scored.scoringVersion),
+    category_deductions_json: JSON.stringify(scored.categoryDeductions),
+    exposure: scored.exposure,
+    data_quality: scored.dataQuality,
+    conditions_json: JSON.stringify(conditions),
+    limit_coverage_pct: limitCoveragePct,
+    start_geohash5: candidate.startGeohash5,
+    end_geohash5: candidate.endGeohash5,
+    polyline: polyline === '' ? null : polyline,
+    status: tripStatus(scored.status),
+    checkpoint_ts: checkpointTs,
+    incomplete: incomplete ? 1 : 0,
+  } as const;
+
+  if (!parsed.success) {
+    // Defence in depth: the drive is ended, never left `recording` (a recovery would fail the same
+    // way forever) and never silent. Stored whole when the events store; when even that fails,
+    // the trip row alone is ended and the samples are kept.
+    const paths = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))].slice(0, 8);
+    const failed = { sync_state: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR } as const;
+    try {
+      await db.transaction(async (tx) => {
+        await events.removeByTrip(id, tx);
+        await events.insertMany(allEvents.map((e) => toNewEvent(e, id)), tx);
+        const trip = await trips.update(id, { ...tripPatch, ...failed }, now(), tx);
+        if (!trip) throw new MissingTripError(id);
+        await samples.purgeByTrip(id, tx);
+        await createSettingsRepo(tx).remove(arbiterStateKey(id));
+      });
+    } catch (error) {
+      if (error instanceof MissingTripError) throw error;
+      const trip = await trips.update(
+        id,
+        { status: tripStatus(scored.status), ended_at: endedAt, ...failed },
+        now()
+      );
+      if (!trip) throw new MissingTripError(id);
+    }
+    throw new FinalizePayloadRefusedError(id, paths);
+  }
+  const payload = parsed.data;
+
   const written = await db.transaction(async (tx) => {
     await events.removeByTrip(id, tx);
     const eventRows = await events.insertMany(
@@ -570,31 +681,9 @@ export async function finalizeTrip(
     const trip = await trips.update(
       id,
       {
-        started_at: startedAt,
-        ended_at: endedAt,
-        tz,
-        distance_m: metrics.distanceM,
-        duration_s: metrics.durationS,
-        role: decided.role,
-        role_confidence: decided.roleConfidence,
-        role_source: roleSourceFor(session.startEvidence),
-        mode: session.mode,
-        camera_session: payload.cameraSession ? 1 : 0,
-        score: scored.score,
-        scoring_version: String(scored.scoringVersion),
-        category_deductions_json: JSON.stringify(scored.categoryDeductions),
-        exposure: scored.exposure,
-        data_quality: scored.dataQuality,
-        conditions_json: JSON.stringify(conditions),
-        limit_coverage_pct: limitCoveragePct,
-        start_geohash5: payload.startGeohash5,
-        end_geohash5: payload.endGeohash5,
-        polyline: polyline === '' ? null : polyline,
-        status: tripStatus(scored.status),
+        ...tripPatch,
         // Nothing to sync for a discarded trip: it is settled the moment it is stored.
         sync_state: discarded ? 'synced' : 'queued',
-        checkpoint_ts: checkpointTs,
-        incomplete: incomplete ? 1 : 0,
       },
       now(),
       tx

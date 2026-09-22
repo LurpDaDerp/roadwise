@@ -23,7 +23,7 @@ begin
 end $$;
 
 begin;
-select plan(164);
+select plan(166);
 
 -- ---------------------------------------------------------------------------
 -- 1. supabase_auth_admin: an OAuth sign-in (GoTrue's UPDATE of raw_user_meta_data and
@@ -118,7 +118,9 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('a1a1a1a1-0000-4000-8000-000000000009', 'l26@example.com', '{}'),
   ('a1a1a1a1-0000-4000-8000-00000000000a', 'm16@example.com', '{}'),
   ('a1a1a1a1-0000-4000-8000-00000000000b', 'm26@example.com', '{}'),
-  ('a1a1a1a1-0000-4000-8000-00000000000c', 'r6@example.com', '{}');
+  ('a1a1a1a1-0000-4000-8000-00000000000c', 'r6@example.com', '{}'),
+  ('a1a1a1a1-0000-4000-8000-00000000000d', 'w6@example.com', '{}'),
+  ('a1a1a1a1-0000-4000-8000-00000000000e', 'x6@example.com', '{}');
 insert into auth.identities (provider_id, user_id, identity_data, provider) values
   ('g-u6', 'a1a1a1a1-0000-4000-8000-000000000004',
     '{"sub":"g-u6","email":"u6@example.com","full_name":"Uma Child","name":"Uma","avatar_url":"https://example.com/u.png","picture":"https://example.com/u.png"}', 'google');
@@ -640,6 +642,15 @@ select is((select row(p.age_band, (select count(*) from public.devices v where v
 update public.profiles set age_band = '13_17' where id = 'a1a1a1a1-0000-4000-8000-000000000003';
 select is(public.rederive_age_bands(), 0, 'the pass reads only birth dates near a 13th or 18th birthday');
 update public.profiles set age_band = '18_plus' where id = 'a1a1a1a1-0000-4000-8000-000000000003';
+
+-- the catch-up edge (n2): after a week-long pg_cron outage the pass still finds an 18th birthday
+-- exactly 7 days back (W), and nothing 8 days back (X). Neither has a drive, so both are on UTC.
+update public.private_profiles set birth_date = ((select utc from d) - interval '18 years')::date - 7 where user_id = 'a1a1a1a1-0000-4000-8000-00000000000d';
+update public.private_profiles set birth_date = ((select utc from d) - interval '18 years')::date - 8 where user_id = 'a1a1a1a1-0000-4000-8000-00000000000e';
+update public.profiles set age_band = '13_17' where id in ('a1a1a1a1-0000-4000-8000-00000000000d', 'a1a1a1a1-0000-4000-8000-00000000000e');
+select is(public.rederive_age_bands(), 1, 'the pass catches up an 18th birthday exactly 7 days back, and reads nothing older');
+select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-00000000000d', 'a1a1a1a1-0000-4000-8000-00000000000e')),
+  array['18_plus', '13_17'], 'W (7 days back) is released to 18_plus; X (8 days back) is outside the window');
 
 -- ---------------------------------------------------------------------------
 -- 9. support correction: a mistyped adult (U) is released by a service-role birth-date update

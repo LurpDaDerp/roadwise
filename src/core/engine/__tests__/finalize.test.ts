@@ -4,7 +4,10 @@ import type { AlertDecision } from '@/core/alerts/types';
 import { NO_LIMIT, T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import type { StartEvidence, TripRole, TripSession } from '@/core/engine/engine.types';
 import {
+  FinalizePayloadRefusedError,
   finalizeTrip,
+  INVALID_PAYLOAD_SYNC_ERROR,
+  normaliseZone,
   POLYLINE_EPSILON_M,
   simplifyTrack,
   TRIM_ENDPOINTS_M,
@@ -24,7 +27,7 @@ import {
   type TripStatus,
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { FinalizeTripPayloadSchema, MAX_EVENTS, MAX_POLYLINE_BYTES } from '@/data/sync/payload';
+import { FinalizeTripPayloadSchema, MAX_EVENTS, MAX_POLYLINE_BYTES, TZ_NAME_PATTERN } from '@/data/sync/payload';
 import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
 import { decodePolyline, encodePolyline, simplify } from '@/lib/polyline';
 
@@ -869,6 +872,115 @@ describe('the write step is atomic', () => {
     const { trip } = await finalizeTrip(session(rows, { events: WORKED }), deps);
     expect(trip).toMatchObject({ status: 'provisional', sync_state: 'queued', score: 74 });
     await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+  });
+});
+
+// M4 T1 r2 re-review I1: the upload contract takes zone NAMES only, and a phone can report an
+// offset id (`GMT+05:30`) or a legacy one (`EST5EDT`). The device must never refuse its own drive.
+describe('the zone a drive carries', () => {
+  test.each([
+    ['America/New_York', 'America/New_York'],
+    ['UTC', 'UTC'],
+    ['Etc/GMT+5', 'Etc/GMT+5'],
+    // whole-hour offsets: the sign is INVERTED in Etc names
+    ['GMT+5', 'Etc/GMT-5'],
+    ['GMT-5', 'Etc/GMT+5'],
+    ['UTC+3', 'Etc/GMT-3'],
+    ['UTC-3', 'Etc/GMT+3'],
+    ['GMT+05:00', 'Etc/GMT-5'],
+    ['UTC+0500', 'Etc/GMT-5'],
+    ['GMT+14', 'Etc/GMT-14'],
+    ['GMT-12', 'Etc/GMT+12'],
+    ['GMT+0', 'UTC'],
+    ['GMT-00:00', 'UTC'],
+    // outside what Etc names (UTC+14 to UTC-12), fractional, legacy, unknown or empty: UTC
+    ['GMT+15', 'UTC'],
+    ['GMT-13', 'UTC'],
+    ['GMT+05:30', 'UTC'],
+    ['UTC+0545', 'UTC'],
+    ['GMT-03:30', 'UTC'],
+    ['EST5EDT', 'UTC'],
+    ['+23:59', 'UTC'],
+    ['Mars/Olympus', 'UTC'],
+    ['', 'UTC'],
+  ])('%s becomes %s', (raw, zone) => {
+    expect(normaliseZone(raw)).toBe(zone);
+    expect(TZ_NAME_PATTERN.test(normaliseZone(raw))).toBe(true);
+  });
+
+  test('a missing zone is UTC', () => {
+    expect(normaliseZone(undefined)).toBe('UTC');
+    expect(normaliseZone(null)).toBe('UTC');
+  });
+
+  test('the inverted sign means what the phone meant: GMT+5 reads five hours ahead of UTC', () => {
+    const hourIn = (timeZone: string) =>
+      new Intl.DateTimeFormat('en-US', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(
+        Date.UTC(2026, 0, 1, 0, 0)
+      );
+    expect(hourIn(normaliseZone('GMT+5'))).toBe('05');
+    expect(hourIn(normaliseZone('UTC-3'))).toBe('21');
+  });
+
+  test.each([
+    ['GMT+05:30', 'UTC'],
+    ['EST5EDT', 'UTC'],
+    ['GMT+5', 'Etc/GMT-5'],
+  ])('a drive recorded in %s is queued with a contract-valid zone (%s)', async (raw, zone) => {
+    const rows = track(300);
+    await persisted(rows, 300);
+    const { trip, payload } = await finalizeTrip(session(rows), { ...deps, tz: raw });
+    expect(payload.tz).toBe(zone);
+    expect(FinalizeTripPayloadSchema.parse(payload)).toEqual(payload);
+    expect(trip).toMatchObject({ tz: zone, sync_state: 'queued' });
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1);
+  });
+});
+
+// Defence in depth: whatever makes a payload fail the contract, the drive is ended, not left
+// `recording` for a recovery that would fail the same way forever, and never lost silently.
+describe('a payload the contract refuses', () => {
+  const refusing = (): FinalizeDeps => ({ ...deps, cameraSession: 'yes' as unknown as boolean });
+
+  test('ends the trip as a recorded, visible failure and queues nothing', async () => {
+    const rows = track(300);
+    await persisted(rows, 300);
+
+    const error = await finalizeTrip(session(rows, { events: [p1] }), refusing()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FinalizePayloadRefusedError);
+    expect((error as FinalizePayloadRefusedError).paths).toEqual(['cameraSession']);
+
+    const trip = await createTripsRepo(db).get(TRIP);
+    expect(trip?.status).not.toBe('recording');
+    expect(trip).toMatchObject({ sync_state: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR });
+    expect(trip?.ended_at).not.toBeNull();
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
+    // stored whole: its events are kept and the samples it no longer needs are gone
+    await expect(createEventsRepo(db).countByTrip(TRIP)).resolves.toBe(1);
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+    // nothing is left for recovery to retry forever
+    await expect(createTripsRepo(db).list({ status: 'recording' })).resolves.toEqual([]);
+  });
+
+  test('when even the full write fails, the trip row alone is ended and the samples are kept', async () => {
+    const rows = track(300);
+    await persisted(rows, 300);
+    // Every transaction fails; the row-alone ending is a single statement outside one.
+    const failing: Db = {
+      execute: (sql, params) => db.execute(sql, params),
+      transaction: () => Promise.reject(new Error('disk full')),
+    };
+
+    await expect(
+      finalizeTrip(session(rows, { events: [p1] }), { ...refusing(), db: failing })
+    ).rejects.toBeInstanceOf(FinalizePayloadRefusedError);
+
+    expect(await createTripsRepo(db).get(TRIP)).toMatchObject({
+      sync_state: 'failed',
+      sync_error: INVALID_PAYLOAD_SYNC_ERROR,
+    });
+    expect((await createTripsRepo(db).get(TRIP))?.status).not.toBe('recording');
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(300);
   });
 });
 

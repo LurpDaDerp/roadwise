@@ -44,6 +44,7 @@ import type { DriveSenseEvent, DriveSenseEvents, DriveSenseState, Subscription }
 import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
+import { normaliseZone } from '@/core/engine/finalize';
 import {
   recoverRecordingTrips,
   type RecoveryDeps,
@@ -283,7 +284,10 @@ export interface AppRuntime {
   stop(opts?: { endOpenTrip?: boolean }): Promise<void>;
 }
 
-const deviceZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone;
+// Normalised at the source (M4 T1 r2 re-review I1): an id outside the upload contract's zone
+// names (`GMT+05:30`, `EST5EDT`) would otherwise stamp and judge every drive in a zone the
+// device's own finalize refuses. Whole-hour offsets become `Etc/GMT∓H`, anything else `UTC`.
+const deviceZone = (): string => normaliseZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
 
 function warn(error: unknown, context: string): void {
   if (__DEV__) console.warn(`[bootstrap] ${context}:`, error);
