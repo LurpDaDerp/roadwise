@@ -31,6 +31,7 @@ export const signInLegalCopy = {
   agree: 'I agree to the Terms and Privacy Policy.',
   needsTick: 'Tick the box above first.',
   saveFailed: "Couldn't save that. Try again.",
+  rateLimited: 'Too many sign-in emails. Try again in a minute.',
 } as const;
 
 /**
@@ -250,14 +251,17 @@ export function SignInScreen() {
           {t('signIn.magicLinkSent')}
         </Text>
       ) : null}
-      {error || magic.state === 'error' ? (
+      {error || magic.state === 'error' || magic.state === 'rate_limited' ? (
         <Text
           variant="callout"
           tone="danger"
           accessibilityRole="alert"
           accessibilityLiveRegion="polite"
         >
-          {error ?? t('signIn.errorGeneric')}
+          {error ??
+            (magic.state === 'rate_limited'
+              ? signInLegalCopy.rateLimited
+              : t('signIn.errorGeneric'))}
         </Text>
       ) : null}
     </Screen>

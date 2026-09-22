@@ -118,13 +118,16 @@ const guide = (title: string, ...steps: string[]): BatteryGuide => ({
 /**
  * What a device that has never fetched reads, equal to the values the migrations write: the flags
  * as 0005 leaves them (plus `guardian_invites: false`, which 0006 adds), and 0006's and 0007's
- * rows. The battery guides here are the text 0006 must carry verbatim (see the Task 16 report).
+ * rows. `oem_battery_guides` here is the ONE source of the guide text (Ruling T16 (3)): 0006
+ * carries it word for word, and a parity test parses the migration and holds it to this.
  */
 export const CONFIG_DEFAULTS: Omit<AppConfig, 'fetchedAt'> = {
+  // camera_beta and referral are off: a flag must not advertise a feature that is not built yet
+  // (Ruling T16 (2); 0005 is amended to match).
   flags: {
     auto_detect: true,
-    camera_beta: true,
-    referral: true,
+    camera_beta: false,
+    referral: false,
     guardian_invites: false,
   },
   min_app_version: '2.0.0',
@@ -217,10 +220,38 @@ function pickValues(valueOf: (key: ConfigKey) => unknown): Partial<ConfigValues>
  * Rejects — storing nothing — when the request fails or the answer is not a list of rows, so a
  * throttled foreground job tries again next time instead of stamping a failure as done.
  */
-export async function refreshAppConfig(
+export function refreshAppConfig(
   supabase: AppConfigSupabase,
   db: Db,
   now: () => number = Date.now
+): Promise<void> {
+  // One request at a time per database (review m2): the daily foreground job and a screen's hourly
+  // refresh can both fire on the same return to the front, and they share this one fetch.
+  const running = inFlightRefresh.get(db);
+  if (running) return running;
+  const run = fetchAndStore(supabase, db, now).finally(() => inFlightRefresh.delete(db));
+  inFlightRefresh.set(db, run);
+  return run;
+}
+
+const inFlightRefresh = new Map<Db, Promise<void>>();
+const writeListeners = new Set<() => void>();
+
+/**
+ * Called after every write of `APP_CONFIG_KEY`, whichever path made it (review m1), so a screen
+ * already showing the config re-reads it. Returns the unsubscribe.
+ */
+export function onAppConfigWritten(fn: () => void): () => void {
+  writeListeners.add(fn);
+  return () => {
+    writeListeners.delete(fn);
+  };
+}
+
+async function fetchAndStore(
+  supabase: AppConfigSupabase,
+  db: Db,
+  now: () => number
 ): Promise<void> {
   const { data, error } = await supabase.from(APP_CONFIG_TABLE).select('key,value');
   if (error) throw new Error(`app config: the request failed (${describe(error)})`);
@@ -234,6 +265,22 @@ export async function refreshAppConfig(
     values: pickValues((key) => rows.get(key)),
   };
   await createSettingsRepo(db).set(APP_CONFIG_KEY, stored);
+  for (const fn of [...writeListeners]) {
+    try {
+      fn();
+    } catch {
+      // A listener's failure is its own; the config is stored.
+    }
+  }
+}
+
+/**
+ * A refresh that did not run because now is the wrong moment — the launch is still booting, or a
+ * drive is under way. It is not an attempt: the throttle is not stamped, so the next return to
+ * the front tries again (review m1).
+ */
+export class AppConfigRefreshRefused extends Error {
+  override readonly name = 'AppConfigRefreshRefused';
 }
 
 /**
@@ -295,8 +342,10 @@ export const APP_CONFIG_QUERY_KEY = ['settings', APP_CONFIG_KEY] as const;
 export interface AppConfigRefresher {
   /**
    * Run `refresh` when it is due: the stored config is an interval old (or was never fetched)
-   * and no attempt — successful or not — was made within the interval. Callers arriving while an
-   * attempt is running share it. Resolves true only when a refresh ran and succeeded; never rejects.
+   * and no attempt that ran — successful or failed — was made within the interval. A refusal
+   * (`AppConfigRefreshRefused`: booting, mid-drive) is not an attempt and is not stamped. Callers
+   * arriving while an attempt is running share it. Resolves true only when a refresh ran and
+   * succeeded; never rejects.
    */
   maybeRefresh(db: Db, refresh: () => Promise<void>, now: () => number): Promise<boolean>;
 }
@@ -318,12 +367,18 @@ export function createAppConfigRefresher(
           const { fetchedAt } = await readConfig(db);
           const t = now();
           if (!due(fetchedAt, t) || !due(lastAttemptAt, t)) return false;
+          try {
+            await refresh();
+          } catch (error) {
+            // A refusal (booting, mid-drive) is not an attempt and leaves no stamp; a request that
+            // ran and failed (offline) waits an interval, as a success does.
+            if (!(error instanceof AppConfigRefreshRefused)) lastAttemptAt = t;
+            return false;
+          }
           lastAttemptAt = t;
-          await refresh();
           return true;
         } catch {
-          // Offline, or a drive under way: the cached config stands, and the next try is an
-          // interval away (the 24 h foreground job keeps its own schedule).
+          // The cache could not be read: nothing ran, so nothing is stamped.
           return false;
         } finally {
           inFlight = null;
@@ -350,8 +405,8 @@ const sharedRefresher = createAppConfigRefresher();
 async function runtimeRefresh(): Promise<void> {
   const { getRuntimeState } = await import('@/boot/controller');
   const runtime = getRuntimeState().runtime;
-  if (runtime === null) throw new Error('app config: no runtime');
-  if (runtime.drive.isBusy()) throw new Error('app config: a drive is under way');
+  if (runtime === null) throw new AppConfigRefreshRefused('app config: no runtime yet');
+  if (runtime.drive.isBusy()) throw new AppConfigRefreshRefused('app config: a drive is under way');
   await runtime.refreshConfig();
 }
 
@@ -386,22 +441,25 @@ export function useAppConfig(deps: UseAppConfigDeps = {}): {
     queryFn: () => readConfig(db),
   });
 
+  // Any write of the cache — this hook's refresh or the daily foreground job's — is shown at once.
+  useEffect(
+    () =>
+      onAppConfigWritten(() => {
+        void client.invalidateQueries({ queryKey: APP_CONFIG_QUERY_KEY });
+      }),
+    [client]
+  );
+
   useEffect(() => {
-    let live = true;
     const attempt = () => {
-      void refresher.maybeRefresh(db, refresh, now).then((refreshed) => {
-        if (refreshed && live) void client.invalidateQueries({ queryKey: APP_CONFIG_QUERY_KEY });
-      });
+      void refresher.maybeRefresh(db, refresh, now);
     };
     if (appState.currentState === 'active') attempt();
     const subscription = appState.addEventListener('change', (next) => {
       if (next === 'active') attempt();
     });
-    return () => {
-      live = false;
-      subscription.remove();
-    };
-  }, [db, client, refresh, refresher, appState, now]);
+    return () => subscription.remove();
+  }, [db, refresh, refresher, appState, now]);
 
   return { config: query.data ?? DEFAULT_CONFIG, ready: query.isSuccess };
 }

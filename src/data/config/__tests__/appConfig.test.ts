@@ -6,6 +6,7 @@ import { createElement, type ReactNode } from 'react';
 
 import {
   APP_CONFIG_KEY,
+  AppConfigRefreshRefused,
   APP_CONFIG_REFRESH_INTERVAL_MS,
   APP_CONFIG_SCHEMAS,
   APP_CONFIG_TABLE,
@@ -27,6 +28,19 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Database } from '@/data/supabase/types';
+
+// Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time; the root
+// tsconfig's `types` is ["jest"], hence local shapes (the drive golden's pattern).
+declare const __dirname: string;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- see above: `import` would need @types/node
+const { readFileSync } = require('node:fs') as {
+  readFileSync: (file: string, encoding: 'utf8') => string;
+};
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+const { join } = require('node:path') as { join: (...parts: string[]) => string };
+
+const migration0006 = (): string =>
+  readFileSync(join(__dirname, '../../../../supabase/migrations/0006_onboarding.sql'), 'utf8');
 
 const NOW = 1_790_000_000_000;
 
@@ -173,9 +187,9 @@ const MIGRATED = [
   {
     key: 'feature_flags',
     value: {
-      camera_beta: true,
+      camera_beta: false,
       auto_detect: true,
-      referral: true,
+      referral: false,
       guardian_invites: false,
     },
   },
@@ -204,10 +218,11 @@ const refreshWith = (rows: unknown[], at = NOW) =>
 
 describe('the compiled defaults', () => {
   test('equal the values the migrations write', () => {
+    // A flag must not advertise an unbuilt feature (Ruling T16 (2)).
     expect(CONFIG_DEFAULTS.flags).toEqual({
       auto_detect: true,
-      camera_beta: true,
-      referral: true,
+      camera_beta: false,
+      referral: false,
       guardian_invites: false,
     });
     expect(CONFIG_DEFAULTS.min_app_version).toBe('2.0.0');
@@ -237,6 +252,23 @@ describe('the compiled defaults', () => {
     for (const key of CONFIG_KEYS) {
       expect(APP_CONFIG_SCHEMAS[key].safeParse(CONFIG_DEFAULTS[key]).success).toBe(true);
     }
+  });
+
+  // PARITY (Ruling T16 (3)): CONFIG_DEFAULTS is the one source of the guide text, and 0006 carries
+  // it word for word. Parsed from the migration, as the drive golden parses seed.sql. Expected to
+  // fail until Task 1's round 2 copies the text in.
+  test('0006 writes the battery guides word for word as CONFIG_DEFAULTS has them', () => {
+    const match = /\('oem_battery_guides',\s*\$json\$([\s\S]*?)\$json\$::jsonb/.exec(
+      migration0006()
+    );
+    expect(match).not.toBeNull();
+    expect(JSON.parse(match?.[1] ?? 'null')).toEqual(CONFIG_DEFAULTS.oem_battery_guides);
+  });
+
+  test("0006's feature_flags row matches the compiled flags", () => {
+    const match = /\('feature_flags',\s*'(\{[^']*\})'::jsonb/.exec(migration0006());
+    expect(match).not.toBeNull();
+    expect(JSON.parse(match?.[1] ?? 'null')).toEqual(CONFIG_DEFAULTS.flags);
   });
 
   test('every battery guide has a title and one to eight steps', () => {
@@ -451,6 +483,33 @@ describe('readConfig', () => {
   });
 });
 
+describe('refreshAppConfig dedupe (review m2)', () => {
+  test('two refreshes of one database at once make one request', async () => {
+    let answer: (v: { data: unknown; error: unknown }) => void = () => {};
+    let requests = 0;
+    const supabase: AppConfigSupabase = {
+      from: () => ({
+        select: () => {
+          requests += 1;
+          return new Promise((resolve) => {
+            answer = resolve;
+          });
+        },
+      }),
+    };
+    const daily = refreshAppConfig(supabase, db, () => NOW);
+    const hourly = refreshAppConfig(supabase, db, () => NOW);
+    answer({ data: MIGRATED, error: null });
+    await Promise.all([daily, hourly]);
+    expect(requests).toBe(1);
+    // Once it has settled, the next refresh is a new request.
+    const next = refreshAppConfig(supabase, db, () => NOW + 1);
+    answer({ data: MIGRATED, error: null });
+    await next;
+    expect(requests).toBe(2);
+  });
+});
+
 describe('the refresh throttle', () => {
   const HOUR = APP_CONFIG_REFRESH_INTERVAL_MS;
 
@@ -487,6 +546,22 @@ describe('the refresh throttle', () => {
     await expect(refresher.maybeRefresh(db, refresh, () => NOW)).resolves.toBe(false);
     await expect(refresher.maybeRefresh(db, refresh, () => NOW + 60_000)).resolves.toBe(false);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('a refusal (booting, mid-drive) is not stamped: the next foreground tries again', async () => {
+    const refresher = createAppConfigRefresher();
+    const refresh = jest
+      .fn<Promise<void>, []>()
+      .mockRejectedValueOnce(new AppConfigRefreshRefused('app config: no runtime yet'))
+      .mockRejectedValueOnce(new AppConfigRefreshRefused('app config: a drive is under way'))
+      .mockImplementation(() => refreshWith(MIGRATED, NOW + 2));
+    await expect(refresher.maybeRefresh(db, refresh, () => NOW)).resolves.toBe(false);
+    await expect(refresher.maybeRefresh(db, refresh, () => NOW + 1)).resolves.toBe(false);
+    await expect(refresher.maybeRefresh(db, refresh, () => NOW + 2)).resolves.toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    // …and the refresh that ran is stamped as usual.
+    await expect(refresher.maybeRefresh(db, refresh, () => NOW + 3)).resolves.toBe(false);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 
   test('two callers at once share one request', async () => {
@@ -637,6 +712,47 @@ describe('useAppConfig', () => {
     await act(async () => appState.set('active'));
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
     await second.unmount();
+  });
+
+  test('a config written by another path (the daily job) shows in a mounted screen', async () => {
+    const appState = fakeAppState('background');
+    const refresh = jest.fn(async () => {});
+    const refresher = createAppConfigRefresher();
+    const { result } = await renderHook(
+      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.config.legal_urls).toEqual({});
+    await act(async () => {
+      await refreshWith([
+        { key: 'legal_urls', value: { terms: 'https://t.test/', privacy: 'https://p.test/' } },
+      ]);
+    });
+    await waitFor(() => expect(result.current.config.legal_urls.terms).toBe('https://t.test/'));
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  test('refused at first launch, it retries at the next return to the front', async () => {
+    const appState = fakeAppState('active');
+    const refresh = jest
+      .fn<Promise<void>, []>()
+      .mockRejectedValueOnce(new AppConfigRefreshRefused('app config: no runtime yet'))
+      .mockImplementation(() =>
+        refreshWith([
+          { key: 'legal_urls', value: { terms: 'https://t.test/', privacy: 'https://p.test/' } },
+        ])
+      );
+    const refresher = createAppConfigRefresher();
+    const { result } = await renderHook(
+      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      { wrapper }
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await act(async () => appState.set('background'));
+    await act(async () => appState.set('active'));
+    await waitFor(() => expect(result.current.config.legal_urls.terms).toBe('https://t.test/'));
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   test('a failed refresh keeps the cached config', async () => {

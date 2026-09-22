@@ -14,7 +14,7 @@ import { ThemeProvider } from '@/ui/theme';
 const mockUseState = useState;
 const mockAppleSignIn = jest.fn(async () => {});
 const mockGoogleSignIn = jest.fn(async () => {});
-const mockSend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'error');
+const mockSend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'rate_limited' | 'error');
 const mockWorld = { googleReady: true };
 const mockConfig: { config: AppConfig; ready: boolean } = {
   config: { ...CONFIG_DEFAULTS, fetchedAt: null },
@@ -35,7 +35,9 @@ jest.mock('@/features/auth/useGoogleSignIn', () => ({
 // the app, or the confirmation line can never be asserted.
 jest.mock('@/features/auth/useMagicLink', () => ({
   useMagicLink: () => {
-    const [state, setState] = mockUseState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+    const [state, setState] = mockUseState<'idle' | 'sending' | 'sent' | 'rate_limited' | 'error'>(
+      'idle'
+    );
     return {
       state,
       send: async (email: string) => {
@@ -253,5 +255,30 @@ describe('A3: the disclaimer and terms tick', () => {
     await act(async () => view.rerender(tree()));
     expect(screen.getByRole('checkbox')).not.toBeChecked();
     expect(screen.getByRole('button', APPLE)).toBeDisabled();
+  });
+});
+
+describe('magic-link rate limit', () => {
+  const sendEmail = async () => {
+    await mount();
+    await tick();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.press(screen.getByRole('button', EMAIL));
+  };
+
+  test('a refused burst says to wait, in the alert region', async () => {
+    mockSend.mockResolvedValueOnce('rate_limited');
+    await sendEmail();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Too many sign-in emails. Try again in a minute.');
+    expect(screen.queryByText('Sign-in did not work. Try again.')).toBeNull();
+  });
+
+  test('any other failure keeps the generic line', async () => {
+    mockSend.mockResolvedValueOnce('error');
+    await sendEmail();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
+    expect(screen.queryByText(/Too many sign-in emails/)).toBeNull();
   });
 });

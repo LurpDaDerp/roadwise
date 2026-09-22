@@ -30,3 +30,39 @@ test('reports error', async () => {
   });
   expect(result.current.state).toBe('error');
 });
+
+describe('a refused burst of emails', () => {
+  const sendWith = async (error: unknown) => {
+    mockSignInWithOtp.mockResolvedValue({ error });
+    const { result } = await renderHook(() => useMagicLink());
+    let returned: unknown;
+    await act(async () => {
+      returned = await result.current.send('x@example.com');
+    });
+    return { state: result.current.state, returned };
+  };
+
+  test('HTTP 429 is rate_limited', async () => {
+    await expect(sendWith({ status: 429, message: 'Too Many Requests' })).resolves.toEqual({
+      state: 'rate_limited',
+      returned: 'rate_limited',
+    });
+  });
+
+  test('the over_email_send_rate_limit code is rate_limited', async () => {
+    await expect(
+      sendWith({ status: 400, code: 'over_email_send_rate_limit', message: 'rate limit' })
+    ).resolves.toEqual({ state: 'rate_limited', returned: 'rate_limited' });
+  });
+
+  test('any other refusal is still a plain error', async () => {
+    for (const error of [
+      { status: 400, code: 'validation_failed', message: 'bad email' },
+      { status: 500, message: 'boom' },
+      { code: 'over_sms_send_rate_limit' },
+      'a string',
+    ]) {
+      await expect(sendWith(error)).resolves.toEqual({ state: 'error', returned: 'error' });
+    }
+  });
+});
