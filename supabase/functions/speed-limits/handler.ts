@@ -80,11 +80,12 @@ export interface CoverageBox {
 
 /**
  * The states whose open data is loaded (ruling B2 M-1): AWS is asked only inside these boxes.
- * Outside them `unknown` is the honest answer anyway. Washington's extent, rounded outward by about
- * 5 km. Add a state here when its import lands.
+ * Outside them `unknown` is the honest answer anyway. Washington: the loaded data's extent clipped
+ * at the state border (ruling B3 concern 3), so Vancouver, WA (about 45.63) is in, while downtown
+ * Portland (about 45.52) and BC north of 49° are out. Add a state here when its import lands.
  */
 export const AWS_COVERAGE: readonly CoverageBox[] = [
-  { state: 'WA', minLat: 45.5, maxLat: 49.05, minLng: -124.9, maxLng: -116.85 },
+  { state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -116.9 },
 ];
 
 export const insideCoverage = (p: LatLng): boolean =>

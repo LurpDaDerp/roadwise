@@ -34,6 +34,7 @@ describe('MATCH', () => {
       CONF_RAMP: 0.65,
       CONF_HPMS_PENALTY: 0.1,
       CONF_AWS: 0.7,
+      MAX_CANDIDATES: 20,
     });
   });
 });
@@ -373,5 +374,62 @@ describe('matchLimit — invariants', () => {
     const r2 = matchLimit(90, [cand({ key: 'osm:a', distanceM: 5, limitMph: 35 }), cand({ key: 'osm:b', distanceM: 5, limitMph: 25 })]);
     expect(r1.key).toBe('osm:a');
     expect(r2.key).toBe('osm:a');
+  });
+});
+
+describe('the candidate cap (the server returns at most 20 nearest)', () => {
+  // A 31-road interchange (the real worst case in the WA import: I-205 at Vancouver, WA). The car's
+  // road is the 20th nearest; 19 nearer ramps cross its course, and 11 farther roads run parallel
+  // to it with a different limit, all within the parallel margin.
+  const interchange = (): Candidate[] => {
+    const ramps = Array.from({ length: 19 }, (_, i) =>
+      cand({ key: `osm:ramp${String(i).padStart(2, '0')}`, highway: 'motorway_link', distanceM: 1 + i * 0.3, bearingDeg: 0, limitMph: 45 })
+    );
+    const own = cand({ key: 'osm:own', highway: 'primary', distanceM: 8, bearingDeg: 90, limitMph: 35 });
+    const far = Array.from({ length: 11 }, (_, i) =>
+      cand({ key: `osm:far${String(i).padStart(2, '0')}`, highway: 'motorway', distanceM: 9 + i * 0.5, bearingDeg: 90, limitMph: 60 })
+    );
+    return [...far, own, ...ramps];
+  };
+
+  it('considers only the nearest 20, before the heading test, so the farther parallels do not count', () => {
+    const cs = interchange();
+    expect(cs).toHaveLength(31);
+    expect(matchLimit(90, cs)).toEqual({
+      limitMph: 35,
+      source: 'posted',
+      matchConfidence: 0.95,
+      parallelRoads: false,
+      provider: 'osm',
+      key: 'osm:own',
+    });
+  });
+
+  it('would have flagged parallel roads without the cap (the 21st onward change the outcome)', () => {
+    const cs = interchange();
+    // Only the 20 the server would return, plus one of the farther parallels: now it counts.
+    const nearest20 = [...cs].sort((a, b) => a.distanceM - b.distanceM).slice(0, 20);
+    const withOneMore = [...nearest20.slice(1), cs.find((c) => c.key === 'osm:far00')!];
+    expect(matchLimit(90, withOneMore)).toMatchObject({ limitMph: 35, parallelRoads: true, matchConfidence: 0.6 });
+  });
+
+  it('answers the same whatever order the candidates arrive in, ties broken by key', () => {
+    const cs = interchange();
+    // an exact distance tie at the cut: the 20th and 21st are both 8 m; the key decides
+    const tie = cand({ key: 'osm:zzz', highway: 'motorway', distanceM: 8, bearingDeg: 90, limitMph: 60 });
+    const forward = matchLimit(90, [...cs, tie]);
+    const backward = matchLimit(90, [tie, ...cs].reverse());
+    expect(backward).toEqual(forward);
+    expect(forward).toMatchObject({ key: 'osm:own', parallelRoads: false });
+  });
+
+  it('never lets out-of-radius or broken candidates take a slot', () => {
+    const cs = interchange();
+    const junk = [
+      ...Array.from({ length: 5 }, (_, i) => cand({ key: `osm:nan${i}`, distanceM: NaN })),
+      ...Array.from({ length: 5 }, (_, i) => cand({ key: `osm:neg${i}`, distanceM: -1 })),
+      ...Array.from({ length: 5 }, (_, i) => cand({ key: `osm:out${i}`, distanceM: 26 })),
+    ];
+    expect(matchLimit(90, [...junk, ...cs])).toEqual(matchLimit(90, cs));
   });
 });

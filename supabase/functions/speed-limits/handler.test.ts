@@ -381,8 +381,8 @@ Deno.test('re-review N1: a parallel pick is answered uncached; a clear pick is a
 Deno.test('outside every loaded state, AWS is not asked and no budget is spent', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({ candidates: [], routes });
-  // Portland, OR: south of Washington's box
-  const res = await handleSpeedLimits(post({ lat: 45.4, lng: -122.68, heading: 0 }), h.deps);
+  // downtown Portland, OR: south of Washington's box
+  const res = await handleSpeedLimits(post({ lat: 45.5152, lng: -122.6784, heading: 0 }), h.deps);
   assertEquals(res.status, 200);
   assertEquals((await res.json()).source, 'unknown');
   assertEquals(routes.calls.length, 0);
@@ -391,16 +391,21 @@ Deno.test('outside every loaded state, AWS is not asked and no budget is spent',
 });
 
 Deno.test('the coverage list is pinned to Washington', () => {
-  assertEquals(AWS_COVERAGE, [{ state: 'WA', minLat: 45.5, maxLat: 49.05, minLng: -124.9, maxLng: -116.85 }]);
+  assertEquals(AWS_COVERAGE, [{ state: 'WA', minLat: 45.54, maxLat: 49.0, minLng: -124.73, maxLng: -116.9 }]);
   assertEquals(
     [
       insideCoverage({ lat: 47.6062, lng: -122.3321 }), // Seattle
       insideCoverage({ lat: 47.6588, lng: -117.426 }), // Spokane
-      insideCoverage({ lat: 45.5152, lng: -122.6784 }), // Portland, OR: inside the rounded box (edge)
-      insideCoverage({ lat: 37.7749, lng: -122.4194 }), // San Francisco
+      insideCoverage({ lat: 45.6387, lng: -122.6615 }), // Vancouver, WA
+      insideCoverage({ lat: 45.654171, lng: -122.5875696 }), // I-205 interchange (B3's worst case)
+      insideCoverage({ lat: 45.5152, lng: -122.6784 }), // downtown Portland, OR
       insideCoverage({ lat: 49.2827, lng: -123.1207 }), // Vancouver, BC
+      insideCoverage({ lat: 49.0001, lng: -122.75 }), // just north of the 49th parallel
+      insideCoverage({ lat: 47.9, lng: -124.8 }), // Pacific, west of the coast
+      insideCoverage({ lat: 47.66, lng: -116.8 }), // Coeur d'Alene, ID
+      insideCoverage({ lat: 37.7749, lng: -122.4194 }), // San Francisco
     ],
-    [true, true, true, false, false]
+    [true, true, true, true, false, false, false, false, false, false]
   );
 });
 
@@ -629,9 +634,9 @@ Deno.test('a tile batch answers B1 JSON plus fallback aws, validated, cacheable,
 // Seattle's corridor tiles are inside Washington's box; these are well outside it.
 const SF_TILE = '15/5241/12663'; // San Francisco
 const NYC_TILE = '15/9647/12320'; // New York
-// Straddling WA's western edge (lng -124.9): the tile spans about -124.91..-124.90.
+// Straddling WA's western edge (lng -124.73): the tile holding that meridian at lat 47.
 const EDGE_TILE = (() => {
-  const x = Math.floor(((-124.9 + 180) / 360) * 2 ** 15);
+  const x = Math.floor(((-124.73 + 180) / 360) * 2 ** 15);
   const y = Math.floor(((1 - Math.asinh(Math.tan((47 * Math.PI) / 180)) / Math.PI) / 2) * 2 ** 15);
   return `15/${x}/${y}`;
 })();
@@ -642,7 +647,9 @@ Deno.test('coverage per tile: inside, outside, and a tile straddling the edge', 
   assertEquals(tileInCoverage(EDGE_TILE), true);
   // the straddling tile really does reach west of the box
   const x = Number(EDGE_TILE.split('/')[1]);
-  assert((x / 2 ** 15) * 360 - 180 < -124.9);
+  assert((x / 2 ** 15) * 360 - 180 < -124.73 && ((x + 1) / 2 ** 15) * 360 - 180 > -124.73);
+  // and the tile just west of it is out
+  assertEquals(tileInCoverage(`15/${x - 1}/${EDGE_TILE.split('/')[2]}`), false);
 });
 
 Deno.test('fallback is aws only when configured and some requested tile is in coverage', async () => {

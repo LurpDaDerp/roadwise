@@ -77,6 +77,12 @@ export const MATCH = {
   CONF_RAMP: 0.65,
   CONF_HPMS_PENALTY: 0.1,
   CONF_AWS: 0.7,
+  /**
+   * Only the nearest this-many candidates within `RADIUS_M` are considered (nearest first, exact ties
+   * by key), before the heading test: `speed_limit_candidates` returns at most 20 rows in that order,
+   * so the device, which sees every segment in its tiles, and the server consider the same set.
+   */
+  MAX_CANDIDATES: 20,
 } as const;
 
 /** Distance at or under which a lone road earns `CONF_SINGLE_NEAR`. */
@@ -144,11 +150,14 @@ export function matchLimit(courseDeg: number | null, candidates: readonly Candid
   if (courseDeg === null || !Number.isFinite(courseDeg) || courseDeg < 0) return unknown(false);
   const course = normalizeDeg(courseDeg);
 
-  const passing = candidates
-    .filter(
-      (c) => Number.isFinite(c.distanceM) && c.distanceM >= 0 && c.distanceM <= MATCH.RADIUS_M && headingPasses(course, c)
-    )
-    .sort(byDistance);
+  // The nearest MAX_CANDIDATES within the radius, whatever their heading: the server's query caps
+  // before any heading test, so capping here after it would let the device see roads the server
+  // never returned (a 31-road interchange is real: I-205 at Vancouver, WA).
+  const nearest = candidates
+    .filter((c) => Number.isFinite(c.distanceM) && c.distanceM >= 0 && c.distanceM <= MATCH.RADIUS_M)
+    .sort(byDistance)
+    .slice(0, MATCH.MAX_CANDIDATES);
+  const passing = nearest.filter((c) => headingPasses(course, c));
   const roads = passing.filter((c) => c.provider === 'osm');
   const hpms = passing.filter((c) => c.provider === 'hpms' && validLimit(c.limitMph) !== null);
   const cache = passing.filter((c) => c.provider === 'aws' && validLimit(c.limitMph) !== null);
