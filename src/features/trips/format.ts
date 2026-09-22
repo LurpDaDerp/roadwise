@@ -76,11 +76,12 @@ export type Highlight =
 export const MAX_HIGHLIGHTS = 3;
 
 /**
- * A speeding event whose stored confidence is below `Q_FULL_AT`: its limit was one the HUD showed
- * as "—" (§9.5 partial weight, or not counted at all), so every surface labels it "limit
- * uncertain". An event with no stored confidence makes no claim either way.
+ * A speeding event whose stored confidence is below `Q_FULL_AT`: the limit was below the action
+ * line (the HUD showed "—"; §9.5) or the GPS fix was too loose (capped at 0.4). Either way the
+ * reading is uncertain, so every surface labels it "uncertain reading" — which never names the
+ * wrong cause. An event with no stored confidence makes no claim either way.
  */
-export function isLimitUncertain(event: Pick<TripEventView, 'category' | 'confidence'>): boolean {
+export function isReadingUncertain(event: Pick<TripEventView, 'category' | 'confidence'>): boolean {
   return (
     event.category === 'speeding' &&
     event.confidence !== null &&
@@ -123,11 +124,11 @@ export function highlightsFor(trip: TripSummary, events: readonly TripEventView[
       : (() => {
           const counted = events.filter((e) => e.category === worst && e.affectsScore);
           const episodes = counted.length;
-          const uncertain = counted.filter(isLimitUncertain).length;
+          const uncertain = counted.filter(isReadingUncertain).length;
           const label = categoryLabel(worst);
           const count =
             uncertain > 0
-              ? `${copy.highlights.episodes(episodes)}, ${uncertain} ${copy.limitUncertain}`
+              ? `${copy.highlights.episodes(episodes)}, ${uncertain} ${copy.readingUncertain}`
               : copy.highlights.episodes(episodes);
           return {
             kind: 'cost',

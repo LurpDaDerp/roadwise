@@ -230,16 +230,16 @@ describe('a drive with a route and two moments', () => {
     expect(row.props.accessibilityLabel).not.toContain('minus');
   });
 
-  test('a speeding moment against an uncertain limit says so, on screen and to a screen reader', async () => {
+  test('a speeding moment with an uncertain reading says so, on screen and to a screen reader', async () => {
     const unsure = eventRow({ ...speeding, id: 'e-unsure', confidence: 0.6, started_at: T0 + 90_000 });
     const w = await world({ trips: [scored], events: [speeding, unsure] });
     await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
     await screen.findByTestId('trip-detail');
-    expect(screen.getByTestId('limit-uncertain-e-unsure')).toHaveTextContent('limit uncertain');
-    expect(screen.getByTestId('timeline-e-unsure').props.accessibilityLabel).toContain('limit uncertain');
+    expect(screen.getByTestId('reading-uncertain-e-unsure')).toHaveTextContent('uncertain reading');
+    expect(screen.getByTestId('timeline-e-unsure').props.accessibilityLabel).toContain('uncertain reading');
     // Negative control: the confident speeding moment carries no such label.
-    expect(screen.queryByTestId('limit-uncertain-e-speeding')).toBeNull();
-    expect(screen.getByTestId('timeline-e-speeding').props.accessibilityLabel).not.toContain('limit uncertain');
+    expect(screen.queryByTestId('reading-uncertain-e-speeding')).toBeNull();
+    expect(screen.getByTestId('timeline-e-speeding').props.accessibilityLabel).not.toContain('uncertain reading');
   });
 
   test('tapping a moment opens it', async () => {

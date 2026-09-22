@@ -196,11 +196,11 @@ export const tripCopy = {
   severity: { moderate: 'Moderate', severe: 'Severe', none: 'Not counted' },
   confidence: { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' },
   /**
-   * A speeding event measured against a limit below the action line (§9.5, confidence under
-   * `Q_FULL_AT`): the HUD sign showed "—" there, so the summary never implies a limit the driver
-   * was shown (U1 re-review ruling).
+   * A speeding event stored below `Q_FULL_AT`: either the limit was below the action line (§9.5 —
+   * the HUD sign showed "—") or the GPS fix was too loose (capped at 0.4). One label covers both
+   * causes without naming the wrong one (U1 re-review ruling; U3 re-review n1).
    */
-  limitUncertain: 'limit uncertain',
+  readingUncertain: 'uncertain reading',
   standing: {
     possible: 'Detected, not counted',
     /** §9.4: below the confidence floor an event is shown and deliberately costs nothing. */

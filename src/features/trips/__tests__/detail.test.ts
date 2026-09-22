@@ -220,13 +220,13 @@ describe('the timeline', () => {
     expect(rows[1]).toMatchObject({ standing: 'possible', points: null });
   });
 
-  test('a speeding row below the action line is marked limit-uncertain; a confident one is not', () => {
+  test('a speeding row below the action line is marked reading-uncertain; a confident one is not', () => {
     const rows = timelineRows(trip(), [
       view({ id: 'unsure', category: 'speeding', confidence: 0.6 }),
       view({ id: 'sure', category: 'speeding', confidence: 0.9 }),
       view({ id: 'phone', category: 'phone', confidence: 0.6, measured_json: '{}' }),
     ]);
-    expect(rows.map((r) => r.limitUncertain)).toEqual([true, false, false]);
+    expect(rows.map((r) => r.readingUncertain)).toEqual([true, false, false]);
   });
 
   test('a possible event never shows points, even when a deduction was stored on it', () => {

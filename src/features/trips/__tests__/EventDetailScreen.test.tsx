@@ -98,16 +98,16 @@ describe('the moment itself', () => {
   });
 });
 
-describe('limit uncertain', () => {
-  test('a speeding moment scored against an uncertain limit is labelled', async () => {
+describe('uncertain reading', () => {
+  test('a speeding moment with an uncertain reading is labelled', async () => {
     await open([speeding({ confidence: 0.6 })]);
-    expect(screen.getByTestId('limit-uncertain')).toHaveTextContent('limit uncertain');
+    expect(screen.getByTestId('reading-uncertain')).toHaveTextContent('uncertain reading');
   });
 
   test('negative control: a confident limit carries no label', async () => {
     await open([speeding({ confidence: 0.9 })]);
-    expect(screen.queryByTestId('limit-uncertain')).toBeNull();
-    expect(screen.queryByText('limit uncertain')).toBeNull();
+    expect(screen.queryByTestId('reading-uncertain')).toBeNull();
+    expect(screen.queryByText('uncertain reading')).toBeNull();
   });
 });
 

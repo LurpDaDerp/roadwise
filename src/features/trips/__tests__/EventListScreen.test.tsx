@@ -20,18 +20,18 @@ const speeding = (id: string, confidence: number, at: number) =>
 
 afterEach(clearQueryClients);
 
-describe('D3 list: limit uncertain', () => {
-  test('a speeding moment against an uncertain limit is labelled in the list; a confident one is not', async () => {
+describe('D3 list: uncertain reading', () => {
+  test('a speeding moment with an uncertain reading is labelled in the list; a confident one is not', async () => {
     const w = await world({
       trips: [trip],
       events: [speeding('unsure', 0.6, 60_000), speeding('sure', 0.9, 120_000)],
     });
     await w.renderScreen(<EventListScreen clientTripId={ID} />);
     await screen.findByTestId('event-timeline');
-    expect(screen.getByTestId('limit-uncertain-unsure')).toHaveTextContent('limit uncertain');
-    expect(screen.getByTestId('timeline-unsure').props.accessibilityLabel).toContain('limit uncertain');
+    expect(screen.getByTestId('reading-uncertain-unsure')).toHaveTextContent('uncertain reading');
+    expect(screen.getByTestId('timeline-unsure').props.accessibilityLabel).toContain('uncertain reading');
     // Negative control.
-    expect(screen.queryByTestId('limit-uncertain-sure')).toBeNull();
-    expect(screen.getByTestId('timeline-sure').props.accessibilityLabel).not.toContain('limit uncertain');
+    expect(screen.queryByTestId('reading-uncertain-sure')).toBeNull();
+    expect(screen.getByTestId('timeline-sure').props.accessibilityLabel).not.toContain('uncertain reading');
   });
 });
