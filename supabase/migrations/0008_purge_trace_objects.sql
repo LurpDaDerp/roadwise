@@ -9,7 +9,8 @@
 -- cannot delete object bytes (storage.protect_delete; 0002's header): the edge function
 -- purge-trace-objects deletes through the Storage API, and this migration lists what it deletes,
 -- clears the trips rows' trace_path for what it deleted, keeps two runs from overlapping, and
--- wakes it every 15 minutes.
+-- wakes it every 15 minutes. It is the ONE retention mechanism: 0002's unscheduled
+-- expire_trace_objects is dropped here (final review m8).
 --
 -- Retention (ruling "B6 retention"): 14 days, for every user, matching the pd-1 disclosure ("kept
 -- up to 14 days so disputes can be checked"); it supersedes 0002's 90-day note. Counted from the
@@ -30,7 +31,7 @@
 --     was SCORED without a trace, i.e. finalize-trip's `no_trace` condition (payload.tracePath null,
 --     which apply_trip stores as trace_path null). It describes the recording at scoring time, not
 --     later retention: clearing trace_path after the purge deletes the object (clear_trace_paths,
---     expire_trace_objects, soft_delete_trip) never changes it, so a re-score never lowers a grade
+--     soft_delete_trip) never changes it, so a re-score never lowers a grade
 --     for a trace that was present when the drive was scored. Backfilled = (trace_path is null)
 --     FIRST, before anything in this migration can clear a path. Set by the non-definer trigger
 --     trips_scored_without_trace for every writer: on insert from trace_path, on every update
@@ -309,6 +310,13 @@ begin
 end $$;
 
 select cron.schedule('purge-trace-objects', '*/15 * * * *', 'select public.dispatch_purge_traces()');
+
+-- ---------------------------------------------------------------------------
+-- final review m8: 0002's expire_trace_objects was never scheduled or called, and it cleared
+-- trace_path before the bytes went. This migration's purge is the one retention mechanism, so the
+-- older function is dropped rather than left for M8 to wire in beside it.
+-- ---------------------------------------------------------------------------
+drop function if exists public.expire_trace_objects(interval, int);
 
 -- ---------------------------------------------------------------------------
 -- grants

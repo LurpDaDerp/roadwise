@@ -53,6 +53,7 @@
 --         always -> foreground = location_always; always|foreground -> denied = location; motion
 --         granted -> denied = motion; a missing key is unknown, never a lapse); none when the phone
 --         says `ack: true`; pending only when `reportedFrom: 'background'`, else skipped/inbox_only.
+--         No location_always lapse while `alwaysExcused: true` (final review I4).
 --         At most one row per (user, device, kind, the user's local day) (security M-2).
 --         A background lapse later the same day upgrades that day's inbox_only row to pending
 --         (ruling T2 n1); a row in any other state is never touched.
@@ -367,7 +368,12 @@ begin
   if v_new ->> 'ack' = 'true' then
     return null;
   end if;
-  if v_old ->> 'location' = 'always' and v_new ->> 'location' = 'foreground' then
+  -- final review I4: no location_always lapse while the phone says Always is excused (the driver
+  -- chose manual mode, or the auto_detect flag is withdrawn): losing Always then stops nothing the
+  -- driver asked for, and "Tap to fix it" would be a nag (spec 10.11). A missing key is false, so an
+  -- older client behaves as before. Only this kind is excused.
+  if v_old ->> 'location' = 'always' and v_new ->> 'location' = 'foreground'
+     and coalesce(v_new ->> 'alwaysExcused', 'false') <> 'true' then
     v_kinds := array_append(v_kinds, 'location_always');
   end if;
   if v_old ->> 'location' in ('always', 'foreground') and v_new ->> 'location' = 'denied' then
@@ -685,11 +691,14 @@ end $$;
 
 -- record_push_outcomes({ outcomes: [{ inbox_id, state, reason, push_after?, deliveries? }] }) returns int
 --   at most 500 outcomes; state sent | deferred | skipped | failed; reason from the fixed list;
---   deferred needs push_after <= now() + 7 days (it moves push_after only: the row stays visible); every inbox_id must be `sending` (claimed and not
---   yet settled) or the whole call is refused; deliveries (<= 10 per item) are
+--   deferred needs push_after <= now() + 7 days (it moves push_after only: the row stays visible); an
+--   inbox_id whose row no longer exists (deleted mid-sweep: a u13 minimisation, an account deletion)
+--   is skipped and not counted; any other must be `sending` (claimed and not yet settled) or the
+--   whole call is refused; deliveries (<= 10 per item) are
 --   { token?, ticket_id?, error? }, one push_deliveries row each (the token is linked only while it
 --   is still registered to the item's user); error DeviceNotRegistered deletes that registration.
---   sent stamps pushed_at. Returns the number of outcomes applied.
+--   sent stamps pushed_at. Returns the number of outcomes applied; outcomes submitted minus that
+--   number is how many rows had vanished.
 create or replace function public.record_push_outcomes(p jsonb) returns int
 language plpgsql security definer set search_path = public as $$
 declare
@@ -752,7 +761,12 @@ begin
     end if;
 
     select i.user_id, i.push_state into v_user, v_current from public.inbox i where i.id = v_id for update;
-    if not found or v_current <> 'sending' then
+    -- final review m1: the row vanished mid-sweep (a u13 minimisation, an account deletion): skip it,
+    -- uncounted, so the rest of the batch still lands; its deliveries have nothing to attach to
+    if not found then
+      continue;
+    end if;
+    if v_current <> 'sending' then
       raise exception 'outcome for an unclaimed item' using errcode = 'invalid_parameter_value';
     end if;
 

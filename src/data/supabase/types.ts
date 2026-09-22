@@ -952,10 +952,6 @@ export type Database = {
       dismiss_inbox: { Args: { p_ids: string[] }; Returns: number }
       dispatch_purge_traces: { Args: never; Returns: string }
       dispatch_push: { Args: never; Returns: string }
-      expire_trace_objects: {
-        Args: { p_limit?: number; p_older_than?: string }
-        Returns: Json
-      }
       expired_trace_object_keys: {
         Args: { p_after_name: string; p_limit: number }
         Returns: Json

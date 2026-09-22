@@ -15,7 +15,7 @@ begin
 end $$;
 
 begin;
-select plan(89);
+select plan(90);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -404,5 +404,8 @@ select is(public.dispatch_purge_traces(), 'dispatched', 'a blocked child''s obje
 update public.profiles set age_band = '18_plus' where id = 'b8000000-0000-4000-8000-000000000003';
 select is(public.dispatch_purge_traces(), 'idle', 'nothing past 14 days and no blocked child''s object: idle');
 
+-- final review m8: this migration's purge is the one retention mechanism
+select hasnt_function('public', 'expire_trace_objects', array['interval', 'integer'],
+  '0002''s unscheduled expire_trace_objects is dropped: 0008''s purge is the one trace retention mechanism');
 select * from finish();
 rollback;

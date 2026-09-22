@@ -18,7 +18,7 @@ begin
 end $$;
 
 begin;
-select plan(300);
+select plan(306);
 
 -- ---------------------------------------------------------------------------
 -- 0. client writes in FRESH sessions (fix round 4). PL/pgSQL checks EXECUTE on a function a trigger
@@ -774,6 +774,30 @@ select set_config('request.jwt.claims', '', true);
 select is((select row(payload ->> 'deviceId' = repeat('x', 128), dedupe_key = 'permission_lapsed:md5-' || md5(repeat('x', 128)) || ':location_always:' || (select kir from lday))::text
     from public.inbox where dedupe_key like 'permission_lapsed:md5-%'),
   row(true, true)::text, 'its dedupe key hashes the device id (within 128 characters); the payload keeps the id');
+-- final review I4: an excused Always (manual by choice, or auto_detect withdrawn) is no lapse
+insert into public.devices (id, user_id, platform, permissions) values
+  ('a-watch-excused', 'b7000000-0000-4000-8000-000000000001', 'ios', '{"location":"always","alwaysExcused":true}'),
+  ('a-watch-wanted', 'b7000000-0000-4000-8000-000000000001', 'ios', '{"location":"always","alwaysExcused":false}'),
+  ('a-watch-older', 'b7000000-0000-4000-8000-000000000001', 'ios', '{"location":"always"}');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"location":"foreground","alwaysExcused":true,"reportedFrom":"background"}' where id = 'a-watch-excused';
+update public.devices set permissions = '{"location":"foreground","alwaysExcused":false,"reportedFrom":"background"}' where id = 'a-watch-wanted';
+update public.devices set permissions = '{"location":"foreground","reportedFrom":"background"}' where id = 'a-watch-older';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select coalesce(array_agg(row(payload ->> 'deviceId', payload ->> 'permission', push_state)::text order by payload ->> 'deviceId'), '{}')
+    from public.inbox where payload ->> 'deviceId' like 'a-watch-%'),
+  array[row('a-watch-older', 'location_always', 'pending')::text, row('a-watch-wanted', 'location_always', 'pending')::text],
+  'Always -> While Using raises no location_always lapse while alwaysExcused is true; it does when false, and when the key is missing (an older client) (final review I4)');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"b7000000-0000-4000-8000-000000000001"}', true);
+update public.devices set permissions = '{"location":"denied","alwaysExcused":true,"reportedFrom":"background"}' where id = 'a-watch-excused';
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array_agg(payload ->> 'permission') from public.inbox where payload ->> 'deviceId' = 'a-watch-excused'), array['location'],
+  'the excuse covers only location_always: losing location altogether is still a lapse');
+delete from public.devices where id like 'a-watch-%';
 delete from public.devices where id = repeat('x', 128);
 delete from public.notification_prefs where user_id = 'b7000000-0000-4000-8000-000000000001';
 alter table public.devices enable trigger devices_touch;
@@ -975,8 +999,9 @@ select throws_ok(format($$ select public.record_push_outcomes(jsonb_build_object
   '22023', 'delivery must be an object with bounded token, ticket_id and error', 'an overlong delivery error is refused');
 select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"inbox_id":"%s","state":"sent","reason":"ok"}]}') $$, (select v #>> '{}' from res where k = 'i3')),
   '22023', 'outcome for an unclaimed item', 'an outcome for a row that is not sending is refused');
-select throws_ok(format($$ select public.record_push_outcomes('{"outcomes":[{"inbox_id":"%s","state":"sent","reason":"ok"}]}') $$, gen_random_uuid()),
-  '22023', 'outcome for an unclaimed item', 'an outcome for an unknown row is refused');
+select is(public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(
+    jsonb_build_object('inbox_id', gen_random_uuid(), 'state', 'sent', 'reason', 'ok')))), 0,
+  'an outcome for a row that no longer exists is skipped and not counted (final review m1)');
 select is(public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(
     jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'j1'), 'state', 'sent', 'reason', 'ok', 'deliveries', jsonb_build_array(
       jsonb_build_object('token', 'ExponentPushToken[aaaaaaaaaaaa3]', 'ticket_id', 'ticket-1'),
@@ -1009,6 +1034,40 @@ select is((select array_agg(row(token, ticket_id, error)::text order by ticket_i
   array[row('ExponentPushToken[aaaaaaaaaaaa3]', 'ticket-1', null::text)::text, row(null::text, null::text, 'DeviceNotRegistered')::text],
   'one delivery per ticket; the dead token''s delivery keeps its error');
 select is((select count(*)::int from public.push_registrations where token = 'ExponentPushToken[deadtoken0001]'), 0, 'DeviceNotRegistered deletes the registration');
+
+-- final review m1: a claimed row deleted mid-sweep (a u13 minimisation, an account deletion) must not
+-- sink the rest of its batch
+insert into res (k, v) select 'g1', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'g1'));
+insert into res (k, v) select 'g2', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000002', 'g2', 'b-phone'));
+insert into res (k, v) select 'g3', to_jsonb(pg_temp.pending('b7000000-0000-4000-8000-000000000001', 'g3'));
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+insert into res (k, v) values ('claim6', public.claim_push_batch(100, 300));
+reset role;
+select set_config('request.jwt.claims', '', true);
+delete from public.inbox where dedupe_key = 'g2';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is(public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(
+    jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'g1'), 'state', 'sent', 'reason', 'ok',
+      'deliveries', jsonb_build_array(jsonb_build_object('token', null, 'error', 'MessageTooBig'))),
+    jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'g2'), 'state', 'sent', 'reason', 'ok',
+      'deliveries', jsonb_build_array(jsonb_build_object('token', null, 'ticket_id', 'ticket-g2'))),
+    jsonb_build_object('inbox_id', (select v #>> '{}' from res where k = 'g3'), 'state', 'deferred', 'reason', 'driving',
+      'push_after', now() + interval '5 minutes')))), 2,
+  'a batch with a row deleted mid-sweep applies the other outcomes and counts only them (submitted 3, applied 2)');
+select throws_ok(format($$ select public.record_push_outcomes(jsonb_build_object('outcomes', jsonb_build_array(
+    jsonb_build_object('inbox_id', '%s', 'state', 'sent', 'reason', 'ok'),
+    jsonb_build_object('inbox_id', '%s', 'state', 'sent', 'reason', 'ok')))) $$,
+    (select v #>> '{}' from res where k = 'g2'), (select v #>> '{}' from res where k = 'g1')),
+  '22023', 'outcome for an unclaimed item', 'a row that exists but is not sending still refuses the call, vanished rows beside it or not');
+reset role;
+select set_config('request.jwt.claims', '', true);
+select is((select array_agg(row(dedupe_key, push_state, push_reason)::text order by dedupe_key) from public.inbox where dedupe_key in ('g1', 'g2', 'g3')),
+  array[row('g1', 'sent', 'ok')::text, row('g3', 'deferred', 'driving')::text], 'g1 is sent and g3 deferred; g2 stays gone');
+select is((select array_agg(coalesce(error, ticket_id)) from public.push_deliveries
+    where inbox_id in ((select (v #>> '{}')::uuid from res where k = 'g1'), (select (v #>> '{}')::uuid from res where k = 'g2'))),
+  array['MessageTooBig'], 'only the surviving row''s delivery is recorded; the vanished row''s has nothing to attach to');
 
 -- receipts
 insert into public.push_deliveries (inbox_id, user_id, ticket_id, created_at) values
