@@ -824,6 +824,7 @@ export type Database = {
           role_source: string | null
           rows_digest: Json
           score: number | null
+          scored_without_trace: boolean
           scoring_version: number
           start_geohash5: string | null
           start_label: string | null
@@ -863,6 +864,7 @@ export type Database = {
           role_source?: string | null
           rows_digest?: Json
           score?: number | null
+          scored_without_trace?: boolean
           scoring_version?: number
           start_geohash5?: string | null
           start_label?: string | null
@@ -902,6 +904,7 @@ export type Database = {
           role_source?: string | null
           rows_digest?: Json
           score?: number | null
+          scored_without_trace?: boolean
           scoring_version?: number
           start_geohash5?: string | null
           start_label?: string | null

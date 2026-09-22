@@ -15,7 +15,7 @@ begin
 end $$;
 
 begin;
-select plan(72);
+select plan(89);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -99,9 +99,10 @@ select is((select count(*)::int from pg_proc p where p.oid in ('public.take_job_
   'the lease functions and clear_trace_paths are security definer, owned by postgres, pinning exactly search_path=public');
 select is((select count(*)::int from pg_proc p where p.oid in ('public.expired_trace_object_keys(integer, text)'::regprocedure,
     'public.underage_object_keys_after(integer, text, text)'::regprocedure, 'public.underage_object_keys(integer)'::regprocedure,
-    'public.purge_traces_signature(bigint, text)'::regprocedure, 'public.dispatch_purge_traces()'::regprocedure)
-    and not p.prosecdef and p.proconfig = array['search_path=public']), 5,
-  'the listings, the signature and the dispatcher are security invoker pinning exactly search_path=public');
+    'public.purge_traces_signature(bigint, text)'::regprocedure, 'public.dispatch_purge_traces()'::regprocedure,
+    'public.stamp_scored_without_trace()'::regprocedure)
+    and not p.prosecdef and p.proconfig = array['search_path=public']), 6,
+  'the listings, the signature, the dispatcher and the flag trigger are security invoker pinning exactly search_path=public');
 select is(array[has_function_privilege('service_role', 'public.expired_trace_object_keys(integer, text)', 'execute'),
                 has_function_privilege('service_role', 'public.underage_object_keys_after(integer, text, text)', 'execute'),
                 has_function_privilege('service_role', 'public.underage_object_keys(integer)', 'execute'),
@@ -111,7 +112,7 @@ select is(array[has_function_privilege('service_role', 'public.expired_trace_obj
   array[true, true, true, true, true, true], 'service_role runs the listings, clear_trace_paths and the lease functions');
 select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'authenticated']) r, unnest(array[
     'public.expired_trace_object_keys(integer, text)', 'public.underage_object_keys_after(integer, text, text)', 'public.underage_object_keys(integer)',
-    'public.clear_trace_paths(text[])',
+    'public.clear_trace_paths(text[])', 'public.stamp_scored_without_trace()',
     'public.take_job_lease(text, uuid, integer)', 'public.release_job_lease(text, uuid)',
     'public.purge_traces_signature(bigint, text)', 'public.dispatch_purge_traces()']) f),
   false, 'anon and authenticated execute nothing this migration creates or replaces');
@@ -190,6 +191,11 @@ reset role;
 select has_index('public', 'trips', 'trips_trace_expiry_idx', 'half (b) reads trips past retention through a partial index');
 select is((select count(*)::int from pg_proc where pronamespace = 'public'::regnamespace and proname = 'trace_drive_ended_at'), 0,
   'the per-object drive-end helper is gone');
+select ok(pg_get_functiondef('public.dispatch_purge_traces()'::regprocedure) ~ 'split_part\(o\.name, ''/'', 1\) = p\.id::text'
+      and pg_get_functiondef('public.dispatch_purge_traces()'::regprocedure) ~ 'o\.name ~>=~ \(p\.id::text \|\| ''/''\) and o\.name ~<~ \(p\.id::text \|\| ''0''\)',
+  'the dispatcher''s child probe joins on the first path segment beside the byte range (review B6 r2 n4)');
+select ok(pg_get_functiondef('public.dispatch_purge_traces()'::regprocedure) !~* ' like ',
+  'and uses no LIKE');
 select ok(pg_get_functiondef('public.dispatch_purge_traces()'::regprocedure) !~ 'trips t\s+where t\.user_id'
       and pg_get_functiondef('public.expired_trace_object_keys(integer, text)'::regprocedure) !~ 'trace_drive_ended_at',
   'neither the probe nor the listing looks a drive up per object');
@@ -249,6 +255,89 @@ select is((select trace_path from public.trips where client_trip_id = 'a-trip'),
 set local role service_role;
 select is(public.clear_trace_paths(array['b8000000-0000-4000-8000-000000000001/a-trip.bin.gz']), 0, 'clearing again is a no-op (idempotent)');
 reset role;
+
+-- ---------------------------------------------------------------------------
+-- trips.scored_without_trace (ruling B6 r2): the recording as it was scored
+-- ---------------------------------------------------------------------------
+select set_config('request.jwt.claims', '', true);
+select has_column('public', 'trips', 'scored_without_trace', 'trips carries scored_without_trace');
+select col_type_is('public', 'trips', 'scored_without_trace', 'boolean', 'it is a boolean');
+select col_not_null('public', 'trips', 'scored_without_trace', 'it is never null');
+select col_default_is('public', 'trips', 'scored_without_trace', 'false', 'it defaults to false');
+select column_privs_are('public', 'trips', 'scored_without_trace', 'authenticated', array['SELECT']::name[], 'a client may read it and never write it');
+select column_privs_are('public', 'trips', 'scored_without_trace', 'anon', '{}'::name[], 'anon has nothing on it');
+select has_trigger('public', 'trips', 'trips_scored_without_trace', 'a trigger stamps it for every writer');
+
+-- the backfill: the migration's own statement, run again over rows that predate the column
+select ok((select min(u.idx) filter (where u.st ~ 'update public\.trips set scored_without_trace = \(trace_path is null\)')
+         < least(min(u.idx) filter (where u.st ~ 'create trigger trips_scored_without_trace'),
+                 min(u.idx) filter (where u.st ~ 'create or replace function public\.clear_trace_paths'))
+    from supabase_migrations.schema_migrations m, unnest(m.statements) with ordinality as u(st, idx) where m.version = '0008'),
+  'the backfill runs before the flag is pinned and before anything in 0008 can clear a path');
+alter table public.trips disable trigger trips_scored_without_trace;
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason, trace_path) values
+  ('b8000000-0000-4000-8000-000000000001', 'old-untraced', now() - interval '3 days', now() - interval '3 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short', null),
+  ('b8000000-0000-4000-8000-000000000001', 'old-traced', now() - interval '3 days', now() - interval '3 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short',
+    'b8000000-0000-4000-8000-000000000001/old-traced.bin.gz');
+update public.trips set scored_without_trace = false where client_trip_id in ('old-untraced', 'old-traced');
+do $$
+begin
+  execute (select substring(u.st from 'update public\.trips set scored_without_trace[^;]*')
+           from supabase_migrations.schema_migrations m, unnest(m.statements) u(st)
+           where m.version = '0008' and u.st ~ 'update public\.trips set scored_without_trace' limit 1);
+end $$;
+alter table public.trips enable trigger trips_scored_without_trace;
+select is((select array_agg(client_trip_id || ':' || scored_without_trace order by client_trip_id) from public.trips where client_trip_id in ('old-untraced', 'old-traced')),
+  array['old-traced:false', 'old-untraced:true'], 'the backfill sets the flag from trace_path for rows that predate it');
+
+-- apply_trip stamps it from the payload on insert (parity with finalize-trip's no_trace: tracePath null)
+create function pg_temp.envelope(p_client text, p_trace boolean) returns jsonb
+language sql as $$
+  select jsonb_build_object(
+    'userId', 'b8000000-0000-4000-8000-000000000001',
+    'payload', jsonb_build_object(
+      'clientTripId', p_client,
+      'startedAt', floor(extract(epoch from now() - interval '2 days') * 1000)::bigint,
+      'endedAt', floor(extract(epoch from now() - interval '2 days' + interval '15 minutes') * 1000)::bigint,
+      'tz', 'UTC', 'distanceM', 12500.5, 'durationS', 900,
+      'role', 'driver', 'roleConfidence', null, 'roleSource', 'manual', 'mode', 'mounted', 'cameraSession', false,
+      'events', '[]'::jsonb,
+      'rowsDigest', jsonb_build_object('count', 900, 'validGnssPct', 98.5, 'imuPresent', true, 'maxSustainedSpeedMps', 31.2, 'sha256', repeat('a', 64)),
+      'startGeohash5', 'c23nb', 'endGeohash5', 'c23nb', 'polyline', '_p~iF~ps|U',
+      'tracePath', case when p_trace then p_client || '.bin.gz' end,
+      'hadSevereEvent', false, 'incomplete', false),
+    'scored', jsonb_build_object('score', 80, 'status', 'final', 'exposure', 1.25, 'dataQuality', 'A',
+      'categoryDeductions', '{"phone":0,"speeding":20,"braking":0,"accel":0,"cornering":0,"focus":0}'::jsonb,
+      'eventDeductions', '{}'::jsonb, 'scoringVersion', 1),
+    'day', jsonb_build_object('day', ((now() - interval '2 days') at time zone 'UTC')::date,
+      'longTermScore', 80, 'band', 'good', 'provisional', false, 'safeDay', false, 'goodDay', true, 'phoneFreeDay', true,
+      'cameraDay', false, 'exposure', 1.25, 'drivingS', 900, 'tripsScored', 1, 'severeEvents', 0),
+    'baselines', jsonb_build_object('medians', '{"speeding": 1.2}'::jsonb))
+$$;
+create temp table fx8 (name text primary key, p jsonb not null);
+insert into fx8 values ('traced', pg_temp.envelope('flag-traced', true)), ('untraced', pg_temp.envelope('flag-untraced', false));
+grant select on fx8 to service_role;
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select lives_ok($$ select public.apply_trip((select p from fx8 where name = 'traced')) $$, 'a traced drive is stored');
+select lives_ok($$ select public.apply_trip((select p from fx8 where name = 'untraced')) $$, 'an untraced drive is stored');
+reset role;
+select is((select array_agg(client_trip_id || ':' || scored_without_trace || ':' || (trace_path is null) order by client_trip_id)
+    from public.trips where client_trip_id in ('flag-traced', 'flag-untraced')),
+  array['flag-traced:false:false', 'flag-untraced:true:true'],
+  'apply_trip stores scored_without_trace = (payload tracePath is null), the condition finalize-trip downgrades on');
+
+-- it never flips: not when the purge clears the path, not for any later writer
+set local role service_role;
+select is(public.clear_trace_paths(array['b8000000-0000-4000-8000-000000000001/flag-traced.bin.gz']), 1, 'the purge clears the traced drive''s path');
+reset role;
+select is((select row(trace_path is null, scored_without_trace)::text from public.trips where client_trip_id = 'flag-traced'), row(true, false)::text,
+  'clear_trace_paths leaves scored_without_trace alone: the drive was scored with its trace');
+update public.trips set scored_without_trace = true where client_trip_id = 'flag-traced';
+update public.trips set scored_without_trace = false, trace_path = null where client_trip_id = 'flag-untraced';
+select is((select array_agg(client_trip_id || ':' || scored_without_trace order by client_trip_id) from public.trips where client_trip_id in ('flag-traced', 'flag-untraced')),
+  array['flag-traced:false', 'flag-untraced:true'], 'no later update, even the owner''s, flips it either way');
+select set_config('request.jwt.claims', '', true);
 select set_config('request.jwt.claims', '', true);
 
 -- ---------------------------------------------------------------------------

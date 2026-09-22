@@ -26,6 +26,17 @@
 -- most 14 days from that upload, like any orphan.
 --
 -- Objects (every one follows .agent/backend-conventions.md; numbers below are its sections):
+--   * trips.scored_without_trace boolean not null default false (ruling B6 r2): whether the drive
+--     was SCORED without a trace, i.e. finalize-trip's `no_trace` condition (payload.tracePath null,
+--     which apply_trip stores as trace_path null). It describes the recording at scoring time, not
+--     later retention: clearing trace_path after the purge deletes the object (clear_trace_paths,
+--     expire_trace_objects, soft_delete_trip) never changes it, so a re-score never lowers a grade
+--     for a trace that was present when the drive was scored. Backfilled = (trace_path is null)
+--     FIRST, before anything in this migration can clear a path. Set by the non-definer trigger
+--     trips_scored_without_trace for every writer: on insert from trace_path, on every update
+--     pinned to the old value. apply_trip itself is unchanged (it inserts trace_path from the
+--     payload, so the trigger reads exactly its value). Server-owned: clients have no write grant
+--     on trips at all (0002), only table-level select.
 --   * public.underage_object_keys_after(p_limit int, p_after_bucket text, p_after_name text)
 --     returns jsonb (service-role guard first; invoker): [{ bucket, name }] of objects in ANY
 --     bucket whose first path segment is a u13 user's id, ordered (bucket, name) in byte order,
@@ -44,9 +55,9 @@
 --   * trips_trace_expiry_idx: a partial index on trips (ended_at) where trace_path is not null,
 --     for half (b); clear_trace_paths keeps it small.
 --   * public.clear_trace_paths(p_keys text[]) returns int: service-role-only definer. For each key
---     the function has DELETED from the traces bucket, clears trips.trace_path, so no UI or
---     re-score references a missing object and a re-score honestly gets `no_trace` (ruling B6
---     retention). Keys must be '<uuid>/<client id>.bin.gz' (22023 otherwise), at most 1000; the
+--     the function has DELETED from the traces bucket, clears trips.trace_path, so nothing
+--     references a missing object (ruling B6 retention). It leaves scored_without_trace alone: a
+--     re-score reads that flag, so a drive scored with its trace keeps its grade. Keys must be '<uuid>/<client id>.bin.gz' (22023 otherwise), at most 1000; the
 --     row is found through the (user_id, client_trip_id) key; returns the count only.
 --   * public.job_leases (#1, #10, #11): one row per background job, the lease that keeps two runs
 --     from overlapping (an advisory lock does not survive PostgREST's pooled connections). RLS on,
@@ -75,6 +86,26 @@
 --
 -- The authentication contract is push-sender's sweep contract (0007, T2 r1) with its own purpose
 -- string and its own key, so neither signature can ever be replayed against the other function.
+
+-- ---------------------------------------------------------------------------
+-- scored_without_trace: the recording as it was scored, whatever retention does later
+-- ---------------------------------------------------------------------------
+alter table public.trips add column scored_without_trace boolean not null default false;
+-- the backfill runs before anything below can clear a trace_path
+update public.trips set scored_without_trace = (trace_path is null) where scored_without_trace is distinct from (trace_path is null);
+
+create or replace function public.stamp_scored_without_trace() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.scored_without_trace := new.trace_path is null;
+  else
+    new.scored_without_trace := old.scored_without_trace;
+  end if;
+  return new;
+end $$;
+create trigger trips_scored_without_trace before insert or update on public.trips
+  for each row execute function public.stamp_scored_without_trace();
 
 -- ---------------------------------------------------------------------------
 -- listing: a blocked child's objects, every bucket
@@ -285,6 +316,7 @@ select cron.schedule('purge-trace-objects', '*/15 * * * *', 'select public.dispa
 alter table public.job_leases enable row level security;
 revoke all on public.job_leases from anon, authenticated, service_role;
 
+revoke all on function public.stamp_scored_without_trace() from public, anon, authenticated;
 revoke all on function public.underage_object_keys_after(int, text, text) from public, anon, authenticated;
 revoke all on function public.underage_object_keys(int) from public, anon, authenticated;
 revoke all on function public.expired_trace_object_keys(int, text) from public, anon, authenticated;
