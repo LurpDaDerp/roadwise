@@ -1,23 +1,25 @@
 /**
- * Every string the auto-record screen (R16) prints.
+ * Every string the auto-record screen (R16) prints, and the app's ONE background-location
+ * disclosure.
  *
- * The prominent disclosure is its own export with a version (M4 seam, controller ruling): M4 Task 9
- * takes ownership of the disclosure text and replaces this screen with A9, so one disclosure system
- * exists and a consent record can name exactly which words the driver was shown. Change
- * `DISCLOSURE_TEXT` only together with a bump of `DISCLOSURE_VERSION`.
+ * The prominent disclosure is owned by M4 from Task 9 on (controller ruling I3): this module is
+ * the single source of its words. M4's `BackgroundDisclosure` (A9, the post-drive offers and B2's
+ * repair) and M3's interim detection screen both print these constants, and the consent record a
+ * grant writes names `DISCLOSURE_VERSION`, so it says exactly which words the driver was shown.
+ * Change `DISCLOSURE_TEXT` only together with a new `DISCLOSURE_VERSION`.
  */
 
-/** Bumped whenever `DISCLOSURE_TEXT` changes. */
-export const DISCLOSURE_VERSION = 1;
+/** Names the words in `DISCLOSURE_TEXT`; stored as `consents.version` for `background_location`. */
+export const DISCLOSURE_VERSION = 'pd-1';
 
 /**
- * Google Play's prominent disclosure for background location, shown before any permission is
- * requested: what is collected (location, motion activity), that it is collected while the app is
- * closed or not in use, and what for. It claims nothing the app does not do.
+ * Google Play's prominent disclosure for background location, shown before any background
+ * request on both platforms (design §5.3): what is collected, that it is collected while the app
+ * is closed or not in use, what for, and how it is kept. On counsel's list before any store build.
  */
 export const DISCLOSURE_TEXT = {
-  heading: 'Record drives automatically',
-  body: 'RoadWise collects your location, including in the background when the app is closed or not in use, to notice when you start driving and to record each drive: your route, your speed and the speed limits along the way. It also uses your phone’s motion activity to tell driving apart from walking. Your drives are scored to help you improve and are saved to your RoadWise account. You can turn auto-record off here at any time.',
+  heading: 'Allow RoadWise to use your location in the background',
+  body: 'RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. Location is saved only while a drive is being recorded. It is stored with your account to score your drives and is never sold.',
 } as const;
 
 export const detectionCopy = {

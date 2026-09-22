@@ -122,13 +122,14 @@ async function renderScreen(ui: ReactElement, host: DriveHost, trips = [aDrive])
 
 afterEach(clearQueryClients);
 
-test('the disclosure is exported with a version, for M4 to take over', () => {
-  expect(DISCLOSURE_VERSION).toBe(1);
-  expect(DISCLOSURE_TEXT.heading).toBe('Record drives automatically');
+test('the one disclosure (M4 Task 9) is exported with its version, word for word', () => {
+  expect(DISCLOSURE_VERSION).toBe('pd-1');
+  expect(DISCLOSURE_TEXT.heading).toBe('Allow RoadWise to use your location in the background');
   // Play's prominent disclosure: what is collected, that it is collected in the background, what for.
-  expect(DISCLOSURE_TEXT.body).toMatch(/location/);
-  expect(DISCLOSURE_TEXT.body).toMatch(/in the background when the app is closed or not in use/);
-  expect(DISCLOSURE_TEXT.body).toMatch(/motion activity/);
+  expect(DISCLOSURE_TEXT.body).toBe(
+    'RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. Location is saved only while a drive is being recorded. It is stored with your account to score your drives and is never sold.'
+  );
+  expect(DISCLOSURE_TEXT.body).toMatch(/even when the app is closed or not in use/);
 });
 
 test('the disclosure is printed first, and nothing is requested before the driver taps', async () => {
