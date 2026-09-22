@@ -421,6 +421,25 @@ describe('totals', () => {
     expect(longestSafeStreak([])).toBe(0);
   });
 
+  // A row with no counted drive (every drive deleted, or only unscored ones; D2 writes such rows)
+  // is a day without counted driving, not an unsafe day: it neither adds nor breaks the run.
+  test('a day row with no counted drive neither adds to nor breaks the streak', () => {
+    const empty = (d: string) =>
+      toDayEntry({ day: d, payload: { day: d, safeDay: false, goodDay: false, tripsScored: 0 }, updated_at: T0 });
+    expect(
+      longestSafeStreak([day('2026-01-05', true), empty('2026-01-06'), day('2026-01-07', true)])
+    ).toBe(2);
+    // negative control: a day with a counted drive that was not safe still breaks the run
+    const unsafe = toDayEntry({
+      day: '2026-01-06',
+      payload: { day: '2026-01-06', safeDay: false, goodDay: true, tripsScored: 1 },
+      updated_at: T0,
+    });
+    expect(longestSafeStreak([day('2026-01-05', true), unsafe, day('2026-01-07', true)])).toBe(1);
+    // and one with no count at all (an older payload) is read as before: not safe, so it breaks
+    expect(longestSafeStreak([day('2026-01-05', true), day('2026-01-06', false), day('2026-01-07', true)])).toBe(1);
+  });
+
   test('the best week is the highest scored week, the later one on a tie, and none without scores', () => {
     expect(bestWeek([point('2026-01-05', 91), point('2026-01-12', 91), point('2026-01-19', 80)])).toEqual({
       weekStart: '2026-01-12',
