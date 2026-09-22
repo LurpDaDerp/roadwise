@@ -1,12 +1,18 @@
 import { DEVICE_TABLES } from '@/boot/device';
 import { legalState } from '@/features/auth/legal';
+import { readProfileCache } from '@/features/auth/profileCache';
 import { createQueueRepo, createSamplesRepo, createSettingsRepo, type Db } from '@/data/db';
 import { onDataChanged } from '@/data/events';
 import { createTestDb, seedDay, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 
 import {
+  acknowledgeDisclaimer,
+  BLOCK_PURGED_KEY,
   CHILD_DRIVE_TABLES,
+  KEPT_SETTINGS,
+  markBlockPurged,
+  readBlockPurged,
   PURGE_MAX_ROUNDS,
   fetchOwnConsents,
   purgeLocalDriveData,
@@ -114,6 +120,22 @@ describe('setBirthDate', () => {
   ])('rejects on any other failure (%p)', async (error) => {
     mockRpc.mockResolvedValueOnce({ data: null, error });
     await expect(setBirthDate('2008-03-04')).rejects.toBe(error);
+  });
+});
+
+describe('acknowledgeDisclaimer', () => {
+  it("merges only disclaimerAcknowledged through T2's merge_own_profile_flags", async () => {
+    await acknowledgeDisclaimer('2026-09-21');
+    expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', {
+      patch: { disclaimerAcknowledged: '2026-09-21' },
+    });
+    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the merge fails', async () => {
+    const error = { code: '22023', message: 'bad patch' };
+    mockRpc.mockResolvedValueOnce({ data: null, error });
+    await expect(acknowledgeDisclaimer('2026-09-21')).rejects.toBe(error);
   });
 });
 
@@ -324,12 +346,88 @@ describe('purgeLocalDriveData', () => {
     expect(mockCancelDriveSummaries).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the settings the signed-in app still runs on (owner, config)', async () => {
+  it('keeps only the allowlisted settings the signed-in app still runs on', async () => {
     await seedChildDrives();
-    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
     const settings = createSettingsRepo(db);
+    await settings.set('session.uid', 'child');
+    await settings.set('auth.disclaimerAcknowledged', '2026-09-21');
+    await settings.set('onboarding.step', 'not-eligible');
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
     expect(await settings.get('device.lastUserId')).toBe('child');
+    expect(await settings.get('session.uid')).toBe('child');
     expect(await settings.get('config.app')).toEqual({ fetchedAt: T0, flags: {} });
+    expect(await settings.get('auth.disclaimerAcknowledged')).toBe('2026-09-21');
+    expect(await settings.get('onboarding.step')).toBe('not-eligible');
+  });
+
+  it.each([
+    // Drive-derived: habitual route cells, per-drive answers and arbiter state, opened trip ids.
+    ['role.routes', [{ key: 'dr5ru>dr5rv', driver: 3, other: 0 }]],
+    ['role.answer.child-trip', 'dr5ru>dr5rv'],
+    ['role.prior', { driver: 0.8 }],
+    ['engine.arbiter.child-trip', { state: 1 }],
+    ['notifications.openedTrips', ['child-trip']],
+    ['insights.baseline', { brake: 1 }],
+    ['hydrate.cursor', 'x'],
+    ['trips.deletedIds', ['t']],
+    ['onboarding.consents', { userId: 'child', rows: [] }],
+    ['permissions.pendingDisclosureConsent', { uid: 'child' }],
+    ['onboarding.pendingHref', '/trips/child-trip/summary'],
+    // The auto-record opt-in and its intent: a child released at 13 opts in again, disclosure first.
+    ['drive.autoDetect', true],
+    ['permissions.autoRecordIntent', true],
+    // A key no task has written yet: removed by default, because the list is an allowlist.
+    ['some.future.drive.key', { whatever: true }],
+  ])('removes %s', async (key, value) => {
+    const settings = createSettingsRepo(db);
+    await settings.set(key, value);
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
+    expect(await settings.get(key)).toBeNull();
+  });
+
+  it('reduces the profile cache to the owner and the u13 band, so a relaunch never arms (H2)', async () => {
+    await seedChildDrives();
+    const settings = createSettingsRepo(db);
+    await settings.set('profile.cache', {
+      userId: 'child',
+      profile: { id: 'child', age_band: 'u13', display_name: 'Kid', driving_stage: 'permit', flags: { a: 1 } },
+    });
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
+    const cached = await readProfileCache(settings, 'child');
+    expect(cached?.age_band).toBe('u13');
+    expect(cached).toEqual({ id: 'child', age_band: 'u13' });
+    expect(await settings.get('profile.cache')).toEqual({
+      userId: 'child',
+      profile: { id: 'child', age_band: 'u13' },
+    });
+  });
+
+  it('writes that minimal cache even when none was stored, and none without an owner', async () => {
+    const settings = createSettingsRepo(db);
+    await settings.set('device.lastUserId', 'child');
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
+    expect(await readProfileCache(settings, 'child')).toEqual({ id: 'child', age_band: 'u13' });
+    await settings.remove('device.lastUserId');
+    await settings.set('profile.cache', { userId: 'x', profile: { id: 'x', display_name: 'X' } });
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
+    expect(await settings.get('profile.cache')).toBeNull();
+  });
+
+  it('the allowlist holds no drive-derived key', () => {
+    for (const key of KEPT_SETTINGS) {
+      expect(key).not.toMatch(/^(role|engine|trips|hydrate|insights|notifications)\./);
+    }
+  });
+
+  it('the purged stamp is per account', async () => {
+    expect(await readBlockPurged(db, 'child')).toBe(false);
+    await markBlockPurged(db, 'child', () => T0);
+    expect(await readBlockPurged(db, 'child')).toBe(true);
+    expect(await readBlockPurged(db, 'someone-else')).toBe(false);
+    expect(await createSettingsRepo(db).get(BLOCK_PURGED_KEY)).toEqual({ userId: 'child', at: T0 });
+    // It survives a later purge: it is on the allowlist.
+    await purgeLocalDriveData(db, { traces: { clear: async () => {} } });
+    expect(await readBlockPurged(db, 'child')).toBe(true);
   });
 
   it('covers every table the handover wipe covers except settings', () => {

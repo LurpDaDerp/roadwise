@@ -128,7 +128,8 @@ export function useFlowContext(): FlowContext | null {
   const { config, ready } = useAppConfig();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const userId = session?.user.id ?? profile?.id ?? null;
+  // Identity for server calls comes from the verified session only (T12 security M-2).
+  const userId = session?.user.id ?? null;
   const published = legalState(config).published;
   const wantConsents = published && userId !== null;
 

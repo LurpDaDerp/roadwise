@@ -6,14 +6,18 @@ import { useSession } from '@/data/supabase/session';
 import { DriveContext } from '@/drive/DriveProvider';
 import { Text, useTheme } from '@/ui';
 
-import { purgeLocalDriveData, purgeOwnObjects } from '../api';
+import { markBlockPurged, purgeLocalDriveData, purgeOwnObjects, readBlockPurged } from '../api';
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
 import { StepFrame, StepPositionProvider } from '../StepFrame';
 
 const copy = onboardingCopy.notEligible;
 
-type Removal = 'running' | 'done' | 'failed';
+/**
+ * `failed-local`: something on this phone could not be removed (the server part was not tried).
+ * `failed-server`: the phone is clean; some objects in Storage are left for the server to remove.
+ */
+type Removal = 'running' | 'done' | 'failed-local' | 'failed-server';
 
 /**
  * The under-13 block.
@@ -34,9 +38,10 @@ type Removal = 'running' | 'done' | 'failed';
 export function NotEligibleStep(_props: StepProps) {
   const th = useTheme();
   const db = useDb();
-  const { session, profile, signOut } = useSession();
+  const { session, signOut } = useSession();
   const host = useContext(DriveContext)?.host ?? null;
-  const userId = session?.user.id ?? profile?.id ?? null;
+  // Identity for every server call is the verified session's, never the profile row (security M-2).
+  const userId = session?.user.id ?? null;
   const [removal, setRemoval] = useState<Removal>('running');
   const [signingOut, setSigningOut] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
@@ -51,14 +56,23 @@ export function NotEligibleStep(_props: StepProps) {
 
   /** Everything the server cannot remove itself; the outcome lands only when it is known. */
   const runRemoval = useCallback(async () => {
-    if (userId === null) return;
-    let outcome: Removal = 'failed';
+    // With no session nothing can be removed from Storage as this account: say so, never "done".
+    let outcome: Removal = 'failed-local';
     try {
-      await host?.untilIdle();
-      await purgeLocalDriveData(db);
-      outcome = (await purgeOwnObjects(userId)) === 'done' ? 'done' : 'failed';
+      // Finished before on this phone (review m1): nothing to redo, and no Storage listing.
+      if (userId !== null && (await readBlockPurged(db, userId))) {
+        outcome = 'done';
+      } else {
+        await host?.untilIdle();
+        await purgeLocalDriveData(db);
+        outcome = 'failed-server';
+        if (userId !== null && (await purgeOwnObjects(userId)) === 'done') {
+          await markBlockPurged(db, userId);
+          outcome = 'done';
+        }
+      }
     } catch {
-      outcome = 'failed';
+      // `outcome` says how far it got.
     }
     if (mounted.current) setRemoval(outcome);
   }, [userId, host, db]);
@@ -73,7 +87,7 @@ export function NotEligibleStep(_props: StepProps) {
   }, [runRemoval]);
 
   const onSignOut = async () => {
-    if (signingOut) return;
+    if (signingOut || removal === 'running') return;
     setSigningOut(true);
     setSignOutFailed(false);
     try {
@@ -88,22 +102,25 @@ export function NotEligibleStep(_props: StepProps) {
     }
   };
 
+  const failed = removal === 'failed-local' || removal === 'failed-server';
+  const tryAgain = { label: copy.retry, onPress: retry, testID: 'not-eligible-retry' };
+  const signOutAction = {
+    label: copy.signOut,
+    onPress: () => void onSignOut(),
+    // Not while the removal runs: signing out ends the session the Storage removal needs.
+    disabled: removal === 'running',
+    loading: signingOut,
+    testID: 'not-eligible-sign-out',
+  };
+
   return (
     <StepPositionProvider value={null}>
       <StepFrame
         title={copy.title}
         testID="not-eligible"
-        primary={{
-          label: copy.signOut,
-          onPress: () => void onSignOut(),
-          loading: signingOut,
-          testID: 'not-eligible-sign-out',
-        }}
-        secondary={
-          removal === 'failed'
-            ? { label: copy.retry, onPress: retry, testID: 'not-eligible-retry' }
-            : undefined
-        }
+        // After a failure, trying again comes first; signing out stays possible, second.
+        primary={failed ? tryAgain : signOutAction}
+        secondary={failed ? signOutAction : undefined}
       >
         <View style={{ gap: th.space.md }} accessibilityLiveRegion="polite">
           {removal === 'running' ? (
@@ -115,9 +132,14 @@ export function NotEligibleStep(_props: StepProps) {
               {copy.kept}
             </Text>
           ) : (
-            <Text variant="body" tone="danger" accessibilityRole="alert">
-              {copy.removeFailed}
-            </Text>
+            <>
+              <Text variant="body" tone="danger" accessibilityRole="alert">
+                {copy.removeFailed}
+              </Text>
+              <Text variant="callout" tone="muted" testID="not-eligible-after-failure">
+                {removal === 'failed-server' ? copy.serverFinishes : copy.stillOnPhone}
+              </Text>
+            </>
           )}
           {signOutFailed ? (
             <Text variant="callout" tone="danger" accessibilityRole="alert">

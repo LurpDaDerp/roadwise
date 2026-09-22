@@ -102,6 +102,11 @@ export const onboardingCopy = {
     removing: 'Removing your drive data…',
     kept: "We've kept only what we need to remember this.",
     removeFailed: "We couldn't finish removing your drive data.",
+    /** The phone is clean; what is left is in Storage, which the server removes (B6). */
+    serverFinishes:
+      'If you sign out now, RoadWise will finish removing your recorded drives from its servers.',
+    /** The phone itself still holds some of it. */
+    stillOnPhone: 'Some of your drive data is still on this phone. Try again before you sign out.',
     retry: 'Try again',
     signOut: 'Sign out',
     signOutFailed: "Couldn't sign out. Try again.",

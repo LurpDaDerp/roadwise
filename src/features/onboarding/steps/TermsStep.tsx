@@ -6,14 +6,13 @@ import { Pressable, useWindowDimensions, View } from 'react-native';
 import { useAppConfig } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
-import { updateOwnProfile } from '@/data/supabase/profile';
 import { useSession } from '@/data/supabase/session';
 import { DISCLAIMER_VERSION, legalState, type LegalState } from '@/features/auth/legal';
 import { LegalLinks } from '@/features/auth/LegalLinks';
 import { DISCLAIMER_ACK_KEY } from '@/features/auth/pendingConsent';
 import { Text, useTheme } from '@/ui';
 
-import { recordCurrentTerms } from '../api';
+import { acknowledgeDisclaimer, recordCurrentTerms } from '../api';
 import { noteConsentsRecorded } from '../context';
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -44,7 +43,8 @@ const asFlags = (flags: unknown): Record<string, unknown> =>
  *   documents are published.
  *
  * The acknowledgement is a preference, not a consent: `flags.disclaimerAcknowledged` at the
- * current `DISCLAIMER_VERSION`, which is what makes `termsCurrent` true (T11 carry). Every write
+ * current `DISCLAIMER_VERSION` (merged on the server by `merge_own_profile_flags`), which is what
+ * makes `termsCurrent` true (T11 carry). Every write
  * is idempotent, so a failure is answered in place and Continue simply tries again.
  */
 export function TermsStep({ onNext, onBack }: StepProps) {
@@ -66,7 +66,8 @@ export function TermsStep({ onNext, onBack }: StepProps) {
   const running = useRef(false);
 
   const label = legal.published ? `${copy.acknowledge} ${copy.agree}` : copy.acknowledge;
-  const userId = session?.user.id ?? profile?.id ?? null;
+  // Identity for server calls comes from the verified session only (T12 security M-2).
+  const userId = session?.user.id ?? null;
 
   const submit = async () => {
     if (!ticked || running.current || userId === null) return;
@@ -80,11 +81,9 @@ export function TermsStep({ onNext, onBack }: StepProps) {
       }
       // The device keeps the acknowledgement too, as the sign-in screen's tick does.
       await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
-      const flags = asFlags(profile?.flags);
-      if (flags.disclaimerAcknowledged !== DISCLAIMER_VERSION) {
-        await updateOwnProfile(userId, {
-          flags: { ...flags, disclaimerAcknowledged: DISCLAIMER_VERSION },
-        });
+      if (asFlags(profile?.flags).disclaimerAcknowledged !== DISCLAIMER_VERSION) {
+        // A server-side merge of this one key (T2), never a whole-object write of `flags`.
+        await acknowledgeDisclaimer(DISCLAIMER_VERSION);
       }
       await refreshProfile();
       onNext();

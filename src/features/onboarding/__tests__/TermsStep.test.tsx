@@ -26,6 +26,7 @@ const mockSession = {
   refreshProfile: jest.fn(async () => {}),
 };
 const mockUpdateOwnProfile = jest.fn(async (_id: string, _patch: unknown) => ({}));
+const mockRpc = jest.fn(async (_fn: string, _args: unknown) => ({ data: {} as unknown, error: null as unknown }));
 const mockRecordConsent = jest.fn(async (_id: string, _c: unknown) => ({}));
 const mockHeld: { type: string; version: string; revoked_at: null }[] = [];
 
@@ -45,7 +46,9 @@ jest.mock('@/data/supabase/client', () => {
     eq: () => chain,
     in: () => Promise.resolve({ data: mockHeld, error: null }),
   };
-  return { supabase: { from: () => chain } };
+  return {
+    supabase: { from: () => chain, rpc: (fn: string, args: unknown) => mockRpc(fn, args) },
+  };
 });
 
 const PUBLISHED: AppConfig = {
@@ -98,6 +101,7 @@ afterEach(() => {
 beforeEach(() => {
   onNext.mockClear();
   mockUpdateOwnProfile.mockReset().mockResolvedValue({});
+  mockRpc.mockReset().mockResolvedValue({ data: {}, error: null });
   mockRecordConsent.mockReset().mockResolvedValue({});
   mockSession.refreshProfile.mockReset().mockResolvedValue(undefined);
   mockSession.profile = { id: USER, flags: { theme: 'dark' } };
@@ -139,9 +143,11 @@ describe('TermsStep — documents not published (rev1: I7)', () => {
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
 
     expect(mockRecordConsent).not.toHaveBeenCalled();
-    expect(mockUpdateOwnProfile).toHaveBeenCalledWith(USER, {
-      flags: { theme: 'dark', disclaimerAcknowledged: DISCLAIMER_VERSION },
+    // One key, merged on the server; the whole flags object is never written from here.
+    expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', {
+      patch: { disclaimerAcknowledged: DISCLAIMER_VERSION },
     });
+    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
     expect(mockSession.refreshProfile).toHaveBeenCalled();
     const settings = createSettingsRepo(db);
     expect(await settings.get(DISCLAIMER_ACK_KEY)).toBe(DISCLAIMER_VERSION);
@@ -149,7 +155,7 @@ describe('TermsStep — documents not published (rev1: I7)', () => {
   });
 
   it('a failed write says so in place, and Continue tries again', async () => {
-    mockUpdateOwnProfile.mockRejectedValueOnce(new Error('offline'));
+    mockRpc.mockResolvedValueOnce({ data: null, error: new Error('offline') });
     await renderStep();
     await fireEvent.press(screen.getByRole('checkbox'));
     await fireEvent.press(screen.getByTestId('terms-continue'));
@@ -167,7 +173,7 @@ describe('TermsStep — documents not published (rev1: I7)', () => {
     await fireEvent.press(screen.getByRole('checkbox'));
     await fireEvent.press(screen.getByTestId('terms-continue'));
     await waitFor(() => expect(onNext).toHaveBeenCalled());
-    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });
 
@@ -195,8 +201,8 @@ describe('TermsStep — documents published', () => {
       [USER, { type: 'tos', version: 't-2' }],
       [USER, { type: 'privacy', version: 'p-3' }],
     ]);
-    expect(mockUpdateOwnProfile).toHaveBeenCalledWith(USER, {
-      flags: { theme: 'dark', disclaimerAcknowledged: DISCLAIMER_VERSION },
+    expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', {
+      patch: { disclaimerAcknowledged: DISCLAIMER_VERSION },
     });
     // The flow sees the consents at once, and so does the next offline start.
     expect(client.getQueryData(consentsQueryKey(USER))).toEqual(

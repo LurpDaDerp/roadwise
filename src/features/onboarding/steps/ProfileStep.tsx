@@ -69,7 +69,8 @@ export function ProfileStep({ onNext, onBack }: StepProps) {
   const scale = Math.min(fontScale, 2);
   const router = useRouter();
   const { session, profile, refreshProfile } = useSession();
-  const userId = session?.user.id ?? profile?.id ?? null;
+  // Identity for server calls comes from the verified session only (T12 security M-2).
+  const userId = session?.user.id ?? null;
 
   const [name, setName] = useState(() => initialName(profile?.display_name, session?.user));
   const [nameFocused, setNameFocused] = useState(false);

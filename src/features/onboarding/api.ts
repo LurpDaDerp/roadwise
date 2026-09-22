@@ -6,16 +6,22 @@
  * RLS scoping are the ones the rest of the app already relies on. Nothing here decides a route;
  * the steps do that from what these return.
  */
+import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
+import { APP_CONFIG_KEY } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
+import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
 import { supabase } from '@/data/supabase/client';
 import { recordConsent, updateOwnProfile, type Profile } from '@/data/supabase/profile';
 import { TRACES_BUCKET } from '@/data/sync/runner';
+import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 import type { LegalState } from '@/features/auth/legal';
-import type { ConsentRow, TermsType } from '@/features/auth/pendingConsent';
+import { DISCLAIMER_ACK_KEY, type ConsentRow, type TermsType } from '@/features/auth/pendingConsent';
+import { PROFILE_CACHE_KEY } from '@/features/auth/profileCache';
 
 import type { AgeBand, DrivingStage } from './flow';
+import { ONBOARDING_PLAN_KEY, ONBOARDING_STEP_KEY } from './state';
 
 // ---------------------------------------------------------------------------------------------
 // Birth date (write-once, 0001 `set_birth_date`).
@@ -86,6 +92,18 @@ export function saveProfileBasics(
     display_name: basics.displayName,
     driving_stage: basics.drivingStage,
   });
+}
+
+/**
+ * Acknowledge the disclaimer on the account: `flags.disclaimerAcknowledged = version`, merged on
+ * the server by T2's caller-own `merge_own_profile_flags` (`flags || patch`), so a concurrent
+ * write of another flag is never overwritten by a read-modify-write here. Rejects on failure.
+ */
+export async function acknowledgeDisclaimer(version: string): Promise<void> {
+  const { error } = await supabase.rpc('merge_own_profile_flags', {
+    patch: { disclaimerAcknowledged: version },
+  });
+  if (error) throw error;
 }
 
 /** The account's Terms and Privacy consents (RLS: owner only). Rejects when they cannot be read. */
@@ -194,11 +212,9 @@ async function purgeBucket(bucket: string, userId: string): Promise<'done' | 'pa
 
 /**
  * Every table that holds a driver's drives, or work owed to the server about them, children
- * before parents. It is the handover wipe's list (`src/boot/device.ts` `DEVICE_TABLES`) without
- * `settings`: the device owner, the config cache and the session's own keys stay, because the
- * account is still signed in on this phone and the app must keep working until it signs out.
- * The queue goes with everything in it — `age_pending`-deferred uploads included — so nothing
- * sits there to fail later as a 403.
+ * before parents: the handover wipe's list (`src/boot/device.ts` `DEVICE_TABLES`) without
+ * `settings`, which `KEPT_SETTINGS` handles key by key. The queue goes with everything in it —
+ * `age_pending`-deferred uploads included — so nothing sits there to fail later as a 403.
  */
 export const CHILD_DRIVE_TABLES: readonly string[] = [
   'trip_events',
@@ -208,6 +224,37 @@ export const CHILD_DRIVE_TABLES: readonly string[] = [
   'inbox_cache',
   'speed_limit_tiles',
   'trips',
+];
+
+/** Settings key: `{ userId, at }`, written once this account's removal has fully succeeded. */
+export const BLOCK_PURGED_KEY = 'onboarding.blockPurgedAt';
+
+/**
+ * The ONLY settings a blocked account keeps (Ruling T12 security I-1, client part; supersedes a
+ * prefix list). Everything else in `settings` is deleted with the drive tables, in the same
+ * transaction — so a key a later task adds is removed by default, drive-derived or not (the
+ * role-route cells, `role.answer.*`, `engine.arbiter.*`, opened trip ids, the insights baseline,
+ * the hydrate cursors, tombstones, the consents and profile caches, a pending disclosure consent,
+ * a held deep link to a trip…). The auto-record choice (`drive.autoDetect`) and its intent
+ * (`permissions.autoRecordIntent`) go too: the minimisation deleted the background-location
+ * consent, so a child released at 13 opts in again and sees the disclosure first. What stays is what the signed-in app needs until sign-out:
+ * whose phone this is (the owner fences), the public config, the disclaimer acknowledgement,
+ * where onboarding is, this removal's own stamp, and `profile.cache` — rewritten, never kept as it was:
+ * reduced to `{ id, age_band: 'u13' }` for the device owner, so a relaunch (offline included)
+ * still knows the band and the host never arms auto-record for the child (H2 daff447), while no
+ * name or other field survives. Add a key here only if the block screen cannot work without it,
+ * and never one derived from a drive.
+ */
+export const KEPT_SETTINGS: readonly string[] = [
+  LAST_USER_KEY,
+  PENDING_OWNER_KEY,
+  SESSION_UID_KEY,
+  APP_CONFIG_KEY,
+  DISCLAIMER_ACK_KEY,
+  PROFILE_CACHE_KEY,
+  ONBOARDING_STEP_KEY,
+  ONBOARDING_PLAN_KEY,
+  BLOCK_PURGED_KEY,
 ];
 
 export interface LocalPurgeDeps {
@@ -233,8 +280,8 @@ async function cancelSummaries(): Promise<void> {
 }
 
 /**
- * Remove the child's drives from this phone: the rows in `CHILD_DRIVE_TABLES` in one
- * transaction, then the trace files, and any drive summary still scheduled. Rows first, files
+ * Remove the child's drives from this phone: the rows in `CHILD_DRIVE_TABLES` and every setting
+ * outside `KEPT_SETTINGS` in one transaction, then the trace files, and any drive summary still scheduled. Rows first, files
  * second, as the handover wipe does: a crash between leaves unreferenced bytes, never rows
  * pointing at traces that are gone. A failure anywhere rejects, so the caller never reports a
  * clean phone it has not got. The caller waits for an open drive to close before calling this.
@@ -245,8 +292,35 @@ export async function purgeLocalDriveData(db: Db, deps: LocalPurgeDeps = {}): Pr
   });
   await db.transaction(async (tx) => {
     for (const table of CHILD_DRIVE_TABLES) await tx.execute(`DELETE FROM ${table}`);
+    await tx.execute(
+      `DELETE FROM settings WHERE key NOT IN (${KEPT_SETTINGS.map(() => '?').join(', ')})`,
+      [...KEPT_SETTINGS]
+    );
+    // The profile cache keeps the band and nothing else, in the shape `readProfileCache` reads.
+    const settings = createSettingsRepo(tx);
+    const owner = await settings.get<unknown>(LAST_USER_KEY);
+    if (typeof owner === 'string' && owner !== '') {
+      await settings.set(PROFILE_CACHE_KEY, { userId: owner, profile: { id: owner, age_band: 'u13' } });
+    } else {
+      await settings.remove(PROFILE_CACHE_KEY);
+    }
   });
   await (deps.traces ? deps.traces.clear() : clearTraceFiles());
   // Screens reading trips re-read (the same invalidation a restore triggers).
   emitDataChanged({ source: 'hydrate' });
+}
+
+/** Whether this account's removal already finished on this phone (the block screen skips it). */
+export async function readBlockPurged(db: Db, userId: string): Promise<boolean> {
+  try {
+    const stamp = await createSettingsRepo(db).get<{ userId?: unknown }>(BLOCK_PURGED_KEY);
+    return stamp?.userId === userId;
+  } catch {
+    return false;
+  }
+}
+
+/** Stamp a removal that succeeded in full: the local purge and a `done` from Storage. */
+export async function markBlockPurged(db: Db, userId: string, now: () => number = Date.now): Promise<void> {
+  await createSettingsRepo(db).set(BLOCK_PURGED_KEY, { userId, at: now() });
 }
