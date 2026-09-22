@@ -170,7 +170,16 @@ export default function RootLayout() {
     () =>
       runtime === null
         ? undefined
-        : { stop: () => runtime.drive.suspendForSignOut(), resume: () => runtime.drive.resumeAfterSignIn() },
+        : {
+            // Recording stops (the open drive finalized), then the drive state's `idle` is written
+            // while this driver's session is still valid (T10 security): the server must not keep
+            // a stale "driving" that holds pushes after the sign-out.
+            stop: async () => {
+              await runtime.drive.suspendForSignOut();
+              await runtime.driveStateSettled();
+            },
+            resume: () => runtime.drive.resumeAfterSignIn(),
+          },
     [runtime]
   );
   // Home's "Couldn't restore your drives — Retry": the restore now, throttle bypassed.

@@ -208,11 +208,19 @@ function fakeRuntime(drive: Partial<DriveState>) {
   };
   const queryClient = new QueryClient();
   const flushDeletes = jest.fn(async () => ({ sent: 1, left: 0 }));
+  const log: string[] = [];
+  const driveStateSettled = jest.fn(async () => {
+    log.push('driveStateSettled');
+  });
+  host.suspendForSignOut.mockImplementation(async () => {
+    log.push('suspendForSignOut');
+  });
   return {
-    runtime: { db: {}, queryClient, drive: host, runner: { flushDeletes } } as unknown as NonNullable<
+    runtime: { db: {}, queryClient, drive: host, runner: { flushDeletes }, driveStateSettled } as unknown as NonNullable<
       RuntimeState['runtime']
     >,
     host,
+    log,
     flushDeletes,
     queryClient,
   };
@@ -318,9 +326,10 @@ describe('the root layout', () => {
 describe('sign-out and sign-in reach the drive host (final review I3; final-fix security I-1)', () => {
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  test('sign-out stops recording through the host; backing out resumes it explicitly', async () => {
-    const { host } = await renderReady();
+  test('sign-out stops recording, then settles the drive state (idle written first); backing out resumes', async () => {
+    const { host, log } = await renderReady();
     await mockSession.recording?.stop();
+    expect(log).toEqual(['suspendForSignOut', 'driveStateSettled']);
     expect(host.suspendForSignOut).toHaveBeenCalledTimes(1);
     await mockSession.recording?.resume();
     expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);

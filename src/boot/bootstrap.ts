@@ -209,6 +209,11 @@ export interface BootstrapDeps {
   reportPermissionsFromBackground?: () => void | Promise<void>;
   /** The account's cached age band, for the arming rule. Default: the device owner's cached profile. */
   readAgeBand?: () => Promise<string | null>;
+  /**
+   * The client the runtime reports the drive state with (ruling T10 (4)). Default: the app's
+   * Supabase client, loaded only when a drive is first reported.
+   */
+  devicesClient?: import('@/data/devices/register').DevicesClient;
   /** The identity stage's bound on `getSession()`. Default: `SESSION_TIMEOUT_MS`. */
   sessionTimeoutMs?: number;
   /**
@@ -273,6 +278,12 @@ export interface AppRuntime {
   now: () => number;
   /** Fetch the public config (feature flags) once; rejects on failure. For the foreground job. */
   refreshConfig(): Promise<void>;
+  /**
+   * The drive state reported so far has been written (and a failed `idle` retried), while the
+   * owner's session is still valid (T10 security). The sign-out awaits it before the session ends,
+   * so the server never keeps a stale "driving" that holds pushes.
+   */
+  driveStateSettled(): Promise<void>;
   /**
    * Stops the runner and the hydrator, then the drive host, detaches the cache from the change
    * event and empties it. For teardown; never mid-session. The cache is emptied rather than left to
@@ -462,7 +473,9 @@ async function runLaunch(
       source: withBackgroundWakeReport(
         source,
         appState,
-        deps.reportPermissionsFromBackground,
+        // M4's permission report on every background wake (ruling T10 (4)): T10's reporter, which
+        // reads only local state unless the permissions changed. Required on the first wake.
+        deps.reportPermissionsFromBackground ?? defaultBackgroundPermissionReport(db, onError),
         onError
       ),
       limits,
@@ -534,6 +547,20 @@ async function runLaunch(
         onError(error, 'summary notifier');
       }
     }
+    // The drive state the server holds pushes on (ruling T10 (4)): reported by the runtime, so a
+    // drive the Android headless task records with no screen says `recording`, then `idle`.
+    const driveReports =
+      identity.owner === 'signed-out'
+        ? null
+        : attachDriveStateReporting({
+            db,
+            drive,
+            appState,
+            sessionUid: async () =>
+              (await identity.supabase.auth.getSession()).data.session?.user.id ?? null,
+            client: deps.devicesClient,
+            onError,
+          });
     // After start, so an adopted drive already recording is not taken for a new one's start.
     let unmountDiagnostics: () => void = () => {};
     const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
@@ -547,6 +574,7 @@ async function runLaunch(
     // Async: a summary still being scheduled lands before the notifier lets go (final review M1),
     // so the next launch's wipe finds it in the OS and cancels it, rather than it landing after.
     const release = async (): Promise<void> => {
+      driveReports?.release();
       unmountDiagnostics();
       // Bounded like the wipe's cancel (final re-review n5): a hung notifications call must not
       // hold a handover's teardown, and with it the "Switching accounts" screen.
@@ -554,7 +582,7 @@ async function runLaunch(
       if (settling) await withinMs(settling, CANCEL_SUMMARIES_TIMEOUT_MS);
       notifier?.detach();
     };
-    return { drive, limits, adopted: adopted ? newest : null, passes, release };
+    return { drive, limits, adopted: adopted ? newest : null, passes, release, driveReports };
   });
 
   const outcome: RecoveryResult = {
@@ -630,6 +658,7 @@ async function runLaunch(
     owner: identity.owner,
     schemaVersion,
     now,
+    driveStateSettled: () => engine.driveReports?.settled() ?? Promise.resolve(),
     async refreshConfig() {
       const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
       const flag = () => readFlag(db, 'auto_detect', AUTO_DETECT_FLAG_FALLBACK);
@@ -782,6 +811,127 @@ function defaultLimits(
     online: getSharedOnline,
     onError: (error) => onError(error, 'speed limits'),
   });
+}
+
+/**
+ * T10's background permission report, loaded on the first wake that needs it (its module reads the
+ * device's permission adapters, which no launch should load up front).
+ */
+function defaultBackgroundPermissionReport(
+  db: Db,
+  onError: (error: unknown, context: string) => void
+): () => Promise<void> {
+  let report: (() => Promise<void>) | null = null;
+  return () => {
+    if (report === null) {
+      /* eslint-disable @typescript-eslint/no-require-imports -- deferred: loaded on the first wake */
+      const { createBackgroundPermissionReporter } =
+        require('@/data/devices/permissionsReport') as typeof import('@/data/devices/permissionsReport');
+      /* eslint-enable @typescript-eslint/no-require-imports */
+      report = createBackgroundPermissionReporter({
+        db,
+        onError: (error) => onError(error, 'report permissions from background'),
+      });
+    }
+    return report();
+  };
+}
+
+/**
+ * The runtime's drive-state reporting (ruling T10 (4)): the host is subscribed for the process's
+ * life, and each status change is handed to T10's reporter (`recording` once, `idle` once). The
+ * reporter is made at the first change that needs one, and only when every guard holds: the device
+ * owner is known, no other owner's handover is pending, this install is registered (an install id
+ * exists), and the signed-in session is that owner. Otherwise nothing is written.
+ *
+ * Battery (§3.5): nothing runs on a timer. An armed, idle phone makes no change and so no read; a
+ * drive costs a few local reads at its first `recording` and two writes. A failed `idle` is sent
+ * again at the next foreground (one AppState listener, attached only once a reporter exists).
+ */
+function attachDriveStateReporting(opts: {
+  db: Db;
+  drive: DriveHost;
+  appState: { addEventListener(type: 'change', fn: (s: string) => void): { remove(): void } };
+  sessionUid: () => Promise<string | null>;
+  client?: import('@/data/devices/register').DevicesClient;
+  onError: (error: unknown, context: string) => void;
+}): { release(): void; settled(): Promise<void> } {
+  /* eslint-disable @typescript-eslint/no-require-imports -- data modules, loaded with the runtime */
+  const { createDriveStateReporter } =
+    require('@/data/devices/driveState') as typeof import('@/data/devices/driveState');
+  const { registerDriveStateSource } =
+    require('@/data/devices/driveStateStore') as typeof import('@/data/devices/driveStateStore');
+  const { readInstallId } = require('@/data/devices/installId') as typeof import('@/data/devices/installId');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const settings = createSettingsRepo(opts.db);
+  let live = true;
+  let reporter: ReturnType<typeof createDriveStateReporter> | null = null;
+  let chain: Promise<void> = Promise.resolve();
+  let lastStatus = opts.drive.snapshot().status;
+  let offForeground: (() => void) | null = null;
+  /** The owner the reporter writes for: every later write is fenced on the session being them. */
+  let reporterOwner: string | null = null;
+
+  async function create(): Promise<ReturnType<typeof createDriveStateReporter> | null> {
+    const owner = await readDeviceOwner(opts.db);
+    if (owner === null) return null;
+    const pending = await settings.get<string>(PENDING_OWNER_KEY);
+    if (pending !== null && pending !== owner) return null;
+    const deviceId = await readInstallId(settings);
+    if (deviceId === null) return null;
+    if ((await opts.sessionUid()) !== owner) return null;
+    const client = opts.client ?? (await import('@/data/supabase/client')).supabase;
+    if (!live) return null;
+    const created = createDriveStateReporter({
+      supabase: client,
+      userId: owner,
+      deviceId,
+      onError: opts.onError,
+    });
+    const sub = opts.appState.addEventListener('change', (next) => {
+      if (next === 'active') void created.retryPending().catch(() => {});
+    });
+    offForeground = () => sub.remove();
+    reporterOwner = owner;
+    return created;
+  }
+
+  const releaseSource = registerDriveStateSource();
+  const unsubscribe = opts.drive.subscribe((s) => {
+    if (s.status === lastStatus) return;
+    lastStatus = s.status;
+    const status = s.status;
+    chain = chain
+      .then(async () => {
+        // A reporter is needed only once a drive records; until then there is nothing to say.
+        if (reporter === null && status === 'recording') reporter = await create();
+        if (reporter === null) return;
+        // The owner fence (T10 security): a write goes out only under the owner's own session. At
+        // a handover the session is already the next driver's, so nothing is written for them.
+        if ((await opts.sessionUid()) !== reporterOwner) return;
+        reporter.onDriveState({ status });
+      })
+      .catch((error: unknown) => opts.onError(error, 'devices drive state'));
+  });
+  return {
+    release() {
+      live = false;
+      unsubscribe();
+      offForeground?.();
+      releaseSource();
+    },
+    /**
+     * Every state change handed over so far has been written, and a failed `idle` has been tried
+     * once more — while the owner's session is still valid (T10 security: the sign-out awaits this
+     * so the server never keeps a stale "driving" that holds pushes).
+     */
+    async settled() {
+      await chain;
+      if (reporter === null || (await opts.sessionUid()) !== reporterOwner) return;
+      await reporter.retryPending();
+      await reporter.settled();
+    },
+  };
 }
 
 /** The device owner's age band from the cached profile, or null when there is none. */

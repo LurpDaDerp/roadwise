@@ -34,6 +34,8 @@ import { createQueryClient } from '@/data/queries';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
 import { finalizeIdempotencyKey, SESSION_UID_KEY, traceIdempotencyKey } from '@/data/sync/queue';
 import { createFakeDriveSense } from '@drive-sense';
+import { INSTALL_ID_KEY } from '@/data/devices/installId';
+import { isDriveStateReported } from '@/data/devices/driveStateStore';
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import type { AppConfigSupabase } from '@/data/config/appConfig';
@@ -1510,5 +1512,180 @@ describe('ruling T12 (1): the launch reads the cached age band', () => {
     await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: '18_plus' } });
     runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
     expect(runtime.drive.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+});
+
+// The permission reporter's module reads native permission adapters; here only its wiring is tested.
+const mockBackgroundReports: string[] = [];
+jest.mock('@/data/devices/permissionsReport', () => ({
+  createBackgroundPermissionReporter: () => async () => {
+    mockBackgroundReports.push('report');
+  },
+}));
+
+describe('ruling T10 (4): the runtime reports the drive state and background permissions', () => {
+  const INSTALL = 'install-0001';
+
+  /** The `devices` table as the drive-state reporter writes it, under the signed-in owner. */
+  function devicesClient() {
+    const writes: string[] = [];
+    const client = {
+      from: (table: string) => ({
+        update: (row: { drive_state: string }) => {
+          const q = {
+            eq: () => q,
+            select: async () => {
+              writes.push(`${table}:${row.drive_state}`);
+              return { data: [{ id: INSTALL }], error: null };
+            },
+          };
+          return q;
+        },
+      }),
+    };
+    return { client, writes };
+  }
+
+  async function recordAndEnd(run: AppRuntime, driveSense: ReturnType<typeof createFakeDriveSense>, clock: { t: number }) {
+    await run.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await run.drive.settled();
+    for (const row of drive(200, { t0: clock.t + 1000 })) {
+      clock.t = row.ts + 200;
+      driveSense.loadTrace([row]);
+      driveSense.step();
+      await run.drive.settled();
+    }
+    await run.drive.end();
+    await run.drive.untilIdle();
+    await settle();
+  }
+
+  async function launch(opts: { uid: string | null; owner?: string; pending?: string; installId?: boolean }) {
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    if (opts.owner) await settings.set(LAST_USER_KEY, opts.owner);
+    if (opts.pending) await settings.set('device.pendingOwner', opts.pending);
+    if (opts.installId !== false) await settings.set(INSTALL_ID_KEY, INSTALL);
+    const clock = { t: NOW };
+    const driveSense = createFakeDriveSense({ platform: 'android', now: () => clock.t });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const devices = devicesClient();
+    const built = deps({
+      supabase: createFakeSupabase({ uid: opts.uid }),
+      source: driveSense,
+      now: () => clock.t,
+      profile: 'background',
+      mayDrain: () => false,
+      devicesClient: devices.client as never,
+    });
+    built.appState.currentState = 'background';
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    return { driveSense, clock, devices, built };
+  }
+
+  test('a drive recorded with no screen (the headless task) reports recording, then idle', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    expect(isDriveStateReported()).toBe(true);
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    expect(l.devices.writes).toEqual(['devices:recording', 'devices:idle']);
+  });
+
+  test('armed and idle, nothing is written (state changes only, never a timer)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await settle();
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('signed out: nothing is reported (and nothing records)', async () => {
+    const l = await launch({ uid: null, owner: 'user-1' });
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('another driver pending (the owner watch saw them sign in): nothing is reported', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await createSettingsRepo(db).set('device.pendingOwner', 'user-2');
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('no install registered yet: nothing is reported', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1', installId: false });
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('the runtime registers a drive-state source for A8, and stop releases it', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const store = require('@/data/devices/driveStateStore') as typeof import('@/data/devices/driveStateStore');
+    let released = 0;
+    const real = store.registerDriveStateSource;
+    const spy = jest.spyOn(store, 'registerDriveStateSource').mockImplementation(() => {
+      const release = real();
+      return () => {
+        released += 1;
+        release();
+      };
+    });
+    await launch({ uid: 'user-1', owner: 'user-1' });
+    expect(spy).toHaveBeenCalledTimes(1);
+    await runtime!.stop({ endOpenTrip: false });
+    expect(released).toBe(1);
+    spy.mockRestore();
+    runtime!.queryClient.clear();
+    runtime = null;
+  });
+
+  async function recordOnly(l: Awaited<ReturnType<typeof launch>>) {
+    await runtime!.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await runtime!.drive.settled();
+    for (const row of drive(200, { t0: l.clock.t + 1000 })) {
+      l.clock.t = row.ts + 200;
+      l.driveSense.loadTrace([row]);
+      l.driveSense.step();
+      await runtime!.drive.settled();
+    }
+    await settle();
+  }
+
+  test('sign-out: the idle is written before the session ends (T10 security)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await recordOnly(l);
+    expect(l.devices.writes).toEqual(['devices:recording']);
+    // What the layout's sign-out hook does before the session ends: stop recording, then settle.
+    await runtime!.drive.suspendForSignOut();
+    await runtime!.driveStateSettled();
+    expect(l.devices.writes).toEqual(['devices:recording', 'devices:idle']);
+  });
+
+  test('handover: nothing is written under the next driver (the owner fence)', async () => {
+    const supabase = createFakeSupabase({ uid: 'user-1' });
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    await createSettingsRepo(db).set(INSTALL_ID_KEY, INSTALL);
+    const clock = { t: NOW };
+    const driveSense = createFakeDriveSense({ platform: 'android', now: () => clock.t });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const devices = devicesClient();
+    const built = deps({ supabase, source: driveSense, now: () => clock.t, mayDrain: () => false, devicesClient: devices.client as never });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    await recordOnly({ driveSense, clock, devices, built });
+    expect(devices.writes).toEqual(['devices:recording']);
+    // B signs in on this phone: the rebuild's teardown ends A's drive under B's session.
+    supabase.setUid('user-2');
+    await runtime.stop();
+    await settle();
+    expect(devices.writes).toEqual(['devices:recording']);
+    runtime.queryClient.clear();
+    runtime = null;
+  });
+
+  test('the default background wake hook is T10\'s permission reporter', async () => {
+    mockBackgroundReports.length = 0;
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    l.driveSense.emit('wake', { reason: 'significantChange', ts: NOW });
+    await runtime!.drive.settled();
+    await settle();
+    expect(mockBackgroundReports).toEqual(['report']);
   });
 });
