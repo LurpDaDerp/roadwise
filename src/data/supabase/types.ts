@@ -345,6 +345,30 @@ export type Database = {
         }
         Relationships: []
       }
+      job_leases: {
+        Row: {
+          created_at: string
+          expires_at: string
+          holder: string
+          job: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          holder: string
+          job: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          holder?: string
+          job?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       limits_cache: {
         Row: {
           created_at: string
@@ -922,11 +946,13 @@ export type Database = {
         Returns: string
       }
       dismiss_inbox: { Args: { p_ids: string[] }; Returns: number }
+      dispatch_purge_traces: { Args: never; Returns: string }
       dispatch_push: { Args: never; Returns: string }
       expire_trace_objects: {
         Args: { p_limit?: number; p_older_than?: string }
         Returns: Json
       }
+      expired_trace_object_keys: { Args: { p_limit: number }; Returns: Json }
       guardian_link_state: { Args: never; Returns: Json }
       inbox_subject_gone: {
         Args: { p_payload: Json; p_ref: string; p_type: string; p_user: string }
@@ -941,6 +967,10 @@ export type Database = {
       mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
       notification_defaults: { Args: never; Returns: Json }
+      purge_traces_signature: {
+        Args: { p_key: string; p_ts: number }
+        Returns: string
+      }
       push_receipts_due: { Args: { p_limit: number }; Returns: Json }
       push_sweep_signature: {
         Args: { p_key: string; p_ts: number }
@@ -972,6 +1002,10 @@ export type Database = {
       register_push_token: {
         Args: { p_device_id: string; p_token: string }
         Returns: undefined
+      }
+      release_job_lease: {
+        Args: { p_holder: string; p_job: string }
+        Returns: boolean
       }
       require_baselines: {
         Args: { p_baselines: Json; p_fn: string }
@@ -1018,6 +1052,10 @@ export type Database = {
       speed_limit_tiles: { Args: { p_keys: string[] }; Returns: Json }
       take_global_rate_limit: {
         Args: { p_key: string; p_max: number; p_window: string }
+        Returns: boolean
+      }
+      take_job_lease: {
+        Args: { p_holder: string; p_job: string; p_seconds: number }
         Returns: boolean
       }
       take_rate_limit: {
