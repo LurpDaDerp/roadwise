@@ -471,6 +471,16 @@ describe('fences: a device that changes hands never receives the previous driver
     expect(getHydrationStatus().state).toBe('failed');
   });
 
+  test('a restore a drive paused stays "restoring", never reported as failed (final review M8)', async () => {
+    supabase.tables = { trips: [serverTrip(1)] };
+    setHydrationStatus({ state: 'restoring', restored: 0 });
+    busy = true;
+    const result = await hydrator().run({ full: true });
+    expect(result.complete).toBe(false);
+    expect(getHydrationStatus()).toEqual({ state: 'restoring', restored: 0 });
+    setHydrationStatus({ state: 'idle' });
+  });
+
   test('only a full run that reached the end marks the device restored', async () => {
     supabase.tables = { trips: [serverTrip(1)] };
     await hydrator().run({ full: false });

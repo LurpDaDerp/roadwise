@@ -1113,9 +1113,12 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
     } catch (error) {
       result.complete = false;
       if (error instanceof Halt) {
-        // Busy: the restore is still owed and resumes at the next foreground. Fenced: this
-        // hydrator's lifetime is over and a new one owns the status.
-        if (full && of === generation) setHydrationStatus({ state: 'failed', at: now() });
+        // Busy: a drive paused the restore on purpose. It is still owed and resumes at the next
+        // foreground, so the status stays "restoring" rather than reading as a failure (final
+        // review M8). Fenced (another owner, a stopped hydrator): this run can never finish.
+        if (full && of === generation && error.why === 'fenced') {
+          setHydrationStatus({ state: 'failed', at: now() });
+        }
         return result;
       }
       report(error, 'hydrate');

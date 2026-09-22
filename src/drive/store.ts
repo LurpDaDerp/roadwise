@@ -1,9 +1,11 @@
 // The React-facing copy of the host's state (zustand, vanilla).
 //
 // While RoadWise is in front, every host change is published — the HUD needs each row. While it is
-// in the background nobody is looking, so only status changes are published (the root layout's
-// lockout and routing need those); the host's own state keeps updating, and the store catches up
-// with the latest snapshot the moment the app is active again (rev1: m).
+// in the background nobody is looking, so only what the root layout's lockout and routing read is
+// published: `status`, `lockedOut` and `mode` (final review M6 — a drive that reached speed while
+// backgrounded must open locked out, not on the last published `false`). A boolean compare each,
+// nothing more on the 1 Hz path. The store catches up with the full snapshot the moment the app is
+// active again (rev1: m).
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
 import type { AppStateLike } from '@/data/foreground';
@@ -31,7 +33,10 @@ export function createDriveStore(host: DriveHost, appState: AppStateLike): Drive
   function connect(): () => void {
     let active = isActive(appState.currentState);
     const offHost = host.subscribe((s) => {
-      if (active || s.status !== store.getState().status) store.setState(s, true);
+      const shown = store.getState();
+      if (active || s.status !== shown.status || s.lockedOut !== shown.lockedOut || s.mode !== shown.mode) {
+        store.setState(s, true);
+      }
     });
     const offApp = appState.addEventListener('change', (next) => {
       active = isActive(next);

@@ -1034,8 +1034,12 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       return;
     }
     if (isRecording()) {
-      // The wake would otherwise be lost: nothing tells the runner when a drive ends, and the
-      // app is already in the foreground, so no AppState change is coming either.
+      // The drive's end normally wakes the runner itself: the host emits a `finalize` change once
+      // the snapshot is idle, and that drains at once (and clears this timer; tested). This timer
+      // is the safety net for a drive that ends WITHOUT a finalize change — a candidate discarded
+      // as "not a drive", a dry run, a finalize that failed — where the wake would otherwise be
+      // lost until the next foreground (final review M10d: kept, and why). One timer at most, only
+      // while busy; never while armed and idle.
       if (recordingRetry === null) {
         recordingRetry = setTimeout(() => {
           recordingRetry = null;

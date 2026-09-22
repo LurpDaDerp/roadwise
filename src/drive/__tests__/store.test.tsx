@@ -108,6 +108,19 @@ describe('createDriveStore', () => {
     expect(store.getState().speedMps).toBe(3);
   });
 
+  test('backgrounded: a lockout or a mode change is published at once too (final review M6)', () => {
+    const h = stubHost({ ...state(), lockedOut: false, mode: 'mounted' });
+    const app = fakeAppState('background');
+    const store = createDriveStore(h.host, app);
+    h.push({ lockedOut: true, speedMps: 13 });
+    // The first frame back at speed must already be locked out (SR2/SR8), before any catch-up.
+    expect(store.getState()).toMatchObject({ lockedOut: true, speedMps: 13 });
+    h.push({ mode: 'pocket' });
+    expect(store.getState().mode).toBe('pocket');
+    h.push({ speedMps: 20 });
+    expect(store.getState().speedMps).toBe(13);
+  });
+
   test('dispose unsubscribes from the host and the app state', () => {
     const h = stubHost(state());
     const app = fakeAppState('active');

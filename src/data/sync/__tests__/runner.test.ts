@@ -710,6 +710,32 @@ test('a wake while the engine records is retried once the drive ends', async () 
   }
 });
 
+test("the host's finalize change drains at once, before the 15 s safety net, and clears it (final review M10d)", async () => {
+  jest.useFakeTimers();
+  const sync = runner();
+  try {
+    await seedQueuedTrip();
+    recording = true;
+    sync.start();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(supabase.invokes).toHaveLength(0);
+    expect(jest.getTimerCount()).toBe(1); // the safety net, and nothing else
+
+    // The drive ends with a finalize: the host emits its change once the snapshot is idle, and
+    // the queued work goes at once — no 15 s wait.
+    recording = false;
+    emitDataChanged({ source: 'finalize' });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(supabase.invokes).toHaveLength(1);
+    // The safety net was cleared by that drain: running the clock past it sends nothing more.
+    await jest.advanceTimersByTimeAsync(RECORDING_RETRY_MS * 2);
+    expect(supabase.invokes).toHaveLength(1);
+  } finally {
+    await sync.stop();
+    jest.useRealTimers();
+  }
+});
+
 test('two drains never overlap', async () => {
   await seedQueuedTrip();
   let inFlight = 0;
