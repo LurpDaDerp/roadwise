@@ -1,12 +1,13 @@
 # DriveSense - the RoadWise background drive-capture module.
 #
-# M0 ships the shell: the module name, the event names, and getState(). The capture pipeline
-# lands in M3. The version is hard-coded rather than read from a package.json because this is a
+# M3 (N2): background drive detection, 1 Hz location and 25 Hz motion capture reduced natively to
+# one feature row per second, phone state, calls and the backup exclusion. README.md is the
+# contract. The version is hard-coded rather than read from a package.json because this is a
 # local Expo module with no package.json of its own.
 
 Pod::Spec.new do |s|
   s.name           = 'DriveSense'
-  s.version        = '0.1.0'
+  s.version        = '0.3.0'
   s.summary        = 'Background drive capture for RoadWise'
   s.author         = 'RoadWise'
   s.license        = { :type => 'Proprietary' }
@@ -18,5 +19,6 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
+  s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication'
   s.source_files = '**/*.{h,m,mm,swift}'
 end
