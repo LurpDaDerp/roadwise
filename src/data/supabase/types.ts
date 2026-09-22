@@ -114,6 +114,8 @@ export type Database = {
           app_version: string | null
           capability_tier: string
           created_at: string
+          drive_state: string
+          drive_state_at: string | null
           id: string
           last_seen_at: string
           model: string | null
@@ -128,6 +130,8 @@ export type Database = {
           app_version?: string | null
           capability_tier?: string
           created_at?: string
+          drive_state?: string
+          drive_state_at?: string | null
           id: string
           last_seen_at?: string
           model?: string | null
@@ -142,6 +146,8 @@ export type Database = {
           app_version?: string | null
           capability_tier?: string
           created_at?: string
+          drive_state?: string
+          drive_state_at?: string | null
           id?: string
           last_seen_at?: string
           model?: string | null
@@ -231,6 +237,63 @@ export type Database = {
           key?: string
           updated_at?: string
           window_start?: string
+        }
+        Relationships: []
+      }
+      inbox: {
+        Row: {
+          created_at: string
+          dedupe_key: string
+          deliver_after: string
+          dismissed_at: string | null
+          id: string
+          payload: Json
+          push_attempts: number
+          push_claimed_at: string | null
+          push_reason: string | null
+          push_state: string
+          pushed_at: string | null
+          read_at: string | null
+          ref_id: string | null
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          dedupe_key: string
+          deliver_after?: string
+          dismissed_at?: string | null
+          id?: string
+          payload: Json
+          push_attempts?: number
+          push_claimed_at?: string | null
+          push_reason?: string | null
+          push_state?: string
+          pushed_at?: string | null
+          read_at?: string | null
+          ref_id?: string | null
+          type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dedupe_key?: string
+          deliver_after?: string
+          dismissed_at?: string | null
+          id?: string
+          payload?: Json
+          push_attempts?: number
+          push_claimed_at?: string | null
+          push_reason?: string | null
+          push_state?: string
+          pushed_at?: string | null
+          read_at?: string | null
+          ref_id?: string | null
+          type?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -339,6 +402,45 @@ export type Database = {
         }
         Relationships: []
       }
+      notification_prefs: {
+        Row: {
+          categories: Json
+          created_at: string
+          local_sent_count: number
+          local_sent_day: string | null
+          quiet_enabled: boolean | null
+          quiet_end: string | null
+          quiet_start: string | null
+          tz: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          categories?: Json
+          created_at?: string
+          local_sent_count?: number
+          local_sent_day?: string | null
+          quiet_enabled?: boolean | null
+          quiet_end?: string | null
+          quiet_start?: string | null
+          tz?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          categories?: Json
+          created_at?: string
+          local_sent_count?: number
+          local_sent_day?: string | null
+          quiet_enabled?: boolean | null
+          quiet_end?: string | null
+          quiet_start?: string | null
+          tz?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       private_profiles: {
         Row: {
           birth_date: string | null
@@ -410,6 +512,101 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      push_deliveries: {
+        Row: {
+          created_at: string
+          error: string | null
+          id: string
+          inbox_id: string
+          receipt_checked_at: string | null
+          receipt_error: string | null
+          receipt_status: string | null
+          ticket_id: string | null
+          token: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          id?: string
+          inbox_id: string
+          receipt_checked_at?: string | null
+          receipt_error?: string | null
+          receipt_status?: string | null
+          ticket_id?: string | null
+          token?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          id?: string
+          inbox_id?: string
+          receipt_checked_at?: string | null
+          receipt_error?: string | null
+          receipt_status?: string | null
+          ticket_id?: string | null
+          token?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "push_deliveries_inbox_id_fkey"
+            columns: ["inbox_id"]
+            isOneToOne: false
+            referencedRelation: "inbox"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "push_deliveries_token_fkey"
+            columns: ["token"]
+            isOneToOne: false
+            referencedRelation: "push_registrations"
+            referencedColumns: ["token"]
+          },
+        ]
+      }
+      push_registrations: {
+        Row: {
+          created_at: string
+          device_id: string
+          last_registered_at: string
+          platform: string
+          token: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_id: string
+          last_registered_at?: string
+          platform: string
+          token: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          device_id?: string
+          last_registered_at?: string
+          platform?: string
+          token?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "push_registrations_device_fkey"
+            columns: ["user_id", "device_id"]
+            isOneToOne: false
+            referencedRelation: "devices"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
       }
       rate_limits: {
         Row: {
@@ -710,6 +907,10 @@ export type Database = {
         Returns: Json
       }
       apply_trip: { Args: { p: Json }; Returns: Json }
+      claim_push_batch: {
+        Args: { p_lease_seconds: number; p_limit: number }
+        Returns: Json
+      }
       count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
       create_guardian_invite: { Args: never; Returns: Json }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
@@ -717,12 +918,27 @@ export type Database = {
         Args: { p_as_of: string; p_birth_date: string }
         Returns: string
       }
+      dismiss_inbox: { Args: { p_ids: string[] }; Returns: number }
+      dispatch_push: { Args: never; Returns: string }
       expire_trace_objects: {
         Args: { p_limit?: number; p_older_than?: string }
         Returns: Json
       }
       guardian_link_state: { Args: never; Returns: Json }
+      inbox_subject_gone: {
+        Args: { p_payload: Json; p_ref: string; p_type: string; p_user: string }
+        Returns: boolean
+      }
+      is_known_tz: { Args: { p_tz: string }; Returns: boolean }
+      is_short_drive: {
+        Args: { p_distance_m: number; p_duration_s: number }
+        Returns: boolean
+      }
       is_underage: { Args: { p_user: string }; Returns: boolean }
+      mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
+      merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
+      notification_defaults: { Args: never; Returns: Json }
+      push_receipts_due: { Args: { p_limit: number }; Returns: Json }
       put_limits_cache: {
         Args: {
           p_heading: number
@@ -743,7 +959,13 @@ export type Database = {
         }
         Returns: Json
       }
+      record_push_outcomes: { Args: { p: Json }; Returns: number }
+      record_push_receipts: { Args: { p: Json }; Returns: number }
       rederive_age_bands: { Args: never; Returns: number }
+      register_push_token: {
+        Args: { p_device_id: string; p_token: string }
+        Returns: undefined
+      }
       require_baselines: {
         Args: { p_baselines: Json; p_fn: string }
         Returns: undefined
@@ -797,6 +1019,7 @@ export type Database = {
       }
       underage_identity_keys: { Args: { p_data: Json }; Returns: Json }
       underage_object_keys: { Args: { p_limit: number }; Returns: Json }
+      unregister_push_token: { Args: { p_token: string }; Returns: boolean }
       upsert_baselines: {
         Args: { p_baselines: Json; p_user: string }
         Returns: undefined
@@ -809,6 +1032,7 @@ export type Database = {
         Args: { p_at?: string; p_user: string }
         Returns: string
       }
+      user_tz: { Args: { p_user: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
