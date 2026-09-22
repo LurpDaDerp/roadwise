@@ -19,7 +19,8 @@ import {
   createSpeedLimitsDb,
   handleSpeedLimits,
   RATE_LIMITS,
-  TILE_CACHE_CONTROL,
+  TILE_MAX_AGE_S,
+  tileCacheControl,
   TILE_RPC_TIMEOUT_MS,
   TileTimeout,
   toCandidate,
@@ -27,6 +28,8 @@ import {
 } from './handler.ts';
 
 const UID = '00000000-0000-4000-8000-000000000001';
+/** The tests' clock: 30 days before the fixture tiles' `expiresAt`. */
+const NOW = 1_790_000_000_000 - 30 * 86_400_000;
 const GOOD = 'good-token';
 
 // The fixture's corridor (B1 seed): 9000000001 primary 35 mph along lat 47.6062, digitised east;
@@ -127,6 +130,7 @@ function harness(opts: {
   routes?: RoutesClient | null;
   rpc?: Record<string, (args: Record<string, unknown>) => RpcReply>;
   random?: () => number;
+  now?: number;
 } = {}): Harness {
   const fake = fakeSupabase({
     rpc: (fn, args) => {
@@ -162,6 +166,7 @@ function harness(opts: {
     routes: opts.routes ?? null,
     log,
     random: opts.random ?? (() => 0.5),
+    now: () => opts.now ?? NOW,
   };
   return { deps, rpc: fake.rpcCalls, logs, infos };
 }
@@ -324,6 +329,31 @@ Deno.test('the matcher picks the span the car is on from the longer route, and o
   assertEquals(cached[0].args.p_limit_mph, 45);
   assertEquals(cached[0].args.p_key, awsCacheKey(spans[1].leg));
   assertEquals((cached[0].args.p_line as { coordinates: number[][] }).coordinates, spans[1].leg.map((p) => [p.lng, p.lat]));
+});
+
+Deno.test('a limit change just behind the car: the car span answers, not Spans[0] (review M2)', async () => {
+  // The route starts behind the car (ruling I-1). The first span (25 mph) ends 8 m behind the car,
+  // inside the matcher's 25 m, so taking Spans[0] would answer 25. The car is on the 45 span.
+  const at = (m: number): LatLng => ({ lat: 47.606 + m / 111_320, lng: -122.32 });
+  const spans: SpanLimit[] = [
+    { mph: 25, leg: [at(-140), at(-8)] },
+    { mph: 45, leg: [at(-8), at(160)] },
+  ];
+  const routes = stubRoutes(() => Promise.resolve(spans));
+  const h = harness({ candidates: [], routes });
+  const body = await (await handleSpeedLimits(post(UNTAGGED_POINT), h.deps)).json();
+  assertEquals(body.limitMph, 45);
+  // a different limit within 10 m is a parallel-road situation to the matcher: less confident
+  assertEquals([body.source, body.parallelRoads, body.matchConfidence], ['cached', true, 0.6]);
+  const cached = h.rpc.filter((c) => c.fn === 'put_limits_cache');
+  assertEquals(cached.map((c) => c.args.p_limit_mph), [45]);
+  assertEquals(cached[0].args.p_key, awsCacheKey(spans[1].leg));
+
+  // With an untagged OSM way under the car, both spans join it and disagree: unknown, never 25.
+  const withRoad = harness({ candidates: [untaggedRow], routes });
+  const r = await (await handleSpeedLimits(post(UNTAGGED_POINT), withRoad.deps)).json();
+  assertEquals(r.source, 'unknown');
+  assert(!withRoad.rpc.some((c) => c.fn === 'put_limits_cache'));
 });
 
 Deno.test('outside every loaded state, AWS is not asked and no budget is spent', async () => {
@@ -561,8 +591,8 @@ Deno.test('a tile batch answers B1 JSON plus fallback aws, validated, cacheable,
   const h = harness({ routes, tiles: tileBatch(TILE_KEYS, (i) => (i === 1 ? { truncated: true } : {})) });
   const res = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps);
   assertEquals(res.status, 200);
-  assertEquals(res.headers.get('cache-control'), TILE_CACHE_CONTROL);
-  assertEquals(TILE_CACHE_CONTROL, 'private, max-age=86400');
+  // every tile expires 30 days out, so the day cap applies
+  assertEquals(res.headers.get('cache-control'), 'private, max-age=86400');
   const body = await res.json();
   TileBatchResponseSchema.parse(body);
   assertEquals(body.fallback, 'aws');
@@ -610,6 +640,26 @@ Deno.test('fallback is aws only when configured and some requested tile is in co
   // not configured: null even inside coverage
   const h = harness({ routes: null, tiles: tileBatch(TILE_KEYS) });
   assertEquals((await (await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps)).json()).fallback, null);
+});
+
+Deno.test('max-age follows the earliest tile expiry in the batch, capped at a day, never negative', async () => {
+  assertEquals(TILE_MAX_AGE_S, 86_400);
+  // one tile's cache row expires in 5 h 20 min 30.9 s: the batch may be cached that long, no longer
+  const soon = NOW + (5 * 3600 + 20 * 60 + 30) * 1000 + 900;
+  const h = harness({ tiles: tileBatch(TILE_KEYS, (i) => (i === 1 ? { expiresAt: soon } : {})) });
+  const res = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps);
+  assertEquals(res.headers.get('cache-control'), `private, max-age=${5 * 3600 + 20 * 60 + 30}`);
+  await res.body?.cancel();
+
+  // an edge already at, or past, its expiry: 0
+  for (const exp of [NOW, NOW - 1, NOW + 999]) {
+    const e = harness({ tiles: tileBatch(TILE_KEYS, (i) => (i === 2 ? { expiresAt: exp } : {})) });
+    const r = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), e.deps);
+    assertEquals(r.headers.get('cache-control'), 'private, max-age=0', String(exp - NOW));
+    await r.body?.cancel();
+  }
+  assertEquals(tileCacheControl([NOW + 86_400_000 + 5_000], NOW), 'private, max-age=86400');
+  assertEquals(tileCacheControl([NOW + 86_399_999], NOW), 'private, max-age=86399');
 });
 
 Deno.test('five tile keys, a bad key, a duplicate or none are 400 before any database call', async () => {

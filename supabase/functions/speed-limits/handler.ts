@@ -8,7 +8,8 @@
 //        Validated against the device's own schema before it is sent: the device refuses a whole
 //        batch for one bad segment, so a batch this end would send wrongly is a 500, never a
 //        half-good 200. `truncated` is passed through as the database set it.
-//        `Cache-Control: private, max-age=86400`, and gzip when the request accepts it.
+//        `Cache-Control: private, max-age=` up to the batch's earliest tile expiry, at most a day
+//        (ruling B2-I1), and gzip when the request accepts it.
 //   POST PointRequest → PointResponse, in §4.4's order: the candidates around the point go through
 //        `matchLimit` (the device's matcher, byte for byte); a match with a limit answers. Otherwise,
 //        with the AWS client configured, the point inside a state whose open data is loaded, and
@@ -112,7 +113,19 @@ export const AWS_AHEAD_M = { min: 150, max: 300 } as const;
 export const TILE_RPC_TIMEOUT_MS = 5_000;
 /** A point request is four numbers; anything larger is not one. */
 export const MAX_BODY_BYTES = 1_024;
-export const TILE_CACHE_CONTROL = 'private, max-age=86400';
+/** The longest a batch may sit in an HTTP cache (rev1: O12), whatever its tiles' expiry. */
+export const TILE_MAX_AGE_S = 86_400;
+
+/**
+ * The batch's `Cache-Control` (ruling B2-I1): never cached past the earliest tile expiry in it, so
+ * a cache row's refresh (or its expiry) is never hidden behind a stale HTTP copy; at most a day.
+ * `max(0, floor((min(expiresAt) - now) / 1000))`, capped at `TILE_MAX_AGE_S`.
+ */
+export function tileCacheControl(expiresAt: readonly number[], nowMs: number): string {
+  const earliest = Math.min(...expiresAt);
+  const age = Math.min(TILE_MAX_AGE_S, Math.max(0, Math.floor((earliest - nowMs) / 1000)));
+  return `private, max-age=${age}`;
+}
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;
@@ -237,6 +250,8 @@ export interface SpeedLimitsDeps {
   log?: SpeedLogger;
   /** For the route's ends and the cache TTL; `Math.random` by default. */
   random?: () => number;
+  /** Epoch ms, for the batch's max-age; `Date.now` by default. */
+  now?: () => number;
 }
 
 type Route = 'point' | 'tiles';
@@ -394,7 +409,8 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
     });
     return { res: json(500, { code: 'invalid_tiles' }), outcome: 'invalid_tiles', source: null };
   }
-  const res = await jsonEncoded(req, 200, checked.data, { 'cache-control': TILE_CACHE_CONTROL });
+  const cacheControl = tileCacheControl(checked.data.tiles.map((t) => t.expiresAt), (deps.now ?? Date.now)());
+  const res = await jsonEncoded(req, 200, checked.data, { 'cache-control': cacheControl });
   return { res, outcome: 'served', source: null };
 }
 
