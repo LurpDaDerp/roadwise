@@ -618,6 +618,53 @@ describe('fix round 1', () => {
     expect(lookupPoint).toHaveBeenCalledTimes(1);
   });
 
+  it("NF-I1: a capped match uses the point answer it asked for, with the answer's own confidence", async () => {
+    // The own-road-dropped case: the truncated tile keeps only the 25 mph frontage road. The
+    // server's candidate query is not truncated and finds the corridor's 35 mph.
+    const answer: PointResponse = {
+      limitMph: 35,
+      source: 'posted',
+      matchConfidence: 0.95,
+      parallelRoads: true,
+      provider: 'osm',
+    };
+    const { api, lookupPoint } = fakeApi({
+      truncated: true,
+      fallback: 'aws',
+      segmentsFor: () => [frontage()],
+      point: answer,
+    });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < 5; i += 1) {
+      expect(client.lookup(LAT, LNG0 + mLng(i * 20), EAST, MOVING)!.matchConfidence).toBeLessThanOrEqual(0.6);
+      await client.settled();
+    }
+    expect(lookupPoint).toHaveBeenCalledTimes(1);
+    const next = client.lookup(LAT, LNG0 + mLng(120), EAST, MOVING);
+    expect(next).toEqual({ limitMps: mphToMps(35), source: 'posted', matchConfidence: 0.95, parallelRoads: true });
+    // Used, so the trigger rests: many more rows on the answer's stretch ask nothing more.
+    client.prefetch(LAT, LNG0 + mLng(120), EAST);
+    await client.settled();
+    for (let i = 0; i < 6; i += 1) {
+      client.lookup(LAT, LNG0 + mLng(100 + i * 10), EAST, MOVING);
+      await client.settled();
+    }
+    expect(lookupPoint).toHaveBeenCalledTimes(1);
+  });
+
+  it('NF-I1: capped rows make no request when no point answer could come (no fallback)', async () => {
+    const { api, lookupPoint } = fakeApi({ truncated: true, fallback: null, segmentsFor: () => [frontage()] });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < 20; i += 1) {
+      expect(client.lookup(LAT, LNG0 + mLng(i * 20), EAST, MOVING)!.matchConfidence).toBeLessThanOrEqual(0.6);
+      await client.settled();
+    }
+    expect(lookupPoint).not.toHaveBeenCalled();
+    expect(client.stats().requestsThisTrip).toBe(1); // the trip-start batch only
+  });
+
   it('M2: offline, a prefetch preloads the tiles ahead from SQLite, so a tile edge costs no null row', async () => {
     online = false;
     const set = prefetchSet(LAT, LNG0, EAST).map(tileKey);

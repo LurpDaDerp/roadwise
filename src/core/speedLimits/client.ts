@@ -379,9 +379,10 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
 
   /**
    * Match against every fresh tile in memory near the point (plus `own`, when given, even if it
-   * has since been evicted), then any point answer. `capped` is true when a truncated tile nearby
-   * held the match to `TRUNCATED_CONFIDENCE_CAP` — the point-lookup trigger counts that row as
-   * unknown.
+   * has since been evicted). A point answer covering the position is used when the match is
+   * unknown, or when it is capped. `capped` is true when a truncated tile nearby held the match to
+   * `TRUNCATED_CONFIDENCE_CAP` and no point answer replaced it — the point-lookup trigger counts
+   * that row as unknown.
    */
   function evaluate(
     lat: number,
@@ -402,6 +403,12 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     }
     const sample = toSample(result);
     if (truncatedNear(tiles, p, MATCH.RADIUS_M)) {
+      // The server's point answer beats a capped match: its candidate query is not truncated, so
+      // it sees the road the tile may have dropped. This is what the capped row's lookup was for.
+      if (course >= 0) {
+        const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
+        if (fromPoint) return { sample: fromPoint, capped: false };
+      }
       return {
         sample: { ...sample, matchConfidence: Math.min(sample.matchConfidence, TRUNCATED_CONFIDENCE_CAP) },
         capped: true,
@@ -487,6 +494,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       return persist ? repo.purgeExpired(now()) : Promise.resolve(0);
     },
 
+    // Diagnostics only: `truncatedTiles` copies the LRU. Nothing on the per-row path calls this.
     stats() {
       return {
         memoryTiles: lru.size,
