@@ -74,14 +74,19 @@ export async function mergeOwnProfileFlags(patch: { disclaimerAcknowledged: stri
  *   only when the account does not already hold it, so an older tick never downgrades the row.
  * - the A6–A8 permission consents a step could not send (offline) and `finishOnboarding` could not
  *   either (T14 review m2): only those held for THIS account, each sent once; what is sent is
- *   dropped from the owed record, what fails stays for the next session.
- * All are attempted whatever happens to the others; if any fails this rejects, after all ran.
+ *   dropped from the owed record, what fails stays for the next session. A failure here is
+ *   returned as `failure`, never thrown, so it cannot hold back the refresh a merged disclaimer
+ *   needs (T14 r1 review n1).
+ * All are attempted whatever happens to the others. A failed Terms or disclaimer write rejects,
+ * after all ran.
  */
 export async function flushSignedInConsents(
   deps: SignedInConsentDeps
-): Promise<{ recorded: TermsType[]; disclaimerMerged: boolean }> {
+): Promise<{ recorded: TermsType[]; disclaimerMerged: boolean; failure: unknown }> {
   const { db, settings, userId, legal, consentApi, mergeFlags = mergeOwnProfileFlags } = deps;
   let failure: unknown = null;
+  /** A permission consent that could not be sent: reported, never thrown (T14 r1 review n1). */
+  let consentFailure: unknown = null;
 
   let recorded: TermsType[] = [];
   try {
@@ -116,17 +121,17 @@ export async function flushSignedInConsents(
           await record(userId, { type, version: PERMISSION_CONSENT_VERSION });
         } catch (error) {
           left.push(type);
-          failure ??= error;
+          consentFailure ??= error;
         }
       }
       await savePendingPermissionConsents(settings, userId, left);
     }
   } catch (error) {
-    failure ??= error;
+    consentFailure ??= error;
   }
 
   if (failure !== null) throw failure;
-  return { recorded, disclaimerMerged };
+  return { recorded, disclaimerMerged, failure: consentFailure };
 }
 
 /**
@@ -152,22 +157,33 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const gate = profileGate(profile);
+  const userId = session?.user.id ?? null;
 
   // The deep link held while setup is owed, known here before the moment it is needed, so the
-  // exit from onboarding below can use it without waiting on a read (T14 review, ruling 1).
-  const held = useRef<string | null>(null);
+  // exit from onboarding below can use it without waiting on a read (T14 review, ruling 1). It is
+  // bound to the account it was held for and used only under that account; a sign-out or any
+  // change of account drops it (T14 r1 review m1), whatever becomes of this component.
+  const held = useRef<{ uid: string; href: string } | null>(null);
+  const holdFor = (href: string | null) => {
+    held.current = href !== null && userId !== null ? { uid: userId, href } : null;
+  };
+  useEffect(() => {
+    if (held.current && (status === 'signedOut' || held.current.uid !== userId)) held.current = null;
+  }, [status, userId]);
   // The generated route types may not list the group yet; the gate compares plain strings.
   const inOnboarding = (segments as readonly string[])[0] === '(onboarding)';
   useEffect(() => {
     if (gate !== 'onboarding') return;
     let live = true;
+    const uid = userId;
     void readPendingHref(settings).then((href) => {
-      if (live) held.current = href;
+      // A read never replaces a fresher hold made while it was out (or clears one).
+      if (live && uid !== null && href !== null && held.current === null) held.current = { uid, href };
     });
     return () => {
       live = false;
     };
-  }, [gate, settings]);
+  }, [gate, settings, userId]);
 
   useEffect(() => {
     const to = resolveGate(status, gate, update, segments, { busy, mode, tripOpen });
@@ -176,24 +192,25 @@ export function AuthGate({ children }: { children: ReactNode }) {
     // onboarding finishes, instead of Home.
     if (to === ONBOARDING_START) {
       const href = pendingHrefFor(pathname);
-      if (href !== null) held.current = href;
+      if (href !== null) holdFor(href);
       void savePendingHref(settings, pathname).catch(() => {});
     }
     // Setup has just finished while the driver is still inside onboarding: the held link has one
     // owner, this gate, so a render landing between `finishOnboarding`'s refresh and its own
     // replace can't send the driver Home and lose it. Used once, then cleared; Home otherwise.
     if (to === HOME && gate === 'ready' && inOnboarding) {
-      const href = held.current;
+      const mine = held.current;
       held.current = null;
+      const href = mine !== null && status === 'signedIn' && mine.uid === userId ? mine.href : null;
       if (href !== null) void settings.remove(ONBOARDING_PENDING_HREF_KEY).catch(() => {});
       router.replace((href ?? HOME) as Href);
       return;
     }
     router.replace(to as Href);
-  }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings, inOnboarding]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `holdFor` reads `userId`, listed here
+  }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings, inOnboarding, userId]);
 
   // Once per signed-in session, against the server's row (a cached row may be stale).
-  const userId = session?.user.id ?? null;
   const flushedFor = useRef<string | null>(null);
   useEffect(() => {
     if (status === 'signedOut') flushedFor.current = null;
@@ -207,7 +224,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     flushedFor.current = userId;
     const legal = legalState(config);
     void flushSignedInConsents({ db, settings, userId, legal, flags: profile.flags })
-      .then(({ disclaimerMerged }) => (disclaimerMerged ? refreshProfile() : undefined))
+      .then(({ disclaimerMerged, failure }) => {
+        // Owed permission consents that still fail are kept; the next change of profile (or the
+        // next session) tries them again. They never hold back the refresh below.
+        if (failure !== null && flushedFor.current === userId) flushedFor.current = null;
+        return disclaimerMerged ? refreshProfile() : undefined;
+      })
       .catch(() => {
         // Offline, or the server refused: the next change of profile tries again.
         if (flushedFor.current === userId) flushedFor.current = null;

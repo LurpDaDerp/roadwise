@@ -31,6 +31,7 @@ const mockWorld: {
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
   db: Db | null;
+  uid: string;
 } = {
   status: 'loading',
   profile: null,
@@ -42,12 +43,13 @@ const mockWorld: {
   hostBusy: false,
   update: 'ok',
   db: null,
+  uid: 'u1',
 };
 
 jest.mock('@/data/supabase/session', () => ({
   useSession: () => ({
     status: mockWorld.status,
-    session: mockWorld.status === 'signedIn' ? { user: { id: 'u1' } } : null,
+    session: mockWorld.status === 'signedIn' ? { user: { id: mockWorld.uid } } : null,
     profile: mockWorld.profile,
     profileSource: mockWorld.profileSource,
     refreshProfile: mockRefresh,
@@ -103,6 +105,7 @@ beforeEach(async () => {
     hostBusy: false,
     update: 'ok',
     db,
+    uid: 'u1',
   });
   mockReplace.mockReset();
   mockRefresh.mockClear();
@@ -352,7 +355,7 @@ describe('flushSignedInConsents', () => {
     });
     expect(consentApi.calls).toEqual(['tos@t1', 'privacy@p1']);
     expect(mergeFlags).toHaveBeenCalledWith({ disclaimerAcknowledged: DISCLAIMER_VERSION });
-    expect(out).toEqual({ recorded: ['tos', 'privacy'], disclaimerMerged: true });
+    expect(out).toEqual({ recorded: ['tos', 'privacy'], disclaimerMerged: true, failure: null });
   });
 
   test('no write when the account already holds the current acknowledgement', async () => {
@@ -542,14 +545,15 @@ describe('owed permission consents (T14 review m2)', () => {
     expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toEqual({ userId: 'u2', types: ['motion'] });
   });
 
-  test('a failure keeps what was not sent and rejects, so the next session tries again', async () => {
+  test('a failure keeps what was not sent and is reported, not thrown (T14 r1 n1)', async () => {
     await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u1', types: ['location', 'motion'] });
     const record = jest.fn(async (_u: string, c: { type: string }) => {
       if (c.type === 'motion') throw new Error('offline');
     });
-    await expect(
-      flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, recordPermissionConsent: record })
-    ).rejects.toThrow('offline');
+    const out = await flushSignedInConsents({
+      db, settings, userId: 'u1', legal: unpublished, flags: {}, recordPermissionConsent: record,
+    });
+    expect(out.failure).toEqual(new Error('offline'));
     expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toEqual({ userId: 'u1', types: ['motion'] });
   });
 
@@ -562,5 +566,66 @@ describe('owed permission consents (T14 review m2)', () => {
     await mount({ status: 'signedIn', profile: READY, profileSource: 'network', segments: ['(tabs)', 'home'] });
     await waitFor(async () => expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toBeNull());
     expect(insert).toHaveBeenCalledWith({ user_id: 'u1', type: 'location', version: PERMISSION_CONSENT_VERSION });
+  });
+});
+
+describe('round 2 (T14 r1 review)', () => {
+  test('n1: a failing permission consent never holds back the refresh a merged disclaimer needs', async () => {
+    await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
+    await settings.set(PENDING_PERMISSION_CONSENTS_KEY, { userId: 'u1', types: ['location'] });
+    mockFrom.mockImplementation(() => ({
+      insert: () => ({ select: () => ({ single: async () => ({ data: null, error: new Error('offline') }) }) }),
+    }));
+    await mount({ status: 'signedIn', profile: OWED, profileSource: 'network', segments: ['(onboarding)', '[step]'] });
+    await waitFor(() =>
+      expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', { patch: { disclaimerAcknowledged: DISCLAIMER_VERSION } })
+    );
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    expect(await settings.get(PENDING_PERMISSION_CONSENTS_KEY)).toEqual({ userId: 'u1', types: ['location'] });
+  });
+
+  test('m1: A held a link, signed out, B signs in and is ready inside onboarding: B goes Home, never to A’s link', async () => {
+    // A: setup owed, a deep link to /inbox arrives and is held.
+    const view = await mount({
+      status: 'signedIn',
+      uid: 'u1',
+      profile: OWED,
+      profileSource: 'network',
+      segments: ['(app)', 'inbox'],
+      pathname: '/inbox',
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
+    await act(async () => {});
+    // A signs out while an onboarding screen is still showing; the handover wipe empties settings.
+    Object.assign(mockWorld, { status: 'signedOut', profile: null, profileSource: null, segments: ['(onboarding)', '[step]'], pathname: '/ready' });
+    await view.rerender(gate());
+    await settings.remove(ONBOARDING_PENDING_HREF_KEY);
+    // B signs in, already set up, still on that onboarding screen.
+    mockReplace.mockClear();
+    Object.assign(mockWorld, { status: 'signedIn', uid: 'u2', profile: { ...READY, id: 'u2' }, profileSource: 'network' });
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)/home');
+    expect(mockReplace).not.toHaveBeenCalledWith('/inbox');
+  });
+
+  test('m1 control: the same account keeps its link across the same steps without a sign-out', async () => {
+    const view = await mount({
+      status: 'signedIn',
+      uid: 'u1',
+      profile: OWED,
+      profileSource: 'network',
+      segments: ['(app)', 'inbox'],
+      pathname: '/inbox',
+    });
+    await act(async () => {});
+    Object.assign(mockWorld, { segments: ['(onboarding)', '[step]'], pathname: '/ready' });
+    await view.rerender(gate());
+    await settings.remove(ONBOARDING_PENDING_HREF_KEY);
+    mockReplace.mockClear();
+    Object.assign(mockWorld, { profile: READY });
+    await view.rerender(gate());
+    await act(async () => {});
+    expect(mockReplace).toHaveBeenCalledWith('/inbox');
   });
 });
