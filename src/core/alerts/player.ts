@@ -93,7 +93,8 @@ export interface AlertPlayer {
   /**
    * Long-press mute: silences the alert sounding now. One already waiting behind it still plays.
    * While idle it releases the audio session once more, through the queue (P2-M1) — the host's
-   * drive-end release (P2-M2). When an item is queued but not started, that item releases instead.
+   * drive-end release (P2-M2). When an item is queued but not started, that item releases instead,
+   * and pays the release on exit even if it plays nothing (P2-N1).
    */
   stopCurrent(): Promise<void>;
   /** "Recording" at start (§8.4). Spoken on L1's session rule; silent with voice off or on a call. */
@@ -151,6 +152,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   let current: Run | null = null;
   /** Items enqueued whose task has not yet finished. */
   let pending = 0;
+  /**
+   * An idle `stopCurrent` deferred its release to a queued item (P2-N1). Cleared by any release;
+   * an item that exits without releasing (dropped, or an announcement it skipped) pays it on exit.
+   */
+  let releaseOwed = false;
 
   function report(err: unknown): void {
     try {
@@ -221,6 +227,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       } catch (err) {
         report(err);
       } finally {
+        if (releaseOwed) await releaseSession();
         if (current === run) current = null;
         pending -= 1;
         finish();
@@ -241,10 +248,14 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       : "playback";
   }
 
+  /** Every release goes through here, so it settles a release an idle stopCurrent left owed. */
+  function releaseSession(): Promise<void> {
+    releaseOwed = false;
+    return bounded(() => audio.deactivate());
+  }
+
   function releaseViaQueue(): Promise<void> {
-    return enqueue(async () => {
-      await bounded(() => audio.deactivate());
-    });
+    return enqueue(releaseSession);
   }
 
   return {
@@ -270,7 +281,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
             await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
           }
         } finally {
-          await bounded(() => audio.deactivate());
+          await releaseSession();
         }
         const haptic = HAPTIC_FOR_LEVEL[level];
         if (haptic) await step(run, () => haptics.pattern(haptic));
@@ -291,8 +302,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       } else if (pending === 0) {
         // Through the queue, so it cannot race a decision delivered a moment later (P2-M1).
         await releaseViaQueue();
+      } else {
+        // An item is queued but not yet started. It releases on its way out — and if it exits
+        // without playing (dropped, or a skipped announcement), it pays the owed release (P2-N1).
+        releaseOwed = true;
       }
-      // Otherwise an item is queued but not yet started; it releases the session on its way out.
     },
 
     announce(key) {
@@ -304,7 +318,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           await step(run, () => audio.activate(sessionForL1()));
           await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
         } finally {
-          await bounded(() => audio.deactivate());
+          await releaseSession();
         }
       });
     },

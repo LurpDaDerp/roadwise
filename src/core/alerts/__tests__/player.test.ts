@@ -423,6 +423,57 @@ describe("alert player", () => {
     });
   });
 
+  describe("a release deferred to a queued item is never lost (P2-N1)", () => {
+    // The sequence the re-review names: a call ends (expo-audio re-activates the session), the
+    // host calls stopCurrent while an item is queued but not started, and that item then exits
+    // without playing. The session must still be released exactly once.
+    it("call ends → stopCurrent → the queued decision is dropped by deliverable(): released once", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      r.flags.deliverable = false;
+      // Several decisions queued at the role switch, so they are still queued when stopCurrent
+      // decides whether to release itself or leave it to them.
+      const delivering = [1, 2, 3].map((n) =>
+        player.deliver(decision(1, { id: `q${n}` })),
+      );
+      const stopping = player.stopCurrent();
+      await Promise.all([...delivering, stopping]);
+      expect(r.calls.some((c) => c.startsWith("play"))).toBe(false);
+      expect(count(r.calls, "deactivate")).toBe(1);
+    });
+
+    it("call ends → stopCurrent → the queued announcement is skipped (voice off, or on a call): released once", async () => {
+      for (const skip of ["voiceOff", "onCall"] as const) {
+        const r = rig();
+        const player = createAlertPlayer(r.deps);
+        if (skip === "voiceOff") r.flags.voice = false;
+        else r.flags.call = true;
+        const announcing = [1, 2, 3].map(() =>
+          player.announce("alert.recording"),
+        );
+        const stopping = player.stopCurrent();
+        await Promise.all([...announcing, stopping]);
+        expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
+        expect(count(r.calls, "deactivate")).toBe(1);
+      }
+    });
+
+    it("an owed release is paid once, not again by a later item that plays", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      r.flags.deliverable = false;
+      const dropped = [1, 2, 3].map((n) =>
+        player.deliver(decision(1, { id: `q${n}` })),
+      );
+      const stopping = player.stopCurrent();
+      await Promise.all([...dropped, stopping]);
+      r.flags.deliverable = true;
+      await player.deliver(decision(2));
+      // one for the owed release, one for the L2 itself
+      expect(count(r.calls, "deactivate")).toBe(2);
+    });
+  });
+
   describe("an idle long press cannot race the next alert (P2-M1)", () => {
     it("a long press just after a decision is delivered leaves the release to that decision", async () => {
       const r = rig();
