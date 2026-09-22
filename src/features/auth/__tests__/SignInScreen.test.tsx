@@ -5,7 +5,7 @@ import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { DataProvider } from '@/data/queries/context';
 import { SAFETY_DISCLAIMER } from '@/features/auth/legal';
-import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
+import { LINK_VISIT_KEY, PENDING_TERMS_KEY, currentSignInVisit } from '@/features/auth/pendingConsent';
 import { SignInScreen } from '@/features/auth/SignInScreen';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -221,13 +221,14 @@ describe('A3: the disclaimer and terms tick', () => {
   test('unticking clears the Terms acceptance and disables the buttons again', async () => {
     await mount();
     await tick();
+    executed.length = 0; // the visit's own start-up clear is not the untick's
     await fireEvent.press(screen.getByRole('checkbox'));
     await waitFor(() => expect(screen.getByRole('checkbox')).not.toBeChecked());
     expect(screen.getByRole('button', APPLE)).toBeDisabled();
-    // clearTermsAccepted: the Terms acceptance goes; the disclaimer acknowledgement is a device
-    // preference and stays.
+    // clearTermsAccepted: the Terms acceptance goes, with any link it was handed to; the
+    // disclaimer acknowledgement is a device preference and stays.
     const removed = executed.filter((e) => e.sql.startsWith('DELETE')).map((e) => e.params[0]);
-    expect(removed).toEqual([PENDING_TERMS_KEY]);
+    expect(removed).toEqual([PENDING_TERMS_KEY, LINK_VISIT_KEY]);
   });
 
   test('a save that fails leaves it unticked and says so', async () => {
@@ -280,5 +281,53 @@ describe('magic-link rate limit', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
     expect(screen.queryByText(/Too many sign-in emails/)).toBeNull();
+  });
+});
+
+describe('each visit is its own (T17 round 2)', () => {
+  test('a new visit starts unticked, with a new visit token', async () => {
+    mockConfig.config = PUBLISHED;
+    const first = await mount();
+    const firstVisit = currentSignInVisit();
+    expect(firstVisit).not.toBeNull();
+    await tick();
+    await first.unmount();
+
+    executed.length = 0;
+    await mount();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(currentSignInVisit()).not.toBe(firstVisit);
+    // The link an earlier visit was waiting on is forgotten.
+    await waitFor(() =>
+      expect(
+        executed.some((e) => /DELETE FROM settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY)
+      ).toBe(true)
+    );
+  });
+
+  test('sending a magic link hands this visit to the link, before the email is sent', async () => {
+    const order: string[] = [];
+    mockSend.mockImplementation(async () => {
+      order.push(
+        executed.some((e) => /INSERT OR REPLACE INTO settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY)
+          ? 'send after hand-off'
+          : 'send before hand-off'
+      );
+      return 'sent';
+    });
+    await mount();
+    await tick();
+    const visit = currentSignInVisit();
+    executed.length = 0;
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', EMAIL));
+    });
+    await waitFor(() => expect(mockSend).toHaveBeenCalled());
+    expect(order).toEqual(['send after hand-off']);
+    const handOff = executed.find(
+      (e) => /INSERT OR REPLACE INTO settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY
+    );
+    expect(handOff?.params[1]).toBe(JSON.stringify(visit));
   });
 });

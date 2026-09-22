@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -17,7 +17,14 @@ import { Button, Screen, Text, useTheme } from '@/ui';
 
 import { DISCLAIMER_VERSION, legalState, SAFETY_DISCLAIMER, type LegalState } from './legal';
 import { LegalLinks } from './LegalLinks';
-import { clearTermsAccepted, markTermsAccepted } from './pendingConsent';
+import {
+  clearTermsAccepted,
+  currentSignInVisit,
+  forgetLinkVisit,
+  handVisitToLink,
+  markTermsAccepted,
+  startSignInVisit,
+} from './pendingConsent';
 import { useAppleSignIn } from './useAppleSignIn';
 import { useGoogleSignIn } from './useGoogleSignIn';
 import { useMagicLink } from './useMagicLink';
@@ -73,6 +80,14 @@ export function SignInScreen() {
   const [saving, setSaving] = useState(false);
   const agreed = tickedFor === subject;
 
+  // Every visit to this screen is a new visit (T17 round 2): the box starts unticked, a tick is
+  // stored with this visit's in-memory token, and no tick from an earlier visit — or a link an
+  // earlier visit was waiting on — is honoured any more. See `pendingConsent.ts`.
+  useEffect(() => {
+    startSignInVisit();
+    void forgetLinkVisit(settings);
+  }, [settings]);
+
   const toggle = async () => {
     if (saving || !ready) return;
     setError(null);
@@ -108,7 +123,13 @@ export function SignInScreen() {
       setBusy(null);
     }
   };
-  const submit = run('email', () => magic.send(email.trim()));
+  // The link may reopen the app after it was closed, which forgets the in-memory visit: hand this
+  // visit to the link first, so the tick made here is still honoured when it lands.
+  const submit = run('email', async () => {
+    const visit = currentSignInVisit();
+    if (visit) await handVisitToLink(settings, visit);
+    return magic.send(email.trim());
+  });
   // `available` only ever turns true on iOS, and it resolves a tick after the first paint, so the
   // platform check is what keeps the button from popping into the stack under the driver's thumb.
   const showApple = Platform.OS === 'ios' || apple.available;

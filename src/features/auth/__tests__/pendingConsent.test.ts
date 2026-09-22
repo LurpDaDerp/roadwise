@@ -7,8 +7,13 @@ import { DISCLAIMER_VERSION, legalState, type LegalState } from '@/features/auth
 import {
   DISCLAIMER_ACK_KEY,
   PENDING_TERMS_KEY,
+  LINK_VISIT_KEY,
   PENDING_TERMS_TTL_MS,
   bindPendingTerms,
+  currentSignInVisit,
+  forgetLinkVisit,
+  handVisitToLink,
+  startSignInVisit,
   clearTermsAccepted,
   flushPendingConsents,
   hasCurrentTerms,
@@ -57,12 +62,14 @@ beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
   settings = createSettingsRepo(db);
+  // Every tick below is made on a sign-in screen visit, as the app makes them (T17 round 2).
+  startSignInVisit();
 });
 
 describe('markTermsAccepted', () => {
   test('published: keeps the accepted versions for the account, and the disclaimer acknowledgement', async () => {
     await markTermsAccepted(settings, published);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
     await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
   });
 
@@ -153,7 +160,7 @@ describe('flushPendingConsents', () => {
       });
 
     await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
 
     await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['privacy'] });
     expect(rows.map((r) => r.type)).toEqual(['tos', 'privacy']);
@@ -165,13 +172,13 @@ describe('flushPendingConsents', () => {
     fetchConsents.mockRejectedValueOnce(new Error('offline'));
     await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
     expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
   });
 
   test('an acceptance older than its lifetime records nothing and is dropped', async () => {
     const ticked = Date.parse('2026-09-22T10:00:00Z');
     await markTermsAccepted(settings, published, () => ticked);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: ticked });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: ticked, visit: expect.any(String) });
     const { api, fetchConsents, recordConsent } = fakeServer();
 
     const late = () => ticked + PENDING_TERMS_TTL_MS + 1;
@@ -314,6 +321,84 @@ describe('a tick is bound to the account it was given for (T17 security M-1)', (
     await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
     await settings.set(PENDING_TERMS_KEY, { tos: 1 });
     await bindPendingTerms(settings, 'u1');
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+});
+
+describe('a tick is honoured only by the visit that made it (T17 round 2)', () => {
+  test('the tick carries the current visit', async () => {
+    await markTermsAccepted(settings, published);
+    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ visit: currentSignInVisit() });
+  });
+
+  test('a tick from an earlier visit is never recorded', async () => {
+    await markTermsAccepted(settings, published);
+    startSignInVisit(); // someone opens the sign-in screen again
+    const { api, fetchConsents, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
+    expect(fetchConsents).not.toHaveBeenCalled();
+    expect(recordConsent).not.toHaveBeenCalled();
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+
+  test('a tick with no visit (an older build, or not made on the screen) is never recorded', async () => {
+    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: Date.now() });
+    const { api, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
+    expect(recordConsent).not.toHaveBeenCalled();
+  });
+
+  /** The same module loaded afresh: what a magic link reopening a killed app sees (no visit in memory). */
+  function freshProcess(): typeof import('@/features/auth/pendingConsent') {
+    let fresh: typeof import('@/features/auth/pendingConsent') | undefined;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- a second copy of the module
+      fresh = require('@/features/auth/pendingConsent') as typeof import('@/features/auth/pendingConsent');
+    });
+    if (!fresh) throw new Error('module not loaded');
+    return fresh;
+  }
+
+  test('the magic-link path: a tick handed to the link is recorded after the app is reopened by it', async () => {
+    await markTermsAccepted(settings, published);
+    await handVisitToLink(settings, currentSignInVisit() as string);
+    const reopened = freshProcess();
+    expect(reopened.currentSignInVisit()).toBeNull();
+    const { api, recordConsent } = fakeServer();
+    await expect(reopened.flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
+      recorded: ['tos', 'privacy'],
+    });
+    expect(recordConsent).toHaveBeenCalledTimes(2);
+    // Used once: the link visit goes with the tick.
+    await expect(settings.get(LINK_VISIT_KEY)).resolves.toBeNull();
+  });
+
+  test('without the hand-off, a reopened app honours no tick', async () => {
+    await markTermsAccepted(settings, published);
+    const { api, recordConsent } = fakeServer();
+    await expect(freshProcess().flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
+      recorded: [],
+    });
+    expect(recordConsent).not.toHaveBeenCalled();
+  });
+
+  test('a new visit forgets the link an earlier visit was waiting on', async () => {
+    await markTermsAccepted(settings, published);
+    await handVisitToLink(settings, currentSignInVisit() as string);
+    startSignInVisit();
+    await forgetLinkVisit(settings);
+    const { api, recordConsent } = fakeServer();
+    await expect(freshProcess().flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
+      recorded: [],
+    });
+    expect(recordConsent).not.toHaveBeenCalled();
+  });
+
+  test('an untick or sign-out clears the link visit with the tick', async () => {
+    await markTermsAccepted(settings, published);
+    await handVisitToLink(settings, currentSignInVisit() as string);
+    await clearTermsAccepted(settings);
+    await expect(settings.get(LINK_VISIT_KEY)).resolves.toBeNull();
     await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
   });
 });

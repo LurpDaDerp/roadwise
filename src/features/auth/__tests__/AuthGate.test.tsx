@@ -7,7 +7,7 @@ import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { AuthGate, flushSignedInConsents } from '@/features/auth/AuthGate';
 import { DISCLAIMER_VERSION, legalState } from '@/features/auth/legal';
-import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
+import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY, startSignInVisit } from '@/features/auth/pendingConsent';
 import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
@@ -332,7 +332,7 @@ describe('flushSignedInConsents', () => {
   }
 
   test('records a pending published acceptance and merges the disclaimer', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now() });
+    await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now(), visit: startSignInVisit() });
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     const consentApi = api();
     const updateProfile = jest.fn(async () => ({}));
@@ -371,7 +371,7 @@ describe('flushSignedInConsents', () => {
   });
 
   test('a failed consent write still merges the disclaimer, then rejects', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now() });
+    await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now(), visit: startSignInVisit() });
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     const consentApi = { fetchConsents: jest.fn(async () => { throw new Error('offline'); }), recordConsent: jest.fn() };
     const updateProfile = jest.fn(async () => ({}));

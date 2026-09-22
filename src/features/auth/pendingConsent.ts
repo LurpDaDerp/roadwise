@@ -54,7 +54,59 @@ export interface ConsentApi {
 }
 
 /** The accepted versions, and when (epoch ms) they were accepted. */
-type PendingTerms = Record<TermsType, string> & { at: number; uid?: string };
+type PendingTerms = Record<TermsType, string> & { at: number; uid?: string; visit?: string };
+
+// ---------------------------------------------------------------------------------------------
+// The sign-in visit (T17 round 2, consent integrity). A tick is honoured only by the visit to the
+// sign-in screen that made it, so a different person can never inherit an unused one.
+//
+// - Each time the sign-in screen mounts it starts a visit: a fresh random token held IN MEMORY
+//   (`startSignInVisit`). The box starts unticked, and a tick is stored with that token.
+// - The flush honours a stored tick only when its token is the current in-memory visit. A new
+//   visit replaces the token, so every earlier tick is dead; so does a new process, which has none.
+// - The magic-link path: the link may reopen the app after the process was killed, which loses the
+//   in-memory token. So "Email me a link" hands the visit to that link (`handVisitToLink`): the
+//   token is written to `auth.linkVisit`, and a stored tick whose token matches it is honoured too.
+//   Only the one most recent link's visit is kept; a new visit to the sign-in screen, an untick and
+//   every sign-out remove it. The link itself can only complete on this device and only for the
+//   inbox it was sent to (PKCE: the code verifier never leaves the phone), so a stored link visit
+//   can only be consumed by the flow that created it.
+// ---------------------------------------------------------------------------------------------
+
+/** Settings key: the sign-in visit a magic link was sent from (a token, or absent). */
+export const LINK_VISIT_KEY = 'auth.linkVisit';
+
+let currentVisit: string | null = null;
+
+const newVisitToken = (): string =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+
+/** The sign-in screen mounted: a new visit, and every earlier tick is no longer honoured. */
+export function startSignInVisit(): string {
+  currentVisit = newVisitToken();
+  return currentVisit;
+}
+
+/** The visit in progress in this process, or null (none, or the process was restarted). */
+export function currentSignInVisit(): string | null {
+  return currentVisit;
+}
+
+/** A new visit forgets the link an earlier visit was waiting on. Never rejects. */
+export async function forgetLinkVisit(settings: SettingsRepo): Promise<void> {
+  await settings.remove(LINK_VISIT_KEY).catch(() => false);
+}
+
+/** "Email me a link": the link that reopens the app belongs to this visit's flow. */
+export async function handVisitToLink(settings: SettingsRepo, visit: string): Promise<void> {
+  await settings.set(LINK_VISIT_KEY, visit);
+}
+
+async function honouredVisit(settings: SettingsRepo, visit: unknown): Promise<boolean> {
+  if (typeof visit !== 'string' || visit.length === 0) return false;
+  if (visit === currentVisit) return true;
+  return (await settings.get<unknown>(LINK_VISIT_KEY)) === visit;
+}
 
 const defaultApi: ConsentApi = {
   async fetchConsents(userId) {
@@ -76,7 +128,9 @@ const isPendingTerms = (v: unknown): v is PendingTerms =>
   typeof (v as Record<string, unknown>).privacy === 'string' &&
   typeof (v as Record<string, unknown>).at === 'number' &&
   ((v as Record<string, unknown>).uid === undefined ||
-    typeof (v as Record<string, unknown>).uid === 'string');
+    typeof (v as Record<string, unknown>).uid === 'string') &&
+  ((v as Record<string, unknown>).visit === undefined ||
+    typeof (v as Record<string, unknown>).visit === 'string');
 
 /**
  * A driver signed in: a tick still waiting for its sign-in becomes this account's. A tick already
@@ -110,10 +164,17 @@ const holds = (consents: readonly ConsentRow[], type: TermsType, version: string
 export async function markTermsAccepted(
   settings: SettingsRepo,
   legal: LegalState,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  visit: string | null = currentVisit
 ): Promise<void> {
   if (legal.published && legal.tos && legal.privacy) {
-    const pending: PendingTerms = { tos: legal.tos.version, privacy: legal.privacy.version, at: now() };
+    // With no visit (not made on the sign-in screen) the tick is stored but never honoured.
+    const pending: PendingTerms = {
+      tos: legal.tos.version,
+      privacy: legal.privacy.version,
+      at: now(),
+      ...(visit ? { visit } : {}),
+    };
     await settings.set(PENDING_TERMS_KEY, pending);
   } else {
     await settings.remove(PENDING_TERMS_KEY);
@@ -127,6 +188,7 @@ export async function markTermsAccepted(
  */
 export async function clearTermsAccepted(settings: SettingsRepo): Promise<void> {
   await settings.remove(PENDING_TERMS_KEY);
+  await settings.remove(LINK_VISIT_KEY);
 }
 
 /**
@@ -158,6 +220,8 @@ export async function flushPendingConsents(
     // Bound to another account: never this account's consent. Unbound: this is the sign-in it
     // was ticked for.
     (pending.uid === undefined || pending.uid === userId) &&
+    // Made in this visit to the sign-in screen, or in the visit a magic link was sent from.
+    (await honouredVisit(settings, pending.visit)) &&
     TERMS_TYPES.every((type) => pending[type] === current[type]);
   if (!usable) {
     await settings.remove(PENDING_TERMS_KEY);
@@ -172,6 +236,7 @@ export async function flushPendingConsents(
     recorded.push(type);
   }
   await settings.remove(PENDING_TERMS_KEY);
+  await settings.remove(LINK_VISIT_KEY);
   return { recorded };
 }
 
