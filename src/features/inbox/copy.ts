@@ -85,6 +85,16 @@ export const inboxCopy = {
       },
     },
     /**
+     * Always lost while that was not a fault (final review I4): auto-record off by the driver's
+     * choice, or withdrawn by the server. B2 calls this "Your choice"; so this row never asks to fix
+     * anything — past tense, and what it means now, with no imperative.
+     */
+    excused: {
+      title: 'Location was changed from Always',
+      body: (day: string) =>
+        `On ${day}, location was changed from Always. Auto-record isn’t in use, so nothing needs to change.`,
+    },
+    /**
      * Reported under a different install id (review n2, n4): a phone signed in to the account —
      * possibly this one before a reinstall or a handover, so never "another phone". This phone's
      * permissions say nothing about it, so there is nothing here to check.

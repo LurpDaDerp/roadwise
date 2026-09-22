@@ -143,6 +143,13 @@ export interface ServerPermissions {
   reportedFrom: ReportedFrom;
   /** True when the change was observed on return from B2's own Open Settings (no lapse item). */
   ack: boolean;
+  /**
+   * Losing Always is excused now: auto-record off by the driver's choice (manual mode), or withdrawn
+   * by the server (`auto_detect` off) — `isAlwaysExcused`, the health model's own excuse (final
+   * review I4). 0007's lapse trigger raises no `location_always` lapse while it is true. Absent in a
+   * report written before it existed: read as false.
+   */
+  alwaysExcused?: boolean;
   /** ISO 8601 */
   checkedAt: string;
 }

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 
@@ -180,7 +180,7 @@ export type PermissionHealth =
       refresh: () => Promise<void>;
     };
 
-interface Read {
+export interface PermissionHealthRead {
   snapshot: PermissionSnapshot;
   manualByChoice: boolean;
   everGranted: EverGranted;
@@ -194,6 +194,50 @@ interface Read {
  * (a read before and a read after a trip to Settings). Keyed by account, so a handover reads anew.
  */
 export const permissionHealthKey = (uid: string | null) => ['permissions', 'health', uid ?? ''] as const;
+
+/** One read of the phone and the settings it is judged with; null when the phone can't be read. */
+export async function readPermissionHealth(
+  adapter: Pick<PermissionsAdapter, 'snapshot'>,
+  settings: Pick<SettingsRepo, 'get' | 'set'>
+): Promise<PermissionHealthRead | null> {
+  try {
+    const snapshot = await adapter.snapshot();
+    const prev = (await settings.get<EverGranted>(EVER_GRANTED_KEY)) ?? {};
+    const everGranted = nextEverGranted(prev, snapshot);
+    if (everGranted !== prev) await settings.set(EVER_GRANTED_KEY, everGranted);
+    const manualByChoice = (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true;
+    const affirmation = await settings.get<unknown>(DISCLOSURE_AFFIRMED_KEY);
+    return { snapshot, manualByChoice, everGranted, affirmation };
+  } catch {
+    return null;
+  }
+}
+
+/** A shared read no older than this is reused by another reader (the foreground's burst). */
+export const SHARED_READ_MS = 2_000;
+
+/**
+ * The shared snapshot for a reader outside React's query hooks (`DeviceHost`, final review m4):
+ * through the same query as B2 and Home, so a foreground makes one phone read, not one per
+ * reader. With no query client (a bare test tree) it reads directly. Null when it can't be read.
+ */
+export async function sharedPermissionSnapshot(
+  queryClient: QueryClient | null,
+  uid: string | null,
+  adapter: Pick<PermissionsAdapter, 'snapshot'>,
+  settings: Pick<SettingsRepo, 'get' | 'set'>
+): Promise<PermissionSnapshot | null> {
+  const read = queryClient
+    ? await queryClient.fetchQuery({
+        queryKey: permissionHealthKey(uid),
+        queryFn: () => readPermissionHealth(adapter, settings),
+        staleTime: SHARED_READ_MS,
+        gcTime: 0,
+        retry: false,
+      })
+    : await readPermissionHealth(adapter, settings);
+  return read?.snapshot ?? null;
+}
 
 /**
  * B2's model for the screen and the Home banner. The phone is read on mount and on every return
@@ -220,20 +264,7 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
   const queryClient = useQueryClient();
   const key = useMemo(() => permissionHealthKey(userId), [userId]);
 
-  /** One read of the phone and the settings it is judged with; null when the phone can't be read. */
-  const fetchRead = useCallback(async (): Promise<Read | null> => {
-    try {
-      const snapshot = await adapter.snapshot();
-      const prev = (await settings.get<EverGranted>(EVER_GRANTED_KEY)) ?? {};
-      const everGranted = nextEverGranted(prev, snapshot);
-      if (everGranted !== prev) await settings.set(EVER_GRANTED_KEY, everGranted);
-      const manualByChoice = (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true;
-      const affirmation = await settings.get<unknown>(DISCLOSURE_AFFIRMED_KEY);
-      return { snapshot, manualByChoice, everGranted, affirmation };
-    } catch {
-      return null;
-    }
-  }, [adapter, settings]);
+  const fetchRead = useCallback(() => readPermissionHealth(adapter, settings), [adapter, settings]);
 
   const query = useQuery({
     queryKey: key,

@@ -322,3 +322,37 @@ describe('DeviceHost', () => {
     expect(tokenListeners.size).toBe(0);
   });
 });
+
+describe('final review m4: one permission read per foreground, shared with B2 and Home', () => {
+  it('a fresh shared read is reused: the host reports it without reading the phone again', async () => {
+    const { QueryClient, QueryClientProvider } = jest.requireActual<typeof import('@tanstack/react-query')>(
+      '@tanstack/react-query'
+    );
+    const { permissionHealthKey } = jest.requireActual<typeof import('@/features/permissions/usePermissionHealth')>(
+      '@/features/permissions/usePermissionHealth'
+    );
+    const client = new QueryClient();
+    // What Home's banner read a moment ago, on this same foreground.
+    client.setQueryData(permissionHealthKey('user-a'), {
+      snapshot: snapshot({ location: 'foreground' }),
+      manualByChoice: false,
+      everGranted: {},
+      affirmation: null,
+    });
+    const reads = jest.fn(async () => snapshot());
+    const onForeground = jest.fn();
+    await render(<DeviceHost deps={{ ...deps(), adapter: { snapshot: reads } }} onForeground={onForeground} />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={client}>
+          <Wrapper>{children}</Wrapper>
+        </QueryClientProvider>
+      ),
+    });
+    await waitFor(() => expect(onForeground).toHaveBeenCalledWith('user-a'));
+    expect(reads).not.toHaveBeenCalled();
+    expect(fake.to('devices').find((c) => c.op === 'update')?.values).toMatchObject({
+      permissions: expect.objectContaining({ location: 'foreground' }),
+    });
+    client.clear();
+  });
+});

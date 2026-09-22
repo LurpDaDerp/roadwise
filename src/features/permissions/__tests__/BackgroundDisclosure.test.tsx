@@ -423,3 +423,11 @@ test('a read failure is an inline error with a retry', async () => {
   await press(screen.getByText('Try again'));
   expect(await screen.findByTestId('disclosure-continue')).toBeOnTheScreen();
 });
+
+test('final review m7: with Always already granted nothing is shown, so no prompt is stamped', async () => {
+  const adapter = fakeAdapter(snap({ location: 'always' }));
+  const { settings, onResult } = await renderDisclosure(adapter);
+  await press(await screen.findByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(await settings.get(PROMPTS_KEY)).toBeNull();
+});

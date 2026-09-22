@@ -26,6 +26,7 @@ export {
 } from './pushToken';
 export {
   createBackgroundPermissionReporter,
+  readAlwaysExcused,
   readReportedPermissions,
   REPORTED_PERMISSIONS_KEY,
   reportPermissions,

@@ -1,6 +1,6 @@
 export * from './types';
 export * from './keys';
-export { assessHealth, nextEverGranted } from './health';
+export { assessHealth, isAlwaysExcused, nextEverGranted } from './health';
 export {
   affirmationCovers,
   affirmationFor,

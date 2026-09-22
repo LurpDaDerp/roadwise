@@ -22,7 +22,8 @@
  * forward, a screen asking and a new token; each foreground is
  * local reads plus at most the writes something actually changed.
  */
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
+import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 
 import { createPermissionsAdapter, type PermissionsAdapter } from '@/core/permissions';
@@ -32,11 +33,11 @@ import type { AppStateLike } from '@/data/foreground';
 import { useDataSource } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
 import { profileGate } from '@/features/auth/authGuard';
-import { takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
+import { sharedPermissionSnapshot, takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
 
 import { onDeviceSyncRequested } from './events';
 import { getInstallId } from './installId';
-import { readReportedPermissions, reportPermissions } from './permissionsReport';
+import { readAlwaysExcused, readReportedPermissions, reportPermissions } from './permissionsReport';
 import { createExpoPushPort, easProjectId, syncPushToken, type PushPort, type SyncPushResult } from './pushToken';
 import { readDeviceInfo, upsertDevice, type BaseDeviceInfo, type DevicesClient } from './register';
 
@@ -93,6 +94,9 @@ export function DeviceHost(props: DeviceHostProps): null {
           ? 'token'
           : 'off';
 
+  // The app's query client, when there is one: the permission read is shared with B2 and Home
+  // (final review m4), so a foreground reads the phone once.
+  const queryClient = useContext(QueryClientContext) ?? null;
   const latest = useRef(props);
   useLayoutEffect(() => {
     latest.current = props;
@@ -175,12 +179,9 @@ export function DeviceHost(props: DeviceHostProps): null {
 
       let snapshot = null;
       if (full) {
-        try {
-          snapshot = await d.adapter.snapshot();
-        } catch (error) {
-          // a failed read reports nothing, never a made-up state (T8)
-          report(error, 'devices permissions snapshot');
-        }
+        snapshot = await sharedPermissionSnapshot(queryClient, userId, d.adapter, settings);
+        // a failed read reports nothing, never a made-up state (T8)
+        if (snapshot === null) report(new Error('permission snapshot unreadable'), 'devices permissions snapshot');
         if (!live) return;
       }
 
@@ -196,8 +197,9 @@ export function DeviceHost(props: DeviceHostProps): null {
       if (snapshot) {
         const taken = snapshot;
         await step('devices permissions report', async () => {
+          const alwaysExcused = await readAlwaysExcused(db, taken);
           const result = await reportPermissions(
-            { userId, deviceId: id, snapshot: taken, reportedFrom: 'foreground', ack: 'settingsReturn' },
+            { userId, deviceId: id, snapshot: taken, reportedFrom: 'foreground', ack: 'settingsReturn', alwaysExcused },
             deps
           );
           // Back in the app with nothing changed: that Settings trip is over.
@@ -241,7 +243,7 @@ export function DeviceHost(props: DeviceHostProps): null {
       live = false;
       for (const cleanup of cleanups.splice(0)) cleanup();
     };
-  }, [mode, userId, db, now]);
+  }, [mode, userId, db, now, queryClient]);
 
   return null;
 }

@@ -64,10 +64,15 @@ export interface InboxLocal {
 export interface PermissionsNow {
   deviceId: string | null;
   snapshot: PermissionSnapshot | null;
+  /**
+   * Losing Always is excused now (the report's `readAlwaysExcused`, final review I4): auto-record
+   * off by choice, or withdrawn. Absent or null: not known, so nothing is excused.
+   */
+  alwaysExcused?: boolean | null;
 }
 
 /** Whether a reported lapse still holds on this phone now. */
-export type LapseNow = 'lapsed' | 'fixed' | 'unknown' | 'elsewhere';
+export type LapseNow = 'lapsed' | 'fixed' | 'unknown' | 'elsewhere' | 'excused';
 
 /**
  * The lapse re-checked against the phone's current permissions, with the server's own rule for
@@ -83,7 +88,9 @@ export function lapseNow(payload: PermissionLapsedPayload, current: PermissionsN
   const s = current.snapshot;
   switch (payload.permission) {
     case 'location_always':
-      return s.location === 'always' ? 'fixed' : 'lapsed';
+      if (s.location === 'always') return 'fixed';
+      // Not a fault while auto-record is off by choice or withdrawn (final review I4).
+      return current.alwaysExcused === true ? 'excused' : 'lapsed';
     case 'location':
       return s.location === 'always' || s.location === 'foreground' ? 'fixed' : 'lapsed';
     case 'motion':
@@ -192,7 +199,9 @@ export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: st
     const words =
       state === 'lapsed'
         ? base
-        : (() => {
+        : state === 'excused'
+          ? { title: copy.lapse.excused.title, body: copy.lapse.excused.body(formatTripDate(at, tz)) }
+          : (() => {
             const c = copy.lapse[state][lapse.data.permission];
             return { title: c.title, body: c.body(formatTripDate(at, tz)) };
           })();

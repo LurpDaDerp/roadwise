@@ -59,6 +59,18 @@ function alwaysExcuse(s: PermissionSnapshot, c: HealthContext): Excuse | null {
   return null;
 }
 
+/**
+ * Whether losing Always is excused right now — the one excuse function (T8 I1), shared with the
+ * permissions report (final review I4: `alwaysExcused`), so the server raises no lapse, and the
+ * inbox calls nothing a fault, for a state B2 shows as a choice.
+ */
+export function isAlwaysExcused(
+  s: Pick<PermissionSnapshot, 'platform'>,
+  c: Pick<HealthContext, 'autoDetectAvailable' | 'firstDriveDone' | 'manualByChoice' | 'autoDetectOn'>
+): boolean {
+  return alwaysExcuse(s as PermissionSnapshot, c as HealthContext) !== null;
+}
+
 function alwaysRow(s: PermissionSnapshot, c: HealthContext): HealthRow {
   if (s.location === 'always') return { id: 'locationAlways', status: 'ok', fix: 'none' };
   const excuse = alwaysExcuse(s, c);

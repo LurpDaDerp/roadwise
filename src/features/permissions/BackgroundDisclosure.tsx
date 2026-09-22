@@ -213,7 +213,9 @@ export function BackgroundDisclosure({
         return;
       }
       const access = await adapter.requestLocationAlways({ firstDriveDone });
-      await recordPrompt(settings, 'locationAlways', now());
+      // Stamped only when the OS was actually asked (final review m7): the adapter asks only from
+      // While Using; with Always already granted nothing was shown, and the history must not say so.
+      if (snapshot.location === 'foreground') await recordPrompt(settings, 'locationAlways', now());
       if (access === 'always') {
         await granted();
       } else {

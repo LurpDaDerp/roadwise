@@ -26,8 +26,19 @@ describe('toServerPermissions', () => {
       batteryOptimization: 'exempt',
       reportedFrom: 'foreground',
       ack: false,
+      alwaysExcused: false,
       checkedAt: '2026-09-22T12:00:00.000Z',
     });
+  });
+
+  it('final review I4: carries alwaysExcused, and a change of it alone changes the fingerprint', () => {
+    const wanted = toServerPermissions(snap(), 'foreground', false, false);
+    const excused = toServerPermissions(snap(), 'foreground', false, true);
+    expect(excused.alwaysExcused).toBe(true);
+    expect(permissionsFingerprint(excused)).not.toBe(permissionsFingerprint(wanted));
+    // A report stored before the field existed reads as not excused: no spurious re-report.
+    const { alwaysExcused: _dropped, ...legacy } = wanted;
+    expect(permissionsFingerprint(legacy)).toBe(permissionsFingerprint(wanted));
   });
 
   it('carries ack and reportedFrom', () => {

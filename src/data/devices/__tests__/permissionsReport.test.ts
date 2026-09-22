@@ -16,6 +16,7 @@ import { createFakeSupabase, type FakeSupabase } from '../__fixtures__/fakeSupab
 import { INSTALL_ID_KEY } from '../installId';
 import {
   createBackgroundPermissionReporter,
+  readAlwaysExcused,
   REPORTED_PERMISSIONS_KEY,
   reportPermissions,
   reportPermissionsFromBackground,
@@ -168,12 +169,113 @@ describe('reportPermissions', () => {
   });
 });
 
+describe('final review I4: alwaysExcused', () => {
+  const ctx = async (over: { autoDetect?: boolean; manual?: boolean; flag?: boolean } = {}) => {
+    const s = settings();
+    if (over.autoDetect !== undefined) await s.set('drive.autoDetect', over.autoDetect);
+    if (over.manual !== undefined) await s.set('permissions.manualByChoice', over.manual);
+    if (over.flag !== undefined) await s.set('config.app', { fetchedAt: T0, flags: { auto_detect: over.flag } });
+  };
+
+  it('auto-record wanted and offered: not excused', async () => {
+    await ctx({ autoDetect: true });
+    expect(await readAlwaysExcused(db, snap())).toBe(false);
+  });
+
+  it.each([
+    ['auto-record off (the driver’s choice)', { autoDetect: false }],
+    ['manual by choice', { autoDetect: true, manual: true }],
+    ['the auto_detect flag withdrawn', { autoDetect: true, flag: false }],
+  ] as const)('%s: excused', async (_label, over) => {
+    await ctx(over);
+    expect(await readAlwaysExcused(db, snap())).toBe(true);
+  });
+
+  it('an excused Always → While Using is reported with alwaysExcused: true', async () => {
+    await ctx({ autoDetect: true, manual: true });
+    const always = snap({ location: 'always' });
+    await reportPermissions(
+      { userId: 'user-a', deviceId: 'install-1', snapshot: always, reportedFrom: 'foreground', ack: false, alwaysExcused: await readAlwaysExcused(db, always) },
+      { supabase: fake.client, settings: settings(), now: () => now }
+    );
+    const whileUsing = snap({ location: 'foreground' });
+    expect(
+      await reportPermissions(
+        {
+          userId: 'user-a',
+          deviceId: 'install-1',
+          snapshot: whileUsing,
+          reportedFrom: 'foreground',
+          ack: false,
+          alwaysExcused: await readAlwaysExcused(db, whileUsing),
+        },
+        { supabase: fake.client, settings: settings(), now: () => now }
+      )
+    ).toBe('reported');
+    expect(written().at(-1)).toMatchObject({ location: 'foreground', alwaysExcused: true });
+  });
+
+  it('a change of the excuse alone is reported (it is in the fingerprint), so the server knows before the next change', async () => {
+    const same = snap({ location: 'always' });
+    const report = (alwaysExcused: boolean) =>
+      reportPermissions(
+        { userId: 'user-a', deviceId: 'install-1', snapshot: same, reportedFrom: 'foreground', ack: false, alwaysExcused },
+        { supabase: fake.client, settings: settings(), now: () => now }
+      );
+    expect(await report(false)).toBe('reported');
+    expect(await report(false)).toBe('unchanged');
+    expect(await report(true)).toBe('reported');
+    expect(written().at(-1)).toMatchObject({ alwaysExcused: true });
+  });
+
+  it('every report carries alwaysExcused explicitly (true or false, never omitted)', async () => {
+    await reportPermissions(
+      { userId: 'user-a', deviceId: 'install-1', snapshot: snap(), reportedFrom: 'foreground', ack: false },
+      { supabase: fake.client, settings: settings(), now: () => now }
+    );
+    expect(written().at(-1)).toHaveProperty('alwaysExcused', false);
+  });
+
+  it('contract (b9679a8): excused, then auto-record turned on, then Always lost — the lapse write carries alwaysExcused: false with location foreground', async () => {
+    const report = async (snapshot: PermissionSnapshot) =>
+      reportPermissions(
+        {
+          userId: 'user-a',
+          deviceId: 'install-1',
+          snapshot,
+          reportedFrom: 'foreground',
+          ack: false,
+          alwaysExcused: await readAlwaysExcused(db, snapshot),
+        },
+        { supabase: fake.client, settings: settings(), now: () => now }
+      );
+    // Manual mode with Always: excused.
+    await ctx({ autoDetect: false });
+    expect(await report(snap({ location: 'always' }))).toBe('reported');
+    expect(written().at(-1)).toMatchObject({ location: 'always', alwaysExcused: true });
+    // The driver turns auto-record on: no longer excused, and the server is told.
+    await ctx({ autoDetect: true });
+    expect(await report(snap({ location: 'always' }))).toBe('reported');
+    expect(written().at(-1)).toMatchObject({ location: 'always', alwaysExcused: false });
+    // Always is lost: the lapse write itself says it is not excused, so no stale true can mute it.
+    expect(await report(snap({ location: 'foreground' }))).toBe('reported');
+    expect(written().at(-1)).toMatchObject({ location: 'foreground', alwaysExcused: false });
+  });
+
+  it('a settings read that fails counts as not excused: a real lapse is never hidden', async () => {
+    const broken = { ...db, execute: async () => { throw new Error('disk'); } } as unknown as typeof db;
+    expect(await readAlwaysExcused(broken, snap())).toBe(false);
+  });
+});
+
 describe('reportPermissionsFromBackground', () => {
   async function seedDevice(owner = 'user-a') {
     const s = settings();
     await s.set(LAST_USER_KEY, owner);
     await s.set(INSTALL_ID_KEY, 'install-1');
     await s.set(LAST_UPSERT_KEY, { userId: owner, deviceId: 'install-1', at: T0, appVersion: '2.0.0', fingerprint: null });
+    // A driver who wants auto-record: losing Always would be a real lapse (final review I4).
+    await s.set('drive.autoDetect', true);
     // the foreground has reported once: only an onboarded account's host does that
     const permissions = toServerPermissions(snap(), 'foreground');
     await s.set(REPORTED_PERMISSIONS_KEY, {

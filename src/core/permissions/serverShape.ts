@@ -6,7 +6,8 @@ import type { PermissionSnapshot, ReportedFrom, ServerPermissions } from './type
 export function toServerPermissions(
   s: PermissionSnapshot,
   reportedFrom: ReportedFrom,
-  ack = false
+  ack = false,
+  alwaysExcused = false
 ): ServerPermissions {
   return {
     v: 1,
@@ -18,6 +19,7 @@ export function toServerPermissions(
     batteryOptimization: s.batteryOptimization,
     reportedFrom,
     ack,
+    alwaysExcused,
     checkedAt: new Date(s.checkedAt).toISOString(),
   };
 }
@@ -25,11 +27,13 @@ export function toServerPermissions(
 type Fingerprinted = Pick<
   PermissionSnapshot,
   'location' | 'precise' | 'notifications' | 'batteryOptimization'
-> & { motion?: PermissionSnapshot['motion'] };
+> & { motion?: PermissionSnapshot['motion']; alwaysExcused?: boolean };
 
 /**
  * A stable key over the reported permission states only — not the time, Low Power Mode,
- * can-ask-again, `reportedFrom` or `ack` — so a report is sent only when a permission changed.
+ * can-ask-again, `reportedFrom` or `ack` — so a report is sent only when a permission changed, or
+ * when whether losing Always is excused changed (final review I4: the server must know before the
+ * next Always → While Using).
  * Accepts a snapshot or a `ServerPermissions` alike.
  */
 export function permissionsFingerprint(p: Fingerprinted): string {
@@ -40,5 +44,6 @@ export function permissionsFingerprint(p: Fingerprinted): string {
     p.motion ?? 'null',
     p.notifications,
     p.batteryOptimization,
+    p.alwaysExcused === true ? 'excused' : 'wanted',
   ].join('|');
 }

@@ -118,10 +118,14 @@ describe('InboxScreen', () => {
       checkedAt: T0,
     });
 
-    async function renderLapse(read: () => Promise<PermissionSnapshot>) {
+    async function renderLapse(read: () => Promise<PermissionSnapshot>, opts: { excused?: boolean } = {}) {
       const row = lapse();
       const w = await inboxWorld();
       await createSettingsRepo(w.db).set(INSTALL_ID_KEY, DEVICE);
+      // A driver who wants auto-record (so losing Always is a real lapse), unless the test says
+      // they chose manual mode (final review I4).
+      await createSettingsRepo(w.db).set('drive.autoDetect', true);
+      if (opts.excused) await createSettingsRepo(w.db).set('permissions.manualByChoice', true);
       const server = fakeApi([row]);
       const permissions = { snapshot: jest.fn(read) };
       await w.render(<InboxScreen deps={{ api: server.api, permissions }} tz="UTC" />);
@@ -134,6 +138,16 @@ describe('InboxScreen', () => {
       await press(screen.getByTestId(`inbox-row-${row.id}`));
       expect(mockRouter.push).toHaveBeenCalledWith('/permissions');
       await waitFor(() => expect(api.markInboxRead).toHaveBeenCalledWith([row.id]));
+    });
+
+    it('final review I4: lost while manual by choice — neutral words, never "Tap to fix", nothing called a fault', async () => {
+      await renderLapse(async () => snapshot('foreground'), { excused: true });
+      expect(await screen.findByText('Location was changed from Always')).toBeTruthy();
+      expect(
+        screen.getByText('On Mon, Jan 5, location was changed from Always. Auto-record isn’t in use, so nothing needs to change.')
+      ).toBeTruthy();
+      expect(screen.queryByText('Automatic recording is off')).toBeNull();
+      expect(screen.queryByText(/fix/i)).toBeNull();
     });
 
     it('fixed since: past tense, only the permission', async () => {
@@ -156,6 +170,7 @@ describe('InboxScreen', () => {
       const row = lapse();
       const w = await inboxWorld();
       await createSettingsRepo(w.db).set(INSTALL_ID_KEY, DEVICE);
+      await createSettingsRepo(w.db).set('drive.autoDetect', true);
       let location: PermissionSnapshot['location'] = 'foreground';
       const permissions = { snapshot: jest.fn(async () => snapshot(location)) };
       await w.render(<InboxScreen deps={{ api: fakeApi([row]).api, permissions, appState }} tz="UTC" />);

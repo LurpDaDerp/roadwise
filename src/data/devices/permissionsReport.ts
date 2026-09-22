@@ -20,7 +20,9 @@
  */
 import {
   EVER_GRANTED_KEY,
+  MANUAL_BY_CHOICE_KEY,
   createPermissionsAdapter,
+  isAlwaysExcused,
   nextEverGranted,
   permissionsFingerprint,
   toServerPermissions,
@@ -31,12 +33,15 @@ import {
   type ServerPermissions,
 } from '@/core/permissions';
 import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
+import { readFlag } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import type { Database } from '@/data/supabase/types';
 import { markSettingsReturn, takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
 import { normaliseZone } from '@/core/engine/finalize';
 import { readLocalSent } from '@/notifications/localDelivery';
+import { AUTO_DETECT_SETTING_KEY } from '@/drive/policy';
+import { deviceZone } from '@/lib/deviceZone';
 
 import { readInstallId } from './installId';
 import { asError, noteReportedFingerprint, readLastUpsert, type DevicesClient } from './register';
@@ -61,6 +66,30 @@ export interface ReportPermissionsInput {
   reportedFrom: ReportedFrom;
   /** `'settingsReturn'`: true when this follows a Settings trip from B2 (T9's mark). */
   ack: boolean | 'settingsReturn';
+  /** `readAlwaysExcused`: losing Always is excused now (final review I4). Default false. */
+  alwaysExcused?: boolean;
+}
+
+/**
+ * Whether losing Always is excused on this phone now, for the report (final review I4): the
+ * health model's own `isAlwaysExcused` over the driver's choices as stored — auto-record off
+ * (`drive.autoDetect`, the host's), manual by choice, or the `auto_detect` flag withdrawn. The
+ * report contract is the choice and the flag only, so iOS's before-the-first-drive wait (which is
+ * not a choice) is left out. Local reads only; a read that fails counts as not excused, so a real
+ * lapse is never hidden.
+ */
+export async function readAlwaysExcused(db: Db, snapshot: Pick<PermissionSnapshot, 'platform'>): Promise<boolean> {
+  try {
+    const read = await createSettingsRepo(db).getMany([MANUAL_BY_CHOICE_KEY, AUTO_DETECT_SETTING_KEY]);
+    return isAlwaysExcused(snapshot, {
+      autoDetectAvailable: await readFlag(db, 'auto_detect'),
+      firstDriveDone: true,
+      manualByChoice: read[MANUAL_BY_CHOICE_KEY] === true,
+      autoDetectOn: read[AUTO_DETECT_SETTING_KEY] === true,
+    });
+  } catch {
+    return false;
+  }
 }
 
 export interface ReportPermissionsDeps {
@@ -120,7 +149,7 @@ export async function reportPermissions(
   await updateEverGranted(settings, snapshot);
 
   const last = await readReportedPermissions(settings, userId, deviceId);
-  const next = toServerPermissions(snapshot, reportedFrom, false);
+  const next = toServerPermissions(snapshot, reportedFrom, false, input.alwaysExcused ?? false);
   // Unknown motion keeps the motion last reported (the server's lapse baseline).
   if (next.motion === undefined && last?.motion !== undefined) next.motion = last.motion;
   const fingerprint = permissionsFingerprint(next);
@@ -265,13 +294,6 @@ export interface BackgroundReportDeps {
   onError?: (error: unknown, context: string) => void;
 }
 
-const deviceZone = (): string => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return 'UTC';
-  }
-};
 
 let defaultAdapter: PermissionsAdapter | null = null;
 
@@ -309,8 +331,9 @@ export async function reportPermissionsFromBackground(deps: BackgroundReportDeps
       deps.supabase ??
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only when a report is due
       (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase;
+    const alwaysExcused = await readAlwaysExcused(deps.db, snapshot);
     return await reportPermissions(
-      { userId: owner, deviceId, snapshot, reportedFrom: 'background', ack: 'settingsReturn' },
+      { userId: owner, deviceId, snapshot, reportedFrom: 'background', ack: 'settingsReturn', alwaysExcused },
       {
         supabase,
         settings,
