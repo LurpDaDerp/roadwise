@@ -890,6 +890,37 @@ Deno.test('set-role passenger unscores the trip and applies an unscored envelope
   assertEquals(r.days, e.day);
 });
 
+Deno.test('past trace retention a trip whose trace_path names a deleted object re-scores as no_trace, without error (B6 r1 n3)', async () => {
+  // the drive ended 15 days before the re-score: its trace is gone by policy, though the column
+  // (set before the upload, or left by an upload that raced the purge) still names it
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ role: 'passenger', status: 'unscored', score: null, data_quality: 'A' })],
+      trip_events: [storedEventRow({ deduction: null })],
+      event_disputes: [],
+    },
+    now: T0 + 1_320_000 + 15 * 86_400_000,
+  });
+  const r = await split(await handleTripAction(post(setRole('driver')), h.deps));
+  assertEquals(r.status, 200);
+  const e = recompute(h);
+  assertEquals(e.scored?.dataQuality, 'B');
+  assertEquals(e.scored, { ...scoreTrip(storedMetrics('driver', false), [storedEvent('scored')]), hadSevereEvent: false });
+});
+
+Deno.test('inside retention the same trip keeps its trace (negative control for the rule above)', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow({ role: 'passenger', status: 'unscored', score: null, data_quality: 'A' })],
+      trip_events: [storedEventRow({ deduction: null })],
+      event_disputes: [],
+    },
+    now: T0 + 1_320_000 + 13 * 86_400_000,
+  });
+  assertEquals((await handleTripAction(post(setRole('driver')), h.deps)).status, 200);
+  assertEquals(recompute(h).scored, { ...scoreTrip(storedMetrics('driver'), [storedEvent('scored')]), hadSevereEvent: false });
+});
+
 Deno.test('set-role driver re-scores from the stored digest and events', async () => {
   const h = harness({
     tables: {
