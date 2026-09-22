@@ -213,6 +213,56 @@ Deno.test('quiet hours come before the window', () => {
   assertEquals(reason(d), 'quiet_hours');
 });
 
+// ——— the rewards types (M5) over the real catalog ———
+
+Deno.test('rewards: a goal_completed inside quiet hours defers to the quiet end, 07:00', () => {
+  const at = Date.parse('2026-09-23T06:30:00Z'); // 23:30 PDT
+  const payload = { kind: 'challenge', challengeId: 'safe_run', points: 300 };
+  assertEquals(decide(item({ type: 'goal_completed', payload, createdAt: at - MIN }), at, CATALOG), {
+    kind: 'defer',
+    reason: 'quiet_hours',
+    until: Date.parse('2026-09-23T14:00:00Z'), // 07:00 PDT
+  });
+});
+
+Deno.test('rewards: a streak_milestone at 09:00 defers to its evening window, 18:00', () => {
+  const at = Date.parse('2026-09-23T16:00:00Z'); // 09:00 PDT
+  const payload = { days: 7, reachedOn: '2026-09-22' };
+  assertEquals(decide(item({ type: 'streak_milestone', payload, createdAt: at - MIN }), at, CATALOG), {
+    kind: 'defer',
+    reason: 'window',
+    until: Date.parse('2026-09-24T01:00:00Z'), // 18:00 PDT
+  });
+});
+
+Deno.test('rewards: a level_up claimed at 02:05 with quiet hours off defers to 09:00 (rev1: R-I m5)', () => {
+  const at = Date.parse('2026-09-23T09:05:00Z'); // 02:05 PDT
+  const payload = { kind: 'level', level: 2, name: 'Steady' };
+  const noQuiet = { quiet: { enabled: false, start: '22:00', end: '07:00' } };
+  assertEquals(decide(item({ type: 'level_up', payload, createdAt: at - MIN }, noQuiet), at, CATALOG), {
+    kind: 'defer',
+    reason: 'window',
+    until: Date.parse('2026-09-23T16:00:00Z'), // 09:00 PDT
+  });
+});
+
+Deno.test('rewards: inside their windows each type sends; capped, one is skipped (inbox only)', () => {
+  const at = Date.parse('2026-09-24T02:00:00Z'); // 19:00 PDT
+  const cases: [string, unknown][] = [
+    ['streak_milestone', { days: 7, reachedOn: '2026-09-22' }],
+    ['goal_completed', { kind: 'weekly_goal', category: 'phone', weekStart: '2026-09-14', points: 150, prorated: false }],
+    ['level_up', { kind: 'badge', badgeId: 'safe_days_7', tier: 'bronze' }],
+    ['referral_qualified', { role: 'referrer', points: 500 }],
+  ];
+  for (const [type, payload] of cases) {
+    assertEquals(reason(decide(item({ type, payload, createdAt: at - MIN }), at, CATALOG)), 'send', type);
+    assertEquals(decide(item({ type, payload, createdAt: at - MIN }, { localSentToday: 2 }), at, CATALOG), {
+      kind: 'skip',
+      reason: 'capped',
+    });
+  }
+});
+
 // ——— weekly limit ———
 
 Deno.test('a weekly limit counts the type in the last 7 days', () => {
@@ -273,7 +323,8 @@ Deno.test('cap: with quiet hours off, the next day first slot is local midnight'
 });
 
 Deno.test('cap: only a lapse is carried to the next day; any other capped type is skipped', () => {
-  // No other pushed type has copy yet (renderPush), so the skip path is pinned through the rule.
+  // A capped rewards push (M5) is skipped, not carried: its row stays in the inbox, and §R9 pushes
+  // at most one rewards notification a day anyway. The rule is pinned here and end to end below.
   assertEquals(DEFER_WHEN_CAPPED, ['permission_lapsed']);
   const q = { enabled: true, start: '22:00', end: '07:00' };
   assertEquals(cappedDecision('streak_milestone', NOW, 'America/Los_Angeles', q, undefined), {
