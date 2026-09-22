@@ -71,7 +71,7 @@ const noise3 = (rnd: () => number, sd: number): Vec3 => [
 ];
 
 /** Piecewise-linear profile through `knots` [(t seconds, value)], constant outside them. */
-function profile(knots: readonly (readonly [number, number])[]): (t: number) => number {
+export function profile(knots: readonly (readonly [number, number])[]): (t: number) => number {
   return (t) => {
     const first = knots[0];
     const last = knots[knots.length - 1];
@@ -127,7 +127,7 @@ const MOUNT: Mat3 = matMul(
 
 // ——— the simulator ———
 
-interface PhoneMotion {
+export interface PhoneMotion {
   /** device-frame axis the phone turns about relative to the car */
   axis: Vec3;
   /** angle (rad) the phone has turned relative to its mount at time t (seconds) */
@@ -138,7 +138,7 @@ interface PhoneMotion {
   lift?: (t: number) => Vec3;
 }
 
-interface Drive {
+export interface Drive {
   seconds: number;
   seed: number;
   v0: number;
@@ -241,6 +241,22 @@ function simulate(d: Drive) {
     return { t: T0 + ms, a: r6(a), w: r6(w) };
   };
   return { sampleTimes, fixAt, imuAt, rawAt };
+}
+
+/**
+ * Raw Android-style input for a whole drive, one entry per second: the accelerometer + gyroscope
+ * samples (reference sign) and the fix. For tests that run gravityFilter → extractSecond end to end.
+ */
+export function rawDriveSeconds(d: Drive) {
+  const sim = simulate(d);
+  return Array.from({ length: d.seconds }, (_, i) => {
+    const s = i + 1;
+    return {
+      tsMs: T0 + s * 1000,
+      raw: sim.sampleTimes(s).map(sim.rawAt),
+      fix: sim.fixAt(s * 1000 - FIX_LEAD_MS),
+    };
+  });
 }
 
 const PHONE_MOUNTED: PhoneSample = { locked: true, screenOn: false, appForeground: true };

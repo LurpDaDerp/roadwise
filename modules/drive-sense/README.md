@@ -209,13 +209,27 @@ dt = (t − t_prev) / 1000                       (0 when t_prev is null)
 if g is null or dt ≤ 0 or dt > GRAVITY_RESET_GAP_S (1 s):   g = a            (seed)
 else:
     g_pred = g + (g × w)·dt                    (dg/dt = −w × g: gravity is fixed in the world)
-    α      = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt)            (GRAVITY_TAU_S = 0.5 s)
-    g      = α·g_pred + (1 − α)·a
+    if | |a| − 1 | ≤ GRAVITY_GATE_G (0.05 g):              (no dynamic acceleration)
+        α = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt)           (GRAVITY_TAU_S = 5 s)
+        g = α·g_pred + (1 − α)·a
+    else:                                                  (braking, cornering, a bump)
+        g = g_pred                                         (the gyro alone carries gravity)
 ua = a − g
 emit { t, ua, g, w }
 ```
 
 `g` is not renormalised. Batch boundaries do not change the output.
+
+Why these values (N1 fix round, coordinator ruling): with a 0.5 s time constant a 0.45 g brake
+was absorbed into "gravity" within a second (0.06 g left after 1 s, gravity tilted 0.37 rad), so
+Android under-read braking, `gravityStability` collapsed and a held brake reset the frame. The
+filter is now gyro-dominant (5 s), and the accelerometer does not correct gravity at all while its
+magnitude says the car is accelerating. A phone genuinely repositioned in its mount is still
+followed: the gyro carries the rotation at once, and anything the gyro missed is pulled in by the
+accelerometer within a few time constants; a gap longer than `GRAVITY_RESET_GAP_S` re-seeds.
+Known limit: the magnitude gate only trips for horizontal acceleration above ≈ 0.32 g
+(√(1 + 0.32²) − 1 ≈ 0.05), so a sustained gentler acceleration is still partly absorbed at the
+5 s rate.
 
 ### Grouping samples into seconds
 
@@ -311,7 +325,8 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `HANDLING_W_SPAN` | 0.6 | handling span, rad/s |
 | `HANDLING_STABLE_GS` | 0.95 | steady-gravity threshold |
 | `HANDLING_STABLE_FACTOR` | 0.5 | handling multiplier when steady |
-| `GRAVITY_TAU_S` | 0.5 | gravity filter time constant |
+| `GRAVITY_TAU_S` | 5 | gravity filter time constant |
+| `GRAVITY_GATE_G` | 0.05 | accelerometer correction only while \|‖a‖ − 1\| ≤ this |
 | `GRAVITY_RESET_GAP_S` | 1 | gravity filter re-seed gap |
 | `EPS` | 1e-9 | `normalize` zero threshold |
 | `SELF_TEST_TOLERANCE` | 1e-6 | self-test per-field tolerance |

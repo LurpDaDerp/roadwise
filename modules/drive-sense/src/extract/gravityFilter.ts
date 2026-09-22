@@ -6,13 +6,16 @@
 //   seed  (first sample, dt ≤ 0, or dt > GRAVITY_RESET_GAP_S):  g = a
 //   else  g_pred = g + (g × w)·dt            (gravity is fixed in the world, so in the device frame
 //                                             it turns opposite to the device: dg/dt = −w × g)
-//         α      = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt)
-//         g      = α·g_pred + (1 − α)·a
+//         if | |a| − 1 | ≤ GRAVITY_GATE_G:     (the accelerometer reads ~1 g: no dynamic acceleration)
+//             α = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt)
+//             g = α·g_pred + (1 − α)·a
+//         else:                                (braking, cornering, a bump: trust the gyro alone)
+//             g = g_pred
 //   ua = a − g
 // Pure; the Kotlin port (`GravityFilter.kt`) follows these lines in this order.
-import { G_MPS2, GRAVITY_RESET_GAP_S, GRAVITY_TAU_S } from './constants';
+import { G_MPS2, GRAVITY_GATE_G, GRAVITY_RESET_GAP_S, GRAVITY_TAU_S } from './constants';
 import type { GravityState, ImuSample, RawImuSample } from './types';
-import { add, cross, scale, sub, type Vec3 } from './vec';
+import { add, cross, norm, scale, sub, type Vec3 } from './vec';
 
 export const initialGravityState = (): GravityState => ({ g: null, t: null });
 
@@ -36,8 +39,12 @@ export function gravityFilter(
       g = s.a;
     } else {
       const predicted = add(g, scale(cross(g, s.w), dt));
-      const alpha = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt);
-      g = add(scale(predicted, alpha), scale(s.a, 1 - alpha));
+      if (Math.abs(norm(s.a) - 1) <= GRAVITY_GATE_G) {
+        const alpha = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt);
+        g = add(scale(predicted, alpha), scale(s.a, 1 - alpha));
+      } else {
+        g = predicted;
+      }
     }
     tPrev = s.t;
     imu.push({ t: s.t, ua: sub(s.a, g), g, w: s.w });

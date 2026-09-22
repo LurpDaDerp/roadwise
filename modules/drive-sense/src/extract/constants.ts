@@ -76,8 +76,16 @@ export const HANDLING_STABLE_FACTOR = 0.5;
 
 // ——— Android gravity filter (complementary: gyro propagation + accelerometer low-pass) ———
 
-/** Time constant (s) of the accelerometer correction in the gravity filter. */
-export const GRAVITY_TAU_S = 0.5;
+/**
+ * Time constant (s) of the accelerometer correction in the gravity filter. Gyro-dominant on
+ * purpose: at 0.5 s a 0.45 g brake was absorbed into "gravity" within a second (N1 fix round).
+ */
+export const GRAVITY_TAU_S = 5;
+/**
+ * The accelerometer corrects gravity only while its magnitude is within this (g) of 1 g, so
+ * dynamic acceleration (a hard brake, a corner) never tilts the estimate; the gyro alone carries it.
+ */
+export const GRAVITY_GATE_G = 0.05;
 /** A gap between raw samples longer than this (s), or a non-increasing timestamp, re-seeds gravity from the accelerometer. */
 export const GRAVITY_RESET_GAP_S = 1;
 
