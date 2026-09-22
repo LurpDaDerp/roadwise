@@ -40,7 +40,11 @@ export function WelcomeScreen() {
 
   const onLayout = (e: LayoutChangeEvent) => {
     const w = e.nativeEvent.layout.width;
-    if (w > 0 && w !== pageWidth) setPageWidth(w);
+    if (w <= 0 || w === pageWidth) return;
+    setPageWidth(w);
+    // Rotation or split screen: the offset is still `page × old width`, which would leave two
+    // half-cards on screen while the dots claim a whole page. Snap to the same page at the new width.
+    pager.current?.scrollTo({ x: page * w, y: 0, animated: false });
   };
 
   const onSettle = (e: NativeSyntheticEvent<NativeScrollEvent>) => {

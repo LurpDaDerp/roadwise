@@ -14,11 +14,13 @@ export const welcomeCopy = {
     },
     {
       title: 'Quiet coaching, fair scores',
-      body: 'Short, calm cues while you drive. Afterwards, a score that shows what counted, and a way to flag anything that looks wrong.',
+      // Not "a score": too-short, grade-C, passenger and unanswered role-unknown drives carry none.
+      body: 'Short, calm cues while you drive. Afterwards, see what counted and why, and flag anything that looks wrong.',
     },
     {
       title: "You control what's shared",
-      body: 'Your drives stay private to your account. Sharing starts off, and turning it on is your call.',
+      // The privacy promise itself is the footer line (`welcome.privacy`); this says what it does not.
+      body: 'Sharing starts off, and turning it on is your call.',
     },
   ],
   page: (n: number, total: number) => `Page ${n} of ${total}`,

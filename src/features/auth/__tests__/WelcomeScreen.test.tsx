@@ -54,6 +54,30 @@ test('says nothing about deletion, export, rewards or points, which this build c
   expect(everything).not.toMatch(/delete|export|reward|points/i);
 });
 
+test('card copy promises nothing that is not true of every drive', async () => {
+  await mount();
+  // Too-short, grade-C, passenger and unanswered role-unknown drives carry no score, so the
+  // coaching card names what every drive has: what counted, why, and a way to flag it.
+  expect(
+    screen.getByText(
+      'Short, calm cues while you drive. Afterwards, see what counted and why, and flag anything that looks wrong.'
+    )
+  ).toBeTruthy();
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(/a score/i);
+  // The footer already carries the privacy promise; the sharing card says only what the footer does not.
+  expect(screen.getByText("Sharing starts off, and turning it on is your call.")).toBeTruthy();
+});
+
+test('a width change (rotation, split screen) keeps the current page whole', async () => {
+  await mount();
+  const pager = screen.getByTestId('welcome-pager');
+  await fireEvent(pager, 'layout', { nativeEvent: { layout: { width: 300, height: 200, x: 0, y: 0 } } });
+  await fireEvent.press(screen.getByRole('button', { name: 'Next' }));
+  await fireEvent(pager, 'layout', { nativeEvent: { layout: { width: 700, height: 200, x: 0, y: 0 } } });
+  expect(scrollTo).toHaveBeenLastCalledWith({ x: 700, y: 0, animated: false });
+  expect(screen.getByLabelText('Page 2 of 3')).toBeTruthy();
+});
+
 test('Next moves one page at a time, and the last page offers Get started', async () => {
   await mount();
   expect(screen.queryByRole('button', { name: 'Get started' })).toBeNull();

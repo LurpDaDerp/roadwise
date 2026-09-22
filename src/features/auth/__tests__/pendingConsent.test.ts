@@ -7,6 +7,8 @@ import { DISCLAIMER_VERSION, legalState, type LegalState } from '@/features/auth
 import {
   DISCLAIMER_ACK_KEY,
   PENDING_TERMS_KEY,
+  PENDING_TERMS_TTL_MS,
+  clearTermsAccepted,
   flushPendingConsents,
   hasCurrentTerms,
   markTermsAccepted,
@@ -59,7 +61,7 @@ beforeEach(async () => {
 describe('markTermsAccepted', () => {
   test('published: keeps the accepted versions for the account, and the disclaimer acknowledgement', async () => {
     await markTermsAccepted(settings, published);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3' });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
     await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
   });
 
@@ -78,7 +80,7 @@ describe('markTermsAccepted', () => {
 
 describe('flushPendingConsents', () => {
   test('unpublished: records nothing and asks the server nothing, even with an old acceptance stored', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3' });
+    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: Date.now() });
     const { api, fetchConsents, recordConsent } = fakeServer();
     await expect(flushPendingConsents(db, 'u1', unpublished, api)).resolves.toEqual({ recorded: [] });
     expect(fetchConsents).not.toHaveBeenCalled();
@@ -131,7 +133,7 @@ describe('flushPendingConsents', () => {
   });
 
   test('an acceptance of a version other than the one now published records nothing and is dropped', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-1', privacy: 'p-3' });
+    await settings.set(PENDING_TERMS_KEY, { tos: 't-1', privacy: 'p-3', at: Date.now() });
     const { api, recordConsent } = fakeServer();
     await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
     expect(recordConsent).not.toHaveBeenCalled();
@@ -150,7 +152,7 @@ describe('flushPendingConsents', () => {
       });
 
     await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3' });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
 
     await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['privacy'] });
     expect(rows.map((r) => r.type)).toEqual(['tos', 'privacy']);
@@ -162,7 +164,61 @@ describe('flushPendingConsents', () => {
     fetchConsents.mockRejectedValueOnce(new Error('offline'));
     await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
     expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3' });
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number) });
+  });
+
+  test('an acceptance older than its lifetime records nothing and is dropped', async () => {
+    const ticked = Date.parse('2026-09-22T10:00:00Z');
+    await markTermsAccepted(settings, published, () => ticked);
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: ticked });
+    const { api, fetchConsents, recordConsent } = fakeServer();
+
+    const late = () => ticked + PENDING_TERMS_TTL_MS + 1;
+    await expect(flushPendingConsents(db, 'u1', published, api, late)).resolves.toEqual({ recorded: [] });
+    expect(fetchConsents).not.toHaveBeenCalled();
+    expect(recordConsent).not.toHaveBeenCalled();
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+
+  test('an acceptance within its lifetime is recorded', async () => {
+    const ticked = Date.parse('2026-09-22T10:00:00Z');
+    await markTermsAccepted(settings, published, () => ticked);
+    const { api } = fakeServer();
+    const inTime = () => ticked + PENDING_TERMS_TTL_MS;
+    await expect(flushPendingConsents(db, 'u1', published, api, inTime)).resolves.toEqual({
+      recorded: ['tos', 'privacy'],
+    });
+  });
+
+  test('an acceptance stamped in the future (clock moved back) is not trusted', async () => {
+    const now = Date.parse('2026-09-22T10:00:00Z');
+    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: now + 60 * 60 * 1000 });
+    const { api, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api, () => now)).resolves.toEqual({ recorded: [] });
+    expect(recordConsent).not.toHaveBeenCalled();
+  });
+
+  test('an acceptance with no timestamp (an older shape) is dropped', async () => {
+    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3' });
+    const { api, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
+    expect(recordConsent).not.toHaveBeenCalled();
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+  });
+
+  test('clearTermsAccepted (untick, sign-out) removes the acceptance, so nothing is recorded', async () => {
+    await markTermsAccepted(settings, published);
+    await clearTermsAccepted(settings);
+    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+    const { api, recordConsent } = fakeServer();
+    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
+    expect(recordConsent).not.toHaveBeenCalled();
+  });
+
+  test('clearTermsAccepted keeps the disclaimer acknowledgement, which is not a consent record', async () => {
+    await markTermsAccepted(settings, published);
+    await clearTermsAccepted(settings);
+    await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
   });
 
   test('a stored value of the wrong shape is ignored and dropped', async () => {
