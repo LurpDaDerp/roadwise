@@ -234,6 +234,51 @@ export type Database = {
         }
         Relationships: []
       }
+      invites: {
+        Row: {
+          code_hash: string
+          created_at: string
+          expires_at: string
+          family_id: string | null
+          id: string
+          issuer_id: string
+          max_uses: number
+          revoked: boolean
+          role: string | null
+          type: string
+          updated_at: string
+          uses: number
+        }
+        Insert: {
+          code_hash: string
+          created_at?: string
+          expires_at: string
+          family_id?: string | null
+          id?: string
+          issuer_id: string
+          max_uses?: number
+          revoked?: boolean
+          role?: string | null
+          type: string
+          updated_at?: string
+          uses?: number
+        }
+        Update: {
+          code_hash?: string
+          created_at?: string
+          expires_at?: string
+          family_id?: string | null
+          id?: string
+          issuer_id?: string
+          max_uses?: number
+          revoked?: boolean
+          role?: string | null
+          type?: string
+          updated_at?: string
+          uses?: number
+        }
+        Relationships: []
+      }
       limits_cache: {
         Row: {
           created_at: string
@@ -665,11 +710,18 @@ export type Database = {
       }
       apply_trip: { Args: { p: Json }; Returns: Json }
       count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
+      create_guardian_invite: { Args: never; Returns: Json }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
+      derive_age_band_on: {
+        Args: { p_as_of: string; p_birth_date: string }
+        Returns: string
+      }
       expire_trace_objects: {
         Args: { p_limit?: number; p_older_than?: string }
         Returns: Json
       }
+      guardian_link_state: { Args: never; Returns: Json }
+      is_underage: { Args: { p_user: string }; Returns: boolean }
       put_limits_cache: {
         Args: {
           p_heading: number
@@ -690,6 +742,7 @@ export type Database = {
         }
         Returns: Json
       }
+      rederive_age_bands: { Args: never; Returns: number }
       require_baselines: {
         Args: { p_baselines: Json; p_fn: string }
         Returns: undefined
@@ -741,6 +794,7 @@ export type Database = {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
+      underage_object_keys: { Args: { p_limit: number }; Returns: Json }
       upsert_baselines: {
         Args: { p_baselines: Json; p_user: string }
         Returns: undefined
@@ -748,6 +802,10 @@ export type Database = {
       upsert_score_day: {
         Args: { p_days: Json; p_user: string }
         Returns: undefined
+      }
+      user_local_date: {
+        Args: { p_at?: string; p_user: string }
+        Returns: string
       }
     }
     Enums: {
