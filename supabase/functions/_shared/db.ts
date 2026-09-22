@@ -66,7 +66,10 @@ export interface Db {
   getDayRow(userId: string, day: string): Promise<DayRow | null>;
   /** Live scored trips (final or provisional) that ended at or after `sinceMs`, newest first. */
   listScoredTrips(userId: string, sinceMs: number): Promise<ScoredTripRow[]>;
-  /** Live trips of those local days, any status, with their scored phone-event counts. */
+  /**
+   * Trips of those local days, any status, with their scored phone-event counts. Soft-deleted ones
+   * are included and marked `deleted` (D2: a deleted drive keeps counting against its day).
+   */
   listDayTrips(userId: string, days: readonly string[]): Promise<DayTripRow[]>;
   applyTrip(envelope: ApplyTripEnvelope): Promise<ApplyTripResult>;
 }
@@ -221,10 +224,9 @@ export function createDb(client: SupabaseClient): Db {
     async listDayTrips(userId, days) {
       const { data, error } = await client
         .from('trips')
-        .select('id, local_day, score, status, duration_s, exposure, had_severe_event, camera_session')
+        .select('id, local_day, score, status, duration_s, exposure, had_severe_event, camera_session, deleted_at')
         .eq('user_id', userId)
         .in('local_day', days)
-        .is('deleted_at', null)
         .order('started_at')
         .limit(DAY_TRIPS_LIMIT);
       if (error) throw asPgError(error);
@@ -253,6 +255,7 @@ export function createDb(client: SupabaseClient): Db {
         hadSevereEvent: row.had_severe_event,
         phoneEvents: phone.get(row.id) ?? 0,
         cameraGood: row.camera_session,
+        deleted: row.deleted_at !== null,
       }));
     },
 

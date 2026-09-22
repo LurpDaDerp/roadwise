@@ -146,13 +146,19 @@ export interface TripOutcome {
  * one, plus this one as it will be. The trip's own day always; today as well when the action
  * lands on a later day, so the long-term score moves today too (as finalize-trip does). Every
  * integer-bound field is rounded by `dayRows`, at the boundary, and nowhere else.
+ *
+ * `keepTripOnDay` is the delete path's (D2): the trip's own stored row stays among its day's trips
+ * as a deleted drive, so the day is judged with and without it and deleting never raises it. The
+ * row is marked deleted here whether or not the read already sees the soft delete. The long-term
+ * score and the baselines leave the trip out either way.
  */
 export async function aggregatesAfter(
   db: Db,
   userId: string,
   nowMs: number,
   trip: StoredTrip,
-  outcome: TripOutcome | null
+  outcome: TripOutcome | null,
+  opts: { keepTripOnDay?: boolean } = {}
 ): Promise<{ day: DayRow[]; baselines: Baselines | null }> {
   const today = localDay(nowMs, trip.tz);
   const days = today === trip.localDay ? [trip.localDay] : [trip.localDay, today];
@@ -175,7 +181,9 @@ export async function aggregatesAfter(
   const allScored = [...own, ...stored];
   const lt = longTermScore(allScored, nowMs);
 
-  const dayTrips = (await db.listDayTrips(userId, days)).filter((t) => t.id !== trip.id);
+  const dayTrips: DayTripInput[] = (await db.listDayTrips(userId, days)).flatMap((t) =>
+    t.id !== trip.id ? [t] : opts.keepTripOnDay ? [{ ...t, deleted: true }] : []
+  );
   const ownDay: DayTripInput[] = outcome
     ? [
         {
@@ -187,6 +195,7 @@ export async function aggregatesAfter(
           hadSevereEvent: outcome.hadSevereEvent,
           phoneEvents: outcome.phoneEvents,
           cameraGood: trip.cameraSession,
+          deleted: false,
         },
       ]
     : [];

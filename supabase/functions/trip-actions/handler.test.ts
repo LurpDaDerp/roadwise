@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertMatch, assertNotEquals } from '@std/assert';
 import { emptyDayRow, type DayRow } from '../_shared/aggregate.ts';
 import { createActionsDb, type RecomputeEnvelope } from '../_shared/actions_db.ts';
-import { scoreTrip } from '../_shared/scoring/index';
+import { longTermScore, scoreTrip } from '../_shared/scoring/index';
 import type { ScorableEvent, ScoredTrip, TripMetrics } from '../_shared/scoring/index';
 import { fakeActionsClient, type RecordedCall } from '../_shared/testing/fake_actions_client.ts';
 import {
@@ -1124,6 +1124,81 @@ Deno.test('delete removes the trace object before the writer, then refreshes the
   // both trips are inside the current four weeks: the window behind them holds nothing
   assertEquals(e.baselines?.medians, {});
   assertEquals(r.days, e.day);
+});
+
+// D2: a deleted drive keeps counting against its day. The day is judged with and without it and
+// keeps the lower result; the long-term score and the baselines no longer include it.
+const d2Tables = (deletedAt: string | null) => ({
+  trips: [
+    storedTripRow({ score: 50, deleted_at: deletedAt, trace_path: deletedAt ? null : TRACE_KEY }),
+    tripRow({ id: 'kept', score: 95, duration_s: 1200, exposure: 1.2 }),
+    // three earlier days so the long-term score is not withheld
+    ...[1, 2, 3].map((i) =>
+      tripRow({
+        id: `earlier-${i}`,
+        score: 80,
+        duration_s: 1500,
+        exposure: 1.5,
+        local_day: `2023-11-1${4 - i}`,
+        ended_at: new Date(T0 - i * DAY_MS).toISOString(),
+      })
+    ),
+  ],
+  trip_events: [],
+  event_disputes: [],
+});
+
+Deno.test('deleting the 50 drive leaves its day as it was with the drive: not safe, and the long-term score without it', async () => {
+  const h = harness({ tables: d2Tables(null) });
+  const r = await split(await handleTripAction(post(del()), h.deps));
+  assertEquals(r.status, 200);
+  const e = recompute(h);
+  assertEquals(e.day.length, 1);
+  // without the 50 the day would be the 95 alone, a safe day; with it the average is 72.5
+  assertEquals(e.day[0].safeDay, false);
+  assertEquals(e.day[0].goodDay, true);
+  assertEquals(e.day[0].tripsScored, 1);
+  assertEquals(e.day[0].drivingS, 1200);
+  const kept = [
+    { endedAt: T0 - 2_400_000, score: 95, exposure: 1.2, durationS: 1200 },
+    ...[1, 2, 3].map((i) => ({ endedAt: T0 - i * DAY_MS, score: 80, exposure: 1.5, durationS: 1500 })),
+  ];
+  const lt = longTermScore(kept, NOW);
+  assert(lt.score !== null);
+  assertEquals(e.day[0].longTermScore, lt.score);
+  assertNotEquals(
+    lt.score,
+    longTermScore([...kept, { endedAt: T0 + 1_320_000, score: 50, exposure: STORED_SCORED.exposure, durationS: 1320 }], NOW)
+      .score
+  );
+  assertEquals(r.days, e.day);
+});
+
+Deno.test('a delete replay writes the same day rows as the first delete', async () => {
+  const first = harness({ tables: d2Tables(null) });
+  assertEquals((await handleTripAction(post(del()), first.deps)).status, 200);
+  const replay = harness({
+    tables: d2Tables(new Date(NOW).toISOString()),
+    rpc: { soft_delete_trip: (args) => ({ data: { trip_id: args.p_trip_id, trace_path: null, replayed: true } }) },
+  });
+  const r = await split(await handleTripAction(post(del()), replay.deps));
+  assertEquals(r.body.replayed, true);
+  assertEquals(recompute(replay).day, recompute(first).day);
+  assertEquals(recompute(replay).baselines?.medians, recompute(first).baselines?.medians);
+});
+
+Deno.test('a dispute on another drive of the day still counts the deleted one against it', async () => {
+  const h = harness({
+    tables: {
+      trips: [storedTripRow(), tripRow({ id: 'gone', score: 40, duration_s: 1500, deleted_at: new Date(T0).toISOString() })],
+      trip_events: [storedEventRow()],
+      event_disputes: [],
+    },
+  });
+  assertEquals((await handleTripAction(post(dispute()), h.deps)).status, 200);
+  const e = recompute(h);
+  assertEquals(e.day[0].safeDay, false);
+  assertEquals(e.day[0].tripsScored, 1);
 });
 
 Deno.test('the object is removed even when the stored row no longer names it', async () => {

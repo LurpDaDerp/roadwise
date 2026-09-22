@@ -310,6 +310,28 @@ Deno.test('the stored trips feed the long-term score, the day row and the baseli
   assertEquals(e.baselines?.medians.score, 70); // median of 60 and 80
 });
 
+// D2: a drive the user deleted keeps counting against its day, so a new safe drive cannot make
+// the day safe that the deleted one had spoiled.
+Deno.test('a new safe drive on a day holding a deleted bad drive does not make the day safe', async () => {
+  const h = harness({
+    tables: {
+      trips: [tripRow({ id: 'gone', score: 40, duration_s: 1200, deleted_at: new Date(T0 - HOUR).toISOString() })],
+      trip_events: [],
+      score_daily: [],
+    },
+  });
+  const res = await handleFinalizeTrip(post(payload()), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelope(h);
+  assert((e.scored.score as number) >= 85);
+  assertEquals(e.day[0].safeDay, false);
+  // the counts are the kept drives': the new one alone
+  assertEquals(e.day[0].tripsScored, 1);
+  assertEquals(e.day[0].drivingS, 1320);
+  // the deleted drive is not in the long-term score either: one trip, still withheld
+  assertEquals(e.day[0].longTermScore, null);
+});
+
 Deno.test('a trip synced on a later day also writes today\'s row; the response carries the trip\'s own', async () => {
   const h = harness({ now: T0 + 3 * DAY_MS });
   const { status, body } = await json(await handleFinalizeTrip(post(payload()), h.deps));

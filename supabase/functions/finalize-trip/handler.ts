@@ -217,6 +217,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
       hadSevereEvent,
       phoneEvents: events.filter((e) => e.category === 'phone' && e.status === 'scored').length,
       cameraGood: p.cameraSession,
+      deleted: false,
     };
 
     const envelope: ApplyTripEnvelope = {

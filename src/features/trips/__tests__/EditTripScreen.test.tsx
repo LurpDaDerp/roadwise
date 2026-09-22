@@ -9,6 +9,7 @@ import {
   routerDouble,
   world,
 } from '@/features/trips/__fixtures__/render';
+import { tripCopy as copy } from '@/features/trips/copy';
 import { EditTripScreen } from '@/features/trips/EditTripScreen';
 
 const mockRouter = routerDouble();
@@ -104,7 +105,7 @@ describe('deleting the drive', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByText(
-        "Your safety score and any safe day this drive was part of get worked out again without it. Points you've already earned are never taken back."
+        "Your safety score is worked out again without it. Deleting a drive never makes a day safe. If its day is already confirmed, that day's points and streak stay exactly as they are; in Insights a safe day it was part of may no longer count as one."
       )
     ).toBeOnTheScreen();
     expect(
@@ -116,14 +117,32 @@ describe('deleting the drive', () => {
     expect(screen.getByRole('button', { name: 'Keep it' })).toBeOnTheScreen();
   });
 
-  test('a drive on a day already credited carries the recalculation notice', async () => {
+  test('a drive on a day already credited says that day is final', async () => {
     await open({
       trips: [tripRow({ client_trip_id: ID, sync_state: 'synced' })],
       days: [['2026-01-05', { day: '2026-01-05', safeDay: true }]],
     });
     await press(screen.getByTestId('delete-trip'));
     expect(screen.getByTestId('rewarded-notice')).toBeOnTheScreen();
-    expect(screen.getByText(/nothing you have earned is taken back/)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak — they're final."
+      )
+    ).toBeOnTheScreen();
+  });
+
+  // D2 and R-A: a deleted drive keeps counting against its day, and a confirmed day is final. So
+  // no delete copy may say a day is worked out again, or promise that a confirmed day will change.
+  test('the delete copy never says a day is recalculated, or that a confirmed day will change', () => {
+    const strings = [...copy.edit.deleteConsequence, copy.edit.rewarded, copy.edit.rewardedBody];
+    for (const s of strings) {
+      expect(s).not.toMatch(/day[^.]*worked out again|worked out again[^.]*day/i);
+      expect(s).not.toMatch(/works? the day out again|recalculat/i);
+      expect(s).not.toMatch(/(confirmed|credited)[^.]*(will|may|can) (change|go up|go down|be (raised|lowered|taken))/i);
+    }
+    expect(copy.edit.deleteConsequence[1]).toMatch(/^Your safety score is worked out again without it\./);
+    expect(copy.edit.deleteConsequence[1]).toContain('Deleting a drive never makes a day safe.');
+    expect(copy.edit.rewardedBody).toContain("they're final");
   });
 
   test('a drive on an ordinary day carries no such notice', async () => {

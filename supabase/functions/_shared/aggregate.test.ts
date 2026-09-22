@@ -25,6 +25,7 @@ const trip = (overrides: Partial<DayTripInput> = {}): DayTripInput => ({
   hadSevereEvent: false,
   phoneEvents: 0,
   cameraGood: false,
+  deleted: false,
   ...overrides,
 });
 
@@ -115,6 +116,89 @@ Deno.test('a day with no trips is all zeros but still carries the long-term scor
     tripsScored: 0,
     severeEvents: 0,
   });
+});
+
+// D2: a deleted drive keeps counting against its day. The day is judged with and without it and
+// keeps the lower result, so deleting a drive can never make a day safe or good that was not.
+Deno.test('a kept safe drive beside a deleted 50 is not a safe day: the day keeps what it was with the drive', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200 }), trip({ score: 50, durationS: 1200, deleted: true })],
+    good
+  );
+  assertEquals(row.safeDay, false);
+  // with the drive the average is 72.5, a good day; without it a safe day: the lower is good
+  assertEquals(row.goodDay, true);
+  assertEquals(row.drivingS, 1200);
+  assertEquals(row.tripsScored, 1);
+  assertEquals(row.exposure, 1.2);
+});
+
+Deno.test('a deleted 40 beside a kept 95 leaves the day neither safe nor good', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200 }), trip({ score: 40, durationS: 1200, deleted: true })],
+    good
+  );
+  assertEquals(row.safeDay, false);
+  assertEquals(row.goodDay, false);
+  assertEquals(row.drivingS, 1200);
+});
+
+Deno.test('a day whose only drive is a deleted 95 is not safe and counts no trips', () => {
+  const [row] = dayRows([TRIP_DAY], [trip({ score: 95, durationS: 1200, deleted: true })], good);
+  assertEquals(row.safeDay, false);
+  assertEquals(row.goodDay, false);
+  assertEquals(row.phoneFreeDay, false);
+  assertEquals(row.cameraDay, false);
+  assertEquals(row.tripsScored, 0);
+  assertEquals(row.drivingS, 0);
+  assertEquals(row.exposure, 0);
+  assertEquals(row.severeEvents, 0);
+});
+
+Deno.test('deleting the drive with the phone pickup does not make the day phone-free', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200 }), trip({ score: 90, durationS: 600, phoneEvents: 1, deleted: true })],
+    good
+  );
+  assertEquals(row.phoneFreeDay, false);
+  assertEquals(row.safeDay, true); // both with and without it the day is safe
+});
+
+Deno.test('deleting a severe drive does not make the day safe; its severe event no longer counts in the row', () => {
+  const [row] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200 }), trip({ score: 90, durationS: 600, hadSevereEvent: true, deleted: true })],
+    good
+  );
+  assertEquals(row.safeDay, false);
+  assertEquals(row.goodDay, true);
+  assertEquals(row.severeEvents, 0);
+});
+
+Deno.test('a camera day needs the camera with and without the deleted drives', () => {
+  const [kept] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200, cameraGood: true }), trip({ score: 90, deleted: true })],
+    good
+  );
+  assertEquals(kept.cameraDay, true);
+  const [gone] = dayRows(
+    [TRIP_DAY],
+    [trip({ score: 95, durationS: 1200 }), trip({ score: 90, cameraGood: true, deleted: true })],
+    good
+  );
+  assertEquals(gone.cameraDay, false);
+});
+
+Deno.test('a deleted drive that is not final changes nothing', () => {
+  const kept = [trip({ score: 95, durationS: 1200 })];
+  assertEquals(
+    dayRows([TRIP_DAY], [...kept, trip({ score: null, status: 'unscored', deleted: true })], good),
+    dayRows([TRIP_DAY], kept, good)
+  );
 });
 
 Deno.test('median of an even count is the mean of the middle pair', () => {

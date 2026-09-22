@@ -354,7 +354,7 @@ export const tripCopy = {
     /** §7.D D5, including the guardian-visibility note — said plainly, before the button. */
     deleteConsequence: [
       'The drive, its score and everything on its timeline go for good.',
-      "Your safety score and any safe day this drive was part of get worked out again without it. Points you've already earned are never taken back.",
+      "Your safety score is worked out again without it. Deleting a drive never makes a day safe. If its day is already confirmed, that day's points and streak stay exactly as they are; in Insights a safe day it was part of may no longer count as one.",
       'If you share summaries with a parent or guardian, they can see that a drive was deleted — never what was on it.',
     ],
     deleteConfirm: 'Delete drive',
@@ -362,6 +362,6 @@ export const tripCopy = {
     deleteError: "Couldn't delete that. Try again.",
     rewarded: 'Already counted',
     rewardedBody:
-      "This drive is part of a day you've already been credited for. Deleting it works the day out again; nothing you have earned is taken back.",
+      "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak — they're final.",
   },
 } as const;

@@ -428,7 +428,9 @@ async function deleteTrip(run: Run, a: DeleteAction): Promise<Response> {
   if (!trip) return json(404, { code: 'not_found' });
   const deleted = await db.softDeleteTrip(userId, trip.id);
   // Refreshed on a replay too: the first attempt may have died between the delete and this.
-  const aggregates = await aggregatesAfter(db, userId, run.nowMs, trip, null);
+  // D2: the deleted drive stays on its day, judged with and without it, so deleting never raises
+  // the day; the long-term score and the baselines leave it out.
+  const aggregates = await aggregatesAfter(db, userId, run.nowMs, trip, null, { keepTripOnDay: true });
   await db.applyRecompute({
     userId,
     tripId: trip.id,

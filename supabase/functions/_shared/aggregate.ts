@@ -73,6 +73,12 @@ export interface DayTripInput {
   phoneEvents: number;
   /** `camera_session` for M2: there is no stored signal of camera quality beyond it. */
   cameraGood: boolean;
+  /**
+   * Soft-deleted by the user (D2). A deleted drive keeps counting against its day: the day is
+   * judged with and without it and keeps the lower result, so deleting never raises a day. It
+   * adds nothing to the day's counts (driving time, exposure, trips, severe events).
+   */
+  deleted: boolean;
 }
 
 /**
@@ -129,6 +135,13 @@ export const emptyDayRow = (day: string): DayRow => dayRows([day], [], WITHHELD)
  * One row per requested day over the trips that fall on it, every row carrying the same
  * long-term score: a late-synced trip writes its own day with the score as of now, and the
  * caller adds today's day when the score should move today too (`apply_trip` accepts an array).
+ *
+ * D2: a day is judged twice, over all its trips and over the ones not deleted, and each flag keeps
+ * the lower of the two, so deleting a drive can never make a day safe, good, phone-free or a
+ * camera day that it was not with the drive. A day that was safe with the drive and good without
+ * it is good; one that was good with it and safe without it is good too. The counts (driving
+ * time, exposure, trips scored, severe events) are the kept drives' alone, as before: a deleted
+ * drive is gone from what the day shows, never from how it is judged.
  */
 export function dayRows(
   days: readonly string[],
@@ -137,19 +150,23 @@ export function dayRows(
 ): DayRow[] {
   return days.map((day) => {
     const own = trips.filter((t) => t.localDay === day);
-    const result = evaluateDay({ trips: own.map(toDayTrip) });
-    const scored = own.filter((t) => t.status === 'final' && t.score !== null);
+    const live = own.filter((t) => !t.deleted);
+    const all = evaluateDay({ trips: own.map(toDayTrip) });
+    const kept = evaluateDay({ trips: live.map(toDayTrip) });
+    const safeDay = all.safeDay && kept.safeDay;
+    const goodDay = !safeDay && (all.safeDay || all.goodDay) && (kept.safeDay || kept.goodDay);
+    const scored = live.filter((t) => t.status === 'final' && t.score !== null);
     return {
       day,
       longTermScore: lt.score === null ? null : Math.round(lt.score),
       band: lt.band,
       provisional: lt.provisional,
-      safeDay: result.safeDay,
-      goodDay: result.goodDay,
-      phoneFreeDay: result.phoneFreeDay,
-      cameraDay: result.cameraDay,
+      safeDay,
+      goodDay,
+      phoneFreeDay: all.phoneFreeDay && kept.phoneFreeDay,
+      cameraDay: all.cameraDay && kept.cameraDay,
       exposure: round6(scored.reduce((sum, t) => sum + t.exposure, 0)),
-      drivingS: Math.round(result.drivingS),
+      drivingS: Math.round(kept.drivingS),
       tripsScored: scored.length,
       severeEvents: scored.filter((t) => t.hadSevereEvent).length,
     };

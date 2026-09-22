@@ -185,7 +185,7 @@ Deno.test('eventRows carries the server ids with the new statuses and deductions
   ]);
 });
 
-const store = () =>
+const store = (own: Record<string, unknown> = {}, extra: Record<string, unknown>[] = []) =>
   fakeSupabase({
     tables: {
       trips: [
@@ -196,7 +196,9 @@ const store = () =>
           duration_s: 1320,
           exposure: 1.1,
           ended_at: new Date(T0 + 1_320_000).toISOString(),
+          ...own,
         }),
+        ...extra,
         tripRow({
           id: 'other',
           score: 80,
@@ -285,6 +287,50 @@ Deno.test('a deleted trip is left out of every aggregate, and a late action also
   assertEquals(out.day[1].tripsScored, 0);
   assertEquals(out.day[1].longTermScore, out.day[0].longTermScore);
   assertEquals(out.baselines?.medians.score, 70);
+});
+
+// D2: on a delete the trip's own stored row stays on its day as a deleted drive, so the day is
+// judged with and without it; the long-term score and the baselines still leave it out.
+Deno.test('keepTripOnDay judges the day with and without the deleted trip, and the long-term score leaves it out', async () => {
+  const now = T0 + 3_600_000;
+  const kept = await aggregatesAfter(createDb(store().client), UID, now, trip(), null, { keepTripOnDay: true });
+  const dropped = await aggregatesAfter(createDb(store().client), UID, now, trip(), null);
+  // without it the day is the 80 alone (good) and phone-free; with it, 90 and 80 (safe) with a
+  // phone pickup: the lower of the two is kept, a good day that is not phone-free
+  assertEquals(dropped.day[0].phoneFreeDay, true);
+  assertEquals(kept.day[0].safeDay, false);
+  assertEquals(kept.day[0].goodDay, true);
+  assertEquals(kept.day[0].phoneFreeDay, false);
+  // the counts are the kept drives', exactly as before
+  assertEquals(kept.day[0].tripsScored, 1);
+  assertEquals(kept.day[0].drivingS, 1500);
+  assertEquals(kept.day[0].exposure, 1.5);
+  assertEquals(kept.day[0].longTermScore, dropped.day[0].longTermScore);
+  assertEquals(kept.baselines?.medians, dropped.baselines?.medians);
+});
+
+Deno.test('keepTripOnDay treats the trip as deleted whether or not the read already sees its deleted_at', async () => {
+  const now = T0 + 3_600_000;
+  const before = await aggregatesAfter(createDb(store().client), UID, now, trip(), null, { keepTripOnDay: true });
+  const marked = store({ deleted_at: new Date(now).toISOString() });
+  const after = await aggregatesAfter(createDb(marked.client), UID, now, trip(), null, { keepTripOnDay: true });
+  assertEquals(after.day, before.day);
+});
+
+Deno.test('a deleted trip that is not the one acted on stays on its day for a dispute too', async () => {
+  const fake = store({}, [tripRow({ id: 'gone', score: 40, duration_s: 1500, deleted_at: new Date(T0).toISOString() })]);
+  const out = await aggregatesAfter(createDb(fake.client), UID, T0 + 3_600_000, trip(), {
+    score: 96,
+    status: 'final',
+    exposure: 1.1,
+    categoryDeductions: {},
+    phoneEvents: 0,
+    hadSevereEvent: false,
+  });
+  // 96 and 80 alone would be a safe day; with the deleted 40 the average is 72: good, not safe
+  assertEquals(out.day[0].safeDay, false);
+  assertEquals(out.day[0].goodDay, true);
+  assertEquals(out.day[0].tripsScored, 2);
 });
 
 Deno.test('the integer-bound day fields reach the envelope as integers even when the stored durations are not', async () => {

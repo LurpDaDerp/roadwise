@@ -117,13 +117,13 @@ Deno.test('listScoredTrips returns live scored trips since the cutoff, newest fi
   });
 });
 
-Deno.test('listDayTrips returns the live trips of those days with their scored phone events', async () => {
+Deno.test('listDayTrips returns the trips of those days, deleted ones marked, with their scored phone events', async () => {
   const fake = fakeSupabase({
     tables: {
       trips: [
         tripRow({ id: 'a', camera_session: true }),
         tripRow({ id: 'b', local_day: '2023-11-15', status: 'unscored', score: null, had_severe_event: true }),
-        tripRow({ id: 'gone', deleted_at: new Date(T0).toISOString() }),
+        tripRow({ id: 'gone', score: 50, deleted_at: new Date(T0).toISOString() }),
         tripRow({ id: 'other-day', local_day: '2023-11-16' }),
       ],
       trip_events: [
@@ -147,6 +147,7 @@ Deno.test('listDayTrips returns the live trips of those days with their scored p
       hadSevereEvent: false,
       phoneEvents: 2,
       cameraGood: true,
+      deleted: false,
     },
     {
       id: 'b',
@@ -158,11 +159,30 @@ Deno.test('listDayTrips returns the live trips of those days with their scored p
       hadSevereEvent: true,
       phoneEvents: 0,
       cameraGood: false,
+      deleted: false,
+    },
+    // D2: a deleted drive keeps counting against its day, with what it stored
+    {
+      id: 'gone',
+      localDay: TRIP_DAY,
+      score: 50,
+      status: 'final',
+      durationS: 1200,
+      exposure: 1,
+      hadSevereEvent: false,
+      phoneEvents: 1,
+      cameraGood: false,
+      deleted: true,
     },
   ]);
+  const trips = fake.queries.find((q) => q.table === 'trips');
+  assertEquals(
+    trips?.filters.some((f) => f[1] === 'deleted_at'),
+    false
+  );
   const events = fake.queries.find((q) => q.table === 'trip_events');
   assertEquals(events?.filters, [
-    ['in', 'trip_id', ['a', 'b']],
+    ['in', 'trip_id', ['a', 'b', 'gone']],
     ['eq', 'category', 'phone'],
     ['eq', 'status', 'scored'],
   ]);
