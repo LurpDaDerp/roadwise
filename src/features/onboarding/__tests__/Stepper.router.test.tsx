@@ -22,6 +22,21 @@ import { ThemeProvider } from '@/ui/theme';
 import type { FlowContext } from '../flow';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
 
+// Task 12's real Terms, profile and block steps read the session, the config and the server; this
+// suite is about the stepper's mechanics, so those three render the placeholder frame instead.
+jest.mock('../steps/TermsStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { TermsStep: (p: object) => <PlaceholderStep {...p} step="terms" /> };
+});
+jest.mock('../steps/ProfileStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { ProfileStep: (p: object) => <PlaceholderStep {...p} step="profile" /> };
+});
+jest.mock('../steps/NotEligibleStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { NotEligibleStep: (p: object) => <PlaceholderStep {...p} step="not-eligible" /> };
+});
+
 const ADULT: FlowContext = {
   platform: 'android',
   ageBand: '18_plus',

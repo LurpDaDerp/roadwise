@@ -1,7 +1,10 @@
 import type { ComponentType } from 'react';
 
 import type { FlowContext, StepId } from './flow';
+import { NotEligibleStep } from './steps/NotEligibleStep';
 import { PlaceholderStep } from './steps/PlaceholderStep';
+import { ProfileStep } from './steps/ProfileStep';
+import { TermsStep } from './steps/TermsStep';
 
 /**
  * What the stepper hands every step. A step renders its own `StepFrame` (the position comes from
@@ -30,9 +33,9 @@ function placeholderFor(step: StepId): ComponentType<StepProps> {
  * out of every flow until `STEP_AVAILABLE` turns them on.
  */
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
-  terms: placeholderFor('terms'),
-  profile: placeholderFor('profile'),
-  'not-eligible': placeholderFor('not-eligible'),
+  terms: TermsStep,
+  profile: ProfileStep,
+  'not-eligible': NotEligibleStep,
   guardian: placeholderFor('guardian'),
   location: placeholderFor('location'),
   motion: placeholderFor('motion'),
