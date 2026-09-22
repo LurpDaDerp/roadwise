@@ -18,6 +18,7 @@
 import DriveSense from '@drive-sense';
 import { AppRegistry, Platform } from 'react-native';
 
+import type { Db } from '@/data/db';
 import type { DriveHost } from '@/drive/host';
 
 import type { AppRuntime } from './bootstrap';
@@ -38,7 +39,17 @@ export const HEADLESS_DRAIN_TIMEOUT_MS = 60_000;
 export const INHERITED_CAPTURE_WAIT_MS = 65_000;
 
 /** The drive-summary notifier (U3), attached here because no layout is mounted headless. */
-type AttachNotifier = (host: DriveHost) => { detach(): void; settled(): Promise<void> };
+type AttachNotifier = (host: DriveHost, db: Db) => { detach(): void; settled(): Promise<void> };
+
+/**
+ * U3's notifier for the headless task, given the runtime's database (M4 final review m6): the
+ * notifier plans delivery from it, and must not depend on the runtime having attached first.
+ */
+export function attachHeadlessSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-notifications
+  const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
+  return attachSummaryNotifier(host, { db });
+}
 
 export interface DriveHeadlessTaskDeps {
   ensureRuntime: (profile: LaunchProfile) => Promise<AppRuntime>;
@@ -114,7 +125,7 @@ export function createDriveHeadlessTask(
       }
       // Past boot, the runtime is shared (the app may be open on it): an error here is reported,
       // and a live drive is never stopped over it (H2 r1 m1).
-      notifier = deps.attachNotifier?.(rt.drive) ?? null;
+      notifier = deps.attachNotifier?.(rt.drive, rt.db) ?? null;
       await untilDriveDone(rt.drive);
       // A drain the finalize already woke is waited for before this task's own bounded pass, so
       // the task never settles mid-upload (H2 r1 m2). The whole wait is inside the bound.
@@ -149,9 +160,7 @@ export function registerDriveHeadlessTask(deps: RegisterDeps = {}): boolean {
       ensureRuntime,
       stopCapture: () => DriveSense.stopCapture(),
       report: warn,
-      attachNotifier: (host) =>
-        // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-notifications
-        (require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier')).attachSummaryNotifier(host),
+      attachNotifier: attachHeadlessSummaryNotifier,
     }
   );
   (deps.registry ?? AppRegistry).registerHeadlessTask(DRIVE_HEADLESS_TASK, () => task);

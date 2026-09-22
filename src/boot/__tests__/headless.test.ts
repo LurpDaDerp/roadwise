@@ -1,4 +1,5 @@
 import {
+  attachHeadlessSummaryNotifier,
   createDriveHeadlessTask,
   DRIVE_HEADLESS_TASK,
   HEADLESS_DRAIN_TIMEOUT_MS,
@@ -142,7 +143,7 @@ describe('the DriveSenseTask body', () => {
     expect(isHeadlessActive()).toBe(false);
     expect(d.stopCapture).not.toHaveBeenCalled();
     // The summary notification is scheduled from here when the app is not open (U3).
-    expect(d.attachNotifier).toHaveBeenCalledWith(script.runtime.drive);
+    expect(d.attachNotifier).toHaveBeenCalledWith(script.runtime.drive, (script.runtime as unknown as { db: unknown }).db);
     expect(calls).toEqual(['detach']);
   });
 
@@ -263,5 +264,33 @@ describe('registerDriveHeadlessTask', () => {
     const registerHeadlessTask = jest.fn();
     expect(registerDriveHeadlessTask({ os: 'ios', registry: { registerHeadlessTask } })).toBe(false);
     expect(registerHeadlessTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('the headless summary notifier gets the runtime database (M4 final review m6)', () => {
+  test('the task attaches with the runtime db', async () => {
+    const script = scriptedRuntime();
+    const db = { marker: 'db' };
+    (script.runtime as unknown as { db: unknown }).db = db;
+    const { deps: d } = deps({ ensureRuntime: jest.fn(async () => script.runtime) });
+    const run = createDriveHeadlessTask(d)({});
+    await flush();
+    expect(d.attachNotifier).toHaveBeenCalledWith(script.runtime.drive, db);
+    script.idle();
+    await flush();
+    script.runnerIdle();
+    await flush();
+    script.drained();
+    await run;
+  });
+
+  test('the default attach passes { db } to U3 (not first-attach luck)', () => {
+    const attach = jest.fn(() => ({ detach: () => {}, settled: async () => {} }));
+    jest.doMock('@/features/drive/summaryNotifier', () => ({ attachSummaryNotifier: attach }));
+    const host = {} as never;
+    const db = {} as never;
+    attachHeadlessSummaryNotifier(host, db);
+    expect(attach).toHaveBeenCalledWith(host, { db });
+    jest.dontMock('@/features/drive/summaryNotifier');
   });
 });
