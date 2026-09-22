@@ -1336,3 +1336,50 @@ describe('an under-13 account never arms (ruling T12 (1))', () => {
     expect(h.host.snapshot().status).toBe('armed');
   });
 });
+
+describe('an under-13 account records nothing (u13 security M-2)', () => {
+  test('a trip adopted at launch is ended and finalized under the owner, not recorded on', async () => {
+    const { trip, rows } = await orphan();
+    const h = harness({ readAgeBand: async () => 'u13' });
+    h.setClock(last(rows).ts + 20_000);
+    h.fake.setState({ capturing: true, captureWasOpen: true, mode: 'mounted', rate: 'full' });
+    await h.host.start({ adopt: trip });
+    await h.host.untilIdle();
+    expect(h.host.snapshot().status).toBe('off');
+    expect((await trips().get(trip.client_trip_id))?.status).not.toBe('recording');
+    expect(await trips().list({ status: 'recording' })).toEqual([]);
+    expect(h.host.captureActive()).toBe(false);
+  });
+
+  test('negative control: an adult account continues the adopted trip', async () => {
+    const { trip, rows } = await orphan();
+    const h = harness({ readAgeBand: async () => '18_plus' });
+    h.setClock(last(rows).ts + 20_000);
+    await h.host.start({ adopt: trip });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: trip.client_trip_id });
+  });
+
+  test('a manual start is refused; an adult band then allows it', async () => {
+    const h = harness({ readAgeBand: async () => 'u13' });
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    expect(h.host.snapshot().status).toBe('off');
+    expect(h.fake.calls.filter((c) => c.startsWith('startCapture'))).toEqual([]);
+
+    await h.host.setAgeBand('18_plus');
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    expect(h.host.isBusy()).toBe(true);
+  });
+
+  test('a band that becomes u13 during a drive ends and finalizes it', async () => {
+    const h = harness({ readAgeBand: async () => 'unknown' });
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(200, { t0: h.now() + 1000 }));
+    const tripId = h.host.snapshot().clientTripId as string;
+    await h.host.setAgeBand('u13');
+    await h.host.untilIdle();
+    expect(h.host.isBusy()).toBe(false);
+    expect((await trips().get(tripId))?.status).toBe('provisional');
+  });
+});

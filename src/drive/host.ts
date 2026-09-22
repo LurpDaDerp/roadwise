@@ -798,6 +798,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             report(e, 'adopt');
           }
         }
+        // An under-13 account records nothing (u13 security M-2): a trip the relaunch adopted is
+        // ended and finalized under the owner as usual, and nothing is recorded onto it.
+        if (ageBand === 'u13') {
+          if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
+          // Nor is a capture native started kept waiting for a wake: nothing may be recorded, so
+          // it is stopped at the first reconcile rather than left to the 60 s watchdog.
+          inheritedCapture = false;
+        }
         attachNative();
         if (deps.appState) {
           subscriptions.push(
@@ -841,8 +849,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     manualStart: ({ mode, passenger, evidence }) =>
       run(async () => {
-        // No drive is recorded for nobody (§8.2; final-fix security M-1).
-        if (signedOut) return;
+        // No drive is recorded for nobody (§8.2; final-fix security M-1), nor for an under-13
+        // account (u13 security M-2): it would sit on the phone and fail as a permanent 403.
+        if (signedOut || ageBand === 'u13') return;
         await engine.dispatch({ type: 'manualStart', mode, passenger, evidence, ts: now() });
       }, 'manualStart'),
 
@@ -970,6 +979,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       run(async () => {
         if (band === ageBand) return;
         ageBand = band;
+        // A drive open when the account turns out to be under 13 is ended and finalized, like the
+        // one a relaunch adopted (u13 security M-2).
+        if (band === 'u13' && isBusyStatus(engine.snapshot().status)) {
+          await engine.dispatch({ type: 'end', ts: now() });
+        }
         await applyArming();
       }, 'ageBand'),
 
