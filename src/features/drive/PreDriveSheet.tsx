@@ -18,7 +18,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -37,6 +37,7 @@ import { Field } from '@/features/trips/Field';
 import { HOME_HREF } from '@/features/trips/routes';
 import { Banner, Button, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
+import { DRIVE_ROUTES, driveHref } from './hudCopy';
 import { currentSpeedMps, isMovingStart } from './movingCheck';
 import {
   ensureDrivePermissions,
@@ -54,9 +55,9 @@ export const LOW_BATTERY_PCT = 15;
 /** A fix this tight is one the drive can use (the recorder's validity line). */
 export const GPS_READY_ACCURACY_M = 50;
 
-// U2 owns these routes (`app/drive/hud.tsx`, `app/drive/pocket.tsx`); the names are the plan's.
-export const HUD_HREF = '/drive/hud' as Href;
-export const POCKET_HREF = '/drive/pocket' as Href;
+// U2's routes (`app/drive/hud.tsx`, `app/drive/pocket.tsx`), named once in its `hudCopy.ts`.
+export const HUD_HREF = driveHref(DRIVE_ROUTES.hud);
+export const POCKET_HREF = driveHref(DRIVE_ROUTES.pocket);
 
 const START_MIN_HEIGHT = 64;
 const CONTROL_MIN_HEIGHT = 52;

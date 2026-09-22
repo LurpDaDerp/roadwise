@@ -169,8 +169,33 @@ describe('EndScreen (C8)', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
-  test('no trip to wait for (reached with nothing recording): Home, with no claim at all', async () => {
-    const h = stubHost(state({ status: 'armed', clientTripId: null, lastFinalized: saved('earlier') }));
+  test('an automatic close batched finalize → armed before the mount: the lastFinalized trip is the one', async () => {
+    // U2 seam: the snapshot's id is already null; lastFinalized names the trip that just closed.
+    const h = stubHost(state({ status: 'armed', clientTripId: null, lastFinalized: saved('closed') }));
+    await renderEnd(h.host);
+    expect(mockRouter.replace).toHaveBeenCalledWith(tripSummaryHref('closed'));
+  });
+
+  test('batched and short: the outcome of that same trip, not a guess', async () => {
+    const short = stubHost(state({ status: 'armed', clientTripId: null, lastFinalized: saved('hop', true) }));
+    await renderEnd(short.host);
+    expect(screen.getByRole('header', { name: copy.end.short })).toBeOnTheScreen();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('End pressed before host.end() (U2): the recording trip is captured, and a later outcome for it lands', async () => {
+    const h = stubHost(state({ status: 'recording', clientTripId: 'mine', lastFinalized: saved('yesterday') }));
+    await renderEnd(h.host);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await act(async () => h.push({ status: 'ending' }));
+    await act(async () => h.push({ status: 'finalizing' }));
+    await act(async () => h.push({ status: 'armed', clientTripId: null, lastFinalized: saved('mine') }));
+    expect(mockRouter.replace).toHaveBeenCalledWith(tripSummaryHref('mine'));
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+  });
+
+  test('no trip anywhere (nothing recording, nothing finalized): Home, with no claim at all', async () => {
+    const h = stubHost(state({ status: 'armed', clientTripId: null, lastFinalized: null }));
     await renderEnd(h.host);
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
     expect(mockRouter.replace).not.toHaveBeenCalled();

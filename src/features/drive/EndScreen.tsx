@@ -2,8 +2,10 @@
  * C8 — the end of a drive (§7.C C8; M3 brief U3, rev1: I16).
  *
  * It captures the trip it is for on mount — the route's `clientTripId` when given, else the
- * host's current one — and waits only for a `lastFinalized` with that id. `lastFinalized` carries
- * over into the next trip (H1 review), so an outcome for any other id is ignored.
+ * host's current one, else the `lastFinalized` one (U2 seam: an automatic close can batch
+ * finalize → armed into one render, so the snapshot's id may already be null when this screen
+ * mounts) — and matches `lastFinalized` against that id. `lastFinalized` carries over into the
+ * next trip (H1 review), so an outcome for any other id is ignored.
  *
  * - `ok: true` → that trip's summary (D1). A short drive stays here: "Short drive saved — too short
  *   to score", with Done.
@@ -11,7 +13,7 @@
  *   the next time RoadWise opens." with Done. (The recovery at launch does finalize a trip left
  *   `recording`, E1 — so the sentence is true in both cases.)
  * - A dry run (the parked simulation, U5) never claims a save or a failure: it stored nothing.
- * - Nothing to wait for (no trip id at all) → Home, with no claim.
+ * - Nothing to wait for (no trip id anywhere) → Home, with no claim.
  *
  * While mounted it marks itself for the summary notifier: a finalize seen while the app is in the
  * foreground on this screen schedules no notification, since this screen is the answer.
@@ -41,7 +43,10 @@ export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) 
   const host = useDriveHost();
   const t = useTheme();
   // Captured once, on mount: the trip this screen is for.
-  const [tripId] = useState<string | null>(() => routeId || host.snapshot().clientTripId);
+  const [tripId] = useState<string | null>(() => {
+    const s = host.snapshot();
+    return routeId || s.clientTripId || s.lastFinalized?.clientTripId || null;
+  });
   const [outcome, setOutcome] = useState<Outcome>('waiting');
   const settledRef = useRef(false);
 
