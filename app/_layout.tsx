@@ -85,11 +85,11 @@ export default function RootLayout() {
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover });
   }, [runtime, handover]);
 
-  // §8.2 (final review I3; final-fix security I-1): only a real sign-in by this device's owner —
-  // a `SIGNED_IN` event whose uid is the recorded owner (or a device nobody owns yet) — lets
-  // auto-record follow the opt-in again. A token refresh, the initial session or any other event
-  // never does, and the host ignores even `SIGNED_IN` while its sign-out is still in progress. A
-  // different driver is a handover: the rebuild's new host decides from its own launch.
+  // §8.2 (final review I3; final-fix security I-1): only a sign-in by this device's owner — a
+  // `SIGNED_IN` whose uid is the recorded owner (or a device nobody owns yet), or the owner's
+  // `INITIAL_SESSION` at a slow launch — lets auto-record follow the opt-in again. A token refresh
+  // or any other event never does, and the host ignores these while its sign-out is in progress.
+  // A different driver is a handover: the rebuild's new host decides from its own launch.
   useEffect(() => {
     if (runtime === null) return;
     let live = true;
@@ -98,13 +98,26 @@ export default function RootLayout() {
         runtime.drive.signOutCompleted();
         return;
       }
-      if (event !== 'SIGNED_IN' || !session) return;
+      if (!session) return;
       const uid = session.user.id;
-      void readDeviceOwner(runtime.db)
-        .then((owner) => {
-          if (live && (owner === uid || owner === null)) return runtime.drive.signedInAgain();
-        })
-        .catch(() => {});
+      if (event === 'SIGNED_IN') {
+        void readDeviceOwner(runtime.db)
+          .then((owner) => {
+            if (live && (owner === uid || owner === null)) return runtime.drive.signedInAgain();
+          })
+          .catch(() => {});
+        return;
+      }
+      // A cold launch whose session arrived only now (a slow keychain): the device owner's own
+      // restored session re-arms, or a long-lived process would silently miss drives for days.
+      // The host refuses it during a sign-out and after one completed (ruling on H2 concern 2).
+      if (event === 'INITIAL_SESSION') {
+        void readDeviceOwner(runtime.db)
+          .then((owner) => {
+            if (live && owner === uid) return runtime.drive.signedInAgain({ initial: true });
+          })
+          .catch(() => {});
+      }
     });
     return () => {
       live = false;

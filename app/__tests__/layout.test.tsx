@@ -80,6 +80,10 @@ jest.mock('@/ui/fonts', () => ({
 
 const mockHandover: { fire: ((uid: string) => void) | null } = { fire: null };
 const mockOwner: { uid: string | null } = { uid: null };
+// The layout's subject is its own wiring, not the auth gate's routing (tested in its own suite).
+jest.mock('@/features/auth/AuthGate', () => ({
+  AuthGate: ({ children }: { children: ReactNode }) => children,
+}));
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => mockOwner.uid,
 }));
@@ -318,12 +322,12 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
   });
 
-  test('only SIGNED_IN by the device owner re-arms; a token refresh never does', async () => {
+  test('SIGNED_IN by the device owner re-arms; a token refresh never does', async () => {
     mockOwner.uid = 'u1';
     const { host } = await renderReady();
     await act(async () => {
       mockAuth.listener?.('TOKEN_REFRESHED', { user: { id: 'u1' } });
-      mockAuth.listener?.('INITIAL_SESSION', { user: { id: 'u1' } });
+      mockAuth.listener?.('USER_UPDATED', { user: { id: 'u1' } });
       await settle();
     });
     expect(host.signedInAgain).not.toHaveBeenCalled();
@@ -333,7 +337,23 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
       mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } });
       await settle();
     });
-    expect(host.signedInAgain).toHaveBeenCalledTimes(1);
+    expect(host.signedInAgain).toHaveBeenCalledWith();
+  });
+
+  test("a slow keychain: the owner's INITIAL_SESSION re-arms, marked initial so the host refuses it around a sign-out", async () => {
+    mockOwner.uid = 'u1';
+    const { host } = await renderReady();
+    await act(async () => {
+      mockAuth.listener?.('INITIAL_SESSION', { user: { id: 'u2' } });
+      mockAuth.listener?.('INITIAL_SESSION', null);
+      await settle();
+    });
+    expect(host.signedInAgain).not.toHaveBeenCalled();
+    await act(async () => {
+      mockAuth.listener?.('INITIAL_SESSION', { user: { id: 'u1' } });
+      await settle();
+    });
+    expect(host.signedInAgain).toHaveBeenCalledWith({ initial: true });
   });
 
   test("a different driver's SIGNED_IN never re-arms the old host (a handover rebuilds instead)", async () => {

@@ -1179,3 +1179,29 @@ describe('the unavailable mark is not sticky (final re-review n2)', () => {
     expect(h.host.snapshot().alertsAvailable).toBe(true);
   });
 });
+
+describe('a slow keychain at launch does not leave the host disarmed for the process (ruling on H2 concern 2)', () => {
+  test("a launch that started signed out re-arms on the owner's initial session", async () => {
+    const h = harness({ signedOut: true });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot().status).toBe('off');
+    await h.host.signedInAgain({ initial: true });
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('never while a sign-out is in progress, nor after one completed in this process', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.suspendForSignOut();
+    await h.host.signedInAgain({ initial: true });
+    expect(h.host.snapshot().status).toBe('off');
+    h.host.signOutCompleted();
+    await h.host.signedInAgain({ initial: true });
+    expect(h.host.snapshot().status).toBe('off');
+    // Only a real sign-in re-arms after a completed sign-out.
+    await h.host.signedInAgain();
+    expect(h.host.snapshot().status).toBe('armed');
+  });
+});

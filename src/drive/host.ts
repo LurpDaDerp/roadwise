@@ -173,7 +173,7 @@ export interface DriveHost {
    * auth event landing during the sign-out's flush can never re-arm a host nobody is signed in to
    * (final-fix security I-1).
    */
-  signedInAgain(): Promise<void>;
+  signedInAgain(opts?: { initial?: boolean }): Promise<void>;
   /** The session has ended (`SIGNED_OUT`): the sign-out is over, and the host stays disarmed. */
   signOutCompleted(): void;
   /** The per-row detector context the engine is given (diagnostics). */
@@ -294,6 +294,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let signedOut = deps.signedOut === true;
   /** Between `suspendForSignOut` and `signOutCompleted` (or a back-out): auth events are ignored. */
   let signingOut = false;
+  /**
+   * A sign-out completed in this process. From then on only a real sign-in re-arms: an
+   * `INITIAL_SESSION` (a restored session) never does (ruling on H2 concern 2).
+   */
+  let signOutDone = false;
   let thermal: ThermalLevel = 'nominal';
   let callActive = false;
   let screenLocked = false;
@@ -903,15 +908,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         await applyArming();
       }, 'signIn'),
 
-    signedInAgain: () =>
+    signedInAgain: (opts = {}) =>
       run(async () => {
         if (signingOut || !signedOut) return;
+        // A restored session at launch (a slow keychain, `INITIAL_SESSION`) re-arms a host that
+        // started signed out — never once a sign-out has completed in this process.
+        if (opts.initial === true && signOutDone) return;
         signedOut = false;
         await applyArming();
       }, 'signIn'),
 
     signOutCompleted() {
       signingOut = false;
+      signOutDone = true;
     },
 
     l1RespectsSilentSwitch: () =>
