@@ -17,41 +17,43 @@ final class Watchdog {
   static let CLAIM_TIMEOUT_S: Double = 60
   static let NO_LISTENER_TIMEOUT_S: Double = 300
 
-  private var claimItem: DispatchWorkItem?
-  private var listenerItem: DispatchWorkItem?
+  /// Deadlines are kept on CLOCK_MONOTONIC, which on Darwin keeps counting while the device sleeps
+  /// and ignores wall-clock changes (review N2N3 M1: `asyncAfter(deadline:)` runs on mach absolute
+  /// time, which stops in sleep, so at `low` rate while parked the 5-minute guard could stretch
+  /// indefinitely). The timer that wakes us is on the wall clock (`asyncAfter(wallDeadline:)`, which
+  /// also advances in sleep); every row and fix calls `check()` too, as Android does.
+  private enum Kind { case claim, listener }
+  private var claimDeadline: UInt64?
+  private var listenerDeadline: UInt64?
+  private var generation = 0
   /// Called on main when a guard fires; the controller stops the capture.
   var onExpire: (() -> Void)?
 
   /// A native-started capture is still waiting for its JS claim.
-  var awaitingClaim: Bool { claimItem != nil }
+  var awaitingClaim: Bool { claimDeadline != nil }
+
+  static func nowNs() -> UInt64 { clock_gettime_nsec_np(CLOCK_MONOTONIC) }
 
   func captureStarted(nativeStarted: Bool, rowListening: Bool) {
     dispatchPrecondition(condition: .onQueue(.main))
     cancelAll()
-    if nativeStarted {
-      claimItem = schedule(Self.CLAIM_TIMEOUT_S) { [weak self] in
-        self?.claimItem = nil
-        self?.onExpire?()
-      }
-    }
-    if !rowListening { startListenerClock() }
+    if nativeStarted { arm(.claim, Self.CLAIM_TIMEOUT_S) }
+    if !rowListening { arm(.listener, Self.NO_LISTENER_TIMEOUT_S) }
   }
 
   /// A JS `startCapture` claimed the capture.
   func claimed() {
     dispatchPrecondition(condition: .onQueue(.main))
-    claimItem?.cancel()
-    claimItem = nil
+    claimDeadline = nil
   }
 
   /// The JS `row` listener attached or went away.
   func rowListening(_ listening: Bool, capturing: Bool) {
     dispatchPrecondition(condition: .onQueue(.main))
     if listening || !capturing {
-      listenerItem?.cancel()
-      listenerItem = nil
-    } else if listenerItem == nil {
-      startListenerClock()
+      listenerDeadline = nil
+    } else if listenerDeadline == nil {
+      arm(.listener, Self.NO_LISTENER_TIMEOUT_S)
     }
   }
 
@@ -60,24 +62,49 @@ final class Watchdog {
     cancelAll()
   }
 
-  private func startListenerClock() {
-    listenerItem = schedule(Self.NO_LISTENER_TIMEOUT_S) { [weak self] in
-      self?.listenerItem = nil
-      self?.onExpire?()
+  /// Main thread. Fires any guard whose deadline has passed (called on each row and fix, and by
+  /// the guards' own timers).
+  func check() {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let now = Self.nowNs()
+    var expired = false
+    if let d = claimDeadline, now >= d {
+      claimDeadline = nil
+      expired = true
+    }
+    if let d = listenerDeadline, now >= d {
+      listenerDeadline = nil
+      expired = true
+    }
+    if expired { onExpire?() }
+  }
+
+  private func arm(_ kind: Kind, _ seconds: Double) {
+    let deadline = Self.nowNs() + UInt64(seconds * 1_000_000_000)
+    switch kind {
+    case .claim: claimDeadline = deadline
+    case .listener: listenerDeadline = deadline
+    }
+    schedule(kind, seconds, generation: generation)
+  }
+
+  /// A wall-clock timer that re-checks, and re-arms itself if a wall-clock change fired it early.
+  private func schedule(_ kind: Kind, _ seconds: Double, generation gen: Int) {
+    DispatchQueue.main.asyncAfter(wallDeadline: .now() + Swift.max(seconds, 0.05)) { [weak self] in
+      guard let self = self, gen == self.generation else { return }
+      self.check()
+      let pending = kind == .claim ? self.claimDeadline : self.listenerDeadline
+      if let d = pending {
+        let now = Self.nowNs()
+        self.schedule(kind, d > now ? Double(d - now) / 1_000_000_000 : 0, generation: gen)
+      }
     }
   }
 
   private func cancelAll() {
-    claimItem?.cancel()
-    claimItem = nil
-    listenerItem?.cancel()
-    listenerItem = nil
-  }
-
-  private func schedule(_ seconds: Double, _ body: @escaping () -> Void) -> DispatchWorkItem {
-    let item = DispatchWorkItem(block: body)
-    DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
-    return item
+    generation += 1
+    claimDeadline = nil
+    listenerDeadline = nil
   }
 }
 

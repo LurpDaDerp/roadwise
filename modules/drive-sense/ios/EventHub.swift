@@ -27,10 +27,15 @@ final class EventHub {
 
   private init() {}
 
+  /// A new module instance: listeners of the old one are gone. Say so for each (as Android does),
+  /// because the old instance's own `detach` may come later and then be ignored — the row
+  /// watchdog must learn that nobody is listening (review N2N3 M2).
   func attach(_ sink: DriveSenseEventSink) {
     onMain {
       self.sink = sink
+      let had = self.listening
       self.listening.removeAll()
+      for e in had { self.onListeningChanged?(e, false) }
     }
   }
 

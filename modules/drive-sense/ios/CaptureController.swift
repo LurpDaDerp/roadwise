@@ -234,6 +234,7 @@ final class CaptureController {
   }
 
   private func handleFix(_ fix: FixSample) {
+    watchdog.check() // a guard may be due (its timer can lag in sleep); may stop the capture
     guard capturing else { return }
     let gen = generation
     if rate == "low" {
@@ -245,6 +246,7 @@ final class CaptureController {
   }
 
   private func emitRow(_ row: ExtractedRow, generation gen: Int) {
+    watchdog.check()
     guard capturing, gen == generation else { return }
     lastRowTs = row.ts
     EventHub.shared.emit("row", row.payload)

@@ -168,6 +168,24 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/NO_LISTENER_TIMEOUT_S\s*(?::\s*\w+)?\s*=\s*300\b/);
   });
 
+  it('keeps watchdog deadlines on a clock that runs in sleep, checked on rows and fixes (N2N3 M1)', () => {
+    // the Watchdog class only (WakeTask's 25 s runs under a background-task assertion: no sleep)
+    const all = code('Watchdog.swift');
+    const src = all.slice(all.indexOf('final class Watchdog'), all.indexOf('final class WakeTask'));
+    expect(src).toContain('asyncAfter(wallDeadline:');
+    expect(src).not.toMatch(/asyncAfter\(deadline:/);
+    expect(src).toContain('CLOCK_MONOTONIC');
+    const ctrl = code('CaptureController.swift');
+    expect(ctrl).toMatch(/func handleFix[\s\S]{0,80}watchdog\.check\(\)/);
+    expect(ctrl).toMatch(/func emitRow[\s\S]{0,80}watchdog\.check\(\)/);
+  });
+
+  it('tells the watchdog the old listeners are gone when a new module attaches (N2N3 M2)', () => {
+    expect(code('EventHub.swift')).toMatch(
+      /func attach[\s\S]{0,200}for e in had \{ self\.onListeningChanged\?\(e, false\) \}/
+    );
+  });
+
   it('maps motion activity with the README precedence', () => {
     const src = code('ActivitySource.swift');
     const order = ['.walking', '.running', '.cycling', '.automotive', '.stationary'].map((k) =>
