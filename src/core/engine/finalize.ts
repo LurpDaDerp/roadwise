@@ -434,7 +434,8 @@ export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
  * Thrown after a drive whose payload failed the contract has been ENDED locally: stored with its
  * measurements, `sync_state: 'failed'` and `sync_error: 'invalid_payload'`, so it is never left
  * `recording` for a recovery that would only fail the same way, and history shows why it will not
- * upload. The caller reports it like any finalize failure.
+ * upload. Its samples are kept for a later build to finalize again; nothing is queued. The caller
+ * reports it like any finalize failure.
  */
 export class FinalizePayloadRefusedError extends Error {
   constructor(
@@ -647,7 +648,9 @@ export async function finalizeTrip(
   if (!parsed.success) {
     // Defence in depth: the drive is ended, never left `recording` (a recovery would fail the same
     // way forever) and never silent. Stored whole when the events store; when even that fails,
-    // the trip row alone is ended and the samples are kept.
+    // the trip row alone is ended. Either way the samples are KEPT (ruling T1 r4 n1, no data loss):
+    // the drive is the driver's, a later build that fixes the contract can finalize it again from
+    // them, and the driver's own delete still purges them.
     const paths = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))].slice(0, 8);
     const failed = { sync_state: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR } as const;
     try {
@@ -656,7 +659,6 @@ export async function finalizeTrip(
         await events.insertMany(allEvents.map((e) => toNewEvent(e, id)), tx);
         const trip = await trips.update(id, { ...tripPatch, ...failed }, now(), tx);
         if (!trip) throw new MissingTripError(id);
-        await samples.purgeByTrip(id, tx);
         await createSettingsRepo(tx).remove(arbiterStateKey(id));
       });
     } catch (error) {
@@ -684,6 +686,8 @@ export async function finalizeTrip(
         ...tripPatch,
         // Nothing to sync for a discarded trip: it is settled the moment it is stored.
         sync_state: discarded ? 'synced' : 'queued',
+        // A drive an earlier build refused (`invalid_payload`) is no longer failed once it queues.
+        sync_error: null,
       },
       now(),
       tx

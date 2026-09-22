@@ -27,6 +27,9 @@ import {
   type TripStatus,
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { createSettingsRepo } from '@/data/db/settings';
+import { DEVICE_OWNER_KEY } from '@/data/sync/queue';
+import { deleteTrip } from '@/features/trips/tripActions';
 import { FinalizeTripPayloadSchema, MAX_EVENTS, MAX_POLYLINE_BYTES, TZ_NAME_PATTERN } from '@/data/sync/payload';
 import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
 import { decodePolyline, encodePolyline, simplify } from '@/lib/polyline';
@@ -942,7 +945,7 @@ describe('the zone a drive carries', () => {
 describe('a payload the contract refuses', () => {
   const refusing = (): FinalizeDeps => ({ ...deps, cameraSession: 'yes' as unknown as boolean });
 
-  test('ends the trip as a recorded, visible failure and queues nothing', async () => {
+  test('ends the trip as a recorded, visible failure, keeps its samples and queues nothing', async () => {
     const rows = track(300);
     await persisted(rows, 300);
 
@@ -955,11 +958,41 @@ describe('a payload the contract refuses', () => {
     expect(trip).toMatchObject({ sync_state: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR });
     expect(trip?.ended_at).not.toBeNull();
     await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(0);
-    // stored whole: its events are kept and the samples it no longer needs are gone
+    // stored whole, and nothing lost (ruling T1 r4 n1): its events and every sample are kept
     await expect(createEventsRepo(db).countByTrip(TRIP)).resolves.toBe(1);
-    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(300);
     // nothing is left for recovery to retry forever
     await expect(createTripsRepo(db).list({ status: 'recording' })).resolves.toEqual([]);
+  });
+
+  test('a later build that can build the payload finalizes the kept drive from its samples', async () => {
+    const rows = track(300);
+    await persisted(rows, 300);
+    await expect(finalizeTrip(session(rows, { events: [p1] }), refusing())).rejects.toBeInstanceOf(
+      FinalizePayloadRefusedError
+    );
+
+    const { trip, payload } = await finalizeTrip(session(rows, { events: [p1] }), deps);
+    expect(trip).toMatchObject({ sync_state: 'queued', sync_error: null });
+    expect(payload.rowsDigest.count).toBe(300);
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1);
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+  });
+
+  test("the driver's delete purges the kept samples", async () => {
+    const rows = track(300);
+    await persisted(rows, 300);
+    await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    await expect(finalizeTrip(session(rows, { events: [p1] }), refusing())).rejects.toBeInstanceOf(
+      FinalizePayloadRefusedError
+    );
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(300);
+
+    await deleteTrip(db, TRIP, NOW + 1000);
+
+    await expect(createSamplesRepo(db).count(TRIP)).resolves.toBe(0);
+    await expect(createEventsRepo(db).countByTrip(TRIP)).resolves.toBe(0);
+    await expect(createQueueRepo(db).countByStatus('pending')).resolves.toBe(1); // the delete itself
   });
 
   test('when even the full write fails, the trip row alone is ended and the samples are kept', async () => {
