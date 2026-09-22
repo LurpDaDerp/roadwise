@@ -527,41 +527,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // And the device still records that owner, before anything leaves it (H2 I-1 d).
     if (!(await deviceOwnerIs(db, uid))) return { kind: 'defer' };
 
-    if (payload.tracePath !== null && state.traceUploadedAt === null) {
-      if (await traceWaitsForWifi()) {
-        if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
-        // The summary goes up now; the file follows under its own key on the next Wi-Fi. The new
-        // item carries *this* item's owner, and is written only while the device still records
-        // that owner (security review D1 M-3): a handover between the check above and this write
-        // must not stamp the previous driver's trace with the next driver's uid.
-        const owner = item.owner_uid as string;
-        const trace = { clientTripId: payload.clientTripId, tracePath: payload.tracePath };
-        const queued = await db.transaction(async (tx) => {
-          if (!(await ownerStill(tx, item))) return false;
-          await enqueueTraceUpload(
-            db,
-            trace,
-            at,
-            tx,
-            owner
-          );
-          return true;
-        });
-        if (!queued) return { kind: 'defer' };
-      } else {
-        const upload = await uploadTrace(uid, payload.clientTripId, payload.tracePath);
-        if (upload.kind !== 'ok') return upload;
-        if (upload.uploaded) {
-          if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
-          await queue.markTraceUploaded(item.id, at);
-          state.traceUploadedAt = at;
-        }
-      }
-    }
-
+    // The summary goes FIRST, and the trace only once the server has accepted the trip (M4 final
+    // review backend m2). A trace uploaded ahead of a finalize the server defers (`age_pending`,
+    // an account with no age answer yet) sits in Storage with no trips row; after 14 days the
+    // orphan purge deletes it, and the later finalize would then name a missing object. It is
+    // also the one path that would store a not-yet-aged account's GNSS trace before the answer.
+    //
     // The invoke travels under whatever token the client holds *now*, so the fence is checked
-    // one last time here: an upload that was already in flight is one thing, a whole trip posted
-    // into the next driver's account is another.
+    // here: a whole trip posted into the next driver's account must never happen.
     if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
     const { data, error } = await supabase.functions.invoke(FINALIZE_FUNCTION, { body: payload });
     if (error) {
@@ -572,11 +545,37 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
     const applied = await applyFinalize(item, payload, data, at, state.generation);
     if (applied.kind !== 'done') return applied;
-    // Only this item's own upload licenses the delete; a trace still waiting under `trace:<id>`
-    // is the other item's to remove once it has actually sent it.
-    if (payload.tracePath !== null && state.traceUploadedAt !== null) {
+    if (payload.tracePath === null) return { kind: 'done' };
+    // Uploaded by an earlier build (upload-then-finalize), so this item's own upload licenses it.
+    if (state.traceUploadedAt !== null) {
       await removeTrace(payload.tracePath);
+      return { kind: 'done' };
     }
+
+    // The trip is accepted: the trace follows. On Wi-Fi (or with the setting off) it goes now;
+    // otherwise — or when this attempt fails for any reason — it waits under its own queue item,
+    // with that item's own retry and Wi-Fi rules, and the summary is not sent again.
+    if (!(await traceWaitsForWifi())) {
+      if (!(await ownerHolds(item, state.generation))) return { kind: 'defer' };
+      const upload = await uploadTrace(uid, payload.clientTripId, payload.tracePath);
+      if (upload.kind === 'ok') {
+        // Uploaded (or the file is gone): nothing left for the device to keep.
+        if (upload.uploaded) await removeTrace(payload.tracePath);
+        return { kind: 'done' };
+      }
+    }
+    // The new item carries *this* item's owner, and is written only while the device still
+    // records that owner (security review D1 M-3): a handover between the checks above and this
+    // write must not stamp the previous driver's trace with the next driver's uid.
+    const owner = item.owner_uid as string;
+    const trace = { clientTripId: payload.clientTripId, tracePath: payload.tracePath };
+    await db.transaction(async (tx) => {
+      if (!(await ownerStill(tx, item))) return false;
+      await enqueueTraceUpload(db, trace, at, tx, owner);
+      return true;
+    });
+    // Not queued (the device changed hands): the next driver's wipe removes the file; the trip
+    // itself was accepted, so this item is done either way.
     return { kind: 'done' };
   }
 

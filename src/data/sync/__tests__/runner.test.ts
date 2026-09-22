@@ -317,30 +317,33 @@ test('a 409 from storage counts as uploaded and the finalize still runs', async 
   expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced' });
 });
 
-test('a 5xx from storage is retryable, and the finalize is not attempted without it', async () => {
+test('a 5xx from storage after the finalize: the trip is synced, and the trace waits under its own item', async () => {
   await seedQueuedTrip();
-  supabase = createFakeSupabase({ uid: UID, upload: () => storageError(500, 'boom') });
-
-  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 0, failed: 0, deferred: 1 });
-  expect(supabase.invokes).toHaveLength(0);
-  expect(await finalizeItem()).toMatchObject({
-    status: 'pending',
-    attempts: 1,
-    last_error: 'storage_500',
-    trace_uploaded_at: null,
+  supabase = createFakeSupabase({
+    uid: UID,
+    upload: () => storageError(500, 'boom'),
+    invoke: () => invokeOk(SERVER_OK),
   });
+
+  await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 1 });
+  expect(supabase.invokes).toHaveLength(1);
+  expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced' });
+  // The summary is not sent again; the trace keeps its own retry and Wi-Fi rules.
+  expect(await traceItem()).toMatchObject({ status: 'pending' });
+  expect(fs.files.has(TRACE)).toBe(true);
 });
 
-test('a 403 from storage fails the trip terminally', async () => {
+test('a 403 on the trace after the finalize leaves the trip synced; the trace item takes its own terminal path', async () => {
   await seedQueuedTrip();
-  supabase = createFakeSupabase({ uid: UID, upload: () => storageError(403, 'not authorized') });
-
-  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 0, failed: 1, deferred: 0 });
-  expect(supabase.invokes).toHaveLength(0);
-  expect(await trips().get(TRIP_ID)).toMatchObject({
-    sync_state: 'failed',
-    sync_error: 'storage_403',
+  supabase = createFakeSupabase({
+    uid: UID,
+    upload: () => storageError(403, 'not authorized'),
+    invoke: () => invokeOk(SERVER_OK),
   });
+
+  await runner().drainOnce(T0);
+  expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced' });
+  expect(await traceItem()).not.toBeNull();
 });
 
 test('a 400 is terminal: the item fails and the trip records the server code', async () => {
@@ -510,22 +513,29 @@ test('a trace-upload item waits, without burning an attempt, while the device is
   expect(fs.files.has(TRACE)).toBe(true);
 });
 
-test('a crash between the upload and the finalize call does not re-upload the trace', async () => {
+test('a finalize that fails uploads no trace: the object never goes up ahead of an accepted trip', async () => {
   await seedQueuedTrip();
   supabase = createFakeSupabase({ uid: UID, invoke: () => functionsFetchError() });
   await runner().drainOnce(T0);
 
-  expect(supabase.uploads).toHaveLength(1);
-  expect(await finalizeItem()).toMatchObject({ attempts: 1, trace_uploaded_at: T0 });
+  expect(supabase.uploads).toHaveLength(0);
+  expect(await finalizeItem()).toMatchObject({ attempts: 1, trace_uploaded_at: null });
 
-  // Second pass, once the retry time has come: the object is already in Storage.
   const later = T0 + 60_000;
   supabase = createFakeSupabase({ uid: UID, invoke: () => invokeOk(SERVER_OK) });
   await expect(runner().drainOnce(later)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
-
-  expect(supabase.uploads).toHaveLength(0);
   expect(supabase.invokes).toHaveLength(1);
+  expect(supabase.uploads).toHaveLength(1);
   expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'synced' });
+});
+
+test('an item an earlier build had already uploaded the trace for is not uploaded again', async () => {
+  const item = await seedQueuedTrip();
+  await queue().markTraceUploaded(item.id, T0 - 1000);
+  supabase = createFakeSupabase({ uid: UID, invoke: () => invokeOk(SERVER_OK) });
+  await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+  expect(supabase.uploads).toHaveLength(0);
+  expect(fs.removals).toEqual([TRACE]);
 });
 
 test('a claim a killed process left standing is reclaimed and drained', async () => {
@@ -1294,11 +1304,10 @@ describe('a device that changes hands mid-pass', () => {
     });
     supabase = createFakeSupabase({
       uid: UID,
-      upload: async () => {
+      invoke: async () => {
         await held;
-        return { data: { path: 'x' }, error: null };
+        return invokeOk(SERVER_OK);
       },
-      invoke: () => invokeOk(SERVER_OK),
     });
     const sync = runner();
     await seedQueuedTrip();
@@ -1310,9 +1319,10 @@ describe('a device that changes hands mid-pass', () => {
     release();
     await inFlight;
 
-    // The trace was already in flight when the handover landed; what must not follow it is the
-    // summary, which would be stored as the new user's trip.
-    expect(supabase.invokes).toHaveLength(0);
+    // The summary was already in flight when the handover landed; what must not follow it is the
+    // trace, which would be stored under the new user's key, nor the answer written locally.
+    expect(supabase.uploads).toHaveLength(0);
+    expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'queued' });
   });
 });
 
@@ -1351,19 +1361,18 @@ describe('owner re-checks inside a pass (carry-over 4)', () => {
     expect(await trips().get(TRIP_ID)).toMatchObject({ sync_state: 'queued', server_id: null });
   });
 
-  test('a session that changes while the trace uploads: no upload mark, and no summary', async () => {
+  test('a session that changes while the summary is in flight: no answer written, and no trace sent', async () => {
     supabase = createFakeSupabase({
       uid: UID,
-      upload: () => {
+      invoke: () => {
         supabase.setUid('the-next-driver');
-        return { data: { path: 'x' }, error: null };
+        return invokeOk(SERVER_OK);
       },
-      invoke: () => invokeOk(SERVER_OK),
     });
     await seedQueuedTrip();
 
     await expect(runner().drainOnce(T0)).resolves.toMatchObject({ done: 0, deferred: 1 });
-    expect(supabase.invokes).toHaveLength(0);
+    expect(supabase.uploads).toHaveLength(0);
     expect(await finalizeItem()).toMatchObject({ trace_uploaded_at: null });
   });
 
@@ -1719,5 +1728,48 @@ describe('D2 round 2: offline drains and the launch reopen (review D2 I1)', () =
     expect(await queue().byKey('dispute:gone')).toBeNull();
     expect(supabase.invokes).toHaveLength(0);
     await r.stop();
+  });
+});
+
+describe('the trace goes only after the server accepted the trip (M4 final review backend m2)', () => {
+  test('on Wi-Fi: the summary first, then the trace', async () => {
+    await seedQueuedTrip();
+    const order: string[] = [];
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => {
+        order.push('finalize');
+        return invokeOk(SERVER_OK);
+      },
+      upload: () => {
+        order.push('trace');
+        return { data: { path: 'x' }, error: null };
+      },
+    });
+    await expect(runner().drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+    expect(order).toEqual(['finalize', 'trace']);
+    expect(fs.removals).toEqual([TRACE]);
+  });
+
+  test('an account with no age answer yet (age_pending): no trace leaves the phone, however long it waits', async () => {
+    await seedQueuedTrip();
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () => functionsHttpError(503, { code: 'age_pending' }, { 'Retry-After': '900' }),
+    });
+    const r = runner();
+    for (let i = 0; i < 5; i += 1) await r.drainOnce(T0 + i * 3_600_000);
+    expect(supabase.uploads).toHaveLength(0);
+    expect(fs.files.has(TRACE)).toBe(true);
+  });
+
+  test('on cellular with Wi-Fi-only traces: the summary goes, the trace is queued for Wi-Fi', async () => {
+    wifi = false;
+    await seedQueuedTrip();
+    supabase = createFakeSupabase({ uid: UID, invoke: () => invokeOk(SERVER_OK) });
+    await runner().drainOnce(T0);
+    expect(supabase.invokes).toHaveLength(1);
+    expect(supabase.uploads).toHaveLength(0);
+    expect(await traceItem()).toMatchObject({ status: 'pending' });
   });
 });
