@@ -323,6 +323,33 @@ describe('reportPermissionsFromBackground', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("a zero count sends the zone alone, never overwriting another phone's count for today (T7 r1 n3)", async () => {
+    await seedDevice();
+    expect(await bg(snap({ location: 'foreground' }))).toBe('reported');
+    expect(fake.to('notification_prefs').map((c) => c.values)).toEqual([{ tz: 'UTC' }]);
+  });
+
+  it('a zero count with the zone refused (22023) sends nothing more', async () => {
+    await seedDevice();
+    fake.respond = (c) =>
+      c.target === 'notification_prefs'
+        ? { data: null, error: { code: '22023', message: 'unknown time zone' } }
+        : { data: [{ id: 'x' }], error: null };
+    const onError = jest.fn();
+    expect(
+      await reportPermissionsFromBackground({
+        db,
+        supabase: fake.client,
+        now: () => now,
+        zone: () => 'UTC',
+        onError,
+        adapter: { snapshot: async () => snap({ location: 'foreground' }) },
+      })
+    ).toBe('reported');
+    expect(fake.to('notification_prefs').map((c) => c.values)).toEqual([{ tz: 'UTC' }]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('a count that fails to send does not hold back the lapse report', async () => {
     await seedDevice();
     await settings().set(LOCAL_SENT_KEY, { day: '2026-09-22', count: 1 });

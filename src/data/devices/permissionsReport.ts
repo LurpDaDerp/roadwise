@@ -208,20 +208,24 @@ async function sendDayCount(
   now: number
 ): Promise<void> {
   const count = await readDayCount(settings, tz, now);
-  if (!count) return;
-  const counted = { local_sent_day: count.day, local_sent_count: count.count };
+  // One row per account (T7 r1 n3): a phone that showed nothing today must not overwrite another
+  // phone's count for today with 0, so a zero (or unreadable) count sends the zone alone — the
+  // foreground sync's `count > 0` rule.
+  const counted =
+    count && count.count > 0 ? { local_sent_day: count.day, local_sent_count: count.count } : null;
   try {
     await writePrefs(supabase, userId, { ...counted, tz });
   } catch (error) {
     if (codeOf(error) !== INVALID_PARAMETER) throw error;
-    await writePrefs(supabase, userId, counted);
+    // The zone was refused: send the count alone, or nothing when there is none.
+    if (counted) await writePrefs(supabase, userId, counted);
   }
 }
 
 async function writePrefs(
   supabase: DevicesClient,
   userId: string,
-  values: { local_sent_day: string; local_sent_count: number; tz?: string }
+  values: { local_sent_day?: string; local_sent_count?: number; tz?: string }
 ): Promise<void> {
   const update = async (): Promise<boolean> => {
     const { data, error } = await supabase
