@@ -1,7 +1,8 @@
-import { screen, within } from '@testing-library/react-native';
+import { act, screen, within } from '@testing-library/react-native';
 import { useState } from 'react';
 import { AccessibilityInfo } from 'react-native';
 
+import { setHydrationStatus } from '@/data/hydrate/status';
 import { deductions, MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import {
   brokenDb,
@@ -292,4 +293,79 @@ test('a passenger trip is never counted as one of the driver s drives', async ()
   );
   await w.renderScreen(<Route />);
   expect(await screen.findByText('Building your score: 2 of 3 drives')).toBeOnTheScreen();
+});
+
+describe('the long-term score is the server value (R9)', () => {
+  const dayRow = (day: string, longTermScore: number | null, over: Record<string, unknown> = {}) => ({
+    day,
+    longTermScore,
+    band: longTermScore === null ? null : 'excellent',
+    provisional: longTermScore === null,
+    safeDay: false,
+    goodDay: false,
+    phoneFreeDay: false,
+    cameraDay: false,
+    ...over,
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      setHydrationStatus({ state: 'idle' });
+    });
+  });
+
+  test("prints the newest day row's score with the day it was computed, not a number worked out here", async () => {
+    const w = await world(
+      {
+        trips: TRIPS.map((t) => ({ ...t, sync_state: 'synced' as const })),
+        days: [
+          ['2026-01-12', dayRow('2026-01-12', 81)],
+          ['2026-01-19', dayRow('2026-01-19', 91)],
+        ],
+      },
+      now
+    );
+    await w.renderScreen(<Route />);
+    await settled();
+
+    expect(screen.getByTestId('long-term-score-value')).toHaveTextContent('91');
+    expect(within(screen.getByTestId('long-term-score')).getByText('Excellent')).toBeOnTheScreen();
+    expect(screen.getByText('as of Jan 19')).toBeOnTheScreen();
+    expect(screen.queryByText(/waiting to sync/)).toBeNull();
+  });
+
+  test('drives still on their way up are named beside it', async () => {
+    const w = await world({ trips: TRIPS, days: [['2026-01-19', dayRow('2026-01-19', 91)]] }, now);
+    await w.renderScreen(<Route />);
+    await settled();
+    // TRIPS are all queued: every one of them can still move the score.
+    expect(screen.getByText('5 drives waiting to sync')).toBeOnTheScreen();
+  });
+
+  test('with drives on this phone but no server row yet, the ring says so rather than a local number', async () => {
+    const w = await world({ trips: TRIPS }, now);
+    await w.renderScreen(<Route />);
+    await settled();
+    expect(screen.getByTestId('long-term-score-value')).toHaveTextContent('—');
+    expect(screen.getByText('Your score appears when your drives sync')).toBeOnTheScreen();
+  });
+
+  test('during a restore, never "Building your score" from a history this phone does not have yet', async () => {
+    setHydrationStatus({ state: 'restoring', restored: 0 });
+    const w = await world({}, now);
+    await w.renderScreen(<Route />);
+    expect(await screen.findByText('Restoring…')).toBeOnTheScreen();
+    expect(screen.queryByText(/Building your score/)).toBeNull();
+  });
+
+  test('a server score the partial local history cannot chart is still printed', async () => {
+    const w = await world(
+      { trips: [drive('a', MON.jan19, 90, {}, { sync_state: 'synced' })], days: [['2026-01-19', dayRow('2026-01-19', 88)]] },
+      now
+    );
+    await w.renderScreen(<Route />);
+    expect(await screen.findByText('as of Jan 19')).toBeOnTheScreen();
+    expect(screen.getByTestId('long-term-score-value')).toHaveTextContent('88');
+    expect(screen.queryByText(/Building your score/)).toBeNull();
+  });
 });

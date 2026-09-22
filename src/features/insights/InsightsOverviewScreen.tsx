@@ -3,7 +3,17 @@ import { CONSTANTS, type EventCategory } from '@scoring';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 
-import { useInsights, useTrips, type Insights, type YouVsYou } from '@/data/queries';
+import {
+  useDataSource,
+  useInsights,
+  useLongTermScore,
+  useTrips,
+  type Insights,
+  type LongTermScoreView,
+  type YouVsYou,
+} from '@/data/queries';
+import { homeCopy } from '@/features/home/copy';
+import { formatAsOfDay } from '@/features/home/LicenceCard';
 import { Card, ListRow, Screen, Text, useTheme } from '@/ui';
 import { bandLabel, formatScore, Stamp, TrendLine } from '@/ui/charts';
 
@@ -29,25 +39,50 @@ import { PeriodSelector } from './PeriodSelector';
 import { periodPhrase, type InsightsPeriod } from './period';
 import { categoryHref, howScoringWorksHref, totalsHref } from './routes';
 
-/** The long-term score as one printed field: the numeral, the band as a word, the stamp if any. */
-function ScoreField({ longTerm }: { longTerm: Insights['longTerm'] }) {
+/**
+ * The long-term score as one printed field — the server's value (R9, via `useLongTermScore`), with
+ * the same qualifiers Home prints: the day it was computed for, the drives still on their way up,
+ * and "Restoring…" while the device does not yet know the driver's history.
+ */
+function ScoreField({ view }: { view: LongTermScoreView }) {
   const th = useTheme();
-  const score = longTerm.score;
+  const { now } = useDataSource();
+  const scored = view.state === 'score' && view.score !== null;
+  const day = view.asOfDay === null ? null : formatAsOfDay(view.asOfDay, now());
+  const side =
+    view.state === 'score' && view.band !== null
+      ? bandLabel(view.band)
+      : view.state === 'restoring'
+        ? homeCopy.card.restoring
+        : view.state === 'waiting'
+          ? homeCopy.card.waiting
+          : copy.score.building;
+  const qualifiers = [
+    scored && day ? homeCopy.card.asOf(day.printed) : null,
+    view.state !== 'restoring' && view.pendingDrives > 0
+      ? homeCopy.card.pending(view.pendingDrives)
+      : null,
+  ].filter((line): line is string => line !== null);
 
   return (
     <Field label={copy.score.label} testID="long-term-score">
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.md, flexWrap: 'wrap' }}>
         <FieldText face="numeral" variant="title1" testID="long-term-score-value">
-          {score === null ? copy.score.notYet : formatScore(score)}
+          {scored && view.score !== null ? formatScore(view.score) : copy.score.notYet}
         </FieldText>
         <Text variant="subhead" tone="muted" style={{ flex: 1 }}>
-          {longTerm.band === null ? copy.score.building : bandLabel(longTerm.band)}
+          {side}
         </Text>
-        {longTerm.provisional && score !== null ? (
+        {view.provisional && scored ? (
           <Stamp kind="provisional" size="sm" animate={false} testID="provisional-stamp" />
         ) : null}
       </View>
-      {longTerm.provisional ? (
+      {qualifiers.map((line) => (
+        <Text key={line} variant="footnote" tone="muted" testID="long-term-score-qualifier">
+          {line}
+        </Text>
+      ))}
+      {view.provisional && view.state !== 'restoring' ? (
         <Text variant="footnote" tone="muted">
           {copy.score.provisionalNote(CONSTANTS.LONG_TERM_MIN_TRIPS, CONSTANTS.LONG_TERM_WINDOW_D)}
         </Text>
@@ -227,8 +262,11 @@ export function InsightsOverviewScreen({
   // of 100 would silently print a longer run as exactly "100 drives". `readInsights` already
   // reads the whole table, and E3 shares this cache entry.
   const tripsQuery = useTrips({ role: 'driver' });
+  // The ring's number is the server's (R9); `insights.longTerm`, computed on this phone from a
+  // different set of trips, is no longer drawn beside it.
+  const longTermQuery = useLongTermScore();
 
-  if (insightsQuery.isPending) {
+  if (insightsQuery.isPending || longTermQuery.isPending) {
     return (
       <Screen scroll bottomInset={bottomInset}>
         <TopBar title={copy.title} />
@@ -240,22 +278,38 @@ export function InsightsOverviewScreen({
     );
   }
 
-  if (insightsQuery.error || !insightsQuery.data) {
+  if (insightsQuery.error || !insightsQuery.data || longTermQuery.error || !longTermQuery.data) {
     return (
       <Screen bottomInset={bottomInset}>
         <TopBar title={copy.title} />
-        <ReadError onRetry={() => void insightsQuery.refetch()} />
+        <ReadError
+          onRetry={() => {
+            void insightsQuery.refetch();
+            void longTermQuery.refetch();
+          }}
+        />
       </Screen>
     );
   }
 
   const insights = insightsQuery.data;
+  const longTerm = longTermQuery.data;
 
   if (!insights.enoughData) {
+    // The progress state counts this phone's drives, which is honest only while the server agrees
+    // there is no score yet. During a restore, or once the server has printed a score this phone's
+    // partial history cannot show, the score field says what is known instead.
+    const building = longTerm.state === 'building' || longTerm.state === 'waiting';
     return (
       <Screen scroll bottomInset={bottomInset} testID="insights-overview">
         <TopBar title={copy.title} />
-        <BuildingState scored={insights.scoredTripsAllTime} />
+        {building ? (
+          <BuildingState scored={insights.scoredTripsAllTime} />
+        ) : (
+          <Card variant="license">
+            <ScoreField view={longTerm} />
+          </Card>
+        )}
         <Entries period={period} />
       </Screen>
     );
@@ -274,7 +328,7 @@ export function InsightsOverviewScreen({
       <PeriodSelector value={period} onChange={onPeriodChange} testID="period" />
 
       <Card variant="license">
-        <ScoreField longTerm={insights.longTerm} />
+        <ScoreField view={longTerm} />
         <Field label={copy.trend.label}>
           <TrendLine
             points={toChartTrend(insights.trend)}

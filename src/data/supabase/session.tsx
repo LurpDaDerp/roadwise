@@ -6,11 +6,26 @@ import { fetchProfile, type Profile } from './profile';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
 
+/** What a sign-out flush achieved: the runner's `FlushResult` (`src/data/sync/runner.ts`). */
+export type SignOutFlushResult = { sent: number; left: number };
+
+/**
+ * `signedOut: false` means nothing was ended: the flush left deletes unsent (`unsentDeletes`, or
+ * `null` when the flush itself failed and the count is unknown). The caller names that to the
+ * driver and, if they still want to, calls `signOut({ force: true })`.
+ */
+export type SignOutOutcome = { signedOut: true } | { signedOut: false; unsentDeletes: number | null };
+
 type Ctx = {
   status: Status;
   session: Session | null;
   profile: Profile | null;
-  signOut: () => Promise<void>;
+  /**
+   * Sends every delete this device still owes (security review D1 M-1), then ends the session —
+   * unless a delete could not be sent, in which case nothing is ended and the outcome says how
+   * many. `force` skips the flush: the driver has just been told and chose to sign out anyway.
+   */
+  signOut: (opts?: { force?: boolean }) => Promise<SignOutOutcome>;
   refreshProfile: () => Promise<void>;
 };
 
@@ -41,7 +56,19 @@ function withTimeout(promise: Promise<Profile>): Promise<Profile> {
   });
 }
 
-export function SessionProvider({ children }: { children: React.ReactNode }) {
+export function SessionProvider({
+  children,
+  flushBeforeSignOut,
+}: {
+  children: React.ReactNode;
+  /**
+   * `() => flushBeforeSignOut(runtime)` from `src/boot/bootstrap.ts`, wired by the root layout.
+   * It must run while the outgoing session is still valid: once a different driver signs in, the
+   * wipe removes any delete still queued and the next restore would bring those drives back.
+   * Absent (a tree with no runtime), sign-out ends the session directly, as before M3.
+   */
+  flushBeforeSignOut?: () => Promise<SignOutFlushResult>;
+}) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState<Status>('loading');
@@ -151,12 +178,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       status,
       session,
       profile,
-      signOut: async () => {
+      signOut: async (opts?: { force?: boolean }): Promise<SignOutOutcome> => {
+        if (flushBeforeSignOut && !opts?.force) {
+          let left: number | null;
+          try {
+            ({ left } = await flushBeforeSignOut());
+          } catch {
+            // The flush could not say what it sent. Unknown is not zero: ask rather than assume.
+            left = null;
+          }
+          if (left !== 0) return { signedOut: false, unsentDeletes: left };
+        }
         await supabase.auth.signOut();
+        return { signedOut: true };
       },
       refreshProfile: () => refreshRef.current(),
     }),
-    [status, session, profile]
+    [status, session, profile, flushBeforeSignOut]
   );
 
   return <SessionCtx.Provider value={value}>{children}</SessionCtx.Provider>;
