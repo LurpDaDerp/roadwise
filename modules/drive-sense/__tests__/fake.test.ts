@@ -29,7 +29,8 @@ test('replays speeding-corrected.json row for row through a row listener', async
   });
   fake.loadTrace(rows);
   fake.drain();
-  expect(got).toEqual(rows);
+  // Row for row, as the bridge keeps them (rounded to ROW_DECIMALS — ruling D2 concern 1).
+  expect(got).toEqual(rows.map((r) => parseRow(r)));
   expect(fake.step()).toBe(false);
 });
 

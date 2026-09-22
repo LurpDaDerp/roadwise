@@ -60,11 +60,11 @@ describe.each(VECTOR_NAMES)('%s', (name) => {
     if (vector.kind === 'extract') {
       expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
       for (const s of vector.inputs.seconds) expect(s.imu.length).toBeLessThanOrEqual(25);
-      for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(row);
+      for (const row of vector.expected.rows) expect(parseRow(row)).not.toBeNull(); // the bridge accepts it (and rounds it: ruling D2 concern 1)
     } else if (vector.kind === 'androidRaw') {
       expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
       for (const s of vector.inputs.seconds) expect(s.raw.length).toBeLessThanOrEqual(25);
-      for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(row);
+      for (const row of vector.expected.rows) expect(parseRow(row)).not.toBeNull(); // the bridge accepts it (and rounds it: ruling D2 concern 1)
     } else {
       expect(vector.inputs.batches.flat().length).toBeLessThanOrEqual(250);
     }

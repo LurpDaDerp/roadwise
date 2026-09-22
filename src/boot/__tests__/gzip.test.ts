@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { parseRow } from '@drive-sense';
 import { gunzipSync as fflateGunzip } from 'fflate';
 
 import { gzip } from '@/boot/gzip';
@@ -32,11 +33,12 @@ function prng(seed: number): () => number {
 
 /**
  * A 1 Hz drive as the finalizer writes it (`canonicalJson` of the rows): a car wandering at city
- * speeds with sensor noise on every channel. `digits` is the precision each value carries.
+ * speeds with sensor noise on every channel, every value an unrounded double as native emits it.
+ * `bridge: true` passes each row through drive-sense's `parseRow`, as the host does before the row
+ * reaches the engine and SQLite (ruling D2 concern 1); `false` is the raw native row.
  */
-function driveTrace(minBytes: number, digits: 'sensor' | 'double'): Uint8Array {
+function driveTrace(minBytes: number, bridge: boolean): Uint8Array {
   const rnd = prng(20260922);
-  const q = (x: number, d: number) => (digits === 'double' ? x : Number(x.toFixed(d)));
   const rows: FeatureRow[] = [];
   let lat = 47.6062;
   let lng = -122.333;
@@ -50,29 +52,32 @@ function driveTrace(minBytes: number, digits: 'sensor' | 'double'): Uint8Array {
     lat += (Math.cos((course * Math.PI) / 180) * speed) / 111_320;
     lng += (Math.sin((course * Math.PI) / 180) * speed) / 75_000;
     alt += (rnd() - 0.5) * 0.3;
-    rows.push({
+    const native: FeatureRow = {
       ts: 1_700_000_000_000 + i * 1000,
-      lat: q(lat, 7),
-      lng: q(lng, 7),
-      hAcc: q(3 + rnd() * 5, 2),
-      speed: q(speed, 2),
-      speedAcc: q(0.3 + rnd() * 0.5, 2),
-      course: q(course, 1),
-      alt: q(alt, 2),
+      lat: lat,
+      lng: lng,
+      hAcc: 3 + rnd() * 5,
+      speed: speed,
+      speedAcc: 0.3 + rnd() * 0.5,
+      course: course,
+      alt: alt,
       gnssValid: true,
-      aLonMax: q(rnd() * 0.1, 4),
-      aLonMin: q(-rnd() * 0.1, 4),
-      aLatMax: q(rnd() * 0.1, 4),
-      aLatMin: q(-rnd() * 0.1, 4),
-      yawRateMax: q(rnd() * 0.2, 4),
-      jerkMax: q(rnd() * 0.5, 4),
-      gravityStability: q(0.9 + rnd() * 0.1, 4),
-      orientationDelta: q(rnd() * 0.05, 4),
-      handlingScore: q(rnd() * 0.1, 4),
+      aLonMax: rnd() * 0.1,
+      aLonMin: -rnd() * 0.1,
+      aLatMax: rnd() * 0.1,
+      aLatMin: -rnd() * 0.1,
+      yawRateMax: rnd() * 0.2,
+      jerkMax: rnd() * 0.5,
+      gravityStability: 0.9 + rnd() * 0.1,
+      orientationDelta: rnd() * 0.05,
+      handlingScore: rnd() * 0.1,
       locked: false,
       screenOn: true,
       appForeground: true,
-    });
+    };
+    const row = bridge ? parseRow(native) : native;
+    if (row === null) throw new Error('the generated row failed the bridge contract');
+    rows.push(row);
     // Re-serialising every row would be quadratic; every 500 rows is plenty to find the size.
     if (i % 500 === 0) json = canonicalJson(rows);
   }
@@ -98,8 +103,8 @@ test('the same bytes always make the same file: no timestamp in the header', () 
   expect(gzip(bytes)).toEqual(out);
 });
 
-test('a 1 MB trace round-trips byte for byte and shrinks below a quarter of its size', () => {
-  const trace = driveTrace(1_000_000, 'sensor');
+test('a 1 MB trace of native rows, as the bridge keeps them, round-trips and shrinks below a quarter', () => {
+  const trace = driveTrace(1_000_000, true);
   expect(trace.length).toBeGreaterThanOrEqual(1_000_000);
 
   const out = gzip(trace);
@@ -109,11 +114,10 @@ test('a 1 MB trace round-trips byte for byte and shrinks below a quarter of its 
   expect(out.length / trace.length).toBeLessThan(0.25);
 });
 
-test('rows carrying full-precision doubles still shrink to under a third (measured ~0.30)', () => {
-  // What a native module that emits unrounded doubles produces: the last digits are noise, and
-  // noise does not compress. Recorded so the ratio is known, not assumed (see the D2 report).
-  const trace = driveTrace(1_000_000, 'double');
+test('negative control: the same rows unrounded miss the target (their noise digits do not compress)', () => {
+  // Without `parseRow`'s rounding the trace compresses to ~30 %: this is why the bridge rounds.
+  const trace = driveTrace(1_000_000, false);
   const out = gzip(trace);
   expect(sameBytes(new Uint8Array(gunzipSync(out)), trace)).toBe(true);
-  expect(out.length / trace.length).toBeLessThan(1 / 3);
+  expect(out.length / trace.length).toBeGreaterThan(0.25);
 });
