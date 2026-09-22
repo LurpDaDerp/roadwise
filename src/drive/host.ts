@@ -307,6 +307,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * `INITIAL_SESSION` (a restored session) never does (ruling on H2 concern 2).
    */
   let signOutDone = false;
+  /** A session end the driver did not start is suspending (r2-M2): an owner sign-in waits for it. */
+  let involuntaryEnd = false;
+  /** The owner signed in while `involuntaryEnd` was suspending: applied once it completes (r3). */
+  let signInWaiting = false;
   let thermal: ThermalLevel = 'nominal';
   let callActive = false;
   let screenLocked = false;
@@ -741,7 +745,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     } while (seen !== chain);
   }
 
-  return {
+  // Bound as a named object, never through `this`: the layout may hold a detached reference, and
+  // a `this` that is undefined would throw into a swallowed `.catch` and leave recording on (r3).
+  const self: DriveHost = {
     async start(opts = {}) {
       if (started) return { adopted: false };
       started = true;
@@ -904,7 +910,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
         await engine.dispatch({ type: 'disarm' });
       }, 'signOut');
-      await this.untilIdle();
+      await self.untilIdle();
       await run(applyArming, 'signOut');
     },
 
@@ -918,6 +924,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     signedInAgain: (opts = {}) =>
       run(async () => {
+        // The owner signed straight back in while a session end they did not start is still
+        // stopping: applied once it completes, so they miss no drives (security r3). A sign-out
+        // the driver started still refuses it (I-1).
+        if (involuntaryEnd && opts.initial !== true) {
+          signInWaiting = true;
+          return;
+        }
         if (signingOut || !signedOut) return;
         // A restored session at launch (a slow keychain, `INITIAL_SESSION`) re-arms a host that
         // started signed out — never once a sign-out has completed in this process.
@@ -933,8 +946,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     async sessionEnded() {
       // Recording is still on (no sign-out stopped it, or the owner signed in again since).
-      if (!signingOut && !signedOut) await this.suspendForSignOut();
-      this.signOutCompleted();
+      if (!signingOut && !signedOut) {
+        involuntaryEnd = true;
+        try {
+          await self.suspendForSignOut();
+        } finally {
+          involuntaryEnd = false;
+        }
+      }
+      self.signOutCompleted();
+      if (signInWaiting) {
+        signInWaiting = false;
+        await self.signedInAgain();
+      }
     },
 
     l1RespectsSilentSwitch: () =>
@@ -942,4 +966,5 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     detectorContext: ctx,
   };
+  return self;
 }

@@ -1248,3 +1248,46 @@ describe('a session that ends without the driver signing out (security r2-M2)', 
     expect(h.host.snapshot().status).toBe('off');
   });
 });
+
+describe('security r3 notes', () => {
+  test("the owner's SIGNED_IN during an involuntary session end is applied once the suspension completes", async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(200, { t0: h.now() + 1000 }));
+
+    // The session is revoked; while the drive is being finalized, the owner signs straight back in.
+    const ending = h.host.sessionEnded();
+    await h.host.signedInAgain();
+    await ending;
+    await h.host.settled();
+
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test("negative control: the driver's own sign-out still refuses an auth event arriving during it", async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    const suspending = h.host.suspendForSignOut();
+    await h.host.signedInAgain();
+    await suspending;
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('off');
+  });
+
+  test('the sign-out and sign-in methods work detached from the host (no `this`)', async () => {
+    const h = harness();
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    const { sessionEnded, signedInAgain, suspendForSignOut, signOutCompleted } = h.host;
+    await sessionEnded();
+    expect(h.host.snapshot().status).toBe('off');
+    await signedInAgain();
+    expect(h.host.snapshot().status).toBe('armed');
+    await suspendForSignOut();
+    signOutCompleted();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+  });
+});
