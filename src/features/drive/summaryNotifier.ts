@@ -47,6 +47,8 @@ const IDENTIFIER_PREFIX = 'drive-summary:';
  * OPEN PRODUCT QUESTION (pending with the user): does a drive summary count toward §11.1's
  * "≤ 2 non-family notifications per day"? M3 answers no, so the cap is not consulted. Flip this one
  * constant to make every schedule ask `dailyCapAllows` first (M4 owns the counter behind it).
+ * Flipped with no `dailyCapAllows` supplied, the notifier fails closed: nothing is scheduled and
+ * the gap is reported once (U3 review m3 — a cap that exists only in a comment is no cap).
  */
 export const DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP = false;
 
@@ -79,8 +81,13 @@ export interface SummaryNotifierDeps {
   port?: SummaryNotificationPort;
   appState?: { currentState: string | null };
   isEndScreenVisible?: () => boolean;
-  /** Consulted only when `summaryCountsTowardDailyCap()` is true. */
+  /**
+   * Consulted only when the cap switch is on — and then REQUIRED: without it nothing is
+   * scheduled (fail closed). There is no default-allow.
+   */
   dailyCapAllows?: () => Promise<boolean>;
+  /** The cap switch; defaults to `summaryCountsTowardDailyCap` (tests flip it here). */
+  countsTowardDailyCap?: () => boolean;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -181,6 +188,33 @@ const announceable = (lf: LastFinalized): lf is Extract<LastFinalized, { ok: tru
 
 type HostLike = Pick<DriveHost, 'snapshot' | 'subscribe'>;
 
+/** Every attached notifier, so a deletion or a handover can reach its carry. */
+const liveNotifiers = new Set<{ forget(clientTripId?: string): Promise<void> }>();
+
+/**
+ * Cancel the drive-summary notification for a drive that is gone (m2): pass its `clientTripId`
+ * when a drive is deleted; pass nothing on a handover or sign-out, which drops every pending
+ * summary. Reaches both the OS's pending requests and each live notifier's in-memory carry. With
+ * no notifier attached (a process that never mounted one) the OS requests are cancelled directly.
+ */
+export async function cancelDriveSummaries(
+  clientTripId?: string,
+  port: SummaryNotificationPort = createExpoSummaryPort()
+): Promise<void> {
+  if (liveNotifiers.size > 0) {
+    await Promise.all([...liveNotifiers].map((n) => n.forget(clientTripId)));
+    return;
+  }
+  const pending = await port.scheduled();
+  for (const p of pending) {
+    if (clientTripId === undefined || p.clientTripIds.includes(clientTripId)) {
+      await port.cancel(p.identifier);
+      // Without a notifier to re-schedule them, the other drives of a batch are left out rather
+      // than announced by a request that also names a deleted drive.
+    }
+  }
+}
+
 const attached = new WeakMap<HostLike, { notifier: SummaryNotifier; refs: number }>();
 
 /**
@@ -225,8 +259,25 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
   const port = deps.port ?? createExpoSummaryPort();
   const appState = deps.appState ?? AppState;
   const onEndScreen = deps.isEndScreenVisible ?? (() => endScreenVisible);
-  const dailyCapAllows = deps.dailyCapAllows ?? (async () => true);
+  const dailyCapAllows = deps.dailyCapAllows;
+  const countsTowardCap = deps.countsTowardDailyCap ?? summaryCountsTowardDailyCap;
   const report = deps.onError ?? (() => {});
+  let capGapReported = false;
+  /** The cap's answer. Switch on and no counter wired → no (and say so once). */
+  const capAllows = async (): Promise<boolean> => {
+    if (!countsTowardCap()) return true;
+    if (!dailyCapAllows) {
+      if (!capGapReported) {
+        capGapReported = true;
+        report(
+          new Error('drive summary counts toward the daily cap, but no dailyCapAllows was given'),
+          'summary.cap'
+        );
+      }
+      return false;
+    }
+    return dailyCapAllows();
+  };
 
   // One serial chain for every OS call, so a cancel can never overtake the schedule before it.
   let chain: Promise<void> = Promise.resolve();
@@ -265,32 +316,65 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
       });
       return;
     }
-    enqueue('summary.schedule', async () => {
-      if (carried.length === 0) return;
-      if (!(await port.permissionGranted())) {
-        carried = [];
-        return;
-      }
-      if (summaryCountsTowardDailyCap() && !(await dailyCapAllows())) {
-        carried = [];
-        return;
-      }
-      // Re-read at the last moment: a drive may have begun while the reads above were in flight.
-      if (DRIVING.has(host.snapshot().status)) return;
-      const pending = await port.scheduled();
-      addCarried(pending.flatMap((p) => p.clientTripIds));
-      const ids = carried;
+    enqueue('summary.schedule', scheduleCarriedNow);
+  };
+
+  /** Folds any pending request into the carry and schedules the carry as one request. */
+  async function scheduleCarriedNow(): Promise<void> {
+    if (carried.length === 0) return;
+    if (!(await port.permissionGranted())) {
       carried = [];
-      for (const p of pending) await port.cancel(p.identifier);
-      const last = ids[ids.length - 1] as string;
-      await port.schedule({
-        identifier: `${IDENTIFIER_PREFIX}${last}`,
-        clientTripIds: ids,
-        seconds: DRIVE_SUMMARY_DELAY_S,
-        ...summaryContent(ids),
+      return;
+    }
+    if (!(await capAllows())) {
+      carried = [];
+      return;
+    }
+    // Re-read at the last moment: a drive may have begun while the reads above were in flight.
+    if (DRIVING.has(host.snapshot().status)) return;
+    const pending = await port.scheduled();
+    addCarried(pending.flatMap((p) => p.clientTripIds));
+    const ids = carried;
+    carried = [];
+    for (const p of pending) await port.cancel(p.identifier);
+    const last = ids[ids.length - 1] as string;
+    await port.schedule({
+      identifier: `${IDENTIFIER_PREFIX}${last}`,
+      clientTripIds: ids,
+      seconds: DRIVE_SUMMARY_DELAY_S,
+      ...summaryContent(ids),
+    });
+  }
+
+  /**
+   * m2: a drive that is gone (deleted, or wiped by a handover) is never announced. With an id,
+   * that drive leaves every pending request and the carry, and any other drives in the same
+   * request are scheduled again without it; with none, everything goes.
+   */
+  const forget = (clientTripId?: string) =>
+    new Promise<void>((resolve) => {
+      enqueue('summary.forget', async () => {
+        try {
+          const pending = await port.scheduled();
+          const keep: string[] = [];
+          for (const p of pending) {
+            if (clientTripId !== undefined && !p.clientTripIds.includes(clientTripId)) continue;
+            await port.cancel(p.identifier);
+            if (clientTripId !== undefined) {
+              keep.push(...p.clientTripIds.filter((id) => id !== clientTripId));
+            }
+          }
+          carried =
+            clientTripId === undefined ? [] : carried.filter((id) => id !== clientTripId);
+          if (keep.length > 0) {
+            addCarried(keep);
+            if (!BUSY.has(host.snapshot().status)) await scheduleCarriedNow();
+          }
+        } finally {
+          resolve();
+        }
       });
     });
-  };
 
   const onChange = (s: DriveState) => {
     const status = s.status;
@@ -330,10 +414,13 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
   };
 
   const unsubscribe = host.subscribe(onChange);
+  const live = { forget };
+  liveNotifiers.add(live);
 
   return {
     detach() {
       unsubscribe();
+      liveNotifiers.delete(live);
     },
     settled: async () => {
       // Tasks may enqueue more tasks; wait until the chain stops growing.

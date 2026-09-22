@@ -148,15 +148,35 @@ describe('EndScreen (C8)', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
-  test('no answer in 10 s → the same honest fallback with Done', async () => {
+  test('no answer in 10 s → "Still saving…" with Done — never a failure it has not seen', async () => {
     const h = stubHost(state());
     await renderEnd(h.host);
     await act(async () => jest.advanceTimersByTime(END_WAIT_MS - 1));
-    expect(screen.queryByText(copy.end.failed)).toBeNull();
+    expect(screen.queryByText(copy.end.slow)).toBeNull();
     await act(async () => jest.advanceTimersByTime(1));
     expect(END_WAIT_MS).toBe(10_000);
-    expect(screen.getByText(copy.end.failed)).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: copy.end.slow })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: copy.end.done })).toBeOnTheScreen();
+    expect(screen.queryByText(copy.end.failed)).toBeNull();
+  });
+
+  test('a slow save that succeeds after the 10 s still lands on the summary (it kept listening)', async () => {
+    const h = stubHost(state());
+    await renderEnd(h.host);
+    await act(async () => jest.advanceTimersByTime(END_WAIT_MS + 2_000));
+    await act(async () => h.push({ status: 'armed', clientTripId: null, lastFinalized: saved('mine') }));
+    expect(mockRouter.replace).toHaveBeenCalledWith(tripSummaryHref('mine'));
+  });
+
+  test('after the 10 s, an observed failure replaces "Still saving…"', async () => {
+    const h = stubHost(state());
+    await renderEnd(h.host);
+    await act(async () => jest.advanceTimersByTime(END_WAIT_MS));
+    await act(async () =>
+      h.push({ status: 'armed', clientTripId: null, lastFinalized: { clientTripId: 'mine', ok: false, at: T } })
+    );
+    expect(screen.getByText(copy.end.failed)).toBeOnTheScreen();
+    expect(screen.queryByText(copy.end.slow)).toBeNull();
   });
 
   test('a dry run (the parked simulation) never claims a save or a failure', async () => {

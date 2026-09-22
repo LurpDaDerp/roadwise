@@ -9,9 +9,11 @@
  *
  * - `ok: true` → that trip's summary (D1). A short drive stays here: "Short drive saved — too short
  *   to score", with Done.
- * - `ok: false`, or no answer within 10 s → "We couldn't finish saving this drive. It will be saved
- *   the next time RoadWise opens." with Done. (The recovery at launch does finalize a trip left
- *   `recording`, E1 — so the sentence is true in both cases.)
+ * - `ok: false` → "We couldn't finish saving this drive. It will be saved the next time RoadWise
+ *   opens." with Done. (The recovery at launch finalizes a trip left `recording`, E1.)
+ * - No answer within 10 s → "Still saving…" with Done, and the screen KEEPS LISTENING: a slow but
+ *   successful finalize still lands on the summary (U3 review m1). Failure is said only when an
+ *   `ok: false` is actually seen.
  * - A dry run (the parked simulation, U5) never claims a save or a failure: it stored nothing.
  * - Nothing to wait for (no trip id anywhere) → Home, with no claim.
  *
@@ -34,7 +36,7 @@ import { setEndScreenVisible } from './summaryNotifier';
 /** How long the screen waits for its own trip's outcome before the honest fallback. */
 export const END_WAIT_MS = 10_000;
 
-type Outcome = 'waiting' | 'short' | 'failed' | 'simulation';
+type Outcome = 'waiting' | 'slow' | 'short' | 'failed' | 'simulation';
 
 const IDLE = new Set<DriveState['status']>(['armed', 'off']);
 
@@ -83,7 +85,11 @@ export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) 
     judge(host.snapshot());
     const unsubscribe = host.subscribe(judge);
     const timer = setTimeout(() => {
-      settle(host.snapshot().dryRun ? 'simulation' : 'failed');
+      if (settledRef.current) return;
+      // A simulation stored nothing, so saying so is true at any time. A real drive is only
+      // "still saving": the subscription stays, and its outcome replaces this face when it lands.
+      if (host.snapshot().dryRun) settle('simulation');
+      else setOutcome('slow');
     }, END_WAIT_MS);
     return () => {
       unsubscribe();
@@ -95,6 +101,7 @@ export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) 
     if (outcome === 'short') AccessibilityInfo.announceForAccessibility(copy.end.short);
     else if (outcome === 'failed') AccessibilityInfo.announceForAccessibility(copy.end.failed);
     else if (outcome === 'simulation') AccessibilityInfo.announceForAccessibility(copy.end.simulation);
+    else if (outcome === 'slow') AccessibilityInfo.announceForAccessibility(copy.end.slow);
   }, [outcome]);
 
   const done = () => router.dismissTo(HOME_HREF);
@@ -122,7 +129,8 @@ export function EndScreen({ clientTripId: routeId }: { clientTripId?: string }) 
 
   const face = {
     short: { icon: 'checkmark-circle-outline' as const, title: copy.end.short, body: copy.end.shortBody },
-    failed: { icon: 'time-outline' as const, title: null, body: copy.end.failed },
+    failed: { icon: 'alert-circle-outline' as const, title: null, body: copy.end.failed },
+    slow: { icon: 'time-outline' as const, title: copy.end.slow, body: copy.end.slowBody },
     simulation: { icon: 'flask-outline' as const, title: copy.end.simulation, body: copy.end.simulationBody },
   }[outcome];
 

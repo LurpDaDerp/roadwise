@@ -47,6 +47,10 @@ export const startCopy = {
     savingBody: 'This takes a moment.',
     short: 'Short drive saved — too short to score',
     shortBody: "Drives under half a mile or two minutes aren't scored. It's in your trips.",
+    /** After 10 s with no answer: no claim of failure until an `ok: false` is actually seen (m1). */
+    slow: 'Still saving…',
+    slowBody:
+      'This is taking longer than usual. It will finish saving on its own, or the next time RoadWise opens.',
     failed:
       "We couldn't finish saving this drive. It will be saved the next time RoadWise opens.",
     simulation: 'Simulation finished',

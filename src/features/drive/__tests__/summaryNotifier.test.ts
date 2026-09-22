@@ -6,6 +6,7 @@ import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
 import {
   attachSummaryNotifier,
+  cancelDriveSummaries,
   createExpoSummaryPort,
   DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP,
   DRIVE_SUMMARY_DELAY_S,
@@ -375,6 +376,126 @@ describe('attachSummaryNotifier', () => {
     expect(port.scheduled).not.toHaveBeenCalled();
     expect(port.cancel).not.toHaveBeenCalled();
     n.detach();
+  });
+
+  test('m3: the cap switch flipped with no counter wired fails closed, and says so once', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const onError = jest.fn();
+    const n = attachSummaryNotifier(h.host, {
+      port,
+      appState: background,
+      countsTowardDailyCap: () => true,
+      onError,
+    });
+    drive(h, 't1', ok('t1'));
+    drive(h, 't2', ok('t2'));
+    await n.settled();
+    expect(port.schedule).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'summary.cap');
+    n.detach();
+  });
+
+  test('m3: the cap switch flipped asks the counter — no means none, yes means one', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const dailyCapAllows = jest.fn(async () => false);
+    const n = attachSummaryNotifier(h.host, {
+      port,
+      appState: background,
+      countsTowardDailyCap: () => true,
+      dailyCapAllows,
+    });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    expect(dailyCapAllows).toHaveBeenCalledTimes(1);
+    expect(port.schedule).not.toHaveBeenCalled();
+    dailyCapAllows.mockResolvedValue(true);
+    drive(h, 't2', ok('t2'));
+    await n.settled();
+    expect(port.pending()).toEqual([expect.objectContaining({ clientTripIds: ['t2'] })]);
+    n.detach();
+  });
+
+  test('m3 negative control: switch off, the counter is never consulted', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const dailyCapAllows = jest.fn(async () => false);
+    const n = attachSummaryNotifier(h.host, { port, appState: background, dailyCapAllows });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    expect(dailyCapAllows).not.toHaveBeenCalled();
+    expect(port.pending()).toHaveLength(1);
+    n.detach();
+  });
+
+  test('m2: a deleted drive leaves its pending notification; the rest of a batch is announced without it', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const n = attachSummaryNotifier(h.host, { port, appState: background });
+    drive(h, 't1', ok('t1'));
+    drive(h, 't2', ok('t2'));
+    await n.settled();
+    expect(port.pending()[0]?.clientTripIds).toEqual(['t1', 't2']);
+    await cancelDriveSummaries('t1');
+    expect(port.pending()).toEqual([
+      expect.objectContaining({ clientTripIds: ['t2'], title: 'Your drive is ready' }),
+    ]);
+    await cancelDriveSummaries('t2');
+    expect(port.pending()).toEqual([]);
+    n.detach();
+  });
+
+  test('m2: a drive deleted while carried (cancelled by the next drive) is never announced', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const n = attachSummaryNotifier(h.host, { port, appState: background });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    h.push({ status: 'candidate', clientTripId: 't2' });
+    await n.settled();
+    await cancelDriveSummaries('t1');
+    h.push({ status: 'armed', clientTripId: null }); // a false start: the carry would come back
+    await n.settled();
+    expect(port.pending()).toEqual([]);
+    n.detach();
+  });
+
+  test('m2: a handover or sign-out drops every pending summary and the carry', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const n = attachSummaryNotifier(h.host, { port, appState: background });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    h.push({ status: 'candidate', clientTripId: 't2' });
+    await n.settled();
+    await cancelDriveSummaries();
+    h.push({ status: 'armed', clientTripId: null });
+    await n.settled();
+    expect(port.pending()).toEqual([]);
+    n.detach();
+  });
+
+  test('m2 negative control: deleting an unrelated drive leaves a pending notification alone', async () => {
+    const h = stubHost(state());
+    const port = fakePort();
+    const n = attachSummaryNotifier(h.host, { port, appState: background });
+    drive(h, 't1', ok('t1'));
+    await n.settled();
+    await cancelDriveSummaries('other');
+    expect(port.pending()).toEqual([expect.objectContaining({ clientTripIds: ['t1'] })]);
+    n.detach();
+  });
+
+  test('m2: with no notifier attached, the OS requests naming the drive are cancelled directly', async () => {
+    const port = fakePort();
+    await port.schedule({ identifier: 'drive-summary:a', title: 't', body: 'b', clientTripIds: ['a'], seconds: 120 });
+    await port.schedule({ identifier: 'drive-summary:b', title: 't', body: 'b', clientTripIds: ['b'], seconds: 120 });
+    await cancelDriveSummaries('a', port);
+    expect(port.pending().map((p) => p.identifier)).toEqual(['drive-summary:b']);
+    await cancelDriveSummaries(undefined, port);
+    expect(port.pending()).toEqual([]);
   });
 
   test('the daily-cap question is one named switch, off until the product answer lands', () => {
