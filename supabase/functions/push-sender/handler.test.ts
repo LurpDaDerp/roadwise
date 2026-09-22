@@ -9,10 +9,18 @@ import {
   EXPO_RETRY_MS,
   LEASE_SECONDS,
   RECEIPT_LIMIT,
-  SIGNATURE_WINDOW_S,
-  verifySweepSignature,
+  OUTCOME_RESERVE_MS,
+  RECEIPTS_MIN_MS,
+  SWEEP_BUDGET_MS,
+  SWEEP_PURPOSE,
   type SenderDeps,
 } from './handler.ts';
+import { SWEEP_WINDOW_S, verifySweepSignature } from '../_shared/sweep_auth.ts';
+import { EXPO_TIMEOUT_MAX_MS } from '../_shared/expo_push.ts';
+
+/** push-sender's check, through the shared contract: its purpose, the key, whole seconds. */
+const verify = (sig: string | null, key: string, nowMs: number) =>
+  verifySweepSignature(sig, SWEEP_PURPOSE, key, Math.floor(nowMs / 1000));
 
 // The test vector from task-2-report.md "fix round 1", computed there independently with Python.
 const KEY = 'rw-test-vector-key-0123456789abcdef';
@@ -40,7 +48,11 @@ interface ExpoCall {
   body: unknown;
 }
 
-type ExpoReply = (path: string, body: unknown) => Response;
+type ExpoReply = (path: string, body: unknown, signal?: AbortSignal | null) => Response | Promise<Response>;
+
+/** An Expo that never answers: the request hangs until its timeout aborts it. */
+const hang: ExpoReply = (_path, _body, signal) =>
+  new Promise((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason)));
 
 /** Every message accepted; every receipt ok. */
 const expoOk: ExpoReply = (path, body) =>
@@ -48,7 +60,9 @@ const expoOk: ExpoReply = (path, body) =>
     ? Response.json({ data: (body as { to: string }[]).map((m, i) => ({ status: 'ok', id: `ticket-${i}-${m.to.slice(-4, -1)}` })) })
     : Response.json({ data: Object.fromEntries((body as { ids: string[] }).ids.map((id) => [id, { status: 'ok' }])) });
 
-function harness(opts: Omit<FakePushDbOptions, 'now'> & { expo?: ExpoReply; now?: number } = {}) {
+function harness(
+  opts: Omit<FakePushDbOptions, 'now'> & { expo?: ExpoReply; now?: number; budgetMs?: number } = {}
+) {
   const now = opts.now ?? NOW;
   const fake = fakePushDb({ ...opts, now: () => now });
   const expoCalls: ExpoCall[] = [];
@@ -58,7 +72,7 @@ function harness(opts: Omit<FakePushDbOptions, 'now'> & { expo?: ExpoReply; now?
     new Headers(init?.headers).forEach((v, k) => (headers[k] = v));
     const body = JSON.parse(String(init?.body));
     expoCalls.push({ url: String(input), headers, body });
-    return Promise.resolve(reply(String(input), body));
+    return Promise.resolve().then(() => reply(String(input), body, init?.signal));
   };
   const logs: unknown[][] = [];
   const deps: SenderDeps = {
@@ -66,6 +80,7 @@ function harness(opts: Omit<FakePushDbOptions, 'now'> & { expo?: ExpoReply; now?
     db: fake.db,
     expo: { fetch: fetch as typeof globalThis.fetch, url: 'http://expo.test/push', accessToken: 'expo-access' },
     now: () => now,
+    budgetMs: opts.budgetMs,
     log: {
       info: (...a) => logs.push(['info', ...a]),
       warn: (...a) => logs.push(['warn', ...a]),
@@ -113,7 +128,7 @@ const SECRETS = [
 // ——— authentication ———
 
 Deno.test('the test vector is accepted', async () => {
-  assertEquals(await verifySweepSignature(VECTOR, KEY, NOW), true);
+  assertEquals(await verify(VECTOR, KEY, NOW), true);
   const h = harness();
   const res = await h.handle(sweep(VECTOR));
   assertEquals(res.status, 200);
@@ -153,17 +168,17 @@ Deno.test('401 before any database call: missing, malformed, 121 s stale either 
     assertEquals(h.fake.calls, [], `${name}: no database call`);
     assertEquals(h.expoCalls, [], `${name}: no Expo call`);
     assertCleanLogs(h.logs, [...SECRETS, ...(sig ? [sig.trim()] : [])]);
-    assertEquals(await verifySweepSignature(sig, KEY, now), false, name);
+    assertEquals(await verify(sig, KEY, now), false, name);
   }
 });
 
 Deno.test('the window is ±120 s inclusive', async () => {
-  assertEquals(SIGNATURE_WINDOW_S, 120);
-  assertEquals(await verifySweepSignature(VECTOR, KEY, NOW + 120_000), true);
-  assertEquals(await verifySweepSignature(VECTOR, KEY, NOW - 120_000), true);
-  assertEquals(await verifySweepSignature(VECTOR, KEY, NOW + 120_999), true); // still 120 whole seconds
-  assertEquals(await verifySweepSignature(VECTOR, KEY, NOW + 121_000), false);
-  assertEquals(await verifySweepSignature(await sign(TS + 60), KEY, NOW), true);
+  assertEquals(SWEEP_WINDOW_S, 120);
+  assertEquals(await verify(VECTOR, KEY, NOW + 120_000), true);
+  assertEquals(await verify(VECTOR, KEY, NOW - 120_000), true);
+  assertEquals(await verify(VECTOR, KEY, NOW + 120_999), true); // still 120 whole seconds
+  assertEquals(await verify(VECTOR, KEY, NOW + 121_000), false);
+  assertEquals(await verify(await sign(TS + 60), KEY, NOW), true);
 });
 
 Deno.test('405 for any method but POST, after the signature and before any database call', async () => {
@@ -458,4 +473,150 @@ Deno.test('a sweep that arrives while one is running returns at once without tou
   assertEquals((await first).status, 200);
   // Released afterwards.
   assertEquals((await h.handle(sweep(VECTOR))).status, 200);
+});
+
+// ——— fix round 1 ———
+
+Deno.test('m1: an Expo timeout after the request went out is ambiguous — recorded sent with no ticket, never re-sent', async () => {
+  const it = item({}, { tokens: [TOKEN_A, TOKEN_B] });
+  // A 3.2 s budget leaves 1.2 s for Expo after the outcome reserve: the request times out.
+  const h = harness({ items: [it], expo: hang, budgetMs: OUTCOME_RESERVE_MS + 1_200 });
+  const t0 = performance.now();
+  const res = await h.handle(sweep(VECTOR));
+  assert(performance.now() - t0 < OUTCOME_RESERVE_MS + 1_200, 'the sweep stays inside its budget');
+  assertEquals(await res.json(), { claimed: 1, sent: 1, deferred: 0, skipped: 0, failed: 0, receipts: 0 });
+  assertEquals(h.fake.outcomes, [
+    { inbox_id: it.inboxId, state: 'sent', reason: 'ok', deliveries: [{ token: TOKEN_A }, { token: TOKEN_B }] },
+  ]);
+  assertCleanLogs(h.logs, SECRETS);
+});
+
+Deno.test('m1: a reset after the request went out is ambiguous; a later chunk never attempted is deferred', async () => {
+  // 60 users × 2 tokens = two /send chunks. The first is reset mid-request, the second never starts.
+  const items = Array.from({ length: 60 }, (_, i) =>
+    item({ userId: `44444444-4444-4444-8444-${String(i).padStart(12, '0')}` }, { tokens: [TOKEN_A, TOKEN_B] })
+  );
+  const h = harness({
+    items,
+    expo: () => {
+      throw new TypeError('fetch failed', {
+        cause: new Error(
+          'error sending request for url (https://exp.host/--/api/v2/push/send): client error (SendRequest): connection closed before message completed'
+        ),
+      });
+    },
+  });
+  assertEquals(await (await h.handle(sweep(VECTOR))).json(), {
+    claimed: 60,
+    sent: 50,
+    deferred: 10,
+    skipped: 0,
+    failed: 0,
+    receipts: 0,
+  });
+  assertEquals(h.expoCalls.length, 1);
+  assertEquals(h.fake.outcomes[0].deliveries, [{ token: TOKEN_A }, { token: TOKEN_B }]);
+  assertEquals(h.fake.outcomes[50], {
+    inbox_id: items[50].inboxId,
+    state: 'deferred',
+    reason: 'expo_unavailable',
+    push_after: iso(NOW + 2 * MIN),
+  });
+});
+
+Deno.test('m1: a failure proven before sending (connection refused, DNS) defers 2 minutes', async () => {
+  for (const cause of [
+    'error sending request for url (https://exp.host/--/api/v2/push/send): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)',
+    'error sending request for url (https://exp.host/--/api/v2/push/send): client error (Connect): dns error: No such host is known. (os error 11001)',
+  ]) {
+    const it = item();
+    const h = harness({
+      items: [it],
+      expo: () => {
+        throw new TypeError('fetch failed', { cause: new Error(cause) });
+      },
+    });
+    assertEquals((await (await h.handle(sweep(VECTOR))).json()).deferred, 1);
+    assertEquals(h.fake.outcomes, [
+      { inbox_id: it.inboxId, state: 'deferred', reason: 'expo_unavailable', push_after: iso(NOW + 2 * MIN) },
+    ]);
+  }
+});
+
+Deno.test('m2: a malformed claimed row is failed on its own and the rest of the batch proceeds', async () => {
+  const good = item();
+  const badId = '55555555-5555-4555-8555-555555555555';
+  const h = harness({ items: [good], malformed: [badId], unidentified: 1 });
+  assertEquals(await (await h.handle(sweep(VECTOR))).json(), {
+    claimed: 3,
+    sent: 1,
+    deferred: 0,
+    skipped: 0,
+    failed: 2,
+    receipts: 0,
+  });
+  assertEquals(
+    h.fake.outcomes.map((o) => [o.inbox_id, o.state, o.reason]),
+    [
+      [good.inboxId, 'sent', 'ok'],
+      [badId, 'failed', 'bad_payload'],
+    ]
+  );
+});
+
+Deno.test('m4: recordOutcomes is retried once on a retryable code, and only once', async () => {
+  const it = item();
+  const once = harness({ items: [it], failOnce: { recordOutcomes: new PgError('40001', 'could not serialize access') } });
+  assertEquals((await once.handle(sweep(VECTOR))).status, 200);
+  assertEquals(once.fake.calls.filter((c) => c.fn === 'recordOutcomes').length, 2);
+  assertEquals(once.fake.outcomes.map((o) => o.state), ['sent']);
+  assertEquals(once.expoCalls.length, 1); // the push itself is not repeated
+
+  const always = harness({ items: [item()], fail: { recordOutcomes: new PgError('40P01', 'deadlock detected') } });
+  assertEquals((await always.handle(sweep(VECTOR))).status, 503);
+  assertEquals(always.fake.calls.filter((c) => c.fn === 'recordOutcomes').length, 2);
+
+  const refused = harness({ items: [item()], failOnce: { recordOutcomes: new PgError('22023', 'unknown outcome reason') } });
+  assertEquals((await refused.handle(sweep(VECTOR))).status, 400);
+  assertEquals(refused.fake.calls.filter((c) => c.fn === 'recordOutcomes').length, 1); // no retry of a refusal
+});
+
+Deno.test('budget: the sweep stays under 8 s with the Expo timeout sized inside it', () => {
+  assertEquals(SWEEP_BUDGET_MS, 8_000);
+  assert(EXPO_TIMEOUT_MAX_MS + OUTCOME_RESERVE_MS <= SWEEP_BUDGET_MS);
+  assert(SWEEP_BUDGET_MS < 10_000, "under pg_net's 10 s client timeout");
+});
+
+Deno.test('budget: a slow claim leaves no time to send — the sends wait for the next sweep, unsent', async () => {
+  const it = item();
+  // Budget 2.6 s; the claim takes 1 s, leaving 1.6 s − the 2 s reserve: no send can start.
+  const h = harness({ items: [it], delayMs: { claim: 1_000 }, budgetMs: OUTCOME_RESERVE_MS + 600 });
+  const res = await h.handle(sweep(VECTOR));
+  assertEquals(await res.json(), { claimed: 1, sent: 0, deferred: 1, skipped: 0, failed: 0, receipts: 0 });
+  assertEquals(h.expoCalls, []);
+  assertEquals(h.fake.outcomes, [
+    { inbox_id: it.inboxId, state: 'deferred', reason: 'expo_unavailable', push_after: iso(NOW) },
+  ]);
+  // Receipts are not read with under RECEIPTS_MIN_MS left.
+  assertEquals(h.fake.calls.map((c) => c.fn), ['claim', 'recordOutcomes']);
+  assert(RECEIPTS_MIN_MS > 0);
+});
+
+Deno.test('budget: a database call that outlives the budget is aborted and the sweep answers inside it', async () => {
+  const h = harness({ items: [item()], delayMs: { claim: 5_000 }, budgetMs: 300 });
+  const t0 = performance.now();
+  const res = await h.handle(sweep(VECTOR));
+  assert(performance.now() - t0 < 1_000, 'aborted at the budget, not after the slow call');
+  assertEquals(res.status, 500);
+  assertEquals(h.expoCalls, []);
+});
+
+Deno.test('budget: slow receipts are cut at the budget and reported as not ready', async () => {
+  const due = [{ deliveryId: 'aaaaaaaa-0000-4000-8000-000000000009', ticketId: 'ticket-9' }];
+  const budgetMs = RECEIPTS_MIN_MS + 1_000;
+  const h = harness({ due, expo: hang, budgetMs });
+  const t0 = performance.now();
+  assertEquals((await h.handle(sweep(VECTOR))).status, 200);
+  assert(performance.now() - t0 < budgetMs, 'the sweep stays inside its budget');
+  assertEquals(h.fake.receipts, [{ delivery_id: due[0].deliveryId, status: null, error: null }]);
 });

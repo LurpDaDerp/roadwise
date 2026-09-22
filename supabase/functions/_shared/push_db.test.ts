@@ -35,7 +35,8 @@ function db(reply: (fn: string, args: Record<string, unknown>) => { data?: unkno
 
 Deno.test('claim calls claim_push_batch with the limit and lease and camel-cases each item', async () => {
   const { pushDb, fake } = db(() => ({ data: [claimRow()] }));
-  const items = await pushDb.claim(100, 300);
+  const { items, malformed, unidentified } = await pushDb.claim(100, 300);
+  assertEquals([malformed, unidentified], [[], 0]);
   assertEquals(fake.rpcCalls, [{ fn: 'claim_push_batch', args: { p_limit: 100, p_lease_seconds: 300 } }]);
   assertEquals(items, [
     {
@@ -61,25 +62,67 @@ Deno.test('claim calls claim_push_batch with the limit and lease and camel-cases
 });
 
 Deno.test('claim: an empty batch, a null driving_since and an unknown type are fine', async () => {
-  assertEquals(await db(() => ({ data: [] })).pushDb.claim(100, 300), []);
+  assertEquals(await db(() => ({ data: [] })).pushDb.claim(100, 300), { items: [], malformed: [], unidentified: 0 });
   const row = claimRow({ type: 'something_new' });
   (row.ctx as Record<string, unknown>).driving_since = null;
-  const [item] = await db(() => ({ data: [row] })).pushDb.claim(100, 300);
+  const {
+    items: [item],
+  } = await db(() => ({ data: [row] })).pushDb.claim(100, 300);
   assertEquals(item.type, 'something_new');
   assertEquals(item.ctx.drivingSince, null);
 });
 
-Deno.test('claim refuses output that breaks the contract', async () => {
-  for (const bad of [
-    null,
-    { not: 'an array' },
-    [claimRow({ inbox_id: 'nope' })],
-    [claimRow({ created_at: 'yesterday' })],
-    [claimRow({ ctx: { ...claimRow().ctx, quiet: { enabled: true, start: '25:00', end: '07:00' } } })],
-    [claimRow({ ctx: { ...claimRow().ctx, tokens: 'ExponentPushToken[abc]' } })],
-  ]) {
+Deno.test('claim refuses an answer that is not an array', async () => {
+  for (const bad of [null, { not: 'an array' }, 'x']) {
     await assertRejects(() => db(() => ({ data: bad })).pushDb.claim(100, 300), PushDbContractError);
   }
+});
+
+Deno.test('claim parses row by row: a malformed row is set aside by its inbox id and the rest proceed', async () => {
+  const id = (n: number) => `0b9c6f0e-1f4b-4c43-9a55-2d9b8f0c1a${String(n).padStart(2, '0')}`;
+  const good = claimRow({ inbox_id: id(10) });
+  const rows = [
+    claimRow({ inbox_id: id(11), created_at: 'yesterday' }),
+    good,
+    claimRow({ inbox_id: id(12), ctx: { ...claimRow().ctx, quiet: { enabled: true, start: '25:00', end: '07:00' } } }),
+    claimRow({ inbox_id: id(13), ctx: { ...claimRow().ctx, tokens: 'ExponentPushToken[abc]' } }),
+    claimRow({ inbox_id: 'nope' }),
+    42,
+  ];
+  const out = await db(() => ({ data: rows })).pushDb.claim(100, 300);
+  assertEquals(out.items.map((i) => i.inboxId), [id(10)]);
+  assertEquals(out.malformed, [id(11), id(12), id(13)]);
+  assertEquals(out.unidentified, 2);
+});
+
+Deno.test('every call carries the sweep abort signal when one is given', async () => {
+  const seen: [string, AbortSignal | null][] = [];
+  const client = {
+    rpc(fn: string) {
+      const settled = Promise.resolve({ data: fn === 'claim_push_batch' || fn === 'push_receipts_due' ? [] : 1, error: null });
+      return Object.assign(settled, {
+        abortSignal: (s: AbortSignal) => {
+          seen.push([fn, s]);
+          return settled;
+        },
+      });
+    },
+  } as unknown as Parameters<typeof createPushDb>[0];
+  const pushDb = createPushDb(client);
+  const signal = new AbortController().signal;
+  await pushDb.claim(1, 30, signal);
+  await pushDb.recordOutcomes([{ inbox_id: INBOX, state: 'skipped', reason: 'stale' }], signal);
+  await pushDb.receiptsDue(1, signal);
+  await pushDb.recordReceipts([{ delivery_id: INBOX, status: null, error: null }], signal);
+  assertEquals(
+    seen.map(([fn, s]) => [fn, s === signal]),
+    [
+      ['claim_push_batch', true],
+      ['record_push_outcomes', true],
+      ['push_receipts_due', true],
+      ['record_push_receipts', true],
+    ]
+  );
 });
 
 Deno.test('a writer error becomes a PgError with its code and message', async () => {

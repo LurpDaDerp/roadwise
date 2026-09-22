@@ -1,7 +1,10 @@
 import { assert, assertEquals, assertRejects } from '@std/assert';
 import {
   DEFAULT_EXPO_PUSH_URL,
+  EXPO_TIMEOUT_MAX_MS,
   ExpoUnavailable,
+  failedBeforeSend,
+  MIN_REQUEST_MS,
   getReceipts,
   RECEIPT_CHUNK,
   SEND_CHUNK,
@@ -152,4 +155,73 @@ Deno.test('getReceipts on 503 is ExpoUnavailable with the receipts already fetch
   const ids = Array.from({ length: 301 }, (_, i) => `r-${i}`);
   const err = await assertRejects(() => getReceipts(ids, { fetch: f.fetch }), ExpoUnavailable);
   assertEquals(Object.keys(err.receipts).length, 300);
+});
+
+// ——— fix round 1: at most once and the time budget ———
+
+const CONNECT_REFUSED =
+  'error sending request for url (https://exp.host/--/api/v2/push/send): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)';
+const DNS_FAILED =
+  'error sending request for url (https://exp.host/--/api/v2/push/send): client error (Connect): dns error: No such host is known. (os error 11001)';
+const RESET =
+  'error sending request from 127.0.0.1:5910 for https://exp.host/--/api/v2/push/send: client error (SendRequest): connection closed before message completed';
+
+Deno.test('failedBeforeSend: only a connect-stage failure is proven unsent (messages as Deno words them)', () => {
+  assertEquals(failedBeforeSend(new TypeError('fetch failed', { cause: new Error(CONNECT_REFUSED) })), true);
+  assertEquals(failedBeforeSend(new TypeError('fetch failed', { cause: new Error(DNS_FAILED) })), true);
+  assertEquals(failedBeforeSend(new TypeError('fetch failed', { cause: new Error(RESET) })), false);
+  assertEquals(failedBeforeSend(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), false);
+  assertEquals(failedBeforeSend(new DOMException('aborted', 'AbortError')), false);
+  assertEquals(failedBeforeSend(new TypeError('something else')), false);
+  assertEquals(failedBeforeSend('not an error'), false);
+});
+
+Deno.test('a reset mid-request marks the chunk unknown and stops: later chunks are never attempted', async () => {
+  const f = fakeFetch((call, i) => {
+    if (i === 0) return tickets(call);
+    throw new TypeError('fetch failed', { cause: new Error(RESET) });
+  });
+  const messages = Array.from({ length: 250 }, (_, i) => msg(i));
+  const err = await assertRejects(() => sendPush(messages, { fetch: f.fetch }), ExpoUnavailable);
+  assertEquals(f.calls.length, 2);
+  assertEquals(err.budget, false);
+  assertEquals(err.tickets[99], { status: 'ok', id: 'ticket-ExponentPushToken[token-99]' });
+  assertEquals(err.tickets[100], { status: 'unknown' });
+  assertEquals(err.tickets[199], { status: 'unknown' });
+  assertEquals(err.tickets[200], null);
+});
+
+Deno.test('the request timeout is sized to the budget left; a timeout is ambiguous', async () => {
+  const hanging = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+    new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+  const t0 = performance.now();
+  const err = await assertRejects(
+    () => sendPush([msg(1)], { fetch: hanging as typeof fetch, timeLeft: () => 600 }),
+    ExpoUnavailable
+  );
+  const took = performance.now() - t0;
+  assert(took >= 550 && took < 1_500, `timed out after ${took} ms`);
+  assertEquals(err.tickets, [{ status: 'unknown' }]);
+  assertEquals(EXPO_TIMEOUT_MAX_MS, 5_000);
+});
+
+Deno.test('with less than MIN_REQUEST_MS left, no request is started (budget)', async () => {
+  const f = fakeFetch(tickets);
+  const err = await assertRejects(
+    () => sendPush([msg(1), msg(2)], { fetch: f.fetch, timeLeft: () => MIN_REQUEST_MS - 1 }),
+    ExpoUnavailable
+  );
+  assertEquals(f.calls.length, 0);
+  assertEquals(err.budget, true);
+  assertEquals(err.tickets, [null, null]);
+  const r = await assertRejects(() => getReceipts(['a'], { fetch: f.fetch, timeLeft: () => 0 }), ExpoUnavailable);
+  assertEquals(r.budget, true);
+});
+
+Deno.test('an ambiguous receipts read is simply read again later (ExpoUnavailable, nothing recorded as found)', async () => {
+  const f = fakeFetch(() => {
+    throw new TypeError('fetch failed', { cause: new Error(RESET) });
+  });
+  const err = await assertRejects(() => getReceipts(['a', 'b'], { fetch: f.fetch }), ExpoUnavailable);
+  assertEquals(err.receipts, {});
 });

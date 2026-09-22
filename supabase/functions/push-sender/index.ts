@@ -5,7 +5,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { DEFAULT_EXPO_PUSH_URL } from '../_shared/expo_push.ts';
 import { createPushDb } from '../_shared/push_db.ts';
-import { createPushSender, MIN_KEY_BYTES } from './handler.ts';
+import { MIN_SWEEP_KEY_BYTES, sweepKeyUsable } from '../_shared/sweep_auth.ts';
+import { createPushSender } from './handler.ts';
 
 const url = Deno.env.get('SUPABASE_URL');
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -13,8 +14,8 @@ const hmacKey = Deno.env.get('PUSH_SENDER_HMAC_KEY');
 if (!url || !serviceKey || !hmacKey) {
   throw new Error('push-sender needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and PUSH_SENDER_HMAC_KEY');
 }
-if (new TextEncoder().encode(hmacKey).byteLength < MIN_KEY_BYTES) {
-  throw new Error(`push-sender needs a PUSH_SENDER_HMAC_KEY of at least ${MIN_KEY_BYTES} bytes`);
+if (!sweepKeyUsable(hmacKey)) {
+  throw new Error(`push-sender needs a PUSH_SENDER_HMAC_KEY of at least ${MIN_SWEEP_KEY_BYTES} bytes`);
 }
 if (hmacKey === serviceKey) {
   throw new Error('push-sender refuses a PUSH_SENDER_HMAC_KEY equal to the service-role key');

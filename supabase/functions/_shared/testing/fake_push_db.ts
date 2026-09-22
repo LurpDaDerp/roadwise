@@ -4,8 +4,10 @@
 // bound and fixed 22023 messages, one bad outcome refusing the whole call — so a handler that sends
 // `deliver_after`, an unknown reason or an outcome for an unclaimed item fails here as it would on
 // the stack. Every call is logged in order, so a test can prove no call happened (auth first).
+// A call can be slowed (`delayMs`, honouring the sweep's abort signal as supabase-js does) or made
+// to fail once or always.
 import { PgError } from '../pg.ts';
-import type { DueReceipt, Outcome, PushDb, ReceiptReport } from '../push_db.ts';
+import type { ClaimResult, DueReceipt, Outcome, PushDb, ReceiptReport } from '../push_db.ts';
 import type { PushItem } from '../push_policy.ts';
 
 const STATES = new Set(['sent', 'deferred', 'skipped', 'failed']);
@@ -49,8 +51,15 @@ export interface FakePushDbOptions {
   items?: PushItem[];
   due?: DueReceipt[];
   now?: () => number;
-  /** Make one port call fail with this error. */
+  /** Make one port call fail with this error, every time. */
   fail?: Partial<Record<FakePushDbCall['fn'], Error>>;
+  /** Make one port call fail with this error the first time only. */
+  failOnce?: Partial<Record<FakePushDbCall['fn'], Error>>;
+  /** Make one port call take this long (aborted early by the call's signal). */
+  delayMs?: Partial<Record<FakePushDbCall['fn'], number>>;
+  /** Claimed rows that broke the contract, by inbox id (they are `sending` like the rest). */
+  malformed?: string[];
+  unidentified?: number;
   /** Resolves before `claim` answers: lets a test hold a sweep open. */
   claimGate?: Promise<void>;
 }
@@ -64,23 +73,47 @@ export function fakePushDb(opts: FakePushDbOptions = {}): FakePushDb {
   const calls: FakePushDbCall[] = [];
   const outcomes: Outcome[] = [];
   const receipts: ReceiptReport[] = [];
+  const once = { ...(opts.failOnce ?? {}) };
   const failIf = (fn: FakePushDbCall['fn']) => {
     const e = opts.fail?.[fn];
     if (e) throw e;
+    const first = once[fn];
+    if (first) {
+      delete once[fn];
+      throw first;
+    }
+  };
+  const delay = (fn: FakePushDbCall['fn'], signal?: AbortSignal): Promise<void> => {
+    const ms = opts.delayMs?.[fn];
+    if (!ms) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new PgError('57014', 'AbortError: the sweep budget ran out'));
+      });
+    });
   };
 
   const db: PushDb = {
-    async claim(limit, leaseSeconds) {
+    async claim(limit, leaseSeconds, signal): Promise<ClaimResult> {
       calls.push({ fn: 'claim', args: { limit, leaseSeconds } });
       if (opts.claimGate) await opts.claimGate;
+      await delay('claim', signal);
       failIf('claim');
       const out = pending.slice(0, limit);
       pending = pending.slice(limit);
       for (const it of out) sending.add(it.inboxId);
-      return structuredClone(out);
+      const malformed = [...(opts.malformed ?? [])];
+      for (const id of malformed) sending.add(id);
+      opts.malformed = [];
+      const unidentified = opts.unidentified ?? 0;
+      opts.unidentified = 0;
+      return { items: structuredClone(out), malformed, unidentified };
     },
-    recordOutcomes(list) {
+    async recordOutcomes(list, signal) {
       calls.push({ fn: 'recordOutcomes', args: structuredClone(list) });
+      await delay('recordOutcomes', signal);
       failIf('recordOutcomes');
       if (!Array.isArray(list) || list.length > 500) throw refuse('outcomes must be an array of at most 500 items');
       const seen = new Set<string>();
@@ -109,15 +142,17 @@ export function fakePushDb(opts: FakePushDbOptions = {}): FakePushDb {
       }
       for (const o of list) sending.delete(o.inbox_id);
       outcomes.push(...structuredClone(list));
-      return Promise.resolve(list.length);
+      return list.length;
     },
-    receiptsDue(limit) {
+    async receiptsDue(limit, signal) {
       calls.push({ fn: 'receiptsDue', args: { limit } });
+      await delay('receiptsDue', signal);
       failIf('receiptsDue');
-      return Promise.resolve(structuredClone((opts.due ?? []).slice(0, limit)));
+      return structuredClone((opts.due ?? []).slice(0, limit));
     },
-    recordReceipts(list) {
+    async recordReceipts(list, signal) {
       calls.push({ fn: 'recordReceipts', args: structuredClone(list) });
+      await delay('recordReceipts', signal);
       failIf('recordReceipts');
       for (const r of list) {
         if (!(r.status === null || r.status === 'ok' || r.status === 'error')) {
@@ -126,7 +161,7 @@ export function fakePushDb(opts: FakePushDbOptions = {}): FakePushDb {
       }
       receipts.push(...structuredClone(list));
       const known = new Set((opts.due ?? []).map((d) => d.deliveryId));
-      return Promise.resolve(list.filter((r) => known.has(r.delivery_id)).length);
+      return list.filter((r) => known.has(r.delivery_id)).length;
     },
   };
   return { db, calls, outcomes, receipts };
