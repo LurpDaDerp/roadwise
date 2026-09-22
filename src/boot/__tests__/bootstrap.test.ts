@@ -742,12 +742,12 @@ describe('D2: backup exclusion, the network adapter and the drain policy', () =>
     await settle();
 
     expect(errors).toContain('network adapter');
-    // The summary went up; the megabytes wait for a Wi-Fi the launch could not see.
+    // The summary went up; the megabytes never do on a network the launch could not see. (The
+    // trace follows only an accepted trip — M4 final review m2 — and then waits for Wi-Fi under
+    // its own item, which the runner tests cover; this fake server does not accept.)
     expect(supabase.invokes).toHaveLength(1);
     expect(supabase.uploads).toHaveLength(0);
-    expect(await createQueueRepo(db).byKey(traceIdempotencyKey(TRIP))).toMatchObject({
-      status: 'pending',
-    });
+    expect(await createQueueRepo(db).byKey(traceIdempotencyKey(TRIP))).toBeNull();
   });
 
   test('the host drain policy reaches the runner', async () => {
