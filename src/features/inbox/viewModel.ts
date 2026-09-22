@@ -1,0 +1,243 @@
+/**
+ * What one inbox row says, decided before anything is drawn. Pure: no React, no database.
+ *
+ * Ruling I9: a drive summary's words come from the drive's CURRENT state when the drive is on this
+ * phone — its role now, its distance now, whether it would score now — never from the facts frozen
+ * into the row at insert. The words themselves are the catalog's (`renderLocal`), so the inbox and
+ * the notification can never disagree about how a drive is described.
+ *
+ * - On the phone and not deleted: the summary or the role question, a link to D1, and one line
+ *   from the newest report the driver made on it, read from the stored outcome (never re-derived:
+ *   `eventStanding` reads what the server settled).
+ * - Deleted by the driver (the row, or its tombstone once the delete has synced): says so, no link.
+ * - Not on the phone: the payload's words and date, "Not on this phone", no link — D1 would have
+ *   nothing to show.
+ * - A type this build cannot render (not live, unknown, or a payload that fails its schema): null.
+ *
+ * No score anywhere: not a number, not a band.
+ */
+import type { Href } from 'expo-router';
+
+import {
+  tipOutcomeOf,
+  toTripSummary,
+  unscoredReasonOf,
+  type TripDetail,
+  type TripEventView,
+  type TripSummary,
+} from '@/data/queries';
+import type { TripRow } from '@/data/db/types';
+import { eventStanding } from '@/features/trips/detail';
+import { formatClock, formatTripDate } from '@/features/trips/format';
+import { tripSummaryHref } from '@/features/trips/routes';
+import { dayKey } from '@/lib/time';
+import {
+  CATALOG,
+  countsTowardDailyCap,
+  LIVE_TYPES,
+  PayloadSchemas,
+  renderInboxBase,
+  renderLocal,
+  type Catalog,
+  type LiveType,
+  type NotificationType,
+} from '@/notifications/catalog';
+import { CONSTANTS } from '@scoring';
+
+import type { InboxRow } from './api';
+import { inboxCopy as copy } from './copy';
+
+/** What the phone holds about the drive a row is about. */
+export interface InboxLocal {
+  trip: TripDetail | null;
+  events: TripEventView[];
+  /** The driver deleted this drive here and the row is gone (a tombstone remembers it). */
+  deleted?: boolean;
+}
+
+export interface InboxItemView {
+  id: string;
+  type: LiveType;
+  title: string;
+  body: string;
+  /** One line from the newest report on this drive, or null. */
+  dispute: string | null;
+  /** "Today · 7:42 AM", "Yesterday · …", "Fri, Jan 2 · …". */
+  when: string;
+  /** Where a tap goes, or null when there is nothing to open. */
+  href: Href | null;
+  /** A short fact under the body ("Not on this phone"), or null. */
+  note: string | null;
+  unread: boolean;
+  /** The drive this row is about, for `trip_summary`. */
+  clientTripId: string | null;
+  /** Everything the row says, in reading order, with the unread state in words. */
+  accessibilityLabel: string;
+}
+
+/** B2. Cast: the route exists (`app/(app)/permissions/index.tsx`); the catalog url is the same. */
+const PERMISSIONS_HREF = '/permissions' as Href;
+
+const isLive = (type: string): type is LiveType => (LIVE_TYPES as readonly string[]).includes(type);
+
+/** A `TripDetail` straight from a row — the loader's batch read, including a deleted row. */
+export function toTripDetail(row: TripRow, scoredTripCount: number): TripDetail {
+  const trip = toTripSummary(row);
+  return {
+    trip,
+    scoredTripCount,
+    stage: scoredTripCount >= CONSTANTS.LEARNING_PERIOD_TRIPS ? 'experienced' : 'new',
+    tipOutcome: tipOutcomeOf(trip),
+    unscoredReason: unscoredReasonOf(trip),
+  };
+}
+
+/**
+ * Whether this drive would be scored if the driver said *I drove*: the scoring gate re-run with
+ * role `driver` (ruling T4 I2) — not discarded, not too short, not grade C.
+ */
+export function scorableIfDriver(trip: TripSummary): boolean {
+  return unscoredReasonOf({ ...trip, role: 'driver', scored: false }) === null;
+}
+
+const DISPUTE_LINE: Partial<Record<ReturnType<typeof eventStanding>, string>> = copy.dispute;
+
+/** The newest report's standing, in one line; null when the driver reported nothing. */
+export function disputeLine(events: readonly TripEventView[]): string | null {
+  let newest: { at: number; event: TripEventView } | null = null;
+  for (const event of events) {
+    const d = event.dispute;
+    if (d === null) continue;
+    const at = d.decidedAt ?? d.submittedAt;
+    if (newest === null || at >= newest.at) newest = { at, event };
+  }
+  return newest === null ? null : (DISPUTE_LINE[eventStanding(newest.event)] ?? null);
+}
+
+/** "Today · 7:42 AM" in `tz`. */
+export function whenLabel(ms: number, now: number, tz: string): string {
+  const day = safeDayKey(ms, tz);
+  const label =
+    day === safeDayKey(now, tz)
+      ? copy.today
+      : day === safeDayKey(now - 86_400_000, tz)
+        ? copy.yesterday
+        : formatTripDate(ms, tz);
+  return `${label} · ${formatClock(ms, tz)}`;
+}
+
+function safeDayKey(ms: number, tz: string): string {
+  try {
+    return dayKey(new Date(ms), tz);
+  } catch {
+    return dayKey(new Date(ms));
+  }
+}
+
+function labelOf(v: Omit<InboxItemView, 'accessibilityLabel'>): string {
+  const parts = [v.unread ? `${copy.unread}.` : null, `${v.title}.`, v.body, v.dispute, v.note ? `${v.note}.` : null, v.when];
+  return parts.filter((p): p is string => p !== null && p.length > 0).join(' ');
+}
+
+function finish(v: Omit<InboxItemView, 'accessibilityLabel'>): InboxItemView {
+  return { ...v, accessibilityLabel: labelOf(v) };
+}
+
+export function toItemView(row: InboxRow, local: InboxLocal, now: number, tz: string): InboxItemView | null {
+  if (!isLive(row.type)) return null;
+  const common = { id: row.id, type: row.type, unread: row.read_at === null };
+
+  if (row.type === 'permission_lapsed') {
+    const base = renderInboxBase('permission_lapsed', row.payload);
+    if (base === null) return null;
+    return finish({
+      ...common,
+      title: base.title,
+      body: base.body,
+      dispute: null,
+      when: whenLabel(Date.parse(row.created_at), now, tz),
+      href: PERMISSIONS_HREF,
+      note: null,
+      clientTripId: null,
+    });
+  }
+
+  const payload = PayloadSchemas.trip_summary.safeParse(row.payload);
+  if (!payload.success) return null;
+  const facts = payload.data;
+  const trip = local.trip?.trip ?? null;
+
+  if (local.deleted === true || (trip !== null && trip.deletedAt !== null)) {
+    return finish({
+      ...common,
+      title: copy.deleted.title,
+      body: copy.deleted.body,
+      dispute: null,
+      when: whenLabel(trip?.startedAt ?? Date.parse(facts.startedAt), now, tz),
+      href: null,
+      note: null,
+      clientTripId: facts.clientTripId,
+    });
+  }
+
+  if (trip === null) {
+    const base = renderInboxBase('trip_summary', row.payload);
+    if (base === null) return null;
+    return finish({
+      ...common,
+      title: base.title,
+      body: base.body,
+      dispute: null,
+      when: whenLabel(Date.parse(facts.startedAt), now, tz),
+      href: null,
+      note: copy.notOnPhone,
+      clientTripId: facts.clientTripId,
+    });
+  }
+
+  const current = renderLocal('trip_summary', {
+    clientTripId: trip.clientTripId,
+    distanceM: trip.distanceM,
+    roleUnknown: trip.role === 'unknown',
+    scorableIfDriver: scorableIfDriver(trip),
+    count: 1,
+  });
+  return finish({
+    ...common,
+    title: current.title,
+    body: current.body,
+    dispute: disputeLine(local.events),
+    when: whenLabel(trip.startedAt, now, tz),
+    href: tripSummaryHref(trip.clientTripId),
+    note: null,
+    clientTripId: trip.clientTripId,
+  });
+}
+
+/** Rows the list shows: not dismissed. */
+export const isVisibleRow = (row: InboxRow): boolean => row.dismissed_at === null;
+
+/**
+ * The server's half of the §11.1 daily cap: rows `push-sender` pushed during the user's local day
+ * in `tz`, counted only when their type counts toward the cap — decided by the catalog
+ * (`countsTowardDailyCap`, so a `transactional` summary is exempt), never by comparing against
+ * `family`. A type this build does not know is counted: for a cap, over-counting only holds a
+ * notification back; under-counting would let a third one through. Dismissed rows count too.
+ */
+export function countServerPushesToday(
+  rows: readonly InboxRow[],
+  tz: string,
+  now: number,
+  catalog: Catalog = CATALOG
+): number {
+  const today = safeDayKey(now, tz);
+  let count = 0;
+  for (const row of rows) {
+    if (row.pushed_at === null) continue;
+    if (safeDayKey(Date.parse(row.pushed_at), tz) !== today) continue;
+    const known = Object.prototype.hasOwnProperty.call(catalog, row.type);
+    if (known && !countsTowardDailyCap(row.type as NotificationType, catalog)) continue;
+    count += 1;
+  }
+  return count;
+}
