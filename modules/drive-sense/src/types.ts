@@ -163,7 +163,15 @@ export interface DriveSenseApi {
   /** iOS: sets isExcludedFromBackup on the file or directory; Android: resolves (rev1: R4). */
   excludeFromBackup(uri: string): Promise<void>;
   /** Android S3 notification (End drive action only while stationary); iOS no-op. */
-  setNotificationState(state: { stationary: boolean; startedAt: number | null }): Promise<void>;
+  setNotificationState(state: {
+    stationary: boolean;
+    startedAt: number | null;
+    /**
+     * A candidate that may still be discarded (final review M5): Android titles the notice
+     * "Checking for a drive" rather than claiming a recording. Absent means false.
+     */
+    candidate?: boolean;
+  }): Promise<void>;
   /** Android ApplicationExitInfo (+ 'watchdog' from the persisted record); iOS null. */
   getLastExitInfo(): Promise<ExitInfo | null>;
   /**
@@ -218,7 +226,7 @@ export interface FakeControls {
   /** What `isIgnoringBatteryOptimizations` resolves to (default: true on iOS, false on Android). */
   setIgnoringBatteryOptimizations(value: boolean): void;
   /** The last `setNotificationState` argument, or null. */
-  readonly notificationState: { stationary: boolean; startedAt: number | null } | null;
+  readonly notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null;
 }
 
 // `ExtractedRow` (the reference's own copy of the row shape) and M1's `FeatureRow` must stay

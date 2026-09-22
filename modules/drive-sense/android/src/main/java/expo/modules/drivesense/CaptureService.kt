@@ -200,11 +200,12 @@ class CaptureService : Service() {
     }
 
     /** `setNotificationState(...)`: remembered for the capture's notification. */
-    fun setNotificationState(stationary: Boolean, startedAt: Long?) {
+    fun setNotificationState(stationary: Boolean, startedAt: Long?, candidate: Boolean = false) {
       val inst = instance ?: return
       inst.handler.post {
         inst.notifStationary = stationary
         inst.notifStartedAt = startedAt
+        inst.notifCandidate = candidate
         inst.refreshNotification()
       }
     }
@@ -233,6 +234,8 @@ class CaptureService : Service() {
   private var droppedSamples = 0
   private var notifStationary = false
   private var notifStartedAt: Long? = null
+  /** A candidate, not yet a drive (final review M5): "Checking for a drive". */
+  private var notifCandidate = false
 
   /** The latest start command delivered (main thread). */
   private var lastStartId = 0
@@ -341,7 +344,7 @@ class CaptureService : Service() {
 
   /** @return null when the service is in the foreground, else the contract code for the refusal. */
   private fun goForeground(): String? {
-    val notification = NotificationFactory.build(this, notifStartedAt, notifStationary)
+    val notification = NotificationFactory.build(this, notifStartedAt, notifStationary, notifCandidate)
     return try {
       val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
       ServiceCompat.startForeground(this, NotificationFactory.NOTIFICATION_ID, notification, type)
@@ -358,7 +361,7 @@ class CaptureService : Service() {
     if (!isCapturing) return
     try {
       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?
-      nm?.notify(NotificationFactory.NOTIFICATION_ID, NotificationFactory.build(this, notifStartedAt, notifStationary))
+      nm?.notify(NotificationFactory.NOTIFICATION_ID, NotificationFactory.build(this, notifStartedAt, notifStationary, notifCandidate))
     } catch (_: Exception) {
       // Notifications blocked: the service keeps running (SR9).
     }
@@ -393,6 +396,8 @@ class CaptureService : Service() {
     currentMode = mode
     currentRate = rate
     captureStartedAt = startedAt
+    // An auto capture opens as a candidate until JS confirms it; a manual start is a drive.
+    notifCandidate = mode == "auto"
     prefs.mode = mode
     prefs.rate = rate
     prefs.captureStartedAt = startedAt
@@ -459,6 +464,7 @@ class CaptureService : Service() {
     captureStartedAt = null
     notifStationary = false
     notifStartedAt = null
+    notifCandidate = false
     if (clearOpen) prefs.captureOpen = false
     main.post {
       try {

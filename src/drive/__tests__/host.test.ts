@@ -458,12 +458,12 @@ describe('ending, the gap window and after it', () => {
     await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
     const moving = drive(150);
     await h.feed(moving);
-    expect(h.fake.notificationState).toEqual({ stationary: false, startedAt: T0 });
+    expect(h.fake.notificationState).toEqual({ stationary: false, startedAt: T0, candidate: false });
     h.fake.emit('notificationAction', { action: 'endDrive', ts: h.now() });
     await h.host.settled();
     expect(h.host.snapshot().status).toBe('recording');
     await h.feed(still(5, last(moving)));
-    expect(h.fake.notificationState).toEqual({ stationary: true, startedAt: T0 });
+    expect(h.fake.notificationState).toEqual({ stationary: true, startedAt: T0, candidate: false });
     const sent = h.fake.calls.filter((c) => c === 'setNotificationState').length;
     await h.feed(still(3, row({ ts: last(moving).ts + 5000, lat: last(moving).lat, lng: last(moving).lng })));
     // Sent on change only, never per row.

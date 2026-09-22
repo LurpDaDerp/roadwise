@@ -120,6 +120,13 @@ describe('every method goes to native with its arguments', () => {
       stationary: true,
       startedAt: 1_700_000_000_000,
     });
+    // A candidate (final review M5): the notice says it is checking, not recording.
+    await DriveSense.setNotificationState({ stationary: false, startedAt: null, candidate: true });
+    expect(mockNative.setNotificationState).toHaveBeenLastCalledWith({
+      stationary: false,
+      startedAt: null,
+      candidate: true,
+    });
   });
 
   test('query methods resolve native results', async () => {
@@ -195,6 +202,7 @@ describe('bridge validation', () => {
     ['excludeFromBackup', ['']],
     ['setNotificationState', [{ stationary: 'yes', startedAt: null }]],
     ['setNotificationState', [{ stationary: true, startedAt: 1.5 }]],
+    ['setNotificationState', [{ stationary: false, startedAt: null, candidate: 'yes' }]],
     ['selfTest', [{}]],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;

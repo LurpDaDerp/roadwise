@@ -124,4 +124,5 @@ export const exitInfoSchema: z.ZodType<ExitInfo> = z.strictObject({
 export const notificationStateSchema = z.strictObject({
   stationary: z.boolean(),
   startedAt: epochMs.nullable(),
+  candidate: z.boolean().optional(),
 });

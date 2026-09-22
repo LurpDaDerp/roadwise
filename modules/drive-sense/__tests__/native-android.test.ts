@@ -258,6 +258,14 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
     expect(src).toMatch(/"drive_recording"/);
     expect(src).toMatch(/IMPORTANCE_LOW/);
     expect(src).toMatch(/Recording your drive/);
+    // A candidate that may be discarded is "Checking for a drive" (final review M5), and a
+    // capture native starts in 'auto' mode opens as one until JS says otherwise.
+    expect(src).toMatch(/Checking for a drive/);
+    expect(src).toMatch(/if \(candidate\) return "Checking for a drive"/);
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/notifCandidate = mode == "auto"/);
+    expect(svc).toMatch(/NotificationFactory\.build\(this, notifStartedAt, notifStationary, notifCandidate\)/);
+    expect(code(kt('DriveSenseModule'))).toMatch(/state\["candidate"\] as\? Boolean \?: false/);
     expect(src).toMatch(/Recording drive · /);
   });
 

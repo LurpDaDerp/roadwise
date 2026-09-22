@@ -204,7 +204,8 @@ class DriveSenseModule : Module() {
     AsyncFunction("setNotificationState") { state: Map<String, Any?> ->
       val stationary = state["stationary"] as? Boolean ?: false
       val startedAt = (state["startedAt"] as? Number)?.toLong()
-      CaptureService.setNotificationState(stationary, startedAt)
+      val candidate = state["candidate"] as? Boolean ?: false
+      CaptureService.setNotificationState(stationary, startedAt, candidate)
     }
 
     AsyncFunction("getLastExitInfo") {

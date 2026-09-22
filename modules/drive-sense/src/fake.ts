@@ -70,7 +70,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let history: MotionActivity[] = [];
   let exitInfo: ExitInfo | null = null;
   let ignoringBatteryOptimizations = platform === 'ios';
-  let notificationState: { stationary: boolean; startedAt: number | null } | null = null;
+  let notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null = null;
   let queue: FeatureRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
@@ -189,7 +189,11 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     setNotificationState(s) {
       command('setNotificationState');
-      notificationState = { stationary: s.stationary, startedAt: s.startedAt };
+      notificationState = {
+        stationary: s.stationary,
+        startedAt: s.startedAt,
+        ...(s.candidate === undefined ? {} : { candidate: s.candidate }),
+      };
       return resolve(undefined);
     },
     getLastExitInfo() {

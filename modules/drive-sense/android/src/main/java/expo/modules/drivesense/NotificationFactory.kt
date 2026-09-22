@@ -35,18 +35,23 @@ object NotificationFactory {
     nm.createNotificationChannel(channel)
   }
 
-  /** "Recording drive · N min" when the start is known, else "Recording your drive". */
-  fun title(startedAt: Long?, now: Long): String {
+  /**
+   * "Checking for a drive" while a candidate may still be discarded (final review M5: never claim a
+   * recording that may not exist); then "Recording drive · N min" when the start is known, else
+   * "Recording your drive".
+   */
+  fun title(startedAt: Long?, now: Long, candidate: Boolean = false): String {
+    if (candidate) return "Checking for a drive"
     if (startedAt == null || startedAt <= 0 || now < startedAt) return "Recording your drive"
     val minutes = (now - startedAt) / 60_000L
     return "Recording drive · $minutes min"
   }
 
-  fun build(context: Context, startedAt: Long?, stationary: Boolean): Notification {
+  fun build(context: Context, startedAt: Long?, stationary: Boolean, candidate: Boolean = false): Notification {
     ensureChannel(context)
     val builder = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_drive_notification)
-      .setContentTitle(title(startedAt, System.currentTimeMillis()))
+      .setContentTitle(title(startedAt, System.currentTimeMillis(), candidate))
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setSilent(true)

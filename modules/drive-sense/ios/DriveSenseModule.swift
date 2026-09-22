@@ -149,4 +149,5 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
 struct NotificationStateRecord: Record {
   @Field var stationary: Bool = false
   @Field var startedAt: Double?
+  @Field var candidate: Bool = false
 }
