@@ -1,25 +1,25 @@
 /**
- * Keeps this install's server-side presence current: the `devices` row, the permission report,
- * the push token and the drive state. Renders nothing; mounted once by the root layout (Task 18).
+ * Keeps this install's server-side presence current: the `devices` row, the permission report and
+ * the push token. Renders nothing; mounted once by the root layout (Task 18). The drive state is
+ * not reported here: the runtime reports it (bootstrap, ruling T10 (4)), so a headless drive is
+ * covered and nothing is written twice.
  *
  * Runs only while signed in, and only while this account is the device owner with no handover
  * pending (M3 H2's owner fence), so nothing is ever written for one driver from another's phone
  * state. Never for an under-13 account, nor before the profile is known.
  * - **Still in setup:** the device row and the push token only (security M-1: the phone stops
  *   receiving the previous owner's pushes as soon as the new owner signs in). No permission
- *   report, no drive state, no `onForeground`.
+ *   report, no `onForeground`.
  * - **Onboarded:** everything below.
  *
  * - **On mount and on every `AppState → active`:** the throttled upsert, a permission snapshot →
  *   `reportPermissions`, `syncPushToken` (forced on the first successful sync of the launch: T2
- *   security M-3), the drive-state reporter's `retryPending`, then `onForeground?.(userId)`.
+ *   security M-3), then `onForeground?.(userId)`.
  *   A mount in a background launch (an iOS location wake renders the tree) waits for `active`.
  * - **`requestDeviceSync()`** → `syncPushToken`; **a new OS token** → a forced `syncPushToken`.
- * - **`subscribeDrive`** → the drive-state reporter; `useDriveStateReported()` is true while a host
- *   with a source is mounted.
  *
  * Battery (§3.5): no timer and no polling. The only triggers are the OS saying the app came
- * forward, a screen asking, a new token, and the drive's own state changes; each foreground is
+ * forward, a screen asking and a new token; each foreground is
  * local reads plus at most the writes something actually changed.
  */
 import { useEffect, useLayoutEffect, useRef } from 'react';
@@ -31,12 +31,9 @@ import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { useDataSource } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
-import type { DriveState } from '@/drive/host';
 import { profileGate } from '@/features/auth/authGuard';
 import { takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
 
-import { createDriveStateReporter, type DriveStateReporter } from './driveState';
-import { registerDriveStateSource } from './driveStateStore';
 import { onDeviceSyncRequested } from './events';
 import { getInstallId } from './installId';
 import { readReportedPermissions, reportPermissions } from './permissionsReport';
@@ -56,8 +53,6 @@ export interface DeviceHostDeps {
 export interface DeviceHostProps {
   /** Default true. The host also requires a signed-in, onboarded account. */
   enabled?: boolean;
-  /** The drive host's subscribe; each state change goes to the drive-state reporter. */
-  subscribeDrive?: (fn: (s: DriveState) => void) => () => void;
   /** Runs last on every foreground sync (Task 7's `syncNotificationPrefs`). */
   onForeground?: (userId: string) => unknown;
   onError?: (error: unknown, context: string) => void;
@@ -105,9 +100,6 @@ export function DeviceHost(props: DeviceHostProps): null {
   /** The account whose token this launch has already force-registered (T2 M-3: once per launch). */
   const tokenForcedFor = useRef<string | null>(null);
 
-  const hasSource = props.subscribeDrive !== undefined;
-  useEffect(() => (hasSource ? registerDriveStateSource() : undefined), [hasSource]);
-
   useEffect(() => {
     if (mode === 'off' || userId === null) return;
     const full = mode === 'full';
@@ -127,7 +119,6 @@ export function DeviceHost(props: DeviceHostProps): null {
     };
 
     let deviceId: string | null = null;
-    let reporter: DriveStateReporter | null = null;
     let running = false;
     let again = false;
 
@@ -163,12 +154,6 @@ export function DeviceHost(props: DeviceHostProps): null {
       if (!live) return false;
       deviceId = id;
       // Attached synchronously after the last await, so an unmount in between leaves nothing.
-      const subscribeDrive = latest.current.subscribeDrive;
-      if (full && subscribeDrive) {
-        const r = createDriveStateReporter({ supabase: d.supabase, userId, deviceId: id, onError: report });
-        reporter = r;
-        cleanups.push(subscribeDrive((s) => r.onDriveState(s)));
-      }
       cleanups.push(
         onDeviceSyncRequested(() => {
           void step('devices push token', () => syncToken(false));
@@ -226,9 +211,6 @@ export function DeviceHost(props: DeviceHostProps): null {
         if (result !== null && result !== 'error') tokenForcedFor.current = userId;
       });
       if (!live || !full) return;
-
-      await step('devices drive state retry', async () => reporter?.retryPending());
-      if (!live) return;
 
       await step('devices onForeground', async () => latest.current.onForeground?.(userId));
     };

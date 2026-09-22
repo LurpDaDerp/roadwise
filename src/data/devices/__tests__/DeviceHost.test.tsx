@@ -1,13 +1,11 @@
 import { act, render, renderHook, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import type { EngineStatus } from '@/core/engine/engine.types';
 import type { PermissionSnapshot } from '@/core/permissions';
 import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import { DataProvider } from '@/data/queries/context';
-import type { DriveState } from '@/drive/host';
 import { SETTINGS_RETURN_ACK_KEY } from '@/features/permissions/usePermissionHealth';
 
 import { createFakeSupabase, type FakeSupabase } from '../__fixtures__/fakeSupabase';
@@ -51,11 +49,6 @@ let snap: PermissionSnapshot;
 let permitted: boolean;
 let tokenListeners: Set<() => void>;
 let push: PushPort;
-let driveListeners: Set<(s: DriveState) => void>;
-const subscribeDrive = (fn: (s: DriveState) => void) => {
-  driveListeners.add(fn);
-  return () => driveListeners.delete(fn);
-};
 
 function deps(): Partial<DeviceHostDeps> {
   return {
@@ -103,7 +96,6 @@ beforeEach(async () => {
       return { remove: () => tokenListeners.delete(fn) };
     },
   };
-  driveListeners = new Set();
   mockSession = {
     status: 'signedIn',
     session: { user: { id: 'user-a' } },
@@ -212,15 +204,12 @@ describe('DeviceHost', () => {
     it('not onboarded yet: the device row and the token only, no report and no onForeground', async () => {
       mockSession.profile = { age_band: 'adult', flags: {} };
       const onForeground = jest.fn();
-      await render(<DeviceHost deps={deps()} onForeground={onForeground} subscribeDrive={subscribeDrive} />, {
-        wrapper: Wrapper,
-      });
+      await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
       await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
       await settle();
       expect(ops()).toEqual(['devices:upsert', 'register_push_token:rpc']);
       expect(fake.to('devices')[0]?.values).not.toHaveProperty('permissions');
       expect(onForeground).not.toHaveBeenCalled();
-      expect(driveListeners.size).toBe(0);
     });
 
     it('a handover: the new owner takes the token before onboarding, once the rebuild has settled the owner', async () => {
@@ -275,11 +264,7 @@ describe('DeviceHost', () => {
     ['a pending handover', PENDING_OWNER_KEY, 'user-b'],
   ])('%s: the owner fence holds everything back', async (_n, key, value) => {
     await createSettingsRepo(db).set(key, value);
-    await render(<DeviceHost deps={deps()} subscribeDrive={subscribeDrive} />, { wrapper: Wrapper });
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    await act(() => driveListeners.forEach((l) => l({ status: 'recording' } as DriveState)));
+    await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
@@ -306,37 +291,14 @@ describe('DeviceHost', () => {
     await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(2));
   });
 
-  it('reports the drive state from subscribeDrive, and is marked as reported only while mounted', async () => {
+  it('reports no drive state and never claims to (the runtime reports it: ruling T10 (4))', async () => {
     const onForeground = jest.fn();
     const reported = await renderHook(() => useDriveStateReported());
-    expect(reported.result.current).toBe(false);
-    const view = await render(<DeviceHost deps={deps()} subscribeDrive={subscribeDrive} onForeground={onForeground} />, {
-      wrapper: Wrapper,
-    });
+    await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
     await waitFor(() => expect(onForeground).toHaveBeenCalled());
     await reported.rerender({});
-    expect(reported.result.current).toBe(true);
-    await waitFor(() => expect(driveListeners.size).toBe(1));
-    const emit = (status: EngineStatus) => act(() => driveListeners.forEach((l) => l({ status } as DriveState)));
-    await emit('candidate');
-    await emit('recording');
-    await emit('recording');
-    await emit('finalizing');
-    await emit('armed');
-    await waitFor(() =>
-      expect(fake.calls.filter((c) => c.values && typeof c.values === 'object' && 'drive_state' in c.values)).toHaveLength(2)
-    );
-    await act(async () => view.unmount());
-    expect(driveListeners.size).toBe(0);
-    await reported.rerender({});
     expect(reported.result.current).toBe(false);
-  });
-
-  it('without subscribeDrive the drive state is not reported', async () => {
-    const reported = await renderHook(() => useDriveStateReported());
-    await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
-    await reported.rerender({});
-    expect(reported.result.current).toBe(false);
+    expect(fake.calls.some((c) => c.values && typeof c.values === 'object' && 'drive_state' in c.values)).toBe(false);
   });
 
   it('a snapshot that fails is reported as an error and the rest still runs', async () => {
@@ -351,15 +313,12 @@ describe('DeviceHost', () => {
 
   it('signing out stops the listeners', async () => {
     const onForeground = jest.fn();
-    const view = await render(<DeviceHost deps={deps()} onForeground={onForeground} subscribeDrive={subscribeDrive} />, {
-      wrapper: Wrapper,
-    });
+    const view = await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
     await waitFor(() => expect(onForeground).toHaveBeenCalled());
-    await waitFor(() => expect(driveListeners.size).toBe(1));
+    await waitFor(() => expect(tokenListeners.size).toBe(1));
     mockSession = { status: 'signedOut', session: null, profile: null };
-    await view.rerender(<DeviceHost deps={deps()} onForeground={onForeground} subscribeDrive={subscribeDrive} />);
-    await waitFor(() => expect(driveListeners.size).toBe(0));
-    expect(appStateListeners.size).toBe(0);
+    await view.rerender(<DeviceHost deps={deps()} onForeground={onForeground} />);
+    await waitFor(() => expect(appStateListeners.size).toBe(0));
     expect(tokenListeners.size).toBe(0);
   });
 });

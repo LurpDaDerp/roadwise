@@ -1,6 +1,6 @@
 /**
- * Whether this phone tells the server when it is driving: true only while a `DeviceHost` is
- * mounted with a `subscribeDrive` source (rev1: C1). A8's promise "We hold them while you're
+ * Whether this phone tells the server when it is driving: true only while a drive-state source is
+ * registered — the runtime's reporter (bootstrap, ruling T10 (4)) (rev1: C1). A8's promise "We hold them while you're
  * driving." is shown only when this is true, so the screen never claims what the app does not do.
  */
 import { useSyncExternalStore } from 'react';
