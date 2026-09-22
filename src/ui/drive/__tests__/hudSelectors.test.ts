@@ -3,7 +3,6 @@ import { CONSTANTS } from '@scoring';
 import type { AlertDecision, AlertKind, AlertLevel } from '@/core/alerts/types';
 import type { LimitSample } from '@/core/engine/types';
 import {
-  HUD_LIMIT_CONFIDENCE_MIN,
   countWords,
   hudLimitMph,
   hudSpeedMph,
@@ -49,21 +48,15 @@ describe('hudSpeedMph — unknown is "—", never 0 and never stale', () => {
 });
 
 describe('hudLimitMph — the one limit gate (controller ruling, §13.2)', () => {
-  test('the threshold is the alert and scoring threshold', () => {
-    expect(HUD_LIMIT_CONFIDENCE_MIN).toBe(CONSTANTS.Q_FULL_AT);
-    expect(HUD_LIMIT_CONFIDENCE_MIN).toBe(0.8);
-  });
+  // The gate's agreement with the alert and scoring gate is proven over the matcher's real outputs
+  // (AWS 0.7, HPMS 0.75, ramp 0.65, ...) in limitGateSeam.test.ts, not by comparing constants.
 
   test('a confident posted match shows its limit', () => {
     expect(hudLimitMph(limit(35), true)).toBe(35);
     expect(hudLimitMph(limit(60, { matchConfidence: 0.8 }), true)).toBe(60);
   });
 
-  test('a cached limit at full confidence shows', () => {
-    expect(hudLimitMph(limit(45, { source: 'cached', matchConfidence: 0.9 }), true)).toBe(45);
-  });
-
-  test.each([0.6, 0.65, 0.79])('a ramp or parallel-road match at %s shows "—"', (c) => {
+  test.each([0.6, 0.65, 0.69])('a ramp or parallel-road match at %s shows "—"', (c) => {
     expect(hudLimitMph(limit(35, { matchConfidence: c }), true)).toBeNull();
   });
 

@@ -15,7 +15,7 @@ describe('StatusRing', () => {
   test('each level is announced and doubles as the recording indicator', async () => {
     const labels: string[] = [];
     for (const level of levels) {
-      const { unmount } = await render(<StatusRing level={level} night={false} />);
+      const { unmount } = await render(<StatusRing level={level} recording night={false} />);
       const label = String(screen.getByTestId('hud-status').props.accessibilityLabel);
       expect(label).toMatch(/^Recording/);
       labels.push(label);
@@ -24,10 +24,24 @@ describe('StatusRing', () => {
     expect(new Set(labels).size).toBe(3);
   });
 
+  test('off the recording state it neither shows the recording mark nor says "Recording" (M3)', async () => {
+    for (const level of levels) {
+      const { unmount } = await render(<StatusRing level={level} recording={false} night={false} />);
+      expect(screen.queryByTestId('hud-status-recording')).toBeNull();
+      const label = String(screen.getByTestId('hud-status').props.accessibilityLabel);
+      expect(label).not.toMatch(/record/i);
+      // The alert level is still announced.
+      expect(screen.getByTestId('hud-status-strip')).toBeOnTheScreen();
+      await unmount();
+    }
+    await render(<StatusRing level="calm" recording night={false} />);
+    expect(screen.getByTestId('hud-status-recording')).toBeOnTheScreen();
+  });
+
   test('levels differ by thickness and mark, not colour alone', async () => {
     const seen: { height: number; mark: boolean }[] = [];
     for (const level of levels) {
-      const { unmount } = await render(<StatusRing level={level} night={false} />);
+      const { unmount } = await render(<StatusRing level={level} recording night={false} />);
       seen.push({
         height: Number(flat(screen.getByTestId('hud-status-strip').props.style).height),
         mark: screen.queryByTestId('hud-status-mark') !== null,
@@ -42,11 +56,11 @@ describe('StatusRing', () => {
   });
 
   test('critical uses the critical ink, night the night palette', async () => {
-    const { rerender } = await render(<StatusRing level="critical" night={false} />);
+    const { rerender } = await render(<StatusRing level="critical" recording night={false} />);
     expect(flat(screen.getByTestId('hud-status-strip').props.style).backgroundColor).toBe(
       HUD.day.critical
     );
-    await rerender(<StatusRing level="calm" night />);
+    await rerender(<StatusRing level="calm" recording night />);
     expect(flat(screen.getByTestId('hud-status-strip').props.style).backgroundColor).toBe(
       HUD.night.inkMuted
     );

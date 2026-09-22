@@ -1,7 +1,7 @@
 import { CONSTANTS } from '@scoring';
 
 import type { AlertDecision, AlertKind, AlertLevel, AlertVoiceKey } from '@/core/alerts/types';
-import { limitConfidence } from '@/core/detectors/common';
+import { limitActionable } from '@/core/detectors/common';
 import type { LimitSample } from '@/core/engine/types';
 import { t } from '@/i18n';
 
@@ -10,13 +10,6 @@ import { t } from '@/i18n';
  * guessed value). Components take the raw snapshot fields — `speedMps`, `speedKnown`, `limit` —
  * and call these, so no caller can put a number on the HUD that the data does not support.
  */
-
-/**
- * Controller ruling (S1 review): the limit sign shows a limit only at the confidence that gates
- * alerts and scoring. Ramp and parallel-road matches come back at 0.6–0.65; without the gate a
- * motorway exit would flash the ramp's 35 at a driver doing 60.
- */
-export const HUD_LIMIT_CONFIDENCE_MIN = CONSTANTS.Q_FULL_AT;
 
 const MPS_PER_MPH = CONSTANTS.MPH;
 
@@ -30,25 +23,31 @@ export function hudSpeedMph(speedMps: number, speedKnown: boolean): number | nul
  * The limit to print on the sign in whole mph, or null ("—"). Shown only when:
  * - there is a current fix (`speedKnown`) — without one there is no current road, and the snapshot's
  *   limit belongs to wherever the fix was lost;
- * - the source is real (not `unknown`) with a positive finite limit;
- * - the map match is at least `HUD_LIMIT_CONFIDENCE_MIN`; and
- * - the limit's own confidence (§9.5: source, parallel roads) reaches it too — so a statutory
- *   default or a road-next-door ambiguity never shows, exactly as it never alerts.
+ * - the limit is a positive finite number; and
+ * - `limitActionable(limit)` holds — the one predicate that also decides whether the app alerts and
+ *   scores in full against this limit (common.ts, Ruling U1-I1). So the sign shows exactly the
+ *   limits the app acts on: a cached (AWS) or HPMS-filled limit that can trigger "Slow down" is on
+ *   the sign, while ramp, parallel-road and truncated-tile matches (under the matcher's 0.7) and a
+ *   statutory default are "—", exactly as they never alert. Never add a second threshold here —
+ *   the cross-seam test (`limitGateSeam.test.ts`) fails if this gate and the alert gate drift.
  */
 export function hudLimitMph(limit: LimitSample | null, speedKnown: boolean): number | null {
   if (!speedKnown || !limit) return null;
   const { limitMps } = limit;
-  if (limit.source === 'unknown' || limitMps === null) return null;
-  if (!Number.isFinite(limitMps) || limitMps <= 0) return null;
-  if (!(limit.matchConfidence >= HUD_LIMIT_CONFIDENCE_MIN)) return null;
-  const q = limitConfidence(limit);
-  if (q === null || q < HUD_LIMIT_CONFIDENCE_MIN) return null;
+  if (limitMps === null || !Number.isFinite(limitMps) || limitMps <= 0) return null;
+  if (!limitActionable(limit)) return null;
   return Math.round(limitMps / MPS_PER_MPH);
 }
 
 /**
  * Past the tolerance over a limit the sign itself would show, on a speed the readout itself would
  * show. Instantaneous: this is the readout's state (C3), not the arbiter's alert (§13.4).
+ *
+ * Judged on the RAW m/s values, not the rounded numerals — deliberately. It is the same comparison
+ * the speeding detector and arbiter make (`speed − limit > SPEEDING_TOLERANCE_MPS`), so the readout
+ * turns red exactly when the app would count the second as speeding. The cost is that the numerals
+ * can read, say, "40" against "35" while red (40.4 mph). Do not "fix" this to rounded values: the HUD
+ * would then disagree with the alert.
  */
 export function hudSpeeding(
   speedMps: number,

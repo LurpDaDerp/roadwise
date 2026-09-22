@@ -81,7 +81,11 @@ function stillWithoutFix(row: FeatureRow): boolean {
 const knownLimit = (limit: LimitSample): number | null =>
   limit.source !== 'unknown' ? limit.limitMps : null;
 
-/** The speeding detector's own confidence for this row (§9.5), so the arbiter judges it the same way. */
+/**
+ * The speeding detector's own confidence for this row (§9.5), so the arbiter judges it the same way.
+ * It reaches `Q_FULL_AT` exactly when `limitActionable(limit)` holds and the fix is good — the same
+ * line the HUD's limit sign is drawn on (common.ts, Ruling U1-I1).
+ */
 function rowQuality(row: FeatureRow, limit: LimitSample): number {
   const q = limitConfidence(limit);
   if (q === null || knownSpeed(row) === null) return 0;

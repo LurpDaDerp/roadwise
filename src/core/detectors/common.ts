@@ -64,6 +64,18 @@ export function limitConfidence(limit: LimitSample): number | null {
   return ambiguous ? Math.min(base, LIMIT_Q_AMBIGUOUS) : base;
 }
 
+/**
+ * THE line between a limit the app acts on and one it does not: the limit's own confidence
+ * reaches `Q_FULL_AT`. The speeding detector alerts (via `alertableFor`) and the machine's
+ * `rowQuality` feeds the arbiter at full weight exactly on this side of it, and the HUD's limit
+ * sign shows a limit exactly when this holds (with a current fix) — so the sign never hides a
+ * limit the app alerts or scores against, nor shows one it ignores (Ruling U1-I1). Change the
+ * line here, not in a caller. A good GNSS fix is a separate condition the callers add.
+ */
+export function limitActionable(limit: LimitSample): boolean {
+  return (limitConfidence(limit) ?? 0) >= CONSTANTS.Q_FULL_AT;
+}
+
 /** The fix is too loose to accuse anyone of a precise speed. */
 export function gnssPoor(row: FeatureRow): boolean {
   return row.hAcc > H_ACC_MAX_M || row.speedAcc > SPEED_ACC_MAX_MPS;

@@ -3,7 +3,6 @@ export { HazardChip, type HazardChipProps, type HudHazard } from './HazardChip';
 export { HudIndicators, type HudGps, type HudIndicatorsProps } from './HudIndicators';
 export {
   countWords,
-  HUD_LIMIT_CONFIDENCE_MIN,
   HUD_MAX_WORDS,
   hudLimitMph,
   hudSpeedMph,

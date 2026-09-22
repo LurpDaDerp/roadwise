@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react-native';
+import { useEffect, useLayoutEffect } from 'react';
 import { Animated, StyleSheet, type ViewStyle } from 'react-native';
 
 import type { AlertDecision, AlertKind, AlertLevel } from '@/core/alerts/types';
@@ -129,6 +130,45 @@ test('without reduce motion it fades in once, inside the 300 ms state-transition
   expect(config.duration).toBeLessThanOrEqual(300);
   expect(config.toValue).toBe(1);
   expect(config.useNativeDriver).toBe(true);
+});
+
+/**
+ * Logs the commit phases of a sibling rendered after the overlay. React runs layout effects in tree
+ * order during the commit (before the frame is painted) and passive effects afterwards, so the
+ * overlay's reset must be logged before this probe's layout entry to be in place before paint.
+ */
+function PhaseProbe({ log }: { log: string[] }) {
+  useLayoutEffect(() => {
+    log.push('commit');
+  });
+  useEffect(() => {
+    log.push('after-paint');
+  });
+  return null;
+}
+
+test('each new decision starts from transparent before its first paint — no one-frame flash (M1)', async () => {
+  const log: string[] = [];
+  jest.spyOn(Animated.Value.prototype, 'setValue').mockImplementation(function (v: number) {
+    log.push(`opacity=${v}`);
+  });
+  jest.spyOn(Animated, 'timing').mockImplementation(
+    () => ({ start: () => log.push('fade'), stop: () => {} }) as unknown as Animated.CompositeAnimation
+  );
+  const tree = (d: AlertDecision) => (
+    <>
+      <AlertOverlay decision={d} night={false} reduceMotion={false} />
+      <PhaseProbe log={log} />
+    </>
+  );
+
+  const { rerender } = await render(tree(decision(1, 'speeding', undefined, 'A')));
+  expect(log.slice(0, 3)).toEqual(['opacity=0', 'fade', 'commit']);
+
+  // B replaces A while A is still showing (A's fade ended at 1): reset again, inside the commit.
+  log.length = 0;
+  await rerender(tree(decision(3, 'phone', undefined, 'B')));
+  expect(log.slice(0, 3)).toEqual(['opacity=0', 'fade', 'commit']);
 });
 
 test('the same decision re-rendered at 1 Hz does not animate again', async () => {

@@ -58,6 +58,8 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
         status,
         measured: { speedMps: ep.speedAtMax, limitMps: ep.limitAtMax, overMps: ep.maxOver },
         context: ep.context,
+        // With a good fix throughout, q ≥ Q_FULL_AT exactly when `limitActionable(limit)` held on
+        // every row of the episode: the line the HUD's limit sign is drawn on (common.ts, Ruling U1-I1).
         alertable: alertableFor(status, q),
         source: 'gnss',
       },

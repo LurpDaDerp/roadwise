@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { memo, useEffect, useState } from 'react';
+import { memo, useLayoutEffect, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -49,10 +49,14 @@ const L1_FRAME = 12;
  * Sound and haptics are the player's (P2); this is the visual channel only.
  */
 function AlertOverlayView({ decision, night, reduceMotion }: AlertOverlayProps) {
-  const [opacity] = useState(() => new Animated.Value(1));
+  const [opacity] = useState(() => new Animated.Value(reduceMotion ? 1 : 0));
   const id = decision?.id ?? null;
 
-  useEffect(() => {
+  // A layout effect, not a passive one: it runs in the commit, before the frame is painted. With
+  // `useEffect` a new decision would paint once at the previous value (1 — the last fade's end),
+  // then drop to 0 and fade in: a one-frame blink, worst for the full-screen L3 (U1 review M1).
+  // Keyed on `id`, so it also resets when decision B replaces A while A is still showing.
+  useLayoutEffect(() => {
     if (id === null) return;
     if (reduceMotion) {
       opacity.setValue(1);
