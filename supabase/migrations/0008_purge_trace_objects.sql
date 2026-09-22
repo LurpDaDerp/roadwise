@@ -13,9 +13,17 @@
 --
 -- Retention (ruling "B6 retention"): 14 days, for every user, matching the pd-1 disclosure ("kept
 -- up to 14 days so disputes can be checked"); it supersedes 0002's 90-day note. Counted from the
--- DRIVE where a trips row exists: least(object created_at, trips.ended_at), so a late upload
--- cannot keep a trace ~44 days (B6 security M-2); from the object's created_at otherwise (an
--- orphan). An object is never created before its drive ends, so this is never early.
+-- DRIVE where a trips row names the object: least(object created_at, trips.ended_at), so a late
+-- upload cannot keep a trace ~44 days (B6 security M-2); from the object's created_at otherwise
+-- (an orphan). An object is never created before its drive ends, so this is never early.
+-- least(x, y) < c is exactly x < c or y < c, so the rule is evaluated as the union of two cheap
+-- halves (review B6 r1 n1), never as one trips lookup per object:
+--   (a) traces objects with created_at < cutoff (a plain column filter on the bucket), and
+--   (b) objects named by trips.trace_path where trips.ended_at < cutoff (the partial index
+--       trips_trace_expiry_idx, then an exact (bucket_id, name) lookup in storage.objects).
+-- One case falls to (a) alone: an object whose trips row names no path, which is only a late
+-- upload landing under a drive already deleted (soft_delete_trip clears trace_path); it is kept at
+-- most 14 days from that upload, like any orphan.
 --
 -- Objects (every one follows .agent/backend-conventions.md; numbers below are its sections):
 --   * public.underage_object_keys_after(p_limit int, p_after_bucket text, p_after_name text)
@@ -29,14 +37,12 @@
 --   * public.underage_object_keys(p_limit int): 0006's function, REPLACED with the same signature,
 --     now the cursor-less call of the above (the old LIKE '<id>/%' join grew as u13 x objects).
 --   * public.expired_trace_object_keys(p_limit int, p_after_name text) returns jsonb (service-role
---     guard first; invoker): [{ bucket, name }] of `traces` objects whose retention start (above)
---     is more than 14 days ago, found by object metadata with the trips row joined only for its
---     end, ordered by name in byte order after the cursor, 1..1000 rows. The scan is bounded to
---     the traces bucket, walked in (bucket_id, name) index order; storage has no created_at index
---     and none of ours can be added.
---   * public.trace_drive_ended_at(p_name text) returns timestamptz: invoker helper, the drive's end
---     for a trace key through the (user_id, client_trip_id) unique key, or null (an orphan, or not
---     a trace key). Executable by service_role, which the invoker listing runs as.
+--     guard first; invoker): [{ bucket, name }] of `traces` objects past retention (above): the
+--     union of halves (a) and (b), deduplicated, ordered by name in byte order after the cursor,
+--     1..1000 rows. Half (a) is bounded to the traces bucket (storage has no created_at index and
+--     none of ours can be added); half (b) reads only trips past retention that still name a path.
+--   * trips_trace_expiry_idx: a partial index on trips (ended_at) where trace_path is not null,
+--     for half (b); clear_trace_paths keeps it small.
 --   * public.clear_trace_paths(p_keys text[]) returns int: service-role-only definer. For each key
 --     the function has DELETED from the traces bucket, clears trips.trace_path, so no UI or
 --     re-score references a missing object and a re-score honestly gets `no_trace` (ruling B6
@@ -114,34 +120,40 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- listing: traces past retention, counted from the drive where one exists
 -- ---------------------------------------------------------------------------
--- the drive's end for a traces key '<uuid>/<client id>.bin.gz', or null (an orphan, or a name
--- that is not a trace key): found through the (user_id, client_trip_id) unique key
-create or replace function public.trace_drive_ended_at(p_name text) returns timestamptz
-language sql stable set search_path = public as $$
-  select t.ended_at from public.trips t
-  where p_name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[A-Za-z0-9_-]{1,64}\.bin\.gz$'
-    and t.user_id = split_part(p_name, '/', 1)::uuid
-    and t.client_trip_id = left(split_part(p_name, '/', 2), -7)
-$$;
+-- half (b)'s index: trips past retention that still name a trace
+create index trips_trace_expiry_idx on public.trips (ended_at) where trace_path is not null;
 
 create or replace function public.expired_trace_object_keys(p_limit int, p_after_name text) returns jsonb
 language plpgsql stable set search_path = public as $$
 declare
+  v_cutoff timestamptz := now() - interval '14 days';
   v_keys jsonb;
 begin
   perform public.require_service_role('expired_trace_object_keys');
   if p_limit is null or p_limit < 1 or p_limit > 1000 then
     raise exception 'limit must be between 1 and 1000' using errcode = 'invalid_parameter_value';
   end if;
-  select coalesce(jsonb_agg(jsonb_build_object('bucket', k.bucket_id, 'name', k.name) order by k.name collate "C"), '[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('bucket', 'traces', 'name', k.name) order by k.name collate "C"), '[]'::jsonb)
     into v_keys
   from (
-    select o.bucket_id, o.name
-    from storage.objects o
-    where o.bucket_id = 'traces'
-      and (p_after_name is null or o.name collate "C" > p_after_name collate "C")
-      and least(o.created_at, public.trace_drive_ended_at(o.name)) < now() - interval '14 days'
-    order by o.name collate "C"
+    select u.name
+    from (
+      -- (a) uploaded more than 14 days ago
+      (select o.name from storage.objects o
+       where o.bucket_id = 'traces' and o.created_at < v_cutoff
+         and (p_after_name is null or o.name collate "C" > p_after_name collate "C")
+       order by o.name collate "C"
+       limit p_limit)
+      union
+      -- (b) named by a trips row whose drive ended more than 14 days ago
+      (select o.name from public.trips t
+       join storage.objects o on o.bucket_id = 'traces' and o.name = t.trace_path
+       where t.trace_path is not null and t.ended_at < v_cutoff
+         and (p_after_name is null or t.trace_path collate "C" > p_after_name collate "C")
+       order by o.name collate "C"
+       limit p_limit)
+    ) u
+    order by u.name collate "C"
     limit p_limit
   ) k;
   return v_keys;
@@ -243,10 +255,12 @@ begin
   if coalesce(v_url, '') = '' or octet_length(coalesce(v_key, '')) < 32 then
     return 'unconfigured';
   end if;
-  -- the listings' own predicates, as existence probes
+  -- the listings' own predicates, as existence probes: halves (a) and (b), then the children
   if not exists (select 1 from storage.objects o
-                 where o.bucket_id = 'traces'
-                   and least(o.created_at, public.trace_drive_ended_at(o.name)) < now() - interval '14 days')
+                 where o.bucket_id = 'traces' and o.created_at < now() - interval '14 days')
+     and not exists (select 1 from public.trips t
+                     join storage.objects o on o.bucket_id = 'traces' and o.name = t.trace_path
+                     where t.trace_path is not null and t.ended_at < now() - interval '14 days')
      and not exists (select 1 from public.profiles p
                      join storage.objects o
                        on split_part(o.name, '/', 1) = p.id::text
@@ -273,7 +287,6 @@ revoke all on public.job_leases from anon, authenticated, service_role;
 
 revoke all on function public.underage_object_keys_after(int, text, text) from public, anon, authenticated;
 revoke all on function public.underage_object_keys(int) from public, anon, authenticated;
-revoke all on function public.trace_drive_ended_at(text) from public, anon, authenticated;
 revoke all on function public.expired_trace_object_keys(int, text) from public, anon, authenticated;
 revoke all on function public.clear_trace_paths(text[]) from public, anon, authenticated;
 revoke all on function public.take_job_lease(text, uuid, int) from public, anon, authenticated;
@@ -283,8 +296,6 @@ revoke all on function public.dispatch_purge_traces() from public, anon, authent
 grant execute on function public.underage_object_keys_after(int, text, text) to service_role;
 grant execute on function public.underage_object_keys(int) to service_role;
 grant execute on function public.expired_trace_object_keys(int, text) to service_role;
--- the listing is invoker, so its caller runs the helper (a read of one drive's end by its key)
-grant execute on function public.trace_drive_ended_at(text) to service_role;
 grant execute on function public.clear_trace_paths(text[]) to service_role;
 grant execute on function public.take_job_lease(text, uuid, int) to service_role;
 grant execute on function public.release_job_lease(text, uuid) to service_role;

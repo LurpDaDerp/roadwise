@@ -1066,7 +1066,6 @@ export type Database = {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
-      trace_drive_ended_at: { Args: { p_name: string }; Returns: string }
       underage_identity_keys: { Args: { p_data: Json }; Returns: Json }
       underage_object_keys: { Args: { p_limit: number }; Returns: Json }
       underage_object_keys_after: {

@@ -15,7 +15,7 @@ begin
 end $$;
 
 begin;
-select plan(66);
+select plan(72);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -99,10 +99,9 @@ select is((select count(*)::int from pg_proc p where p.oid in ('public.take_job_
   'the lease functions and clear_trace_paths are security definer, owned by postgres, pinning exactly search_path=public');
 select is((select count(*)::int from pg_proc p where p.oid in ('public.expired_trace_object_keys(integer, text)'::regprocedure,
     'public.underage_object_keys_after(integer, text, text)'::regprocedure, 'public.underage_object_keys(integer)'::regprocedure,
-    'public.trace_drive_ended_at(text)'::regprocedure,
     'public.purge_traces_signature(bigint, text)'::regprocedure, 'public.dispatch_purge_traces()'::regprocedure)
-    and not p.prosecdef and p.proconfig = array['search_path=public']), 6,
-  'the listings, the drive-end helper, the signature and the dispatcher are security invoker pinning exactly search_path=public');
+    and not p.prosecdef and p.proconfig = array['search_path=public']), 5,
+  'the listings, the signature and the dispatcher are security invoker pinning exactly search_path=public');
 select is(array[has_function_privilege('service_role', 'public.expired_trace_object_keys(integer, text)', 'execute'),
                 has_function_privilege('service_role', 'public.underage_object_keys_after(integer, text, text)', 'execute'),
                 has_function_privilege('service_role', 'public.underage_object_keys(integer)', 'execute'),
@@ -112,7 +111,7 @@ select is(array[has_function_privilege('service_role', 'public.expired_trace_obj
   array[true, true, true, true, true, true], 'service_role runs the listings, clear_trace_paths and the lease functions');
 select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'authenticated']) r, unnest(array[
     'public.expired_trace_object_keys(integer, text)', 'public.underage_object_keys_after(integer, text, text)', 'public.underage_object_keys(integer)',
-    'public.trace_drive_ended_at(text)', 'public.clear_trace_paths(text[])',
+    'public.clear_trace_paths(text[])',
     'public.take_job_lease(text, uuid, integer)', 'public.release_job_lease(text, uuid)',
     'public.purge_traces_signature(bigint, text)', 'public.dispatch_purge_traces()']) f),
   false, 'anon and authenticated execute nothing this migration creates or replaces');
@@ -170,9 +169,11 @@ update storage.objects set created_at = now() - interval '1 day' where name = 'b
 
 -- retention counts from the DRIVE when a trips row exists (M-2): a trace uploaded 2 days ago of a
 -- drive that ended 20 days ago is past retention; one uploaded 2 days ago of a 2-day-old drive is not
-insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason) values
-  ('b8000000-0000-4000-8000-000000000001', 'late-trip', now() - interval '20 days', now() - interval '20 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short'),
-  ('b8000000-0000-4000-8000-000000000001', 'recent-trip', now() - interval '2 days', now() - interval '2 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short');
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, tz, distance_m, duration_s, role, mode, exposure, data_quality, status, unscored_reason, trace_path) values
+  ('b8000000-0000-4000-8000-000000000001', 'late-trip', now() - interval '20 days', now() - interval '20 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short',
+    'b8000000-0000-4000-8000-000000000001/late-trip.bin.gz'),
+  ('b8000000-0000-4000-8000-000000000001', 'recent-trip', now() - interval '2 days', now() - interval '2 days' + interval '10 minutes', 'UTC', 100, 600, 'driver', 'mounted', 1, 'A', 'unscored', 'too_short',
+    'b8000000-0000-4000-8000-000000000001/recent-trip.bin.gz');
 insert into storage.objects (bucket_id, name, owner_id, created_at) values
   ('traces', 'b8000000-0000-4000-8000-000000000001/late-trip.bin.gz', 'b8000000-0000-4000-8000-000000000001', now() - interval '2 days'),
   ('traces', 'b8000000-0000-4000-8000-000000000001/recent-trip.bin.gz', 'b8000000-0000-4000-8000-000000000001', now() - interval '2 days');
@@ -180,7 +181,23 @@ set local role service_role;
 select is((select array_agg(e->>'name' order by e->>'name') from jsonb_array_elements(public.expired_trace_object_keys(100, null)) e where e->>'name' like 'b8000000-0000-4000-8000-000000000001/%'),
   array['b8000000-0000-4000-8000-000000000001/late-trip.bin.gz'],
   'a late upload of a 20-day-old drive is past retention; a fresh upload of a 2-day-old drive is not');
+select is(jsonb_array_length(public.expired_trace_object_keys(100, null)),
+  (select count(distinct e->>'name')::int from jsonb_array_elements(public.expired_trace_object_keys(100, null)) e),
+  'an object both old and named by an old drive is listed once (the union is deduplicated)');
 reset role;
+
+-- review B6 r1 n1: the steady-state probe and the listing make no trips lookup per object
+select has_index('public', 'trips', 'trips_trace_expiry_idx', 'half (b) reads trips past retention through a partial index');
+select is((select count(*)::int from pg_proc where pronamespace = 'public'::regnamespace and proname = 'trace_drive_ended_at'), 0,
+  'the per-object drive-end helper is gone');
+select ok(pg_get_functiondef('public.dispatch_purge_traces()'::regprocedure) !~ 'trips t\s+where t\.user_id'
+      and pg_get_functiondef('public.expired_trace_object_keys(integer, text)'::regprocedure) !~ 'trace_drive_ended_at',
+  'neither the probe nor the listing looks a drive up per object');
+select ok(pg_temp.plan_of($q$select 1 from storage.objects o where o.bucket_id = 'traces' and o.created_at < now() - interval '14 days'$q$) !~ 'trips',
+  'half (a) of the probe is a filter on the bucket alone');
+select is(pg_get_indexdef('public.trips_trace_expiry_idx'::regclass),
+  'CREATE INDEX trips_trace_expiry_idx ON public.trips USING btree (ended_at) WHERE (trace_path IS NOT NULL)',
+  'half (b) reads trips past retention through (ended_at) where trace_path is not null');
 
 -- the other list the function deletes: 0006's, every bucket, a blocked child's prefix
 insert into storage.objects (bucket_id, name, owner_id) values
@@ -202,18 +219,18 @@ reset role;
 select set_config('request.jwt.claims', '', true);
 select throws_ok($$ select public.underage_object_keys_after(10, null, null) $$, '42501', 'underage_object_keys_after requires the service role',
   'no JWT: the child listing refuses first');
--- review B6 I1: never a nested loop comparing every object with every child; a hash or merge join
--- on the first path segment, or storage's own name_prefix_search index per child
-select ok(pg_temp.plan_of($q$select o.bucket_id, o.name from public.profiles p join storage.objects o
-    on split_part(o.name, '/', 1) = p.id::text and o.name ~>=~ (p.id::text || '/') and o.name ~<~ (p.id::text || '0')
-    where p.age_band = 'u13'$q$) ~ '((Hash|Merge) Cond: \(+split_part\(o\.name|name_prefix_search)',
-  'the child listing plans as a hash or merge join on the first segment, or an index scan on name_prefix_search');
-set local enable_seqscan = off;
-select ok(pg_temp.plan_of($q$select o.bucket_id, o.name from public.profiles p join storage.objects o
-    on split_part(o.name, '/', 1) = p.id::text and o.name ~>=~ (p.id::text || '/') and o.name ~<~ (p.id::text || '0')
-    where p.age_band = 'u13'$q$) like '%name_prefix_search%',
-  'and name_prefix_search can serve it, one range per child, once the bucket is large');
-reset enable_seqscan;
+-- review B6 I1: never a LIKE built per row (one comparison per object per child). The join is on
+-- the first path segment, which a hash or merge join can use, beside a byte range per child that
+-- storage's name_prefix_search index serves. Plans on the fixture's handful of rows depend on the
+-- statistics, so the shape is read from the definition and the index from a constant range; the
+-- report carries EXPLAIN ANALYZE at 60 000 objects.
+select ok(pg_get_functiondef('public.underage_object_keys_after(integer, text, text)'::regprocedure) ~ 'split_part\(o\.name, ''/'', 1\) = p\.id::text'
+      and pg_get_functiondef('public.underage_object_keys_after(integer, text, text)'::regprocedure) ~ 'o\.name ~>=~ \(p\.id::text \|\| ''/''\) and o\.name ~<~ \(p\.id::text \|\| ''0''\)'
+      and pg_get_functiondef('public.underage_object_keys_after(integer, text, text)'::regprocedure) !~* ' like ',
+  'the child listing joins on the first path segment beside a byte range, and uses no LIKE');
+select is((select array_agg(c.opcname::text) from pg_index i join pg_opclass c on c.oid = any(i.indclass::oid[])
+    where i.indexrelid = 'storage.name_prefix_search'::regclass), array['text_pattern_ops'],
+  'and storage''s name_prefix_search is text_pattern_ops, so each child''s ~>=~ / ~<~ byte range is an index condition');
 
 -- after a delete: the trips row stops naming the trace (ruling B6 retention)
 select throws_ok($$ select public.clear_trace_paths(array['b8000000-0000-4000-8000-000000000001/a-trip.bin.gz']) $$, '42501',
