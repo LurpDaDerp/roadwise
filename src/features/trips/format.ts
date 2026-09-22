@@ -150,11 +150,11 @@ export interface UnscoredCopy {
  */
 export function unscoredCopy(trip: TripSummary, reason: UnscoredReason | null): UnscoredCopy {
   if (trip.role === 'unknown') {
-    return { title: copy.score.notScoredYet, body: copy.unscored.unknownRole, stamp: null };
+    return { title: copy.score.whoWasDriving, body: copy.unscored.unknownRole, stamp: null };
   }
   switch (reason) {
     case 'role_unknown':
-      return { title: copy.score.notScoredYet, body: copy.unscored.unknownRole, stamp: null };
+      return { title: copy.score.whoWasDriving, body: copy.unscored.unknownRole, stamp: null };
     case 'passenger':
       return { title: copy.score.notScored, body: copy.unscored.passenger, stamp: 'passenger' };
     case 'too_short':

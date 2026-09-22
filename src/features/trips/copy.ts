@@ -16,7 +16,9 @@ export const tripCopy = {
   score: {
     label: 'Score',
     notScored: 'Not scored',
-    notScoredYet: 'Not scored yet',
+    // The title while the role is unknown: the question itself, which stays true whatever the answer
+    // ("Not scored yet" implied a score was coming, which is false for a passenger drive).
+    whoWasDriving: 'Who was driving?',
     calculating: 'Calculating…',
   },
   unscored: {
