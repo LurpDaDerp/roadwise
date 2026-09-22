@@ -23,8 +23,10 @@
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
 //   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
 //   a dense tile in key order, not by place, so the car's own road can be the one dropped while a
-//   parallel road survives, and the matcher would name the neighbour's limit at 0.85. The HUD shows
-//   a limit only at ≥ 0.8; ramp, parallel-road and truncated-tile matches (0.6–0.65) show "—".
+//   parallel road survives, and the matcher would name the neighbour's limit at 0.85. The HUD, the
+//   alerts and scoring all act on a limit exactly when `limitActionable` holds, and any match below
+//   `MATCH_CONFIDENCE_MIN` (0.7) fails it, so ramp, parallel-road and truncated-tile matches
+//   (0.6–0.65) show "—" and are never acted on.
 // - **Simulation (`persist: false`).** Nothing is written to SQLite: no tile is stored and
 //   `purgeExpired` does nothing. Reading tiles already there is harmless and stays allowed.
 
@@ -61,7 +63,7 @@ export const POINT_ANSWER_BEHIND_M = 30;
 export const POINT_ANSWER_AHEAD_M = 150;
 /** Point answers held in memory (a few dozen bytes each). */
 export const MAX_POINT_ANSWERS = 16;
-/** The most confidence a match near a truncated tile may carry — under the HUD's 0.8 gate. */
+/** The most confidence a match near a truncated tile may carry — below `MATCH_CONFIDENCE_MIN`, so never actionable. */
 export const TRUNCATED_CONFIDENCE_CAP = 0.6;
 /**
  * A truncated tile is kept this long at most. Truncation is deterministic, so re-requesting it
