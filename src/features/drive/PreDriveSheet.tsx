@@ -394,9 +394,10 @@ export const defaultProbes: StartProbes = {
 /** The deps a route passes when it has only a settings repo to add. */
 export function defaultStartDeps(settings: StartDeps['settings']): StartDeps {
   return {
-    ensurePermissions: () => ensureDrivePermissions(),
+    // The prompt history (the 14-day window) lives in the same settings repo.
+    ensurePermissions: () => ensureDrivePermissions({ settings }),
     readLocationPermission: () => readLocationPermission(),
-    openSettings: openAppSettings,
+    openSettings: () => openAppSettings(),
     currentSpeedMps: () => currentSpeedMps(),
     settings,
     probes: defaultProbes,

@@ -234,10 +234,13 @@ export interface BootstrapDeps {
   /**
    * U3's drive-summary notifier, attached to the started host in every launch profile — so a drive
    * finalized with no layout mounted (the Android headless task, an iOS background launch) still
-   * schedules its summary. Attaching twice is safe (the layout's routing hook attaches too).
+   * schedules its summary. Attaching twice is safe (the headless task attaches too). It is given
+   * the launch's database, which its delivery plan reads (M4 Task 19: H6 and the daily cap).
    * Default: `attachSummaryNotifier`. `null`: none.
    */
-  attachSummaryNotifier?: ((host: DriveHost) => { detach(): void; settled?(): Promise<void> }) | null;
+  attachSummaryNotifier?:
+    | ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> })
+    | null;
   /** iOS backup exclusion (plan R4). Default: drive-sense's `excludeFromBackup`. */
   excludeFromBackup?: (uri: string) => Promise<void>;
   /** The directory the database lives in. Default: expo-sqlite's `defaultDatabaseDirectory`. */
@@ -547,7 +550,7 @@ async function runLaunch(
     let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
     if (attach) {
       try {
-        notifier = attach(drive);
+        notifier = attach(drive, db);
       } catch (error) {
         onError(error, 'summary notifier');
       }
@@ -1074,10 +1077,10 @@ async function cachedAgeBand(db: Db): Promise<string | null> {
 }
 
 /** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */
-function defaultSummaryNotifier(host: DriveHost): { detach(): void; settled(): Promise<void> } {
+function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host);
+  return attachSummaryNotifier(host, { db });
 }
 
 /**

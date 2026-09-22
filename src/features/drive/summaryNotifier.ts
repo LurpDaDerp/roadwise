@@ -2,73 +2,74 @@
  * The "your drive is ready" notification (§11.2 "Trip summary ready"; cross-plan ruling: LOCAL,
  * scheduled on the phone at finalize, never pushed by the server for this device's own trips).
  *
- * The rules (M3 brief U3, rev1: I14):
- * - At finalize, one local notification with an OS time trigger of 120 s — §11.2's "≥ 2 min after
- *   end". No JS timer is involved: iOS suspends a backgrounded app, so the OS holds the delay.
+ * The rules (M3 brief U3, rev1: I14), unchanged by M4:
+ * - At finalize, one local notification with an OS trigger. No JS timer is involved: iOS suspends a
+ *   backgrounded app, so the OS holds the delay.
  * - Only when notification permission is ALREADY granted. This module never asks.
  * - Never for a short, discarded, failed or simulated drive, and never while the app is in the
  *   foreground on the end screen (that screen is the answer).
  * - A new candidate or recording cancels the pending request, so nothing lands while driving.
- *   The cancelled drive is carried, not forgotten: when that next drive ends — or turns out to
- *   be a false start — the carried drive is announced again with a fresh 120 s, batched with the
- *   new one when it qualifies ("2 drives are ready"). This is how "a second finalize before it
- *   fires replaces it with a batched notification" can happen at all: every second drive begins
- *   with a candidate or a recording, which is exactly what cancels the first request.
- * - Copy carries no score and no places (§11.1 rule 5: privacy-safe on the lock screen).
+ *   The cancelled drive is carried, not forgotten: when that next drive ends — or turns out to be
+ *   a false start — the carried drive is announced again, batched with the new one when it
+ *   qualifies ("2 drives are ready").
+ *
+ * M4 (Task 19; rev1: C1): the words, the link and the "Were you driving?" buttons come from the
+ * catalog's `renderLocal` (one copy). Whether and when come from `localDeliveryPlan`: H6's "Drive
+ * summaries" switch, quiet hours (the trigger moves to the quiet end) and the §11.1 daily cap,
+ * counted together with the server's pushes from the inbox cache. A scheduled summary is counted
+ * (`recordLocalSent`) on its delivery day; one cancelled or replaced before delivery is uncounted
+ * (`uncountLocalSent`), so a batch never counts twice. It goes on the `trips` channel, after
+ * `ensureNotificationSetup()` (the channels and the `trip_role` category).
  *
  * Honesty: a `lastFinalized` carries over into the next trip (H1 review), so an outcome is only
  * news when its `clientTripId` is the trip this notifier watched being recorded.
  *
- * Seam for M4 (controller ruling): the OS calls sit behind `SummaryNotificationPort`, and the
- * words behind `summaryContent`. M4's notification catalog (`renderLocal`, `localDeliveryPlan`)
- * replaces either without touching the rules. M4 Task 19 retires or replaces this file (N-m3).
- *
- * Battery (§3.5): the host listener compares two fields per change and returns; the OS is only
- * touched on a status edge or a finalize — never on the 1 Hz path, and never while armed and idle.
+ * Battery (§3.5): the host listener compares two fields per change and returns. The OS and the
+ * database are touched only on a status edge or a finalize — never on the 1 Hz path, and never
+ * while armed and idle.
  */
 import * as Notifications from 'expo-notifications';
-import type { Href } from 'expo-router';
 import { AppState, Platform } from 'react-native';
 
 import type { EngineStatus } from '@/core/engine/engine.types';
+import { normaliseZone } from '@/core/engine/finalize';
+import { readConfig } from '@/data/config/appConfig';
+import type { Db } from '@/data/db/driver';
+import { createSettingsRepo } from '@/data/db/settings';
+import { createTripsRepo } from '@/data/db/trips';
+import { toTripSummary } from '@/data/queries/rows';
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
 import { isBusyStatus, isDrivingStatus } from '@/drive/policy';
-import { TRIP_HISTORY_HREF, tripSummaryHref } from '@/features/trips/routes';
+import { countServerPushesToday, scorableIfDriver } from '@/features/inbox/viewModel';
+import { ensureNotificationSetup } from '@/features/notifications/categories';
+import { renderLocal, type Catalog, type LocalCopy, type TripSummaryFacts } from '@/notifications/catalog';
+import {
+  localDeliveryPlan,
+  readCachedPrefs,
+  readLocalCounts,
+  recordLocalSent,
+  uncountLocalSent,
+  type LocalPlan,
+} from '@/notifications/localDelivery';
 
-import { startCopy } from './startCopy';
-
-/** §11.2 "≥ 2 min after end", held by the OS. */
-export const DRIVE_SUMMARY_DELAY_S = 120;
-/** `content.data.kind` of every drive-summary request, so routing and cancels find only ours. */
+/** `content.data.kind` of every drive-summary request, so cancels find only ours (and T5's legacy routing). */
 export const DRIVE_SUMMARY_KIND = 'driveSummary';
-export const DRIVE_SUMMARY_CHANNEL_ID = 'drive-summary';
+/** M3's own channel, retired: summaries go on the catalog's `trips` channel (Task 5). */
+export const LEGACY_SUMMARY_CHANNEL_ID = 'drive-summary';
 const IDENTIFIER_PREFIX = 'drive-summary:';
-
-/**
- * OPEN PRODUCT QUESTION (pending with the user): does a drive summary count toward §11.1's
- * "≤ 2 non-family notifications per day"? M3 answers no, so the cap is not consulted. Flip this one
- * constant to make every schedule ask `dailyCapAllows` first (M4 owns the counter behind it).
- * Flipped with no `dailyCapAllows` supplied, the notifier fails closed: nothing is scheduled and
- * the gap is reported once (U3 review m3 — a cap that exists only in a comment is no cap).
- */
-export const DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP = false;
-
-export function summaryCountsTowardDailyCap(): boolean {
-  return DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP;
-}
 
 export interface ScheduledSummary {
   identifier: string;
   clientTripIds: string[];
 }
 
+/** One OS request: `renderLocal`'s copy, delivered at `at` (epoch ms). */
 export interface SummaryRequest extends ScheduledSummary {
-  title: string;
-  body: string;
-  seconds: number;
+  copy: LocalCopy;
+  at: number;
 }
 
-/** Everything this module asks of the OS. M4 may swap it for its catalog's delivery. */
+/** Everything this module asks of the OS. */
 export interface SummaryNotificationPort {
   /** Read only — never prompts. */
   permissionGranted(): Promise<boolean>;
@@ -78,17 +79,29 @@ export interface SummaryNotificationPort {
   cancel(identifier: string): Promise<void>;
 }
 
+/**
+ * The M4 half: what a summary says, whether and when it may be shown, and its count. The default,
+ * `createSummaryDelivery(db)`, reads the phone's own database.
+ */
+export interface SummaryDelivery {
+  /** `renderLocal` for these drives: one from its trip row, several as the batch. */
+  render(clientTripIds: readonly string[]): Promise<LocalCopy>;
+  /** `localDeliveryPlan` for a summary of drives that ended at `endedAt`. */
+  plan(endedAt: number, now: number): Promise<LocalPlan>;
+  /** Counts a scheduled request on its delivery day. */
+  record(identifier: string, at: number, now: number): Promise<void>;
+  /** Uncounts a request cancelled before delivery. One already delivered stays counted. */
+  uncount(identifier: string, now: number): Promise<void>;
+}
+
 export interface SummaryNotifierDeps {
   port?: SummaryNotificationPort;
+  /** The database the default delivery reads. With neither this nor `delivery`, nothing is scheduled. */
+  db?: Db;
+  delivery?: SummaryDelivery;
+  now?: () => number;
   appState?: { currentState: string | null };
   isEndScreenVisible?: () => boolean;
-  /**
-   * Consulted only when the cap switch is on — and then REQUIRED: without it nothing is
-   * scheduled (fail closed). There is no default-allow.
-   */
-  dailyCapAllows?: () => Promise<boolean>;
-  /** The cap switch; defaults to `summaryCountsTowardDailyCap` (tests flip it here). */
-  countsTowardDailyCap?: () => boolean;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -98,12 +111,87 @@ export interface SummaryNotifier {
   settled(): Promise<void>;
 }
 
-/** The words. One drive, or a batch — never a score, never a place. */
-export function summaryContent(clientTripIds: readonly string[]): { title: string; body: string } {
-  const c = startCopy.notification;
-  return clientTripIds.length > 1
-    ? { title: c.batchTitle(clientTripIds.length), body: c.batchBody }
-    : { title: c.title, body: c.body };
+// ——— the M4 delivery, from the phone's database ———
+
+/** The phone's zone, normalised the way a drive's zone is. */
+function deviceZone(): string {
+  try {
+    return normaliseZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
+ * The facts `renderLocal` needs for one drive. `scorableIfDriver` re-runs the scoring gate with
+ * role `driver` (ruling T4 I2). A drive this phone no longer holds makes no claim: no distance, no
+ * question and no scoring promise.
+ */
+async function factsFor(db: Db, clientTripId: string): Promise<TripSummaryFacts> {
+  const row = await createTripsRepo(db).get(clientTripId);
+  if (row === null) {
+    return { clientTripId, distanceM: 0, roleUnknown: false, scorableIfDriver: false, count: 1 };
+  }
+  const trip = toTripSummary(row);
+  const roleUnknown = trip.role === 'unknown';
+  return {
+    clientTripId,
+    distanceM: trip.distanceM,
+    roleUnknown,
+    scorableIfDriver: roleUnknown && scorableIfDriver(trip),
+    count: 1,
+  };
+}
+
+export function createSummaryDelivery(
+  db: Db,
+  opts: { zone?: () => string; /** Tests build both readings of the cap question. */ catalog?: Catalog } = {}
+): SummaryDelivery {
+  const settings = createSettingsRepo(db);
+  const zone = () => normaliseZone((opts.zone ?? deviceZone)());
+  return {
+    async render(ids) {
+      const last = ids[ids.length - 1] as string;
+      if (ids.length >= 2) {
+        return renderLocal('trip_summary', {
+          clientTripId: last,
+          distanceM: 0,
+          roleUnknown: false,
+          scorableIfDriver: false,
+          count: ids.length,
+        });
+      }
+      return renderLocal('trip_summary', await factsFor(db, last));
+    },
+    async plan(endedAt, now) {
+      const tz = zone();
+      const prefs = await readCachedPrefs(settings, (await readConfig(db)).notification_defaults);
+      const { today, byDay } = await readLocalCounts(settings, tz, now);
+      // The server's half, from the inbox cache, never the screen's hook, which is 0 until its
+      // query resolves (T6 review m3). Required here: the inbox cache's module loads the app client.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred, see above
+      const { createInboxCache } = require('@/features/inbox/cache') as typeof import('@/features/inbox/cache');
+      const rows = await createInboxCache(db).list();
+      const serverPushedToday = countServerPushesToday(rows, tz, now, opts.catalog);
+      return localDeliveryPlan({
+        type: 'trip_summary',
+        endedAt,
+        now,
+        prefs,
+        tz,
+        localSentToday: today.count,
+        serverPushedToday,
+        localScheduledByDay: byDay,
+        catalog: opts.catalog,
+      });
+    },
+    async record(identifier, at, now) {
+      await recordLocalSent(settings, zone(), now, { id: identifier, at, catalog: opts.catalog });
+    },
+    async uncount(identifier, now) {
+      await uncountLocalSent(settings, identifier, zone(), now);
+    },
+  };
 }
 
 // ——— the end screen's presence (C8 marks itself; read synchronously at finalize) ———
@@ -124,7 +212,7 @@ const isOurs = (data: unknown): data is { kind: string; clientTripIds: string[] 
   Array.isArray((data as { clientTripIds?: unknown }).clientTripIds);
 
 export function createExpoSummaryPort(os: string = Platform.OS): SummaryNotificationPort {
-  let channelReady = false;
+  let legacyChannelGone = false;
   return {
     async permissionGranted() {
       const p = await Notifications.getPermissionsAsync();
@@ -146,24 +234,26 @@ export function createExpoSummaryPort(os: string = Platform.OS): SummaryNotifica
         }));
     },
     async schedule(req) {
-      if (os === 'android' && !channelReady) {
-        await Notifications.setNotificationChannelAsync(DRIVE_SUMMARY_CHANNEL_ID, {
-          name: startCopy.notification.channelName,
-          importance: Notifications.AndroidImportance.DEFAULT,
-        });
-        channelReady = true;
+      // The `trips` channel and the "Were you driving?" buttons exist before the first request.
+      await ensureNotificationSetup();
+      if (os === 'android' && !legacyChannelGone) {
+        legacyChannelGone = true;
+        await Notifications.deleteNotificationChannelAsync(LEGACY_SUMMARY_CHANNEL_ID).catch(() => {});
       }
+      const { copy } = req;
       await Notifications.scheduleNotificationAsync({
         identifier: req.identifier,
         content: {
-          title: req.title,
-          body: req.body,
-          data: { kind: DRIVE_SUMMARY_KIND, clientTripIds: req.clientTripIds },
+          title: copy.title,
+          body: copy.body,
+          // `url` is what a tap opens (Task 5's routing); the kind and ids let cancels find it.
+          data: { kind: DRIVE_SUMMARY_KIND, clientTripIds: req.clientTripIds, url: copy.url },
+          ...(copy.categoryId === undefined ? {} : { categoryIdentifier: copy.categoryId }),
         },
         trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-          seconds: req.seconds,
-          channelId: DRIVE_SUMMARY_CHANNEL_ID,
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: req.at,
+          channelId: copy.channelId,
         },
       });
     },
@@ -214,8 +304,8 @@ const attached = new WeakMap<HostLike, { notifier: SummaryNotifier; refs: number
 
 /**
  * Watch `host` and schedule the drive-summary notification at each finalize. Idempotent per host:
- * the root layout's hook and the Android headless runtime may both attach; they share one notifier,
- * and it detaches when the last of them lets go.
+ * the runtime and the Android headless task may both attach; they share one notifier (made with
+ * the first attach's deps), and it detaches when the last of them lets go.
  */
 export function attachSummaryNotifier(
   host: HostLike,
@@ -252,27 +342,12 @@ function handle(
 
 function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotifier {
   const port = deps.port ?? createExpoSummaryPort();
+  const delivery = deps.delivery ?? (deps.db ? createSummaryDelivery(deps.db) : null);
+  const now = deps.now ?? Date.now;
   const appState = deps.appState ?? AppState;
   const onEndScreen = deps.isEndScreenVisible ?? (() => endScreenVisible);
-  const dailyCapAllows = deps.dailyCapAllows;
-  const countsTowardCap = deps.countsTowardDailyCap ?? summaryCountsTowardDailyCap;
   const report = deps.onError ?? (() => {});
-  let capGapReported = false;
-  /** The cap's answer. Switch on and no counter wired → no (and say so once). */
-  const capAllows = async (): Promise<boolean> => {
-    if (!countsTowardCap()) return true;
-    if (!dailyCapAllows) {
-      if (!capGapReported) {
-        capGapReported = true;
-        report(
-          new Error('drive summary counts toward the daily cap, but no dailyCapAllows was given'),
-          'summary.cap'
-        );
-      }
-      return false;
-    }
-    return dailyCapAllows();
-  };
+  let deliveryGapReported = false;
 
   // One serial chain for every OS call, so a cancel can never overtake the schedule before it.
   let chain: Promise<void> = Promise.resolve();
@@ -293,12 +368,20 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
     for (const id of ids) if (!carried.includes(id)) carried.push(id);
   };
 
+  /** Cancel a pending request and take it off the day's count (it was never delivered). */
+  const cancelOne = async (identifier: string) => {
+    await port.cancel(identifier);
+    if (delivery) {
+      await delivery.uncount(identifier, now()).catch((e: unknown) => report(e, 'summary.uncount'));
+    }
+  };
+
   const cancelPending = () =>
     enqueue('summary.cancel', async () => {
       const pending = await port.scheduled();
       for (const p of pending) {
         addCarried(p.clientTripIds);
-        await port.cancel(p.identifier);
+        await cancelOne(p.identifier);
       }
     });
 
@@ -317,28 +400,34 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
   /** Folds any pending request into the carry and schedules the carry as one request. */
   async function scheduleCarriedNow(): Promise<void> {
     if (carried.length === 0) return;
+    if (!delivery) {
+      // No way to honour H6 and the cap: fail closed, and say so once.
+      carried = [];
+      if (!deliveryGapReported) {
+        deliveryGapReported = true;
+        report(new Error('drive summary notifier has no database to plan delivery'), 'summary.delivery');
+      }
+      return;
+    }
     if (!(await port.permissionGranted())) {
       carried = [];
       return;
     }
-    if (!(await capAllows())) {
-      carried = [];
-      return;
-    }
-    // Re-read at the last moment: a drive may have begun while the reads above were in flight.
+    // Re-read at the last moment: a drive may have begun while the read above was in flight.
     if (isDrivingStatus(host.snapshot().status)) return;
     const pending = await port.scheduled();
     addCarried(pending.flatMap((p) => p.clientTripIds));
     const ids = carried;
     carried = [];
-    for (const p of pending) await port.cancel(p.identifier);
-    const last = ids[ids.length - 1] as string;
-    await port.schedule({
-      identifier: `${IDENTIFIER_PREFIX}${last}`,
-      clientTripIds: ids,
-      seconds: DRIVE_SUMMARY_DELAY_S,
-      ...summaryContent(ids),
-    });
+    // The replaced requests come off the count first, so the batch that replaces them counts once.
+    for (const p of pending) await cancelOne(p.identifier);
+    const t = now();
+    const plan = await delivery.plan(t, t);
+    if (plan.kind === 'skip') return;
+    const copy = await delivery.render(ids);
+    const identifier = `${IDENTIFIER_PREFIX}${ids[ids.length - 1] as string}`;
+    await port.schedule({ identifier, clientTripIds: ids, copy, at: plan.at });
+    await delivery.record(identifier, plan.at, t);
   }
 
   /**
@@ -354,7 +443,7 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
           const keep: string[] = [];
           for (const p of pending) {
             if (clientTripId !== undefined && !p.clientTripIds.includes(clientTripId)) continue;
-            await port.cancel(p.identifier);
+            await cancelOne(p.identifier);
             if (clientTripId !== undefined) {
               keep.push(...p.clientTripIds.filter((id) => id !== clientTripId));
             }
@@ -426,16 +515,4 @@ function createNotifier(host: HostLike, deps: SummaryNotifierDeps): SummaryNotif
       }
     },
   };
-}
-
-// ——— routing a tap (used by useSummaryNotificationRouting) ———
-
-/** Where a tapped drive-summary notification goes: one drive → its summary; a batch → the list. */
-export function summaryHrefFor(response: Notifications.NotificationResponse | null): Href | null {
-  if (!response) return null;
-  const data = response.notification.request.content.data as unknown;
-  if (!isOurs(data)) return null;
-  const ids = data.clientTripIds.filter((id): id is string => typeof id === 'string' && id !== '');
-  if (ids.length === 0) return null;
-  return ids.length === 1 ? tripSummaryHref(ids[0] as string) : TRIP_HISTORY_HREF;
 }

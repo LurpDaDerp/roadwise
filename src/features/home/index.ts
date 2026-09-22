@@ -1,6 +1,6 @@
 export { homeCopy } from './copy';
 export {
-  DETECTION_HREF,
+  AUTO_RECORD_HREF,
   DetectionStatusLine,
   detectionLineState,
   type DetectionLineState,

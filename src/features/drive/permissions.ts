@@ -2,18 +2,27 @@
  * What a manual drive needs before it can start (§7.C C1 "Permissions: Location (required),
  * Motion"): foreground location, and motion.
  *
- * - Location is required. An undetermined permission is asked once; a denied one is never asked
- *   again from here (§7.0 "Never re-prompt in a loop") — the caller shows the blocking explainer
- *   with Open Settings, and re-reads with `readLocationPermission` when the app comes back.
+ * - Every read and request goes through Task 8's adapter (`createPermissionsAdapter`); nothing here
+ *   calls an Expo permission API (rev1: I3 — one permission system).
+ * - The prompts here are started by the app, not by a tap on a Fix button, so each goes through
+ *   `offerPrompt`: at most one OS prompt per permission in 14 days (product §8.3), recorded when made.
+ * - Location is required. An undetermined permission is asked (inside the window); a denied one is
+ *   never asked again from here (§7.0 "Never re-prompt in a loop"). The caller shows the blocking
+ *   explainer with Open Settings, and re-reads with `readLocationPermission` on the way back.
  * - Motion is asked once when undetermined and never blocks: a manual drive records without it.
- * - Background location ("Always") is not asked here: that is auto-record's (R16, DetectionScreen).
+ * - Background location ("Always") is never asked here: only `BackgroundDisclosure` asks for it.
  */
-import * as Linking from 'expo-linking';
-import * as Location from 'expo-location';
-import DriveSense, { type DriveSenseState } from '@drive-sense';
+import {
+  createPermissionsAdapter,
+  offerPrompt,
+  type Grant,
+  type LocationAccess,
+  type PermissionsAdapter,
+  type SettingsStore,
+} from '@/core/permissions';
 
 export type LocationPermission = 'granted' | 'denied' | 'undetermined';
-export type MotionPermission = DriveSenseState['motion'];
+export type MotionPermission = Grant;
 
 export interface DrivePermissions {
   location: 'granted' | 'denied';
@@ -21,59 +30,77 @@ export interface DrivePermissions {
 }
 
 export interface PermissionDeps {
-  location: {
-    getForegroundPermissionsAsync(): Promise<{ status: string }>;
-    requestForegroundPermissionsAsync(): Promise<{ status: string }>;
-  };
-  driveSense: {
-    getState(): Promise<Pick<DriveSenseState, 'motion'>>;
-    requestMotionPermission(): Promise<'granted' | 'denied' | 'unavailable'>;
-  };
+  adapter?: Pick<
+    PermissionsAdapter,
+    'snapshot' | 'requestLocationForeground' | 'requestMotion' | 'openAppSettings'
+  >;
+  /** Where the 14-day prompt history lives (the settings repo). */
+  settings: SettingsStore;
+  now?: () => number;
 }
 
-const defaultDeps: PermissionDeps = { location: Location, driveSense: DriveSense };
+const asLocation = (access: LocationAccess): LocationPermission =>
+  access === 'always' || access === 'foreground'
+    ? 'granted'
+    : access === 'undetermined'
+      ? 'undetermined'
+      : 'denied';
 
-const asLocation = (status: string): LocationPermission =>
-  status === 'granted' ? 'granted' : status === 'undetermined' ? 'undetermined' : 'denied';
+let sharedAdapter: PermissionsAdapter | null = null;
 
-/** Read only — never prompts. For the return from Settings. */
+/** The device adapter, made on first use; it loads nothing native until a method is called. */
+const adapterOf = (deps: Partial<Pick<PermissionDeps, 'adapter'>>) =>
+  deps.adapter ?? (sharedAdapter ??= createPermissionsAdapter());
+
+/** Read only — never prompts. For the return from Settings. A phone that can't be read is denied. */
 export async function readLocationPermission(
-  deps: PermissionDeps = defaultDeps
+  deps: Partial<Pick<PermissionDeps, 'adapter'>> = {}
 ): Promise<LocationPermission> {
   try {
-    return asLocation((await deps.location.getForegroundPermissionsAsync()).status);
+    return asLocation((await adapterOf(deps).snapshot()).location);
   } catch {
     return 'denied';
   }
 }
 
-async function ensureMotion(deps: PermissionDeps): Promise<MotionPermission> {
+export async function ensureDrivePermissions(deps: PermissionDeps): Promise<DrivePermissions> {
+  const adapter = adapterOf(deps);
+  const now = deps.now ?? Date.now;
+  let snap;
   try {
-    const { motion } = await deps.driveSense.getState();
-    if (motion !== 'undetermined') return motion;
-    return await deps.driveSense.requestMotionPermission();
+    snap = await adapter.snapshot();
   } catch {
-    // No native module (Expo Go, a failed bridge): motion is simply not there to use.
-    return 'unavailable';
+    return { location: 'denied', motion: 'undetermined' };
   }
-}
 
-export async function ensureDrivePermissions(
-  deps: PermissionDeps = defaultDeps
-): Promise<DrivePermissions> {
-  let location = await readLocationPermission(deps);
+  let location = asLocation(snap.location);
   if (location === 'undetermined') {
     try {
-      location = asLocation((await deps.location.requestForegroundPermissionsAsync()).status);
+      const answer = await offerPrompt(deps.settings, 'location', now(), () =>
+        adapter.requestLocationForeground()
+      );
+      // Inside the 14-day window nothing is asked: the explainer's Open Settings is the way on.
+      location = answer === 'skipped' ? 'denied' : asLocation(answer);
     } catch {
       location = 'denied';
     }
   }
   if (location !== 'granted') return { location: 'denied', motion: 'undetermined' };
-  return { location: 'granted', motion: await ensureMotion(deps) };
+
+  // null: drive-sense could not be read (no native module) — motion is simply not there to use.
+  let motion: MotionPermission = snap.motion ?? 'unavailable';
+  if (motion === 'undetermined') {
+    try {
+      const answer = await offerPrompt(deps.settings, 'motion', now(), () => adapter.requestMotion());
+      motion = answer === 'skipped' ? 'undetermined' : (answer ?? 'unavailable');
+    } catch {
+      motion = 'unavailable';
+    }
+  }
+  return { location: 'granted', motion };
 }
 
 /** The app's own page in the system Settings. */
-export function openAppSettings(): Promise<void> {
-  return Linking.openSettings();
+export function openAppSettings(deps: Partial<Pick<PermissionDeps, 'adapter'>> = {}): Promise<void> {
+  return adapterOf(deps).openAppSettings();
 }

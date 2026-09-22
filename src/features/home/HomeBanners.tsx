@@ -3,6 +3,8 @@ import { View } from 'react-native';
 
 import { useOnline } from '@/data/net/useOnline';
 import { useHydrationStatus } from '@/data/queries';
+import { PermissionHealthBanner } from '@/features/permissions/PermissionHealthBanner';
+import type { PermissionHealthDeps } from '@/features/permissions/usePermissionHealth';
 import { Banner, useTheme } from '@/ui';
 
 import { homeCopy } from './copy';
@@ -61,16 +63,26 @@ function RestoreBanner() {
 
 /**
  * Home's conditional status banners (§7.B B1 item 2), most urgent first: the drive in progress
- * (U2's banner, which decides for itself whether it shows), offline, and a restore from the
- * server that is running or was cut short. Each says only what the device knows.
+ * (U2's banner, which decides for itself whether it shows), permission health (Task 9's calm
+ * "tap to fix", shown only when the health model raises it — the one permission banner Home
+ * carries; Task 19), offline, and a restore from the server that is running or was cut short.
+ * Each says only what the device knows.
  */
-export function HomeBanners({ inProgress }: { inProgress?: ReactNode }) {
+export function HomeBanners({
+  inProgress,
+  permissionDeps,
+}: {
+  inProgress?: ReactNode;
+  /** Test seams for the permission banner (the adapter, AppState, the config refresher). */
+  permissionDeps?: PermissionHealthDeps;
+}) {
   const th = useTheme();
   const online = useOnline();
 
   return (
     <View style={{ gap: th.space.sm }} testID="home-banners">
       {inProgress}
+      <PermissionHealthBanner deps={permissionDeps} />
       {online ? null : <Banner tone="info" message={copy.offline} testID="banner-offline" />}
       <RestoreBanner />
     </View>
