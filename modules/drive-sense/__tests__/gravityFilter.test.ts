@@ -219,13 +219,17 @@ describe('through the extractor (N1 fix round: GRAVITY_TAU_S 0.5 → 5 s plus th
     for (const row of rows.slice(22)) expect(row.aLonMin).toBeGreaterThanOrEqual(-0.05);
   });
 
-  test('noise cannot leak a held 0.25 g acceleration into gravity; the brake after it reads true (fix round 4)', () => {
+  // N1-r4 M1: over noise seeds 21–28 the 5-sample mean keeps the tilt at 0.007–0.024 rad (a
+  // per-sample gate: 0.038–0.059), so < 0.03 rad separates the two on every seed.
+  test.each([21, 22, 23, 24, 25, 26, 27, 28])(
+    'noise cannot leak a held 0.25 g acceleration into gravity; the brake after it reads true (seed %i)',
+    (seed) => {
     // cruise 1 s (true seed), 0.25 g for 7.5 s with 0.01 g accelerometer noise, cruise, then 0.45 g
     // from 10.8 s to 13.5 s. With a per-sample gate about 15 % of the samples opened it and the
-    // brake read −0.52.
+    // brake read up to −0.50.
     const out = rawDriveSeconds({
       seconds: 14,
-      seed: 21,
+      seed,
       v0: 5,
       accelNoise: 0.01,
       aLon: profile([
@@ -240,16 +244,51 @@ describe('through the extractor (N1 fix round: GRAVITY_TAU_S 0.5 → 5 s plus th
       aLat: () => 0,
     });
     const rows = pipeline(out);
-    // gravity after 7.5 s of acceleration: still the true gravity
-    expect(angle(rows[8]!.g, MOUNT_GRAVITY)).toBeLessThan(0.01);
+    // gravity after 7.5 s of acceleration: within 0.03 rad of the true gravity
+    expect(angle(rows[8]!.g, MOUNT_GRAVITY)).toBeLessThan(0.03);
     expect(rows[8]!.alignment.aligned).toBe(true);
-    // seconds 12 and 13 lie wholly inside the brake
+    // seconds 12 and 13 lie wholly inside the brake: within 0.03 g of −0.45
     for (const { row } of rows.slice(11, 13)) {
-      expect(row.aLonMin).toBeGreaterThanOrEqual(-0.47);
-      expect(row.aLonMin).toBeLessThanOrEqual(-0.43);
-      expect(row.aLonMax).toBeGreaterThanOrEqual(-0.47);
-      expect(row.aLonMax).toBeLessThanOrEqual(-0.43);
+      expect(row.aLonMin).toBeGreaterThanOrEqual(-0.48);
+      expect(row.aLonMin).toBeLessThanOrEqual(-0.42);
+      expect(row.aLonMax).toBeGreaterThanOrEqual(-0.48);
+      expect(row.aLonMax).toBeLessThanOrEqual(-0.42);
     }
+    }
+  );
+
+  test('a capture that seeds inside a 0.3 g acceleration never reads a harsh brake in the next 30 s (N1-r4 M2)', () => {
+    // The automatic start as a car pulls away: the filter seeds on a tilted gravity and the gate
+    // then holds that tilt through the cruise. The false brake it produces never trains the frame
+    // (alignment needs GNSS Δv ≥ ALIGN_MIN_G on five agreeing updates), so those rows are unaligned
+    // — unmeasured — rather than wrong. This pins that safety claim.
+    const rows = pipeline(
+      rawDriveSeconds({
+        seconds: 34,
+        seed: 31,
+        v0: 3,
+        accelNoise: 0.01,
+        aLon: profile([
+          [0, 0.3],
+          [4, 0.3],
+          [4.3, 0],
+          [10, 0],
+          [10.3, -0.2],
+          [13, -0.2],
+          [13.3, 0],
+          [18, 0],
+          [18.3, 0.15],
+          [22, 0.15],
+          [22.3, 0],
+          [26, 0],
+          [26.3, -0.2],
+          [29, -0.2],
+          [29.3, 0],
+        ]),
+        aLat: () => 0,
+      })
+    ).map((r) => r.row);
+    for (const row of rows.slice(0, 30)) expect(row.aLonMin).toBeGreaterThan(-CONSTANTS.HARSH_BRAKE_G);
   });
 
   test('a real reorientation is still absorbed: the gyro carries it at once', () => {

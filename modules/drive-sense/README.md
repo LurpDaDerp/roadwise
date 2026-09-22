@@ -214,6 +214,14 @@ Only JS can decide a drive is over, so native must not keep sensing when JS is n
 `startCapture` from JS always claims. The JS side's own guard is H2's headless task, which calls
 `stopCapture` when its boot fails; the watchdog is the second line.
 
+**Android: the headless task never outlives the drive (review N2N3 I4).** The headless service
+holds a partial wake lock until its task finishes, so native owns its end too: a watchdog stop also
+stops the headless service **at once** (its `onDestroy` releases the wake lock); a normal
+`stopCapture` stops it after a **2-minute** grace for finalize and upload; and the task itself is
+bounded (`HeadlessJsTaskConfig` timeout 6 h — never 0; if a drive outlasts it only the headless
+service ends, while the capture keeps its own foreground service and wake lock). JS side (H2):
+the `DriveSenseTask` promise must settle once the capture has stopped and the drive is finalized.
+
 ---
 
 ## 7. Feature extraction (R1) — frames and algorithm
@@ -286,10 +294,24 @@ round 4): with per-sample gating, accelerometer noise (σ ≈ 0.01 g) opened the
 of the samples of a held 0.25 g acceleration (|a| − 1 ≈ 0.031, just above the gate), so 7.5 s of
 it tilted gravity ≈ 0.035–0.047 rad and the brake after it read −0.52 g for a true −0.45 g —
 enough to push a gentle 0.25 g brake past `HARSH_BRAKE_G`. Averaging five samples cuts the noise
-on the gated quantity by √5, and the same test now keeps the tilt under 0.01 rad and reads that
-brake within 0.02 g. A sustained acceleration gives every sample, and so the mean, the same |a|,
-so the trip point below is unchanged. Seed on a steady phone: a capture that seeds mid-acceleration
-keeps that tilt until the car cruises, because the gate then holds it.
+on the gated quantity by √5: about 3× less leak. Over noise seeds 21–28 the same scenario keeps
+the tilt at 0.007–0.024 rad (a per-sample gate: 0.038–0.059) and reads the brake within 0.025 g
+of −0.45; `gravityFilter.test.ts` asserts < 0.03 rad and ±0.03 g on every one of those seeds. A
+sustained acceleration gives every sample, and so the mean, the same |a|, so the trip point below
+is unchanged. The window restarts at every seed (`mags = [|a|]`): the `gravity-filter` vector
+re-seeds in the middle of a batch straight into a 0.25 g acceleration, so a port that keeps the
+stale magnitudes fails it (the generator refuses the vector unless that port differs by > 1e-4).
+
+**Seeding caveat — its real consequence (N1-r4 M2).** A capture that seeds mid-acceleration (the
+ordinary automatic start as a car pulls away) starts with gravity tilted by about the acceleration
+(0.25 g → 0.25 rad), and the gate holds that tilt until the car cruises. The cost is **coverage,
+not false events**: the tilt makes a false "brake" at cruise, but the frame aligns only on updates
+where GNSS Δv ≥ `ALIGN_MIN_G` and needs `ALIGN_MIN_UPDATES` agreeing ones, so that false reading
+never trains the frame. Those rows stay unaligned — their frame-dependent fields are 0, so events
+there go unmeasured — for tens of seconds, and after a strong start (≥ 0.35 g) the frame may not
+align for more than 40 s. A test seeds inside a 0.3 g acceleration and asserts no row reaches
+−`HARSH_BRAKE_G` in the next 30 s. If the device pass shows the coverage loss is large, a cheap
+mitigation is a short time constant for the first few seconds of in-band samples after a seed.
 
 The gate: a sustained horizontal acceleration h changes |a| by √(1 + h²) − 1 ≈ h²/2, so the gate trips at
 h = √((1 + GRAVITY_GATE_G)² − 1) ≈ 0.2 g — below `HARSH_ACCEL_G` (0.28) and `HARSH_BRAKE_G`
@@ -314,9 +336,16 @@ Samples and fixes are timed on the monotonic **boot clock** and converted to epo
   `CLLocation.timestamp` is already a `Date`: use `timeIntervalSince1970 × 1000` directly.
 - `t = anchor.epochMs + (clockMs − anchor.clockMs)` (`toEpochMs`).
 - **Sanity fallback:** if that `t` is more than `TIMEBASE_MAX_SKEW_MS` (2000 ms) from the item's
-  arrival time (the wall clock when native received it), use the arrival time instead and count it
-  for diagnostics (some older Android devices time sensor events on another base). Batched Android
-  samples arrive up to 1 s late, inside the margin.
+  arrival time, use the arrival time instead and count it for diagnostics (some older Android
+  devices time sensor events on another base). Batched Android samples arrive up to 1 s late,
+  inside the margin.
+- **Android: "arrival" is measured on the capture's anchored boot clock**, not the wall clock:
+  `arrival = anchor.epochMs + (SystemClock.elapsedRealtimeNanos() / 1e6 − anchor.clockMs)` at
+  delivery (review N2N3 I2). Row `ts` is on the same base, so a wall-clock step mid-drive (a manual
+  change, an NTP or NITZ correction) moves neither the samples, the fixes nor the windows; the
+  fallback then fires only for its real target, a sensor stamping on another clock. (Against
+  `currentTimeMillis()`, a step over 2 s pushed every later sample and fix off its window: the rest
+  of the drive had no IMU and no fix.) iOS keeps its wall-clock design (below).
 
 ### Windows: which samples and which fix belong to a row
 
@@ -330,8 +359,13 @@ Samples and fixes are timed on the monotonic **boot clock** and converted to epo
   start (a window already closed) are dropped and counted.
 - The window's fix is the one with the **latest fix timestamp** in the window (`pickFix`), whatever
   order the fixes arrived in. No fix is used by two rows.
-- Android batches IMU up to 1 s late: compute a row once a sample with `t > ts` has arrived, or
-  1.5 s after `ts`, whichever comes first. The row keeps its `ts`.
+- **When a row closes (both platforms; review N2N3 I1).** Once the data for its window can be
+  complete: the first IMU sample stamped after `ts` has arrived (or the IMU is not running)
+  **and** either a fix stamped after `ts` has arrived or `FIX_SETTLE_MS` (300 ms) has passed since
+  `ts` — capped at `ROW_MAX_WAIT_MS` (1.5 s) after `ts`. The platform delivers a fix a few hundred
+  ms after its own timestamp and `pickFix` never uses a late fix, so closing on the IMU alone
+  (Android batches it up to 1 s late, so a burst often lands before the fix) would drop good fixes
+  and report `gnssValid: false`. The row keeps its `ts`; rows reach JS about 300 ms after `ts`.
 - At `low` rate a row is emitted per fix, with `ts` = the fix's converted time rounded, and skipped
   if it is not greater than the previous row's `ts`.
 
@@ -343,12 +377,9 @@ Samples and fixes are timed on the monotonic **boot clock** and converted to epo
   so after a wall-clock change the fixes, the samples and the windows all stay on one base (an
   uptime-based `ts` would have put every fix in the wrong window). A clock set back holds rows until
   the wall clock passes the previous `ts`, keeping `ts` strictly increasing.
-- **A row closes** once the data for its window can be complete: the first IMU sample stamped
-  after `ts` has arrived (or the IMU is not running) **and** either a fix stamped after `ts` has
-  arrived or `FIX_SETTLE_MS` (300 ms) has passed since `ts` — capped at `ROW_MAX_WAIT_MS` (1.5 s)
-  after `ts`. Core Location delivers a fix a few hundred ms after its timestamp, and `pickFix` never
-  uses a late fix, so closing on the IMU alone would lose it. Rows therefore reach JS about 300 ms
-  after `ts` (up to 1.5 s if device motion delivers nothing). Constants in `ios/RowPipeline.swift`.
+- **A row closes** by the rule above, common to both platforms (iOS found it first: Core Location
+  delivers a fix a few hundred ms after its timestamp). Up to 1.5 s if device motion delivers
+  nothing. Constants in `ios/RowPipeline.swift` and `android/…/CaptureService.kt`.
 
 ### Per second: `extractSecond(imu, fix, phone, tsMs, state)`
 
@@ -487,7 +518,7 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `mount-shift` | slow sag in the mount → gravity-deviation reset in second 10 |
 | `no-imu` | IMU-absent encoding and every GNSS encoding of §4 |
 | `unaligned-start` | frame-free fields populated, frame-dependent fields 0 |
-| `gravity-filter` | the Android filter on raw accel + gyro, with a re-seeding gap |
+| `gravity-filter` | the Android filter on raw accel + gyro, with a re-seeding gap between batches and a re-seed in the middle of the last batch straight into a 0.25 g acceleration (pins the gate-window reset: a port that keeps stale magnitudes fails) |
 | `android-raw` | Android units and sign in, rows out: the conversion, the filter and the extractor together (a port that skips `/ G_MPS2` or the sign fails it) |
 
 Regenerate after changing the reference or a constant (never by hand):

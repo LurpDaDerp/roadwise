@@ -9,7 +9,13 @@
 //
 // Pure module: only relative imports, no Node APIs, deterministic (seeded noise), so Jest,
 // Node strip-types and any future tooling produce byte-identical output.
-import { G_MPS2 } from '../src/extract/constants';
+import {
+  G_MPS2,
+  GRAVITY_GATE_G,
+  GRAVITY_GATE_SAMPLES,
+  GRAVITY_RESET_GAP_S,
+  GRAVITY_TAU_S,
+} from '../src/extract/constants';
 import type {
   FixSample,
   ImuSample,
@@ -17,7 +23,7 @@ import type {
   RawImuSample,
 } from '../src/extract/types';
 import { getMarginProbe, MARGIN_MIN, setMarginProbe } from '../src/extract/probe';
-import { add, dot, normalize, scale, type Vec3 } from '../src/extract/vec';
+import { add, cross, dot, norm, normalize, scale, sub, type Vec3 } from '../src/extract/vec';
 import {
   runAndroidRawInputs,
   runExtractInputs,
@@ -562,15 +568,90 @@ export function gravityRawBatches(): RawImuSample[][] {
     if (s === 6) continue;
     batches.push(sim.sampleTimes(s).map(sim.rawAt));
   }
+  const last = batches[batches.length - 1]!;
+  batches.push(reseedBatch(last[last.length - 1]!.t + 40));
   return batches;
 }
 
+/**
+ * N1-r4 M3: a re-seed in the MIDDLE of a batch that pins the gate window's reset. Ten samples at
+ * rest fill the window with |a| = 1; a 1.2 s gap re-seeds; the samples after it sit inside a 0.25 g
+ * acceleration (|a| ≈ 1.031, out of band) whose direction swings from +x to +y. With the window
+ * reset (`mags = [|a|]`) the gate is shut at once and gravity holds the seed; a port that keeps the
+ * stale 1 g magnitudes sees a mean in band for three samples and pulls gravity toward the swinging
+ * acceleration. `gravityFilterVector` refuses the vector unless that port differs by > 1e-4.
+ */
+export function reseedBatch(tStart: number): RawImuSample[] {
+  const out: RawImuSample[] = [];
+  for (let i = 0; i < 10; i++) out.push({ t: tStart + i * 40, a: [0, 0, -1], w: [0, 0, 0] });
+  const t1 = tStart + 9 * 40 + 1200;
+  for (let i = 0; i < 15; i++) {
+    const phi = (Math.PI / 2) * Math.min(1, i / 5);
+    out.push({ t: t1 + i * 40, a: [round(0.25 * Math.cos(phi), 6), round(0.25 * Math.sin(phi), 6), -1], w: [0, 0, 0] });
+  }
+  return out;
+}
+
+/**
+ * The port bug M3 guards against: the gravity filter with the gate window NOT reset at a re-seed
+ * (the stale magnitudes kept, the seed's |a| pushed like any other). Generator-only.
+ */
+export function gravityFilterStaleWindow(batches: readonly RawImuSample[][]): ImuSample[][] {
+  let g: Vec3 | null = null;
+  let tPrev: number | null = null;
+  let mags: number[] = [];
+  return batches.map((batch) =>
+    batch.map((s) => {
+      const dt = tPrev === null ? 0 : (s.t - tPrev) / 1000;
+      mags.push(norm(s.a));
+      if (mags.length > GRAVITY_GATE_SAMPLES) mags.shift();
+      if (g === null || dt <= 0 || dt > GRAVITY_RESET_GAP_S) {
+        g = s.a;
+      } else {
+        let sum = 0;
+        for (const m of mags) sum += m;
+        const predicted = add(g, scale(cross(g, s.w), dt));
+        if (Math.abs(sum / mags.length - 1) <= GRAVITY_GATE_G) {
+          const alpha = GRAVITY_TAU_S / (GRAVITY_TAU_S + dt);
+          g = add(scale(predicted, alpha), scale(s.a, 1 - alpha));
+        } else {
+          g = predicted;
+        }
+      }
+      tPrev = s.t;
+      mags = mags.slice(-GRAVITY_GATE_SAMPLES);
+      return { t: s.t, ua: sub(s.a, g), g, w: s.w };
+    })
+  );
+}
+
+/** Largest absolute difference between two filter outputs of the same shape. */
+export function maxBatchDiff(a: readonly ImuSample[][], b: readonly ImuSample[][]): number {
+  let max = 0;
+  a.forEach((batch, i) =>
+    batch.forEach((s, j) => {
+      const o = b[i]![j]!;
+      for (const k of ['ua', 'g'] as const) for (let c = 0; c < 3; c++) max = Math.max(max, Math.abs(s[k][c]! - o[k][c]!));
+    })
+  );
+  return max;
+}
+
+/** A stale-window port must differ from the reference by more than this on the gravity vector (N1-r4 M3). */
+export const STALE_WINDOW_MIN_DIFF = 1e-4;
+
 function gravityFilterVector(): GoldenVector {
   const inputs = { batches: gravityRawBatches() };
+  const staleDiff = maxBatchDiff(runGravityInputs(inputs), gravityFilterStaleWindow(inputs.batches));
+  if (!(staleDiff > STALE_WINDOW_MIN_DIFF)) {
+    throw new Error(
+      `vector gravity-filter: a port that keeps the gate window across a re-seed differs by only ${staleDiff}; the vector must pin the reset`
+    );
+  }
   const v: GravityVector = {
     name: 'gravity-filter',
     description:
-      'Raw accelerometer (reference sign, g) + gyroscope in one-second batches: at rest, accelerating at 0.2 g while turning, then the phone rotating 0.9 rad about its x axis, with second 6 missing (a gap longer than GRAVITY_RESET_GAP_S re-seeds gravity from the accelerometer).',
+      'Raw accelerometer (reference sign, g) + gyroscope in one-second batches: at rest, accelerating at 0.2 g while turning, then the phone rotating 0.9 rad about its x axis, with second 6 missing (a gap longer than GRAVITY_RESET_GAP_S re-seeds gravity from the accelerometer); the last batch re-seeds in its middle, after a 1.2 s gap, straight into a 0.25 g acceleration, so a port that does not reset the gate window at a re-seed fails it.',
     kind: 'gravityFilter',
     inputs,
     expected: { batches: withMarginCheck('gravity-filter', () => runGravityInputs(inputs)) },

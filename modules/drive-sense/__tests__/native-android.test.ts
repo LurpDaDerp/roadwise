@@ -182,10 +182,11 @@ describe('native-android: arming and wakes', () => {
     expect(src).toMatch(/Build\.VERSION_CODES\.Q/);
   });
 
-  it('the headless task is DriveSenseTask with timeout 0 and allowed in the foreground', () => {
+  it('the headless task is DriveSenseTask with a bounded timeout and allowed in the foreground (N2N3 I4)', () => {
     const src = code(kt('DriveSenseHeadlessService'));
     expect(src).toMatch(/"DriveSenseTask"/);
-    expect(src).toMatch(/timeout\s*=\s*0L?\b/);
+    expect(src).toMatch(/timeout\s*=\s*TASK_TIMEOUT_MS/);
+    expect(src).toMatch(/TASK_TIMEOUT_MS\s*=\s*6L \* 60 \* 60 \* 1000/);
     expect(src).toMatch(/isAllowedInForeground\s*=\s*true/);
     expect(src).toMatch(/HeadlessJsTaskConfig\(/);
   });
@@ -206,6 +207,40 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
     const src = code(kt('Watchdog'));
     expect(src).toMatch(/CLAIM_TIMEOUT_MS\s*=\s*60_000L/);
     expect(src).toMatch(/NO_ROW_LISTENER_MS\s*=\s*300_000L/);
+  });
+
+  it('the watchdog also ends the headless task at once; a normal stop ends it after a grace (N2N3 I4)', () => {
+    const src = code(kt('CaptureService'));
+    expect(src).toMatch(/stopService\(Intent\(app, DriveSenseHeadlessService::class\.java\)\)/);
+    expect(src).toMatch(/endCapture\(clearOpen = true, headlessNow = true\)/);
+    expect(src).toMatch(/HEADLESS_GRACE_MS = 2 \* 60_000L/);
+  });
+
+  it('a row closes after its IMU AND its fix (or 300 ms), capped at 1.5 s — the iOS rule (N2N3 I1)', () => {
+    const src = code(kt('CaptureService'));
+    expect(src).toMatch(/FIX_SETTLE_MS = 300L/);
+    expect(src).toMatch(/ROW_MAX_WAIT_MS = 1_500L/);
+    expect(src).toMatch(/val imuReady = !imuRunning \|\| latestImuT > ts/);
+    expect(src).toMatch(/val fixReady = latestFixT > ts \|\| now >= ts \+ FIX_SETTLE_MS/);
+    expect(src).toMatch(/force \|\| \(imuReady && fixReady\) \|\| now >= ts \+ ROW_MAX_WAIT_MS/);
+  });
+
+  it('arrival is measured on the anchored boot clock, never the wall clock (N2N3 I2)', () => {
+    for (const f of ['SensorSource', 'LocationSource']) {
+      const src = code(kt(f));
+      expect(src).toMatch(/TimeBase\.anchoredNow\(/);
+      expect(src).not.toMatch(/currentTimeMillis/);
+    }
+    expect(code(kt('CaptureService'))).toMatch(/nowEpochMs\(\): Double = TimeBase\.anchoredNow\(anchor\)/);
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'TimeBaseTest.kt'))).toBe(true);
+  });
+
+  it('accelerometer–gyroscope pairing waits on arrival time and counts the unpaired (N2N3 I3)', () => {
+    const src = code(kt('SensorSource'));
+    expect(src).toMatch(/PAIR_WAIT_ARRIVAL_MS = 1_200\.0/);
+    expect(src).toMatch(/nowArrivalMs - s\.arrivalClockMs > PAIR_WAIT_ARRIVAL_MS/);
+    expect(src).toMatch(/unpaired\+\+/);
+    expect(code(kt('CaptureService'))).toMatch(/addImuUnpaired\(/);
   });
 
   it('startCapture claims; the row listener feeds the watchdog', () => {

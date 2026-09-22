@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
+import android.os.SystemClock
 import kotlin.math.abs
 
 /**
@@ -14,10 +15,17 @@ import kotlin.math.abs
  * at 40 000 µs with 1 s of FIFO batching, so the sensor hub buffers samples and the CPU wakes about
  * once a second rather than 50 times. Registered only while capturing at `full` rate.
  *
- * Each accelerometer sample is paired with the gyroscope sample nearest in time, timed on the boot
- * clock and converted through the capture's [ClockAnchor], converted to the reference sign with
- * [androidAccelToReference], and run through [GravityFilter] (state carried) — the same functions
- * `selfTest` runs. The resulting [ImuSample]s go to [onSample] on the capture thread.
+ * Each accelerometer sample is paired with the gyroscope sample nearest in time (sensor stamps,
+ * within [PAIR_MAX_GAP_MS]), converted through the capture's [ClockAnchor], converted to the
+ * reference sign with [androidAccelToReference], and run through [GravityFilter] (state carried) —
+ * the same functions `selfTest` runs. The resulting [ImuSample]s go to [onSample] on the capture
+ * thread.
+ *
+ * Pairing waits on ARRIVAL time, not sensor time (review N2N3 I3): a hub may flush the two FIFOs
+ * separately, the whole accelerometer batch landing before the matching gyroscope batch. An
+ * accelerometer sample is held until a gyroscope sample stamped at or after it has arrived, or
+ * until [PAIR_WAIT_ARRIVAL_MS] of arrival time (boot clock at delivery) has passed — enough to
+ * cover a batch skew. A sample released without a partner is counted ([takeUnpaired]).
  */
 class SensorSource(
   context: Context,
@@ -29,14 +37,14 @@ class SensorSource(
     const val SAMPLING_PERIOD_US = 40_000
     const val MAX_REPORT_LATENCY_US = 1_000_000
 
-    /** How long an accelerometer sample waits for a gyroscope sample at or after it (ms, boot clock). */
-    private const val PAIR_WAIT_MS = 250.0
+    /** How long (arrival time, ms) an accelerometer sample waits for its gyroscope partner. */
+    const val PAIR_WAIT_ARRIVAL_MS = 1_200.0
 
     /** A gyroscope sample further than this from the accelerometer sample is not a partner (ms). */
-    private const val PAIR_MAX_GAP_MS = 60.0
+    const val PAIR_MAX_GAP_MS = 60.0
 
-    /** Two seconds of gyroscope at 25 Hz — never more waits for pairing. */
-    private const val MAX_GYRO_BUFFERED = 50
+    /** About four seconds at 25 Hz: more than a batch skew ever needs. */
+    private const val MAX_BUFFERED = 100
 
     /**
      * Android `TYPE_ACCELEROMETER` values (m/s², face-up ≈ [0, 0, +9.81]) → the reference sign, in g
@@ -47,7 +55,8 @@ class SensorSource(
       Vec3((0.0 - x) / G_MPS2, (0.0 - y) / G_MPS2, (0.0 - z) / G_MPS2)
   }
 
-  private class Timed(val clockMs: Double, val arrival: Double, val x: Double, val y: Double, val z: Double)
+  /** A sensor sample: its stamp and its delivery time, both on the boot clock (ms). */
+  private class Timed(val clockMs: Double, val arrivalClockMs: Double, val x: Double, val y: Double, val z: Double)
 
   private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager?
   private val accelerometer: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -58,11 +67,14 @@ class SensorSource(
   private var gravity = GravityFilter.initialState()
   private var running = false
 
-  /** Timestamps that fell back to their arrival time since the last read (README §7). */
-  var fallbacks = 0
-    private set
+  private var fallbacks = 0
+  private var unpaired = 0
 
+  /** Timestamps that fell back to their arrival time since the last read (README §7). */
   fun takeFallbacks(): Int = fallbacks.also { fallbacks = 0 }
+
+  /** Accelerometer samples emitted with no gyroscope partner (`w = 0`) since the last read. */
+  fun takeUnpaired(): Int = unpaired.also { unpaired = 0 }
 
   /** @return false when there is no accelerometer (every row is then IMU-absent). */
   fun start(): Boolean {
@@ -101,57 +113,65 @@ class SensorSource(
     if (!running || event.values.size < 3) return
     val sample = Timed(
       clockMs = event.timestamp / 1e6,
-      arrival = System.currentTimeMillis().toDouble(),
+      arrivalClockMs = SystemClock.elapsedRealtimeNanos() / 1e6,
       x = event.values[0].toDouble(),
       y = event.values[1].toDouble(),
       z = event.values[2].toDouble()
     )
     when (event.sensor.type) {
-      Sensor.TYPE_ACCELEROMETER -> pendingAccel.add(sample)
+      Sensor.TYPE_ACCELEROMETER -> {
+        pendingAccel.add(sample)
+        if (pendingAccel.size > MAX_BUFFERED) emitOne(pendingAccel.removeAt(0), anchor())
+      }
       Sensor.TYPE_GYROSCOPE -> {
         gyro.add(sample)
-        if (gyro.size > MAX_GYRO_BUFFERED) gyro.removeAt(0) // an accelerometer that stopped reporting
+        if (gyro.size > MAX_BUFFERED) gyro.removeAt(0) // an accelerometer that stopped reporting
       }
       else -> return
     }
-    drain()
+    drain(sample.arrivalClockMs)
   }
 
-  /** Pair and emit every accelerometer sample whose gyroscope partner is known (or will not come). */
-  private fun drain() {
+  /** Pair and emit every accelerometer sample whose partner is known, or will not come. */
+  private fun drain(nowArrivalMs: Double) {
+    if (pendingAccel.isEmpty()) return
     val latestGyro = gyro.lastOrNull()?.clockMs
-    val latestAccel = pendingAccel.lastOrNull()?.clockMs ?: return
     val a = anchor()
     val iter = pendingAccel.iterator()
     while (iter.hasNext()) {
       val s = iter.next()
       val ready = gyroscope == null ||
         (latestGyro != null && latestGyro >= s.clockMs) ||
-        latestAccel - s.clockMs > PAIR_WAIT_MS
+        nowArrivalMs - s.arrivalClockMs > PAIR_WAIT_ARRIVAL_MS
       if (!ready) break
       iter.remove()
-      emit(s, partner(s.clockMs), a)
+      emitOne(s, a)
     }
-    // Keep only the gyroscope samples a future accelerometer sample could still pair with.
-    val oldestPending = pendingAccel.firstOrNull()?.clockMs ?: latestAccel
-    while (gyro.size > 1 && gyro[1].clockMs <= oldestPending) gyro.removeAt(0)
+    // Keep only the gyroscope samples a waiting accelerometer sample could still pair with.
+    val oldestPending = pendingAccel.firstOrNull()?.clockMs ?: return
+    while (gyro.size > 1 && gyro[1].clockMs <= oldestPending - PAIR_MAX_GAP_MS) gyro.removeAt(0)
   }
 
-  private fun partner(clockMs: Double): Vec3 {
+  private fun emitOne(s: Timed, a: ClockAnchor) {
+    val w = partner(s.clockMs)
+    if (w == null) {
+      if (gyroscope != null) unpaired++
+    }
+    // Arrival on the capture's anchored boot clock, so a wall-clock step cannot trip the fallback.
+    val converted = TimeBase.toEpochMs(s.clockMs, a, TimeBase.anchoredNow(a, s.arrivalClockMs))
+    if (converted.fellBack) fallbacks++
+    val raw = RawImuSample(converted.t, androidAccelToReference(s.x, s.y, s.z), w ?: Vec3.ZERO)
+    val out = GravityFilter.filter(listOf(raw), gravity)
+    gravity = out.state
+    for (imu in out.imu) onSample(imu)
+  }
+
+  private fun partner(clockMs: Double): Vec3? {
     var best: Timed? = null
     for (g in gyro) {
       if (best == null || abs(g.clockMs - clockMs) < abs(best.clockMs - clockMs)) best = g
     }
-    val b = best ?: return Vec3.ZERO
-    return if (abs(b.clockMs - clockMs) <= PAIR_MAX_GAP_MS) Vec3(b.x, b.y, b.z) else Vec3.ZERO
-  }
-
-  private fun emit(s: Timed, w: Vec3, a: ClockAnchor) {
-    val converted = TimeBase.toEpochMs(s.clockMs, a, s.arrival)
-    if (converted.fellBack) fallbacks++
-    val raw = RawImuSample(converted.t, androidAccelToReference(s.x, s.y, s.z), w)
-    val out = GravityFilter.filter(listOf(raw), gravity)
-    gravity = out.state
-    for (imu in out.imu) onSample(imu)
+    val b = best ?: return null
+    return if (abs(b.clockMs - clockMs) <= PAIR_MAX_GAP_MS) Vec3(b.x, b.y, b.z) else null
   }
 }

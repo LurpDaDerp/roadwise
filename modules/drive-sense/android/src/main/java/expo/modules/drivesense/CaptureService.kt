@@ -40,8 +40,20 @@ class CaptureService : Service() {
     const val ACTION_END_DRIVE = "expo.modules.drivesense.END_DRIVE"
     const val EXTRA_MODE = "mode"
 
-    /** A row is computed once a sample later than its ts arrived, or this long after ts (README §7). */
-    private const val ROW_LATE_MS = 1_500L
+    /**
+     * When a row closes (README §7, both platforms; review N2N3 I1): an IMU sample stamped after ts
+     * has arrived (or no IMU), AND a fix stamped after ts has arrived or FIX_SETTLE_MS has passed —
+     * capped at ROW_MAX_WAIT_MS after ts. The same constants as ios/RowPipeline.swift.
+     */
+    const val FIX_SETTLE_MS = 300L
+    const val ROW_MAX_WAIT_MS = 1_500L
+
+    /**
+     * After a drive ends, the headless JS task gets this long to finalize and upload before native
+     * stops its service (and so its wake lock) itself (review N2N3 I4). Timed on the main looper,
+     * which runs while that wake lock holds the CPU awake.
+     */
+    const val HEADLESS_GRACE_MS = 2 * 60_000L
     private const val TICK_MS = 1_000L
     private const val MINUTE_MS = 60_000L
     private const val START_RESULT_TIMEOUT_MS = 10_000L
@@ -78,6 +90,33 @@ class CaptureService : Service() {
       private set
 
     private val main = Handler(Looper.getMainLooper())
+
+    /** The pending post-drive stop of the headless task (review N2N3 I4); cancelled by a new capture. */
+    private var headlessStop: Runnable? = null
+
+    private fun cancelHeadlessStop() {
+      headlessStop?.let { main.removeCallbacks(it) }
+      headlessStop = null
+    }
+
+    /** Stop the headless JS service after [delayMs] — its onDestroy releases the headless wake lock. */
+    private fun scheduleHeadlessStop(context: Context, delayMs: Long) {
+      val app = context.applicationContext
+      main.post {
+        cancelHeadlessStop()
+        val r = Runnable {
+          headlessStop = null
+          if (isCapturing) return@Runnable // a new drive started meanwhile
+          try {
+            app.stopService(Intent(app, DriveSenseHeadlessService::class.java))
+          } catch (_: Exception) {
+            // not running
+          }
+        }
+        headlessStop = r
+        main.postDelayed(r, delayMs)
+      }
+    }
 
     /** One JS startCapture waiting for the service's foreground result. */
     private class PendingStart(val onResult: (String?) -> Unit)
@@ -188,6 +227,7 @@ class CaptureService : Service() {
   private val pendingTs = ArrayList<Long>()
   private var prevRowTs: Long? = null
   private var latestImuT = Double.NEGATIVE_INFINITY
+  private var latestFixT = Double.NEGATIVE_INFINITY
   private var imuRunning = false
   private var nextTickAt = 0L
   private var droppedSamples = 0
@@ -326,6 +366,7 @@ class CaptureService : Service() {
 
   /** The headless JS task that runs the drive host while the app is not open (rev1: I15). */
   private fun startHeadless() {
+    cancelHeadlessStop()
     try {
       startService(Intent(this, DriveSenseHeadlessService::class.java))
       HeadlessJsTaskService.acquireWakeLockNow(this)
@@ -343,6 +384,8 @@ class CaptureService : Service() {
     fixes.clear()
     pendingTs.clear()
     prevRowTs = null
+    latestFixT = Double.NEGATIVE_INFINITY
+    main.post { cancelHeadlessStop() }
     latestImuT = Double.NEGATIVE_INFINITY
     droppedSamples = 0
 
@@ -393,7 +436,7 @@ class CaptureService : Service() {
     if (rate == "low") {
       // Close what the IMU already covered, then stop it.
       imuRunning = false
-      closeReady()
+      closeReady(force = true)
       imu.clear()
     }
     currentRate = rate
@@ -401,9 +444,15 @@ class CaptureService : Service() {
     startRate(rate)
   }
 
-  /** Stop GNSS, IMU, timers and rows; with [clearOpen] (JS stop, watchdog) also the flag and the service. */
-  private fun endCapture(clearOpen: Boolean) {
+  /**
+   * Stop GNSS, IMU, timers and rows; with [clearOpen] (JS stop, watchdog) also the flag and the
+   * service. The headless JS task is stopped too — at once when [headlessNow] (the watchdog: JS is
+   * not there), else after HEADLESS_GRACE_MS for it to finalize — so its wake lock never outlives
+   * the drive (review N2N3 I4).
+   */
+  private fun endCapture(clearOpen: Boolean, headlessNow: Boolean = false) {
     stopSources()
+    scheduleHeadlessStop(this, if (headlessNow) 0L else HEADLESS_GRACE_MS)
     isCapturing = false
     currentRate = null
     currentMode = null
@@ -443,7 +492,7 @@ class CaptureService : Service() {
   private fun onWatchdog() {
     if (!isCapturing) return
     prefs.recordExit("watchdog", whileCapturing = true)
-    endCapture(clearOpen = true)
+    endCapture(clearOpen = true, headlessNow = true)
   }
 
   private fun onMinute() {
@@ -457,6 +506,7 @@ class CaptureService : Service() {
   private fun reportFallbacks() {
     val n = (location?.takeFallbacks() ?: 0) + (sensors?.takeFallbacks() ?: 0)
     if (n > 0) prefs.addTimebaseFallbacks(n)
+    prefs.addImuUnpaired(sensors?.takeUnpaired() ?: 0)
   }
 
   // ——— wake lock: the 1 Hz row timer must keep running with the screen off ———
@@ -486,7 +536,7 @@ class CaptureService : Service() {
   // ——— rows (capture thread) ———
 
   /** The boot clock through this capture's anchor: monotonic, so row timestamps only increase. */
-  private fun nowEpochMs(): Double = anchor.epochMs + (SystemClock.elapsedRealtimeNanos() / 1e6 - anchor.clockMs)
+  private fun nowEpochMs(): Double = TimeBase.anchoredNow(anchor)
 
   private fun onTick() {
     if (!isCapturing || currentRate != "full") return
@@ -494,7 +544,8 @@ class CaptureService : Service() {
     val last = pendingTs.lastOrNull() ?: prevRowTs
     if (last == null || ts > last) {
       pendingTs.add(ts)
-      handler.postDelayed(closeLate, ROW_LATE_MS)
+      handler.postDelayed(closeLate, FIX_SETTLE_MS)
+      handler.postDelayed(closeLate, ROW_MAX_WAIT_MS)
     }
     // Next tick on a 1 s grid; after a stall (> 2 s behind) start the grid again.
     val now = SystemClock.elapsedRealtime()
@@ -531,17 +582,25 @@ class CaptureService : Service() {
     } else {
       fixes.add(fix)
       if (fixes.size > MAX_FIXES_BUFFERED) fixes.removeAt(0)
+      if (fix.t > latestFixT) latestFixT = fix.t
+      if (pendingTs.isNotEmpty()) closeReady()
     }
     watchdog.check()
   }
 
-  /** Close every pending row whose window is complete (a later sample arrived, or 1.5 s passed). */
-  private fun closeReady() {
+  /**
+   * Close every pending row whose window can be complete (README §7 "When a row closes"): the IMU
+   * has passed ts (or is not running) AND a fix stamped after ts has arrived or FIX_SETTLE_MS has
+   * passed — capped at ROW_MAX_WAIT_MS. [force] closes everything pending (switching to low rate).
+   */
+  private fun closeReady(force: Boolean = false) {
     if (!isCapturing) return
     val now = nowEpochMs()
     while (pendingTs.isNotEmpty()) {
       val ts = pendingTs[0]
-      val ready = !imuRunning || latestImuT > ts || now >= ts + ROW_LATE_MS
+      val imuReady = !imuRunning || latestImuT > ts
+      val fixReady = latestFixT > ts || now >= ts + FIX_SETTLE_MS
+      val ready = force || (imuReady && fixReady) || now >= ts + ROW_MAX_WAIT_MS
       if (!ready) break
       pendingTs.removeAt(0)
       closeRow(ts)

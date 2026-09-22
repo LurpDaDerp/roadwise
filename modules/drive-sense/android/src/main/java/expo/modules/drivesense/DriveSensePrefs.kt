@@ -23,6 +23,7 @@ object DriveSensePrefs {
   private const val EXIT_REASON = "exitReason"
   private const val EXIT_WHILE_CAPTURING = "exitWhileCapturing"
   private const val FALLBACK_COUNT = "timebaseFallbacks"
+  private const val UNPAIRED_COUNT = "imuUnpaired"
 
   @Volatile
   private var prefs: SharedPreferences? = null
@@ -78,6 +79,11 @@ object DriveSensePrefs {
   /** Converted timestamps that fell back to their arrival time (README §7), for diagnostics. */
   fun addTimebaseFallbacks(n: Int) {
     if (n > 0) p.edit().putLong(FALLBACK_COUNT, p.getLong(FALLBACK_COUNT, 0L) + n).apply()
+  }
+
+  /** Accelerometer samples that found no gyroscope partner (review N2N3 I3), for diagnostics. */
+  fun addImuUnpaired(n: Int) {
+    if (n > 0) p.edit().putLong(UNPAIRED_COUNT, p.getLong(UNPAIRED_COUNT, 0L) + n).apply()
   }
 
   data class ExitRecord(val ts: Long, val reason: String, val whileCapturing: Boolean)

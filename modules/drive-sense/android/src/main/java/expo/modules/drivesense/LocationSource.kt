@@ -42,8 +42,9 @@ class LocationSource(
 
   private val callback = object : LocationCallback() {
     override fun onLocationResult(result: LocationResult) {
-      val arrival = System.currentTimeMillis().toDouble()
       val a = anchor()
+      // Arrival on the capture's anchored boot clock, not the wall clock (README §7, review N2N3 I2).
+      val arrival = TimeBase.anchoredNow(a)
       for (location in result.locations) onFix(toFix(location, a, arrival))
     }
   }

@@ -19,6 +19,17 @@ data class ClockAnchor(val epochMs: Double, val clockMs: Double) {
 object TimeBase {
   data class Converted(val t: Double, val fellBack: Boolean)
 
+  /**
+   * A boot-clock instant on the capture's epoch base: `anchor.epochMs + (clockMs − anchor.clockMs)`.
+   * Android measures an item's ARRIVAL with this (the boot clock at delivery), not with
+   * `currentTimeMillis()` (README §7, review N2N3 I2): row `ts` is on the same base, so a wall-clock
+   * step mid-drive cannot trip the sanity fallback and push samples and fixes off their windows.
+   */
+  fun anchoredNow(anchor: ClockAnchor, clockNowMs: Double): Double = anchor.epochMs + (clockNowMs - anchor.clockMs)
+
+  /** [anchoredNow] at this instant. */
+  fun anchoredNow(anchor: ClockAnchor): Double = anchoredNow(anchor, SystemClock.elapsedRealtimeNanos() / 1e6)
+
   /** Boot-clock ms → epoch ms; more than TIMEBASE_MAX_SKEW_MS from the arrival time falls back to it. */
   fun toEpochMs(clockMs: Double, anchor: ClockAnchor, arrivalEpochMs: Double): Converted {
     val t = anchor.epochMs + (clockMs - anchor.clockMs)
