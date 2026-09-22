@@ -1320,8 +1320,8 @@ describe('D2: network state and the drain policy', () => {
   async function refusedRoleAnswer(): Promise<QueueItem> {
     const item = await queue().enqueue(
       'set-role',
-      { action: 'set-role', clientTripId: 'other', role: 'driver' },
-      'role:other',
+      { action: 'set-role', clientTripId: TRIP_ID, role: 'driver' },
+      `role:${TRIP_ID}:1`,
       T0,
       undefined,
       UID
@@ -1390,10 +1390,11 @@ describe('D2: network state and the drain policy', () => {
     const net = fakeNet(OFFLINE);
     const r = runner({ net });
     r.start();
-    await waitFor(() => supabase.sessions > 0);
-    await tick();
-    // Offline: the start-up drain found nothing due (both items are failed).
+    for (let i = 0; i < 5; i += 1) await tick();
+    // Offline: the start-up wake claims nothing, reopens nothing and asks nobody anything.
     expect(supabase.invokes).toHaveLength(0);
+    expect(supabase.sessions).toBe(0);
+    expect(await queue().get(exhausted.id)).toMatchObject({ status: 'failed' });
 
     net.set(WIFI);
     await waitFor(() => supabase.invokes.length > 0);
@@ -1411,11 +1412,12 @@ describe('D2: network state and the drain policy', () => {
   });
 
   test('a change that is not offline to online reopens nothing', async () => {
-    const exhausted = await exhaustedUpload();
     const net = fakeNet(CELL);
     const r = runner({ net });
     r.start();
-    await tick();
+    for (let i = 0; i < 5; i += 1) await tick();
+    // The launch's own reopen pass has run (and found nothing). Now an upload gives up.
+    const exhausted = await exhaustedUpload();
 
     net.set(WIFI); // online already: a better link, not a reconnect
     net.set(CELL);
@@ -1477,5 +1479,86 @@ describe('D2: network state and the drain policy', () => {
     await seedQueuedTrip();
     const r = runner({ net: { isWifi: () => true } });
     await expect(r.drainOnce(T0)).resolves.toMatchObject({ done: 1 });
+  });
+});
+
+describe('D2 round 2: offline drains and the launch reopen (review D2 I1)', () => {
+  function netAt(online: boolean) {
+    let state = { online, wifi: online };
+    const listeners = new Set<(s: { online: boolean; wifi: boolean }) => void>();
+    return {
+      isOnline: () => state.online,
+      isWifi: () => state.wifi,
+      subscribe(fn: (s: { online: boolean; wifi: boolean }) => void) {
+        listeners.add(fn);
+        return () => listeners.delete(fn) as unknown as void;
+      },
+      set(next: boolean) {
+        state = { online: next, wifi: next };
+        for (const l of [...listeners]) l(state);
+      },
+    };
+  }
+
+  test('offline, a drain claims nothing and counts no attempt', async () => {
+    const item = await seedQueuedTrip();
+    const r = runner({ net: netAt(false) });
+
+    await expect(r.drainOnce(T0)).resolves.toEqual({ done: 0, failed: 0, deferred: 0 });
+    await expect(r.drainOnce(T0 + 60_000)).resolves.toEqual({ done: 0, failed: 0, deferred: 0 });
+
+    expect(supabase.invokes).toHaveLength(0);
+    expect(await queue().get(item.id)).toMatchObject({ status: 'pending', attempts: 0, claimed_at: null });
+  });
+
+  test('a launch that is online from the start reopens what ran out while the app was dead', async () => {
+    // Exhausted in an earlier process that was killed offline: this one never sees the edge.
+    const item = await seedQueuedTrip();
+    await db.execute(
+      "UPDATE sync_queue SET status = 'failed', attempts = ?, last_error = 'network' WHERE id = ?",
+      [MAX_ATTEMPTS, item.id]
+    );
+    const r = runner({ net: netAt(true) });
+    r.start();
+    await waitFor(() => supabase.invokes.length === 1);
+    for (let i = 0; i < 5; i += 1) await tick();
+
+    expect(await queue().get(item.id)).toMatchObject({ status: 'done' });
+    expect(supabase.invokes).toHaveLength(1);
+    await r.stop();
+  });
+
+  test('the launch reopen runs once per lifetime, not on every drain', async () => {
+    const r = runner({ net: netAt(true) });
+    r.start();
+    for (let i = 0; i < 5; i += 1) await tick();
+    // An upload gives up after the launch pass; later drains on the same lifetime leave it.
+    const item = await seedQueuedTrip();
+    await db.execute(
+      "UPDATE sync_queue SET status = 'failed', attempts = ?, last_error = 'network' WHERE id = ?",
+      [MAX_ATTEMPTS, item.id]
+    );
+    await r.drainOnce(T0 + 1);
+    expect(await queue().get(item.id)).toMatchObject({ status: 'failed' });
+    await r.stop();
+  });
+
+  test('the first drain sweeps reports whose event is gone (security review D2 R1-M1)', async () => {
+    await queue().enqueue(
+      'dispute',
+      { action: 'dispute', clientEventId: 'gone', reason: 'hazard', note: 'private words' },
+      'dispute:gone',
+      T0,
+      undefined,
+      UID
+    );
+    await db.execute("UPDATE sync_queue SET status = 'failed', attempts = 3 WHERE idempotency_key = 'dispute:gone'");
+    const r = runner({ net: netAt(true) });
+    r.start();
+    for (let i = 0; i < 10; i += 1) await tick();
+
+    expect(await queue().byKey('dispute:gone')).toBeNull();
+    expect(supabase.invokes).toHaveLength(0);
+    await r.stop();
   });
 });

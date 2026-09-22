@@ -1,4 +1,3 @@
-/** @jest-environment node */
 import {
   readRolePrior,
   recordRoleAnswer,
@@ -7,11 +6,19 @@ import {
 } from '@/core/engine/rolePrior';
 import { createQueueRepo, createSettingsRepo, createTripsRepo } from '@/data/db';
 import { readTombstones } from '@/data/db/tombstones';
-import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
+import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { eventRow, tripRow } from '@/data/queries/__fixtures__/rows';
 import { DEVICE_OWNER_KEY } from '@/data/sync/queue';
 import { createFakeFs } from '@/data/sync/__fixtures__/fakes';
-import { deleteTrip } from '@/features/trips/tripActions';
+import { act, renderHook } from '@testing-library/react-native';
+
+import { createQueryClient } from '@/data/queries';
+import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
+import { deleteTrip, useDeleteTrip } from '@/features/trips/tripActions';
+
+jest.mock('@/features/drive/summaryNotifier', () => ({
+  cancelDriveSummaries: jest.fn(async () => {}),
+}));
 
 test('a delete leaves a tombstone that outlives its queue item (security review D1 M-2)', async () => {
   const db = await createTestDb();
@@ -68,4 +75,23 @@ test('a delete drops the drive reports and role answers from the queue, notes an
   const { rows } = await db.execute('SELECT idempotency_key, payload_json FROM sync_queue ORDER BY idempotency_key');
   expect(rows.map((r) => r.idempotency_key)).toEqual(['delete:trip-1', 'dispute:other', 'role:trip-2:6']);
   expect(JSON.stringify(rows)).not.toContain('cyclist');
+});
+
+test("deleting a drive from the app cancels its pending summary notification (U3)", async () => {
+  const db = await createTestDb();
+  await createSettingsRepo(db).set(DEVICE_OWNER_KEY, 'user-1');
+  await seedTrips(db, [tripRow({ client_trip_id: 'trip-1' })]);
+  const client = createQueryClient();
+  const { result } = await renderHook(() => useDeleteTrip(), {
+    wrapper: wrapperFor(db, client, () => 1_000),
+  });
+
+  let ok = false;
+  await act(async () => {
+    ok = await result.current.remove('trip-1');
+  });
+
+  expect(ok).toBe(true);
+  expect(cancelDriveSummaries).toHaveBeenCalledWith('trip-1');
+  client.clear();
 });

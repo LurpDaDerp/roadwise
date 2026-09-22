@@ -164,3 +164,16 @@ test('a directory re-created after clear() is excluded again before the next tra
     `write ${TRACES_URI}/c.bin.gz`,
   ]);
 });
+
+test('a creation-time exclusion that never answers does not hold the writer (review D2 m3)', async () => {
+  const { module, events } = fakeFileSystemWithUris();
+  let calls = 0;
+  const writer = await createExpoTraceWriter(TRACES_DIRECTORY, async () => module, () => {
+    calls += 1;
+    // The first call hangs for ever; the one before the write answers.
+    return calls === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+  });
+  await writer.writeGzip('a.bin.gz', new TextEncoder().encode('[]'));
+  expect(calls).toBe(2);
+  expect(events).toContain(`write ${TRACES_URI}/a.bin.gz`);
+});

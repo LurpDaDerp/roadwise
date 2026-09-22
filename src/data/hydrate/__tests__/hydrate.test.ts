@@ -988,6 +988,26 @@ describe('fix round 3', () => {
     await expect(settings().get(roleAnswerKey('trip-1'))).resolves.toBeNull();
   });
 
+  test("security review D2 R1-M1: a drive removed by reconciliation takes its failed reports and role answers with it", async () => {
+    supabase.tables = { trips: five(), trip_events: [serverEvent(1, 1)] };
+    await hydrator().run({ full: true });
+    const queue = createQueueRepo(db);
+    // Gave up earlier; `failed` work does not hold the removal back.
+    await queue.enqueue('dispute', { action: 'dispute', clientEventId: 'ev-1', reason: 'hazard', note: 'private words' }, 'dispute:ev-1', NOW, undefined, UID);
+    await queue.enqueue('set-role', { action: 'set-role', clientTripId: 'trip-1', role: 'passenger' }, 'role:trip-1:9', NOW, undefined, UID);
+    await db.execute("UPDATE sync_queue SET status = 'failed', attempts = 20, next_attempt_at = ?", [Number.MAX_SAFE_INTEGER]);
+    // Another drive's report stays.
+    await queue.enqueue('set-role', { action: 'set-role', clientTripId: 'trip-2', role: 'driver' }, 'role:trip-2:9', NOW, undefined, UID);
+    await db.execute("UPDATE sync_queue SET status = 'failed' WHERE idempotency_key = 'role:trip-2:9'");
+
+    supabase.tables.trips = five().slice(1);
+    const result = await hydrator({ now: () => NOW + RECONCILE_INTERVAL_MS }).run({ full: false });
+
+    expect(result.removed).toBe(1);
+    const { rows } = await db.execute('SELECT idempotency_key FROM sync_queue ORDER BY idempotency_key');
+    expect(rows.map((r) => r.idempotency_key)).toEqual(['role:trip-2:9']);
+  });
+
   test('R2-M1: a self-heal cut short is not recorded, so the next run heals without waiting a day', async () => {
     supabase.tables = { trips: five() };
     await hydrator().run({ full: true });

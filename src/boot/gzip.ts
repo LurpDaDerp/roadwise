@@ -4,8 +4,10 @@
  * M2 wrapped the trace in stored (uncompressed) deflate blocks because no compressor was in the
  * dependency list; this replaces that body and nothing else — the finalizer still calls
  * `fs.writeGzip(path, bytes)`, and every gunzip (the server's trace check, Node's `zlib`) reads the
- * result. Once per finished drive, while the car is stationary: a 3 h trace is ~0.2–0.4 s of JS,
- * off the 1 Hz path.
+ * result. Once per finished drive, while the car is stationary, off the 1 Hz path. Its cost on
+ * Hermes (no JIT) is **not yet measured**: a 3 h trace is ~10.8k rows, ~2 MB after the bridge
+ * rounds them, and could take 0.5 s or more at level 6 (review D2 m4). The device pass times it
+ * around `writeGzip`; over 0.5 s, level 1 is compared (size against time) before level 6 ships.
  *
  * `mtime: 0` leaves the header's timestamp empty, so the same rows always make the same file — a
  * re-finalize after a crash rewrites identical bytes, and nothing about when it was written leaks

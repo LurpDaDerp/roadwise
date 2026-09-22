@@ -89,18 +89,37 @@ export function createNetAdapter(network: ExpoNetworkLike, initial: NetworkState
 let created: Promise<NetAdapter> | null = null;
 
 /**
+ * How long the launch waits for the first network read (review D2 m3). It is a local OS call and
+ * answers in milliseconds; past this the launch treats the network as unknown (never on Wi-Fi) rather
+ * than hold a background wake's few seconds on it. A one-shot timer at launch, cleared on answer.
+ */
+export const NET_READ_TIMEOUT_MS = 1500;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`network state not read within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
  * The process's network adapter over `expo-network`, created once: a second call returns the
  * same one, so the launch and anything later share one native listener. It also becomes the
  * adapter `useOnline` reads. Rejects when the native module is missing (a build from before P1)
- * or the first read fails; the caller falls back to "never on Wi-Fi", and a later call tries again.
+ * or the first read fails or takes longer than `timeoutMs`; the caller falls back to "never on
+ * Wi-Fi", and a later call tries again.
  */
-export function createExpoNet(load?: () => Promise<ExpoNetworkLike>): Promise<NetAdapter> {
+export function createExpoNet(
+  load?: () => Promise<ExpoNetworkLike>,
+  timeoutMs: number = NET_READ_TIMEOUT_MS
+): Promise<NetAdapter> {
   if (created) return created;
   const attempt = (async () => {
     const network = await (load
       ? load()
       : (import('expo-network') as unknown as Promise<ExpoNetworkLike>));
-    const initial = await network.getNetworkStateAsync();
+    const initial = await withTimeout(network.getNetworkStateAsync(), timeoutMs);
     const adapter = createNetAdapter(network, initial);
     setSharedNet(adapter);
     return adapter;

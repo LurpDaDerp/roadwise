@@ -44,6 +44,16 @@ export const REFUSED_NEVER = Number.MAX_SAFE_INTEGER;
  */
 const RETRIES_EXHAUSTED = 'retries_exhausted';
 
+/**
+ * `last_error` of an attempt that never reached a server (`classifyInvokeError` /
+ * `classifyStorageError` with no HTTP status). Such an item is reopened on every reconnect; one
+ * that ran out on server answers (5xx, 429, an unreadable reply) waits `SERVER_REOPEN_AFTER_MS`
+ * after it gave up, so a payload the server keeps choking on is not re-sent in full after every
+ * tunnel (review D2 m1).
+ */
+const TRANSPORT_FAILURE = 'network';
+export const SERVER_REOPEN_AFTER_MS = 24 * 60 * 60 * 1000;
+
 /** Queue kinds whose body names a trip, and whose give-up marks that trip failed. */
 const TRIP_KINDS = new Set(['finalize-trip', 'set-role', 'delete-trip']);
 
@@ -55,6 +65,33 @@ function parseBody(json: string): Record<string, unknown> | null {
       : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Drop every queued report on one of the trip's events and every role answer about the trip, in
+ * any status (security review D2 I-1, R1-M1). Their bodies hold the driver's own words about a drive
+ * that is being destroyed — by a local delete (`deleteTrip`) or because it was deleted elsewhere
+ * (hydrate's reconcile removal). Run inside that transaction, **before** the events are removed,
+ * while they still name the reports.
+ */
+export async function dropQueuedAbout(tx: Db, clientTripId: string): Promise<void> {
+  const { rows: events } = await tx.execute('SELECT id FROM trip_events WHERE client_trip_id = ?', [
+    clientTripId,
+  ]);
+  for (const event of events) {
+    if (typeof event.id === 'string') {
+      await tx.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [`dispute:${event.id}`]);
+    }
+  }
+  // A role answer's key carries a stamp, so it is found by its body.
+  const { rows: answers } = await tx.execute(
+    "SELECT id, payload_json FROM sync_queue WHERE kind = 'set-role'"
+  );
+  for (const answer of answers) {
+    if (parseBody(String(answer.payload_json))?.clientTripId === clientTripId) {
+      await tx.execute('DELETE FROM sync_queue WHERE id = ?', [answer.id]);
+    }
   }
 }
 
@@ -89,6 +126,16 @@ async function undoGiveUp(tx: Db, item: QueueItem, now: number): Promise<void> {
   if (body === null) return;
 
   if (TRIP_KINDS.has(item.kind) && typeof body.clientTripId === 'string') {
+    // A role answer's or a delete's give-up wrote `retries_exhausted` over whatever the trip said
+    // before. If its upload was refused for good, "queued" would promise a drive the server has
+    // turned down (review D2 m2): leave the trip as it is.
+    if (item.kind !== 'finalize-trip') {
+      const { rows } = await tx.execute(
+        "SELECT 1 FROM sync_queue WHERE idempotency_key = ? AND status = 'failed' AND next_attempt_at = ?",
+        [`trip:${body.clientTripId}`, REFUSED_NEVER]
+      );
+      if (rows.length > 0) return;
+    }
     await tx.execute(
       `UPDATE trips SET sync_state = 'queued', sync_error = NULL, updated_at = ?
         WHERE client_trip_id = ? AND sync_state = 'failed' AND sync_error = ?`,
@@ -388,7 +435,8 @@ export function createQueueRepo(db: Db) {
      * it — and a reopened report goes back to "sending" on its event.
      *
      * An item whose trip or event has gone from the device is left failed (security review D2
-     * I-1; see `subjectGone`).
+     * I-1; see `subjectGone`). One that ran out on server answers rather than on the transport is
+     * reopened only `SERVER_REOPEN_AFTER_MS` after it gave up (review D2 m1).
      *
      * Returns how many items were reopened.
      */
@@ -402,6 +450,8 @@ export function createQueueRepo(db: Db) {
         let reopened = 0;
         for (const item of rows.map(toQueueItem)) {
           if (await subjectGone(tx, item)) continue;
+          const serverSide = item.last_error !== TRANSPORT_FAILURE;
+          if (serverSide && now - item.next_attempt_at < SERVER_REOPEN_AFTER_MS) continue;
           reopened += 1;
           await tx.execute(
             `UPDATE sync_queue
@@ -413,6 +463,27 @@ export function createQueueRepo(db: Db) {
           await undoGiveUp(tx, item, now);
         }
         return reopened;
+      });
+    },
+
+    /**
+     * Drop every report and role answer whose trip or event is no longer on the device (security
+     * review D2 R1-M1): left behind by a delete made before this build, or by a drive removed while
+     * such an item sat `failed`. They are never sent and never reopened, but the driver's notes must
+     * not linger. Run once per runner lifetime, at its first drain. Returns how many were dropped.
+     */
+    sweepOrphanedReports(): Promise<number> {
+      return db.transaction(async (tx) => {
+        const { rows } = await tx.execute(
+          "SELECT * FROM sync_queue WHERE kind IN ('dispute', 'set-role') AND status <> 'inflight'"
+        );
+        let dropped = 0;
+        for (const item of rows.map(toQueueItem)) {
+          if (!(await subjectGone(tx, item))) continue;
+          await tx.execute('DELETE FROM sync_queue WHERE id = ?', [item.id]);
+          dropped += 1;
+        }
+        return dropped;
       });
     },
 

@@ -62,24 +62,31 @@ export async function createExpoTraceWriter(
   /** The directory exists and carries the attribute, as far as this writer knows. */
   let excluded = false;
 
-  /** Create the directory (idempotent) and, unless this writer already did, exclude it. */
-  async function ensureDirectory(): Promise<void> {
+  /** Create the directory (idempotent) and return it. */
+  function makeDirectory() {
     const dir = new Directory(...([Paths.document, directory] as never[]));
     dir.create({ intermediates: true, idempotent: true });
-    if (excluded) return;
+    return dir;
+  }
+
+  async function exclude(uri: string): Promise<void> {
     try {
-      await excludeFromBackup(dir.uri);
+      await excludeFromBackup(uri);
       excluded = true;
     } catch (error) {
       onError(error, 'exclude traces from backup');
     }
   }
 
-  await ensureDirectory();
+  // At creation the exclusion is started, not awaited (review D2 m3): the writer is made on the
+  // launch path, background wakes included, and a native call that hung must not hold it. The
+  // write below awaits its own exclusion if this one has not landed by then.
+  void exclude(makeDirectory().uri);
 
   return {
     async writeGzip(path: string, bytes: Uint8Array): Promise<void> {
-      await ensureDirectory();
+      const dir = makeDirectory();
+      if (!excluded) await exclude(dir.uri);
       new File(...([Paths.document, directory, path] as never[])).write(gzip(bytes));
     },
 

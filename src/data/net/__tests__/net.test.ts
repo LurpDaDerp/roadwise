@@ -137,6 +137,14 @@ test('createExpoNet rejects without the native module, and a later call tries ag
   expect(adapter.isOnline()).toBe(true);
 });
 
+test('a first read that never answers rejects after the timeout instead of holding the launch', async () => {
+  const hung: ExpoNetworkLike = {
+    getNetworkStateAsync: () => new Promise(() => {}),
+    addNetworkStateListener: () => ({ remove() {} }),
+  };
+  await expect(createExpoNet(async () => hung, 10)).rejects.toThrow('not read within 10 ms');
+});
+
 describe('useOnline', () => {
   test('before any adapter exists it does not claim offline', async () => {
     const { result } = await renderHook(() => useOnline());

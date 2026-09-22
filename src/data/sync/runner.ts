@@ -299,6 +299,16 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
    * armed and idle in the background (no query, no request — design §3.5).
    */
   let reconnectPending = false;
+  /** The once-per-lifetime sweep of reports whose drive is gone (security review D2 R1-M1). */
+  let sweepPending = false;
+
+  /**
+   * The adapter says the device is offline. Only an adapter that reports connectivity can say so;
+   * a plain `NetStatus` never does. Offline, a drain claims nothing (review D2 I1): every request
+   * would fail at the transport and walk its item down the ladder towards `failed` — attempts that
+   * were never really tried — and the reconnect edge brings the drain back.
+   */
+  const offline = (): boolean => canSubscribe(net) && !net.isOnline();
 
   /**
    * The signed-in user's id, or null when there is no session to upload under.
@@ -911,7 +921,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const empty: DrainResult = { done: 0, failed: 0, deferred: 0 };
     // One drain at a time: two passes claiming the same items would race on every `markAttempt`.
     // And none the host's policy forbids: nothing claimed means no attempt counted.
-    if (draining || isRecording() || !mayDrain()) return empty;
+    if (draining || isRecording() || !mayDrain() || offline()) return empty;
     draining = true;
     // Held so `stop()` can be awaited: the generation fence already refuses a dead pass's writes,
     // but a host rebuilding the runtime (a handover) wants the old pass's network work finished
@@ -921,6 +931,15 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       settled = resolve;
     });
     try {
+      if (sweepPending) {
+        sweepPending = false;
+        try {
+          await queue.sweepOrphanedReports();
+        } catch (error) {
+          sweepPending = true;
+          report(error, 'sweep orphaned reports');
+        }
+      }
       if (reconnectPending) {
         reconnectPending = false;
         try {
@@ -1016,6 +1035,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     start(): void {
       if (started) return;
       started = true;
+      // A launch cannot see a network gap it did not witness: items that ran out while this app
+      // was killed offline would otherwise stay failed until some later edge (review D2 I1). So the
+      // first drain this lifetime allows reopens them, and sweeps orphaned reports, once.
+      reconnectPending = true;
+      sweepPending = true;
       // New work: something was queued, or the host finalized a drive. A `sync` change is this
       // runner's own pass and a `hydrate` change queues nothing, so neither wakes it.
       unsubscribes.push(

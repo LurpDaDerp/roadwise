@@ -60,6 +60,7 @@
  * (the cursor already names the last committed page, so the next run resumes there).
  */
 import type { Db } from '@/data/db/driver';
+import { dropQueuedAbout } from '@/data/db/queue';
 import { createSettingsRepo } from '@/data/db/settings';
 import { addTombstone, readTombstones } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
@@ -917,6 +918,10 @@ export function createHydrator(deps: HydratorDeps): Hydrator {
         if (typeof row.updated_at === 'number' && row.updated_at > listedFrom) continue;
         // Exactly what a local delete destroys, with nothing queued: the server already did it.
         await tx.execute('DELETE FROM samples WHERE client_trip_id = ?', [id]);
+        // Before its events go, while they still name them: any report or role answer still queued
+        // about the drive (a `failed` one survives the pending-work guard) goes too, notes and all
+        // (security review D2 R1-M1).
+        await dropQueuedAbout(tx, id);
         await tx.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [id]);
         await tx.execute('DELETE FROM trips WHERE client_trip_id = ?', [id]);
         // Its role answer stops counting toward the prior, and its route key goes with it

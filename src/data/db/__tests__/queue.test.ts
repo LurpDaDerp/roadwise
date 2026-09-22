@@ -3,7 +3,13 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createEventsRepo } from '@/data/db/events';
-import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S } from '@/data/db/queue';
+import {
+  backoffSeconds,
+  createQueueRepo,
+  MAX_ATTEMPTS,
+  RECLAIM_AFTER_S,
+  SERVER_REOPEN_AFTER_MS,
+} from '@/data/db/queue';
 import { createTripsRepo } from '@/data/db/trips';
 import { eventRow, tripRow } from '@/data/queries/__fixtures__/rows';
 import { RETRIES_EXHAUSTED } from '@/data/sync/actions';
@@ -562,6 +568,51 @@ describe('reopenRetryable', () => {
     const item = await queue.enqueue('delete-trip', { clientTripId: 'husk' }, 'delete:husk', T0);
     await exhaust(item.id);
     await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(1);
+  });
+
+  test('review D2 m1: an item that ran out on server answers waits a day after giving up; a transport failure does not', async () => {
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'net' }), T0);
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'srv' }), T0);
+    const net = await queue.enqueue('finalize-trip', { clientTripId: 'net' }, 'trip:net', T0);
+    const srv = await queue.enqueue('finalize-trip', { clientTripId: 'srv' }, 'trip:srv', T0);
+    await exhaust(net.id, 'network');
+    await exhaust(srv.id, 'http_503');
+    const gaveUpAt = (await queue.get(srv.id))!.next_attempt_at;
+
+    await expect(queue.reopenRetryable(gaveUpAt + 60_000)).resolves.toBe(1);
+    expect((await queue.get(net.id))?.status).toBe('pending');
+    expect((await queue.get(srv.id))?.status).toBe('failed');
+
+    await expect(queue.reopenRetryable(gaveUpAt + SERVER_REOPEN_AFTER_MS)).resolves.toBe(1);
+    expect((await queue.get(srv.id))?.status).toBe('pending');
+  });
+
+  test('review D2 m2: a reopened role answer does not say "queued" over an upload the server refused', async () => {
+    const trips = createTripsRepo(db);
+    await trips.insert(tripRow({ client_trip_id: 't', sync_state: 'failed', sync_error: RETRIES_EXHAUSTED }), T0);
+    const up = await queue.enqueue('finalize-trip', { clientTripId: 't' }, 'trip:t', T0);
+    await refuse(up.id, 'implausible_speed');
+    const role = await queue.enqueue('set-role', { clientTripId: 't' }, 'role:t:1', T0);
+    await exhaust(role.id);
+
+    await expect(queue.reopenRetryable(T0 + 1000)).resolves.toBe(1);
+    expect(await trips.get('t')).toMatchObject({ sync_state: 'failed' });
+  });
+
+  test('sweepOrphanedReports drops reports and role answers whose event or trip is gone, and nothing else', async () => {
+    await createTripsRepo(db).insert(tripRow({ client_trip_id: 'kept' }), T0);
+    await createEventsRepo(db).insertMany([eventRow({ id: 'e-kept', client_trip_id: 'kept' })]);
+    await queue.enqueue('dispute', { clientEventId: 'e-gone', note: 'private words' }, 'dispute:e-gone', T0);
+    await queue.enqueue('set-role', { clientTripId: 'gone' }, 'role:gone:1', T0);
+    await queue.enqueue('dispute', { clientEventId: 'e-kept' }, 'dispute:e-kept', T0);
+    await queue.enqueue('set-role', { clientTripId: 'kept' }, 'role:kept:1', T0);
+    // Not a report: the delete of a gone drive must still reach the server.
+    await queue.enqueue('delete-trip', { clientTripId: 'gone' }, 'delete:gone', T0);
+
+    await expect(queue.sweepOrphanedReports()).resolves.toBe(2);
+
+    const { rows } = await db.execute('SELECT idempotency_key FROM sync_queue ORDER BY idempotency_key');
+    expect(rows.map((r) => r.idempotency_key)).toEqual(['delete:gone', 'dispute:e-kept', 'role:kept:1']);
   });
 
   test('an item whose body this build cannot read is still reopened, and touches no row', async () => {

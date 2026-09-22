@@ -3,9 +3,25 @@
 // fresh generation, and every vector's `expected` must be what the reference computes from its
 // `inputs` — so neither the files nor the reference can drift without this suite failing.
 import { runVector, type GoldenVector } from '../src/extract/vectors';
-import { parseRow } from '../src/rowSchema';
+import { parseRow, ROW_DECIMALS } from '../src/rowSchema';
 import { parseVectors } from '../src/selfTest';
+import type { FeatureRow } from '../src/types';
 import { VECTOR_BUILDERS, VECTOR_NAMES, serializeVector } from '../scripts/scenarios';
+
+/**
+ * What the bridge must return for a golden row (ruling D2 concern 1), written out rather than
+ * calling `roundTo`: each rounded field is `round(x · 10^d) / 10^d` and lies within half a step of
+ * the input; every other field is the input exactly.
+ */
+function bridged(row: FeatureRow): FeatureRow {
+  const out = { ...row };
+  for (const [key, decimals] of Object.entries(ROW_DECIMALS) as [keyof typeof ROW_DECIMALS, number][]) {
+    const value = Math.round(row[key] * 10 ** decimals) / 10 ** decimals;
+    expect(Math.abs(value - row[key])).toBeLessThanOrEqual(0.5 * 10 ** -decimals + 1e-12);
+    out[key] = value === 0 ? 0 : value;
+  }
+  return out;
+}
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -60,11 +76,11 @@ describe.each(VECTOR_NAMES)('%s', (name) => {
     if (vector.kind === 'extract') {
       expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
       for (const s of vector.inputs.seconds) expect(s.imu.length).toBeLessThanOrEqual(25);
-      for (const row of vector.expected.rows) expect(parseRow(row)).not.toBeNull(); // the bridge accepts it (and rounds it: ruling D2 concern 1)
+      for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(bridged(row));
     } else if (vector.kind === 'androidRaw') {
       expect(vector.inputs.seconds.length).toBeLessThanOrEqual(10);
       for (const s of vector.inputs.seconds) expect(s.raw.length).toBeLessThanOrEqual(25);
-      for (const row of vector.expected.rows) expect(parseRow(row)).not.toBeNull(); // the bridge accepts it (and rounds it: ruling D2 concern 1)
+      for (const row of vector.expected.rows) expect(parseRow(row)).toEqual(bridged(row));
     } else {
       expect(vector.inputs.batches.flat().length).toBeLessThanOrEqual(250);
     }

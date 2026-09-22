@@ -30,6 +30,8 @@ import {
 } from '@/data/db';
 import { invalidateAfterSync, invalidateTrip, useDb } from '@/data/queries';
 import { forgetRoleAnswer } from '@/core/engine/rolePrior';
+import { dropQueuedAbout } from '@/data/db/queue';
+import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 import { addTombstone } from '@/data/db/tombstones';
 import { emitDataChanged } from '@/data/events';
 import { DisputePayloadSchema } from '@/data/sync/actions';
@@ -176,30 +178,6 @@ async function removeTraceFile(clientTripId: string, fs?: TraceFs): Promise<void
 export interface DeleteTripDeps {
   /** The traces directory. Defaults to the device's; a test passes its own. */
   fs?: TraceFs;
-}
-
-/** Every `dispute` item naming one of the trip's events, and every `set-role` item for the trip. */
-async function dropQueuedAbout(tx: Db, clientTripId: string): Promise<void> {
-  const queue = createQueueRepo(tx);
-  const { rows: events } = await tx.execute('SELECT id FROM trip_events WHERE client_trip_id = ?', [
-    clientTripId,
-  ]);
-  for (const event of events) {
-    if (typeof event.id === 'string') await queue.dropByKey(disputeIdempotencyKey(event.id), tx);
-  }
-  // A role answer's key carries a stamp, so it is found by its body.
-  const { rows: answers } = await tx.execute(
-    "SELECT id, payload_json FROM sync_queue WHERE kind = 'set-role'"
-  );
-  for (const answer of answers) {
-    let about: unknown = null;
-    try {
-      about = (JSON.parse(String(answer.payload_json)) as { clientTripId?: unknown }).clientTripId;
-    } catch {
-      // A body this build cannot read names no drive.
-    }
-    if (about === clientTripId) await tx.execute('DELETE FROM sync_queue WHERE id = ?', [answer.id]);
-  }
 }
 
 /**
@@ -375,6 +353,8 @@ export function useDeleteTrip(): DeleteTrip {
       setPhase('busy');
       try {
         await deleteTrip(db, clientTripId);
+        // A drive that goes for good takes its pending "summary ready" notification with it (U3).
+        void cancelDriveSummaries(clientTripId).catch(() => {});
         await invalidateAfterSync(queryClient);
         setPhase('done');
         return true;
