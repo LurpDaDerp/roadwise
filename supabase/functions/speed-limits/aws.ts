@@ -6,24 +6,27 @@
 // the function then says `fallback: null` and answers `unknown`). The secrets live in the function's
 // environment and never leave this file: not in a response, not in a log.
 //
-// What comes back is the first span's `MaxSpeed`, converted to mph, together with the route's own
-// leg geometry for that span, the road AWS actually matched, which is what gets cached (rev1: m),
-// never a straight projection of the car's heading. Anything this file cannot vouch for is null:
-// no route, no speed limit on the first span, an unlimited road, a limit outside the tables' 5..85
-// mph, or a leg with fewer than two usable points. A transport failure, a timeout or a non-2xx
-// answer throws `AwsRoutesError`; the handler turns every failure into `unknown`, never a 5xx.
+// What comes back is every span of the route that carries a posted limit: its `MaxSpeed`,
+// converted to mph, with the route's own geometry for that span (rev1: m), never a straight
+// projection of the car's heading. The route runs from behind the car to ahead of it (ruling B2
+// I-1), so the handler picks the span the car is on with the device's matcher. A span this file
+// cannot vouch for is left out: no speed limit, an unlimited road, a limit outside the tables'
+// 5..85 mph, or fewer than two usable points. No route, or span offsets that cannot be read, is an
+// empty list. A transport failure, a timeout or a non-2xx answer throws `AwsRoutesError`; the
+// handler turns every failure into `unknown`, never a 5xx.
 import { AwsClient } from 'aws4fetch';
 import type { LatLng } from '../_shared/speedLimits/geometry';
 
-export interface SpeedLimitAlong {
-  /** The first span's posted limit, whole mph rounded to the nearest 5, 5..85. */
+export interface SpanLimit {
+  /** The span's posted limit, whole mph rounded to the nearest 5, 5..85. */
   mph: number;
   /** The route's own geometry for that span, in travel order: 2..`MAX_LEG_POINTS` points, under `MAX_LEG_M`. */
   leg: LatLng[];
 }
 
 export interface RoutesClient {
-  speedLimitAlong(origin: LatLng, dest: LatLng): Promise<SpeedLimitAlong | null>;
+  /** The route's spans that carry a usable limit, in travel order; empty when there are none. */
+  speedLimitsAlong(origin: LatLng, dest: LatLng): Promise<SpanLimit[]>;
 }
 
 /** What `createAwsRoutesClient` reads; `Deno.env` satisfies it. */
@@ -76,16 +79,16 @@ const flatM = (a: LatLng, b: LatLng): number => {
 };
 
 /**
- * The part of the leg the first span covers (up to the second span's first point, when AWS reports
- * one), with repeated points dropped, cut at `MAX_LEG_POINTS` and `MAX_LEG_M`. Null when fewer than
- * two distinct points remain or any position is not a coordinate on the globe.
+ * The positions `start..end` (both inclusive, so neighbouring spans share their boundary point) with
+ * repeated points dropped, cut at `MAX_LEG_POINTS` and `MAX_LEG_M`. Null when fewer than two
+ * distinct points remain or any position is not a coordinate on the globe.
  */
-export function legForFirstSpan(positions: unknown, spanEnd: number | null): LatLng[] | null {
+export function legForRange(positions: unknown, start: number, end: number): LatLng[] | null {
   if (!Array.isArray(positions)) return null;
-  const end = spanEnd !== null && spanEnd >= 1 ? Math.min(spanEnd + 1, positions.length) : positions.length;
+  const last = Math.min(end, positions.length - 1);
   const leg: LatLng[] = [];
   let length = 0;
-  for (let i = 0; i < end && leg.length < MAX_LEG_POINTS; i += 1) {
+  for (let i = Math.max(0, start); i <= last && leg.length < MAX_LEG_POINTS; i += 1) {
     const p = positions[i];
     if (!Array.isArray(p) || p.length < 2) return null;
     const [lng, lat] = p;
@@ -107,22 +110,36 @@ export function legForFirstSpan(positions: unknown, spanEnd: number | null): Lat
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json | null => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : null);
 
-/** The answer of one `CalculateRoutes` response, or null when it carries nothing usable. */
-export function readSpeedLimit(body: unknown): SpeedLimitAlong | null {
+/**
+ * The usable spans of one `CalculateRoutes` response. Each span runs from its `GeometryOffset` to
+ * the next span's; offsets that are missing, not whole, or go backwards make the split unknowable,
+ * and then nothing is returned rather than a limit pinned to the wrong stretch of road.
+ */
+export function readSpanLimits(body: unknown): SpanLimit[] {
   const route = Array.isArray(obj(body)?.Routes) ? obj((obj(body)!.Routes as unknown[])[0]) : null;
   const leg = Array.isArray(route?.Legs) ? obj((route!.Legs as unknown[])[0]) : null;
-  if (!leg) return null;
+  if (!leg) return [];
   const spans = obj(leg.VehicleLegDetails)?.Spans;
-  if (!Array.isArray(spans)) return null;
-  const first = obj(spans[0]);
-  const limit = obj(first?.SpeedLimit);
-  if (!limit || limit.Unlimited === true) return null;
-  const mph = kmhToMph(limit.MaxSpeed);
-  if (mph === null) return null;
-  const nextOffset = obj(spans[1])?.GeometryOffset;
-  const spanEnd = typeof nextOffset === 'number' && Number.isInteger(nextOffset) ? nextOffset : null;
-  const positions = legForFirstSpan(obj(leg.Geometry)?.LineString, spanEnd);
-  return positions ? { mph, leg: positions } : null;
+  const positions = obj(leg.Geometry)?.LineString;
+  if (!Array.isArray(spans) || !Array.isArray(positions)) return [];
+  const offsets: number[] = [];
+  for (const [i, raw] of spans.entries()) {
+    const offset = obj(raw)?.GeometryOffset ?? (i === 0 ? 0 : undefined);
+    if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) return [];
+    if (i > 0 && offset < offsets[i - 1]!) return [];
+    offsets.push(offset);
+  }
+  const out: SpanLimit[] = [];
+  spans.forEach((raw, i) => {
+    const limit = obj(obj(raw)?.SpeedLimit);
+    if (!limit || limit.Unlimited === true) return;
+    const mph = kmhToMph(limit.MaxSpeed);
+    if (mph === null) return;
+    const end = i + 1 < offsets.length ? offsets[i + 1]! : positions.length - 1;
+    const legPts = legForRange(positions, offsets[i]!, end);
+    if (legPts) out.push({ mph, leg: legPts });
+  });
+  return out;
 }
 
 export function createAwsRoutesClient(
@@ -140,7 +157,7 @@ export function createAwsRoutesClient(
   const timeoutMs = opts.timeoutMs ?? AWS_TIMEOUT_MS;
 
   return {
-    async speedLimitAlong(origin, dest) {
+    async speedLimitsAlong(origin, dest) {
       const body = JSON.stringify({
         Origin: [origin.lng, origin.lat],
         Destination: [dest.lng, dest.lat],
@@ -171,7 +188,7 @@ export function createAwsRoutesClient(
       } catch {
         throw new AwsRoutesError(res.status, 'answered with a body that is not JSON');
       }
-      return readSpeedLimit(parsed);
+      return readSpanLimits(parsed);
     },
   };
 }

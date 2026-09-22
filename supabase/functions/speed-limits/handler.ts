@@ -10,14 +10,17 @@
 //        `Cache-Control: private, max-age=86400`, and gzip when the request accepts it.
 //   POST PointRequest → PointResponse, in §4.4's order: the candidates around the point go through
 //        `matchLimit` (the device's matcher, byte for byte); a match with a limit answers. Otherwise,
-//        with the AWS client configured and the user's daily AWS budget not spent, one
-//        `CalculateRoutes` call from the point to a point 150 m ahead on the heading. Its answer is
-//        used only if the matcher, given the route's own geometry as a cache segment, picks it
-//        exactly as the device would pick it from the tile; then it is cached (only AWS's geometry
-//        and limit, for a random 7 to 10 whole days) and answered `cached`. Everything else is
-//        `unknown`, with confidence 0. An AWS failure is never a 5xx.
+//        with the AWS client configured, the point inside a state whose open data is loaded, and
+//        neither the user's nor the global daily AWS budget spent, one `CalculateRoutes` call from a
+//        random 75..200 m behind the car to a random 150..300 m ahead of it on the heading (ruling
+//        B2 I-1: no stored line ends at a fixed offset from the car). Each span of the route with a
+//        limit becomes the cache segment the device would see; the answer is used only if the
+//        matcher picks one of them exactly as the device would from the tile. That span alone is
+//        cached (only AWS's geometry and limit, for a random 7 to 10 whole days; the database
+//        normalises its orientation) and answered `cached`. Everything else is `unknown`, with
+//        confidence 0. An AWS failure is never a 5xx.
 //
-// Order of refusal, cheapest first: method, JWT, the request's shape, the budget, then the
+// Order of refusal, cheapest first: method, JWT, the request's shape, the route's budget, then the
 // database. The uid comes from the token only. Each request logs one line,
 // `{ requestId, route, outcome, source }`: never a coordinate, a heading or a tile key.
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -42,25 +45,63 @@ import {
   TileKeysSchema,
   type PointResponse,
 } from '../_shared/speedLimits/wire';
-import type { RoutesClient, SpeedLimitAlong } from './aws.ts';
+import type { RoutesClient, SpanLimit } from './aws.ts';
 
 /**
- * Every rate-limit budget this function spends, in one place (B1 security audit). Each is one
- * `take_rate_limit(uid, key, window, max)` row per user; handler.test.ts pins the values.
- *   aws:   AWS lookups per user per day. Each costs money, so a spent budget is `unknown`, not an error.
- *   tiles: tile batches per user per hour. The device asks for one batch per kilometre (about two a
- *          minute at highway speed), so 240 an hour is double that with room for retries.
+ * Every rate-limit budget this function spends, in one place (B1 security audit; rulings B2 M-1,
+ * M-2). Each is one `take_rate_limit(user, key, window, max)` row; handler.test.ts pins the values.
+ *   aws:       AWS lookups per user per day. Each costs money, so a spent budget is `unknown`.
+ *   awsGlobal: AWS lookups per day across every user (`AWS_GLOBAL_PER_DAY`), so N accounts cannot
+ *              make 100·N paid calls. One row, owned by `AWS_GLOBAL_SENTINEL_USER`. Spent or
+ *              unreadable, it is `unknown`: the check fails closed.
+ *   tiles:     tile batches per user per hour. The device asks for one batch per kilometre (about
+ *              two a minute at highway speed), so 240 an hour is double that with room for retries.
+ *   point:     point lookups per user per hour (429 when spent). The device asks at most one per
+ *              prefetch window, about one a kilometre, so 600 an hour is far above any honest drive.
  */
+export const AWS_GLOBAL_PER_DAY = 2000;
+/**
+ * The owner of the global AWS row: the nil uuid, which `gen_random_uuid()` never produces, so it can
+ * never be a real user's budget. `rate_limits.user_id` references `auth.users`, so the row needs an
+ * `auth.users` entry with this id (see the task report); until one exists the check fails closed.
+ */
+export const AWS_GLOBAL_SENTINEL_USER = '00000000-0000-0000-0000-000000000000';
 export const RATE_LIMITS = {
   aws: { key: 'aws_limits', window: '1 day', max: 100 },
+  awsGlobal: { key: 'aws_global', window: '1 day', max: AWS_GLOBAL_PER_DAY },
   tiles: { key: 'speed_tiles', window: '1 hour', max: 240, retryAfterS: 600 },
+  point: { key: 'speed_point', window: '1 hour', max: 600, retryAfterS: 60 },
 } as const;
+
+export interface CoverageBox {
+  state: string;
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
+/**
+ * The states whose open data is loaded (ruling B2 M-1): AWS is asked only inside these boxes.
+ * Outside them `unknown` is the honest answer anyway. Washington's extent, rounded outward by about
+ * 5 km. Add a state here when its import lands.
+ */
+export const AWS_COVERAGE: readonly CoverageBox[] = [
+  { state: 'WA', minLat: 45.5, maxLat: 49.05, minLng: -124.9, maxLng: -116.85 },
+];
+
+export const insideCoverage = (p: LatLng): boolean =>
+  AWS_COVERAGE.some((b) => p.lat >= b.minLat && p.lat <= b.maxLat && p.lng >= b.minLng && p.lng <= b.maxLng);
 
 /** AWS cache rows live a random 7 to 10 whole days (B1 security audit), never a client-given time. */
 export const AWS_TTL_MIN_DAYS = 7;
 export const AWS_TTL_MAX_DAYS = 10;
-/** How far ahead on the heading the AWS route ends (plan B2). */
-export const AWS_AHEAD_M = 150;
+/**
+ * The AWS route runs from a random distance behind the car (on the reverse heading) to a random
+ * distance ahead (ruling B2 I-1), so neither end of a stored line sits at a fixed offset from it.
+ */
+export const AWS_BEHIND_M = { min: 75, max: 200 } as const;
+export const AWS_AHEAD_M = { min: 150, max: 300 } as const;
 /** The tile call is abandoned after this; the migration's own statement timeout bounds the database. */
 export const TILE_RPC_TIMEOUT_MS = 5_000;
 /** A point request is four numbers; anything larger is not one. */
@@ -181,7 +222,7 @@ export interface SpeedLimitsDeps {
   /** Null when the three AWS secrets are not all set: no fallback, `fallback: null`. */
   routes: RoutesClient | null;
   log?: SpeedLogger;
-  /** For the cache TTL; `Math.random` by default. */
+  /** For the route's ends and the cache TTL; `Math.random` by default. */
   random?: () => number;
 }
 
@@ -220,7 +261,7 @@ async function sha16(text: string): Promise<string> {
 }
 
 /** The AWS answer as the cache segment the device will see in its tile (two-way, as stored). */
-async function awsCandidate(p: LatLng, found: SpeedLimitAlong, key: string): Promise<Candidate> {
+async function awsCandidate(p: LatLng, found: SpanLimit, key: string): Promise<Candidate> {
   const line = new Float64Array(found.leg.length * 2);
   found.leg.forEach((q, i) => {
     line[2 * i] = q.lat;
@@ -353,45 +394,71 @@ async function point(req: Request, run: Run): Promise<Outcome> {
     return { res: json(200, valid.data), outcome, source: valid.data.source };
   };
 
+  const pb = RATE_LIMITS.point;
+  if (!(await deps.db.takeRateLimit(userId, pb.key, pb.window, pb.max))) {
+    return {
+      res: json(429, { code: 'too_many_requests' }, { 'retry-after': String(pb.retryAfterS) }),
+      outcome: 'rate_limited',
+      source: null,
+    };
+  }
+
   const candidates = await deps.db.candidates(lat, lng, radiusM);
   const match = matchLimit(heading, candidates);
   if (match.source !== 'unknown') return answer(toAnswer(match), 'matched');
 
   const unknown = (outcome: string) => answer(unknownAnswer(match.parallelRoads), outcome);
   if (!deps.routes) return unknown('no_fallback');
+  if (!insideCoverage(here)) return unknown('outside_coverage');
 
-  const b = RATE_LIMITS.aws;
-  try {
-    if (!(await deps.db.takeRateLimit(userId, b.key, b.window, b.max))) return unknown('rate_limited');
-  } catch (err) {
-    log.error('speed-limits aws budget check failed', { requestId: id, route: 'point', error: errorText(err) });
-    return unknown('rate_limit_failed');
+  // The user's budget first, so a user whose own budget is spent never draws on everyone's.
+  const budgets = [
+    [RATE_LIMITS.aws, userId, 'rate_limited'],
+    [RATE_LIMITS.awsGlobal, AWS_GLOBAL_SENTINEL_USER, 'global_rate_limited'],
+  ] as const;
+  for (const [b, owner, refused] of budgets) {
+    try {
+      if (!(await deps.db.takeRateLimit(owner, b.key, b.window, b.max))) return unknown(refused);
+    } catch (err) {
+      log.error('speed-limits aws budget check failed', { requestId: id, route: 'point', budget: b.key, error: errorText(err) });
+      return unknown('rate_limit_failed');
+    }
   }
 
-  let found: SpeedLimitAlong | null;
+  const random = deps.random ?? Math.random;
+  const between = (r: { min: number; max: number }): number => r.min + random() * (r.max - r.min);
+  const from = ahead(here, heading + 180, between(AWS_BEHIND_M));
+  const to = ahead(here, heading, between(AWS_AHEAD_M));
+  let spans: SpanLimit[];
   try {
-    found = await deps.routes.speedLimitAlong(here, ahead(here, heading, AWS_AHEAD_M));
+    spans = await deps.routes.speedLimitsAlong(from, to);
   } catch (err) {
     log.error('speed-limits aws lookup failed', { requestId: id, route: 'point', error: errorText(err) });
     return unknown('aws_failed');
   }
-  if (!found) return unknown('aws_no_limit');
+  if (spans.length === 0) return unknown('aws_no_limit');
 
-  // The matcher decides, with the route's own road beside the open data, exactly as the device will
-  // decide from the tile once the row is stored: a route that snapped to another road, or runs
-  // across the car's course, answers nothing.
-  const cacheKey = awsCacheKey(found.leg);
-  const withAws = matchLimit(heading, [...candidates, await awsCandidate(here, found, cacheKey)]);
-  if (withAws.source !== 'cached') return unknown('aws_unmatched');
+  // The matcher decides, with every span of the route beside the open data, exactly as the device
+  // will decide from the tile once the row is stored: it picks the span the car is on, and a route
+  // that snapped to another road, or runs across the car's course, answers nothing.
+  const keyed = await Promise.all(
+    spans.map(async (span) => {
+      const cacheKey = awsCacheKey(span.leg);
+      return { span, cacheKey, candidate: await awsCandidate(here, span, cacheKey) };
+    })
+  );
+  const withAws = matchLimit(heading, [...candidates, ...keyed.map((k) => k.candidate)]);
+  const chosen = withAws.source === 'cached' ? keyed.find((k) => k.candidate.key === withAws.key) : undefined;
+  if (!chosen) return unknown('aws_unmatched');
 
   try {
     await deps.db.putLimitsCache({
-      key: cacheKey,
-      leg: found.leg,
-      limitMph: found.mph,
+      key: chosen.cacheKey,
+      leg: chosen.span.leg,
+      limitMph: chosen.span.mph,
       // The geo-routes v2 span says nothing about one-way travel, so the row is stored two-way.
       headingDeg: null,
-      ttlDays: cacheTtlDays(deps.random ?? Math.random),
+      ttlDays: cacheTtlDays(random),
     });
   } catch (err) {
     // AWS did answer for this road; the answer stands, only the cache missed it.

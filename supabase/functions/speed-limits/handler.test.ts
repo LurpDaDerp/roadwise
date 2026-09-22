@@ -2,11 +2,16 @@ import { assert, assertEquals, assertMatch } from '@std/assert';
 import { fakeSupabase, type RpcError } from '../_shared/testing/fake_supabase.ts';
 import { PointResponseSchema, TileBatchResponseSchema } from '../_shared/speedLimits/wire';
 import type { LatLng } from '../_shared/speedLimits/geometry';
-import type { RoutesClient, SpeedLimitAlong } from './aws.ts';
+import type { RoutesClient, SpanLimit } from './aws.ts';
 import {
   acceptsGzip,
   ahead,
   AWS_AHEAD_M,
+  AWS_BEHIND_M,
+  AWS_COVERAGE,
+  AWS_GLOBAL_PER_DAY,
+  AWS_GLOBAL_SENTINEL_USER,
+  insideCoverage,
   AWS_TTL_MAX_DAYS,
   AWS_TTL_MIN_DAYS,
   awsCacheKey,
@@ -83,16 +88,31 @@ interface Stub extends RoutesClient {
   calls: { origin: LatLng; dest: LatLng }[];
 }
 
-const stubRoutes = (answer: () => Promise<SpeedLimitAlong | null>): Stub => {
+/** A stub AWS client; a test's answer may be one span, a list, or null (no usable span). */
+const stubRoutes = (
+  answer: (origin: LatLng, dest: LatLng) => Promise<SpanLimit | SpanLimit[] | null>
+): Stub => {
   const calls: Stub['calls'] = [];
   return {
     calls,
-    speedLimitAlong(origin, dest) {
+    async speedLimitsAlong(origin, dest) {
       calls.push({ origin, dest });
-      return answer();
+      const got = await answer(origin, dest);
+      return got === null ? [] : Array.isArray(got) ? got : [got];
     },
   };
 };
+
+/** Flat-earth metres between two points, as the matcher measures. */
+const metres = (a: LatLng, b: LatLng) =>
+  Math.hypot((b.lng - a.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180), (b.lat - a.lat) * 111_320);
+
+/** The route AWS would snap along the untagged way, between the ends the handler asked for. */
+const snappedNorth = (origin: LatLng, dest: LatLng): LatLng[] => [
+  { lat: origin.lat, lng: -122.32 },
+  { lat: (origin.lat + dest.lat) / 2, lng: -122.32 },
+  { lat: dest.lat, lng: -122.32 },
+];
 
 interface Harness {
   deps: SpeedLimitsDeps;
@@ -219,8 +239,9 @@ Deno.test('a matched posted road answers posted with the matcher confidence, and
   assertEquals(body, { source: 'posted', limitMph: 35, matchConfidence: 0.95, parallelRoads: false, provider: 'osm' });
   PointResponseSchema.parse(body);
   assertEquals(routes.calls.length, 0);
-  assertEquals(fns(h), ['speed_limit_candidates']);
-  assertEquals(h.rpc[0].args, { p_lat: 47.6062, p_lng: -122.315, p_radius_m: 25 });
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates']);
+  assertEquals(h.rpc[0].args, { p_user: UID, p_key: 'speed_point', p_window: '1 hour', p_max: 600 });
+  assertEquals(h.rpc[1].args, { p_lat: 47.6062, p_lng: -122.315, p_radius_m: 25 });
 });
 
 Deno.test('an untagged way with no AWS configured is unknown with confidence 0, and tiles say fallback null', async () => {
@@ -228,7 +249,7 @@ Deno.test('an untagged way with no AWS configured is unknown with confidence 0, 
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { source: 'unknown', limitMph: null, matchConfidence: 0, parallelRoads: false, provider: null });
-  assertEquals(fns(h), ['speed_limit_candidates']);
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates']);
 
   const tiles = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps);
   assertEquals(tiles.status, 200);
@@ -238,28 +259,139 @@ Deno.test('an untagged way with no AWS configured is unknown with confidence 0, 
 // --- point: the AWS fallback ---
 
 Deno.test('an untagged way with AWS answers 45 mph cached at 0.7 and caches the route leg', async () => {
-  const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
+  let leg: LatLng[] = [];
+  const routes = stubRoutes((o, d) => {
+    leg = snappedNorth(o, d);
+    return Promise.resolve({ mph: 45, leg });
+  });
   const h = harness({ candidates: [untaggedRow], routes, random: () => 0.99 });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { source: 'cached', limitMph: 45, matchConfidence: 0.7, parallelRoads: false, provider: 'aws' });
 
-  // one route from the point to 150 m ahead on the heading
+  // one route, from behind the car on the reverse heading to ahead of it on the heading
   assertEquals(routes.calls.length, 1);
-  assertEquals(routes.calls[0].origin, { lat: 47.606, lng: -122.32 });
-  const dest = routes.calls[0].dest;
-  assert(Math.abs((dest.lat - 47.606) * 111_320 - AWS_AHEAD_M) < 0.01);
-  assert(Math.abs(dest.lng - -122.32) < 1e-9);
+  const { origin, dest } = routes.calls[0];
+  assert(Math.abs((47.606 - origin.lat) * 111_320 - (75 + 0.99 * 125)) < 0.01);
+  assert(Math.abs((dest.lat - 47.606) * 111_320 - (150 + 0.99 * 150)) < 0.01);
+  assert(Math.abs(origin.lng - -122.32) < 1e-9 && Math.abs(dest.lng - -122.32) < 1e-9);
 
-  assertEquals(fns(h), ['speed_limit_candidates', 'take_rate_limit', 'put_limits_cache']);
-  assertEquals(h.rpc[1].args, { p_user: UID, p_key: 'aws_limits', p_window: '1 day', p_max: 100 });
-  assertEquals(h.rpc[2].args, {
-    p_key: 'aws:3:47.60600,-122.32000;47.60735,-122.32000',
-    p_line: { type: 'LineString', coordinates: [[-122.32, 47.606], [-122.32, 47.6067], [-122.32, 47.60735]] },
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit', 'take_rate_limit', 'put_limits_cache']);
+  assertEquals(h.rpc[2].args, { p_user: UID, p_key: 'aws_limits', p_window: '1 day', p_max: 100 });
+  assertEquals(h.rpc[3].args, { p_user: AWS_GLOBAL_SENTINEL_USER, p_key: 'aws_global', p_window: '1 day', p_max: 2000 });
+  assertEquals(h.rpc[4].args, {
+    p_key: awsCacheKey(leg),
+    p_line: { type: 'LineString', coordinates: leg.map((p) => [p.lng, p.lat]) },
     p_limit_mph: 45,
     p_heading: null,
     p_ttl_days: 10,
   });
+});
+
+Deno.test('neither end of the stored line sits at the car, and the ends move from lookup to lookup', async () => {
+  const here = { lat: UNTAGGED_POINT.lat, lng: UNTAGGED_POINT.lng };
+  const stored: number[][][] = [];
+  for (const r of [0, 0.37, 0.999]) {
+    const routes = stubRoutes((o, d) => Promise.resolve({ mph: 45, leg: snappedNorth(o, d) }));
+    const h = harness({ candidates: [untaggedRow], routes, random: () => r });
+    await (await handleSpeedLimits(post(UNTAGGED_POINT), h.deps)).body?.cancel();
+    const line = (h.rpc.find((c) => c.fn === 'put_limits_cache')!.args.p_line as { coordinates: number[][] }).coordinates;
+    stored.push(line);
+    const [first, last] = [line[0], line[line.length - 1]];
+    const back = metres(here, { lat: first[1], lng: first[0] });
+    const fwd = metres(here, { lat: last[1], lng: last[0] });
+    assert(back >= AWS_BEHIND_M.min - 0.01 && back <= AWS_BEHIND_M.max + 0.01, String(back));
+    assert(fwd >= AWS_AHEAD_M.min - 0.01 && fwd <= AWS_AHEAD_M.max + 0.01, String(fwd));
+  }
+  assertEquals(new Set(stored.map((l) => JSON.stringify(l[0]))).size, 3);
+});
+
+Deno.test('the matcher picks the span the car is on from the longer route, and only that span is cached', async () => {
+  // Three spans along the untagged way: 25 mph behind, 45 mph through the car, 35 mph ahead.
+  const at = (m: number): LatLng => ({ lat: 47.606 + m / 111_320, lng: -122.32 });
+  const spans: SpanLimit[] = [
+    { mph: 25, leg: [at(-150), at(-60)] },
+    { mph: 45, leg: [at(-60), at(0.5), at(90)] },
+    { mph: 35, leg: [at(90), at(250)] },
+  ];
+  const routes = stubRoutes(() => Promise.resolve(spans));
+  const h = harness({ candidates: [untaggedRow], routes });
+  const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
+  assertEquals((await res.json()).limitMph, 45);
+  const cached = h.rpc.filter((c) => c.fn === 'put_limits_cache');
+  assertEquals(cached.length, 1);
+  assertEquals(cached[0].args.p_limit_mph, 45);
+  assertEquals(cached[0].args.p_key, awsCacheKey(spans[1].leg));
+  assertEquals((cached[0].args.p_line as { coordinates: number[][] }).coordinates, spans[1].leg.map((p) => [p.lng, p.lat]));
+});
+
+Deno.test('outside every loaded state, AWS is not asked and no budget is spent', async () => {
+  const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
+  const h = harness({ candidates: [], routes });
+  // Portland, OR: south of Washington's box
+  const res = await handleSpeedLimits(post({ lat: 45.4, lng: -122.68, heading: 0 }), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).source, 'unknown');
+  assertEquals(routes.calls.length, 0);
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates']);
+  assertEquals(h.infos.at(-1)?.outcome, 'outside_coverage');
+});
+
+Deno.test('the coverage list is pinned to Washington', () => {
+  assertEquals(AWS_COVERAGE, [{ state: 'WA', minLat: 45.5, maxLat: 49.05, minLng: -124.9, maxLng: -116.85 }]);
+  assertEquals(
+    [
+      insideCoverage({ lat: 47.6062, lng: -122.3321 }), // Seattle
+      insideCoverage({ lat: 47.6588, lng: -117.426 }), // Spokane
+      insideCoverage({ lat: 45.5152, lng: -122.6784 }), // Portland, OR: inside the rounded box (edge)
+      insideCoverage({ lat: 37.7749, lng: -122.4194 }), // San Francisco
+      insideCoverage({ lat: 49.2827, lng: -123.1207 }), // Vancouver, BC
+    ],
+    [true, true, true, false, false]
+  );
+});
+
+Deno.test('a spent global AWS budget is unknown without calling AWS', async () => {
+  const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
+  const h = harness({
+    candidates: [untaggedRow],
+    routes,
+    rpc: { take_rate_limit: (args) => ({ data: args.p_key !== 'aws_global' }) },
+  });
+  const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).source, 'unknown');
+  assertEquals(routes.calls.length, 0);
+  assertEquals(h.infos.at(-1)?.outcome, 'global_rate_limited');
+});
+
+Deno.test('the global budget check fails closed: an error there is unknown without calling AWS', async () => {
+  // e.g. 23503 while the sentinel owner has no auth.users row
+  const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
+  const h = harness({
+    candidates: [untaggedRow],
+    routes,
+    rpc: {
+      take_rate_limit: (args) =>
+        args.p_key === 'aws_global' ? { error: { code: '23503', message: 'fk' } } : { data: true },
+    },
+  });
+  const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).source, 'unknown');
+  assertEquals(routes.calls.length, 0);
+});
+
+Deno.test('a spent point budget is 429 before the candidates query', async () => {
+  const h = harness({
+    candidates: [corridorRow],
+    rpc: { take_rate_limit: (args) => ({ data: args.p_key !== 'speed_point' }) },
+  });
+  const res = await handleSpeedLimits(post(CORRIDOR_POINT), h.deps);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('retry-after'), '60');
+  assertEquals(await res.json(), { code: 'too_many_requests' });
+  assertEquals(fns(h), ['take_rate_limit']);
 });
 
 Deno.test('with no open-data road at all, an AWS leg under the car answers cached', async () => {
@@ -290,17 +422,26 @@ Deno.test('AWS without a limit is unknown, with nothing cached', async () => {
 
 Deno.test('a spent AWS budget is unknown without calling AWS', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
-  const h = harness({ candidates: [untaggedRow], routes, rpc: { take_rate_limit: () => ({ data: false }) } });
+  const h = harness({
+    candidates: [untaggedRow],
+    routes,
+    rpc: { take_rate_limit: (args) => ({ data: args.p_key !== 'aws_limits' }) },
+  });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
   assertEquals((await res.json()).source, 'unknown');
   assertEquals(routes.calls.length, 0);
-  assertEquals(fns(h), ['speed_limit_candidates', 'take_rate_limit']);
+  // the user's refusal never reaches the global row
+  assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit']);
 });
 
 Deno.test('a failed budget check is unknown without calling AWS, never a 5xx', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
-  const h = harness({ candidates: [untaggedRow], routes, rpc: { take_rate_limit: () => ({ error: { code: '40001', message: 'x' } }) } });
+  const h = harness({
+    candidates: [untaggedRow],
+    routes,
+    rpc: { take_rate_limit: (args) => (args.p_key === 'aws_limits' ? { error: { code: '40001', message: 'x' } } : { data: true }) },
+  });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
   assertEquals((await res.json()).source, 'unknown');
@@ -343,10 +484,15 @@ Deno.test('a candidate lookup failure maps through the shared SQLSTATE mapping',
 // --- cache identity, TTL, budgets ---
 
 Deno.test('the rate-limit budgets are pinned', () => {
+  assertEquals(AWS_GLOBAL_PER_DAY, 2000);
+  assertEquals(AWS_GLOBAL_SENTINEL_USER, '00000000-0000-0000-0000-000000000000');
   assertEquals(RATE_LIMITS, {
     aws: { key: 'aws_limits', window: '1 day', max: 100 },
+    awsGlobal: { key: 'aws_global', window: '1 day', max: 2000 },
     tiles: { key: 'speed_tiles', window: '1 hour', max: 240, retryAfterS: 600 },
+    point: { key: 'speed_point', window: '1 hour', max: 600, retryAfterS: 60 },
   });
+  assertEquals([AWS_BEHIND_M, AWS_AHEAD_M], [{ min: 75, max: 200 }, { min: 150, max: 300 }]);
 });
 
 Deno.test('the cache TTL is a whole number of days, uniform over 7..10', () => {
@@ -426,7 +572,7 @@ Deno.test('five tile keys, a bad key, a duplicate or none are 400 before any dat
 });
 
 Deno.test('a spent tile budget is 429 without the tile query', async () => {
-  const h = harness({ rpc: { take_rate_limit: () => ({ data: false }) } });
+  const h = harness({ rpc: { take_rate_limit: (args) => ({ data: args.p_key !== 'speed_tiles' }) } });
   const res = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps);
   assertEquals(res.status, 429);
   assertEquals(res.headers.get('retry-after'), '600');
