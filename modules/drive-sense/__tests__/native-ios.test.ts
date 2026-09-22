@@ -4,12 +4,22 @@
 // depend on, the app-delegate subscriber registration, and the rule that `selfTest` runs the
 // production extractor rather than a copy. Behaviour is proven by the V1 compile and the device
 // pass (see the N2 report).
-import * as fs from 'fs';
-import * as path from 'path';
 import * as CONSTANTS from '../src/extract/constants';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
+
+// Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
+// tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
+// shapes rather than an `import` from 'node:fs'.
+declare const __dirname: string;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- see above: `import` would need @types/node
+const fs = require('node:fs') as {
+  readdirSync: (dir: string) => string[];
+  readFileSync: (file: string, encoding: 'utf8') => string;
+};
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+const path = require('node:path') as { join: (...parts: string[]) => string };
 
 const MODULE_DIR = path.join(__dirname, '..');
 const IOS_DIR = path.join(MODULE_DIR, 'ios');
@@ -177,6 +187,12 @@ describe('iOS drive-sense module (text)', () => {
   it('observes calls and excludes files from backup', () => {
     expect(code('CallObserver.swift')).toContain('CXCallObserver');
     expect(code('Backup.swift')).toContain('isExcludedFromBackup = true');
+  });
+
+  it('maps excludeFromBackup failures to E_NOT_FOUND (nothing there) and E_IO (attribute not set)', () => {
+    const src = moduleCode();
+    expect(src).toMatch(/Backup\.Failure\.notFound\(let message\) \{\s*promise\.reject\("E_NOT_FOUND"/);
+    expect(src).toMatch(/Backup\.Failure\.failed\(let message\) \{\s*promise\.reject\("E_IO"/);
   });
 
   it('answers the documented iOS constants', () => {

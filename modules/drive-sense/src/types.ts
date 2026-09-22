@@ -117,6 +117,8 @@ export const DRIVE_SENSE_ERROR_CODES = [
   'E_FGS_REFUSED',
   /** `excludeFromBackup()` (iOS): nothing exists at the URI. */
   'E_NOT_FOUND',
+  /** `excludeFromBackup()` (iOS): the file exists but the backup-exclusion attribute could not be set. */
+  'E_IO',
   /** `selfTest()`: the vectors JSON could not be parsed at all. */
   'E_INVALID_INPUT',
 ] as const;

@@ -102,10 +102,12 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       do {
         try Backup.exclude(uri)
         promise.resolve(nil)
-      } catch Backup.Failure.notFound(let message), Backup.Failure.failed(let message) {
+      } catch Backup.Failure.notFound(let message) {
         promise.reject("E_NOT_FOUND", message)
+      } catch Backup.Failure.failed(let message) {
+        promise.reject("E_IO", message)
       } catch {
-        promise.reject("E_NOT_FOUND", error.localizedDescription)
+        promise.reject("E_IO", error.localizedDescription)
       }
     }
 

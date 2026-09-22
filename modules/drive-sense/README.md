@@ -54,17 +54,17 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING enter/exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. **Requires** `location: 'always'` and `motion: 'granted'` on both platforms, else rejects `E_PERMISSION` and stays unarmed (without Always, iOS region and significant-change wakes do not relaunch the app and Android cannot start a location service from the background; without motion, iOS cannot confirm a wake as automotive and Android's transitions API throws `SecurityException`). `motion: 'unavailable'` or (Android) no Google Play services → `E_UNAVAILABLE`. |
+| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING enter/exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. **Requires** `location: 'always'` and `motion: 'granted'` on both platforms, else rejects `E_PERMISSION` and stays unarmed (without Always, iOS region and significant-change wakes do not relaunch the app and Android cannot start a location service from the background; without motion, iOS cannot confirm a wake as automotive and Android's transitions API throws `SecurityException`). `motion: 'unavailable'` or (Android) no Google Play services → `E_UNAVAILABLE`. iOS re-centres the region only on a location the wake itself carries, or on the manager's cached location when it is newer than the current centre (a region exit carries none); otherwise the next significant-change wake re-centres it — never by starting GPS. |
 | `disarm()` | Stop the wakes and clear the persisted armed flag. Does **not** stop a capture in progress. Idempotent. |
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: the OS refusing the location foreground service for lack of background location (started from the background with only `whenInUse`) → `E_PERMISSION`; refusing it for any other reason (background-start restrictions) → `E_FGS_REFUSED`. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: the OS refusing the location foreground service for lack of background location (started from the background with only `whenInUse`) → `E_PERMISSION`; refusing it for any other reason (background-start restrictions) → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). |
 | `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service. Idempotent. |
-| `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. Ignored (resolves) while not capturing. |
+| `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
 | `queryMotionHistory(fromTs, toTs)` | Activities with `fromTs ≤ ts ≤ toTs`, oldest first. iOS: `queryActivityStarting`. Android: the transitions buffered natively over the last 24 h (`TransitionStore`). |
 | `getScreenState()` | `{ locked, on }` now (same derivation as the `screen` event). |
 | `getThermalState()` | `nominal`/`fair`/`serious`/`critical` (iOS `ProcessInfo.thermalState`; Android `PowerManager` thermal status: NONE/LIGHT → nominal, MODERATE → fair, SEVERE → serious, CRITICAL and above → critical). |
 | `requestMotionPermission()` | iOS: triggers the motion prompt with a one-minute activity query; Android API 29+: requests `ACTIVITY_RECOGNITION` (below 29 it is install-time: `granted`). Resolves `granted`/`denied`/`unavailable` (hardware without motion activity). **Never rejects.** Already granted → `granted` without a prompt. When the OS will not ask again (iOS `denied`/`restricted`; Android refused with `shouldShowRequestPermissionRationale` false after a request, i.e. "don't ask again") → `denied` **without prompting**; the app must send the user to Settings. |
-| `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects `E_NOT_FOUND` if nothing exists at `uri` (iOS). JS callers treat a rejection as non-fatal. |
+| `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects `E_NOT_FOUND` if nothing exists at `uri`, and `E_IO` if it exists but the attribute could not be set (iOS). JS callers treat a rejection as non-fatal. |
 | `setNotificationState({ stationary, startedAt })` | Android S3: `stationary: true` adds the **End drive** action (→ `notificationAction`); `false` removes it. `startedAt` drives "Recording drive · N min" (updated once a minute). iOS: no-op, resolves. |
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether background drive detection survives Doze (M4 permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
@@ -82,6 +82,7 @@ tests for one. Anything else a native method throws is a bug.
 | `E_UNAVAILABLE` | `arm` | no motion-activity hardware, or (Android) no Google Play services |
 | `E_FGS_REFUSED` | `startCapture` (Android) | the OS refused the foreground service for a reason other than permission |
 | `E_NOT_FOUND` | `excludeFromBackup` (iOS) | nothing at the URI |
+| `E_IO` | `excludeFromBackup` (iOS) | the file exists but `isExcludedFromBackup` could not be set |
 | `E_INVALID_INPUT` | `selfTest` | the vectors JSON is unparseable |
 
 Every other method never rejects: `disarm`, `stopCapture`, `setCaptureRate`, `getState`,
@@ -333,6 +334,21 @@ Samples and fixes are timed on the monotonic **boot clock** and converted to epo
   1.5 s after `ts`, whichever comes first. The row keeps its `ts`.
 - At `low` rate a row is emitted per fix, with `ts` = the fix's converted time rounded, and skipped
   if it is not greater than the previous row's `ts`.
+
+#### iOS: when a row closes, and what its `ts` is (N2 ruling)
+
+- **Row `ts` is the wall clock at the 1 s tick** (`Date()`, rounded), not an anchor-converted
+  uptime. `CLLocation.timestamp` is a wall-clock `Date` used directly, and the sanity fallback puts
+  any IMU sample whose converted stamp drifts more than 2 s from arrival onto the wall clock too;
+  so after a wall-clock change the fixes, the samples and the windows all stay on one base (an
+  uptime-based `ts` would have put every fix in the wrong window). A clock set back holds rows until
+  the wall clock passes the previous `ts`, keeping `ts` strictly increasing.
+- **A row closes** once the data for its window can be complete: the first IMU sample stamped
+  after `ts` has arrived (or the IMU is not running) **and** either a fix stamped after `ts` has
+  arrived or `FIX_SETTLE_MS` (300 ms) has passed since `ts` — capped at `ROW_MAX_WAIT_MS` (1.5 s)
+  after `ts`. Core Location delivers a fix a few hundred ms after its timestamp, and `pickFix` never
+  uses a late fix, so closing on the IMU alone would lose it. Rows therefore reach JS about 300 ms
+  after `ts` (up to 1.5 s if device motion delivers nothing). Constants in `ios/RowPipeline.swift`.
 
 ### Per second: `extractSecond(imu, fix, phone, tsMs, state)`
 
