@@ -99,6 +99,11 @@ function autoRecordRow(
   if (mode === 'automatic') return { id: 'autoRecord', status: 'ok', fix: 'none' };
   const excuse = alwaysExcuse(s, c);
   if (excuse) return { id: 'autoRecord', status: 'info', fix: 'none', reason: excuse };
+  // Wanted and allowed by the phone, but this account never affirmed the disclosure: the host
+  // will not arm (Task 19 r1). Its own fixable reason — never shown as a choice.
+  if (awaitingAffirmation(s, c)) {
+    return { id: 'autoRecord', status: 'attention', fix: 'request', reason: 'notAffirmed' };
+  }
   // Wanted but blocked: point at whatever blocks it, Always first (the host needs both).
   const blocker = always.status !== 'ok' ? always : motion;
   if (blocker.status === 'info') {
@@ -143,11 +148,24 @@ function lowPowerRow(s: PermissionSnapshot): HealthRow {
   return { id: 'lowPower', status: 'info', fix: 'none' };
 }
 
+/** Everything auto-record needs is there except this account's disclosure affirmation. */
+function awaitingAffirmation(s: PermissionSnapshot, c: HealthContext): boolean {
+  return (
+    c.disclosureAffirmed === false &&
+    c.autoDetectAvailable !== false &&
+    c.autoDetectOn &&
+    !c.manualByChoice &&
+    s.location === 'always' &&
+    (s.motion === 'granted' || s.motion === null)
+  );
+}
+
 function recordingModeOf(s: PermissionSnapshot, c: HealthContext): RecordingMode {
   if (!c.drives || !hasLocation(s)) return 'unavailable';
   // Motion that could not be checked (null) does not decide the mode: the host arms only with
   // motion granted, so a failed read here must not contradict an armed host.
   const automatic =
+    c.disclosureAffirmed !== false &&
     c.autoDetectAvailable !== false &&
     c.autoDetectOn &&
     s.location === 'always' &&
@@ -169,6 +187,9 @@ function bannerFor(s: PermissionSnapshot, c: HealthContext): boolean {
     return true;
   }
   if (s.motion === 'denied' && c.everGranted.motion === true) return true;
+  // Auto-record wanted but not armed for want of this account's affirmation (Task 19 r1): the
+  // driver would otherwise lose automatic recording with no word about why.
+  if (awaitingAffirmation(s, c)) return true;
   return false;
 }
 

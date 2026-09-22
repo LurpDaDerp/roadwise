@@ -80,7 +80,8 @@ test('Continue: affirmation stored, ONE Always request, consent recorded only on
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
   expect(requests(adapter)).toEqual(['requestLocationAlways:firstDriveDone=true']);
-  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0 });
+  // Bound to the account shown the words (Task 19 r1): arming checks it against the owner.
+  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
   expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
   expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBeNull();
   // The driver tapped: the 14-day history is stamped so the app's own offers wait.
@@ -109,12 +110,23 @@ test('the driver’s auto-record intent turns auto-record on when Always arrives
   expect(host.setAutoDetect).toHaveBeenCalledWith(true);
 });
 
-test('no intent: Always alone never turns auto-record on', async () => {
+test('no intent: Always alone never turns auto-record on, but arming is re-applied at once', async () => {
   const adapter = fakeAdapter(snap({ location: 'foreground' }));
   const { host, onResult } = await renderDisclosure(adapter);
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
   expect(host.setAutoDetect).not.toHaveBeenCalled();
+  // Task 19 r1: an intent stored earlier (onboarding) may arm now that the affirmation exists.
+  expect(host.refreshArming).toHaveBeenCalledTimes(1);
+});
+
+test('an inherited Always (already granted): Continue still records this account’s affirmation and consent', async () => {
+  const adapter = fakeAdapter(snap({ location: 'always' }));
+  const { settings, onResult, recordConsent } = await renderDisclosure(adapter);
+  await press(await screen.findByTestId('disclosure-continue'));
+  await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
+  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
 });
 
 test('an auto-record entry (the offers, B2’s repair): Continue says the driver wants it on', async () => {

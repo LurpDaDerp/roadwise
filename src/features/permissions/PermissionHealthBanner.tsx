@@ -29,6 +29,9 @@ export function bannerMessage(
     (r) => r.id === 'locationAlways' && r.status === 'attention' && r.reason === 'lapsed'
   );
   if (snapshot.precise === false || alwaysLapsed) return { message: copy.locationLimited, tone: 'warning' };
+  if (report.rows.some((r) => r.id === 'autoRecord' && r.reason === 'notAffirmed')) {
+    return { message: copy.autoRecordNeedsOk, tone: 'warning' };
+  }
   const autoRecordWanted =
     context.autoDetectAvailable !== false && context.autoDetectOn && !context.manualByChoice;
   return { message: autoRecordWanted ? copy.motionAuto : copy.motionManual, tone: 'warning' };

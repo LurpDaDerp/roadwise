@@ -17,6 +17,8 @@ import {
   type TripRow,
 } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { LAST_USER_KEY } from '@/boot/device';
+import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
 import * as events from '@/data/events';
 import { createDriveHost, playerInputs, type DriveHost, type DriveState } from '@/drive/host';
 import { AUTO_DETECT_SETTING_KEY } from '@/drive/policy';
@@ -26,9 +28,15 @@ import { geohash5 } from '@/lib/geo';
 const { AUTO_END_STATIONARY_S, GAP_MERGE_S, LOCKOUT_SPEED_MPS } = scoring.CONSTANTS;
 
 let db: Db;
+const OWNER = 'owner-1';
 beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
+  // The device owner has affirmed the background-location disclosure (Task 19 r1): the arming
+  // tests below start from a consented driver; the "disclosure affirmation" block removes it.
+  const settings = createSettingsRepo(db);
+  await settings.set(LAST_USER_KEY, OWNER);
+  await settings.set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0, uid: OWNER });
 });
 
 afterEach(() => {
@@ -1019,6 +1027,89 @@ describe('mode and passenger', () => {
 });
 
 // --- final review: arming follows the phone, sign-out stops recording, sound failures show ---------
+
+describe('the disclosure affirmation gates arming (Task 19 r1, security I-1)', () => {
+  const settings = () => createSettingsRepo(db);
+
+  test('inherited Always and a stored intent, but no affirmation: not armed, and the state says so', async () => {
+    await settings().remove(DISCLOSURE_AFFIRMED_KEY);
+    await settings().set(AUTO_DETECT_SETTING_KEY, true);
+    const h = harness();
+    await h.host.start();
+    await h.host.settled();
+    expect(h.host.autoDetectEnabled()).toBe(true);
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(h.fake.calls).not.toContain('arm');
+  });
+
+  test('affirmed by the device owner: armed', async () => {
+    const h = harness();
+    await armed(h);
+    expect(h.host.snapshot().autoDetectArmed).toBe(true);
+  });
+
+  test('affirmed by another account (the previous owner): not armed', async () => {
+    await settings().set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0, uid: 'someone-else' });
+    const h = harness();
+    await h.host.start();
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+  });
+
+  test('an affirmation below the arming minimum: not armed', async () => {
+    await settings().set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-0', at: T0, uid: OWNER });
+    const h = harness();
+    await h.host.start();
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot().autoDetectArmed).toBe(false);
+  });
+
+  test('a copy-only bump of the disclosure (above the minimum) stays armed', async () => {
+    await settings().set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-2', at: T0, uid: OWNER });
+    const h = harness();
+    await armed(h);
+  });
+
+  test('an affirmation from before the uid was stored does not count (migration)', async () => {
+    await settings().set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0 });
+    const h = harness();
+    await h.host.start();
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot().autoDetectArmed).toBe(false);
+  });
+
+  test('a read failure: not armed, and reported', async () => {
+    const h = harness();
+    await h.host.start();
+    const execute = db.execute.bind(db);
+    jest.spyOn(db, 'execute').mockImplementation(async (sql, params) => {
+      if (sql.includes('WHERE key IN')) throw new Error('disk');
+      return execute(sql, params);
+    });
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot().autoDetectArmed).toBe(false);
+    expect(h.errors.map((e) => e.ctx)).toContain('readAffirmation');
+  });
+
+  test('affirming, then refreshArming, arms at once', async () => {
+    await settings().remove(DISCLOSURE_AFFIRMED_KEY);
+    const h = harness();
+    await h.host.start();
+    await h.host.setAutoDetect(true);
+    expect(h.host.snapshot().autoDetectArmed).toBe(false);
+    await settings().set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0, uid: OWNER });
+    await h.host.refreshArming();
+    expect(h.host.snapshot().autoDetectArmed).toBe(true);
+  });
+
+  test('battery: with auto-record off, arming reads no affirmation', async () => {
+    const h = harness();
+    await h.host.start();
+    const spy = jest.spyOn(db, 'execute');
+    await h.host.refreshArming();
+    expect(spy.mock.calls.filter(([sql]) => String(sql).includes('WHERE key IN'))).toHaveLength(0);
+  });
+});
 
 describe('arming is re-applied on the foreground (final review I4)', () => {
   function withAppState() {

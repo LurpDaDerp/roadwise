@@ -227,8 +227,9 @@ export const permissionsAllowArming = (s: {
 }): boolean => s.location === 'always' && s.motion === 'granted';
 
 /**
- * Auto-record arms only when the driver opted in, the feature flag makes it available, a driver is
- * signed in (§8.2: sign-out stops recording), and the permissions allow it. The single predicate
+ * Auto-record arms only when the driver opted in, the feature flag makes it available, the device
+ * owner has affirmed the background-location disclosure, a driver is signed in (§8.2: sign-out
+ * stops recording), and the permissions allow it. The single predicate
  * (final review I4); the host publishes its result as `DriveState.autoDetectArmed`, which Home and
  * the detection screen read rather than re-deriving it.
  */
@@ -244,8 +245,19 @@ export const shouldArm = (a: {
    * not block: its uploads defer safely. The driver's saved choice is never changed by this.
    */
   ageBand?: string | null;
+  /**
+   * The device owner affirmed the background-location disclosure, at or above the arming minimum
+   * (Task 19 r1, security I-1: defence in depth). Required: Always is device-level and survives a
+   * handover, so a phone that allows it proves nothing about this account's consent.
+   */
+  affirmed: boolean;
 }): boolean =>
-  a.intent && a.flag && a.signedIn !== false && a.ageBand !== 'u13' && permissionsAllowArming(a);
+  a.intent &&
+  a.flag &&
+  a.affirmed &&
+  a.signedIn !== false &&
+  a.ageBand !== 'u13' &&
+  permissionsAllowArming(a);
 
 /**
  * L1 may honour the silent switch only while the phone is mounted and RoadWise is frontmost and

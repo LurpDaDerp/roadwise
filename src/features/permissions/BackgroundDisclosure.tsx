@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, View } from 'react-native';
 
 import {
+  affirmationFor,
   AUTO_RECORD_INTENT_KEY,
   DISCLOSURE_AFFIRMED_KEY,
   MANUAL_BY_CHOICE_KEY,
@@ -116,7 +117,10 @@ export function BackgroundDisclosure({
     // The intent is spent here, so an old one can never turn auto-record on after a later grant.
     const wanted = (await settings.get<boolean>(AUTO_RECORD_INTENT_KEY)) === true;
     await settings.remove(AUTO_RECORD_INTENT_KEY);
+    // Arming follows at once (Task 19 r1): the host requires this affirmation, so a stored intent
+    // that could not arm before now can.
     if (wanted) await host.setAutoDetect(true);
+    else await host.refreshArming();
     finish('always');
   }, [settings, userId, deps.recordConsent, host, finish]);
 
@@ -183,7 +187,14 @@ export function BackgroundDisclosure({
     setBusy(true);
     setRequestFailed(false);
     try {
-      await settings.set(DISCLOSURE_AFFIRMED_KEY, { version: DISCLOSURE_VERSION, at: now() });
+      // Bound to the account shown the words (Task 19 r1): arming checks it against the device
+      // owner. With no account (lost mid-flow) it is stored without one and covers nobody.
+      await settings.set(
+        DISCLOSURE_AFFIRMED_KEY,
+        shownTo.current === null
+          ? { version: DISCLOSURE_VERSION, at: now() }
+          : affirmationFor(DISCLOSURE_VERSION, shownTo.current, now())
+      );
       if (enableAutoRecord) await settings.set(AUTO_RECORD_INTENT_KEY, true);
       if (settingsOnly) {
         awaitingSettings.current = true;

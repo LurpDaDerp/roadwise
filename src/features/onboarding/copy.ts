@@ -206,6 +206,10 @@ export const onboardingCopy = {
     toggle: 'Record drives automatically',
     toggleOn: 'RoadWise starts recording your drives automatically.',
     toggleOff: 'Off. You start each drive yourself with Drive.',
+    /** On, but this account hasn't affirmed the background-location disclosure (Task 19 r1). */
+    needsOk: 'Turned on, but it can’t start drives until you review how RoadWise uses background location.',
+    review: 'Review background location',
+    reviewHint: 'Shows how RoadWise uses background location, then turns auto-record on',
     iosAfterFirstDrive: 'Turns on after your first drive, once you allow it.',
     needs: {
       location: "Auto-record needs location access, which is off on this phone.",

@@ -42,10 +42,13 @@ export const permissionsCopy = {
     afterFirstDrive: 'After your first drive',
     cantCheck: "Can't check",
     lapsed: 'Note',
+    notAffirmed: 'Needs your OK',
   } satisfies Record<HealthReason, string>,
   fix: {
     location: 'Allow location',
     background: 'Allow background location',
+    /** Always is already allowed on the phone; this account has not seen the disclosure. */
+    review: 'Review background location',
     motion: 'Allow motion access',
     notifications: 'Allow notifications',
     openSettings: 'Open Settings',
@@ -54,6 +57,7 @@ export const permissionsCopy = {
   fixHint: {
     openSettings: 'Opens this app in your phone’s Settings',
     background: 'Explains background location before anything is asked',
+    review: 'Shows how RoadWise uses background location, then turns auto-record on',
   },
   test: {
     run: 'Run a test',
@@ -68,6 +72,8 @@ export const permissionsCopy = {
   banner: {
     recordingOff: 'Drive recording is off — tap to fix',
     locationLimited: 'Location access is limited — tap to fix',
+    /** Auto-record wanted and allowed, but this account hasn't affirmed the disclosure (Task 19 r1). */
+    autoRecordNeedsOk: 'Auto-record needs your OK to use background location — tap to review',
     /** Motion lost while the driver starts drives themselves (Ruling T8 r1 (3)). */
     motionManual: 'Motion access is off, so drives may not end on their own — tap to fix',
     motionAuto:
@@ -179,6 +185,9 @@ export function rowConsequence(row: HealthRow, c: ConsequenceContext): string {
         if (reason === 'afterFirstDrive') return 'On iPhone, auto-record can be turned on after your first drive.';
         if (reason === 'notAvailable') return 'Auto-record isn’t available yet. Tap Start drive whenever you drive.';
         return 'You start drives yourself with Start drive.';
+      }
+      if (reason === 'notAffirmed') {
+        return 'Turned on, but it can’t start drives until you review how RoadWise uses background location.';
       }
       const blocker = c.snapshot.location === 'always' ? 'motion access' : 'background location';
       return `Turned on, but it needs ${blocker} to start drives.`;

@@ -50,15 +50,17 @@ function fakeHost(status: DriveState['status'], intent: boolean, armed = status 
   };
 }
 
-const seams = (adapter: FakeAdapter) => ({ adapter, appState: fakeAppState(), appConfig: { refresher: noRefresh } });
+/** One AppState for the whole render, as on a phone. */
+let appState = fakeAppState();
+const seams = (adapter: FakeAdapter) => ({ adapter, appState, appConfig: { refresher: noRefresh } });
 
 async function renderLine(
   status: DriveState['status'],
   intent: boolean,
-  opts: { flag?: boolean; armed?: boolean; adapter?: FakeAdapter; withBanners?: boolean } = {}
+  opts: { flag?: boolean; armed?: boolean; adapter?: FakeAdapter; withBanners?: boolean; affirmed?: boolean } = {}
 ) {
   const adapter = opts.adapter ?? fakeAdapter(snap());
-  const w = await permissionsWorld({ trips: [drive(1)], autoDetect: opts.flag });
+  const w = await permissionsWorld({ trips: [drive(1)], autoDetect: opts.flag, affirmed: opts.affirmed ?? true });
   const fake = fakeHost(status, intent, opts.armed);
   await w.render(
     opts.withBanners ? (
@@ -76,7 +78,10 @@ async function renderLine(
   return fake;
 }
 
-beforeEach(() => mockRouter.push.mockClear());
+beforeEach(() => {
+  mockRouter.push.mockClear();
+  appState = fakeAppState();
+});
 afterEach(() => {
   clearQueryClients();
   mockSession.profile = { driving_stage: 'new' };
@@ -172,4 +177,26 @@ test('Home carries one banner and one status line, and the line never repeats th
   const line = screen.getByTestId('detection-status-row');
   expect(line.props.accessibilityLabel).not.toContain(bannerText);
   expect(line.props.accessibilityLabel).toBe("Auto-record is on but isn't running, Auto-record settings");
+});
+
+test('m2: the banner and the line share ONE read of the phone, on mount and on each return to the front', async () => {
+  const adapter = fakeAdapter(snap());
+  await renderLine('armed', true, { adapter, withBanners: true });
+  await screen.findByText('Auto-record is on');
+  expect(adapter.log.filter((c) => c === 'snapshot')).toHaveLength(1);
+
+  // Back from Settings with location off: both change together, from the same read.
+  adapter.current = snap({ location: 'denied', precise: null });
+  await act(async () => appState.foreground());
+  expect(await screen.findByTestId('banner-permission-health')).toBeOnTheScreen();
+  expect(adapter.log.filter((c) => c === 'snapshot')).toHaveLength(2);
+  expect(screen.queryByText('Auto-record is on')).toBeNull();
+});
+
+test('an account that has not affirmed the disclosure: the line never says "on", and the banner says why', async () => {
+  await renderLine('armed', true, { withBanners: true, affirmed: false });
+  expect(
+    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location — tap to review' })
+  ).toBeOnTheScreen();
+  expect(screen.getByText("Auto-record is on but isn't running")).toBeOnTheScreen();
 });

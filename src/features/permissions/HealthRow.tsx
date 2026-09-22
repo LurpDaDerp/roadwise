@@ -14,6 +14,8 @@ export type FixTarget =
   | 'requestNotifications'
   /** Background location: always through the prominent disclosure first (design §5.3). */
   | 'disclosure'
+  /** Always is allowed, but this account never affirmed the disclosure (Task 19 r1): the same screen. */
+  | 'reviewDisclosure'
   | 'openSettings'
   | 'openBatterySettings';
 
@@ -32,6 +34,8 @@ export function fixFor(row: HealthRowModel, snapshot: PermissionSnapshot): FixTa
     case 'locationAlways':
       return 'disclosure';
     case 'autoRecord':
+      // This account's affirmation (Task 19 r1): the disclosure, though the phone allows Always.
+      if (row.reason === 'notAffirmed') return 'reviewDisclosure';
       // Whatever blocks it: Always first (through the disclosure), then motion.
       if (snapshot.location !== 'always') return 'disclosure';
       return row.fix === 'request' ? 'requestMotion' : 'openSettings';
@@ -51,12 +55,14 @@ export const FIX_LABEL: Record<FixTarget, string> = {
   requestMotion: copy.fix.motion,
   requestNotifications: copy.fix.notifications,
   disclosure: copy.fix.background,
+  reviewDisclosure: copy.fix.review,
   openSettings: copy.fix.openSettings,
   openBatterySettings: copy.fix.openBatterySettings,
 };
 
 const FIX_HINT: Partial<Record<FixTarget, string>> = {
   disclosure: copy.fixHint.background,
+  reviewDisclosure: copy.fixHint.review,
   openSettings: copy.fixHint.openSettings,
 };
 

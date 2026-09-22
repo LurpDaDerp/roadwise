@@ -15,20 +15,35 @@
  *   so the tap is the driver's opt-in (Ruling T9 (2)).
  * - **Android battery:** the maker's guide and "Open battery settings"; the status only when the
  *   phone can report it (drive-sense's `isIgnoringBatteryOptimizations`, T8 (5)).
+ * - **This account's disclosure first (Task 19 r1, security I-1), for every caller.** Always is
+ *   device-level and survives a handover, so the phone allowing it proves nothing about this
+ *   account's consent. Turning auto-record on when the signed-in account has not affirmed the
+ *   background-location disclosure opens `BackgroundDisclosure` in place of the panel; its
+ *   Continue records the affirmation and the `background_location` consent, then turns
+ *   auto-record on. `setAutoDetect(true)` is never called from here without an affirmation. An
+ *   auto-record already on but not affirmed says it can't start, with a Review button to the same.
  */
 import * as Device from 'expo-device';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
 
 import {
+  affirmationCovers,
   AUTO_RECORD_INTENT_KEY,
+  DISCLOSURE_AFFIRMED_KEY,
   MANUAL_BY_CHOICE_KEY,
   type PermissionPlatform,
   type PermissionSnapshot,
 } from '@/core/permissions';
 import { useAppConfig, type BatteryGuide, type UseAppConfigDeps } from '@/data/config/appConfig';
 import { useTrips } from '@/data/queries';
+import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
+import {
+  BackgroundDisclosure,
+  type DisclosureReason,
+  type DisclosureResult,
+} from '@/features/permissions/BackgroundDisclosure';
 import { guideFor } from '@/features/permissions/oemGuides';
 import { completedDrives, markSettingsReturn } from '@/features/permissions/usePermissionHealth';
 import { Banner, Button, Skeleton, Text, useTheme } from '@/ui';
@@ -43,6 +58,8 @@ export interface AutoRecordDeps extends PermissionStepDeps {
   /** `expo-device`'s maker name; picks the battery guide. */
   manufacturer?: string | null;
   appConfig?: UseAppConfigDeps;
+  /** Why the disclosure shows when it must: onboarding's A9, or the post-onboarding screen. */
+  disclosureReason?: DisclosureReason;
 }
 
 /** What stands between the driver and auto-record, most basic first. */
@@ -63,6 +80,19 @@ export type AutoRecordModel =
       on: boolean;
       busy: boolean;
       failed: boolean;
+      /**
+       * The signed-in account has affirmed the background-location disclosure. Without it the host
+       * does not arm, and turning on opens the disclosure instead.
+       */
+      affirmed: boolean;
+      /** The disclosure has taken the panel's place (turn on, or Review, without an affirmation). */
+      disclosure: {
+        reason: DisclosureReason;
+        deps: PermissionStepDeps;
+        onResult: (result: DisclosureResult) => void;
+      } | null;
+      /** Opens the disclosure: the Review button when auto-record is on but not affirmed. */
+      review: () => void;
       battery: { status: 'exempt' | 'optimized' | null; guide: BatteryGuide } | null;
       setOn: (enabled: boolean) => Promise<boolean>;
       /** A9's Skip: manual by choice, and any stored wish is dropped. */
@@ -87,7 +117,28 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
   const { config } = useAppConfig(deps.appConfig);
   const manufacturer = deps.manufacturer === undefined ? Device.manufacturer : deps.manufacturer;
 
+  const { session } = useSession();
+  const uid = session?.user.id ?? null;
   const [intent, setIntent] = useState<boolean | null>(null);
+  const [affirmed, setAffirmed] = useState<boolean | null>(null);
+  const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const affirmationTicket = useRef(0);
+
+  const readAffirmation = useCallback(async () => {
+    const ticket = ++affirmationTicket.current;
+    let covered = false;
+    try {
+      covered = affirmationCovers(await settings.get<unknown>(DISCLOSURE_AFFIRMED_KEY), uid);
+    } catch {
+      // Unreadable is not affirmed: the disclosure is shown again, never skipped.
+      covered = false;
+    }
+    if (ticket === affirmationTicket.current) setAffirmed(covered);
+  }, [settings, uid]);
+
+  useEffect(() => {
+    void readAffirmation();
+  }, [readAffirmation]);
   const [, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -119,6 +170,11 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
           else await settings.remove(AUTO_RECORD_INTENT_KEY);
           setIntent(enabled);
         } else {
+          if (enabled && affirmed !== true) {
+            // Security I-1: the disclosure first; its Continue turns auto-record on.
+            setDisclosureOpen(true);
+            return false;
+          }
           await host.setAutoDetect(enabled);
           setVersion((v) => v + 1);
         }
@@ -131,8 +187,14 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
         setBusy(false);
       }
     },
-    [intentMode, settings, host]
+    [intentMode, settings, host, affirmed]
   );
+
+  const onDisclosureResult = useCallback(() => {
+    setDisclosureOpen(false);
+    setVersion((v) => v + 1);
+    void readAffirmation();
+  }, [readAffirmation]);
 
   const skip = useCallback(async () => {
     await settings.set(MANUAL_BY_CHOICE_KEY, true);
@@ -150,7 +212,9 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
   }, [settings, now, adapter]);
 
   if (phone.status === 'error') return { status: 'error', retry: () => void phone.reload() };
-  if (snapshot === null || tripList === undefined || intent === null) return { status: 'loading' };
+  if (snapshot === null || tripList === undefined || intent === null || affirmed === null) {
+    return { status: 'loading' };
+  }
 
   const blocker = blockerOf(snapshot, !intentMode);
   const mode = blocker !== null ? 'blocked' : intentMode ? 'intent' : 'host';
@@ -171,6 +235,11 @@ export function useAutoRecord(deps: AutoRecordDeps = {}): AutoRecordModel {
     on,
     busy,
     failed,
+    affirmed,
+    disclosure: disclosureOpen
+      ? { reason: deps.disclosureReason ?? 'repair', deps: { adapter, appState, now }, onResult: onDisclosureResult }
+      : null,
+    review: () => setDisclosureOpen(true),
     battery,
     setOn,
     skip,
@@ -199,12 +268,26 @@ export function AutoRecordPanel({ model }: { model: AutoRecordModel }) {
     );
   }
 
+  if (model.disclosure !== null) {
+    return (
+      <BackgroundDisclosure
+        reason={model.disclosure.reason}
+        enableAutoRecord
+        deps={model.disclosure.deps}
+        onResult={model.disclosure.onResult}
+      />
+    );
+  }
+
   const { mode, blocker, on, busy, platform, battery } = model;
+  // On, but the host cannot arm until this account affirms the disclosure: never "on" (honesty).
+  const awaitingOk = mode === 'host' && on && !model.affirmed;
   let line: string;
   if (blocker === 'location') line = copy.needs.location;
   else if (blocker === 'always') line = copy.needs.always[platform];
   else if (blocker === 'motion') line = copy.needs.motion;
   else if (mode === 'intent') line = copy.iosAfterFirstDrive;
+  else if (awaitingOk) line = copy.needsOk;
   else line = on ? copy.toggleOn : copy.toggleOff;
 
   return (
@@ -234,9 +317,21 @@ export function AutoRecordPanel({ model }: { model: AutoRecordModel }) {
           />
         </View>
         {/* Before any tap: what the toggle does, or why it can't (Ruling T9 (2)). */}
-        <StatusLine tone={blocker ? 'attention' : on ? 'ok' : 'info'} testID="auto-record-line">
+        <StatusLine tone={blocker || awaitingOk ? 'attention' : on ? 'ok' : 'info'} testID="auto-record-line">
           {line}
         </StatusLine>
+        {awaitingOk ? (
+          <View style={{ alignItems: 'flex-start' }}>
+            <Button
+              label={copy.review}
+              variant="secondary"
+              size="md"
+              onPress={model.review}
+              accessibilityHint={copy.reviewHint}
+              testID="auto-record-review"
+            />
+          </View>
+        ) : null}
         {model.failed ? (
           <Text variant="callout" tone="danger" accessibilityRole="alert">
             {copy.failed}

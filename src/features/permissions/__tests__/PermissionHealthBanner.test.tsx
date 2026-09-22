@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 async function renderBanner(adapter: FakeAdapter, seed: Seed = { trips: [drive(1)] }, intent = true) {
-  const w = await permissionsWorld(seed);
+  const w = await permissionsWorld({ affirmed: true, ...seed });
   const appState = fakeAppState();
   await w.render(
     <PermissionHealthBanner deps={{ adapter, appState, appConfig: { refresher: noRefresh } }} />,
@@ -115,4 +115,11 @@ test('a return to the front re-reads the phone: a fix made in Settings clears th
   adapter.current = snap();
   await act(async () => appState.foreground());
   await waitFor(() => expect(screen.queryByTestId('banner-permission-health')).toBeNull());
+});
+
+test('Task 19 r1: auto-record wanted but not affirmed by this account: its own banner, never silence', async () => {
+  await renderBanner(fakeAdapter(snap()), { trips: [drive(1)], affirmed: false });
+  expect(
+    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location — tap to review' })
+  ).toBeOnTheScreen();
 });

@@ -1,5 +1,7 @@
 import { useRef } from 'react';
 
+import { Screen } from '@/ui';
+
 import { AutoRecordPanel, useAutoRecord, type AutoRecordDeps } from '../AutoRecordPanel';
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -16,7 +18,7 @@ const copy = onboardingCopy.autoRecord;
  * - Blocked, or the phone couldn't be read: Continue, writing nothing (D12).
  */
 export function AutoDetectStep({ onNext, onBack, deps }: StepProps & { deps?: AutoRecordDeps }) {
-  const model = useAutoRecord(deps);
+  const model = useAutoRecord({ disclosureReason: 'onboarding', ...deps });
   const leaving = useRef(false);
   const go = (work?: () => Promise<boolean | void>) => async () => {
     if (leaving.current) return;
@@ -47,6 +49,16 @@ export function AutoDetectStep({ onNext, onBack, deps }: StepProps & { deps?: Au
       disabled: model.busy,
       testID: 'auto-record-skip',
     };
+  }
+
+  // Turn on without this account's affirmation: the one disclosure takes the step (Task 19 r1).
+  // Its Continue turns auto-record on; either answer comes back to this step.
+  if (model.status === 'ready' && model.disclosure !== null) {
+    return (
+      <Screen scroll testID="auto-detect-disclosure">
+        <AutoRecordPanel model={model} />
+      </Screen>
+    );
   }
 
   return (

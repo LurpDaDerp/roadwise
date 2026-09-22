@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 
 import {
+  affirmationCovers,
   assessHealth,
   createPermissionsAdapter,
+  DISCLOSURE_AFFIRMED_KEY,
   EVER_GRANTED_KEY,
   MANUAL_BY_CHOICE_KEY,
   nextEverGranted,
@@ -181,17 +184,26 @@ interface Read {
   snapshot: PermissionSnapshot;
   manualByChoice: boolean;
   everGranted: EverGranted;
+  /** The raw stored affirmation, judged against the signed-in account below. */
+  affirmation: unknown;
 }
+
+/**
+ * The one read of the phone every health surface shares (Task 19 r1, review m2): Home's banner and
+ * its status line — and B2 — observe the same query, so they can never show two different phones
+ * (a read before and a read after a trip to Settings). Keyed by account, so a handover reads anew.
+ */
+export const permissionHealthKey = (uid: string | null) => ['permissions', 'health', uid ?? ''] as const;
 
 /**
  * B2's model for the screen and the Home banner. The phone is read on mount and on every return
  * to the front (`AppState → active`) and when the caller asks (`refresh`, after a Fix) — never on
- * a timer, so an armed-idle phone costs nothing (design §3.5).
+ * a timer, so an armed-idle phone costs nothing (design §3.5). Concurrent readers share one read.
  *
  * The context is the driver's, never guessed: auto-record from `host.autoDetectEnabled()` (the
  * choice, not the engine's status — N-m2), its availability from the `auto_detect` flag, the first
- * completed drive from the trip list, manual-by-choice and the ever-granted memory from settings.
- * A failed read is `status: 'error'`, not a made-up state.
+ * completed drive from the trip list, manual-by-choice, the ever-granted memory and this account's
+ * disclosure affirmation from settings. A failed read is `status: 'error'`, not a made-up state.
  */
 export function usePermissionHealth(deps: PermissionHealthDeps = {}): PermissionHealth {
   const adapter = deps.adapter ?? defaultPermissionsAdapter();
@@ -205,11 +217,8 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
   const trips = useTrips();
   // Re-render when the host arms or disarms, so the choice read below is current.
   useDrive((s) => s.autoDetectArmed === true);
-
-  const [read, setRead] = useState<Read | null>(null);
-  const [failed, setFailed] = useState(false);
-  const live = useRef(true);
-  const latest = useRef(0);
+  const queryClient = useQueryClient();
+  const key = useMemo(() => permissionHealthKey(userId), [userId]);
 
   /** One read of the phone and the settings it is judged with; null when the phone can't be read. */
   const fetchRead = useCallback(async (): Promise<Read | null> => {
@@ -219,47 +228,43 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
       const everGranted = nextEverGranted(prev, snapshot);
       if (everGranted !== prev) await settings.set(EVER_GRANTED_KEY, everGranted);
       const manualByChoice = (await settings.get<boolean>(MANUAL_BY_CHOICE_KEY)) === true;
-      return { snapshot, manualByChoice, everGranted };
+      const affirmation = await settings.get<unknown>(DISCLOSURE_AFFIRMED_KEY);
+      return { snapshot, manualByChoice, everGranted, affirmation };
     } catch {
       return null;
     }
   }, [adapter, settings]);
 
-  /** Reads, and shows the result unless a newer read started meanwhile or the caller unmounted. */
-  const load = useCallback(async () => {
-    const ticket = ++latest.current;
-    const result = await fetchRead();
-    if (!live.current || ticket !== latest.current) return;
-    setRead(result);
-    setFailed(result === null);
-  }, [fetchRead]);
+  const query = useQuery({
+    queryKey: key,
+    queryFn: fetchRead,
+    // Read on mount of the first reader and on each return to the front — not again for a second
+    // reader mounting beside it, which shares this read.
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
 
+  const { refetch } = query;
   useEffect(() => {
-    live.current = true;
-    const run = () => {
-      const ticket = ++latest.current;
-      void fetchRead().then((result) => {
-        if (!live.current || ticket !== latest.current) return;
-        setRead(result);
-        setFailed(result === null);
-      });
-    };
-    run();
     const sub = appState.addEventListener('change', (next) => {
-      if (next === 'active') run();
+      // Every reader hears the change; `cancelRefetch: false` joins the one read already started.
+      if (next === 'active') void refetch({ cancelRefetch: false });
     });
-    return () => {
-      live.current = false;
-      sub.remove();
-    };
-  }, [fetchRead, appState]);
+    return () => sub.remove();
+  }, [appState, refetch]);
+
+  const read = query.data ?? null;
+  const failed = query.isFetched && read === null && !query.isFetching;
 
   // A background-location consent the disclosure could not send (offline) goes when this is read.
   useEffect(() => {
     if (userId !== null) void flushPendingDisclosureConsent(settings, userId).catch(() => {});
   }, [settings, userId, read]);
 
-  const refresh = load;
+  const refresh = useCallback(async () => {
+    await queryClient.refetchQueries({ queryKey: key, exact: true });
+  }, [queryClient, key]);
 
   if (failed) return { status: 'error', refresh };
   // A trip list that cannot be read counts as no drive yet: the stricter iOS reading (§5.3).
@@ -273,6 +278,7 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
     firstDriveDone: completedDrives(tripList) > 0,
     manualByChoice: read.manualByChoice,
     everGranted: read.everGranted,
+    disclosureAffirmed: affirmationCovers(read.affirmation, userId),
   };
   return {
     status: 'ready',

@@ -83,7 +83,7 @@ export function PermissionHealthScreen({ deps = {} }: { deps?: PermissionHealthS
   const onFix = async (target: FixTarget) => {
     if (pending) return;
     setActionFailed(false);
-    if (target === 'disclosure') {
+    if (target === 'disclosure' || target === 'reviewDisclosure') {
       router.push(REPAIR_HREF);
       return;
     }

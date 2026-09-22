@@ -2,7 +2,8 @@
  * Task 19: `/permissions/auto-record`, the post-onboarding place to turn auto-record on or off
  * (it replaced M3's interim detection screen). A9's panel; a Fix for what blocks it; and an Always
  * grant this account has not affirmed the disclosure for goes through the disclosure first (T9
- * security: Always is device-level and survives a handover, a consent record does not).
+ * security: Always is device-level and survives a handover, a consent record does not). Since
+ * round 1 that gate is the shared model's, so it opens in place here as in onboarding.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
@@ -19,6 +20,7 @@ import {
   type FakeAdapter,
   type Seed,
 } from '@/features/permissions/__fixtures__/harness';
+import { recordConsent } from '@/data/supabase/profile';
 import { REPAIR_HREF } from '@/features/permissions/PermissionHealthScreen';
 import { clearQueryClients, routerDouble } from '@/features/trips/__fixtures__/render';
 
@@ -37,7 +39,7 @@ jest.mock('@/data/supabase/session', () => ({
 }));
 jest.mock('@/data/supabase/profile', () => ({ recordConsent: jest.fn(async () => ({})) }));
 
-const AFFIRMED = { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-1', at: T0 } };
+const AFFIRMED = { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-1', at: T0, uid: 'u1' } };
 
 afterEach(() => {
   clearQueryClients();
@@ -62,19 +64,25 @@ const toggle = (on: boolean) =>
     fireEvent(screen.getByTestId('auto-record-toggle'), 'valueChange', on);
   });
 
-test('Always granted, but this account never affirmed the disclosure: turning on opens it first', async () => {
+test('Always granted, but this account never affirmed the disclosure: turning on opens it in place', async () => {
   const { host } = await renderScreen(fakeAdapter(snap()));
   await toggle(true);
-  expect(mockRouter.push).toHaveBeenCalledWith(REPAIR_HREF);
+  expect(await screen.findByTestId('background-disclosure-repair')).toBeOnTheScreen();
   expect(host.setAutoDetect).not.toHaveBeenCalled();
+  // Continue records this account's consent, then turns auto-record on.
+  await act(async () => {
+    fireEvent.press(await screen.findByTestId('disclosure-continue'));
+  });
+  await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
 });
 
-test('a disclosure affirmed for older words does not count', async () => {
+test('a disclosure affirmed below the arming minimum does not count', async () => {
   const { host } = await renderScreen(fakeAdapter(snap()), {
-    seed: { trips: [drive(1)], settings: { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-0', at: T0 } } },
+    seed: { trips: [drive(1)], settings: { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-0', at: T0, uid: 'u1' } } },
   });
   await toggle(true);
-  expect(mockRouter.push).toHaveBeenCalledWith(REPAIR_HREF);
+  expect(await screen.findByTestId('background-disclosure-repair')).toBeOnTheScreen();
   expect(host.setAutoDetect).not.toHaveBeenCalled();
 });
 

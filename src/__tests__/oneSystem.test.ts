@@ -9,6 +9,8 @@
  *   `requestLocationAlways` — the only background-location request site (T9 security);
  * - only `src/features/notifications` names `setNotificationHandler` or
  *   `addNotificationResponseReceivedListener`;
+ * - only the host, bootstrap, the shared auto-record model and the disclosure name `setAutoDetect`
+ *   (Task 19 r1: every other screen turns auto-record on through the gated model);
  * - M3's interim detection screen and its `/detection` route are gone.
  *
  * A name is matched as a whole identifier anywhere in code (a call, a reference or a destructure),
@@ -52,6 +54,19 @@ export const RULES: readonly Rule[] = [
     name: 'background location is asked for only through the one disclosure (T9 security)',
     names: ['requestLocationAlways'],
     allowed: ['src/core/permissions/', 'src/features/permissions/BackgroundDisclosure.tsx'],
+  },
+  {
+    // Task 19 r1 (security I-1): auto-record is turned on only by the host itself, the shared
+    // auto-record model (gated behind this account's disclosure) and the disclosure's Continue.
+    // Bootstrap re-applies the stored choice when the server flag changes.
+    name: 'auto-record is turned on only through the gated model or the disclosure',
+    names: ['setAutoDetect'],
+    allowed: [
+      'src/drive/',
+      'src/boot/bootstrap.ts',
+      'src/features/onboarding/AutoRecordPanel.tsx',
+      'src/features/permissions/BackgroundDisclosure.tsx',
+    ],
   },
   {
     name: 'one notification handler and one response listener (rev1: C1)',
@@ -152,6 +167,7 @@ describe('the scanner (negative control)', () => {
       'src/features/onboarding/v.ts': 'await adapter.requestLocationAlways({ firstDriveDone: true });',
       // A `//` inside a string is not a comment, and a name in a string (a computed call) counts.
       'src/features/trips/u.ts': "const u = 'http://x'; N['setNotificationHandler'](h);",
+      'app/(app)/permissions/auto-record.tsx': 'await host.setAutoDetect(true);',
     };
     expect(scan(planted).map((v) => `${v.file}:${v.name}`)).toEqual([
       'src/features/drive/x.ts:requestForegroundPermissionsAsync',
@@ -162,6 +178,7 @@ describe('the scanner (negative control)', () => {
       'src/features/home/w.ts:addNotificationResponseReceivedListener',
       'src/features/onboarding/v.ts:requestLocationAlways',
       'src/features/trips/u.ts:setNotificationHandler',
+      'app/(app)/permissions/auto-record.tsx:setAutoDetect',
     ]);
   });
 

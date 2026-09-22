@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 
 import {
+  affirmationCovers,
   DISCLOSURE_AFFIRMED_KEY,
   MANUAL_BY_CHOICE_KEY,
   recordPrompt,
   type PermissionSnapshot,
 } from '@/core/permissions';
+import { useSession } from '@/data/supabase/session';
 import { BackgroundDisclosure } from '@/features/permissions/BackgroundDisclosure';
 import { markSettingsReturn } from '@/features/permissions/usePermissionHealth';
 import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
@@ -34,7 +36,9 @@ type View_ = 'loading' | 'error' | 'ask' | 'denied' | 'disclosure' | 'approximat
  * - **Android:** straight after a foreground grant the one prominent disclosure takes the screen
  *   (`BackgroundDisclosure reason="onboarding"`); Always is asked only after its Continue, and
  *   Not now there is manual by choice. It is shown again on a return to this step only if it was
- *   never answered.
+ *   never answered. An Always the phone already allows (inherited from a previous owner, or set in
+ *   Settings) shows it too, until THIS account has affirmed it (Task 19 r1, security I-1): the
+ *   phone's grant is not this account's consent.
  * - **iOS:** no background request at all (design §5.3). The step says the question comes after
  *   the first drive, and asks nothing more.
  * - A grant records the `location` consent (approximate is a grant); a denial records nothing and
@@ -46,6 +50,8 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
   const phone = usePhone(adapter, appState);
   const grantConsent = useGrantConsent(settings);
   const ios = ctx.platform === 'ios';
+  const { session } = useSession();
+  const uid = session?.user.id ?? null;
 
   /** The disclosure was answered before (affirmed, or Not now): a resume doesn't show it again. */
   const [disclosureDone, setDisclosureDone] = useState<boolean | null>(null);
@@ -57,12 +63,15 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
   useEffect(() => {
     let live = true;
     void Promise.all([settings.get(DISCLOSURE_AFFIRMED_KEY), settings.get(MANUAL_BY_CHOICE_KEY)])
-      .then(([affirmed, manual]) => live && setDisclosureDone(affirmed !== null || manual === true))
+      .then(
+        ([affirmed, manual]) =>
+          live && setDisclosureDone(affirmationCovers(affirmed, uid) || manual === true)
+      )
       .catch(() => live && setDisclosureDone(false));
     return () => {
       live = false;
     };
-  }, [settings]);
+  }, [settings, uid]);
 
   const snapshot = phone.status === 'ready' ? phone.snapshot : null;
 
@@ -70,7 +79,7 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
   if (phone.status === 'error') view = 'error';
   else if (snapshot === null || disclosureDone === null) view = 'loading';
   else if (granted(snapshot)) {
-    if (!ios && snapshot.location === 'foreground' && !disclosureDone) view = 'disclosure';
+    if (!ios && !disclosureDone) view = 'disclosure';
     else if (snapshot.precise === false) view = 'approximate';
     else view = 'granted';
   } else if (snapshot.location === 'denied' && (answered || !snapshot.locationCanAskAgain)) view = 'denied';
@@ -97,7 +106,7 @@ export function LocationStep({ ctx, onNext, onBack, deps }: StepProps & { deps?:
         await grantConsent('location');
         // Android With While Using: the disclosure renders next (derived above). Otherwise move
         // on, unless approximate location has something to say first.
-        const disclosureNext = !ios && access === 'foreground' && !disclosureDone;
+        const disclosureNext = !ios && !disclosureDone;
         if (!disclosureNext && next?.precise !== false) await leave(next);
       }
     } catch {

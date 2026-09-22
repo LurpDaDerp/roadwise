@@ -8,6 +8,7 @@
  */
 import type { ReactElement } from 'react';
 
+import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
 import type {
   Grant,
   LocationAccess,
@@ -176,12 +177,23 @@ export interface Seed {
   settings?: Record<string, unknown>;
   /** The `auto_detect` flag as the server last said; absent = never fetched (defaults). */
   autoDetect?: boolean;
+  /**
+   * The signed-in account (`AFFIRMED_UID`, the suites' session) has affirmed the background-location
+   * disclosure (Task 19 r1). Absent: not affirmed, as on a fresh install or after a handover.
+   */
+  affirmed?: boolean;
 }
+
+/** The session uid every permission suite mocks. */
+export const AFFIRMED_UID = 'u1';
 
 export async function permissionsWorld(seed: Seed = {}) {
   const w = await world({ trips: seed.trips ?? [] });
   const settings = createSettingsRepo(w.db);
   for (const [key, value] of Object.entries(seed.settings ?? {})) await settings.set(key, value);
+  if (seed.affirmed === true) {
+    await settings.set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0, uid: AFFIRMED_UID });
+  }
   if (seed.autoDetect !== undefined) {
     const stored: StoredAppConfig = { fetchedAt: T0, flags: { auto_detect: seed.autoDetect }, values: {} };
     await settings.set(APP_CONFIG_KEY, stored);

@@ -55,7 +55,7 @@ async function renderB2(
   seed: Seed = { trips: [drive(1)] },
   opts: { intent?: boolean; manufacturer?: string | null } = {}
 ) {
-  const w = await permissionsWorld(seed);
+  const w = await permissionsWorld({ affirmed: true, ...seed });
   const { host } = fakeHost({ intent: opts.intent ?? true });
   const appState = fakeAppState();
   await w.render(
@@ -213,4 +213,15 @@ test('a non-driver sees only notifications, and no test', async () => {
   expect(await screen.findByTestId('permission-row-notifications')).toBeOnTheScreen();
   expect(screen.queryByTestId('permission-row-location')).toBeNull();
   expect(screen.queryByTestId('permissions-run-test')).toBeNull();
+});
+
+test('Task 19 r1: auto-record wanted and allowed, but this account never affirmed the disclosure — its own row, and the Fix opens it', async () => {
+  await renderB2(fakeAdapter(snap()), { trips: [drive(1)], affirmed: false });
+  const rowEl = await screen.findByTestId('permission-row-autoRecord');
+  expect(rowEl).toHaveTextContent(/Needs attention/);
+  expect(rowEl).toHaveTextContent(/review how RoadWise uses background location/);
+  expect(rowEl).not.toHaveTextContent(/Your choice/);
+  await press(screen.getByTestId('permission-row-autoRecord-fix'));
+  expect(mockRouter.push).toHaveBeenCalledWith(REPAIR_HREF);
+  expect(screen.getByTestId('permission-row-autoRecord-fix')).toHaveTextContent('Review background location');
 });

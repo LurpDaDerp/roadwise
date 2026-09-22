@@ -7,6 +7,7 @@ import {
   type BootstrapDeps,
 } from '@/boot/bootstrap';
 import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
+import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
 import { T0, counterIds, limit, mph } from '@/core/detectors/__fixtures__/rows';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { drive, TZ } from '@/core/engine/__fixtures__/drives';
@@ -231,6 +232,17 @@ test('the cache is wired to the change event, and stop() detaches everything', a
   // `afterEach` no longer holds this runtime; the cache's gc timers are this test's to drop.
   queryClient.clear();
 });
+
+
+/**
+ * The device owner `uid` affirmed the background-location disclosure (Task 19 r1): the host arms
+ * only then. Tests that expect arming start from a consented driver.
+ */
+async function affirm(uid: string): Promise<void> {
+  const settings = createSettingsRepo(db);
+  await settings.set(LAST_USER_KEY, uid);
+  await settings.set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: 0, uid });
+}
 
 describe('whose device this is', () => {
   test('a launch by the same user leaves the record alone', async () => {
@@ -873,6 +885,7 @@ describe('H2: the engine stage — the drive host, adopt after a relaunch', () =
 
   test("the host reads the remote flag, but only the driver's own opt-in arms auto-detect", async () => {
     await migrate(db);
+    await affirm('user-1');
     // The flag is available (nothing fetched yet), and the driver never opted in: not armed.
     // Signed in: with nobody signed in nothing arms at all (§8.2, tested below).
     const signedIn = () => ({ supabase: createFakeSupabase({ uid: 'user-1' }) });
@@ -971,6 +984,7 @@ describe('H2 r1: a config refresh that changes auto_detect re-applies the arming
 
   test('a withdrawn flag disarms; a restored one re-arms the driver who opted in', async () => {
     await migrate(db);
+    await affirm('user-1');
     await createSettingsRepo(db).set('drive.autoDetect', true);
     const { flag, appConfig } = serverFlag();
     const built = deps({ appConfig, supabase: createFakeSupabase({ uid: 'user-1' }) });
@@ -1360,6 +1374,7 @@ describe('H2: foreground jobs', () => {
 describe('M3 final review: the launch wiring', () => {
   test('I3: a launch with nobody signed in never arms, whatever the stored opt-in (§8.2)', async () => {
     await migrate(db);
+    await affirm('user-1');
     await createSettingsRepo(db).set('drive.autoDetect', true);
     const built = deps(); // signed out
     runtime = await bootstrapApp(built.bootstrapDeps);
@@ -1501,7 +1516,7 @@ describe('ruling T12 (1): the launch reads the cached age band', () => {
   test("an under-13 account's cached profile keeps a launch disarmed; an adult's arms", async () => {
     await migrate(db);
     const settings = createSettingsRepo(db);
-    await settings.set(LAST_USER_KEY, 'user-1');
+    await affirm('user-1');
     await settings.set('drive.autoDetect', true);
     await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: 'u13' } });
     runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
@@ -1786,7 +1801,7 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
 
   test('the background permission hook is never awaited: a hook that never answers does not hold the wake (review m3)', async () => {
     await migrate(db);
-    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    await affirm('user-1');
     await createSettingsRepo(db).set('drive.autoDetect', true);
     const clock = { t: NOW };
     const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock.t });

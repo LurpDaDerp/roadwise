@@ -45,7 +45,9 @@ import { rebuildFromSamples } from '@/core/engine/replay';
 import { roleEvidenceFor } from '@/core/engine/rolePrior';
 import type { DetectorContext, FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import { LAST_USER_KEY } from '@/boot/device';
 import type { TraceWriter } from '@/boot/traceWriter';
+import { affirmationCovers, DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
 import { createSettingsRepo, type Db, type TripRow, type TripStatus } from '@/data/db';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
@@ -679,6 +681,24 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  /**
+   * One local settings read: the disclosure affirmation and the device owner together. Covered
+   * only when the affirmation names the owner, at or above the arming minimum. Rejects on a read
+   * failure (the caller reports it and does not arm).
+   */
+  async function readArmingAffirmed(): Promise<boolean> {
+    const { rows } = await db.execute('SELECT key, value_json FROM settings WHERE key IN (?, ?)', [
+      DISCLOSURE_AFFIRMED_KEY,
+      LAST_USER_KEY,
+    ]);
+    const value = (key: string): unknown => {
+      const row = rows.find((r) => r.key === key);
+      return row ? (JSON.parse(String(row.value_json)) as unknown) : null;
+    };
+    const owner = value(LAST_USER_KEY);
+    return affirmationCovers(value(DISCLOSURE_AFFIRMED_KEY), typeof owner === 'string' ? owner : null);
+  }
+
   async function applyArming(): Promise<void> {
     if (!started) return;
     const state = await source.getState();
@@ -692,14 +712,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         flag = false;
       }
     }
-    const arm = shouldArm({
+    const inputs = {
       intent,
       flag,
       location: state.location,
       motion: state.motion,
       signedIn: !signedOut,
       ageBand,
-    });
+    };
+    // Security I-1 (Task 19 r1): the device owner's disclosure affirmation, read only when
+    // everything else would arm — so nothing new is read unless arming is actually in question.
+    let affirmed = false;
+    if (shouldArm({ ...inputs, affirmed: true })) {
+      try {
+        affirmed = await readArmingAffirmed();
+      } catch (e) {
+        report(e, 'readAffirmation');
+        affirmed = false;
+      }
+    }
+    const arm = shouldArm({ ...inputs, affirmed });
     if (arm) {
       try {
         await source.arm();

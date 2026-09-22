@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import { MANUAL_BY_CHOICE_KEY, PROMPTS_KEY } from '@/core/permissions';
+import { DISCLOSURE_AFFIRMED_KEY, MANUAL_BY_CHOICE_KEY, PROMPTS_KEY } from '@/core/permissions';
 import { T0 } from '@/data/queries/__fixtures__/rows';
 import { DISCLOSURE_TEXT } from '@/features/drive/detectionCopy';
 import {
@@ -152,6 +152,40 @@ describe('Android', () => {
     expect(await screen.findByText(copy.allowed)).toBeOnTheScreen();
     expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
     expect(requests(again)).toEqual([]);
+  });
+
+  describe('an Always the phone already allows (Task 19 r1, security I-1)', () => {
+    test('inherited from the previous owner: the disclosure, and its Continue records this account’s consent', async () => {
+      const adapter = fakeAdapter(snap({ platform: 'android', location: 'always' }));
+      const { settings } = await renderStep('android', adapter);
+      expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
+      await press(await screen.findByTestId('disclosure-continue'));
+      await waitFor(() => expect(consents('background_location')).toHaveLength(1));
+      expect(consents('background_location')[0]?.[0]).toBe('u1');
+      expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
+    });
+
+    test('affirmed by the previous owner: still this account’s disclosure', async () => {
+      const adapter = fakeAdapter(snap({ platform: 'android', location: 'always' }));
+      await renderStep('android', adapter, {
+        settings: { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-1', at: T0, uid: 'previous-owner' } },
+      });
+      expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
+    });
+
+    test('affirmed by this account: no disclosure again', async () => {
+      const adapter = fakeAdapter(snap({ platform: 'android', location: 'always' }));
+      await renderStep('android', adapter, { affirmed: true });
+      expect(await screen.findByText(copy.allowed)).toBeOnTheScreen();
+      expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+    });
+
+    test('iOS: no disclosure here (design §5.3); turning auto-record on is gated instead', async () => {
+      const adapter = fakeAdapter(snap({ platform: 'ios', location: 'always' }));
+      await renderStep('ios', adapter);
+      expect(await screen.findByText(copy.allowed)).toBeOnTheScreen();
+      expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+    });
   });
 });
 

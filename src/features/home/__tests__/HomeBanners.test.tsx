@@ -49,7 +49,7 @@ async function renderBanners(
   ui: (deps: { adapter: FakeAdapter }) => ReactElement = (deps) => <HomeBanners permissionDeps={withSeams(deps.adapter)} />,
   adapter: FakeAdapter = fakeAdapter(snap())
 ) {
-  const w = await permissionsWorld({ trips: [drive(1)] });
+  const w = await permissionsWorld({ trips: [drive(1)], affirmed: true });
   await w.render(ui({ adapter }), fakeHost({ intent: true }).host);
   await waitFor(() => expect(adapter.log).toContain('snapshot'));
   await act(async () => {});
@@ -145,6 +145,7 @@ test('the drive-in-progress banner comes first, then permission health, then off
     ),
     fakeAdapter(snap({ location: 'denied', precise: null }))
   );
+  await screen.findByTestId('banner-permission-health');
   // The rendered tree, depth first: the order a screen reader meets them.
   const seen: string[] = [];
   type Node = { props?: { testID?: string }; children?: (Node | string)[] | null };

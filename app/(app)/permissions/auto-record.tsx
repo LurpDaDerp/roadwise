@@ -1,17 +1,7 @@
-import { useFocusEffect, useRouter, type Href } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useRouter, type Href } from 'expo-router';
 import { View } from 'react-native';
 
-import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
-import { createSettingsRepo } from '@/data/db';
-import { useDb } from '@/data/queries';
-import { DISCLOSURE_VERSION } from '@/features/drive/detectionCopy';
-import {
-  AutoRecordPanel,
-  useAutoRecord,
-  type AutoRecordDeps,
-  type AutoRecordModel,
-} from '@/features/onboarding/AutoRecordPanel';
+import { AutoRecordPanel, useAutoRecord, type AutoRecordDeps } from '@/features/onboarding/AutoRecordPanel';
 import { onboardingCopy } from '@/features/onboarding/copy';
 import { PERMISSIONS_HREF } from '@/features/permissions/PermissionHealthBanner';
 import { REPAIR_HREF } from '@/features/permissions/PermissionHealthScreen';
@@ -31,66 +21,18 @@ export const autoRecordRouteCopy = {
 } as const;
 
 /**
- * Whether the signed-in account has affirmed the current background-location disclosure on this
- * phone. The mark lives in settings, so a handover's wipe clears it: Always is device-level and
- * survives a new account, but the new account's consent does not exist until it sees the words.
- */
-export function useDisclosureAffirmed(): boolean | null {
-  const db = useDb();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const [affirmed, setAffirmed] = useState<boolean | null>(null);
-  // Re-read whenever the screen comes back into focus: the disclosure it opens may have been affirmed.
-  useFocusEffect(
-    useCallback(() => {
-      let live = true;
-      void settings
-        .get<{ version?: unknown }>(DISCLOSURE_AFFIRMED_KEY)
-        .then((v) => live && setAffirmed(v !== null && v.version === DISCLOSURE_VERSION))
-        .catch(() => live && setAffirmed(false));
-      return () => {
-        live = false;
-      };
-    }, [settings])
-  );
-  return affirmed;
-}
-
-/**
- * Turning auto-record on here with Always already granted but no disclosure affirmed by this
- * account (an Always grant inherited from the phone's previous owner, or one made in Settings) goes
- * through the disclosure first (T9 security): Continue there records this account's consent and
- * turns auto-record on. Nothing else changes: off always goes straight to the host.
- */
-export function withDisclosureGate(
-  model: AutoRecordModel,
-  affirmed: boolean | null,
-  openDisclosure: () => void
-): AutoRecordModel {
-  if (model.status !== 'ready' || model.mode !== 'host') return model;
-  return {
-    ...model,
-    setOn: async (enabled) => {
-      if (enabled && affirmed !== true) {
-        openDisclosure();
-        return false;
-      }
-      return model.setOn(enabled);
-    },
-  };
-}
-
-/**
  * `/permissions/auto-record` — the post-onboarding place to turn auto-record on or off (Task 19;
- * it replaced M3's interim detection screen). A9's `AutoRecordPanel`, plus a Fix for what blocks
- * it: a missing Always opens the prominent disclosure first, never an OS prompt; anything else
- * opens B2. Home's status line leads here.
+ * it replaced M3's interim detection screen). A9's `AutoRecordPanel` — whose model opens the
+ * disclosure in place when this account has not affirmed it (Task 19 r1) — plus a Fix for what
+ * blocks it: a missing Always opens the prominent disclosure first, never an OS prompt; anything
+ * else opens B2. Home's status line leads here.
  */
 export function AutoRecordScreen({ deps }: { deps?: AutoRecordDeps }) {
   const th = useTheme();
   const router = useRouter();
-  const affirmed = useDisclosureAffirmed();
   const openDisclosure = () => router.push(REPAIR_HREF);
-  const model = withDisclosureGate(useAutoRecord(deps), affirmed, openDisclosure);
+  // The shared model gates turning on behind this account's disclosure (Task 19 r1).
+  const model = useAutoRecord({ disclosureReason: 'repair', ...deps });
   const back = router.canGoBack() ? () => router.back() : () => router.replace(HOME);
 
   let fix = null;

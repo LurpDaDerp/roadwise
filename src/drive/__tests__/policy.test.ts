@@ -230,8 +230,10 @@ describe('small rules', () => {
   });
 
   test('arming needs the flag, the user setting, Always location, motion and a signed-in driver (one predicate, I4)', () => {
-    const ok = { intent: true, flag: true, location: 'always', motion: 'granted' } as const;
+    const ok = { intent: true, flag: true, location: 'always', motion: 'granted', affirmed: true } as const;
     expect(shouldArm(ok)).toBe(true);
+    // Task 19 r1 (security I-1): never without this account's disclosure affirmation.
+    expect(shouldArm({ ...ok, affirmed: false })).toBe(false);
     expect(shouldArm({ ...ok, intent: false })).toBe(false);
     expect(shouldArm({ ...ok, flag: false })).toBe(false);
     expect(shouldArm({ ...ok, location: 'whenInUse' })).toBe(false);

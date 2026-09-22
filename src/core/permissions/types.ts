@@ -64,7 +64,17 @@ export type FixAction = 'request' | 'openSettings' | 'openBatterySettings' | 'no
  * `afterFirstDrive`: iOS Always is offered only after the first completed drive;
  * `lapsed`: previously granted, now lost; `cantCheck`: the state could not be read.
  */
-export type HealthReason = 'choice' | 'notAvailable' | 'afterFirstDrive' | 'lapsed' | 'cantCheck';
+export type HealthReason =
+  | 'choice'
+  | 'notAvailable'
+  | 'afterFirstDrive'
+  | 'lapsed'
+  | 'cantCheck'
+  /**
+   * Auto-record is wanted and the phone allows it, but this account has not affirmed the
+   * background-location disclosure (Task 19 r1): the host will not arm. Fixable — never a choice.
+   */
+  | 'notAffirmed';
 
 export interface HealthRow {
   id: HealthRowId;
@@ -100,6 +110,11 @@ export interface HealthContext {
   /** A9 Skip, or Always declined in the disclosure or the OS (settings `permissions.manualByChoice`). */
   manualByChoice: boolean;
   everGranted: EverGranted;
+  /**
+   * This account has affirmed the background-location disclosure (at or above the arming minimum).
+   * The host arms only then (Task 19 r1). Optional, default true: only the app's hook knows it.
+   */
+  disclosureAffirmed?: boolean;
 }
 
 /** The permissions the 14-day prompt policy tracks. */

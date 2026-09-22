@@ -392,3 +392,40 @@ describe('nextEverGranted', () => {
     expect(nextEverGranted(prev, snap())).toBe(prev);
   });
 });
+
+describe('this account has not affirmed the disclosure (Task 19 r1, security I-1)', () => {
+  it('auto-record wanted, Always and motion allowed: manual, its own fixable reason, and a banner', () => {
+    const r = assessHealth(snap(), ctx({ disclosureAffirmed: false }));
+    expect(r.recordingMode).toBe('manual');
+    expect(row(r.rows, 'autoRecord')).toEqual({
+      id: 'autoRecord',
+      status: 'attention',
+      fix: 'request',
+      reason: 'notAffirmed',
+    });
+    expect(r.showBanner).toBe(true);
+    expect(r.overall).toBe('attention');
+  });
+
+  it('never shown as a choice, and never raised where auto-record is not wanted or offered', () => {
+    for (const c of [
+      ctx({ disclosureAffirmed: false, autoDetectOn: false }),
+      ctx({ disclosureAffirmed: false, manualByChoice: true }),
+      ctx({ disclosureAffirmed: false, autoDetectAvailable: false }),
+    ]) {
+      const r = assessHealth(snap(), c);
+      expect(row(r.rows, 'autoRecord')?.reason).not.toBe('notAffirmed');
+      expect(r.showBanner).toBe(false);
+    }
+  });
+
+  it('a missing permission is named first: without Always the row points at Always, not the affirmation', () => {
+    const r = assessHealth(snap({ location: 'foreground' }), ctx({ disclosureAffirmed: false }));
+    expect(row(r.rows, 'autoRecord')?.reason).not.toBe('notAffirmed');
+  });
+
+  it('affirmed, or not known (a pure caller): automatic as before', () => {
+    expect(assessHealth(snap(), ctx({ disclosureAffirmed: true })).recordingMode).toBe('automatic');
+    expect(assessHealth(snap(), ctx()).recordingMode).toBe('automatic');
+  });
+});

@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import { AUTO_RECORD_INTENT_KEY, MANUAL_BY_CHOICE_KEY } from '@/core/permissions';
+import { AUTO_RECORD_INTENT_KEY, DISCLOSURE_AFFIRMED_KEY, MANUAL_BY_CHOICE_KEY } from '@/core/permissions';
 import { CONFIG_DEFAULTS } from '@/data/config/appConfig';
 import { T0 } from '@/data/queries/__fixtures__/rows';
 import {
@@ -14,6 +14,7 @@ import {
   type FakeAdapter,
   type Seed,
 } from '@/features/permissions/__fixtures__/harness';
+import { recordConsent } from '@/data/supabase/profile';
 import { SETTINGS_RETURN_ACK_KEY } from '@/features/permissions/usePermissionHealth';
 import { clearQueryClients } from '@/features/trips/__fixtures__/render';
 
@@ -78,7 +79,7 @@ describe('Android with Always and motion', () => {
   test('Turn on goes through the drive host, writes no auto-detect setting of its own, and moves on', async () => {
     const adapter = fakeAdapter(snap({ platform: 'android' }));
     const { onNext, host, settings, keys } = await renderStep('android', adapter, {
-      seed: { settings: { [MANUAL_BY_CHOICE_KEY]: true } },
+      seed: { settings: { [MANUAL_BY_CHOICE_KEY]: true }, affirmed: true },
     });
     expect(await screen.findByText(copy.toggleOff)).toBeOnTheScreen();
     await press(screen.getByTestId('auto-record-turn-on'));
@@ -90,7 +91,7 @@ describe('Android with Always and motion', () => {
 
   test('the toggle says plainly that it turns on automatic recording, and reads the host choice, not the status', async () => {
     const adapter = fakeAdapter(snap({ platform: 'android' }));
-    const { host } = await renderStep('android', adapter, { intent: true, status: 'off' });
+    const { host } = await renderStep('android', adapter, { intent: true, status: 'off', seed: { affirmed: true } });
     const toggle = await screen.findByTestId('auto-record-toggle');
     expect(toggle.props.value).toBe(true);
     expect(screen.getByText(copy.toggleOn)).toBeOnTheScreen();
@@ -173,7 +174,7 @@ describe('iOS', () => {
 
   test('after the first drive with Always and motion: through the host', async () => {
     const adapter = fakeAdapter(snap({ platform: 'ios' }));
-    const { host } = await renderStep('ios', adapter, { seed: { trips: [drive(1)] } });
+    const { host } = await renderStep('ios', adapter, { seed: { trips: [drive(1)], affirmed: true } });
     await press(await screen.findByTestId('auto-record-turn-on'));
     await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
   });
@@ -192,4 +193,60 @@ test('a read failure: said, with a retry, and Continue moves on', async () => {
   expect(await screen.findByTestId('auto-record-read-error')).toBeOnTheScreen();
   await press(screen.getByTestId('auto-record-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
+});
+
+describe('this account has not affirmed the disclosure (Task 19 r1, security I-1)', () => {
+  test('inherited Always: Turn on opens the one disclosure and does not turn auto-record on', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { host, onNext } = await renderStep('android', adapter);
+    await press(await screen.findByTestId('auto-record-turn-on'));
+    expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
+    expect(host.setAutoDetect).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  test('then Continue records the affirmation and the consent for the session uid, and only then turns it on', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { host, settings } = await renderStep('android', adapter);
+    await press(await screen.findByTestId('auto-record-turn-on'));
+    await press(await screen.findByTestId('disclosure-continue'));
+    await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
+    // The consent is recorded before auto-record is turned on.
+    const consentAt = (recordConsent as jest.Mock).mock.invocationCallOrder[0] as number;
+    const onAt = (host.setAutoDetect as jest.Mock).mock.invocationCallOrder[0] as number;
+    expect(consentAt).toBeLessThan(onAt);
+    // Back on the step, which now says it is on.
+    expect(await screen.findByTestId('auto-detect-step')).toBeOnTheScreen();
+  });
+
+  test('an affirmation made by the previous owner does not count for this account', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { host } = await renderStep('android', adapter, {
+      seed: { settings: { [DISCLOSURE_AFFIRMED_KEY]: { version: 'pd-1', at: T0, uid: 'previous-owner' } } },
+    });
+    await press(await screen.findByTestId('auto-record-turn-on'));
+    expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
+    expect(host.setAutoDetect).not.toHaveBeenCalled();
+  });
+
+  test('already on but not affirmed: never said to be on; Review opens the disclosure', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    await renderStep('android', adapter, { intent: true });
+    expect(await screen.findByText(copy.needsOk)).toBeOnTheScreen();
+    expect(screen.queryByText(copy.toggleOn)).toBeNull();
+    await press(screen.getByTestId('auto-record-review'));
+    expect(await screen.findByTestId('background-disclosure-onboarding')).toBeOnTheScreen();
+  });
+
+  test('turning off never needs the disclosure', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android' }));
+    const { host } = await renderStep('android', adapter, { intent: true });
+    await act(async () => {
+      fireEvent(await screen.findByTestId('auto-record-toggle'), 'valueChange', false);
+    });
+    expect(host.setAutoDetect).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId('background-disclosure-onboarding')).toBeNull();
+  });
 });
