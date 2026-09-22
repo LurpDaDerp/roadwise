@@ -29,7 +29,25 @@ test('a copy that differs from the source by one character is out of sync', () =
   expect(inSync(src + '\n', render(src))).toBe(false);
 });
 
+/** Every module specifier in `src`: import/export … from, bare import, dynamic import, require. */
+const specifiers = (src: string) => [
+  ...[...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']/gm)].map((m) => m[1]),
+  ...[...src.matchAll(/^\s*import\s*["']([^"']+)["']/gm)].map((m) => m[1]),
+  ...[...src.matchAll(/\b(?:import|require)\s*\(\s*["']([^"']+)["']/g)].map((m) => m[1]),
+];
+
 test('the catalog stays portable: it imports zod and nothing else', () => {
-  const imports = [...source().matchAll(/^import[^;]*?from\s+'([^']+)'/gms)].map((m) => m[1]);
-  expect(imports).toEqual(['zod']);
+  expect(specifiers(source())).toEqual(['zod']);
+});
+
+test('the portability scan sees every import form', () => {
+  const src = [
+    'import { a } from "x1";',
+    "export { b } from 'x2';",
+    "export * from 'x3';",
+    "import 'x4';",
+    "const c = await import('x5');",
+    'const d = require("x6");',
+  ].join('\n');
+  expect(specifiers(src).sort()).toEqual(['x1', 'x2', 'x3', 'x4', 'x5', 'x6']);
 });

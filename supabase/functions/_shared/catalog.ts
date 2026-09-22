@@ -38,19 +38,32 @@ export type NotificationType =
   | 'data_export_ready'
   | 'transparency_reminder';
 
-/** H6's switches; `recording` is the §11.1 rule 3 addition (every category individually switchable). */
-export type NotificationCategory =
-  | 'trip_summaries'
-  | 'recording'
-  | 'rewards'
-  | 'family'
-  | 'safety'
-  | 'product'
-  | 'weekly_recap'
-  | 'crews';
+/**
+ * H6's switches; `recording` is the §11.1 rule 3 addition (every category individually switchable).
+ * The runtime list, so the server's category-key validation can be asserted against it.
+ */
+export const NOTIFICATION_CATEGORIES = [
+  'trip_summaries',
+  'recording',
+  'rewards',
+  'family',
+  'safety',
+  'product',
+  'weekly_recap',
+  'crews',
+] as const;
+export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
-/** How §11.1 rule 2 treats a type: `family` and `critical` are exempt from the daily cap. */
-export type CapClass = 'standard' | 'family' | 'promo' | 'critical';
+/**
+ * How §11.1 rule 2 treats a type. `standard` and `promo` count toward the daily cap; `family`,
+ * `critical` and `transactional` do not. `transactional` exists only for the drive summary when
+ * `DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP` is false. Decide the cap with `countsTowardDailyCap`
+ * (or `CAP_EXEMPT_CLASSES`), never by comparing against `family` alone.
+ */
+export type CapClass = 'standard' | 'family' | 'promo' | 'critical' | 'transactional';
+
+/** The cap classes §11.1 rule 2 does not count. */
+export const CAP_EXEMPT_CLASSES: readonly CapClass[] = ['family', 'critical', 'transactional'];
 
 /** `local`: scheduled by the phone itself. `push`: sent by `push-sender`. */
 export type Delivery = 'local' | 'push';
@@ -92,23 +105,36 @@ export const DAILY_CAP = { nonFamilyPerDay: 2, promoPer7Days: 1 } as const;
  * The M4 ledger's reading of §11.1 is yes — rule 2 caps every non-family notification and exempts
  * only family and crash alerts, and §11.2 lists "Trip summary ready" as a notification — so a
  * driver with three drives in a day gets at most two summary notifications (batching keeps it
- * lower). Flip this one constant if the user rules drive summaries transactional. Both halves of
- * the cap (the phone's `localDeliveryPlan` and `push-sender`) read it through `countsTowardDailyCap`.
+ * lower). Flip this one constant if the user rules drive summaries transactional.
+ *
+ * It lives in the catalog's DATA (ruling T4 I1): it sets `CATALOG.trip_summary.capClass`
+ * (`standard` when true, `transactional` when false), so every reader of `capClass` — the phone's
+ * `localDeliveryPlan` and day count, `push-sender`'s cap, the inbox's `countServerPushesToday` —
+ * follows it with no code of its own.
  */
 export const DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP = true;
 
 // ——— the catalog ———
 
+/** The drive summary's Android channel, stated once for the entry and for `renderLocal`. */
+const TRIP_CHANNEL = 'trips' as const;
+
 const entry = <T extends NotificationType>(e: CatalogEntry & { type: T }): CatalogEntry & { type: T } => e;
 
-export const CATALOG = {
+export type Catalog = { readonly [K in NotificationType]: CatalogEntry & { type: K } };
+
+/**
+ * The catalog for one reading of the §11.1 question. The app and the edge functions use `CATALOG`
+ * (built from `DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP`); tests build both readings.
+ */
+export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog => ({
   // Live.
   trip_summary: entry({
     type: 'trip_summary',
     category: 'trip_summaries',
-    capClass: 'standard',
+    capClass: driveSummaryCountsTowardDailyCap ? 'standard' : 'transactional',
     priority: 'normal',
-    androidChannel: 'trips',
+    androidChannel: TRIP_CHANNEL,
     delivery: 'local',
     producer: 'M3',
     live: true,
@@ -239,17 +265,20 @@ export const CATALOG = {
     live: false,
     ttlHours: 168,
   }),
-} as const satisfies { [K in NotificationType]: CatalogEntry & { type: K } };
+});
+
+export const CATALOG: Catalog = buildCatalog(DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP);
 
 /** The live types, in catalog order. Equals the `inbox.type` CHECK (Task 20 asserts it). */
 export const LIVE_TYPES = ['trip_summary', 'permission_lapsed'] as const;
 export type LiveType = (typeof LIVE_TYPES)[number];
 
-/** Whether a notification of `type` uses up one of the day's `DAILY_CAP.nonFamilyPerDay`. */
-export function countsTowardDailyCap(type: NotificationType): boolean {
-  if (type === 'trip_summary') return DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP;
-  const cls = CATALOG[type].capClass;
-  return cls === 'standard' || cls === 'promo';
+/**
+ * Whether a notification of `type` uses up one of the day's `DAILY_CAP.nonFamilyPerDay`. Reads
+ * `capClass` and nothing else, so it and every other reader of `capClass` agree.
+ */
+export function countsTowardDailyCap(type: NotificationType, catalog: Catalog = CATALOG): boolean {
+  return !CAP_EXEMPT_CLASSES.includes(catalog[type].capClass);
 }
 
 // ——— payloads (live types only) ———
@@ -263,6 +292,11 @@ export const PayloadSchemas = {
       distanceM: z.number().min(0),
       status: z.enum(['provisional', 'final', 'unscored']),
       roleUnknown: z.boolean(),
+      /**
+       * `TripSummaryFacts.scorableIfDriver`, when the producer knows it. Absent reads as false: the
+       * copy then makes no scoring promise (ruling T4 I2).
+       */
+      scorableIfDriver: z.boolean().optional(),
     })
     .strict(),
   permission_lapsed: z
@@ -285,7 +319,7 @@ export interface LocalCopy {
   url: string;
   /** The *I drove / Passenger* action category, only when the driver must say who drove. */
   categoryId?: 'trip_role';
-  channelId: 'trips';
+  channelId: typeof TRIP_CHANNEL;
 }
 
 export interface PushCopy {
@@ -305,6 +339,12 @@ export interface TripSummaryFacts {
   clientTripId: string;
   distanceM: number;
   roleUnknown: boolean;
+  /**
+   * Whether this drive would be scored if the driver says *I drove*: not too short and not grade C
+   * (ruling T4 I2). `role_unknown` masks both in the scorer, so the notifier finds out by re-running
+   * the gate with `role: 'driver'`. Only when true may the copy say "so it can be scored".
+   */
+  scorableIfDriver: boolean;
   /** How many drives this notification announces (M3 batches drives that end close together). */
   count: number;
 }
@@ -330,7 +370,7 @@ export function renderLocal(type: 'trip_summary', facts: TripSummaryFacts): Loca
       title: `${facts.count} drives are ready`,
       body: 'Tap to see how they went.',
       url: '/trips',
-      channelId: 'trips',
+      channelId: TRIP_CHANNEL,
     };
   }
   const mi = miles(facts.distanceM);
@@ -338,13 +378,12 @@ export function renderLocal(type: 'trip_summary', facts: TripSummaryFacts): Loca
   if (facts.roleUnknown) {
     return {
       title: 'Were you driving?',
-      body:
-        mi === null
-          ? 'Tell us who drove this trip so it can be scored.'
-          : `Tell us who drove your ${mi} mi trip so it can be scored.`,
+      body: `Tell us who drove ${mi === null ? 'this trip' : `your ${mi} mi trip`}${
+        facts.scorableIfDriver ? ' so it can be scored' : ''
+      }.`,
       url,
       categoryId: 'trip_role',
-      channelId: 'trips',
+      channelId: TRIP_CHANNEL,
     };
   }
   return {
@@ -354,7 +393,7 @@ export function renderLocal(type: 'trip_summary', facts: TripSummaryFacts): Loca
         ? 'Your drive is ready. Tap to see how it went.'
         : `Your ${mi} mi drive is ready. Tap to see how it went.`,
     url,
-    channelId: 'trips',
+    channelId: TRIP_CHANNEL,
   };
 }
 
@@ -377,8 +416,8 @@ const LAPSE_COPY: Record<PermissionLapsedPayload['permission'], { title: string;
  * Push copy for a live `delivery: 'push'` type. Null for a local type (never pushed), a non-live
  * type (no copy yet) and a payload that fails its schema (nothing true to say).
  */
-export function renderPush(type: NotificationType, payload: unknown): PushCopy | null {
-  const e = CATALOG[type];
+export function renderPush(type: NotificationType, payload: unknown, catalog: Catalog = CATALOG): PushCopy | null {
+  const e = catalog[type];
   if (!e.live || e.delivery !== 'push') return null;
   if (type === 'permission_lapsed') {
     const p = PayloadSchemas.permission_lapsed.safeParse(payload);
@@ -401,6 +440,7 @@ export function renderInboxBase(type: NotificationType, payload: unknown): Inbox
       clientTripId: p.data.clientTripId,
       distanceM: p.data.distanceM,
       roleUnknown: p.data.roleUnknown,
+      scorableIfDriver: p.data.scorableIfDriver ?? false,
       count: 1,
     });
     return { title, body, url };

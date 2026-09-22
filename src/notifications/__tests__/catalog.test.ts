@@ -1,5 +1,8 @@
 import {
+  CAP_EXEMPT_CLASSES,
   CATALOG,
+  NOTIFICATION_CATEGORIES,
+  buildCatalog,
   DAILY_CAP,
   DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP,
   LIVE_TYPES,
@@ -48,6 +51,20 @@ const lapsePayload = { permission: 'location' as const, platform: 'ios' as const
 describe('the catalog', () => {
   test('holds every §11.2 P0 row and nothing else', () => {
     expect(Object.keys(CATALOG).sort()).toEqual([...P0_TYPES].sort());
+  });
+
+  test('the runtime category list is every H6 category, and every entry uses one', () => {
+    expect([...NOTIFICATION_CATEGORIES]).toEqual([
+      'trip_summaries',
+      'recording',
+      'rewards',
+      'family',
+      'safety',
+      'product',
+      'weekly_recap',
+      'crews',
+    ]);
+    for (const e of ALL) expect(NOTIFICATION_CATEGORIES).toContain(e.category);
   });
 
   test('each entry names itself', () => {
@@ -134,9 +151,41 @@ describe('the daily cap (§11.1 rule 2)', () => {
     expect(DAILY_CAP).toEqual({ nonFamilyPerDay: 2, promoPer7Days: 1 });
   });
 
-  test('the pending reading: drive summaries count, in one named switch', () => {
+  test('the pending reading: drive summaries count, and CATALOG is built from the switch', () => {
     expect(DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP).toBe(true);
-    expect(countsTowardDailyCap('trip_summary')).toBe(DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP);
+    expect(CATALOG).toEqual(buildCatalog(DRIVE_SUMMARY_COUNTS_TOWARD_DAILY_CAP));
+  });
+
+  test('switch on: the drive summary is standard, so every capClass reader counts it', () => {
+    const cat = buildCatalog(true);
+    expect(cat.trip_summary.capClass).toBe('standard');
+    expect(countsTowardDailyCap('trip_summary', cat)).toBe(true);
+  });
+
+  test('switch off: the drive summary is transactional, so every capClass reader exempts it', () => {
+    const cat = buildCatalog(false);
+    expect(cat.trip_summary.capClass).toBe('transactional');
+    expect(CAP_EXEMPT_CLASSES).toContain('transactional');
+    expect(countsTowardDailyCap('trip_summary', cat)).toBe(false);
+  });
+
+  test('the switch changes the drive summary and nothing else', () => {
+    const on = buildCatalog(true);
+    const off = buildCatalog(false);
+    for (const t of P0_TYPES) {
+      if (t === 'trip_summary') {
+        expect({ ...off[t], capClass: 'standard' }).toEqual(on[t]);
+      } else {
+        expect(off[t]).toEqual(on[t]);
+        expect(countsTowardDailyCap(t, off)).toBe(countsTowardDailyCap(t, on));
+      }
+    }
+  });
+
+  test('countsTowardDailyCap is exactly "capClass is not exempt"', () => {
+    for (const e of ALL) {
+      expect(countsTowardDailyCap(e.type)).toBe(!CAP_EXEMPT_CLASSES.includes(e.capClass));
+    }
   });
 
   test('family rows are exempt; standard and promo rows count', () => {
@@ -157,6 +206,8 @@ describe('payload schemas', () => {
     );
     expect(PayloadSchemas.trip_summary.safeParse({ ...tripPayload, distanceM: -1 }).success).toBe(false);
     expect(PayloadSchemas.trip_summary.safeParse({ ...tripPayload, status: 'scored' }).success).toBe(false);
+    expect(PayloadSchemas.trip_summary.safeParse({ ...tripPayload, scorableIfDriver: true }).success).toBe(true);
+    expect(PayloadSchemas.trip_summary.safeParse({ ...tripPayload, scorableIfDriver: 'yes' }).success).toBe(false);
   });
 
   test('permission_lapsed accepts the contract and refuses drift', () => {
@@ -177,6 +228,21 @@ describe('payload schemas', () => {
 describe('push copy', () => {
   test('a local type is never pushed', () => {
     expect(renderPush('trip_summary', tripPayload)).toBeNull();
+    for (const e of ALL.filter((x) => x.delivery === 'local')) expect(renderPush(e.type, tripPayload)).toBeNull();
+  });
+
+  test('every live push type renders from a valid payload', () => {
+    const valid: Partial<Record<NotificationType, unknown>> = { permission_lapsed: lapsePayload };
+    for (const e of ALL.filter((x) => x.live && x.delivery === 'push')) {
+      expect(renderPush(e.type, valid[e.type])).not.toBeNull();
+    }
+  });
+
+  test('the delivery guard holds on its own: a live type marked local is not pushed', () => {
+    const cat = buildCatalog(true);
+    const localLapse = { ...cat, permission_lapsed: { ...cat.permission_lapsed, delivery: 'local' as const } };
+    expect(renderPush('permission_lapsed', lapsePayload, cat)).not.toBeNull();
+    expect(renderPush('permission_lapsed', lapsePayload, localLapse)).toBeNull();
   });
 
   test('a payload that fails its schema renders nothing', () => {

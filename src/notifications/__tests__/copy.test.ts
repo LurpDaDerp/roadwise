@@ -1,8 +1,8 @@
 import { BANNED_COPY, renderInboxBase, renderLocal, renderPush } from '../catalog';
 
 const MILE = 1609.344;
-const trip = (distanceM: number, roleUnknown = false, count = 1) =>
-  renderLocal('trip_summary', { clientTripId: 'trip_01-A', distanceM, roleUnknown, count });
+const trip = (distanceM: number, roleUnknown = false, count = 1, scorableIfDriver = true) =>
+  renderLocal('trip_summary', { clientTripId: 'trip_01-A', distanceM, roleUnknown, scorableIfDriver, count });
 
 /** A local notification must not claim a result: the score is provisional at finalize. */
 const CLAIMS_RESULT = /is scored|your score|score of|\d+ ?(points|pts)/i;
@@ -30,7 +30,7 @@ describe('renderLocal — the one copy of the drive summary', () => {
     });
   });
 
-  test('role unknown asks who drove, with the I drove / Passenger category', () => {
+  test('role unknown on a drive that would score asks who drove, so it can be scored', () => {
     expect(trip(3.24 * MILE, true)).toEqual({
       title: 'Were you driving?',
       body: 'Tell us who drove your 3.2 mi trip so it can be scored.',
@@ -39,6 +39,27 @@ describe('renderLocal — the one copy of the drive summary', () => {
       channelId: 'trips',
     });
     expect(trip(0, true).body).toBe('Tell us who drove this trip so it can be scored.');
+  });
+
+  // Ruling T4 I2: `role_unknown` masks grade C and too-short in the scorer, so answering would
+  // not produce a score. The notifier re-runs the gate as a driver and passes false for either.
+  test.each([
+    ['grade C (poor GPS)', 3.24 * MILE, 'Tell us who drove your 3.2 mi trip.'],
+    ['too short to score', 0.3 * MILE, 'Tell us who drove your 0.3 mi trip.'],
+    ['no measurable distance', 0, 'Tell us who drove this trip.'],
+  ])('role unknown on a drive that would not score (%s) promises no score', (_why, d, body) => {
+    expect(trip(d, true, 1, false)).toEqual({
+      title: 'Were you driving?',
+      body,
+      url: '/trips/trip_01-A/summary',
+      categoryId: 'trip_role',
+      channelId: 'trips',
+    });
+  });
+
+  test('scorability changes only the role question', () => {
+    expect(trip(3.24 * MILE, false, 1, false)).toEqual(trip(3.24 * MILE, false, 1, true));
+    expect(trip(3.24 * MILE, true, 2, false)).toEqual(trip(3.24 * MILE, true, 2, true));
   });
 
   test.each([2, 5])('%i drives batch into one', (n) => {
@@ -92,8 +113,14 @@ describe('renderInboxBase', () => {
   };
 
   test('a drive summary uses the words the driver saw on the notification', () => {
-    const { title, body, url } = trip(3.24 * MILE, true);
-    expect(renderInboxBase('trip_summary', tripPayload)).toEqual({ title, body, url });
+    for (const scorableIfDriver of [true, false]) {
+      const { title, body, url } = trip(3.24 * MILE, true, 1, scorableIfDriver);
+      expect(renderInboxBase('trip_summary', { ...tripPayload, scorableIfDriver })).toEqual({ title, body, url });
+    }
+  });
+
+  test('a payload that does not say the drive would score makes no scoring promise', () => {
+    expect(renderInboxBase('trip_summary', tripPayload)?.body).toBe('Tell us who drove your 3.2 mi trip.');
   });
 
   test('a permission lapse uses its push copy', () => {
@@ -113,7 +140,9 @@ describe('renderInboxBase', () => {
 
 describe('every string', () => {
   const locals = [0, 0.3 * MILE, 3.24 * MILE, 9.96 * MILE, 250 * MILE].flatMap((d) =>
-    [1, 2, 5].flatMap((count) => [false, true].map((roleUnknown) => trip(d, roleUnknown, count)))
+    [1, 2, 5].flatMap((count) =>
+      [false, true].flatMap((roleUnknown) => [false, true].map((scorable) => trip(d, roleUnknown, count, scorable)))
+    )
   );
   const pushes = (['location_always', 'location', 'motion'] as const).flatMap((permission) =>
     (['ios', 'android'] as const).map((platform) =>
