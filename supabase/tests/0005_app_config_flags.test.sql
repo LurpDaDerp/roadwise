@@ -17,10 +17,11 @@ select is((select count(*)::int from supabase_migrations.schema_migrations
     where version = '0005' and array_to_string(statements, ' ') like '%feature_flags%on conflict (key) do nothing%'), 1,
   'migration 0005 inserts feature_flags with on conflict do nothing');
 select is((select count(*)::int from public.app_config where key = 'feature_flags'), 1, 'the feature_flags row exists');
-select is((select value from public.app_config where key = 'feature_flags'), '{"camera_beta": true, "auto_detect": true, "referral": true}'::jsonb,
+-- 0006 merges guardian_invites into this row; M3's three flags are asserted independently of it
+select is((select value - 'guardian_invites' from public.app_config where key = 'feature_flags'), '{"camera_beta": true, "auto_detect": true, "referral": true}'::jsonb,
   'it carries the M3 defaults');
-select is((select array_agg(k || ':' || jsonb_typeof(value -> k) order by k) from public.app_config, jsonb_object_keys(value) k where key = 'feature_flags'),
-  array['auto_detect:boolean', 'camera_beta:boolean', 'referral:boolean'], 'its value is an object of exactly three booleans');
+select is((select array_agg(k || ':' || jsonb_typeof(value -> k) order by k) from public.app_config, jsonb_object_keys(value - 'guardian_invites') k where key = 'feature_flags'),
+  array['auto_detect:boolean', 'camera_beta:boolean', 'referral:boolean'], 'apart from 0006''s guardian_invites, its value is an object of exactly three booleans');
 select is((select is_public from public.app_config where key = 'feature_flags'), true, 'it is public');
 select is((select count(*)::int from supabase_migrations.schema_migrations
     where version = '0005' and array_to_string(statements, ' ') like '%min_app_version%on conflict (key) do nothing%'), 1,

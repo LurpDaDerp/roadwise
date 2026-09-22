@@ -1,4 +1,4 @@
--- 0006_onboarding: driving stages, guardian invites (dark behind a flag), the age policy, the daily
+-- 0006_onboarding: driving stages, guardian invites (dark behind a flag), the age policy, the hourly
 -- age-band re-derivation on the user's local date, and the under-13 minimisation.
 --
 -- Objects (every one follows .agent/backend-conventions.md; numbers below are its sections):
@@ -50,13 +50,16 @@
 --     (the most recent zone their device reported), UTC only when none is known. 0007 may replace
 --     user_local_date to prefer notification_prefs.tz; its signature is the contract.
 --   * public.sync_age_band() replaced (0001's trigger on private_profiles.birth_date): derives on
---     the local date too, so the birth-date write and the daily pass can never disagree and flip a
+--     the local date too, so the birth-date write and the hourly pass can never disagree and flip a
 --     band back and forth around a birthday.
---   * public.rederive_age_bands() (ruling I4): invoker, run daily by pg_cron as postgres; no API
+--   * public.rederive_age_bands() (ruling I4): invoker, run hourly by pg_cron as postgres; no API
 --     role may execute it. A teen who turns 18 becomes 18_plus; a u13 child who turns 13 becomes
 --     13_17 and is released into onboarding with the already-minimised, empty profile.
---   * cron job `age-band-rederive` at 00:15 UTC. The pg_cron extension is created here when absent
---     (it installs into pg_catalog and its own cron schema, the one exception to #14).
+--   * cron job `age-band-rederive` at minute 15 of every hour (ruling T1): each user rolls over
+--     within the hour after their own local midnight, whatever their zone, never before it. The
+--     pass is idempotent (it writes only bands that differ), so every other run of the day changes
+--     nothing. The pg_cron extension is created here when absent (it installs into pg_catalog and
+--     its own cron schema, the one exception to #14).
 --   * app_config rows, `on conflict (key) do nothing` (security rule 4): minor_consent_mode,
 --     onboarding, legal_urls, store_urls, oem_battery_guides, min_app_version, feature_flags; and
 --     guardian_invites merged into an existing feature_flags row only when the key is absent.
@@ -223,7 +226,7 @@ language sql immutable set search_path = public as $$
 $$;
 
 -- the user's calendar date at p_at: in the zone of their latest live drive, else UTC. A zone the
--- server no longer knows falls back to UTC rather than failing the daily pass for everyone.
+-- server no longer knows falls back to UTC rather than failing the hourly pass for everyone.
 create or replace function public.user_local_date(p_user uuid, p_at timestamptz default now()) returns date
 language plpgsql stable set search_path = public as $$
 declare
@@ -253,7 +256,7 @@ begin
   return new;
 end $$;
 
--- daily, by pg_cron as postgres
+-- hourly, by pg_cron as postgres
 create or replace function public.rederive_age_bands() returns int
 language plpgsql set search_path = public as $$
 declare
@@ -423,10 +426,10 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- the daily pass
+-- the hourly pass
 -- ---------------------------------------------------------------------------
 create extension if not exists pg_cron with schema pg_catalog;
-select cron.schedule('age-band-rederive', '15 0 * * *', 'select public.rederive_age_bands()');
+select cron.schedule('age-band-rederive', '15 * * * *', 'select public.rederive_age_bands()');
 
 -- ---------------------------------------------------------------------------
 -- config rows: an operator's value is never overwritten by a push

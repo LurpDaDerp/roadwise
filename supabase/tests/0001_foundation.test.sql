@@ -265,15 +265,17 @@ select throws_ok($$ select public.set_birth_date(date '2010-06-01') $$, '42501',
 -- through the trigger, not only through the rpc
 -- ---------------------------------------------------------------------------
 reset role;
+-- devices.updated_at moves on update: the fixture row started stale (see the top of the file); checked before B
+-- turns under 13 below, because 0006's minimisation then deletes B's devices
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), timestamptz '2020-01-01 00:00:00+00', 'fixture device starts with a stale updated_at');
+update public.devices set push_token = 'srv' where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b';
+select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), now(), 'updated_at bumps on update');
+
 update public.private_profiles set birth_date = date '2015-01-01' where user_id = '00000000-0000-0000-0000-000000000002';
 select is((select age_band from public.profiles where id = '00000000-0000-0000-0000-000000000002'), 'u13', 'a server write of birth_date re-derives the band');
 update public.private_profiles set birth_date = null where user_id = '00000000-0000-0000-0000-000000000002';
 select is((select age_band from public.profiles where id = '00000000-0000-0000-0000-000000000002'), 'unknown', 'clearing birth_date server-side resets the band');
 
--- devices.updated_at moves on update: the fixture row started stale (see the top of the file)
-select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), timestamptz '2020-01-01 00:00:00+00', 'fixture device starts with a stale updated_at');
-update public.devices set push_token = 'srv' where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b';
-select is((select updated_at from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and id = 'dev-b'), now(), 'updated_at bumps on update');
 
 select * from finish();
 rollback;

@@ -1,5 +1,5 @@
 -- 0006_onboarding: driving stages, guardian invites (dark behind feature_flags.guardian_invites),
--- the age policy on trips, the daily age-band re-derivation on the user's local date, and the
+-- the age policy on trips, the hourly age-band re-derivation on the user's local date, and the
 -- under-13 minimisation (profile cleared, devices and consents deleted, OAuth name metadata
 -- stripped and kept stripped, every later write refused).
 --
@@ -247,7 +247,7 @@ select is((select row(polpermissive, polcmd, polroles = array['authenticated'::r
   'storage_refuse_underage is a restrictive insert policy for authenticated');
 
 select is((select row(schedule, command, username)::text from cron.job where jobname = 'age-band-rederive'),
-  row('15 0 * * *', 'select public.rederive_age_bands()', 'postgres')::text, 'pg_cron runs the re-derivation daily at 00:15 UTC as postgres');
+  row('15 * * * *', 'select public.rederive_age_bands()', 'postgres')::text, 'pg_cron runs the re-derivation hourly at minute 15 as postgres');
 
 select is((select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relrowsecurity), 0, 'no table in public is missing RLS');
@@ -473,7 +473,7 @@ select throws_ok($$ update public.private_profiles set birth_date = current_date
 select set_config('request.jwt.claims', '', true);
 
 -- ---------------------------------------------------------------------------
--- 7. daily re-derivation: K turns 13, S turns 18
+-- 7. hourly re-derivation: K turns 13, S turns 18
 -- ---------------------------------------------------------------------------
 select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-000000000005', 'a1a1a1a1-0000-4000-8000-000000000006')),
   array['u13', '13_17'], 'K starts under 13 and S at 17');
@@ -487,7 +487,7 @@ select is((select array_agg(age_band order by id) from public.profiles where id 
 -- simulate the calendar moving under unchanged birth dates: put the bands back as they were yesterday
 update public.profiles set age_band = 'u13' where id = 'a1a1a1a1-0000-4000-8000-000000000005';
 update public.profiles set age_band = '13_17' where id = 'a1a1a1a1-0000-4000-8000-000000000006';
-select is(public.rederive_age_bands(), 2, 'the daily pass moves both');
+select is(public.rederive_age_bands(), 2, 'the hourly pass moves both');
 select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-000000000005', 'a1a1a1a1-0000-4000-8000-000000000006')),
   array['13_17', '18_plus'], 'K is 13_17 and S is 18_plus');
 select is(public.rederive_age_bands(), 0, 'a second pass changes nothing');
@@ -530,11 +530,11 @@ update public.private_profiles set birth_date = (select kir from d) - interval '
   where user_id in ('a1a1a1a1-0000-4000-8000-00000000000a', 'a1a1a1a1-0000-4000-8000-00000000000b');
 select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-00000000000a', 'a1a1a1a1-0000-4000-8000-00000000000b')),
   array['18_plus', '13_17'], 'setting a birth date derives the band on the driver''s local date');
--- and so does the daily pass
+-- and so does the hourly pass
 update public.private_profiles set birth_date = (select kir from d) - interval '18 years'
   where user_id in ('a1a1a1a1-0000-4000-8000-000000000008', 'a1a1a1a1-0000-4000-8000-000000000009');
 update public.profiles set age_band = 'unknown' where id in ('a1a1a1a1-0000-4000-8000-000000000008', 'a1a1a1a1-0000-4000-8000-000000000009');
-select is(public.rederive_age_bands(), 2, 'the daily pass finds both stale bands');
+select is(public.rederive_age_bands(), 2, 'the hourly pass finds both stale bands');
 select is((select array_agg(age_band order by id) from public.profiles where id in ('a1a1a1a1-0000-4000-8000-000000000008', 'a1a1a1a1-0000-4000-8000-000000000009')),
   array['18_plus', '13_17'], 'and turns each over on the driver''s local date, not the UTC date');
 

@@ -356,7 +356,7 @@ select is((select count(*)::int from pg_publication_tables where pubname = 'supa
 select is((select public from storage.buckets where id = 'traces'), false, 'traces bucket is private');
 select is((select file_size_limit from storage.buckets where id = 'traces'), 5242880::bigint, 'traces bucket caps objects at 5 MB');
 select is((select allowed_mime_types from storage.buckets where id = 'traces'), array['application/gzip'], 'traces bucket accepts gzip only');
-select policies_are('storage', 'objects', array['traces_insert_own', 'traces_select_own', 'traces_delete_own']::name[], 'storage.objects has exactly the three traces policies');
+select policies_are('storage', 'objects', array['traces_insert_own', 'traces_select_own', 'traces_delete_own', 'storage_refuse_underage']::name[], 'storage.objects has exactly the three traces policies and 0006''s under-13 refusal');
 
 -- default privileges: anything postgres creates in public from now on is default-deny
 create table public.zz_probe (id int);
