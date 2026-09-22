@@ -22,6 +22,12 @@ export interface DriveStateReporterDeps {
   userId: string;
   deviceId: string;
   onError?: (error: unknown, context: string) => void;
+  /**
+   * Told the outcome of every write, once it settles: `ok` is true only when it reached this
+   * install's row. For the runtime's own retry policy (H2), without wrapping the client. A
+   * listener that throws costs the reporter nothing.
+   */
+  onWrite?: (state: 'idle' | 'recording', ok: boolean) => void;
 }
 
 export interface DriveStateReporter {
@@ -48,6 +54,16 @@ export function createDriveStateReporter(deps: DriveStateReporterDeps): DriveSta
 
   /** One write; true when it reached this install's row. */
   async function write(state: Reported): Promise<boolean> {
+    const ok = await attempt(state);
+    try {
+      deps.onWrite?.(state, ok);
+    } catch (error) {
+      deps.onError?.(error, 'devices drive state onWrite');
+    }
+    return ok;
+  }
+
+  async function attempt(state: Reported): Promise<boolean> {
     try {
       const { data, error } = await supabase
         .from('devices')

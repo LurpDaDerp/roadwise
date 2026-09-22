@@ -119,4 +119,66 @@ describe('drive-state reporter', () => {
     await reporter.settled();
     expect(order).toEqual(['recording', 'idle']);
   });
+
+  describe('onWrite (the runtime learns each outcome)', () => {
+    function withOnWrite() {
+      const fake = createFakeSupabase();
+      const onWrite = jest.fn();
+      const onError = jest.fn();
+      const reporter = createDriveStateReporter({
+        supabase: fake.client,
+        userId: 'user-a',
+        deviceId: 'install-1',
+        onError,
+        onWrite,
+      });
+      const feed = async (...statuses: EngineStatus[]) => {
+        for (const s of statuses) reporter.onDriveState(state(s));
+        await reporter.settled();
+      };
+      return { fake, reporter, feed, onWrite, onError };
+    }
+
+    it('is told every write, in order, with its outcome', async () => {
+      const { feed, onWrite } = withOnWrite();
+      await feed('candidate', 'recording', 'recording', 'armed');
+      expect(onWrite.mock.calls).toEqual([
+        ['recording', true],
+        ['idle', true],
+      ]);
+    });
+
+    it('a failed write and a write that matched no row are both not ok; a retry reports again', async () => {
+      const { feed, fake, reporter, onWrite } = withOnWrite();
+      fake.respond = () => ({ data: null, error: { message: 'offline' } });
+      await feed('recording');
+      fake.respond = () => ({ data: [], error: null });
+      await feed('armed');
+      fake.respond = () => ({ data: [{ id: 'install-1' }], error: null });
+      await reporter.retryPending();
+      expect(onWrite.mock.calls).toEqual([
+        ['recording', false],
+        ['idle', false],
+        ['idle', true],
+      ]);
+    });
+
+    it('is not told of writes that never happen (a discarded candidate)', async () => {
+      const { feed, onWrite } = withOnWrite();
+      await feed('armed', 'candidate', 'armed');
+      expect(onWrite).not.toHaveBeenCalled();
+    });
+
+    it('a listener that throws is reported and costs the reporter nothing', async () => {
+      const { fake, reporter, onWrite, onError } = withOnWrite();
+      onWrite.mockImplementation(() => {
+        throw new Error('listener');
+      });
+      reporter.onDriveState(state('recording'));
+      reporter.onDriveState(state('armed'));
+      await reporter.settled();
+      expect(fake.to('devices')).toHaveLength(2);
+      expect(onError).toHaveBeenCalledWith(expect.any(Error), 'devices drive state onWrite');
+    });
+  });
 });
