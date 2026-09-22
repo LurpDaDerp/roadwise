@@ -14,6 +14,7 @@ import {
   LastTripCard,
   LicenceCard,
 } from '@/features/home';
+import { InboxBell } from '@/features/inbox/InboxBell';
 import { t } from '@/i18n';
 import { Button, Screen, Text, useTheme } from '@/ui';
 
@@ -41,7 +42,8 @@ function confirmSignOut(message: string): Promise<boolean> {
 }
 
 /**
- * B1 — Home (§7.B B1, direction contract FIRST VIEWPORT): the status banners, the licence card,
+ * B1 — Home (§7.B B1, direction contract FIRST VIEWPORT): the header with the inbox bell (B3,
+ * Task 18), the status banners, the licence card,
  * the RECORD row, the detection status line, and the bottom-anchored Start drive that the tab
  * bar's centre Drive action mirrors. Sign-out sits at the foot of the page with its consequence.
  */
@@ -77,6 +79,19 @@ export default function Home() {
     <Screen bottomInset={false} padded={false}>
       {/* One column, so the scrolling record and the anchored action meet without a gap. */}
       <View style={{ flex: 1 }}>
+        {/* The header: the inbox bell at the trailing edge, above the scrolling record, so it is
+          always one tap away. It prints the unread count as a number, never as colour alone. */}
+        <View
+          testID="home-header"
+          style={{
+            flexDirection: 'row',
+            justifyContent: 'flex-end',
+            paddingHorizontal: th.space.sm,
+            paddingTop: th.space.xs,
+          }}
+        >
+          <InboxBell />
+        </View>
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{

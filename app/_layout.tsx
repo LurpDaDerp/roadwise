@@ -1,25 +1,29 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import * as Notifications from 'expo-notifications';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { flushBeforeSignOut } from '@/boot/bootstrap';
+import { flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
 import { hasDriverData, readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
+import { createSettingsRepo } from '@/data/db/settings';
+import { DeviceHost } from '@/data/devices/DeviceHost';
+import { unregisterPushToken } from '@/data/devices/pushToken';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
-import { SessionProvider, useSession } from '@/data/supabase/session';
+import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
-import { useSummaryNotificationRouting } from '@/features/drive/useSummaryNotificationRouting';
 import { RestoreRetryProvider } from '@/features/home/HomeBanners';
+import { NotificationsHost } from '@/features/notifications';
+import { PermissionPromptsHost } from '@/features/permissions/PermissionPromptsHost';
+import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
 import { FONT_WAIT_MS, shouldRender, useAppFonts } from '@/ui/fonts';
 
@@ -27,17 +31,6 @@ import { FONT_WAIT_MS, shouldRender, useAppFonts } from '@/ui/fonts';
 // printed in B612, not in the platform sans it would otherwise fall back to for one flash.
 void SplashScreen.preventAutoHideAsync().catch(() => {
   // The splash is already hidden (a fast reload). Nothing to hold.
-});
-
-// A drive summary that fires while the app is open still shows (U3). Quiet: a banner and the list,
-// no sound. M4 refines this per notification kind.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-  }),
 });
 
 const controller = runtimeController;
@@ -56,6 +49,41 @@ function AgeBandSync({ host }: { host: { setAgeBand(band: string | null): Promis
     if (known) void host.setAgeBand(band).catch(() => {});
   }, [host, band, known]);
   return null;
+}
+
+/**
+ * M4's runtime-bound hosts (Task 18), inside the data, query, drive and session providers:
+ * - `DeviceHost`: the device row, the permission report and the push token; on each foreground it
+ *   syncs the notification preferences (T7). No `subscribeDrive`: the runtime is the one drive-state
+ *   reporter (T10 r2, H2).
+ * - `NotificationsHost`: the app's only notification handler and response listener (rev1: C1).
+ *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
+ *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here.
+ * - `PermissionPromptsHost`: the post-drive background-location offers (T9), keyed by the signed-in
+ *   account so a handover remounts it and its "finished" ref never holds back the next owner.
+ */
+function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
+  const host = runtime.drive;
+  const { session } = useSession();
+  const uid = session?.user.id ?? null;
+  const isBusy = useCallback(() => host.isBusy(), [host]);
+  const subscribeBusy = useCallback((listener: () => void) => host.subscribe(() => listener()), [host]);
+  const onForeground = useCallback(
+    (userId: string) => syncNotificationPrefs(userId, { db: runtime.db }),
+    [runtime]
+  );
+  return (
+    <>
+      <DeviceHost onForeground={onForeground} />
+      <NotificationsHost
+        isRecording={isBusy}
+        isBusy={isBusy}
+        subscribeBusy={subscribeBusy}
+        ready={ready}
+      />
+      <PermissionPromptsHost key={uid ?? 'signed-out'} isBusy={isBusy} />
+    </>
+  );
 }
 
 export default function RootLayout() {
@@ -157,9 +185,15 @@ export default function RootLayout() {
   const ready =
     fontsReady && (runtime !== null || state.error !== null || state.status === 'switching');
 
-  // The layout sits above `DriveProvider`, so the host is passed in. It routes a summary tap only
-  // once the Stack below is mounted, and never into a drive under way.
-  useSummaryNotificationRouting({ host: runtime?.drive ?? null, ready: ready && runtime !== null });
+  // The push-token release (T10), once per runtime: a rebuild's cleanup unregisters it before the
+  // next runtime registers its own. It runs inside the sign-out's 2 s budget, reads the token and
+  // the uid it was registered for at its start, and sends nothing unless the session is still that
+  // uid, so it can never release under the next driver's JWT (T17 security).
+  useEffect(() => {
+    if (runtime === null) return;
+    const settings = createSettingsRepo(runtime.db);
+    return registerBeforeSignOut(() => unregisterPushToken({ settings }));
+  }, [runtime]);
 
   // Sign-out sends the deletes this device still owes while the session can (D1 security M-1).
   const flush = useCallback(
@@ -243,6 +277,8 @@ export default function RootLayout() {
                         <Stack screenOptions={{ headerShown: false, orientation: 'portrait' }}>
                           <Stack.Screen name="index" />
                           <Stack.Screen name="(auth)" />
+                          <Stack.Screen name="(onboarding)" />
+                          <Stack.Screen name="update-required" />
                           <Stack.Screen name="(tabs)" />
                           <Stack.Screen name="(app)" />
                           <Stack.Screen name="auth/callback" />
@@ -254,6 +290,7 @@ export default function RootLayout() {
                         </Stack>
                       </LockoutGate>
                     </AuthGate>
+                    <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
                   </RestoreRetryProvider>
                 </SessionProvider>
               </DriveProvider>

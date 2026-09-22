@@ -128,6 +128,7 @@ jest.mock('@/data/supabase/session', () => ({
     return children;
   },
   useSession: () => ({ status: 'signedIn', profile: mockProfile.current }),
+  registerBeforeSignOut: () => () => {},
 }));
 jest.mock('@/data/queries', () => ({
   ...jest.requireActual('@/data/queries'),
@@ -142,10 +143,10 @@ jest.mock('@/features/home/HomeBanners', () => ({
   },
 }));
 
-const mockRouting = jest.fn();
-jest.mock('@/features/drive/useSummaryNotificationRouting', () => ({
-  useSummaryNotificationRouting: (opts: unknown) => mockRouting(opts),
-}));
+// Task 18's hosts are stand-ins here; their wiring is `layout-wiring.test.tsx`'s subject.
+jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
+jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
+jest.mock('@/features/permissions/PermissionPromptsHost', () => ({ PermissionPromptsHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
 import RootLayout from '../_layout';
@@ -284,17 +285,9 @@ describe('the root layout', () => {
     expect(screen.queryByTestId('hud-screen')).toBeNull();
   });
 
-  test('mounts the summary routing with the host, and the foreground notification handler', async () => {
-    const { host } = await renderReady();
-    expect(mockRouting).toHaveBeenLastCalledWith({ host, ready: true });
-    // Set once, at module load: a summary firing while the app is open still shows, quietly.
-    expect(handlerCalls).toHaveLength(1);
-    await expect(handlerCalls[0]?.[0].handleNotification()).resolves.toEqual({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    });
+  test('sets no notification handler of its own: the notification host installs the only one (Task 18)', async () => {
+    await renderReady();
+    expect(handlerCalls).toHaveLength(0);
   });
 
   test('wires sign-out to flush the deletes owed, and Home’s Retry to the restore', async () => {

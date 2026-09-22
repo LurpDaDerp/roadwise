@@ -1,6 +1,4 @@
-import { act, renderHook } from '@testing-library/react-native';
 import * as Notifications from 'expo-notifications';
-import { router } from 'expo-router';
 
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
@@ -18,7 +16,6 @@ import {
   type ScheduledSummary,
   type SummaryNotificationPort,
 } from '@/features/drive/summaryNotifier';
-import { useSummaryNotificationRouting } from '@/features/drive/useSummaryNotificationRouting';
 import { TRIP_HISTORY_HREF, tripSummaryHref } from '@/features/trips/routes';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
@@ -580,64 +577,5 @@ describe('summaryHrefFor', () => {
     expect(summaryHrefFor(response({ kind: 'weekly' }))).toBeNull();
     expect(summaryHrefFor(response(null))).toBeNull();
     expect(summaryHrefFor(response({ kind: DRIVE_SUMMARY_KIND, clientTripIds: [] }))).toBeNull();
-  });
-});
-
-describe('useSummaryNotificationRouting', () => {
-  const tap = (ids: string[], id = 'drive-summary:x') =>
-    ({
-      actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
-      notification: { date: T, request: { identifier: id, content: { data: { kind: DRIVE_SUMMARY_KIND, clientTripIds: ids } } } },
-    }) as unknown as Notifications.NotificationResponse;
-
-  function listener() {
-    const calls = (Notifications.addNotificationResponseReceivedListener as jest.Mock).mock.calls;
-    return calls[calls.length - 1][0] as (r: Notifications.NotificationResponse) => void;
-  }
-
-  test('a tap routes to that drive summary and clears the response', async () => {
-    const h = stubHost(state());
-    await renderHook(() => useSummaryNotificationRouting({ host: h.host }));
-    await act(() => listener()(tap(['t1'])));
-    expect(router.push).toHaveBeenCalledWith(tripSummaryHref('t1'));
-    expect(Notifications.clearLastNotificationResponse).toHaveBeenCalled();
-  });
-
-  test('a tap that launched the app is routed once the app is ready, exactly once', async () => {
-    (Notifications.getLastNotificationResponse as jest.Mock).mockReturnValue(tap(['t1']));
-    const h = stubHost(state());
-    const { rerender } = await renderHook(
-      ({ ready }: { ready: boolean }) => useSummaryNotificationRouting({ host: h.host, ready }),
-      { initialProps: { ready: false } }
-    );
-    expect(router.push).not.toHaveBeenCalled();
-    await rerender({ ready: true });
-    expect(router.push).toHaveBeenCalledTimes(1);
-    await rerender({ ready: true });
-    expect(router.push).toHaveBeenCalledTimes(1);
-    (Notifications.getLastNotificationResponse as jest.Mock).mockReturnValue(null);
-  });
-
-  test('a tap during a drive waits until the drive is over', async () => {
-    const h = stubHost(state({ status: 'recording', clientTripId: 'now' }));
-    await renderHook(() => useSummaryNotificationRouting({ host: h.host }));
-    await act(() => listener()(tap(['t1'])));
-    expect(router.push).not.toHaveBeenCalled();
-    await act(() => h.push({ status: 'finalizing' }));
-    expect(router.push).not.toHaveBeenCalled();
-    await act(() => h.push({ status: 'armed', clientTripId: null }));
-    expect(router.push).toHaveBeenCalledWith(tripSummaryHref('t1'));
-  });
-
-  test('attaches the notifier to the host it is given, and detaches on unmount', async () => {
-    const h = stubHost(state());
-    const { unmount } = await renderHook(() => useSummaryNotificationRouting({ host: h.host }));
-    expect(h.listeners()).toBeGreaterThan(0);
-    await unmount();
-    expect(h.listeners()).toBe(0);
-  });
-
-  test('no host yet (the runtime is still booting): nothing attaches, taps still wait', async () => {
-    await expect(renderHook(() => useSummaryNotificationRouting({ host: null }))).resolves.toBeDefined();
   });
 });

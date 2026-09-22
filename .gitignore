@@ -23,6 +23,11 @@ expo-env.d.ts
 .env.*
 !.env.example
 
+# Firebase (FCM) Android credential (Task 18): never committed. EAS builds read the
+# GOOGLE_SERVICES_JSON file variable. Deliberately NOT in .easignore: a local copy may be uploaded
+# to an EAS build, which is where it is meant to go.
+google-services.json
+
 # supabase local
 supabase/.temp/
 supabase/.branches/

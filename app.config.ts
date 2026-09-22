@@ -47,6 +47,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // tile and nothing crashes. iOS uses Apple Maps and needs no key.
     config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000000' },
+    // FCM, for server pushes (Task 18). Never committed (.gitignore): an EAS build gets it from the
+    // GOOGLE_SERVICES_JSON file variable, a local build from the file beside this one.
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
     permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'],
   },
   extra: { eas: { projectId: EAS_PROJECT_ID } },
@@ -59,7 +62,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // `audio` background mode. The app never records, so no microphone prompt and no
     // RECORD_AUDIO permission.
     ['expo-audio', { microphonePermission: false, recordAudioAndroid: false, enableBackgroundPlayback: true }],
-    'expo-notifications',
+    // The Android status-bar icon: the app mark as a white glyph on transparent (96 x 96), tinted
+    // ID blue in the shade.
+    ['expo-notifications', { icon: './assets/notification-icon.png', color: '#1C3F94' }],
     'expo-font',
     'expo-web-browser',
     [
