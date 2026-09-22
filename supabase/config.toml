@@ -384,6 +384,11 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# push-sender is called by pg_cron (dispatch_push, 0007), not by a user: it authenticates the
+# signed X-Sweep-Signature header itself, so the gateway JWT check is off for it alone.
+[functions.push-sender]
+verify_jwt = false
+
 # purge-trace-objects (task B6): woken only by pg_cron through pg_net with a signed
 # X-Sweep-Signature header (0008 dispatch_purge_traces), never by a client, so no JWT is sent.
 [functions.purge-trace-objects]
