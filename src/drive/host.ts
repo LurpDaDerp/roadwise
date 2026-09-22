@@ -147,8 +147,10 @@ export interface DriveHost {
   subscribe(fn: (s: DriveState) => void): () => void;
   /** For the alert player: L1 honours the silent switch only when mounted, unlocked, in front. */
   l1RespectsSilentSwitch(): boolean;
-  /** The player could not sound an alert: `alertsAvailable` is false for the rest of this drive. */
+  /** The player could not sound an alert: `alertsAvailable` is false until a sound works again. */
   reportAlertsUnavailable(): void;
+  /** An alert sounded: a mark from an earlier failure in this drive is cleared (n2). */
+  reportAlertsAvailable(): void;
   /**
    * Re-read the permissions and the flag and arm or disarm to match (final review I4). Also runs
    * by itself on every transition to `active`, so a return from Settings takes effect.
@@ -234,8 +236,10 @@ export function playerInputs(getHost: () => DriveHost | undefined): {
   l1RespectsSilentSwitch(): boolean;
   deliverable(): boolean;
   onUnavailable(): void;
+  onAvailable(): void;
 } {
   return {
+    onAvailable: () => getHost()?.reportAlertsAvailable(),
     // A sound that failed marks the drive's alerts unavailable (final review I2).
     onUnavailable: () => getHost()?.reportAlertsUnavailable(),
     callActive: () => getHost()?.snapshot().callActive ?? false,
@@ -867,6 +871,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     reportAlertsUnavailable() {
       if (soundFailedThisDrive) return;
       soundFailedThisDrive = true;
+      publish();
+    },
+
+    reportAlertsAvailable() {
+      if (!soundFailedThisDrive) return;
+      soundFailedThisDrive = false;
       publish();
     },
 

@@ -1165,3 +1165,17 @@ describe('a sign-out in progress ignores auth events; a signed-out host records 
     expect(h.fake.calls.filter((c) => c.startsWith('startCapture'))).toEqual([]);
   });
 });
+
+describe('the unavailable mark is not sticky (final re-review n2)', () => {
+  test('a later alert that sounded clears it within the same drive', async () => {
+    const h = harness();
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(40, { t0: h.now() + 1000 }));
+    const inputs = playerInputs(() => h.host);
+    inputs.onUnavailable();
+    expect(h.host.snapshot().alertsAvailable).toBe(false);
+    inputs.onAvailable();
+    expect(h.host.snapshot().alertsAvailable).toBe(true);
+  });
+});

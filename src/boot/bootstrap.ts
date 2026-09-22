@@ -41,7 +41,7 @@ import { AppState } from 'react-native';
 
 import type { DriveSenseEvent, DriveSenseEvents, DriveSenseState, Subscription } from '@drive-sense';
 
-import { createExpoAlertPorts, probeAlertTones } from '@/core/alerts/adapters';
+import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import {
@@ -58,6 +58,7 @@ import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimit
 import { readFlag, refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
 import { createExpoDb, createTripsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
+import { onDataChanged } from '@/data/events';
 import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
@@ -91,6 +92,7 @@ import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createExpoTraceFs } from '@/data/sync/traceFs';
 
 import {
+  CANCEL_SUMMARIES_TIMEOUT_MS,
   ensureDeviceOwner,
   PENDING_OWNER_KEY,
   readDeviceOwner,
@@ -535,7 +537,10 @@ async function runLaunch(
     // so the next launch's wipe finds it in the OS and cancels it, rather than it landing after.
     const release = async (): Promise<void> => {
       unmountDiagnostics();
-      await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
+      // Bounded like the wipe's cancel (final re-review n5): a hung notifications call must not
+      // hold a handover's teardown, and with it the "Switching accounts" screen.
+      const settling = notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
+      if (settling) await withinMs(settling, CANCEL_SUMMARIES_TIMEOUT_MS);
       notifier?.detach();
     };
     return { drive, limits, adopted: adopted ? newest : null, passes, release };
@@ -798,11 +803,13 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
 function defaultPlayer(
   onError: (error: unknown, context: string) => void
 ): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
+  // No launch probe (final re-review n2): `createAudioPlayer` does not load the asset on either
+  // platform — a load error arrives later, asynchronously — so creating a player at launch proves
+  // nothing, and really loading one would hold every launch (background wakes included) on audio.
+  // The check lives where it means something: a tone that never reports loading or playing fails
+  // at its first alert, and the host marks alerts unavailable (and clears it when one sounds).
   return async (inputs) => {
     const ports = await createExpoAlertPorts();
-    // Each tone is loaded once here, off the drive path (final review I2): a missing or corrupt
-    // asset rejects now, so the drive records silently and says so instead of failing unseen.
-    await probeAlertTones();
     return createAlertPlayer({
       ...ports,
       voiceEnabled: () => true,
@@ -911,6 +918,20 @@ export async function startForegroundJobs(
     onError,
   };
   const stopHydrate = runWhenForeground('hydrate', HYDRATE_INTERVAL_MS, job, foreground);
+  // A restore a drive paused (it halts while the engine is busy) resumes when that drive is
+  // finalized, if the app is in front — rather than leaving Home saying "Restoring…" with nothing
+  // running until the next foreground (final re-review n4). Only while a full restore is owed.
+  let resuming = false;
+  const offFinalize = onDataChanged((change) => {
+    if (change.source !== 'finalize' || !fullOwed || resuming) return;
+    if (foreground.appState.currentState !== 'active') return;
+    resuming = true;
+    void job()
+      .catch((error: unknown) => onError(error, 'foreground job hydrate (after the drive)'))
+      .finally(() => {
+        resuming = false;
+      });
+  });
   const stopConfig = runWhenForeground(
     'config',
     APP_CONFIG_INTERVAL_MS,
@@ -925,6 +946,7 @@ export async function startForegroundJobs(
     async stop() {
       stopHydrate();
       stopConfig();
+      offFinalize();
     },
     async runNow() {
       try {

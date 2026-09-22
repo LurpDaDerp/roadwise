@@ -92,6 +92,11 @@ export interface AlertPlayerDeps {
    * but recovered on the playback session (`fellBack`) is not a failure: the alert still sounded.
    */
   onUnavailable?(): void;
+  /**
+   * An alert activated and played: sound works again, so a mark left by an earlier, transient
+   * failure is cleared (final re-review n2 — the mark is not sticky for the whole drive).
+   */
+  onAvailable?(): void;
 }
 
 export interface AlertPlayer {
@@ -190,6 +195,14 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   function unavailable(): void {
     try {
       deps.onUnavailable?.();
+    } catch (err) {
+      report(err);
+    }
+  }
+
+  function available(): void {
+    try {
+      deps.onAvailable?.();
     } catch (err) {
       report(err);
     }
@@ -298,8 +311,10 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           const activated = await step(run, () => audio.activate(kind));
           const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
           const played = await step(run, () => audio.play(level, { volume }));
-          // Silent for the driver, and they must be able to see that (I2).
+          // Silent for the driver, and they must be able to see that (I2); a sound that worked
+          // clears an earlier mark (n2).
           if (!activated || !played) unavailable();
+          else if (!run.stopped) available();
           const key = decision.voice;
           if (
             level >= 2 &&

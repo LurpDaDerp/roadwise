@@ -1,5 +1,5 @@
-// Final review I2: the production player (not an injected one) probes each tone at launch, so a
-// tone that will not load marks alerts unavailable on a real device.
+// Final review I2: the production player (not an injected one) marks alerts unavailable when the
+// audio ports cannot load.
 import { createFakeDriveSense } from '@drive-sense';
 
 import { bootstrapApp, type AppRuntime, type BootstrapDeps } from '@/boot/bootstrap';
@@ -9,22 +9,22 @@ import { migrate, type Db } from '@/data/db';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
 
-const mockAudio = { fail: false, created: 0 };
-jest.mock('expo-audio', () => ({
-  setAudioModeAsync: jest.fn(async () => {}),
-  setIsAudioActiveAsync: jest.fn(async () => {}),
-  createAudioPlayer: jest.fn(() => {
-    if (mockAudio.fail) throw new Error('tone asset missing');
-    mockAudio.created += 1;
-    return { remove: jest.fn(), addListener: jest.fn(() => ({ remove: jest.fn() })), play: jest.fn() };
+// The production player path (no `createPlayer` injected), with the audio ports scripted: they load,
+// or they cannot (a build whose audio modules are missing). There is no launch tone probe any more
+// (final re-review n2): creating a player does not load the asset, so it proved nothing; a tone that
+// never loads is caught at its first alert instead (adapters and player tests).
+const mockPorts = { fail: false, loads: 0 };
+jest.mock('@/core/alerts/adapters', () => ({
+  ...jest.requireActual('@/core/alerts/adapters'),
+  createExpoAlertPorts: jest.fn(async () => {
+    mockPorts.loads += 1;
+    if (mockPorts.fail) throw new Error('Cannot find native module ExpoAudio');
+    return {
+      audio: { activate: async () => {}, play: async () => {}, stop: async () => {}, deactivate: async () => {} },
+      voice: { speak: async () => {}, stop: async () => {} },
+      haptics: { pattern: async () => {} },
+    };
   }),
-}));
-jest.mock('expo-speech', () => ({ speak: jest.fn(), stop: jest.fn(async () => {}) }));
-jest.mock('expo-haptics', () => ({
-  ImpactFeedbackStyle: { Heavy: 'heavy' },
-  NotificationFeedbackType: { Warning: 'warning' },
-  impactAsync: jest.fn(async () => {}),
-  notificationAsync: jest.fn(async () => {}),
 }));
 
 let db: Db;
@@ -33,8 +33,8 @@ let runtime: AppRuntime | null = null;
 beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
-  mockAudio.fail = false;
-  mockAudio.created = 0;
+  mockPorts.fail = false;
+  mockPorts.loads = 0;
 });
 
 afterEach(async () => {
@@ -79,18 +79,18 @@ function deps(errors: string[]): BootstrapDeps {
   };
 }
 
-test('a tone that will not load: the drive records silently, and says so', async () => {
-  mockAudio.fail = true;
+test('audio that will not load: the drive records silently, and says so', async () => {
+  mockPorts.fail = true;
   const errors: string[] = [];
   runtime = await bootstrapApp(deps(errors));
   expect(runtime.drive.snapshot().alertsAvailable).toBe(false);
   expect(errors).toContain('alert ports');
 });
 
-test('negative control: every tone loads, and alerts are available', async () => {
+test('negative control: the ports load, and alerts are available', async () => {
   const errors: string[] = [];
   runtime = await bootstrapApp(deps(errors));
-  expect(mockAudio.created).toBe(3);
+  expect(mockPorts.loads).toBe(1);
   expect(runtime.drive.snapshot().alertsAvailable).toBe(true);
   expect(errors).not.toContain('alert ports');
 });

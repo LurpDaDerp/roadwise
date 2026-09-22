@@ -1440,3 +1440,57 @@ describe('M3 final review: the launch wiring', () => {
     expect(resets).toBe(0);
   });
 });
+
+describe('final re-review n4, n5', () => {
+  test('n4: a restore a drive paused resumes when that drive is finalized, so "Restoring…" is never left idle', async () => {
+    let clock = NOW;
+    await migrate(db);
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'user-1');
+    const driveSense = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    driveSense.setState({ location: 'always', motion: 'granted' });
+    const supabase = createFakeSupabase({ uid: 'user-1', tables: {} });
+    // No drain here: sql.js is one connection, and the runner's finalize drain would overlap the
+    // restore's transactions (on a device, expo-sqlite serialises them on separate connections).
+    const { bootstrapDeps } = deps({ supabase, source: driveSense, now: () => clock, mayDrain: () => false });
+    runtime = await bootstrapApp(bootstrapDeps);
+    await runtime.drive.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await runtime.drive.settled();
+    for (const row of drive(200, { t0: clock + 1000 })) {
+      clock = row.ts + 200;
+      driveSense.loadTrace([row]);
+      driveSense.step();
+      await runtime.drive.settled();
+    }
+    expect(runtime.drive.isBusy()).toBe(true);
+
+    // Never restored: a full restore is owed, and the app is in front — but a drive is recording.
+    const appState = Object.assign(createFakeAppState(), { currentState: 'active' as string | null });
+    const jobs = await startForegroundJobs(runtime, { appState, onError: () => {} });
+    await settle();
+    expect(getHydrationStatus()).toEqual({ state: 'restoring', restored: 0 });
+
+    // The drive ends: the host's finalize change resumes the restore, with no new foreground.
+    await runtime.drive.end();
+    await runtime.drive.untilIdle();
+    await settle();
+    await settle();
+    expect(getHydrationStatus()).toEqual({ state: 'idle' });
+    await jobs.stop();
+    setHydrationStatus({ state: 'idle' });
+  });
+
+  test('n5: a notifier that never settles holds a teardown for 2 s at most', async () => {
+    await migrate(db);
+    const { bootstrapDeps } = deps({
+      attachSummaryNotifier: () => ({ settled: () => new Promise<void>(() => {}), detach: () => {} }),
+    });
+    runtime = await bootstrapApp(bootstrapDeps);
+    const started = Date.now();
+    await runtime.stop();
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(1_900);
+    expect(elapsed).toBeLessThan(3_000);
+    runtime.queryClient.clear();
+    runtime = null;
+  });
+});

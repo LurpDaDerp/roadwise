@@ -701,3 +701,26 @@ describe("a sound that could not play is reported as unavailable (final review I
     expect(held.unavailable()).toBe(0);
   });
 });
+
+describe("a later alert that sounds clears the mark (final re-review n2)", () => {
+  it("onAvailable follows every decision that activated and played; never one that failed", async () => {
+    let fail = true;
+    const r = rig({
+      audio: {
+        play: async () => {
+          if (fail) throw new Error("transient");
+        },
+      },
+    });
+    const seen: string[] = [];
+    const player = createAlertPlayer({
+      ...r.deps,
+      onUnavailable: () => seen.push("unavailable"),
+      onAvailable: () => seen.push("available"),
+    });
+    await player.deliver(decision(2));
+    fail = false;
+    await player.deliver(decision(2));
+    expect(seen).toEqual(["unavailable", "available"]);
+  });
+});

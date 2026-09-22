@@ -16,7 +16,6 @@ import { Platform as mockPlatform } from "react-native";
 import {
   ANDROID_RESPECT_SILENT_MODE,
   createExpoAlertPorts,
-  probeAlertTones,
   IOS_RESPECT_SILENT_MODE,
   PLAYBACK_MODE,
   TONE_FINISH_MARGIN_MS,
@@ -53,7 +52,7 @@ function mockValidateAudioModeIOS(partial: Record<string, unknown>): void {
   }
 }
 
-type Listener = (status: { didJustFinish: boolean }) => void;
+type Listener = (status: { didJustFinish: boolean; isLoaded?: boolean; playing?: boolean }) => void;
 
 interface FakePlayer {
   volume: number;
@@ -325,7 +324,7 @@ describe("expo alert ports", () => {
     expect(sources).toEqual(["l1.wav", "l2.wav", "l3.wav"]);
   });
 
-  it("a tone with no finish event resolves after its length plus the margin", async () => {
+  it("a tone that loaded but sent no finish event resolves after its length plus the margin", async () => {
     jest.useFakeTimers();
     try {
       const { audio } = await createExpoAlertPorts();
@@ -333,6 +332,7 @@ describe("expo alert ports", () => {
       const playing = audio.play(3, { volume: 1 }).then(() => {
         done = true;
       });
+      mockPlayers[0]!.listener!({ isLoaded: true, playing: true, didJustFinish: false });
       await jest.advanceTimersByTimeAsync(
         TONE_MS[3] + TONE_FINISH_MARGIN_MS - 10,
       );
@@ -435,17 +435,47 @@ describe("expo alert ports", () => {
   });
 });
 
-describe("probeAlertTones (final review I2)", () => {
-  it("creates and frees one player per tone, and plays nothing", async () => {
-    await probeAlertTones();
-    expect(audioMock.createAudioPlayer.mock.calls.map((c) => c[0])).toEqual(["l1.wav", "l2.wav", "l3.wav"]);
-    expect(mockPlayers.every((p) => p.remove.mock.calls.length === 1 && p.play.mock.calls.length === 0)).toBe(true);
+describe("a tone that never loads is a failure, not a success (final re-review n2)", () => {
+  let restoreOS: (() => void) | null = null;
+  const setOS = (os: "ios" | "android") => {
+    restoreOS = jest.replaceProperty(mockPlatform, "OS", os).restore;
+  };
+  afterEach(() => {
+    restoreOS?.();
+    restoreOS = null;
   });
 
-  it("rejects when a tone's player cannot be created", async () => {
-    audioMock.createAudioPlayer.mockImplementationOnce(() => {
-      throw new Error("asset missing");
-    });
-    await expect(probeAlertTones()).rejects.toThrow("asset missing");
+  it("no status ever says loaded or playing: play rejects at the timer, and the player is freed", async () => {
+    jest.useFakeTimers();
+    try {
+      setOS("ios");
+      const { audio } = await createExpoAlertPorts();
+      const outcome = audio.play(2, { volume: 1 }).then(
+        () => "resolved",
+        (e: unknown) => String(e),
+      );
+      await jest.advanceTimersByTimeAsync(TONE_MS[2] + TONE_FINISH_MARGIN_MS + 10);
+      expect(await outcome).toContain("never loaded");
+      expect(mockPlayers[0]!.remove).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("except L1 on Android's respect-silent session, which a silent ringer may drop on purpose", async () => {
+    jest.useFakeTimers();
+    try {
+      setOS("android");
+      const { audio } = await createExpoAlertPorts();
+      await audio.activate("respectSilent");
+      const outcome = audio.play(1, { volume: 1 }).then(
+        () => "resolved",
+        (e: unknown) => String(e),
+      );
+      await jest.advanceTimersByTimeAsync(TONE_MS[1] + TONE_FINISH_MARGIN_MS + 10);
+      expect(await outcome).toBe("resolved");
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
