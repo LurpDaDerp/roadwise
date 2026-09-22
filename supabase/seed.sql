@@ -1,5 +1,6 @@
+-- `feature_flags` is not seeded here: migration 0005_app_config_flags.sql inserts it on every
+-- database, hosted ones included (`db push` never runs this file)
 insert into public.app_config (key, value, is_public) values
-  ('feature_flags', '{"camera_beta": true, "auto_detect": true, "referral": true}', true),
   ('min_app_version', '"2.0.0"', true)
 on conflict (key) do update set value = excluded.value;
 
