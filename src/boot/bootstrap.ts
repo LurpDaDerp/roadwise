@@ -557,17 +557,18 @@ async function runLaunch(
     }
     // The drive state the server holds pushes on (ruling T10 (4)): reported by the runtime, so a
     // drive the Android headless task records with no screen says `recording`, then `idle`.
-    const driveReports =
-      identity.owner === 'signed-out'
-        ? null
-        : attachDriveStateReporting({
-            db,
-            drive,
-            appState,
-            client: deps.devicesClient,
-            now,
-            onError,
-          });
+    // Attached for every launch, signed out included (M4 final review I1): a fresh install launches
+    // signed out and signs in without a rebuild, and its first drive must still be reported. The
+    // reporter's local fence (the stored session is the owner, no handover pending) runs on every
+    // attempt, so a process nobody is signed in to writes nothing.
+    const driveReports = attachDriveStateReporting({
+      db,
+      drive,
+      appState,
+      client: deps.devicesClient,
+      now,
+      onError,
+    });
     // After start, so an adopted drive already recording is not taken for a new one's start.
     let unmountDiagnostics: () => void = () => {};
     const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
@@ -914,6 +915,13 @@ function attachDriveStateReporting(opts: {
   /** The backoff after a failed attempt: when, and how many retries have been spent. */
   let backoff: { at: number; retries: number } | null = null;
   let offForeground: (() => void) | null = null;
+  /**
+   * Whether this process could have left `recording` on the server (M4 final review I2): it asked
+   * for `recording`, or it started with a trip open or finalizing. Only then is an `idle` news; an
+   * idle-to-idle change otherwise (a discarded candidate, auto-record turned on or off, a sign-out
+   * with no drive) writes nothing — an armed, idle phone costs nothing.
+   */
+  let mayHoldRecording = false;
 
   /** A write's outcome, from T10's reporter (`onWrite`, round 2): retries included. */
   function onOutcome(state: Reported, ok: boolean): void {
@@ -1008,6 +1016,8 @@ function attachDriveStateReporting(opts: {
     if (status !== lastStatus) {
       lastStatus = status;
       const next = desiredFor(status);
+      if (next === 'recording') mayHoldRecording = true;
+      if (next === 'idle' && !mayHoldRecording) return;
       if (next !== null && next !== desired) {
         desired = next;
         backoff = null;
@@ -1030,7 +1040,11 @@ function attachDriveStateReporting(opts: {
   // tells the server nothing unless a trip is open or was left open (a finalizing relaunch).
   const seed = opts.drive.snapshot().status;
   if (seed === 'armed' || seed === 'off') lastStatus = seed;
-  else onPublish(seed);
+  else {
+    // A trip open or finalizing at launch: the server may hold `recording` from before (r1 m2).
+    if (seed !== 'candidate') mayHoldRecording = true;
+    onPublish(seed);
+  }
   return {
     release() {
       live = false;

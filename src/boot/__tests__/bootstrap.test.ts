@@ -1853,6 +1853,63 @@ describe('ruling T10 (4): the runtime reports the drive state and background per
     expect(l.devices.writes.length).toBeGreaterThan(attempts);
   });
 
+  test('launched signed out, then signed in: the first drive is reported (M4 final review I1)', async () => {
+    const l = await launch({ uid: null });
+    expect(runtime!.owner).toBe('signed-out');
+    // The first sign-in on this device: the owner watch records the owner (as rememberDeviceOwner
+    // does), and the layout tells the host.
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set('session.uid', 'user-1');
+    await runtime!.drive.signedInAgain();
+    await recordAndEnd(runtime!, l.driveSense, l.clock);
+    expect(l.devices.writes).toEqual(['devices:recording', 'devices:idle']);
+  });
+
+  test('a discarded candidate writes nothing (M4 final review I2)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: true } });
+    await affirm('user-1');
+    await runtime!.drive.setAutoDetect(true);
+    expect(runtime!.drive.snapshot().status).toBe('armed');
+    l.driveSense.setMotionHistory([{ type: 'automotive', confidence: 'high', ts: l.clock.t - 10_000 }]);
+    l.driveSense.emit('wake', { reason: 'activityTransition', ts: l.clock.t });
+    await runtime!.drive.settled();
+    expect(runtime!.drive.snapshot().status).toBe('candidate');
+    // Walking: the candidate is discarded, back to armed.
+    l.driveSense.emit('activity', { type: 'walking', confidence: 'high', ts: l.clock.t + 5_000 });
+    await runtime!.drive.settled();
+    l.clock.t += 5 * 60_000;
+    await runtime!.drive.end();
+    await runtime!.drive.settled();
+    await settle();
+    expect(runtime!.drive.snapshot().status).not.toBe('recording');
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('turning auto-record on, then off, while idle writes nothing (I2)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: true } });
+    await affirm('user-1');
+    await runtime!.drive.setAutoDetect(true);
+    expect(runtime!.drive.snapshot().status).toBe('armed');
+    await runtime!.drive.setAutoDetect(false);
+    expect(runtime!.drive.snapshot().status).toBe('off');
+    await settle();
+    expect(l.devices.writes).toEqual([]);
+  });
+
+  test('a sign-out with no drive in this process writes nothing (I2)', async () => {
+    const l = await launch({ uid: 'user-1', owner: 'user-1' });
+    await createSettingsRepo(db).set('config.app', { fetchedAt: NOW, flags: { auto_detect: true } });
+    await affirm('user-1');
+    await runtime!.drive.setAutoDetect(true);
+    expect(runtime!.drive.snapshot().status).toBe('armed');
+    await runtime!.drive.suspendForSignOut();
+    await runtime!.driveStateSettled();
+    expect(l.devices.writes).toEqual([]);
+  });
+
   test('the default background wake hook is T10\'s permission reporter', async () => {
     mockBackgroundReports.length = 0;
     const l = await launch({ uid: 'user-1', owner: 'user-1' });
