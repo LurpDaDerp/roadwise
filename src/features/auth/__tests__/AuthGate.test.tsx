@@ -5,7 +5,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
-import { AuthGate, flushSignedInConsents } from '@/features/auth/AuthGate';
+import { AuthGate, flushSignedInConsents, mergeOwnProfileFlags } from '@/features/auth/AuthGate';
 import { DISCLAIMER_VERSION, legalState } from '@/features/auth/legal';
 import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY, startSignInVisit } from '@/features/auth/pendingConsent';
 import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
@@ -67,10 +67,9 @@ jest.mock('@/data/config/appConfig', () => ({
 jest.mock('@/data/queries', () => ({
   useDb: () => mockWorld.db,
 }));
-jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-const mockUpdateOwnProfile = jest.fn(async (..._args: unknown[]) => ({}));
-jest.mock('@/data/supabase/profile', () => ({
-  updateOwnProfile: (...args: unknown[]) => mockUpdateOwnProfile(...args),
+const mockRpc = jest.fn(async (..._args: unknown[]) => ({ data: {} as unknown, error: null as unknown }));
+jest.mock('@/data/supabase/client', () => ({
+  supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
 }));
 
 const READY = { id: 'u1', age_band: '18_plus', flags: { onboarded: true } };
@@ -98,7 +97,7 @@ beforeEach(async () => {
   });
   mockReplace.mockClear();
   mockRefresh.mockClear();
-  mockUpdateOwnProfile.mockClear();
+  mockRpc.mockClear();
 });
 
 function gate() {
@@ -255,9 +254,11 @@ describe('the sign-in flush', () => {
       profileSource: 'network',
       segments: ['(onboarding)', '[step]'],
     });
-    await waitFor(() => expect(mockUpdateOwnProfile).toHaveBeenCalledTimes(1));
-    expect(mockUpdateOwnProfile).toHaveBeenCalledWith('u1', {
-      flags: { onboarded: false, other: 1, disclaimerAcknowledged: DISCLAIMER_VERSION },
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(1));
+    // Only the acknowledgement goes up; the server merges it into the row as it is now (no
+    // read-modify-write of `onboarded` or `other`).
+    expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', {
+      patch: { disclaimerAcknowledged: DISCLAIMER_VERSION },
     });
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
 
@@ -265,18 +266,18 @@ describe('the sign-in flush', () => {
     mockWorld.profile = { id: 'u1', age_band: '18_plus', flags: { disclaimerAcknowledged: DISCLAIMER_VERSION } };
     await view.rerender(gate());
     await act(async () => {});
-    expect(mockUpdateOwnProfile).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 
   test('never against a cached row, and not for a blocked account', async () => {
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     await mount({ status: 'signedIn', profile: OWED, profileSource: 'cache', segments: ['(onboarding)', '[step]'] });
     await act(async () => {});
-    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
 
     await mount({ status: 'signedIn', profile: U13, profileSource: 'network', segments: ['(onboarding)', '[step]'] });
     await act(async () => {});
-    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   test('a row that is not this account’s own is never written from (security M-2)', async () => {
@@ -288,7 +289,7 @@ describe('the sign-in flush', () => {
       segments: ['(tabs)', 'home'],
     });
     await act(async () => {});
-    expect(mockUpdateOwnProfile).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   test('a cached profile is re-read on each return to the front', async () => {
@@ -335,57 +336,71 @@ describe('flushSignedInConsents', () => {
     await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now(), visit: startSignInVisit() });
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     const consentApi = api();
-    const updateProfile = jest.fn(async () => ({}));
+    const mergeFlags = jest.fn(async () => ({}));
     const out = await flushSignedInConsents({
-      db, settings, userId: 'u1', legal: published, flags: { onboarded: true }, consentApi, updateProfile,
+      db, settings, userId: 'u1', legal: published, flags: { onboarded: true }, consentApi, mergeFlags,
     });
     expect(consentApi.calls).toEqual(['tos@t1', 'privacy@p1']);
-    expect(updateProfile).toHaveBeenCalledWith('u1', {
-      flags: { onboarded: true, disclaimerAcknowledged: DISCLAIMER_VERSION },
-    });
+    expect(mergeFlags).toHaveBeenCalledWith({ disclaimerAcknowledged: DISCLAIMER_VERSION });
     expect(out).toEqual({ recorded: ['tos', 'privacy'], disclaimerMerged: true });
   });
 
   test('no write when the account already holds the current acknowledgement', async () => {
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
-    const updateProfile = jest.fn(async () => ({}));
+    const mergeFlags = jest.fn(async () => ({}));
     const out = await flushSignedInConsents({
       db, settings, userId: 'u1', legal: unpublished,
-      flags: { disclaimerAcknowledged: DISCLAIMER_VERSION }, updateProfile,
+      flags: { disclaimerAcknowledged: DISCLAIMER_VERSION }, mergeFlags,
     });
-    expect(updateProfile).not.toHaveBeenCalled();
+    expect(mergeFlags).not.toHaveBeenCalled();
     expect(out.disclaimerMerged).toBe(false);
   });
 
   test('an older device acknowledgement is never copied (and never downgrades the row)', async () => {
     await settings.set(DISCLAIMER_ACK_KEY, '2020-01-01');
-    const updateProfile = jest.fn(async () => ({}));
-    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: null, updateProfile });
-    expect(updateProfile).not.toHaveBeenCalled();
+    const mergeFlags = jest.fn(async () => ({}));
+    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: null, mergeFlags });
+    expect(mergeFlags).not.toHaveBeenCalled();
   });
 
   test('nothing acknowledged on the device: no write', async () => {
-    const updateProfile = jest.fn(async () => ({}));
-    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, updateProfile });
-    expect(updateProfile).not.toHaveBeenCalled();
+    const mergeFlags = jest.fn(async () => ({}));
+    await flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, mergeFlags });
+    expect(mergeFlags).not.toHaveBeenCalled();
   });
 
   test('a failed consent write still merges the disclaimer, then rejects', async () => {
     await settings.set(PENDING_TERMS_KEY, { tos: 't1', privacy: 'p1', at: Date.now(), visit: startSignInVisit() });
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
     const consentApi = { fetchConsents: jest.fn(async () => { throw new Error('offline'); }), recordConsent: jest.fn() };
-    const updateProfile = jest.fn(async () => ({}));
+    const mergeFlags = jest.fn(async () => ({}));
     await expect(
-      flushSignedInConsents({ db, settings, userId: 'u1', legal: published, flags: {}, consentApi, updateProfile })
+      flushSignedInConsents({ db, settings, userId: 'u1', legal: published, flags: {}, consentApi, mergeFlags })
     ).rejects.toThrow('offline');
-    expect(updateProfile).toHaveBeenCalledTimes(1);
+    expect(mergeFlags).toHaveBeenCalledTimes(1);
   });
 
   test('a failed flag write rejects', async () => {
     await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
-    const updateProfile = jest.fn(async () => { throw new Error('42501'); });
+    const mergeFlags = jest.fn(async () => { throw new Error('42501'); });
     await expect(
-      flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, updateProfile })
+      flushSignedInConsents({ db, settings, userId: 'u1', legal: unpublished, flags: {}, mergeFlags })
     ).rejects.toThrow('42501');
+  });
+});
+
+describe('mergeOwnProfileFlags', () => {
+  test('calls the server merge with only the patch', async () => {
+    mockRpc.mockResolvedValueOnce({ data: { onboarded: true, disclaimerAcknowledged: 'v' }, error: null });
+    await expect(mergeOwnProfileFlags({ disclaimerAcknowledged: 'v' })).resolves.toEqual({
+      onboarded: true,
+      disclaimerAcknowledged: 'v',
+    });
+    expect(mockRpc).toHaveBeenCalledWith('merge_own_profile_flags', { patch: { disclaimerAcknowledged: 'v' } });
+  });
+
+  test('a refused call rejects', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: { code: '22023', message: 'bad key' } });
+    await expect(mergeOwnProfileFlags({ disclaimerAcknowledged: 'v' })).rejects.toMatchObject({ code: '22023' });
   });
 });

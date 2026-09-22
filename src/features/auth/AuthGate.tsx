@@ -6,7 +6,7 @@ import { useAppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries';
-import { updateOwnProfile, type ProfilePatch } from '@/data/supabase/profile';
+import { supabase } from '@/data/supabase/client';
 import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
 
@@ -34,13 +34,26 @@ export interface SignedInConsentDeps {
   /** The flags of the profile row just read from the server (never a cached row). */
   flags: unknown;
   consentApi?: ConsentApi;
-  updateProfile?: (userId: string, patch: ProfilePatch) => Promise<unknown>;
+  /** Merges `patch` into the caller's own `profiles.flags` on the server (Task 2's RPC). */
+  mergeFlags?: (patch: { disclaimerAcknowledged: string }) => Promise<unknown>;
+}
+
+/**
+ * `merge_own_profile_flags` (Task 2, 0007): a server-side merge into the caller's own row, so a
+ * concurrent flags write elsewhere is never overwritten (T17 review m2). The server accepts only
+ * the allowlisted keys and derives the row from the caller's JWT.
+ */
+export async function mergeOwnProfileFlags(patch: { disclaimerAcknowledged: string }): Promise<unknown> {
+  const { data, error } = await supabase.rpc('merge_own_profile_flags', { patch });
+  if (error) throw error;
+  return data;
 }
 
 /**
  * What the device holds from before sign-in, recorded on the account (once per signed-in session):
  * - a pending Terms and Privacy acceptance (Task 15's `flushPendingConsents`: only when published);
- * - the disclaimer acknowledged at sign-in (A3), merged into `profiles.flags` so the Terms step
+ * - the disclaimer acknowledged at sign-in (A3), merged into `profiles.flags` server-side
+ *   (`merge_own_profile_flags`, never a read-modify-write) so the Terms step
  *   does not ask a second time (ruling T15). Only the current `DISCLAIMER_VERSION` is copied, and
  *   only when the account does not already hold it, so an older tick never downgrades the row.
  * Both are attempted whatever happens to the other; if either fails this rejects, after both ran.
@@ -48,7 +61,7 @@ export interface SignedInConsentDeps {
 export async function flushSignedInConsents(
   deps: SignedInConsentDeps
 ): Promise<{ recorded: TermsType[]; disclaimerMerged: boolean }> {
-  const { db, settings, userId, legal, consentApi, updateProfile = updateOwnProfile } = deps;
+  const { db, settings, userId, legal, consentApi, mergeFlags = mergeOwnProfileFlags } = deps;
   let failure: unknown = null;
 
   let recorded: TermsType[] = [];
@@ -66,9 +79,8 @@ export async function flushSignedInConsents(
         ? (deps.flags as Record<string, unknown>)
         : {};
     if (ack === DISCLAIMER_VERSION && flags.disclaimerAcknowledged !== DISCLAIMER_VERSION) {
-      await updateProfile(userId, {
-        flags: { ...flags, disclaimerAcknowledged: DISCLAIMER_VERSION } as ProfilePatch['flags'],
-      });
+      // Only the one key goes up: the server merges it into whatever the row holds now.
+      await mergeFlags({ disclaimerAcknowledged: DISCLAIMER_VERSION });
       disclaimerMerged = true;
     }
   } catch (error) {
