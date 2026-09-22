@@ -13,7 +13,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(149);
+select plan(159);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -159,8 +159,8 @@ select throws_ok($$ insert into public.limits_cache (segment_key, geom, limit_mp
     values ('00000000000000aa', extensions.st_geomfromtext('LINESTRING(-122.31 47.61, -122.309 47.61)', 4326), 45, now() + interval '31 days') $$,
   '23514', null, 'a cache row may not live longer than 30 days (the 31-day CHECK)');
 select lives_ok($$ insert into public.limits_cache (segment_key, geom, limit_mph, expires_at)
-    values ('00000000000000ab', extensions.st_geomfromtext('LINESTRING(-122.31 47.61, -122.309 47.61)', 4326), 45, now() + interval '30 days') $$,
-  'a cache row of exactly 30 days is accepted');
+    values ('00000000000000ab', extensions.st_geomfromtext('LINESTRING(-122.31 47.61, -122.309 47.61)', 4326), 45, date_trunc('day', now(), 'UTC') + interval '30 days') $$,
+  'a cache row of exactly 30 days from its (day-floored) creation is accepted');
 select throws_ok($$ insert into public.limits_cache (segment_key, geom, limit_mph, expires_at)
     values ('00000000000000ac', extensions.st_geomfromtext('LINESTRING(-122.31 47.61, -122.309 47.61)', 4326), null, now() + interval '1 day') $$,
   '23502', null, 'a cache row without a limit is refused (the device refuses an AWS segment with no limit)');
@@ -288,6 +288,8 @@ select matches(public.put_limits_cache('aws-leg-47.6170,-122.3100', '{"type":"Li
 select is((select count(*)::int from public.limits_cache), 1, 'one cache row');
 select is((select segment_key from public.limits_cache), left(encode(sha256(convert_to('aws-leg-47.6170,-122.3100', 'UTF8')), 'hex'), 16), 'the key is the first 16 hex digits of sha256 of the caller key');
 select is((select expires_at from public.limits_cache), now() + interval '7 days', 'it expires after the ttl');
+select is((select array[created_at, updated_at] from public.limits_cache), array[date_trunc('day', now(), 'UTC'), date_trunc('day', now(), 'UTC')],
+  'its created_at and updated_at keep only the UTC day, not the time of the lookup');
 select is((select row(provider, limit_mph, oneway)::text from public.speed_limit_candidates(47.6170, -122.3090, 25)), row('aws', 45, 1)::text,
   'an unexpired cache row is a candidate, one-way along the heading it was asked for');
 select is((select segment_key from public.speed_limit_candidates(47.6170, -122.3090, 25)), (select segment_key from public.limits_cache), 'under the stored key');
@@ -295,11 +297,18 @@ select is((select array_agg((s ->> 'provider') || ':' || (s ->> 'id') || ':' || 
     from pg_temp.segs(public.speed_limit_tiles(array[pg_temp.tile_of(47.6170, -122.3090)]), pg_temp.tile_of(47.6170, -122.3090)) s),
   array['aws:' || (select segment_key from public.limits_cache) || ':45'], 'the cache row is in its tile with the same id and its limit');
 select is((select (pg_temp.tile(public.speed_limit_tiles(array[pg_temp.tile_of(47.6170, -122.3090)]), pg_temp.tile_of(47.6170, -122.3090)) -> 'expiresAt')::bigint),
-  floor(extract(epoch from now() + interval '7 days') * 1000)::bigint, 'a tile expires no later than the cache rows inside it');
+  floor(extract(epoch from date_trunc('day', now() + interval '7 days', 'UTC')) * 1000)::bigint, 'a tile with a cache row expires at the start of the UTC day that row expires on');
+select is((select (pg_temp.tile(public.speed_limit_tiles(array[pg_temp.tile_of(47.6170, -122.3090)]), pg_temp.tile_of(47.6170, -122.3090)) -> 'expiresAt')::bigint % 86400000),
+  0::bigint, 'so expiresAt is day-aligned and carries no time of the lookup');
+select ok((select (pg_temp.tile(public.speed_limit_tiles(array[pg_temp.tile_of(47.6170, -122.3090)]), pg_temp.tile_of(47.6170, -122.3090)) -> 'expiresAt')::bigint
+    <= (select floor(extract(epoch from expires_at) * 1000)::bigint from public.limits_cache)),
+  'and it is never later than the row''s true expiry');
 select lives_ok($$ select public.put_limits_cache('aws-leg-47.6170,-122.3100', '{"type":"LineString","coordinates":[[-122.3100,47.6170],[-122.3080,47.6171]]}', 40, null, 30) $$,
   'writing the same key again refreshes the row');
-select is((select row(count(*), max(limit_mph), max(expires_at) = now() + interval '30 days', bool_and(heading_deg is null))::text from public.limits_cache), row(1, 40, true, true)::text,
-  'one row, with the new limit, ttl and heading');
+select is((select row(count(*), max(limit_mph), max(expires_at) = date_trunc('day', now(), 'UTC') + interval '30 days', bool_and(heading_deg is null))::text from public.limits_cache), row(1, 40, true, true)::text,
+  'one row, with the new limit and heading; a 30-day ttl ends at the start of the UTC day 30 days on');
+select is((select array[created_at, updated_at] from public.limits_cache), array[date_trunc('day', now(), 'UTC'), date_trunc('day', now(), 'UTC')],
+  'a refresh stores day-floored stamps too');
 select is((select oneway from public.speed_limit_candidates(47.6170, -122.3090, 25)), 0, 'a cache row with no heading is two-way');
 
 reset role;
@@ -322,6 +331,23 @@ select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","c
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.31,97.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a position off the globe is refused');
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.21,47.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a 7.5 km line is refused');
 select throws_ok($$ select public.put_limits_cache('k', '{"type":"LineString","coordinates":[[-122.31,47.61],[-122.31,47.61]]}', 45, 90, 30) $$, '22023', 'line must be a GeoJSON LineString of 2 to 1000 positions on the globe, under 5 km', 'a zero-length line is refused');
+
+-- the bounded purge: each put_limits_cache call deletes at most 100 expired rows (review M-1)
+reset role;
+delete from public.limits_cache;
+insert into public.limits_cache (segment_key, geom, limit_mph, expires_at, created_at)
+  select lpad(to_hex(i), 16, '0'), extensions.st_geomfromtext('LINESTRING(-122.40 47.70, -122.399 47.70)', 4326), 30,
+    now() - interval '1 day', now() - interval '10 days'
+  from generate_series(1, 150) i;
+insert into public.limits_cache (segment_key, geom, limit_mph, expires_at)
+  values ('ffffffffffffffff', extensions.st_geomfromtext('LINESTRING(-122.40 47.71, -122.399 47.71)', 4326), 30, now() + interval '1 day');
+set local role service_role;
+select lives_ok($$ select public.put_limits_cache('purge-1', '{"type":"LineString","coordinates":[[-122.41,47.72],[-122.409,47.72]]}', 35, null, 7) $$, 'a cache write with 150 expired rows waiting');
+select is((select count(*)::int from public.limits_cache where expires_at <= now()), 50, 'purges exactly 100 of them');
+select is((select count(*)::int from public.limits_cache where segment_key = 'ffffffffffffffff'), 1, 'and leaves a live row alone');
+select lives_ok($$ select public.put_limits_cache('purge-2', '{"type":"LineString","coordinates":[[-122.41,47.73],[-122.409,47.73]]}', 35, null, 7) $$, 'the next cache write');
+select is((select count(*)::int from public.limits_cache where expires_at <= now()), 0, 'purges the remaining 50');
+select is((select count(*)::int from public.limits_cache), 3, 'leaving the live row and the two new answers');
 
 -- ---------------------------------------------------------------------------
 -- take_rate_limit: upsert-and-count under a row lock

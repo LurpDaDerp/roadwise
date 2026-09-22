@@ -80,6 +80,10 @@ create table hpms.sections (
 
 -- AWS Location answers, kept at most 30 days. The key is put_limits_cache's short hash, never the
 -- caller's raw identifier, so the tile id built from it fits the device's 24 characters.
+-- Each row exists because some driver's lookup caused it, so it keeps no time of day: created_at
+-- and updated_at are stored floored to the UTC day (limits_cache_touch), and the tile answer floors
+-- a row's expiry to the UTC day too (security review I-1). The 30-day CHECK is measured from the
+-- floored created_at, so it is never looser than 30 days from the lookup.
 create table public.limits_cache (
   segment_key text primary key
     check (char_length(segment_key) between 1 and 128)
@@ -102,7 +106,19 @@ create index limits_cache_expires_at_idx on public.limits_cache (expires_at);
 
 create trigger ways_touch before update on osm.ways for each row execute function public.touch_updated_at();
 create trigger sections_touch before update on hpms.sections for each row execute function public.touch_updated_at();
-create trigger limits_cache_touch before update on public.limits_cache for each row execute function public.touch_updated_at();
+-- the cache's stamps carry the day, never the moment of the lookup that caused the row
+create or replace function public.limits_cache_day_stamps() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.created_at := date_trunc('day', coalesce(new.created_at, now()), 'UTC');
+  else
+    new.created_at := date_trunc('day', new.created_at, 'UTC');
+  end if;
+  new.updated_at := date_trunc('day', now(), 'UTC');
+  return new;
+end $$;
+create trigger limits_cache_touch before insert or update on public.limits_cache for each row execute function public.limits_cache_day_stamps();
 
 -- ---------------------------------------------------------------------------
 -- speed_limit_candidates: every road near a point, one row per road, nearest first
@@ -281,7 +297,9 @@ begin
     )
     select jsonb_build_object(
       'tile', v_key,
-      'expiresAt', floor(extract(epoch from least(now() + interval '30 days', (select min(s.expires) from src s))) * 1000)::bigint,
+      -- a cache row's expiry counts floored to the UTC day: never later than the truth (the device
+      -- refreshes early, not late), and never the moment of the lookup behind it (I-1)
+      'expiresAt', floor(extract(epoch from least(now() + interval '30 days', (select min(date_trunc('day', s.expires, 'UTC')) from src s))) * 1000)::bigint,
       'truncated', coalesce(max(r.total), 0) > 2000,
       'segments', coalesce(jsonb_agg(jsonb_build_object(
           'id', r.key,
@@ -340,10 +358,23 @@ begin
     raise exception '%', v_bad_line using errcode = 'invalid_parameter_value';
   end if;
 
+  -- opportunistic retention (review M-1; the scheduled job is M8's): at most 100 expired rows per
+  -- call, so no call pays for a backlog, and rows another call is purging are skipped, not waited on
+  delete from public.limits_cache
+    where segment_key in (
+      select c.segment_key from public.limits_cache c
+      where c.expires_at <= now()
+      order by c.expires_at
+      limit 100
+      for update skip locked);
+
   v_key := left(encode(sha256(convert_to(p_key, 'UTF8')), 'hex'), 16);
-  -- a refresh is a new answer: created_at restarts with it, so the 30-day CHECK bounds each answer
+  -- a refresh is a new answer: created_at restarts with it (floored to the day by the trigger), so
+  -- the 30-day CHECK bounds each answer. Measured from that floor, a 30-day ttl ends at the start of
+  -- the UTC day 30 days on, up to a day short; B2's 7-10 day ttls are unaffected.
   insert into public.limits_cache (segment_key, geom, limit_mph, heading_deg, provider, expires_at, created_at)
-    values (v_key, v_geom, p_limit_mph, p_heading, 'aws', now() + make_interval(days => p_ttl_days), now())
+    values (v_key, v_geom, p_limit_mph, p_heading, 'aws',
+      least(now() + make_interval(days => p_ttl_days), date_trunc('day', now(), 'UTC') + interval '30 days'), now())
   on conflict (segment_key) do update
     set geom = excluded.geom,
         limit_mph = excluded.limit_mph,
@@ -399,6 +430,7 @@ revoke all on function public.speed_limit_candidates(double precision, double pr
 revoke all on function public.speed_limit_tiles(text[]) from public, anon, authenticated;
 revoke all on function public.put_limits_cache(text, jsonb, int, numeric, int) from public, anon, authenticated;
 revoke all on function public.take_rate_limit(uuid, text, interval, int) from public, anon, authenticated;
+revoke all on function public.limits_cache_day_stamps() from public, anon, authenticated;
 grant execute on function public.speed_limit_candidates(double precision, double precision, int) to service_role;
 grant execute on function public.speed_limit_tiles(text[]) to service_role;
 grant execute on function public.put_limits_cache(text, jsonb, int, numeric, int) to service_role;
