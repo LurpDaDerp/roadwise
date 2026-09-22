@@ -10,14 +10,27 @@
 //   the modal can see the simulated drive.
 // - The HUD is drawn as the lockout overlay, which never routes, so the end screen (and its
 //   "couldn't save" copy) is never reached by a simulated drive (ruling "Carried from H1").
-// - The panel counts the tables before and after and says "nothing was stored" only when the
-//   counts agree: the claim is checked, not assumed.
+// - The panel says "nothing was stored" only when SQLite itself saw no write while it ran
+//   (`total_changes()` on the app's connection, plus `PRAGMA data_version` for commits made on
+//   another connection — the device driver's transactions use their own): the claim is checked,
+//   not assumed. Row counts alone would miss an UPDATE or an `INSERT OR REPLACE` (review m1); they
+//   are kept only to name the tables in the "changed" message.
+// - It cannot start while a real drive is open, and it closes the moment the real host becomes
+//   busy or locks out: an RN Modal renders above the lockout overlay (review m2, rev1: I12).
 //
 // Timers exist only while a simulation runs, which the developer starts on this screen (§3.5).
 import * as scoring from '@scoring';
 import { createFakeDriveSense } from '@drive-sense';
 import { useKeepAwake } from 'expo-keep-awake';
-import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+} from 'react';
 import { AppState, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -28,8 +41,9 @@ import { parseTrace, type Trace } from '@/core/replay/trace';
 import type { Db } from '@/data/db';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
-import { DriveProvider } from '@/drive/DriveProvider';
+import { DriveContext, DriveProvider } from '@/drive/DriveProvider';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
 import { Banner, Button, Card, Text, useTheme } from '@/ui';
 
@@ -52,7 +66,8 @@ export const simCopy = {
     `Alerts sent to the player: ${a[1]} level 1, ${a[2]} level 2, ${a[3]} level 3`,
   unchanged: 'Nothing was stored. Drive history and the speed-limit tile table are as they were.',
   changed: (list: string) =>
-    `These tables changed while the simulation ran: ${list}. The simulation writes nothing, so something else in the app did. Run it again with the app otherwise idle.`,
+    `The database was written while the simulation ran${list ? ` (${list})` : ', with row counts unchanged'}. The simulation writes nothing, so something else in the app did. Run it again with the app otherwise idle.`,
+  realDrive: 'Not while a drive is recording.',
   errors: (n: number) => `${n} host error${n === 1 ? '' : 's'} were reported during the run.`,
   failed: (message: string) => `The simulation could not start: ${message}`,
 } as const;
@@ -76,12 +91,17 @@ export const SIM_TRACES: readonly { name: SimTraceName; label: string; detail: s
 
 /** Loaded on demand, so the fixtures are parsed only when a developer runs one. */
 export function loadSimTrace(name: SimTraceName): Trace {
-  switch (name) {
-    case 'speeding-corrected':
-      return parseTrace(require('../../core/__fixtures__/traces/speeding-corrected.json'));
-    case 'phone-pickup':
-      return parseTrace(require('../../core/__fixtures__/traces/phone-pickup.json'));
+  // Build-time constants, so a production bundle folds the gate to `false` and Metro drops both
+  // requires: the fixtures never ship where the screen cannot open (review m3).
+  if (__DEV__ || process.env.EXPO_PUBLIC_DIAGNOSTICS === '1') {
+    switch (name) {
+      case 'speeding-corrected':
+        return parseTrace(require('../../core/__fixtures__/traces/speeding-corrected.json'));
+      case 'phone-pickup':
+        return parseTrace(require('../../core/__fixtures__/traces/phone-pickup.json'));
+    }
   }
+  throw new Error('The simulation drives are not in this build');
 }
 
 /** Every table a drive could write to, including the tile cache. */
@@ -104,6 +124,24 @@ export async function countTables(db: Db): Promise<TableCounts> {
   return out;
 }
 
+/** SQLite's own write counters: any INSERT, UPDATE or DELETE moves one of them. */
+export interface WriteMark {
+  /** `total_changes()` on this connection */
+  totalChanges: number;
+  /** `PRAGMA data_version`: moves when another connection commits */
+  dataVersion: number;
+}
+
+export async function writeMark(db: Db): Promise<WriteMark> {
+  const t = await db.execute('SELECT total_changes() AS n');
+  const v = await db.execute('PRAGMA data_version');
+  const row = v.rows[0] ?? {};
+  return {
+    totalChanges: Number(t.rows[0]?.n ?? 0),
+    dataVersion: Number(row.data_version ?? Object.values(row)[0] ?? 0),
+  };
+}
+
 export interface SimulationOutcome {
   cancelled: boolean;
   rowsPlayed: number;
@@ -111,6 +149,7 @@ export interface SimulationOutcome {
   alerts: Record<AlertLevel, number>;
   before: TableCounts;
   after: TableCounts;
+  /** Judged by `WriteMark`, not by the counts. */
   unchanged: boolean;
   errors: string[];
 }
@@ -207,6 +246,7 @@ export function createSimulation(opts: SimulationOptions): Simulation {
     },
     async run() {
       const before = await countTables(db);
+      const markBefore = await writeMark(db);
       wall0 = Date.now();
       const first = trace.rows[0]?.ts ?? 0;
       fake.loadTrace(trace.rows.map((r) => ({ ...r, ts: wall0 + ROW_MS + (r.ts - first) })));
@@ -226,6 +266,7 @@ export function createSimulation(opts: SimulationOptions): Simulation {
         await created.settled();
       }
       await created.stop({ endOpenTrip: true });
+      const markAfter = await writeMark(db);
       const after = await countTables(db);
       return {
         cancelled,
@@ -234,7 +275,9 @@ export function createSimulation(opts: SimulationOptions): Simulation {
         alerts: { ...alerts },
         before,
         after,
-        unchanged: SIM_TABLES.every((t) => before[t] === after[t]),
+        unchanged:
+          markAfter.totalChanges === markBefore.totalChanges &&
+          markAfter.dataVersion === markBefore.dataVersion,
         errors: [...errors],
       };
     },
@@ -248,6 +291,30 @@ async function createRealPlayer(getHost: () => DriveHost | undefined): Promise<A
     voiceEnabled: () => true,
     ...playerInputs(getHost),
   });
+}
+
+const noSubscription = () => () => {};
+const noDrive = () => 'idle';
+
+/**
+ * The app's REAL drive, read from the provider this panel sits under (outside the simulation's
+ * own provider): 'lockout' while it is locked out, 'busy' while a trip is open, else 'idle'.
+ * Outside any provider there is no real drive to protect. One string, so rows do not re-render.
+ */
+function useRealDrive(): { state: 'idle' | 'busy' | 'lockout'; isBusy: () => boolean } {
+  const ctx = useContext(DriveContext);
+  const store = ctx?.store;
+  const state = useSyncExternalStore(
+    store ? store.subscribe : noSubscription,
+    store
+      ? () => {
+          const s = store.getState();
+          return s.lockedOut ? 'lockout' : isBusyStatus(s.status) ? 'busy' : 'idle';
+        }
+      : noDrive
+  ) as 'idle' | 'busy' | 'lockout';
+  const host = ctx?.host;
+  return { state, isBusy: () => host?.isBusy() ?? false };
 }
 
 type Phase =
@@ -272,6 +339,13 @@ export function SimulationPanel({
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const live = useRef(true);
   const running = useRef<Simulation | null>(null);
+  const real = useRealDrive();
+
+  // A real drive that opens, or locks out, while a simulation runs ends the simulation at once:
+  // two hosts must not drive two players, and the modal must never sit above the real lockout.
+  useEffect(() => {
+    if (real.state !== 'idle') running.current?.cancel();
+  }, [real.state]);
 
   useEffect(() => {
     live.current = true;
@@ -282,6 +356,7 @@ export function SimulationPanel({
   }, []);
 
   const start = useCallback(async () => {
+    if (real.isBusy()) return;
     setPhase({ kind: 'starting' });
     try {
       let host: DriveHost | undefined;
@@ -305,9 +380,10 @@ export function SimulationPanel({
       running.current = null;
       if (live.current) setPhase({ kind: 'failed', message: e instanceof Error ? e.message : String(e) });
     }
-  }, [createPlayer, db, speed, traceName]);
+  }, [createPlayer, db, speed, traceName, real]);
 
   const busy = phase.kind === 'starting' || phase.kind === 'running';
+  const blocked = real.state !== 'idle';
 
   return (
     <Card testID="simulation-panel">
@@ -358,13 +434,19 @@ export function SimulationPanel({
         label={phase.kind === 'starting' ? simCopy.starting : simCopy.start}
         onPress={() => void start()}
         loading={phase.kind === 'starting'}
-        disabled={busy}
+        disabled={busy || blocked}
+        accessibilityHint={blocked ? simCopy.realDrive : undefined}
       />
+      {blocked ? (
+        <Text variant="footnote" tone="muted">
+          {simCopy.realDrive}
+        </Text>
+      ) : null}
 
       {phase.kind === 'done' ? <OutcomeReport outcome={phase.outcome} /> : null}
       {phase.kind === 'failed' ? <Banner tone="danger" message={simCopy.failed(phase.message)} /> : null}
 
-      {phase.kind === 'running' ? (
+      {phase.kind === 'running' && !blocked ? (
         <Modal
           visible
           animationType="fade"

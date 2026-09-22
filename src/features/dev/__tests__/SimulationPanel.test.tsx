@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { AppState, Text } from 'react-native';
 
 import type { AlertDecision } from '@/core/alerts/types';
 import type { Db } from '@/data/db';
 import { createTestDb, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { tripRow } from '@/data/queries/__fixtures__/rows';
 import { DataProvider } from '@/data/queries/context';
+import { DriveProvider } from '@/drive/DriveProvider';
+import type { DriveHost, DriveState } from '@/drive/host';
 import { useDrive } from '@/drive/useDrive';
 import { ThemeProvider } from '@/ui';
 
@@ -117,6 +119,34 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
     }
   );
 
+  test('a write that leaves every row count equal still fails the "nothing was stored" check (m1)', async () => {
+    await db.execute("INSERT INTO settings (key, value_json) VALUES ('units', '\"mi\"')");
+    const before = await countTables(db);
+    jest.useFakeTimers();
+    const sim = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
+    const run = sim.run();
+    await jest.advanceTimersByTimeAsync(5000);
+    // What a leaking dry run would do: rewrite an existing setting in place. No count moves.
+    await db.execute("INSERT OR REPLACE INTO settings (key, value_json) VALUES ('units', '\"km\"')");
+    const outcome = await runToEnd(run);
+    jest.useRealTimers();
+    expect(outcome.after).toEqual(before);
+    expect(outcome.before).toEqual(outcome.after);
+    expect(outcome.unchanged).toBe(false);
+  });
+
+  test('an UPDATE is caught the same way', async () => {
+    jest.useFakeTimers();
+    const sim = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
+    const run = sim.run();
+    await jest.advanceTimersByTimeAsync(5000);
+    await db.execute("UPDATE trips SET distance_m = distance_m + 1 WHERE client_trip_id = 'real-1'");
+    const outcome = await runToEnd(run);
+    jest.useRealTimers();
+    expect(outcome.before).toEqual(outcome.after);
+    expect(outcome.unchanged).toBe(false);
+  });
+
   test('at 1x a row takes a second; at 5x a fifth of one', async () => {
     jest.useFakeTimers();
     const slow = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 1, player: fakePlayer });
@@ -160,6 +190,42 @@ describe('SimulationPanel', () => {
     return <Text testID="stub-hud">{`${s.status} ${s.dryRun ? 'dry' : 'real'}`}</Text>;
   }
 
+  async function renderPanelUnder(realHost: DriveHost, player = fakePlayer()) {
+    await render(
+      <ThemeProvider>
+        <DataProvider db={db}>
+          <DriveProvider host={realHost}>
+            <SimulationPanel Hud={StubHud} createPlayer={async () => player} />
+          </DriveProvider>
+        </DataProvider>
+      </ThemeProvider>
+    );
+    return player;
+  }
+
+  /** The app's real host, reduced to what the provider and the panel read. */
+  function realHostStub(initial: Partial<DriveState>) {
+    let current = { status: 'off', lockedOut: false, ...initial } as DriveState;
+    const listeners = new Set<(s: DriveState) => void>();
+    const host = {
+      snapshot: () => current,
+      subscribe: (fn: (s: DriveState) => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+      isBusy: () => ['candidate', 'recording', 'ending', 'finalizing'].includes(current.status),
+    } as unknown as DriveHost;
+    return {
+      host,
+      async push(next: Partial<DriveState>) {
+        current = { ...current, ...next };
+        await act(async () => {
+          for (const fn of listeners) fn(current);
+        });
+      },
+    };
+  }
+
   async function renderPanel(player = fakePlayer()) {
     await render(
       <ThemeProvider>
@@ -188,6 +254,50 @@ describe('SimulationPanel', () => {
     jest.useRealTimers();
     expect(screen.queryByTestId('stub-hud')).toBeNull();
     expect(screen.getByText(/Nothing was stored/)).toBeTruthy();
+  });
+
+  describe('the real drive comes first (m2)', () => {
+    const realState = AppState.currentState;
+    beforeEach(() => {
+      (AppState as { currentState: string }).currentState = 'active';
+    });
+    afterEach(() => {
+      (AppState as { currentState: string }).currentState = realState;
+    });
+
+    test.each(['candidate', 'recording', 'ending'] as const)(
+      'cannot start while a real drive is %s',
+      async (status) => {
+        const real = realHostStub({ status });
+        const player = await renderPanelUnder(real.host);
+        expect(screen.getByText('Not while a drive is recording.')).toBeTruthy();
+        const start = screen.getByRole('button', { name: 'Simulate a drive' });
+        expect(start).toBeDisabled();
+        await fireEvent.press(start);
+        expect(screen.queryByTestId('stub-hud')).toBeNull();
+        expect(player.announce).not.toHaveBeenCalled();
+      }
+    );
+
+    test('a real lockout closes the simulation modal at once and ends the simulation', async () => {
+      const real = realHostStub({ status: 'armed' });
+      await renderPanelUnder(real.host);
+      jest.useFakeTimers();
+      await fireEvent.press(screen.getByRole('button', { name: 'Simulate a drive' }));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3000);
+      });
+      expect(screen.getByTestId('stub-hud')).toBeTruthy();
+      await real.push({ status: 'recording', lockedOut: true });
+      expect(screen.queryByTestId('stub-hud')).toBeNull();
+      for (let i = 0; i < 50 && !screen.queryByText(/Stopped early/); i += 1) {
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(500);
+        });
+      }
+      jest.useRealTimers();
+      expect(screen.getByText(/Stopped early/)).toBeTruthy();
+    });
   });
 
   test('offers both fixture drives', async () => {

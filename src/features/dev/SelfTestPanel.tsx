@@ -54,22 +54,24 @@ export const VECTOR_NAMES = [
 
 /** Read and validate every vector file (throws on a malformed one, naming it). */
 export function loadVectors(): GoldenVector[] {
-  const files: Record<(typeof VECTOR_NAMES)[number], () => unknown> = {
-    cruise: () => require('../../../modules/drive-sense/assets/vectors/cruise.json'),
-    'hard-brake': () => require('../../../modules/drive-sense/assets/vectors/hard-brake.json'),
-    'corner-left': () => require('../../../modules/drive-sense/assets/vectors/corner-left.json'),
-    'turn-lagged-course': () =>
-      require('../../../modules/drive-sense/assets/vectors/turn-lagged-course.json'),
-    'phone-pickup': () => require('../../../modules/drive-sense/assets/vectors/phone-pickup.json'),
-    'mount-shift': () => require('../../../modules/drive-sense/assets/vectors/mount-shift.json'),
-    'no-imu': () => require('../../../modules/drive-sense/assets/vectors/no-imu.json'),
-    'unaligned-start': () =>
-      require('../../../modules/drive-sense/assets/vectors/unaligned-start.json'),
-    'gravity-filter': () =>
-      require('../../../modules/drive-sense/assets/vectors/gravity-filter.json'),
-    'android-raw': () => require('../../../modules/drive-sense/assets/vectors/android-raw.json'),
-  };
-  return parseVectors(JSON.stringify(VECTOR_NAMES.map((name) => files[name]())));
+  // The gate is spelled out here as build-time constants, so a production bundle folds it to
+  // `false` and Metro drops every require inside it: the ~324 KB of vectors never ship (review m3).
+  if (__DEV__ || process.env.EXPO_PUBLIC_DIAGNOSTICS === '1') {
+    const files: Record<(typeof VECTOR_NAMES)[number], () => unknown> = {
+      cruise: () => require('../../../modules/drive-sense/assets/vectors/cruise.json'),
+      'hard-brake': () => require('../../../modules/drive-sense/assets/vectors/hard-brake.json'),
+      'corner-left': () => require('../../../modules/drive-sense/assets/vectors/corner-left.json'),
+      'turn-lagged-course': () => require('../../../modules/drive-sense/assets/vectors/turn-lagged-course.json'),
+      'phone-pickup': () => require('../../../modules/drive-sense/assets/vectors/phone-pickup.json'),
+      'mount-shift': () => require('../../../modules/drive-sense/assets/vectors/mount-shift.json'),
+      'no-imu': () => require('../../../modules/drive-sense/assets/vectors/no-imu.json'),
+      'unaligned-start': () => require('../../../modules/drive-sense/assets/vectors/unaligned-start.json'),
+      'gravity-filter': () => require('../../../modules/drive-sense/assets/vectors/gravity-filter.json'),
+      'android-raw': () => require('../../../modules/drive-sense/assets/vectors/android-raw.json'),
+    };
+    return parseVectors(JSON.stringify(VECTOR_NAMES.map((name) => files[name]())));
+  }
+  throw new Error('The golden vectors are not in this build');
 }
 
 function show(v: unknown): string {
