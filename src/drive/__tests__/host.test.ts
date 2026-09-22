@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import * as scoring from '@scoring';
-import { createFakeDriveSense, type MotionActivity } from '@drive-sense';
+import { createFakeDriveSense, parseRow, type MotionActivity } from '@drive-sense';
 
 import type { AlertDecision } from '@/core/alerts/types';
 import { T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
@@ -201,11 +201,13 @@ describe('a manual mounted drive, end to end', () => {
     expect(s.speedKnown).toBe(true);
     expect(h.limits.calls[0]).toBe('startTrip');
     expect(h.limits.calls.filter((c) => c === 'startTrip')).toHaveLength(1);
-    // The limit adapter hands the client the row's own fix quality and speed.
+    // The limit adapter hands the client the row's own fix quality and speed, as the row reads
+    // after `parseRow` rounds it at the bridge (D2 round 1).
+    const seen = parseRow(last(rows))!;
     expect(h.limits.client.lookup).toHaveBeenLastCalledWith(
-      last(rows).lat,
-      last(rows).lng,
-      last(rows).course,
+      seen.lat,
+      seen.lng,
+      seen.course,
       { gnssValid: true, speedMps: 10 }
     );
 
