@@ -238,7 +238,14 @@ export const shouldArm = (a: {
   location: DriveSenseState['location'];
   motion: DriveSenseState['motion'];
   signedIn?: boolean;
-}): boolean => a.intent && a.flag && a.signedIn !== false && permissionsAllowArming(a);
+  /**
+   * The account's server-derived age band (ruling T12 (1)): an under-13 account never arms — its
+   * drives would sit on the phone and fail as a permanent 403. `unknown` (or not yet known) does
+   * not block: its uploads defer safely. The driver's saved choice is never changed by this.
+   */
+  ageBand?: string | null;
+}): boolean =>
+  a.intent && a.flag && a.signedIn !== false && a.ageBand !== 'u13' && permissionsAllowArming(a);
 
 /**
  * L1 may honour the silent switch only while the phone is mounted and RoadWise is frontmost and

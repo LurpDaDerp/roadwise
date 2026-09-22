@@ -108,6 +108,7 @@ jest.mock('@/data/supabase/client', () => ({
   },
 }));
 
+const mockProfile: { current: { age_band: string } | null } = { current: null };
 const mockSession: {
   flush: (() => Promise<unknown>) | null;
   recording: { stop(): Promise<void>; resume(): Promise<void> } | null;
@@ -126,7 +127,7 @@ jest.mock('@/data/supabase/session', () => ({
     mockSession.recording = recording ?? null;
     return children;
   },
-  useSession: () => ({ status: 'signedIn' }),
+  useSession: () => ({ status: 'signedIn', profile: mockProfile.current }),
 }));
 jest.mock('@/data/queries', () => ({
   ...jest.requireActual('@/data/queries'),
@@ -201,6 +202,7 @@ function fakeRuntime(drive: Partial<DriveState>) {
     suspendForSignOut: jest.fn(async () => {}),
     resumeAfterSignIn: jest.fn(async () => {}),
     signedInAgain: jest.fn(async () => {}),
+    setAgeBand: jest.fn(async () => {}),
     signOutCompleted: jest.fn(() => {}),
     sessionEnded: jest.fn(async () => {}),
   };
@@ -392,5 +394,22 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
       await settle();
     });
     expect(host.signedInAgain).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the account's age band reaches the host (ruling T12 (1))", () => {
+  afterEach(() => {
+    mockProfile.current = null;
+  });
+
+  test('the signed-in profile band is handed to the host, and a change follows', async () => {
+    mockProfile.current = { age_band: '13_17' };
+    const { host } = await renderReady();
+    expect(host.setAgeBand).toHaveBeenLastCalledWith('13_17');
+  });
+
+  test('no profile yet: nothing is handed over (the cached band the launch read stands)', async () => {
+    const { host } = await renderReady();
+    expect(host.setAgeBand).not.toHaveBeenCalled();
   });
 });

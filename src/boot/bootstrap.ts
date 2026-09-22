@@ -99,6 +99,8 @@ import {
   readDeviceOwner,
   type DeviceOwnerOutcome,
 } from './device';
+import { readProfileCache } from '@/features/auth/profileCache';
+
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
 import { createExpoTraceWriter, type TraceWriter } from './traceWriter';
 
@@ -205,6 +207,8 @@ export interface BootstrapDeps {
    * permission that lapsed in the background reaches the driver. Default: nothing (M4 fills it).
    */
   reportPermissionsFromBackground?: () => void | Promise<void>;
+  /** The account's cached age band, for the arming rule. Default: the device owner's cached profile. */
+  readAgeBand?: () => Promise<string | null>;
   /** The identity stage's bound on `getSession()`. Default: `SESSION_TIMEOUT_MS`. */
   sessionTimeoutMs?: number;
   /**
@@ -470,6 +474,9 @@ async function runLaunch(
       tz: currentZone,
       newId,
       readFlag: deps.readFlag ?? ((key) => readFlag(db, key, AUTO_DETECT_FLAG_FALLBACK)),
+      // The account's age band from the profile the app caches (ruling T12 (1)), so a background
+      // launch of an under-13 account never arms. The UI hands later changes to `setAgeBand`.
+      readAgeBand: deps.readAgeBand ?? (() => cachedAgeBand(db)),
       appState,
       alertsAvailable,
       // §8.2: with nobody signed in, auto-record stays disarmed whatever the stored opt-in (I3).
@@ -775,6 +782,14 @@ function defaultLimits(
     online: getSharedOnline,
     onError: (error) => onError(error, 'speed limits'),
   });
+}
+
+/** The device owner's age band from the cached profile, or null when there is none. */
+async function cachedAgeBand(db: Db): Promise<string | null> {
+  const owner = await readDeviceOwner(db);
+  if (owner === null) return null;
+  const profile = await readProfileCache(createSettingsRepo(db), owner);
+  return profile?.age_band ?? null;
 }
 
 /** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */

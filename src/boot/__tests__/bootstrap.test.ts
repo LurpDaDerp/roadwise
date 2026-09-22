@@ -1494,3 +1494,21 @@ describe('final re-review n4, n5', () => {
     runtime = null;
   });
 });
+
+describe('ruling T12 (1): the launch reads the cached age band', () => {
+  test("an under-13 account's cached profile keeps a launch disarmed; an adult's arms", async () => {
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set('drive.autoDetect', true);
+    await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: 'u13' } });
+    runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    await runtime.stop();
+    runtime.queryClient.clear();
+
+    await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: '18_plus' } });
+    runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
+    expect(runtime.drive.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+});

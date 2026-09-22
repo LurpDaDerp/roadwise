@@ -238,6 +238,12 @@ describe('small rules', () => {
     expect(shouldArm({ ...ok, motion: 'denied' })).toBe(false);
     expect(shouldArm({ ...ok, signedIn: false })).toBe(false);
     expect(shouldArm({ ...ok, signedIn: true })).toBe(true);
+    // Ruling T12 (1): never for an under-13 account; an unknown band does not block.
+    expect(shouldArm({ ...ok, ageBand: 'u13' })).toBe(false);
+    expect(shouldArm({ ...ok, ageBand: 'unknown' })).toBe(true);
+    expect(shouldArm({ ...ok, ageBand: '13_17' })).toBe(true);
+    expect(shouldArm({ ...ok, ageBand: '18_plus' })).toBe(true);
+    expect(shouldArm({ ...ok, ageBand: null })).toBe(true);
     // The permission half is its own export, read by the detection screen too.
     expect(permissionsAllowArming({ location: 'always', motion: 'granted' })).toBe(true);
     expect(permissionsAllowArming({ location: 'always', motion: 'undetermined' })).toBe(false);

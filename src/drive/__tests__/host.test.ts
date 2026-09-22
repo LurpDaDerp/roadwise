@@ -67,6 +67,7 @@ interface HarnessOptions {
   readFlag?: (key: 'auto_detect') => Promise<boolean>;
   appState?: import('@/data/foreground').AppStateLike;
   signedOut?: boolean;
+  readAgeBand?: () => Promise<string | null>;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -120,6 +121,7 @@ function harness(opts: HarnessOptions = {}) {
     readFlag: opts.readFlag,
     appState: opts.appState,
     signedOut: opts.signedOut,
+    readAgeBand: opts.readAgeBand,
     scheduler,
     onError: (error, ctx) => errors.push({ error, ctx }),
   });
@@ -1289,5 +1291,48 @@ describe('security r3 notes', () => {
     await suspendForSignOut();
     signOutCompleted();
     expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+  });
+});
+
+describe('an under-13 account never arms (ruling T12 (1))', () => {
+  test('a u13 band at start: opted in and permitted, still off; the saved choice is untouched', async () => {
+    const h = harness({ readAgeBand: async () => 'u13' });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(h.fake.calls).not.toContain('arm');
+    expect(h.host.autoDetectEnabled()).toBe(true);
+    expect(await createSettingsRepo(db).get(AUTO_DETECT_SETTING_KEY)).toBe(true);
+  });
+
+  test.each(['unknown', '13_17', '18_plus'])('a %s band arms per the other conditions', async (band) => {
+    const h = harness({ readAgeBand: async () => band });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
+  });
+
+  test('a band that changes to u13 (the block screen) disarms; a later adult band re-arms', async () => {
+    const h = harness({ readAgeBand: async () => 'unknown' });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot().status).toBe('armed');
+    await h.host.setAgeBand('u13');
+    expect(h.host.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
+    expect(last(h.fake.calls)).toBe('disarm');
+    expect(h.host.autoDetectEnabled()).toBe(true);
+    await h.host.setAgeBand('18_plus');
+    expect(h.host.snapshot().status).toBe('armed');
+  });
+
+  test('a band that cannot be read does not block (unknown uploads defer safely)', async () => {
+    const h = harness({
+      readAgeBand: async () => {
+        throw new Error('no cache');
+      },
+    });
+    await h.host.setAutoDetect(true);
+    await h.host.start();
+    expect(h.host.snapshot().status).toBe('armed');
   });
 });

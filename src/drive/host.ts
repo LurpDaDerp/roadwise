@@ -177,6 +177,11 @@ export interface DriveHost {
   /** The session has ended (`SIGNED_OUT`): the sign-out is over, and the host stays disarmed. */
   signOutCompleted(): void;
   /**
+   * The account's age band changed (the profile refreshed, or the under-13 block): arming is
+   * re-applied. `u13` never arms (ruling T12 (1)); the driver's saved choice is untouched.
+   */
+  setAgeBand(band: string | null): Promise<void>;
+  /**
    * The session ended, whoever ended it (a `SIGNED_OUT` auth event; security r2-M2). A sign-out
    * the driver started has already stopped recording, and this only closes it. One they did not
    * start — a revoked or expired token, a password changed elsewhere — is handled exactly like
@@ -218,6 +223,11 @@ export interface DriveHostDeps {
   alertsAvailable?: boolean;
   /** Start with no driver signed in: nothing arms until `resumeAfterSignIn` (§8.2). */
   signedOut?: boolean;
+  /**
+   * The account's age band as the app last cached it (ruling T12 (1)), read once at `start`; the
+   * UI then hands every change in through `setAgeBand`. A read that fails counts as unknown.
+   */
+  readAgeBand?: () => Promise<string | null>;
 }
 
 /** Scored driver trips: the learning period's count (rev1: m). */
@@ -307,6 +317,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * `INITIAL_SESSION` (a restored session) never does (ruling on H2 concern 2).
    */
   let signOutDone = false;
+  /** The account's age band (ruling T12 (1)); null until known. Only `u13` blocks arming. */
+  let ageBand: string | null = null;
   /** A session end the driver did not start is suspending (r2-M2): an owner sign-in waits for it. */
   let involuntaryEnd = false;
   /** The owner signed in while `involuntaryEnd` was suspending: applied once it completes (r3). */
@@ -686,6 +698,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       location: state.location,
       motion: state.motion,
       signedIn: !signedOut,
+      ageBand,
     });
     if (arm) {
       try {
@@ -768,6 +781,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           report(e, 'getState');
         }
         if (persist) intent = (await settings.get<boolean>(AUTO_DETECT_SETTING_KEY)) === true;
+        if (deps.readAgeBand && ageBand === null) {
+          try {
+            ageBand = await deps.readAgeBand();
+          } catch (e) {
+            report(e, 'ageBand');
+          }
+        }
         await refreshTripIndex().catch((e: unknown) => report(e, 'tripIndex'));
         // rev1: I2 — before any native listener exists and before arming, so a buffered wake
         // cannot open a second trip for the same drive.
@@ -945,6 +965,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       signingOut = false;
       signOutDone = true;
     },
+
+    setAgeBand: (band) =>
+      run(async () => {
+        if (band === ageBand) return;
+        ageBand = band;
+        await applyArming();
+      }, 'ageBand'),
 
     async sessionEnded() {
       // Recording is still on (no sign-out stopped it, or the owner signed in again since).

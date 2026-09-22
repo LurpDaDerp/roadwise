@@ -14,7 +14,7 @@ import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
-import { SessionProvider } from '@/data/supabase/session';
+import { SessionProvider, useSession } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
@@ -41,6 +41,22 @@ Notifications.setNotificationHandler({
 });
 
 const controller = runtimeController;
+
+/**
+ * Hands the signed-in account's age band to the drive host whenever the profile changes (ruling
+ * T12 (1)): an under-13 account never arms, so the block screen needs no disarm call of its own.
+ * Inside `SessionProvider`, where the profile lives; nothing is handed over until a profile exists,
+ * so the cached band the launch read stands meanwhile.
+ */
+function AgeBandSync({ host }: { host: { setAgeBand(band: string | null): Promise<void> } }) {
+  const { profile } = useSession();
+  const band = profile?.age_band ?? null;
+  const known = profile !== null && profile !== undefined;
+  useEffect(() => {
+    if (known) void host.setAgeBand(band).catch(() => {});
+  }, [host, band, known]);
+  return null;
+}
 
 export default function RootLayout() {
   const { loaded, error } = useAppFonts();
@@ -204,6 +220,7 @@ export default function RootLayout() {
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
                 <SessionProvider flushBeforeSignOut={flush} recording={recording}>
+                  <AgeBandSync host={runtime.drive} />
                   <RestoreRetryProvider retry={retryRestore}>
                     <AuthGate>
                       {/* A lockout covers every route, native modals included (U2, rev1: I12). */}
