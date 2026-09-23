@@ -564,7 +564,7 @@ select is(array(select row(day, outcome, outcome_reason, tier, phone_free, camer
   array[row(date '2026-06-01', 'safe', 'safe', 'safe', false, false, 50)::text,
         row(date '2026-06-02', 'unsafe', 'unsafe', 'good', false, false, 20)::text,
         row(date '2026-06-03', 'unsafe', 'unsafe', 'none', false, false, 0)::text,
-        row(date '2026-06-04', 'neutral', 'no_drive', 'none', false, false, 0)::text,
+        row(date '2026-06-04', 'neutral', 'no_drive', 'none', false, false, 0)::text, -- a genuine day without a drive stays no_drive
         row(date '2026-06-05', 'neutral', 'learning', 'none', false, false, 0)::text,
         row(date '2026-06-06', 'neutral', 'short', 'none', false, false, 0)::text,
         row(date '2026-06-07', 'unsafe', 'unsafe', 'none', false, false, 0)::text,
@@ -712,7 +712,7 @@ select pg_temp.trip(pg_temp.u(14), date '2026-06-05', 40);
 select pg_temp.day(pg_temp.u(14), date '2026-06-05', false);
 select pg_temp.settle(pg_temp.u(14), pg_temp.late());
 select is((select row(outcome, outcome_reason, tier, points, streak_after, predicates ->> 'safe')::text from public.reward_days where user_id = pg_temp.u(14) and day = '2026-06-05'),
-  row('neutral', 'no_drive', 'none', 0, 9, 'neutral')::text, 'the late day gets a frozen neutral no-value row');
+  row('neutral', 'late', 'none', 0, 9, 'neutral')::text, 'the late day gets a frozen neutral no-value row, reason late');
 select is((select row(count(*), bool_and((detail ->> 'late_day')::boolean))::text from public.reward_contradictions where user_id = pg_temp.u(14)), row(1, true)::text,
   'and one late_day contradiction');
 select is(pg_temp.snap(pg_temp.u(14)) - 'days', (select s from snapI) - 'days', 'the streak, points and goals are unchanged');

@@ -24,7 +24,7 @@ begin
 end $$;
 
 begin;
-select plan(111);
+select plan(112);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -537,8 +537,14 @@ select pg_temp.settle(pg_temp.u(19), pg_temp.later());
 select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 2, true);
 select pg_temp.settle(pg_temp.u(19), pg_temp.later());
 select is((select row(outcome, outcome_reason, points)::text from public.reward_days where user_id = pg_temp.u(19) and day = pg_temp.today() + 2),
-  row('neutral', 'no_drive', 0)::text, 'a day uploaded behind the frontier settles as I-A''s frozen neutral row');
+  row('neutral', 'late', 0)::text, 'a day uploaded behind the frontier settles as I-A''s frozen neutral row, reason late');
 select is((select status from public.referrals where invitee_id = pg_temp.u(19)), 'pending', 'so its drive does not count: three drives, two on real settled days, still pending');
+-- the same day read as a no_drive row (reward_days is immutable, hence replica) does not count either
+set local session_replication_role = replica;
+update public.reward_days set outcome_reason = 'no_drive' where user_id = pg_temp.u(19) and day = pg_temp.today() + 2;
+set local session_replication_role = origin;
+select pg_temp.settle(pg_temp.u(19), pg_temp.later());
+select is((select status from public.referrals where invitee_id = pg_temp.u(19)), 'pending', 'a no_drive day''s drive does not count either');
 select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 4, true);
 select pg_temp.settle(pg_temp.u(19), pg_temp.later());
 select is((select status from public.referrals where invitee_id = pg_temp.u(19)), 'qualified', 'the next normally settled drive qualifies');

@@ -59,7 +59,7 @@ set lock_timeout = '5s';
 -- say (a device holds a day only once it has reported a watermark at all: a null synced_through is a
 -- build that does not report, review m1). Days ahead of the frontier settle strictly in day order; a score_daily day at or behind the
 -- frontier with no reward row is never settled for value: it gets one contradiction and a frozen
--- neutral/no_drive row. Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
+-- neutral/late row (its own reason, so a reader never mistakes it for a day without a drive). Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
 -- (score_daily plus final driver trips of the day, deleted ones included, and their scored events).
 -- A settled day is final: when its score_daily row later moves (updated_at past checked_through) one
 -- changed_after_settlement contradiction is written and nothing else changes. The zone-hop guard: a day
@@ -237,7 +237,8 @@ create table public.reward_days (
   user_id uuid not null references auth.users(id) on delete cascade,
   day date not null,
   outcome text not null check (outcome in ('safe', 'neutral', 'unsafe')),
-  outcome_reason text not null check (outcome_reason in ('safe', 'no_drive', 'learning', 'short', 'unsafe', 'zone_hop')),
+  -- 'late': I-A's frozen row of a day first seen behind the frontier (never settled for value)
+  outcome_reason text not null check (outcome_reason in ('safe', 'no_drive', 'learning', 'short', 'unsafe', 'zone_hop', 'late')),
   tier text not null check (tier in ('safe', 'good', 'none')),
   phone_free boolean not null,
   camera boolean not null,
@@ -576,7 +577,7 @@ begin
       on conflict (user_id, dedupe_key) do nothing;
       insert into public.reward_days (user_id, day, outcome, outcome_reason, tier, phone_free, camera, predicates, points,
         streak_after, wall_close, settled_at, source_updated_at, checked_through)
-      values (p_user, v_day, 'neutral', 'no_drive', 'none', false, false, v_neutral, 0,
+      values (p_user, v_day, 'neutral', 'late', 'none', false, false, v_neutral, 0,
         coalesce(v_streak, 0), f.wall_close, p_now, f.source_updated_at, f.source_updated_at);
     end loop;
   end if;

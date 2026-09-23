@@ -351,10 +351,10 @@ begin
         and t.started_at > v_r.redeemed_at
         and t.started_at <= v_r.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int)
         and t.local_day >= coalesce(v_start, '-infinity'::date)
-        -- (fix round 1, m1) a day settled normally: I-A's frozen late-day row (neutral / no_drive) never earns,
+        -- (fix round 1, m1) a day settled normally: I-A's frozen late-day row (neutral / late) never earns,
         -- and a real no_drive day has no final driver drive to count anyway
         and exists (select 1 from public.reward_days rd where rd.user_id = p_user and rd.day = t.local_day
-                    and rd.outcome_reason <> 'no_drive');
+                    and rd.outcome_reason not in ('no_drive', 'late'));
     if v_drives >= (v_ref ->> 'QUALIFYING_DRIVES')::int then
       if exists (select 1 from public.devices a join public.devices b on b.id = a.id
                  where a.user_id = p_user and b.user_id = v_r.referrer_id)
