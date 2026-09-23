@@ -9,7 +9,7 @@ The optional `gaze_direct` network runs in the same pipeline only in builds made
 `DMS_GAZE_NET=1`. That is a release gate: it never ships in a production binary until counsel
 clears its licence (§7).
 
-> **Status (Task 1 of the DMS rework).** This README and `src/` define the v2 contract. The Swift
+> **Status (Tasks 1–2 of the DMS rework).** This README and `src/` define the v2 contract, the TS reference of every native feature and the golden vectors. The Swift
 > and Kotlin sources under `ios/` and `android/` are still the V1 implementation, which does not
 > implement this contract. They are rewritten against it in Tasks 3 (iOS) and 4 (Android). No JS
 > code starts the camera before then.
@@ -102,7 +102,7 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 | # | Field | Mask | Meaning |
 |---|---|---|---|
-| 0 | `tOffMs` | A | the record's time minus the header's `anchorTMs`, ms: ≥ 0, and under a second in practice (§5) |
+| 0 | `tOffMs` | A | the record's time minus the header's `anchorTMs`, ms: 0 ≤ `tOffMs` ≤ `MAX_T_OFF_MS = 10000` (a larger one is dropped as implausible), and under a second in practice (§5) |
 | 1 | `face` | A | 0 or 1 |
 | 2 | `boxCx` | F | face box centre x, upright frame, 0–1 |
 | 3 | `boxCy` | F | face box centre y |
@@ -186,11 +186,72 @@ These hold whatever JavaScript does.
 
 ## 7. The gaze-net release gate
 
-`gaze_direct.onnx`, its meta file and ONNX Runtime are compiled and bundled only when `DMS_GAZE_NET=1`. Without it, the native `GazeNet` is a stub and `getModelInfo().gazeNetAvailable` is false. The podspec and `build.gradle` refuse to build with `DMS_GAZE_NET=1` for a production profile. The build switch itself arrives in Tasks 2–4.
+`gaze_direct.onnx`, its meta file, ONNX Runtime and the Swift/Kotlin that uses them are compiled and bundled **only** when the build environment has `DMS_GAZE_NET=1`.
+- **iOS** (`ios/DmsVision.podspec`, evaluated at `pod install`): with the switch, it adds `onnxruntime-objc 1.30.0`, the `GazeNetResources/*` resources, the `GazeNet/**` sources and the compilation condition `DMS_GAZE_NET`. Without it, it compiles `GazeNetStub/**` instead.
+- **Android** (`android/build.gradle`): with the switch (or `-PdmsGazeNet=1`), it adds `onnxruntime-android 1.30.0`, `src/gazenet/java` and `src/gazenet/assets`. Without it, it adds `src/nogazenet/java`.
+- **The stub** reports `available = false`, so `getModelInfo().gazeNetAvailable` is false, `gazeSha256` and `onnxruntime` are null, and no record carries `NET_RAN`.
+- **Refusal:** the podspec raises and Gradle throws `DMS_GAZE_NET=1 is refused in a production build (release gate, U-2)` when the switch meets `EAS_BUILD_PROFILE=production`. Gradle also throws on any `release` task with no EAS profile.
+- **Profiles:** only the `development` EAS profile sets the switch. `preview` and `production` build without it.
+- **Provenance:** see `THIRD_PARTY.md`. The training data is unknown, which blocks the gate.
 
-## 8. Golden vectors and the self-test
+## 8. The per-frame feature pass, the golden vectors and the self-test
 
-Added in Task 2.
+### 8.1 What native computes (the TS reference is binding)
+
+`src/reference/` is the reference implementation the Swift and Kotlin ports reproduce. Port each file's logic verbatim, including the index lists, thresholds and orders of operation:
+
+| Reference | Native class (both platforms) | What it does |
+|---|---|---|
+| `landmarks.ts` | part of `FeatureExtractor` | index sets; buffer → upright landmark rotation |
+| `features.ts`, `irisOffset.ts` | `FeatureExtractor` | box, IOD, per-eye EAR, width, iris offsets, iris-inside, clipping; MAR and mouth width. All on UPRIGHT landmarks, in upright PIXELS |
+| `roi.ts` | `Roi` | BT.601 integer luma; frame, face and eye luma statistics, iris contrast, glare, blur. All in the BUFFER frame, on MediaPipe's buffer-frame landmarks |
+| `headPose.ts` | `HeadPose` | pose from the column-major facial transformation matrix, rotated upright; the net's vector → angles |
+| `record.ts` | `FeatureExtractor` + `RecordEncoder` | the whole record, per the §4 mask |
+| `gazeInputs.ts`, `decayingHistogram.ts` | `GazeInputs`, `StatsTracker` | the net's inputs, and the subject-statistic tracker (net builds only run the net, but both platforms port the assembly) |
+| `wire.ts` `buildFrameBatch` | `Batcher` + `RecordEncoder` | `anchorTMs` = the first record's `tMs` (Double); `tOffMs = tMs − anchorTMs` in Double, then stored as Float |
+
+**Porting rules:**
+- Compute in `Double` and store each record field as `Float` at the end.
+- MediaPipe landmarks and matrices arrive as `Float`; widen them to `Double` before any arithmetic.
+- `probe(...)` calls are test instrumentation. Do not port them.
+- `pairwiseSum` may be a plain left-to-right sum.
+- Luma is read per pixel inside each region. Never build a full-frame luma plane.
+- Pixels are BGRA on iOS (`kCVPixelFormatType_32BGRA`) and RGBA on Android (`OUTPUT_IMAGE_FORMAT_RGBA_8888`). Honour the row stride, which may exceed `width × 4`.
+- The net's statistic tracker admits a frame only when neither eye is clipped and the mean raw EAR is at least `0.18`.
+- `prepare` uses the tracker state **before** the frame.
+- The tracker time is the record clock in seconds.
+- The tracker is reset on every new session.
+
+### 8.2 The golden vectors (`assets/vectors/*.json`)
+
+Regenerate them with `node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON modules/dms-vision/scripts/make-vectors.ts`. When the ONNX inputs change, also run `scripts/make-onnx-vectors.py` (Python onnxruntime 1.30.0 in a throwaway venv), then `make-vectors.ts` again. Never edit the files by hand. `__tests__/vectors.test.ts` fails when a file differs from a fresh generation.
+
+| Kind | Inputs | Native returns |
+|---|---|---|
+| `record` | `images` (w, h, `bgra`\|`rgba`, base64 pixels, tightly packed); `frames` (tMs, image index, rotationDeg, buffer-frame landmarks or null, buffer-frame matrix or null, the net's vector or null, latencies); `anchorEpochMs` | `batch: { anchorTMs, anchorEpochMs, n, data }`. That is the production encoder's batch of all frames, with `data` in base64 and `anchorEpochMs` echoed from the input |
+| `gazeInputs` | width, height, focalScale, frames (tSec, **upright** landmarks) | `frames: [{ cloud, context, validity, admitted }]` |
+| `statsTracker` | trainingMean, warmup, windowS, t[], pushes[] (null = NaN) | `current: [[4]…]` |
+| `headPose` | cases (column-major matrix, rotationDeg) | `poses: [[yaw, pitch, roll]…]` |
+| `onnx` | cases (cloud, context, validity) | `cases: [{ gaze[3], rotation[9] }]`. A build without the net answers `skipped` |
+
+The vectors are synthetic (`THIRD_PARTY.md`). The generator refuses any vector in which a threshold comparison lies within `MARGIN_MIN = 1e-6` (relative) of its threshold.
+
+### 8.3 The self-test protocol
+
+1. JS (the diagnostics panel) validates the vector files with `parseVectors` and calls `selfTest(JSON.stringify(vectors))`.
+2. Native runs its **production** classes over each vector. It never runs a copy kept for testing. The ports' selfTest must go through the same `FeatureExtractor`, `Roi`, `HeadPose`, `RecordEncoder`, `GazeInputs` and `GazeNet` the camera path uses.
+3. Native resolves one JSON string:
+   ```jsonc
+   { "version": 1, "platform": "ios" | "android", "gazeNetAvailable": bool,
+     "results": [ { "name", "kind", ...output } | { "name", "kind", "error": "message" }
+                | { "name", "kind": "onnx", "skipped": "reason" } ] }   // one per vector, in order
+   ```
+   A vector that throws natively yields the `error` form. The promise rejects (`E_BAD_ARGS`) only if the input is not parseable at all.
+4. JS diffs the output with `diffSelfTest(vectors, outputJson)`.
+   - Numbers must satisfy |native − expected| ≤ 1e-4 + 1e-5·|expected|. A record's time is held to an absolute 1e-3 ms.
+   - Nulls (NaN) and lengths must match exactly.
+   - A record batch must decode with 0 dropped records.
+   - `skipped` is accepted only for `onnx`, and only when `gazeNetAvailable` is false.
 
 ## 9. JS usage
 

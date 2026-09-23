@@ -128,6 +128,11 @@ export type DmsFps = (typeof ALLOWED_FPS)[number];
 export const ALLOWED_ROTATIONS = [0, 90, 180, 270] as const;
 export type Rotation = (typeof ALLOWED_ROTATIONS)[number];
 
+/**
+ * A record more than this after its batch's anchor is implausible (a batch spans BATCH_MS) and is
+ * dropped: it also keeps `tOffMs` well inside float32's sub-microsecond range (Task 1 review).
+ */
+export const MAX_T_OFF_MS = 10_000;
 /** Native flushes pending records to JS at most this often (plan rev1: m8). */
 export const BATCH_MS = 100;
 /** No `setPolicy` heartbeat for this long while running → native pauses (reason `watchdog`). */

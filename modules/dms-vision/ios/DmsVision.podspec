@@ -1,21 +1,30 @@
-# DmsVision — the RoadCash driver-monitoring native inference layer.
+# DmsVision: the RoadWise driver-monitoring native layer (README.md is the contract).
 #
-# Pinned native dependencies (verified on CocoaPods trunk 2026-09-18):
-#   MediaPipeTasksVision 0.10.35  (published 2026-04-27, ios >= 15.0, static framework)
-#   onnxruntime-objc     1.30.0   (published 2026-09-11, ios >= 15.1, static framework,
-#                                  pulls onnxruntime-c 1.30.0)
+# Pinned native dependencies (verified on CocoaPods trunk 2026-09-18; the plan's keep table):
+#   MediaPipeTasksVision 0.10.35   every build
+#   onnxruntime-objc     1.30.0    ONLY with DMS_GAZE_NET=1 (the gaze network's release gate)
 # Do NOT loosen these to optimistic operators: EAS builds must be reproducible.
+#
+# The gaze-net switch (plan: Global Constraints, the gaze_direct release gate). `gaze_direct.onnx`,
+# its meta file, ONNX Runtime and the Swift that uses them are part of the pod only when the
+# environment says DMS_GAZE_NET=1 at `pod install` time. Otherwise GazeNetStub/ supplies a GazeNet
+# that reports itself unavailable. A production profile can never carry the switch: the install
+# fails instead (plan rev2: rev1-M1).
+
+gaze_net = ENV['DMS_GAZE_NET'] == '1'
+if gaze_net && ENV['EAS_BUILD_PROFILE'] == 'production'
+  raise 'DMS_GAZE_NET=1 is refused in a production build (release gate, U-2)'
+end
 
 Pod::Spec.new do |s|
   s.name           = 'DmsVision'
-  s.version        = '1.0.0'
-  s.summary        = 'Front-camera MediaPipe FaceLandmarker + ONNX gaze inference for RoadCash.'
-  s.description    = 'Owns a preview-free AVCaptureSession, runs MediaPipe FaceLandmarker in ' \
-                     'LIVE_STREAM mode and the gaze network through ONNX Runtime, and emits ' \
-                     'upright-normalized 478-point landmark clouds to JavaScript.'
+  s.version        = '2.0.0'
+  s.summary        = 'Front-camera face features for the RoadWise driver-monitoring system.'
+  s.description    = 'Owns a preview-free AVCaptureSession, runs MediaPipe FaceLandmarker and ' \
+                     'emits derived per-frame feature records (never pixels or landmarks).'
   s.license        = { :type => 'MIT' }
-  s.author         = 'RoadCash'
-  s.homepage       = 'https://github.com/roadcash/RoadCash-dms'
+  s.author         = 'RoadWise'
+  s.homepage       = 'https://github.com/roadwise/dms-vision'
   s.platforms      = { :ios => '15.1' }
   s.swift_version  = '5.9'
   s.source         = { :git => '' }
@@ -25,21 +34,22 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
   s.dependency 'MediaPipeTasksVision', '0.10.35'
-  s.dependency 'onnxruntime-objc', '1.30.0'
 
-  s.pod_target_xcconfig = {
+  xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'SWIFT_COMPILATION_MODE' => 'wholemodule'
   }
 
-  # The model bundle ships as a native resource bundle, so no download and no
-  # expo-asset copy is needed. Resolved at runtime by DmsVisionBundle.swift, which
-  # looks in both the framework bundle and the main bundle (CocoaPods places
-  # resource bundles differently for static libraries and for frameworks).
-  s.resource_bundles = {
-    'DmsVision' => ['Resources/*']
-  }
+  if gaze_net
+    s.dependency 'onnxruntime-objc', '1.30.0'
+    xcconfig['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) DMS_GAZE_NET'
+    s.resource_bundles = { 'DmsVision' => ['Resources/*', 'GazeNetResources/*'] }
+    s.exclude_files = ['Pods/**', 'GazeNetStub/**']
+  else
+    s.resource_bundles = { 'DmsVision' => ['Resources/*'] }
+    s.exclude_files = ['Pods/**', 'GazeNet/**']
+  end
 
+  s.pod_target_xcconfig = xcconfig
   s.source_files = '**/*.{h,m,mm,swift}'
-  s.exclude_files = 'Pods/**'
 end

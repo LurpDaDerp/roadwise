@@ -16,6 +16,7 @@ import {
   FRAME_MASK,
   FRAME_STRIDE,
   FRAME_WIRE_VERSION,
+  MAX_T_OFF_MS,
   type FrameField,
   type Rotation,
 } from './constants';
@@ -213,7 +214,7 @@ function decodeRecord(v: readonly number[], anchorTMs: number): FrameFeatures | 
   }
   if (v[I.reserved] !== 0) return null;
   if (!(ALLOWED_ROTATIONS as readonly number[]).includes(v[I.rotationDeg]!)) return null;
-  if (v[I.tOffMs]! < 0 || v[I.latLandmarkMs]! < 0 || v[I.latTotalMs]! < 0) return null;
+  if (v[I.tOffMs]! < 0 || v[I.tOffMs]! > MAX_T_OFF_MS || v[I.latLandmarkMs]! < 0 || v[I.latTotalMs]! < 0) return null;
   if (v[I.frameLuma]! < 0 || v[I.frameLuma]! > 255) return null;
   if (face) {
     const rIn = v[I.irisInR]!;

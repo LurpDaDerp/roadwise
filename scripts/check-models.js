@@ -21,11 +21,26 @@ const MODULE_DIR = path.join(APP_DIR, 'modules', 'dms-vision');
 const FILES = ['face_landmarker.task', 'gaze_direct.onnx', 'gaze_direct.meta.json'];
 /** The copy every other one is compared against (and the one meta.json is read from). */
 const CANONICAL_LABEL = 'app assets';
-const LOCATIONS = [
-  { label: CANONICAL_LABEL, dir: path.join(APP_DIR, 'assets', 'models') },
-  { label: 'ios bundle', dir: path.join(MODULE_DIR, 'ios', 'Resources') },
-  { label: 'android assets', dir: path.join(MODULE_DIR, 'android', 'src', 'main', 'assets') },
-];
+const CANONICAL = { label: CANONICAL_LABEL, dir: path.join(APP_DIR, 'assets', 'models') };
+/**
+ * Where each file's native copies live. The gaze network ships only in builds made with
+ * DMS_GAZE_NET=1 (the DMS release gate), so its copies sit in gated folders that only those builds
+ * bundle; the landmarker is in every build.
+ */
+function locationsFor(name) {
+  if (name === 'face_landmarker.task') {
+    return [
+      CANONICAL,
+      { label: 'ios bundle', dir: path.join(MODULE_DIR, 'ios', 'Resources') },
+      { label: 'android assets', dir: path.join(MODULE_DIR, 'android', 'src', 'main', 'assets') },
+    ];
+  }
+  return [
+    CANONICAL,
+    { label: 'ios gaze-net', dir: path.join(MODULE_DIR, 'ios', 'GazeNetResources') },
+    { label: 'android gaze-net', dir: path.join(MODULE_DIR, 'android', 'src', 'gazenet', 'assets') },
+  ];
+}
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -36,7 +51,7 @@ const digests = {};
 
 for (const name of FILES) {
   const perLocation = [];
-  for (const location of LOCATIONS) {
+  for (const location of locationsFor(name)) {
     const file = path.join(location.dir, name);
     if (!fs.existsSync(file)) {
       console.error(`MISSING  ${location.label}: ${path.relative(APP_DIR, file)}`);
@@ -64,7 +79,7 @@ for (const name of FILES) {
 }
 
 // The meta file records the sha256 the deployment stack verified the ONNX graph against.
-const canonicalDir = LOCATIONS.find((l) => l.label === CANONICAL_LABEL).dir;
+const canonicalDir = CANONICAL.dir;
 const metaFile = path.join(canonicalDir, 'gaze_direct.meta.json');
 if (fs.existsSync(metaFile)) {
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
@@ -83,7 +98,7 @@ if (fs.existsSync(metaFile)) {
 }
 
 if (failed) {
-  console.error('\ncheck-models: FAILED - re-copy assets/models/* into modules/dms-vision/ios/Resources/ and modules/dms-vision/android/src/main/assets/');
+  console.error('\ncheck-models: FAILED - re-copy assets/models/face_landmarker.task into modules/dms-vision/ios/Resources/ and android/src/main/assets/, and gaze_direct.* into modules/dms-vision/ios/GazeNetResources/ and android/src/gazenet/assets/');
   process.exit(1);
 }
 console.log('\ncheck-models: all model copies are identical.');

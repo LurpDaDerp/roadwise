@@ -209,6 +209,12 @@ describe('time: tOffMs against a float64 anchor (Task 1 review C1)', () => {
     expect(out.batch!.frames.map((f) => f.tMs)).toEqual([100]);
   });
 
+  test('a record more than MAX_T_OFF_MS after the anchor is implausible and dropped', () => {
+    const out = decodeFrameBatch(batch([tracked(1000), tracked(1000 + 10_000), tracked(1000 + 10_000.5)]));
+    expect(out.droppedRecords).toBe(1);
+    expect(out.batch!.frames.map((f) => f.tMs)).toEqual([1000, 11_000]);
+  });
+
   test('a negative anchor is a broken header', () => {
     expect(decodeFrameBatch(batch([tracked(1)], { anchorTMs: -5 })).droppedBatch).toBe(true);
   });

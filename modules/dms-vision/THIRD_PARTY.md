@@ -33,16 +33,51 @@ code copied.
 
 ## Linked dependencies
 
-| Package | Licence |
-|---|---|
-| `MediaPipeTasksVision` / `com.google.mediapipe:tasks-vision` 0.10.35 | Apache-2.0 |
-| `onnxruntime-objc` / `com.microsoft.onnxruntime:onnxruntime-android` 1.30.0 | MIT |
-| `androidx.camera:*` 1.4.2 | Apache-2.0 |
-| `ExpoModulesCore` | MIT |
+| Package | Licence | In which builds |
+|---|---|---|
+| `MediaPipeTasksVision` / `com.google.mediapipe:tasks-vision` 0.10.35 | Apache-2.0 | every build |
+| `androidx.camera:camera-core`, `-camera2`, `-lifecycle`, `-view` 1.4.2 | Apache-2.0 | every Android build |
+| `ExpoModulesCore` | MIT | every build |
+| `onnxruntime-objc` / `com.microsoft.onnxruntime:onnxruntime-android` 1.30.0 | MIT | **only** builds made with `DMS_GAZE_NET=1` (see below) |
 
-The bundled model files (`face_landmarker.task`) are Google's MediaPipe Face Landmarker assets
-(Apache-2.0). `gaze_direct.onnx` and `gaze_direct.meta.json` are the project's own trained gaze
-network.
+## Bundled models
+
+### `face_landmarker.task`: every build
+
+Google's MediaPipe Face Landmarker asset, Apache-2.0, sha256
+`64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff`.
+
+### `gaze_direct.onnx` + `gaze_direct.meta.json`: provenance and the release gate
+
+**Status: not cleared for distribution. It must not be in any production binary.**
+
+| | |
+|---|---|
+| What it is | The project's own gaze network (V1 research pipeline), `twostream` architecture, 867,069 parameters. Inputs: a 478-point weak-3D landmark cloud, a 7-value camera/subject context and a validity mask. Output: a gaze direction and a head rotation |
+| Checkpoint | `checkpoints/gaze_direct_promoted.pt`, sha256 `b0d3622a51d30a76369b7ab95b281a255f2329db9d1a9747fbabe8b781eacd74` (from the meta file) |
+| ONNX graph | sha256 `4aa9661091efbdc28b20927f905c78097b9a7b5b787401f74ce6259f8f7666c8`; meta sha256 `007335e0dc34e4e9b1aeb5c4c34b65f1c1c811365d6768d3d814b70e47d35ca6` |
+| Trained by | the project owner (the RoadCash/RoadWise research pipeline) |
+| **Training data and its licences** | **UNKNOWN. To be supplied by the model's owner.** The meta file records normalisation statistics only. The public gaze datasets such a network is usually trained on (MPIIGaze/MPIIFaceGaze, GazeCapture, ETH-XGaze, Gaze360) are licensed for research or non-commercial use only |
+| Licence of the model | undetermined until the training data's terms are known |
+
+**The release gate** (DMS plan, Global Constraints; decision U-2):
+- The model files live only in `ios/GazeNetResources/` and `android/src/gazenet/assets/`.
+- Those folders, ONNX Runtime and the Swift/Kotlin that use them are compiled only when the build environment has `DMS_GAZE_NET=1`. Only the `development` EAS profile sets it; the internal device-pass builds use it.
+- The podspec and `build.gradle` **refuse** the switch for a production build.
+- `__tests__/release-gate.test.ts` and `__tests__/models.test.ts` pin all of this.
+- Every build uses the licence-clean **geometric gaze** (head pose + iris offset, computed by the DMS engine) by default.
+- Lifting the gate needs three things: counsel's written clearance of the training data's terms, recorded in the DMS ledger; a controller ruling; and the user's decision.
+
+## Golden vectors
+
+`assets/vectors/*.json` are synthetic. Every face is drawn from parameters by `scripts/synth.ts`
+with a seeded generator, and no vector contains a person's face or landmarks. `stats-tracker.json`
+reuses the inputs of the V1 Python reference's own synthetic fixture (seeded normal noise).
+`__tests__/fixtures/v1-reference/` holds two V1 fixtures verbatim: synthetic faces from the
+reference's `make_face` generator. They are test oracles only. The V1 `onnx_parity.json` is **not**
+included: its source file's provenance is unknown. The ONNX parity vector is regenerated from
+synthetic inputs by `scripts/make-onnx-vectors.py` with Python onnxruntime 1.30.0. That is a tool
+run in a throwaway environment, never a repo dependency.
 
 ## MIT licence text (applies to the prior art named above)
 
