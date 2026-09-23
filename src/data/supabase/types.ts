@@ -123,6 +123,8 @@ export type Database = {
           permissions: Json
           platform: string
           push_token: string | null
+          signed_out_at: string | null
+          synced_through: string | null
           updated_at: string
           user_id: string
         }
@@ -139,6 +141,8 @@ export type Database = {
           permissions?: Json
           platform: string
           push_token?: string | null
+          signed_out_at?: string | null
+          synced_through?: string | null
           updated_at?: string
           user_id: string
         }
@@ -155,6 +159,8 @@ export type Database = {
           permissions?: Json
           platform?: string
           push_token?: string | null
+          signed_out_at?: string | null
+          synced_through?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -468,6 +474,39 @@ export type Database = {
         }
         Relationships: []
       }
+      points_ledger: {
+        Row: {
+          amount: number
+          balance_after: number
+          created_at: string
+          id: string
+          idempotency_key: string
+          ref_key: string
+          type: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          balance_after: number
+          created_at?: string
+          id?: string
+          idempotency_key: string
+          ref_key: string
+          type: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          balance_after?: number
+          created_at?: string
+          id?: string
+          idempotency_key?: string
+          ref_key?: string
+          type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       private_profiles: {
         Row: {
           birth_date: string | null
@@ -537,6 +576,69 @@ export type Database = {
           profile_visibility?: string
           units?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      progress: {
+        Row: {
+          best_streak: number
+          challenges_completed: number
+          created_at: string
+          goals_achieved: number
+          level: number
+          next_focus: string | null
+          phone_free_days: number
+          points: number
+          referrals_rewarded: number
+          safe_days: number
+          settled_through: string | null
+          shields: number
+          smooth_days: number
+          streak_days: number
+          streak_started: string | null
+          updated_at: string
+          user_id: string
+          xp: number
+        }
+        Insert: {
+          best_streak?: number
+          challenges_completed?: number
+          created_at?: string
+          goals_achieved?: number
+          level?: number
+          next_focus?: string | null
+          phone_free_days?: number
+          points?: number
+          referrals_rewarded?: number
+          safe_days?: number
+          settled_through?: string | null
+          shields?: number
+          smooth_days?: number
+          streak_days?: number
+          streak_started?: string | null
+          updated_at?: string
+          user_id: string
+          xp?: number
+        }
+        Update: {
+          best_streak?: number
+          challenges_completed?: number
+          created_at?: string
+          goals_achieved?: number
+          level?: number
+          next_focus?: string | null
+          phone_free_days?: number
+          points?: number
+          referrals_rewarded?: number
+          safe_days?: number
+          settled_through?: string | null
+          shields?: number
+          smooth_days?: number
+          streak_days?: number
+          streak_started?: string | null
+          updated_at?: string
+          user_id?: string
+          xp?: number
         }
         Relationships: []
       }
@@ -662,6 +764,117 @@ export type Database = {
         }
         Relationships: []
       }
+      reward_contradictions: {
+        Row: {
+          created_at: string
+          day: string | null
+          dedupe_key: string
+          detail: Json
+          id: string
+          kind: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          day?: string | null
+          dedupe_key: string
+          detail: Json
+          id?: string
+          kind: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          day?: string | null
+          dedupe_key?: string
+          detail?: Json
+          id?: string
+          kind?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      reward_days: {
+        Row: {
+          camera: boolean
+          checked_through: string
+          created_at: string
+          day: string
+          outcome: string
+          outcome_reason: string
+          phone_free: boolean
+          points: number
+          predicates: Json
+          settled_at: string
+          source_updated_at: string
+          streak_after: number | null
+          tier: string
+          updated_at: string
+          user_id: string
+          wall_close: string
+        }
+        Insert: {
+          camera: boolean
+          checked_through: string
+          created_at?: string
+          day: string
+          outcome: string
+          outcome_reason: string
+          phone_free: boolean
+          points: number
+          predicates: Json
+          settled_at: string
+          source_updated_at: string
+          streak_after?: number | null
+          tier: string
+          updated_at?: string
+          user_id: string
+          wall_close: string
+        }
+        Update: {
+          camera?: boolean
+          checked_through?: string
+          created_at?: string
+          day?: string
+          outcome?: string
+          outcome_reason?: string
+          phone_free?: boolean
+          points?: number
+          predicates?: Json
+          settled_at?: string
+          source_updated_at?: string
+          streak_after?: number | null
+          tier?: string
+          updated_at?: string
+          user_id?: string
+          wall_close?: string
+        }
+        Relationships: []
+      }
+      reward_due: {
+        Row: {
+          created_at: string
+          due_at: string
+          failures: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          due_at: string
+          failures?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          due_at?: string
+          failures?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       score_daily: {
         Row: {
           band: string | null
@@ -676,6 +889,7 @@ export type Database = {
           provisional: boolean
           safe_day: boolean
           severe_events: number
+          trips_all: number
           trips_scored: number
           updated_at: string
           user_id: string
@@ -693,6 +907,7 @@ export type Database = {
           provisional?: boolean
           safe_day?: boolean
           severe_events?: number
+          trips_all?: number
           trips_scored?: number
           updated_at?: string
           user_id: string
@@ -710,6 +925,7 @@ export type Database = {
           provisional?: boolean
           safe_day?: boolean
           severe_events?: number
+          trips_all?: number
           trips_scored?: number
           updated_at?: string
           user_id?: string
@@ -919,12 +1135,61 @@ export type Database = {
         }
         Relationships: []
       }
+      weekly_goals: {
+        Row: {
+          category: string
+          closed_at: string | null
+          created_at: string
+          fail_days: number
+          pass_days: number
+          prorated: boolean
+          source: string
+          state: string
+          target_days: number
+          updated_at: string
+          user_id: string
+          week_start: string
+        }
+        Insert: {
+          category: string
+          closed_at?: string | null
+          created_at?: string
+          fail_days?: number
+          pass_days?: number
+          prorated?: boolean
+          source: string
+          state?: string
+          target_days?: number
+          updated_at?: string
+          user_id: string
+          week_start: string
+        }
+        Update: {
+          category?: string
+          closed_at?: string | null
+          created_at?: string
+          fail_days?: number
+          pass_days?: number
+          prorated?: boolean
+          source?: string
+          state?: string
+          target_days?: number
+          updated_at?: string
+          user_id?: string
+          week_start?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
       age_band_rank: { Args: { p_band: string }; Returns: number }
+      append_streak: {
+        Args: { p_days: string[]; p_user: string }
+        Returns: Json
+      }
       apply_recompute: {
         Args: {
           p_baselines: Json
@@ -952,6 +1217,38 @@ export type Database = {
       dismiss_inbox: { Args: { p_ids: string[] }; Returns: number }
       dispatch_purge_traces: { Args: never; Returns: string }
       dispatch_push: { Args: never; Returns: string }
+      emit_reward_events: {
+        Args: { p_events: Json; p_now: string; p_tz: string; p_user: string }
+        Returns: number
+      }
+      ensure_week_goal: {
+        Args: {
+          p_now: string
+          p_tz: string
+          p_user: string
+          p_week_start: string
+        }
+        Returns: {
+          category: string
+          closed_at: string | null
+          created_at: string
+          fail_days: number
+          pass_days: number
+          prorated: boolean
+          source: string
+          state: string
+          target_days: number
+          updated_at: string
+          user_id: string
+          week_start: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "weekly_goals"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       expired_trace_object_keys: {
         Args: { p_after_name: string; p_limit: number }
         Returns: Json
@@ -970,6 +1267,8 @@ export type Database = {
       mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
       notification_defaults: { Args: never; Returns: Json }
+      open_my_week: { Args: never; Returns: Json }
+      purge_reward_audit: { Args: never; Returns: number }
       purge_traces_signature: {
         Args: { p_key: string; p_ts: number }
         Returns: string
@@ -1002,6 +1301,7 @@ export type Database = {
       record_push_outcomes: { Args: { p: Json }; Returns: number }
       record_push_receipts: { Args: { p: Json }; Returns: number }
       rederive_age_bands: { Args: never; Returns: number }
+      refresh_progress: { Args: { p_user: string }; Returns: Json }
       register_push_token: {
         Args: { p_device_id: string; p_token: string }
         Returns: undefined
@@ -1031,9 +1331,100 @@ export type Database = {
         Args: { p_fn: string; p_name: string; p_type: string; p_value: Json }
         Returns: undefined
       }
+      reward_credit: {
+        Args: {
+          p_amount: number
+          p_key: string
+          p_ref: string
+          p_type: string
+          p_user: string
+        }
+        Returns: boolean
+      }
+      reward_day_facts: {
+        Args: { p_from: string; p_to: string; p_tz: string; p_user: string }
+        Returns: Database["public"]["CompositeTypes"]["reward_fact"][]
+        SetofOptions: {
+          from: "*"
+          to: "reward_fact"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      reward_day_ready: {
+        Args: { p_now: string; p_user: string; p_wall_close: string }
+        Returns: boolean
+      }
+      reward_fact_summary: {
+        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
+        Returns: Json
+      }
+      reward_goal_counts: {
+        Args: { p_category: string; p_user: string; p_week_start: string }
+        Returns: Record<string, unknown>
+      }
+      reward_outcome: {
+        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
+        Returns: Record<string, unknown>
+      }
+      reward_predicates: {
+        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
+        Returns: Json
+      }
+      reward_retry_at: {
+        Args: { p_close: string; p_now: string }
+        Returns: string
+      }
+      reward_rules: { Args: never; Returns: Json }
+      reward_settle_failed: {
+        Args: { p_lease: string; p_now: string; p_user: string }
+        Returns: undefined
+      }
+      reward_tier: {
+        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
+        Returns: string
+      }
+      reward_wall_close: {
+        Args: { p_day: string; p_zones: string[] }
+        Returns: string
+      }
+      reward_week_closed: {
+        Args: {
+          p_now: string
+          p_tz: string
+          p_user: string
+          p_week_start: string
+        }
+        Returns: boolean
+      }
+      reward_zone_hop: {
+        Args: { p_user: string; p_wall_close: string }
+        Returns: boolean
+      }
+      schedule_next_settle: {
+        Args: { p_lease: string; p_now: string; p_tz: string; p_user: string }
+        Returns: string
+      }
       set_birth_date: { Args: { p_birth_date: string }; Returns: undefined }
       set_trip_role_row: {
         Args: { p_role: string; p_trip_id: string; p_user: string }
+        Returns: Json
+      }
+      set_weekly_focus: { Args: { p_category: string }; Returns: Json }
+      settle_days: {
+        Args: { p_now: string; p_tz: string; p_user: string }
+        Returns: string[]
+      }
+      settle_due_rewards_at: {
+        Args: { p_limit: number; p_now: string }
+        Returns: number
+      }
+      settle_goals: {
+        Args: { p_days: string[]; p_now: string; p_tz: string; p_user: string }
+        Returns: Json
+      }
+      settle_rewards: {
+        Args: { p_lease?: string; p_now: string; p_user: string }
         Returns: Json
       }
       soft_delete_trip: {
@@ -1085,12 +1476,35 @@ export type Database = {
         Returns: string
       }
       user_tz: { Args: { p_user: string }; Returns: string }
+      valid_reward_predicates: { Args: { p: Json }; Returns: boolean }
+      weakest_goal_category: {
+        Args: { p_user: string; p_week_start: string }
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
     }
     CompositeTypes: {
-      [_ in never]: never
+      reward_fact: {
+        day: string | null
+        safe_day: boolean | null
+        good_day: boolean | null
+        phone_free_day: boolean | null
+        camera_day: boolean | null
+        driving_s: number | null
+        provisional: boolean | null
+        scored_all: number | null
+        avg_all: number | null
+        severe_all: number | null
+        phone: number | null
+        speeding: number | null
+        braking: number | null
+        accel: number | null
+        cornering: number | null
+        wall_close: string | null
+        source_updated_at: string | null
+      }
     }
   }
 }
