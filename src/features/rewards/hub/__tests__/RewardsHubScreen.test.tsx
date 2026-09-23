@@ -1,3 +1,4 @@
+import { LEVELS } from '@scoring';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { clearInboxClients, setOnline, settleInbox } from '@/features/inbox/__fixtures__/harness';
@@ -258,7 +259,7 @@ describe('RewardsHubScreen — goal, challenges, badges, links', () => {
       ],
     });
     await renderHub(snap);
-    expect(screen.getByTestId('hub-challenge-phone_down')).toHaveTextContent(/No phone use.*6 of 10 driving days/s);
+    expect(screen.getByTestId('hub-challenge-phone_down')).toHaveTextContent(/No phone use.*6 of 10 days counted/s);
     expect(screen.getByTestId('hub-challenge-safe_run')).toBeTruthy();
     expect(screen.queryByTestId('hub-challenge-smooth_ride')).toBeNull();
     await press('hub-challenge-phone_down');
@@ -309,6 +310,30 @@ describe('RewardsHubScreen — goal, challenges, badges, links', () => {
     await waitFor(() => expect(screen.getByTestId('hub-link-invite')).toBeTruthy());
     await press('hub-link-invite');
     expect(mockRouter.push).toHaveBeenCalledWith(INVITE_HREF);
+  });
+});
+
+describe('How rewards work — the copy (review m1)', () => {
+  const [points, , classes] = hubCopy.how.paragraphs;
+
+  it('scopes the miles-and-drives rule to daily points (referrals do count drives)', () => {
+    expect(points).toContain('Daily points never count miles or the number of drives.');
+    expect(points).not.toMatch(/(^|\. )Nothing counts/);
+  });
+
+  it('the 10 minutes applies only to the phone-free and camera bonuses', () => {
+    expect(points).toContain(
+      '50 for a safe day or 20 for a good day. On days you drive at least 10 minutes, no phone use adds 25 and the camera on adds 10.'
+    );
+    expect(points).not.toMatch(/once you've driven/);
+  });
+
+  it('the class list is built from the shared LEVELS, in order', () => {
+    const names = LEVELS.map((l) => l.name);
+    expect(classes).toContain(
+      `${names[0]}, then ${names.slice(1, -1).join(', ')} and ${names[names.length - 1]}.`
+    );
+    expect(classes).toContain('Learner, then Steady, Smooth, Focused, Road-wise and Mentor.');
   });
 });
 

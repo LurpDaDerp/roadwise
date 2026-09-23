@@ -7,12 +7,19 @@
  * are never money or anything redeemable, no pressure and no "!", the streak is never "days in a
  * row", no nudge to drive, and nothing promises a store, leaderboard or crew.
  */
-import { REWARDS } from '@scoring';
+import { LEVELS, REWARDS } from '@scoring';
 
 import { CONFIRM_RULE, NOT_MONEY, SETTLE_RULE, STREAK_RULE } from './common';
 
 const n = (value: number) => new Intl.NumberFormat('en-US').format(value);
 const P = REWARDS.POINTS;
+
+/** "Learner, then Steady, Smooth, Focused, Road-wise and Mentor", from the shared `LEVELS`. */
+const [firstClass, ...laterClasses] = LEVELS.map((l) => l.name);
+const classList =
+  laterClasses.length === 0
+    ? `${firstClass}`
+    : `${firstClass}, then ${laterClasses.slice(0, -1).join(', ')}${laterClasses.length > 1 ? ' and ' : ''}${laterClasses[laterClasses.length - 1]}`;
 
 export const hubCopy = {
   title: 'Rewards',
@@ -70,7 +77,8 @@ export const hubCopy = {
 
   challenges: {
     title: 'Challenges',
-    progress: (pass: number, target: number) => `${pass} of ${target} driving days`,
+    /** Task 9's words for the same numbers ("driving days" would read as the window). */
+    progress: (pass: number, target: number) => `${pass} of ${target} days counted`,
   },
 
   nextBadge: (text: string) => `Next badge: ${text}`,
@@ -93,9 +101,9 @@ export const hubCopy = {
     hintClose: 'Hides the explanation',
     /** §R1–§R5 in plain words, then the rules every screen shares. */
     paragraphs: [
-      `Each confirmed day earns points for how you drove that day: ${P.safeDay} for a safe day or ${P.goodDay} for a good day, plus ${P.phoneFreeDay} with no phone use and ${P.cameraDay} with the camera on, once you've driven 10 minutes that day. A weekly goal adds ${P.weeklyGoal}, and a finished challenge adds its own points. Nothing counts miles or the number of drives.`,
+      `Each confirmed day earns points for how you drove that day: ${P.safeDay} for a safe day or ${P.goodDay} for a good day. On days you drive at least ${REWARDS.MIN_DRIVING_S / 60} minutes, no phone use adds ${P.phoneFreeDay} and the camera on adds ${P.cameraDay}. A weekly goal adds ${P.weeklyGoal}, and a finished challenge adds its own points. Daily points never count miles or the number of drives.`,
       NOT_MONEY,
-      "Your class follows your points: Learner, then Steady, Smooth, Focused, Road-wise and Mentor. Points you've earned are never taken back.",
+      `Your class follows your points: ${classList}. Points you've earned are never taken back.`,
       `${STREAK_RULE} Every ${REWARDS.SHIELD_EVERY_SAFE_DAYS}th safe day adds a shield, and you can hold ${REWARDS.SHIELD_MAX}.`,
       `Each week has one goal in one area, for ${REWARDS.WEEKLY_GOAL_TARGET_DAYS} driving days. If you drive on fewer days, it still counts when every day you drove met it.`,
       CONFIRM_RULE,

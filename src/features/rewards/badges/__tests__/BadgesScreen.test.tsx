@@ -149,6 +149,20 @@ describe('badge copy', () => {
     expect(Object.keys(BADGE_COPY).sort()).toEqual([...allIds].sort());
   });
 
+  it('phone-free names claim no more than the metric measures (review m2)', () => {
+    expect(BADGE_COPY.phone_free_days_10.name).toBe('Phone Down');
+    expect(BADGE_COPY.phone_free_days_50.name).toBe('Phone Away');
+    expect(BADGE_COPY.phone_free_days_200.name).toBe('Phone-Free Habit');
+    const names = Object.values(BADGE_COPY).map((c) => c.name).join(' ');
+    expect(names).not.toMatch(/eyes|undistracted|attention|focus/i);
+  });
+
+  it('the referral criterion states the 90-day window (review m2)', () => {
+    expect(BADGE_COPY.referrals_1.criterion(1)).toBe(
+      'A friend joins with your code and their first 3 scored drives are confirmed within 90 days'
+    );
+  });
+
   it('criteria print the threshold they were given', () => {
     expect(BADGE_COPY.safe_days_30.criterion(30)).toBe('Reach 30 safe days');
     expect(BADGE_COPY.phone_free_days_10.criterion(10)).toBe('Reach 10 days with no phone use');

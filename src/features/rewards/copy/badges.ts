@@ -38,8 +38,8 @@ export const BADGE_COPY: Readonly<Record<BadgeId, { name: string; criterion: (th
   safe_days_30: { name: 'Safe Regular', criterion: reach('safe_days') },
   safe_days_100: { name: 'Safe Hundred', criterion: reach('safe_days') },
   phone_free_days_10: { name: 'Phone Down', criterion: reach('phone_free_days') },
-  phone_free_days_50: { name: 'Eyes on the Road', criterion: reach('phone_free_days') },
-  phone_free_days_200: { name: 'Undistracted', criterion: reach('phone_free_days') },
+  phone_free_days_50: { name: 'Phone Away', criterion: reach('phone_free_days') },
+  phone_free_days_200: { name: 'Phone-Free Habit', criterion: reach('phone_free_days') },
   smooth_days_7: { name: 'Smooth Start', criterion: reach('smooth_days') },
   smooth_days_30: { name: 'Steady Rhythm', criterion: reach('smooth_days') },
   smooth_days_100: { name: 'Glass of Water', criterion: reach('smooth_days') },
@@ -58,7 +58,7 @@ export const BADGE_COPY: Readonly<Record<BadgeId, { name: string; criterion: (th
   referrals_1: {
     name: 'Good Company',
     criterion: () =>
-      `A friend joins with your code and ${REWARDS.REFERRAL.QUALIFYING_DRIVES} of their drives are confirmed`,
+      `A friend joins with your code and their first ${REWARDS.REFERRAL.QUALIFYING_DRIVES} scored drives are confirmed within ${REWARDS.REFERRAL.QUALIFY_WITHIN_D} days`,
   },
 };
 
