@@ -13,6 +13,16 @@ import { finalizeIdempotencyKey } from '@/data/sync/queue';
 import { HYDRATE_RESTORED_AT_KEY } from '@/data/hydrate/hydrate';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
+// The launch and the wipe `require` these lazily (deferred native modules): the first launch loads
+// installId (expo-crypto, then expo), and a handover's wipe loads summaryNotifier (expo-notifications).
+// Loaded there, a test paid ~0.4 s of module loading and transforming each, inside its 5 s budget, which
+// the handover test overran under a loaded full suite (the flake). Loaded here, at file load, the tests
+// time only the launch itself.
+import '@/data/devices/driveState';
+import '@/data/devices/driveStateStore';
+import '@/data/devices/installId';
+import '@/data/devices/syncWatermark';
+import '@/features/drive/summaryNotifier';
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
 
