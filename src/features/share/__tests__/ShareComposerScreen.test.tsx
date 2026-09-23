@@ -104,7 +104,7 @@ describe('ShareComposerScreen (F9)', () => {
 
   test('a drive not yet confirmed: said so, and nothing to share', async () => {
     await open({ kind: 'trip', clientTripId: 'trip-9' }, { trips: [{ ...FINAL, status: 'provisional' }] });
-    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeTruthy();
+    expect(screen.getByText('You can share a drive once RoadWise has its final score.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
   });
 
@@ -207,6 +207,38 @@ describe('ShareComposerScreen (F9)', () => {
     expect(tree).toContain('Safe Start');
     expect(tree).toContain('Earned Sep');
     expect(tree).not.toMatch(/licen[cs]e|\bID\b|DOB|date of birth|<<|MRZ/i);
+  });
+
+  test('Android: "Shares as text on this phone." under Share and in its hint (T13 r1 m2)', async () => {
+    await open({ kind: 'trip', clientTripId: 'trip-9' }, { trips: [FINAL] });
+    expect(screen.getByTestId('share-text-only').props.children).toBe('Shares as text on this phone.');
+    expect(screen.getByRole('button', { name: 'Share' }).props.accessibilityHint).toContain('Shares as text on this phone.');
+  });
+
+  test('iOS: the image goes, so no text-only note', async () => {
+    const w = await shareWorld({ trips: [FINAL] });
+    const { deps } = composerDeps({}, 'ios');
+    await w.render(<ShareComposerScreen params={{ kind: 'trip', clientTripId: 'trip-9' }} deps={deps} />);
+    await screen.findByTestId('share-preview');
+    expect(screen.queryByTestId('share-text-only')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Share' }).props.accessibilityHint).not.toContain('text');
+  });
+
+  test('Share waits while a turned-on code is still loading (T13 r1 n2)', async () => {
+    let release: (code: string) => void = () => undefined;
+    const referral = fakeReferralApi();
+    (referral.getMyReferralCode as jest.Mock).mockImplementation(() => new Promise<string>((r) => (release = r)));
+    const { sheet } = await open({ kind: 'streak' }, { referral: true }, { api: referral });
+    await act(async () => {
+      fireEvent(screen.getByRole('switch', { name: 'Add my invite code' }), 'valueChange', true);
+    });
+    const button = screen.getByRole('button', { name: 'Share' });
+    expect(button.props.accessibilityState).toMatchObject({ disabled: true });
+    await press(button);
+    expect(sheet).not.toHaveBeenCalled();
+    await act(async () => release('ABCD2345'));
+    await settleInbox();
+    expect(screen.getByRole('button', { name: 'Share' }).props.accessibilityState).toMatchObject({ disabled: false });
   });
 
   test('200 % text: the chrome still renders every control', async () => {

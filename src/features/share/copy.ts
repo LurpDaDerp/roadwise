@@ -17,6 +17,7 @@ export const shareCopy = {
   share: 'Share',
   shareHint: 'Opens the share sheet with this card',
   androidNote: 'Shares as text on this phone.',
+  shareHintAndroid: 'Opens the share sheet with this card. Shares as text on this phone.',
   preview: 'Card preview',
   loading: 'Getting your card ready',
   loadError: "Your card couldn't be made.",
@@ -29,7 +30,7 @@ export const shareCopy = {
   },
   /** When the thing asked for isn't there to share yet (the brief's line, per kind where it fits). */
   empty: {
-    trip: "You can share a drive once it's confirmed.",
+    trip: 'You can share a drive once RoadWise has its final score.',
     streak: "Share your first safe day once it's confirmed.",
     badge: "You can share a badge once you've earned it.",
     level: "Share your first safe day once it's confirmed.",
@@ -54,6 +55,7 @@ export const shareCopy = {
     earned: (date: string) => `Earned ${date}`,
     safeDays: (n: number) => `${new Intl.NumberFormat('en-US').format(n)} ${n === 1 ? 'safe day' : 'safe days'}`,
     week: (date: string) => `Week of ${date}`,
+    everyDay: 'Every day driven that week',
     codeLabel: 'Invite code',
     codeLine: (code: string) => `Join me on RoadWise with my code ${code}.`,
   },

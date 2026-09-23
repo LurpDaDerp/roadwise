@@ -51,7 +51,7 @@ const INPUTS: Record<CardKind, CardInput> = {
     tz: 'UTC',
     ...leaky,
   },
-  level: { kind: 'level', progress: progressRow({ xp: 4200, safe_days: 42 }), ...leaky },
+  level: { kind: 'level', progress: progressRow({ xp: 4200, level: 3, safe_days: 42 }), ...leaky },
   goal: {
     kind: 'goal',
     goals: [goalRow('2026-09-21'), goalRow('2026-09-14', { state: 'achieved', pass_days: 4, category: 'braking' })],
@@ -134,6 +134,10 @@ describe('buildCardModel: what a card may carry', () => {
       primary: 'Smooth',
       details: ['42 safe days'],
     });
+    // The server's level is the authority, not the XP table (T13 r1 n3).
+    expect(
+      buildCardModel({ kind: 'level', progress: progressRow({ xp: 99_999, level: 2, safe_days: 5 }) }, DEFAULT_TOGGLES)?.primary
+    ).toBe('Steady');
     expect(buildCardModel({ kind: 'level', progress: null }, DEFAULT_TOGGLES)).toBeNull();
     expect(buildCardModel({ kind: 'level', progress: progressRow({ safe_days: 0 }) }, DEFAULT_TOGGLES)).toBeNull();
   });
@@ -145,6 +149,18 @@ describe('buildCardModel: what a card may carry', () => {
       details: ['Week of Sep 14'],
     });
     expect(buildCardModel({ kind: 'goal', goals: [goalRow('2026-09-21'), null] }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('goal, prorated: claims only the days that passed, "Every day driven that week" (T13 r1 m1)', () => {
+    const model = buildCardModel(
+      { kind: 'goal', goals: [goalRow('2026-09-14', { state: 'achieved', prorated: true, pass_days: 2, category: 'phone' })] },
+      DEFAULT_TOGGLES
+    );
+    expect(model).toMatchObject({
+      primary: 'Keep your phone down on 2 driving days',
+      details: ['Every day driven that week', 'Week of Sep 14'],
+    });
+    expect(JSON.stringify(model)).not.toContain('4 driving days');
   });
 
   test('the invite code: only when turned on AND there is one', () => {

@@ -1,6 +1,6 @@
 import { useRouter, type Href } from 'expo-router';
 import { useRef, useState } from 'react';
-import { StyleSheet, Switch, useWindowDimensions, View } from 'react-native';
+import { Platform, StyleSheet, Switch, useWindowDimensions, View } from 'react-native';
 import type Svg from 'react-native-svg';
 
 import { useTrip } from '@/data/queries';
@@ -183,9 +183,13 @@ function Composer({
   }
 
   const caption = captionFor(model);
+  // Android shares the card's words, not its picture (D10): said under the button and in its hint.
+  const textOnly = (deps.share?.platform ?? Platform.OS) !== 'ios';
+  // A code turned on but not here yet would be missing from what goes out: wait for it.
+  const codeLoading = toggles.code && code.isPending;
   const previewWidth = Math.min(width - 2 * th.space.lg, 420);
   const share = async () => {
-    if (sharing) return;
+    if (sharing || codeLoading) return;
     setSharing(true);
     setFailed(false);
     const outcome = await shareCard(svgRef.current as unknown as SvgSnapshot | null, model, deps.share);
@@ -258,9 +262,15 @@ function Composer({
           label={copy.share}
           onPress={() => void share()}
           loading={sharing}
-          accessibilityHint={copy.shareHint}
+          disabled={codeLoading}
+          accessibilityHint={textOnly ? copy.shareHintAndroid : copy.shareHint}
           testID="share-button"
         />
+        {textOnly ? (
+          <Text variant="footnote" tone="muted" style={{ textAlign: 'center', marginTop: th.space.sm }} testID="share-text-only">
+            {copy.androidNote}
+          </Text>
+        ) : null}
       </View>
     </Frame>
   );

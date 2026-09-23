@@ -17,7 +17,7 @@
  * **Off by default, for everyone (R-E, D10).** Distance and the invite code appear only when the
  * driver turns them on; a code that isn't a well-formed referral code is never printed.
  */
-import { BADGES, levelFor, REFERRAL_CODE_PATTERN, type BadgeId } from '@scoring';
+import { BADGES, LEVELS, levelFor, REFERRAL_CODE_PATTERN, type BadgeId } from '@scoring';
 
 import type { TripSummary } from '@/data/queries/rows';
 import { goalSentence, BADGE_TIER_LABEL } from '@/features/rewards/copy/common';
@@ -149,7 +149,8 @@ export function buildCardModel(input: CardInput, toggles: CardToggles = DEFAULT_
         'level',
         {
           heading: copy.card.level,
-          primary: levelFor(progress.xp).name,
+          // The server's level is the authority (it never drops); the XP table only if it's unknown.
+          primary: LEVELS.find((l) => l.level === progress.level)?.name ?? levelFor(progress.xp).name,
           unit: null,
           details: [copy.card.safeDays(progress.safe_days)],
           numeric: false,
@@ -167,9 +168,13 @@ export function buildCardModel(input: CardInput, toggles: CardToggles = DEFAULT_
         'goal',
         {
           heading: copy.card.goal,
-          primary: goalSentence(reached.category, reached.target_days),
+          // A prorated goal was reached on every day driven, not on the full target (T13 r1 m1):
+          // it claims only the days that passed.
+          primary: goalSentence(reached.category, reached.prorated ? reached.pass_days : reached.target_days),
           unit: null,
-          details: [copy.card.week(dateLabel(reached.week_start))],
+          details: reached.prorated
+            ? [copy.card.everyDay, copy.card.week(dateLabel(reached.week_start))]
+            : [copy.card.week(dateLabel(reached.week_start))],
           numeric: false,
         },
         input,
