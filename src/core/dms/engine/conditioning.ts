@@ -218,10 +218,13 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         // The whole interval up to this frame is unobserved (obsDt is 0 on a gap): the gap frame adds no closure
         // time, so it never crosses an F threshold by itself (the property tests' gap invariant).
         unobservedMs = dtS * 1000;
-        if (!bridged) {
-          if (closed && q.quality === 'tracking') closedSince += unobservedMs;
-          else closed = false;
-        }
+        if (bridged) {
+          // Final review round 2 (the I1 residual): a bridge survives a gap shorter than its cap (the check above
+          // ends one that overruns it), but the gap counts 0 toward both the closure and the cap.
+          closedSince += unobservedMs;
+          bridgeStart += unobservedMs;
+        } else if (closed && q.quality === 'tracking') closedSince += unobservedMs;
+        else closed = false;
         lastGazeRel = null;
       }
       lastQuality = q.quality;

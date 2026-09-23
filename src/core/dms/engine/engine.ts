@@ -97,6 +97,8 @@ export interface DmsSnapshot {
   source: GazeUse | null;
   /** with a `gaze` source, which path gave it (the net, or the geometric path); null otherwise */
   gazeFrom: 'net' | 'geometric' | null;
+  /** the last frame's closure time, ms (0 when the eyes are open): observed time only (final review round 2) */
+  closedMs: number;
   /** the last frame's gaze relative to the road centre, degrees (the diagnostics agreement); null without one */
   gazeRel: { yaw: number; pitch: number } | null;
   /** the last frame's rule speed (known, or held under the tunnel rules) */
@@ -195,6 +197,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastSource: null as GazeUse | null,
       lastGazeFrom: null as 'net' | 'geometric' | null,
       lastGazeRel: null as { yaw: number; pitch: number } | null,
+      lastClosedMs: 0,
       lastSpeed: null as number | null,
       bufferFraction: 1,
       d2SumS: 0,
@@ -272,6 +275,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastQuality = p.quality;
     d.lastSource = p.source;
     d.lastGazeFrom = p.gazeFrom;
+    d.lastClosedMs = p.closedMs;
     d.lastGazeRel = p.gazeRel === null ? null : { yaw: p.gazeRel.yaw, pitch: p.gazeRel.pitch };
     d.lastSpeed = speed;
     // Zones are learned in the configured path's coordinates only (T16 r3 m1): a net configuration's geometric
@@ -454,6 +458,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         source: d.lastSource,
         gazeFrom: d.lastGazeFrom,
         gazeRel: d.lastGazeRel,
+        closedMs: d.lastClosedMs,
         ruleSpeedKmh: d.lastSpeed,
         fps: d.fps.fps(),
         bufferFraction: d.bufferFraction,

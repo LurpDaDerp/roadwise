@@ -132,11 +132,12 @@ export function createFastRules(cfg: DmsConfig) {
       // A frame gap ends an unbridged episode silently (T12 review I1) — unless the eyes are still closed on
       // a TRACKING frame after it (final review m1): the episode continues on observed time, its onset
       // shifted by the unobserved span, as the conditioner shifted its closure clock.
-      if (p.gap && !p.closureBridged && episode !== null) {
-        if (p.eyesClosed && p.quality === 'tracking') {
+      // Round 2: bridged or not, both owners (the conditioner's clock and this episode) shift together.
+      if (p.gap && episode !== null) {
+        if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {
           episode.onset += p.unobservedMs;
           if (episode.deepSince !== null) episode.deepSince += p.unobservedMs;
-        } else endSilently(events);
+        } else if (!p.closureBridged) endSilently(events);
       }
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
       if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {

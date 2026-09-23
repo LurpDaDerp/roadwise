@@ -292,3 +292,37 @@ describe('n2: the summary says how much of a net build’s gaze was the net', ()
     expect(geo.summary().gazeFromShare).toBeNull();
   });
 });
+
+describe('final review round 2 (I1 residual): a stop SHORTER than the bridge cap adds no closure time either', () => {
+  // The re-review's probe: the eyes shut and the head drops at 100 s, the face is lost at 100.8 s (the bridge),
+  // frames stop at 101.5 s for N s, and the first frame back is TRACKING with the eyes still shut (a blink),
+  // open 0.2 s later. About 1.5 s of closure was observed or bridged: at most F1 (microsleep) is legitimate.
+  const probe = (stopS: number, lostOnReturnS = 0) => {
+    const back = 101.5 + stopS;
+    const drv: DriverFn = (t, r) => {
+      if (t < 100) return { gaze: onRoad(r), speedKmh: 60 };
+      if (t < 100.8) {
+        const pitch = -30 * Math.min(1, (t - 100) / 0.6);
+        return { gaze: rel(0, pitch), head: { yaw: 0.8, pitch: -1.2 + pitch }, openness: 0.1, speedKmh: 60 };
+      }
+      if (t < 101.5 || (t >= back && t < back + lostOnReturnS)) return { gaze: onRoad(r), face: false, speedKmh: 60 };
+      return { gaze: onRoad(r), openness: t < back + lostOnReturnS + 0.2 ? 0.1 : 1, speedKmh: 60 };
+    };
+    const engine = createDmsEngine(C, DEFAULT_INIT);
+    const out = newOut();
+    const items = synthDrive({ fps: 15, seconds: back + lostOnReturnS + 3, seed: 11, source: 'geometric', driver: drv });
+    feed(engine, items, out, (f) => (f.tMs >= 101_500 && f.tMs < back * 1000 ? null : f));
+    return { out, backMs: back * 1000 };
+  };
+  test.each([3, 5, 9])('a %d s stop: no sleep or unresponsive from the unobserved time (a microsleep may be legitimate)', (stopS) => {
+    const { out, backMs } = probe(stopS);
+    const after = out.events.filter((e) => e.tMs >= backMs - 1);
+    expect(after.filter((e) => e.kind === 'sleep' || e.kind === 'unresponsive')).toEqual([]);
+    expect(out.cmds.filter((c) => c.tMs >= backMs - 1 && c.action === 'start' && (c.kind === 'sleep' || c.kind === 'unresponsive'))).toEqual([]);
+  });
+  test.each([3, 5, 9])('a %d s stop, the face still lost for 0.3 s after it (a bridged gap frame): the episode’s measured length excludes the stop', (stopS) => {
+    const { out } = probe(stopS, 0.3);
+    const ends = out.events.filter((e) => e.kind === 'episode_end');
+    for (const e of ends) expect(e.durMs!).toBeLessThan(3_000);
+  });
+});

@@ -8,9 +8,10 @@
 //     (a new one needs ≥ 10 km/h; below it only an escalation of a running episode, T11 I1);
 //   - rule 5 at REQUEST time (T12 review m2): no D1, D2 or phone-pattern request from a LOST frame is
 //     accepted unless it carries c8 (a fatigue burst may play on a LOST frame: ruled acceptable);
-//   - no D1, D2, F1 or F2 on a gap frame (T12 review I1: unobserved time never counts, and a gap frame adds
-//     no closure time; final review m1), unless the F event is bridged: a C-26 bridge runs through a short
-//     gap and is ended at bridgeMaxS on any frame (final review I1, m8);
+//   - a gap frame adds no time: no D1 or D2 on a gap frame, and the closure time (`closedMs`) on a gap frame
+//     is never more than on the frame before it, bridged or not (T12 review I1; final review m1, and round 2's
+//     I1 residual: the invariant "bridged F events are allowed" hid that bug). An F event may still fire on a
+//     gap frame from a state change with no time added (the looking-down gate lifting, the speed gate);
 //   - nothing starts while the gate is closed, and nothing Tier 1/2 while the camera is off;
 //   - a Critical's LIFETIME is bounded (final review m8), not only paired with a stop at the drive's end:
 //       · it stops within criticalLostMaxS + 1 s of the later of its start and the last TRACKING frame (U-23);
@@ -44,6 +45,7 @@ interface Step {
   quality: string | null;
   speed: number | null;
   buffer: number;
+  closedMs: number;
   commands: DmsAlertCommand[];
   events: { kind: string; tMs: number }[];
   off: RandomOff | null;
@@ -67,7 +69,7 @@ function play(d: RandomDrive, engine: DmsEngine, onStep?: (s: Step) => void): Dm
     const s = engine.snapshot();
     const out = engine.drain();
     commands.push(...out.commands);
-    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, commands: [...out.commands], events: [...out.events], off });
+    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, closedMs: s.closedMs, commands: [...out.commands], events: [...out.events], off });
   }
   return commands;
 }
@@ -82,15 +84,17 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
   let lastTracking = Number.NEGATIVE_INFINITY;
   let lastFrame = Number.NEGATIVE_INFINITY;
   let knownLowSince: number | null = null;
+  let prevClosedMs = 0;
   const commands = play(d, engine, (s) => {
     expect(s.buffer).toBeGreaterThanOrEqual(0);
     expect(s.buffer).toBeLessThanOrEqual(1);
     if (s.gap) {
-      // A C-26 bridge runs on the frame clock through a short gap, and the conditioner ends it at bridgeMaxS on
-      // any frame (final review I1), so a BRIDGED F1/F2 on a gap frame is within the cap by construction.
-      const onGap = s.events.filter((e) => ['d1_warning', 'd2_warning', 'microsleep', 'sleep'].includes(e.kind) && (e as { bridged?: boolean }).bridged !== true);
+      const onGap = s.events.filter((e) => ['d1_warning', 'd2_warning'].includes(e.kind));
       expect({ seed, tMs: s.tMs, onGap }).toEqual({ seed, tMs: s.tMs, onGap: [] });
+      // The gap adds no closure time (round 2): at most the previous frame's.
+      expect({ seed, tMs: s.tMs, added: s.closedMs > prevClosedMs + 1e-6 }).toEqual({ seed, tMs: s.tMs, added: false });
     }
+    if (s.frame) prevClosedMs = s.closedMs;
     if (s.frame) lastFrame = s.tMs;
     if (s.quality === 'tracking') lastTracking = s.tMs;
     const row = rowAt.get(s.tMs);
