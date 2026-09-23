@@ -58,18 +58,46 @@ afterEach(clearQueryClients);
 const speedingEvent = (id: string, over: Parameters<typeof eventRow>[0] = {}) =>
   eventRow({ id, client_trip_id: ID, category: 'speeding', deduction: 3, ...over });
 
+/**
+ * Drain a `slowDb` until the screen is drawn. The skeleton test's reads each waited 200 ms, and a read can
+ * enable the next one (a dependent query starts after its render), so the loaded screen arrives only
+ * after several sequential reads: a `findBy` with its 1 s budget raced that chain and lost under load
+ * (the full-suite flake). Each step here waits for every pending read, then one tick for React Query's
+ * notify and the render (which starts any dependent read), and stops when `done` holds: bounded by steps,
+ * never by time.
+ */
+async function drainUntil(slow: { idle(): Promise<void> }, done: () => boolean): Promise<void> {
+  for (let step = 0; step < 20; step += 1) {
+    await act(async () => {
+      await slow.idle();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    if (done()) {
+      await act(() => slow.idle());
+      return;
+    }
+  }
+  throw new Error('the slow reads never finished drawing the screen');
+}
+
 describe('while the row is read', () => {
   test('the card is drawn as a skeleton, never a spinner', async () => {
     const w = await world({ trips: [tripRow({ client_trip_id: ID })] });
-    const slow = slowDb(w.db, 200);
+    // every read waits 20 ms: long enough that the first render has none, and the drain below is bounded by
+    // steps, not by time
+    const slow = slowDb(w.db, 20);
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />, slow);
     expect(screen.getByRole('progressbar', { name: 'Loading this drive' })).toBeOnTheScreen();
-    expect(await screen.findByText('Near Home → Near Lincoln HS')).toBeOnTheScreen();
-    // The timeline and the day are still in flight; let them land inside the test.
-    await act(() => slow.idle());
-    // The day's rewards answer too (their cache write goes through the same slow file).
-    await waitFor(() => expect(screen.queryByTestId('earned-loading')).toBeNull());
-    await act(() => slow.idle());
+    // The card, then the timeline, the day and the day's rewards (their cache write goes through the same
+    // slow file): all of them land inside the test.
+    await drainUntil(
+      slow,
+      () => screen.queryByText('Near Home → Near Lincoln HS') !== null && screen.queryByTestId('earned-loading') === null
+    );
+    expect(screen.getByText('Near Home → Near Lincoln HS')).toBeOnTheScreen();
+    expect(screen.queryByTestId('earned-loading')).toBeNull();
   });
 
   test('a database that cannot be read says so in place and offers a retry', async () => {
