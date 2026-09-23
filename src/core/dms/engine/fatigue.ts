@@ -47,6 +47,11 @@ export interface FatigueFrame {
   lookingDown: boolean;
   /** the rules' relative gaze; null without one */
   gazeRel: AnglePair | null;
+  /**
+   * which path gave the gaze (Perceived.gazeFrom). Only a net configuration ever says 'net'; its dispersion is
+   * summed apart from everything else and scored against its own baseline (T16 r3 m2). Absent = not net.
+   */
+  gazeFrom?: 'net' | 'geometric' | null;
   /** ContextState.ruleSpeedKmh; null = unknown (never counts toward learning) */
   speedKmh: number | null;
   /** the measured fps (the fps meter) */
@@ -131,20 +136,40 @@ export function createFatigueActions(cfg: Pick<DmsConfig, 'fatigue'>) {
   };
 }
 
-interface Second {
-  k: number;
-  trackS: number;
-  closedS: number;
-  fpsSum: number;
-  frames: number;
-  hot: boolean;
+/** Dispersion sums for one gaze path. */
+interface Disp {
   gn: number;
   gy: number;
   gp: number;
   gyy: number;
   gpp: number;
 }
-const newSecond = (k: number): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
+interface Second extends Disp {
+  k: number;
+  trackS: number;
+  closedS: number;
+  fpsSum: number;
+  frames: number;
+  hot: boolean;
+  /** the net path's sums (a net configuration); the Disp fields hold every other gaze */
+  net: Disp;
+}
+const newDisp = (): Disp => ({ gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
+const newSecond = (k: number): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, ...newDisp(), net: newDisp() });
+const addDisp = (to: Disp, from: Disp) => {
+  to.gn += from.gn;
+  to.gy += from.gy;
+  to.gp += from.gp;
+  to.gyy += from.gyy;
+  to.gpp += from.gpp;
+};
+const addGaze = (to: Disp, g: AnglePair) => {
+  to.gn++;
+  to.gy += g.yaw;
+  to.gp += g.pitch;
+  to.gyy += g.yaw * g.yaw;
+  to.gpp += g.pitch * g.pitch;
+};
 const dispersionOf = (n: number, y: number, p: number, yy: number, pp: number) => (n < 2 ? null : Math.sqrt(Math.max(0, yy / n - (y / n) ** 2) + Math.max(0, pp / n - (p / n) ** 2)));
 
 
@@ -168,7 +193,7 @@ export function createFatigue(cfg: DmsConfig) {
   };
 
   // Learning: the baseline sums over frames (and events) at a known ≥ minSpeedKmh.
-  const base = { drivingS: 0, trackS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 };
+  const base = { drivingS: 0, trackS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, ...newDisp(), net: newDisp() };
   let active = false;
   let atSpeed = false;
   let nextMinute: number | null = null;
@@ -188,11 +213,8 @@ export function createFatigue(cfg: DmsConfig) {
       s.fpsSum += x.fpsSum;
       s.frames += x.frames;
       s.hot ||= x.hot;
-      s.gn += x.gn;
-      s.gy += x.gy;
-      s.gp += x.gp;
-      s.gyy += x.gyy;
-      s.gpp += x.gpp;
+      addDisp(s, x);
+      addDisp(s.net, x.net);
     };
     seconds.forEach(add);
     if (cur !== null) add(cur);
@@ -242,9 +264,15 @@ export function createFatigue(cfg: DmsConfig) {
     values.yawns = { x: scaled(countSince(yawns, w('yawns')), sig.yawns.windowS, yw.trackS), b: scaled(base.yawns, sig.yawns.windowS, base.trackS) };
     const g = win('dispersion');
     observed.dispersion = g.trackS;
-    const dNow = dispersionOf(g.gn, g.gy, g.gp, g.gyy, g.gpp);
-    const dBase = dispersionOf(base.gn, base.gy, base.gp, base.gyy, base.gpp);
+    // Within one path only (T16 r3 m2): the path that dominates the window, against that path's baseline. A
+    // path with no baseline leaves the row sparse rather than compare two paths' noise.
+    const onNet = g.net.gn > g.gn;
+    const now = onNet ? g.net : g;
+    const was = onNet ? base.net : base;
+    const dNow = dispersionOf(now.gn, now.gy, now.gp, now.gyy, now.gpp);
+    const dBase = dispersionOf(was.gn, was.gy, was.gp, was.gyy, was.gpp);
     values.dispersion = { x: dNow !== null && dBase !== null && dBase > 0 ? Math.max(0, 1 - dNow / dBase) : 0, b: 0 };
+    const noBaseline = now.gn > 0 && dBase === null;
 
     const sub = {} as Record<SignalName, number | null>;
     const raw = {} as Record<SignalName, { x: number; b: number } | null>;
@@ -260,7 +288,7 @@ export function createFatigue(cfg: DmsConfig) {
         continue;
       }
       const minObs = s === 'perclos' ? f.perclosMinTrackingS : f.minTrackingShare * sig[s].windowS;
-      if (observed[s] < minObs - 1e-6) {
+      if (observed[s] < minObs - 1e-6 || (s === 'dispersion' && noBaseline)) {
         sparse.push(s);
         continue;
       }
@@ -331,13 +359,8 @@ export function createFatigue(cfg: DmsConfig) {
         if (closed) cur.closedS += dt;
       }
       const g = trk ? x.gazeRel : null;
-      if (g !== null) {
-        cur.gn++;
-        cur.gy += g.yaw;
-        cur.gp += g.pitch;
-        cur.gyy += g.yaw * g.yaw;
-        cur.gpp += g.pitch * g.pitch;
-      }
+      const onNet = x.gazeFrom === 'net';
+      if (g !== null) addGaze(onNet ? cur.net : cur, g);
       // Learning.
       atSpeed = x.speedKmh !== null && x.speedKmh >= f.minSpeedKmh;
       if (!active && atSpeed) {
@@ -346,13 +369,7 @@ export function createFatigue(cfg: DmsConfig) {
           base.trackS += dt;
           if (closed) base.closedS += dt;
         }
-        if (g !== null) {
-          base.gn++;
-          base.gy += g.yaw;
-          base.gp += g.pitch;
-          base.gyy += g.yaw * g.yaw;
-          base.gpp += g.pitch * g.pitch;
-        }
+        if (g !== null) addGaze(onNet ? base.net : base, g);
         if (base.drivingS >= f.activeAfterS - 1e-6 && base.trackS >= f.minTrackingShare * f.activeAfterS - 1e-6) active = true;
       }
       nextMinute ??= x.tMs + f.everyS * 1000;

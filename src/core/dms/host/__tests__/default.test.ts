@@ -3,13 +3,16 @@
 // wrapper (whose start takes a plain string). Here the wrapper is the fake.
 import type { FeatureRow } from '@/core/engine/types';
 import type { FakeDmsVision } from '../../../../../modules/dms-vision/src/fake';
-import { createDefaultDmsController } from '../default';
+import { createDefaultDmsController, createDefaultShadowComparator } from '../default';
 import { createDefaultDmsController as fromIndex } from '../../index';
 
 jest.mock('../../../../../modules/dms-vision', () => {
   const { createFakeDmsVision } = jest.requireActual<typeof import('../../../../../modules/dms-vision/src/fake')>('../../../../../modules/dms-vision/src/fake');
   return { __esModule: true, default: createFakeDmsVision() };
 });
+// The comparator's binding (T16 r3 security m-2): capture what it is handed.
+const mockShadowArgs: unknown[] = [];
+jest.mock('../shadow', () => ({ createShadowComparator: (native: unknown, opts: unknown) => (mockShadowArgs.push(native, opts), { dispose: () => {} }) }));
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module's instance
 const wrapper = (require('../../../../../modules/dms-vision') as { default: FakeDmsVision }).default;
 
@@ -94,4 +97,13 @@ describe('T15 r2 m1: one native owner at a time (the default controllers share o
     await a.dispose();
     await b.dispose();
   });
+});
+
+test('T16 r3 security m-2: the shadow comparator is handed addListener alone, never the module', () => {
+  const active = () => true;
+  createDefaultShadowComparator({ active });
+  const [native, opts] = mockShadowArgs.slice(-2) as [Record<string, unknown>, { active: () => boolean }];
+  expect(Object.keys(native)).toEqual(['addListener']);
+  expect(native).not.toBe(wrapper);
+  expect(opts.active).toBe(active);
 });

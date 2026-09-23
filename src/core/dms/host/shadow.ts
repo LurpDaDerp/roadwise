@@ -8,9 +8,13 @@
 //   and the net that ran): the median |Δyaw| and |Δpitch| between the two gazes relative to their road
 //   centres (0.1° bins, so no sample is kept), and the zone agreement.
 //
-// It only listens to native's `frames` and `state` events. It never calls native (the controller owns the
-// camera and its gate), keeps no frame, and logs and stores nothing. The net engine's column is null until a
-// frame carries the net. Not for M7: the dev panel is its one user.
+// It only listens to native's `frames` and `state` events: it is handed `addListener` alone, never the module
+// (T16 r3, security m-2), so it cannot call native, and it drops every frame while its paired controller does
+// not own the camera (`active`), so it never hears another controller's session. It keeps no frame, and logs
+// and stores nothing. The net engine runs with `gaze.netFallback` off (T16 r3 m3): with no net value it uses
+// the head, so the net column's alerts are the net's alone; `fallbackFrames` counts gazes from the other path
+// (0 for both engines by construction, and pinned by a test). The net column is null until a frame carries
+// the net. Not for M7: the dev panel is its one user.
 import type { FeatureRow } from '@/core/engine/types';
 import type { DmsVisionApi, Subscription } from '../../../../modules/dms-vision/src/types';
 import { decodeFrameBatch } from '../../../../modules/dms-vision/src/wire';
@@ -30,6 +34,8 @@ export interface DmsShadowSourceStats {
   /** alerts per hour of observed time; null before any */
   alertsPerHour: number | null;
   byKind: Record<string, number>;
+  /** frames whose gaze came from the other path (never, for either engine) */
+  fallbackFrames: number;
 }
 
 export interface DmsShadowStats {
@@ -85,10 +91,11 @@ function createHistogram() {
 }
 
 function createSource(config: DmsConfigOverrides, gazeSource: 'geometric' | 'net', driverSide: DriverSide) {
-  const cfg = resolveDmsConfig({ ...config, gazeSource });
+  // The net engine is pure net: no geometric fallback (T16 r3 m3).
+  const cfg = resolveDmsConfig({ ...config, gazeSource, gaze: { ...config.gaze, netFallback: gazeSource === 'geometric' } });
   const make = () => createDmsEngine(cfg, { driverSide, sensitivity: 'normal', alerts: 'shadow', profile: null });
   let engine: DmsEngine = make();
-  const totals = { frames: 0, observedMs: 0, alerts: 0, byKind: {} as Record<string, number> };
+  const totals = { frames: 0, observedMs: 0, alerts: 0, fallbackFrames: 0, byKind: {} as Record<string, number> };
   let lastT: number | null = null;
   const drain = () => {
     for (const c of engine.drain().commands) {
@@ -103,6 +110,8 @@ function createSource(config: DmsConfigOverrides, gazeSource: 'geometric' | 'net
     },
     frame(tMs: number) {
       totals.frames++;
+      const from = engine.snapshot().gazeFrom;
+      if (from !== null && from !== gazeSource) totals.fallbackFrames++;
       if (lastT !== null && tMs > lastT && tMs - lastT <= GAP_MS) totals.observedMs += tMs - lastT;
       lastT = tMs;
       drain();
@@ -116,12 +125,20 @@ function createSource(config: DmsConfigOverrides, gazeSource: 'geometric' | 'net
     },
     stats(): DmsShadowSourceStats {
       const observedS = totals.observedMs / 1000;
-      return { frames: totals.frames, observedS, alerts: totals.alerts, alertsPerHour: observedS > 0 ? totals.alerts / (observedS / 3600) : null, byKind: { ...totals.byKind } };
+      return { frames: totals.frames, observedS, alerts: totals.alerts, alertsPerHour: observedS > 0 ? totals.alerts / (observedS / 3600) : null, byKind: { ...totals.byKind }, fallbackFrames: totals.fallbackFrames };
     },
   };
 }
 
-export function createShadowComparator(native: Pick<DmsVisionApi, 'addListener'>, opts: { config?: DmsConfigOverrides; driverSide?: DriverSide } = {}): DmsShadowComparator {
+export interface DmsShadowOptions {
+  config?: DmsConfigOverrides;
+  driverSide?: DriverSide;
+  /** whether the paired controller owns the camera now; frames are dropped while it does not (default: always) */
+  active?: () => boolean;
+}
+
+export function createShadowComparator(native: Pick<DmsVisionApi, 'addListener'>, opts: DmsShadowOptions = {}): DmsShadowComparator {
+  const active = opts.active ?? (() => true);
   const side = opts.driverSide ?? 'left';
   const geo = createSource(opts.config ?? {}, 'geometric', side);
   const net = createSource(opts.config ?? {}, 'net', side);
@@ -141,7 +158,7 @@ export function createShadowComparator(native: Pick<DmsVisionApi, 'addListener'>
 
   const subs: Subscription[] = [
     native.addListener('frames', (raw) => {
-      if (disposed) return;
+      if (disposed || !active()) return; // another controller's session is none of ours (T16 r3 security m-2)
       const res = decodeFrameBatch(raw, lastTMs);
       if (res.batch === null) return;
       lastTMs = res.lastTMs;

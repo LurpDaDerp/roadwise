@@ -121,3 +121,15 @@ test('M7 is told to use the host-owned binding, never the wrapper', () => {
   expect(README).toMatch(/createDefaultDmsController\(/);
   expect(README).not.toMatch(/native: DmsVision/);
 });
+
+test('T16 r3 (security I-1): the README says what passing cameraFocus uploads, and the M7 carries that gate it', () => {
+  const s = section('Where the data may go');
+  expect(s).toMatch(/`cameraFocus`[^\n]*\bis an upload\b/);
+  for (const field of ["source 'camera'", '`glanceS`', '`focusKind`', '3 dp', '`camera_session`', '`camera_day`']) expect(s).toContain(field);
+  expect(s).toMatch(/per trip[^\n]*A10 disclosure[^\n]*versioned camera consent|A10 disclosure[^\n]*versioned camera consent[^\n]*per trip/);
+  expect(s).toMatch(/guardian[^\n]*camera-sourced events/i);
+});
+
+test('T16 r3 (seat T14 Round 2): M7 maps busy to "camera in use by diagnostics"', () => {
+  expect(README).toMatch(/`busy`[^\n]*camera in use by diagnostics/);
+});

@@ -16,7 +16,7 @@ const dms = createDefaultDmsController({
 ```
 
 - **`createDefaultDmsController` binds the native module inside the host** (security T14 m-1). M7 never imports `modules/dms-vision` or holds the raw wrapper, whose `start` takes a plain string. `imports.test.ts` fails the build if anything outside `src/core/dms/host` references the wrapper or `createGate`, in any import form, or if anything re-exports either. `createDmsController({ native, … })` is for tests with the fake.
-- **One native owner.** Every `createDefaultDmsController` shares one slot for the camera module: a controller takes it before its first native call of a drive and gives it back at the drive's end and on `dispose()`. Another controller whose gate would open meanwhile stays closed with reason `busy` and makes no native call.
+- **One native owner.** Every `createDefaultDmsController` shares one slot for the camera module: a controller takes it before its first native call of a drive and gives it back at the drive's end and on `dispose()`. Another controller whose gate would open meanwhile stays closed with reason `busy` and makes no native call. **M7 carry:** the HUD maps `busy` to its own message, "camera in use by diagnostics", never a generic off (the dev panel is the only other holder, and it lets go on blur).
 - **Build it on sign-in and `dispose()` it on sign-out, an account switch or account deletion.** Disposing ignores every later call and stops the camera first, before it ends the drive (security M-2/M-4, T14 I-1).
 - **Clear the profile after disposing:** `await dms.dispose(); await store.clear();` on sign-out and on account deletion. `dispose` may save the uid's profile while it ends the drive, so a `clear()` before it can be undone. Run the handover wipe after both (security T14 m-3).
 - **The gate's nonce** is `expo-crypto` `randomUUID()`. The token never leaves the controller: never log it or store it.
@@ -73,6 +73,9 @@ Any input that is false, missing or unknown keeps the camera off.
 - **Events, the summary and the focus samples stay on the device** until M7 ships a disclosure and a versioned consent that covers their upload. The profile never leaves it.
 - **Guardians see nothing DMS-specific** without a new disclosure version.
 - **Focus samples change the focus score**, so where DMS is on, the score's own disclosure must mention camera input.
+- **Passing `cameraFocus` to the drive engine is an upload** (security T16 I-1). M1's existing trip-event pipeline sends each focus sample to Supabase as a trip event with source 'camera', the measured `glanceS` and `focusKind` (`glance` or `drowsiness`), at the event's location rounded to 3 dp, and the trip's `camera_session` and the daily `camera_day` follow from it. `src/core/dms/__tests__/privacy.test.ts` pins exactly these fields; any new camera-derived field fails it.
+- **M7 carry, the upload gate:** M7 passes `cameraFocus` only for a trip whose driver has seen the A10 disclosure and holds the versioned camera consent (`consents(type='camera')`), checked per trip; otherwise `cameraFocus` is null (M7 tests that). The panel never passes it.
+- **M7 carry, guardians:** guardian-facing views show no camera-sourced events (source 'camera') until a new guardian disclosure version covers them.
 
 ## Guarantees
 

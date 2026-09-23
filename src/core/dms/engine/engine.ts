@@ -254,7 +254,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastGazeFrom = p.gazeFrom;
     d.lastGazeRel = p.gazeRel === null ? null : { yaw: p.gazeRel.yaw, pitch: p.gazeRel.pitch };
     d.lastSpeed = speed;
-    d.learner.observe(t, p.gazeRel, zone, calState === 'calibrated');
+    // Zones are learned in the configured path's coordinates only (T16 r3 m1): a net configuration's geometric
+    // fallback frames (another gain, another centre) would blur the mirror clusters. Held and head frames are
+    // unchanged; the geometric configuration never has a fallback.
+    const learnRel = p.gazeFrom !== null && p.gazeFrom !== gazeSource ? null : p.gazeRel;
+    d.learner.observe(t, learnRel, zone, calState === 'calibrated');
     d.learner.maybeCluster(d.cal.stats().drivingS);
     const onRoad = zone !== null && zoneClass(zone, cfg) === 'on_road';
     const c8 = p.quality === 'lost' && zone === 'far_lateral';
@@ -338,6 +342,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       openness: p.openness,
       lookingDown: p.lookingDown,
       gazeRel: p.gazeRel,
+      gazeFrom: p.gazeFrom,
       speedKmh: speed,
       fps,
       hot: host.thermalLevel !== null && host.thermalLevel >= 1,

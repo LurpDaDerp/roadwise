@@ -116,6 +116,15 @@ test('only the wrapper reaches the native module by name (T15 r2 security m-4)',
   expect(NATIVE_BY_NAME.test(files.find((f) => f.rel === WRAPPER_FILE)!.src)).toBe(true);
 });
 
+// T16 r3 (security T14 Info-R2-1): stricter than the by-name rule, and it closes a name built at runtime
+// (`const NAME = 'DmsVision'`), the legacy `NativeModules.DmsVision` and the JSI `globalThis.expo.modules.DmsVision`:
+// no 'DmsVision' string literal and no `.DmsVision` member anywhere outside modules/dms-vision/.
+export const NAME_LITERAL = /['"`]DmsVision['"`]|\.\s*DmsVision\b/;
+test('the module name appears nowhere outside modules/dms-vision/ (no literal, no member)', () => {
+  const offenders = files.filter((f) => !f.rel.startsWith('modules/dms-vision/') && NAME_LITERAL.test(f.src)).map((f) => f.rel);
+  expect(offenders).toEqual([]);
+});
+
 test('no other local module references dms-vision', () => {
   const offenders = files.filter((f) => f.rel.startsWith('modules/') && !f.rel.startsWith('modules/dms-vision/') && specifiers(f.src).some((s) => s.includes('dms-vision'))).map((f) => f.rel);
   expect(offenders).toEqual([]);
@@ -181,6 +190,12 @@ describe('the scan bites', () => {
     [`const n = NativeModulesProxy['DmsVision'];`],
   ])('the native module by name: %s', (line) => {
     expect(NATIVE_BY_NAME.test(line)).toBe(true);
+  });
+  test.each([[`const NAME = 'DmsVision';`], ['const n = NativeModules.DmsVision;'], ['const n = globalThis.expo.modules.DmsVision;'], ['const n = x[`DmsVision`];']])('the name literal or member: %s', (line) => {
+    expect(NAME_LITERAL.test(line)).toBe(true);
+  });
+  test('the identifier the host binds is not the name', () => {
+    expect(NAME_LITERAL.test("import DmsVision from '../../../../modules/dms-vision';\nDmsVision.addListener('frames', f);")).toBe(false);
   });
   test('another module by name, or a mock keyed on the name, is not', () => {
     expect(NATIVE_BY_NAME.test(`requireNativeModule('DriveSense')`)).toBe(false);

@@ -17,7 +17,10 @@
 // - Native failures are silent (SR9): one retry 5 s later (row-driven: no timer), then off for the drive.
 //   A failure caused by our own stop (a setPolicy that lost the race) is not a failure. A fault while the
 //   camera ran is the camera going off at speed (engine.cameraOff 'fault'; T14 r2 R1-m1), and a fault while
-//   the permission is being read waits for its retry (R1-m3).
+//   the permission is being read waits for its retry (R1-m3). One residual is accepted (seat T14 Round 2): a
+//   native E_PERMISSION while the op's own permission read is pending closes the gate without changing the
+//   inputs, so a read that returns `granted` (issued just before the revocation) re-opens and calls start once;
+//   native refuses it (E_PERMISSION, no frames) and the gate closes again. One wasted start, bounded.
 // - One native owner (T15 r2 seat m1): with an owner slot (createDefaultDmsController), the slot is taken
 //   before the first native call of a drive and given back at its end and on dispose; a controller that
 //   cannot take it is closed (`busy`), makes no native call and ignores the other session's events.

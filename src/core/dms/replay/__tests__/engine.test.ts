@@ -377,3 +377,19 @@ describe('T14 r1: stopAlerts (a gate close ends the sound; the drive goes on) an
     expect(out.events.filter((e) => e.kind === 'episode_end')).toHaveLength(1);
   });
 });
+
+describe('T16 r3 m1: zones are learned only from the configured gaze path (never the geometric fallback)', () => {
+  const mirrors = scenario('mirror checks');
+  const learnedZones = (netOffAfterS: number | null) => {
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    const items = synthDrive({ fps: 15, seconds: 900, seed: 9, source: 'net', driver: mirrors.driver });
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(netOffAfterS !== null && it.frame.tMs >= netOffAfterS * 1000 ? { ...it.frame, net: null } : it.frame);
+    }
+    return (engine.endDrive(items.at(-1)!.frame.tMs).profile?.learnedZones ?? []).map((z) => ({ id: z.id, yaw: Math.round(z.yawDeg), pitch: Math.round(z.pitchDeg) }));
+  };
+  test('a net drive whose second half runs on the geometric fallback learns what the net-only drive learns', () => {
+    expect(learnedZones(450)).toEqual(learnedZones(null));
+  });
+});

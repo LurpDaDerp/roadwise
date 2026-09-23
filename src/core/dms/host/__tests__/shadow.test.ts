@@ -17,7 +17,7 @@ async function running(fake: FakeDmsVision) {
 }
 
 /** A synthetic drive through the fake: rows to the comparator, frames through native's `frames` event. */
-function feed(fake: FakeDmsVision, cmp: DmsShadowComparator, driver: DriverFn, seconds: number, o: { net?: boolean; seed?: number; heartbeat?: boolean } = {}) {
+function feed(fake: FakeDmsVision, cmp: DmsShadowComparator, driver: DriverFn, seconds: number, o: { net?: boolean; seed?: number; heartbeat?: boolean; netOffAfterS?: number } = {}) {
   const items = synthDrive({ fps: 15, seconds, seed: o.seed ?? 5, source: o.net === false ? 'geometric' : 'net', driver });
   for (const it of items) {
     if (it.row) {
@@ -27,7 +27,8 @@ function feed(fake: FakeDmsVision, cmp: DmsShadowComparator, driver: DriverFn, s
     }
     const t = it.frame.tMs;
     if (t > fake.now()) fake.advance(t - fake.now());
-    fake.pushRecords([recordFromFeatures(featuresFromFrame(it.frame))]);
+    const f = o.netOffAfterS !== undefined && t >= o.netOffAfterS * 1000 ? { ...it.frame, net: null } : it.frame;
+    fake.pushRecords([recordFromFeatures(featuresFromFrame(f))]);
   }
 }
 
@@ -123,5 +124,29 @@ describe('the shadow comparator', () => {
     cmp.dispose();
     feed(fake, cmp, attentive, 10);
     expect(cmp.stats().geometric.frames).toBe(two.frames);
+  });
+});
+
+describe('T16 r3', () => {
+  test('seat m3: the net column is pure net: with the net off, the net shadow never counts the geometric path', async () => {
+    const fake = createFakeDmsVision({ gazeNetAvailable: true, epochAtZero: EPOCH0 });
+    await running(fake);
+    const cmp = createShadowComparator(fake);
+    feed(fake, cmp, glances, 400, { netOffAfterS: 200 });
+    const s = cmp.stats();
+    expect(s.net).not.toBeNull();
+    expect(s.net!.fallbackFrames).toBe(0);
+    expect(s.geometric.fallbackFrames).toBe(0);
+  });
+  test('security m-2: frames are dropped while the paired controller does not own the camera', async () => {
+    const fake = createFakeDmsVision({ gazeNetAvailable: true, epochAtZero: EPOCH0 });
+    await running(fake);
+    let owns = false;
+    const cmp = createShadowComparator(fake, { active: () => owns });
+    feed(fake, cmp, attentive, 5);
+    expect(cmp.stats().geometric.frames).toBe(0);
+    owns = true;
+    feed(fake, cmp, attentive, 5, { seed: 8 });
+    expect(cmp.stats().geometric.frames).toBeGreaterThan(50);
   });
 });

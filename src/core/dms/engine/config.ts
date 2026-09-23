@@ -134,6 +134,11 @@ export interface DmsConfig {
     headOnlyMarginDeg: number;
     /** T6 review m2: a net value is carried at most max(this, 2 × gazeNetEvery frame intervals) */
     netHoldMinMs: number;
+    /**
+     * T16: a net configuration with no net value uses the geometric path against its own centre (true), or the
+     * head (false). False only for the diagnostics' pure-net shadow engine (T16 r3 m3), so its column is net-only.
+     */
+    netFallback: boolean;
   };
 
   geometric: {
@@ -497,7 +502,7 @@ const DEFAULT: DmsConfig = {
     limitedMinSpeedKmh: 20,
     irisRecencyS: 10,
   },
-  gaze: { blinkHoldMs: 500, headOnlyMarginDeg: 5, netHoldMinMs: 300 },
+  gaze: { blinkHoldMs: 500, headOnlyMarginDeg: 5, netHoldMinMs: 300, netFallback: true },
   geometric: { kEye: 0.43, gPitch: 1.0, nearEyeYawDeg: 25, fallbackMarginDeg: 5 },
   calibration: {
     straightCourseRateDegS: 2,
@@ -797,6 +802,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
     if (!Array.isArray(r) || r.length !== 2 || !(r[0]! < r[1]!)) bad(path, 'must be an ordered [low, high] pair');
   };
 
+  if (typeof c.gaze.netFallback !== 'boolean') bad('gaze.netFallback', 'must be a boolean');
   if (!(c.quality.irisRecencyS > 0)) bad('quality.irisRecencyS', 'must be > 0');
   if (!(c.closure.bridgeMaxS > c.closure.f3.closedS)) bad('closure.bridgeMaxS', 'must exceed closure.f3.closedS (C-26: F3 fires inside a bridge)');
   if (!(c.closure.bridgeDropWindowS > 0)) bad('closure.bridgeDropWindowS', 'must be > 0');

@@ -39,12 +39,12 @@ interface Tick {
 }
 
 /** One drive through every seam. */
-function chain(o: { cfgSource: 'geometric' | 'net'; netAvailable: boolean; gazeNetEvery: 1 | 2; segs: Seg[] }): Tick[] {
+function chain(o: { cfgSource: 'geometric' | 'net'; netAvailable: boolean; gazeNetEvery: 1 | 2; segs: Seg[]; netFallback?: boolean }): Tick[] {
   const seconds = o.segs.at(-1)!.untilS;
   const seg = (t: number) => o.segs.find((s) => t < s.untilS) ?? o.segs.at(-1)!;
   const driver: DriverFn = (t, rr) => ({ gaze: onRoad(rr), speedKmh: seg(t).speedKmh });
   const items = synthDrive({ fps: 15, seconds, seed: 31, source: 'net', driver });
-  const engine = createDmsEngine(resolveDmsConfig({ gazeSource: o.cfgSource, gazeNetEvery: o.gazeNetEvery }), { driverSide: 'left', sensitivity: 'normal', alerts: 'shadow', profile: null });
+  const engine = createDmsEngine(resolveDmsConfig({ gazeSource: o.cfgSource, gazeNetEvery: o.gazeNetEvery, ...(o.netFallback === undefined ? {} : { gaze: { netFallback: o.netFallback } }) }), { driverSide: 'left', sensitivity: 'normal', alerts: 'shadow', profile: null });
   const policy = createCapturePolicy();
   let np: ReturnType<typeof nativePolicy> = null;
   let quality: PolicyInput['quality'] = null;
@@ -153,6 +153,15 @@ describe('the other producer values', () => {
     expect(ticks.some((x) => x.netRan)).toBe(true);
     expect(ticks.some((x) => x.gazeFrom === 'net')).toBe(false);
     expect(ticks.filter((x) => x.source === 'gaze').every((x) => x.gazeFrom === 'geometric')).toBe(true);
+  });
+});
+
+describe('T16 r3 m3: gaze.netFallback false (the pure-net shadow engine)', () => {
+  test('with the net off it uses the head, never the geometric path; with the net on, the net', () => {
+    const ticks = chain({ cfgSource: 'net', netAvailable: true, gazeNetEvery: 1, segs: SEGS, netFallback: false });
+    expect(ticks.some((x) => x.gazeFrom === 'geometric')).toBe(false);
+    expect(ticks.some((x) => x.gazeFrom === 'net')).toBe(true);
+    expect(sinceNet(ticks).some((x) => x.sinceNetMs >= 1000 && x.source === 'head')).toBe(true);
   });
 });
 

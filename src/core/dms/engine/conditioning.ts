@@ -242,7 +242,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
 
       // The configured source; a net configuration with no net value falls back to the geometric path, measured
       // against the geometric centre (never the net's), so the net is used only when it ran.
-      const netFallback = refs.gazeSource === 'net' && netCam === null && geoCam !== null && (refs.geoCentre ?? null) !== null;
+      const netFallback = cfg.gaze.netFallback && refs.gazeSource === 'net' && netCam === null && geoCam !== null && (refs.geoCentre ?? null) !== null;
       const srcCam = refs.gazeSource === 'net' ? (netCam ?? (netFallback ? geoCam : null)) : geoCam;
       const srcCentre = netFallback ? refs.geoCentre! : refs.gazeCentre;
       const gazeFromSrc: 'net' | 'geometric' = refs.gazeSource === 'net' && !netFallback ? 'net' : 'geometric';

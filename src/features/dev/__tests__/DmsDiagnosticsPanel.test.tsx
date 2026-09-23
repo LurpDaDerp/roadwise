@@ -118,7 +118,7 @@ const startToken = () => {
 /** The panel's controller on the fake native module (the route's default binds the real one). */
 const mk = (deps: DmsDefaultControllerDeps) => createDmsController({ ...deps, native: fake });
 /** The shadow comparator on the same fake (the route's default binds the real module). */
-const mkCmp = () => createShadowComparator(fake);
+const mkCmp = (o: Parameters<typeof createShadowComparator>[1]) => createShadowComparator(fake, o);
 const text = (id: string) => String(screen.getByTestId(id).props.children);
 
 describe('the gate is the real one', () => {
@@ -268,6 +268,22 @@ describe('T15 r2: the camera runs only while the screen is focused (security m-3
     expect(fake.calls.filter((c) => c.method === 'start')).toHaveLength(1);
     expect(screen.getByText(copy.startDrive)).toBeTruthy(); // the drive ended with the blur
   });
+  test('security T16 m-2: while the panel is busy, its comparator hears nobody else’s session', async () => {
+    const held = (deps: DmsDefaultControllerDeps) => createHostController({ ...deps, native: fake, owner: { acquire: () => false, release: () => {} } });
+    const made: ReturnType<typeof createShadowComparator>[] = [];
+    await render(wrap(<DmsDiagnosticsPanel createController={held} createComparator={(o) => (made.push(createShadowComparator(fake, o)), made.at(-1)!)} cameraBeta ageBand="18_plus" />));
+    await startDrive();
+    // Another owner's session runs (here the test starts native itself).
+    await act(async () => {
+      await fake.start({ gateToken: 'other', fps: 15, gazeNet: false, gazeNetEvery: 1, delegate: 'cpu', rotationOffsetDegrees: 0 });
+      for (let k = 0; k < 15; k++) {
+        fake.advance(1000 / 15);
+        fake.pushRecords([recordFromFeatures(featuresFromFrame({ ...frame({ tMs: fake.now() }), tMs: fake.now() }))]);
+      }
+    });
+    expect(text('dms-reason')).toBe('busy');
+    expect(made[0]!.stats().geometric.frames).toBe(0);
+  });
   test('another controller holds the native module: the panel says so and never calls native', async () => {
     const held = (deps: DmsDefaultControllerDeps) => createHostController({ ...deps, native: fake, owner: { acquire: () => false, release: () => {} } });
     await render(wrap(<DmsDiagnosticsPanel createController={held} createComparator={mkCmp} cameraBeta ageBand="18_plus" />));
@@ -293,8 +309,8 @@ describe('T16: the geometric and net gaze side by side, and the shadow counts pe
   });
   test('the comparator stops listening when the screen blurs', async () => {
     const made: ReturnType<typeof createShadowComparator>[] = [];
-    const tracked = () => {
-      const c = createShadowComparator(fake);
+    const tracked = (o: Parameters<typeof createShadowComparator>[1]) => {
+      const c = createShadowComparator(fake, o);
       made.push(c);
       return c;
     };

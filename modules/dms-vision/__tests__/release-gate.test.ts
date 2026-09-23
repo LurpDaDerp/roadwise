@@ -28,7 +28,7 @@ const code = (src: string, marker: '#' | '//') =>
     .join('\n');
 
 describe('eas.json', () => {
-  const eas = JSON.parse(read(MODULE, '..', '..', 'eas.json')) as { build: Record<string, { env?: Record<string, string>; extends?: string }>; submit?: Record<string, unknown> };
+  const eas = JSON.parse(read(MODULE, '..', '..', 'eas.json')) as { build: Record<string, { env?: Record<string, string>; extends?: string; channel?: string }>; submit?: Record<string, unknown> };
   test('the production profile never sets DMS_GAZE_NET', () => {
     expect(eas.build.production).toBeDefined();
     expect(eas.build.production!.env?.DMS_GAZE_NET).toBeUndefined();
@@ -46,24 +46,36 @@ describe('eas.json', () => {
     const extending = { build: { ...eas.build, production: { ...eas.build.production, extends: 'preview' } } };
     expect(productionLeaks(extending)).toEqual(['extends']);
   });
+  // T15 r3 (seat m1, security m-R2-1(b)): the OTA guard (diagnosticsEnabled) compares the embedded channel
+  // with 'production'; a renamed or missing channel would make it silently inert.
+  test('the production channel is exactly "production" (what the OTA guard compares against)', () => {
+    expect(eas.build.production!.channel).toBe('production');
+    expect(productionLeaks(eas)).not.toContain('channel');
+  });
+  test('the channel check bites: renamed, or removed', () => {
+    const renamed = { build: { ...eas.build, production: { ...eas.build.production, channel: 'prod' } } };
+    expect(productionLeaks(renamed)).toEqual(['channel']);
+    const { channel: _drop, ...noChannel } = eas.build.production!;
+    void _drop;
+    expect(productionLeaks({ build: { ...eas.build, production: noChannel } })).toEqual(['channel']);
+  });
   test('the preview profile does not either (it compiles the production variant at D1)', () => {
     expect(eas.build.preview?.env?.DMS_GAZE_NET).toBeUndefined();
   });
 });
 
 /** What in eas.json could put a diagnostics or gaze-net build into production (empty = nothing). */
-function productionLeaks(eas: { build: Record<string, { env?: Record<string, string>; extends?: string }> }): string[] {
+function productionLeaks(eas: { build: Record<string, { env?: Record<string, string>; extends?: string; channel?: string }> }): string[] {
   const prod = eas.build.production;
   if (prod === undefined) return ['no production profile'];
   const out: string[] = [];
   for (const key of ['EXPO_PUBLIC_DIAGNOSTICS', 'DMS_GAZE_NET']) if (prod.env?.[key] !== undefined) out.push(`env.${key}`);
   if (prod.extends !== undefined) out.push('extends');
+  if (prod.channel !== 'production') out.push('channel');
   return out;
 }
 
 describe('committed .env files (T15 r2 security m-1(a))', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
-  const dir = require('node:fs') as { readdirSync: (d: string) => string[] };
   const root = path.join(MODULE, '..', '..');
   const ignore = read(root, '.gitignore');
   const easIgnore = read(root, '.easignore');
@@ -73,10 +85,15 @@ describe('committed .env files (T15 r2 security m-1(a))', () => {
       expect(lines).toEqual(expect.arrayContaining(['.env', '.env.*', '!.env.example']));
     }
   });
-  test('no committable .env file sets the diagnostics flag or the gaze net', () => {
-    const committable = dir.readdirSync(root).filter((n) => n === '.env.example');
-    expect(committable).toEqual(['.env.example']);
-    for (const n of committable) expect(setsFlag(read(root, n))).toEqual([]);
+  // T15 r3 (security m-R2-1(a)): the files git actually tracks, so a force-added .env.production is seen.
+  test('the only tracked .env file is .env.example, and it sets neither key', () => {
+    const tracked = trackedEnvFiles(root);
+    expect(unexpectedEnvFiles(tracked)).toEqual([]);
+    for (const n of tracked) expect(setsFlag(read(root, n))).toEqual([]);
+  });
+  test('the tracked-file check bites: a force-added .env.production', () => {
+    expect(unexpectedEnvFiles(['.env.example', '.env.production'])).toEqual(['.env.production']);
+    expect(unexpectedEnvFiles(['.env'])).toEqual(['.env', '(no .env.example)']);
   });
   test('the check bites', () => {
     expect(setsFlag('EXPO_PUBLIC_DIAGNOSTICS=1\n')).toEqual(['EXPO_PUBLIC_DIAGNOSTICS']);
@@ -84,6 +101,23 @@ describe('committed .env files (T15 r2 security m-1(a))', () => {
     expect(setsFlag('# EXPO_PUBLIC_DIAGNOSTICS=1\nEXPO_PUBLIC_DIAGNOSTICS=\n')).toEqual([]);
   });
 });
+
+/** The tracked files at the repo root whose name starts with .env (git ls-files). */
+function trackedEnvFiles(root: string): string[] {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node types
+  const cp = require('node:child_process') as { execFileSync: (f: string, a: string[], o: { cwd: string; encoding: 'utf8' }) => string };
+  return cp
+    .execFileSync('git', ['ls-files', '--', '.env*'], { cwd: root, encoding: 'utf8' })
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^\.env/.test(l));
+}
+/** Anything but exactly .env.example. */
+function unexpectedEnvFiles(tracked: string[]): string[] {
+  const out = tracked.filter((n) => n !== '.env.example');
+  if (!tracked.includes('.env.example')) out.push('(no .env.example)');
+  return out;
+}
 
 /** The keys a dotenv text sets to a non-empty value (comments ignored). */
 function setsFlag(text: string): string[] {

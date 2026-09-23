@@ -33,6 +33,7 @@ import {
   createDefaultDmsController,
   createDefaultShadowComparator,
   type DmsShadowComparator,
+  type DmsShadowOptions,
   type DmsShadowStats,
   type DmsController,
   type DmsDefaultControllerDeps,
@@ -160,11 +161,11 @@ interface Tallies {
 }
 
 type MakeController = (deps: DmsDefaultControllerDeps) => DmsController;
-type MakeComparator = () => DmsShadowComparator;
+type MakeComparator = (opts: DmsShadowOptions) => DmsShadowComparator;
 
 const EMPTY_CMP: DmsShadowStats = {
   rows: 0,
-  geometric: { frames: 0, observedS: 0, alerts: 0, alertsPerHour: null, byKind: {} },
+  geometric: { frames: 0, observedS: 0, alerts: 0, alertsPerHour: null, byKind: {}, fallbackFrames: 0 },
   net: null,
   agreement: { frames: 0, medianAbsDyawDeg: null, medianAbsDpitchDeg: null, zoneFrames: 0, zoneAgreement: null },
 };
@@ -289,7 +290,9 @@ export function DmsDiagnosticsPanel({
       });
       ctlRef.current = ctl;
       // The shadow engines (one per gaze source) listen to the same session's frames; they never call native.
-      const comparator = createComparator();
+      // It hears frames only while this screen's controller owns and runs the camera (T16 r3, security m-2): a
+      // controller that is closed or `busy` reports the camera `off`, so another owner's session is dropped.
+      const comparator = createComparator({ active: () => ctlRef.current?.status().camera !== 'off' && ctlRef.current !== null });
       cmpRef.current = comparator;
       setStatus(ctl.status());
       setSession((n) => n + 1);

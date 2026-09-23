@@ -3,14 +3,20 @@
 // or reaches a log. The native side has its own sweeps (modules/dms-vision/__tests__/native-*.test.ts: no
 // pixels out, no storage, no network, logging only through DmsLog's static codes). This one covers the
 // JavaScript side:
-// 1. The DMS code (src/core/dms, modules/dms-vision/src, the dev panel and its route) calls no console, no
-//    network, no storage and no telemetry. Code only: comments may name what is forbidden. (The panel reads
-//    the signed-in profile's age band through the session hook, `@/data/supabase/session`: a read of what
-//    the app already holds, not a call; the Supabase client itself is forbidden.)
+// 1. The DMS code (src/core/dms, modules/dms-vision/src, the dev panel and its route) imports only what its
+//    group's ALLOWLIST names (T16 r3, security m-1): a new import, including an app helper that does I/O
+//    itself, fails until it is reviewed. On top of that, a denylist catches direct calls and indirections:
+//    any `console` reference at all, network, storage and telemetry names, and `globalThis[...]` / `global[...]`.
+//    Code only: comments may name what is forbidden. (The panel reads the signed-in profile's age band through
+//    the session hook and the stored flag through appConfig: reads of what the app already holds.)
 // 2. Nothing else in the repo imports the DMS lane yet, except the dev panel; M7 will add itself here under
 //    review (its uploads need a disclosure and consent first: README, "Where the data may go").
 // 3. The profile's settings key is written only by the profile store.
-// 4. The upload contract (the client's and the server's payload schemas) and the backend carry no DMS field.
+// 4. The upload contract (T16 r3, security I-1). The DMS's own words (gaze, landmarks, iris, PERCLOS, the
+//    GateToken, the profile) appear nowhere in it or in the backend. What IS camera-derived is pinned by name,
+//    and anything new fails: a trip event with source 'camera', `measured.glanceS`, `measured.focusKind`
+//    ('glance' | 'drowsiness'), its lat/lng rounded to 3 dp, `trips.camera_session` and the daily
+//    `camera_day`. Passing `cameraFocus` to the drive engine uploads those (README, "Where the data may go").
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node types
@@ -45,10 +51,10 @@ export function code(src: string): string {
 
 const DMS_FILES = [...load(['src/core/dms', 'modules/dms-vision/src']), ...['src/features/dev/DmsDiagnosticsPanel.tsx', 'app/(app)/dev/dms.tsx'].map((rel) => ({ rel, src: fs.readFileSync(path.join(ROOT, rel), 'utf8') }))];
 
-/** What DMS code must never call or import. */
+/** What DMS code must never call or import (the denylist, over the allowlist below). */
 export const FORBIDDEN: [string, RegExp][] = [
-  ['console', /\bconsole\s*\.\s*\w+\s*\(/],
-  ['network', /\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\baxios\b|\bsendBeacon\b|['"]@supabase\/|['"]@\/data\/supabase\/(?!session['"])|['"]@\/data\/sync/],
+  ['console', /\bconsole\b/],
+  ['network', /\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\baxios\b|\bsendBeacon\b|['"]@supabase\/|['"]@\/data\/supabase\/(?!session['"])|['"]@\/data\/sync|\bglobalThis\s*\[|\bglobal\s*\[/],
   ['storage', /\bAsyncStorage\b|\bSecureStore\b|['"]expo-secure-store['"]|['"]expo-file-system|\bFileSystem\b|\blocalStorage\b|\bsessionStorage\b|\bMMKV\b|['"]expo-sqlite['"]|['"]@\/data\/db/],
   ['telemetry', /\bSentry\b|['"]@sentry\/|\bcaptureException\b|\banalytics\b|\btrackEvent\b/],
 ];
@@ -58,6 +64,57 @@ export function breaks(src: string): string[] {
   const c = code(src);
   return FORBIDDEN.filter(([, re]) => re.test(c)).map(([name]) => name);
 }
+
+/** Every module specifier in a source (as imports.test.ts reads them), comments stripped. */
+export function specifiers(src: string): string[] {
+  const re = /(?:\bfrom\s*|\bimport\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\brequireActual\s*(?:<[^>]*>)?\s*\(\s*)(['"])([^'"\n]+)\1/g;
+  return [...code(src).matchAll(re)].map((m) => m[2]!);
+}
+const LANE = ['src/core/dms/', 'modules/dms-vision/src/'];
+const MODULE_LEAVES = ['constants', 'wire', 'types'].map((l) => `modules/dms-vision/src/${l}`);
+/** The non-relative imports each group may make (T16 r3, security m-1). */
+const ALLOW: Record<string, readonly string[]> = {
+  lane: ['@/core/engine/types', '@/core/engine/machine', '@scoring', 'zod'],
+  host: ['@/core/engine/types', '@/core/engine/machine', 'expo-crypto'],
+  module: ['expo-modules-core', 'zod'],
+  panel: ['react', 'react-native', 'expo-router', '@/ui', '@/core/dms', '@/core/engine/types', '@/data/config/appConfig', '@/data/queries/context', '@/data/supabase/session'],
+  route: ['react', 'expo-router', '@/features/dev/DmsDiagnosticsPanel', '@/features/dev/flags'],
+};
+const groupOf = (rel: string) =>
+  rel === 'src/features/dev/DmsDiagnosticsPanel.tsx' ? 'panel' : rel === 'app/(app)/dev/dms.tsx' ? 'route' : rel.startsWith('modules/') ? 'module' : rel.startsWith('src/core/dms/host/') ? 'host' : 'lane';
+/** The specifiers a lane file may not import. */
+export function disallowed(rel: string, src: string): string[] {
+  const group = groupOf(rel);
+  return specifiers(src).filter((spec) => {
+    if (ALLOW[group]!.includes(spec)) return false;
+    if (!spec.startsWith('.')) return true;
+    const target = path.relative(ROOT, path.resolve(path.join(ROOT, rel), '..', spec)).replace(/\\/g, '/');
+    if (group === 'module') return !target.startsWith('modules/dms-vision/src/');
+    if (target.startsWith('src/core/dms/')) return false;
+    if (MODULE_LEAVES.includes(target)) return false;
+    // The wrapper itself: only the host's binding (imports.test.ts enforces who).
+    return !(group === 'host' && target === 'modules/dms-vision');
+  });
+}
+
+describe('1a. DMS code imports only what its group allows (T16 r3, security m-1)', () => {
+  test('no lane file imports anything unlisted', () => {
+    expect(DMS_FILES.map((f) => ({ f: f.rel, extra: disallowed(f.rel, f.src) })).filter((x) => x.extra.length > 0)).toEqual([]);
+  });
+  test.each([
+    ['src/core/dms/host/shadow.ts', `import { useDb } from '@/data/queries/context';`],
+    ['src/core/dms/engine/engine.ts', `import { uploadTrip } from '@/data/sync/upload';`],
+    ['src/core/dms/engine/engine.ts', `import { log } from '@/lib/log';`],
+    ['src/core/dms/engine/engine.ts', `import DmsVision from '${['..', '..', '..', '..', 'modules', 'dms-vision'].join('/')}';`],
+    ['src/features/dev/DmsDiagnosticsPanel.tsx', `import { settle } from '@/features/rewards/api';`],
+    ['modules/dms-vision/src/wire.ts', `import { x } from '../../../src/core/dms/engine/config';`],
+  ])('the allowlist bites: %s ← %s', (rel, line) => {
+    expect(disallowed(rel, line)).toHaveLength(1);
+  });
+  test('LANE groups are where the files are', () => {
+    expect(DMS_FILES.every((f) => LANE.some((l) => f.rel.startsWith(l)) || ['panel', 'route'].includes(groupOf(f.rel)))).toBe(true);
+  });
+});
 
 describe('1. DMS code: no console, network, storage or telemetry', () => {
   test('the sweep sees the host, the engine, the wrapper and the panel', () => {
@@ -75,6 +132,12 @@ describe('1. DMS code: no console, network, storage or telemetry', () => {
     ['storage', `import { createSettingsRepo } from '@/data/db';`],
     ['telemetry', `Sentry.captureException(e);`],
   ])('the sweep bites (%s): %s', (rule, line) => {
+    expect(breaks(line)).toContain(rule);
+  });
+  test.each([
+    ['console', `const c = console; c.log(frame);`],
+    ['network', `globalThis['fet' + 'ch'](url);`],
+  ])('indirections are caught (%s): %s', (rule, line) => {
     expect(breaks(line)).toContain(rule);
   });
   test('comments are not code', () => {
@@ -95,16 +158,47 @@ describe('2. who imports the DMS lane', () => {
   });
 });
 
-describe('3. the upload contract and the backend carry nothing of the DMS', () => {
-  const DMS_WORDS = /\b(dms|gaze|gazeRel|landmarks?|iris|perclos|gatetoken|dmsprofile)\b/i;
-  test('the payload schemas (client and server) and the trip finaliser', () => {
-    for (const rel of ['src/data/sync/payload.ts', 'supabase/functions/_shared/payload.ts', 'src/core/engine/finalize.ts']) {
-      expect({ rel, dms: DMS_WORDS.test(code(fs.readFileSync(path.join(ROOT, rel), 'utf8'))) }).toEqual({ rel, dms: false });
+describe('3. the upload contract: the DMS-derived surface is pinned by name (T16 r3, security I-1)', () => {
+  const read = (rel: string) => code(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+  /** Every identifier in a source that names camera, focus, drowsiness, glance, attention or a DMS internal. */
+  const WATCH = /\b\w*(?:camera|focus|drowsi|glance|attention|dms|gaze|landmark|iris|perclos|gatetoken)\w*\b/gi;
+  const watched = (src: string) => [...new Set([...src.matchAll(WATCH)].map((m) => m[0]))].sort();
+  const DMS_INTERNAL = /\b(dms\w*|gaze\w*|landmarks?|iris\w*|perclos|gatetoken|dmsprofile)\b/i;
+
+  test('the client and server payload schemas name exactly the pinned camera-derived fields', () => {
+    // source 'camera' (trip_events), measured.glanceS, measured.focusKind 'glance' | 'drowsiness', the focus
+    // category and its deduction, trips.cameraSession.
+    const PINNED = ['camera', 'cameraSession', 'drowsiness', 'focus', 'focusKind', 'glance', 'glanceS'];
+    for (const rel of ['src/data/sync/payload.ts', 'supabase/functions/_shared/payload.ts']) expect({ rel, watched: watched(read(rel)) }).toEqual({ rel, watched: PINNED });
+  });
+  test('the event carrying them keeps its location to 3 dp, and focusKind has exactly two values', () => {
+    for (const rel of ['src/data/sync/payload.ts', 'supabase/functions/_shared/payload.ts']) {
+      const src = read(rel);
+      expect(src).toMatch(/refine\(\(e\) => roundedTo3dp\(e\.lat\) && roundedTo3dp\(e\.lng\)/);
+      expect(src).toMatch(/focusKind: z\.enum\(\['glance', 'drowsiness'\]\)/);
+      expect(src).toMatch(/source: z\.enum\(\['gnss', 'imu', 'both', 'os', 'camera'\]\)/);
     }
   });
-  test('no backend function or migration mentions the DMS', () => {
+  test('the trip finaliser names only the camera session (and the camera-seat reason)', () => {
+    expect(watched(read('src/core/engine/finalize.ts'))).toEqual(['cameraFaceDriverSeat', 'cameraSession', 'camera_session']);
+  });
+  test('the migrations name only camera_session, camera_day, the camera consent, the flag and the source check', () => {
+    const sql = load(['supabase/migrations'], /\.sql$/).map((f) => f.src).join('\n');
+    expect([...new Set([...sql.matchAll(/\b\w*camera\w*\b/gi)].map((m) => m[0]))].sort()).toEqual(['camera', 'cameraDay', 'cameraSession', 'camera_beta', 'camera_day', 'camera_session']);
+  });
+  test('the backend functions name only the same camera fields', () => {
+    const fns = load(['supabase/functions'], /\.(ts|js)$/).filter((f) => !f.rel.includes('/testing/'));
+    const names = [...new Set(fns.flatMap((f) => [...code(f.src).matchAll(/\b\w*camera\w*\b/gi)].map((m) => m[0])))].sort();
+    expect(names).toEqual(['camera', 'cameraDay', 'cameraGood', 'cameraSession', 'camera_day', 'camera_session']);
+  });
+  test('no DMS internal (gaze, landmarks, iris, PERCLOS, the token, the profile) in the contract or the backend', () => {
     const backend = [...load(['supabase/functions'], /\.(ts|js)$/), ...load(['supabase/migrations'], /\.sql$/)];
     expect(backend.length).toBeGreaterThan(0);
-    expect(backend.filter((f) => DMS_WORDS.test(f.src)).map((f) => f.rel)).toEqual([]);
+    const all = [...backend, ...['src/data/sync/payload.ts', 'src/core/engine/finalize.ts'].map((rel) => ({ rel, src: read(rel) }))];
+    expect(all.filter((f) => DMS_INTERNAL.test(f.src)).map((f) => f.rel)).toEqual([]);
+  });
+  test('the pin bites: a new camera-derived field in the payload fails', () => {
+    const mutated = read('src/data/sync/payload.ts').replace('glanceS: nonNegative.optional(),', 'glanceS: nonNegative.optional(),\n    gazeYaw: z.number().optional(),');
+    expect(watched(mutated)).toContain('gazeYaw');
   });
 });

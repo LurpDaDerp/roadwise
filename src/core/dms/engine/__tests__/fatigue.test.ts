@@ -349,3 +349,30 @@ describe('T10 round 2: the minimum scored weight (R1-m2) and the observed baseli
     expect(later.at(-1)!.status).toBe('scored');
   });
 });
+
+describe('T16 r3 m2: gaze dispersion is scored within one gaze path (net builds)', () => {
+  // A deterministic jitter, so the geometric path looks noisier than the net (σ 4° against 2.5°).
+  const jitter = (t: number, a: number) => a * Math.sin(t * 97.3) * Math.cos(t * 13.1);
+  const scan = (t: number, a: number) => ({ yaw: 3 * Math.sin((2 * Math.PI * t) / 5) + jitter(t, a), pitch: 2 * Math.cos((2 * Math.PI * t) / 4) + jitter(t + 1, a) });
+  test('a baseline on the net, a window on the geometric fallback: the row is sparse, never scored across paths', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, (t) => ({ gazeFrom: 'net', gazeRel: scan(t, 2.5) }), blinker(fz, 15, 4, 200));
+    const ms = feed(fz, 610, 1000, 15, (t) => ({ gazeFrom: 'geometric', gazeRel: scan(t, 4) }), blinker(fz, 15, 4, 200));
+    const last = ms.at(-1)!;
+    expect(last.sub.dispersion).toBeNull();
+    expect(last.sparse).toContain('dispersion');
+  });
+  test('the same path on both sides: scored against its own baseline (identical gaze → 0)', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, (t) => ({ gazeFrom: 'net', gazeRel: scan(t, 2.5) }), blinker(fz, 15, 4, 200));
+    const ms = feed(fz, 610, 1000, 15, (t) => ({ gazeFrom: 'net', gazeRel: scan(t, 2.5) }), blinker(fz, 15, 4, 200));
+    expect(ms.at(-1)!.sub.dispersion).toBeCloseTo(0, 1);
+  });
+  test('the geometric window after a net baseline scores with the net samples in the window ignored, when the net baseline has a geometric twin', () => {
+    // Both paths learned during the baseline (net on, then off, alternating by minute), then a geometric window.
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, (t) => ({ gazeFrom: Math.floor(t / 60) % 2 === 0 ? 'net' : 'geometric', gazeRel: scan(t, Math.floor(t / 60) % 2 === 0 ? 2.5 : 4) }), blinker(fz, 15, 4, 200));
+    const ms = feed(fz, 610, 1000, 15, (t) => ({ gazeFrom: 'geometric', gazeRel: scan(t, 4) }), blinker(fz, 15, 4, 200));
+    expect(ms.at(-1)!.sub.dispersion).toBeCloseTo(0, 1);
+  });
+});

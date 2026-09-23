@@ -294,3 +294,11 @@ describe('T14 r1 nit: gazeNetEvery is config (default 2: the net every other fra
     expect(() => resolveDmsConfig({ gazeNetEvery: 3 as never })).toThrow(/gazeNetEvery/);
   });
 });
+
+describe('T16 r3 m3: gaze.netFallback (default true)', () => {
+  test('on by default; a boolean override is kept; anything else is refused', () => {
+    expect(DEFAULT_DMS_CONFIG.gaze.netFallback).toBe(true);
+    expect(resolveDmsConfig({ gaze: { netFallback: false } }).gaze.netFallback).toBe(false);
+    expect(() => resolveDmsConfig({ gaze: { netFallback: 1 as never } })).toThrow(/netFallback/);
+  });
+});

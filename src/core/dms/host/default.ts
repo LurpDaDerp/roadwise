@@ -9,7 +9,7 @@
 // makes no native call. This is what keeps the dev panel from driving the camera under M7's drive.
 import DmsVision from '../../../../modules/dms-vision';
 import { createDmsController, type DmsController, type DmsControllerDeps, type DmsNativeOwner } from './controller';
-import { createShadowComparator, type DmsShadowComparator } from './shadow';
+import { createShadowComparator, type DmsShadowComparator, type DmsShadowOptions } from './shadow';
 
 /** Everything the controller needs but the native module and its owner slot, which this binding supplies. */
 export type DmsDefaultControllerDeps = Omit<DmsControllerDeps, 'native' | 'owner'>;
@@ -33,9 +33,9 @@ export function createDefaultDmsController(deps: DmsDefaultControllerDeps): DmsC
 }
 
 /**
- * The dev panel's shadow comparator on the real module (plan Task 16): it only listens to the frames the
- * controller's session already delivers, and never calls native.
+ * The dev panel's shadow comparator on the real module (plan Task 16). It is handed `addListener` alone, never
+ * the module (T16 r3, security m-2), and `opts.active` says when its paired controller owns the camera.
  */
-export function createDefaultShadowComparator(opts: Parameters<typeof createShadowComparator>[1] = {}): DmsShadowComparator {
-  return createShadowComparator(DmsVision, opts);
+export function createDefaultShadowComparator(opts: DmsShadowOptions = {}): DmsShadowComparator {
+  return createShadowComparator({ addListener: DmsVision.addListener.bind(DmsVision) }, opts);
 }
