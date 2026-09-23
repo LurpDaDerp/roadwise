@@ -8,6 +8,9 @@ import { categoryCaps } from '@/content/scoring-explainer';
 import type { DayEntry, TripEventView, TripSummary, UnscoredReason } from '@/data/queries';
 import { mpsToMph } from '@/lib/units';
 
+import { DAY_TIER_LABEL, NOT_COUNTED, SETTLE_RULE } from '@/features/rewards/copy/common';
+import type { DayAward } from '@/features/rewards/viewModel';
+
 import { tripCopy as copy } from './copy';
 
 function inZone(ts: number, tz: string, options: Intl.DateTimeFormatOptions): string {
@@ -215,6 +218,66 @@ export function earnedFor(trip: TripSummary, day: DayEntry | null): EarnedKind {
   if (trip.score >= CONSTANTS.SAFE_DAY_AVG) return 'safeOnTrack';
   if (trip.score >= CONSTANTS.GOOD_DAY_AVG) return 'goodOnTrack';
   return 'counts';
+}
+
+/**
+ * The EARNED field once rewards exist (M5, D1 item 5), from the day's award (Task 7's `dayAward`,
+ * three ways) and, while the day is still open, M2's reading of where this drive leaves it.
+ *
+ * - `settled`: the day's confirmed tier and its **total** points, said to be the day's (§10.1: a
+ *   day earns, not a drive), and the streak after it. Nothing earned is one plain line.
+ * - `pending`: M2's "on track" words with M2's settle rule. A day the server has evaluated safe or
+ *   good is still only "on track" until it is confirmed — never a stamp before then.
+ * - `not_counted`: the day will never be part of the rewards; never "confirmed when the day closes".
+ * - `unknown`: offline with no saved answer for the day, or a refusal; said as such, never guessed.
+ */
+export type EarnedView =
+  | {
+      kind: 'settled';
+      headline: string;
+      spoken: string;
+      stamp: boolean;
+      streak: string | null;
+      note: string;
+    }
+  | { kind: 'nothing'; headline: string }
+  | { kind: 'pending'; headline: string; note: string }
+  | { kind: 'not_counted'; headline: string; note: string }
+  | { kind: 'unknown'; headline: string; note: string };
+
+export function earnedView(trip: TripSummary, day: DayEntry | null, award: DayAward | 'unknown'): EarnedView {
+  if (award === 'unknown') return { kind: 'unknown', headline: copy.earned.counts, note: copy.earned.unknown };
+  if (award.status === 'settled') {
+    if (award.points <= 0) return { kind: 'nothing', headline: copy.earned.nothing };
+    const label = award.tier === 'none' ? copy.earned.confirmedDay : DAY_TIER_LABEL[award.tier];
+    return {
+      kind: 'settled',
+      headline: copy.earned.settled(label, award.points),
+      spoken: copy.earned.settledSpoken(label, award.points),
+      stamp: award.tier === 'safe',
+      streak: award.streakAfter === null ? null : copy.earned.streakAfter(award.streakAfter),
+      note: copy.earned.forTheDay,
+    };
+  }
+  if (award.status === 'not_counted') {
+    return {
+      kind: 'not_counted',
+      headline: NOT_COUNTED.title,
+      note:
+        award.reason === 'before_rewards' && award.rewardsStart !== null
+          ? NOT_COUNTED.beforeRewards(award.rewardsStart)
+          : NOT_COUNTED.afterConfirmed,
+    };
+  }
+  const track = earnedFor(trip, day);
+  const headline = {
+    safeDay: copy.earned.safeOnTrack,
+    goodDay: copy.earned.goodOnTrack,
+    safeOnTrack: copy.earned.safeOnTrack,
+    goodOnTrack: copy.earned.goodOnTrack,
+    counts: copy.earned.counts,
+  }[track];
+  return { kind: 'pending', headline, note: SETTLE_RULE };
 }
 
 const seconds = (s: number) => `${Math.max(1, Math.round(s))} s`;

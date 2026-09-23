@@ -3,8 +3,9 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, View } from 'react-native';
 
-import { useScoreDaily, useTrip } from '@/data/queries';
+import { useTrip } from '@/data/queries';
 import { useLockout } from '@/features/drive/useLockout';
+import { useDayAward } from '@/features/rewards/useRewards';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
@@ -76,6 +77,27 @@ function RoleRadio({
 }
 
 /**
+ * Whether the drive's day is confirmed (settled: its `reward_days` row exists). Only a known
+ * settled day counts; pending, not counted, loading and unknown (offline) are all "no" — the notes
+ * that hang on this say something only when it is true (rev1: R-A; Task 3 carry).
+ */
+function useDayConfirmed(day: string): boolean {
+  const award = useDayAward(day);
+  return award.status === 'success' && award.data.status === 'settled';
+}
+
+/** (rev1: R-A) Under the role choice, only for a confirmed day: the answer moves the score, not the day. */
+function ConfirmedDayRoleNote({ day }: { day: string }) {
+  const confirmed = useDayConfirmed(day);
+  if (!confirmed) return null;
+  return (
+    <Text variant="footnote" tone="muted" testID="confirmed-day-note">
+      {copy.edit.confirmedDayNote}
+    </Text>
+  );
+}
+
+/**
  * The delete confirmation (§7.D D5), as a sheet so the drive it is about stays on screen behind
  * it. Every consequence is stated **before** the destructive button, including the one the
  * product is honest about rather than quiet about: a guardian who receives shared summaries can
@@ -85,20 +107,22 @@ function DeleteSheet({
   visible,
   busy,
   failed,
-  rewarded,
+  day,
   onConfirm,
   onCancel,
 }: {
   visible: boolean;
   busy: boolean;
   failed: boolean;
-  rewarded: boolean;
+  /** The drive's local day: the "already confirmed" notice shows only once that day has settled. */
+  day: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const th = useTheme();
   // A native Modal sits above the lockout overlay, so it closes itself while driving (rev1: I12).
   const lockedOut = useLockout();
+  const rewarded = useDayConfirmed(day);
   return (
     <Modal
       visible={visible && !lockedOut}
@@ -183,10 +207,6 @@ export function EditTripScreen({ clientTripId }: { clientTripId: string }) {
   const router = useRouter();
   const th = useTheme();
   const detailQuery = useTrip(clientTripId);
-  // Only once the trip is known: a placeholder range would mint a cache entry nothing reads
-  // (Task 6 review M-12, reproduced here).
-  const day = detailQuery.data?.trip.day ?? null;
-  const dayQuery = useScoreDaily(day === null ? null : { from: day, to: day });
   const { setRole, busy, failed } = useSetTripRole();
   const remove = useDeleteTrip();
   const [confirming, setConfirming] = useState(false);
@@ -230,8 +250,6 @@ export function EditTripScreen({ clientTripId }: { clientTripId: string }) {
   }
 
   const { trip } = detail;
-  const cached = dayQuery.data?.[0] ?? null;
-  const rewarded = cached !== null && (cached.safeDay || cached.goodDay);
 
   const consequence =
     changed === null ? null : changed === 'driver' ? copy.edit.roleRescore : copy.edit.roleUnscore;
@@ -286,6 +304,7 @@ export function EditTripScreen({ clientTripId }: { clientTripId: string }) {
             {consequence}
           </Text>
         ) : null}
+        <ConfirmedDayRoleNote day={trip.day} />
       </Field>
 
       <Field label={copy.edit.vehicleLabel} testID="vehicle-field">
@@ -312,7 +331,7 @@ export function EditTripScreen({ clientTripId }: { clientTripId: string }) {
         visible={confirming}
         busy={remove.phase === 'busy'}
         failed={remove.phase === 'error'}
-        rewarded={rewarded}
+        day={trip.day}
         onConfirm={confirmDelete}
         onCancel={() => setConfirming(false)}
       />

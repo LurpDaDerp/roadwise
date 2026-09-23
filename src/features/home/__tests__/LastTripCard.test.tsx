@@ -12,6 +12,8 @@ import {
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+// The trips barrel now carries D1's rewards field, whose hooks load the Supabase client (M5 T11).
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 const DAY = 86_400_000;
 const drive = (id: string, daysAgo: number, over: Parameters<typeof tripRow>[0] = {}) =>

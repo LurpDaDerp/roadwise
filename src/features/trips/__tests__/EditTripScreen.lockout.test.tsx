@@ -14,9 +14,33 @@ import { DriveProvider } from '@/drive/DriveProvider';
 import type { DriveHost, DriveState } from '@/drive/host';
 import { clearQueryClients, press, routerDouble, world } from '@/features/trips/__fixtures__/render';
 import { EditTripScreen } from '@/features/trips/EditTripScreen';
+import { pendingDay, serveRewards } from '@/features/trips/__fixtures__/rewards';
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
+}));
+// The rewards server is the fixture's double, resolved at call time (the fixture reads this module).
+jest.mock('@/features/rewards/api', () => ({
+  ...jest.requireActual<object>('@/features/rewards/api'),
+  defaultRewardsApi: new Proxy(
+    {},
+    {
+      get: (_target, name: string) => (...args: unknown[]) =>
+        (
+          jest.requireActual<{ rewardsApiDelegate: Record<string, (...a: unknown[]) => unknown> }>(
+            '@/features/trips/__fixtures__/rewards'
+          ).rewardsApiDelegate[name] as (...a: unknown[]) => unknown
+        )(...args),
+    }
+  ),
+}));
+
+beforeEach(() => {
+  serveRewards(pendingDay());
+});
 
 const ID = 'trip-1';
 const T = 1_790_000_000_000;

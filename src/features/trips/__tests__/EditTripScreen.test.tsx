@@ -11,9 +11,31 @@ import {
 } from '@/features/trips/__fixtures__/render';
 import { tripCopy as copy } from '@/features/trips/copy';
 import { EditTripScreen } from '@/features/trips/EditTripScreen';
+import { pendingDay, serveRewards, settledDay } from '@/features/trips/__fixtures__/rewards';
+import { RewardsOfflineError } from '@/features/rewards/api';
+import { BANNED_COPY } from '@/notifications/catalog';
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
+}));
+// The rewards server is the fixture's double, resolved at call time (the fixture reads this module).
+jest.mock('@/features/rewards/api', () => ({
+  ...jest.requireActual<object>('@/features/rewards/api'),
+  defaultRewardsApi: new Proxy(
+    {},
+    {
+      get: (_target, name: string) => (...args: unknown[]) =>
+        (
+          jest.requireActual<{ rewardsApiDelegate: Record<string, (...a: unknown[]) => unknown> }>(
+            '@/features/trips/__fixtures__/rewards'
+          ).rewardsApiDelegate[name] as (...a: unknown[]) => unknown
+        )(...args),
+    }
+  ),
+}));
 
 const ID = 'trip-1';
 
@@ -31,6 +53,7 @@ beforeEach(() => {
   mockRouter.push.mockClear();
   mockRouter.back.mockClear();
   mockRouter.dismissTo.mockClear();
+  serveRewards(pendingDay());
 });
 afterEach(clearQueryClients);
 
@@ -88,6 +111,31 @@ describe('who was driving', () => {
     );
   });
 
+  test('on a confirmed day a note says the answer moves the drive\'s score, not the day', async () => {
+    serveRewards(settledDay());
+    await open();
+    expect(
+      await screen.findByText(
+        "This day is already confirmed. Changing who drove updates the drive's score, not that day's points or streak."
+      )
+    ).toBeOnTheScreen();
+    await press(screen.getByTestId('role-passenger'));
+    // The M2 consequence stays about the score only; the note stays beside it.
+    expect(await screen.findByTestId('role-consequence')).toHaveTextContent(
+      'This drive no longer counts towards your score.'
+    );
+    expect(screen.getByTestId('confirmed-day-note')).toBeOnTheScreen();
+  });
+
+  test('before the day is confirmed there is no note: the answer counts normally', async () => {
+    await open({
+      trips: [tripRow({ client_trip_id: ID, sync_state: 'synced' })],
+      days: [['2026-01-05', { day: '2026-01-05', safeDay: true }]],
+    });
+    await waitFor(() => expect(screen.queryByTestId('confirmed-day-note')).toBeNull());
+    expect(screen.getByTestId('role-field')).not.toHaveTextContent(/already confirmed/);
+  });
+
   test('vehicles are named and honestly deferred rather than shown as a dead control', async () => {
     await open();
     expect(screen.getByText('Vehicles are coming soon.')).toBeOnTheScreen();
@@ -105,7 +153,7 @@ describe('deleting the drive', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByText(
-        "Your safety score is worked out again without it. Deleting a drive never makes a day safe. If its day is already confirmed, that day's points and streak stay exactly as they are; in Insights a safe day it was part of may no longer count as one."
+        "Your safety score is worked out again without it. Deleting a drive never improves the day it was on: until that day is confirmed, the day is judged both with and without this drive and keeps the lower result, so it may no longer count as a safe day. Once a day is confirmed, its points and streak don't change, even if Insights later shows that day differently."
       )
     ).toBeOnTheScreen();
     expect(
@@ -117,13 +165,11 @@ describe('deleting the drive', () => {
     expect(screen.getByRole('button', { name: 'Keep it' })).toBeOnTheScreen();
   });
 
-  test('a drive on a day already credited says that day is final', async () => {
-    await open({
-      trips: [tripRow({ client_trip_id: ID, sync_state: 'synced' })],
-      days: [['2026-01-05', { day: '2026-01-05', safeDay: true }]],
-    });
+  test('a drive on a confirmed (settled) day says that day is final', async () => {
+    serveRewards(settledDay());
+    await open({ trips: [tripRow({ client_trip_id: ID, sync_state: 'synced' })] });
     await press(screen.getByTestId('delete-trip'));
-    expect(screen.getByTestId('rewarded-notice')).toBeOnTheScreen();
+    expect(await screen.findByTestId('rewarded-notice')).toBeOnTheScreen();
     expect(
       screen.getByText(
         "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak — they're final."
@@ -141,8 +187,30 @@ describe('deleting the drive', () => {
       expect(s).not.toMatch(/(confirmed|credited)[^.]*(will|may|can) (change|go up|go down|be (raised|lowered|taken))/i);
     }
     expect(copy.edit.deleteConsequence[1]).toMatch(/^Your safety score is worked out again without it\./);
-    expect(copy.edit.deleteConsequence[1]).toContain('Deleting a drive never makes a day safe.');
+    expect(copy.edit.deleteConsequence[1]).toMatch(/until that day is confirmed/);
+    expect(copy.edit.deleteConsequence[1]).toContain('Deleting a drive never improves the day it was on');
     expect(copy.edit.rewardedBody).toContain("they're final");
+    for (const line of [...copy.edit.deleteConsequence, copy.edit.confirmedDayNote, copy.dispute.confirmedDayResult]) {
+      for (const banned of BANNED_COPY) expect(line).not.toMatch(banned);
+    }
+  });
+
+  test('an unsettled day the server judged safe carries no "already confirmed" notice', async () => {
+    // The cached day says safe; the rewards say the day has not settled. Only settlement counts.
+    await open({
+      trips: [tripRow({ client_trip_id: ID, sync_state: 'synced' })],
+      days: [['2026-01-05', { day: '2026-01-05', safeDay: true }]],
+    });
+    await press(screen.getByTestId('delete-trip'));
+    expect(screen.getByTestId('delete-consequences')).toBeOnTheScreen();
+    expect(screen.queryByTestId('rewarded-notice')).toBeNull();
+  });
+
+  test('offline with nothing saved: no notice (unknown is never claimed as confirmed)', async () => {
+    serveRewards(pendingDay()).server.fail.fetch = new RewardsOfflineError();
+    await open();
+    await press(screen.getByTestId('delete-trip'));
+    expect(screen.queryByTestId('rewarded-notice')).toBeNull();
   });
 
   test('a drive on an ordinary day carries no such notice', async () => {

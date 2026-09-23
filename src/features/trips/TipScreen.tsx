@@ -3,8 +3,10 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { createSettingsRepo } from '@/data/db';
-import { useDb, useTrip, useTripEvents } from '@/data/queries';
+import { useTrip, useTripEvents } from '@/data/queries';
+import { GOAL_CATEGORY_VALUES, RewardsRpcError, type FocusApplied, type GoalCategory } from '@/features/rewards/api';
+import { BUSY_LINE, FOCUS_APPLIED } from '@/features/rewards/copy/common';
+import { useSetWeeklyFocus } from '@/features/rewards/useRewards';
 import { Banner, Button, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { tripCopy as copy } from './copy';
@@ -14,12 +16,22 @@ import { CATEGORY_ICON as MARK } from './icons';
 import { ICON, TOUCH } from './layout';
 import { tipForTrip } from './tip';
 
-/** Where "Practice this week" is kept until the weekly focus (§10.4, M5) has a home of its own. */
-export const WEEKLY_FOCUS_KEY = 'focus.weekly';
+/** A tip's category as a weekly-goal focus, or null: the camera (`focus`) and general tips have none. */
+export function goalCategoryOf(category: string): GoalCategory | null {
+  return (GOAL_CATEGORY_VALUES as readonly string[]).includes(category) ? (category as GoalCategory) : null;
+}
 
-export interface WeeklyFocus {
-  tipId: string;
-  setAt: number;
+type FocusState =
+  | { phase: 'idle' }
+  | { phase: 'saving' }
+  | { phase: 'set'; applied: FocusApplied }
+  | { phase: 'error'; message: string };
+
+/** The refusal in the driver's words: offline and busy say what to do; anything else, try again. */
+function focusError(error: unknown): string {
+  if (error instanceof RewardsRpcError && error.code === 'offline') return copy.tipScreen.offline;
+  if (error instanceof RewardsRpcError && error.code === 'busy') return BUSY_LINE;
+  return copy.tipScreen.error;
 }
 
 /** How many of the drive's own events the tip shows as examples (§7.D D6: one or two). */
@@ -57,10 +69,10 @@ function BackButton({ onPress }: { onPress: () => void }) {
 export function TipScreen({ clientTripId }: { clientTripId: string }) {
   const router = useRouter();
   const th = useTheme();
-  const db = useDb();
   const detailQuery = useTrip(clientTripId);
   const eventsQuery = useTripEvents(clientTripId);
-  const [focus, setFocus] = useState<'idle' | 'saving' | 'set' | 'error'>('idle');
+  const [focus, setFocus] = useState<FocusState>({ phase: 'idle' });
+  const setWeeklyFocus = useSetWeeklyFocus();
 
   const back = () => (router.canGoBack() ? router.back() : router.dismissTo('/(tabs)/home'));
 
@@ -125,14 +137,16 @@ export function TipScreen({ clientTripId }: { clientTripId: string }) {
           .filter((event) => event.category === tip.category && event.affectsScore)
           .slice(0, MAX_EXAMPLES);
 
-  const practice = async () => {
-    setFocus('saving');
+  // "Practice this week" is the server's weekly focus (§10.4): the tip's category becomes the goal's.
+  // A camera tip has no goal category, so it has nothing to set.
+  const category = goalCategoryOf(tip.category);
+  const practice = async (chosen: GoalCategory) => {
+    setFocus({ phase: 'saving' });
     try {
-      const value: WeeklyFocus = { tipId: tip.id, setAt: Date.now() };
-      await createSettingsRepo(db).set(WEEKLY_FOCUS_KEY, value);
-      setFocus('set');
-    } catch {
-      setFocus('error');
+      const { applied } = await setWeeklyFocus.mutateAsync(chosen);
+      setFocus({ phase: 'set', applied });
+    } catch (error) {
+      setFocus({ phase: 'error', message: focusError(error) });
     }
   };
 
@@ -199,28 +213,35 @@ export function TipScreen({ clientTripId }: { clientTripId: string }) {
 
       {outcome === 'keep_it_up' ? (
         <Button label={copy.done} onPress={back} testID="done" />
-      ) : (
+      ) : category === null ? null : (
         <View style={{ gap: th.space.sm }}>
-          {focus === 'set' ? (
-            <Text variant="callout" tone="accent" accessibilityLiveRegion="polite">
-              {copy.tipScreen.focusConfirm}
+          {focus.phase === 'set' ? (
+            <Text variant="callout" tone="accent" accessibilityLiveRegion="polite" testID="focus-applied">
+              {FOCUS_APPLIED[focus.applied]}
             </Text>
           ) : null}
-          {focus === 'error' ? (
+          {focus.phase === 'error' ? (
             <Text
               variant="callout"
               tone="danger"
               accessibilityRole="alert"
               accessibilityLiveRegion="polite"
+              testID="focus-error"
             >
-              {copy.tipScreen.error}
+              {focus.message}
             </Text>
           ) : null}
           <Button
-            label={focus === 'set' ? copy.tipScreen.focusSet : copy.tipScreen.practice}
-            onPress={() => void practice()}
-            loading={focus === 'saving'}
-            disabled={focus === 'set'}
+            label={
+              focus.phase === 'set'
+                ? focus.applied === 'this_week'
+                  ? copy.tipScreen.focusSet
+                  : copy.tipScreen.focusSetNext
+                : copy.tipScreen.practice
+            }
+            onPress={() => void practice(category)}
+            loading={focus.phase === 'saving'}
+            disabled={focus.phase === 'set'}
             testID="practice"
           />
         </View>

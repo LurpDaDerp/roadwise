@@ -36,6 +36,22 @@ export function parseStatedLimit(text: string): number | 'out_of_range' | undefi
   return value;
 }
 
+/**
+ * (rev1: R-A) The line under an accepted report when the drive's day is already confirmed: the
+ * report came off the drive's score, and the day's points and streak were final before it. Nothing
+ * when the day is not confirmed (the report counts normally then). Presentational on purpose: the
+ * caller that shows a report's result knows the drive's day and reads its award (`useDayAward`), so
+ * this sheet — mounted on the lockout path too — never needs the rewards layer.
+ */
+export function ConfirmedDayResultLine({ confirmed }: { confirmed: boolean }) {
+  if (!confirmed) return null;
+  return (
+    <Text variant="footnote" tone="muted" testID="confirmed-day-result">
+      {copy.dispute.confirmedDayResult}
+    </Text>
+  );
+}
+
 function Radio({
   label,
   checked,

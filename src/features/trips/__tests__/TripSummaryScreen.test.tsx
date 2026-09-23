@@ -10,10 +10,37 @@ import {
   slowDb,
   world,
 } from '@/features/trips/__fixtures__/render';
+import {
+  beforeRewardsDay,
+  pendingDay,
+  serveRewards,
+  settledDay,
+} from '@/features/trips/__fixtures__/rewards';
 import { TripSummaryScreen } from '@/features/trips/TripSummaryScreen';
+import { RewardsOfflineError } from '@/features/rewards/api';
+import { BANNED_COPY } from '@/notifications/catalog';
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
+}));
+// The rewards server is the fixture's double, resolved at call time (the fixture reads this module).
+jest.mock('@/features/rewards/api', () => ({
+  ...jest.requireActual<object>('@/features/rewards/api'),
+  defaultRewardsApi: new Proxy(
+    {},
+    {
+      get: (_target, name: string) => (...args: unknown[]) =>
+        (
+          jest.requireActual<{ rewardsApiDelegate: Record<string, (...a: unknown[]) => unknown> }>(
+            '@/features/trips/__fixtures__/rewards'
+          ).rewardsApiDelegate[name] as (...a: unknown[]) => unknown
+        )(...args),
+    }
+  ),
+}));
 
 const NOW = T0 + 3_600_000;
 const ID = 'trip-1';
@@ -23,6 +50,7 @@ beforeEach(() => {
   mockRouter.dismissTo.mockClear();
   mockRouter.back.mockClear();
   jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+  serveRewards(pendingDay());
 });
 
 afterEach(clearQueryClients);
@@ -38,6 +66,9 @@ describe('while the row is read', () => {
     expect(screen.getByRole('progressbar', { name: 'Loading this drive' })).toBeOnTheScreen();
     expect(await screen.findByText('Near Home → Near Lincoln HS')).toBeOnTheScreen();
     // The timeline and the day are still in flight; let them land inside the test.
+    await act(() => slow.idle());
+    // The day's rewards answer too (their cache write goes through the same slow file).
+    await waitFor(() => expect(screen.queryByTestId('earned-loading')).toBeNull());
     await act(() => slow.idle());
   });
 
@@ -124,7 +155,7 @@ describe('a scored drive', () => {
     });
 
     // 88 is a safe-day score; the day is not closed, and the field says so.
-    expect(screen.getByText('Safe day on track')).toBeOnTheScreen();
+    expect(await screen.findByText('Safe day on track')).toBeOnTheScreen();
     expect(screen.getByText('Confirmed when the day closes.')).toBeOnTheScreen();
   });
 
@@ -141,16 +172,18 @@ describe('a scored drive', () => {
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     expect(await screen.findByRole('image', { name: 'Score 75, Getting there' })).toBeOnTheScreen();
     expect(screen.queryByLabelText('Will sync')).toBeNull();
-    expect(screen.getByText('Good day on track')).toBeOnTheScreen();
+    expect(await screen.findByText('Good day on track')).toBeOnTheScreen();
   });
 
-  test('the cached day stamps SAFE DAY once the server has seen this drive', async () => {
+  test('a day the server judged safe is still only on track until it is confirmed: no stamp', async () => {
     const w = await world({
       trips: [tripRow({ client_trip_id: ID, score: 60, status: 'final', sync_state: 'synced', category_deductions_json: JSON.stringify(deductions({ phone: 30, speeding: 10 })) })],
       days: [['2026-01-05', { day: '2026-01-05', safeDay: true }]],
     });
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
-    expect(await screen.findByLabelText('Safe day')).toBeOnTheScreen();
+    expect(await screen.findByText('Safe day on track')).toBeOnTheScreen();
+    expect(screen.getByText('Confirmed when the day closes.')).toBeOnTheScreen();
+    expect(screen.queryByTestId('stamp-safe-day')).toBeNull();
   });
 
   test('an upload the server refused is explained in words, with the code under Details', async () => {
@@ -173,7 +206,7 @@ describe('a scored drive', () => {
     expect(screen.getByText(/saved from its last checkpoint/)).toBeOnTheScreen();
   });
 
-  test('the footer links name the rest of the trip; sharing waits for its cards', async () => {
+  test('the footer links name the rest of the trip; sharing waits until the drive is confirmed', async () => {
     const w = await world({ trips: [scored] });
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     await screen.findByText('Near Home → Near Lincoln HS');
@@ -187,10 +220,129 @@ describe('a scored drive', () => {
       pathname: '/(app)/trips/[clientTripId]/events',
       params: { clientTripId: ID },
     });
+    // Not synced yet: nothing true to share, and it says when there will be.
     expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
-    expect(screen.getByText('Share cards are coming soon.')).toBeOnTheScreen();
+    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+    expect(screen.queryByText('Share cards are coming soon.')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Done' }));
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
+  });
+});
+
+describe('sharing (D1 → F9)', () => {
+  test('a synced final drive opens the share composer for this drive', async () => {
+    const w = await world({ trips: [tripRow({ client_trip_id: ID, score: 88, status: 'final', sync_state: 'synced' })] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    const share = await screen.findByRole('button', { name: 'Share' });
+    expect(share).toBeEnabled();
+    expect(screen.queryByText("You can share a drive once it's confirmed.")).toBeNull();
+    await fireEvent.press(share);
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/rewards/share?kind=trip&clientTripId=trip-1');
+  });
+
+  test.each([
+    ['synced but provisional', { status: 'provisional', sync_state: 'synced' }],
+    ['final but queued', { status: 'final', sync_state: 'queued' }],
+    ['final but refused', { status: 'final', sync_state: 'failed' }],
+  ] as const)('%s: disabled, with the reason', async (_name, over) => {
+    const w = await world({ trips: [tripRow({ client_trip_id: ID, score: 88, ...over })] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    const share = await screen.findByRole('button', { name: 'Share' });
+    expect(share).toBeDisabled();
+    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+    await fireEvent.press(share);
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+});
+
+describe('what the day earned (D1 item 5, M5)', () => {
+  const synced = tripRow({ client_trip_id: ID, score: 90, status: 'final', sync_state: 'synced' });
+
+  test("a confirmed safe day: the stamp, the day's points said to be the day's, and the streak after it", async () => {
+    serveRewards(settledDay());
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(
+      await screen.findByLabelText('Safe day, 75 points for the day. Streak after this day: 5')
+    ).toBeOnTheScreen();
+    expect(screen.getByText('Safe day · +75 points')).toBeOnTheScreen();
+    expect(screen.getByText('Streak after this day: 5')).toBeOnTheScreen();
+    expect(screen.getByText('Points are for the whole day, not just this drive.')).toBeOnTheScreen();
+    expect(screen.getByTestId('stamp-safe-day', { includeHiddenElements: true })).toBeOnTheScreen();
+    // A confirmed day is never "on track", and never waits for the day to close.
+    expect(screen.queryByText('Confirmed when the day closes.')).toBeNull();
+    expect(screen.queryByText('Safe day on track')).toBeNull();
+  });
+
+  test('a confirmed good day has no stamp', async () => {
+    serveRewards(settledDay({ tier: 'good', points: 20, phone_free: false, streak_after: 2 }));
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText('Good day · +20 points')).toBeOnTheScreen();
+    expect(screen.queryByTestId('stamp-safe-day', { includeHiddenElements: true })).toBeNull();
+  });
+
+  test('a confirmed day that earned nothing says so plainly: no streak, no tip upsell, no settle rule', async () => {
+    serveRewards(
+      settledDay({ tier: 'none', outcome: 'unsafe', outcome_reason: 'unsafe', points: 0, phone_free: false, streak_after: 0 })
+    );
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText('No points for this day')).toBeOnTheScreen();
+    expect(screen.getByTestId('earned')).not.toHaveTextContent(/Streak|Confirmed when|tip|practi/i);
+  });
+
+  test('a day from before the rewards says why, never "Confirmed when the day closes"', async () => {
+    serveRewards(beforeRewardsDay());
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText("This day isn't part of your rewards.")).toBeOnTheScreen();
+    expect(screen.getByText('Rewards count from February 1, 2026.')).toBeOnTheScreen();
+    expect(screen.queryByText('Confirmed when the day closes.')).toBeNull();
+  });
+
+  test('a day the settlement passed without a row is not counted either', async () => {
+    serveRewards({ ...settledDay(), days: [] });
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(
+      await screen.findByText('A drive on this day reached RoadWise after the day was confirmed, so the day stays as it was.')
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('Confirmed when the day closes.')).toBeNull();
+  });
+
+  test("a late day frozen by the settlement reads as not counted, never 'settled, no points'", async () => {
+    serveRewards(settledDay({ outcome: 'neutral', outcome_reason: 'late', tier: 'none', points: 0, phone_free: false, streak_after: 4 }));
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(
+      await screen.findByText('A drive on this day reached RoadWise after the day was confirmed, so the day stays as it was.')
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('No points for this day')).toBeNull();
+  });
+
+  test('offline with nothing saved: unknown is said as unknown, never guessed', async () => {
+    const double = serveRewards(pendingDay());
+    double.server.fail.fetch = new RewardsOfflineError();
+    const w = await world({ trips: [synced] });
+    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
+    expect(await screen.findByText("Couldn't check this day's points right now.")).toBeOnTheScreen();
+    expect(screen.queryByText('Confirmed when the day closes.')).toBeNull();
+    expect(screen.queryByText('Safe day on track')).toBeNull();
+  });
+
+  test('every new Earned and share line passes BANNED_COPY', () => {
+    const lines = [
+      'Safe day · +75 points',
+      'Safe day, 75 points for the day',
+      'Streak after this day: 5',
+      'Points are for the whole day, not just this drive.',
+      'No points for this day',
+      "You can share a drive once it's confirmed.",
+      "Couldn't check this day's points right now.",
+    ];
+    for (const line of lines) for (const banned of BANNED_COPY) expect(line).not.toMatch(banned);
   });
 });
 

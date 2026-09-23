@@ -29,12 +29,13 @@ export {
   type TripDayGroup,
 } from './detail';
 export {
+  ConfirmedDayResultLine,
   DisputeSheet,
   MAX_STATED_LIMIT,
   MIN_STATED_LIMIT,
   parseStatedLimit,
 } from './DisputeSheet';
-export { EarnedField } from './EarnedField';
+export { DayEarnedField, EarnedField } from './EarnedField';
 export { EditTripScreen } from './EditTripScreen';
 export { EventDetailScreen } from './EventDetailScreen';
 export { EventListScreen } from './EventListScreen';
@@ -45,6 +46,7 @@ export {
   dateLine,
   describeEvent,
   earnedFor,
+  earnedView,
   formatClock,
   formatTimeSpan,
   formatTripDate,
@@ -57,6 +59,7 @@ export {
   spokenRoute,
   unscoredCopy,
   type EarnedKind,
+  type EarnedView,
   type Highlight,
   type UnscoredCopy,
 } from './format';
@@ -87,7 +90,7 @@ export {
 } from './routes';
 export { tipForTrip, type TripTip } from './tip';
 export { firstSentence, TipCard } from './TipCard';
-export { TipScreen, WEEKLY_FOCUS_KEY, type WeeklyFocus } from './TipScreen';
+export { goalCategoryOf, TipScreen } from './TipScreen';
 export { TripTopBar } from './TopBar';
 export { TripDetailScreen } from './TripDetailScreen';
 export { TripConditionsField, TripQualityField } from './TripFacts';
@@ -104,7 +107,7 @@ export { PAGE_SIZE, TripHistoryScreen } from './TripHistoryScreen';
 export { EventMiniMap, loadMaps, resetMapsCache, TripRouteField } from './TripMap';
 export { TripScoreField } from './TripScoreField';
 export { TripStatusChip, type TripStatusChipKind } from './TripStatusChip';
-export { TripSummaryScreen } from './TripSummaryScreen';
+export { tripShareHref, TripSummaryScreen } from './TripSummaryScreen';
 export { spokenRow, TripTimeline } from './TripTimeline';
 export {
   DELETE_TRIP_KIND,

@@ -1,12 +1,14 @@
 import { deductions, eventRow, MILE_M, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { toDayEntry, toTripEventView, toTripSummary, unscoredReasonOf } from '@/data/queries';
 import type { TripRow } from '@/data/db';
+import { BANNED_COPY } from '@/notifications/catalog';
 
 import {
   conditionsLabel,
   dateLine,
   describeEvent,
   earnedFor,
+  earnedView,
   formatTimeSpan,
   formatTripDate,
   highlightsFor,
@@ -187,6 +189,116 @@ describe('the earned field', () => {
     // track" would be contradicting the only authority there is.
     const synced = summary({ score: 90, sync_state: 'synced', status: 'final' });
     expect(earnedFor(synced, day({}))).toBe('counts');
+  });
+});
+
+describe('the earned field once rewards exist (M5, D1)', () => {
+  const day = (flags: Partial<{ safeDay: boolean; goodDay: boolean }>) =>
+    toDayEntry({ day: '2026-01-05', payload: flags, updated_at: T0 });
+  const synced = summary({ score: 90, sync_state: 'synced', status: 'final' });
+  const settled = (over: Partial<{ tier: 'safe' | 'good' | 'none'; points: number; streakAfter: number | null }> = {}) =>
+    ({
+      status: 'settled',
+      settled: true,
+      tier: 'safe',
+      phoneFree: true,
+      camera: false,
+      points: 75,
+      streakAfter: 5,
+      ...over,
+    }) as const;
+
+  test("a confirmed day: its tier and the day's total points, said to be the day's, and the streak after it", () => {
+    const view = earnedView(synced, day({ safeDay: true }), settled());
+    expect(view).toEqual({
+      kind: 'settled',
+      headline: 'Safe day · +75 points',
+      spoken: 'Safe day, 75 points for the day',
+      stamp: true,
+      streak: 'Streak after this day: 5',
+      note: 'Points are for the whole day, not just this drive.',
+    });
+  });
+
+  test('a good day, a bonus-only day, one point, and no streak line when the row has none', () => {
+    expect(earnedView(synced, null, settled({ tier: 'good', points: 20 }))).toMatchObject({
+      headline: 'Good day · +20 points',
+      spoken: 'Good day, 20 points for the day',
+      stamp: false,
+    });
+    expect(earnedView(synced, null, settled({ tier: 'none', points: 25 }))).toMatchObject({
+      headline: 'Day confirmed · +25 points',
+      stamp: false,
+    });
+    expect(earnedView(synced, null, settled({ points: 1, streakAfter: null }))).toMatchObject({
+      headline: 'Safe day · +1 point',
+      streak: null,
+    });
+  });
+
+  test('a confirmed day that earned nothing is one plain line: no streak, no tip, no settle rule', () => {
+    expect(earnedView(synced, null, settled({ tier: 'none', points: 0, streakAfter: 0 }))).toEqual({
+      kind: 'nothing',
+      headline: 'No points for this day',
+    });
+  });
+
+  test("a day not yet confirmed keeps M2's words and M2's settle rule, and is never stamped", () => {
+    const pending = { status: 'pending', settled: false } as const;
+    expect(earnedView(summary({ score: 90 }), null, pending)).toEqual({
+      kind: 'pending',
+      headline: 'Safe day on track',
+      note: 'Confirmed when the day closes.',
+    });
+    expect(earnedView(summary({ score: 75 }), null, pending).headline).toBe('Good day on track');
+    expect(earnedView(summary({ score: 60 }), null, pending).headline).toBe('On your record');
+    // The server evaluated the day safe, but it is not confirmed: still only "on track".
+    expect(earnedView(synced, day({ safeDay: true }), pending).headline).toBe('Safe day on track');
+    expect(earnedView(synced, day({ goodDay: true }), pending)).toMatchObject({
+      headline: 'Good day on track',
+      note: 'Confirmed when the day closes.',
+    });
+  });
+
+  test('a day outside the rewards says why, and never "Confirmed when the day closes"', () => {
+    const late = earnedView(synced, null, {
+      status: 'not_counted',
+      settled: false,
+      reason: 'after_confirmed',
+      rewardsStart: null,
+    });
+    expect(late).toEqual({
+      kind: 'not_counted',
+      headline: "This day isn't part of your rewards.",
+      note: 'A drive on this day reached RoadWise after the day was confirmed, so the day stays as it was.',
+    });
+    const early = earnedView(synced, null, {
+      status: 'not_counted',
+      settled: false,
+      reason: 'before_rewards',
+      rewardsStart: '2026-09-10',
+    });
+    expect(early).toMatchObject({ kind: 'not_counted', note: 'Rewards count from September 10, 2026.' });
+    for (const view of [late, early]) expect(JSON.stringify(view)).not.toMatch(/Confirmed when the day closes/);
+  });
+
+  test('unknown is said as unknown', () => {
+    expect(earnedView(synced, null, 'unknown')).toEqual({
+      kind: 'unknown',
+      headline: 'On your record',
+      note: "Couldn't check this day's points right now.",
+    });
+  });
+
+  test('every new earned string passes BANNED_COPY', () => {
+    const views = [
+      earnedView(synced, null, settled()),
+      earnedView(synced, null, settled({ tier: 'none', points: 0 })),
+      earnedView(synced, null, 'unknown'),
+    ];
+    for (const text of views.flatMap((v) => Object.values(v)).filter((v): v is string => typeof v === 'string')) {
+      for (const banned of BANNED_COPY) expect(text).not.toMatch(banned);
+    }
   });
 });
 

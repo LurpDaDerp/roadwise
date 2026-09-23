@@ -47,6 +47,10 @@ export async function world(seed: Seed = {}, now: () => number = Date.now): Prom
     db,
     async renderScreen(ui, over = db) {
       const client = createQueryClient();
+      // A finished mutation (M5's weekly focus) keeps a five-minute gc timer that `clear()` does
+      // not cancel, and it holds the Jest worker open; Infinity schedules none.
+      const defaults = client.getDefaultOptions();
+      client.setDefaultOptions({ ...defaults, mutations: { ...defaults.mutations, gcTime: Infinity } });
       clients.add(client);
       const Data = wrapperFor(over, client, now);
       return render(

@@ -7,7 +7,7 @@ import type { DriveHost, DriveState } from '@/drive/host';
 import { ThemeProvider } from '@/ui';
 
 import { tripCopy } from '../copy';
-import { DisputeSheet, parseStatedLimit } from '../DisputeSheet';
+import { ConfirmedDayResultLine, DisputeSheet, parseStatedLimit } from '../DisputeSheet';
 
 function state(over: Partial<DriveState> = {}): DriveState {
   return {
@@ -95,5 +95,28 @@ describe('DisputeSheet', () => {
     expect(screen.queryByText(tripCopy.dispute.title)).toBeNull();
     await push({ lockedOut: false, speedMps: 0 });
     expect(screen.getByTestId('dispute-sheet').props.visible).toBe(true);
+  });
+});
+
+describe('the result line on a confirmed day (rev1: R-A)', () => {
+  test("under an accepted report on a confirmed day: off the drive's score, the day already final", async () => {
+    await render(
+      <ThemeProvider>
+        <ConfirmedDayResultLine confirmed />
+      </ThemeProvider>
+    );
+    expect(
+      screen.getByText("Removed from the drive's score. This day's points and streak were already confirmed.")
+    ).toBeOnTheScreen();
+    expect(tripCopy.dispute.confirmedDayResult).not.toMatch(/will change|taken back|recalculat/i);
+  });
+
+  test('negative control: a day not yet confirmed shows nothing (the report counts normally)', async () => {
+    await render(
+      <ThemeProvider>
+        <ConfirmedDayResultLine confirmed={false} />
+      </ThemeProvider>
+    );
+    expect(screen.queryByTestId('confirmed-day-result')).toBeNull();
   });
 });

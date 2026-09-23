@@ -5,6 +5,8 @@
  * are shaped so a localisation pass can lift them into it without touching a component. Voice
  * (§7.0, §9.10): second person, supportive, plain words, never a code in primary text.
  */
+import { pointsText } from '@/features/rewards/copy/common';
+
 export const tripCopy = {
   summaryTitle: 'Drive summary',
   back: 'Back',
@@ -80,11 +82,26 @@ export const tripCopy = {
     goodOnTrack: 'Good day on track',
     counts: 'On your record',
     provisional: 'Confirmed when the day closes.',
+    /** M5 (§10.1): a day earns, not a drive — so the points shown are the day's, and say so. */
+    settled: (label: string, points: number) => `${label} · +${pointsText(points)}`,
+    settledSpoken: (label: string, points: number) => `${label}, ${pointsText(points)} for the day`,
+    forTheDay: 'Points are for the whole day, not just this drive.',
+    /** A confirmed day below a good day that still earned a bonus (phone-free, camera). */
+    confirmedDay: 'Day confirmed',
+    streakAfter: (n: number) => `Streak after this day: ${n}`,
+    nothing: 'No points for this day',
+    checking: "Checking this day's points",
+    unknown: "Couldn't check this day's points right now.",
   },
   footer: {
     fullTrip: 'See full trip',
     wrong: 'Something wrong?',
     share: 'Share',
+    shareUnconfirmed: "You can share a drive once it's confirmed.",
+    /**
+     * Still read by D2 (`TripDetailScreen`, not Task 11's file). The brief deletes it; that needs
+     * D2's share entry to move to F9 as well — reported, not done here. D1 no longer uses it.
+     */
     shareSoon: 'Share cards are coming soon.',
   },
   /** §7.C C10, verbatim. */
@@ -107,7 +124,8 @@ export const tripCopy = {
     fromThisDrive: 'From this drive',
     practice: 'Practice this week',
     focusSet: 'Focus set for this week',
-    focusConfirm: 'This is your focus this week.',
+    focusSetNext: 'Focus set for next week',
+    offline: "Couldn't set your focus. Try again when you're online.",
     error: "Couldn't save that. Try again.",
   },
 
@@ -291,6 +309,8 @@ export const tripCopy = {
       "If you weren't driving, the whole drive comes off your score — not just this moment.",
     notDriverGo: 'Change who was driving',
     queued: "Saved. We'll send it when you're online.",
+    /** (rev1: R-A) Under an accepted report whose day is already confirmed. */
+    confirmedDayResult: "Removed from the drive's score. This day's points and streak were already confirmed.",
     failed: "Couldn't save that. Try again.",
   },
 
@@ -345,6 +365,9 @@ export const tripCopy = {
     roleError: "Couldn't save that. Try again.",
     roleRescore: "We'll score this drive again with the new answer the next time you're online.",
     roleUnscore: 'This drive no longer counts towards your score.',
+    /** (rev1: R-A) Only when the drive's day is confirmed (settled); before that the answer counts. */
+    confirmedDayNote:
+      "This day is already confirmed. Changing who drove updates the drive's score, not that day's points or streak.",
     vehicleLabel: 'Vehicle',
     vehicleSoon: 'Vehicles are coming soon.',
     deleteLabel: 'Delete',
@@ -354,7 +377,7 @@ export const tripCopy = {
     /** §7.D D5, including the guardian-visibility note — said plainly, before the button. */
     deleteConsequence: [
       'The drive, its score and everything on its timeline go for good.',
-      "Your safety score is worked out again without it. Deleting a drive never makes a day safe. If its day is already confirmed, that day's points and streak stay exactly as they are; in Insights a safe day it was part of may no longer count as one.",
+      "Your safety score is worked out again without it. Deleting a drive never improves the day it was on: until that day is confirmed, the day is judged both with and without this drive and keeps the lower result, so it may no longer count as a safe day. Once a day is confirmed, its points and streak don't change, even if Insights later shows that day differently.",
       'If you share summaries with a parent or guardian, they can see that a drive was deleted — never what was on it.',
     ],
     deleteConfirm: 'Delete drive',
