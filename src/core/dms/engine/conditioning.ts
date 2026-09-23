@@ -7,6 +7,7 @@ import { Median3 } from './filters';
 import { geometricGaze } from './geometricGaze';
 import { nearEye, type Quality, type QualityReason, type QualityResult } from './quality';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, HeadAngles, Rotation } from './types';
+import { RingBuffer } from './windows';
 
 export interface EarPair {
   r: number | null;
@@ -65,8 +66,14 @@ export interface Perceived {
   /** max over the used reliable eyes (the near eye alone past the yaw limit); null when unknown */
   openness: number | null;
   eyesClosed: boolean;
-  /** how long the current closure has lasted, ms (0 when open) */
+  /** how long the current closure has lasted, ms (0 when open); it keeps running through a bridge */
   closedMs: number;
+  /**
+   * C-26: this non-TRACKING frame carries a closure across a face loss (eyes shut ≥ 500 ms, then the
+   * head went down and the face was lost, not a turn). `eyesClosed` stays true. PERCLOS must not count
+   * bridged time as TRACKING time.
+   */
+  closureBridged: boolean;
   lookingDown: boolean;
   /** driver-frame head yaw rate, °/s; null without two consecutive heads */
   headYawSpeedDegS: number | null;
@@ -91,6 +98,13 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
   let frameIntervalMs = 1000 / 15;
   let closed = false;
   let closedSince = 0;
+  // C-26 closure bridging: the evidence at the loss, and the bridge itself.
+  let lastTrackedClosedMs = 0;
+  let bridged = false;
+  let bridgeStart = 0;
+  const pitchHist = new RingBuffer<{ t: number; v: number }>(64);
+  const yawSpeeds = new RingBuffer<{ t: number; v: number }>(32);
+  let lastRelYaw: number | null = null;
   // Iris evidence in time, per eye (T6 round-1 review R1-I1).
   const lastReliableT = { r: Number.NEGATIVE_INFINITY, l: Number.NEGATIVE_INFINITY };
   const episode = { r: false, l: false };
@@ -104,15 +118,14 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
    * The quality the rules see: an eye counts as usable for openness only if it is usable in this frame
    * AND its iris was seen (reliable) within irisRecencyS, or it is inside a closure episode that began
    * while it counted (F2/F3 and a sleeping driver stay visible past the window). The episode ends when
-   * the eye reopens (> openAbove) or becomes unusable. TRACKING needs one such eye; a drive that starts
-   * in sunglasses is HEAD_ONLY until an iris is seen.
+   * the eye reopens (> openAbove) or becomes unusable, except during a C-26 bridge, when it ends only on
+   * reopening or the bridge's silent end (step, after the closure update). TRACKING needs one such eye;
+   * a drive that starts in sunglasses is HEAD_ONLY until an iris is seen.
    */
   function eyeTiers(f: EngineFrame, q: QualityResult): QualityResult {
     const within = cfg.quality.irisRecencyS * 1000;
     if (q.reliableR) lastReliableT.r = f.tMs;
     if (q.reliableL) lastReliableT.l = f.tMs;
-    if (!q.usableR) episode.r = false;
-    if (!q.usableL) episode.l = false;
     const usableR = q.usableR && (f.tMs - lastReliableT.r <= within || episode.r);
     const usableL = q.usableL && (f.tMs - lastReliableT.l <= within || episode.l);
     if (q.quality !== 'tracking' || usableR || usableL) return { ...q, usableR, usableL };
@@ -147,6 +160,11 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       prevHeadDrvYaw = null;
       lastNet = null;
       closed = false;
+      bridged = false;
+      lastTrackedClosedMs = 0;
+      pitchHist.clear();
+      yawSpeeds.clear();
+      lastRelYaw = null;
       lastGazeRel = null;
     },
 
@@ -206,22 +224,64 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       const gazeDrv = srcCam === null ? null : toDrv(srcCam);
       const headRel = headDrv !== null && refs.headCentre !== null ? relative(headDrv, refs.headCentre) : null;
 
-      // Openness and closure: TRACKING only; a quality drop ends the episode silently.
+      // The head evidence C-26 needs: relative pitch (to the head centre, or the pre-calibration
+      // reference), its last second, and the C-8 turn signals (yaw speed in the fast-turn window, yaw).
+      const cl = cfg.closure;
+      const relPitch = headDrv === null ? null : refs.headCentre !== null ? headDrv.pitch - refs.headCentre.pitch : refs.pitchReference !== null ? headDrv.pitch - refs.pitchReference : null;
+      if (relPitch !== null) pitchHist.push({ t: f.tMs, v: relPitch });
+      pitchHist.dropWhile((s) => s.t < f.tMs - cl.bridgeDropWindowS * 1000);
+      if (headYawSpeedDegS !== null) yawSpeeds.push({ t: f.tMs, v: headYawSpeedDegS });
+      yawSpeeds.dropWhile((s) => s.t < f.tMs - cfg.zones.fastTurnWindowMs);
+      if (headRel !== null) lastRelYaw = headRel.yaw;
+      const headDown = (v: number | null) => v !== null && v <= -cfg.nod.referenceWithinDeg;
+      const turnNow = headYawSpeedDegS !== null && Math.abs(headYawSpeedDegS) > cfg.zones.fastTurnDegS;
+      const yawFar = (y: number | null) => y !== null && Math.abs(y) > cfg.zones.lostLateralYawDeg;
+
+      // Openness and closure. TRACKING measures it; a loss ends it silently unless C-26 bridges it.
       let o = { r: null as number | null, l: null as number | null, used: null as number | null };
       if (q.quality === 'tracking' && f.head !== null) o = openness(f, q, refs.openEyeEar, f.head.yaw);
-      if (o.used === null) {
+      let bridgeEnded = false;
+      if (o.used !== null) {
+        bridged = false; // back in TRACKING: a closed eye continues the same closure, an open one ends it
+        if (!closed && o.used < cl.closedBelow) {
+          closed = true;
+          closedSince = f.tMs;
+        } else if (closed && o.used > cl.openAbove) {
+          closed = false;
+        }
+        lastTrackedClosedMs = closed ? f.tMs - closedSince : 0;
+      } else if (bridged) {
+        // Keep: every LOST frame; a HEAD_ONLY frame only with the head still down and no turn evidence.
+        const capped = f.tMs - bridgeStart > cl.bridgeMaxS * 1000 + 1e-6;
+        const keep = q.quality === 'lost' || (headDown(relPitch) && !turnNow && !yawFar(headRel?.yaw ?? null) && !q.reasons.includes('head_yaw'));
+        if (capped || !keep) bridgeEnded = true;
+      } else if (closed) {
+        // Start: the closure was longer than a blink, the head was going down, and it is not a C-8 turn.
+        const last = pitchHist.last();
+        let peak = Number.NEGATIVE_INFINITY;
+        pitchHist.forEach((s) => (peak = Math.max(peak, s.v)));
+        const dropped = last !== undefined && (headDown(last.v) || peak - last.v >= cl.bridgeHeadDropDeg - 1e-9);
+        let turnPeak = 0;
+        yawSpeeds.forEach((s) => (turnPeak = Math.max(turnPeak, Math.abs(s.v))));
+        const turn = turnPeak > cfg.zones.fastTurnDegS || yawFar(lastRelYaw) || q.reasons.includes('head_yaw');
+        if (lastTrackedClosedMs >= cl.bridgeMinClosedMs - 1e-6 && dropped && !turn) {
+          bridged = true;
+          bridgeStart = f.tMs;
+        } else closed = false;
+      }
+      if (bridgeEnded) {
+        // A silent end (a turn, the head back up, the cap): no closure, and the per-eye episodes end.
+        bridged = false;
         closed = false;
-      } else if (!closed && o.used < cfg.closure.closedBelow) {
-        closed = true;
-        closedSince = f.tMs;
-      } else if (closed && o.used > cfg.closure.openAbove) {
-        closed = false;
+        episode.r = false;
+        episode.l = false;
       }
       const closedMs = closed ? f.tMs - closedSince : 0;
-      // A closure episode per eye starts only while the eye counts, and ends when it reopens.
+      // A closure episode per eye starts only while the eye counts, and ends when it reopens or becomes
+      // unusable (except during a bridge).
       for (const [side, o1, usable] of [['r', o.r, q.usableR], ['l', o.l, q.usableL]] as const) {
         if (!usable || o1 === null) {
-          if (!usable) episode[side] = false;
+          if (!usable && !bridged) episode[side] = false;
           continue;
         }
         if (o1 < cfg.closure.closedBelow) episode[side] = true;
@@ -285,6 +345,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         openness: o.used,
         eyesClosed: closed,
         closedMs,
+        closureBridged: bridged,
         lookingDown,
         headYawSpeedDegS,
       };

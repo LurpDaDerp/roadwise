@@ -339,6 +339,15 @@ export interface DmsConfig {
     blinkMinFps: number;
     /** §M6 (rev0): the measured fps is the median frame dt over the last 10 s */
     fpsWindowS: number;
+    /**
+     * C-26 (T9 review I1), closure bridging: a closure of ≥ bridgeMinClosedMs whose face is then lost
+     * with the head down (rel pitch ≤ −nod.referenceWithinDeg, or a fall of ≥ bridgeHeadDropDeg within
+     * bridgeDropWindowS) and no C-8 turn keeps running through HEAD_ONLY/LOST, for at most bridgeMaxS.
+     */
+    bridgeMinClosedMs: number;
+    bridgeHeadDropDeg: number;
+    bridgeDropWindowS: number;
+    bridgeMaxS: number;
   };
 
   nod: {
@@ -604,6 +613,10 @@ const DEFAULT: DmsConfig = {
     longBlinkMs: 500,
     blinkMinFps: 12.5,
     fpsWindowS: 10,
+    bridgeMinClosedMs: 500,
+    bridgeHeadDropDeg: 5,
+    bridgeDropWindowS: 1,
+    bridgeMaxS: 10,
   },
   nod: {
     referenceWithinDeg: 5,
@@ -762,6 +775,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   };
 
   if (!(c.quality.irisRecencyS > 0)) bad('quality.irisRecencyS', 'must be > 0');
+  if (!(c.closure.bridgeMaxS > c.closure.f3.closedS)) bad('closure.bridgeMaxS', 'must exceed closure.f3.closedS (C-26: F3 fires inside a bridge)');
+  if (!(c.closure.bridgeDropWindowS > 0)) bad('closure.bridgeDropWindowS', 'must be > 0');
 
   // Geometric gaze.
   if (!(c.geometric.kEye > 0 && c.geometric.kEye <= 1)) bad('geometric.kEye', 'must lie in (0, 1]');

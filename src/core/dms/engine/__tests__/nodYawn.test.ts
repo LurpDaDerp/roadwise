@@ -6,12 +6,15 @@ import { createYawnDetector, speechRatio, type YawnInput } from '../yawn';
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
 
 /** A nod stream at 15 fps from pitch(t) and openness(t) (relative head pitch, degrees). */
-function nods(pitch: (t: number) => number, openness: (t: number) => number | null, seconds = 6, speed = 60) {
+function nods(pitch: (t: number) => number, openness: (t: number) => number | null, seconds = 6, speed = 60, gap: { lost: (t: number) => boolean; bridged?: boolean } | null = null) {
   const d = createNodDetector(C);
   const kinds: string[] = [];
   for (let i = 0; i <= seconds * 15; i++) {
     const t = i / 15;
-    const x: NodInput = { tMs: t * 1000, quality: 'tracking', relPitchDeg: pitch(t), openness: openness(t), ruleSpeedKmh: speed };
+    const lost = gap?.lost(t) ?? false;
+    const x: NodInput = lost
+      ? { tMs: t * 1000, quality: 'lost', relPitchDeg: null, openness: null, ruleSpeedKmh: speed, closureBridged: gap?.bridged ?? false }
+      : { tMs: t * 1000, quality: 'tracking', relPitchDeg: pitch(t), openness: openness(t), ruleSpeedKmh: speed };
     kinds.push(...d.onFrame(x).map((e) => e.kind));
   }
   return kinds;
@@ -41,6 +44,18 @@ describe('nods', () => {
   });
   test('a lap glance with lids at 0.25 and a fast snap back is at most a nod, never microsleep_nod', () => {
     expect(nods(profile(25, 0.5, 0.5, 0.3), () => 0.25)).toEqual(['nod']);
+  });
+  test('T9 r1 m2: one blink frame in a lap glance is not "while openness < 0.5": every known frame of the drop must be', () => {
+    expect(nods(profile(20, 0.6, 0.3, 0.4), (t) => (t >= 1.3 && t < 1.37 ? 0.2 : 1))).toEqual([]);
+  });
+  test('C-26: a nod whose depth frames are LOST for 0.5 s, then a return up → nod (the speed across the gap)', () => {
+    expect(nods(profile(20, 0.6, 0.3, 0.4), () => 0.3, 6, 60, { lost: (t) => t >= 1.65 && t < 2.15 })).toEqual(['nod']);
+  });
+  test('C-26: the openness hold counts a LOST gap only when the closure was bridged', () => {
+    const lids = (t: number) => (t >= 1.2 && t < 1.9 ? 0.1 : 0.3);
+    const gap = (t: number) => t >= 1.4 && t < 1.75;
+    expect(nods(profile(20, 0.6, 0.3, 0.4), lids, 6, 60, { lost: gap, bridged: true })).toEqual(['microsleep_nod']);
+    expect(nods(profile(20, 0.6, 0.3, 0.4), lids, 6, 60, { lost: gap, bridged: false })).toEqual(['nod']);
   });
   test('microsleep_nod needs 20 km/h; below it the nod is still counted', () => {
     const lidsShut = (t: number) => (t >= 1.2 && t < 1.8 ? 0.1 : 0.3);
@@ -88,16 +103,19 @@ describe('yawns', () => {
   test('a rise faster than 0.3 s from 1.5 to 2.5 fails', () => {
     expect(yawns(yawnMar(0.4, 0.15, 2.4, 0.8))).toEqual([]);
   });
-  test('speech on top of the open mouth (5 Hz at 15 fps) is rejected; so is 4 Hz at 10 fps (band limited by fps/2)', () => {
-    // A talking amplitude of 0.04 keeps the mouth above MAR 0.35 and openness 2.5 throughout, so only the
-    // speech test can reject it (an earlier draft's 0.12 dipped under 0.35 and was rejected by the
-    // absolute-MAR hold instead, which hid a missing speech test).
-    const talk = (hz: number) => (t: number) => {
-      const base = yawnMar(0.4, 0.8, 3, 0.8)(t);
-      return t > 1.8 && t < 4.8 ? base + 0.04 * Math.sin(2 * Math.PI * hz * t) + 0.02 * (t - 1.8) : base;
-    };
+  // A talking amplitude of 0.04 keeps the mouth above MAR 0.35 and openness 2.5 throughout, so only the
+  // speech test can reject it (an earlier draft's 0.12 dipped under 0.35 and was rejected by the
+  // absolute-MAR hold instead, which hid a missing speech test). One test per case (T9 review m3).
+  const talk = (hz: number) => (t: number) => {
+    const base = yawnMar(0.4, 0.8, 3, 0.8)(t);
+    return t > 1.8 && t < 4.8 ? base + 0.04 * Math.sin(2 * Math.PI * hz * t) + 0.02 * (t - 1.8) : base;
+  };
+  test('speech on top of the open mouth (5 Hz at 15 fps) is rejected', () => {
     expect(yawns(yawnMar(0.4, 0.8, 3, 0.8))).toEqual(['yawn']);
     expect(yawns(talk(5))).toEqual([]);
+  });
+  test('4 Hz at 10 fps is rejected too (the band limited by fps/2)', () => {
+    expect(yawns(yawnMar(0.4, 0.8, 3, 0.8), { fps: 10 })).toEqual(['yawn']);
     expect(yawns(talk(4), { fps: 10 })).toEqual([]);
   });
   test('the speech band: [3, min(8, fps/2)] Hz over [0.3, fps/2] Hz', () => {

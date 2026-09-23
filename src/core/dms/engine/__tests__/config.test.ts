@@ -94,6 +94,11 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.fatigue.perclosOpennessBelow).toBe(0.2);
     expect(c.fatigue.perclosMinTrackingS).toBe(30);
     expect(c.closure.fpsWindowS).toBe(10);
+    // C-26 closure bridging (T9 review I1)
+    expect(c.closure.bridgeMinClosedMs).toBe(500);
+    expect(c.closure.bridgeHeadDropDeg).toBe(5);
+    expect(c.closure.bridgeDropWindowS).toBe(1);
+    expect(c.closure.bridgeMaxS).toBe(10);
     expect(c.distraction.gazeRulesMinFps).toBe(6.5);
     expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 });
   });
@@ -215,6 +220,8 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['far lateral without its shoulder-check grace', (c) => (c.zones.table.find((x) => x.id === 'far_lateral')!.shoulderCheckGraceS = null), /zones\.table\[far_lateral\]\.shoulderCheckGraceS/],
     ['PERCLOS below the looking-down threshold', (c) => (c.fatigue.perclosOpennessBelow = 0.1), /fatigue\.perclosOpennessBelow/],
     ['a gaze-rules fps floor of 0', (c) => (c.distraction.gazeRulesMinFps = 0), /distraction\.gazeRulesMinFps/],
+    ['a closure bridge cap at or under F3 (C-26)', (c) => (c.closure.bridgeMaxS = 6), /closure\.bridgeMaxS/],
+    ['a zero head-drop window (C-26)', (c) => (c.closure.bridgeDropWindowS = 0), /closure\.bridgeDropWindowS/],
   ];
   test.each(cases)('%s', (_name, breakIt, path) => {
     const c = copy();
