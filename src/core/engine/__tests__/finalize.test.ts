@@ -1065,7 +1065,8 @@ describe('upload caps (M2 plausibility: at most MAX_EVENTS events, polyline at m
   });
 
   test('a polyline over MAX_POLYLINE_BYTES at 10 m is re-simplified with a doubled epsilon until it fits', async () => {
-    const n = 6000;
+    // The fewest rows whose polyline at 10 m is over the cap (about 3 bytes a vertex): 5,700 rows, 17,100 bytes.
+    const n = 5700;
     // Due north at 10 m/s with a 15 m zigzag: every vertex survives epsilon = 10, none survives 20.
     const rows = Array.from({ length: n }, (_, i) =>
       row({
@@ -1077,7 +1078,10 @@ describe('upload caps (M2 plausibility: at most MAX_EVENTS events, polyline at m
         aLonMax: 0.02,
       })
     );
-    const dense = encodePolyline(simplify(rows, POLYLINE_EPSILON_M));
+    // The precondition is the first attempt finalize itself makes (Douglas-Peucker per chunk of 1,000). It
+    // was the whole-track `simplify`, quadratic on this zigzag: 9 of the test's 13 s, and past its 30 s
+    // timeout under load (the full-suite flake).
+    const dense = encodePolyline(simplifyTrack(rows, POLYLINE_EPSILON_M));
     expect(dense.length).toBeGreaterThan(MAX_POLYLINE_BYTES);
     await persisted(rows, n);
 
