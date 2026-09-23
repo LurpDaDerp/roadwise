@@ -20,6 +20,7 @@
  */
 import { createSettingsRepo, type Db } from '@/data/db';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
+import { restoreCarriedHeldJoin, takeCarriableHeldJoin } from '@/features/onboarding/state';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -40,6 +41,12 @@ export const PENDING_OWNER_KEY = 'device.pendingOwner';
  * `speed_limit_tiles` **is** taken, even though limits are public facts about roads — which roads
  * are cached says where the last driver drove, and re-downloading them costs a little data rather
  * than someone's privacy.
+ *
+ * The ONE exception to "the wipe keeps nothing" (M5 T12 r1b, security R4): an invite link opened
+ * while nobody was signed in (`auth.heldJoin`) is carried across a handover when it is live and
+ * either unbound or already bound to the incoming driver — never one bound to the previous owner —
+ * and is written back bound to the incoming driver. It is a public invite code that this person
+ * opened, and the join screen still asks before anything is used.
  */
 export const DEVICE_TABLES: readonly string[] = [
   'trip_events',
@@ -85,6 +92,11 @@ export interface DeviceOwnerDeps {
   traces?: { clear(): Promise<void> };
   /** Told about a failure that did not change the outcome. */
   onError?: (error: unknown, context: string) => void;
+  /**
+   * The driver taking the device over (a handover). Only then may a held invite link be carried
+   * across the wipe, bound to them (see `DEVICE_TABLES`). Without it nothing is carried.
+   */
+  incomingUid?: string;
 }
 
 /**
@@ -97,9 +109,22 @@ export interface DeviceOwnerDeps {
 export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<void> {
   // A "your drive is ready" scheduled for the last driver must not fire for the next one (U3).
   await cancelSummariesBounded();
+  const incoming = deps.incomingUid;
+  // Read before the rows go; a read that fails carries nothing (fail closed).
+  const carried = incoming
+    ? await takeCarriableHeldJoin(createSettingsRepo(db), Date.now(), incoming).catch(() => null)
+    : null;
   await db.transaction(async (tx) => {
     for (const table of DEVICE_TABLES) await tx.execute(`DELETE FROM ${table}`);
   });
+  if (carried !== null && incoming) {
+    try {
+      await restoreCarriedHeldJoin(createSettingsRepo(db), carried, incoming);
+    } catch (error) {
+      // The invite is lost, which is the safe way to fail: the wipe itself is done.
+      deps.onError?.(error, 'wipe carry');
+    }
+  }
   try {
     await deps.traces?.clear();
   } catch (error) {
@@ -172,7 +197,7 @@ export async function ensureDeviceOwner(
   // Fail closed: an unowned device is adopted only when it is empty. With data on it, "no owner"
   // means a database this branch never stamped — somebody's drives, and nobody has said whose.
   const adopt = lastUserId === null && !(await hasDriverData(db));
-  if (!adopt) await wipeDevice(db, deps);
+  if (!adopt) await wipeDevice(db, { ...deps, incomingUid: uid });
   await rememberDeviceOwner(db, uid);
   return adopt ? 'first' : 'wiped';
 }
