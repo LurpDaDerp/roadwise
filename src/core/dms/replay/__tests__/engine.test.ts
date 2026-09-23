@@ -153,6 +153,39 @@ describe('escalations reach the manager (T11 I1): F3 after F1 at a known 8 km/h'
   });
 });
 
+describe('F3’s no-on-road watch ends with its Critical (found by the DMS_FULL property run, seed 1056)', () => {
+  test('an F1 before calibration, the Critical ended by a known stop, then the face comes and goes: no late unresponsive', () => {
+    // F1 at 30 s (no zone yet: uncalibrated), stopped for 10 s (the Critical ends at a known 0 km/h), then
+    // LOST stretches with open eyes looking around: before Task 12's fix the watch kept counting and fired
+    // an `unresponsive` escalation of nothing (escalation_unverified).
+    const drv: DriverFn = (t, r) => ({
+      gaze: t > 45 ? rel(35, -10) : onRoad(r),
+      openness: t >= 29 && t < 30.5 ? 0.1 : 1,
+      speedKmh: t < 31 ? 90 : t < 42 ? 0 : 60,
+      face: !(t > 45 && Math.floor(t) % 3 === 0),
+    });
+    const r = replayItems(synthDrive({ fps: 15, seconds: 80, seed: 10, source: 'geometric', driver: drv }), C);
+    expect(r.events.map((e) => e.kind)).toContain('microsleep');
+    expect(r.events.map((e) => e.kind)).not.toContain('unresponsive');
+    expect(r.invariantViolations).toBe(0);
+  });
+});
+
+describe('F3’s no-on-road watch ends when the manager ends the Critical', () => {
+  test('F1, the face lost while the car stops (the Critical ends at a known 0 km/h), then the face back looking away: no late unresponsive', () => {
+    const drv: DriverFn = (t, r) => ({
+      gaze: t >= 108 ? rel(30, -20) : onRoad(r),
+      openness: t >= 100 && t < 101.3 ? 0.1 : 1,
+      speedKmh: t < 101.5 ? 60 : 0,
+      face: !(t >= 101.3 && t < 108),
+    });
+    const r = replayItems(synthDrive({ fps: 15, seconds: 116, seed: 12, source: 'geometric', driver: drv }), C);
+    expect(sig(r.commands).slice(0, 2)).toEqual(['start:microsleep', 'stop:microsleep']);
+    expect(r.events.map((e) => e.kind)).not.toContain('unresponsive');
+    expect(r.invariantViolations).toBe(0);
+  });
+});
+
 describe('the request flags (T11 I1/I2, round 2): the whole matrix asserts invariantViolations === 0', () => {
   test('a C-8 turn into LOST: a D1 raised on the LOST frame carries c8, so nothing is a violation', () => {
     // A fast head turn to the far lateral, then the face lost for 4 s at 60 km/h (C-8 far lateral).

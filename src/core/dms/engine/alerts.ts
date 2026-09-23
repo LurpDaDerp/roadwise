@@ -329,6 +329,11 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       return out;
     },
 
+    /** The running Critical's kind, or null (the façade ends F3's no-on-road watch with it, Task 12). */
+    critical(): AlertKind | null {
+      return critical === null ? null : critical.kind;
+    },
+
     /** Rule 7: tags the last logged alert; never changes live behaviour. */
     tagLastAlert(tag: 'wrong'): boolean {
       const last = log.last();

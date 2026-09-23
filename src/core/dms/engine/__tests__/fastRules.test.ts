@@ -90,6 +90,27 @@ describe('F1–F3 (§M6)', () => {
     const back = fast(ps, 60, (p) => !p.eyesClosed);
     expect(back.kinds).not.toContain('unresponsive');
   });
+  test('T12: an unknown gaze direction (no zone, e.g. before calibration) neither clears nor counts toward the no-on-road clause', () => {
+    // F1 at 1.0 s; then the eyes open with no direction for 10 s (null): nothing; then off road: F3 3.0 s later.
+    const ps = perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 16, spec: { gaze: { yaw: 40, pitch: -20 } } }]);
+    const r = createFastRules(C);
+    const ev: FastEvent[] = [];
+    ps.forEach((p) => ev.push(...r.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: p.tMs < 12_100 ? null : false }).events));
+    const un = ev.filter((e) => e.kind === 'unresponsive');
+    expect(un).toHaveLength(1);
+    expect(un[0]!.tMs).toBeGreaterThanOrEqual(15_000);
+  });
+  test('T12: criticalEnded() (the alert manager ended the Critical) ends the no-on-road watch', () => {
+    const ps = perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 6, spec: { gaze: { yaw: 40, pitch: -20 } } }]);
+    const r = createFastRules(C);
+    const ev: FastEvent[] = [];
+    ps.forEach((p, i) => {
+      ev.push(...r.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: false }).events);
+      if (i === 40) r.criticalEnded();
+    });
+    expect(ev.map((e) => e.kind)).toContain('microsleep');
+    expect(ev.map((e) => e.kind)).not.toContain('unresponsive');
+  });
   test('a HEAD_ONLY frame mid-closure ends the episode silently', () => {
     const r = fast(perceive([{ s: 0.8, spec: { ear: ear(0.1) } }, { s: 0.1, spec: { blur: 5 } }, { s: 0.5, spec: { ear: ear(0.1) } }]), 60);
     expect(r.kinds).not.toContain('microsleep');

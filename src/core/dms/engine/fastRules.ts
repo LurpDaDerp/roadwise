@@ -25,8 +25,12 @@ export interface FastInput {
   p: Perceived;
   /** ContextState.ruleSpeedKmh; null counts as below 10 */
   ruleSpeedKmh: number | null;
-  /** the gaze is on the road (road centre / forward road) with the eyes open */
-  onRoadGaze: boolean;
+  /**
+   * the gaze is on the road (road centre / forward road) with the eyes open; null = no direction is known
+   * (no zone: before calibration, or occluded), which neither clears nor counts toward F3's
+   * no-on-road clause (Task 12, found by the DMS_FULL property run)
+   */
+  onRoadGaze: boolean | null;
 }
 
 export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink';
@@ -70,6 +74,14 @@ export function createFastRules(cfg: DmsConfig) {
   return {
     /** Any Critical that started elsewhere (D4, microsleep_nod): starts the "no on-road gaze" watch. */
     criticalStarted,
+
+    /**
+     * The alert manager ended the running Critical (its stop condition, or a known low speed): the "no
+     * on-road gaze" watch belongs to it and ends too, so it can never raise an escalation of nothing.
+     */
+    criticalEnded(): void {
+      pendingF3 = null;
+    },
 
     fatigueFloor(tMs: number): FatigueFloor {
       if (tMs <= severeUntil) return 'severe';
@@ -132,8 +144,8 @@ export function createFastRules(cfg: DmsConfig) {
 
       // F3's second clause: no on-road gaze within 3.0 s of observed time after a Critical start.
       if (pendingF3 !== null && !events.some((e) => e.kind === 'microsleep' || e.kind === 'sleep')) {
-        if (x.onRoadGaze) pendingF3 = null;
-        else if (p.quality !== 'lost') {
+        if (x.onRoadGaze === true) pendingF3 = null;
+        else if (x.onRoadGaze === false && p.quality !== 'lost') {
           pendingF3 += p.dtS;
           if (pendingF3 >= cl.f3.noOnRoadS - EPS) {
             pendingF3 = null;

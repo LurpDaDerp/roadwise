@@ -4,7 +4,9 @@
 //   - the D1 buffer f stays in [0, 1];
 //   - nothing Tier 1/2 is audible below 20 km/h, and nothing at all below 10 km/h except a Critical
 //     (a new one needs ≥ 10 km/h; below it only an escalation of a running episode, T11 I1);
-//   - no alert from a LOST frame except C-8 (Tier 1/2) or a Critical (a C-26 bridge or an escalation);
+//   - no alert raised on a LOST frame except C-8 (a Tier 2 start) or a Critical (a C-26 bridge or an
+//     escalation); a Tier 1 or fatigue `once` is exempt: it was raised earlier and held, or by the minute
+//     clock, not by the frame it plays on;
 //   - every start has its stop by the end of the drive, and every tier is 1–3;
 //   - the façade never breaks the alert contract (invariantViolations 0: rule 5 and escalations);
 //   - a replay equals itself (determinism), and the summary has no NaN.
@@ -47,7 +49,7 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
       if (c.tier < 3) {
         expect({ seed, c, speed }).toEqual({ seed, c, speed: expect.any(Number) });
         expect(speed!).toBeGreaterThanOrEqual(20);
-        if (s.quality === 'lost') expect({ seed, c, zone: s.zone }).toEqual({ seed, c, zone: 'far_lateral' });
+        if (s.quality === 'lost' && c.action === 'start') expect({ seed, c, zone: s.zone }).toEqual({ seed, c, zone: 'far_lateral' });
       }
     }
   }

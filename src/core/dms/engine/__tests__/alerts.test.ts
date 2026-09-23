@@ -277,3 +277,14 @@ describe('T11 round 2 (R1-m1): an escalation is corroborated, or fails loud', ()
     expect(running.am.stats().invariantViolations).toBe(0);
   });
 });
+
+describe('T12: critical() reports the running Critical (the façade ends the F3 watch with it)', () => {
+  test('null, then the kind while it runs, then null after its stop', () => {
+    const am = createAlertManager(C, { mode: 'live' });
+    expect(am.critical()).toBeNull();
+    run([{ s: 1, f: asleep, req: [crit('sleep')] }], 'live', am);
+    expect(am.critical()).toBe('sleep');
+    run([{ s: 1.2 }], 'live', am);
+    expect(am.critical()).toBeNull();
+  });
+});

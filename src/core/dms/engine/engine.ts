@@ -157,6 +157,12 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   const addCommands = (c: readonly DmsAlertCommand[]) => {
     if (c.length > 0) commands = commands.concat(c).slice(-PENDING_CAP);
   };
+  /** Runs an alert-manager step; if it ended the running Critical, F3's no-on-road watch ends with it. */
+  const alertStep = (step: () => readonly DmsAlertCommand[]) => {
+    const before = d.alerts.critical();
+    addCommands(step());
+    if (before !== null && d.alerts.critical() === null) d.fast.criticalEnded();
+  };
 
   function onCalibrationEvents(): void {
     for (const e of d.cal.drainEvents()) {
@@ -238,8 +244,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       }
     }
 
-    // The fast rules (F1–F4, blinks).
-    const onRoadGaze = onRoad && !p.eyesClosed;
+    // The fast rules (F1–F4, blinks). With no zone (before calibration, or occluded) the direction is
+    // unknown: null neither clears nor feeds F3's no-on-road watch.
+    const onRoadGaze = zone === null ? null : onRoad && !p.eyesClosed;
     for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze }).events) {
       const bridged = e.bridged === true;
       if (e.kind === 'blink') {
@@ -292,7 +299,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     }
 
     // The alert manager, then the summary.
-    addCommands(
+    alertStep(() =>
       d.alerts.onFrame({
         tMs: t,
         epochMs,
@@ -320,7 +327,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       // running Critical still ends on a known low speed (T11 r1 m1 carry).
       if (d.lastFrameT === null || tMs - d.lastFrameT >= 1000) {
         const cs = d.ctx.at(tMs);
-        addCommands(
+        alertStep(() =>
           d.alerts.onFrame({ tMs, epochMs: tMs + epochOffset, ruleSpeedKmh: cs.ruleSpeedKmh, speedKnown: cs.speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: d.warmup, requests: EMPTY_REQ })
         );
       }
