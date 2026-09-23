@@ -228,6 +228,13 @@ export function renderBuffer(p: FaceParams, rotation: Rotation, format: 'bgra' |
   return { w: bw, h: bh, bytes };
 }
 
+/** Copy tightly packed rows into rows of `stride` bytes, filling the padding with `fill`. */
+export function padRows(bytes: Uint8Array, w: number, h: number, stride: number, fill = 0xff): Uint8Array {
+  const out = new Uint8Array(stride * h).fill(fill);
+  for (let y = 0; y < h; y++) out.set(bytes.subarray(y * w * 4, (y + 1) * w * 4), y * stride);
+  return out;
+}
+
 /** The face's landmarks in the BUFFER frame of `rotation` (what MediaPipe returns). */
 export function bufferLandmarks(p: FaceParams, rotation: Rotation): Float64Array {
   return landmarksToBuffer(faceLandmarks(p), rotation);

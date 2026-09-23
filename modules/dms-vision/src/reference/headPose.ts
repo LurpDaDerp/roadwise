@@ -23,6 +23,40 @@ export interface HeadPose {
   rollDeg: number;
 }
 
+/** The smallest |translation z| a real face has (MediaPipe metric units; a face sits ~30–60 in front). */
+export const MATRIX_TZ_MIN = 5;
+/** The largest magnitude the bottom row's x, y, z entries may have in a rigid transform. */
+export const MATRIX_ZERO_MAX = 1;
+
+/**
+ * Resolve the matrix layout at runtime (Task 2 review I2), so a platform that hands over row-major
+ * data cannot silently invert every head angle. A face's transform has a large translation z:
+ * - column-major puts it at m[14], and m[11] (bottom row, z column) is ~0;
+ * - row-major puts it at m[11], and m[14] is ~0.
+ * Column-major with |m[14]| ≥ 5 and |m[11]| < 1 is returned unchanged. Row-major with |m[11]| ≥ 5
+ * and |m[14]| < 1 is transposed. Anything else (a non-finite value, or neither pattern) returns null,
+ * and the caller sets POSE_MISSING. Every head-pose path goes through this.
+ */
+export function normaliseMatrixLayout(m: ArrayLike<number>): number[] | null {
+  if (m.length !== 16) return null;
+  for (let i = 0; i < 16; i++) if (!Number.isFinite(m[i]!)) return null;
+  const a14 = Math.abs(m[14]!);
+  const a11 = Math.abs(m[11]!);
+  if (a14 >= MATRIX_TZ_MIN && a11 < MATRIX_ZERO_MAX) return Array.from(m);
+  if (a11 >= MATRIX_TZ_MIN && a14 < MATRIX_ZERO_MAX) {
+    const t = new Array<number>(16);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) t[c * 4 + r] = m[r * 4 + c]!;
+    return t;
+  }
+  return null;
+}
+
+/** Head pose from a matrix in either layout, or null when the layout is ambiguous (POSE_MISSING). */
+export function headPoseFromAnyLayout(m: ArrayLike<number>, rotation: Rotation): HeadPose | null {
+  const n = normaliseMatrixLayout(m);
+  return n === null ? null : headPoseFromMatrix(n, rotation);
+}
+
 /** R[row][col] of a column-major 4×4. */
 function at(m: ArrayLike<number>, row: number, col: number): number {
   return m[col * 4 + row]!;

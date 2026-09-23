@@ -205,7 +205,7 @@ These hold whatever JavaScript does.
 | `landmarks.ts` | part of `FeatureExtractor` | index sets; buffer → upright landmark rotation |
 | `features.ts`, `irisOffset.ts` | `FeatureExtractor` | box, IOD, per-eye EAR, width, iris offsets, iris-inside, clipping; MAR and mouth width. All on UPRIGHT landmarks, in upright PIXELS |
 | `roi.ts` | `Roi` | BT.601 integer luma; frame, face and eye luma statistics, iris contrast, glare, blur. All in the BUFFER frame, on MediaPipe's buffer-frame landmarks |
-| `headPose.ts` | `HeadPose` | pose from the column-major facial transformation matrix, rotated upright; the net's vector → angles |
+| `headPose.ts` | `HeadPose` | `normaliseMatrixLayout` (column-major if \|m14\| ≥ 5 and \|m11\| < 1; transposed if the reverse; otherwise null → POSE_MISSING), applied to EVERY matrix before the pose; pose rotated upright; the net's vector → angles |
 | `record.ts` | `FeatureExtractor` + `RecordEncoder` | the whole record, per the §4 mask |
 | `gazeInputs.ts`, `decayingHistogram.ts` | `GazeInputs`, `StatsTracker` | the net's inputs, and the subject-statistic tracker (net builds only run the net, but both platforms port the assembly) |
 | `wire.ts` `buildFrameBatch` | `Batcher` + `RecordEncoder` | `anchorTMs` = the first record's `tMs` (Double); `tOffMs = tMs − anchorTMs` in Double, then stored as Float |
@@ -216,7 +216,7 @@ These hold whatever JavaScript does.
 - `probe(...)` calls are test instrumentation. Do not port them.
 - `pairwiseSum` may be a plain left-to-right sum.
 - Luma is read per pixel inside each region. Never build a full-frame luma plane.
-- Pixels are BGRA on iOS (`kCVPixelFormatType_32BGRA`) and RGBA on Android (`OUTPUT_IMAGE_FORMAT_RGBA_8888`). Honour the row stride, which may exceed `width × 4`.
+- Pixels are BGRA on iOS (`kCVPixelFormatType_32BGRA`) and RGBA on Android (`OUTPUT_IMAGE_FORMAT_RGBA_8888`). **Always read pixel (x, y) at `base + y·stride + x·4`** with the buffer's own stride (iOS `CVPixelBufferGetBytesPerRow`, Android `planes[0].rowStride`), never `width × 4`. Camera rows are padded, and the `record-stride-*` vectors pad them with 0xFF at an odd width.
 - The net's statistic tracker admits a frame only when neither eye is clipped and the mean raw EAR is at least `0.18`.
 - `prepare` uses the tracker state **before** the frame.
 - The tracker time is the record clock in seconds.
@@ -228,10 +228,10 @@ Regenerate them with `node --experimental-strip-types --disable-warning=Experime
 
 | Kind | Inputs | Native returns |
 |---|---|---|
-| `record` | `images` (w, h, `bgra`\|`rgba`, base64 pixels, tightly packed); `frames` (tMs, image index, rotationDeg, buffer-frame landmarks or null, buffer-frame matrix or null, the net's vector or null, latencies); `anchorEpochMs` | `batch: { anchorTMs, anchorEpochMs, n, data }`. That is the production encoder's batch of all frames, with `data` in base64 and `anchorEpochMs` echoed from the input |
+| `record` | `images` (w, h, **stride**, `bgra`\|`rgba`, base64 of `stride·h` bytes); `frames` (tMs, image index, rotationDeg, buffer-frame landmarks or null, buffer-frame matrix or null, the net's vector or null, latencies); `anchorEpochMs` | `batch: { anchorTMs, anchorEpochMs, n, data }`. That is the production encoder's batch of all frames, with `data` in base64 and `anchorEpochMs` echoed from the input |
 | `gazeInputs` | width, height, focalScale, frames (tSec, **upright** landmarks) | `frames: [{ cloud, context, validity, admitted }]` |
 | `statsTracker` | trainingMean, warmup, windowS, t[], pushes[] (null = NaN) | `current: [[4]…]` |
-| `headPose` | cases (column-major matrix, rotationDeg) | `poses: [[yaw, pitch, roll]…]` |
+| `headPose` | cases (a matrix in EITHER layout, rotationDeg) | `poses: [[yaw, pitch, roll] or null…]`. null means the layout rule found the layout ambiguous |
 | `onnx` | cases (cloud, context, validity) | `cases: [{ gaze[3], rotation[9] }]`. A build without the net answers `skipped` |
 
 The vectors are synthetic (`THIRD_PARTY.md`). The generator refuses any vector in which a threshold comparison lies within `MARGIN_MIN = 1e-6` (relative) of its threshold.

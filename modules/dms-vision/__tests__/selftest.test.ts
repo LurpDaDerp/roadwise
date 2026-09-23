@@ -69,6 +69,16 @@ test('skipping anything but the net is refused', () => {
   expect(diffSelfTest(vectors, output(results, true)).ok).toBe(false);
 });
 
+test('a port that ignores the layout rule (a pose where the matrix is ambiguous) fails', () => {
+  const results = faithful(true);
+  const i = vectors.findIndex((v) => v.kind === 'headPose');
+  const poses = (results[i]!.poses as (number[] | null)[]).map((p) => p ?? [0, 0, 0]);
+  results[i] = { ...results[i]!, poses };
+  const d = diffSelfTest(vectors, output(results, true));
+  expect(d.ok).toBe(false);
+  expect(d.vectors[i]!.mismatches.map((m) => m.path)).toContain('poses[5]');
+});
+
 test('an error result fails its vector', () => {
   const results = faithful(true);
   const i = vectors.findIndex((v) => v.kind === 'statsTracker');
@@ -81,7 +91,7 @@ test('an error result fails its vector', () => {
 test('a wrong head-pose sign is found and named', () => {
   const results = faithful(true);
   const i = vectors.findIndex((v) => v.kind === 'headPose');
-  const poses = (results[i]!.poses as number[][]).map((p) => [-p[0]!, p[1]!, p[2]!]);
+  const poses = (results[i]!.poses as (number[] | null)[]).map((p) => (p === null ? null : [-p[0]!, p[1]!, p[2]!]));
   results[i] = { ...results[i]!, poses };
   const d = diffSelfTest(vectors, output(results, true));
   expect(d.ok).toBe(false);

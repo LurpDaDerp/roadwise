@@ -17,7 +17,7 @@ import {
   type RecordFrame,
   type VectorImage,
 } from '../src/reference/vectors';
-import { DEFAULT_FACE, bufferLandmarks, faceLandmarks, renderBuffer, rng, type FaceParams, type ImageOptions } from './synth';
+import { DEFAULT_FACE, bufferLandmarks, faceLandmarks, padRows, renderBuffer, rng, type FaceParams, type ImageOptions } from './synth';
 
 /**
  * The shortest decimal that parses back to the same float32 as `x`. The native side receives these
@@ -39,6 +39,22 @@ const f32 = (xs: ArrayLike<number>): number[] => Array.from(xs, short32);
 /** A week of uptime (the float32 trap of Task 1 review C1), plus a fraction. */
 const T0 = 6.048e8 + 0.375;
 const EPOCH0 = 1_790_000_000_000;
+
+/** How a frame's matrix is laid out: MediaPipe's column-major, a transposed (row-major) copy, or ambiguous. */
+type Layout = 'column' | 'row' | 'ambiguous';
+
+function transpose(m: number[]): number[] {
+  const t = new Array<number>(16);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) t[c * 4 + r] = m[r * 4 + c]!;
+  return t;
+}
+
+/** Row-major = the column-major matrix transposed; ambiguous = a translation too small to tell (tz −2). */
+function poseMatrix(pose: [number, number, number], rotation: Rotation, layout: Layout): number[] {
+  if (layout === 'ambiguous') return matrixFromPose(pose[0], pose[1], pose[2], rotation, -2);
+  const m = matrixFromPose(pose[0], pose[1], pose[2], rotation);
+  return layout === 'row' ? transpose(m) : m;
+}
 
 function withProbe<T>(name: string, build: () => T): T {
   setMarginProbe((what, value, threshold) => {
@@ -63,9 +79,12 @@ class RecordBuilder {
   frames: RecordFrame[] = [];
   private t = T0;
 
-  image(p: FaceParams, rotation: Rotation, format: 'bgra' | 'rgba', opts: ImageOptions = {}): number {
+  /** `padding` bytes are added to every row (0xFF), so stride = w·4 + padding (Task 2 review I1). */
+  image(p: FaceParams, rotation: Rotation, format: 'bgra' | 'rgba', opts: ImageOptions = {}, padding = 0): number {
     const img = renderBuffer(p, rotation, format, opts);
-    this.images.push({ w: img.w, h: img.h, format, pixels: bytesToBase64(img.bytes) });
+    const stride = img.w * 4 + padding;
+    const bytes = padding === 0 ? img.bytes : padRows(img.bytes, img.w, img.h, stride);
+    this.images.push({ w: img.w, h: img.h, stride, format, pixels: bytesToBase64(bytes) });
     return this.images.length - 1;
   }
 
@@ -74,14 +93,15 @@ class RecordBuilder {
     rotation: Rotation,
     p: FaceParams | null,
     pose: [number, number, number] | null,
-    netGaze: [number, number, number] | null = null
+    netGaze: [number, number, number] | null = null,
+    layout: Layout = 'column'
   ): void {
     this.frames.push({
       tMs: this.t,
       image,
       rotationDeg: rotation,
       landmarks: p === null ? null : f32(bufferLandmarks(p, rotation)),
-      matrix: pose === null ? null : f32(matrixFromPose(pose[0], pose[1], pose[2], rotation)),
+      matrix: pose === null ? null : f32(poseMatrix(pose, rotation, layout)),
       netGaze: netGaze === null ? null : f32(netGaze),
       latLandmarkMs: 11.25,
       latTotalMs: 17.5,
@@ -136,6 +156,28 @@ function recordClipped(): GoldenVector {
   const low = face({ seed: 42, fy: 86.2 });
   b.frame(b.image(low, 90, 'bgra'), 90, low, null);
   return b.vector('record-clipped', 'a clipped left eye; then a clipped mouth with POSE_MISSING');
+}
+
+function recordStrideBgra(): GoldenVector {
+  const b = new RecordBuilder();
+  // An ODD buffer width (81) at 0°, rows padded by 24 bytes of 0xFF: a reader that uses w·4 shears
+  // and reads the padding (Task 2 review I1). The second frame's matrix arrives ROW-major (I2).
+  const p = face({ w: 81, h: 100, fx: 40.7, seed: 91 });
+  const img = b.image(p, 0, 'bgra', {}, 24);
+  b.frame(img, 0, p, [6, -4, 3]);
+  b.frame(img, 0, p, [6, -4, 3], null, 'row');
+  return b.vector('record-stride-bgra', 'iOS BGRA with an odd width (81 px) and rows padded to w·4 + 24 bytes of 0xFF; the second matrix is row-major');
+}
+
+function recordStrideRgba(): GoldenVector {
+  const b = new RecordBuilder();
+  // Android RGBA, odd width (79) at 180°, 24 bytes of 0xFF padding; the second matrix is ambiguous
+  // (translation too small) and must become POSE_MISSING (I2).
+  const p = face({ w: 79, h: 100, fx: 39.6, seed: 92 });
+  const img = b.image(p, 180, 'rgba', {}, 24);
+  b.frame(img, 180, p, [-9, 5, -2]);
+  b.frame(img, 180, p, [-9, 5, -2], null, 'ambiguous');
+  return b.vector('record-stride-rgba', 'Android RGBA with an odd width (79 px) and rows padded to w·4 + 24 bytes of 0xFF; the second matrix is ambiguous');
 }
 
 function recordQuality(): GoldenVector {
@@ -195,12 +237,14 @@ function headPose(): GoldenVector {
     const pitch = (r() - 0.5) * 70;
     const roll = (r() - 0.5) * 50;
     const rot = rotations[k % 4]!;
-    cases.push({ matrix: f32(matrixFromPose(yaw, pitch, roll, rot)), rotationDeg: rot });
+    // Every 4th case arrives row-major (it must read the same), and two are ambiguous (null).
+    const layout: Layout = k === 5 || k === 11 ? 'ambiguous' : k % 4 === 1 ? 'row' : 'column';
+    cases.push({ matrix: f32(poseMatrix([yaw, pitch, roll], rot, layout)), rotationDeg: rot });
   }
   const inputs = { cases };
   return {
     name: 'head-pose',
-    description: 'facial transformation matrices built from known yaw/pitch/roll at every rotation',
+    description: 'facial transformation matrices built from known yaw/pitch/roll at every rotation, in both layouts, plus two ambiguous ones (null)',
     kind: 'headPose',
     inputs,
     expected: { poses: runHeadPoseVector(inputs) },
@@ -237,6 +281,8 @@ export const VECTOR_NAMES = [
   'record-clipped',
   'record-quality',
   'record-rotations',
+  'record-stride-bgra',
+  'record-stride-rgba',
   'record-tracked-bgra-90',
   'stats-tracker',
 ] as const;
@@ -252,6 +298,8 @@ export function buildVectors(v1Tracker: V1TrackerFixture): Record<string, Golden
     ['record-clipped', recordClipped],
     ['record-quality', recordQuality],
     ['record-rotations', recordRotations],
+    ['record-stride-bgra', recordStrideBgra],
+    ['record-stride-rgba', recordStrideRgba],
     ['record-tracked-bgra-90', recordTracked],
     ['stats-tracker', () => statsTracker(v1Tracker)],
   ];

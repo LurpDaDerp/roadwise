@@ -7,6 +7,7 @@
 //   a week of uptime. A vector that stops covering its case fails here.
 import { FLAG, FRAME_FIELDS, type FrameField } from '../src/constants';
 import {
+  base64ToBytes,
   runGazeInputsVector,
   runHeadPoseVector,
   runRecordVector,
@@ -162,6 +163,42 @@ describe('the record vectors cover their cases', () => {
     expect(field(open, 'irisContrastR')!).toBeGreaterThan(12);
     expect(field(open, 'earR')!).toBeGreaterThan(0.2);
     expect(field(open, 'blur')!).toBeGreaterThan(0);
+  });
+
+  test('padded rows (Task 2 review I1): odd widths, stride = w·4 + 24, 0xFF padding, and faces tracked', () => {
+    for (const name of ['record-stride-bgra', 'record-stride-rgba']) {
+      const v = byName[name]!;
+      if (v.kind !== 'record') throw new Error('kind');
+      for (const img of v.inputs.images) {
+        expect(img.w % 2).toBe(1);
+        expect(img.stride).toBe(img.w * 4 + 24);
+        const bytes = base64ToBytes(img.pixels);
+        expect(bytes.length).toBe(img.stride * img.h);
+        for (let y = 0; y < img.h; y++) {
+          for (let k = img.w * 4; k < img.stride; k++) expect(bytes[y * img.stride + k]).toBe(0xff);
+        }
+      }
+      const first = v.expected.records[0]!;
+      expect(field(first, 'face')).toBe(1);
+      expect(field(first, 'flags')).toBe(0);
+      expect(field(first, 'irisContrastR')!).toBeGreaterThan(12);
+    }
+    expect(byName['record-stride-bgra']!.kind === 'record' && byName['record-stride-bgra']!.inputs.images[0]!.format).toBe('bgra');
+    expect(byName['record-stride-rgba']!.kind === 'record' && byName['record-stride-rgba']!.inputs.images[0]!.format).toBe('rgba');
+  });
+
+  test('matrix layouts (Task 2 review I2): row-major reads the same pose; ambiguous is POSE_MISSING', () => {
+    const [col, row] = records('record-stride-bgra');
+    for (const f of ['headYaw', 'headPitch', 'headRoll'] as const) expect(field(row!, f)!).toBeCloseTo(field(col!, f)!, 6);
+    expect(field(row!, 'flags')).toBe(0);
+    const [ok, ambiguous] = records('record-stride-rgba');
+    expect(field(ok!, 'headYaw')).not.toBeNull();
+    expect(field(ambiguous!, 'flags')).toBe(FLAG.POSE_MISSING);
+    expect(field(ambiguous!, 'headYaw')).toBeNull();
+    const hp = byName['head-pose']!;
+    if (hp.kind !== 'headPose') throw new Error('kind');
+    expect(hp.expected.poses.filter((p) => p === null)).toHaveLength(2);
+    expect(hp.inputs.cases.filter((c) => Math.abs(c.matrix[11]!) >= 5)).toHaveLength(3); // row-major cases (k = 1, 9, 13)
   });
 
   test('gaze inputs: three admitted frames, then a closed-eye frame that is not', () => {

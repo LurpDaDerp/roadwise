@@ -25,7 +25,15 @@ const vectorSchema = z.discriminatedUnion('kind', [
     inputs: z.strictObject({
       anchorEpochMs: num,
       images: z.array(
-        z.strictObject({ w: z.number().int().positive(), h: z.number().int().positive(), format: z.enum(['bgra', 'rgba']), pixels: z.string() })
+        z
+          .strictObject({
+            w: z.number().int().positive(),
+            h: z.number().int().positive(),
+            stride: z.number().int().positive(),
+            format: z.enum(['bgra', 'rgba']),
+            pixels: z.string(),
+          })
+          .refine((i) => i.stride >= i.w * 4, { message: 'stride must be at least w·4' })
       ),
       frames: z.array(
         z.strictObject({
@@ -78,7 +86,7 @@ const vectorSchema = z.discriminatedUnion('kind', [
     ...base,
     kind: z.literal('headPose'),
     inputs: z.strictObject({ cases: z.array(z.strictObject({ matrix: z.array(num).length(16), rotationDeg: rotation })) }),
-    expected: z.strictObject({ poses: z.array(z.tuple([num, num, num])) }),
+    expected: z.strictObject({ poses: z.array(z.tuple([num, num, num]).nullable()) }),
   }),
   z.strictObject({
     ...base,
@@ -233,7 +241,11 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
           d.push({ path: 'poses.length', expected: v.expected.poses.length, actual: Array.isArray(poses) ? poses.length : undefined });
           break;
         }
-        v.expected.poses.forEach((e, i) => d.nums(`poses[${i}]`, poses[i], e));
+        v.expected.poses.forEach((e, i) => {
+          if (e === null) {
+            if (poses[i] !== null) d.push({ path: `poses[${i}]`, expected: null, actual: 'a pose' });
+          } else d.nums(`poses[${i}]`, poses[i], e);
+        });
         break;
       }
       case 'onnx': {

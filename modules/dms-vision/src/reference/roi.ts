@@ -1,7 +1,14 @@
 // Luma statistics for quality classification (README §4 fields 16–21, 28, 29, 32). Computed in the
 // BUFFER frame, from MediaPipe's buffer-frame landmarks and the unrotated pixels, so no pixel is
-// ever rotated. A rotation by a multiple of 90° maps pixels one-to-one, so every statistic here is
-// the same as it would be upright. Ported verbatim to Swift and Kotlin.
+// ever rotated. A rotation by a multiple of 90° maps pixels one-to-one, so every statistic is
+// equivalent to its upright value up to the sampling grid. Whole-rect means, the eye masks and
+// `eyeSat` are exactly equal. `faceLuma` (every 2nd pixel from the rect origin), `frameLuma` (every
+// 8th) and the 64×64 blur cells sample a slightly different grid per orientation. Native always
+// computes in the buffer frame, so this is consistent (Task 2 review m1). Ported verbatim to Swift
+// and Kotlin.
+//
+// Pixels are read at `y·stride + x·4`. Camera rows are padded, so `stride` (bytes per row) is often
+// more than `width·4`, and native readers ALWAYS use the buffer's stride (Task 2 review I1).
 //
 // Luma is BT.601 in integers: `(77·R + 150·G + 29·B) >> 8`. iOS receives BGRA, Android RGBA.
 // Natively it is read per pixel inside each region; no full-frame luma plane is built.
@@ -16,12 +23,21 @@ export function luma601(r: number, g: number, b: number): number {
   return (77 * r + 150 * g + 29 * b) >> 8;
 }
 
-/** A `w × h` luma plane from tightly packed 4-byte pixels (row stride `w·4`). */
-export function lumaPlane(bytes: Uint8Array, w: number, h: number, format: PixelFormat): Uint8Array {
-  if (bytes.length !== w * h * 4) throw new Error(`expected ${w * h * 4} bytes, got ${bytes.length}`);
+/**
+ * A `w × h` luma plane from 4-byte pixels with `stride` bytes per row (≥ `w·4`; the padding after
+ * each row's `w·4` bytes is never read). `bytes` holds `stride·h` bytes.
+ */
+export function lumaPlane(bytes: Uint8Array, w: number, h: number, format: PixelFormat, stride: number = w * 4): Uint8Array {
+  if (stride < w * 4) throw new Error(`stride ${stride} is less than w·4 = ${w * 4}`);
+  if (bytes.length !== stride * h) throw new Error(`expected ${stride * h} bytes, got ${bytes.length}`);
   const out = new Uint8Array(w * h);
   const [ri, gi, bi] = format === 'bgra' ? [2, 1, 0] : [0, 1, 2];
-  for (let p = 0; p < w * h; p++) out[p] = luma601(bytes[p * 4 + ri]!, bytes[p * 4 + gi]!, bytes[p * 4 + bi]!);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = y * stride + x * 4;
+      out[y * w + x] = luma601(bytes[o + ri]!, bytes[o + gi]!, bytes[o + bi]!);
+    }
+  }
   return out;
 }
 

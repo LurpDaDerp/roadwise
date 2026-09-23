@@ -20,6 +20,9 @@ export const STAT_HIST_HI = 0.2;
 export const STAT_HIST_BIN = 0.0025;
 /**
  * A frame's statistics enter the tracker only when the mean of the two raw EARs is at least this.
+ * It gates ONLY the gaze network's subject statistics (internal builds with DMS_GAZE_NET=1), never a
+ * closure rule; the engine's closure thresholds are per-driver and live in DmsConfig. Do not tune it
+ * for drowsiness (Task 2 review nit).
  * The statistics describe an open eye, and a blink or a closure would drag the median. This is a
  * fixed, absolute threshold (V1 used its drowsiness tracker's per-driver `eyes_open`).
  */

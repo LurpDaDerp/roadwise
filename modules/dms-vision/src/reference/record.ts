@@ -3,12 +3,12 @@
 // 1. rotate MediaPipe's buffer-frame landmarks upright (`landmarksToUpright`);
 // 2. compute the geometry on the upright landmarks (`geometry`);
 // 3. compute the luma statistics in the buffer frame (`roi.ts`);
-// 4. compute head pose from the matrix (`headPoseFromMatrix`), or set POSE_MISSING;
+// 4. resolve the matrix layout and compute head pose (`headPoseFromAnyLayout`), or set POSE_MISSING;
 // 5. convert the net's vector if it ran (`gazeAngles`), and set NET_RAN.
 import { FLAG, FRAME_FIELDS, type FrameField } from '../constants';
 import { faceAbsentRecord } from '../wire';
 import { geometry } from './features';
-import { gazeAngles, headPoseFromMatrix } from './headPose';
+import { gazeAngles, headPoseFromAnyLayout } from './headPose';
 import { landmarksToUpright, uprightSize, type Rotation } from './landmarks';
 import { blurScore, eyeLuma, faceLuma, faceRect, frameLuma } from './roi';
 
@@ -24,7 +24,7 @@ export interface FrameInput {
   luma: Uint8Array;
   /** MediaPipe's landmarks in the BUFFER frame (478 × 3), or null when no face was found */
   landmarks: ArrayLike<number> | null;
-  /** the facial transformation matrix (column-major 4×4, buffer frame), or null */
+  /** the facial transformation matrix (4×4, buffer frame, either layout: `normaliseMatrixLayout`), or null */
   matrix: ArrayLike<number> | null;
   /** the gaze network's output vector when it ran on this frame, else null */
   netGaze: ArrayLike<number> | null;
@@ -54,8 +54,8 @@ export function buildRecord(f: FrameInput): number[] {
   r[I.boxH] = g.boxH;
   r[I.iod] = g.iod;
 
-  if (f.matrix !== null) {
-    const pose = headPoseFromMatrix(f.matrix, f.rotationDeg);
+  const pose = f.matrix === null ? null : headPoseFromAnyLayout(f.matrix, f.rotationDeg);
+  if (pose !== null) {
     r[I.headYaw] = pose.yawDeg;
     r[I.headPitch] = pose.pitchDeg;
     r[I.headRoll] = pose.rollDeg;

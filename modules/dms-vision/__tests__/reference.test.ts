@@ -16,7 +16,7 @@ import {
   rowStatistics,
   weak3dCloud,
 } from '../src/reference/gazeInputs';
-import { gazeAngles, headPoseFromMatrix, matrixFromPose } from '../src/reference/headPose';
+import { gazeAngles, headPoseFromAnyLayout, headPoseFromMatrix, matrixFromPose, normaliseMatrixLayout } from '../src/reference/headPose';
 import { irisOffset } from '../src/reference/irisOffset';
 import { LANDMARK_FLOATS, landmarksToBuffer, landmarksToUpright, uprightSize, type Rotation } from '../src/reference/landmarks';
 import { blurScore, eyeLuma, faceLuma, frameLuma, luma601, lumaPlane } from '../src/reference/roi';
@@ -202,6 +202,26 @@ describe('head pose', () => {
     expect(Math.abs(p.rollDeg - -4)).toBeGreaterThan(45);
   });
 
+  test('matrix layout: column-major unchanged, row-major transposed, ambiguous null (Task 2 review I2)', () => {
+    const col = matrixFromPose(25, -8, 6, 90);
+    const row = Array.from({ length: 16 }, (_, i) => col[(i % 4) * 4 + Math.floor(i / 4)]!);
+    expect(normaliseMatrixLayout(col)).toEqual(col);
+    expect(normaliseMatrixLayout(row)).toEqual(col);
+    const p = headPoseFromAnyLayout(row, 90)!;
+    expect(p.yawDeg).toBeCloseTo(25, 9);
+    expect(p.pitchDeg).toBeCloseTo(-8, 9);
+    expect(normaliseMatrixLayout(matrixFromPose(25, -8, 6, 90, -2))).toBeNull(); // translation too small
+    const both = [...col];
+    both[11] = -40; // both slots large
+    expect(normaliseMatrixLayout(both)).toBeNull();
+    const bad = [...col];
+    bad[3] = NaN;
+    expect(normaliseMatrixLayout(bad)).toBeNull();
+    expect(normaliseMatrixLayout(col.slice(0, 15))).toBeNull();
+    // A transposed rotation is its inverse: reading row-major data as column-major flips yaw.
+    expect(headPoseFromMatrix(row.map((x, i) => (i === 11 ? 0 : i === 14 ? -40 : x)), 90).yawDeg).not.toBeCloseTo(25, 1);
+  });
+
   test('gaze angles: forward, 45° right, 45° up (stored y is flipped)', () => {
     expect(gazeAngles([0, 0, 1])).toEqual({ yawDeg: 0, pitchDeg: -0 });
     expect(gazeAngles([1, 0, 1]).yawDeg).toBeCloseTo(45, 12);
@@ -217,6 +237,17 @@ describe('luma statistics', () => {
     const pixel = new Uint8Array([255, 0, 0, 255]); // B=255 in BGRA, R=255 in RGBA
     expect(lumaPlane(pixel, 1, 1, 'bgra')[0]).toBe(28);
     expect(lumaPlane(pixel, 1, 1, 'rgba')[0]).toBe(76);
+  });
+
+  test('padded rows are skipped: stride > w·4 reads the same luma as tight packing (Task 2 review I1)', () => {
+    const w = 3;
+    const h = 2;
+    const tight = Uint8Array.from({ length: w * h * 4 }, (_, i) => (i * 29) % 256);
+    const stride = w * 4 + 24;
+    const padded = new Uint8Array(stride * h).fill(0xff);
+    for (let y = 0; y < h; y++) padded.set(tight.subarray(y * w * 4, (y + 1) * w * 4), y * stride);
+    expect(lumaPlane(padded, w, h, 'bgra', stride)).toEqual(lumaPlane(tight, w, h, 'bgra'));
+    expect(() => lumaPlane(padded, w, h, 'bgra', w * 4 - 1)).toThrow(/stride/);
   });
 
   test('frame luma samples every 8th pixel of every 8th row', () => {

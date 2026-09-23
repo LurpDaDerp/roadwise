@@ -4,7 +4,7 @@
 import { buildFrameBatch } from '../wire';
 import { GazeInputAssembler, SubjectStatisticTracker } from './gazeInputs';
 import { geometry } from './features';
-import { headPoseFromMatrix } from './headPose';
+import { headPoseFromAnyLayout } from './headPose';
 import { landmarksToUpright, type Rotation } from './landmarks';
 import { lumaPlane, type PixelFormat } from './roi';
 import { buildRecord } from './record';
@@ -15,8 +15,10 @@ export type Num = number | null;
 export interface VectorImage {
   w: number;
   h: number;
+  /** bytes per row, ≥ w·4 (camera rows are padded; Task 2 review I1) */
+  stride: number;
   format: PixelFormat;
-  /** base64 of `w·h·4` bytes */
+  /** base64 of `stride·h` bytes; the row padding is 0xFF in the padded vectors */
   pixels: string;
 }
 
@@ -63,7 +65,8 @@ export type GoldenVector =
       description: string;
       kind: 'headPose';
       inputs: { cases: { matrix: number[]; rotationDeg: Rotation }[] };
-      expected: { poses: [number, number, number][] };
+      /** null where the matrix layout is ambiguous (`normaliseMatrixLayout`) */
+      expected: { poses: ([number, number, number] | null)[] };
     }
   | {
       name: string;
@@ -116,7 +119,7 @@ export const nullToNan = (x: Num): number => (x === null ? NaN : x);
 
 /** The reference records for a record vector (absolute form, NaN as null). */
 export function runRecordVector(inputs: Extract<GoldenVector, { kind: 'record' }>['inputs']): Num[][] {
-  const lumas = inputs.images.map((img) => lumaPlane(base64ToBytes(img.pixels), img.w, img.h, img.format));
+  const lumas = inputs.images.map((img) => lumaPlane(base64ToBytes(img.pixels), img.w, img.h, img.format, img.stride));
   return inputs.frames.map((f) => {
     const img = inputs.images[f.image]!;
     return buildRecord({
@@ -156,10 +159,10 @@ export function runStatsTrackerVector(inputs: Extract<GoldenVector, { kind: 'sta
   return inputs.pushes.map((p, i) => Array.from(tracker.push(p.map(nullToNan), inputs.t[i]!)));
 }
 
-export function runHeadPoseVector(inputs: Extract<GoldenVector, { kind: 'headPose' }>['inputs']): [number, number, number][] {
+export function runHeadPoseVector(inputs: Extract<GoldenVector, { kind: 'headPose' }>['inputs']): ([number, number, number] | null)[] {
   return inputs.cases.map((c) => {
-    const p = headPoseFromMatrix(c.matrix, c.rotationDeg);
-    return [p.yawDeg, p.pitchDeg, p.rollDeg];
+    const p = headPoseFromAnyLayout(c.matrix, c.rotationDeg);
+    return p === null ? null : [p.yawDeg, p.pitchDeg, p.rollDeg];
   });
 }
 
