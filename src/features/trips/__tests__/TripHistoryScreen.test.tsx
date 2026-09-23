@@ -57,8 +57,11 @@ describe('the list', () => {
       trips: [drive('a', 0), drive('c', 1)],
       days: [['2026-01-05', { day: '2026-01-05', safeDay: true, goodDay: false }]],
     });
-    expect(screen.getByTestId('stamp-safe-day')).toBeOnTheScreen();
+    // the stamps come from a second query (the day awards), which settles after the list: wait for the
+    // stamp itself, then the plain day (2026-01-04) has none (one query answers both days at once)
+    expect(await screen.findByTestId('stamp-safe-day')).toBeOnTheScreen();
     expect(screen.getAllByLabelText('Safe day')).toHaveLength(1);
+    expect(screen.getAllByTestId('stamp-safe-day')).toHaveLength(1);
   });
 
   test('tapping a drive opens its summary', async () => {
