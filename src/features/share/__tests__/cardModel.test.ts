@@ -1,0 +1,186 @@
+import { tripRow } from '@/data/queries/__fixtures__/rows';
+import { toTripSummary } from '@/data/queries/rows';
+import { badgeDefRows, badgeRow, goalRow, progressRow, UID } from '@/features/rewards/__fixtures__/rows';
+import { BANNED_COPY } from '@/notifications/catalog';
+
+import {
+  buildCardModel,
+  captionFor,
+  CARD_KINDS,
+  cardLines,
+  DEFAULT_TOGGLES,
+  dateLabel,
+  type CardInput,
+  type CardKind,
+  type CardToggles,
+} from '../cardModel';
+import { shareCopy } from '../copy';
+
+// Privacy fixtures: none of these may reach a card, whatever the toggles.
+const NAME = 'Avery Quinn';
+const BIRTH = '2009-04-17';
+const PLACE = 'Near Lincoln HS';
+
+const finalTrip = (over: Parameters<typeof tripRow>[0] = {}) =>
+  toTripSummary(
+    tripRow({
+      status: 'final',
+      sync_state: 'synced',
+      score: 92,
+      started_at: Date.parse('2026-09-21T23:47:00Z'),
+      tz: 'America/Los_Angeles',
+      start_label: 'Near Home',
+      end_label: PLACE,
+      polyline: '_p~iF~ps|U_ulLnnqC',
+      start_geohash5: '9q8yy',
+      ...over,
+    })
+  );
+
+/** Something extra on every input a careless build could leak. */
+const leaky = { name: NAME, birthDate: BIRTH, user_id: UID } as Record<string, unknown>;
+
+const INPUTS: Record<CardKind, CardInput> = {
+  trip: { kind: 'trip', trip: finalTrip(), ...leaky },
+  streak: { kind: 'streak', progress: progressRow({ streak_days: 12, best_streak: 30 }), ...leaky },
+  badge: {
+    kind: 'badge',
+    badgeId: 'safe_days_7',
+    badges: [badgeRow('safe_days_7', { earned_at: '2026-09-21T06:15:00+00:00' })],
+    defs: badgeDefRows(),
+    tz: 'UTC',
+    ...leaky,
+  },
+  level: { kind: 'level', progress: progressRow({ xp: 4200, safe_days: 42 }), ...leaky },
+  goal: {
+    kind: 'goal',
+    goals: [goalRow('2026-09-21'), goalRow('2026-09-14', { state: 'achieved', pass_days: 4, category: 'braking' })],
+    ...leaky,
+  },
+} as Record<CardKind, CardInput>;
+
+const ALL_TOGGLES: CardToggles = { distance: true, code: true };
+
+describe('buildCardModel: what a card may carry', () => {
+  test('the defaults are off, for everyone (R-E, D10)', () => {
+    expect(DEFAULT_TOGGLES).toEqual({ distance: false, code: false });
+  });
+
+  test.each(CARD_KINDS)('%s: never a name, place, route, coordinate, time, speed or birth date, even with every toggle on', (kind) => {
+    const model = buildCardModel({ ...INPUTS[kind], inviteCode: 'ABCD2345' }, ALL_TOGGLES);
+    expect(model).not.toBeNull();
+    const json = JSON.stringify(model);
+    for (const banned of [NAME, BIRTH, PLACE, 'Near Home', UID, '_p~iF', '9q8yy']) expect(json).not.toContain(banned);
+    expect(json).not.toMatch(/\blat\b|\blng\b|polyline|geohash|mph|km\/h/i);
+    expect(json).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(model?.wordmark).toBe('RoadWise');
+    const caption = captionFor(model!);
+    expect(caption).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(caption).not.toContain(NAME);
+    for (const line of [...cardLines(model!), caption]) {
+      expect(line).not.toMatch(/<<|MRZ/);
+      expect(line).not.toMatch(/licen[cs]e|\bID\b|DOB|date of birth/i);
+      for (const re of BANNED_COPY) expect(line).not.toMatch(re);
+      expect(line).not.toMatch(/points?\b/i);
+    }
+  });
+
+  test('trip: the score, its band and the day as "Sep 21" in the trip\'s own zone — no time', () => {
+    const model = buildCardModel(INPUTS.trip, DEFAULT_TOGGLES);
+    expect(model).toMatchObject({ kind: 'trip', heading: 'Drive score', primary: '92', unit: 'Excellent', details: ['Sep 21'] });
+  });
+
+  test('trip: distance only when turned on', () => {
+    expect(JSON.stringify(buildCardModel(INPUTS.trip, DEFAULT_TOGGLES))).not.toMatch(/\bmi\b/);
+    expect(buildCardModel(INPUTS.trip, { distance: true, code: false })?.details).toEqual(['Sep 21', '10.0 mi']);
+  });
+
+  test.each([
+    ['provisional', { status: 'provisional' as const }],
+    ['not synced', { sync_state: 'queued' as const }],
+    ['unscored', { status: 'unscored' as const, score: null }],
+  ])('trip: %s → no card', (_name, over) => {
+    expect(buildCardModel({ kind: 'trip', trip: finalTrip(over) }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('trip: none → no card', () => {
+    expect(buildCardModel({ kind: 'trip', trip: null }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('streak: current and best', () => {
+    expect(buildCardModel(INPUTS.streak, DEFAULT_TOGGLES)).toMatchObject({
+      heading: 'Safe-day streak',
+      primary: '12',
+      unit: 'days',
+      details: ['Best 30 days'],
+    });
+    expect(buildCardModel({ kind: 'streak', progress: progressRow({ streak_days: 0, best_streak: 4 }) }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('badge: only an earned one — its name, tier and the day it was earned', () => {
+    expect(buildCardModel(INPUTS.badge, DEFAULT_TOGGLES)).toMatchObject({
+      heading: 'Badge',
+      primary: 'Safe Start',
+      unit: 'Bronze',
+      details: ['Earned Sep 21'],
+    });
+    expect(buildCardModel({ ...INPUTS.badge, badgeId: 'safe_days_30' } as CardInput, DEFAULT_TOGGLES)).toBeNull();
+    expect(buildCardModel({ ...INPUTS.badge, badgeId: 'no_such_badge' } as CardInput, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('level: the class name and the settled safe days', () => {
+    expect(buildCardModel(INPUTS.level, DEFAULT_TOGGLES)).toMatchObject({
+      heading: 'Class',
+      primary: 'Smooth',
+      details: ['42 safe days'],
+    });
+    expect(buildCardModel({ kind: 'level', progress: null }, DEFAULT_TOGGLES)).toBeNull();
+    expect(buildCardModel({ kind: 'level', progress: progressRow({ safe_days: 0 }) }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('goal: the latest reached weekly goal — its sentence and "Week of"', () => {
+    expect(buildCardModel(INPUTS.goal, DEFAULT_TOGGLES)).toMatchObject({
+      heading: 'Weekly goal reached',
+      primary: 'Brake smoothly on 4 driving days',
+      details: ['Week of Sep 14'],
+    });
+    expect(buildCardModel({ kind: 'goal', goals: [goalRow('2026-09-21'), null] }, DEFAULT_TOGGLES)).toBeNull();
+  });
+
+  test('the invite code: only when turned on AND there is one', () => {
+    const on = { distance: false, code: true };
+    expect(buildCardModel({ ...INPUTS.streak, inviteCode: 'ABCD2345' }, DEFAULT_TOGGLES)?.code).toBeNull();
+    expect(buildCardModel({ ...INPUTS.streak, inviteCode: null }, on)?.code).toBeNull();
+    expect(buildCardModel({ ...INPUTS.streak, inviteCode: 'IIII1111' }, on)?.code).toBeNull();
+    const model = buildCardModel({ ...INPUTS.streak, inviteCode: 'ABCD2345' }, on);
+    expect(model?.code).toBe('ABCD2345');
+    expect(captionFor(model!)).toContain('Join me on RoadWise with my code ABCD2345.');
+  });
+
+  test('the caption is the card in words', () => {
+    const model = buildCardModel(INPUTS.trip, { distance: true, code: false })!;
+    expect(captionFor(model)).toBe('RoadWise\nDrive score: 92, Excellent\nSep 21\n10.0 mi');
+  });
+
+  test('dateLabel: a month and a day, never a time', () => {
+    expect(dateLabel('2026-09-21')).toBe('Sep 21');
+    expect(dateLabel('2026-01-05')).toBe('Jan 5');
+  });
+});
+
+describe('copy', () => {
+  test('BANNED_COPY over every string', () => {
+    const out: string[] = [];
+    const walk = (v: unknown) => {
+      if (typeof v === 'string') out.push(v);
+      else if (typeof v === 'function') out.push(String((v as (x: unknown) => unknown)(3)), String((v as (x: unknown) => unknown)('Sep 21')));
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(shareCopy);
+    expect(out.length).toBeGreaterThan(20);
+    for (const s of out) {
+      for (const re of BANNED_COPY) expect(s).not.toMatch(re);
+      expect(s).not.toMatch(/licen[cs]e|\bID\b|DOB/);
+    }
+  });
+});

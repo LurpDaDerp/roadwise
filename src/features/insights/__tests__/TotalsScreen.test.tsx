@@ -140,14 +140,13 @@ test('a record with nothing on it says what would fill it', async () => {
   expect(screen.queryByTestId('total-miles')).toBeNull();
 });
 
-test('sharing a record is named as a door that is not open yet, not hidden', async () => {
+test('no share door and no "coming soon": F9 exists, and no card shows these descriptive totals (M5 T13)', async () => {
   const w = await world({ trips: TRIPS, days: DAYS }, now);
   await w.renderScreen(<Route />);
   await ready();
 
-  const share = screen.getByRole('button', { name: 'Share a record' });
-  expect(share).toBeDisabled();
-  expect(screen.getByText('Share cards are coming soon.')).toBeOnTheScreen();
+  expect(screen.queryByRole('button', { name: 'Share a record' })).toBeNull();
+  expect(screen.queryByText(/coming soon/i)).toBeNull();
 });
 
 test('a database that cannot be read says so in place and offers a retry', async () => {

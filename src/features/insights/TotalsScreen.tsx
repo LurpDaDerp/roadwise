@@ -1,7 +1,7 @@
 import { View } from 'react-native';
 
 import { useInsights, useScoreDaily, useTrips, type Insights } from '@/data/queries';
-import { Button, Card, EmptyState, Screen, Text, useTheme } from '@/ui';
+import { Card, EmptyState, Screen, Text } from '@/ui';
 import { formatScore } from '@/ui/charts';
 
 import { InsightsSkeleton, ReadError, TopBar } from './Chrome';
@@ -67,7 +67,6 @@ function TotalsRecord({
   period: InsightsPeriod;
   onPeriodChange: (period: InsightsPeriod) => void;
 }) {
-  const th = useTheme();
   const window = windowOf(insights);
   // Every drive the driver made, windowed by `totalsFor`: one cache entry for all four periods.
   const tripsQuery = useTrips({ role: 'driver' });
@@ -171,21 +170,8 @@ function TotalsRecord({
         {copy.totals.daysNote}
       </Text>
 
-      {/* F9 is a later milestone; the door is shown disabled rather than hidden, so the record
-          does not look like something that can never leave the phone. */}
-      <View style={{ alignSelf: 'flex-start', marginLeft: -th.space.lg }}>
-        <Button
-          label={copy.totals.share}
-          variant="ghost"
-          size="md"
-          disabled
-          onPress={() => {}}
-          accessibilityHint={copy.totals.shareSoon}
-        />
-      </View>
-      <Text variant="footnote" tone="subtle">
-        {copy.totals.shareSoon}
-      </Text>
+      {/* No share here (M5 T13): these totals are descriptive and read from this phone, and no F9
+          card shows them — a card of the settled streak or class would not be these numbers. */}
     </Screen>
   );
 }

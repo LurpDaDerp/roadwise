@@ -274,8 +274,6 @@ export const insightsCopy = {
       title: 'Nothing on the record yet',
       body: 'Drives you take as the driver are totalled here.',
     },
-    share: 'Share a record',
-    shareSoon: 'Share cards are coming soon.',
   },
 
   how: {

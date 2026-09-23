@@ -6,5 +6,10 @@ import { Stack } from 'expo-router';
  * auth group does — and the swipe-back gesture still works.
  */
 export default function AppLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      {/* F9's composer rises as a sheet over the screen that opened it (M5 Task 13). */}
+      <Stack.Screen name="rewards/share" options={{ presentation: 'formSheet' }} />
+    </Stack>
+  );
 }
