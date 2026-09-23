@@ -592,6 +592,14 @@ describe('the refresh throttle', () => {
 
 describe('useAppConfig', () => {
   let client: QueryClient;
+  /**
+   * One `now` for every render. The hook's refresh effect depends on `now`, so an inline `() => NOW` is a
+   * new function each render: the query's own re-render then re-ran the effect and made a second attempt,
+   * which after a refusal (never stamped) called `refresh` again. Whether that re-render landed before
+   * `waitFor`'s first check depended on scheduling, so "called once" failed under load (the full-suite flake,
+   * caught as `Received number of calls: 2`). With a stable `now` the effect runs once per mount.
+   */
+  const fixedNow = () => NOW;
 
   /** An AppState whose transitions the test drives. */
   function fakeAppState(initial: string) {
@@ -638,7 +646,7 @@ describe('useAppConfig', () => {
           appState,
           refresh,
           refresher,
-          now: () => NOW,
+          now: fixedNow,
         });
         seen.push(value);
         return value;
@@ -659,7 +667,7 @@ describe('useAppConfig', () => {
     const refresh = jest.fn(async () => {});
     const refresher = createAppConfigRefresher();
     const { result } = await renderHook(
-      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
       { wrapper }
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -679,7 +687,7 @@ describe('useAppConfig', () => {
     );
     const refresher = createAppConfigRefresher();
     const { result } = await renderHook(
-      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
       { wrapper }
     );
     await waitFor(() => expect(result.current.config.legal_urls.terms).toBe('https://t.test/'));
@@ -719,7 +727,7 @@ describe('useAppConfig', () => {
     const refresh = jest.fn(async () => {});
     const refresher = createAppConfigRefresher();
     const { result } = await renderHook(
-      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
       { wrapper }
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -745,7 +753,7 @@ describe('useAppConfig', () => {
       );
     const refresher = createAppConfigRefresher();
     const { result } = await renderHook(
-      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
       { wrapper }
     );
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
@@ -753,6 +761,23 @@ describe('useAppConfig', () => {
     await act(async () => appState.set('active'));
     await waitFor(() => expect(result.current.config.legal_urls.terms).toBe('https://t.test/'));
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  test('a re-render makes no second attempt: the refresh effect runs once per mount', async () => {
+    const appState = fakeAppState('active');
+    const refresh = jest
+      .fn<Promise<void>, []>()
+      .mockRejectedValue(new AppConfigRefreshRefused('app config: no runtime yet'));
+    const refresher = createAppConfigRefresher();
+    const { result, rerender } = await renderHook(
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    await act(async () => {
+      await rerender({});
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   test('a failed refresh keeps the cached config', async () => {
@@ -764,7 +789,7 @@ describe('useAppConfig', () => {
     });
     const refresher = createAppConfigRefresher();
     const { result } = await renderHook(
-      () => useAppConfig({ appState, refresh, refresher, now: () => NOW }),
+      () => useAppConfig({ appState, refresh, refresher, now: fixedNow }),
       { wrapper }
     );
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
