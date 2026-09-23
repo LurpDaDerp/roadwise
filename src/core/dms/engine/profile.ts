@@ -44,6 +44,7 @@ export interface DmsProfileV1 {
 }
 
 type Cfg = Pick<DmsConfig, 'calibration'>;
+type ZoneCfg = Pick<DmsConfig, 'calibration' | 'zones'>;
 
 // ---------------------------------------------------------------------------------------------
 // Signatures.
@@ -72,6 +73,33 @@ export function mountMatches(a: MountSignature, b: MountSignature, cfg: Cfg): bo
 }
 
 // ---------------------------------------------------------------------------------------------
+// Learned-mirror bounds (T7 review I2), applied when learning and when loading a profile.
+// ---------------------------------------------------------------------------------------------
+
+/** The distance from a direction to a zone's default rectangle (0 inside; Infinity if not a rectangle). */
+export function distanceToDefault(id: LearnedZone['id'], yaw: number, pitch: number, cfg: Pick<DmsConfig, 'zones'>): number {
+  const r = cfg.zones.table.find((z) => z.id === id)?.region;
+  if (r === undefined || r.kind !== 'rect') return Infinity;
+  const dy = Math.max(r.yaw[0] - yaw, 0, yaw - r.yaw[1]);
+  const dp = Math.max(r.pitch[0] - pitch, 0, pitch - r.pitch[1]);
+  return Math.hypot(dy, dp);
+}
+
+/**
+ * A learned mirror may be used only if its half-widths are within [ellipseMinHalfWidthDeg,
+ * learnedMaxHalfWidthDeg], its centroid is within mirrorNearDeg of the default rectangle, and it cannot
+ * reach the road-centre circle at its largest radius: |centroid| − max(half-widths) ≥ radiusMaxDeg.
+ */
+export function learnedZoneWithinBounds(z: Omit<LearnedZone, 'drives'>, cfg: ZoneCfg): boolean {
+  const c = cfg.zones;
+  const halves = [z.halfYawDeg, z.halfPitchDeg];
+  if (!halves.every((h) => h > 0 && h <= c.learnedMaxHalfWidthDeg + 1e-9)) return false;
+  if (distanceToDefault(z.id, z.yawDeg, z.pitchDeg, cfg) > c.mirrorNearDeg) return false;
+  const reach = Math.hypot(z.yawDeg, z.pitchDeg) - Math.max(z.halfYawDeg, z.halfPitchDeg);
+  return reach >= cfg.calibration.radiusMaxDeg;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Parsing.
 // ---------------------------------------------------------------------------------------------
 
@@ -95,13 +123,14 @@ function signature(x: unknown): MountSignature | null {
   return { yawDeg: s.yawDeg, pitchDeg: s.pitchDeg, rollDeg: s.rollDeg, boxCx: s.boxCx, boxCy: s.boxCy, iod: s.iod };
 }
 
-function learnedZone(x: unknown): LearnedZone | null {
+function learnedZone(x: unknown, cfg: ZoneCfg): LearnedZone | null {
   const k = ['id', 'yawDeg', 'pitchDeg', 'halfYawDeg', 'halfPitchDeg', 'drives'];
   if (!isObj(x) || !keysExactly(x, k)) return null;
   if (x.id !== 'rear_mirror' && x.id !== 'driver_mirror' && x.id !== 'passenger_mirror') return null;
   if (![x.yawDeg, x.pitchDeg, x.halfYawDeg, x.halfPitchDeg, x.drives].every(fin)) return null;
   const z = x as unknown as LearnedZone;
   if (!(z.halfYawDeg > 0) || !(z.halfPitchDeg > 0) || !Number.isInteger(z.drives) || z.drives < 0) return null;
+  if (!learnedZoneWithinBounds(z, cfg)) return null;
   return { id: z.id, yawDeg: z.yawDeg, pitchDeg: z.pitchDeg, halfYawDeg: z.halfYawDeg, halfPitchDeg: z.halfPitchDeg, drives: z.drives };
 }
 
@@ -122,7 +151,7 @@ const KEYS = [
 ];
 
 /** A stored profile, validated field by field; null when anything is off. */
-export function parseProfile(x: unknown, cfg: Cfg = DEFAULT_DMS_CONFIG as DmsConfig): DmsProfileV1 | null {
+export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as DmsConfig): DmsProfileV1 | null {
   if (!isObj(x) || !keysExactly(x, KEYS)) return null;
   if (x.v !== 1) return null;
   if (x.driverSide !== 'left' && x.driverSide !== 'right') return null;
@@ -151,7 +180,7 @@ export function parseProfile(x: unknown, cfg: Cfg = DEFAULT_DMS_CONFIG as DmsCon
   if (!Array.isArray(x.learnedZones)) return null;
   const learnedZones: LearnedZone[] = [];
   for (const z of x.learnedZones) {
-    const lz = learnedZone(z);
+    const lz = learnedZone(z, cfg);
     if (lz === null) return null;
     learnedZones.push(lz);
   }

@@ -254,6 +254,12 @@ export interface DmsConfig {
     drivesToAdopt: number;
     ellipseSigmas: number;
     ellipseMinHalfWidthDeg: number;
+    /**
+     * T7 review I2: a learned mirror's half-widths are capped, its centroid stays within mirrorNearDeg of
+     * the default rectangle, and it may not reach within calibration.radiusMaxDeg of the centre, so a
+     * mis-learned mirror can never swallow the forward road.
+     */
+    learnedMaxHalfWidthDeg: number;
   };
 
   glances: {
@@ -553,6 +559,7 @@ const DEFAULT: DmsConfig = {
     drivesToAdopt: 3,
     ellipseSigmas: 2,
     ellipseMinHalfWidthDeg: 4,
+    learnedMaxHalfWidthDeg: 10,
   },
   glances: {
     endOnRoadMs: 100,
@@ -793,6 +800,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
     }
   }
   if (!(c.zones.widenCapDeg >= c.zones.widenDeg)) bad('zones.widenCapDeg', 'must be ≥ widenDeg');
+  if (!(c.zones.learnedMaxHalfWidthDeg >= c.zones.ellipseMinHalfWidthDeg)) bad('zones.learnedMaxHalfWidthDeg', 'must be ≥ ellipseMinHalfWidthDeg');
   // Hysteresis shrinks a zone by its width when entering it: it must leave every rectangle a core.
   const halfSpans = (c.zones.table ?? []).flatMap((z) => (z.region.kind === 'rect' ? [(z.region.yaw[1] - z.region.yaw[0]) / 2, (z.region.pitch[1] - z.region.pitch[0]) / 2] : []));
   if (halfSpans.length > 0 && !(c.zones.hysteresisDeg < Math.min(...halfSpans))) bad('zones.hysteresisDeg', 'must be smaller than half of every rectangular zone');

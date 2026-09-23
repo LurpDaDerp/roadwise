@@ -5,7 +5,7 @@
 // candidate seen in ≥ 3 drives replaces that mirror's rectangle with an ellipse, centroid ± 2σ per axis,
 // half-widths ≥ 4°. Pure; every buffer is bounded.
 import type { DmsConfig, ZoneId } from './config';
-import type { LearnedZone } from './profile';
+import { distanceToDefault, learnedZoneWithinBounds, type LearnedZone } from './profile';
 import { median, sd } from './stats';
 import type { AnglePair } from './types';
 import type { MirrorId } from './zones';
@@ -27,8 +27,12 @@ export interface MirrorCandidate {
 
 const MIRRORS: MirrorId[] = ['rear_mirror', 'driver_mirror', 'passenger_mirror'];
 
-/** DBSCAN on directions (planar degrees). Labels: cluster index ≥ 0, or −1 for noise. */
-export function dbscan(points: readonly AnglePair[], eps: number, minPts: number): number[] {
+/**
+ * DBSCAN on directions (planar degrees). Labels: cluster index ≥ 0, or −1 for noise. The expansion
+ * queue is walked with a head index, and a point is labelled when it is enqueued, so none is queued
+ * twice: memory ≤ n and CPU ≤ n² distance tests (T7 review I1; Hermes' `shift` is O(length)).
+ */
+export function dbscan(points: readonly AnglePair[], eps: number, minPts: number, stats?: { maxQueue: number }): number[] {
   const n = points.length;
   const labels = new Array<number>(n).fill(-2); // −2 unvisited
   const near = (i: number) => {
@@ -45,66 +49,61 @@ export function dbscan(points: readonly AnglePair[], eps: number, minPts: number
       continue;
     }
     labels[i] = cluster;
-    const queue = [...nb];
-    while (queue.length > 0) {
-      const j = queue.shift()!;
-      if (labels[j] === -1) labels[j] = cluster;
-      if (labels[j] !== -2) continue;
-      labels[j] = cluster;
-      const nb2 = near(j);
-      if (nb2.length >= minPts) queue.push(...nb2);
+    const queue: number[] = [];
+    const enqueue = (j: number) => {
+      if (labels[j] === -2) {
+        labels[j] = cluster;
+        queue.push(j);
+      } else if (labels[j] === -1) {
+        labels[j] = cluster; // a border point: labelled, never expanded (it was not a core point)
+      }
+    };
+    for (const j of nb) enqueue(j);
+    for (let qi = 0; qi < queue.length; qi++) {
+      const nb2 = near(queue[qi]!);
+      if (nb2.length >= minPts) for (const j of nb2) enqueue(j);
     }
+    if (stats !== undefined) stats.maxQueue = Math.max(stats.maxQueue, queue.length);
     cluster += 1;
   }
   return labels;
 }
 
-export function createZoneLearner(cfg: Pick<DmsConfig, 'zones'>, prior: readonly LearnedZone[]) {
+/**
+ * `prior` is the learned zones of a profile whose mount has ALREADY matched; the engine façade starts
+ * with [] and calls `setPrior` only on the calibrator's `warm_start` (T7 review m4, Task 12/14).
+ */
+export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>, initialPrior: readonly LearnedZone[] = []) {
   const z = cfg.zones;
   const fixations: Fixation[] = [];
-  let window: { t: number; yaw: number; pitch: number }[] = [];
+  let prior: readonly LearnedZone[] = initialPrior;
+  // The I-DT window, O(1) per frame (T7 review m2): running extremes, sums, count and start time.
+  let w = { n: 0, t0: 0, t1: 0, sy: 0, sp: 0, y0: 0, y1: 0, p0: 0, p1: 0 };
   let candidates: MirrorCandidate[] = [];
   let clusteredAt = 0;
   let nextClusterS = z.learnEveryS;
 
-  const offRoad = (id: ZoneId | null) => id !== null && z.table.find((x) => x.id === id)!.class !== 'on_road';
+  // Off-road, and never the phone screen: brief phone glances must not become a "mirror" (T7 review I2).
+  const offRoad = (id: ZoneId | null) => id !== null && id !== 'phone_screen' && z.table.find((x) => x.id === id)!.class !== 'on_road';
 
+  /**
+   * Closes the window. The duration is last − first sample time, one frame interval short of the
+   * fixation's true length (T7 review nit): at 15 fps 4 frames read 200 ms, at 8 fps 3 frames 250 ms.
+   * Accepted: it biases the "median < 1 s" mirror test very slightly toward mirrors.
+   */
   function closeWindow(): void {
-    if (window.length >= 2) {
-      const durMs = window[window.length - 1]!.t - window[0]!.t;
-      if (durMs >= z.fixationMinMs && fixations.length < z.fixationsPerDrive) {
-        fixations.push({
-          yaw: window.reduce((s, x) => s + x.yaw, 0) / window.length,
-          pitch: window.reduce((s, x) => s + x.pitch, 0) / window.length,
-          durMs,
-        });
-      }
+    if (w.n >= 2) {
+      const durMs = w.t1 - w.t0;
+      if (durMs >= z.fixationMinMs && fixations.length < z.fixationsPerDrive) fixations.push({ yaw: w.sy / w.n, pitch: w.sp / w.n, durMs });
     }
-    window = [];
+    w.n = 0;
   }
 
-  const dispersion = (w: { yaw: number; pitch: number }[]) => {
-    let y0 = Infinity;
-    let y1 = -Infinity;
-    let p0 = Infinity;
-    let p1 = -Infinity;
-    for (const x of w) {
-      y0 = Math.min(y0, x.yaw);
-      y1 = Math.max(y1, x.yaw);
-      p0 = Math.min(p0, x.pitch);
-      p1 = Math.max(p1, x.pitch);
-    }
-    return y1 - y0 + (p1 - p0);
-  };
+  function startWindow(t: number, a: AnglePair): void {
+    w = { n: 1, t0: t, t1: t, sy: a.yaw, sp: a.pitch, y0: a.yaw, y1: a.yaw, p0: a.pitch, p1: a.pitch };
+  }
 
-  /** Distance from a point to a mirror's default rectangle (0 inside). */
-  const toMirror = (id: MirrorId, a: AnglePair) => {
-    const r = z.table.find((x) => x.id === id)!.region;
-    if (r.kind !== 'rect') return Infinity;
-    const dy = Math.max(r.yaw[0] - a.yaw, 0, a.yaw - r.yaw[1]);
-    const dp = Math.max(r.pitch[0] - a.pitch, 0, a.pitch - r.pitch[1]);
-    return Math.hypot(dy, dp);
-  };
+  const toMirror = (id: MirrorId, a: AnglePair) => distanceToDefault(id, a.yaw, a.pitch, cfg);
 
   function cluster(): void {
     clusteredAt = fixations.length;
@@ -125,14 +124,16 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones'>, prior: readonly
         }
       }
       if (best === null || bestD > z.mirrorNearDeg) continue;
+      const half = (xs: number[]) => Math.min(z.learnedMaxHalfWidthDeg, Math.max(z.ellipseSigmas * sd(xs), z.ellipseMinHalfWidthDeg));
       const cand: MirrorCandidate = {
         id: best,
         yaw: centroid.yaw,
         pitch: centroid.pitch,
-        halfYawDeg: Math.max(z.ellipseSigmas * sd(members.map((f) => f.yaw)), z.ellipseMinHalfWidthDeg),
-        halfPitchDeg: Math.max(z.ellipseSigmas * sd(members.map((f) => f.pitch)), z.ellipseMinHalfWidthDeg),
+        halfYawDeg: half(members.map((f) => f.yaw)),
+        halfPitchDeg: half(members.map((f) => f.pitch)),
         count: members.length,
       };
+      if (!learnedZoneWithinBounds({ id: best, yawDeg: cand.yaw, pitchDeg: cand.pitch, halfYawDeg: cand.halfYawDeg, halfPitchDeg: cand.halfPitchDeg }, cfg)) continue;
       const prev = byMirror.get(best);
       if (prev === undefined || cand.count > prev.count) byMirror.set(best, cand);
     }
@@ -146,13 +147,31 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones'>, prior: readonly
         closeWindow();
         return;
       }
-      const next = [...window, { t: tMs, yaw: rel.yaw, pitch: rel.pitch }];
-      if (dispersion(next) > z.fixationMaxDispersionDeg) {
-        closeWindow();
-        window = [{ t: tMs, yaw: rel.yaw, pitch: rel.pitch }];
-      } else {
-        window = next;
+      if (w.n === 0) {
+        startWindow(tMs, rel);
+        return;
       }
+      const y0 = Math.min(w.y0, rel.yaw);
+      const y1 = Math.max(w.y1, rel.yaw);
+      const p0 = Math.min(w.p0, rel.pitch);
+      const p1 = Math.max(w.p1, rel.pitch);
+      if (y1 - y0 + (p1 - p0) > z.fixationMaxDispersionDeg) {
+        closeWindow();
+        startWindow(tMs, rel);
+        return;
+      }
+      w.n += 1;
+      w.t1 = tMs;
+      w.sy += rel.yaw;
+      w.sp += rel.pitch;
+      w.y0 = y0;
+      w.y1 = y1;
+      w.p0 = p0;
+      w.p1 = p1;
+    },
+    /** The matched profile's learned zones (on warm_start only). */
+    setPrior(zones: readonly LearnedZone[]): void {
+      prior = zones;
     },
     fixationCount: () => fixations.length,
     cluster,
@@ -183,6 +202,15 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones'>, prior: readonly
           continue;
         }
         if (old === undefined) {
+          out.push({ id: m, yawDeg: cur.yaw, pitchDeg: cur.pitch, halfYawDeg: cur.halfYawDeg, halfPitchDeg: cur.halfPitchDeg, drives: 1 });
+          continue;
+        }
+        // Recurrence in the same place (T7 review I2): merge only when this drive's centroid lies in the
+        // prior ellipse grown by ε; otherwise the new candidate replaces it and counts from one.
+        const e = z.dbscanEpsDeg;
+        const dy = (cur.yaw - old.yawDeg) / (old.halfYawDeg + e);
+        const dp = (cur.pitch - old.pitchDeg) / (old.halfPitchDeg + e);
+        if (dy * dy + dp * dp > 1) {
           out.push({ id: m, yawDeg: cur.yaw, pitchDeg: cur.pitch, halfYawDeg: cur.halfYawDeg, halfPitchDeg: cur.halfPitchDeg, drives: 1 });
           continue;
         }

@@ -55,14 +55,21 @@ export function cameraRel(centre: AnglePair, rollOffsetDeg: number, side: Driver
  * Junction: yaw rate > 8°/s below 40 km/h → 30°. Curve: yaw rate ≥ 2°/s for ≥ 3 rows at ≥ 40 km/h →
  * clamp((rate − 2)/6, 0, 1) × 15°. Both need a known turn sign; the larger applies.
  */
+/** The turn rate for the extensions: the gyro peak, or |course rate| when the IMU is absent (T7 review m1). */
+export function turnRate(ctx: VehicleContext): number | null {
+  if (ctx.yawRateDegS !== null) return ctx.yawRateDegS;
+  return ctx.courseRateDegS !== null ? Math.abs(ctx.courseRateDegS) : null;
+}
+
 export function forwardExtension(ctx: VehicleContext, sustainedRows: number, side: DriverSide, cfg: Pick<DmsConfig, 'zones'>): Extension {
   const z = cfg.zones;
-  if (ctx.turnSign === 0 || ctx.speedKmh === null || ctx.yawRateDegS === null) return { toward: 0, deg: 0 };
+  const rate = turnRate(ctx);
+  if (ctx.turnSign === 0 || ctx.speedKmh === null || rate === null) return { toward: 0, deg: 0 };
   const toward = (side === 'left' ? ctx.turnSign : -ctx.turnSign) as -1 | 1;
   let deg = 0;
-  if (ctx.speedKmh < z.junctionMaxSpeedKmh && ctx.yawRateDegS > z.junctionMinYawRateDegS) deg = z.junctionExtendDeg;
-  if (ctx.speedKmh >= z.curveMinSpeedKmh && ctx.yawRateDegS >= z.curveMinYawRateDegS && sustainedRows >= z.curveRows) {
-    const k = Math.min(1, Math.max(0, (ctx.yawRateDegS - z.curveMinYawRateDegS) / z.curveRampDegS));
+  if (ctx.speedKmh < z.junctionMaxSpeedKmh && rate > z.junctionMinYawRateDegS) deg = z.junctionExtendDeg;
+  if (ctx.speedKmh >= z.curveMinSpeedKmh && rate >= z.curveMinYawRateDegS && sustainedRows >= z.curveRows) {
+    const k = Math.min(1, Math.max(0, (rate - z.curveMinYawRateDegS) / z.curveRampDegS));
     deg = Math.max(deg, k * z.curveMaxExtendDeg);
   } else if (deg === 0) {
     return { toward: 0, deg: 0 };
@@ -76,7 +83,8 @@ export function createTurnExtender(cfg: Pick<DmsConfig, 'zones'>, side: DriverSi
   return {
     onRow(ctx: VehicleContext): Extension {
       const z = cfg.zones;
-      const curving = ctx.speedKmh !== null && ctx.speedKmh >= z.curveMinSpeedKmh && ctx.yawRateDegS !== null && ctx.yawRateDegS >= z.curveMinYawRateDegS;
+      const rate = turnRate(ctx);
+      const curving = ctx.speedKmh !== null && ctx.speedKmh >= z.curveMinSpeedKmh && rate !== null && rate >= z.curveMinYawRateDegS;
       rows = curving ? rows + 1 : 0;
       return forwardExtension(ctx, rows, side, cfg);
     },
@@ -145,7 +153,8 @@ export function createZoneClassifier(cfg: Pick<DmsConfig, 'zones' | 'calibration
   const h = cfg.zones.hysteresisDeg;
   let current: ZoneId | null = null;
   const speeds = new RingBuffer<{ t: number; v: number }>(32);
-  let lastHeadRelYaw: number | null = null;
+  /** the last relative head yaw, with its time; cleared by a frame without a head (T7 review m3) */
+  let lastHead: { t: number; yaw: number } | null = null;
   let lostSince: number | null = null;
   let lostFar = false;
 
@@ -169,7 +178,7 @@ export function createZoneClassifier(cfg: Pick<DmsConfig, 'zones' | 'calibration
     reset() {
       current = null;
       speeds.clear();
-      lastHeadRelYaw = null;
+      lastHead = null;
       lostSince = null;
       lostFar = false;
     },
@@ -181,7 +190,8 @@ export function createZoneClassifier(cfg: Pick<DmsConfig, 'zones' | 'calibration
           speeds.forEach((s) => {
             if (s.t >= p.tMs - cfg.zones.fastTurnWindowMs) peak = Math.max(peak, Math.abs(s.v));
           });
-          lostFar = peak > cfg.zones.fastTurnDegS || (lastHeadRelYaw !== null && Math.abs(lastHeadRelYaw) > cfg.zones.lostLateralYawDeg);
+          const recentYaw = lastHead !== null && lastHead.t >= p.tMs - cfg.zones.fastTurnWindowMs ? lastHead.yaw : null;
+          lostFar = peak > cfg.zones.fastTurnDegS || (recentYaw !== null && Math.abs(recentYaw) > cfg.zones.lostLateralYawDeg);
         }
         current = null;
         return lostFar && p.tMs - lostSince <= cfg.zones.farLateralAfterTurnS * 1000 ? 'far_lateral' : null;
@@ -190,7 +200,7 @@ export function createZoneClassifier(cfg: Pick<DmsConfig, 'zones' | 'calibration
       lostFar = false;
       if (p.headYawSpeedDegS !== null) speeds.push({ t: p.tMs, v: p.headYawSpeedDegS });
       speeds.dropWhile((s) => s.t < p.tMs - cfg.zones.fastTurnWindowMs);
-      lastHeadRelYaw = p.headRel?.yaw ?? lastHeadRelYaw;
+      lastHead = p.headRel !== null ? { t: p.tMs, yaw: p.headRel.yaw } : null;
       if (p.gazeRel === null) return null;
       return classify(p.gazeRel, zc);
     },

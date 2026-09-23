@@ -44,6 +44,9 @@ test.each([
   ['a neutral MAR below the floor', { ...GOOD, neutralMar: 0.01 }],
   ['a learned zone with an unknown id', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], id: 'lap' }] }],
   ['an unknown key', { ...GOOD, extra: 1 }],
+  ['a learned zone wider than 10°', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], halfYawDeg: 30 }] }],
+  ['a learned zone far from its default mirror', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], yawDeg: 60, pitchDeg: 30 }] }],
+  ['a learned zone reaching within 15° of the centre', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], yawDeg: 20, pitchDeg: 5, halfYawDeg: 9 }] }],
   ['a missing key', (() => { const { savedAtMs: _s, ...rest } = GOOD; return rest; })()],
 ])('refuses %s', (_n, value) => {
   expect(parseProfile(value)).toBeNull();

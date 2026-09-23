@@ -190,3 +190,22 @@ describe('LOST after a fast turn (C-8)', () => {
 test('the config refuses a hysteresis wider than a mirror is tall', () => {
   expect(() => resolveDmsConfig({ zones: { hysteresisDeg: 6 } })).toThrow(/hysteresisDeg/);
 });
+
+describe('T7 review round 1', () => {
+  test('m1: without an IMU the extensions use |course rate|', () => {
+    const e = forwardExtension(ctx({ tMs: 0, speedKmh: 30, yawRateDegS: null, imuPresent: false, courseRateDegS: 12, turnSign: 1 }), 0, 'left', C);
+    expect(e).toEqual({ toward: 1, deg: 30 });
+    const t = createTurnExtender(C, 'left');
+    const row = () => ctx({ tMs: 0, speedKmh: 80, yawRateDegS: null, imuPresent: false, courseRateDegS: -5, turnSign: -1 });
+    t.onRow(row());
+    t.onRow(row());
+    expect(t.onRow(row()).deg).toBeCloseTo(7.5, 12);
+  });
+  test('m3: a far head yaw 1 s before a loss, then frames without a head, is occlusion', () => {
+    const k = createZoneClassifier(C);
+    const p = (tMs: number, over: Record<string, unknown>) => ({ tMs, quality: 'tracking' as const, gazeRel: { yaw: 0, pitch: 0 }, headRel: { yaw: 0, pitch: 0 }, headYawSpeedDegS: 0, ...over });
+    k.step(p(0, { headRel: { yaw: 60, pitch: 0 } }), BASE);
+    for (let t = 66; t < 1000; t += 66) k.step(p(t, { quality: 'head_only', headRel: null, headYawSpeedDegS: null }), BASE);
+    expect(k.step(p(1000, { quality: 'lost', gazeRel: null, headRel: null, headYawSpeedDegS: null }), BASE)).toBeNull();
+  });
+});
