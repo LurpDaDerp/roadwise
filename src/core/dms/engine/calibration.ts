@@ -93,6 +93,7 @@ interface Comparison {
 }
 
 const MAX_FPS = 30;
+const PITCH_MEDIAN_EVERY_MS = 250;
 
 export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide; profile?: DmsProfileV1 | null; seed?: CalibrationSeed | null }): Calibrator {
   const c = cfg.calibration;
@@ -100,6 +101,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   const events: CalibrationEvent[] = [];
   const samples = new RingBuffer<Sample>(Math.ceil(c.windowS * MAX_FPS) + 1);
   const pitchRing = new RingBuffer<{ t: number; pitch: number }>(Math.ceil(c.runningMedianS * MAX_FPS) + 1);
+  /**
+   * The ring's median (a 30 s running median), refreshed at most every PITCH_MEDIAN_EVERY_MS of frame time
+   * after the ring changes: it was sorted twice per frame before calibration (Task 12's profile).
+   */
+  let pitchMedian: number | null = null;
+  let pitchMedianStale = true;
+  let pitchMedianT = Number.NEGATIVE_INFINITY;
+  let pitchNowT = 0;
   const sigWindow = new SignatureWindow(c.signatureS);
   const bump = new StepBump(cfg);
 
@@ -178,6 +187,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     mar = null;
     mouthW = null;
     pitchRing.clear();
+    pitchMedianStale = true;
+    pitchMedian = null;
     emit('driver_change');
   }
 
@@ -217,7 +228,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   function pitchReference(): number | null {
     if (centres.head !== null) return centres.head.pitch;
     if (pitchRing.size === 0) return null;
-    return median(pitchRing.toArray().map((x) => x.pitch));
+    if (pitchMedian === null || (pitchMedianStale && pitchNowT - pitchMedianT >= PITCH_MEDIAN_EVERY_MS)) {
+      pitchMedian = median(pitchRing.toArray().map((x) => x.pitch));
+      pitchMedianStale = false;
+      pitchMedianT = pitchNowT;
+    }
+    return pitchMedian;
   }
 
   function evaluate(t: number): boolean {
@@ -371,6 +387,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (p.headDrv !== null) {
         pitchRing.push({ t: f.tMs, pitch: p.headDrv.pitch });
         pitchRing.dropWhile((x) => x.t < f.tMs - c.runningMedianS * 1000);
+        pitchMedianStale = true;
+        pitchNowT = f.tMs;
       }
 
       // The openness sanity check after a resume (rev2 R1-m2).

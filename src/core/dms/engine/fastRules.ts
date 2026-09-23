@@ -36,6 +36,13 @@ export interface FastEvent {
   tMs: number;
   /** F1–F3 of a closure that was carried across a face loss (C-26) */
   bridged?: boolean;
+  /** unresponsive: the F3 clause that raised it (the closure time, or no on-road gaze after a Critical) */
+  clause?: 'closure' | 'no_on_road';
+  /**
+   * unresponsive: it escalates a running Critical (the closure clause in an F1/F2 episode, rev1 I6; the
+   * no-on-road clause always), so the alert manager lets it start below 10 km/h (T11 review I1).
+   */
+  escalation?: boolean;
   /** blinks */
   durMs?: number;
   long?: boolean;
@@ -113,7 +120,7 @@ export function createFastRules(cfg: DmsConfig) {
         if (!episode.f3 && countedS >= cl.f3.closedS - EPS && (speed >= cl.f3.minSpeedKmh || escalation)) {
           episode.f3 = true;
           pendingF3 = null;
-          events.push({ kind: 'unresponsive', tMs: p.tMs, ...bridged });
+          events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'closure', escalation: escalation, ...bridged });
         }
       } else if (episode !== null && p.quality === 'tracking' && !episode.bridged) {
         const durMs = p.tMs - episode.onset;
@@ -131,7 +138,7 @@ export function createFastRules(cfg: DmsConfig) {
           if (pendingF3 >= cl.f3.noOnRoadS - EPS) {
             pendingF3 = null;
             if (episode !== null) episode.f3 = true;
-            events.push({ kind: 'unresponsive', tMs: p.tMs, ...(episode?.bridged === true ? { bridged: true } : {}) });
+            events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'no_on_road', escalation: true, ...(episode?.bridged === true ? { bridged: true } : {}) });
           }
         }
       }

@@ -103,6 +103,22 @@ describe('F1–F3 (§M6)', () => {
     expect(kinds).toContain('sleep');
     expect(kinds).toContain('unresponsive'); // the escalation of an active Critical, speed unknown
   });
+  test('T12: each unresponsive says which clause raised it and whether it escalates a running Critical', () => {
+    const ps = closedFor(7);
+    const esc = fast(ps, 60).events.find((e) => e.kind === 'unresponsive')!;
+    expect(esc).toMatchObject({ clause: 'no_on_road', escalation: true }); // F1 at 1.0 s, no on-road gaze 3 s later
+    // F2 and F3 share the ≥ 10 km/h gate and F2's threshold is lower, so the closure clause always follows
+    // F2 in its episode: an escalation even when both fire on the frame the speed first reaches 10.
+    const late = createFastRules(C);
+    const ev: FastEvent[] = [];
+    ps.forEach((p) => ev.push(...late.onFrame({ p, ruleSpeedKmh: p.tMs < 7500 ? 5 : 15, onRoadGaze: true }).events));
+    expect(ev.filter((e) => e.kind !== 'blink').map((e) => e.kind)).toEqual(['sleep', 'unresponsive']);
+    expect(ev.find((e) => e.kind === 'unresponsive')).toMatchObject({ clause: 'closure', escalation: true });
+    const esc2 = createFastRules(C);
+    const ev2: FastEvent[] = [];
+    ps.forEach((p) => ev2.push(...esc2.onFrame({ p, ruleSpeedKmh: 12, onRoadGaze: true }).events)); // on road: only the closure clause
+    expect(ev2.filter((e) => e.kind === 'unresponsive')).toEqual([expect.objectContaining({ clause: 'closure', escalation: true })]);
+  });
   test('T9 r1 m1: one unresponsive per Critical episode (the no-on-road clause at 3.0 s after F1, not again at 6.0 s)', () => {
     const r = fast(closedFor(7), 60, () => false);
     const un = r.events.filter((e) => e.kind === 'unresponsive');
@@ -272,6 +288,29 @@ describe('blinks and the fps meter', () => {
     expect(b15[0]).toMatchObject({ long: false, counted: true });
     expect(blinks(15, 0.6)[0]).toMatchObject({ long: true, counted: true });
     expect(blinks(10, 0.3)[0]).toMatchObject({ counted: false }); // blinks under 15 fps give no statistics
+  });
+  test('T12: the incremental median equals the plain median of the window on a jittery, gappy stream', () => {
+    const m = createFpsMeter(C);
+    let t = 0;
+    const kept: { t: number; dt: number }[] = [];
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let i = 0; i < 3000; i++) {
+      const dt = rnd() < 0.02 ? 400 + Math.round(rnd() * 900) : [33, 34, 66, 67, 100, 125][Math.floor(rnd() * 6)]!;
+      const prev = t;
+      t += dt;
+      m.push(t);
+      if (i > 0 || prev > 0) kept.push({ t, dt });
+      while (kept.length > 0 && kept[0]!.t <= t - 10_000) kept.shift();
+      while (kept.length > 302) kept.shift();
+      if (kept.length === 0) {
+        expect(m.fps()).toBe(0);
+        continue;
+      }
+      const s = kept.map((x) => x.dt).sort((a, b) => a - b);
+      const med = s.length % 2 === 1 ? s[s.length >> 1]! : (s[(s.length >> 1) - 1]! + s[s.length >> 1]!) / 2;
+      expect(m.fps()).toBeCloseTo(1000 / med, 9);
+    }
   });
   test('the measured fps is 1000 / the median dt over the last 10 s', () => {
     const m = createFpsMeter(C);
