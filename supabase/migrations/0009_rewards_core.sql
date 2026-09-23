@@ -21,7 +21,7 @@
 --     settled day never changes, up or down. checked_through is bookkeeping, not client-readable.
 --   * public.reward_due (#10, #11): the settlement queue, one row per user. RLS on, no policy, no grant.
 --   * public.weekly_goals (#1, #10, #11): one goal per user and ISO week. Owner read.
---   * public.reward_contradictions (append-only, documented, with one exception): changed_after_settlement,
+--   * public.reward_contradictions (append-only except the relabel counter, documented): changed_after_settlement,
 --     relabel_with_events and zone_hop, server-only (RLS on, no policy, no grant); M6 reads it through a
 --     future definer RPC. Purged after 400 days by purge_reward_audit() (bounded, daily 04:40). The
 --     exception (security M-1): a relabel row is one per (drive, target role, local day), and a repeat
@@ -294,7 +294,7 @@ create table public.weekly_goals (
   primary key (user_id, week_start)
 );
 
--- append-only (documented): server only
+-- append-only except the relabel counter (security M-1, see audit_trip_relabel): server only
 create table public.reward_contradictions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -321,7 +321,7 @@ declare
 begin
   insert into public.progress (user_id, rewards_start)
   select p.id, public.user_local_date(p.id) from public.profiles p
-  where p.age_band <> 'u13' and not exists (select 1 from public.progress pr where pr.user_id = p.id);
+  where p.age_band is distinct from 'u13' and not exists (select 1 from public.progress pr where pr.user_id = p.id);
   get diagnostics v_count = row_count;
   return v_count;
 end $$;
