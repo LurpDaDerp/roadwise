@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import { renderedStrings } from '@/features/rewards/__fixtures__/goalChallengesWorld';
 import { clearInboxClients, setOnline, settleInbox } from '@/features/inbox/__fixtures__/harness';
@@ -39,10 +39,25 @@ async function renderJoin(
   const server = fakeReferralApi(state);
   await w.render(<JoinScreen code={param} deps={{ api: server.api, refreshConfig: noRefresh }} />);
   await screen.findByTestId('join-screen');
-  await waitFor(() => expect(screen.queryByTestId('join-loading')).toBeNull());
-  if (opts.held) await waitFor(() => expect(screen.queryByTestId('join-leaving')).toBeNull());
+  await settleUntilGone('join-loading');
+  if (opts.held) await settleUntilGone('join-leaving');
   await settleInbox();
   return { ...w, ...server };
+}
+
+/**
+ * Let the screen's reads (the referral state, the config) finish until `testID` is gone. Each step is
+ * `settleInbox`, which returns once no query or mutation is in flight; the step count bounds it, not a
+ * clock. It was `waitFor`'s 1 s default, which the first answered read (about 0.2 s alone) overran on a
+ * loaded full suite (the flake: the loading card still on screen).
+ */
+async function settleUntilGone(testID: string): Promise<void> {
+  await settleUntil(() => screen.queryByTestId(testID) === null);
+  expect(screen.queryByTestId(testID)).toBeNull();
+}
+
+async function settleUntil(done: () => boolean): Promise<void> {
+  for (let step = 0; step < 50 && !done(); step += 1) await settleInbox();
 }
 
 const press = async (el: Parameters<typeof fireEvent.press>[0]) => {
@@ -162,7 +177,8 @@ describe('JoinScreen (roadwise://join/<code>)', () => {
       const server = fakeReferralApi(state);
       markHeldJoinArrival(UID, `/join/${CODE}`);
       await w.render(<JoinScreen code={CODE} deps={{ api: server.api, refreshConfig: noRefresh }} />);
-      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home'));
+      await settleUntil(() => mockRouter.replace.mock.calls.length > 0);
+      expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home');
       expect(screen.queryByText(copy.explain.windowClosed)).toBeNull();
       expect(screen.queryByText(copy.explain.alreadyUsed)).toBeNull();
       expect(screen.queryByText("That code didn't work.")).toBeNull();
@@ -174,7 +190,8 @@ describe('JoinScreen (roadwise://join/<code>)', () => {
       const server = fakeReferralApi();
       markHeldJoinArrival(UID, `/join/${CODE}`);
       await w.render(<JoinScreen code={CODE} deps={{ api: server.api, refreshConfig: noRefresh }} />);
-      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home'));
+      await settleUntil(() => mockRouter.replace.mock.calls.length > 0);
+      expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home');
       expect(screen.queryByText(copy.unavailable)).toBeNull();
       expect(server.api.fetchMyReferrals).not.toHaveBeenCalled();
     });
