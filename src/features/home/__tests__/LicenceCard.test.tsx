@@ -4,7 +4,8 @@ import { AccessibilityInfo } from 'react-native';
 import { createSettingsRepo } from '@/data/db/settings';
 import { setHydrationStatus } from '@/data/hydrate/status';
 import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
-import { formatAsOfDay, inLearningPeriod, LicenceCard } from '@/features/home/LicenceCard';
+import { formatAsOfDay } from '@/features/home/format';
+import { inLearningPeriod, LicenceCard } from '@/features/home/LicenceCard';
 import { setOnline } from '@/features/inbox/__fixtures__/harness';
 import { RewardsDataError, type RewardsSnapshot } from '@/features/rewards/api';
 import { writeCachedRewards } from '@/features/rewards/cache';
@@ -16,6 +17,7 @@ import { BANNED_COPY } from '@/notifications/catalog';
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/lib/deviceZone', () => ({ deviceZone: () => 'UTC' }));
 jest.mock('@/data/supabase/session', () => ({
   useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
 }));
@@ -290,6 +292,32 @@ describe('the rewards fields: CLASS, STREAK, SAFE DAYS and POINTS (M5, D13)', ()
     await w.renderScreen(<LicenceCard name="Maya" />);
     expect(await screen.findByLabelText('Safe days, 1')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Safe days, 3')).toBeNull();
+  });
+
+  test('rewards began after this phone\'s first drive: SAFE DAYS says since when (m1)', async () => {
+    mockRewardsServer.answer = async () =>
+      snapshot({ progress: progressRow({ safe_days: 0, rewards_start: '2026-01-15' }) });
+    // T0 is 2026-01-05: this drive is from before the rewards began.
+    const w = await world({ trips: [drive('old', 0)] }, now);
+    await w.renderScreen(<LicenceCard name="Maya" />);
+    expect(await screen.findByLabelText('Safe days, 0, since January 15')).toBeOnTheScreen();
+    expect(screen.getByText('since Jan 15')).toBeOnTheScreen();
+  });
+
+  test('no footnote when every drive is from the rewards on, or rewards_start is not set', async () => {
+    mockRewardsServer.answer = async () =>
+      snapshot({ progress: progressRow({ safe_days: 3, rewards_start: '2026-01-05' }) });
+    const w = await world({ trips: [drive('same-day', 0), drive('later', -2)] }, now);
+    await w.renderScreen(<LicenceCard name="Maya" />);
+    expect(await screen.findByLabelText('Safe days, 3')).toBeOnTheScreen();
+    expect(screen.queryByTestId('licence-safe-days-since')).toBeNull();
+    clearQueryClients();
+
+    mockRewardsServer.answer = async () => snapshot({ progress: progressRow({ safe_days: 3, rewards_start: null }) });
+    const w2 = await world({ trips: [drive('old', 30)] }, now);
+    await w2.renderScreen(<LicenceCard name="Maya" />);
+    expect(await screen.findByLabelText('Safe days, 3')).toBeOnTheScreen();
+    expect(screen.queryByTestId('licence-safe-days-since')).toBeNull();
   });
 
   test("the streak is the server's streak_days, never recounted from the settled days", async () => {

@@ -4,7 +4,7 @@ import { Pressable, View } from 'react-native';
 
 import { useDataSource } from '@/data/queries';
 import { RewardsOfflineError, type WeeklyGoal } from '@/features/rewards/api';
-import { goalSentence } from '@/features/rewards/copy/common';
+import { goalActiveLine, goalSentence } from '@/features/rewards/copy/common';
 import { useEnsureWeek } from '@/features/rewards/useEnsureWeek';
 import { useRewards } from '@/features/rewards/useRewards';
 import { goalView, isoWeekStart } from '@/features/rewards/viewModel';
@@ -33,7 +33,7 @@ function thisWeeksGoal(goal: WeeklyGoal | null, now: number): WeeklyGoal | null 
   return goal.week_start === isoWeekStart(dayKey(new Date(now), deviceZone())) ? goal : null;
 }
 
-/** "2 of 4 days" as a ruled bar: passing days of the target, never past full. */
+/** "2 of 4 driving days" as a ruled bar: passing days of the target, never past full. */
 function ProgressBar({ pass, target }: { pass: number; target: number }) {
   const th = useTheme();
   const fraction = target > 0 ? Math.min(1, Math.max(0, pass / target)) : 0;
@@ -79,12 +79,16 @@ function FocusBody() {
     const view = goalView(goal);
     const sentence = goalSentence(view.category, view.target);
     const progress = copy.progress(view.pass, view.target);
-    const note = view.state === 'active' ? null : view.remainingText;
+    // Active: the shared line (never "N more days"; the proration promise only while it can hold).
+    const note =
+      view.state === 'active'
+        ? goalActiveLine({ pass: view.pass, target: view.target, failDays: view.fail })
+        : view.remainingText;
     return (
       <View style={{ marginHorizontal: -th.space.lg, marginBottom: -th.space.lg }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={copy.spoken([copy.label, sentence, progress, ...(note ? [clause(note)] : [])])}
+          accessibilityLabel={copy.spoken([copy.label, sentence, progress, clause(note)])}
           onPress={() => router.push(GOAL_HREF)}
           testID="weekly-focus"
           style={({ pressed }) => [
@@ -109,11 +113,9 @@ function FocusBody() {
                 <ProgressBar pass={view.pass} target={view.target} />
               </View>
             </View>
-            {note ? (
-              <Text variant="footnote" tone="muted">
-                {note}
-              </Text>
-            ) : null}
+            <Text variant="footnote" tone="muted" testID="weekly-focus-line">
+              {note}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={th.colors.textSubtle} />
         </Pressable>

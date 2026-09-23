@@ -89,19 +89,37 @@ async function renderField(before?: (w: Awaited<ReturnType<typeof world>>) => Pr
   return w;
 }
 
-const LABEL = 'This week. Keep your phone down on 4 driving days. 2 of 4 days. Opens your weekly goal';
+/** The shared active line (`goalActiveLine`) with no failed day: the proration promise holds. */
+const ACTIVE_LINE = '2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.';
+const LABEL =
+  'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. 2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts. Opens your weekly goal';
 
 test("this week's goal: the sentence, the day count with a bar, and a tap to the goal", async () => {
   await renderField();
   const field = await screen.findByRole('button', { name: LABEL });
   expect(screen.getByText('This week')).toBeOnTheScreen();
   expect(within(field).getByText('Keep your phone down on 4 driving days')).toBeOnTheScreen();
-  expect(within(field).getByText('2 of 4 days')).toBeOnTheScreen();
+  expect(within(field).getByText('2 of 4 driving days')).toBeOnTheScreen();
+  expect(within(field).getByText(ACTIVE_LINE)).toBeOnTheScreen();
+  // Never a nudge to drive more.
+  expect(within(field).queryByText(/more driving day/)).toBeNull();
   expect(within(field).getByTestId('weekly-focus-bar', { includeHiddenElements: true })).toBeOnTheScreen();
   await press(field);
   expect(mockRouter.push).toHaveBeenCalledWith('/rewards/goal');
   // A goal that already exists is never opened again.
   expect(mockServer.opens).toBe(0);
+});
+
+test('after a day that did not pass, the active line keeps the count and drops the proration promise', async () => {
+  mockServer.answer = async () => snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 1 }) });
+  await renderField();
+  expect(
+    await screen.findByRole('button', {
+      name: 'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. 2 of 4 days so far. Opens your weekly goal',
+    })
+  ).toBeOnTheScreen();
+  expect(screen.getByText('2 of 4 days so far.')).toBeOnTheScreen();
+  expect(screen.queryByText(/Drive fewer days/)).toBeNull();
 });
 
 test('a goal reached says so, and its bar is full', async () => {
@@ -110,7 +128,7 @@ test('a goal reached says so, and its bar is full', async () => {
   await renderField();
   expect(
     await screen.findByRole('button', {
-      name: 'This week. Stay within the limit on 4 driving days. 4 of 4 days. Goal reached. Opens your weekly goal',
+      name: 'This week. Stay within the limit on 4 driving days. 4 of 4 driving days. Goal reached. Opens your weekly goal',
     })
   ).toBeOnTheScreen();
   expect(screen.getByText('Goal reached.')).toBeOnTheScreen();
@@ -123,7 +141,7 @@ test('the bar never runs past full', async () => {
   mockServer.answer = async () =>
     snapshot({ currentGoal: goalRow(THIS_WEEK, { target_days: 2, pass_days: 3, state: 'achieved', prorated: true }) });
   await renderField();
-  await screen.findByText('3 of 2 days');
+  await screen.findByText('3 of 2 driving days');
   expect(screen.getByTestId('weekly-focus-fill', { includeHiddenElements: true }).props.style).toEqual(
     expect.arrayContaining([expect.objectContaining({ width: '100%' })])
   );
@@ -148,7 +166,8 @@ test("no goal for this week yet, online: this week's goal is opened, then printe
   await waitFor(() => expect(mockServer.opens).toBe(1));
   await act(async () => opened());
   expect(await screen.findByText('Brake smoothly on 4 driving days')).toBeOnTheScreen();
-  expect(screen.getByText('0 of 4 days')).toBeOnTheScreen();
+  expect(screen.getByText('0 of 4 driving days')).toBeOnTheScreen();
+  expect(screen.getByText('Counts from the days you drive this week.')).toBeOnTheScreen();
   expect(mockServer.opens).toBe(1);
 });
 

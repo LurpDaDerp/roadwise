@@ -1,19 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { CONSTANTS } from '@scoring';
-import type { UseQueryResult } from '@tanstack/react-query';
 import { useRouter, type Href } from 'expo-router';
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
 
-import { useDataSource, useLongTermScore, type LongTermScoreView } from '@/data/queries';
+import { useDataSource, useLongTermScore, useTrips, type LongTermScoreView } from '@/data/queries';
 import { pointsText } from '@/features/rewards/copy/common';
-import type { RewardsData } from '@/features/rewards/useRewards';
+import { RewardsOfflineError } from '@/features/rewards/api';
+import { useRewards } from '@/features/rewards/useRewards';
 import { classView, streakView, type ClassView, type StreakView } from '@/features/rewards/viewModel';
 import { Field, FieldText } from '@/features/trips';
+import { deviceZone } from '@/lib/deviceZone';
+import { dayKey } from '@/lib/time';
 import { Banner, Card, Skeleton, Text, useTheme } from '@/ui';
 import { bandLabel, formatScore, Stamp } from '@/ui/charts';
 
 import { homeCopy } from './copy';
+import { formatAsOfDay } from './format';
 
 const copy = homeCopy.card;
 
@@ -22,26 +25,6 @@ const DRIVES_NEEDED = CONSTANTS.LONG_TERM_MIN_TRIPS;
 
 /** The rewards tab (F1). */
 const REWARDS_HREF = '/rewards' as Href;
-
-/**
- * A `YYYY-MM-DD` day as the card prints it ("Sep 21") and as it is spoken ("September 21"). The
- * year joins in only when it is not the current one, so a score that is months old says so.
- */
-export function formatAsOfDay(day: string, now: number): { printed: string; spoken: string } {
-  const date = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return { printed: day, spoken: day };
-  const thisYear = new Date(now).getUTCFullYear() === date.getUTCFullYear();
-  const opts = (month: 'short' | 'long'): Intl.DateTimeFormatOptions => ({
-    month,
-    day: 'numeric',
-    timeZone: 'UTC',
-    ...(thisYear ? null : { year: 'numeric' }),
-  });
-  return {
-    printed: new Intl.DateTimeFormat('en-US', opts('short')).format(date),
-    spoken: new Intl.DateTimeFormat('en-US', opts('long')).format(date),
-  };
-}
 
 /**
  * The learning period (product spec §10: the first drives, while the long-term score is still
@@ -139,7 +122,15 @@ function ScoreField({ view }: { view: LongTermScoreView }) {
 type RewardsFields =
   | { state: 'loading' }
   | { state: 'unread'; offline: boolean; retry: () => void }
-  | { state: 'ready'; safeDays: number; klass: ClassView; streak: StreakView; points: number };
+  | {
+      state: 'ready';
+      safeDays: number;
+      /** `progress.rewards_start` (a day key): settled days count only from it. */
+      rewardsStart: string | null;
+      klass: ClassView;
+      streak: StreakView;
+      points: number;
+    };
 
 /**
  * The card's rewards values, straight from the server's settled `progress` row (or this phone's
@@ -147,27 +138,14 @@ type RewardsFields =
  * (Decision D13, so the card and the badges agree), the streak is `progress.streak_days`, and a
  * driver with no progress row yet is a Learner with nothing — which is true, not a guess.
  */
-/**
- * `useRewards`, loaded on first render rather than at import. The rewards hooks import the session
- * module, which loads the app client and needs its env; Insights imports `formatAsOfDay` from this
- * file, and its suites (which mock neither) must not start needing either.
- */
-function useRewardsSnapshot(): UseQueryResult<RewardsData> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the rewards hooks, only when rendered
-  const { useRewards } = require('@/features/rewards/useRewards') as typeof import('@/features/rewards/useRewards');
-  return useRewards();
-}
-
-/** `RewardsOfflineError` by its name, so this file does not import the rewards api either. */
-const isOffline = (error: unknown) => error instanceof Error && error.name === 'RewardsOfflineError';
-
 function useRewardsFields(): RewardsFields {
-  const rewards = useRewardsSnapshot();
+  const rewards = useRewards();
   if (rewards.data) {
     const progress = rewards.data.snapshot.progress;
     return {
       state: 'ready',
       safeDays: progress?.safe_days ?? 0,
+      rewardsStart: progress?.rewards_start ?? null,
       klass: classView(progress),
       streak: streakView(progress),
       points: progress?.points ?? 0,
@@ -176,7 +154,7 @@ function useRewardsFields(): RewardsFields {
   if (rewards.error) {
     return {
       state: 'unread',
-      offline: isOffline(rewards.error),
+      offline: rewards.error instanceof RewardsOfflineError,
       retry: () => void rewards.refetch(),
     };
   }
@@ -186,14 +164,40 @@ function useRewardsFields(): RewardsFields {
 const unreadReason = (fields: { offline: boolean }) =>
   fields.offline ? copy.rewardsOffline : copy.rewardsError;
 
+/** The latest instant a trip can start and still fall on a day before `day` in any zone (UTC+14). */
+const beforeDayBound = (day: string) => Date.parse(`${day}T00:00:00Z`) + 14 * 3_600_000;
+
+/**
+ * Whether this phone holds a drive from before `rewardsStart` (a day key, in the device's zone):
+ * then SAFE DAYS, which counts settled days only from that day, says "since" so a new count never
+ * reads as a lifetime one (review m1, ruled a). The drives read are the few just before the day.
+ */
+function useDrivesBefore(rewardsStart: string | null): boolean {
+  const trips = useTrips(rewardsStart === null ? { to: -1, limit: 0 } : { to: beforeDayBound(rewardsStart), limit: 20 });
+  if (rewardsStart === null || !trips.data) return false;
+  return trips.data.some((t) => dayKey(new Date(t.startedAt), deviceZone()) < rewardsStart);
+}
+
 function SafeDaysField({ rewards }: { rewards: RewardsFields }) {
+  const { now } = useDataSource();
+  const rewardsStart = rewards.state === 'ready' ? rewards.rewardsStart : null;
+  const since = useDrivesBefore(rewardsStart) && rewardsStart !== null ? formatAsOfDay(rewardsStart, now()) : null;
   let body;
   if (rewards.state === 'ready') {
     body = (
-      <View accessible accessibilityLabel={copy.spoken.safeDays(rewards.safeDays)} testID="licence-safe-days">
+      <View
+        accessible
+        accessibilityLabel={copy.spoken.safeDays(rewards.safeDays, since?.spoken ?? null)}
+        testID="licence-safe-days"
+      >
         <FieldText face="numeral" variant="title1">
           {String(rewards.safeDays)}
         </FieldText>
+        {since ? (
+          <Text variant="footnote" tone="muted" testID="licence-safe-days-since">
+            {copy.since(since.printed)}
+          </Text>
+        ) : null}
       </View>
     );
   } else if (rewards.state === 'unread') {

@@ -13,7 +13,7 @@ import {
   type YouVsYou,
 } from '@/data/queries';
 import { homeCopy } from '@/features/home/copy';
-import { formatAsOfDay } from '@/features/home/LicenceCard';
+import { formatAsOfDay } from '@/features/home/format';
 import { Card, ListRow, Screen, Text, useTheme } from '@/ui';
 import { bandLabel, formatScore, Stamp, TrendLine } from '@/ui/charts';
 

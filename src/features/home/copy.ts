@@ -37,6 +37,8 @@ export const homeCopy = {
     shields: (n: number) => (n === 1 ? '1 shield' : `${n} shields`),
     /** Shown only once a streak has restarted, so the run it had is not lost from view. */
     best: (n: number) => `Best ${n}`,
+    /** Under SAFE DAYS when this phone has drives from before the rewards began ("since Sep 21"). */
+    since: (day: string) => `since ${day}`,
     rewardsError: "Couldn't read your rewards.",
     /** Offline with nothing saved on this phone: the cause, not a failure. */
     rewardsOffline: "Your rewards appear when you're online.",
@@ -61,7 +63,8 @@ export const homeCopy = {
       building: (text: string) => `Long-term score not ready yet. ${text}`,
       waiting: 'Long-term score not ready yet. It appears when your drives sync',
       restoring: 'Long-term score: restoring your drives from the server',
-      safeDays: (n: number) => `Safe days, ${n}`,
+      safeDays: (n: number, since: string | null = null) =>
+        since === null ? `Safe days, ${n}` : `Safe days, ${n}, since ${since}`,
       safeDaysUnread: (reason: string) => `Safe days: ${reason}`,
       provisional: 'Provisional',
       /** "Class Steady. Streak 12 days, 2 shields. 1,250 points. Opens rewards" */
@@ -84,8 +87,9 @@ export const homeCopy = {
   /** This week's focus in the RECORD section (§7.B B1 item 6, M5). */
   focus: {
     label: 'This week',
-    /** Passing driving days of the goal's target: "2 of 4 days". */
-    progress: (pass: number, target: number) => `${pass} of ${target} days`,
+    /** Passing driving days of the goal's target: "2 of 4 driving days" (Task 9's words). */
+    progress: (pass: number, target: number) =>
+      `${pass} of ${target} ${target === 1 ? 'driving day' : 'driving days'}`,
     /** A new week's goal has not been opened yet (it is opened on the next online look). */
     none: 'No goal for this week yet.',
     offline: "Your weekly goal appears when you're online.",
