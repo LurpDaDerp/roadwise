@@ -239,7 +239,7 @@ select has_index('public', 'user_challenges', 'user_challenges_def_idx', 'user_c
 select is((select pg_get_indexdef('public.user_challenges_one_active_idx'::regclass)),
   'CREATE UNIQUE INDEX user_challenges_one_active_idx ON public.user_challenges USING btree (user_id, def_id) WHERE (state = ''active''::text)',
   'one active enrolment per definition');
-select is(array[(select count(*)::int from public.badge_defs), (select count(*)::int from public.challenge_defs)], array[15, 4],
+select is(array[(select count(*)::int from public.badge_defs where id <> 'referrals_1'), (select count(*)::int from public.challenge_defs)], array[15, 4],
   'seeds: 15 badges (referrals_1 comes with 0011) and 4 challenges');
 select is((select count(*)::int from pg_trigger where not tgisinternal and tgfoid = 'public.refuse_underage_writes()'::regprocedure
     and tgrelid in ('public.user_badges'::regclass, 'public.user_challenges'::regclass)), 2, 'both user tables refuse an under-13 account''s inserts');

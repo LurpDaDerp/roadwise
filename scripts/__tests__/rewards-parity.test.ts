@@ -2,8 +2,18 @@
 // every constant from that JSON. packages/scoring's `rewardRulesJson()` is the app's copy. This suite
 // parses the JSON literal out of the migration and deep-compares it, and holds the SQL's inbox.type
 // list and the enqueue trigger's wall-clock hour to the same sources, so a change on either side fails
-// here (M5 Task 2 Step 5; the pattern of 0006's and 0007's parity tests).
-import { BADGES, CHALLENGES, REWARDS, rewardRulesJson } from '@scoring';
+// here (M5 Task 2 Step 5; the pattern of 0006's and 0007's parity tests). Migration 0011's referral
+// code rule (the pattern and the normaliser) and its badge row are held to the same sources, over the
+// normaliser test vectors that 0011's pgTAP file also runs (M5 Task 6 Step 5).
+import { LIVE_TYPES } from '@/notifications/catalog';
+import {
+  BADGES,
+  CHALLENGES,
+  REFERRAL_CODE_PATTERN,
+  REWARDS,
+  normaliseReferralCode,
+  rewardRulesJson,
+} from '@scoring';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time; the root
 // tsconfig's `types` is ["jest"], hence local shapes (the appConfig parity test's pattern).
@@ -20,6 +30,39 @@ const migration = (): string =>
 
 const migration0010 = (): string =>
   readFileSync(join(__dirname, '../../supabase/migrations/0010_badges_challenges.sql'), 'utf8');
+
+const migration0011 = (): string =>
+  readFileSync(join(__dirname, '../../supabase/migrations/0011_referral.sql'), 'utf8');
+
+/** The normaliser vectors 0011's pgTAP file runs: the JSON array between its `$vectors$` quotes. */
+function referralVectors(): { input: string; expected: string }[] {
+  const sql = readFileSync(join(__dirname, '../../supabase/tests/0011_referral.test.sql'), 'utf8');
+  const block = /\$vectors\$(\[[\s\S]*?\])\$vectors\$/.exec(sql);
+  if (block?.[1] === undefined) throw new Error('0011_referral.test.sql has no $vectors$ list');
+  return JSON.parse(block[1]) as { input: string; expected: string }[];
+}
+
+/**
+ * The code points `public.normalise_referral_code` strips besides the hyphen: its bracket class is
+ * built from `chr(n)` terms, where a `'-'` term between two of them is a range.
+ */
+function sqlStrippedCodePoints(sql: string): Set<number> {
+  const fn = /function public\.normalise_referral_code\(p_input text\)[\s\S]*?'\[' \|\|([\s\S]*?)\|\| '-\]'/.exec(sql);
+  if (fn?.[1] === undefined) throw new Error('0011 has no normalise_referral_code class');
+  const terms = [...fn[1].matchAll(/chr\((\d+)\)|'-'/g)].map((m) => (m[1] === undefined ? '-' : Number(m[1])));
+  const out = new Set<number>();
+  terms.forEach((term, i) => {
+    if (term !== '-') {
+      out.add(term);
+      return;
+    }
+    const from = terms[i - 1];
+    const to = terms[i + 1];
+    if (typeof from !== 'number' || typeof to !== 'number') throw new Error('a range needs a chr() on each side');
+    for (let cp = from; cp <= to; cp += 1) out.add(cp);
+  });
+  return out;
+}
 
 /** The value tuples of `insert into public.<table> (…) values (…), (…) on conflict`, as string fields. */
 function seedRows(sql: string, table: string): string[][] {
@@ -44,16 +87,6 @@ function inboxTypes(sql: string): string[] {
   return check[1].split(',').map((t) => t.trim().replace(/^'|'$/g, ''));
 }
 
-// Task 4's six live types (Task 6 replaces this literal with [...LIVE_TYPES]).
-const LIVE_TYPES_M5 = [
-  'trip_summary',
-  'permission_lapsed',
-  'streak_milestone',
-  'goal_completed',
-  'level_up',
-  'referral_qualified',
-];
-
 describe('0009 rewards parity', () => {
   const sql = migration();
 
@@ -61,8 +94,8 @@ describe('0009 rewards parity', () => {
     expect(sqlRules(sql)).toEqual(rewardRulesJson());
   });
 
-  it('the inbox.type CHECK lists exactly the six live types', () => {
-    expect(inboxTypes(sql)).toEqual(LIVE_TYPES_M5);
+  it('the inbox.type CHECK lists exactly the catalog LIVE_TYPES', () => {
+    expect(inboxTypes(sql)).toEqual([...LIVE_TYPES]);
   });
 
   it('0010 seeds badge_defs with BADGES exactly (all but referrals_1, which 0011 seeds with its producer)', () => {
@@ -93,5 +126,45 @@ describe('0009 rewards parity', () => {
   it('the enqueue trigger uses the settle wall-clock hour', () => {
     const enqueue = /\(\(new\.day \+ 1\)::timestamp \+ interval '(\d+) hours'\) at time zone 'Etc\/GMT-14'/.exec(sql);
     expect(Number(enqueue?.[1])).toBe(REWARDS.SETTLE_WALL_CLOCK_H);
+  });
+});
+
+describe('0011 referral parity', () => {
+  const sql = migration0011();
+
+  it('every code pattern in 0011 is REFERRAL_CODE_PATTERN, over CODE_ALPHABET', () => {
+    const patterns = [...sql.matchAll(/'(\^\[[A-Z0-9]+\]\{\d+\}\$)'/g)].map((m) => m[1]);
+    expect(patterns).toHaveLength(2);
+    for (const p of patterns) expect(p).toBe(REFERRAL_CODE_PATTERN.source);
+    expect(REFERRAL_CODE_PATTERN.source).toBe(
+      `^[${REWARDS.REFERRAL.CODE_ALPHABET}]{${REWARDS.REFERRAL.CODE_LENGTH}}$`,
+    );
+  });
+
+  it('the SQL normaliser strips exactly the code points a JS whitespace class matches (the hyphen aside)', () => {
+    const stripped = sqlStrippedCodePoints(sql);
+    const mismatches: number[] = [];
+    for (let cp = 0; cp <= 0xffff; cp += 1) {
+      if (/\s/.test(String.fromCharCode(cp)) !== stripped.has(cp)) mismatches.push(cp);
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it('normaliseReferralCode gives the expected output on every vector the 0011 pgTAP file runs', () => {
+    const vectors = referralVectors();
+    expect(vectors.length).toBeGreaterThanOrEqual(19);
+    for (const v of vectors) expect(normaliseReferralCode(v.input)).toBe(v.expected);
+  });
+
+  it('0011 seeds referrals_1 exactly as BADGES has it', () => {
+    const rows = seedRows(sql, 'badge_defs').map(([id, family, tier, metric, threshold, sort]) => ({
+      id,
+      family,
+      tier,
+      metric,
+      threshold: Number(threshold),
+      sort: Number(sort),
+    }));
+    expect(rows).toEqual(BADGES.filter((b) => b.id === 'referrals_1').map((b) => ({ ...b })));
   });
 });

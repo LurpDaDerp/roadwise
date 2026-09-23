@@ -809,6 +809,24 @@ export type Database = {
           },
         ]
       }
+      push_token_seen: {
+        Row: {
+          first_seen_at: string
+          token_sha256: string
+          user_id: string
+        }
+        Insert: {
+          first_seen_at?: string
+          token_sha256: string
+          user_id: string
+        }
+        Update: {
+          first_seen_at?: string
+          token_sha256?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       rate_limits: {
         Row: {
           count: number
@@ -833,6 +851,72 @@ export type Database = {
           updated_at?: string
           user_id?: string
           window_start?: string
+        }
+        Relationships: []
+      }
+      referral_codes: {
+        Row: {
+          code: string
+          created_at: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      referrals: {
+        Row: {
+          created_at: string
+          id: string
+          invitee_id: string
+          invitee_rewarded: boolean
+          qualified_at: string | null
+          redeemed_at: string
+          referrer_cap: boolean
+          referrer_id: string
+          referrer_rewarded: boolean | null
+          reject_reason: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invitee_id: string
+          invitee_rewarded?: boolean
+          qualified_at?: string | null
+          redeemed_at: string
+          referrer_cap?: boolean
+          referrer_id: string
+          referrer_rewarded?: boolean | null
+          reject_reason?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invitee_id?: string
+          invitee_rewarded?: boolean
+          qualified_at?: string | null
+          redeemed_at?: string
+          referrer_cap?: boolean
+          referrer_id?: string
+          referrer_rewarded?: boolean | null
+          reject_reason?: string | null
+          status?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -1404,6 +1488,7 @@ export type Database = {
         Args: { p_after_name: string; p_limit: number }
         Returns: Json
       }
+      get_my_referral_code: { Args: never; Returns: Json }
       guardian_link_state: { Args: never; Returns: Json }
       inbox_subject_gone: {
         Args: { p_payload: Json; p_ref: string; p_type: string; p_user: string }
@@ -1419,6 +1504,8 @@ export type Database = {
       leave_challenge: { Args: { p_id: string }; Returns: undefined }
       mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
+      my_referrals: { Args: never; Returns: Json }
+      normalise_referral_code: { Args: { p_input: string }; Returns: string }
       notification_defaults: { Args: never; Returns: Json }
       open_my_week: { Args: never; Returns: Json }
       purge_reward_audit: { Args: never; Returns: number }
@@ -1453,7 +1540,13 @@ export type Database = {
       }
       record_push_outcomes: { Args: { p: Json }; Returns: number }
       record_push_receipts: { Args: { p: Json }; Returns: number }
+      redeem_referral_code: { Args: { p_code: string }; Returns: Json }
       rederive_age_bands: { Args: never; Returns: number }
+      referral_refusal: {
+        Args: { p_message: string; p_sqlstate: string }
+        Returns: Json
+      }
+      referrals_available: { Args: never; Returns: boolean }
       refresh_progress: { Args: { p_user: string }; Returns: Json }
       register_push_token: {
         Args: { p_device_id: string; p_token: string }
@@ -1579,6 +1672,10 @@ export type Database = {
       }
       settle_goals: {
         Args: { p_days: string[]; p_now: string; p_tz: string; p_user: string }
+        Returns: Json
+      }
+      settle_referrals: {
+        Args: { p_now: string; p_user: string }
         Returns: Json
       }
       settle_rewards: {
