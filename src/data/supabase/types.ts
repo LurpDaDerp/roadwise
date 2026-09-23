@@ -1381,6 +1381,7 @@ export type Database = {
           source: string
           state: string
           target_days: number
+          tz: string
           updated_at: string
           user_id: string
           week_start: string
@@ -1395,6 +1396,7 @@ export type Database = {
           source: string
           state?: string
           target_days?: number
+          tz: string
           updated_at?: string
           user_id: string
           week_start: string
@@ -1409,6 +1411,7 @@ export type Database = {
           source?: string
           state?: string
           target_days?: number
+          tz?: string
           updated_at?: string
           user_id?: string
           week_start?: string
@@ -1473,6 +1476,7 @@ export type Database = {
           source: string
           state: string
           target_days: number
+          tz: string
           updated_at: string
           user_id: string
           week_start: string

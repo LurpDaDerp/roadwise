@@ -20,7 +20,7 @@ begin
 end $$;
 
 begin;
-select plan(225);
+select plan(246);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -251,8 +251,8 @@ select is(pg_temp.remote_apply('rw9_s2', pg_temp.env(pg_temp.u(902), 'g4', (sele
 select is(pg_temp.remote('rw9_s1', format($q$do $d$ begin perform public.settle_rewards('c9000000-0000-4000-8000-000000000902', now(), %L); end $d$; commit$q$,
     (select lease from g_lease))), 'COMMIT', 'the leased settlement finishes');
 select is((select d from extensions.dblink('rw9_pg', $q$select due_at::text from public.reward_due where user_id = 'c9000000-0000-4000-8000-000000000902'$q$) as t(d text))::timestamptz,
-  least(pg_temp.la_close((select today from g_lease)), (((select today from g_lease) + 1)::timestamp + interval '2 hours') at time zone 'Etc/GMT-14'),
-  'the reward_due row still exists, no later than the new day''s close (the enqueue only ever lowers it)');
+  pg_temp.la_close((select today from g_lease)),
+  'the reward_due row still exists, at the new day''s close (the enqueue only ever lowers it; final review I1: the real close, not UTC+14''s)');
 select is((select n from extensions.dblink('rw9_pg', format($q$select count(*)::int from public.reward_days where user_id = 'c9000000-0000-4000-8000-000000000902' and day = %L$q$,
     (select today from g_lease))) as t(n int)), 0, 'the new day is not settled before its close');
 select extensions.dblink_exec('rw9_pg', format($q$do $d$ begin perform public.settle_rewards('c9000000-0000-4000-8000-000000000902', %L); end $d$$q$,
@@ -307,7 +307,7 @@ select columns_are('public', 'reward_days', array['user_id', 'day', 'outcome', '
   'streak_after', 'wall_close', 'settled_at', 'source_updated_at', 'checked_through', 'created_at', 'updated_at']::name[], 'reward_days has exactly its columns');
 select columns_are('public', 'reward_due', array['user_id', 'due_at', 'failures', 'created_at', 'updated_at']::name[], 'reward_due has exactly its columns');
 select columns_are('public', 'weekly_goals', array['user_id', 'week_start', 'category', 'source', 'target_days', 'pass_days', 'fail_days', 'state',
-  'prorated', 'closed_at', 'created_at', 'updated_at']::name[], 'weekly_goals has exactly its columns');
+  'prorated', 'closed_at', 'tz', 'created_at', 'updated_at']::name[], 'weekly_goals has exactly its columns (tz pinned at creation, final review m2)');
 select columns_are('public', 'reward_contradictions', array['id', 'user_id', 'day', 'kind', 'detail', 'dedupe_key', 'created_at']::name[],
   'reward_contradictions has exactly its columns (append-only)');
 select has_column('public', 'devices', 'synced_through', 'devices carries synced_through');
@@ -368,10 +368,15 @@ insert into fn9 select unnest(array['public.reward_rules()', 'public.clamp_devic
   'public.settle_goals(uuid, text, timestamptz, date[])', 'public.refresh_progress(uuid)', 'public.emit_reward_events(uuid, jsonb, text, timestamptz)',
   'public.reward_retry_at(timestamptz, timestamptz)', 'public.schedule_next_settle(uuid, text, timestamptz, timestamptz)',
   'public.settle_rewards(uuid, timestamptz, timestamptz)', 'public.reward_settle_failed(uuid, timestamptz, timestamptz)',
-  'public.settle_due_rewards_at(int, timestamptz)', 'public.purge_reward_audit()', 'public.enqueue_reward_settlement()',
+  'public.settle_due_rewards_at(int, timestamptz)', 'public.purge_reward_audit()',
   'public.audit_trip_relabel()', 'public.upsert_score_day(uuid, jsonb)']::regprocedure[]);
-select is((select count(*)::int from fn9 join pg_proc p on p.oid = fn9.f where not p.prosecdef and p.proconfig = array['search_path=public']), 31,
+select is((select count(*)::int from fn9 join pg_proc p on p.oid = fn9.f where not p.prosecdef and p.proconfig = array['search_path=public']), 30,
   'every other function 0009 creates or replaces is invoker, pinning exactly search_path=public');
+select is((select count(*)::int from pg_proc p where p.oid in ('public.enqueue_reward_settlement()'::regprocedure, 'public.wake_reward_settlement()'::regprocedure)
+    and p.prosecdef and p.proowner = 'postgres'::regrole and p.proconfig = array['search_path=public']), 2,
+  'the enqueue and wake triggers are definer, owned by postgres, pinning search_path (final review I1)');
+select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'authenticated', 'service_role']) r,
+    unnest(array['public.enqueue_reward_settlement()', 'public.wake_reward_settlement()']::regprocedure[]) f), false, 'and no API role executes them');
 select is((select row(p.prokind, p.prosecdef, p.proconfig)::text from pg_proc p where p.oid = 'public.settle_due_rewards(int)'::regprocedure),
   row('p'::"char", false, null::text[])::text,
   'settle_due_rewards(int) is the one documented exception: a procedure, not definer, no proconfig (it COMMITs; the path is set per transaction)');
@@ -509,7 +514,7 @@ select throws_ok($$ insert into public.inbox (user_id, type, payload, dedupe_key
   'an unknown type is still refused');
 delete from public.inbox where user_id = pg_temp.u(2);
 select is((select row(schedule, command, username)::text from cron.job where jobname = 'settle-rewards'),
-  row('*/5 * * * *', 'call public.settle_due_rewards(200)', 'postgres')::text, 'settle-rewards calls the procedure every 5 minutes as postgres');
+  row('*/5 * * * *', 'call public.settle_due_rewards(5000)', 'postgres')::text, 'settle-rewards calls the procedure every 5 minutes as postgres, up to 5000 users (the 4-minute budget bounds it)');
 select is((select row(schedule, command)::text from cron.job where jobname = 'purge-reward-audit'),
   row('40 4 * * *', 'select public.purge_reward_audit()')::text, 'purge-reward-audit runs daily at 04:40');
 select is(public.reward_rules() -> 'POINTS', '{"safeDay": 50, "goodDay": 20, "phoneFreeDay": 25, "cameraDay": 10, "weeklyGoal": 150, "referral": 500}'::jsonb,
@@ -649,13 +654,20 @@ select pg_temp.as_service(format('select public.apply_recompute(%L, %L, null, nu
 select pg_temp.bump(pg_temp.u(1), 3);
 select pg_temp.settle(pg_temp.u(1), pg_temp.late());
 select is(array[pg_temp.snap(pg_temp.u(1)) = (select s from snapA), pg_temp.contra(pg_temp.u(1)) = (select c from snapA) + 3], array[true, true],
-  '(iii) a soft delete after settlement changes nothing settled, one more row');
+  '(iii) a soft delete after settlement changes nothing settled, one more row (the day would now settle to another result)');
 -- (iv) a late upload of a safe drive
 select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.env(pg_temp.u(1), 'a2', date '2026-06-01', 98, 30, true)::text));
 select pg_temp.bump(pg_temp.u(1), 4);
 select pg_temp.settle(pg_temp.u(1), pg_temp.late());
-select is(array[pg_temp.snap(pg_temp.u(1)) = (select s from snapA), pg_temp.contra(pg_temp.u(1)) = (select c from snapA) + 4], array[true, true],
-  '(iv) a late safe upload after settlement changes nothing settled, one more row');
+select is(array[pg_temp.snap(pg_temp.u(1)) = (select s from snapA), pg_temp.contra(pg_temp.u(1)) = (select c from snapA) + 3], array[true, true],
+  '(iv) a late safe upload after settlement changes nothing settled, and (final review m1) records no second row for the safe result (i) already recorded');
+-- (final review m1) a rewrite that leaves the day's result as settled records nothing
+select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.env(pg_temp.u(1), 'a5', date '2026-06-01', 40, 20, false)::text));
+select pg_temp.bump(pg_temp.u(1), 6);
+select pg_temp.settle(pg_temp.u(1), pg_temp.late());
+select is(array[(select (outcome, tier)::text from public.reward_days where user_id = pg_temp.u(1) and day = '2026-06-01'),
+    (pg_temp.contra(pg_temp.u(1)) - (select c from snapA))::text], array[row('unsafe', 'none')::text, '3'],
+  'a late unsafe drive puts the day back to the settled unsafe result: no row');
 -- the mirror: settled safe, then a late unsafe drive
 select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.env(pg_temp.u(1), 'a3', date '2026-06-02', 95, 20, true)::text));
 select pg_temp.settle(pg_temp.u(1), pg_temp.late());
@@ -666,6 +678,9 @@ select pg_temp.bump(pg_temp.u(1), 5);
 select pg_temp.settle(pg_temp.u(1), pg_temp.late());
 select is(array[pg_temp.snap(pg_temp.u(1)) = (select s from snapA2), pg_temp.contra(pg_temp.u(1)) = (select c from snapA2) + 1], array[true, true],
   'a late unsafe drive after a safe day settled changes nothing settled either, one row');
+select is((select count(*)::int from public.reward_contradictions where user_id = pg_temp.u(1) and kind = 'changed_after_settlement'
+    and (detail -> 'settled') = jsonb_build_object('outcome', detail -> 'now' ->> 'outcome', 'tier', detail -> 'now' ->> 'tier')), 0,
+  'no changed_after_settlement row records a result equal to the settled one');
 select throws_ok($$ update public.reward_days set tier = 'safe' where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',
   'a direct change of a settled day is refused, even as postgres');
 select throws_ok($$ update public.reward_days set streak_after = 9 where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',
@@ -739,7 +754,7 @@ update public.score_daily set updated_at = now() - interval '30 days' where user
 set local session_replication_role = origin;
 create temp table snapP as select pg_temp.snap(pg_temp.u(15)) as s, pg_temp.contra(pg_temp.u(15)) as c,
   (select array_agg(day order by day) from public.reward_days where user_id = pg_temp.u(15)) as days;
-create temp table prop (i int, kind int, changed boolean);
+create temp table prop (i int, kind int, changed boolean, key text);
 do $$
 declare
   v_user uuid := pg_temp.u(15);
@@ -748,6 +763,12 @@ declare
   v_trip uuid;
   v_role text;
   v_gap date;
+  v_changed boolean;
+  v_key text;
+  f public.reward_fact;
+  v_o text;
+  v_t text;
+  v_rd record;
 begin
   perform setseed(0.5);
   perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
@@ -786,8 +807,27 @@ begin
         insert into public.score_daily (user_id, day, provisional, safe_day, good_day, phone_free_day, camera_day, exposure, driving_s, trips_scored, severe_events)
           values (v_user, v_gap, false, true, false, false, false, 1, 1200, 1, 0);
     end case;
-    insert into prop values (i, v_kind, pg_temp.bump(v_user, i) > 0);
+    v_changed := pg_temp.bump(v_user, i) > 0;
     perform public.settle_rewards(v_user, pg_temp.late());
+    -- the oracle (final review m1): a new gap day is frozen with one row; a changed settled day records a
+    -- row only when it would now settle to another outcome or tier, once per (day, outcome, tier)
+    v_key := null;
+    if v_changed and v_kind = 6 then
+      v_key := 'gap:' || v_gap;
+    elsif v_changed then
+      select * into f from public.reward_day_facts(v_user, v_day, v_day, 'America/Los_Angeles');
+      select o.outcome into v_o from public.reward_outcome(f) o;
+      v_t := public.reward_tier(f);
+      select rd.outcome, rd.tier, rd.outcome_reason into v_rd from public.reward_days rd where rd.user_id = v_user and rd.day = v_day;
+      if v_rd.outcome_reason = 'zone_hop' then
+        v_t := 'none';
+        if v_o <> 'unsafe' then v_o := 'neutral'; end if;
+      end if;
+      if (v_o, v_t) is distinct from (v_rd.outcome, v_rd.tier) then
+        v_key := v_day || ':' || v_o || ':' || v_t;
+      end if;
+    end if;
+    insert into prop values (i, v_kind, v_changed, v_key);
   end loop;
   perform set_config('request.jwt.claims', '', true);
 end $$;
@@ -796,8 +836,10 @@ select is((select jsonb_build_object('days', (select jsonb_agg(to_jsonb(r) - 'ch
       where r.user_id = pg_temp.u(15) and r.day in (select unnest(days) from snapP)))
     || (pg_temp.snap(pg_temp.u(15)) - 'days')), (select s from snapP),
   'after 60 random late inputs every settled day, the ledger, progress and the goals are unchanged');
-select is(pg_temp.contra(pg_temp.u(15)) - (select c from snapP), (select count(*)::int from prop where changed),
-  'and the contradictions grew by exactly the number of inputs that changed a score_daily row');
+select is(pg_temp.contra(pg_temp.u(15)) - (select c from snapP), (select count(distinct key)::int from prop),
+  'and the contradictions grew by exactly the distinct results the changed days would now settle to (final review m1)');
+select ok((select count(distinct key) from prop) < (select count(*) from prop where changed),
+  'which is fewer than the inputs that rewrote a score_daily row (rewrites that change nothing record nothing)');
 
 -- ---------------------------------------------------------------------------
 -- 9. wall close, zone hop, stale profile zone
@@ -864,8 +906,13 @@ update public.devices set signed_out_at = pg_temp.c() - interval '2 hours' where
 select pg_temp.settle(pg_temp.u(21), pg_temp.c() + interval '1 hour');
 select is(array[(select count(*)::int from public.reward_days where user_id = pg_temp.u(21)),
     (select extract(epoch from due_at - pg_temp.c())::int from public.reward_due where user_id = pg_temp.u(21))],
-  array[0, 7200], 'a device synced before the close holds the day at close + 1 h, and reward_due moves to now + 1 h');
+  array[0, 259200], 'a device synced before the close holds the day at close + 1 h, and reward_due moves to close + 72 h, not an hourly poll (final review I1)');
+-- the wake (final review I1): queued in real time (a day after now), a moved watermark brings the owner to now
+update public.reward_due set due_at = now() + interval '1 day' where user_id = pg_temp.u(21);
+update public.devices set last_seen_at = pg_temp.c() where id = 'w21';
+select is((select due_at from public.reward_due where user_id = pg_temp.u(21)), now() + interval '1 day', 'a device write that moves no watermark wakes nothing');
 update public.devices set synced_through = pg_temp.c() + interval '30 minutes' where id = 'w21';
+select is((select due_at from public.reward_due where user_id = pg_temp.u(21)), now(), 'a moved watermark wakes the owner''s queued settlement to now');
 select pg_temp.settle(pg_temp.u(21), pg_temp.c() + interval '2 hours');
 select is((select count(*)::int from public.reward_days where user_id = pg_temp.u(21)), 1, 'once the watermark passes the close the day settles on the next run');
 select pg_temp.settle(pg_temp.u(22), pg_temp.c() + interval '72 hours' - interval '1 second');
@@ -877,6 +924,25 @@ select pg_temp.settle(pg_temp.u(24), pg_temp.c() + interval '1 minute');
 select is(array[(select count(*)::int from public.reward_days where user_id = pg_temp.u(23)), (select count(*)::int from public.reward_days where user_id = pg_temp.u(24))],
   array[1, 1], 'a signed-out device, or one last seen 15 days ago, does not hold a day');
 create temp table snapW as select pg_temp.snap(pg_temp.u(23)) as s;
+-- the wake on a sign-out and on a removed phone; a user with nothing queued gets no row
+select pg_temp.mkuser(28);
+insert into public.devices (id, user_id, platform, synced_through, last_seen_at) values ('w28', pg_temp.u(28), 'ios', pg_temp.c(), pg_temp.c()),
+  ('w28b', pg_temp.u(28), 'android', pg_temp.c(), pg_temp.c());
+update public.devices set synced_through = pg_temp.c() + interval '1 minute' where id = 'w28';
+select is((select count(*)::int from public.reward_due where user_id = pg_temp.u(28)), 0, 'a wake with nothing queued creates no queue row');
+insert into public.reward_due (user_id, due_at) values (pg_temp.u(28), now() + interval '1 day');
+update public.devices set signed_out_at = now() where id = 'w28';
+select is((select due_at from public.reward_due where user_id = pg_temp.u(28)), now(), 'a sign-out wakes the owner');
+update public.reward_due set due_at = now() + interval '1 day' where user_id = pg_temp.u(28);
+delete from public.devices where id = 'w28b';
+select is((select due_at from public.reward_due where user_id = pg_temp.u(28)), now(), 'so does a removed phone');
+-- I-B holds: a wake during a leased settlement is kept by the lease's compare-and-set
+insert into public.devices (id, user_id, platform, synced_through, last_seen_at) values ('w28c', pg_temp.u(28), 'ios', pg_temp.c(), pg_temp.c());
+update public.reward_due set due_at = now() + interval '10 minutes' where user_id = pg_temp.u(28);
+update public.devices set synced_through = pg_temp.c() + interval '2 minutes' where id = 'w28c';
+select public.settle_rewards(pg_temp.u(28), now(), now() + interval '10 minutes');
+select is((select due_at from public.reward_due where user_id = pg_temp.u(28)), now(),
+  'a wake during a lease survives the leased settlement (nothing owed, yet the row is kept at now: rev2 I-B)');
 update public.devices set signed_out_at = null where id = 'w23';
 select pg_temp.settle(pg_temp.u(23), pg_temp.c() + interval '2 minutes');
 select is(pg_temp.snap(pg_temp.u(23)), (select s from snapW), 're-enrolling that device after the day settled changes nothing (rev2: m1b)');
@@ -1088,13 +1154,57 @@ select is(array(select row(dedupe_key, push_state)::text from public.inbox where
 -- ---------------------------------------------------------------------------
 select pg_temp.mkuser(n) from generate_series(60, 64) n;
 select pg_temp.day(pg_temp.u(60), date '2026-06-10', false);
-select is((select due_at from public.reward_due where user_id = pg_temp.u(60)), timestamptz '2026-06-10 12:00+00',
-  'a score_daily row enqueues the day''s earliest close anywhere (02:00 at UTC+14)');
+select is((select due_at from public.reward_due where user_id = pg_temp.u(60)), now(),
+  'a score_daily row for a day whose close has passed enqueues at now (final review I1: never ahead of older work)');
 select is((select count(*)::int from public.progress where user_id = pg_temp.u(60)) + (select count(*)::int from public.reward_days where user_id = pg_temp.u(60)), 0,
   'and writes nothing else');
-select pg_temp.day(pg_temp.u(60), date '2026-06-05', false);
-select pg_temp.day(pg_temp.u(60), date '2026-06-20', false);
-select is((select due_at from public.reward_due where user_id = pg_temp.u(60)), timestamptz '2026-06-05 12:00+00', 'an earlier day lowers it; a later one does not raise it');
+create temp table today9 as select (now() at time zone 'America/Los_Angeles')::date as d;
+select pg_temp.mkuser(65);
+insert into public.notification_prefs (user_id, tz) values (pg_temp.u(65), 'America/Los_Angeles');
+select pg_temp.day(pg_temp.u(65), (select d from today9) + 10, false);
+select is((select due_at from public.reward_due where user_id = pg_temp.u(65)), pg_temp.la_close((select d from today9) + 10),
+  'a day ahead enqueues at its real close (the user''s zone for a day without trips), not 02:00 at UTC+14 (final review m6)');
+select pg_temp.day(pg_temp.u(65), (select d from today9) + 5, false);
+select pg_temp.day(pg_temp.u(65), (select d from today9) + 20, false);
+select is((select due_at from public.reward_due where user_id = pg_temp.u(65)), pg_temp.la_close((select d from today9) + 5), 'an earlier day lowers it; a later one does not raise it');
+select pg_temp.mkuser(66);
+select pg_temp.drove(pg_temp.u(66), (select d from today9) + 3, true, 'Asia/Tokyo');
+select is((select due_at from public.reward_due where user_id = pg_temp.u(66)), (((select d from today9) + 4)::timestamp + interval '2 hours') at time zone 'Asia/Tokyo',
+  'a driven day enqueues at the close in its trips'' zone');
+-- fairness: an old-day write queues at now, behind a user who has waited longer
+select pg_temp.mkuser(67);
+select pg_temp.mkuser(68);
+select pg_temp.drove(pg_temp.u(68), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(68), pg_temp.late());
+insert into public.reward_due (user_id, due_at) values (pg_temp.u(67), now() - interval '1 hour');
+select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.env(pg_temp.u(68), 'old1', date '2026-06-01', 60, 20, false)::text));
+select is((select due_at from public.reward_due where user_id = pg_temp.u(68)), now(), 'a write to a settled old day queues at now');
+create temp table q9 as select user_id, due_at from public.reward_due where user_id not in (pg_temp.u(67), pg_temp.u(68));
+delete from public.reward_due where user_id not in (pg_temp.u(67), pg_temp.u(68));
+select is(public.settle_due_rewards_at(1, now()), 1, 'a sweep of one user');
+select is(array[(select count(*)::int from public.reward_due where user_id = pg_temp.u(67)), (select count(*)::int from public.reward_due where user_id = pg_temp.u(68))],
+  array[0, 1], 'takes the user who waited longer; the old-day write waits its turn');
+insert into public.reward_due (user_id, due_at) select user_id, due_at from q9 on conflict (user_id) do nothing;
+-- the cheap no-op (final review I1): a run that settles nothing and credits nothing skips the counters
+set local session_replication_role = replica;
+update public.progress set safe_days = 99 where user_id = pg_temp.u(68);
+set local session_replication_role = origin;
+select is(pg_temp.settle(pg_temp.u(68), pg_temp.late()) - 'events', '{"settledDays":0,"ledgerRows":0,"contradictions":1}'::jsonb,
+  'the old-day rewrite settles nothing and records its one row');
+select is((select safe_days from public.progress where user_id = pg_temp.u(68)), 99, 'and the counters, badges and challenges were not recomputed');
+select pg_temp.drove(pg_temp.u(68), date '2026-06-02', true);
+select pg_temp.settle(pg_temp.u(68), pg_temp.late());
+select is((select safe_days from public.progress where user_id = pg_temp.u(68)), 2, 'a run that settles a day recomputes them');
+-- (final review m2) a goal week closes by the zone pinned at the goal's creation, not a later client zone
+select pg_temp.mkuser(69);
+insert into public.notification_prefs (user_id, tz) values (pg_temp.u(69), 'America/Los_Angeles');
+select pg_temp.drove(pg_temp.u(69), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(69), pg_temp.la_close(date '2026-06-01') + interval '1 minute');
+select is((select tz from public.weekly_goals where user_id = pg_temp.u(69) and week_start = '2026-06-01'), 'America/Los_Angeles', 'the goal pins the user''s zone');
+update public.notification_prefs set tz = 'Pacific/Kiritimati' where user_id = pg_temp.u(69);
+select is(array[public.reward_week_closed(pg_temp.u(69), '2026-06-01', public.user_tz(pg_temp.u(69)), timestamptz '2026-06-07 20:00+00'),
+    public.reward_week_closed(pg_temp.u(69), '2026-06-01', public.user_tz(pg_temp.u(69)), pg_temp.la_close(date '2026-06-07'))], array[false, true],
+  'moved to UTC+14 after, the week without a Sunday drive still closes at Sunday''s close in the pinned zone, not 13 h early');
 select pg_temp.drove(pg_temp.u(61), date '2026-06-01', true);
 select pg_temp.settle(pg_temp.u(61), pg_temp.late());
 select is((select count(*)::int from public.reward_due where user_id = pg_temp.u(61)), 0, 'after a settlement with nothing pending the row is gone');
@@ -1113,6 +1223,7 @@ insert into public.reward_days (user_id, day, outcome, outcome_reason, tier, pho
     '{"phone":"neutral","speeding":"neutral","braking":"neutral","accel":"neutral","cornering":"neutral","smooth":"neutral","safe":"neutral"}', 0, 0, now(), now(), now(), now());
 select pg_temp.drove(pg_temp.u(63), date '2026-06-01', true);
 delete from public.reward_due where user_id not in (pg_temp.u(62), pg_temp.u(63));
+update public.reward_due set due_at = timestamptz '2026-06-02 09:00+00' where user_id in (pg_temp.u(62), pg_temp.u(63));
 select is(public.settle_due_rewards_at(10, timestamptz '2026-06-05 00:00+00'), 2, 'the sweep takes both due users');
 select is((select row(failures, due_at)::text from public.reward_due where user_id = pg_temp.u(62)), row(1, timestamptz '2026-06-05 01:00+00')::text,
   'a user whose settlement raises gets failures = 1 and due_at + 1 h');

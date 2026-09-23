@@ -40,13 +40,17 @@ set lock_timeout = '5s';
 --     settle_goals, ensure_week_goal, refresh_progress, emit_reward_events, schedule_next_settle,
 --     reward_credit; the orchestrator settle_rewards; the loop settle_due_rewards_at (no transaction
 --     control, for tests and the e2e); the procedure settle_due_rewards (COMMITs per user).
---   * triggers: enqueue_reward_settlement on score_daily (one pure upsert), audit_trip_relabel on
---     trips.role, freeze_reward_day, clamp_device_watermark, minimise_underage_rewards (the u13
---     transition), refuse_underage_writes on the six new user tables.
+--   * triggers: enqueue_reward_settlement on score_daily (one upsert at the day's real close; a definer since
+--     final review I1), audit_trip_relabel on
+--     trips.role, freeze_reward_day, clamp_device_watermark, wake_reward_settlement on devices (final
+--     review I1: a moved watermark or a sign-out lowers the owner's queued settlement to now; a definer,
+--     because the client writes devices), minimise_underage_rewards (the u13 transition),
+--     refuse_underage_writes on the six new user tables.
 --   * inbox.type: the four reward types join the CHECK.
 --   * client RPCs (#5, #6; definer, owner postgres, proconfig exactly search_path=public,
 --     lock_timeout=2s, auth.uid() first, u13 refused): open_my_week(), set_weekly_focus(text).
---   * cron: settle-rewards every 5 minutes (call public.settle_due_rewards(200)), purge-reward-audit
+--   * cron: settle-rewards every 5 minutes (call public.settle_due_rewards(5000); the 4-minute run budget is
+--     the real bound, final review I1), purge-reward-audit
 --     daily at 04:40.
 --   * THE ONE DOCUMENTED EXCEPTION to #5 (ruling r1-M1): the procedure settle_due_rewards COMMITs, and a
 --     procedure that commits cannot carry `SET search_path`; its body is fully schema-qualified and it
@@ -61,8 +65,10 @@ set lock_timeout = '5s';
 -- frontier with no reward row is never settled for value: it gets one contradiction and a frozen
 -- neutral/late row (its own reason, so a reader never mistakes it for a day without a drive). Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
 -- (score_daily plus final driver trips of the day, deleted ones included, and their scored events).
--- A settled day is final: when its score_daily row later moves (updated_at past checked_through) one
--- changed_after_settlement contradiction is written and nothing else changes. The zone-hop guard: a day
+-- A settled day is final: when its score_daily row later moves (updated_at past checked_through) and the
+-- day would now settle to a different outcome or tier, one changed_after_settlement contradiction is
+-- written per (day, that outcome, that tier), and nothing else changes (final review m1: a write that
+-- changes nothing about the day records nothing, and a day can hold at most eight such rows). The zone-hop guard: a day
 -- whose close is within 20 h of an already-settled day that earned settles without earning (an unsafe
 -- day stays unsafe) and writes a zone_hop contradiction. Every relabel of a drive with scored events
 -- writes relabel_with_events.
@@ -76,8 +82,11 @@ set lock_timeout = '5s';
 -- costliest category over the previous 28 days, ties phone, speeding, braking, cornering, accel; phone
 -- when nothing was lost). Achieved at 4 passes; at week close achieved if every driving day passed
 -- (prorated), no_drives with none, else ended. Every state but active is final; 150 points once.
--- §R8 Settlement mechanics: the score_daily trigger upserts reward_due to the day's earliest close
--- anywhere (UTC+14) and reads nothing. The procedure claims one due user, moves due_at to a 10-minute
+-- §R8 Settlement mechanics: the score_daily trigger upserts reward_due to greatest(now, the day's real
+-- close over its trips' zones) (final review I1/m6: no early wake, and a write to an old day queues
+-- behind older work instead of ahead of it). A day held by a phone's watermark past its close is next
+-- tried at close + 72 h, not hourly: wake_reward_settlement on devices brings the user forward to now
+-- the moment a watermark moves or a phone signs out. The procedure claims one due user, moves due_at to a 10-minute
 -- lease and COMMITs, settles that user under lock_timeout 2 s and COMMITs, per user; the next-settle
 -- write is compare-and-set against the lease (it may set or delete only an untouched lease, and
 -- otherwise only lowers due_at); a failure backs off 1 h (24 h after 5), also compare-and-set. NOTE: a
@@ -90,7 +99,7 @@ set lock_timeout = '5s';
 -- milestone); the rest are inbox-only. Payloads match the catalog's strict schemas exactly.
 --
 -- Nothing from 0001-0008 is edited except: a column on score_daily and `create or replace` of its write
--- helper upsert_score_day (which keeps its owner and grants); an index on trips; two columns and a trigger on devices; the
+-- helper upsert_score_day (which keeps its owner and grants); an index on trips; two columns and two triggers on devices; the
 -- inbox type CHECK (dropped by its real name and re-added); triggers on score_daily, trips and profiles.
 -- apply_trip and apply_recompute are untouched.
 
@@ -183,6 +192,31 @@ begin
 end $$;
 create trigger devices_clamp_watermark before insert or update on public.devices
   for each row execute function public.clamp_device_watermark();
+
+-- (final review I1) a moved watermark, a sign-out or a removed phone may release a held day: lower the
+-- owner's queued settlement to now. One update of the owner's own queue row, and only of a row that is
+-- already queued (a user with nothing queued holds no day); a leased row is lowered too, which the
+-- lease's compare-and-set keeps (rev2: I-B), so the running settlement reschedules to now. A definer:
+-- the client writes devices, and no API role may write reward_due. It grants nothing: at most one
+-- extra settlement of the owner per sweep.
+create or replace function public.wake_reward_settlement() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid;
+begin
+  if tg_op = 'UPDATE' then
+    if new.synced_through is not distinct from old.synced_through and new.signed_out_at is not distinct from old.signed_out_at then
+      return null;
+    end if;
+    v_user := new.user_id;
+  else
+    v_user := old.user_id;
+  end if;
+  update public.reward_due set due_at = now() where user_id = v_user and due_at > now();
+  return null;
+end $$;
+create trigger devices_wake_reward_settlement after update of synced_through, signed_out_at or delete on public.devices
+  for each row execute function public.wake_reward_settlement();
 
 create table public.progress (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -294,6 +328,9 @@ create table public.weekly_goals (
   state text not null default 'active' check (state in ('active', 'achieved', 'ended', 'no_drives')),
   prorated boolean not null default false,
   closed_at timestamptz null,
+  -- (final review m2) the user's zone when the goal was made; a week with no Sunday drive closes by it, so
+  -- a later change of the client-writable notification_prefs.tz cannot close a week early
+  tz text not null check (char_length(tz) between 1 and 64),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, week_start)
@@ -489,14 +526,14 @@ language sql stable set search_path = public as $$
       and (r.tier <> 'none' or r.phone_free or r.camera or jsonb_path_exists(r.predicates, '$.* ? (@ == "pass")')))
 $$;
 
--- §R5 a week has closed: its Sunday is ready (the user's zone when Sunday has no drive) and every day of
--- the week with a score_daily row has settled
+-- §R5 a week has closed: its Sunday is ready (the goal's pinned zone when Sunday has no drive, final
+-- review m2; p_tz only before a goal exists) and every day of the week with a score_daily row has settled
 create or replace function public.reward_week_closed(p_user uuid, p_week_start date, p_tz text, p_now timestamptz) returns boolean
 language sql stable set search_path = public as $$
   select public.reward_day_ready(p_user,
       public.reward_wall_close(p_week_start + 6,
         coalesce((select array_agg(distinct tr.tz) from public.trips tr where tr.user_id = p_user and tr.local_day = p_week_start + 6),
-                 array[coalesce(p_tz, 'UTC')])),
+                 array[coalesce((select g.tz from public.weekly_goals g where g.user_id = p_user and g.week_start = p_week_start), p_tz, 'UTC')])),
       p_now)
     and not exists (
       select 1 from public.score_daily sd
@@ -557,6 +594,8 @@ declare
   v_neutral constant jsonb := '{"phone":"neutral","speeding":"neutral","braking":"neutral","accel":"neutral","cornering":"neutral","smooth":"neutral","safe":"neutral"}';
   v_days date[] := '{}';
   v_start date;
+  v_now_outcome text;
+  v_now_tier text;
   r record;
 begin
   select pr.settled_through, pr.streak_days, pr.rewards_start into v_frontier, v_streak, v_start from public.progress pr where pr.user_id = p_user;
@@ -634,18 +673,32 @@ begin
     v_days := v_days || f.day;
   end loop;
 
-  -- a settled day is final: a later change of its score_daily row is recorded, never applied
+  -- a settled day is final: a later change of its score_daily row is recorded, never applied. (final
+  -- review m1) Only a change that would settle the day differently is recorded, once per (day, outcome,
+  -- tier) it would settle to: a rewrite that changes nothing (a same-result dispute, a role toggled back)
+  -- records nothing, and a day holds at most eight rows however often it is rewritten. A zone-hop row is
+  -- compared as the guard would have settled it (no tier; a pass only neutral).
   for r in
-    select rd.day, rd.outcome, rd.tier, sd.updated_at
+    select rd.day, rd.outcome, rd.outcome_reason, rd.tier, sd.updated_at
     from public.reward_days rd join public.score_daily sd on sd.user_id = rd.user_id and sd.day = rd.day
     where rd.user_id = p_user and sd.updated_at > rd.checked_through
   loop
     select * into f from public.reward_day_facts(p_user, r.day, r.day, p_tz);
-    insert into public.reward_contradictions (user_id, day, kind, detail, dedupe_key)
-    values (p_user, r.day, 'changed_after_settlement',
-      jsonb_build_object('settled', jsonb_build_object('outcome', r.outcome, 'tier', r.tier), 'now', public.reward_fact_summary(f)),
-      'late:' || r.day || ':' || floor(extract(epoch from r.updated_at))::bigint)
-    on conflict (user_id, dedupe_key) do nothing;
+    select o.outcome into v_now_outcome from public.reward_outcome(f) o;
+    v_now_tier := public.reward_tier(f);
+    if r.outcome_reason = 'zone_hop' then
+      v_now_tier := 'none';
+      if v_now_outcome <> 'unsafe' then
+        v_now_outcome := 'neutral';
+      end if;
+    end if;
+    if v_now_outcome is distinct from r.outcome or v_now_tier is distinct from r.tier then
+      insert into public.reward_contradictions (user_id, day, kind, detail, dedupe_key)
+      values (p_user, r.day, 'changed_after_settlement',
+        jsonb_build_object('settled', jsonb_build_object('outcome', r.outcome, 'tier', r.tier), 'now', public.reward_fact_summary(f)),
+        'changed:' || r.day || ':' || v_now_outcome || ':' || v_now_tier)
+      on conflict (user_id, dedupe_key) do nothing;
+    end if;
     update public.reward_days set checked_through = r.updated_at where user_id = p_user and day = r.day;
   end loop;
 
@@ -745,10 +798,10 @@ begin
   if p_week_start <> date_trunc('week', (p_now at time zone coalesce(p_tz, 'UTC'))::date)::date then
     v_focus := null;
   end if;
-  insert into public.weekly_goals (user_id, week_start, category, source, target_days)
+  insert into public.weekly_goals (user_id, week_start, category, source, target_days, tz)
   values (p_user, p_week_start, coalesce(v_focus, public.weakest_goal_category(p_user, p_week_start)),
     case when v_focus is not null then 'chosen' else 'weakest' end,
-    (public.reward_rules() ->> 'WEEKLY_GOAL_TARGET_DAYS')::int)
+    (public.reward_rules() ->> 'WEEKLY_GOAL_TARGET_DAYS')::int, coalesce(p_tz, 'UTC'))
   on conflict (user_id, week_start) do nothing
   returning * into v_goal;
   if v_goal.user_id is not null and v_focus is not null then
@@ -872,12 +925,13 @@ begin
   return v_count;
 end $$;
 
--- a time the owner must come back at: the time itself when it is ahead, else an hour on (never past the cap)
+-- a time the owner must come back at: the close itself when it is ahead; past it (a phone's watermark
+-- holds the day) the cap, when the day settles whatever the watermarks say (final review I1: no hourly
+-- polling; wake_reward_settlement brings the user back the moment a watermark moves or a phone signs out)
 create or replace function public.reward_retry_at(p_close timestamptz, p_now timestamptz) returns timestamptz
 language sql immutable set search_path = public as $$
   select case when p_close > p_now then p_close
-              else greatest(p_now, least(p_now + interval '1 hour',
-                     p_close + make_interval(hours => (public.reward_rules() ->> 'SETTLE_CAP_H')::int))) end
+              else greatest(p_now, p_close + make_interval(hours => (public.reward_rules() ->> 'SETTLE_CAP_H')::int)) end
 $$;
 
 -- §R8 the next time this user is owed a settlement, written compare-and-set against the lease (rev2: I-B)
@@ -903,12 +957,12 @@ begin
     v_next := public.reward_retry_at(v_close, p_now);
   end if;
   for v_goal in
-    select g.week_start from public.weekly_goals g
+    select g.week_start, g.tz from public.weekly_goals g
     where g.user_id = p_user and g.state = 'active' and g.pass_days + g.fail_days > 0
   loop
     v_close := public.reward_wall_close(v_goal.week_start + 6,
       coalesce((select array_agg(distinct tr.tz) from public.trips tr where tr.user_id = p_user and tr.local_day = v_goal.week_start + 6),
-               array[coalesce(p_tz, 'UTC')]));
+               array[v_goal.tz]));
     v_next := least(v_next, public.reward_retry_at(v_close, p_now));
   end loop;
   -- (review m2) a time at or before now is never written: the sweep would pick the user again at once
@@ -1026,8 +1080,9 @@ end $$;
 -- sub-block, then COMMIT outside it. A lock the run cannot get within 2 s (55P03) ends the run
 -- cleanly: in the claim nothing was leased; in a settlement the lease backs off as for any failure,
 -- or, if even that cannot lock, simply expires. The run also stops after 4 minutes or p_limit users
--- (statement_timeout is not enforced inside a CALL; see the header).
-create or replace procedure public.settle_due_rewards(p_limit int default 200)
+-- (statement_timeout is not enforced inside a CALL; see the header). (final review I1) p_limit is 5000:
+-- a settlement is a few indexed scans, so the 4-minute budget, not a user count, bounds a run.
+create or replace procedure public.settle_due_rewards(p_limit int default 5000)
 language plpgsql as $$
 declare
   v_user uuid;
@@ -1105,12 +1160,20 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- triggers on the writers' tables
 -- ---------------------------------------------------------------------------
--- §R8: one pure upsert, reads nothing; runs inside apply_trip's and apply_recompute's own transaction
+-- §R8: one upsert, run inside apply_trip's and apply_recompute's own transaction. (final review I1/m6) It
+-- queues the user at greatest(now, the day's real close over its trips' zones, the user's zone for a day
+-- without trips): no wasted run at the earliest close anywhere, and a write to an old day (a dispute,
+-- a role change) queues at now, behind every user already waiting, instead of jumping the queue. It
+-- reads the day's trip zones (the index settlement uses) and takes no lock but the queue row's. A
+-- definer (owner postgres): it now calls reward_wall_close and user_tz, which no API role executes, and
+-- a service-role write to score_daily must still enqueue (the client-reach audit).
 create or replace function public.enqueue_reward_settlement() returns trigger
-language plpgsql set search_path = public as $$
+language plpgsql security definer set search_path = public as $$
 begin
   insert into public.reward_due (user_id, due_at)
-  values (new.user_id, ((new.day + 1)::timestamp + interval '2 hours') at time zone 'Etc/GMT-14')
+  values (new.user_id, greatest(now(), public.reward_wall_close(new.day,
+    coalesce((select array_agg(distinct tr.tz) from public.trips tr where tr.user_id = new.user_id and tr.local_day = new.day),
+             array[coalesce(public.user_tz(new.user_id), 'UTC')]))))
   on conflict (user_id) do update set due_at = least(public.reward_due.due_at, excluded.due_at);
   return null;
 end $$;
@@ -1240,7 +1303,7 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- cron
 -- ---------------------------------------------------------------------------
-select cron.schedule('settle-rewards', '*/5 * * * *', 'call public.settle_due_rewards(200)');
+select cron.schedule('settle-rewards', '*/5 * * * *', 'call public.settle_due_rewards(5000)');
 select cron.schedule('purge-reward-audit', '40 4 * * *', 'select public.purge_reward_audit()');
 
 -- ---------------------------------------------------------------------------
@@ -1288,7 +1351,7 @@ begin
     'public.reward_retry_at(timestamptz, timestamptz)', 'public.schedule_next_settle(uuid, text, timestamptz, timestamptz)',
     'public.settle_rewards(uuid, timestamptz, timestamptz)', 'public.reward_settle_failed(uuid, timestamptz, timestamptz)',
     'public.settle_due_rewards_at(int, timestamptz)', 'public.purge_reward_audit()', 'public.enqueue_reward_settlement()',
-    'public.audit_trip_relabel()', 'public.minimise_underage_rewards()',
+    'public.audit_trip_relabel()', 'public.minimise_underage_rewards()', 'public.wake_reward_settlement()',
     'public.open_my_week()', 'public.set_weekly_focus(text)'] loop
     execute format('revoke all on function %s from public, anon, authenticated, service_role', f);
   end loop;

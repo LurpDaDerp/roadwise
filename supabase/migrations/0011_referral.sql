@@ -52,7 +52,8 @@ set lock_timeout = '5s';
 -- here) wakes a pending invitee just after that bound.
 --
 -- Settlement order now: u13 check; zone; progress lock; settle_days; append_streak; settle_goals;
--- settle_challenges; settle_referrals; refresh_progress; settle_badges; refresh_progress;
+-- settle_challenges (only when a day settled); settle_referrals; refresh_progress, settle_badges,
+-- refresh_progress (only when a day settled or a credit was written; final review I1);
 -- emit_reward_events; schedule_next_settle.
 --
 -- Nothing from 0001-0010 is edited except: a trigger on push_registrations, the badge row, the flag
@@ -456,11 +457,19 @@ begin
   v_days := public.settle_days(p_user, v_tz, p_now);
   v_events := public.append_streak(p_user, v_days);
   v_events := v_events || public.settle_goals(p_user, v_tz, p_now, v_days);
-  v_events := v_events || public.settle_challenges(p_user, p_now);
+  -- (final review I1) challenges count settled days only, and the counters and badges read settled days
+  -- and credits only: a run that settled no day and credited nothing (a held day, a wake with nothing
+  -- new) skips them. Goals and referrals always run: a week or a referral window can close without a
+  -- new day.
+  if cardinality(v_days) > 0 then
+    v_events := v_events || public.settle_challenges(p_user, p_now);
+  end if;
   v_events := v_events || public.settle_referrals(p_user, p_now);
-  v_events := v_events || public.refresh_progress(p_user);
-  v_events := v_events || public.settle_badges(p_user);
-  v_events := v_events || public.refresh_progress(p_user);
+  if cardinality(v_days) > 0 or (select count(*) from public.points_ledger where user_id = p_user) <> v_ledger then
+    v_events := v_events || public.refresh_progress(p_user);
+    v_events := v_events || public.settle_badges(p_user);
+    v_events := v_events || public.refresh_progress(p_user);
+  end if;
   perform public.emit_reward_events(p_user, v_events, v_tz, p_now);
   perform public.schedule_next_settle(p_user, v_tz, p_now, p_lease);
 
@@ -522,12 +531,12 @@ begin
     v_next := public.reward_retry_at(v_close, p_now);
   end if;
   for v_goal in
-    select g.week_start from public.weekly_goals g
+    select g.week_start, g.tz from public.weekly_goals g
     where g.user_id = p_user and g.state = 'active' and g.pass_days + g.fail_days > 0
   loop
     v_close := public.reward_wall_close(v_goal.week_start + 6,
       coalesce((select array_agg(distinct tr.tz) from public.trips tr where tr.user_id = p_user and tr.local_day = v_goal.week_start + 6),
-               array[coalesce(p_tz, 'UTC')]));
+               array[v_goal.tz]));
     v_next := least(v_next, public.reward_retry_at(v_close, p_now));
   end loop;
   -- a pending referral is settled (then pending means p_now <= its bound) one minute after its bound

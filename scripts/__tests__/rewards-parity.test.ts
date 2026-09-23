@@ -123,9 +123,15 @@ describe('0009 rewards parity', () => {
     expect(rows).toEqual(CHALLENGES.map((c) => ({ ...c })));
   });
 
-  it('the enqueue trigger uses the settle wall-clock hour', () => {
-    const enqueue = /\(\(new\.day \+ 1\)::timestamp \+ interval '(\d+) hours'\) at time zone 'Etc\/GMT-14'/.exec(sql);
-    expect(Number(enqueue?.[1])).toBe(REWARDS.SETTLE_WALL_CLOCK_H);
+  it('the enqueue trigger takes the settle wall-clock hour from the rules (through reward_wall_close), hard-coding none', () => {
+    // final review I1/m6: the enqueue queues at the day's real close, which reward_wall_close computes
+    // from reward_rules().SETTLE_WALL_CLOCK_H (held to REWARDS by the first test above)
+    const enqueue = /create or replace function public\.enqueue_reward_settlement\(\)[\s\S]*?end \$\$;/.exec(sql)?.[0] ?? '';
+    expect(enqueue).toContain('public.reward_wall_close(new.day,');
+    expect(enqueue).not.toMatch(/interval '\d+ hours'/);
+    const wallClose = /create or replace function public\.reward_wall_close\([\s\S]*?end \$\$;/.exec(sql)?.[0] ?? '';
+    expect(wallClose).toContain("(public.reward_rules() ->> 'SETTLE_WALL_CLOCK_H')::int");
+    expect(REWARDS.SETTLE_WALL_CLOCK_H).toBe(2);
   });
 });
 

@@ -27,7 +27,7 @@
  *                   15-day-old account → 'code window closed' for a real and a random code alike (R-D);
  *                   a wrong code through real PostgREST → HTTP 400 with the exact body, both budgets
  *                   charged (T6 security M-1); my_referrals' exact keys.
- *   J  concurrency  (R-G) `call public.settle_due_rewards(200)` while 20 uploads run in parallel: every
+ *   J  concurrency  (R-G) `call public.settle_due_rewards(5000)` while 20 uploads run in parallel: every
  *                   upload 200, no lock wait above 2 s.
  *   F  security     no client DML on any rewards table, no settle RPC, no cross-user or anon reads.
  *   G  catalog      LIVE_TYPES equals the inbox.type CHECK; push-sender's policy defers a claimed
@@ -385,7 +385,9 @@ async function main() {
     };
     const PHONE = (durationS) => ({ category: 'phone', durationS, measured: { speedMps: 15 } });
     const SPEEDING = { category: 'speeding', durationS: 60, measured: { overMps: 6, limitMps: 15.6464 } };
-    const settle = (ms) => Number(sql(`select public.settle_due_rewards_at(500, ${lit(iso(ms))}::timestamptz)`));
+    // a sweep never runs before the writes it must see: the enqueue queues at greatest(now, the day's close)
+    // (final review I1), so a simulated instant already in the past is taken as now
+    const settle = (ms) => Number(sql(`select public.settle_due_rewards_at(500, greatest(${lit(iso(ms))}::timestamptz, now()))`));
     const ledger = (uid) =>
       sqlJson(`select coalesce(json_agg(json_build_array(type, amount, ref_key) order by type, ref_key), '[]') from public.points_ledger where user_id = ${lit(uid)}`);
     const rewardDay = (uid, day) =>
@@ -469,7 +471,9 @@ async function main() {
       checkEq('the unsafe day is unchanged', rewardDay(F.id, dBad), days0[1]);
       const relabel = contradictions(F.id, 'relabel_with_events').filter(([d]) => d === dBad);
       checkEq('one relabel_with_events row, marked settled', relabel.map(([, detail]) => [detail.to, detail.daySettled]), [['passenger', true]]);
-      checkEq('one changed_after_settlement row for that day', contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dBad).length, 1);
+      // (final review m1) the bad day settled neutral (a new driver's provisional 'learning' day), and with no driver drive it would
+      // settle neutral again: nothing about the result changed, so the relabel row is the only record
+      checkEq('no changed_after_settlement row for that day (its result would not change)', contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dBad).length, 0);
 
       // (3) delete the safe day's drive
       const del = await tripAction(F, { action: 'delete', clientTripId: safe.payload.clientTripId });
@@ -738,7 +742,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 300));
       const callStart = Date.now();
       let callEnd = 0;
-      const proc = spawn('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'call public.settle_due_rewards(200)'], {
+      const proc = spawn('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'call public.settle_due_rewards(5000)'], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let procOut = '';
