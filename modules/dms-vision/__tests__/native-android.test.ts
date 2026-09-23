@@ -387,3 +387,15 @@ test('a bind that times out on the main thread is undone there (T4 m3)', () => {
 test('the frame clock base is fixed per session (T4 nit)', () => {
   expect(raw('Lifecycle.kt')).toMatch(/base is then fixed for[\s*]+the session/);
 });
+
+test('after an in-flight timeout the next frame gets a fresh bitmap; the old one waits for its late result (D2 review m1)', () => {
+  const cc = code('CaptureController.kt');
+  expect(body(cc, 'onTimeout')).toContain('frameBitmap.abandon(tsMs)');
+  expect(body(cc, 'handleResult')).toMatch(/if \(f == null \|\| \(ts >= 0 && f\.tsMs != ts\)\) \{\s*[\s\S]*?frameBitmap\.lateResult\(ts\)/);
+  const fb = code('FrameBitmap.kt');
+  // abandon() drops the current bitmap, so fill() allocates a new one; lateResult() recycles only the matching one.
+  expect(body(fb, 'abandon')).toMatch(/bitmap = null[\s\S]*abandoned\.add\(tsMs to b\)/);
+  expect(body(fb, 'lateResult')).toMatch(/indexOfFirst \{ it\.first == tsMs \}[\s\S]*\.recycle\(\)/);
+  expect(body(fb, 'release')).toMatch(/for \(\(_, b\) in abandoned\) b\.recycle\(\)/);
+  expect(fb).toContain('const val MAX_ABANDONED = 4');
+});

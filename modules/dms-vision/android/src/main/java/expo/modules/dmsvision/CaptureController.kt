@@ -1,10 +1,6 @@
 // The camera session, the per-frame feature pass and the native-owned lifecycle (README §5–§6).
-// Threads:
-// - `session` (a HandlerThread): start/stop/policy, the 1 Hz tick, camera-state and thermal callbacks;
-// - `analysis` (one single-thread scheduled executor per session): frames, landmarker results,
-//   in-flight timeouts, the features and the batch;
-// - main: CameraX bind/unbind, the camera-state observer, the orientation listener (bounded waits).
-// Shared state sits behind `lock`. The iOS twin is ios/CaptureController.swift.
+// Threads: `session` (commands, the 1 Hz tick, callbacks), `analysis` (frames, results, timeouts, the
+// features, the batch), main (CameraX, observers; bounded waits). Shared state sits behind `lock`.
 
 package expo.modules.dmsvision
 
@@ -298,8 +294,7 @@ class CaptureController(internal val context: Context) {
       if (tsMs <= lastTsMs) tsMs = lastTsMs + 1
       lastTsMs = tsMs
       val focal = Focal.focalScale(sensor, proxy.width, proxy.height, rotation)
-      // Reusing one bitmap is safe: a frame is accepted only once the previous detection has
-      // answered (inFlight == null above), so MediaPipe cannot still be reading it.
+      // Reused safely: accepted only once the previous detection answered or was abandoned (m1).
       val bitmap = frameBitmap.fill(proxy)
       val f = InFlight(proxy, tsMs, tMs, rotation, SystemClock.elapsedRealtimeNanos(), focal)
       inFlight = f
@@ -326,6 +321,8 @@ class CaptureController(internal val context: Context) {
     if (f.tsMs != tsMs) return
     inFlight = null
     f.proxy.close()
+    // The graph may still read this bitmap: the next frame gets a fresh one (D2 review m1).
+    frameBitmap.abandon(tsMs)
     locked { dropped += 1 }
   }
 
@@ -334,8 +331,11 @@ class CaptureController(internal val context: Context) {
   }
 
   private fun handleResult(ts: Long, landmarks: DoubleArray?, matrix: DoubleArray?, error: String?) {
-    val f = inFlight ?: return
-    if (ts >= 0 && f.tsMs != ts) return // a late answer for a frame the timeout already abandoned
+    val f = inFlight
+    if (f == null || (ts >= 0 && f.tsMs != ts)) {
+      frameBitmap.lateResult(ts) // a late answer for a frame the timeout abandoned: its bitmap is free
+      return
+    }
     inFlight = null
     f.timeout?.cancel(false)
     try {

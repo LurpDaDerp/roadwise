@@ -9,6 +9,8 @@ import java.nio.ByteBuffer
 
 class FrameBitmap {
   private var bitmap: Bitmap? = null
+  /** Bitmaps of frames whose detection timed out, by timestamp, kept until their late result (D2 review m1). */
+  private val abandoned = ArrayList<Pair<Long, Bitmap>>(MAX_ABANDONED)
   /** Padded rows packed tightly, reused every frame. */
   private var packed: ByteBuffer? = null
 
@@ -53,9 +55,36 @@ class FrameBitmap {
     return b
   }
 
+  /**
+   * The detection of frame `tsMs` timed out while MediaPipe may still be reading this bitmap: set it
+   * aside and let the next `fill` allocate a fresh one, so a non-copying `detectAsync` can never read
+   * pixels overwritten by a later frame. Timeouts are rare; the allocation is only on this path.
+   */
+  fun abandon(tsMs: Long) {
+    val b = bitmap ?: return
+    bitmap = null
+    // Bounded: past the cap the oldest is dropped unrecycled (the GC reclaims it once MediaPipe lets go).
+    if (abandoned.size >= MAX_ABANDONED) abandoned.removeAt(0)
+    abandoned.add(tsMs to b)
+  }
+
+  /** The late result of an abandoned frame arrived: its bitmap can be recycled. */
+  fun lateResult(tsMs: Long) {
+    val i = abandoned.indexOfFirst { it.first == tsMs }
+    if (i < 0) return
+    abandoned.removeAt(i).second.recycle()
+  }
+
+  /** Teardown, once the analysis thread is drained and the graph closed. */
   fun release() {
     bitmap?.recycle()
     bitmap = null
+    for ((_, b) in abandoned) b.recycle()
+    abandoned.clear()
     packed = null
+  }
+
+  private companion object {
+    const val MAX_ABANDONED = 4
   }
 }
