@@ -1,193 +1,119 @@
-// DmsVision - the RoadCash driver-monitoring native inference layer (iOS).
-//
-// JS contract: see modules/dms-vision/src/index.js and docs/dms/NATIVE_LAYER.md.
-// Events: onFrame (one per processed camera frame), onStatus (1 Hz), onError.
+// DmsVision: the RoadWise driver-monitoring native module (iOS). README.md is the binding contract.
+// Events: frames (derived feature records, never pixels or landmarks), status (1 Hz), state.
+// Every rejection carries a contract code (DmsError.code).
 
-import ExpoModulesCore
 import AVFoundation
-import Foundation
+import ExpoModulesCore
+import UIKit
 
-public final class DmsVisionModule: Module, DmsVisionPipelineDelegate {
-  private let pipeline = DmsVisionPipeline()
-  private let gaze = DmsVisionGaze()
-  /// Touched only on `statusQueue` (create, resume and cancel all happen there).
-  private var statusTimer: DispatchSourceTimer?
-  private let statusQueue = DispatchQueue(label: "com.roadcash.dmsvision.status")
+public final class DmsVisionModule: Module {
+  private let controller = CaptureController.shared
 
   public func definition() -> ModuleDefinition {
     Name("DmsVision")
 
-    Events("onFrame", "onStatus", "onError")
+    Events("frames", "status", "state")
 
     OnCreate {
-      self.pipeline.delegate = self
+      self.controller.onFrames = { [weak self] payload in self?.sendEvent("frames", payload.mapValues { $0 as Any? }) }
+      self.controller.onState = { [weak self] state, reason in self?.sendEvent("state", ["state": state, "reason": reason]) }
+      self.controller.onStatus = { [weak self] status in self?.sendEvent("status", status as [String: Any?]) }
+      self.controller.onPreviewChange = { session in DmsPreviewRegistry.show(session) }
     }
 
     OnDestroy {
-      self.stopStatusTimer()
-      // Never block the main thread on a capture-session teardown: the stop waits for the
-      // session queue, which may be inside startRunning().
-      let pipeline = self.pipeline
-      let gaze = self.gaze
-      pipeline.sessionQueue.async {
-        pipeline.stopOnSessionQueue()
-        gaze.close()
-      }
+      let c = self.controller
+      c.sessionQueue.async { c.stop(reason: "user") }
     }
 
-    // NOTE (docs/dms/INTEGRATION.md §3): there is deliberately NO OnAppEntersBackground handler.
-    // The JS AppState listener is the single owner of the camera across app-state changes; two
-    // owners left the JS-visible state and the native session disagreeing. iOS interrupts the
-    // session by itself when the app leaves the foreground, and that interruption is reported
-    // through onError / onStatus below, which is what the JS watchdog reacts to.
-
-    Function("isAvailable") { () -> Bool in
-      return true
+    // The native owner of the camera across app states (plan: Privacy 5): leaving the foreground
+    // stops the session. Native never restarts it; JS does, through the gate, on return.
+    OnAppEntersBackground {
+      let c = self.controller
+      c.sessionQueue.async { c.stop(reason: "background") }
     }
 
-    AsyncFunction("getPermissionsAsync") { () -> [String: Any] in
-      return Self.permissionPayload(AVCaptureDevice.authorizationStatus(for: .video))
+    AsyncFunction("getPermission") { (promise: Promise) in
+      promise.resolve(DmsVisionModule.permission(AVCaptureDevice.authorizationStatus(for: .video)))
     }
 
-    AsyncFunction("requestPermissionsAsync") { (promise: Promise) in
-      let status = AVCaptureDevice.authorizationStatus(for: .video)
-      if status != .notDetermined {
-        promise.resolve(Self.permissionPayload(status))
+    AsyncFunction("requestPermission") { (promise: Promise) in
+      if AVCaptureDevice.authorizationStatus(for: .video) != .notDetermined {
+        promise.resolve(DmsVisionModule.permission(AVCaptureDevice.authorizationStatus(for: .video)))
         return
       }
       AVCaptureDevice.requestAccess(for: .video) { _ in
-        promise.resolve(Self.permissionPayload(AVCaptureDevice.authorizationStatus(for: .video)))
+        promise.resolve(DmsVisionModule.permission(AVCaptureDevice.authorizationStatus(for: .video)))
       }
     }
 
-    // start / stop configure and tear down an AVCaptureSession, which takes tens of
-    // milliseconds and must not run on the shared Expo async queue (every other module's async
-    // functions would queue behind it). `.runOnQueue` puts the body on the pipeline's own
-    // session queue - the queue the pipeline serialises its state on - so the bodies below call
-    // the "...OnSessionQueue" entry points and never nest a `sync` on it (that deadlocks).
-    AsyncFunction("start", { (targetFps: Double, facing: String, landmarkFrame: String,
-                              mirrorPair: Bool, rotationOffsetDegrees: Int) in
-      if mirrorPair {
-        // TODO(mirror-pair): the promoted research recipe runs the mesh twice (frame + flipped
-        // frame) and averages through the 478-point mirror permutation, which is worth ~0.32 deg
-        // of LBW error. Out of scope for this version; implement in the pipeline, not in JS.
-        throw DmsVisionException("mirrorPair is not implemented in this version; pass false")
+    AsyncFunction("start") { (opts: StartOptionsRecord, promise: Promise) in
+      do {
+        let o = try opts.validated()
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+          throw DmsError.permission("camera permission has not been granted")
+        }
+        let active = DispatchQueue.main.sync { UIApplication.shared.applicationState == .active }
+        guard active else { throw DmsError.notForeground("the app is not in the foreground") }
+        try self.controller.start(token: o.token, fps: o.fps, gazeNet: o.gazeNet, every: o.every, gpu: o.gpu,
+                                  rotationOffset: o.rotationOffset)
+        promise.resolve(nil)
+      } catch let e as DmsError {
+        promise.reject(e.code, e.message)
+      } catch {
+        promise.reject("E_CAMERA", error.localizedDescription)
       }
-      guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
-        throw DmsVisionException("camera permission has not been granted")
+    }.runOnQueue(controller.sessionQueue)
+
+    AsyncFunction("setPolicy") { (p: CapturePolicyRecord, promise: Promise) in
+      do {
+        let v = try p.validated()
+        try self.controller.setPolicy(token: v.token, capture: v.capture, fps: v.fps, gazeNet: v.gazeNet,
+                                      every: v.every, setup: v.setupMode, preview: v.previewAllowed)
+        promise.resolve(nil)
+      } catch let e as DmsError {
+        promise.reject(e.code, e.message)
+      } catch {
+        promise.reject("E_STATE", error.localizedDescription)
       }
-      try self.gaze.prepare()
-      try self.pipeline.startOnSessionQueue(targetFps: targetFps,
-                                            facing: facing,
-                                            landmarkFrame: landmarkFrame,
-                                            rotationOffsetDegrees: rotationOffsetDegrees)
-      self.startStatusTimer()
-    })
-    .runOnQueue(self.pipeline.sessionQueue)
+    }.runOnQueue(controller.sessionQueue)
 
-    AsyncFunction("stop", { () -> Void in
-      self.stopStatusTimer()
-      self.pipeline.stopOnSessionQueue()
-    })
-    .runOnQueue(self.pipeline.sessionQueue)
+    AsyncFunction("stop") { (promise: Promise) in
+      self.controller.stop(reason: "user")
+      promise.resolve(nil)
+    }.runOnQueue(controller.sessionQueue)
 
-    Function("setTargetFps") { (fps: Double) in
-      self.pipeline.setTargetFps(fps)
-    }
+    AsyncFunction("getStatus") { (promise: Promise) in
+      promise.resolve(self.controller.snapshot(take: false))
+    }.runOnQueue(controller.sessionQueue)
 
-    Function("setIdleMode") { (idle: Bool) in
-      self.pipeline.setIdleMode(idle)
-    }
-
-    Function("getIntrinsics") { () -> [String: Any] in
-      return self.pipeline.intrinsicsReport()
-    }
-
-    Function("getThermalState") { () -> String in
-      return dmsThermalStateName()
-    }
-
-    Function("getModelInfo") { () -> [String: Any] in
-      let meta = try self.gaze.loadMetadata()
-      return [
-        "onnxSha256": (meta["onnx_sha256"] as? String) ?? "",
-        "parameters": (meta["parameters"] as? Int) ?? 0
+    AsyncFunction("getModelInfo") { (promise: Promise) in
+      let landmarker: String = DmsBundle.path("face_landmarker", "task").flatMap { DmsVisionModule.sha256(path: $0) } ?? ""
+      let info: [String: Any?] = [
+        "landmarkerSha256": landmarker,
+        "gazeNetAvailable": GazeNetFactory.available,
+        "gazeSha256": GazeNetFactory.modelSha256(),
+        "mediapipe": "0.10.35",
+        "onnxruntime": GazeNetFactory.onnxRuntimeVersion,
       ]
+      promise.resolve(info)
     }
 
-    AsyncFunction("predictGaze") { (cloud: Data, context: Data, validity: Data) -> Data in
-      return try self.gaze.predict(cloud: cloud, context: context, validity: validity)
-    }
-  }
-
-  // MARK: - Status
-
-  /// Created, resumed and cancelled on `statusQueue` only: a DispatchSourceTimer released before
-  /// it was resumed traps in libdispatch, and cancelling one from another thread while its
-  /// handler runs is a data race on `statusTimer`.
-  private func startStatusTimer() {
-    statusQueue.sync {
-      self.cancelStatusTimerOnQueue()
-      let timer = DispatchSource.makeTimerSource(queue: self.statusQueue)
-      timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
-      timer.setEventHandler { [weak self] in
-        guard let self = self else { return }
-        self.sendEvent("onStatus", self.statusPayload(stopped: false))
+    AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in
+      do {
+        promise.resolve(try SelfTest.run(vectorsJson))
+      } catch let e as DmsError {
+        promise.reject(e.code, e.message)
+      } catch {
+        promise.reject("E_BAD_ARGS", error.localizedDescription)
       }
-      timer.resume()                 // resumed BEFORE it is published
-      self.statusTimer = timer
     }
+
+    View(DmsPreviewView.self) {}
   }
 
-  private func stopStatusTimer() {
-    statusQueue.sync { self.cancelStatusTimerOnQueue() }
-  }
-
-  /// `statusQueue` only.
-  private func cancelStatusTimerOnQueue() {
-    guard let timer = statusTimer else { return }
-    statusTimer = nil
-    timer.setEventHandler {}         // drop the captured self before cancelling
-    timer.cancel()
-  }
-
-  private func statusPayload(stopped: Bool) -> [String: Any?] {
-    let counters = pipeline.takeCounters()
-    let payload: [String: Any?] = [
-      "thermal": dmsThermalStateName(),
-      "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled,
-      "fps": stopped ? 0.0 : Double(counters.processed),
-      "dropped": counters.dropped,
-      "running": pipeline.isRunning
-    ]
-    return payload
-  }
-
-  private static func permissionPayload(_ status: AVAuthorizationStatus) -> [String: Any] {
-    let granted = status == .authorized
-    return [
-      "status": granted ? "granted" : (status == .notDetermined ? "undetermined" : "denied"),
-      "granted": granted,
-      "canAskAgain": status == .notDetermined,
-      "expires": "never"
-    ]
-  }
-
-  // MARK: - DmsVisionPipelineDelegate
-
-  func pipelineDidProduce(frame: [String: Any?]) {
-    sendEvent("onFrame", frame)
-  }
-
-  func pipelineDidFail(code: String, message: String) {
-    let payload: [String: Any?] = ["code": code, "message": message]
-    sendEvent("onError", payload)
-  }
-
-  /// The OS interrupted or resumed the session (a call, another app taking the camera, the app
-  /// leaving the foreground). The JS side reads `running` from this status event and restarts
-  /// the session when the app is active again (docs/dms/INTEGRATION.md §3).
-  func pipelineDidChangeRunning(_ running: Bool) {
-    sendEvent("onStatus", statusPayload(stopped: !running))
+  private static func permission(_ status: AVAuthorizationStatus) -> [String: Any] {
+    let s = status == .authorized ? "granted" : (status == .notDetermined ? "undetermined" : "denied")
+    return ["status": s, "canAskAgain": status == .notDetermined]
   }
 }

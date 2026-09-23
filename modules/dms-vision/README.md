@@ -9,10 +9,11 @@ The optional `gaze_direct` network runs in the same pipeline only in builds made
 `DMS_GAZE_NET=1`. That is a release gate: it never ships in a production binary until counsel
 clears its licence (§7).
 
-> **Status (Tasks 1–2 of the DMS rework).** This README and `src/` define the v2 contract, the TS reference of every native feature and the golden vectors. The Swift
-> and Kotlin sources under `ios/` and `android/` are still the V1 implementation, which does not
-> implement this contract. They are rewritten against it in Tasks 3 (iOS) and 4 (Android). No JS
-> code starts the camera before then.
+> **Status (Tasks 1–3 of the DMS rework).**
+> - This README and `src/` define the v2 contract, the TS reference of every native feature and the golden vectors.
+> - `ios/` implements the contract (Task 3). Its Foundation-only files pass every golden vector on Linux Swift 6.1.
+> - The Kotlin under `android/` is still V1. It does not implement this contract, and Task 4 rewrites it.
+> - Nothing is proven on a device until the D1 build.
 
 This README is **binding** for the Swift and Kotlin implementations. The TypeScript sources are
 the machine-checked half of the same contract:
