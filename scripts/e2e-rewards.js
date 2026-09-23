@@ -386,8 +386,35 @@ async function main() {
     const PHONE = (durationS) => ({ category: 'phone', durationS, measured: { speedMps: 15 } });
     const SPEEDING = { category: 'speeding', durationS: 60, measured: { overMps: 6, limitMps: 15.6464 } };
     // a sweep never runs before the writes it must see: the enqueue queues at greatest(now, the day's close)
-    // (final review I1), so a simulated instant already in the past is taken as now
-    const settle = (ms) => Number(sql(`select public.settle_due_rewards_at(500, greatest(${lit(iso(ms))}::timestamptz, now()))`));
+    // (final review I1), so a simulated instant already in the past is taken as now.
+    // settle_due_rewards_at swallows a user's failed settlement (it backs the user off 1 h and counts them
+    // done), so every sweep is followed by a check that no run user failed. A failure is retried once by
+    // settling that user directly at the same instant: a transient (a 55P03 lock timeout against this
+    // run's own concurrent writes) then succeeds and is logged; a real error raises there, and the user,
+    // its failure count and the error are printed as evidence (0009 keeps no last_error column).
+    const runUsers = () => `array[${users.map(lit).join(', ')}]::uuid[]`;
+    const settle = (ms) => {
+      const at = sql(`select greatest(${lit(iso(ms))}::timestamptz, now())`);
+      const n = Number(sql(`select public.settle_due_rewards_at(500, ${lit(at)}::timestamptz)`));
+      const failed = sqlJson(`select coalesce(json_agg(json_build_array(user_id, failures) order by user_id), '[]')
+        from public.reward_due where user_id = any(${runUsers()}) and failures > 0`);
+      const unrecovered = [];
+      for (const [uid, failures] of failed) {
+        try {
+          sql(`select public.settle_rewards(${lit(uid)}, ${lit(at)}::timestamptz)`);
+          console.log(`   (the sweep at ${at} failed ${uid}'s settlement (failures ${failures}); one retry succeeded)`);
+        } catch (e) {
+          unrecovered.push(`${uid} failures=${failures} error=${String(e.stderr || e.message).trim()}`);
+        }
+      }
+      check('the sweep failed no settlement of this run (after at most one retry)', unrecovered.length === 0, unrecovered.join(' | '));
+      // evidence for a sweep that silently skipped a user: a run user queued within a minute after the
+      // sweep's instant (an enqueue at now() that the sweep could not see) is logged, never asserted
+      const justMissed = sqlJson(`select coalesce(json_agg(json_build_array(user_id, due_at, failures)), '[]') from public.reward_due
+        where user_id = any(${runUsers()}) and due_at > ${lit(at)}::timestamptz and due_at <= ${lit(at)}::timestamptz + interval '1 minute'`);
+      if (justMissed.length > 0) console.log(`   (the sweep at ${at} left run users queued just after it: ${JSON.stringify(justMissed)})`);
+      return n;
+    };
     const ledger = (uid) =>
       sqlJson(`select coalesce(json_agg(json_build_array(type, amount, ref_key) order by type, ref_key), '[]') from public.points_ledger where user_id = ${lit(uid)}`);
     const rewardDay = (uid, day) =>
@@ -412,7 +439,7 @@ async function main() {
       api.user(u.jwt, 'PATCH', `/rest/v1/devices?user_id=eq.${u.id}&id=eq.${encodeURIComponent(id)}`, fields, { Prefer: 'return=minimal' });
 
     // ---- A: the ledger ------------------------------------------------------------
-    section('A ledger: a safe phone-free day earns 50 + 25, a ~60 day nothing; replays add nothing', 10);
+    section('A ledger: a safe phone-free day earns 50 + 25, a ~60 day nothing; replays add nothing', 13);
     const A = newUser('a');
     {
       const B = newUser('b');
@@ -438,7 +465,7 @@ async function main() {
     }
 
     // ---- B: finality -----------------------------------------------------------------
-    section('B finality: after settlement a dispute, a passenger answer and a delete change nothing but the record', 19);
+    section('B finality: after settlement a dispute, a passenger answer and a delete change nothing but the record', 24);
     {
       const F = newUser('final');
       const dGood = addDays(TODAY, -4);
@@ -499,7 +526,7 @@ async function main() {
     }
 
     // ---- H: the watermark --------------------------------------------------------------
-    section('H watermark: a device holds a day until it syncs past the close, at most 72 h; signed out holds nothing', 9);
+    section('H watermark: a device holds a day until it syncs past the close, at most 72 h; signed out holds nothing', 13);
     {
       const C = closeOf(YESTERDAY, TZ);
       const W1 = newUser('w1');
@@ -531,7 +558,7 @@ async function main() {
     }
 
     // ---- I: the zone hop -----------------------------------------------------------
-    section('I zone hop: Kiritimati then Pago Pago an hour apart → two day keys, one earning day, one zone_hop', 5);
+    section('I zone hop: Kiritimati then Pago Pago an hour apart → two day keys, one earning day, one zone_hop', 6);
     {
       const Z = newUser('zone');
       // two instants an hour apart at 05:00 and 06:00 UTC (never 10:00 UTC, where the two zones' dates are 2 apart)
@@ -553,10 +580,20 @@ async function main() {
       checkEq('one earning day, the other settled as a zone hop', rows.map((r) => r && [r.tier, r.outcome_reason]).sort(), [['none', 'zone_hop'], ['safe', 'safe']]);
       checkEq('one zone_hop contradiction', contradictions(Z.id, 'zone_hop').length, 1);
       checkEq('points for one day only', ledger(Z.id).reduce((s, [, amount]) => s + amount, 0), 75);
+      if (rows.some((r) => r === null)) {
+        // evidence for an unsettled zone-hop pair (seen once, 2026-09-23 06:29 UTC): the user's queue row,
+        // day rows and trips at the check
+        console.log(`   (zone hop unsettled: u0 ${iso(u0)}, now ${iso(Date.now())}, state ${JSON.stringify(sqlJson(`select json_build_object(
+          'due', (select json_agg(r) from public.reward_due r where user_id = ${lit(Z.id)}),
+          'days', (select json_agg(json_build_array(day, trips_all, updated_at) order by day) from public.score_daily where user_id = ${lit(Z.id)}),
+          'trips', (select json_agg(json_build_array(local_day, tz, started_at) order by started_at) from public.trips where user_id = ${lit(Z.id)}),
+          'settled', (select json_agg(json_build_array(day, outcome_reason) order by day) from public.reward_days where user_id = ${lit(Z.id)}),
+          'dbNow', now())`))})`);
+      }
     }
 
     // ---- C: streak and weekly goal -------------------------------------------------
-    section('C streak and goal: seven safe days → the milestone, one push for the settlement, the goal +150 once', 9);
+    section('C streak and goal: seven safe days → the milestone, one push for the settlement, the goal +150 once', 11);
     {
       const U = newUser('streak');
       const days = [7, 6, 5, 4, 3, 2, 1].map((n) => addDays(TODAY, -n));
@@ -593,7 +630,7 @@ async function main() {
     }
 
     // ---- D: challenge and badges ----------------------------------------------------
-    section('D challenge and badges: phone_down joined → ten passing days → +200 once; safe_days_7', 6);
+    section('D challenge and badges: phone_down joined → ten passing days → +200 once; safe_days_7', 8);
     {
       const U = newUser('challenge');
       const join = await rpc(U, 'join_challenge', { p_def_id: 'phone_down' });
@@ -615,7 +652,7 @@ async function main() {
     }
 
     // ---- E: referral -------------------------------------------------------------------
-    section('E referral: +500 once each side; shared token or device rejected; window, wrong code, keys', 25);
+    section('E referral: +500 once each side; shared token or device rejected; window, wrong code, keys', 29);
     {
       sql(`update public.app_config set value = value || '{"referral": true}'::jsonb where key = 'feature_flags'`);
       const R = newUser('referrer');
