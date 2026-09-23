@@ -288,6 +288,8 @@ export interface DmsConfig {
     };
     d3: { minGlances: number; minLapS: number; withinS: number; minSpeedKmh: number; cooldownS: number };
     d4: { returnWithinS: number };
+    /** plan §M2 (rev0 "at 5 fps no gaze rule runs"): D1–D4 need a measured fps at or above this */
+    gazeRulesMinFps: number;
     /** C-18 (rev1 m3): a mirror glance ended this recently makes a far-lateral glance a shoulder check */
     shoulderAfterMirrorS: number;
   };
@@ -312,6 +314,8 @@ export interface DmsConfig {
     longBlinkMs: number;
     /** R-U4: blink statistics only at ≥ 15 fps */
     blinkMinFps: number;
+    /** §M6 (rev0): the measured fps is the median frame dt over the last 10 s */
+    fpsWindowS: number;
   };
 
   nod: {
@@ -372,6 +376,10 @@ export interface DmsConfig {
     earlyEveryS: number;
     drowsyEveryS: number;
     severeEveryS: number;
+    /** §M7 PERCLOS P80 (rev0): openness below 0.2 (closure.lookDownClosedBelow under the looking-down gate) */
+    perclosOpennessBelow: number;
+    /** …valid only with ≥ 30 s of TRACKING in its window */
+    perclosMinTrackingS: number;
   };
 
   alerts: {
@@ -396,6 +404,13 @@ export interface DmsConfig {
     /** §M10: a focus sample is a non-driving glance longer than this */
     focusGlanceS: number;
     focusQueueCap: number;
+  };
+
+  summary: {
+    /** §M9, U-11: cameraSession 'good' = ≥ 10 min monitored, ≥ 70 % TRACKING, blinks seen (liveness) */
+    goodSessionMinMonitoredS: number;
+    goodSessionMinTrackingShare: number;
+    goodSessionMinBlinksPer2Min: number;
   };
 }
 
@@ -545,6 +560,7 @@ const DEFAULT: DmsConfig = {
     d2: { bucketMs: 100, resetOnRoadS: 2.0, windowS: 30, warnS: 10.0 },
     d3: { minGlances: 3, minLapS: 1.0, withinS: 30, minSpeedKmh: 20, cooldownS: 600 },
     d4: { returnWithinS: 3.0 },
+    gazeRulesMinFps: 8,
     shoulderAfterMirrorS: 2,
   },
   closure: {
@@ -560,6 +576,7 @@ const DEFAULT: DmsConfig = {
     singleF1HoldS: 900,
     longBlinkMs: 500,
     blinkMinFps: 15,
+    fpsWindowS: 10,
   },
   nod: {
     referenceWithinDeg: 5,
@@ -608,6 +625,8 @@ const DEFAULT: DmsConfig = {
     earlyEveryS: 1200,
     drowsyEveryS: 300,
     severeEveryS: 120,
+    perclosOpennessBelow: 0.2,
+    perclosMinTrackingS: 30,
   },
   alerts: {
     tier2RepeatS: 1,
@@ -622,6 +641,7 @@ const DEFAULT: DmsConfig = {
     repeatedGlancesWithinS: 600,
   },
   scoring: { focusGlanceS: 2.0, focusQueueCap: 32 },
+  summary: { goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 },
 };
 
 function deepFreeze<T>(o: T): T {
@@ -669,7 +689,12 @@ const FRACTIONS = [
   'nod.closureOpenness',
   'yawn.speechMaxRatio',
   'fatigue.minTrackingShare',
+  'fatigue.perclosOpennessBelow',
+  'summary.goodSessionMinTrackingShare',
 ];
+
+/** The longest grace a zone may have before D1 drains (the spec's is 1.0 s). */
+const MAX_GRACE_S = 5;
 
 function walkNumbers(v: unknown, path: string, out: [string, number][]): void {
   if (typeof v === 'number') out.push([path, v]);
@@ -736,6 +761,15 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
       ordered(`${p}.region.yaw`, r.yaw);
       ordered(`${p}.region.pitch`, r.pitch);
     } else if (r.kind === 'camera' && !(r.radiusDeg > 0)) bad(`${p}.region.radiusDeg`, 'must be > 0');
+    else if (r.kind === 'below') {
+      if (!(r.maxPitchDeg < 0)) bad(`${p}.region.maxPitchDeg`, 'must be < 0 (below the centre)');
+      if (!(r.maxAbsYawDeg > 0)) bad(`${p}.region.maxAbsYawDeg`, 'must be > 0');
+    } else if (r.kind === 'lateral' && !(r.minAbsYawDeg > 0)) bad(`${p}.region.minAbsYawDeg`, 'must be > 0');
+    if (!(z.graceS <= MAX_GRACE_S)) bad(`${p}.graceS`, `must be ≤ ${MAX_GRACE_S}`);
+    const shoulder = z.id === 'far_lateral';
+    if (shoulder ? !(typeof z.shoulderCheckGraceS === 'number' && z.shoulderCheckGraceS <= MAX_GRACE_S) : z.shoulderCheckGraceS !== null) {
+      bad(`${p}.shoulderCheckGraceS`, shoulder ? `must be a number ≤ ${MAX_GRACE_S}` : 'only far_lateral has a shoulder-check grace');
+    }
   }
   if (!(c.zones.widenCapDeg >= c.zones.widenDeg)) bad('zones.widenCapDeg', 'must be ≥ widenDeg');
   for (const k of ['curveRows', 'dbscanMinPts', 'drivesToAdopt', 'fixationsPerDrive'] as const) {
@@ -748,6 +782,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   for (const s of ['low', 'normal', 'high'] as const) if (!(d1.sensitivity?.[s] > 0)) bad(`distraction.d1.sensitivity.${s}`, 'must be > 0');
   if (!(d1.lowCapFastS >= d1.bufferFastS && d1.lowCapCityS >= d1.bufferCityS)) bad('distraction.d1', 'the Low caps must be ≥ the normal buffers');
   if (!(c.distraction.noAlertBelowKmh <= c.distraction.logOnlyBelowKmh)) bad('distraction.noAlertBelowKmh', 'must be ≤ logOnlyBelowKmh');
+  if (!(c.distraction.gazeRulesMinFps > 0)) bad('distraction.gazeRulesMinFps', 'must be > 0');
   const d2 = c.distraction.d2;
   if (!(d2.bucketMs > 0) || (d2.windowS * 1000) % d2.bucketMs !== 0) bad('distraction.d2.bucketMs', 'must divide the window');
   if (!(d2.warnS <= d2.windowS)) bad('distraction.d2.warnS', 'must be ≤ windowS');
@@ -779,6 +814,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   }
   for (const k of ['nightStartMin', 'nightEndMin'] as const) if (!(f[k] >= 0 && f[k] <= 1440)) bad(`fatigue.${k}`, 'must lie in [0, 1440]');
   if (!(f.longTripFactor >= 1 && f.nightFactor >= 1)) bad('fatigue', 'amplifying factors must be ≥ 1');
+  if (!(c.closure.lookDownClosedBelow < f.perclosOpennessBelow)) bad('fatigue.perclosOpennessBelow', 'must be > closure.lookDownClosedBelow');
+  if (!(f.perclosMinTrackingS <= f.signals.perclos.windowS)) bad('fatigue.perclosMinTrackingS', 'must be ≤ the PERCLOS window');
 
   if (!Number.isInteger(c.scoring.focusQueueCap) || c.scoring.focusQueueCap < 1) bad('scoring.focusQueueCap', 'must be a positive integer');
   return errors;

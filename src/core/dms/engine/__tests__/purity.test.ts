@@ -1,6 +1,6 @@
 /** @jest-environment node */
 // The DMS engine is a pure function of its inputs (plan Task 5): every source under
-// src/core/dms/engine imports only its own folder, and uses no clock, randomness, timer, console,
+// src/core/dms/engine (tests and test fixtures aside) imports only its own folder, and uses no clock, randomness, timer, console,
 // dynamic require or React. Its time is the frame clock it is given. The one allowed outside import
 // is the dms-vision constants file (PAUSE_AFTER_STOP_MS lives there once), which itself imports
 // nothing.
@@ -26,7 +26,7 @@ function sources(dir: string): string[] {
   const out: string[] = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
-      if (e.name !== '__tests__') out.push(...sources(path.join(dir, e.name)));
+      if (e.name !== '__tests__' && e.name !== '__fixtures__') out.push(...sources(path.join(dir, e.name)));
     } else if (/\.tsx?$/.test(e.name)) out.push(path.join(dir, e.name));
   }
   return out;

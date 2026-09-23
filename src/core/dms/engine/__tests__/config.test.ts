@@ -89,6 +89,13 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.yawn.absMar).toBe(0.35);
     expect(c.yawn.minFps).toBe(10);
   });
+  test('the numbers added in Task 6 (Task 5 review m1)', () => {
+    expect(c.fatigue.perclosOpennessBelow).toBe(0.2);
+    expect(c.fatigue.perclosMinTrackingS).toBe(30);
+    expect(c.closure.fpsWindowS).toBe(10);
+    expect(c.distraction.gazeRulesMinFps).toBe(8);
+    expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 });
+  });
   test('the fatigue weights sum to 1 (§M7)', () => {
     const s = Object.values(c.fatigue.signals).reduce((a, x) => a + x.weight, 0);
     expect(s).toBeCloseTo(1, 12);
@@ -190,6 +197,23 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['the widening cap below one step', (c) => (c.zones.widenCapDeg = 2), /zones\.widenCapDeg/],
     ['a night window beyond a day', (c) => (c.fatigue.nightEndMin = 2000), /fatigue\.nightEndMin/],
     ['the D2 bucket not dividing the window', (c) => (c.distraction.d2.bucketMs = 70), /distraction\.d2\.bucketMs/],
+    ['the lap zone above the centre (Task 5 review m2)', (c) => {
+      const z = c.zones.table.find((x) => x.id === 'lap')!;
+      if (z.region.kind === 'below') z.region.maxPitchDeg = 30;
+    }, /zones\.table\[lap\]\.region\.maxPitchDeg/],
+    ['the lap zone with no yaw extent', (c) => {
+      const z = c.zones.table.find((x) => x.id === 'lap')!;
+      if (z.region.kind === 'below') z.region.maxAbsYawDeg = 0;
+    }, /zones\.table\[lap\]\.region\.maxAbsYawDeg/],
+    ['far lateral from 0°', (c) => {
+      const z = c.zones.table.find((x) => x.id === 'far_lateral')!;
+      if (z.region.kind === 'lateral') z.region.minAbsYawDeg = 0;
+    }, /zones\.table\[far_lateral\]\.region\.minAbsYawDeg/],
+    ['an absurd grace', (c) => (c.zones.table.find((x) => x.id === 'cluster')!.graceS = 60), /zones\.table\[cluster\]\.graceS/],
+    ['a shoulder-check grace on a mirror', (c) => (c.zones.table.find((x) => x.id === 'rear_mirror')!.shoulderCheckGraceS = 1), /zones\.table\[rear_mirror\]\.shoulderCheckGraceS/],
+    ['far lateral without its shoulder-check grace', (c) => (c.zones.table.find((x) => x.id === 'far_lateral')!.shoulderCheckGraceS = null), /zones\.table\[far_lateral\]\.shoulderCheckGraceS/],
+    ['PERCLOS below the looking-down threshold', (c) => (c.fatigue.perclosOpennessBelow = 0.1), /fatigue\.perclosOpennessBelow/],
+    ['a gaze-rules fps floor of 0', (c) => (c.distraction.gazeRulesMinFps = 0), /distraction\.gazeRulesMinFps/],
   ];
   test.each(cases)('%s', (_name, breakIt, path) => {
     const c = copy();
