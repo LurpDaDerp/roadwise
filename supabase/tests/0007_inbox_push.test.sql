@@ -498,7 +498,7 @@ select is((select coalesce(array_agg(t.relname::text order by t.relname), '{}') 
     where t.relnamespace = 'public'::regnamespace and t.relkind = 'r' and t.relname not in ('profiles', 'private_profiles')
       and (exists (select 1 from pg_constraint c where c.conrelid = t.oid and c.contype = 'f' and c.confrelid = 'auth.users'::regclass)
            or exists (select 1 from pg_attribute a where a.attrelid = t.oid and a.attname = 'user_id' and not a.attisdropped))
-      and not exists (select 1 from pg_proc p where p.oid in ('public.minimise_underage_account()'::regprocedure, 'public.minimise_underage_notifications()'::regprocedure)
+      and not exists (select 1 from pg_proc p where p.oid in ('public.minimise_underage_account()'::regprocedure, 'public.minimise_underage_notifications()'::regprocedure, 'public.minimise_underage_rewards()'::regprocedure)
                       and p.prosrc ~ ('delete from public\.' || t.relname || ' where'))), '{}'::text[],
   'every user-referencing public table is deleted by the under-13 minimisation');
 
