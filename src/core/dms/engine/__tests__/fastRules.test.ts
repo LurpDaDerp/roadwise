@@ -282,22 +282,38 @@ describe('frame gaps (T12 review I1): unobserved time never counts', () => {
     for (const end = t + afterS * 1000; t < end; t += 1000 / 15) push(t, b);
     return out;
   }
-  test('a frame after more than maxFrameGapS is a gap; closed on both sides, the closure counts OBSERVED time only (final review m1)', () => {
-    const ps = withGap({ ear: ear(0.1) }, 0.4, 2, { ear: ear(0.1) }, 1.5);
+  test('a frame after more than maxFrameGapS is a gap; closed on both sides of a short gap (≤ maxContinueGapS), the closure counts OBSERVED time only (final review m1, round 3)', () => {
+    const ps = withGap({ ear: ear(0.1) }, 0.4, 0.8, { ear: ear(0.1) }, 1.5);
     const g = ps.find((p) => p.gap)!;
     expect(g).toBeDefined();
     expect(ps.filter((p) => p.gap)).toHaveLength(1);
     expect(g.eyesClosed).toBe(true);
-    // The 0.4 s seen before the gap is kept, the 2 s gap is not counted (T12 I1 still holds).
+    // The 0.4 s seen before the gap is kept, the 0.8 s gap is not counted (T12 I1 still holds).
     expect(g.closedMs).toBeGreaterThan(250); // the closure time observed before the gap; the gap frame adds none
     expect(g.closedMs).toBeLessThan(500);
-    expect(g.unobservedMs).toBeGreaterThan(1900);
+    expect(g.unobservedMs).toBeGreaterThan(700);
     const r = fast(ps, 60);
     const f1 = r.events.find((e) => e.kind === 'microsleep')!;
     // 1.0 s of OBSERVED closure in all: the rest after the gap frame (± a frame), never 1.0 s + the gap.
     expect(f1.tMs - g.tMs).toBeGreaterThanOrEqual(1000 - g.closedMs - 1e-6);
     expect(f1.tMs - g.tMs).toBeLessThanOrEqual(1000 - g.closedMs + 1000 / 15 + 1e-6);
     expect(r.kinds).not.toContain('blink');
+  });
+  test('closed on both sides of a gap LONGER than maxContinueGapS: the closure ends at the gap and a new one starts on its frame (round 3)', () => {
+    const ps = withGap({ ear: ear(0.1) }, 0.4, 1.5, { ear: ear(0.1) }, 1.5);
+    const g = ps.find((p) => p.gap)!;
+    expect(g.unobservedMs).toBeGreaterThan(C.closure.maxContinueGapS * 1000);
+    expect(g.eyesClosed).toBe(true);
+    expect(g.closedMs).toBe(0);
+    const r = fast(ps, 60);
+    const f1 = r.events.find((e) => e.kind === 'microsleep')!;
+    // A full 1.0 s of closure after the gap frame: the 0.4 s before it never counts.
+    expect(f1.tMs - g.tMs).toBeGreaterThanOrEqual(1000 - 1e-6);
+    expect(f1.tMs - g.tMs).toBeLessThanOrEqual(1000 + 1000 / 15 + 1e-6);
+    // The episode too starts at the gap frame (fastRules ends the old one there): its measured length is the
+    // closure after the gap, never the 0.4 s before it.
+    const end = r.rules.flush().find((e) => e.kind === 'episode_end')!;
+    expect(end.durMs!).toBeLessThanOrEqual(ps.at(-1)!.tMs - g.tMs + 1e-6);
   });
   test('closed before a gap, OPEN after it: the closure ends silently at the gap (no blink spanning it)', () => {
     const ps = withGap({ ear: ear(0.1) }, 0.4, 2, {}, 1);

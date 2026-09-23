@@ -133,11 +133,13 @@ export function createFastRules(cfg: DmsConfig) {
       // a TRACKING frame after it (final review m1): the episode continues on observed time, its onset
       // shifted by the unobserved span, as the conditioner shifted its closure clock.
       // Round 2: bridged or not, both owners (the conditioner's clock and this episode) shift together.
+      // Round 3 (R2-1): the episode follows what the conditioner did: it continues only if the closure did
+      // (closed, with closure time kept); a closure the gap ended (or restarted on this frame) ends it.
       if (p.gap && episode !== null) {
-        if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {
+        if (p.eyesClosed && p.closedMs > 0) {
           episode.onset += p.unobservedMs;
           if (episode.deepSince !== null) episode.deepSince += p.unobservedMs;
-        } else if (!p.closureBridged) endSilently(events);
+        } else endSilently(events);
       }
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
       if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {

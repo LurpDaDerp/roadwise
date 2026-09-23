@@ -213,17 +213,18 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       let unobservedMs = 0;
       if (gap) {
         // Unobserved time. Final review m1: an unbridged closure that is still closed on a TRACKING frame after
-        // the gap continues with its clock shifted by the gap (observed time only); otherwise it ends silently.
+        // a SHORT gap (≤ closure.maxContinueGapS, round 3) continues with its clock shifted by the gap (observed
+        // time only); otherwise it ends silently, and a closed eye on this frame starts a new closure.
         // No gaze is held across a gap.
         // The whole interval up to this frame is unobserved (obsDt is 0 on a gap): the gap frame adds no closure
         // time, so it never crosses an F threshold by itself (the property tests' gap invariant).
         unobservedMs = dtS * 1000;
         if (bridged) {
-          // Final review round 2 (the I1 residual): a bridge survives a gap shorter than its cap (the check above
-          // ends one that overruns it), but the gap counts 0 toward both the closure and the cap.
+          // Final review round 2 (the I1 residual): the gap adds no closure time. Round 3 (R2-1): the cap stays on
+          // WALL time (bridgeStart is never shifted), so the check above ends a bridge bridgeMaxS after it began
+          // however the time was split between frames and stops.
           closedSince += unobservedMs;
-          bridgeStart += unobservedMs;
-        } else if (closed && q.quality === 'tracking') closedSince += unobservedMs;
+        } else if (closed && q.quality === 'tracking' && unobservedMs <= cfg.closure.maxContinueGapS * 1000 + 1e-6) closedSince += unobservedMs;
         else closed = false;
         lastGazeRel = null;
       }

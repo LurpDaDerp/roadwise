@@ -160,9 +160,9 @@ describe('frame gaps are unobserved time (T12 review I1)', () => {
     expect(d1[0]!).toBeGreaterThanOrEqual(gapT + 500 - 1000 / fps - 1e-6);
     expect(d1[0]!).toBeLessThanOrEqual(gapT + 500 + 1000 / fps + 1e-6);
   });
-  test.each([15, 5])('%d fps: eyes closed 0.4 s, a 2 s gap, closed again: microsleep at 1.0 s of OBSERVED closure (the gap never counts; final review m1)', (fps) => {
+  test.each([15, 5])('%d fps: eyes closed 0.4 s, a 0.8 s gap (≤ maxContinueGapS), closed again: microsleep at 1.0 s of OBSERVED closure (the gap never counts; final review m1, round 3)', (fps) => {
     const drv: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 && t < 110 ? 0.1 : 1, speedKmh: 60 });
-    const items = gapped(fps, drv, 108, 100.4, 2);
+    const items = gapped(fps, drv, 108, 100.4, 0.8);
     const engine = createDmsEngine(NET, DEFAULT_INIT);
     let gapT = -1;
     const f1: number[] = [];

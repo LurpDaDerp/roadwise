@@ -397,3 +397,32 @@ describe('final review: the alert manager', () => {
     expect(am.critical()).toBe('sleep');
   });
 });
+
+describe('final review round 3 nit: several Criticals on one frame', () => {
+  test.each([
+    ['F1, F2, F3 (seed 1101 at a speed-gate lift)', [crit('microsleep'), crit('sleep'), unr({ closure: true })]],
+    ['F3 listed first', [unr({ closure: true }), crit('microsleep'), crit('sleep')]],
+  ])('%s: only the highest starts; the lower ones are logged as merged', (_name, reqs) => {
+    const r = run([{ s: 1, f: asleep, req: reqs }]);
+    expect(r.sig).toEqual(['start:unresponsive']);
+    const by = r.am.stats().byKind;
+    expect(by.microsleep).toMatchObject({ delivered: 0, merged: 1 });
+    expect(by.sleep).toMatchObject({ delivered: 0, merged: 1 });
+    expect(by.unresponsive.delivered).toBe(1);
+  });
+  test('a Critical accepted earlier on the frame still corroborates an escalation after it (the order of the requests is kept)', () => {
+    const r = run([{ s: 1, f: asleep, req: [crit('microsleep'), unr({ escalation: true })] }]);
+    expect(r.sig).toEqual(['start:unresponsive']);
+    expect(r.am.stats().invariantViolations).toBe(0);
+    expect(r.am.stats().byKind.microsleep.merged).toBe(1);
+  });
+  test('a lower Critical refused for speed does not block the higher one', () => {
+    const r = run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 5 }, req: [crit('sleep'), unr({ escalation: true })] }]);
+    expect(r.sig).toEqual(['start:unresponsive']);
+    expect(r.am.stats().byKind.sleep.suppressed).toBe(1);
+  });
+  test('F1 and F2 on one frame: sleep only; a later F3 still escalates', () => {
+    const r = run([{ s: 1, f: asleep, req: [crit('sleep'), crit('microsleep')] }, { s: 1, f: asleep, req: [unr({ closure: true })] }]);
+    expect(r.sig).toEqual(['start:sleep', 'stop:sleep', 'start:unresponsive']);
+  });
+});

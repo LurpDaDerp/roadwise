@@ -326,3 +326,68 @@ describe('final review round 2 (I1 residual): a stop SHORTER than the bridge cap
     for (const e of ends) expect(e.durMs!).toBeLessThan(3_000);
   });
 });
+
+describe('final review round 3 (R2-1): the bridge cap is wall time; an unbridged closure continues only across a short gap', () => {
+  // The re-review 2 probes, at 60 km/h after a head-drop closure at 100 s (the face lost at 100.8 s, the
+  // bridge): from 101.5 s, `n` times, `offS` with no frames then `lostS` of LOST frames; then `tail`.
+  const probe = (offS: number, lostS: number, n: number, tail: 'open' | 'closed') => {
+    const windows: [number, number][] = [];
+    let t = 101.5;
+    for (let i = 0; i < n; i++) {
+      windows.push([t + offS, t + offS + lostS]);
+      t += offS + lostS;
+    }
+    const back = t + offS; // the last stop, then the face again
+    const lost = (s: number) => (s >= 100.8 && s < 101.5) || windows.some(([a, b]) => s >= a && s < b);
+    const off = (s: number) => s >= 101.5 && s < back && !lost(s);
+    const drv: DriverFn = (s, r) => {
+      if (s < 100) return { gaze: onRoad(r), speedKmh: 60 };
+      if (s < 100.8) {
+        const pitch = -30 * Math.min(1, (s - 100) / 0.6);
+        return { gaze: rel(0, pitch), head: { yaw: 0.8, pitch: -1.2 + pitch }, openness: 0.1, speedKmh: 60 };
+      }
+      if (lost(s) || off(s)) return { gaze: onRoad(r), face: false, speedKmh: 60 };
+      return { gaze: onRoad(r), openness: tail === 'closed' && s < back + 0.5 ? 0.1 : 1, speedKmh: 60 };
+    };
+    const engine = createDmsEngine(C, DEFAULT_INIT);
+    const out = newOut();
+    const items = synthDrive({ fps: 15, seconds: back + 4, seed: 12, source: 'geometric', driver: drv });
+    feed(engine, items, out, (f) => (off(f.tMs / 1000) ? null : f));
+    return out;
+  };
+  test.each([
+    ['5 s off, 0.2 s LOST, × 20', 5, 0.2, 20, 'open'],
+    ['5 s off, 1 s LOST, × 20', 5, 1, 20, 'open'],
+    ['9 s off, one LOST frame, × 10, then a TRACKING closed face', 9, 1 / 15, 10, 'closed'],
+  ] as const)('%s: the bridge ends by bridgeMaxS of wall time; only the earned microsleep, never sleep or unresponsive', (_name, offS, lostS, n, tail) => {
+    const out = probe(offS, lostS, n, tail);
+    expect(out.events.filter((e) => e.kind === 'sleep' || e.kind === 'unresponsive')).toEqual([]);
+    expect(out.cmds.filter((c) => c.action === 'start' && (c.kind === 'sleep' || c.kind === 'unresponsive'))).toEqual([]);
+    const f1 = out.events.filter((e) => e.kind === 'microsleep' || e.kind === 'microsleep_nod');
+    expect(f1.length).toBeLessThanOrEqual(1);
+    for (const e of f1) expect(e.tMs).toBeLessThan(100_000 + C.closure.bridgeMaxS * 1000);
+    for (const e of out.events.filter((x) => x.kind === 'episode_end')) expect(e.durMs!).toBeLessThan(C.closure.bridgeMaxS * 1000);
+  });
+
+  /** Two long blinks (0.65 s, then 0.5 s) with `gapS` of no frames between them, the eyes shut on both sides. */
+  const blinks = (gapS: number) => {
+    const back = 100.65 + gapS;
+    const drv: DriverFn = (s, r) => ({ gaze: onRoad(r), openness: (s >= 100 && s < 100.65) || (s >= back && s < back + 0.5) ? 0.1 : 1, speedKmh: 60 });
+    const engine = createDmsEngine(C, DEFAULT_INIT);
+    const out = newOut();
+    const items = synthDrive({ fps: 15, seconds: back + 3, seed: 14, source: 'geometric', driver: drv });
+    feed(engine, items, out, (f) => (f.tMs >= 100_650 && f.tMs < back * 1000 ? null : f));
+    return out;
+  };
+  test('a 0.65 s long blink, a 5 s stop (a native fault retry), a 0.5 s long blink: two blinks, never a microsleep', () => {
+    expect(C.closure.maxContinueGapS).toBeLessThan(5);
+    const out = blinks(5);
+    expect(out.events.filter((e) => e.kind === 'microsleep' || e.kind === 'microsleep_nod')).toEqual([]);
+    expect(out.cmds.filter((c) => c.action === 'start' && c.tier === 3)).toEqual([]);
+  });
+  test('the same across a 0.8 s gap (dropped frames, within maxContinueGapS): one closure of 1.15 s observed, a microsleep', () => {
+    expect(C.closure.maxContinueGapS).toBeGreaterThanOrEqual(0.8);
+    const out = blinks(0.8);
+    expect(out.events.filter((e) => e.kind === 'microsleep')).toHaveLength(1);
+  });
+});

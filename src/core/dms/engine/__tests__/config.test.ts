@@ -95,6 +95,7 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.fatigue.perclosMinTrackingS).toBe(30);
     expect(c.closure.fpsWindowS).toBe(10);
     expect(c.closure.maxFrameGapS).toBe(0.5); // T12 review I1
+    expect(c.closure.maxContinueGapS).toBe(1); // final review round 3 (R2-1)
     expect(c.alerts.criticalBlindMaxS).toBe(60); // T13 r1 I1
     // C-26 closure bridging (T9 review I1)
     expect(c.closure.bridgeMinClosedMs).toBe(500);
@@ -227,6 +228,8 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['a closure bridge cap at or under F3 (C-26)', (c) => (c.closure.bridgeMaxS = 6), /closure\.bridgeMaxS/],
     ['a zero head-drop window (C-26)', (c) => (c.closure.bridgeDropWindowS = 0), /closure\.bridgeDropWindowS/],
     ['a frame-gap limit at two 5 fps intervals (T12 review I1)', (c) => (c.closure.maxFrameGapS = 0.4), /closure\.maxFrameGapS/],
+    ['a closure-continuation gap not above the frame-gap limit (round 3)', (c) => (c.closure.maxContinueGapS = 0.5), /closure\.maxContinueGapS/],
+    ['a closure-continuation gap not below the bridge cap (round 3)', (c) => (c.closure.maxContinueGapS = 10), /closure\.maxContinueGapS/],
     ['a blind Critical cap no longer than the known-low-speed end (T13 r1 I1)', (c) => (c.alerts.criticalBlindMaxS = 5), /alerts\.criticalBlindMaxS/],
     ['a minimum scored weight of 0 (T10 r1 m2)', (c) => (c.fatigue.minScoredWeight = 0), /fatigue\.minScoredWeight/],
     ['a minimum scored weight above 1', (c) => (c.fatigue.minScoredWeight = 1.5), /fatigue\.minScoredWeight/],

@@ -366,6 +366,13 @@ export interface DmsConfig {
      * Above two frame intervals at the lowest capture rate, below every alert time.
      */
     maxFrameGapS: number;
+    /**
+     * Final review round 3 (R2-1): an UNBRIDGED closure seen closed on both sides of a gap continues (on
+     * observed time) only across a gap of at most this; a longer one ends it silently, and a closed eye after
+     * it starts a new closure. Covers dropped frames and an in-flight timeout, never a fault retry, a gate
+     * flap or a pause. In (maxFrameGapS, bridgeMaxS).
+     */
+    maxContinueGapS: number;
   };
 
   nod: {
@@ -654,6 +661,7 @@ const DEFAULT: DmsConfig = {
     bridgeDropWindowS: 1,
     bridgeMaxS: 10,
     maxFrameGapS: 0.5,
+    maxContinueGapS: 1,
   },
   nod: {
     referenceWithinDeg: 5,
@@ -834,6 +842,9 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.summary.goodSessionMaxCameraOffShare >= 0 && c.summary.goodSessionMaxCameraOffShare <= 1)) bad('summary.goodSessionMaxCameraOffShare', 'must lie in [0, 1]');
   const twoSlowFrames = 2 / Math.min(...ALLOWED_FPS);
   if (!(c.closure.maxFrameGapS > twoSlowFrames + 1e-9)) bad('closure.maxFrameGapS', `must exceed two frame intervals at the lowest capture rate (${twoSlowFrames} s)`);
+  if (!(c.closure.maxContinueGapS > c.closure.maxFrameGapS && c.closure.maxContinueGapS < c.closure.bridgeMaxS)) {
+    bad('closure.maxContinueGapS', 'must lie in (closure.maxFrameGapS, closure.bridgeMaxS)');
+  }
 
   // Geometric gaze.
   if (!(c.geometric.kEye > 0 && c.geometric.kEye <= 1)) bad('geometric.kEye', 'must lie in (0, 1]');

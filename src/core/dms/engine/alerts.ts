@@ -154,6 +154,10 @@ export interface AlertStats {
 const CRITICAL: ReadonlySet<AlertKind> = new Set(['unresponsive', 'microsleep', 'microsleep_nod', 'sleep']);
 const DISTRACTION: ReadonlySet<AlertKind> = new Set(['distraction', 'cumulative']);
 
+/** A Critical's rank: several on one frame start only the highest (final review round 3 nit). */
+const CRITICAL_RANK: Partial<Record<AlertKind, number>> = { microsleep: 1, microsleep_nod: 1, sleep: 2, unresponsive: 3 };
+const rankOf = (req: AlertRequest) => CRITICAL_RANK[req.kind] ?? 0;
+
 export function tierOf(kind: AlertKind): 1 | 2 | 3 {
   if (CRITICAL.has(kind)) return 3;
   if (DISTRACTION.has(kind) || kind === 'fatigue') return 2;
@@ -292,7 +296,13 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         }
       }
 
-      // New requests.
+      // New requests. Round 3 nit: several Criticals on one frame (F1–F3 at a speed-gate lift) start only the
+      // highest; the others are logged as merged, so the host never chirps three starts. The requests keep
+      // their order (an accepted Critical earlier on the frame still verifies an escalation after it).
+      const speedOk = (req: AlertRequest) => isEscalation(req) || (x.ruleSpeedKmh !== null && x.ruleSpeedKmh >= a.criticalMinStartKmh - EPS);
+      const topRank = Math.max(0, ...x.requests.filter((r) => tierOf(r.kind) === 3 && speedOk(r)).map(rankOf));
+      let criticalAcceptedNow = false;
+      let criticalStartedNow = false;
       for (const req of x.requests) {
         const tier = tierOf(req.kind);
         const from = raisedOn(req, x);
@@ -302,15 +312,16 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
           pendingLowSince = null;
         }
         if (tier === 3) {
-          if (!isEscalation(req) && (x.ruleSpeedKmh === null || x.ruleSpeedKmh < a.criticalMinStartKmh - EPS)) {
+          if (!speedOk(req)) {
             refuse(x, req, 'suppressed', 'speed', from);
             continue;
           }
-          const unverified = isEscalation(req) && critical === null && !pendingEscalation;
+          const unverified = isEscalation(req) && critical === null && !criticalAcceptedNow && !pendingEscalation;
+          criticalAcceptedNow = true;
           if (!r5) invariantViolations++;
           if (unverified) invariantViolations++;
           const extra: Partial<AlertLogEntry> = { ...from, ...(!r5 ? { why: 'rule5_violation' } : unverified ? { why: 'escalation_unverified' } : {}) };
-          if (critical !== null && critical.kind === req.kind) {
+          if ((critical !== null && critical.kind === req.kind) || criticalStartedNow || rankOf(req) < topRank) {
             record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged', ...extra });
             continue;
           }
@@ -320,6 +331,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
           }
           if (critical !== null) cmd(out, x, 'stop', critical.kind);
           critical = { kind: req.kind, clearSince: null, lowSince: null, startT: x.tMs };
+          criticalStartedNow = true;
           deliver(out, x, req, 'start', extra);
           continue;
         }
