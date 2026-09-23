@@ -255,31 +255,33 @@ function headPose(): GoldenVector {
 
 /** The ONNX inputs (the expected outputs are filled by make-onnx-vectors.py). */
 /**
- * The batcher's predictive flush (Task 3 review I1): each allowed rate at nominal cadence with a
- * 30 ms processing lag, a jittered 15 fps stream, and a 15 fps stream with a lost frame (the one case
- * where a record may wait longer than BATCH_MS: the next frame came two intervals later). Record
- * times are six days into the boot clock; the wall clock is 1.7e12 ms.
+ * The batcher's predictive flush (Task 3 review I1, round-1 m-r1): each allowed rate at nominal
+ * cadence (callbacks 5 ms and appends 45 ms after capture), 15 fps with a short 20 ms lag (single
+ * batches), a jittered 15 fps stream, and 15 fps with skipped frames (flushed at the skipped callback).
+ * Record times are six days into the boot clock; the wall clock is 1.7e12 ms.
  */
 function batcherFlush(): GoldenVector {
   const T0 = 5e8 + 0.25;
   const epochOffsetMs = 1.7e12 - T0;
-  const stream = (fps: number, offsets: number[]) => ({
+  const stream = (fps: number, offsets: number[], lagMs = 45, skipped: number[] = []) => ({
     intervalMs: 1000 / fps,
     epochOffsetMs,
-    frames: offsets.map((o) => ({ tMs: T0 + o, nowMs: T0 + o + 30 })),
+    frames: offsets.map((o, i) => ({ arriveMs: T0 + o + 5, tMs: T0 + o, nowMs: T0 + o + lagMs, skipped: skipped.includes(i) })),
   });
-  const nominal = (fps: number) => stream(fps, Array.from({ length: 12 }, (_, i) => (i * 1000) / fps));
+  const nominalOffsets = (fps: number) => Array.from({ length: 12 }, (_, i) => (i * 1000) / fps);
   const jitter = [0, 5, -7, 3, 8, -4, 0, 6, -8, 2, 7, -3];
   const inputs = {
     cases: [
-      ...[5, 8, 10, 15].map(nominal),
+      ...[5, 8, 10, 15].map((fps) => stream(fps, nominalOffsets(fps))),
+      stream(15, nominalOffsets(15), 20),
       stream(15, jitter.map((j, i) => (i * 1000) / 15 + j)),
-      stream(15, [0, 1, 2, 4, 5, 6, 7, 9, 10, 11].map((i) => (i * 1000) / 15)),
+      stream(15, nominalOffsets(15), 45, [1, 4, 5, 9]),
+      stream(8, nominalOffsets(8), 45, [2, 3]),
     ],
   };
   return {
     name: 'batcher-flush',
-    description: 'the predictive flush at 5, 8, 10 and 15 fps, jittered 15 fps, and 15 fps with lost frames; anchors on a six-day boot clock',
+    description: 'the predictive flush at 5, 8, 10 and 15 fps, short-lag and jittered 15 fps, and skipped frames flushed at their callback; anchors on a six-day boot clock',
     kind: 'batcher',
     inputs,
     expected: { cases: runBatcherVector(inputs) },

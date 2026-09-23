@@ -87,6 +87,8 @@ class CaptureController(internal val context: Context) {
   private var lastAcceptedMs = -1.0
   private var lastTsMs = -1L
   private var frameIndex = 0
+  /** The one bitmap MediaPipe reads, reused every frame (T4-I2). */
+  private val frameBitmap = FrameBitmap()
 
   /** The frame MediaPipe owes a result for. Its ImageProxy stays open until then: the ROI luma is read from it. */
   private class InFlight(
@@ -128,8 +130,10 @@ class CaptureController(internal val context: Context) {
       val exec = Executors.newSingleThreadScheduledExecutor()
       analysis = exec
       val lmk = Landmarker(context, o.gpu) { ts, lm, m, err -> postResult(exec, ts, lm, m, err) }
+      // Created whenever the build has the net, so a drive that starts slowly (CLOSURE_WATCH, net off)
+      // still has it at speed; gazeNetWanted decides per frame whether it runs (T4-I1).
       var net: GazeNetRunner? = null
-      if (o.gazeNet && GazeNetFactory.available) {
+      if (GazeNetFactory.available) {
         try { net = GazeNetFactory.make(context) } catch (_: Exception) { DmsLog.code(DmsLog.Code.GAZE_NET_FAILED) }
       }
       locked { landmarker = lmk; gazeNet = net }
@@ -259,6 +263,8 @@ class CaptureController(internal val context: Context) {
     }
     lmk?.close()
     net?.close()
+    // The analysis thread is drained and the graph closed, so nothing can read the bitmap any more.
+    frameBitmap.release()
     analysisUseCase = null
     provider = null
     owner = null
@@ -276,6 +282,10 @@ class CaptureController(internal val context: Context) {
     var keep = false
     try {
       val (st, cap, lmk, offset) = locked { Quad(state, min(fps, thermal.fpsCap), landmarker, rotationOffset) }
+      // The predictive flush, checked at every frame before any early return, so a frame that is
+      // throttled, refused or lost cannot stretch a batch past one interval (round-1 review m-r1).
+      val arriveMs = clock.baseNowMs(SystemClock.elapsedRealtimeNanos(), System.nanoTime())
+      if (cap > 0 && batcher.isDue(arriveMs, 1000.0 / cap)) batcher.flush()?.let { onFrames?.invoke(it) }
       if (st != "running" || cap <= 0 || lmk == null) return
       if (inFlight != null) { locked { dropped += 1 }; return }
       val frameNs = proxy.imageInfo.timestamp
@@ -288,7 +298,9 @@ class CaptureController(internal val context: Context) {
       if (tsMs <= lastTsMs) tsMs = lastTsMs + 1
       lastTsMs = tsMs
       val focal = Focal.focalScale(sensor, proxy.width, proxy.height, rotation)
-      val bitmap = proxy.toBitmap()
+      // Reusing one bitmap is safe: a frame is accepted only once the previous detection has
+      // answered (inFlight == null above), so MediaPipe cannot still be reading it.
+      val bitmap = frameBitmap.fill(proxy)
       val f = InFlight(proxy, tsMs, tMs, rotation, SystemClock.elapsedRealtimeNanos(), focal)
       inFlight = f
       lastAcceptedMs = tMs
@@ -301,8 +313,6 @@ class CaptureController(internal val context: Context) {
       } catch (_: Exception) {
         inFlight = null
         locked { dropped += 1 }
-      } finally {
-        bitmap.recycle()
       }
     } catch (_: Exception) {
       locked { dropped += 1 }

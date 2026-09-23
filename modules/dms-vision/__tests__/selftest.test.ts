@@ -161,14 +161,18 @@ test('a port that keeps the rejected flush rule (flush on a later frame once BAT
   const v = vectors[i]!;
   if (v.kind !== 'batcher') throw new Error('kind');
   const late = v.inputs.cases.map((c) => {
-    const flushes: { after: number; n: number; anchorTMs: number; anchorEpochMs: number }[] = [];
+    const flushes: { after: number; at: 'append'; n: number; anchorTMs: number; anchorEpochMs: number }[] = [];
     let first = -1;
+    let n = 0;
     c.frames.forEach((f, k) => {
+      if (f.skipped) return;
       if (first < 0) first = k;
+      n += 1;
       const start = c.frames[first]!;
       if (f.nowMs - start.nowMs >= 100) {
-        flushes.push({ after: k, n: k - first + 1, anchorTMs: start.tMs, anchorEpochMs: start.tMs + c.epochOffsetMs });
+        flushes.push({ after: k, at: 'append', n, anchorTMs: start.tMs, anchorEpochMs: start.tMs + c.epochOffsetMs });
         first = -1;
+        n = 0;
       }
     });
     return { flushes };
@@ -197,4 +201,18 @@ test('the Android focal vector may be skipped on iOS only', () => {
   expect(onIos.vectors[i]!.ok).toBe(true);
   const onAndroid = diffSelfTest(vectors, JSON.stringify({ version: 1, platform: 'android', gazeNetAvailable: true, results }));
   expect(onAndroid.vectors[i]!.ok).toBe(false);
+});
+
+test('a port without the check at the top of the callback fails the skipped-frame cases', () => {
+  const results = faithful(true);
+  const i = vectors.findIndex((v) => v.kind === 'batcher');
+  const v = vectors[i]!;
+  if (v.kind !== 'batcher') throw new Error('kind');
+  const appendOnly = v.inputs.cases.map((c) => ({
+    flushes: runBatcherVector({ cases: [{ ...c, frames: c.frames.map((f) => ({ ...f, arriveMs: -1e15 })) }] })[0]!.flushes,
+  }));
+  results[i] = { name: v.name, kind: 'batcher', cases: appendOnly };
+  const d = diffSelfTest(vectors, output(results, true));
+  expect(d.vectors[i]!.ok).toBe(false);
+  expect(d.vectors[i]!.mismatches.some((m) => /cases\[6\]/.test(m.path))).toBe(true);
 });

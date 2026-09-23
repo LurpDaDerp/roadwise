@@ -85,8 +85,10 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
       let lmk = try Landmarker(gpu: gpu) { [weak self] ts, lm, m, err in
         self?.videoQueue.async { self?.handleResult(ts, lm, m, err) }
       }
+      // Created whenever the build has the net, so a drive that starts slowly (CLOSURE_WATCH, net
+      // off) still has it at speed; gazeNetWanted decides per frame whether it runs (T4-I1).
       var net: GazeNetRunner? = nil
-      if gazeNet && GazeNetFactory.available {
+      if GazeNetFactory.available {
         do { net = try GazeNetFactory.make() } catch { DmsLog.code(.gazeNetFailed) }
       }
       locked { landmarker = lmk; self.gazeNet = net }
@@ -226,6 +228,10 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
   func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
     let (st, cap, offset, orient, landmarkerNow) = locked { (state, min(fps, thermal.fpsCap), rotationOffsetDegrees, orientation, landmarker) }
+    // The predictive flush, checked at every callback before any early return, so a frame that is
+    // throttled, refused or lost cannot stretch a batch past one interval (round-1 review m-r1).
+    let arriveMs = CaptureController.hostMs()
+    if cap > 0, batcher.isDue(nowMs: arriveMs, intervalMs: 1000.0 / Double(cap)), let payload = batcher.flush() { onFrames?(payload) }
     guard st == "running", cap > 0, let lmk = landmarkerNow, let pixel = CMSampleBufferGetImageBuffer(sample) else { return }
     let ptsMs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1000
     guard ptsMs.isFinite else { return }

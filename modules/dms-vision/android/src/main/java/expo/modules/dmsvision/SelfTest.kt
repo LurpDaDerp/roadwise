@@ -172,7 +172,10 @@ object SelfTest {
     return out
   }
 
-  /** The production Batcher over each case's appends; each flush reports which append triggered it. */
+  /**
+   * The production Batcher over each case's callbacks, checked where the camera path checks it: at the
+   * top of every callback (`arriveMs`), and after each appended record (`nowMs`).
+   */
   private fun batcher(inputs: JSONObject): JSONArray {
     val cases = inputs.getJSONArray("cases")
     val out = JSONArray()
@@ -183,16 +186,19 @@ object SelfTest {
       val frames = c.getJSONArray("frames")
       val b = Batcher()
       val flushes = JSONArray()
+      fun flush(k: Int, at: String) {
+        val n = b.count
+        val p = b.flush() ?: throw DmsError.badArgs("batcher flush")
+        flushes.put(JSONObject().put("after", k).put("at", at).put("n", n).put("anchorTMs", p["anchorTMs"]).put("anchorEpochMs", p["anchorEpochMs"]))
+      }
       for (k in 0 until frames.length()) {
         val f = frames.getJSONObject(k)
         val t = num(f, "tMs")
         val now = num(f, "nowMs")
+        if (b.isDue(num(f, "arriveMs"), interval)) flush(k, "arrive")
+        if (f.getBoolean("skipped")) continue
         b.append(FeatureExtractor.faceAbsentRecord(t, 0.0, 0, 0.0, 0.0), now, now + offset)
-        if (b.isDue(now, interval)) {
-          val n = b.count
-          val p = b.flush() ?: throw DmsError.badArgs("batcher flush")
-          flushes.put(JSONObject().put("after", k).put("n", n).put("anchorTMs", p["anchorTMs"]).put("anchorEpochMs", p["anchorEpochMs"]))
-        }
+        if (b.isDue(now, interval)) flush(k, "append")
       }
       out.put(JSONObject().put("flushes", flushes))
     }

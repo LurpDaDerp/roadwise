@@ -62,15 +62,18 @@ internal fun CaptureController.onAnalysis(block: () -> Unit) {
   try { exec.submit(block).get(2, TimeUnit.SECONDS) } catch (_: Exception) {}
 }
 
-/** Runs `block` on the main thread and waits, bounded: a blocked main thread must not hang the session thread. */
-internal fun CaptureController.runOnMain(block: () -> Unit) {
+/**
+ * Runs `block` on the main thread and waits, bounded: a blocked main thread must not hang the session
+ * thread. Returns false when it timed out (the block still runs later, in order, on main).
+ */
+internal fun CaptureController.runOnMain(block: () -> Unit): Boolean {
   if (Looper.myLooper() == Looper.getMainLooper()) {
     block()
-    return
+    return true
   }
   val latch = CountDownLatch(1)
   Handler(Looper.getMainLooper()).post { try { block() } finally { latch.countDown() } }
-  latch.await(2, TimeUnit.SECONDS)
+  return latch.await(2, TimeUnit.SECONDS)
 }
 
 // Binding
@@ -82,7 +85,7 @@ internal fun CaptureController.bindCamera() {
   var error: Exception? = null
   var cam: Camera? = null
   val observer = Observer<CameraState> { s -> onCameraState(s) }
-  runOnMain {
+  val done = runOnMain {
     try {
       val bound = p.bindToLifecycle(o, CameraSelector.DEFAULT_FRONT_CAMERA, a)
       bound.cameraInfo.cameraState.observe(o, observer)
@@ -90,6 +93,19 @@ internal fun CaptureController.bindCamera() {
     } catch (e: Exception) {
       error = e
     }
+  }
+  if (!done) {
+    // The bind may still complete later on main, leaving the camera bound with no owner state: undo it
+    // there, after it (the main queue runs in order) (T4 review m3).
+    Handler(Looper.getMainLooper()).post {
+      try {
+        cam?.cameraInfo?.cameraState?.removeObserver(observer)
+        p.unbind(a)
+      } catch (_: Exception) {
+        // nothing was bound
+      }
+    }
+    throw DmsError.camera("binding the front camera timed out")
   }
   error?.let { throw DmsError.camera("cannot bind the front camera: ${it.message}") }
   camera = cam ?: throw DmsError.camera("binding the front camera timed out")

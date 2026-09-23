@@ -106,7 +106,7 @@ const vectorSchema = z.discriminatedUnion('kind', [
         z.strictObject({
           intervalMs: num,
           epochOffsetMs: num,
-          frames: z.array(z.strictObject({ tMs: num, nowMs: num })),
+          frames: z.array(z.strictObject({ arriveMs: num, tMs: num, nowMs: num, skipped: z.boolean() })),
         })
       ),
     }),
@@ -114,7 +114,7 @@ const vectorSchema = z.discriminatedUnion('kind', [
       cases: z.array(
         z.strictObject({
           flushes: z.array(
-            z.strictObject({ after: z.number().int(), n: z.number().int(), anchorTMs: num, anchorEpochMs: num })
+            z.strictObject({ after: z.number().int(), at: z.enum(['arrive', 'append']), n: z.number().int(), anchorTMs: num, anchorEpochMs: num })
           ),
         })
       ),
@@ -312,14 +312,14 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
         d.nums('focalScales', r.focalScales, v.expected.focalScales);
         break;
       case 'batcher': {
-        // Which append flushed, and how many records went: exact. The anchor times: to the time bound.
+        // Which check of which callback flushed, and how many records went: exact. The anchor times: to the time bound.
         const cases = r.cases as { flushes: unknown }[] | undefined;
         if (!Array.isArray(cases) || cases.length !== v.expected.cases.length) {
           d.push({ path: 'cases.length', expected: v.expected.cases.length, actual: Array.isArray(cases) ? cases.length : undefined });
           break;
         }
         v.expected.cases.forEach((e, i) => {
-          const flushes = cases[i]!.flushes as { after: unknown; n: unknown; anchorTMs: unknown; anchorEpochMs: unknown }[];
+          const flushes = cases[i]!.flushes as { after: unknown; at: unknown; n: unknown; anchorTMs: unknown; anchorEpochMs: unknown }[];
           if (!Array.isArray(flushes) || flushes.length !== e.flushes.length) {
             d.push({ path: `cases[${i}].flushes.length`, expected: e.flushes.length, actual: Array.isArray(flushes) ? flushes.length : undefined });
             return;
@@ -328,6 +328,7 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
             const a = flushes[k]!;
             const p = `cases[${i}].flushes[${k}]`;
             if (a.after !== f.after) d.push({ path: `${p}.after`, expected: f.after, actual: typeof a.after === 'number' ? a.after : undefined });
+            if (a.at !== f.at) d.push({ path: `${p}.at`, expected: f.at, actual: typeof a.at === 'string' ? a.at : undefined });
             if (a.n !== f.n) d.push({ path: `${p}.n`, expected: f.n, actual: typeof a.n === 'number' ? a.n : undefined });
             d.nums(`${p}.anchorTMs`, [a.anchorTMs], [f.anchorTMs], 0);
             d.nums(`${p}.anchorEpochMs`, [a.anchorEpochMs], [f.anchorEpochMs], 0);

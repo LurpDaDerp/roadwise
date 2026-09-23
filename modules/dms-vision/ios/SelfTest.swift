@@ -153,7 +153,8 @@ enum SelfTest {
     }
   }
 
-  /// The production Batcher over each case's appends; each flush reports which append triggered it.
+  /// The production Batcher over each case's callbacks, checked where the camera path checks it: at
+  /// the top of every callback (`arriveMs`), and after each appended record (`nowMs`).
   static func batcher(_ inputs: [String: Any]) throws -> [[String: Any]] {
     guard let cases = inputs["cases"] as? [[String: Any]] else { throw DmsError.badArgs("batcher inputs") }
     return try cases.map { c in
@@ -161,14 +162,18 @@ enum SelfTest {
             let frames = c["frames"] as? [[String: Any]] else { throw DmsError.badArgs("batcher case") }
       let b = Batcher()
       var flushes: [[String: Any]] = []
+      func flush(_ i: Int, _ at: String) throws {
+        let n = b.count
+        guard let p = b.flush() else { throw DmsError.badArgs("batcher flush") }
+        flushes.append(["after": i, "at": at, "n": n, "anchorTMs": p["anchorTMs"] ?? NSNull(), "anchorEpochMs": p["anchorEpochMs"] ?? NSNull()])
+      }
       for (i, f) in frames.enumerated() {
-        guard let t = num(f["tMs"]), let now = num(f["nowMs"]) else { throw DmsError.badArgs("batcher frame") }
+        guard let arrive = num(f["arriveMs"]), let t = num(f["tMs"]), let now = num(f["nowMs"]),
+              let skipped = f["skipped"] as? Bool else { throw DmsError.badArgs("batcher frame") }
+        if b.isDue(nowMs: arrive, intervalMs: interval) { try flush(i, "arrive") }
+        if skipped { continue }
         b.append(FeatureExtractor.faceAbsentRecord(t, 0, 0, 0, 0), nowMs: now, epochNowMs: now + offset)
-        if b.isDue(nowMs: now, intervalMs: interval) {
-          let n = b.count
-          guard let p = b.flush() else { throw DmsError.badArgs("batcher flush") }
-          flushes.append(["after": i, "n": n, "anchorTMs": p["anchorTMs"] ?? NSNull(), "anchorEpochMs": p["anchorEpochMs"] ?? NSNull()])
-        }
+        if b.isDue(nowMs: now, intervalMs: interval) { try flush(i, "append") }
       }
       return ["flushes": flushes]
     }

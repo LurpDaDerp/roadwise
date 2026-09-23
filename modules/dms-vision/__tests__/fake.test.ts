@@ -226,6 +226,13 @@ describe('the gaze net switch', () => {
     expect(m.gazeSha256).toBeNull();
     expect(m.onnxruntime).toBeNull();
   });
+  test('a build with the net runs it on a later policy even when start asked for it off (T4-I1)', async () => {
+    const { fake } = setup({ gazeNetAvailable: true });
+    await fake.start({ ...START, gazeNet: false });
+    expect((await fake.getStatus()).gazeNetOn).toBe(false);
+    await fake.setPolicy({ ...RUN, gazeNet: true });
+    expect((await fake.getStatus()).gazeNetOn).toBe(true);
+  });
   test('a build with the net reports it', async () => {
     const { fake } = setup({ gazeNetAvailable: true });
     await fake.start(START);

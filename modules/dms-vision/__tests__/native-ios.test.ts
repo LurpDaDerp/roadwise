@@ -296,3 +296,26 @@ test('start reads a cached foreground flag, never main.sync (Task 3 review nit)'
 test('the Android focal vector is answered with skipped on iOS (it reads fx from the intrinsic matrix)', () => {
   expect(code('SelfTest.swift')).toContain('case "focal": result["skipped"] = "Android camera characteristics only"');
 });
+
+test('the predictive flush is also checked at the top of every camera callback, before any early return (round-1 m-r1)', () => {
+  const cb = body(code('CaptureController.swift'), 'captureOutput');
+  const check = cb.indexOf('batcher.isDue(nowMs:');
+  expect(check).toBeGreaterThan(0);
+  const firstExit = cb.search(/\breturn\b|\bguard\b/);
+  expect(check).toBeLessThan(firstExit);
+  const self = code('SelfTest.swift');
+  expect(self).toContain('"arriveMs"');
+  expect(self).toContain('"skipped"');
+  expect(self).toContain('try flush(i, "arrive")');
+});
+
+test('the gaze net is created at start whenever the build has it; gazeNetWanted only gates running it (T4-I1)', () => {
+  const start = body(code('CaptureController.swift'), 'start');
+  expect(start).toMatch(/if GazeNetFactory\.available \{[\s\S]*?GazeNetFactory\.make\(\)/);
+  expect(start).not.toMatch(/gazeNet && GazeNetFactory\.available/);
+  expect(body(code('CaptureController.swift'), 'handleResult')).toMatch(/wantNet && netOk/);
+});
+
+test('AppActivity reads the state synchronously when created on the main thread (round-1 nit)', () => {
+  expect(code('AppActivity.swift')).toContain('if Thread.isMainThread');
+});

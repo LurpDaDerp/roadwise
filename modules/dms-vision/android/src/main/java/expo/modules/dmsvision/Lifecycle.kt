@@ -107,7 +107,10 @@ class FrameClock {
     offsetNs = 0L
   }
 
-  /** Called with the first frame of a session; later calls keep the choice. */
+  /**
+   * Called with every frame; only the session's first frame chooses. The base is then fixed for
+   * the session (`reset` at every start), so it can never change mid-session.
+   */
   fun calibrate(frameNs: Long, elapsedNs: Long, uptimeNs: Long) {
     if (base != null) return
     when {

@@ -98,6 +98,7 @@ test('the files of the task exist, and the V1 sources are gone', () => {
     'DmsRecords.kt',
     'DmsAssets.kt',
     'DmsLog.kt',
+    'FrameBitmap.kt',
     ...PURE,
   ]) {
     expect(MAIN).toContain(f);
@@ -343,4 +344,46 @@ test('the gaze net and ONNX Runtime live only in the gazenet source set (behind 
   // The two variants declare the same factory surface.
   const surface = (f: string) => [...code(f).matchAll(/(?:fun|val) (\w+)/g)].map((x) => x[1]).filter((n) => ['available', 'onnxRuntimeVersion', 'modelSha256', 'make'].includes(n!)).sort();
   expect(surface(NET)).toEqual(surface(STUB));
+});
+
+test('the predictive flush is also checked at the top of every analyze call, before any early return (round-1 m-r1)', () => {
+  const a = body(code('CaptureController.kt'), 'analyze');
+  const check = a.indexOf('batcher.isDue(');
+  expect(check).toBeGreaterThan(0);
+  expect(check).toBeLessThan(a.search(/\breturn\b/));
+  expect(code('SelfTest.kt')).toContain('"arriveMs"');
+  expect(code('SelfTest.kt')).toContain('"skipped"');
+});
+
+test('one reusable bitmap per session, filled from the plane; no per-frame toBitmap() (T4-I2)', () => {
+  const fb = code('FrameBitmap.kt');
+  expect(allCode()).not.toContain('toBitmap(');
+  expect(fb).toContain('copyPixelsFromBuffer(');
+  expect(allCode().match(/Bitmap\.createBitmap\(/g) ?? []).toHaveLength(1);
+  // …created only when the size changes, and recycled only there and at teardown.
+  expect(fb).toMatch(/if \(b == null \|\| b\.width != w \|\| b\.height != h\) \{\s*b\?\.recycle\(\)\s*b = Bitmap\.createBitmap\(/);
+  expect(body(code('CaptureController.kt'), 'analyze')).toContain('val bitmap = frameBitmap.fill(proxy)');
+  expect(body(code('CaptureController.kt'), 'analyze')).not.toContain('recycle()');
+  const t = body(code('CaptureController.kt'), 'teardown');
+  expect(t.indexOf('lmk?.close()')).toBeLessThan(t.indexOf('frameBitmap.release()'));
+  // Padded rows are packed into a reusable buffer first; the plane's own buffer is never moved.
+  expect(fb).toContain('plane.rowStride == w * 4');
+  expect(fb).toContain('val src = plane.buffer.duplicate()');
+});
+
+test('the gaze net is created at start whenever the build has it; gazeNetWanted only gates running it (T4-I1)', () => {
+  const start = body(code('CaptureController.kt'), 'start');
+  expect(start).toMatch(/if \(GazeNetFactory\.available\) \{[\s\S]*?GazeNetFactory\.make\(context\)/);
+  expect(start).not.toMatch(/o\.gazeNet && GazeNetFactory\.available/);
+  expect(body(code('CaptureController.kt'), 'handleResult')).toContain('snap.wantNet && snap.netOk');
+});
+
+test('a bind that times out on the main thread is undone there (T4 m3)', () => {
+  const b = body(code('CaptureControllerLifecycle.kt'), 'bindCamera');
+  expect(b).toMatch(/if \(!done\) \{[\s\S]*?\.post \{[\s\S]*?unbind\(/);
+  expect(code('CaptureControllerLifecycle.kt')).toContain('internal fun CaptureController.runOnMain(block: () -> Unit): Boolean');
+});
+
+test('the frame clock base is fixed per session (T4 nit)', () => {
+  expect(raw('Lifecycle.kt')).toMatch(/base is then fixed for[\s*]+the session/);
 });
