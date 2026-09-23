@@ -113,6 +113,11 @@ export interface DmsConfig {
     limitedNoticeS: number;
     /** …at or above this speed */
     limitedMinSpeedKmh: number;
+    /**
+     * T6 round-1 review R1-I1: an eye counts for openness only if its iris was seen (reliable) within
+     * this long, or it is inside a closure that began while it counted. A lens never shows an iris.
+     */
+    irisRecencyS: number;
   };
 
   gaze: {
@@ -450,6 +455,7 @@ const DEFAULT: DmsConfig = {
     headOnlyMinFaceLuma: 50,
     limitedNoticeS: 10,
     limitedMinSpeedKmh: 20,
+    irisRecencyS: 10,
   },
   gaze: { blinkHoldMs: 500, headOnlyMarginDeg: 5, netHoldMinMs: 300 },
   geometric: { kEye: 0.43, gPitch: 1.0, nearEyeYawDeg: 25, fallbackMarginDeg: 5 },
@@ -738,6 +744,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   const ordered = (path: string, r: readonly number[] | undefined) => {
     if (!Array.isArray(r) || r.length !== 2 || !(r[0]! < r[1]!)) bad(path, 'must be an ordered [low, high] pair');
   };
+
+  if (!(c.quality.irisRecencyS > 0)) bad('quality.irisRecencyS', 'must be > 0');
 
   // Geometric gaze.
   if (!(c.geometric.kEye > 0 && c.geometric.kEye <= 1)) bad('geometric.kEye', 'must lie in (0, 1]');

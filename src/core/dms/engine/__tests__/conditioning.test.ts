@@ -117,14 +117,15 @@ describe('openness and closure (§M6, C-22)', () => {
     expect(out[0]!.opennessR).toBeCloseTo(1, 12);
   });
   test('one closed and one open eye is open (the max); an unreliable eye is ignored', () => {
-    const [a] = run([at(0, { ear: [0.03, 0.3] })]);
+    // (A first open frame shows both irises: an eye counts for openness only with iris evidence, R1-I1.)
+    const [, a] = run([at(0), at(1, { ear: [0.03, 0.3] })]);
     expect(a!.eyesClosed).toBe(false);
-    const [b] = run([at(0, { ear: [0.03, 0.3], eyeL: { sat: 0.5 } })]); // the open eye is glared out
+    const [, b] = run([at(0), at(1, { ear: [0.03, 0.3], eyeL: { sat: 0.5 } })]); // the open eye is glared out
     expect(b!.openness).toBeCloseTo(0.1, 12);
     expect(b!.eyesClosed).toBe(true);
   });
   test('past |yaw| 25° the near eye alone', () => {
-    const [p] = run([at(0, { head: { yaw: 30, pitch: 0, roll: 0 }, ear: [0.03, 0.3], eyeR: { widthPx: 40 }, eyeL: { widthPx: 20 } })]);
+    const [, p] = run([at(0), at(1, { head: { yaw: 30, pitch: 0, roll: 0 }, ear: [0.03, 0.3], eyeR: { widthPx: 40 }, eyeL: { widthPx: 20 } })]);
     expect(p!.openness).toBeCloseTo(0.1, 12);
     expect(p!.eyesClosed).toBe(true);
   });
@@ -217,5 +218,33 @@ describe('dropouts (T6 review m2, m4)', () => {
     for (let i = 20; i < 23; i++) specs.push(at(i, { ear: [0.05, 0.05] }));
     const out = run(specs);
     expect(out.slice(20).some((p) => p.source === 'held')).toBe(false);
+  });
+});
+
+describe('iris evidence in time (T6 round-1 review R1-I1)', () => {
+  const LENS = { luma: 0.6, irisContrast: 2, irisIn: false };
+  const frames = (n: number, from: number, over: Partial<FrameSpec>) => Array.from({ length: n }, (_, i) => at(from + i, over));
+  test('a lens from the start (an iris never seen) is HEAD_ONLY throughout', () => {
+    const out = run(frames(200, 0, { eyeR: LENS, eyeL: LENS, ear: [0.3, 0.3] }));
+    expect(out.every((p) => p.quality === 'head_only' && p.reasons.includes('eyes_unreliable'))).toBe(true);
+    expect(out.every((p) => p.openness === null)).toBe(true);
+  });
+  test('sunglasses put on mid-drive: TRACKING for 10 s after the last iris, then HEAD_ONLY', () => {
+    const out = run([...frames(15, 0, {}), ...frames(180, 15, { eyeR: LENS, eyeL: LENS })]); // 1 s seen, then 12 s of lens
+    const lastSeenT = out[14]!.tMs;
+    for (const p of out.slice(15)) {
+      expect({ t: p.tMs, q: p.quality }).toEqual({ t: p.tMs, q: p.tMs - lastSeenT <= 10_000 ? 'tracking' : 'head_only' });
+    }
+  });
+  test('a 20 s closure that began while the iris was seen stays TRACKING and closed throughout (the episode hold)', () => {
+    const out = run([...frames(15, 0, { gaze: { yaw: 4, pitch: 0 } }), ...frames(300, 15, { ear: [0.05, 0.05] })]);
+    const closed = out.slice(15);
+    expect(closed.every((p) => p.quality === 'tracking' && p.eyesClosed)).toBe(true);
+    expect(closed[closed.length - 1]!.closedMs).toBeGreaterThanOrEqual(19_900);
+  });
+  test('the episode ends when the eye reopens: an iris-less open eye then counts the recency again', () => {
+    const out = run([...frames(15, 0, {}), ...frames(200, 15, { ear: [0.05, 0.05] }), ...frames(15, 215, { eyeR: LENS, eyeL: LENS })]);
+    // The reopening frame itself still ends the episode; from the next frame the last iris is > 10 s old.
+    expect(out.slice(216).every((p) => p.quality === 'head_only')).toBe(true);
   });
 });

@@ -3,7 +3,9 @@
 // its contour (irisIn → 0) and its ROI becomes eyelid (irisContrast → ~0), so a gaze-quality test would
 // make every closure look like bad data.
 // - USABLE (not clipped, wide enough, not dark, not glared) judges openness: TRACKING, openness,
-//   closure, the EAR baselines.
+//   closure, the EAR baselines. Per frame only: the conditioner adds the evidence in time (T6 round-1
+//   review R1-I1), so an eye counts for openness only if its iris was seen within `irisRecencyS`, or it
+//   is inside a closure that began while it counted. `classifyQuality` is the raw per-frame view.
 // - RELIABLE (usable, plus iris contrast and the iris inside the contour) judges gaze: the geometric gaze.
 import type { DmsConfig } from './config';
 import type { EngineFrame, EyeFeatures } from './types';

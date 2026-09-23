@@ -49,6 +49,7 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.quality.headOnlyMinBlur).toBe(15);
     expect(c.quality.headOnlyMinFaceLuma).toBe(50);
     expect(c.quality.limitedNoticeS).toBe(10);
+    expect(c.quality.irisRecencyS).toBe(10); // T6 round-1 review R1-I1
   });
   test('the tunnel rule and stale rows (§M1, rev1 I6)', () => {
     expect(c.context.rowStaleMs).toBe(3000);

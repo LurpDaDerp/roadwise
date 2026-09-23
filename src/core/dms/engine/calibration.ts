@@ -313,6 +313,17 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const dt = Math.min(p.dtS, c.admitDtCapS);
       const tracking = p.quality === 'tracking' && p.headCam !== null && f.box !== null && f.iod !== null;
 
+      // A long SEARCH opens its gap BEFORE the rotation check, so a rotation change on the first frame
+      // after it is seen as a change across the gap (T6 round-1 nit).
+      if (
+        gap === null &&
+        p.quality === 'tracking' &&
+        lastTrackingT !== null &&
+        f.tMs - lastTrackingT >= c.longSearchS * 1000
+      ) {
+        openGap();
+      }
+
       // A rotation change mid-drive is a camera bump (rev2 R1-I1); a pending resume comparison is dropped
       // with it, so one change is one bump (T6 review m3).
       if (p.quality !== 'lost') {
@@ -334,8 +345,6 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const box = f.box!;
       const ms: MountSample = { t: f.tMs, yaw: head.yaw, pitch: head.pitch, roll: head.roll, cx: box.cx, cy: box.cy, iod: f.iod! };
 
-      // A long SEARCH is a gap too (C-6), without markGap.
-      if (gap === null && lastTrackingT !== null && f.tMs - lastTrackingT >= c.longSearchS * 1000) openGap();
       lastTrackingT = f.tMs;
 
       // The first TRACKING frame after a gap starts the comparison and the openness sanity check. After a

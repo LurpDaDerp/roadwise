@@ -159,3 +159,13 @@ test('a long SEARCH (≥ 30 s without TRACKING) is a gap too, without markGap', 
   run(stream({ fps: 15, seconds: 6, fromMs: 121_000, seed: 4, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), iod: 0.25 }) }));
   expect(cal.drainEvents().map((e) => e.kind)).toContain('driver_change');
 });
+
+test('a rotation change on the first TRACKING frame after a long SEARCH is still one camera_bump (T6 round-1 nit)', () => {
+  const cal = createCalibrator(C, { driverSide: 'left' });
+  const run = perceiver(C, cal);
+  run(stream({ fps: 15, seconds: 90, seed: 3, sample: roadSampler(TRUTH) }));
+  cal.drainEvents();
+  run(stream({ fps: 5, seconds: 31, fromMs: 90_000, sample: () => ({ face: false }) }));
+  run(stream({ fps: 15, seconds: 8, fromMs: 121_000, seed: 4, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), rotationDeg: 270, box: { cx: 0.62, cy: 0.3 } }) }));
+  expect(cal.drainEvents().map((e) => e.kind)).toEqual(['camera_bump']);
+});

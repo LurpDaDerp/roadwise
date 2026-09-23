@@ -91,11 +91,33 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
   let frameIntervalMs = 1000 / 15;
   let closed = false;
   let closedSince = 0;
+  // Iris evidence in time, per eye (T6 round-1 review R1-I1).
+  const lastReliableT = { r: Number.NEGATIVE_INFINITY, l: Number.NEGATIVE_INFINITY };
+  const episode = { r: false, l: false };
   let lastGazeRel: AnglePair | null = null;
 
   const resetSmoothing = () => {
     for (const m of [hy, hp, hr, gy, gp]) m.reset();
   };
+
+  /**
+   * The quality the rules see: an eye counts as usable for openness only if it is usable in this frame
+   * AND its iris was seen (reliable) within irisRecencyS, or it is inside a closure episode that began
+   * while it counted (F2/F3 and a sleeping driver stay visible past the window). The episode ends when
+   * the eye reopens (> openAbove) or becomes unusable. TRACKING needs one such eye; a drive that starts
+   * in sunglasses is HEAD_ONLY until an iris is seen.
+   */
+  function eyeTiers(f: EngineFrame, q: QualityResult): QualityResult {
+    const within = cfg.quality.irisRecencyS * 1000;
+    if (q.reliableR) lastReliableT.r = f.tMs;
+    if (q.reliableL) lastReliableT.l = f.tMs;
+    if (!q.usableR) episode.r = false;
+    if (!q.usableL) episode.l = false;
+    const usableR = q.usableR && (f.tMs - lastReliableT.r <= within || episode.r);
+    const usableL = q.usableL && (f.tMs - lastReliableT.l <= within || episode.l);
+    if (q.quality !== 'tracking' || usableR || usableL) return { ...q, usableR, usableL };
+    return { ...q, quality: 'head_only', reasons: [...q.reasons, 'eyes_unreliable'], usableR, usableL };
+  }
 
   function openness(f: EngineFrame, q: QualityResult, ear: EarPair | null, headYaw: number): { r: number | null; l: number | null; used: number | null } {
     if (ear === null) return { r: null, l: null, used: null };
@@ -118,13 +140,18 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       resetSmoothing();
       lastQuality = null;
       prevT = null;
+      lastReliableT.r = Number.NEGATIVE_INFINITY;
+      lastReliableT.l = Number.NEGATIVE_INFINITY;
+      episode.r = false;
+      episode.l = false;
       prevHeadDrvYaw = null;
       lastNet = null;
       closed = false;
       lastGazeRel = null;
     },
 
-    step(f, q, refs) {
+    step(f, raw, refs) {
+      const q = eyeTiers(f, raw);
       const dtS = prevT === null ? 0 : Math.max(0, (f.tMs - prevT) / 1000);
       if (dtS > 0 && dtS < 1) frameIntervalMs = dtS * 1000;
       prevT = f.tMs;
@@ -191,6 +218,15 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         closed = false;
       }
       const closedMs = closed ? f.tMs - closedSince : 0;
+      // A closure episode per eye starts only while the eye counts, and ends when it reopens.
+      for (const [side, o1, usable] of [['r', o.r, q.usableR], ['l', o.l, q.usableL]] as const) {
+        if (!usable || o1 === null) {
+          if (!usable) episode[side] = false;
+          continue;
+        }
+        if (o1 < cfg.closure.closedBelow) episode[side] = true;
+        else if (o1 > cfg.closure.openAbove) episode[side] = false;
+      }
 
       // The gaze the rules use (§M2).
       let source: GazeUse = 'none';
