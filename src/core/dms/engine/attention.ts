@@ -124,6 +124,31 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       grace.clear();
     },
 
+    /**
+     * Final review m5: the warning D4 would escalate was stopped (a gate close, the camera off): D4's pending
+     * state ends with it.
+     */
+    clearEscalation() {
+      d4OffS = null;
+      lowKnownSince = null;
+    },
+
+    /**
+     * Final review m5: a row tick with no frame advances D4's known-low clear, as the alert manager's
+     * corroboration advances on it (so a known stop during a camera pause clears both, never one).
+     */
+    rowTick(tMs: number, speedKnown: boolean, ruleSpeedKmh: number | null) {
+      if (d4OffS === null) return;
+      const al = cfg.alerts;
+      if (speedKnown && ruleSpeedKmh !== null && ruleSpeedKmh < al.criticalEndBelowKmh) {
+        lowKnownSince ??= tMs;
+        if (tMs - lowKnownSince >= al.criticalEndAfterS * 1000 - EPS) {
+          d4OffS = null;
+          lowKnownSince = null;
+        }
+      } else lowKnownSince = null;
+    },
+
     onFrame(x: AttentionInput): AttentionOutput {
       const events: AttentionEvent[] = [];
       const speed = x.ruleSpeedKmh ?? 0;

@@ -68,6 +68,8 @@ export interface Calibrator {
   mountSignature(): MountSignature | null;
   refs(): ConditionerRefs;
   stats(): { drivingS: number; admittedS: number };
+  /** drivingS without building the stats object (final review n1: read per frame) */
+  drivingS(): number;
   drainEvents(): CalibrationEvent[];
   toProfile(savedAtMs: number, learnedZones?: LearnedZone[]): DmsProfileV1 | null;
 }
@@ -326,7 +328,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
     observe(f, p, ctx) {
       tNow = f.tMs;
-      const dt = Math.min(p.dtS, c.admitDtCapS);
+      // Final review n4: a gap frame is unobserved time, never driving time.
+      const dt = p.gap ? 0 : Math.min(p.dtS, c.admitDtCapS);
       const tracking = p.quality === 'tracking' && p.headCam !== null && f.box !== null && f.iod !== null;
 
       // A long SEARCH opens its gap BEFORE the rotation check, so a rotation change on the first frame
@@ -476,6 +479,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       pitchReference: pitchReference(),
     }),
     stats: () => ({ drivingS, admittedS: Math.max(0, admittedS) }),
+    drivingS: () => drivingS,
     drainEvents: () => events.splice(0, events.length),
 
     toProfile(savedAtMs, learnedZones = []) {

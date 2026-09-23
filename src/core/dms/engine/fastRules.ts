@@ -36,6 +36,11 @@ export interface FastInput {
    * no-on-road clause (Task 12, found by the DMS_FULL property run)
    */
   onRoadGaze: boolean | null;
+  /**
+   * the measured fps (the façade's fps meter), so the blink `counted` flag and the engine share one meter
+   * (final review n1); absent: fastRules keeps its own (unit tests).
+   */
+  fps?: number;
 }
 
 export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink' | 'episode_end';
@@ -106,6 +111,7 @@ export function createFastRules(cfg: DmsConfig) {
 
     measuredFps: () => fps.fps(),
 
+
     /** Drive end: an F episode still open reports its length so far; the episode ends. */
     flush(): FastEvent[] {
       const events: FastEvent[] = [];
@@ -116,11 +122,22 @@ export function createFastRules(cfg: DmsConfig) {
     onFrame(x: FastInput): { events: FastEvent[] } {
       const { p } = x;
       const events: FastEvent[] = [];
-      fps.push(p.tMs);
+      if (x.fps === undefined) fps.push(p.tMs);
+      const measuredFps = () => x.fps ?? fps.fps();
       const speed = x.ruleSpeedKmh ?? 0;
 
-      // A frame gap ends an unbridged episode silently, like a quality drop (T12 review I1).
-      if (p.gap && !p.closureBridged) endSilently(events);
+      // Final review I1: a bridge the conditioner ended (its cap, on any frame) ends the bridged episode, so a
+      // camera stop inside a bridge is never closure time; a closed eye on this frame starts a new episode.
+      if (p.bridgeEnded) endSilently(events);
+      // A frame gap ends an unbridged episode silently (T12 review I1) — unless the eyes are still closed on
+      // a TRACKING frame after it (final review m1): the episode continues on observed time, its onset
+      // shifted by the unobserved span, as the conditioner shifted its closure clock.
+      if (p.gap && !p.closureBridged && episode !== null) {
+        if (p.eyesClosed && p.quality === 'tracking') {
+          episode.onset += p.unobservedMs;
+          if (episode.deepSince !== null) episode.deepSince += p.unobservedMs;
+        } else endSilently(events);
+      }
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
       if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {
         episode ??= { onset: p.tMs - p.closedMs, lastT: p.tMs, deepSince: null, gated: false, bridged: false, f1: false, f2: false, f3: false };
@@ -161,7 +178,7 @@ export function createFastRules(cfg: DmsConfig) {
         }
       } else if (episode !== null && p.quality === 'tracking' && !episode.bridged) {
         const durMs = p.tMs - episode.onset;
-        events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: fps.fps() >= cl.blinkMinFps });
+        events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
         endEpisode(events, p.tMs, durMs);
       } else {
         endSilently(events); // a quality drop, or the end of a bridged closure: silent (no blink)

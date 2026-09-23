@@ -104,7 +104,7 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     // T10 r1 m2
     expect(c.fatigue.minScoredWeight).toBe(0.25);
     expect(c.distraction.gazeRulesMinFps).toBe(6.5);
-    expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 });
+    expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1, goodSessionMaxCameraOffShare: 0.3, minObservedShare: 0.5 });
   });
   test('the fatigue weights sum to 1 (§M7)', () => {
     const s = Object.values(c.fatigue.signals).reduce((a, x) => a + x.weight, 0);
@@ -300,5 +300,29 @@ describe('T16 r3 m3: gaze.netFallback (default true)', () => {
     expect(DEFAULT_DMS_CONFIG.gaze.netFallback).toBe(true);
     expect(resolveDmsConfig({ gaze: { netFallback: false } }).gaze.netFallback).toBe(false);
     expect(() => resolveDmsConfig({ gaze: { netFallback: 1 as never } })).toThrow(/netFallback/);
+  });
+});
+
+describe('final review m7: the ordering constraints the code relies on', () => {
+  test.each([
+    ['context.rowStaleMs', { context: { rowStaleMs: 900 } }],
+    ['alerts.criticalEndBelowKmh', { alerts: { criticalEndBelowKmh: 15, criticalMinStartKmh: 10 } }],
+    ['alerts.tier3ClearS', { alerts: { tier3ClearS: 0 } }],
+    ['fatigue.everyS', { fatigue: { everyS: 60.5 } }],
+    ['fatigue.signals.nods.windowS', { fatigue: { signals: { nods: { windowS: 600.5 } } } }],
+    ['alerts.criticalLostMaxS', { alerts: { criticalLostMaxS: 3 } }],
+  ])('%s is refused when it breaks its rule', (field, over) => {
+    expect(() => resolveDmsConfig(over as never)).toThrow(new RegExp(field.replace(/\./g, '\.')));
+  });
+  test('the row tick and the attention-score floor are config', () => {
+    expect(DEFAULT_DMS_CONFIG.context.rowTickMs).toBe(1000);
+    expect(DEFAULT_DMS_CONFIG.summary.minObservedShare).toBe(0.5);
+    expect(DEFAULT_DMS_CONFIG.alerts.criticalLostMaxS).toBe(60);
+  });
+  test('createDmsEngine validates: an invalid config cannot be used, even bypassing resolveDmsConfig', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the façade, loaded here only
+    const { createDmsEngine } = require('../engine') as typeof import('../engine');
+    const bad = { ...DEFAULT_DMS_CONFIG, alerts: { ...DEFAULT_DMS_CONFIG.alerts, tier3ClearS: 0 } } as DmsConfig;
+    expect(() => createDmsEngine(bad, { driverSide: 'left', sensitivity: 'normal', alerts: 'live' })).toThrow(/tier3ClearS/);
   });
 });

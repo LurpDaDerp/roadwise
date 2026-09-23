@@ -17,11 +17,11 @@
 // A drive owns its own alert manager, summary, fatigue and rule state (T11 r1 carry): `endDrive` stops
 // every sound, builds the summary and the profile, then starts the next drive fresh, warm from that
 // profile. Commands are merged with concat/spread only: the manager's empty array is frozen.
-import { createAlertManager, type AlertLogEntry, type AlertRequest, type CameraOffCause, type DmsAlertCommand } from './alerts';
+import { createAlertManager, LOG_CAP, type AlertLogEntry, type AlertRequest, type CameraOffCause, type DmsAlertCommand } from './alerts';
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
-import type { DmsConfig, ZoneId } from './config';
+import { validateDmsConfig, type DmsConfig, type ZoneId } from './config';
 import { createContextTracker, type FeatureRowLike, type RowExtras } from './context';
 import { createFpsMeter } from './eyes';
 import { createFastRules, type FastEvent, type FatigueFloor } from './fastRules';
@@ -29,7 +29,7 @@ import { createFatigue, type FatigueLevel, type FatigueMinute } from './fatigue'
 import { createNodDetector } from './nod';
 import type { DmsProfileV1, LearnedZone } from './profile';
 import { classifyQuality, type Quality } from './quality';
-import { createSummary, type DmsTripSummary } from './summary';
+import { createSummary, type DmsTripSummary, type UnobservedCause } from './summary';
 import type { DriverSide, EngineFrame, GazeSource, Sensitivity } from './types';
 import { RingBuffer } from './windows';
 import { createYawnDetector } from './yawn';
@@ -53,6 +53,19 @@ export interface DmsHostState {
   /** the capture policy's SEARCH state (a face lost for long): D1 and D2 freeze */
   search: boolean;
   gazeNetEvery: 1 | 2;
+  /**
+   * final review I5: why the camera is off, as the host knows it (a policy pause, the gate closed). The
+   * engine's own cameraOff / stopAlerts causes win for the stretch they start; with none, a stall.
+   */
+  offCause?: UnobservedCause | null;
+}
+
+/**
+ * Final review m3 (and T16 r3 m1): the gaze a zone may be learned from, and fatigue's dispersion summed over:
+ * a `gaze` source from the configured path only. Never a head, held or fallback direction.
+ */
+export function learnableGaze(p: Pick<Perceived, 'source' | 'gazeFrom' | 'gazeRel'>, gazeSource: GazeSource): Perceived['gazeRel'] {
+  return p.source === 'gaze' && p.gazeFrom === gazeSource ? p.gazeRel : null;
 }
 
 export type DmsEvent =
@@ -138,6 +151,9 @@ const MAX_FPS = 30;
 const EMPTY_REQ: readonly AlertRequest[] = Object.freeze([]);
 
 export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine {
+  // Final review m7: no caller (a test, the replay, a future host path) can run on an invalid config.
+  const problems = validateDmsConfig(cfg);
+  if (problems.length > 0) throw new Error(`DMS config: ${problems.join('; ')}`);
   const host: DmsHostState = { thermalLevel: null, search: false, gazeNetEvery: init.gazeNetEvery ?? 1 };
   const gazeSource: GazeSource = cfg.gazeSource;
   let profile: DmsProfileV1 | null = init.profile ?? null;
@@ -185,6 +201,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       fatigueLevel: 'none' as FatigueLevel,
       warmup: true,
       lastRowSpeed: null as number | null,
+      /** the cause of the current frameless stretch, from cameraOff/stopAlerts (final review I5) */
+      offCause: null as UnobservedCause | null,
+      /** the last blind row tick (final review I5) */
+      lastTickT: null as number | null,
     };
   }
 
@@ -257,9 +277,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Zones are learned in the configured path's coordinates only (T16 r3 m1): a net configuration's geometric
     // fallback frames (another gain, another centre) would blur the mirror clusters. Held and head frames are
     // unchanged; the geometric configuration never has a fallback.
-    const learnRel = p.gazeFrom !== null && p.gazeFrom !== gazeSource ? null : p.gazeRel;
+    const learnRel = learnableGaze(p, gazeSource);
     d.learner.observe(t, learnRel, zone, calState === 'calibrated');
-    d.learner.maybeCluster(d.cal.stats().drivingS);
+    d.learner.maybeCluster(d.cal.drivingS());
     const onRoad = zone !== null && zoneClass(zone, cfg) === 'on_road';
     const c8 = p.quality === 'lost' && zone === 'far_lateral';
 
@@ -300,7 +320,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // The fast rules (F1–F4, blinks). With no zone (before calibration, or occluded) the direction is
     // unknown: null neither clears nor feeds F3's no-on-road watch.
     const onRoadGaze = zone === null ? null : onRoad && !p.eyesClosed;
-    for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze }).events) {
+    for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze, fps }).events) {
       const bridged = e.bridged === true;
       if (e.kind === 'episode_end') {
         emitFast(e);
@@ -341,7 +361,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       closureBridged: p.closureBridged,
       openness: p.openness,
       lookingDown: p.lookingDown,
-      gazeRel: p.gazeRel,
+      gazeRel: learnRel,
       gazeFrom: p.gazeFrom,
       speedKmh: speed,
       fps,
@@ -368,10 +388,13 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         eyesOpen: p.quality === 'tracking' && !p.eyesClosed,
         warmup: d.warmup,
         requests: requests.length > 0 ? requests : EMPTY_REQ,
+        gap: p.gap,
       })
     );
-    d.summary.onFrame({ tMs: t, dtS: obsDt, ruleSpeedKmh: speed, quality: p.quality, zone, gazeRel: p.gazeRel, fps, thermalLevel: host.thermalLevel });
+    d.summary.onFrame({ tMs: t, dtS: obsDt, ruleSpeedKmh: speed, quality: p.quality, zone, gazeRel: p.gazeRel, fps, thermalLevel: host.thermalLevel, gazeFrom: p.gazeFrom });
     d.lastFrameT = t;
+    d.offCause = null;
+    d.lastTickT = null;
   }
 
   return {
@@ -381,13 +404,31 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       epochOffset = row.ts - tMs;
       const ctx = d.ctx.onRow(row, tMs, ex);
       d.extension = d.turn.onRow(ctx);
-      // The camera is off (thermal L3, SEARCH without frames): tick the alert manager as LOST, so a
-      // running Critical still ends on a known low speed (T11 r1 m1 carry).
-      if (d.lastFrameT === null || tMs - d.lastFrameT >= 1000) {
+      // No frame for a row period (the camera off, stalled or paused): tick the alert manager as LOST, so a
+      // running Critical still ends on a known low speed (T11 r1 m1 carry), and is capped from the LAST FRAME
+      // (final review I2: blindSinceMs). The stretch also reaches the summary (final review I5) and D4's
+      // known-low clear (final review m5).
+      if (d.lastFrameT === null || tMs - d.lastFrameT >= cfg.context.rowTickMs) {
         const cs = d.ctx.at(tMs);
         alertStep(() =>
-          d.alerts.onFrame({ tMs, epochMs: tMs + epochOffset, ruleSpeedKmh: cs.ruleSpeedKmh, speedKnown: cs.speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: d.warmup, requests: EMPTY_REQ, blind: true })
+          d.alerts.onFrame({
+            tMs,
+            epochMs: tMs + epochOffset,
+            ruleSpeedKmh: cs.ruleSpeedKmh,
+            speedKnown: cs.speedKnown,
+            quality: 'lost',
+            onRoad: false,
+            eyesOpen: false,
+            warmup: d.warmup,
+            requests: EMPTY_REQ,
+            blind: true,
+            ...(d.lastFrameT === null ? {} : { blindSinceMs: d.lastFrameT }),
+          })
         );
+        d.attention.rowTick(tMs, cs.speedKnown, cs.ruleSpeedKmh);
+        const from = Math.max(d.lastFrameT ?? Number.NEGATIVE_INFINITY, d.lastTickT ?? Number.NEGATIVE_INFINITY);
+        if (Number.isFinite(from) && tMs > from) d.summary.onUnobserved((tMs - from) / 1000, d.offCause ?? host.offCause ?? 'stall', host.thermalLevel, cs.ruleSpeedKmh);
+        d.lastTickT = tMs;
       }
     },
 
@@ -419,7 +460,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         d2SumS: d.d2SumS,
         fatigueLevel: d.fatigueLevel,
         warmup: d.warmup,
-        invariantViolations: d.alerts.stats().invariantViolations,
+        invariantViolations: d.alerts.violations(),
       };
     },
 
@@ -453,10 +494,14 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
     cameraOff(tMs, cause) {
       alertStep(() => d.alerts.cameraOff(tMs, tMs + epochOffset, cause));
+      d.attention.clearEscalation(); // final review m5
+      d.offCause = cause;
     },
 
     stopAlerts(tMs) {
       alertStep(() => d.alerts.stopAll(tMs, tMs + epochOffset));
+      d.attention.clearEscalation(); // final review m5
+      d.offCause = 'gate';
     },
 
     alertLog() {
@@ -469,7 +514,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       const s = d.summary.build({ alerts: a, fatigue: f, calibrationState: d.cal.state() });
       return {
         seedRing: { size: d.seedRing.size, cap: d.seedRing.capacity },
-        alertLog: { size: a.log.length, cap: 1024 },
+        alertLog: { size: a.log.length, cap: LOG_CAP },
         fatigueTimeline: { size: f.timeline.length, cap: 1440 },
         tier0Minutes: { size: s.tier0.minutes.length, cap: 1440 },
         calibrationEvents: { size: s.calibration.events.length, cap: 64 },

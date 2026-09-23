@@ -376,3 +376,34 @@ describe('T16 r3 m2: gaze dispersion is scored within one gaze path (net builds)
     expect(ms.at(-1)!.sub.dispersion).toBeCloseTo(0, 1);
   });
 });
+
+describe('final review m2: blink and yawn rows are observed only at the frame rates their detectors run at', () => {
+  test('a hot start (the first 10 min at 8 fps): the blink rows are sparse all drive, never scored 0', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 8);
+    const ms = feed(fz, 610, 1300, 15, undefined, blinker(fz, 15, 4, 200));
+    const last = ms.at(-1)!;
+    expect(last.sub.blinkDuration).toBeNull();
+    expect(last.sub.longBlinks).toBeNull();
+    expect(last.sparse).toEqual(expect.arrayContaining(['blinkDuration', 'longBlinks']));
+  });
+  test('a mixed window (2 min at 8 fps, 3 min at 15 fps): the long-blink rate is the rate while blinks were counted', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, undefined, blinker(fz, 15, 4, 200));
+    feed(fz, 610, 730, 8);
+    // one long blink every 20 s while at 15 fps: 3 a minute
+    const ms = feed(fz, 730, 912, 15, undefined, blinker(fz, 15, 20, 600));
+    const raw = ms.at(-1)!.raw.longBlinks!;
+    expect(raw.x).toBeGreaterThan(2.5);
+    expect(raw.x).toBeLessThan(3.5);
+  });
+});
+
+describe('final review n3: the dispersion baseline path must hold at least half the baseline gaze', () => {
+  test('a net window against a net baseline of a few samples: sparse', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, (t) => ({ gazeFrom: t < 5 ? 'net' : 'geometric' }), blinker(fz, 15, 4, 200));
+    const ms = feed(fz, 610, 1000, 15, () => ({ gazeFrom: 'net' }), blinker(fz, 15, 4, 200));
+    expect(ms.at(-1)!.sparse).toContain('dispersion');
+  });
+});

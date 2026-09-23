@@ -160,7 +160,7 @@ describe('frame gaps are unobserved time (T12 review I1)', () => {
     expect(d1[0]!).toBeGreaterThanOrEqual(gapT + 500 - 1000 / fps - 1e-6);
     expect(d1[0]!).toBeLessThanOrEqual(gapT + 500 + 1000 / fps + 1e-6);
   });
-  test.each([15, 5])('%d fps: eyes closed 0.4 s, a 2 s gap, closed again: no microsleep until 1.0 s of observed closure', (fps) => {
+  test.each([15, 5])('%d fps: eyes closed 0.4 s, a 2 s gap, closed again: microsleep at 1.0 s of OBSERVED closure (the gap never counts; final review m1)', (fps) => {
     const drv: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 && t < 110 ? 0.1 : 1, speedKmh: 60 });
     const items = gapped(fps, drv, 108, 100.4, 2);
     const engine = createDmsEngine(NET, DEFAULT_INIT);
@@ -173,8 +173,9 @@ describe('frame gaps are unobserved time (T12 review I1)', () => {
       f1.push(...engine.drain().events.filter((e) => e.kind === 'microsleep').map((e) => e.tMs));
     }
     expect(f1).toHaveLength(1);
-    expect(f1[0]! - gapT).toBeGreaterThanOrEqual(1000 - 1e-6);
-    expect(f1[0]! - gapT).toBeLessThanOrEqual(1000 + 1000 / fps + 1e-6);
+    // 0.4 s observed before the gap, 0.6 s after it (± a frame): never the gap itself.
+    expect(f1[0]! - gapT).toBeGreaterThanOrEqual(600 - 1000 / fps - 1e-6);
+    expect(f1[0]! - gapT).toBeLessThanOrEqual(600 + 1000 / fps + 1e-6);
   });
   test('D2\u2019s sum is unchanged across a gap', () => {
     // At 35 km/h (B = 6 s) glances of 1.2 s on the stack, 0.9 s on the road; a 3 s gap inside a glance.

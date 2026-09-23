@@ -153,9 +153,17 @@ interface Second extends Disp {
   hot: boolean;
   /** the net path's sums (a net configuration); the Disp fields hold every other gaze */
   net: Disp;
+  /** final review m2: TRACKING seconds at a measured fps ≥ each row threshold (FPS_THRESHOLDS order) */
+  trackAt: number[];
 }
 const newDisp = (): Disp => ({ gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
-const newSecond = (k: number): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, ...newDisp(), net: newDisp() });
+const newSecond = (k: number, nTh = 0): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, ...newDisp(), net: newDisp(), trackAt: new Array<number>(nTh).fill(0) });
+/**
+ * Final review m2: the rows whose numerator a detector produces only above a frame rate (blinks are counted
+ * at fps ≥ the blink floor, yawns at ≥ the yawn floor). Their observed time is the TRACKING time at that rate
+ * too, in the window, in the baseline and in the sparse check; the other rows keep all TRACKING time.
+ */
+const RATE_ROWS: readonly SignalName[] = ['longBlinks', 'blinkDuration', 'yawns'];
 const addDisp = (to: Disp, from: Disp) => {
   to.gn += from.gn;
   to.gy += from.gy;
@@ -177,6 +185,9 @@ export function createFatigue(cfg: DmsConfig) {
   const f = cfg.fatigue;
   const sig = f.signals;
   const maxWindowS = Math.max(...SIGNALS.map((s) => sig[s].windowS), f.everyS);
+  const FPS_THRESHOLDS = [...new Set(RATE_ROWS.map((s) => sig[s].minFps).filter((v) => v > 0))].sort((a, b) => a - b);
+  const thOf = (s: SignalName) => FPS_THRESHOLDS.indexOf(sig[s].minFps);
+  const nTh = FPS_THRESHOLDS.length;
   const seconds = new RingBuffer<Second>(maxWindowS + 2);
   let cur: Second | null = null;
   const blinks = new RingBuffer<{ t: number; durMs: number; long: boolean }>(4096);
@@ -193,7 +204,10 @@ export function createFatigue(cfg: DmsConfig) {
   };
 
   // Learning: the baseline sums over frames (and events) at a known ≥ minSpeedKmh.
-  const base = { drivingS: 0, trackS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, ...newDisp(), net: newDisp() };
+  const base = { drivingS: 0, trackS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, ...newDisp(), net: newDisp(), trackAt: new Array<number>(0).fill(0) };
+  base.trackAt = new Array<number>(nTh).fill(0);
+  /** a row's observed seconds in a window or the baseline (final review m2) */
+  const obsIn = (x: { trackS: number; trackAt: number[] }, s: SignalName) => (RATE_ROWS.includes(s) && thOf(s) >= 0 ? x.trackAt[thOf(s)]! : x.trackS);
   let active = false;
   let atSpeed = false;
   let nextMinute: number | null = null;
@@ -205,9 +219,10 @@ export function createFatigue(cfg: DmsConfig) {
   /** Sums over the last `windowS` complete seconds before the one holding `nowMs`. */
   function over(nowMs: number, windowS: number) {
     const kNow = Math.floor(nowMs / 1000);
-    const s = newSecond(0);
+    const s = newSecond(0, nTh);
     const add = (x: Second) => {
       if (x.k < kNow - windowS || x.k >= kNow) return;
+      for (let i = 0; i < nTh; i++) s.trackAt[i]! += x.trackAt[i]!;
       s.trackS += x.trackS;
       s.closedS += x.closedS;
       s.fpsSum += x.fpsSum;
@@ -249,10 +264,12 @@ export function createFatigue(cfg: DmsConfig) {
       }
     });
     const lb = win('longBlinks');
-    observed.longBlinks = lb.trackS;
-    values.longBlinks = { x: lb.trackS > 0 ? longN / (lb.trackS / 60) : 0, b: base.trackS > 0 ? base.longBlinks / (base.trackS / 60) : 0 };
+    const lbObs = obsIn(lb, 'longBlinks');
+    const lbBase = obsIn(base, 'longBlinks');
+    observed.longBlinks = lbObs;
+    values.longBlinks = { x: lbObs > 0 ? longN / (lbObs / 60) : 0, b: lbBase > 0 ? base.longBlinks / (lbBase / 60) : 0 };
     const baseMean = base.blinkN > 0 ? base.blinkDurMs / base.blinkN : 0;
-    observed.blinkDuration = win('blinkDuration').trackS;
+    observed.blinkDuration = obsIn(win('blinkDuration'), 'blinkDuration');
     values.blinkDuration = { x: durN > 0 && baseMean > 0 ? durSum / durN / baseMean : 1, b: 1 };
     // Counts scaled to a fully observed window.
     const scaled = (n: number, windowS: number, obsS: number) => (obsS > 0 ? (n * windowS) / obsS : 0);
@@ -260,8 +277,9 @@ export function createFatigue(cfg: DmsConfig) {
     observed.nods = nw.trackS;
     values.nods = { x: scaled(countSince(nods, w('nods')), sig.nods.windowS, nw.trackS), b: scaled(base.nods, sig.nods.windowS, base.trackS) };
     const yw = win('yawns');
-    observed.yawns = yw.trackS;
-    values.yawns = { x: scaled(countSince(yawns, w('yawns')), sig.yawns.windowS, yw.trackS), b: scaled(base.yawns, sig.yawns.windowS, base.trackS) };
+    const ywObs = obsIn(yw, 'yawns');
+    observed.yawns = ywObs;
+    values.yawns = { x: scaled(countSince(yawns, w('yawns')), sig.yawns.windowS, ywObs), b: scaled(base.yawns, sig.yawns.windowS, obsIn(base, 'yawns')) };
     const g = win('dispersion');
     observed.dispersion = g.trackS;
     // Within one path only (T16 r3 m2): the path that dominates the window, against that path's baseline. A
@@ -272,7 +290,9 @@ export function createFatigue(cfg: DmsConfig) {
     const dNow = dispersionOf(now.gn, now.gy, now.gp, now.gyy, now.gpp);
     const dBase = dispersionOf(was.gn, was.gy, was.gp, was.gyy, was.gpp);
     values.dispersion = { x: dNow !== null && dBase !== null && dBase > 0 ? Math.max(0, 1 - dNow / dBase) : 0, b: 0 };
-    const noBaseline = now.gn > 0 && dBase === null;
+    // Final review n3: the baseline path must hold at least half the baseline's gaze samples.
+    const baseGaze = base.gn + base.net.gn;
+    const noBaseline = now.gn > 0 && (dBase === null || was.gn * 2 < baseGaze);
 
     const sub = {} as Record<SignalName, number | null>;
     const raw = {} as Record<SignalName, { x: number; b: number } | null>;
@@ -288,7 +308,10 @@ export function createFatigue(cfg: DmsConfig) {
         continue;
       }
       const minObs = s === 'perclos' ? f.perclosMinTrackingS : f.minTrackingShare * sig[s].windowS;
-      if (observed[s] < minObs - 1e-6 || (s === 'dispersion' && noBaseline)) {
+      // Final review m2: a rate row whose baseline has too little observed time (e.g. a hot start below the
+      // blink floor) is sparse for the drive, never scored against a zero baseline.
+      const baseTooThin = RATE_ROWS.includes(s) && obsIn(base, s) < f.minTrackingShare * f.activeAfterS - 1e-6;
+      if (observed[s] < minObs - 1e-6 || (s === 'dispersion' && noBaseline) || baseTooThin) {
         sparse.push(s);
         continue;
       }
@@ -346,7 +369,7 @@ export function createFatigue(cfg: DmsConfig) {
       const k = Math.floor(x.tMs / 1000);
       if (cur === null || cur.k !== k) {
         if (cur !== null) seconds.push(cur);
-        cur = newSecond(k);
+        cur = newSecond(k, nTh);
         seconds.dropWhile((s) => s.k <= k - maxWindowS - 1);
       }
       const trk = tracked(x);
@@ -357,6 +380,7 @@ export function createFatigue(cfg: DmsConfig) {
       if (trk) {
         cur.trackS += dt;
         if (closed) cur.closedS += dt;
+        for (let i = 0; i < nTh; i++) if (x.fps >= FPS_THRESHOLDS[i]! - 1e-9) cur.trackAt[i]! += dt;
       }
       const g = trk ? x.gazeRel : null;
       const onNet = x.gazeFrom === 'net';
@@ -368,13 +392,16 @@ export function createFatigue(cfg: DmsConfig) {
         if (trk) {
           base.trackS += dt;
           if (closed) base.closedS += dt;
+          for (let i = 0; i < nTh; i++) if (x.fps >= FPS_THRESHOLDS[i]! - 1e-9) base.trackAt[i]! += dt;
         }
         if (g !== null) addGaze(onNet ? base.net : base, g);
         if (base.drivingS >= f.activeAfterS - 1e-6 && base.trackS >= f.minTrackingShare * f.activeAfterS - 1e-6) active = true;
       }
       nextMinute ??= x.tMs + f.everyS * 1000;
       if (x.tMs < nextMinute - 1e-6) return null;
-      nextMinute += f.everyS * 1000;
+      // Final review m6: at most one minute per frame. After a span with no frames (a pause, heat, a gate
+      // close) the schedule restarts from this frame instead of closing every skipped minute here.
+      nextMinute = x.tMs - nextMinute >= f.everyS * 1000 ? x.tMs + f.everyS * 1000 : nextMinute + f.everyS * 1000;
       return closeMinute(x.tMs, x);
     },
     /** A finished blink (fastRules); only counted blinks (fps ≥ blinkMinFps) enter the statistics. */

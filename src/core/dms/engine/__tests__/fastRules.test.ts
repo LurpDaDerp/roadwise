@@ -282,19 +282,30 @@ describe('frame gaps (T12 review I1): unobserved time never counts', () => {
     for (const end = t + afterS * 1000; t < end; t += 1000 / 15) push(t, b);
     return out;
   }
-  test('a frame after more than maxFrameGapS is a gap; the closure before it ends silently, a new one starts', () => {
+  test('a frame after more than maxFrameGapS is a gap; closed on both sides, the closure counts OBSERVED time only (final review m1)', () => {
     const ps = withGap({ ear: ear(0.1) }, 0.4, 2, { ear: ear(0.1) }, 1.5);
     const g = ps.find((p) => p.gap)!;
     expect(g).toBeDefined();
     expect(ps.filter((p) => p.gap)).toHaveLength(1);
     expect(g.eyesClosed).toBe(true);
-    expect(g.closedMs).toBe(0); // a new closure starts at the gap frame
+    // The 0.4 s seen before the gap is kept, the 2 s gap is not counted (T12 I1 still holds).
+    expect(g.closedMs).toBeGreaterThan(250); // the closure time observed before the gap; the gap frame adds none
+    expect(g.closedMs).toBeLessThan(500);
+    expect(g.unobservedMs).toBeGreaterThan(1900);
     const r = fast(ps, 60);
     const f1 = r.events.find((e) => e.kind === 'microsleep')!;
-    expect(f1.tMs - g.tMs).toBeGreaterThanOrEqual(1000 - 1e-6); // 1.0 s of OBSERVED closure after the gap
+    // 1.0 s of OBSERVED closure in all: the rest after the gap frame (± a frame), never 1.0 s + the gap.
+    expect(f1.tMs - g.tMs).toBeGreaterThanOrEqual(1000 - g.closedMs - 1e-6);
+    expect(f1.tMs - g.tMs).toBeLessThanOrEqual(1000 - g.closedMs + 1000 / 15 + 1e-6);
     expect(r.kinds).not.toContain('blink');
   });
-  test('an active C-26 bridge continues through a gap (its cap still applies)', () => {
+  test('closed before a gap, OPEN after it: the closure ends silently at the gap (no blink spanning it)', () => {
+    const ps = withGap({ ear: ear(0.1) }, 0.4, 2, {}, 1);
+    const r = fast(ps, 60);
+    expect(r.kinds).not.toContain('microsleep');
+    expect(r.events.filter((e) => e.kind === 'blink' && (e.durMs ?? 0) > 500)).toEqual([]);
+  });
+  test('an active C-26 bridge continues through a gap shorter than its cap', () => {
     const c = createConditioner(C);
     const down = (p: number): Partial<FrameSpec> => ({ head: { yaw: 0, pitch: p, roll: 0 }, gaze: { yaw: 0, pitch: p }, ear: ear(0.1) });
     const ps: Perceived[] = [];
@@ -433,5 +444,80 @@ describe('T14 r1 m2: episode_end, the measured length of a drowsiness episode (o
     const r = fast(ps, 60, () => false);
     expect(kinds(r.events)).toContain('unresponsive');
     expect(kinds(r.events).filter((k) => k === 'episode_end')).toHaveLength(1);
+  });
+});
+
+describe('final review m1: a short frame gap inside a closure keeps the observed closure', () => {
+  /** 1 s open, then eyes shut; frames missing over [gapFrom, gapTo) s of the closure; open again at `openAt`. */
+  function closureWithGap(gapFrom: number, gapTo: number, openAt: number) {
+    const c = createConditioner(C);
+    const r = createFastRules(C);
+    const events: FastEvent[] = [];
+    const fps = 15;
+    for (let i = 0; i < Math.round((openAt + 1.5) * fps); i++) {
+      const t = i / fps;
+      const inClosure = t >= 1;
+      const rel = t - 1;
+      if (inClosure && rel >= gapFrom && rel < gapTo) continue;
+      const f = frame({ tMs: t * 1000, ear: inClosure && rel < openAt ? ear(0.1) : ear(1) });
+      const p = c.step(f, classifyQuality(f, C), REFS);
+      events.push(...r.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: !p.eyesClosed }).events);
+    }
+    return events;
+  }
+  test('0.5 s closed, a 0.6 s gap, then closed again: F1 on 1.0 s of OBSERVED closure (not restarted after the gap)', () => {
+    const ev = closureWithGap(0.5, 1.1, 2.3);
+    const f1 = ev.find((e) => e.kind === 'microsleep')!;
+    expect(f1).toBeDefined();
+    // closure from 1.0 s; 0.5 s observed before the gap, 0.5 s more after it resumes at 2.1 s → about 2.6 s
+    expect(f1.tMs).toBeLessThan(2_700);
+    expect(f1.tMs).toBeGreaterThan(2_500);
+  });
+  test('the episode’s measured length excludes the gap', () => {
+    const ev = closureWithGap(0.5, 1.1, 2.3);
+    const end = ev.find((e) => e.kind === 'episode_end')!;
+    expect(end.durMs!).toBeLessThan(1_800);
+    expect(end.durMs!).toBeGreaterThan(1_500);
+  });
+  test('open eyes across the gap: two short closures, never one long one', () => {
+    const ev = closureWithGap(0.1, 0.8, 0.1);
+    expect(ev.filter((e) => e.kind === 'blink' && (e.durMs ?? 0) > 500)).toEqual([]);
+  });
+});
+
+describe('final review I1/m8: the bridge cap applies across a gap, whatever the frame after it', () => {
+  /** A bridge: 0.8 s closed with the head going down, then LOST; then a gap of `gapS`, then `resume` frames. */
+  function bridgeThenGap(gapS: number, resume: Partial<FrameSpec>) {
+    const c = createConditioner(C);
+    const r = createFastRules(C);
+    const down = (p: number): Partial<FrameSpec> => ({ head: { yaw: 0, pitch: p, roll: 0 }, gaze: { yaw: 0, pitch: p }, ear: ear(0.1) });
+    const ps: Perceived[] = [];
+    const events: FastEvent[] = [];
+    const push = (tMs: number, spec: Partial<FrameSpec>) => {
+      const f = frame({ tMs, ...spec });
+      const p = c.step(f, classifyQuality(f, C), REFS);
+      ps.push(p);
+      events.push(...r.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: false }).events);
+    };
+    let t = 0;
+    for (; t < 1000; t += 1000 / 15) push(t, {});
+    for (; t < 1800; t += 1000 / 15) push(t, down(-10));
+    for (; t < 2500; t += 1000 / 15) push(t, { face: false });
+    const back = t + gapS * 1000;
+    for (let k = 0; k < 5; k++) push(back + (k * 1000) / 15, resume);
+    return { ps, events, back };
+  }
+  const CAP = C.closure.bridgeMaxS;
+  test.each([
+    ['LOST', { face: false }],
+    ['TRACKING with the eyes closed', { ear: ear(0.1) }],
+  ])('a gap of bridgeMaxS + 1 s, then %s: the bridge has ended, and no F event fires on the frames back', (_n, resume) => {
+    const { ps, events, back } = bridgeThenGap(CAP + 1, resume);
+    const first = ps.find((p) => p.tMs >= back)!;
+    expect(first.gap).toBe(true);
+    expect(first.closureBridged).toBe(false);
+    expect(first.bridgeEnded).toBe(true);
+    expect(events.filter((e) => e.tMs >= back && ['microsleep', 'sleep', 'unresponsive'].includes(e.kind))).toEqual([]);
+    expect(events.filter((e) => e.kind === 'episode_end' && (e.durMs ?? 0) > CAP * 1000)).toEqual([]);
   });
 });

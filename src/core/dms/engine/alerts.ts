@@ -38,7 +38,12 @@
 // session end (T13 r1 I1): the camera going off at speed (heat, dark) stops a running distraction and drops
 // the held items, but KEEPS a running Critical (the phone's heat says nothing about the driver); it then
 // ends on a known < 10 km/h for 5 s, on its clear condition once frames return, or after
-// criticalBlindMaxS with no frame (blind_cap), followed by one Tier 1 `monitoring_paused`.
+// criticalBlindMaxS with no frame (blind_cap), followed by one Tier 1 `monitoring_paused`. The blind cap is
+// measured from the LAST FRAME (the façade's blind ticks carry `blindSinceMs`; final review I2), so frames
+// that simply stop are capped too (cause `fault` when no cameraOff named one), and a late in-flight frame
+// moves it only by its own lateness. U-23 (final review I3): a Critical with no TRACKING face for
+// criticalLostMaxS (LOST, HEAD_ONLY or blind, continuously; only TRACKING resets it) stops (lost_cap) with
+// one `monitoring_paused` (cause face_lost); a returning face may raise a new Critical by the normal rules.
 import type { DmsConfig } from './config';
 import type { Quality } from './quality';
 import { RingBuffer } from './windows';
@@ -61,6 +66,8 @@ export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', '
 
 /** Why the camera went off at speed: heat (thermal L3), the dark (the low-light suspend) or a native fault (T14 r2 R1-m1). */
 export type CameraOffCause = 'heat' | 'dark' | 'fault';
+/** Why `monitoring_paused` played: the camera went off (a CameraOffCause), or no TRACKING face (U-23). */
+export type PausedCause = CameraOffCause | 'face_lost';
 
 export interface DmsAlertCommand {
   id: number;
@@ -70,8 +77,8 @@ export interface DmsAlertCommand {
   tMs: number;
   epochMs: number;
   muted: boolean;
-  /** `monitoring_paused`: why the camera is off */
-  cause?: CameraOffCause;
+  /** `monitoring_paused`: why monitoring paused */
+  cause?: PausedCause;
 }
 
 /**
@@ -104,8 +111,16 @@ export interface AlertFrame {
   eyesOpen: boolean;
   warmup: boolean;
   requests: readonly AlertRequest[];
-  /** a tick with no camera frame (the façade's 1 Hz row tick while the camera is off) */
+  /** a tick with no camera frame (the façade's 1 Hz row tick while no frame came for a row period) */
   blind?: boolean;
+  /**
+   * a blind tick: the time of the last camera frame (final review I2). The blind cap is measured from it, so
+   * it is armed by the absence of frames, whether or not cameraOff was called, and a late in-flight frame
+   * only moves it by its own lateness. Absent before any frame.
+   */
+  blindSinceMs?: number;
+  /** this frame came after a frame gap (final review m9): the clear condition restarts */
+  gap?: boolean;
 }
 
 export type AlertOutcome = 'delivered' | 'muted' | 'merged' | 'dropped' | 'suppressed';
@@ -116,7 +131,7 @@ export interface AlertLogEntry {
   tMs: number;
   outcome: AlertOutcome;
   /** why it was suppressed or dropped, or the invariant a delivered Critical broke */
-  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'escalation_unverified' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end' | 'camera_off' | 'blind_cap';
+  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'escalation_unverified' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end' | 'camera_off' | 'blind_cap' | 'lost_cap';
   /** rule 8's event flag */
   flag?: boolean;
   /** rule 7 */
@@ -150,8 +165,11 @@ function rule5Holds(req: AlertRequest, quality: Quality): boolean {
   switch (req.kind) {
     case 'microsleep':
     case 'sleep':
-    case 'microsleep_nod':
       return quality === 'tracking' || req.bridged;
+    case 'microsleep_nod':
+      // Final review m4: the nod's deep-lid evidence was TRACKING (the detector needs a known openness during
+      // the drop); a fast recovery may blur its last frame into HEAD_ONLY. Only an unbridged LOST frame breaks it.
+      return quality !== 'lost' || req.bridged;
     case 'unresponsive':
       if (req.closure) return quality === 'tracking' || req.bridged;
       return quality !== 'lost' || req.c8;
@@ -166,14 +184,14 @@ function rule5Holds(req: AlertRequest, quality: Quality): boolean {
 }
 
 const EPS = 1e-6;
-const LOG_CAP = 1024;
+export const LOG_CAP = 1024;
 const EMPTY: readonly DmsAlertCommand[] = Object.freeze([]);
 
 export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shadow' }) {
   const a = cfg.alerts;
   const muted = opts.mode === 'shadow';
   let nextId = 1;
-  let critical: { kind: AlertKind; clearSince: number | null; lowSince: number | null } | null = null;
+  let critical: { kind: AlertKind; clearSince: number | null; lowSince: number | null; startT: number } | null = null;
   let distraction: AlertKind | null = null;
   const held: { req: AlertRequest; since: number; raised: Partial<AlertLogEntry> }[] = [];
   const lastTier1 = new Map<AlertKind, number>();
@@ -184,8 +202,12 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   /** a distraction/cumulative request since the last on-road frame or known-low run (T11 round 2) */
   let pendingEscalation = false;
   let pendingLowSince: number | null = null;
-  /** since cameraOff, while no frame has arrived */
-  let blind: { since: number; cause: CameraOffCause } | null = null;
+  /** the last cameraOff cause since the last camera frame (final review I2); null = none seen: a fault */
+  let offCause: CameraOffCause | null = null;
+  /** frames flowing since this time after a cameraOff; a second of them means the camera is back */
+  let backSince: number | null = null;
+  /** the last TRACKING frame (U-23, the lost cap) */
+  let lastTrackingT = Number.NEGATIVE_INFINITY;
 
   function record(e: AlertLogEntry): void {
     log.push(e);
@@ -204,10 +226,33 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   /** Where a request came from: its frame's quality and its C-8 flag. */
   const raisedOn = (req: AlertRequest, x: AlertFrame): Partial<AlertLogEntry> => ({ quality: x.quality, ...('c8' in req ? { c8: req.c8 } : {}) });
   const isEscalation = (req: AlertRequest) => req.kind === 'unresponsive' && req.escalation;
+  /** A cap ends the running Critical, then one Tier 1 `monitoring_paused` says why (rule 3 applies; rule 4 does not). */
+  function capCritical(out: DmsAlertCommand[], x: AlertFrame, why: 'blind_cap' | 'lost_cap', cause: PausedCause): void {
+    const c = critical!;
+    cmd(out, x, 'stop', c.kind);
+    record({ kind: c.kind, tier: 3, tMs: x.tMs, outcome: 'dropped', why });
+    critical = null;
+    const last = lastTier1.get('monitoring_paused');
+    if (last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) {
+      record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: 'suppressed', why: 'tier1_rate' });
+    } else {
+      out.push({ id: nextId++, action: 'once', tier: 1, kind: 'monitoring_paused', tMs: x.tMs, epochMs: x.epochMs, muted, cause });
+      record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: muted ? 'muted' : 'delivered' });
+      lastTier1.set('monitoring_paused', x.tMs);
+    }
+  }
 
   return {
     onFrame(x: AlertFrame): readonly DmsAlertCommand[] {
-      if (x.blind !== true) blind = null; // a frame: the camera is back
+      if (x.blind !== true) {
+        // A second of frames: the camera is back and the cause is spent. A stray in-flight frame right after
+        // cameraOff keeps it (final review I2).
+        if (offCause !== null) {
+          backSince ??= x.tMs;
+          if (x.tMs - backSince >= 1000 - EPS) offCause = null;
+        }
+        if (x.quality === 'tracking') lastTrackingT = x.tMs;
+      } else backSince = null;
       // The escalation corroboration clears as D4's pending state does (no allocation).
       if (pendingEscalation) {
         const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
@@ -229,7 +274,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       }
       if (critical !== null) {
         const clear = x.eyesOpen && x.onRoad;
-        critical.clearSince = clear ? (critical.clearSince ?? x.tMs) : null;
+        // Final review m9: two clear instants across a gap are not a clear second.
+        critical.clearSince = clear ? (x.gap === true ? x.tMs : (critical.clearSince ?? x.tMs)) : null;
         const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
         critical.lowSince = knownLow ? (critical.lowSince ?? x.tMs) : null;
         const cleared = critical.clearSince !== null && x.tMs - critical.clearSince >= a.tier3ClearS * 1000 - EPS;
@@ -237,22 +283,12 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         if (cleared || stopped) {
           cmd(out, x, 'stop', critical.kind);
           critical = null;
-        } else if (blind !== null && x.blind === true && x.tMs - blind.since >= a.criticalBlindMaxS * 1000 - EPS) {
-          // Blind too long: stop, and tell the driver once why monitoring paused.
-          cmd(out, x, 'stop', critical.kind);
-          record({ kind: critical.kind, tier: 3, tMs: x.tMs, outcome: 'dropped', why: 'blind_cap' });
-          critical = null;
-          // Rule 3 applies (a thermal flap at L3 would otherwise repeat it on every cool/heat cycle); rule 4 does
-          // not (see the header).
-          const last = lastTier1.get('monitoring_paused');
-          if (last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) {
-            record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: 'suppressed', why: 'tier1_rate' });
-          } else {
-            out.push({ id: nextId++, action: 'once', tier: 1, kind: 'monitoring_paused', tMs: x.tMs, epochMs: x.epochMs, muted, cause: blind.cause });
-            record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: muted ? 'muted' : 'delivered' });
-            lastTier1.set('monitoring_paused', x.tMs);
-          }
-          blind = null;
+        } else if (x.blind === true && x.blindSinceMs !== undefined && x.tMs - x.blindSinceMs >= a.criticalBlindMaxS * 1000 - EPS) {
+          // Blind too long (no frame since blindSinceMs): stop, and tell the driver once why monitoring paused.
+          capCritical(out, x, 'blind_cap', offCause ?? 'fault');
+        } else if (x.tMs - Math.max(critical.startT, lastTrackingT) >= a.criticalLostMaxS * 1000 - EPS) {
+          // U-23: no TRACKING face this long (LOST, HEAD_ONLY or blind): the clear condition is unobservable.
+          capCritical(out, x, 'lost_cap', 'face_lost');
         }
       }
 
@@ -283,7 +319,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
             distraction = null;
           }
           if (critical !== null) cmd(out, x, 'stop', critical.kind);
-          critical = { kind: req.kind, clearSince: null, lowSince: null };
+          critical = { kind: req.kind, clearSince: null, lowSince: null, startT: x.tMs };
           deliver(out, x, req, 'start', extra);
           continue;
         }
@@ -368,7 +404,11 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       }
       for (const h of held) refuse(x, h.req, 'dropped', 'camera_off', h.raised);
       held.length = 0;
-      blind = { since: tMs, cause };
+      offCause = cause;
+      backSince = null;
+      // Final review m5: the warning an escalation would belong to is gone.
+      pendingEscalation = false;
+      pendingLowSince = null;
       return out.length > 0 ? out : EMPTY;
     },
 
@@ -377,6 +417,9 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
      * (`session_end`), state reset. For drive end, opt-out or revoke, sign-out and engine reset.
      */
     stopAll(tMs: number, epochMs: number): readonly DmsAlertCommand[] {
+      // Final review m5: the warning an escalation would belong to was stopped.
+      pendingEscalation = false;
+      pendingLowSince = null;
       if (critical === null && distraction === null && held.length === 0) return EMPTY;
       const out: DmsAlertCommand[] = [];
       const x = { tMs, epochMs };
@@ -386,8 +429,12 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       held.length = 0;
       distraction = null;
       critical = null;
-      blind = null;
       return out;
+    },
+
+    /** The invariant counter, read without copying anything (final review I4: snapshot() calls it per frame). */
+    violations(): number {
+      return invariantViolations;
     },
 
     /** The running Critical's kind, or null (the façade ends F3's no-on-road watch with it, Task 12). */

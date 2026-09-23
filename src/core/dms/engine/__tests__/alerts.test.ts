@@ -299,7 +299,7 @@ describe('T12 review m2: the log records the request frame\u2019s quality (rule 
 });
 
 describe('T13 r1 I1: cameraOff keeps a Critical (the phone overheating says nothing about the driver)', () => {
-  const blind = (tMs: number, speed: number | null = 60, speedKnown = true): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: speed, speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true });
+  const blind = (tMs: number, speed: number | null = 60, speedKnown = true): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: speed, speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true, blindSinceMs: 1000 }); // the last frame: when the camera went off
   test('a running distraction stops (camera_off); a held Tier 1 is dropped', () => {
     const r = run([{ s: 1, f: off, req: [dist('distraction'), plain('phone_pattern')] }]);
     const cmds = r.am.cameraOff(1000, EPOCH0 + 1000, 'heat');
@@ -340,13 +340,13 @@ describe('T13 r1 I1: cameraOff keeps a Critical (the phone overheating says noth
 });
 
 describe('T13 r1 nit: monitoring_paused is a Tier 1 (rule 3: once per tier1EveryS), and the one rule-4 exception', () => {
-  const blindAt = (tMs: number): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 15, speedKnown: true, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true });
+  const blindAt = (tMs: number, since = 0): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 15, speedKnown: true, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true, blindSinceMs: since });
   const live = (tMs: number, requests: AlertRequest[] = []): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 60, speedKnown: true, quality: 'tracking', onRoad: false, eyesOpen: false, warmup: false, requests });
   /** A Critical at `t0`, the camera off at once, then 61 s blind at a known 15 km/h. */
   function blindCap(am: ReturnType<typeof createAlertManager>, t0: number): DmsAlertCommand[] {
     const out: DmsAlertCommand[] = [...am.onFrame(live(t0, [crit('sleep')]))];
     out.push(...am.cameraOff(t0, EPOCH0 + t0, 'heat'));
-    for (let k = 1; k <= 61; k++) out.push(...am.onFrame(blindAt(t0 + k * 1000)));
+    for (let k = 1; k <= 61; k++) out.push(...am.onFrame(blindAt(t0 + k * 1000, t0)));
     return out;
   }
   test('at 15 km/h (below rule 4’s 20) the first blind cap still says why the sound stopped', () => {
@@ -365,5 +365,35 @@ describe('T13 r1 nit: monitoring_paused is a Tier 1 (rule 3: once per tier1Every
     blindCap(am, 0);
     const later = blindCap(am, 61_000 + C.alerts.tier1EveryS * 1000);
     expect(later.map((c) => c.kind)).toContain('monitoring_paused');
+  });
+});
+
+describe('final review: the alert manager', () => {
+  test('I4: violations() is the counter stats() reports, read without a copy', () => {
+    const r = run([{ s: 1, f: { ...asleep, quality: 'head_only' }, req: [crit('sleep', false)] }]);
+    expect(r.am.violations()).toBe(1);
+    expect(r.am.violations()).toBe(r.am.stats().invariantViolations);
+  });
+  test('m4: a microsleep_nod raised on a HEAD_ONLY recovery frame is not a rule-5 violation (still one on LOST unbridged)', () => {
+    const ho = run([{ s: 1, f: { ...asleep, quality: 'head_only' }, req: [crit('microsleep_nod', false)] }]);
+    expect(ho.sig).toEqual(['start:microsleep_nod']);
+    expect(ho.am.violations()).toBe(0);
+    const lost = run([{ s: 1, f: { ...asleep, quality: 'lost' }, req: [crit('microsleep_nod', false)] }]);
+    expect(lost.am.violations()).toBe(1);
+  });
+  test('m5: stopAll clears the escalation corroboration (a later D4 is not corroborated by a stopped warning)', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }]);
+    r.am.stopAll(1000, EPOCH0 + 1000);
+    r.am.onFrame({ tMs: 1100, epochMs: EPOCH0 + 1100, ruleSpeedKmh: 60, speedKnown: true, quality: 'tracking', onRoad: false, eyesOpen: true, warmup: false, requests: [unr({ escalation: true })] });
+    expect(r.am.stats().log.at(-1)).toMatchObject({ kind: 'unresponsive', why: 'escalation_unverified' });
+  });
+  test('m9: the clear condition is not measured across a frame gap', () => {
+    const am = createAlertManager(C, { mode: 'live' });
+    const fr = (tMs: number, o: Partial<AlertFrame> = {}): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 60, speedKnown: true, quality: 'tracking', onRoad: true, eyesOpen: true, warmup: false, requests: [], ...o });
+    am.onFrame(fr(0, { onRoad: false, eyesOpen: false, requests: [crit('sleep')] }));
+    am.onFrame(fr(100)); // clear
+    const out = am.onFrame(fr(1600, { gap: true })); // clear again, but after a 1.5 s gap
+    expect(out.map((c) => c.action)).not.toContain('stop');
+    expect(am.critical()).toBe('sleep');
   });
 });

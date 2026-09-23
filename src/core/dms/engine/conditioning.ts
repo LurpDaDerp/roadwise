@@ -88,6 +88,17 @@ export interface Perceived {
    * bridged time as TRACKING time.
    */
   closureBridged: boolean;
+  /**
+   * final review I1: a C-26 bridge ended silently on this frame (its cap passed, on any frame, TRACKING
+   * included; a turn; the head back up). The closure it carried ends; a closed eye on this frame starts a new
+   * closure here. fastRules ends the bridged episode.
+   */
+  bridgeEnded: boolean;
+  /**
+   * final review m1: the unobserved time this gap frame skipped (0 when no gap). An unbridged closure seen
+   * closed on both sides of a gap keeps running with its clock shifted by it, so closedMs is observed time.
+   */
+  unobservedMs: number;
   lookingDown: boolean;
   /** driver-frame head yaw rate, °/s; null without two consecutive heads */
   headYawSpeedDegS: number | null;
@@ -189,9 +200,28 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       if (dtS > 0 && !gap) frameIntervalMs = dtS * 1000;
       prevT = f.tMs;
       if (q.quality !== lastQuality || gap) resetSmoothing();
+      // Final review I1: the bridge cap is time since the bridge started, on EVERY frame (a gap or TRACKING
+      // included): a camera stop inside a bridge can never become closure time.
+      let capEnded = false;
+      if (bridged && f.tMs - bridgeStart > cfg.closure.bridgeMaxS * 1000 + 1e-6) {
+        bridged = false;
+        closed = false;
+        episode.r = false;
+        episode.l = false;
+        capEnded = true;
+      }
+      let unobservedMs = 0;
       if (gap) {
-        // Unobserved time: an unbridged closure ends silently, and no gaze is held across it.
-        if (!bridged) closed = false;
+        // Unobserved time. Final review m1: an unbridged closure that is still closed on a TRACKING frame after
+        // the gap continues with its clock shifted by the gap (observed time only); otherwise it ends silently.
+        // No gaze is held across a gap.
+        // The whole interval up to this frame is unobserved (obsDt is 0 on a gap): the gap frame adds no closure
+        // time, so it never crosses an F threshold by itself (the property tests' gap invariant).
+        unobservedMs = dtS * 1000;
+        if (!bridged) {
+          if (closed && q.quality === 'tracking') closedSince += unobservedMs;
+          else closed = false;
+        }
         lastGazeRel = null;
       }
       lastQuality = q.quality;
@@ -299,7 +329,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
           bridgeStart = f.tMs;
         } else closed = false;
       }
-      if (bridgeEnded) {
+      if (capEnded) bridgeEnded = true;
+      if (bridgeEnded && !capEnded) {
         // A silent end (a turn, the head back up, the cap): no closure, and the per-eye episodes end.
         bridged = false;
         closed = false;
@@ -378,6 +409,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         eyesClosed: closed,
         closedMs,
         closureBridged: bridged,
+        bridgeEnded,
+        unobservedMs,
         lookingDown,
         headYawSpeedDegS,
       };

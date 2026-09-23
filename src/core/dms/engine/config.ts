@@ -81,8 +81,10 @@ export interface DmsConfig {
   gazeNetEvery: 1 | 2;
 
   context: {
-    /** §M1: a context row older than this is stale (speed unknown) */
+    /** §M1: a context row older than this is stale (speed unknown); must exceed rowTickMs */
     rowStaleMs: number;
+    /** final review m7: the 1 Hz row period; a row with no frame this long before it is a blind tick */
+    rowTickMs: number;
     /** rev1 I6: unknown speed keeps the last known class this long while the IMU shows motion */
     tunnelHoldMs: number;
     /** rev1 I6: unknown speed without IMU motion keeps the class this long, then counts as < 10 km/h */
@@ -450,6 +452,12 @@ export interface DmsConfig {
      * long with no frame it stops (blind_cap) and a Tier 1 `monitoring_paused` plays once.
      */
     criticalBlindMaxS: number;
+    /**
+     * U-23 (final review I3, the user's ruling, reversible): a Critical with no TRACKING face this long
+     * (continuous time across LOST, HEAD_ONLY and blind stretches; only a TRACKING frame resets it) stops
+     * (lost_cap) and a Tier 1 `monitoring_paused` (cause face_lost) plays once.
+     */
+    criticalLostMaxS: number;
     /** anti-annoyance 8: three Tier 2 distraction warnings in 10 min → a Tier 1 line */
     repeatedGlancesCount: number;
     repeatedGlancesWithinS: number;
@@ -466,6 +474,10 @@ export interface DmsConfig {
     goodSessionMinMonitoredS: number;
     goodSessionMinTrackingShare: number;
     goodSessionMinBlinksPer2Min: number;
+    /** final review I5: cameraSession 'good' also needs camera-off time at speed ≤ this share */
+    goodSessionMaxCameraOffShare: number;
+    /** T11 review m3 (moved to config, final review m7): attentionScore needs this share of monitored time with a zone */
+    minObservedShare: number;
   };
 }
 
@@ -486,7 +498,7 @@ const DEFAULT: DmsConfig = {
   v: 1,
   gazeSource: 'geometric',
   gazeNetEvery: 2,
-  context: { rowStaleMs: 3000, tunnelHoldMs: 600_000, unknownStillHoldMs: 10_000, courseMinSpeedMs: 2, turnSignMinDegS: 2, handlingMinScore: 0.6 },
+  context: { rowStaleMs: 3000, rowTickMs: 1000, tunnelHoldMs: 600_000, unknownStillHoldMs: 10_000, courseMinSpeedMs: 2, turnSignMinDegS: 2, handlingMinScore: 0.6 },
   quality: {
     lostMinBoxArea: 0.01,
     lostMaxFaceLuma: 25,
@@ -705,11 +717,12 @@ const DEFAULT: DmsConfig = {
     criticalEndBelowKmh: 10,
     criticalEndAfterS: 5,
     criticalBlindMaxS: 60,
+    criticalLostMaxS: 60,
     repeatedGlancesCount: 3,
     repeatedGlancesWithinS: 600,
   },
   scoring: { focusGlanceS: 2.0, focusQueueCap: 32 },
-  summary: { goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 },
+  summary: { goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1, goodSessionMaxCameraOffShare: 0.3, minObservedShare: 0.5 },
 };
 
 function deepFreeze<T>(o: T): T {
@@ -807,6 +820,18 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.closure.bridgeMaxS > c.closure.f3.closedS)) bad('closure.bridgeMaxS', 'must exceed closure.f3.closedS (C-26: F3 fires inside a bridge)');
   if (!(c.closure.bridgeDropWindowS > 0)) bad('closure.bridgeDropWindowS', 'must be > 0');
   if (!(c.alerts.criticalBlindMaxS > c.alerts.criticalEndAfterS)) bad('alerts.criticalBlindMaxS', 'must exceed alerts.criticalEndAfterS');
+  if (!(c.alerts.criticalLostMaxS > c.alerts.criticalEndAfterS)) bad('alerts.criticalLostMaxS', 'must exceed alerts.criticalEndAfterS');
+  // Final review m7: the orderings the code relies on.
+  if (!(c.context.rowTickMs > 0)) bad('context.rowTickMs', 'must be > 0');
+  if (!(c.context.rowStaleMs > c.context.rowTickMs)) bad('context.rowStaleMs', 'must exceed context.rowTickMs (the row period)');
+  if (!(c.alerts.criticalEndBelowKmh <= c.alerts.criticalMinStartKmh)) bad('alerts.criticalEndBelowKmh', 'must be ≤ alerts.criticalMinStartKmh');
+  if (!(c.alerts.tier3ClearS > 0)) bad('alerts.tier3ClearS', 'must be > 0');
+  if (!Number.isInteger(c.fatigue.everyS) || c.fatigue.everyS <= 0) bad('fatigue.everyS', 'must be a positive integer');
+  for (const [name, row] of Object.entries(c.fatigue.signals)) {
+    if (!Number.isInteger(row.windowS) || row.windowS <= 0) bad(`fatigue.signals.${name}.windowS`, 'must be a positive integer');
+  }
+  if (!(c.summary.minObservedShare >= 0 && c.summary.minObservedShare <= 1)) bad('summary.minObservedShare', 'must lie in [0, 1]');
+  if (!(c.summary.goodSessionMaxCameraOffShare >= 0 && c.summary.goodSessionMaxCameraOffShare <= 1)) bad('summary.goodSessionMaxCameraOffShare', 'must lie in [0, 1]');
   const twoSlowFrames = 2 / Math.min(...ALLOWED_FPS);
   if (!(c.closure.maxFrameGapS > twoSlowFrames + 1e-9)) bad('closure.maxFrameGapS', `must exceed two frame intervals at the lowest capture rate (${twoSlowFrames} s)`);
 

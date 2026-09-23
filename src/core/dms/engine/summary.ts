@@ -38,8 +38,11 @@ export interface SummaryFrame {
   /** the measured fps */
   fps: number;
   /** the native thermal level (0–3); null when unknown */
-  thermalLevel: 0 | 1 | 2 | 3 | null;
+  thermalLevel: ThermalLevelLike;
+  /** which path gave a gaze source (final review n2); null otherwise */
+  gazeFrom?: 'net' | 'geometric' | null;
 }
+type ThermalLevelLike = 0 | 1 | 2 | 3 | null;
 
 export interface Tier0Minute {
   tMs: number;
@@ -52,6 +55,12 @@ export interface Tier0Minute {
 export interface DmsTripSummary {
   v: 1;
   monitoredS: { tracking: number; head_only: number; lost: number; total: number };
+  /**
+   * final review I5: time at a monitored speed with NO camera frame, by cause (heat, dark, a native fault,
+   * the gate closed, a policy pause, or a stall with no known cause). It is part of the drive the camera did
+   * not see: trackingCoverage and cameraSession count it.
+   */
+  cameraOffS: Record<UnobservedCause, number>;
   trackingCoverage: number | null;
   events: Record<string, number>;
   alerts: Record<AlertKind, AlertCounts>;
@@ -69,6 +78,11 @@ export interface DmsTripSummary {
   thermalMinutes: Record<'0' | '1' | '2' | '3', number>;
   fpsMinutes: Record<string, number>;
   gazeSource: GazeSource;
+  /**
+   * final review n2 (internal builds): with the net configured, the share of gaze frames each path gave (the
+   * geometric fallback when the net was off); null in the geometric configuration.
+   */
+  gazeFromShare: { net: number; geometric: number } | null;
   attentionScore: number | null;
   /** time with a zone / monitored time at ≥ 20 km/h; null with nothing monitored */
   attentionObservedShare: number | null;
@@ -76,8 +90,9 @@ export interface DmsTripSummary {
   calibration: { state: CalibrationState; bumps: number; driverChanges: number; events: CalibrationEvent[] };
 }
 
-/** attentionScore needs at least this share of monitored time with a zone (T11 review m3) */
-const MIN_OBSERVED = 0.5;
+/** Why a stretch at speed had no camera frame (final review I5). */
+export type UnobservedCause = 'heat' | 'dark' | 'fault' | 'gate' | 'paused' | 'stall';
+export const UNOBSERVED_CAUSES: readonly UnobservedCause[] = ['heat', 'dark', 'fault', 'gate', 'paused', 'stall'];
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
 
 export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) {
@@ -93,10 +108,12 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
   let longest: { durS: number; zone: ZoneId } | null = null;
   let over2s = 0;
   let mirrorChecksFast = 0;
-  let fastS = 0;
   let noScanning = 0;
   let inNoScan = false;
   const thermalS = { '0': 0, '1': 0, '2': 0, '3': 0 };
+  const offS = Object.fromEntries(UNOBSERVED_CAUSES.map((c) => [c, 0])) as Record<UnobservedCause, number>;
+  const fromN = { net: 0, geometric: 0 };
+  let mirrorGazeS = 0;
   const fpsS: Record<string, number> = {};
   const calEvents = new RingBuffer<CalibrationEvent>(64);
   let bumps = 0;
@@ -142,8 +159,11 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
       if (x.tMs >= nextMinute - 1e-6) {
         minutes.push({ tMs: nextMinute, eyesOffRoadS: round3(cur.offRoadS), roadCentreShare: cur.gazeS > 0 ? round3(cur.centreS / cur.gazeS) : null, mirrorChecks: cur.mirrors });
         cur.offRoadS = cur.centreS = cur.gazeS = cur.mirrors = 0;
-        nextMinute += 60_000;
+        // Final review m6: one minute per frame; after a span with no frames the schedule restarts here.
+        nextMinute = x.tMs - nextMinute >= 60_000 ? x.tMs + 60_000 : nextMinute + 60_000;
       }
+      if (x.gazeFrom === 'net') fromN.net++;
+      else if (x.gazeFrom === 'geometric') fromN.geometric++;
       if (x.thermalLevel !== null) thermalS[String(x.thermalLevel) as keyof typeof thermalS] += dt;
       if (x.fps > 0) {
         const nearest = ALLOWED_FPS.reduce((b, f) => (Math.abs(f - x.fps) < Math.abs(b - x.fps) ? f : b), ALLOWED_FPS[0]);
@@ -155,6 +175,7 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         if (x.zone !== null) {
           gazeS += dt;
           cur.gazeS += dt;
+          if (x.ruleSpeedKmh! >= g.mirrorRateMinSpeedKmh) mirrorGazeS += dt;
           if (x.zone === 'road_centre') cur.centreS += dt;
           if (zoneClass(x.zone, cfg) === 'on_road') onRoadS += dt;
           else {
@@ -164,7 +185,6 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         }
       }
       const fast = x.ruleSpeedKmh !== null && x.ruleSpeedKmh >= g.noScanningMinSpeedKmh;
-      if (fast) fastS += dt;
       const k = Math.floor(x.tMs / 1000);
       if (sec === null || sec.k !== k) {
         closeSecond();
@@ -178,6 +198,15 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         sec.yy += x.gazeRel.yaw ** 2;
         sec.pp += x.gazeRel.pitch ** 2;
       }
+    },
+    /**
+     * Final review I5: a row tick with no camera frame for a row period. Its time counts toward the thermal
+     * minutes (the camera is off at L3 by definition) and, at a monitored speed, toward cameraOffS[cause].
+     */
+    onUnobserved(dtS: number, cause: UnobservedCause, thermalLevel: ThermalLevelLike, ruleSpeedKmh: number | null): void {
+      const dt = Math.max(0, dtS);
+      if (thermalLevel !== null) thermalS[String(thermalLevel) as keyof typeof thermalS] += dt;
+      if (ruleSpeedKmh !== null && ruleSpeedKmh >= monitoredMin) offS[cause] += dt;
     },
     /** A finished glance (attention's glance_end). */
     onGlance(gl: Glance): void {
@@ -204,14 +233,20 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
     },
     build(inp: { alerts: AlertStats; fatigue: FatigueStats; calibrationState: CalibrationState }): DmsTripSummary {
       const total = monitored.tracking + monitored.head_only + monitored.lost;
+      const off = UNOBSERVED_CAUSES.reduce((acc, c) => acc + offS[c], 0);
+      const atSpeed = total + off;
       const s = cfg.summary;
       const livenessOk = blinks >= (monitored.tracking / 120) * s.goodSessionMinBlinksPer2Min;
       const observed = total > 0 ? gazeS / total : null;
-      const good = total >= s.goodSessionMinMonitoredS && monitored.tracking / total >= s.goodSessionMinTrackingShare && livenessOk;
+      // Final review I5: the drive the camera did not see counts against coverage and the session's grade.
+      const good =
+        total >= s.goodSessionMinMonitoredS && monitored.tracking / total >= s.goodSessionMinTrackingShare && livenessOk && off <= s.goodSessionMaxCameraOffShare * atSpeed + 1e-9;
+      const fromTotal = fromN.net + fromN.geometric;
       return {
         v: 1,
         monitoredS: { tracking: round3(monitored.tracking), head_only: round3(monitored.head_only), lost: round3(monitored.lost), total: round3(total) },
-        trackingCoverage: total > 0 ? round3(monitored.tracking / total) : null,
+        cameraOffS: Object.fromEntries(UNOBSERVED_CAUSES.map((c) => [c, round3(offS[c])])) as Record<UnobservedCause, number>,
+        trackingCoverage: atSpeed > 0 ? round3(monitored.tracking / atSpeed) : null,
         events: { ...events },
         alerts: inp.alerts.byKind,
         nuisanceTags: inp.alerts.log.filter((e) => e.tag === 'wrong').length,
@@ -219,7 +254,8 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         eyesOffRoadS: round3(offRoadS),
         tier0: {
           nonDrivingGlancesOver2s: over2s,
-          mirrorChecksPerMin: fastS >= 60 ? round3(mirrorChecksFast / (fastS / 60)) : null,
+          // Final review n5: per minute of gaze observed at the mirror-rate speed.
+          mirrorChecksPerMin: mirrorGazeS >= 60 ? round3(mirrorChecksFast / (mirrorGazeS / 60)) : null,
           noScanningEpisodes: noScanning,
           minutes: minutes.toArray(),
         },
@@ -232,7 +268,8 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         thermalMinutes: { '0': round3(thermalS['0'] / 60), '1': round3(thermalS['1'] / 60), '2': round3(thermalS['2'] / 60), '3': round3(thermalS['3'] / 60) },
         fpsMinutes: Object.fromEntries(Object.entries(fpsS).map(([k, v]) => [k, round3(v / 60)])),
         gazeSource: opts.gazeSource,
-        attentionScore: gazeS > 0 && observed !== null && observed >= MIN_OBSERVED - 1e-9 ? Math.round((100 * onRoadS) / gazeS) : null,
+        gazeFromShare: opts.gazeSource === 'net' && fromTotal > 0 ? { net: round3(fromN.net / fromTotal), geometric: round3(fromN.geometric / fromTotal) } : null,
+        attentionScore: gazeS > 0 && observed !== null && observed >= s.minObservedShare - 1e-9 ? Math.round((100 * onRoadS) / gazeS) : null,
         attentionObservedShare: observed === null ? null : round3(observed),
         cameraSession: total <= 0 ? 'none' : good ? 'good' : 'limited',
         calibration: { state: inp.calibrationState, bumps, driverChanges, events: calEvents.toArray() },
