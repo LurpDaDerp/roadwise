@@ -20,7 +20,7 @@ begin
 end $$;
 
 begin;
-select plan(248);
+select plan(258);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -277,6 +277,34 @@ select ok(clock_timestamp() - (select c from t_call) < interval '6 seconds', 'wi
 select extensions.dblink_exec('rw9_s1', 'rollback');
 select is((select n from extensions.dblink('rw9_pg', $q$select failures from public.reward_due where user_id = 'c9000000-0000-4000-8000-000000000902'$q$) as t(n int)), 1,
   'and the lease backs off as for any failure');
+
+-- (the intermittent-miss analysis, P1) a sweep skips a user whose queue row another session holds, and
+-- that is a delay, never a loss: the next sweep claims the user
+select extensions.dblink_exec('rw9_pg', $q$update public.reward_due set due_at = now() - interval '1 minute', failures = 0
+  where user_id = 'c9000000-0000-4000-8000-000000000902'$q$);
+select extensions.dblink_exec('rw9_s1', $q$begin; do $d$ begin
+  perform 1 from public.reward_due where user_id = 'c9000000-0000-4000-8000-000000000902' for update; end $d$$q$);
+select is((select n from extensions.dblink('rw9_s2', $q$select public.settle_due_rewards_at(10, now())$q$) as t(n int)), 0,
+  'P1: a sweep while another session holds the user''s queue row skips the user (skip locked: the sweep never waits)');
+select is((select d from extensions.dblink('rw9_pg', $q$select (due_at <= now() and failures = 0)::text from public.reward_due
+    where user_id = 'c9000000-0000-4000-8000-000000000902'$q$) as t(d text)), 'true', 'and leaves the user queued as due, with no failure');
+select extensions.dblink_exec('rw9_s1', 'rollback');
+select is((select n from extensions.dblink('rw9_s2', $q$select public.settle_due_rewards_at(10, now())$q$) as t(n int)), 1,
+  'once the row is released the next sweep claims the user');
+select is((select d from extensions.dblink('rw9_pg', $q$select coalesce((select (due_at > now() and failures = 0)::text from public.reward_due
+    where user_id = 'c9000000-0000-4000-8000-000000000902'), 'true')$q$) as t(d text)), 'true', 'and settles it (no longer due, no failure)');
+-- (P3) a user swept at a simulated future instant is not due in real time until a write re-queues it
+select extensions.dblink_exec('rw9_pg', $q$insert into public.reward_due (user_id, due_at) values ('c9000000-0000-4000-8000-000000000902', now() - interval '1 minute')
+  on conflict (user_id) do update set due_at = excluded.due_at, failures = 0$q$);
+select n from extensions.dblink('rw9_s2', $q$select public.settle_due_rewards_at(10, now() + interval '3 days')$q$) as t(n int);
+select is((select n from extensions.dblink('rw9_pg', $q$select count(*)::int from public.reward_due
+    where user_id = 'c9000000-0000-4000-8000-000000000902' and due_at <= now()$q$) as t(n int)), 0,
+  'P3: after a sweep at a simulated future instant the user is not due in real time');
+select is(pg_temp.remote_apply('rw9_s2', pg_temp.env(pg_temp.u(902), 'g5', date '2026-06-13', 95)), 'COMMIT', 'a write to a past day');
+select is((select d from extensions.dblink('rw9_pg', $q$select (due_at <= now())::text from public.reward_due
+    where user_id = 'c9000000-0000-4000-8000-000000000902'$q$) as t(d text)), 'true', 're-queues the user at now');
+select is((select n from extensions.dblink('rw9_s2', $q$select public.settle_due_rewards_at(10, now())$q$) as t(n int)), 1,
+  'and a real-time sweep claims the user');
 
 select extensions.dblink_exec('rw9_pg', $q$delete from auth.users where id in
   ('c9000000-0000-4000-8000-000000000901', 'c9000000-0000-4000-8000-000000000902')$q$);
@@ -696,6 +724,19 @@ select is((select row(dedupe_key, detail -> 'settled' -> 'phoneFree', detail -> 
     where user_id = pg_temp.u(29) and kind = 'changed_after_settlement'),
   row('changed:2026-06-01:safe:safe:false:false', 'true'::jsonb, 'false'::jsonb)::text,
   'a late change that moves only the phone-free bonus (outcome and tier as settled) is recorded, keyed by the bonus');
+-- (the intermittent-miss hunt) a change stamped BEFORE the settlement's checked_through (a write just after a
+-- backward clock step) is still a change: the change log compares for inequality, not order
+select pg_temp.mkuser(97);
+select pg_temp.drove(pg_temp.u(97), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(97), pg_temp.late());
+set local session_replication_role = replica;
+update public.score_daily set safe_day = false, updated_at = (select checked_through - interval '1 second' from public.reward_days
+  where user_id = pg_temp.u(97) and day = '2026-06-01') where user_id = pg_temp.u(97) and day = '2026-06-01';
+set local session_replication_role = origin;
+select pg_temp.settle(pg_temp.u(97), pg_temp.late());
+select is((select count(*)::int from public.reward_contradictions where user_id = pg_temp.u(97) and kind = 'changed_after_settlement'), 1,
+  'a change whose updated_at is earlier than the settled checked_through (a backward clock step) is still recorded');
+select is(pg_temp.settle(pg_temp.u(97), pg_temp.late()) ->> 'contradictions', '0', 'and only once');
 select throws_ok($$ update public.reward_days set tier = 'safe' where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',
   'a direct change of a settled day is refused, even as postgres');
 select throws_ok($$ update public.reward_days set streak_after = 9 where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',

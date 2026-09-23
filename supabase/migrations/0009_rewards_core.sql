@@ -65,7 +65,8 @@ set lock_timeout = '5s';
 -- frontier with no reward row is never settled for value: it gets one contradiction and a frozen
 -- neutral/late row (its own reason, so a reader never mistakes it for a day without a drive). Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
 -- (score_daily plus final driver trips of the day, deleted ones included, and their scored events).
--- A settled day is final: when its score_daily row later moves (updated_at past checked_through) and the
+-- A settled day is final: when its score_daily row later moves (updated_at no longer the checked_through
+-- stored when it was last compared: a change, not a later time, so a backward clock step cannot hide one) and the
 -- day would now settle to a different outcome, tier, phone-free or camera bonus, one
 -- changed_after_settlement contradiction is written per (day, that result), and nothing else changes
 -- (final review m1, m7: a write that changes nothing about the day records nothing, and a day can hold
@@ -682,10 +683,14 @@ begin
   -- (a same-result dispute, a role toggled back) records nothing, and a day holds at most 32 rows
   -- (3 outcomes x 3 tiers x 2 x 2, less the settled one) however often it is rewritten. A zone-hop row is
   -- compared as the guard would have settled it (no tier, no bonus; a pass only neutral).
+  -- (the intermittent-miss hunt) A row has moved when its updated_at is no longer the one last compared,
+  -- not when it is later: updated_at is the writer's now(), and a database clock stepped backwards (caught
+  -- on the local stack, where a write after a step was stamped before the settlement's checked_through)
+  -- would otherwise hide the change for good.
   for r in
     select rd.day, rd.outcome, rd.outcome_reason, rd.tier, rd.phone_free, rd.camera, sd.updated_at
     from public.reward_days rd join public.score_daily sd on sd.user_id = rd.user_id and sd.day = rd.day
-    where rd.user_id = p_user and sd.updated_at > rd.checked_through
+    where rd.user_id = p_user and sd.updated_at is distinct from rd.checked_through
   loop
     select * into f from public.reward_day_facts(p_user, r.day, r.day, p_tz);
     select o.outcome into v_now_outcome from public.reward_outcome(f) o;
