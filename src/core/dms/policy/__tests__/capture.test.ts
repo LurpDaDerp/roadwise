@@ -4,6 +4,7 @@ import type { ThermalName } from '../../../../../modules/dms-vision/src/constant
 import { capturePolicySchema } from '../../../../../modules/dms-vision/src/wire';
 import { createCapturePolicy, nativePolicy, STATE_TABLE, THERMAL_LADDER, type PolicyInput, type PolicyOutput } from '../capture';
 import { LOW_LIGHT, validatePolicyConstants } from '../constants';
+import { createGate } from '../gate';
 
 type Q = 'tracking' | 'head_only' | 'lost';
 interface Seg {
@@ -258,11 +259,14 @@ describe('the preview (Privacy 6): only in SETUP while stationary (a known < 5 k
 
 describe('the native policy (the wrapper validates it: capturePolicySchema)', () => {
   test('run and pause map to a valid CapturePolicy with the token; OFF maps to null (the host stops native)', () => {
-    const run = nativePolicy(last(sim([{ s: 5, gazeNetEvery: 2 }])), 'tok');
+    const g = createGate(() => 'tok').gateOpen({ optedIn: true, cameraBeta: true, ageBand: '18_plus', driveActive: true, mode: 'mounted', role: 'driver', appActive: true }, 'granted');
+    if (!g.open) throw new Error('closed');
+    const tok = g.token;
+    const run = nativePolicy(last(sim([{ s: 5, gazeNetEvery: 2 }])), tok);
     expect(capturePolicySchema.parse(run)).toEqual({ gateToken: 'tok', capture: 'run', fps: 15, gazeNet: true, gazeNetEvery: 2, setupMode: false, previewAllowed: false });
-    const pause = nativePolicy(last(sim([{ s: 12, speed: 0 }])), 'tok');
+    const pause = nativePolicy(last(sim([{ s: 12, speed: 0 }])), tok);
     expect(capturePolicySchema.parse(pause)).toMatchObject({ capture: 'pause' });
-    expect(nativePolicy(last(sim([{ s: 2, gate: false }])), 'tok')).toBeNull();
+    expect(nativePolicy(last(sim([{ s: 2, gate: false }])), tok)).toBeNull();
   });
 });
 

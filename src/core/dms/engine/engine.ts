@@ -56,7 +56,7 @@ export interface DmsHostState {
 }
 
 export type DmsEvent =
-  | { kind: AttentionEvent['kind']; tMs: number; zone?: ZoneId; durS?: number }
+  | { kind: AttentionEvent['kind']; tMs: number; zone?: ZoneId; durS?: number; shoulderCheck?: boolean }
   | { kind: FastEvent['kind']; tMs: number; bridged?: boolean; durMs?: number; long?: boolean }
   | { kind: NodEvent['kind'] | 'yawn'; tMs: number }
   | { kind: CalibrationEvent['kind']; tMs: number }
@@ -260,7 +260,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.d2SumS = att.d2SumS;
     for (const e of att.events) {
       if (e.kind === 'glance_end' && e.glance !== undefined) d.summary.onGlance(e.glance);
-      emit({ kind: e.kind, tMs: e.tMs, zone: e.zone, durS: e.glance?.durS });
+      emit({ kind: e.kind, tMs: e.tMs, zone: e.zone, durS: e.glance?.durS, shoulderCheck: e.glance?.shoulderCheck });
       if (e.kind === 'd1_warning') requests.push({ kind: 'distraction', c8 });
       else if (e.kind === 'd2_warning') requests.push({ kind: 'cumulative', c8 });
       else if (e.kind === 'd3_phone_pattern') requests.push({ kind: 'phone_pattern' });

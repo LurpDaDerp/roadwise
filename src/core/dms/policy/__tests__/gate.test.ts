@@ -106,3 +106,17 @@ describe('the gate token (rev1 S-M1)', () => {
     expect(real).toBe('nonce-1');
   });
 });
+
+describe('check(): the latch without a mint (the host’s pre-check before any native call, Task 14)', () => {
+  test('it reports the closing input with the latched flag, mints nothing, and observes the drive edges', () => {
+    let minted = 0;
+    const gate = createGate(() => `nonce-${++minted}`);
+    expect(gate.check(OPEN, 'granted')).toBeNull(); // the drive-start edge latches the flag
+    expect(minted).toBe(0);
+    expect(gate.check({ ...OPEN, cameraBeta: false }, 'granted')).toBeNull(); // withdrawn mid-drive: still latched
+    expect(gate.check({ ...OPEN, appActive: false }, 'granted')).toBe('app_inactive');
+    gate.check({ ...OPEN, driveActive: false }, 'granted');
+    expect(gate.check({ ...OPEN, cameraBeta: false }, 'granted')).toBe('flag_off');
+    expect(minted).toBe(0);
+  });
+});

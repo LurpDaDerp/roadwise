@@ -70,7 +70,7 @@ export const STILL_GRAVITY_MIN = 0.95;
 export const STILL_IMU_MAX_G = 0.05;
 
 /** A row with no fix on a phone that is not moving: the no-fix end's evidence. */
-function stillWithoutFix(row: FeatureRow): boolean {
+export function stillWithoutFix(row: FeatureRow): boolean {
   return (
     !row.gnssValid &&
     row.gravityStability >= STILL_GRAVITY_MIN &&

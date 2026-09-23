@@ -49,6 +49,7 @@ import {
   UNKNOWN_HOLD_STILL_MS,
   UP_ROWS,
 } from './constants';
+import type { GateToken } from './gate';
 
 export type CaptureState = 'OFF' | 'PAUSED' | 'SEARCH' | 'CLOSURE_WATCH' | 'FULL' | 'HEAD_ONLY_RUN' | 'SETUP';
 
@@ -314,9 +315,10 @@ export function createCapturePolicy() {
 
 /**
  * The native `setPolicy` argument for a run or pause decision (null for OFF: the host stops native). A
- * paused policy still carries a valid fps (5), which native ignores while paused.
+ * paused policy still carries a valid fps (5), which native ignores while paused. The token is a GateToken
+ * (security T13 I-1): only the gate mints one, so a forged string does not type-check here.
  */
-export function nativePolicy(out: PolicyOutput, gateToken: string): { gateToken: string; capture: 'run' | 'pause'; fps: DmsFps; gazeNet: boolean; gazeNetEvery: 1 | 2; setupMode: boolean; previewAllowed: boolean } | null {
+export function nativePolicy(out: PolicyOutput, gateToken: GateToken): { gateToken: GateToken; capture: 'run' | 'pause'; fps: DmsFps; gazeNet: boolean; gazeNetEvery: 1 | 2; setupMode: boolean; previewAllowed: boolean } | null {
   if (out.action === 'off') return null;
   return {
     gateToken,

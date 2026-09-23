@@ -49,16 +49,25 @@ export function createGate(random: () => string) {
   let latchedBeta = false;
   let token: GateToken | null = null;
 
+  /** The drive-start latch and the closing input; a closed gate forgets its token. Mints nothing. */
+  function check(g: DmsGate, permission: PermissionStatus): GateClosedReason | null {
+    // The remote flag is read only on the drive-start edge.
+    if (g.driveActive && !driveWasActive) latchedBeta = g.cameraBeta;
+    driveWasActive = g.driveActive;
+    const reason = gateClosedReason(g, permission, latchedBeta);
+    if (reason !== null) token = null;
+    return reason;
+  }
+
   return {
+    /**
+     * The same evaluation without a mint: the host's pre-check before any native call (the permission is
+     * read from native only when every other input holds). It observes the drive edges for the latch.
+     */
+    check,
     gateOpen(g: DmsGate, permission: PermissionStatus): GateResult {
-      // The remote flag is read only on the drive-start edge.
-      if (g.driveActive && !driveWasActive) latchedBeta = g.cameraBeta;
-      driveWasActive = g.driveActive;
-      const reason = gateClosedReason(g, permission, latchedBeta);
-      if (reason !== null) {
-        token = null;
-        return { open: false, reason };
-      }
+      const reason = check(g, permission);
+      if (reason !== null) return { open: false, reason };
       if (token === null) {
         const nonce = random();
         if (typeof nonce !== 'string' || nonce.length === 0) throw new Error('gate: the random source gave an empty nonce');
