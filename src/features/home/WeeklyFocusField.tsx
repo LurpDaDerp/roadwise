@@ -1,13 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Pressable, View } from 'react-native';
 
 import { useDataSource } from '@/data/queries';
-import { RewardsOfflineError, type WeeklyGoal } from '@/features/rewards/api';
+import { RewardsOfflineError } from '@/features/rewards/api';
 import { goalActiveLine, goalSentence } from '@/features/rewards/copy/common';
 import { useEnsureWeek } from '@/features/rewards/useEnsureWeek';
 import { useRewards } from '@/features/rewards/useRewards';
-import { goalView, isoWeekStart } from '@/features/rewards/viewModel';
+import { currentWeekGoal } from '@/features/rewards/goal/weeks';
+import { GOAL_HREF } from '@/features/rewards/hub/routes';
+import { goalView } from '@/features/rewards/viewModel';
 import { Field, FieldText } from '@/features/trips';
 import { deviceZone } from '@/lib/deviceZone';
 import { dayKey } from '@/lib/time';
@@ -17,21 +19,8 @@ import { homeCopy } from './copy';
 
 const copy = homeCopy.focus;
 
-/** The weekly goal screen (F2, Task 9). */
-const GOAL_HREF = '/rewards/goal' as Href;
-
 /** A sentence for the spoken label, which joins its parts with ". " itself. */
 const clause = (text: string) => text.replace(/\.$/, '');
-
-/**
- * The goal only when it is this week's: the snapshot's newest goal can be last week's until
- * `open_my_week` runs (always, offline), and printing it here would claim a goal this week does
- * not have. The week is the device's ISO week, as `useEnsureWeek` decides it.
- */
-function thisWeeksGoal(goal: WeeklyGoal | null, now: number): WeeklyGoal | null {
-  if (goal === null) return null;
-  return goal.week_start === isoWeekStart(dayKey(new Date(now), deviceZone())) ? goal : null;
-}
 
 /** "2 of 4 driving days" as a ruled bar: passing days of the target, never past full. */
 function ProgressBar({ pass, target }: { pass: number; target: number }) {
@@ -68,7 +57,8 @@ function FocusBody() {
   useEnsureWeek();
 
   if (rewards.data) {
-    const goal = thisWeeksGoal(rewards.data.snapshot.currentGoal, now());
+    // The one "this week's goal" rule (final review m5), in the device's week as `useEnsureWeek` asks.
+    const goal = currentWeekGoal(rewards.data.snapshot, dayKey(new Date(now()), deviceZone()));
     if (goal === null) {
       return (
         <Text variant="subhead" tone="muted" testID="weekly-focus-none">
