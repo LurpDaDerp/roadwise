@@ -82,7 +82,12 @@ describe('WeeklyGoalScreen', () => {
   test('an active goal says today counts when the day closes, with the shared active line', async () => {
     await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 0 }) }));
     expect(screen.getByText('Today counts when the day closes.')).toBeTruthy();
-    expect(screen.getByTestId('goal-line').props.children).toBe(goalActiveLine({ pass: 2, target: 4, failDays: 0 }));
+    expect(screen.getByTestId('goal-line').props.children).toBe(
+      goalActiveLine({ pass: 2, target: 4, failDays: 0, withCount: false })
+    );
+    // the count is printed once, by the bar (whose spoken value says it once more, for the reader)
+    expect(screen.getAllByText(/2 of 4/)).toHaveLength(1);
+    expect(screen.getByTestId('goal-line').props.children).not.toMatch(/of 4/);
     // what reaching it adds, never shown as added
     expect(screen.getByText('150 points when the goal is reached')).toBeTruthy();
     expect(screen.queryByText(/added/)).toBeNull();
@@ -94,9 +99,10 @@ describe('WeeklyGoalScreen', () => {
     expect(screen.getByTestId('goal-line').props.children).toMatch(/Drive fewer days this week\?/);
   });
 
-  test('I1: after a failed day, no proration promise (pass 1 / fail 1)', async () => {
+  test('I1: after a failed day, no proration promise and no line at all (pass 1 / fail 1)', async () => {
     await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 1, fail_days: 1 }) }));
-    expect(screen.getByTestId('goal-line').props.children).toBe(goalActiveLine({ pass: 1, target: 4, failDays: 1 }));
+    expect(screen.queryByTestId('goal-line')).toBeNull();
+    expect(screen.getAllByText(/1 of 4/)).toHaveLength(1);
     const all = renderedStrings(screen.toJSON()).join(' ');
     expect(all).not.toMatch(/fewer/i);
     expect(all).not.toMatch(/still counts/i);

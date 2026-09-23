@@ -11,7 +11,7 @@ import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } fr
 
 import type { RewardsApi, RewardsSnapshot, WeeklyGoal } from '../api';
 import { DayBar, shiftDay } from '../challenges/ChallengeRow';
-import { goalSentence, OFFLINE_LINE } from '../copy/common';
+import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { goalCopy as copy } from '../copy/goal';
 import { useEnsureWeek } from '../useEnsureWeek';
 import { useRewards } from '../useRewards';
@@ -149,6 +149,9 @@ export function WeeklyGoalScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
 function ThisWeek({ goal }: { goal: WeeklyGoal }) {
   const view = goalView(goal);
   const active = view.state === 'active';
+  const line = active
+    ? goalActiveLine({ pass: view.pass, target: view.target, failDays: view.fail, withCount: false })
+    : view.remainingText;
   return (
     <Card variant="license" testID="goal-this-week">
       <Field label={copy.focusLabel}>
@@ -163,12 +166,15 @@ function ThisWeek({ goal }: { goal: WeeklyGoal }) {
           label={copy.progressLabel}
           testID="goal-progress"
         />
-        {/* The shared active line (`goalActiveLine`, via `goalView`): the proration promise only
-            while no day has failed (0009 achieves a short week only with fail_days = 0). A closed
-            state's line is the shared `GOAL_PROGRESS` one. */}
-        <Text variant="subhead" testID="goal-line">
-          {view.remainingText}
-        </Text>
+        {/* The shared line, without its count: the bar above already prints "2 of 4 driving days".
+            Active, it is the proration promise only while no day has failed (0009 achieves a short
+            week only with fail_days = 0) and nothing after a failed day (null); a closed state's line
+            is the shared `GOAL_PROGRESS` one. */}
+        {line !== null ? (
+          <Text variant="subhead" testID="goal-line">
+            {line}
+          </Text>
+        ) : null}
         {active ? (
           <Text variant="footnote" tone="muted">
             {copy.today}
