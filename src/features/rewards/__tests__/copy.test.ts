@@ -209,6 +209,12 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
     }
   });
 
+  test('goalProgressText: the one progress formatter', () => {
+    expect(common.goalProgressText(2, 4)).toBe('2 of 4 driving days');
+    expect(common.goalProgressText(0, 1)).toBe('0 of 1 driving day');
+    expect(common.goalProgressText(4, 4)).toMatch(/^\d+ of \d+ driving days$/);
+  });
+
   test('the offline and busy lines', () => {
     expect(OFFLINE_LINE).toBe("You're offline. This is what was saved on this phone.");
     expect(BUSY_LINE).toBe('Busy right now. Try again.');

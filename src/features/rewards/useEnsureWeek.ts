@@ -10,7 +10,7 @@
  * refusal (an ineligible account) is spent for the session.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 
 import { useOnline } from '@/data/net/useOnline';
 import { useDataSource } from '@/data/queries';
@@ -18,7 +18,7 @@ import { useSession } from '@/data/supabase/session';
 import { deviceZone } from '@/lib/deviceZone';
 import { dayKey } from '@/lib/time';
 
-import { defaultRewardsApi, RewardsRpcError } from './api';
+import { defaultRewardsApi, RewardsRpcError, type RewardsSnapshot } from './api';
 import { REWARDS_QUERY_KEY } from './keys';
 import { useRewards, type RewardsDeps } from './useRewards';
 import { isoWeekStart } from './viewModel';
@@ -41,9 +41,99 @@ const attempts = new Map<string, Attempt>();
  */
 export const SERVER_WEEK_RETRY_MS = 60 * 60 * 1000;
 
+/** The week `open_my_week` last answered with, per account, this session. */
+const serverWeeks = new Map<string, string>();
+const weekListeners = new Set<() => void>();
+
+function noteServerWeek(uid: string, week: string): void {
+  if (serverWeeks.get(uid) === week) return;
+  serverWeeks.set(uid, week);
+  for (const listener of [...weekListeners]) listener();
+}
+
+function subscribeServerWeek(listener: () => void): () => void {
+  weekListeners.add(listener);
+  return () => {
+    weekListeners.delete(listener);
+  };
+}
+
 /** Tests only: forget what this session opened. */
 export function resetEnsureWeekForTests(): void {
   attempts.clear();
+  serverWeeks.clear();
+}
+
+/** The widest gap between two zones' clocks (UTC+14 to UTC-12). */
+export const ZONE_SPREAD_MS = 26 * 60 * 60 * 1000;
+
+/** The instant the device's week `week` (a Monday) began, in `zone`. */
+function weekBeganAt(week: string, zone: string, near: number): number {
+  // The UTC instant of that Monday's midnight, corrected by the zone's offset near `near`.
+  const utcMidnight = Date.parse(`${week}T00:00:00Z`);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(near));
+  const get = (t: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const wallAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
+  const offset = wallAsUtc - Math.floor(near / 60_000) * 60_000;
+  return utcMidnight - offset;
+}
+
+/**
+ * The Monday (`YYYY-MM-DD`) of the week the SERVER is in for this account, from the snapshot's
+ * newest goal (the server creates each week's goal in the account's zone, by `open_my_week` or by
+ * settlement), or null when there is no goal for the server's week yet — the screen then falls back
+ * to the device's week (final review m9). The rule, with D = the device's week and G = the newest
+ * goal's `week_start`:
+ * - G >= D: G. The server has made a goal for G, so it has reached G — covers a phone BEHIND the
+ *   account zone (still Sunday on the phone, the server's Monday goal already there).
+ * - G = D - 7 days, and less than 26 h (`ZONE_SPREAD_MS`) since the device's Monday began: G. The
+ *   server may still be in its Sunday — covers a phone AHEAD of the account zone. Past 26 h no zone
+ *   on Earth is still in last week, so an older G is stale: null.
+ * - `answered` (the week `open_my_week` answered with this session, `useCurrentWeekStart` passes
+ *   it) is the server's own word and wins over the 26 h guess: the later of it and G.
+ * - anything else (no goal, or an older one): null.
+ */
+export function currentServerWeekStart(
+  snapshot: Pick<RewardsSnapshot, 'currentGoal'>,
+  opts: { now?: number; zone?: string; answered?: string } = {}
+): string | null {
+  const g = snapshot.currentGoal?.week_start ?? null;
+  if (opts.answered !== undefined) return g !== null && g > opts.answered ? g : opts.answered;
+  if (g === null) return null;
+  const now = opts.now ?? Date.now();
+  const zone = opts.zone ?? deviceZone();
+  const d = isoWeekStart(dayKey(new Date(now), zone));
+  if (g >= d) return g;
+  const previous = new Date(Date.parse(`${d}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
+  if (g === previous && now - weekBeganAt(d, zone, now) < ZONE_SPREAD_MS) return g;
+  return null;
+}
+
+/**
+ * `currentServerWeekStart` for the signed-in account, refined by this session's `open_my_week`
+ * answer; re-renders when a new answer arrives. `undefined` until the rewards snapshot has loaded;
+ * `null` when there is no goal for the server's week yet (fall back to the device's week).
+ */
+export function useCurrentWeekStart(deps: RewardsDeps = {}): string | null | undefined {
+  const { now } = useDataSource();
+  const uid = useSession().session?.user.id ?? null;
+  const rewards = useRewards(deps);
+  const answered = useSyncExternalStore(
+    subscribeServerWeek,
+    () => (uid === null ? undefined : serverWeeks.get(uid)),
+    () => undefined
+  );
+  const data = rewards.data;
+  if (data === undefined) return undefined;
+  return currentServerWeekStart(data.snapshot, { now: now(), answered });
 }
 
 /**
@@ -83,6 +173,7 @@ export function useEnsureWeek(deps: RewardsDeps = {}): void {
       (answer) => {
         attempt.serverWeek = answer.week_start;
         attempt.at = now();
+        noteServerWeek(uid, answer.week_start);
         return queryClient.invalidateQueries({ queryKey: REWARDS_QUERY_KEY }).catch(() => undefined);
       },
       (error: unknown) => {

@@ -10,7 +10,12 @@ import {
 } from '@/features/inbox/__fixtures__/harness';
 
 import { RewardsRpcError, type RewardsApi, type RewardsSnapshot } from '../api';
-import { resetEnsureWeekForTests, useEnsureWeek } from '../useEnsureWeek';
+import {
+  currentServerWeekStart,
+  resetEnsureWeekForTests,
+  useCurrentWeekStart,
+  useEnsureWeek,
+} from '../useEnsureWeek';
 import { goalRow, NOW, snapshot, UID } from '../__fixtures__/rows';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -226,5 +231,126 @@ describe("the server's week, not the device's (final review m9)", () => {
     await settleInbox();
     expect(opens(a)).toBe(1);
     await w.hook.unmount();
+  });
+});
+
+describe('useCurrentWeekStart: the server\'s week for the screens (final review m9)', () => {
+  function weekApi(snap: RewardsSnapshot, serverWeek: () => string) {
+    const server = { snapshot: snap };
+    const a: RewardsApi = {
+      fetchSnapshot: jest.fn(async () => server.snapshot),
+      fetchRewardDay: jest.fn(async () => null),
+      openMyWeek: jest.fn(async () => {
+        const week = serverWeek();
+        server.snapshot = { ...server.snapshot, currentGoal: goalRow(week) };
+        return { week_start: week, category: 'phone', source: 'weakest', target_days: 4, pass_days: 0, fail_days: 0, state: 'active', prorated: false } as const;
+      }),
+      setWeeklyFocus: jest.fn(),
+      joinChallenge: jest.fn(),
+      leaveChallenge: jest.fn(),
+    };
+    return a;
+  }
+
+  async function mountBoth(a: RewardsApi) {
+    const client = testQueryClient();
+    const wrapper = wrapperFor(await createTestDb(), client, () => clock);
+    const hook = await renderHook(
+      () => {
+        useEnsureWeek({ api: a, appState: fakeAppState() });
+        return useCurrentWeekStart({ api: a, appState: fakeAppState() });
+      },
+      { wrapper }
+    );
+    return { hook, client };
+  }
+
+  test('zones agree, this week\'s goal exists: that week, no call', async () => {
+    const a = weekApi(snapshot({ currentGoal: goalRow('2026-09-21') }), () => '2026-09-21');
+    const { hook } = await mountBoth(a);
+    await waitFor(() => expect(hook.result.current).toBe('2026-09-21'));
+    expect(opens(a)).toBe(0);
+    await hook.unmount();
+  });
+
+  test('device ahead at Monday midnight: the server\'s last week until its Monday comes, then the new one', async () => {
+    mockZone = 'Pacific/Kiritimati';
+    clock = Date.parse('2026-09-27T10:30:00Z');
+    const a = weekApi(snapshot({ currentGoal: goalRow('2026-09-21') }), () =>
+      clock >= Date.parse('2026-09-28T00:00:00Z') ? '2026-09-28' : '2026-09-21'
+    );
+    const { hook, client } = await mountBoth(a);
+    await waitFor(() => expect(opens(a)).toBe(1));
+    await settleInbox();
+    // negative control: the device alone would say 2026-09-28
+    expect(hook.result.current).toBe('2026-09-21');
+    clock = Date.parse('2026-09-28T01:00:00Z');
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['rewards'] });
+    });
+    await waitFor(() => expect(hook.result.current).toBe('2026-09-28'));
+    await hook.unmount();
+  });
+
+  test('no answer yet and a goal older than last week: null (fall back to the device week)', async () => {
+    setOnline(false);
+    const db = await createTestDb();
+    const { writeCachedRewards } = jest.requireActual<typeof import('../cache')>('../cache');
+    const { createSettingsRepo } = jest.requireActual<typeof import('@/data/db/settings')>('@/data/db/settings');
+    await writeCachedRewards(createSettingsRepo(db), UID, snapshot({ currentGoal: goalRow('2026-09-07') }));
+    const a = weekApi(snapshot({ currentGoal: goalRow('2026-09-07') }), () => '2026-09-21');
+    const client = testQueryClient();
+    const hook = await renderHook(() => useCurrentWeekStart({ api: a, appState: fakeAppState() }), {
+      wrapper: wrapperFor(db, client, () => clock),
+    });
+    await waitFor(() => expect(hook.result.current).toBeNull());
+    expect(opens(a)).toBe(0);
+    await hook.unmount();
+  });
+
+  test('device behind the server: the goal the server already made for its week', async () => {
+    mockZone = 'Pacific/Pago_Pago'; // UTC-11: still Sunday 2026-09-27 at 2026-09-28 05:00 UTC
+    clock = Date.parse('2026-09-28T05:00:00Z');
+    const a = weekApi(snapshot({ currentGoal: goalRow('2026-09-28') }), () => '2026-09-28');
+    const { hook } = await mountBoth(a);
+    await waitFor(() => expect(hook.result.current).toBe('2026-09-28'));
+    expect(opens(a)).toBe(0);
+    await hook.unmount();
+  });
+});
+
+describe('currentServerWeekStart (the rule, pure)', () => {
+  const snap = (week: string | null) => ({ currentGoal: week === null ? null : goalRow(week) });
+
+  test('zones agree: this week\'s goal is the server\'s week', () => {
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: Date.parse('2026-09-23T12:00:00Z'), zone: 'UTC' })).toBe('2026-09-21');
+  });
+
+  test('phone AHEAD of the account (Kiritimati, UTC+14) at its Monday 00:30: last week\'s goal is still the server\'s', () => {
+    const now = Date.parse('2026-09-27T10:30:00Z'); // Monday 00:30 on the phone, Sunday on a UTC server
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'Pacific/Kiritimati' })).toBe('2026-09-21');
+    // 26 h after the phone's Monday began, no zone is in last week any more: a leftover goal is stale
+    const later = Date.parse('2026-09-28T12:30:00Z');
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: later, zone: 'Pacific/Kiritimati' })).toBeNull();
+  });
+
+  test('phone BEHIND the account (Pago Pago, UTC-11) on its Sunday: the server\'s Monday goal is this week\'s', () => {
+    const now = Date.parse('2026-09-28T05:00:00Z'); // Sunday 18:00 on the phone
+    expect(currentServerWeekStart(snap('2026-09-28'), { now, zone: 'Pacific/Pago_Pago' })).toBe('2026-09-28');
+    // negative control: the phone's own week would be 2026-09-21
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'Pacific/Pago_Pago' })).toBe('2026-09-21');
+  });
+
+  test('no goal, or one older than last week: null', () => {
+    const now = Date.parse('2026-09-23T12:00:00Z');
+    expect(currentServerWeekStart(snap(null), { now, zone: 'UTC' })).toBeNull();
+    expect(currentServerWeekStart(snap('2026-09-14'), { now, zone: 'UTC' })).toBeNull();
+  });
+
+  test("the session's open_my_week answer wins over the 26 h guess", () => {
+    const now = Date.parse('2026-09-28T00:30:00Z'); // zones agree, Monday 00:30, goal not opened yet
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC' })).toBe('2026-09-21');
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered: '2026-09-28' })).toBe('2026-09-28');
+    expect(currentServerWeekStart(snap('2026-09-28'), { now, zone: 'UTC', answered: '2026-09-21' })).toBe('2026-09-28');
   });
 });

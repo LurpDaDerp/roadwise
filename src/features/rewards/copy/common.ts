@@ -142,3 +142,8 @@ export function dayLabel(day: string): string {
     new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1))
   );
 }
+
+/** The one goal progress formatter the screens share: "2 of 4 driving days". */
+export function goalProgressText(pass: number, target: number): string {
+  return `${pass} of ${target} driving ${target === 1 ? 'day' : 'days'}`;
+}
