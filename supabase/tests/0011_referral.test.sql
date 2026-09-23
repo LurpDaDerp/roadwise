@@ -24,7 +24,7 @@ begin
 end $$;
 
 begin;
-select plan(96);
+select plan(102);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -526,6 +526,20 @@ insert into public.progress (user_id, rewards_start) values (pg_temp.u(10), pg_t
 select pg_temp.drives(pg_temp.u(10), 3);
 select pg_temp.settle(pg_temp.u(10), pg_temp.later());
 select is((select status from public.referrals where invitee_id = pg_temp.u(10)), 'pending', 'only drives on days on or after rewards_start count');
+-- (fix round 1, m1) a drive uploaded late, behind the frontier, lands on I-A's frozen row and never counts
+select pg_temp.mkuser(19);
+select pg_temp.redeem_as(pg_temp.u(19), pg_temp.code_of(pg_temp.u(6)));
+select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 1, true);
+select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 3, true);
+select pg_temp.settle(pg_temp.u(19), pg_temp.later());
+select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 2, true);
+select pg_temp.settle(pg_temp.u(19), pg_temp.later());
+select is((select row(outcome, outcome_reason, points)::text from public.reward_days where user_id = pg_temp.u(19) and day = pg_temp.today() + 2),
+  row('neutral', 'no_drive', 0)::text, 'a day uploaded behind the frontier settles as I-A''s frozen neutral row');
+select is((select status from public.referrals where invitee_id = pg_temp.u(19)), 'pending', 'so its drive does not count: three drives, two on real settled days, still pending');
+select pg_temp.drove(pg_temp.u(19), pg_temp.today() + 4, true);
+select pg_temp.settle(pg_temp.u(19), pg_temp.later());
+select is((select status from public.referrals where invitee_id = pg_temp.u(19)), 'qualified', 'the next normally settled drive qualifies');
 
 -- ---------------------------------------------------------------------------
 -- 5. the device check (R-C), expiry and the yearly cap
@@ -564,6 +578,16 @@ select is((select count(*)::int from public.push_token_seen where position('shar
 select pg_temp.redeem_as(pg_temp.u(15), pg_temp.code_of(pg_temp.u(13)));
 select pg_temp.settle(pg_temp.u(15), now() + interval '91 days');
 select is((select status from public.referrals where invitee_id = pg_temp.u(15)), 'expired', '91 days without qualifying: expired');
+select is(pg_temp.mine(pg_temp.u(15)) ->> 'myCode', 'not_counted', 'an expired row reads not_counted at once');
+-- (fix round 1, m2) a pending row reads pending until 90 d + 25 h + 2 h + SETTLE_CAP_H (72 h) after redemption
+select pg_temp.mkuser(20);
+select pg_temp.mkuser(21);
+select pg_temp.code_for(pg_temp.u(20));
+select pg_temp.redeem_as(pg_temp.u(21), pg_temp.code_of(pg_temp.u(20)));
+update public.referrals set redeemed_at = now() - interval '90 days 99 hours' + interval '1 minute' where invitee_id = pg_temp.u(21);
+select is(pg_temp.mine(pg_temp.u(21)) ->> 'myCode', 'pending', 'one minute before 90 days + 99 hours: still pending (a held in-window day can still settle)');
+update public.referrals set redeemed_at = now() - interval '90 days 99 hours' - interval '1 minute' where invitee_id = pg_temp.u(21);
+select is(pg_temp.mine(pg_temp.u(21)) ->> 'myCode', 'not_counted', 'one minute after: not_counted');
 -- the yearly cap: 20 already rewarded in 365 days
 select pg_temp.mkuser(n) from generate_series(200, 219) n;
 insert into public.referrals (referrer_id, invitee_id, status, redeemed_at, qualified_at, invitee_rewarded, referrer_rewarded)

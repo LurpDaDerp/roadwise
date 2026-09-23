@@ -42,7 +42,8 @@ set lock_timeout = '5s';
 -- (not signed in, u13, the flag, the window, already used, the user budget itself) raise.
 -- Qualification, in the invitee's settlement (so it waits for the day to settle): at least 3 final,
 -- not-deleted driver drives that started after redemption and within 90 days of it, on settled days
--- on or after progress.rewards_start; then the device check (R-C: the two users' devices.id sets or
+-- on or after progress.rewards_start (a day's reward row settled normally, not I-A's frozen late-day
+-- row); then the device check (R-C: the two users' devices.id sets or
 -- their push_token_seen hash sets intersect → rejected / shared_device, silent to both). Qualified →
 -- the invitee +500 (`referral:invitee:<id>`) and the referrer enqueued at once; the referrer is
 -- credited in their own settlement (`referral:referrer:<id>`) unless 20 were rewarded in the last
@@ -305,7 +306,11 @@ begin
     'myCode', case
       when v_mine.id is null then 'none'
       when v_mine.status = 'qualified' then 'counted'
-      when v_mine.status = 'pending' and now() <= v_mine.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int) then 'pending'
+      -- (fix round 1, m2) a drive just inside the window lies on a local day that ends at most 25 h later
+      -- (24 h, or 25 on a DST day), closes 2 h after that, and can be held up to SETTLE_CAP_H past its close;
+      -- a pending row reads pending until all of that has passed, so it never flips to counted
+      when v_mine.status = 'pending' and now() <= v_mine.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int,
+             hours => 25 + 2 + (public.reward_rules() ->> 'SETTLE_CAP_H')::int) then 'pending'
       else 'not_counted' end);
 end $$;
 
@@ -334,7 +339,10 @@ begin
         and t.started_at > v_r.redeemed_at
         and t.started_at <= v_r.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int)
         and t.local_day >= coalesce(v_start, '-infinity'::date)
-        and exists (select 1 from public.reward_days rd where rd.user_id = p_user and rd.day = t.local_day);
+        -- (fix round 1, m1) a day settled normally: I-A's frozen late-day row (neutral / no_drive) never earns,
+        -- and a real no_drive day has no final driver drive to count anyway
+        and exists (select 1 from public.reward_days rd where rd.user_id = p_user and rd.day = t.local_day
+                    and rd.outcome_reason <> 'no_drive');
     if v_drives >= (v_ref ->> 'QUALIFYING_DRIVES')::int then
       if exists (select 1 from public.devices a join public.devices b on b.id = a.id
                  where a.user_id = p_user and b.user_id = v_r.referrer_id)
