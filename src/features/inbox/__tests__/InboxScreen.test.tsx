@@ -256,7 +256,11 @@ describe('InboxScreen', () => {
     setOnline(false);
     const { api } = fakeApi([]);
     await w.render(<InboxScreen deps={{ api }} tz="UTC" />);
-    expect(await screen.findByText(inboxCopy.offline)).toBeTruthy();
+    // The banner follows the network state at once; the saved rows are a read of the phone's cache that
+    // lands later. Asserting the rows straight after `findByText(banner)` raced that read, and lost under a
+    // loaded full suite (the flake). Settle every read (bounded by steps, not a clock), then assert both.
+    for (let step = 0; step < 50 && screen.queryByText('Drive summary ready') === null; step += 1) await settleInbox();
+    expect(screen.getByText(inboxCopy.offline)).toBeTruthy();
     expect(screen.getByText('Drive summary ready')).toBeTruthy();
     expect(api.fetchInbox).not.toHaveBeenCalled();
   });
