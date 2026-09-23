@@ -99,6 +99,8 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.closure.bridgeHeadDropDeg).toBe(5);
     expect(c.closure.bridgeDropWindowS).toBe(1);
     expect(c.closure.bridgeMaxS).toBe(10);
+    // T10 r1 m2
+    expect(c.fatigue.minScoredWeight).toBe(0.25);
     expect(c.distraction.gazeRulesMinFps).toBe(6.5);
     expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 });
   });
@@ -222,6 +224,8 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['a gaze-rules fps floor of 0', (c) => (c.distraction.gazeRulesMinFps = 0), /distraction\.gazeRulesMinFps/],
     ['a closure bridge cap at or under F3 (C-26)', (c) => (c.closure.bridgeMaxS = 6), /closure\.bridgeMaxS/],
     ['a zero head-drop window (C-26)', (c) => (c.closure.bridgeDropWindowS = 0), /closure\.bridgeDropWindowS/],
+    ['a minimum scored weight of 0 (T10 r1 m2)', (c) => (c.fatigue.minScoredWeight = 0), /fatigue\.minScoredWeight/],
+    ['a minimum scored weight above 1', (c) => (c.fatigue.minScoredWeight = 1.5), /fatigue\.minScoredWeight/],
   ];
   test.each(cases)('%s', (_name, breakIt, path) => {
     const c = copy();

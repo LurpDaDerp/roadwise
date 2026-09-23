@@ -8,11 +8,16 @@
 //   PERCLOS P80 (60 s), long blinks per minute (5 min), mean blink duration as a ratio to the baseline
 //   (5 min, b = 1), nods (10 min), yawns (15 min), and gaze dispersion "reduced" (5 min: x = 1 − the
 //   window's dispersion / the baseline's, b = 0).
-// - Rates are per OBSERVED time (T10 review I1), in the window and in the baseline alike: long blinks and
-//   yawns per TRACKING second (`trackS`), nods per second with a head pose (`headS`: not LOST, not
-//   bridged, HEAD_ONLY included), each scaled to the row's window. Wall-clock rates would read a glare
-//   window low and a baseline learned in glare high. A row observed for under 50 % of its window (PERCLOS:
-//   under `perclosMinTrackingS`) is dropped for the minute as `sparse`, which is not `degraded`.
+// - Rates are per OBSERVED time (T10 review I1), in the window and in the baseline alike: long blinks,
+//   yawns and nods per TRACKING second (`trackS`, not bridged), each scaled to the row's window. Nods
+//   need TRACKING too (T10 r1 m1): since T9 m2 a nod needs a known openness, which exists only in
+//   TRACKING, so HEAD_ONLY time is not nod-observable. Wall-clock rates would read a glare window low and
+//   a baseline learned in glare high. A row observed for under 50 % of its window (PERCLOS: under
+//   `perclosMinTrackingS`) is dropped for the minute as `sparse`, which is not `degraded`.
+// - A minute whose surviving weights sum below `minScoredWeight` (0.25) is `insufficient` (T10 r1 m2): no
+//   score from one weak row or from nothing, but its drops are still reported.
+// - Learning also waits for `minTrackingShare × activeAfterS` (300 s) of TRACKING at speed (T10 r1 m3),
+//   so the baselines are never built on a few observed seconds; the fast rules' floor covers the wait.
 // - A row whose minFps is above the minute's mean measured fps is dropped and the weights renormalise; the
 //   minute is `degraded`, with one reason: `hot` when the thermal governor was active in it (the frame
 //   rate was cut for heat), else `low_fps` (rev1: R-U4).
@@ -38,8 +43,6 @@ export interface FatigueFrame {
   dtS: number;
   quality: Quality;
   closureBridged: boolean;
-  /** a head pose this frame (Perceived.headCam !== null): nods are observable */
-  hasHead: boolean;
   openness: number | null;
   lookingDown: boolean;
   /** the rules' relative gaze; null without one */
@@ -131,7 +134,6 @@ export function createFatigueActions(cfg: Pick<DmsConfig, 'fatigue'>) {
 interface Second {
   k: number;
   trackS: number;
-  headS: number;
   closedS: number;
   fpsSum: number;
   frames: number;
@@ -142,7 +144,7 @@ interface Second {
   gyy: number;
   gpp: number;
 }
-const newSecond = (k: number): Second => ({ k, trackS: 0, headS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
+const newSecond = (k: number): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
 const dispersionOf = (n: number, y: number, p: number, yy: number, pp: number) => (n < 2 ? null : Math.sqrt(Math.max(0, yy / n - (y / n) ** 2) + Math.max(0, pp / n - (p / n) ** 2)));
 
 /** A frame's gap is counted up to 1 s (a longer gap is not observed time). */
@@ -168,7 +170,7 @@ export function createFatigue(cfg: DmsConfig) {
   };
 
   // Learning: the baseline sums over frames (and events) at a known ≥ minSpeedKmh.
-  const base = { drivingS: 0, trackS: 0, headS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 };
+  const base = { drivingS: 0, trackS: 0, closedS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0, nods: 0, yawns: 0, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 };
   let active = false;
   let atSpeed = false;
   let nextMinute: number | null = null;
@@ -176,7 +178,6 @@ export function createFatigue(cfg: DmsConfig) {
   const closedFrame = (x: FatigueFrame) =>
     x.openness !== null && x.openness < (x.lookingDown ? cfg.closure.lookDownClosedBelow : f.perclosOpennessBelow);
   const tracked = (x: FatigueFrame) => x.quality === 'tracking' && !x.closureBridged;
-  const headSeen = (x: FatigueFrame) => x.hasHead && x.quality !== 'lost' && !x.closureBridged;
 
   /** Sums over the last `windowS` complete seconds before the one holding `nowMs`. */
   function over(nowMs: number, windowS: number) {
@@ -185,7 +186,6 @@ export function createFatigue(cfg: DmsConfig) {
     const add = (x: Second) => {
       if (x.k < kNow - windowS || x.k >= kNow) return;
       s.trackS += x.trackS;
-      s.headS += x.headS;
       s.closedS += x.closedS;
       s.fpsSum += x.fpsSum;
       s.frames += x.frames;
@@ -206,7 +206,7 @@ export function createFatigue(cfg: DmsConfig) {
     return n;
   };
 
-  function score(nowMs: number, x: FatigueFrame, minute: Second): Pick<FatigueMinute, 'score' | 'sub' | 'raw' | 'sparse' | 'degraded' | 'reason' | 'perclosDropped'> {
+  function score(nowMs: number, x: FatigueFrame, minute: Second): Pick<FatigueMinute, 'score' | 'sub' | 'raw' | 'sparse' | 'degraded' | 'reason' | 'perclosDropped'> & { wSum: number } {
     const fps = minute.frames > 0 ? minute.fpsSum / minute.frames : 0;
     const values = {} as Record<SignalName, { x: number; b: number }>;
     /** the observed seconds behind each row, in its window */
@@ -237,8 +237,8 @@ export function createFatigue(cfg: DmsConfig) {
     // Counts scaled to a fully observed window.
     const scaled = (n: number, windowS: number, obsS: number) => (obsS > 0 ? (n * windowS) / obsS : 0);
     const nw = win('nods');
-    observed.nods = nw.headS;
-    values.nods = { x: scaled(countSince(nods, w('nods')), sig.nods.windowS, nw.headS), b: scaled(base.nods, sig.nods.windowS, base.headS) };
+    observed.nods = nw.trackS;
+    values.nods = { x: scaled(countSince(nods, w('nods')), sig.nods.windowS, nw.trackS), b: scaled(base.nods, sig.nods.windowS, base.trackS) };
     const yw = win('yawns');
     observed.yawns = yw.trackS;
     values.yawns = { x: scaled(countSince(yawns, w('yawns')), sig.yawns.windowS, yw.trackS), b: scaled(base.yawns, sig.yawns.windowS, base.trackS) };
@@ -275,7 +275,7 @@ export function createFatigue(cfg: DmsConfig) {
     if (x.tripElapsedS > f.longTripS) total *= f.longTripFactor;
     if (isNight(x.localMinutes)) total *= f.nightFactor;
     total = Math.min(f.cap, total);
-    return { score: total, sub, raw, sparse, degraded: lowFps, reason: lowFps ? (minute.hot ? 'hot' : 'low_fps') : null, perclosDropped: sub.perclos === null };
+    return { wSum, score: total, sub, raw, sparse, degraded: lowFps, reason: lowFps ? (minute.hot ? 'hot' : 'low_fps') : null, perclosDropped: sub.perclos === null };
   }
 
   function isNight(m: number | null): boolean {
@@ -293,7 +293,12 @@ export function createFatigue(cfg: DmsConfig) {
     let m: Omit<FatigueMinute, 'level' | 'actions'>;
     if (!active) m = { tMs: nowMs, status: 'learning', ...none };
     else if (minute.trackS < f.minTrackingShare * f.everyS - 1e-6) m = { tMs: nowMs, status: 'insufficient', ...none };
-    else m = { tMs: nowMs, status: 'scored', fps, ...score(nowMs, x, minute) };
+    else {
+      const { wSum, ...r } = score(nowMs, x, minute);
+      // Too little weight survives: no score, but the drops (sparse, fps, PERCLOS) are still reported.
+      if (wSum < f.minScoredWeight - 1e-9) m = { tMs: nowMs, status: 'insufficient', ...none, sparse: r.sparse, degraded: r.degraded, reason: r.reason, perclosDropped: r.perclosDropped };
+      else m = { tMs: nowMs, status: 'scored', fps, ...r };
+    }
     let level: FatigueLevel = m.score === null ? 'none' : levelOf(m.score, f.levels);
     const floor: FatigueLevel = x.floor === 'severe' ? 'severe' : x.floor === 'drowsy' ? 'drowsy' : 'none';
     if (LEVEL_RANK[floor] > LEVEL_RANK[level]) level = floor;
@@ -318,7 +323,6 @@ export function createFatigue(cfg: DmsConfig) {
         seconds.dropWhile((s) => s.k <= k - maxWindowS - 1);
       }
       const trk = tracked(x);
-      const hd = headSeen(x);
       const closed = trk && closedFrame(x);
       cur.frames++;
       cur.fpsSum += x.fps;
@@ -327,7 +331,6 @@ export function createFatigue(cfg: DmsConfig) {
         cur.trackS += dt;
         if (closed) cur.closedS += dt;
       }
-      if (hd) cur.headS += dt;
       const g = trk ? x.gazeRel : null;
       if (g !== null) {
         cur.gn++;
@@ -344,7 +347,6 @@ export function createFatigue(cfg: DmsConfig) {
           base.trackS += dt;
           if (closed) base.closedS += dt;
         }
-        if (hd) base.headS += dt;
         if (g !== null) {
           base.gn++;
           base.gy += g.yaw;
@@ -352,7 +354,7 @@ export function createFatigue(cfg: DmsConfig) {
           base.gyy += g.yaw * g.yaw;
           base.gpp += g.pitch * g.pitch;
         }
-        if (base.drivingS >= f.activeAfterS - 1e-6) active = true;
+        if (base.drivingS >= f.activeAfterS - 1e-6 && base.trackS >= f.minTrackingShare * f.activeAfterS - 1e-6) active = true;
       }
       nextMinute ??= x.tMs + f.everyS * 1000;
       if (x.tMs < nextMinute - 1e-6) return null;

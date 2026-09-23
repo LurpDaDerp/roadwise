@@ -24,7 +24,6 @@ function feed(fz: Fz, fromS: number, toS: number, fps: number, spec: (t: number)
       dtS: 1 / fps,
       quality: 'tracking',
       closureBridged: false,
-      hasHead: true,
       openness: 1,
       lookingDown: false,
       gazeRel: { yaw: 3 * Math.sin((2 * Math.PI * t) / 5), pitch: 2 * Math.cos((2 * Math.PI * t) / 4) },
@@ -223,7 +222,7 @@ describe('insufficient and C-26', () => {
 
 describe('rates by observed time (T10 review I1)', () => {
   /** 40 % of every 10 s LOST (no head, no eyes). */
-  const lost40 = (t: number): Partial<FatigueFrame> => ((t % 10) < 4 ? { quality: 'lost', hasHead: false, openness: null, gazeRel: null } : {});
+  const lost40 = (t: number): Partial<FatigueFrame> => ((t % 10) < 4 ? { quality: 'lost', openness: null, gazeRel: null } : {});
   /**
    * Events by OBSERVED time: a long blink every 10 s, a nod every 20 s and a yawn every 30 s of observed
    * time (TRACKING for blinks and yawns, a head for nods), whatever the share observed.
@@ -255,7 +254,7 @@ describe('rates by observed time (T10 review I1)', () => {
   });
   test('a baseline learned with 40 % LOST, then a fully observed identical driver, reads as the baseline (not high)', () => {
     const fz = createFatigue(C);
-    feed(fz, 0, 1100, 15, lost40, driver(fz, 15, lost40)); // learning ends at 600 s (speed, not observation, sets it); scoring continues in the same mode
+    feed(fz, 0, 1100, 15, lost40, driver(fz, 15, lost40)); // learning ends at 600 s (600 s at speed, 360 s TRACKING); scoring continues in the same mode
     const m = feed(fz, 1100, 2100, 15, undefined, driver(fz, 15, () => ({}))).at(-1)!;
     expect(m.status).toBe('scored');
     for (const k of ['longBlinks', 'nods', 'yawns'] as const) {
@@ -266,7 +265,7 @@ describe('rates by observed time (T10 review I1)', () => {
   });
   test('a row observed for under 50 % of its window is dropped as sparse, not degraded', () => {
     const { fz } = learned();
-    const lost70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'lost', hasHead: false, openness: null, gazeRel: null } : {});
+    const lost70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'lost', openness: null, gazeRel: null } : {});
     feed(fz, 610, 1510, 15, lost70);
     const m = feed(fz, 1510, 1575, 15).at(-1)!;
     expect(m.status).toBe('scored');
@@ -277,12 +276,13 @@ describe('rates by observed time (T10 review I1)', () => {
     expect(m.reason).toBeNull();
     expect(fz.stats().sparseRowMinutes.nods).toBeGreaterThanOrEqual(1);
   });
-  test('HEAD_ONLY keeps nods observed (a head pose), not blinks', () => {
+  test('T10 r1 m1: nods need TRACKING (a known openness, T9 m2), so 70 % HEAD_ONLY leaves them sparse too', () => {
     const { fz } = learned();
     const head70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'head_only', openness: null } : {});
     feed(fz, 610, 1510, 15, head70);
     const m = feed(fz, 1510, 1575, 15).at(-1)!;
-    expect(m.sub.nods).not.toBeNull();
+    expect(m.sparse).toContain('nods');
+    expect(m.sub.nods).toBeNull();
     expect(m.sub.longBlinks).toBeNull();
   });
 });
@@ -306,5 +306,46 @@ describe('T10 review m1 and nit', () => {
     const { fz } = learned();
     const m = feed(fz, 610, 700, 15, (t) => ({ ...perclos20(t), tripElapsedS: 3 * 3600, localMinutes: null }), blinker(fz, 15, 4, 200)).at(-1)!;
     expect(m.score).toBeCloseTo(30 * 1.15, 6);
+  });
+});
+
+describe('T10 round 2: the minimum scored weight (R1-m2) and the observed baseline (R1-m3)', () => {
+  const lost70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'lost', openness: null, gazeRel: null } : {});
+  test('every row dropped (8 fps, the rest sparse) → insufficient, not a score of 0; the drops are still reported', () => {
+    const { fz } = learned(8);
+    feed(fz, 610, 1510, 8, lost70);
+    const m = feed(fz, 1510, 1575, 8).at(-1)!;
+    expect(m.status).toBe('insufficient');
+    expect(m.score).toBeNull();
+    expect(m.sparse).toEqual(expect.arrayContaining(['nods', 'dispersion']));
+    expect(m.degraded).toBe(true);
+    expect(m.perclosDropped).toBe(true);
+  });
+  test('dispersion alone (weight 0.10) → insufficient: one weak row can never reach Severe', () => {
+    const { fz } = learned(8);
+    feed(fz, 610, 1210, 8, lost70);
+    const m = feed(fz, 1210, 1335, 8, () => ({ gazeRel: { yaw: 0, pitch: 0 } })).at(-1)!;
+    expect(m.sparse).toContain('nods');
+    expect(m.sparse).not.toContain('dispersion');
+    expect(m.status).toBe('insufficient');
+    expect(m.level).toBe('none');
+  });
+  test('the thermal case (8 fps, hot): nods + dispersion = 0.25 is still scored', () => {
+    const { fz } = learned(8);
+    const m = feed(fz, 610, 700, 8, () => ({ hot: true })).at(-1)!;
+    expect(m.status).toBe('scored');
+    expect(m.reason).toBe('hot');
+    expect(m.sub.nods).not.toBeNull();
+    expect(m.sub.dispersion).not.toBeNull();
+  });
+  test('learning waits for 50 % of activeAfterS in TRACKING (300 s) as well as 10 min at speed', () => {
+    const fz = createFatigue(C);
+    const head70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'head_only', openness: null } : {});
+    const early = feed(fz, 0, 900, 15, head70); // 900 s at speed, 270 s TRACKING
+    expect(early.every((m) => m.status === 'learning')).toBe(true);
+    expect(fz.active()).toBe(false);
+    const later = feed(fz, 900, 990, 15); // 300 s of TRACKING at 930 s
+    expect(fz.active()).toBe(true);
+    expect(later.at(-1)!.status).toBe('scored');
   });
 });

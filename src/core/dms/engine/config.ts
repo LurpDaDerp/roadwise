@@ -412,6 +412,8 @@ export interface DmsConfig {
     perclosOpennessBelow: number;
     /** …valid only with ≥ 30 s of TRACKING in its window */
     perclosMinTrackingS: number;
+    /** T10 r1 m2: a minute whose surviving row weights sum below this is `insufficient` (nods + dispersion = 0.25 still scores) */
+    minScoredWeight: number;
   };
 
   alerts: {
@@ -668,6 +670,7 @@ const DEFAULT: DmsConfig = {
     severeEveryS: 120,
     perclosOpennessBelow: 0.2,
     perclosMinTrackingS: 30,
+    minScoredWeight: 0.25,
   },
   alerts: {
     tier2RepeatS: 1,
@@ -874,6 +877,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(f.longTripFactor >= 1 && f.nightFactor >= 1)) bad('fatigue', 'amplifying factors must be ≥ 1');
   if (!(c.closure.lookDownClosedBelow < f.perclosOpennessBelow)) bad('fatigue.perclosOpennessBelow', 'must be > closure.lookDownClosedBelow');
   if (!(f.perclosMinTrackingS <= f.signals.perclos.windowS)) bad('fatigue.perclosMinTrackingS', 'must be ≤ the PERCLOS window');
+  if (!(f.minScoredWeight > 0 && f.minScoredWeight <= 1)) bad('fatigue.minScoredWeight', 'must lie in (0, 1]');
 
   if (!Number.isInteger(c.scoring.focusQueueCap) || c.scoring.focusQueueCap < 1) bad('scoring.focusQueueCap', 'must be a positive integer');
   return errors;
