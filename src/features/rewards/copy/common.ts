@@ -75,11 +75,44 @@ export const OFFLINE_LINE = "You're offline. This is what was saved on this phon
 /** A lock timeout (`55P03`, rev1: R-G): the RPC can simply be tried again. */
 export const BUSY_LINE = 'Busy right now. Try again.';
 
-/** `goalView`'s progress line, by state. */
+/**
+ * The weekly goal's line while it is active (M5 T7 round 1, corrected by Task 9's review I1). The
+ * proration sentence is true only while no day has failed: 0009's `settle_goals` achieves a short
+ * week only with `fail_days = 0`, so after a failed day the line says the count and nothing more.
+ * Never "N more days": nothing nudges more driving. Used by Task 9 (the goal screen) and Task 10
+ * (Home), and by `goalView`'s `remainingText`.
+ */
+export function goalActiveLine({ pass, target, failDays }: { pass: number; target: number; failDays: number }): string {
+  if (pass === 0 && failDays === 0) return 'Counts from the days you drive this week.';
+  if (failDays === 0) {
+    return `${pass} of ${target} days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.`;
+  }
+  return `${pass} of ${target} days so far.`;
+}
+
+/** `goalView`'s line for a goal that is no longer active (M5 T7 ruling 1, verbatim). */
 export const GOAL_PROGRESS = {
-  toGo: (n: number) => `${n} more ${n === 1 ? 'driving day' : 'driving days'} to reach it.`,
   achieved: 'Goal reached.',
   achievedProrated: 'Goal reached on every day you drove this week.',
-  noDrives: "You didn't drive this week, so this goal didn't count.",
-  ended: 'This week has closed. A new goal starts with the new week.',
+  noDrives: "No drives this week — that's fine. A new goal starts with the new week.",
+  ended: 'Not reached this week. A new goal starts with the new week.',
 } as const;
+
+/**
+ * A day with drives that is not part of the rewards (`dayAward` → `not_counted`), and why. Never
+ * "not settled yet": these days never will be.
+ */
+export const NOT_COUNTED = {
+  title: "This day isn't part of your rewards.",
+  /** `rewardsStart` is a `YYYY-MM-DD` day key. */
+  beforeRewards: (rewardsStart: string) => `Rewards count from ${dayLabel(rewardsStart)}.`,
+  afterConfirmed: 'It reached RoadWise after the day was confirmed.',
+} as const;
+
+/** "September 21, 2026" for a `YYYY-MM-DD` day key (a calendar date, not an instant). */
+export function dayLabel(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(
+    new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1))
+  );
+}

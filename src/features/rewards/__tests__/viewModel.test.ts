@@ -50,7 +50,7 @@ describe('streakView', () => {
 });
 
 describe('goalView', () => {
-  test('active, part way', () => {
+  test('active, part way, a day failed: the count only (no proration sentence)', () => {
     const v = goalView(goalRow('2026-09-21', { category: 'braking', pass_days: 1, fail_days: 1 }));
     expect(v).toMatchObject({
       category: 'braking',
@@ -62,11 +62,18 @@ describe('goalView', () => {
       prorated: false,
       points: 150,
     });
-    expect(v.remainingText).toBe('3 more driving days to reach it.');
+    expect(v.remainingText).toBe('1 of 4 days so far.');
   });
 
-  test('one more day says "day"', () => {
-    expect(goalView(goalRow('2026-09-21', { pass_days: 3 })).remainingText).toBe('1 more driving day to reach it.');
+  test('active, no day failed: the proration sentence', () => {
+    expect(goalView(goalRow('2026-09-21', { pass_days: 2, fail_days: 0 })).remainingText).toMatch(
+      /^2 of 4 days so far\. Drive fewer days this week\? Keeping it up on each day you drive still counts\.$/
+    );
+  });
+
+  test('nothing counted yet', () => {
+    const text = goalView(goalRow('2026-09-21', { pass_days: 0, fail_days: 0 })).remainingText;
+    expect(text).toMatch(/^Counts from the days you drive this week\.$/);
   });
 
   test('achieved in full, and prorated ("every day you drove")', () => {
@@ -77,11 +84,11 @@ describe('goalView', () => {
   });
 
   test('no drives and ended: no penalty wording, no guilt', () => {
-    expect(goalView(goalRow('2026-09-21', { state: 'no_drives', pass_days: 0 })).remainingText).toBe(
-      "You didn't drive this week, so this goal didn't count."
+    expect(goalView(goalRow('2026-09-21', { state: 'no_drives', pass_days: 0 })).remainingText).toMatch(
+      /^No drives this week — that's fine\. A new goal starts with the new week\.$/
     );
-    expect(goalView(goalRow('2026-09-21', { state: 'ended', pass_days: 2, fail_days: 3 })).remainingText).toBe(
-      'This week has closed. A new goal starts with the new week.'
+    expect(goalView(goalRow('2026-09-21', { state: 'ended', pass_days: 2, fail_days: 3 })).remainingText).toMatch(
+      /^Not reached this week\. A new goal starts with the new week\.$/
     );
   });
 
@@ -97,6 +104,8 @@ describe('goalView', () => {
     for (const t of texts) {
       for (const re of BANNED_COPY) expect(re.test(t)).toBe(false);
       expect(t).not.toMatch(/left to|hurry|expires|days? left/i);
+      // Never a nudge to drive more (ruling 1).
+      expect(t).not.toMatch(/more driving day/i);
     }
   });
 });
@@ -168,28 +177,67 @@ describe('nextBadge: the unearned badge with the highest metric/threshold below 
   });
 });
 
-describe('dayAward', () => {
-  test('a day not settled → settled: false', () => {
-    expect(dayAward(null)).toEqual({ settled: false });
+describe('dayAward: settled | pending | not_counted (T7 round 1, I1)', () => {
+  const ctx = (day: string, over: Parameters<typeof progressRow>[0] = {}) => ({
+    day,
+    progress: progressRow({ rewards_start: '2026-09-10', settled_through: '2026-09-21', ...over }),
   });
+  const row = (day: string) =>
+    rewardDayRow(day, { tier: 'good', phone_free: false, camera: true, points: 30, streak_after: 4 });
 
-  test('a settled day carries its tier, bonuses, points and streak', () => {
-    expect(dayAward(rewardDayRow('2026-09-22', { tier: 'good', phone_free: false, camera: true, points: 30, streak_after: 4 }))).toEqual({
-      settled: true,
-      tier: 'good',
-      phoneFree: false,
-      camera: true,
-      points: 30,
-      streakAfter: 4,
-    });
+  test('a row: settled, with its tier, bonuses, points and streak, whatever the progress says', () => {
+    const expected = { status: 'settled', settled: true, tier: 'good', phoneFree: false, camera: true, points: 30, streakAfter: 4 };
+    expect(dayAward(row('2026-09-22'))).toEqual(expected);
+    expect(dayAward(row('2026-09-22'), ctx('2026-09-22'))).toEqual(expected);
+    // a row wins even behind the frontier or before rewards_start
+    expect(dayAward(row('2026-09-01'), ctx('2026-09-01'))).toMatchObject({ status: 'settled' });
   });
 
   test('settled with nothing earned is still settled', () => {
     expect(dayAward(rewardDayRow('2026-09-22', { tier: 'none', phone_free: false, points: 0 }))).toMatchObject({
+      status: 'settled',
       settled: true,
       tier: 'none',
       points: 0,
     });
+  });
+
+  test('before rewards_start: not_counted (before_rewards)', () => {
+    expect(dayAward(null, ctx('2026-09-09'))).toEqual({
+      status: 'not_counted',
+      settled: false,
+      reason: 'before_rewards',
+      rewardsStart: '2026-09-10',
+    });
+    // negative control: the start day itself is not before it; ahead of the frontier it is pending
+    expect(dayAward(null, ctx('2026-09-10', { settled_through: '2026-09-09' }))).toEqual({ status: 'pending', settled: false });
+  });
+
+  test('at or behind settled_through with no row: not_counted (after_confirmed)', () => {
+    expect(dayAward(null, ctx('2026-09-21'))).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
+    expect(dayAward(null, ctx('2026-09-15'))).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
+    // negative control: the day after the frontier is pending
+    expect(dayAward(null, ctx('2026-09-22'))).toEqual({ status: 'pending', settled: false });
+  });
+
+  test('pending: a new user (rewards_start null, nothing settled) or no progress row', () => {
+    expect(dayAward(null, ctx('2026-09-01', { rewards_start: null, settled_through: null }))).toEqual({
+      status: 'pending',
+      settled: false,
+    });
+    expect(dayAward(null, { day: '2026-09-01', progress: null })).toEqual({ status: 'pending', settled: false });
+    // rewards_start null but a frontier: behind it is still not counted
+    expect(dayAward(null, ctx('2026-09-01', { rewards_start: null }))).toMatchObject({
+      status: 'not_counted',
+      reason: 'after_confirmed',
+      rewardsStart: null,
+    });
+  });
+
+  test('no context: the old two-way reading (pending), and `settled` stays a boolean', () => {
+    const award = dayAward(null);
+    expect(award).toEqual({ status: 'pending', settled: false });
+    expect(award.settled).toBe(false);
   });
 });
 

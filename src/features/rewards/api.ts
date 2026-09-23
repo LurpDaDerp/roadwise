@@ -19,7 +19,7 @@
  */
 import { z } from 'zod';
 
-import { supabase } from '@/data/supabase/client';
+import type { supabase as AppClient } from '@/data/supabase/client';
 
 // ---------------------------------------------------------------------------------------------
 // Row schemas: exactly the columns selected, each `.strict()`
@@ -328,7 +328,16 @@ export function rpcErrorCode(error: unknown, status: number): RewardsRpcCode {
 // ---------------------------------------------------------------------------------------------
 
 /** The slice of the Supabase client these calls use; a test passes a fake. */
-export type RewardsClient = Pick<typeof supabase, 'from' | 'rpc'>;
+export type RewardsClient = Pick<typeof AppClient, 'from' | 'rpc'>;
+
+/**
+ * The app client, loaded on first call rather than at import: a screen, or a test, that imports the
+ * rewards layer without calling the server never loads the client (or needs its env).
+ */
+function appClient(): RewardsClient {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only when used
+  return (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase;
+}
 
 interface Reply {
   data: unknown;
@@ -359,7 +368,7 @@ function parseRows<T>(schema: z.ZodType<T>, data: unknown, table: string): T[] {
  * own error when it refused, and `RewardsDataError` when an answer cannot be read in full.
  */
 export async function fetchRewardsSnapshot(
-  client: RewardsClient = supabase,
+  client: RewardsClient = appClient(),
   now: () => number = Date.now
 ): Promise<RewardsSnapshot> {
   const [progress, goals, days, badges, badgeDefs, active, past, challengeDefs] = await Promise.all([
@@ -401,7 +410,7 @@ export async function fetchRewardsSnapshot(
 }
 
 /** One settled day of the caller's (RLS), or null when that day has not settled. */
-export async function fetchRewardDay(day: string, client: RewardsClient = supabase): Promise<RewardDay | null> {
+export async function fetchRewardDay(day: string, client: RewardsClient = appClient()): Promise<RewardDay | null> {
   const reply = await client.from('reward_days').select(REWARD_DAY_COLUMNS).eq('day', day).limit(1);
   check(reply);
   return parseRows(RewardDayRowSchema, reply.data, 'reward_days')[0] ?? null;
@@ -426,7 +435,7 @@ async function callRpc<T>(
 }
 
 /** This week's goal, materialised on the server if it does not exist yet (and earlier ones closed). */
-export function openMyWeek(client: RewardsClient = supabase): Promise<WeeklyGoalSummary> {
+export function openMyWeek(client: RewardsClient = appClient()): Promise<WeeklyGoalSummary> {
   return callRpc(client.rpc('open_my_week'), WeeklyGoalSummarySchema);
 }
 
@@ -441,18 +450,18 @@ export type FocusApplied = z.infer<typeof FocusResultSchema>['applied'];
  */
 export function setWeeklyFocus(
   category: GoalCategory,
-  client: RewardsClient = supabase
+  client: RewardsClient = appClient()
 ): Promise<{ applied: FocusApplied; goal: WeeklyGoalSummary }> {
   return callRpc(client.rpc('set_weekly_focus', { p_category: category }), FocusResultSchema);
 }
 
 /** Join a challenge; counting starts the day after. */
-export function joinChallenge(defId: string, client: RewardsClient = supabase): Promise<EnrolmentSummary> {
+export function joinChallenge(defId: string, client: RewardsClient = appClient()): Promise<EnrolmentSummary> {
   return callRpc(client.rpc('join_challenge', { p_def_id: defId }), EnrolmentSummarySchema);
 }
 
 /** Leave an active enrolment (no points; final). */
-export function leaveChallenge(id: string, client: RewardsClient = supabase): Promise<void> {
+export function leaveChallenge(id: string, client: RewardsClient = appClient()): Promise<void> {
   return callRpc(client.rpc('leave_challenge', { p_id: id }), null);
 }
 

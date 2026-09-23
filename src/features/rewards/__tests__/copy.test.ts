@@ -6,6 +6,8 @@ const {
   BADGE_TIER_LABEL,
   BUSY_LINE,
   CATEGORY_LABEL,
+  GOAL_PROGRESS,
+  goalActiveLine,
   CONFIRM_RULE,
   DAY_TIER_LABEL,
   FOCUS_APPLIED,
@@ -87,13 +89,18 @@ function allStrings(): string[] {
     if (typeof v === 'string') out.push(v);
     else if (v && typeof v === 'object') Object.values(v).forEach(walk);
   };
-  for (const [name, value] of Object.entries(common)) {
+  for (const value of Object.values(common)) {
     if (typeof value === 'function') continue;
-    if (name === 'NOT_MONEY') continue; // judged on its own below
     walk(value);
   }
   for (const c of ['phone', 'speeding', 'braking', 'accel', 'cornering'] as const) out.push(goalSentence(c, 4));
-  out.push(pointsText(1250), pointsText(1));
+  out.push(
+    pointsText(1250),
+    pointsText(1),
+    goalActiveLine({ pass: 0, target: 4, failDays: 0 }),
+    goalActiveLine({ pass: 2, target: 4, failDays: 0 }),
+    goalActiveLine({ pass: 1, target: 4, failDays: 1 })
+  );
   return out;
 }
 
@@ -104,18 +111,75 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
     for (const s of strings) for (const re of BANNED_COPY) expect([s, re.test(s)]).toEqual([s, false]);
   });
 
-  test('NOT_MONEY names money only to deny it: with that one denial removed, it passes', () => {
-    // BANNED_COPY forbids "money" anywhere; the plan's required sentence is the one place the word
-    // may appear, and only as "They aren't money." (honesty b). Anything else in it must pass.
-    expect(NOT_MONEY.match(/money/gi)).toHaveLength(1);
-    const rest = NOT_MONEY.replace("They aren't money.", '');
-    for (const re of BANNED_COPY) expect(re.test(rest)).toBe(false);
+  test('NOT_MONEY passes through its one exact allowance; any other "money" still fails (ruling 2)', () => {
+    const money = (text: string) => BANNED_COPY.some((re) => re.test(text));
+    expect(money(NOT_MONEY)).toBe(false);
+    for (const other of [
+      'Points are like money.',
+      "They aren't money.",
+      "Points track your progress in RoadWise. They aren't money, they're better.",
+      'Earn money with RoadWise.',
+      "Points track your progress in RoadWise. They aren't moneyish.",
+      "Points track your progress. They aren't money.",
+      `${NOT_MONEY} Save money on insurance.`,
+    ]) {
+      expect([other, money(other)]).toEqual([other, true]);
+    }
+  });
+
+  test('no goal line nudges more driving (ruling 1)', () => {
+    const lines = [
+      goalActiveLine({ pass: 0, target: 4, failDays: 0 }),
+      goalActiveLine({ pass: 3, target: 4, failDays: 0 }),
+      goalActiveLine({ pass: 1, target: 4, failDays: 2 }),
+      ...Object.values(GOAL_PROGRESS),
+    ];
+    for (const s of lines) expect(s).not.toMatch(/more (driving )?days?\b/i);
+    expect(GOAL_PROGRESS).not.toHaveProperty('toGo');
+  });
+
+  describe('goalActiveLine (Task 9 review I1: proration only while no day has failed)', () => {
+    const PRORATION = /Drive fewer days this week\? Keeping it up on each day you drive still counts\./;
+
+    test('nothing counted yet', () => {
+      expect(goalActiveLine({ pass: 0, target: 4, failDays: 0 })).toBe('Counts from the days you drive this week.');
+    });
+
+    test('pass 2, fail 0: the proration sentence is there', () => {
+      const line = goalActiveLine({ pass: 2, target: 4, failDays: 0 });
+      expect(line).toBe('2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      expect(line).toMatch(PRORATION);
+    });
+
+    test('pass 1, fail 1: the count only, no proration sentence', () => {
+      const line = goalActiveLine({ pass: 1, target: 4, failDays: 1 });
+      expect(line).toBe('1 of 4 days so far.');
+      expect(line).not.toMatch(PRORATION);
+      expect(line).not.toMatch(/fewer|still counts/i);
+    });
+
+    test('pass 0, fail 1: the count, not "counts from" and not the proration sentence', () => {
+      const line = goalActiveLine({ pass: 0, target: 4, failDays: 1 });
+      expect(line).toBe('0 of 4 days so far.');
+      expect(line).not.toMatch(PRORATION);
+    });
   });
 
   test('the streak is never "days in a row" and nothing says a confirmed day changes', () => {
     for (const s of [...allStrings(), NOT_MONEY]) {
       expect(s).not.toMatch(/in a row/i);
       expect(s).not.toMatch(/will (change|update|raise)/i);
+    }
+  });
+
+  test('the not-counted lines: honest, never "not settled yet"', () => {
+    expect(common.NOT_COUNTED.title).toBe("This day isn't part of your rewards.");
+    expect(common.NOT_COUNTED.beforeRewards('2026-09-10')).toBe('Rewards count from September 10, 2026.');
+    expect(common.NOT_COUNTED.afterConfirmed).toBe('It reached RoadWise after the day was confirmed.');
+    const lines = [common.NOT_COUNTED.title, common.NOT_COUNTED.beforeRewards('2026-01-01'), common.NOT_COUNTED.afterConfirmed];
+    for (const line of lines) {
+      for (const re of BANNED_COPY) expect(re.test(line)).toBe(false);
+      expect(line).not.toMatch(/not (yet )?settled|confirmed when/i);
     }
   });
 

@@ -3,8 +3,9 @@
  *
  * **Freshness without polling (design §3.5).** The snapshot is fetched when a rewards surface
  * mounts and its data is older than 5 minutes, when the app comes to the foreground with stale data,
- * when the connection comes back after an offline answer, after a sync pass that settled something
- * (the change event's `sync`), and when a notification arrives (the notification host invalidates
+ * when the connection comes back after an offline answer, after the data layer's change event (a
+ * landed sync: `'rewards'` is one of `QUERY_ROOTS`, so `subscribeInvalidation` reaches it), and
+ * when a notification arrives (the notification host invalidates
  * `REWARDS_QUERY_KEY`). Nothing runs on a timer, and nothing runs in the background.
  *
  * **Offline.** With no connection — or when the request cannot reach the server — the answer is the
@@ -27,7 +28,6 @@ import { AppState } from 'react-native';
 
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
-import { onDataChanged, type DataChange } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
 import { getSharedOnline } from '@/data/net/net';
 import { useOnline } from '@/data/net/useOnline';
@@ -45,6 +45,7 @@ import {
   type RewardsSnapshot,
 } from './api';
 import { readCachedRewards, writeCachedRewards } from './cache';
+import { dayAward, type DayAward } from './viewModel';
 import { rewardDayKey, rewardsKey, REWARDS_QUERY_KEY, REWARDS_STALE_MS } from './keys';
 
 /** The snapshot, and whether it came from the phone's cache because the server was out of reach. */
@@ -56,8 +57,6 @@ export interface RewardsData {
 export interface RewardsDeps {
   api?: RewardsApi;
   appState?: AppStateLike;
-  /** The change event (default `onDataChanged`); a `sync` change invalidates the rewards. */
-  changes?: (listener: (change: DataChange) => void) => () => void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -153,20 +152,6 @@ export function useRewards(deps: RewardsDeps = {}): UseQueryResult<RewardsData> 
     return () => sub.remove();
   }, [appState, key, queryClient, uid]);
 
-  // A sync pass that settled something: the watermark may have moved and a day may settle soon, so
-  // what is mounted refreshes. `REWARDS_QUERY_KEY` is not among the data layer's `QUERY_ROOTS`, so
-  // `subscribeInvalidation` does not reach it; this listens to the same change event.
-  const changes = deps.changes ?? onDataChanged;
-  useEffect(() => {
-    if (uid === null) return;
-    return changes((change) => {
-      if (change.source !== 'sync') return;
-      void queryClient
-        .invalidateQueries({ queryKey: REWARDS_QUERY_KEY }, { cancelRefetch: false })
-        .catch(() => undefined);
-    });
-  }, [changes, queryClient, uid]);
-
   // Back online after an offline answer: fetch once.
   const wasOffline = query.data?.offline === true;
   useEffect(() => {
@@ -183,6 +168,10 @@ export function useRewards(deps: RewardsDeps = {}): UseQueryResult<RewardsData> 
  * (key `[...REWARDS_QUERY_KEY, 'day', uid, day]`, 5-minute stale), so an older drive's day is never
  * read as "not settled yet" just because it fell out of the newest 35. Offline, a day the cached
  * snapshot does not hold is an error (`RewardsOfflineError`), never null: it may have settled since.
+ *
+ * **null means "no row", not "not settled yet"** (T7 round 1, I1): a day before `rewards_start`, or
+ * at or behind `settled_through`, has no row and never will. Pass the row to `dayAward(row, { day,
+ * progress })`, or use `useDayAward(day)`, which does that with the snapshot's progress.
  */
 export function useRewardDay(day: string, deps: RewardsDeps = {}): UseQueryResult<RewardDay | null> {
   const uid = useUid();
@@ -206,6 +195,29 @@ export function useRewardDay(day: string, deps: RewardsDeps = {}): UseQueryResul
     staleTime: REWARDS_STALE_MS,
   });
   return covered ? fromSnapshot : fromServer;
+}
+
+/** `useDayAward`'s answer: the three-way award once known, or the reason it is not. */
+export type DayAwardResult =
+  | { status: 'pending'; data: undefined; error: null }
+  | { status: 'error'; data: undefined; error: unknown }
+  | { status: 'success'; data: DayAward; error: null };
+
+/**
+ * A day's award, three ways (`settled` | `pending` | `not_counted`, `dayAward`), from its row and the
+ * snapshot's progress. The row comes from `useRewardDay`, which answers only from a fresh snapshot or
+ * the server (offline, a day the saved copy lacks is an error), so the progress it is judged against
+ * is as fresh as the row. Unknown stays unknown: `status: 'error'` or `'pending'`, never a guess.
+ */
+export function useDayAward(day: string, deps: RewardsDeps = {}): DayAwardResult {
+  const row = useRewardDay(day, deps);
+  const rewards = useRewards(deps);
+  const progress = rewards.data?.snapshot.progress;
+  return useMemo<DayAwardResult>(() => {
+    if (row.status === 'error') return { status: 'error', data: undefined, error: row.error };
+    if (row.status === 'pending' || progress === undefined) return { status: 'pending', data: undefined, error: null };
+    return { status: 'success', data: dayAward(row.data, { day, progress }), error: null };
+  }, [day, progress, row.data, row.error, row.status]);
 }
 
 function useRewardsMutation<A, R>(deps: Pick<RewardsDeps, 'api'>, call: (api: RewardsApi, arg: A) => Promise<R>) {

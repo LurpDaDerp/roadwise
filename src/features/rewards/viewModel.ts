@@ -17,7 +17,7 @@ import type {
   RewardDay,
   WeeklyGoalSummary,
 } from './api';
-import { GOAL_PROGRESS } from './copy/common';
+import { goalActiveLine, GOAL_PROGRESS } from './copy/common';
 
 export interface ClassView {
   level: LevelNumber;
@@ -77,7 +77,7 @@ export function goalView(
   let remainingText: string;
   switch (goal.state) {
     case 'active':
-      remainingText = GOAL_PROGRESS.toGo(Math.max(1, goal.target_days - pass));
+      remainingText = goalActiveLine({ pass, target: goal.target_days, failDays: fail });
       break;
     case 'achieved':
       remainingText = goal.prorated ? GOAL_PROGRESS.achievedProrated : GOAL_PROGRESS.achieved;
@@ -177,28 +177,60 @@ export function nextBadge(progress: Progress | null, defs: readonly BadgeDef[], 
   return best;
 }
 
+/** Why a day with no `reward_days` row will never have one. */
+export type NotCountedReason = 'before_rewards' | 'after_confirmed';
+
+/**
+ * A day's reward, three ways (M5 T7 round 1, I1). `settled` stays as the boolean it always was, so
+ * `if (award.settled)` keeps working; `status` tells the two unsettled cases apart.
+ * - `settled`: the day's `reward_days` row exists (final).
+ * - `not_counted`: no row, and there never will be one — the day is before `rewards_start` (history
+ *   from before rewards existed), or at or behind `settled_through` (the frontier passed it: a late
+ *   day frozen without value, or skipped).
+ * - `pending`: no row yet; it counts once it settles. A new user (no progress row, or
+ *   `rewards_start` null) is always pending.
+ */
 export type DayAward =
-  | { settled: false }
   | {
+      status: 'settled';
       settled: true;
       tier: RewardDay['tier'];
       phoneFree: boolean;
       camera: boolean;
       points: number;
       streakAfter: number | null;
-    };
+    }
+  | { status: 'pending'; settled: false }
+  | { status: 'not_counted'; settled: false; reason: NotCountedReason; rewardsStart: string | null };
 
-/** A day's reward: `settled: false` unless its `reward_days` row exists (then final). */
-export function dayAward(day: RewardDay | null): DayAward {
-  if (day === null) return { settled: false };
-  return {
-    settled: true,
-    tier: day.tier,
-    phoneFree: day.phone_free,
-    camera: day.camera,
-    points: day.points,
-    streakAfter: day.streak_after,
-  };
+/**
+ * A day's reward from its row (or null) and, to tell "not yet" from "never", the day key and the
+ * settled progress. Without `context` a missing row reads as `pending` (the old behaviour).
+ * Offline or with progress unknown, don't call it: the day is unknown (`useRewardDay` errors).
+ */
+export function dayAward(row: RewardDay | null, context?: { day: string; progress: Progress | null }): DayAward {
+  if (row !== null) {
+    return {
+      status: 'settled',
+      settled: true,
+      tier: row.tier,
+      phoneFree: row.phone_free,
+      camera: row.camera,
+      points: row.points,
+      streakAfter: row.streak_after,
+    };
+  }
+  const progress = context?.progress ?? null;
+  if (context !== undefined && progress !== null) {
+    const { day } = context;
+    if (progress.rewards_start !== null && day < progress.rewards_start) {
+      return { status: 'not_counted', settled: false, reason: 'before_rewards', rewardsStart: progress.rewards_start };
+    }
+    if (progress.settled_through !== null && day <= progress.settled_through) {
+      return { status: 'not_counted', settled: false, reason: 'after_confirmed', rewardsStart: progress.rewards_start };
+    }
+  }
+  return { status: 'pending', settled: false };
 }
 
 /** The Monday of `day`'s ISO week (`YYYY-MM-DD` in, `YYYY-MM-DD` out). */

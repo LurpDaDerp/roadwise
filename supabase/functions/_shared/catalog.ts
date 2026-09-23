@@ -635,6 +635,9 @@ export const BANNED_COPY: readonly RegExp[] = [
   /never lowers|driving less|nothing is lost|can(no|')t go down|never decays/i,
   /(can|will) delete|delete (everything|your)|export your|download your data/i,
   /lose your streak|about to lose|hurry|last chance/i,
-  /\$|\bcash\b|money|dollars?|gift ?cards?|redeem|prizes?|insurance|discounts?|\bworth\b|\bwin\b/i,
+  // "money" is refused everywhere except inside the one sentence that denies it, the rewards copy's
+  // NOT_MONEY, "Points track your progress in RoadWise. They aren't money." (M5 T7 ruling 2). The
+  // allowance is exact: that sentence word for word, and no other mention of money.
+  /\$|\bcash\b|(?<!Points track your progress in RoadWise\. They aren't )money|(?<=Points track your progress in RoadWise\. They aren't )money(?!\.)|dollars?|gift ?cards?|redeem|prizes?|insurance|discounts?|\bworth\b|\bwin\b/i,
   /!/,
 ];

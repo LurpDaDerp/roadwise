@@ -89,5 +89,8 @@ export const QUERY_ROOTS = [
   'scoreDaily',
   'insights',
   'longTermScore',
+  // M5's rewards (`REWARDS_QUERY_KEY`, `src/features/rewards/keys.ts`): a landed sync may have moved
+  // the watermark, and only mounted queries refetch (M5 T7 ruling 3).
+  'rewards',
 ] as const;
 export type QueryRoot = (typeof QUERY_ROOTS)[number];

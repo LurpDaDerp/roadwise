@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
+import { QUERY_ROOTS, subscribeInvalidation } from '@/data/queries';
 import { createTestDb, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import {
   clearInboxClients,
@@ -16,13 +17,14 @@ import { RewardsOfflineError, RewardsRpcError, type RewardsApi, type RewardsSnap
 import { readCachedRewards, writeCachedRewards } from '../cache';
 import { rewardDayKey, rewardsKey, REWARDS_STALE_MS } from '../keys';
 import {
+  useDayAward,
   useJoinChallenge,
   useLeaveChallenge,
   useRewardDay,
   useRewards,
   useSetWeeklyFocus,
 } from '../useRewards';
-import { NOW, OTHER_UID, rewardDayRow, snapshot, UID } from '../__fixtures__/rows';
+import { NOW, OTHER_UID, progressRow, rewardDayRow, snapshot, UID } from '../__fixtures__/rows';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 const mockSession: { session: { user: { id: string } } | null } = { session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } };
@@ -122,22 +124,30 @@ describe('useRewards', () => {
     expect(appState.count()).toBe(0);
   });
 
-  test('a sync event invalidates it (a pass that settled something)', async () => {
+  test("a landed sync refreshes ['rewards'] through the data layer's subscribeInvalidation (ruling 3)", async () => {
+    expect(QUERY_ROOTS).toContain('rewards');
+    const { api, hook, client } = await mount();
+    await waitFor(() => expect(fetches(api)).toBe(1));
+    // What bootstrap wires for the runtime's query client.
+    const detach = subscribeInvalidation(client);
+    await act(async () => {
+      emitDataChanged({ source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    await waitFor(() => expect(fetches(api)).toBe(2));
+    detach();
+    await hook.unmount();
+  });
+
+  test('the hook adds no change listener of its own: without subscribeInvalidation a sync refreshes nothing', async () => {
     const { api, hook } = await mount();
     await waitFor(() => expect(fetches(api)).toBe(1));
     await act(async () => {
       emitDataChanged({ source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
       await new Promise((r) => setTimeout(r, 5));
     });
-    await waitFor(() => expect(fetches(api)).toBe(2));
-    // Other changes (a queued item, a restore page) do not.
-    await act(async () => {
-      emitDataChanged({ source: 'enqueue' });
-      emitDataChanged({ source: 'hydrate' });
-      await new Promise((r) => setTimeout(r, 5));
-    });
     await settleInbox();
-    expect(fetches(api)).toBe(2);
+    expect(fetches(api)).toBe(1);
     await hook.unmount();
   });
 
@@ -285,6 +295,68 @@ test('useRewardDay offline: a day the cached snapshot holds is answered; one it 
   expect(lacked.result.current.error).toBeInstanceOf(RewardsOfflineError);
   expect(api.fetchRewardDay).not.toHaveBeenCalled();
   await lacked.unmount();
+});
+
+describe('useDayAward (T7 round 1, I1)', () => {
+  async function award(
+    day: string,
+    snap: RewardsSnapshot,
+    opts: { offline?: boolean } = {}
+  ) {
+    const db = await createTestDb();
+    if (opts.offline) {
+      setOnline(false);
+      await writeCachedRewards(createSettingsRepo(db), UID, snap);
+    }
+    const client = testQueryClient();
+    const { api } = fakeApi(snap);
+    const hook = await renderHook(
+      () => {
+        const r = useDayAward(day, { api, appState: fakeAppState() });
+        void [r.status, r.data, r.error];
+        return r;
+      },
+      { wrapper: wrapperFor(db, client, () => clock) }
+    );
+    await waitFor(() => expect(hook.result.current.status).not.toBe('pending'));
+    const result = hook.result.current;
+    await hook.unmount();
+    return result;
+  }
+
+  const progress = { rewards_start: '2026-09-10', settled_through: '2026-09-21' };
+
+  test('settled: the row', async () => {
+    const result = await award('2026-09-22', snapshot({ progress: progressRow(progress) }));
+    expect(result.data).toMatchObject({ status: 'settled', settled: true });
+  });
+
+  test('pending: after the frontier, no row', async () => {
+    const result = await award('2026-09-23', snapshot({ progress: progressRow(progress) }));
+    expect(result.data).toEqual({ status: 'pending', settled: false });
+  });
+
+  test('not_counted: behind the frontier with no row (a late day)', async () => {
+    const days = [rewardDayRow('2026-09-21'), rewardDayRow('2026-09-19')];
+    const result = await award('2026-09-20', snapshot({ progress: progressRow(progress), days }));
+    expect(result.data).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
+  });
+
+  test('not_counted: before rewards started', async () => {
+    const result = await award('2026-09-05', snapshot({ progress: progressRow(progress), days: [rewardDayRow('2026-09-21')] }));
+    expect(result.data).toMatchObject({ status: 'not_counted', reason: 'before_rewards', rewardsStart: '2026-09-10' });
+  });
+
+  test('a new user with no progress row: pending', async () => {
+    const result = await award('2026-09-05', snapshot({ progress: null, days: [] }));
+    expect(result.data).toEqual({ status: 'pending', settled: false });
+  });
+
+  test('offline, a day the saved copy lacks: unknown (an error), neither pending nor not_counted', async () => {
+    const result = await award('2026-09-20', snapshot({ progress: progressRow(progress) }), { offline: true });
+    expect(result.status).toBe('error');
+    expect(result.data).toBeUndefined();
+  });
 });
 
 describe('mutations invalidate the rewards on success', () => {
