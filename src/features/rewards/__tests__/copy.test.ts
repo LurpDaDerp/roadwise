@@ -157,8 +157,8 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
       expect(goalActiveLine({ pass: 1, target: 4, failDays: 1, withCount: false })).toBeNull();
       expect(goalActiveLine({ pass: 0, target: 4, failDays: 2, withCount: false })).toBeNull();
       // negative control: with the count (the default, or explicit), the count stays
-      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1 })).toBe('1 of 4 days so far.');
-      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1, withCount: true })).toBe('1 of 4 days so far.');
+      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1 })).toBe('1 of 4 driving days.');
+      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1, withCount: true })).toBe('1 of 4 driving days.');
     });
   });
 
@@ -171,20 +171,23 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
 
     test('pass 2, fail 0: the proration sentence is there', () => {
       const line = goalActiveLine({ pass: 2, target: 4, failDays: 0 });
-      expect(line).toBe('2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      expect(line).toBe('2 of 4 driving days. Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      // re-review m-b: one wording, goalProgressText's
+      expect(line.startsWith(`${common.goalProgressText(2, 4)}.`)).toBe(true);
+      expect(line).not.toMatch(/so far/);
       expect(line).toMatch(PRORATION);
     });
 
     test('pass 1, fail 1: the count only, no proration sentence', () => {
       const line = goalActiveLine({ pass: 1, target: 4, failDays: 1 });
-      expect(line).toBe('1 of 4 days so far.');
+      expect(line).toBe('1 of 4 driving days.');
       expect(line).not.toMatch(PRORATION);
       expect(line).not.toMatch(/fewer|still counts/i);
     });
 
     test('pass 0, fail 1: the count, not "counts from" and not the proration sentence', () => {
       const line = goalActiveLine({ pass: 0, target: 4, failDays: 1 });
-      expect(line).toBe('0 of 4 days so far.');
+      expect(line).toBe('0 of 4 driving days.');
       expect(line).not.toMatch(PRORATION);
     });
   });

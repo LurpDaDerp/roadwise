@@ -245,8 +245,9 @@ export const RewardsSnapshotSchema = z
  *
  * - `progress`: null for an account the settlement has not reached yet (a new user).
  * - `currentGoal`: the NEWEST goal row, which is this week's once `open_my_week` has run (or the
- *   settlement created it); until then it may be last week's. Check `week_start` against
- *   `isoWeekStart(today)` (viewModel) before calling it "this week's". `lastGoal`: the one before.
+ *   settlement created it); until then it may be last week's. Never call it "this week's" directly:
+ *   use `currentWeekGoal(snapshot, today, useCurrentWeekStart())` (`goal/weeks.ts`), which judges the
+ *   week by the server's (`currentServerWeekStart`). `lastGoal`: the one before.
  * - `days`: the newest 35 settled days, newest first. A day missing from them is not settled —
  *   unless it is older than the oldest one here (`useRewardDay` then asks the server).
  * - `challenges`: every active enrolment, then the newest 20 others.

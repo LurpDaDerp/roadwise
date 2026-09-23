@@ -66,7 +66,7 @@ describe('ShareCardSvg: the text on the card itself', () => {
     }
   });
 
-  test.each(CARD_KINDS)('%s: the drawn text is the model — every field it prints, nothing else', async (kind) => {
+  test.each(CARD_KINDS)('%s: the drawn text includes every field the model prints', async (kind) => {
     const { model, strings } = await drawn(kind);
     expect(strings).toContain('RoadWise');
     expect(strings).toContain(model.heading.toUpperCase());

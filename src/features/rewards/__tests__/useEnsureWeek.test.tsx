@@ -350,7 +350,87 @@ describe('currentServerWeekStart (the rule, pure)', () => {
   test("the session's open_my_week answer wins over the 26 h guess", () => {
     const now = Date.parse('2026-09-28T00:30:00Z'); // zones agree, Monday 00:30, goal not opened yet
     expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC' })).toBe('2026-09-21');
-    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered: '2026-09-28' })).toBe('2026-09-28');
-    expect(currentServerWeekStart(snap('2026-09-28'), { now, zone: 'UTC', answered: '2026-09-21' })).toBe('2026-09-28');
+    expect(
+      currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered: { week: '2026-09-28', deviceWeek: '2026-09-28' } })
+    ).toBe('2026-09-28');
+    expect(
+      currentServerWeekStart(snap('2026-09-28'), { now, zone: 'UTC', answered: { week: '2026-09-21', deviceWeek: '2026-09-28' } })
+    ).toBe('2026-09-28');
+  });
+});
+
+describe('re-review m-a and m-c: answers and the grace do not outlive their evidence', () => {
+  const snap = (week: string | null) => ({ currentGoal: week === null ? null : goalRow(week) });
+  const answered = { week: '2026-09-21', deviceWeek: '2026-09-21' };
+
+  test('m-a: an answer is trusted while the device is still in the week it asked in', () => {
+    const now = Date.parse('2026-09-25T12:00:00Z');
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered, offline: true })).toBe('2026-09-21');
+  });
+
+  test('m-a: kept alive offline into the next week, last week\'s answer is dropped: null, not last week\'s goal', () => {
+    const now = Date.parse('2026-09-30T12:00:00Z'); // Wednesday of the next week
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered, offline: true })).toBeNull();
+    expect(currentServerWeekStart(snap('2026-09-21'), { now, zone: 'UTC', answered })).toBeNull();
+    // control: in the first 26 h of the new week, online, the answer still stands (the spread)
+    const monday = Date.parse('2026-09-28T03:00:00Z');
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: monday, zone: 'UTC', answered })).toBe('2026-09-21');
+    // ...but not from the offline cache
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: monday, zone: 'UTC', answered, offline: true })).toBeNull();
+  });
+
+  test('m-c: the 26 h grace applies only to a snapshot fetched online', () => {
+    const monday = Date.parse('2026-09-28T00:30:00Z'); // zones agree (UTC), Monday 00:30
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: monday, zone: 'UTC', offline: false })).toBe('2026-09-21');
+    expect(currentServerWeekStart(snap('2026-09-21'), { now: monday, zone: 'UTC', offline: true })).toBeNull();
+    // a goal the server already made for the device week is trusted offline too
+    expect(currentServerWeekStart(snap('2026-09-28'), { now: monday, zone: 'UTC', offline: true })).toBe('2026-09-28');
+  });
+
+  test('m-a, the hook: an app kept alive into the next week, offline, stops claiming last week\'s goal', async () => {
+    clock = Date.parse('2026-09-21T09:00:00Z');
+    const server = { snapshot: snapshot({ currentGoal: null }) };
+    const a: RewardsApi = {
+      fetchSnapshot: jest.fn(async () => server.snapshot),
+      fetchRewardDay: jest.fn(async () => null),
+      openMyWeek: jest.fn(async () => {
+        server.snapshot = { ...server.snapshot, currentGoal: goalRow('2026-09-21') };
+        return { week_start: '2026-09-21', category: 'phone', source: 'weakest', target_days: 4, pass_days: 0, fail_days: 0, state: 'active', prorated: false } as const;
+      }),
+      setWeeklyFocus: jest.fn(),
+      joinChallenge: jest.fn(),
+      leaveChallenge: jest.fn(),
+    };
+    const client = testQueryClient();
+    const hook = await renderHook(
+      () => {
+        useEnsureWeek({ api: a, appState: fakeAppState() });
+        return useCurrentWeekStart({ api: a, appState: fakeAppState() });
+      },
+      { wrapper: wrapperFor(await createTestDb(), client, () => clock) }
+    );
+    await waitFor(() => expect(hook.result.current).toBe('2026-09-21'));
+    // The phone goes offline and the process lives on into Wednesday of the next week.
+    setOnline(false);
+    clock = Date.parse('2026-09-30T12:00:00Z');
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['rewards'] });
+    });
+    await waitFor(() => expect(hook.result.current).toBeNull());
+    await hook.unmount();
+  });
+
+  test('m-c, the hook: zones agree, offline cache on Monday 00:30: null (appears when you\'re online)', async () => {
+    setOnline(false);
+    clock = Date.parse('2026-09-28T00:30:00Z');
+    const db = await createTestDb();
+    const { writeCachedRewards } = jest.requireActual<typeof import('../cache')>('../cache');
+    const { createSettingsRepo } = jest.requireActual<typeof import('@/data/db/settings')>('@/data/db/settings');
+    await writeCachedRewards(createSettingsRepo(db), UID, snapshot({ currentGoal: goalRow('2026-09-21') }));
+    const hook = await renderHook(() => useCurrentWeekStart({ api: api(snapshot()).api, appState: fakeAppState() }), {
+      wrapper: wrapperFor(db, testQueryClient(), () => clock),
+    });
+    await waitFor(() => expect(hook.result.current).toBeNull());
+    await hook.unmount();
   });
 });

@@ -95,7 +95,7 @@ export function goalActiveLine(args: {
   withCount: boolean;
 }): string | null;
 /**
- * `withCount: false` (round 2) leaves "{pass} of {target} days so far." out, for a surface that shows
+ * `withCount: false` (round 2) leaves "{pass} of {target} driving days." (`goalProgressText`) out, for a surface that shows
  * the count itself; after a failed day there is then nothing to say (null: no line).
  */
 export function goalActiveLine({
@@ -111,7 +111,7 @@ export function goalActiveLine({
 }): string | null {
   const proration = 'Drive fewer days this week? Keeping it up on each day you drive still counts.';
   if (pass === 0 && failDays === 0) return 'Counts from the days you drive this week.';
-  const count = `${pass} of ${target} days so far.`;
+  const count = `${goalProgressText(pass, target)}.`;
   if (failDays === 0) return withCount ? `${count} ${proration}` : proration;
   return withCount ? count : null;
 }

@@ -77,7 +77,6 @@ export const hubCopy = {
 
   challenges: {
     title: 'Challenges',
-    /** Task 9's words for the same numbers ("driving days" would read as the window). */
   },
 
   nextBadge: (text: string) => `Next badge: ${text}`,

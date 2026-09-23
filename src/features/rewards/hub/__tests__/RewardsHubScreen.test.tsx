@@ -230,7 +230,8 @@ describe('RewardsHubScreen — goal, challenges, badges, links', () => {
   it('this week’s goal row opens /rewards/goal and speaks its progress', async () => {
     await renderHub(snapshot({ currentGoal: goalRow('2026-09-21', { category: 'phone', pass_days: 2 }) }));
     const line = goalActiveLine({ pass: 2, target: 4, failDays: 0 });
-    expect(line).toMatch(/^2 of 4 days so far\./);
+    // re-review m-b: the hub row uses the one wording, goalProgressText's
+    expect(line).toMatch(/^2 of 4 driving days\./);
     expect(screen.getByTestId('hub-goal').props.accessibilityLabel).toBe(
       `This week's goal, Keep your phone down on 4 driving days, ${line}`
     );

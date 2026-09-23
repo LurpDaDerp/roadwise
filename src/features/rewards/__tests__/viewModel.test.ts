@@ -2,6 +2,8 @@ import { LEVELS, levelFor } from '@scoring';
 
 import { BANNED_COPY } from '@/notifications/catalog';
 
+import { goalProgressText } from '../copy/common';
+
 import {
   challengeView,
   classView,
@@ -88,12 +90,13 @@ describe('goalView', () => {
       prorated: false,
       points: 150,
     });
-    expect(v.remainingText).toBe('1 of 4 days so far.');
+    expect(v.remainingText).toBe('1 of 4 driving days.');
+    expect(v.remainingText).toBe(`${goalProgressText(1, 4)}.`);
   });
 
   test('active, no day failed: the proration sentence', () => {
     expect(goalView(goalRow('2026-09-21', { pass_days: 2, fail_days: 0 })).remainingText).toMatch(
-      /^2 of 4 days so far\. Drive fewer days this week\? Keeping it up on each day you drive still counts\.$/
+      /^2 of 4 driving days\. Drive fewer days this week\? Keeping it up on each day you drive still counts\.$/
     );
   });
 
