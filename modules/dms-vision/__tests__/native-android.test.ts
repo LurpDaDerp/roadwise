@@ -425,3 +425,13 @@ describe('final review (integration minors), Android', () => {
     expect(body(src, 'applyCadence')).toContain('chooseFpsRange(');
   });
 });
+
+describe('final review round 2, Android', () => {
+  test('R-1: a failed re-bind reports paused/error (never silent)', () => {
+    const fn = body(code('CaptureController.kt'), 'resume');
+    expect(fn).toMatch(/interrupted = true[^\n]*\n[\s\S]*emitState\("paused", "error"\)/);
+  });
+  test('R-4: an unbind forgets the applied AE cap (a rebind re-sends it)', () => {
+    expect(body(code('CaptureControllerLifecycle.kt'), 'unbindCamera')).toMatch(/appliedCap = null/);
+  });
+});

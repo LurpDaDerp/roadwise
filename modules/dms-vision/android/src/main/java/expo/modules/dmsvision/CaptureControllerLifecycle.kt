@@ -138,6 +138,8 @@ internal fun CaptureController.unbindCamera() {
   cameraObserver = null
   camera = null
   bound = false
+  appliedCap = null // final review round 2 R-4: a rebind re-sends the AE range
+  appliedCamera = null
 }
 
 /** The C2 preview: a Preview use case bound next to the analysis only while setup mode allows it. */

@@ -45,12 +45,6 @@ object CameraSetup {
       .build()
 
   /**
-   * Drive the sensor at `fps` through CONTROL_AE_TARGET_FPS_RANGE: only an advertised range whose
-   * upper bound is at least `fps`, the closest one, and among equals the highest lower bound (a
-   * fixed range stops auto-exposure from stretching the exposure in low light). Returns the range
-   * sent, or null when the camera keeps its own (the software throttle still holds the cadence).
-   */
-  /**
    * Final review M-7: prefer a range that CONTAINS the policy fps (lower ≤ fps ≤ upper), the smallest upper
    * (so [5,15] or [7,15] at 5 fps rather than [15,15]: the sensor, and CameraX's RGBA conversion, run no
    * faster than needed); failing that, the old rule: the smallest upper ≥ fps, then the highest lower.
@@ -70,6 +64,11 @@ object CameraSetup {
     return containing ?: best
   }
 
+  /**
+   * Drive the sensor at `fps` through CONTROL_AE_TARGET_FPS_RANGE (the range chooseFpsRange picks; a fixed
+   * range stops auto-exposure from stretching the exposure in low light). Returns the range sent, or null
+   * when the camera keeps its own (the software throttle still holds the cadence).
+   */
   @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
   fun applyCadence(camera: Camera, fps: Int): Range<Int>? {
     val available = try {

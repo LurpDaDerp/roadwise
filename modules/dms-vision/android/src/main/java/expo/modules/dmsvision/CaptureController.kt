@@ -223,7 +223,7 @@ class CaptureController(internal val context: Context) {
     if (!bound) {
       try { bindCamera() } catch (_: Exception) {
         locked { pausedSinceMs = pausedWas ?: nowMs(); interrupted = true } // final review M-6: hold the pause; the host recovers by stop/start
-        DmsLog.code(DmsLog.Code.CAMERA_ERROR)
+        DmsLog.code(DmsLog.Code.CAMERA_ERROR); emitState("paused", "error") // round 2 R-1: never silent
         return
       }
     }

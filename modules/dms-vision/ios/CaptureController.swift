@@ -181,6 +181,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
       // recovers by stop() then start().
       locked { interrupted = true; pausedSinceMs = CaptureController.hostMs() }
       DmsLog.code(.cameraRuntimeError)
+      emitState("paused", "error") // final review round 2 R-1: never silent
       return
     }
     setState("running", "policy")

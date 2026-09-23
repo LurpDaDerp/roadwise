@@ -339,3 +339,10 @@ describe('final review (integration minors), iOS', () => {
     expect(fn).toMatch(/interrupted = true/);
   });
 });
+
+describe('final review round 2, iOS', () => {
+  test('R-1: a resume whose session does not run reports paused/error (never silent)', () => {
+    const fn = body(code('CaptureController.swift'), 'resume');
+    expect(fn).toMatch(/if !\(session\?\.isRunning \?\? false\) \{[\s\S]*emitState\("paused", "error"\)[\s\S]*return/);
+  });
+});
