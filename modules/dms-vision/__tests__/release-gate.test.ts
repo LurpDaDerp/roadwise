@@ -28,15 +28,72 @@ const code = (src: string, marker: '#' | '//') =>
     .join('\n');
 
 describe('eas.json', () => {
-  const eas = JSON.parse(read(MODULE, '..', '..', 'eas.json')) as { build: Record<string, { env?: Record<string, string> }> };
+  const eas = JSON.parse(read(MODULE, '..', '..', 'eas.json')) as { build: Record<string, { env?: Record<string, string>; extends?: string }>; submit?: Record<string, unknown> };
   test('the production profile never sets DMS_GAZE_NET', () => {
     expect(eas.build.production).toBeDefined();
     expect(eas.build.production!.env?.DMS_GAZE_NET).toBeUndefined();
+  });
+  // T15 r2 (security m-1(a)): the diagnostics flag never reaches a store build either, by env or inheritance.
+  test('the production profile sets neither EXPO_PUBLIC_DIAGNOSTICS nor DMS_GAZE_NET, and extends nothing', () => {
+    expect(productionLeaks(eas)).toEqual([]);
+  });
+  test('submit has only the production profile (store builds come from it alone)', () => {
+    expect(Object.keys(eas.submit ?? {})).toEqual(['production']);
+  });
+  test('the check bites: a flag in production env, or production extending preview', () => {
+    const withFlag = { build: { ...eas.build, production: { ...eas.build.production, env: { EXPO_PUBLIC_DIAGNOSTICS: '1' } } } };
+    expect(productionLeaks(withFlag)).toEqual(['env.EXPO_PUBLIC_DIAGNOSTICS']);
+    const extending = { build: { ...eas.build, production: { ...eas.build.production, extends: 'preview' } } };
+    expect(productionLeaks(extending)).toEqual(['extends']);
   });
   test('the preview profile does not either (it compiles the production variant at D1)', () => {
     expect(eas.build.preview?.env?.DMS_GAZE_NET).toBeUndefined();
   });
 });
+
+/** What in eas.json could put a diagnostics or gaze-net build into production (empty = nothing). */
+function productionLeaks(eas: { build: Record<string, { env?: Record<string, string>; extends?: string }> }): string[] {
+  const prod = eas.build.production;
+  if (prod === undefined) return ['no production profile'];
+  const out: string[] = [];
+  for (const key of ['EXPO_PUBLIC_DIAGNOSTICS', 'DMS_GAZE_NET']) if (prod.env?.[key] !== undefined) out.push(`env.${key}`);
+  if (prod.extends !== undefined) out.push('extends');
+  return out;
+}
+
+describe('committed .env files (T15 r2 security m-1(a))', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+  const dir = require('node:fs') as { readdirSync: (d: string) => string[] };
+  const root = path.join(MODULE, '..', '..');
+  const ignore = read(root, '.gitignore');
+  const easIgnore = read(root, '.easignore');
+  test('.env and .env.* are ignored by git and by the EAS upload, except .env.example', () => {
+    for (const f of [ignore, easIgnore]) {
+      const lines = f.split('\n').map((l) => l.trim());
+      expect(lines).toEqual(expect.arrayContaining(['.env', '.env.*', '!.env.example']));
+    }
+  });
+  test('no committable .env file sets the diagnostics flag or the gaze net', () => {
+    const committable = dir.readdirSync(root).filter((n) => n === '.env.example');
+    expect(committable).toEqual(['.env.example']);
+    for (const n of committable) expect(setsFlag(read(root, n))).toEqual([]);
+  });
+  test('the check bites', () => {
+    expect(setsFlag('EXPO_PUBLIC_DIAGNOSTICS=1\n')).toEqual(['EXPO_PUBLIC_DIAGNOSTICS']);
+    expect(setsFlag('export DMS_GAZE_NET="1"\n')).toEqual(['DMS_GAZE_NET']);
+    expect(setsFlag('# EXPO_PUBLIC_DIAGNOSTICS=1\nEXPO_PUBLIC_DIAGNOSTICS=\n')).toEqual([]);
+  });
+});
+
+/** The keys a dotenv text sets to a non-empty value (comments ignored). */
+function setsFlag(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^\s*(?:export\s+)?(EXPO_PUBLIC_DIAGNOSTICS|DMS_GAZE_NET)\s*=\s*['"]?([^'"\s#]*)/.exec(line);
+    if (m !== null && m[2] !== '') out.push(m[1]!);
+  }
+  return out;
+}
 
 describe('ios/DmsVision.podspec', () => {
   const pod = code(read(MODULE, 'ios', 'DmsVision.podspec'), '#');

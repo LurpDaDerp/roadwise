@@ -10,6 +10,11 @@
 // `import '…'`, `require(…)`, `import(…)` and `jest.requireActual(…)`. The scan covers src/, app/, packages/
 // and the repository root's own .ts/.tsx files. It is a tripwire, not a type system: the typed sinks
 // (gatedNative, nativePolicy) are the enforcement.
+//
+// T15 r2 (security m-4): the native module reached by NAME (`requireNativeModule('DmsVision')`,
+// `requireOptionalNativeModule('DmsVision')`, `NativeModulesProxy.DmsVision`) bypasses the wrapper
+// altogether; only the wrapper itself (modules/dms-vision/src/index.ts) may do that. modules/ is scanned
+// too, and no other local module may reference dms-vision.
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node types
@@ -33,11 +38,14 @@ function walk(dir: string, deep = true): string[] {
   }
   return out;
 }
-const files = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'app')), ...walk(path.join(ROOT, 'packages')), ...walk(ROOT, false)]
+const files = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'app')), ...walk(path.join(ROOT, 'packages')), ...walk(path.join(ROOT, 'modules')), ...walk(ROOT, false)]
   .map((f) => ({ rel: path.relative(ROOT, f).replace(/\\/g, '/'), src: fs.readFileSync(f, 'utf8') }))
   .filter((f) => f.rel !== SELF);
 
 const HOST = (rel: string) => rel.startsWith('src/core/dms/host/');
+const WRAPPER_FILE = 'modules/dms-vision/src/index.ts';
+/** The native module reached by its registered name. */
+export const NATIVE_BY_NAME = /\b(?:requireNativeModule|requireOptionalNativeModule)\s*(?:<[^>]*>)?\s*\(\s*['"]DmsVision['"]|\bNativeModulesProxy\s*(?:\?\.|\.)\s*DmsVision\b|\bNativeModulesProxy\s*\[\s*['"]DmsVision['"]/;
 
 /** Every module specifier in a source, whatever the form or the quotes. */
 export function specifiers(src: string): string[] {
@@ -88,8 +96,10 @@ export function reExports(src: string): boolean {
   return false;
 }
 
-test('the scan sees the host, the app routes, packages/ and the root files', () => {
+test('the scan sees the host, the app routes, packages/, modules/ and the root files', () => {
   expect(files.some((f) => f.rel === 'src/core/dms/host/controller.ts')).toBe(true);
+  expect(files.some((f) => f.rel === WRAPPER_FILE)).toBe(true);
+  expect(files.some((f) => f.rel.startsWith('modules/drive-sense/'))).toBe(true);
   expect(files.some((f) => f.rel.startsWith('app/'))).toBe(true);
   expect(files.some((f) => f.rel.startsWith('packages/'))).toBe(true);
   expect(files.some((f) => f.rel === 'index.ts')).toBe(true);
@@ -97,6 +107,17 @@ test('the scan sees the host, the app routes, packages/ and the root files', () 
 
 test('only the host references the native wrapper (start/setPolicy), in any form', () => {
   const offenders = files.filter((f) => !HOST(f.rel) && specifiers(f.src).some(isWrapper)).map((f) => f.rel);
+  expect(offenders).toEqual([]);
+});
+
+test('only the wrapper reaches the native module by name (T15 r2 security m-4)', () => {
+  const offenders = files.filter((f) => f.rel !== WRAPPER_FILE && NATIVE_BY_NAME.test(f.src)).map((f) => f.rel);
+  expect(offenders).toEqual([]);
+  expect(NATIVE_BY_NAME.test(files.find((f) => f.rel === WRAPPER_FILE)!.src)).toBe(true);
+});
+
+test('no other local module references dms-vision', () => {
+  const offenders = files.filter((f) => f.rel.startsWith('modules/') && !f.rel.startsWith('modules/dms-vision/') && specifiers(f.src).some((s) => s.includes('dms-vision'))).map((f) => f.rel);
   expect(offenders).toEqual([]);
 });
 
@@ -151,6 +172,19 @@ describe('the scan bites', () => {
   test('using the wrapper, or re-exporting only its types, is not a re-export', () => {
     expect(reExports(`import DmsVision from '${W}';\nexport function make() { return create({ native: DmsVision }); }`)).toBe(false);
     expect(reExports(`export type { DmsVisionApi } from '${W}/src/types';`)).toBe(false);
+  });
+  test.each([
+    [`const n = requireNativeModule('DmsVision');`],
+    [`const n = requireOptionalNativeModule<Api>("DmsVision");`],
+    [`const n = NativeModulesProxy.DmsVision;`],
+    [`const n = NativeModulesProxy?.DmsVision;`],
+    [`const n = NativeModulesProxy['DmsVision'];`],
+  ])('the native module by name: %s', (line) => {
+    expect(NATIVE_BY_NAME.test(line)).toBe(true);
+  });
+  test('another module by name, or a mock keyed on the name, is not', () => {
+    expect(NATIVE_BY_NAME.test(`requireNativeModule('DriveSense')`)).toBe(false);
+    expect(NATIVE_BY_NAME.test(`requireOptionalNativeModule: (name: string) => name === 'DmsVision'`)).toBe(false);
   });
   test('as GateToken', () => {
     expect(/as\s+(unknown\s+as\s+)?GateToken\b/.test('const t = s as GateToken;')).toBe(true);

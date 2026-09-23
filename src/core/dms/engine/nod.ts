@@ -31,6 +31,8 @@ export interface NodInput {
 export interface NodEvent {
   kind: 'nod' | 'microsleep_nod';
   tMs: number;
+  /** microsleep_nod: the longest deep-lid (< closureOpenness) hold during it, seconds (T14 r2 R1-m2) */
+  deepMaxS?: number;
 }
 
 interface Drop {
@@ -112,7 +114,7 @@ export function createNodDetector(cfg: Pick<DmsConfig, 'nod'>) {
       }
       if (speed > n.recoverDegS) {
         const micro = drop.deepMaxS >= n.closureHoldS - 1e-6 && (x.ruleSpeedKmh ?? 0) >= n.minSpeedKmh;
-        out.push({ kind: micro ? 'microsleep_nod' : 'nod', tMs: x.tMs });
+        out.push(micro ? { kind: 'microsleep_nod', tMs: x.tMs, deepMaxS: drop.deepMaxS } : { kind: 'nod', tMs: x.tMs });
         drop = null;
         level = null;
       }

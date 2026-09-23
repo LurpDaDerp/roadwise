@@ -16,6 +16,7 @@ const dms = createDefaultDmsController({
 ```
 
 - **`createDefaultDmsController` binds the native module inside the host** (security T14 m-1). M7 never imports `modules/dms-vision` or holds the raw wrapper, whose `start` takes a plain string. `imports.test.ts` fails the build if anything outside `src/core/dms/host` references the wrapper or `createGate`, in any import form, or if anything re-exports either. `createDmsController({ native, … })` is for tests with the fake.
+- **One native owner.** Every `createDefaultDmsController` shares one slot for the camera module: a controller takes it before its first native call of a drive and gives it back at the drive's end and on `dispose()`. Another controller whose gate would open meanwhile stays closed with reason `busy` and makes no native call.
 - **Build it on sign-in and `dispose()` it on sign-out, an account switch or account deletion.** Disposing ignores every later call and stops the camera first, before it ends the drive (security M-2/M-4, T14 I-1).
 - **Clear the profile after disposing:** `await dms.dispose(); await store.clear();` on sign-out and on account deletion. `dispose` may save the uid's profile while it ends the drive, so a `clear()` before it can be undone. Run the handover wipe after both (security T14 m-3).
 - **The gate's nonce** is `expo-crypto` `randomUUID()`. The token never leaves the controller: never log it or store it.
@@ -52,13 +53,13 @@ Any input that is false, missing or unknown keeps the camera off.
 
 - **Tier 3** (Critical): `microsleep`, `sleep`, `unresponsive`, `microsleep_nod`. Continuous, and louder every 2 s, until `stop`.
 - **Tier 2:** `distraction` and `cumulative` repeat every 1 s until `stop`. `fatigue` is a single burst (`once`).
-- **Tier 1** (`once`): `phone_pattern`, `fatigue_early`, `repeated_glances`, `monitoring_paused` (with `cause: 'heat' | 'dark'`; at most once per 10 min, and at any speed, since it replaces a Critical that was already sounding).
+- **Tier 1** (`once`): `phone_pattern`, `fatigue_early`, `repeated_glances`, `monitoring_paused` (with `cause: 'heat' | 'dark' | 'fault'`; at most once per 10 min, and at any speed, since it replaces a Critical that was already sounding).
 - M7 maps each kind to a tone and a voice key. A throwing `onAlert` never breaks the controller.
 
 ## Focus samples (`CameraFocusSample`)
 
 - A non-driving glance over 2 s: `kind: 'glance'`.
-- Each closure episode that reached F1–F3: `kind: 'drowsiness'`, `glanceS` = the episode's measured length (at most 60 s), sent when the episode ends. Each minute at fatigue drowsy or severe: `glanceS: 60`.
+- Each closure episode that reached F1–F3: `kind: 'drowsiness'`, `glanceS` = the episode's measured length (at most 60 s), sent when the episode ends. Each `microsleep_nod`: `glanceS` = its deep-lid time, at least 0.5 s. Each minute at fatigue drowsy or severe: `glanceS: 60`.
 
 ## Where the data may go (security T14 m-3)
 
@@ -69,5 +70,12 @@ Any input that is false, missing or unknown keeps the camera off.
 ## Guarantees
 
 - **Nothing runs while the gate is closed:** no native call (the permission read included), no timer, no listener work. Native failures are silent: one retry after 5 s, then off for the drive.
-- **The camera going off at speed** (heat, darkness) keeps a running Critical, bounded at 60 s without frames; M7 keeps calling `pushRow`.
+- **The camera going off at speed** (heat, darkness, a native fault) keeps a running Critical, bounded at 60 s without frames, and stops a running distraction; M7 keeps calling `pushRow`.
 - **The profile** lives only in `settings['dms.profile'] = { uid, profile }`, is loaded only for the same uid, and is removed on a mismatch. It is face-geometry-derived (interocular distance, face box, pose and eye baselines) and notices when someone else is driving: the A10 copy and counsel (U-2) must cover that.
+
+## The dev diagnostics panel (`/(app)/dev/dms`)
+
+- **Where it exists:** development and preview builds only (`EXPO_PUBLIC_DIAGNOSTICS=1` or `__DEV__`), never a production-channel build, even through an OTA update published with the flag (the embedded channel is checked). Preview builds go to **adult team testers only**.
+- **Its opt-in is a temporary on-screen switch** (off by default, kept only while the screen is open), because no consent store exists before M7 (security T15 m-2). When M7's versioned camera consent lands, the panel reads it and the switch is removed. Its mounted mode and driver role are simulated too; the remote flag, the age band, the app state and the OS permission are real.
+- **The camera runs only while the panel is focused:** on blur its simulated drive ends and its controller is disposed.
+- **M7 carry (security T15 Info-2):** the panel must not run while M7's controller has a drive. The owner slot enforces it (the panel shows "end the drive first"); M7 does not need to dispose its controller for the panel.

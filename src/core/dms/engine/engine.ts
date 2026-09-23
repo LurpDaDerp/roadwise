@@ -17,7 +17,7 @@
 // A drive owns its own alert manager, summary, fatigue and rule state (T11 r1 carry): `endDrive` stops
 // every sound, builds the summary and the profile, then starts the next drive fresh, warm from that
 // profile. Commands are merged with concat/spread only: the manager's empty array is frozen.
-import { createAlertManager, type AlertLogEntry, type AlertRequest, type DmsAlertCommand } from './alerts';
+import { createAlertManager, type AlertLogEntry, type AlertRequest, type CameraOffCause, type DmsAlertCommand } from './alerts';
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
@@ -26,7 +26,7 @@ import { createContextTracker, type FeatureRowLike, type RowExtras } from './con
 import { createFpsMeter } from './eyes';
 import { createFastRules, type FastEvent, type FatigueFloor } from './fastRules';
 import { createFatigue, type FatigueLevel, type FatigueMinute } from './fatigue';
-import { createNodDetector, type NodEvent } from './nod';
+import { createNodDetector } from './nod';
 import type { DmsProfileV1, LearnedZone } from './profile';
 import { classifyQuality, type Quality } from './quality';
 import { createSummary, type DmsTripSummary } from './summary';
@@ -60,7 +60,9 @@ export type DmsEvent =
   | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean }
   /** T14 r1 m2: a closure episode that reached F1–F3 ended; its measured length (not counted in the summary) */
   | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean }
-  | { kind: NodEvent['kind'] | 'yawn'; tMs: number }
+  | { kind: 'nod' | 'yawn'; tMs: number }
+  /** T14 r2 R1-m2: the nod's deep-lid hold, seconds (its drowsiness sample) */
+  | { kind: 'microsleep_nod'; tMs: number; deepMaxS: number }
   | { kind: CalibrationEvent['kind']; tMs: number }
   | { kind: 'fatigue_minute'; tMs: number; status: FatigueMinute['status']; score: number | null; level: FatigueLevel };
 
@@ -115,7 +117,7 @@ export interface DmsEngine {
    * running distraction stops, a running Critical is kept (bounded by alerts.criticalBlindMaxS). Not a
    * session end: `endDrive` is.
    */
-  cameraOff(tMs: number, cause: 'heat' | 'dark'): void;
+  cameraOff(tMs: number, cause: CameraOffCause): void;
   /**
    * T14 r1 I1: the privacy gate closed mid-drive (opt-out, a revoked permission, the role, the mode, the app
    * backgrounded): monitoring ended, so every sound stops now (`stopAll`). The drive goes on, and its history
@@ -306,7 +308,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Nods (relative pitch as the conditioner defines it) and yawns.
     const relPitch = p.headRel !== null ? p.headRel.pitch : p.headDrv !== null && refs.pitchReference !== null ? p.headDrv.pitch - refs.pitchReference : null;
     for (const e of d.nod.onFrame({ tMs: t, quality: p.quality, relPitchDeg: relPitch, openness: p.openness, ruleSpeedKmh: speed, closureBridged: p.closureBridged, gap: p.gap })) {
-      emit({ kind: e.kind, tMs: e.tMs });
+      emit(e.kind === 'microsleep_nod' ? { kind: 'microsleep_nod', tMs: e.tMs, deepMaxS: e.deepMaxS ?? 0 } : { kind: 'nod', tMs: e.tMs });
       d.fatigue.onNod(e.tMs);
       if (e.kind === 'microsleep_nod') {
         requests.push({ kind: 'microsleep_nod', bridged: p.closureBridged });

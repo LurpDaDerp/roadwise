@@ -59,6 +59,9 @@ export type AlertKind =
 
 export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', 'phone_pattern', 'unresponsive', 'microsleep', 'microsleep_nod', 'sleep', 'fatigue_early', 'fatigue', 'repeated_glances', 'monitoring_paused'];
 
+/** Why the camera went off at speed: heat (thermal L3), the dark (the low-light suspend) or a native fault (T14 r2 R1-m1). */
+export type CameraOffCause = 'heat' | 'dark' | 'fault';
+
 export interface DmsAlertCommand {
   id: number;
   action: 'start' | 'stop' | 'once';
@@ -68,7 +71,7 @@ export interface DmsAlertCommand {
   epochMs: number;
   muted: boolean;
   /** `monitoring_paused`: why the camera is off */
-  cause?: 'heat' | 'dark';
+  cause?: CameraOffCause;
 }
 
 /**
@@ -182,7 +185,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   let pendingEscalation = false;
   let pendingLowSince: number | null = null;
   /** since cameraOff, while no frame has arrived */
-  let blind: { since: number; cause: 'heat' | 'dark' } | null = null;
+  let blind: { since: number; cause: CameraOffCause } | null = null;
 
   function record(e: AlertLogEntry): void {
     log.push(e);
@@ -355,7 +358,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
      * stops (it could never see the road again), the held items are dropped, and a running Critical is
      * KEPT, bounded by criticalBlindMaxS without frames.
      */
-    cameraOff(tMs: number, epochMs: number, cause: 'heat' | 'dark'): readonly DmsAlertCommand[] {
+    cameraOff(tMs: number, epochMs: number, cause: CameraOffCause): readonly DmsAlertCommand[] {
       const out: DmsAlertCommand[] = [];
       const x = { tMs, epochMs };
       if (distraction !== null) {

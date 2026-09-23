@@ -55,3 +55,43 @@ test('its deps have no native: the caller cannot hand it one', () => {
   createDefaultDmsController({ ...deps, native: wrapper });
   expect(true).toBe(true);
 });
+
+describe('T15 r2 m1: one native owner at a time (the default controllers share one slot)', () => {
+  const deps = () => ({ onAlert: () => {}, onStatus: () => {}, profileStore: { load: async () => null, save: async () => {}, clear: async () => {} }, random: () => 'nonce' });
+  const power = { batteryLevel: 80, charging: false, localMinutes: 600 };
+  test('the first opens; the second stays closed (busy) with zero native calls, and opens once the first is disposed', async () => {
+    const a = createDefaultDmsController(deps());
+    const b = createDefaultDmsController(deps());
+    a.setGate(GATE);
+    a.pushRow(row(1_700_000_010_000), power);
+    await a.idle();
+    const calls = wrapper.calls.length;
+    const queries = wrapper.queries.length;
+    b.setGate(GATE);
+    b.pushRow(row(1_700_000_011_000), power);
+    await b.idle();
+    expect(wrapper.calls.length).toBe(calls);
+    expect(wrapper.queries.length).toBe(queries);
+    expect(b.status()).toMatchObject({ camera: 'off', reason: 'busy' });
+    await a.dispose();
+    const before = wrapper.calls.filter((c) => c.method === 'start').length;
+    b.pushRow(row(1_700_000_012_000), power);
+    await b.idle();
+    expect(wrapper.calls.filter((c) => c.method === 'start').length).toBe(before + 1);
+    await b.dispose();
+  });
+  test('a drive end releases the slot too', async () => {
+    const a = createDefaultDmsController(deps());
+    const b = createDefaultDmsController(deps());
+    a.setGate(GATE);
+    a.pushRow(row(1_700_000_020_000), power);
+    await a.idle();
+    await a.endDrive();
+    b.setGate(GATE);
+    b.pushRow(row(1_700_000_021_000), power);
+    await b.idle();
+    expect(b.status().reason).not.toBe('busy');
+    await a.dispose();
+    await b.dispose();
+  });
+});

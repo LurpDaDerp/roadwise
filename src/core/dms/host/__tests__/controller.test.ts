@@ -636,3 +636,88 @@ describe('T14 r1: the permission prompt and the diagnostics the dev panel reads'
     expect(h.ctl.diagnostics().native).toEqual({ fpsActual: expect.any(Number), fpsTarget: expect.any(Number), thermal: 'nominal', gazeNetAvailable: false, gazeNetOn: false });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// T14/T15 round 2 (seat 5 R1-m1..m3).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('T14 r2 R1-m1: a native fault mid-drive is the camera going off (cause fault)', () => {
+  test('a distraction running, then native stopped/error: its stop at once', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
+    await drive(h, 0, 104, { frameAt: synthFrames(stack, 106, 15) });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction']);
+    h.fake.emitRaw('state', { state: 'stopped', reason: 'error' });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
+  });
+  test('a Critical running, then a fault and 60 s of rows at 60 km/h with no frame: blind_cap, then monitoring_paused (fault)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 104, { frameAt: eyesShut(100, 400, 104) });
+    expect(critStarted(h)).toBe(true);
+    const n = h.alerts.length;
+    h.fake.failNext('start', 'E_CAMERA'); // the retry fails too: off for the drive, no frame ever again
+    h.fake.emitRaw('state', { state: 'stopped', reason: 'error' });
+    await drive(h, 104, 166, { frameAt: () => null });
+    const after = h.alerts.slice(n);
+    expect(after.map((c) => `${c.action}:${c.tier}`)).toEqual(['stop:3', 'once:1']);
+    expect(after[1]).toMatchObject({ kind: 'monitoring_paused', cause: 'fault' });
+  });
+});
+
+describe('T14 r2 R1-m2: a microsleep_nod is a drowsiness sample of its deep-lid time', () => {
+  test('one microsleep_nod: one drowsiness sample, 0.5 s or more', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    // At 100 s the head drops 20° over 0.5 s, holds 0.3 s and recovers over 0.3 s; the lids are shut
+    // (0.1) from 100.3 s to 100.95 s: a deep-lid hold of 0.65 s, too short for F1 (1.0 s).
+    const nod: DriverFn = (t, r) => {
+      const k = t - 100;
+      if (k < 0 || k >= 1.1) return { gaze: onRoad(r), speedKmh: 60 };
+      const pitch = k < 0.5 ? (-20 * k) / 0.5 : k < 0.8 ? -20 : -20 + (20 * (k - 0.8)) / 0.3;
+      return { head: { yaw: 0.8, pitch: -1.2 + pitch }, gaze: rel(0, pitch), openness: k >= 0.3 && k < 0.95 ? 0.1 : 0.35, speedKmh: 60 };
+    };
+    const focus = await drive(h, 0, 106, { frameAt: synthFrames(nod, 106, 15) });
+    expect(h.events.filter((e) => e.kind === 'microsleep_nod')).toHaveLength(1);
+    expect(h.events.map((e) => e.kind)).not.toContain('microsleep');
+    const d = drowsy(focus);
+    expect(d).toHaveLength(1);
+    expect(d[0]!.glanceS).toBeGreaterThanOrEqual(0.5);
+    expect(d[0]!.glanceS).toBeLessThan(1);
+  });
+});
+
+describe('T14 r2 R1-m3: a native fault during the permission read is not restarted at once', () => {
+  test('an error while getPermission is pending: no start until a row 5 s later', async () => {
+    let hold: (() => void) | null = null;
+    let holding = false;
+    const h = harness({
+      wrap: (f) => ({
+        ...f,
+        getPermission: () =>
+          holding
+            ? new Promise((res) => {
+                hold = () => void f.getPermission().then(res);
+              })
+            : f.getPermission(),
+      }),
+    });
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    expect(starts(h)).toBe(1);
+    holding = true;
+    h.ctl.pushRow(featureRow(3000, 60), POWER); // its permission read is held
+    for (let i = 0; i < 20 && hold === null; i++) await Promise.resolve();
+    expect(hold).not.toBeNull();
+    h.fake.emitRaw('state', { state: 'stopped', reason: 'error' }); // native faults meanwhile
+    holding = false;
+    (hold as unknown as () => void)();
+    await h.ctl.idle();
+    expect(starts(h)).toBe(1); // not restarted by the op that was waiting on the read
+    await drive(h, 4, 7.5, { frameAt: () => null });
+    expect(starts(h)).toBe(1); // rows under 5 s after the fault: still waiting
+    await drive(h, 8, 9, { frameAt: () => null });
+    expect(starts(h)).toBe(2); // the one retry
+  });
+});

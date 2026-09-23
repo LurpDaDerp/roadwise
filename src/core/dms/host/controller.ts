@@ -15,7 +15,12 @@
 //   closed transition also stops the sound (engine.stopAlerts; T14 r1 I1): monitoring ended, the drive
 //   goes on. The policy's own pauses do not (a known stop ends a Critical; heat and dark are cameraOff).
 // - Native failures are silent (SR9): one retry 5 s later (row-driven: no timer), then off for the drive.
-//   A failure caused by our own stop (a setPolicy that lost the race) is not a failure.
+//   A failure caused by our own stop (a setPolicy that lost the race) is not a failure. A fault while the
+//   camera ran is the camera going off at speed (engine.cameraOff 'fault'; T14 r2 R1-m1), and a fault while
+//   the permission is being read waits for its retry (R1-m3).
+// - One native owner (T15 r2 seat m1): with an owner slot (createDefaultDmsController), the slot is taken
+//   before the first native call of a drive and given back at its end and on dispose; a controller that
+//   cannot take it is closed (`busy`), makes no native call and ignores the other session's events.
 // - The capture policy is evaluated on every 1 Hz row, and its decision is sent as setPolicy: that is also
 //   native's heartbeat. The policy's cameraOff edge calls engine.cameraOff (a Critical is kept; T13 r1 I1).
 // - Frames and rows share the epoch clock: a record's clock moves by its native session's anchor offset,
@@ -69,7 +74,7 @@ export interface DmsHostPower {
 
 export interface DmsHudStatus {
   camera: 'off' | 'starting' | 'active' | 'limited' | 'paused';
-  reason: GateClosedReason | 'error' | 'thermal' | 'low_light' | 'stopped' | 'face_lost' | 'eyes_not_visible' | null;
+  reason: GateClosedReason | 'error' | 'busy' | 'thermal' | 'low_light' | 'stopped' | 'face_lost' | 'eyes_not_visible' | null;
   calibration: CalibrationState | null;
   fatigueLevel: FatigueLevel;
   dimAdvised: boolean;
@@ -123,6 +128,18 @@ export interface DmsControllerDeps {
   config?: DmsConfigOverrides;
   /** the gate's nonce source; default expo-crypto randomUUID (security M-3) */
   random?: () => string;
+  /**
+   * The native module's one owner (T15 r2 seat m1): acquired before the first native call of a drive, released
+   * at its end and on dispose. A controller that cannot acquire it stays closed (`busy`) with no native call.
+   * createDefaultDmsController passes the module-wide slot; tests with their own fake pass none.
+   */
+  owner?: DmsNativeOwner;
+}
+
+export interface DmsNativeOwner {
+  /** true when this controller holds (or now takes) the native module */
+  acquire(): boolean;
+  release(): void;
 }
 
 export interface DmsController {
@@ -162,7 +179,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   const native = gatedNative(deps.native);
   const gate = createGate(deps.random ?? (() => randomUUID()));
   let inputs: DmsGateInputs | null = null;
-  let closedReason: GateClosedReason | 'error' | null = 'no_drive';
+  let closedReason: GateClosedReason | 'error' | 'busy' | null = 'no_drive';
   let token: GateToken | null = null;
   let disposed = false;
   /** dispose() has begun: every input is ignored from here (security T14 I-1) */
@@ -259,6 +276,9 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           }
         });
         focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibrated: engine.snapshot().calibration === 'calibrated', lastAlertStartT });
+      } else if (e.kind === 'microsleep_nod') {
+        // A nod-off is its own drowsiness episode, with no closure episode (T14 r2 R1-m2).
+        focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)));
       } else if (e.kind === 'episode_end') {
         // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2).
         focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000));
@@ -301,8 +321,19 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   // Native.
   // ---------------------------------------------------------------------------------------------
 
+  /** This controller holds the native module (always, without an owner slot). */
+  let held = false;
+  const mine = () => deps.owner === undefined || held;
+  function releaseOwner(): void {
+    if (deps.owner === undefined || !held) return;
+    held = false;
+    deps.owner.release();
+  }
+
   function stopNative(): void {
     token = null;
+    // Not the owner: another controller's session is none of ours to stop (T15 r2 seat m1).
+    if (!mine()) nativeState = 'stopped';
     if (nativeState === 'stopped') return;
     const startInFlight = nativeState === 'starting';
     nativeState = 'stopped';
@@ -316,7 +347,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
    * The gate is closed for `reason`: native stops, and an open -> closed transition also stops the sound
    * (T14 r1 I1). Not for drive end (the engine's endDrive stops it) or the policy's pauses.
    */
-  function closeGate(reason: GateClosedReason | 'error'): void {
+  function closeGate(reason: GateClosedReason | 'error' | 'busy'): void {
     const wasOpen = closedReason === null;
     closedReason = reason;
     stopNative();
@@ -327,7 +358,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     publishStatus();
   }
 
-  function failed(code: string | undefined): void {
+  /** A native failure; `wasRunning`: the camera was delivering frames when it failed. */
+  function failed(code: string | undefined, wasRunning: boolean): void {
     if (code === 'E_PERMISSION') {
       closeGate('permission');
       return;
@@ -336,6 +368,12 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     if (retries >= 1) gaveUp = true;
     errorAt = lastRow?.ts ?? 0;
     stopNative();
+    // The camera went off at speed, as with heat or the dark (T14 r2 R1-m1): a distraction stops, a Critical
+    // is kept (bounded by the blind cap). The retry's frames clear the blind clock.
+    if (wasRunning && engine !== null) {
+      engine.cameraOff(now(), 'fault');
+      dispatch();
+    }
   }
 
   async function ensureEngine(g: DmsGateInputs): Promise<void> {
@@ -382,7 +420,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         if (!disposed) closeGate('permission');
         return;
       }
-      if (disposed || closing || inputs === null) return;
+      // Re-checked after the await (T14 r2 R1-m3): a native fault meanwhile waits for its retry.
+      if (disposed || closing || inputs === null || gaveUp || errorAt !== null) return;
       let open: GateToken | null = null;
       let reason: GateClosedReason | 'error' = 'error';
       try {
@@ -399,8 +438,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       closedReason = null;
       token = open;
       await ensureEngine(inputs);
-      // Closed while the engine was made: nothing starts.
-      if (token !== open || disposed || closing) return;
+      // Closed, or a native fault, while the engine was made: nothing starts.
+      if (token !== open || disposed || closing || gaveUp || errorAt !== null) return;
       const out = lastOut;
       if (out !== null && out.action === 'off') return;
       try {
@@ -415,7 +454,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } catch (e) {
         if (nativeState === 'starting') nativeState = 'stopped';
         // A call that lost the race with our own stop is not a native failure.
-        if (token === open) failed((e as { code?: string }).code);
+        if (token === open) failed((e as { code?: string }).code, reported === 'running' || reported === 'paused');
       }
       publishStatus();
     });
@@ -433,6 +472,14 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     if (reason !== null) {
       closeGate(reason);
       return false;
+    }
+    // One native owner (T15 r2 seat m1): before any native call, the permission read included.
+    if (deps.owner !== undefined && !held) {
+      if (!deps.owner.acquire()) {
+        closeGate('busy');
+        return false;
+      }
+      held = true;
     }
     return true;
   }
@@ -481,13 +528,14 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     resetDrive();
     recent.clear();
     await ops;
+    releaseOwner(); // the camera is stopped: another controller may take it (T15 r2 seat m1)
     publishStatus();
     return summary;
   }
 
   const subs: Subscription[] = [
     deps.native.addListener('frames', (raw) => {
-      if (disposed || engine === null) return;
+      if (disposed || engine === null || !mine()) return;
       const res = decodeFrameBatch(raw, lastTMs);
       if (res.batch === null) {
         stats.droppedBatches++;
@@ -517,6 +565,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       publishStatus();
     }),
     deps.native.addListener('state', (ev) => {
+      if (!mine()) return; // another controller's session
       const prev = reported;
       reported = ev.state;
       nativeState = ev.state;
@@ -525,12 +574,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         lastTMs = null;
         sessionOffset = null;
       }
-      if (ev.state === 'stopped' && ev.reason === 'error') failed('E_CAMERA');
-      if (ev.state === 'stopped' && ev.reason === 'permission') failed('E_PERMISSION');
+      if (ev.state === 'stopped' && ev.reason === 'error') failed('E_CAMERA', prev === 'running' || prev === 'paused');
+      if (ev.state === 'stopped' && ev.reason === 'permission') failed('E_PERMISSION', false);
       if (ev.state === 'stopped') token = null;
       publishStatus();
     }),
     deps.native.addListener('status', (s) => {
+      if (!mine()) return;
       thermal = s.thermal;
       lowPower = s.lowPower;
       nativeView = { fpsActual: s.fpsActual, fpsTarget: s.fpsTarget, thermal: s.thermal, gazeNetAvailable: s.gazeNetAvailable, gazeNetOn: s.gazeNetOn };
@@ -636,6 +686,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       if (engine !== null || creating !== null) await endDriveNow();
       disposed = true;
       stopNative();
+      await ops;
+      releaseOwner();
       await ops;
       for (const s of subs) s.remove();
     },

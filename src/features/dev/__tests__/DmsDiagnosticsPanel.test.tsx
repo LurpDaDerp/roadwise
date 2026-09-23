@@ -15,6 +15,7 @@ import { createFakeDmsVision, type FakeDmsVision } from '../../../../modules/dms
 import { recordFromFeatures } from '../../../../modules/dms-vision/src/wire';
 import { frame } from '../../../core/dms/engine/__fixtures__/synth';
 import { featuresFromFrame } from '../../../core/dms/host/__fixtures__/records';
+import { createDmsController as createHostController } from '../../../core/dms/host/controller';
 import { createDmsController, DMS_PROFILE_KEY, type DmsDefaultControllerDeps } from '@/core/dms';
 import { DmsDiagnosticsPanel, DmsDiagnosticsScreen, dmsDiagCopy as copy } from '../DmsDiagnosticsPanel';
 
@@ -22,6 +23,29 @@ const mockSession: { profile: { id: string; age_band: string } | null } = { prof
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 // The controller's nonce source (expo-crypto has no native side under Jest): a recognisable token per start.
 let mockNonces = 0;
+// Focus (T15 r2 security m-3): the screen's controller lives only while it is focused.
+const mockFocus = { focused: true, listeners: new Set<() => void>() };
+jest.mock('expo-router', () => {
+  const R = jest.requireActual<typeof import('react')>('react');
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      const [f, setF] = R.useState(mockFocus.focused);
+      R.useEffect(() => {
+        const l = () => setF(mockFocus.focused);
+        mockFocus.listeners.add(l);
+        return () => void mockFocus.listeners.delete(l);
+      }, []);
+      R.useEffect(() => (f ? cb() : undefined), [f, cb]);
+    },
+  };
+});
+async function setFocused(v: boolean) {
+  await act(async () => {
+    mockFocus.focused = v;
+    mockFocus.listeners.forEach((l) => l());
+    await flush();
+  });
+}
 jest.mock('expo-crypto', () => ({ randomUUID: () => `gate-token-${++mockNonces}-6b1f0c` }));
 
 const T0 = Date.UTC(2026, 8, 23, 9, 0, 0);
@@ -37,6 +61,7 @@ beforeEach(async () => {
   db = await createTestDb();
   fake = createFakeDmsVision({ epochAtZero: T0 });
   mockSession.profile = { id: 'u1', age_band: '18_plus' };
+  mockFocus.focused = true;
   // The app in the foreground (the gate reads AppState; jest's is not 'active', which the panel treats as closed).
   Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true, writable: true });
   consoleCalls = [];
@@ -222,5 +247,31 @@ describe('the screen reads the real gate inputs', () => {
     expect(text('dms-reason')).toBe('age');
     mockSession.profile = null;
     expect(fake.calls).toEqual([]);
+  });
+});
+
+describe('T15 r2: the camera runs only while the screen is focused (security m-3), and one native owner (seat m1)', () => {
+  test('blur ends the simulated drive and disposes the controller: native stops; focus again starts nothing by itself', async () => {
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
+    await startDrive();
+    expect(fake.nativeState()).toBe('running');
+    await setFocused(false);
+    expect(fake.nativeState()).toBe('stopped');
+    const n = fake.calls.length;
+    await seconds(3);
+    expect(fake.calls.length).toBe(n); // no rows, no heartbeat, no restart while covered
+    await setFocused(true);
+    await seconds(3);
+    expect(fake.calls.filter((c) => c.method === 'start')).toHaveLength(1);
+    expect(screen.getByText(copy.startDrive)).toBeTruthy(); // the drive ended with the blur
+  });
+  test('another controller holds the native module: the panel says so and never calls native', async () => {
+    const held = (deps: DmsDefaultControllerDeps) => createHostController({ ...deps, native: fake, owner: { acquire: () => false, release: () => {} } });
+    await render(wrap(<DmsDiagnosticsPanel createController={held} cameraBeta ageBand="18_plus" />));
+    await startDrive();
+    expect(text('dms-reason')).toBe('busy');
+    expect(screen.getByText(copy.busy)).toBeTruthy();
+    expect(fake.calls).toEqual([]);
+    expect(fake.queries).toEqual([]);
   });
 });
