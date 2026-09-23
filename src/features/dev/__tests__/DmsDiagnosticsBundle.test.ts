@@ -2,8 +2,8 @@
 // The bundle proof for the DMS diagnostics route (plan Task 16, R-2): the route file put through the same
 // transforms a release build uses (babel-preset-expo in production, which inlines EXPO_PUBLIC_* values, then
 // Metro's own inline and constant-folding plugins, which run before Metro collects a module's dependencies).
-// Without the flag the panel and the native wrapper requires are folded away, so Metro never adds either
-// module to the bundle; with the flag, both stay.
+// Without the flag the panel's require is folded away, so Metro never adds it to the bundle; with the flag it
+// stays. The route never references the native wrapper at all (the host binds it: security T14 m-1).
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node types
@@ -54,7 +54,7 @@ const PANEL = /DmsDiagnosticsPanel/;
 const WRAPPER = /modules\/dms-vision/;
 
 describe.each(['ios', 'android'] as const)('%s release bundle', (platform) => {
-  test('no flag: neither the panel nor the native wrapper is required (so neither is bundled)', () => {
+  test('no flag: the panel is not required (so not bundled), nor the wrapper', () => {
     const code = releaseTransform(platform, undefined);
     expect(code).not.toMatch(PANEL);
     expect(code).not.toMatch(WRAPPER);
@@ -68,16 +68,16 @@ describe.each(['ios', 'android'] as const)('%s release bundle', (platform) => {
     expect(code).not.toMatch(WRAPPER);
   });
 
-  test('EXPO_PUBLIC_DIAGNOSTICS=1: both stay', () => {
+  test('EXPO_PUBLIC_DIAGNOSTICS=1: the panel stays; the wrapper is still not referenced', () => {
     const code = releaseTransform(platform, '1');
     expect(code).toMatch(PANEL);
-    expect(code).toMatch(WRAPPER);
+    expect(code).not.toMatch(WRAPPER);
   });
 });
 
-test('the route reaches the panel and the wrapper only through the guarded requires', () => {
-  // A static import would bundle them whatever the flag.
+test('the route reaches the panel only through the guarded require, and never the wrapper', () => {
+  // A static import would bundle it whatever the flag.
   expect(SOURCE).not.toMatch(/import[^;]*from\s+['"][^'"]*DmsDiagnosticsPanel['"]/);
-  expect(SOURCE).not.toMatch(/import[^;]*from\s+['"][^'"]*modules\/dms-vision(?:\/src)?(?:\/index)?['"]/);
+  expect(SOURCE).not.toMatch(/modules\/dms-vision/);
   expect(SOURCE).not.toMatch(/import\(/);
 });

@@ -16,6 +16,11 @@
 //   bridged closure that ends in open eyes is not a blink.
 // - One `unresponsive` per Critical episode (T9 review m1): either F3 clause marks the episode and
 //   clears the other.
+// - `episode_end` (T14 r1 m2): a closure episode that reached F1, F2 or F3 reports its measured length once,
+//   when it ends: at the reopening (onset → reopen, as a blink is measured), at a silent end (a quality drop,
+//   a frame gap or the end of a bridge: onset → its last closed frame), or at `flush()` (drive end). It is the
+//   drowsiness episode the scoring seam samples. F3's no-on-road clause raised outside a closure episode (after
+//   the eyes reopened, or after a D4/nod Critical) belongs to no closure episode and ends none.
 import type { Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { createFpsMeter } from './eyes';
@@ -33,7 +38,7 @@ export interface FastInput {
   onRoadGaze: boolean | null;
 }
 
-export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink';
+export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink' | 'episode_end';
 
 export interface FastEvent {
   kind: FastEventKind;
@@ -47,7 +52,7 @@ export interface FastEvent {
    * no-on-road clause always), so the alert manager lets it start below 10 km/h (T11 review I1).
    */
   escalation?: boolean;
-  /** blinks */
+  /** blinks, and episode_end (the episode's measured length) */
   durMs?: number;
   long?: boolean;
   counted?: boolean;
@@ -60,7 +65,17 @@ const EPS = 1e-6;
 export function createFastRules(cfg: DmsConfig) {
   const cl = cfg.closure;
   const fps = createFpsMeter(cfg);
-  let episode: { onset: number; deepSince: number | null; gated: boolean; bridged: boolean; f1: boolean; f2: boolean; f3: boolean } | null = null;
+  let episode: { onset: number; lastT: number; deepSince: number | null; gated: boolean; bridged: boolean; f1: boolean; f2: boolean; f3: boolean } | null = null;
+
+  /** Ends the current episode; one that reached F1–F3 reports its length (T14 r1 m2). */
+  function endEpisode(events: FastEvent[], tMs: number, durMs: number): void {
+    if (episode !== null && (episode.f1 || episode.f2 || episode.f3)) events.push({ kind: 'episode_end', tMs, durMs, ...(episode.bridged ? { bridged: true } : {}) });
+    episode = null;
+  }
+  /** A silent end: the episode lasted to its last closed frame. */
+  function endSilently(events: FastEvent[]): void {
+    if (episode !== null) endEpisode(events, episode.lastT, episode.lastT - episode.onset);
+  }
   /** observed seconds without an on-road gaze since a Critical start; null when none is pending */
   let pendingF3: number | null = null;
   const f1Times = new RingBuffer<number>(8);
@@ -91,6 +106,13 @@ export function createFastRules(cfg: DmsConfig) {
 
     measuredFps: () => fps.fps(),
 
+    /** Drive end: an F episode still open reports its length so far; the episode ends. */
+    flush(): FastEvent[] {
+      const events: FastEvent[] = [];
+      endSilently(events);
+      return events;
+    },
+
     onFrame(x: FastInput): { events: FastEvent[] } {
       const { p } = x;
       const events: FastEvent[] = [];
@@ -98,10 +120,11 @@ export function createFastRules(cfg: DmsConfig) {
       const speed = x.ruleSpeedKmh ?? 0;
 
       // A frame gap ends an unbridged episode silently, like a quality drop (T12 review I1).
-      if (p.gap && !p.closureBridged) episode = null;
+      if (p.gap && !p.closureBridged) endSilently(events);
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
       if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {
-        episode ??= { onset: p.tMs - p.closedMs, deepSince: null, gated: false, bridged: false, f1: false, f2: false, f3: false };
+        episode ??= { onset: p.tMs - p.closedMs, lastT: p.tMs, deepSince: null, gated: false, bridged: false, f1: false, f2: false, f3: false };
+        episode.lastT = p.tMs;
         if (p.closureBridged) {
           // Through the loss the gate and the deep run stand as at the last TRACKING frame: ungated counts
           // closedMs, a deep run continues, a gated closure that was not deep does not count.
@@ -139,9 +162,9 @@ export function createFastRules(cfg: DmsConfig) {
       } else if (episode !== null && p.quality === 'tracking' && !episode.bridged) {
         const durMs = p.tMs - episode.onset;
         events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: fps.fps() >= cl.blinkMinFps });
-        episode = null;
+        endEpisode(events, p.tMs, durMs);
       } else {
-        episode = null; // a quality drop, or the end of a bridged closure: silent
+        endSilently(events); // a quality drop, or the end of a bridged closure: silent (no blink)
       }
 
       // F3's second clause: no on-road gaze within 3.0 s of observed time after a Critical start.

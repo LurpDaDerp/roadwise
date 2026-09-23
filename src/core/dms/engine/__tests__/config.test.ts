@@ -286,3 +286,11 @@ describe('the fps floors sit between capture rates (T6 review I2)', () => {
     expect(validateDmsConfig(x).join('\n')).toMatch(path);
   });
 });
+
+describe('T14 r1 nit: gazeNetEvery is config (default 2: the net every other frame, the T6 m2 hold covers the gap)', () => {
+  test('the default is 2, an override of 1 is kept, anything else is refused', () => {
+    expect(DEFAULT_DMS_CONFIG.gazeNetEvery).toBe(2);
+    expect(resolveDmsConfig({ gazeNetEvery: 1 }).gazeNetEvery).toBe(1);
+    expect(() => resolveDmsConfig({ gazeNetEvery: 3 as never })).toThrow(/gazeNetEvery/);
+  });
+});

@@ -1,5 +1,7 @@
 // DMS diagnostics (plan Task 16, R-2): a developer screen for the device pass. It runs the real DMS host
-// controller, and so the real privacy gate, against the native module, with a simulated drive.
+// controller, and so the real privacy gate, against the native module, with a simulated drive. The
+// controller comes from the host's createDefaultDmsController, which binds the native module inside the host
+// (security T14 m-1): this screen never holds the native wrapper.
 //
 // What it fakes: the drive only (its state, a speed, the mounted mode and the driver role), and the opt-in,
 // which M7's consent will own (until then it is a switch that lives as long as this screen). What it reads:
@@ -17,14 +19,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, StyleSheet, View } from 'react-native';
 
-import { createDmsController, type DmsController, type DmsGateInputs, type DmsHostSummary, type DmsHudStatus } from '@/core/dms';
+import {
+  createDefaultDmsController,
+  type DmsController,
+  type DmsDefaultControllerDeps,
+  type DmsGateInputs,
+  type DmsHostDiagnostics,
+  type DmsHostSummary,
+  type DmsHudStatus,
+} from '@/core/dms';
 import type { FeatureRow } from '@/core/engine/types';
 import { readFlag } from '@/data/config/appConfig';
 import { useDb } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
 import { Button, Card, Screen, Text, useTheme } from '@/ui';
-
-import type { DmsVisionApi, NativeStatus } from '../../../modules/dms-vision/src/types';
 
 type AgeBand = DmsGateInputs['ageBand'];
 
@@ -99,37 +107,24 @@ function simulatedRow(ts: number, speedKmh: number, appForeground: boolean): Fea
   };
 }
 
-/** The native status fields the live view shows (no latency or model detail is needed to read a drive). */
-interface NativeView {
-  fpsActual: number;
-  fpsTarget: number;
-  thermal: string;
-  gazeNetAvailable: boolean;
-  gazeNetOn: boolean;
-}
-function nativeView(s: unknown): NativeView | null {
-  if (typeof s !== 'object' || s === null) return null;
-  const v = s as Partial<NativeStatus>;
-  if (typeof v.fpsActual !== 'number' || typeof v.fpsTarget !== 'number') return null;
-  return { fpsActual: v.fpsActual, fpsTarget: v.fpsTarget, thermal: String(v.thermal ?? copy.none), gazeNetAvailable: v.gazeNetAvailable === true, gazeNetOn: v.gazeNetOn === true };
-}
-
 interface Tallies {
   alerts: number;
   alertStarts: number;
   events: number;
 }
 
+type MakeController = (deps: DmsDefaultControllerDeps) => DmsController;
+
 export interface DmsDiagnosticsPanelProps {
-  /** The native module (the route hands over the wrapper; tests the fake). */
-  native: DmsVisionApi;
+  /** Builds the controller: the host's default (the real native module) unless a test hands in the fake. */
+  createController?: MakeController;
   /** The stored remote `camera_beta` flag. */
   cameraBeta: boolean;
   ageBand: AgeBand;
 }
 
 /** The screen the route renders: the real flag and age band, then the panel. */
-export function DmsDiagnosticsScreen({ native }: { native: DmsVisionApi }) {
+export function DmsDiagnosticsScreen({ createController }: { createController?: MakeController }) {
   const db = useDb();
   const { profile } = useSession();
   const [cameraBeta, setCameraBeta] = useState<boolean | null>(null);
@@ -143,19 +138,18 @@ export function DmsDiagnosticsScreen({ native }: { native: DmsVisionApi }) {
     };
   }, [db]);
   // Until the flag is read the gate sees it off: the panel starts closed, as the controller does.
-  return <DmsDiagnosticsPanel native={native} cameraBeta={cameraBeta === true} ageBand={ageBandOf(profile?.age_band)} />;
+  return <DmsDiagnosticsPanel createController={createController} cameraBeta={cameraBeta === true} ageBand={ageBandOf(profile?.age_band)} />;
 }
 
-export function DmsDiagnosticsPanel({ native, cameraBeta, ageBand }: DmsDiagnosticsPanelProps) {
+export function DmsDiagnosticsPanel({ createController = createDefaultDmsController, cameraBeta, ageBand }: DmsDiagnosticsPanelProps) {
   const t = useTheme();
   const [optedIn, setOptedIn] = useState(false);
   const [driveActive, setDriveActive] = useState(false);
   const [speedKmh, setSpeedKmh] = useState<number>(60);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const [status, setStatus] = useState<DmsHudStatus | null>(null);
-  const [counts, setCounts] = useState({ frames: 0, droppedBatches: 0, droppedRecords: 0 });
+  const [diag, setDiag] = useState<DmsHostDiagnostics>({ frames: 0, droppedBatches: 0, droppedRecords: 0, ruleSpeedKmh: null, native: null });
   const [tallies, setTallies] = useState<Tallies>({ alerts: 0, alertStarts: 0, events: 0 });
-  const [nativeStatus, setNativeStatus] = useState<NativeView | null>(null);
   const [summary, setSummary] = useState<DmsHostSummary | null>(null);
 
   const ctlRef = useRef<DmsController | null>(null);
@@ -171,14 +165,13 @@ export function DmsDiagnosticsPanel({ native, cameraBeta, ageBand }: DmsDiagnost
     const ctl = ctlRef.current;
     if (ctl === null) return;
     setStatus(ctl.status());
-    setCounts(ctl.diagnostics());
+    setDiag(ctl.diagnostics());
     setTallies({ ...tallyRef.current });
   }, []);
 
   // One controller for the life of the screen. The callbacks count; they keep no command or event.
   useEffect(() => {
-    const ctl = createDmsController({
-      native,
+    const ctl = createController({
       onAlert: (cmd) => {
         tallyRef.current.alerts += 1;
         if (cmd.action === 'start') tallyRef.current.alertStarts += 1;
@@ -192,15 +185,15 @@ export function DmsDiagnosticsPanel({ native, cameraBeta, ageBand }: DmsDiagnost
     });
     ctlRef.current = ctl;
     setStatus(ctl.status());
-    const sub = native.addListener('status', (s) => setNativeStatus(nativeView(s)));
     const app = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
     return () => {
-      sub.remove();
       app.remove();
       ctlRef.current = null;
       void ctl.dispose().catch(() => {});
     };
-  }, [native]);
+    // One controller per mount: the factory is fixed for the screen's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Every gate input change reaches the controller at once.
   useEffect(() => {
@@ -252,7 +245,7 @@ export function DmsDiagnosticsPanel({ native, cameraBeta, ageBand }: DmsDiagnost
     refresh();
   };
   const askPermission = async () => {
-    await native.requestPermission().catch(() => null);
+    await ctlRef.current?.requestPermission().catch(() => null);
     refresh();
   };
 
@@ -263,13 +256,13 @@ export function DmsDiagnosticsPanel({ native, cameraBeta, ageBand }: DmsDiagnost
     reason: status?.reason ?? copy.none,
     calibration: status?.calibration ?? copy.none,
     fatigue: status?.fatigueLevel ?? copy.none,
-    frames: String(counts.frames),
-    dropped: `${counts.droppedBatches} · ${counts.droppedRecords}`,
+    frames: String(diag.frames),
+    dropped: `${diag.droppedBatches} · ${diag.droppedRecords}`,
     alerts: `${tallies.alerts} (${tallies.alertStarts} started)`,
     events: String(tallies.events),
-    fps: nativeStatus === null ? copy.none : `${nativeStatus.fpsActual} / ${nativeStatus.fpsTarget}`,
-    thermal: nativeStatus?.thermal ?? copy.none,
-    gazeNet: nativeStatus === null ? copy.none : `${nativeStatus.gazeNetAvailable ? 'yes' : 'no'} / ${nativeStatus.gazeNetOn ? 'on' : 'off'}`,
+    fps: diag.native === null ? copy.none : `${diag.native.fpsActual} / ${diag.native.fpsTarget}`,
+    thermal: diag.native?.thermal ?? copy.none,
+    gazeNet: diag.native === null ? copy.none : `${diag.native.gazeNetAvailable ? 'yes' : 'no'} / ${diag.native.gazeNetOn ? 'on' : 'off'}`,
   };
 
   return (

@@ -325,3 +325,53 @@ describe('the request flags (T11 I1/I2, round 2): the whole matrix asserts invar
     expect(sig(r.commands)).toContain('start:distraction');
   });
 });
+
+describe('T14 r1: stopAlerts (a gate close ends the sound; the drive goes on) and episode_end', () => {
+  const run = (driver: DriverFn, seconds: number, seed = 16) => {
+    const items = synthDrive({ fps: 15, seconds, seed, source: 'net', driver });
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    const events: { kind: string; durMs?: number }[] = [];
+    const cmds: string[] = [];
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+      const out = engine.drain();
+      events.push(...out.events);
+      cmds.push(...sig(out.commands));
+    }
+    return { engine, events, cmds, last: items.at(-1)!.frame.tMs };
+  };
+  const asleepAt100: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 ? 0.1 : 1, speedKmh: 60 });
+  test('a running Critical stops at once; the drive’s history (the delivered count) is kept', () => {
+    const r = run(asleepAt100, 104);
+    expect(r.cmds).toContain('start:microsleep');
+    r.engine.stopAlerts(r.last);
+    expect(sig(r.engine.drain().commands)).toEqual([expect.stringMatching(/^stop:(microsleep|sleep)$/)]);
+    expect(r.engine.summary().alerts.microsleep.delivered).toBe(1);
+  });
+  test('a running distraction stops', () => {
+    const r = run((t, rr) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(rr), speedKmh: 60 }), 104, 15);
+    expect(r.cmds).toEqual(['start:distraction']);
+    r.engine.stopAlerts(r.last);
+    expect(sig(r.engine.drain().commands)).toEqual(['stop:distraction']);
+  });
+  test('nothing running: no command', () => {
+    const r = run((t, rr) => ({ gaze: onRoad(rr), speedKmh: 60 }), 30);
+    r.engine.stopAlerts(r.last);
+    expect(r.engine.drain().commands).toEqual([]);
+  });
+  test('episode_end reaches the events with the measured length, and is not counted in the summary’s events', () => {
+    const r = run((t, rr) => ({ gaze: onRoad(rr), openness: t >= 100 && t < 108 ? 0.1 : 1, speedKmh: 60 }), 112);
+    const ends = r.events.filter((e) => e.kind === 'episode_end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.durMs!).toBeGreaterThan(7500);
+    expect(ends[0]!.durMs!).toBeLessThan(8600);
+    expect(r.engine.summary().events.episode_end).toBeUndefined();
+  });
+  test('endDrive ends an episode still open: its episode_end is drained with the drive’s last commands', () => {
+    const r = run(asleepAt100, 104);
+    r.engine.endDrive(r.last);
+    const out = r.engine.drain();
+    expect(out.events.filter((e) => e.kind === 'episode_end')).toHaveLength(1);
+  });
+});

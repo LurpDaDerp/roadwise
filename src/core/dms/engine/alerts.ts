@@ -11,7 +11,9 @@
 //  1. A Tier 2 distraction stops on the first on-road frame.
 //  2. The next D1 only after f ≥ 0.5: attention.ts (d1_rearmed). A request while one runs is merged.
 //  3. Tier 1 at most once per tier1EveryS (10 min) per type; fatigue's own timers are in fatigue.ts.
-//  4. Nothing audible below 20 km/h (Tier 1 and 2; a running distraction stops). A NEW Critical may start
+//  4. Nothing audible below 20 km/h (Tier 1 and 2; a running distraction stops), with one exception: the
+//     Tier 1 `monitoring_paused` at a blind cap plays at any speed, since it replaces a Tier 3 sound that was
+//     already playing and tells the driver why it stopped (T13 r1 nit; rule 3's rate still applies). A NEW Critical may start
 //     at ≥ 10 km/h; an ESCALATION (D4 after a D1/D2 warning, F3 in an F1/F2 episode, F3's no-on-road
 //     clause) skips that gate (T8 R1-I1, rev1 I6; T11 review I1). A Critical continues through a
 //     slowdown and through LOST, and ends on its stop condition (the eyes open AND on road for
@@ -237,8 +239,16 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
           cmd(out, x, 'stop', critical.kind);
           record({ kind: critical.kind, tier: 3, tMs: x.tMs, outcome: 'dropped', why: 'blind_cap' });
           critical = null;
-          out.push({ id: nextId++, action: 'once', tier: 1, kind: 'monitoring_paused', tMs: x.tMs, epochMs: x.epochMs, muted, cause: blind.cause });
-          record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: muted ? 'muted' : 'delivered' });
+          // Rule 3 applies (a thermal flap at L3 would otherwise repeat it on every cool/heat cycle); rule 4 does
+          // not (see the header).
+          const last = lastTier1.get('monitoring_paused');
+          if (last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) {
+            record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: 'suppressed', why: 'tier1_rate' });
+          } else {
+            out.push({ id: nextId++, action: 'once', tier: 1, kind: 'monitoring_paused', tMs: x.tMs, epochMs: x.epochMs, muted, cause: blind.cause });
+            record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: muted ? 'muted' : 'delivered' });
+            lastTier1.set('monitoring_paused', x.tMs);
+          }
           blind = null;
         }
       }

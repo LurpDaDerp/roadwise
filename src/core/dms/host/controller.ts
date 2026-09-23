@@ -3,19 +3,34 @@
 // - No native call at all (getPermission included) unless every gate input but the permission holds; the
 //   permission is read from native only then, and again on every row while running (rev1 S-M4).
 // - One gate per controller (M7 builds one controller per signed-in uid and disposes it on sign-out or an
-//   account switch: security M-2/M-4), evaluated on every input change, drive end included, so the remote
-//   flag latches at each drive start. The nonce is a CSPRNG UUID (expo-crypto), never logged or stored;
-//   a gate that throws is closed (security M-3).
-// - Every user or OS input (opt-out, role, mode, app state, a revoked permission, a native permission
-//   error) stops native at once: the stop is queued in the same call.
+//   account switch: security M-2/M-4), evaluated on every input change. The nonce is a CSPRNG UUID
+//   (expo-crypto), never logged or stored; a gate that throws is closed (security M-3).
+// - A drive end closes first (security T14 I-1): endDrive() sets the drive inactive, runs the gate (the
+//   latch edge: the remote flag is read again at the next drive start) and stops native, synchronously,
+//   before it awaits anything. dispose() marks the controller closing (setGate, pushRow and a queued open
+//   are then ignored) and stops native first, then ends the drive.
+// - Every user or OS input (opt-out, role, mode, app state, a revoked permission, a permission read that
+//   fails, a native permission error) stops native at once: the stop is called directly, never behind the
+//   queue (security T14 m-2); a start still in flight is stopped again once it settles. Every open ->
+//   closed transition also stops the sound (engine.stopAlerts; T14 r1 I1): monitoring ended, the drive
+//   goes on. The policy's own pauses do not (a known stop ends a Critical; heat and dark are cameraOff).
 // - Native failures are silent (SR9): one retry 5 s later (row-driven: no timer), then off for the drive.
+//   A failure caused by our own stop (a setPolicy that lost the race) is not a failure.
 // - The capture policy is evaluated on every 1 Hz row, and its decision is sent as setPolicy: that is also
 //   native's heartbeat. The policy's cameraOff edge calls engine.cameraOff (a Critical is kept; T13 r1 I1).
 // - Frames and rows share the epoch clock: a record's clock moves by its native session's anchor offset,
 //   and the decoder's last-accepted time resets on every new session (T1r1 m1). Rows keep feeding the
 //   engine while the camera is off, so a running Critical still ends on a known low speed.
+// - The engine is created on the first gate open of a drive, and the drive's last 10 rows are replayed into
+//   it at once (T14 r1 m1: the last known speed for the tunnel hold, the straight flag, the course rate).
+// - Everything per drive is reset at its end and at the engine's creation (T14 r1 I2): the focus queue
+//   (its remaining samples go out with the summary as `pendingFocus`), the quality clocks, the last frame,
+//   the alert-start time and the decoder's session state.
 // - Commands go to onAlert and events to onEvent; a throwing callback never breaks the controller.
-// - The HUD status says `active` only with TRACKING or HEAD_ONLY frames in the last 1 s.
+// - The HUD status (T14 r1 m3): `active` with TRACKING in the last 1 s, or HEAD_ONLY for under 10 s;
+//   HEAD_ONLY for 10 s or more is `limited` / `eyes_not_visible` (the eye-closure rules are paused);
+//   no good frame in 1 s is `limited` / `low_light` when the engine says the LOST frames are dark, else
+//   `face_lost`.
 import { randomUUID } from 'expo-crypto';
 import type { FeatureRow, CameraFocusSample } from '@/core/engine/types';
 import type { ThermalName } from '../../../../modules/dms-vision/src/constants';
@@ -33,7 +48,7 @@ import type { DmsTripSummary } from '../engine/summary';
 import type { EngineFrame, Sensitivity, DriverSide } from '../engine/types';
 import { RingBuffer } from '../engine/windows';
 import { createCapturePolicy, nativePolicy, type PolicyOutput } from '../policy/capture';
-import { createGate, type DmsGate, type GateClosedReason, type GateToken } from '../policy/gate';
+import { createGate, type DmsGate, type GateClosedReason, type GateToken, type PermissionStatus } from '../policy/gate';
 import { engineFrame } from './frames';
 import { gatedNative } from './native';
 import type { DmsProfileStore } from './profileStore';
@@ -54,7 +69,7 @@ export interface DmsHostPower {
 
 export interface DmsHudStatus {
   camera: 'off' | 'starting' | 'active' | 'limited' | 'paused';
-  reason: GateClosedReason | 'error' | 'thermal' | 'low_light' | 'stopped' | 'face_lost' | null;
+  reason: GateClosedReason | 'error' | 'thermal' | 'low_light' | 'stopped' | 'face_lost' | 'eyes_not_visible' | null;
   calibration: CalibrationState | null;
   fatigueLevel: FatigueLevel;
   dimAdvised: boolean;
@@ -70,7 +85,33 @@ export interface DmsSetupCheck {
 
 export type DmsSeedResult = { ok: true; warmStart: false } | { ok: false; reason: string };
 
-export type DmsHostSummary = DmsTripSummary & { camera: { starts: number; retries: number; gaveUp: boolean } };
+export type DmsHostSummary = DmsTripSummary & {
+  camera: { starts: number; retries: number; gaveUp: boolean };
+  /**
+   * The focus samples not yet handed out by pushRow when the drive ended (T14 r1 I2): M7 gives them to the
+   * ending trip's scoring (drowsiness samples are never dropped). Empty on summary() mid-drive.
+   */
+  pendingFocus: CameraFocusSample[];
+};
+
+/** Native's own report, as the dev panel shows it: rates and states only. */
+export interface DmsNativeView {
+  fpsActual: number;
+  fpsTarget: number;
+  thermal: ThermalName;
+  gazeNetAvailable: boolean;
+  gazeNetOn: boolean;
+}
+
+export interface DmsHostDiagnostics {
+  droppedBatches: number;
+  droppedRecords: number;
+  frames: number;
+  /** the engine's rule speed at its last frame (null: unknown, or no engine) */
+  ruleSpeedKmh: number | null;
+  /** native's last status event, or null before one */
+  native: DmsNativeView | null;
+}
 
 export interface DmsControllerDeps {
   native: DmsVisionApi;
@@ -94,18 +135,27 @@ export interface DmsController {
   tagLastAlert(tag: 'wrong'): void;
   status(): DmsHudStatus;
   summary(): DmsHostSummary | null;
+  /** Ends the drive (closing the gate first) and returns its summary, or null when no engine ran. */
   endDrive(): Promise<DmsHostSummary | null>;
   dispose(): Promise<void>;
+  /**
+   * Shows the OS camera prompt, only when the permission is the one input closing the gate (every other
+   * input holds); otherwise null and no native call. The gate is evaluated again after the answer.
+   */
+  requestPermission(): Promise<PermissionStatus | null>;
   /** Resolves once the queued native calls have settled (tests and the dev panel). */
   idle(): Promise<void>;
-  diagnostics(): { droppedBatches: number; droppedRecords: number; frames: number };
+  diagnostics(): DmsHostDiagnostics;
 }
 
 const RETRY_AFTER_MS = 5_000;
 const ACTIVE_WITHIN_MS = 1_000;
-/** F events closer than this belong to one drowsiness episode (one focus sample). */
-const EPISODE_GAP_MS = 30_000;
-const FOCUS_BY_KIND: Record<string, number> = { microsleep: 1, sleep: 3, unresponsive: 6 };
+/** HEAD_ONLY this long (the C-7 notice time) is `limited` / `eyes_not_visible` (T14 r1 m3). */
+const EYES_NOT_VISIBLE_MS = 10_000;
+/** A drowsiness sample's length is capped at the queue's scale (a drowsy minute is 60 s; T14 r1 m2). */
+const EPISODE_MAX_S = 60;
+/** The rows replayed into an engine created mid-drive (T14 r1 m1). */
+const REPLAY_ROWS = 10;
 
 export function createDmsController(deps: DmsControllerDeps): DmsController {
   const cfg: DmsConfig = resolveDmsConfig(deps.config ?? {});
@@ -115,6 +165,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let closedReason: GateClosedReason | 'error' | null = 'no_drive';
   let token: GateToken | null = null;
   let disposed = false;
+  /** dispose() has begun: every input is ignored from here (security T14 I-1) */
+  let closing = false;
   let nativeState: NativeState = 'stopped';
   /** the state as native last reported it (its own session edges; ours runs ahead of it) */
   let reported: NativeState = 'stopped';
@@ -134,10 +186,15 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let qualitySince = 0;
   let lastGoodT = Number.NEGATIVE_INFINITY;
   let lastFrame: EngineFrame | null = null;
+  let lastTrackingT = Number.NEGATIVE_INFINITY;
+  /** the first HEAD_ONLY frame since the last TRACKING one */
+  let headOnlySince: number | null = null;
   const qualities = new RingBuffer<{ t: number; tracking: boolean }>(60 * 30);
+  const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower }>(REPLAY_ROWS);
   // Native status.
   let thermal: ThermalName = 'nominal';
   let lowPower = false;
+  let nativeView: DmsNativeView | null = null;
   // Failures (SR9).
   let errorAt: number | null = null;
   let retries = 0;
@@ -145,10 +202,24 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let starts = 0;
   // Stats, focus, status.
   const stats = { droppedBatches: 0, droppedRecords: 0, frames: 0 };
-  const focus = createFocusQueue(cfg);
+  let focus = createFocusQueue(cfg);
   let lastAlertStartT: number | null = null;
-  let lastDrowsyT = Number.NEGATIVE_INFINITY;
   let lastStatusJson = '';
+
+  /** Every per-drive field back to its initial value (T14 r1 I2). */
+  function resetDrive(): void {
+    focus = createFocusQueue(cfg);
+    quality = null;
+    qualitySince = 0;
+    lastGoodT = Number.NEGATIVE_INFINITY;
+    lastTrackingT = Number.NEGATIVE_INFINITY;
+    headOnlySince = null;
+    lastFrame = null;
+    qualities.clear();
+    lastAlertStartT = null;
+    lastTMs = null;
+    sessionOffset = null;
+  }
 
   let ops: Promise<void> = Promise.resolve();
   const enqueue = (f: () => Promise<void>) => {
@@ -188,9 +259,9 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           }
         });
         focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibrated: engine.snapshot().calibration === 'calibrated', lastAlertStartT });
-      } else if (e.kind in FOCUS_BY_KIND) {
-        if (e.tMs - lastDrowsyT > EPISODE_GAP_MS) focus.drowsiness(FOCUS_BY_KIND[e.kind]!);
-        lastDrowsyT = e.tMs;
+      } else if (e.kind === 'episode_end') {
+        // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2).
+        focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000));
       } else if (e.kind === 'fatigue_minute' && 'level' in e && (e.level === 'drowsy' || e.level === 'severe')) {
         focus.drowsiness(60);
       }
@@ -204,8 +275,14 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     if (closedReason !== null || token === null) return { camera: 'off', reason: closedReason ?? null, ...base };
     if (lastOut?.action === 'pause') return { camera: 'paused', reason: lastOut.reason === 'gate' ? null : lastOut.reason, ...base };
     if (nativeState !== 'running') return { camera: 'starting', reason: null, ...base };
-    if (now() - lastGoodT <= ACTIVE_WITHIN_MS) return { camera: 'active', reason: null, ...base };
-    return { camera: 'limited', reason: 'face_lost', ...base };
+    const t = now();
+    if (t - lastTrackingT <= ACTIVE_WITHIN_MS) return { camera: 'active', reason: null, ...base };
+    if (t - lastGoodT <= ACTIVE_WITHIN_MS) {
+      // HEAD_ONLY: the eye-closure rules are paused; short runs (a glance, sunglasses pushed up) stay active.
+      if (headOnlySince !== null && t - headOnlySince >= EYES_NOT_VISIBLE_MS) return { camera: 'limited', reason: 'eyes_not_visible', ...base };
+      return { camera: 'active', reason: null, ...base };
+    }
+    return { camera: 'limited', reason: snap?.lostLowLight === true ? 'low_light' : 'face_lost', ...base };
   }
 
   function publishStatus(): void {
@@ -227,14 +304,32 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   function stopNative(): void {
     token = null;
     if (nativeState === 'stopped') return;
+    const startInFlight = nativeState === 'starting';
     nativeState = 'stopped';
-    enqueue(() => native.stop());
+    // At once, never behind a pending call (security T14 m-2); a start still in flight is stopped again
+    // once it settles.
+    void native.stop().catch(() => undefined);
+    if (startInFlight) enqueue(() => native.stop());
+  }
+
+  /**
+   * The gate is closed for `reason`: native stops, and an open -> closed transition also stops the sound
+   * (T14 r1 I1). Not for drive end (the engine's endDrive stops it) or the policy's pauses.
+   */
+  function closeGate(reason: GateClosedReason | 'error'): void {
+    const wasOpen = closedReason === null;
+    closedReason = reason;
+    stopNative();
+    if (wasOpen && engine !== null) {
+      engine.stopAlerts(now());
+      dispatch();
+    }
+    publishStatus();
   }
 
   function failed(code: string | undefined): void {
     if (code === 'E_PERMISSION') {
-      closedReason = 'permission';
-      stopNative();
+      closeGate('permission');
       return;
     }
     if (code === 'E_NOT_FOREGROUND') return; // the app state closes the gate
@@ -260,48 +355,67 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           source = 'geometric';
         }
       }
-      engine = createDmsEngine({ ...cfg, gazeSource: source }, { driverSide: g.driverSide, sensitivity: g.sensitivity, alerts: g.alerts, profile: parseProfile(stored) });
-      driveStartTs = lastRow?.ts ?? null;
+      const e = createDmsEngine({ ...cfg, gazeSource: source }, { driverSide: g.driverSide, sensitivity: g.sensitivity, alerts: g.alerts, profile: parseProfile(stored) });
+      resetDrive();
+      // The drive's last rows, so the engine starts with the last known speed, the straight flag and the
+      // course rate (T14 r1 m1). Rows only: no frame came before the engine.
+      driveStartTs = recent.first()?.row.ts ?? lastRow?.ts ?? null;
+      recent.forEach(({ row, power }) => e.pushRow(row, rowExtras(row, power, driveSeconds(row)), row.ts));
+      engine = e;
+      dispatch();
     })();
     await creating;
     creating = null;
   }
 
+  const driveSeconds = (row: FeatureRow) => (driveStartTs === null ? 0 : Math.max(0, (row.ts - driveStartTs) / 1000));
+
   /** Open (after reading the permission), start if needed, and send the policy. */
   function openAndApply(): void {
     enqueue(async () => {
-      if (disposed || inputs === null || gaveUp || errorAt !== null) return;
-      const perm = await deps.native.getPermission();
-      if (disposed || inputs === null) return;
-      let open: GateToken | null = null;
+      if (disposed || closing || inputs === null || gaveUp || errorAt !== null) return;
+      let perm: PermissionStatus;
       try {
-        const r = gate.gateOpen(inputs, perm.status);
-        if (r.open) open = r.token;
-        else closedReason = r.reason;
+        perm = (await deps.native.getPermission()).status;
       } catch {
-        closedReason = 'error'; // a gate that throws is closed (security M-3)
+        // A permission read that fails is a closed permission (security T14 m-2).
+        if (!disposed) closeGate('permission');
+        return;
+      }
+      if (disposed || closing || inputs === null) return;
+      let open: GateToken | null = null;
+      let reason: GateClosedReason | 'error' = 'error';
+      try {
+        const r = gate.gateOpen(inputs, perm);
+        if (r.open) open = r.token;
+        else reason = r.reason;
+      } catch {
+        reason = 'error'; // a gate that throws is closed (security M-3)
       }
       if (open === null) {
-        stopNative();
+        closeGate(reason);
         return;
       }
       closedReason = null;
       token = open;
       await ensureEngine(inputs);
+      // Closed while the engine was made: nothing starts.
+      if (token !== open || disposed || closing) return;
       const out = lastOut;
       if (out !== null && out.action === 'off') return;
       try {
         if (nativeState === 'stopped') {
           starts++;
           nativeState = 'starting';
-          await native.start({ gateToken: open, fps: out !== null && out.fps !== 0 ? out.fps : 5, gazeNet: out?.gazeNet ?? false, gazeNetEvery: out?.gazeNetEvery ?? 1, delegate: 'cpu', rotationOffsetDegrees: 0 });
+          await native.start({ gateToken: open, fps: out !== null && out.fps !== 0 ? out.fps : 5, gazeNet: out?.gazeNet ?? false, gazeNetEvery: out?.gazeNetEvery ?? cfg.gazeNetEvery, delegate: 'cpu', rotationOffsetDegrees: 0 });
           if (nativeState === 'starting') nativeState = 'running';
         }
-        const p = out === null ? null : nativePolicy(out, open);
+        const p = out === null || token !== open ? null : nativePolicy(out, open);
         if (p !== null) await native.setPolicy(p);
       } catch (e) {
         if (nativeState === 'starting') nativeState = 'stopped';
-        failed((e as { code?: string }).code);
+        // A call that lost the race with our own stop is not a native failure.
+        if (token === open) failed((e as { code?: string }).code);
       }
       publishStatus();
     });
@@ -309,7 +423,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
 
   /** The synchronous gate check: no native call unless every input but the permission holds. */
   function evaluate(): boolean {
-    if (disposed || inputs === null) return false;
+    if (disposed || closing || inputs === null) return false;
     let reason: GateClosedReason | 'error' | null;
     try {
       reason = gate.check(inputs, 'granted');
@@ -317,12 +431,58 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       reason = 'error';
     }
     if (reason !== null) {
-      closedReason = reason;
-      stopNative();
-      publishStatus();
+      closeGate(reason);
       return false;
     }
     return true;
+  }
+
+  /** endDrive's body, also run by dispose(). */
+  async function endDriveNow(): Promise<DmsHostSummary | null> {
+    // Close first, synchronously (security T14 I-1): the drive is over, the gate sees it (the latch edge),
+    // and native stops before anything is awaited.
+    let reason: GateClosedReason | 'error' | null = 'no_drive';
+    if (inputs !== null) {
+      inputs = { ...inputs, driveActive: false };
+      try {
+        reason = gate.check(inputs, 'granted');
+      } catch {
+        reason = 'error';
+      }
+    }
+    closedReason = reason ?? 'no_drive';
+    stopNative();
+    await ops;
+    if (creating !== null) await creating;
+    let summary: DmsHostSummary | null = null;
+    if (engine !== null) {
+      const r = engine.endDrive(now());
+      dispatch(); // the stops, and the sample of an F episode still open
+      const pendingFocus: CameraFocusSample[] = [];
+      for (let f = focus.take(); f !== null; f = focus.take()) pendingFocus.push(f);
+      if (r.profile !== null && r.summary.calibration.state === 'calibrated') {
+        try {
+          await deps.profileStore.save(r.profile);
+        } catch {
+          // a failed save leaves the next drive to calibrate afresh
+        }
+      }
+      summary = { ...r.summary, camera: { starts, retries, gaveUp }, pendingFocus };
+      lastSummary = summary;
+      engine = null;
+    }
+    policy = createCapturePolicy();
+    lastOut = null;
+    errorAt = null;
+    retries = 0;
+    gaveUp = false;
+    starts = 0;
+    driveStartTs = null;
+    resetDrive();
+    recent.clear();
+    await ops;
+    publishStatus();
+    return summary;
   }
 
   const subs: Subscription[] = [
@@ -347,6 +507,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           qualitySince = ef.tMs;
         }
         if (q === 'tracking' || q === 'head_only') lastGoodT = ef.tMs;
+        if (q === 'tracking') {
+          lastTrackingT = ef.tMs;
+          headOnlySince = null;
+        } else if (q === 'head_only') headOnlySince ??= ef.tMs;
         qualities.push({ t: ef.tMs, tracking: q === 'tracking' });
       }
       dispatch();
@@ -369,19 +533,21 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     deps.native.addListener('status', (s) => {
       thermal = s.thermal;
       lowPower = s.lowPower;
+      nativeView = { fpsActual: s.fpsActual, fpsTarget: s.fpsTarget, thermal: s.thermal, gazeNetAvailable: s.gazeNetAvailable, gazeNetOn: s.gazeNetOn };
     }),
   ];
 
   return {
     setGate(g) {
-      if (disposed) return;
+      if (disposed || closing) return;
       inputs = { ...g };
       if (evaluate()) openAndApply();
     },
 
     pushRow(row, power) {
-      if (disposed) return null;
+      if (disposed || closing) return null;
       lastRow = row;
+      recent.push({ row, power });
       if (errorAt !== null && !gaveUp && row.ts - errorAt >= RETRY_AFTER_MS) {
         errorAt = null;
         retries++;
@@ -400,13 +566,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         charging: power.charging,
         setup,
         lostLowLight: snap?.lostLowLight ?? false,
-        gazeNetEvery: 1,
+        gazeNetEvery: cfg.gazeNetEvery,
       });
       lastOut = out;
       if (engine !== null) {
         if (out.cameraOff !== null) engine.cameraOff(row.ts, out.cameraOff);
         engine.setHost({ thermalLevel: out.thermalLevel, search: out.search, gazeNetEvery: out.gazeNetEvery });
-        engine.pushRow(row, rowExtras(row, power, driveStartTs === null ? 0 : (row.ts - driveStartTs) / 1000), row.ts);
+        engine.pushRow(row, rowExtras(row, power, driveSeconds(row)), row.ts);
         dispatch();
       }
       if (open) {
@@ -452,45 +618,38 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
 
     summary() {
       if (engine === null) return lastSummary;
-      return { ...engine.summary(), camera: { starts, retries, gaveUp } };
+      return { ...engine.summary(), camera: { starts, retries, gaveUp }, pendingFocus: [] };
     },
 
     async endDrive() {
-      await ops;
-      if (creating !== null) await creating;
-      if (engine !== null) {
-        const r = engine.endDrive(now());
-        dispatch();
-        if (r.profile !== null && r.summary.calibration.state === 'calibrated') {
-          try {
-            await deps.profileStore.save(r.profile);
-          } catch {
-            // a failed save leaves the next drive to calibrate afresh
-          }
-        }
-        lastSummary = { ...r.summary, camera: { starts, retries, gaveUp } };
-        engine = null;
-      }
-      policy = createCapturePolicy();
-      lastOut = null;
-      errorAt = null;
-      retries = 0;
-      gaveUp = false;
-      starts = 0;
-      stopNative();
-      await ops;
-      publishStatus();
-      return lastSummary;
+      if (disposed || closing) return null;
+      return endDriveNow();
     },
 
     async dispose() {
-      if (disposed) return;
-      const summary = engine !== null ? this.endDrive() : Promise.resolve(null);
-      await summary;
+      if (disposed || closing) return;
+      // Closing first (security T14 I-1): every input is ignored from now, and native stops before the
+      // drive's end (its summary and the profile save) is awaited.
+      closing = true;
+      closedReason = 'no_drive';
+      stopNative();
+      if (engine !== null || creating !== null) await endDriveNow();
       disposed = true;
       stopNative();
       await ops;
       for (const s of subs) s.remove();
+    },
+
+    async requestPermission() {
+      if (disposed || closing || closedReason !== 'permission') return null;
+      let status: PermissionStatus;
+      try {
+        status = (await deps.native.requestPermission()).status;
+      } catch {
+        return null;
+      }
+      if (evaluate()) openAndApply();
+      return status;
     },
 
     async idle() {
@@ -501,6 +660,6 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } while (p !== ops);
     },
 
-    diagnostics: () => ({ ...stats }),
+    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView } }),
   };
 }

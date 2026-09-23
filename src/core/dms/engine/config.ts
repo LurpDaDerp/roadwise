@@ -74,6 +74,11 @@ export interface DmsConfig {
   v: 1;
   /** plan C-24, rev1 R-gaze: the geometric gaze everywhere by default; 'net' only in internal builds */
   gazeSource: GazeSource;
+  /**
+   * T14 r1 nit (rev1 m11): the net on every frame (1) or every other frame (2) in FULL. Default 2: the T6 m2
+   * hold carries a net value across the skipped frame, at half the net's cost. Only a net build uses it.
+   */
+  gazeNetEvery: 1 | 2;
 
   context: {
     /** §M1: a context row older than this is stale (speed unknown) */
@@ -475,6 +480,7 @@ const zone = (
 const DEFAULT: DmsConfig = {
   v: 1,
   gazeSource: 'geometric',
+  gazeNetEvery: 2,
   context: { rowStaleMs: 3000, tunnelHoldMs: 600_000, unknownStillHoldMs: 10_000, courseMinSpeedMs: 2, turnSignMinDegS: 2, handlingMinScore: 0.6 },
   quality: {
     lostMinBoxArea: 0.01,
@@ -770,6 +776,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
 
   if (c.v !== 1) bad('v', 'must be 1');
   if (c.gazeSource !== 'geometric' && c.gazeSource !== 'net') bad('gazeSource', "must be 'geometric' or 'net'");
+  if (c.gazeNetEvery !== 1 && c.gazeNetEvery !== 2) bad('gazeNetEvery', 'must be 1 or 2');
 
   // Every number: finite, and non-negative unless it is a signed angle. Zone tables are named by id.
   const nums: [string, number][] = [];

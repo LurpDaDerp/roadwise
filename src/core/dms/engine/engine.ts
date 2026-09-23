@@ -57,7 +57,9 @@ export interface DmsHostState {
 
 export type DmsEvent =
   | { kind: AttentionEvent['kind']; tMs: number; zone?: ZoneId; durS?: number; shoulderCheck?: boolean }
-  | { kind: FastEvent['kind']; tMs: number; bridged?: boolean; durMs?: number; long?: boolean }
+  | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean }
+  /** T14 r1 m2: a closure episode that reached F1–F3 ended; its measured length (not counted in the summary) */
+  | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean }
   | { kind: NodEvent['kind'] | 'yawn'; tMs: number }
   | { kind: CalibrationEvent['kind']; tMs: number }
   | { kind: 'fatigue_minute'; tMs: number; status: FatigueMinute['status']; score: number | null; level: FatigueLevel };
@@ -114,6 +116,13 @@ export interface DmsEngine {
    * session end: `endDrive` is.
    */
   cameraOff(tMs: number, cause: 'heat' | 'dark'): void;
+  /**
+   * T14 r1 I1: the privacy gate closed mid-drive (opt-out, a revoked permission, the role, the mode, the app
+   * backgrounded): monitoring ended, so every sound stops now (`stopAll`). The drive goes on, and its history
+   * (the summary, the alert log, the rule state) is kept. Not for the policy's own pauses: `stopped` ends a
+   * Critical by its known speed, and heat or dark go through cameraOff.
+   */
+  stopAlerts(tMs: number): void;
 }
 
 const SEED_RING_S = 4;
@@ -173,7 +182,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
   const emit = (e: DmsEvent) => {
     events.push(e);
-    d.summary.onEvent(e.kind);
+    // episode_end restates an F event's episode for the scoring seam; the summary counts the F events.
+    if (e.kind !== 'episode_end') d.summary.onEvent(e.kind);
+  };
+  const emitFast = (e: FastEvent) => {
+    if (e.kind === 'episode_end') emit({ kind: 'episode_end', tMs: e.tMs, durMs: e.durMs ?? 0, bridged: e.bridged === true });
   };
   const addCommands = (c: readonly DmsAlertCommand[]) => {
     if (c.length > 0) commands = commands.concat(c).slice(-PENDING_CAP);
@@ -275,6 +288,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const onRoadGaze = zone === null ? null : onRoad && !p.eyesClosed;
     for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze }).events) {
       const bridged = e.bridged === true;
+      if (e.kind === 'episode_end') {
+        emitFast(e);
+        continue;
+      }
       if (e.kind === 'blink') {
         d.fatigue.onBlink({ tMs: e.tMs, durMs: e.durMs ?? 0, long: e.long === true, counted: e.counted === true });
         d.summary.onBlink(e.tMs);
@@ -407,6 +424,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     },
 
     endDrive(tMs) {
+      for (const e of d.fast.flush()) emitFast(e); // an F episode still open ends with the drive
       addCommands(d.alerts.stopAll(tMs, tMs + epochOffset));
       const summary = d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state() });
       const learned: LearnedZone[] = d.learner.endDrive();
@@ -418,6 +436,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
     cameraOff(tMs, cause) {
       alertStep(() => d.alerts.cameraOff(tMs, tMs + epochOffset, cause));
+    },
+
+    stopAlerts(tMs) {
+      alertStep(() => d.alerts.stopAll(tMs, tMs + epochOffset));
     },
 
     alertLog() {

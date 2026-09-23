@@ -3,7 +3,9 @@
 import type { FeatureRow } from '@/core/engine/types';
 import { createFakeDmsVision, type FakeDmsVision } from '../../../../../modules/dms-vision/src/fake';
 import { recordFromFeatures } from '../../../../../modules/dms-vision/src/wire';
+import type { DmsVisionApi } from '../../../../../modules/dms-vision/src/types';
 import type { DmsAlertCommand } from '../../engine/alerts';
+import type { DmsConfigOverrides } from '../../engine/config';
 import type { DmsEvent } from '../../engine/engine';
 import type { DmsProfileV1 } from '../../engine/profile';
 import type { EngineFrame } from '../../engine/types';
@@ -61,7 +63,9 @@ interface H {
   events: DmsEvent[];
   saved: DmsProfileV1[];
 }
-function harness(o: { profile?: unknown; gazeNetAvailable?: boolean; gazeSource?: 'geometric' | 'net'; onAlertThrows?: boolean; random?: () => string } = {}): H {
+function harness(
+  o: { profile?: unknown; gazeNetAvailable?: boolean; gazeSource?: 'geometric' | 'net'; config?: DmsConfigOverrides; onAlertThrows?: boolean; random?: () => string; wrap?: (f: FakeDmsVision) => DmsVisionApi } = {}
+): H {
   const fake = createFakeDmsVision({ gazeNetAvailable: o.gazeNetAvailable ?? false, epochAtZero: EPOCH0 });
   const alerts: DmsAlertCommand[] = [];
   const statuses: DmsHudStatus[] = [];
@@ -69,7 +73,7 @@ function harness(o: { profile?: unknown; gazeNetAvailable?: boolean; gazeSource?
   const saved: DmsProfileV1[] = [];
   let n = 0;
   const ctl = createDmsController({
-    native: fake,
+    native: o.wrap ? o.wrap(fake) : fake,
     onAlert: (c) => {
       alerts.push(c);
       if (o.onAlertThrows) throw new Error('player bug');
@@ -77,7 +81,7 @@ function harness(o: { profile?: unknown; gazeNetAvailable?: boolean; gazeSource?
     onStatus: (s) => statuses.push(s),
     onEvent: (e) => events.push(e),
     profileStore: { load: async () => o.profile ?? null, save: async (p) => void saved.push(p), clear: async () => {} },
-    config: o.gazeSource !== undefined ? { gazeSource: o.gazeSource } : undefined,
+    config: o.gazeSource !== undefined || o.config !== undefined ? { ...o.config, ...(o.gazeSource !== undefined ? { gazeSource: o.gazeSource } : {}) } : undefined,
     random: o.random ?? (() => `nonce-${++n}`),
   });
   return { fake, ctl, alerts, statuses, events, saved };
@@ -327,7 +331,8 @@ describe('the gate’s lifetime (security M-2, M-4)', () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 3);
-    h.ctl.setGate({ ...GATE, driveActive: false });
+    // No setGate({ driveActive: false }) in between: endDrive itself closes the gate and observes the latch
+    // edge (security T14 I-1).
     await h.ctl.endDrive();
     h.ctl.setGate({ ...GATE, cameraBeta: false });
     await drive(h, 3, 6);
@@ -373,5 +378,261 @@ describe('setup (C2) and the thermal camera-off edge', () => {
     await drive(h, 104, 106, { frameAt: synthFrames(stack, 106, 15) });
     expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
     expect(h.fake.nativeState()).toBe('paused');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// T14 round 1 (seat 5 I1, I2, m1–m3, nit; security I-1, m-2).
+// ---------------------------------------------------------------------------------------------------------
+
+const starts = (h: H) => methods(h).filter((m) => m === 'start').length;
+const lastPolicy = (h: H) => h.fake.calls.filter((c) => c.method === 'setPolicy').at(-1)!.args[0] as { fps: number; gazeNetEvery: number };
+/** Eyes shut from `from` s (a microsleep at from + 1 s, then sleep) at 60 km/h, open again at `to` s. */
+const eyesShut = (from: number, to: number, seconds: number) => synthFrames((t, r) => ({ gaze: onRoad(r), openness: t >= from && t < to ? 0.1 : 1, speedKmh: 60 }), seconds, 15);
+const critStarted = (h: H) => h.alerts.some((c) => c.action === 'start' && c.tier === 3);
+const drowsy = (xs: unknown[]) => (xs as { kind: string; glanceS: number }[]).filter((x) => x.kind === 'drowsiness' && x.glanceS < 60);
+
+describe('T14 r1 security I-1: a drive end and a sign-out close the gate first', () => {
+  test('endDrive, then rows with no setGate: the camera never starts again', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    await h.ctl.endDrive();
+    const n = starts(h);
+    await drive(h, 3, 9);
+    expect(starts(h)).toBe(n);
+    expect(h.fake.nativeState()).toBe('stopped');
+    expect(h.ctl.status()).toMatchObject({ camera: 'off', reason: 'no_drive' });
+  });
+  test('stop is the first native call once dispose() begins, before the drive’s end is awaited', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    const n = h.fake.calls.length;
+    const p = h.ctl.dispose();
+    expect(h.fake.calls[n]?.method).toBe('stop');
+    expect(h.fake.nativeState()).toBe('stopped');
+    await p;
+  });
+  test('a setGate and a row while dispose() is pending never start the camera', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    const p = h.ctl.dispose();
+    h.ctl.setGate(GATE);
+    h.ctl.pushRow(featureRow(3000, 60), POWER);
+    await p;
+    await h.ctl.idle();
+    expect(starts(h)).toBe(1);
+    expect(h.fake.nativeState()).toBe('stopped');
+  });
+});
+
+describe('T14 r1 seat I1: every open → closed gate transition stops the sound', () => {
+  test('a Critical, then opt-out: its stop in the same setGate call', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) });
+    expect(critStarted(h)).toBe(true);
+    const n = h.alerts.length;
+    h.ctl.setGate({ ...GATE, optedIn: false });
+    expect(h.alerts.slice(n).map((c) => `${c.action}:${c.tier}`)).toEqual(['stop:3']);
+  });
+  test('a distraction, then the role → passenger: stop', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
+    await drive(h, 0, 104, { frameAt: synthFrames(stack, 106, 15) });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction']);
+    h.ctl.setGate({ ...GATE, role: 'passenger' });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
+  });
+  test('a Critical, then the permission revoked (read on the next row): stop', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) });
+    expect(critStarted(h)).toBe(true);
+    const n = h.alerts.length;
+    h.fake.setPermission('denied');
+    await drive(h, 104, 106, { frameAt: () => null });
+    expect(h.alerts.slice(n).map((c) => `${c.action}:${c.tier}`)).toEqual(['stop:3']);
+    expect(h.ctl.status()).toMatchObject({ camera: 'off', reason: 'permission' });
+  });
+  test('a gate close with nothing running: no command', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 10);
+    h.ctl.setGate({ ...GATE, optedIn: false });
+    await h.ctl.idle();
+    expect(h.alerts).toEqual([]);
+  });
+});
+
+describe('T14 r1 seat I2: nothing of one drive leaks into the next', () => {
+  test('a drowsiness sample still queued at drive end is returned in pendingFocus; the next drive’s first row returns null', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) }); // still shut at the end: the episode is open
+    const s = await h.ctl.endDrive();
+    expect(drowsy(s!.pendingFocus)).toHaveLength(1);
+    h.ctl.setGate(GATE);
+    expect(h.ctl.pushRow(featureRow(200_000, 60), POWER)).toBeNull();
+  });
+  test('a drive that ended in LOST: the next drive does not start in SEARCH (15 fps at 60 km/h, not 5)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 10);
+    await drive(h, 10, 16, { frameAt: (t) => frame({ tMs: t, face: false }) });
+    expect(lastPolicy(h).fps).toBe(5); // SEARCH in drive 1
+    await h.ctl.endDrive();
+    h.ctl.setGate(GATE);
+    await drive(h, 16, 20, { frameAt: () => null });
+    expect(lastPolicy(h).fps).toBe(15);
+  });
+  test('the last frame does not outlive its drive (setupCheck is unknown again)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    await h.ctl.endDrive();
+    expect(h.ctl.setupCheck().faceVisible).toBe('unknown');
+  });
+  test('an F episode in each of two back-to-back drives: one sample each, none carried or merged across', async () => {
+    // (F1 needs the open-eye baseline, so drive 2 runs past its own calibration before its episode.)
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const one = await drive(h, 0, 106, { frameAt: eyesShut(100, 103, 106) });
+    const s = await h.ctl.endDrive();
+    h.ctl.setGate(GATE);
+    const two = await drive(h, 106, 212, { frameAt: eyesShut(206, 209, 212) });
+    expect(drowsy([...one, ...s!.pendingFocus])).toHaveLength(1);
+    expect(drowsy(two)).toHaveLength(1);
+  });
+});
+
+describe('T14 r1 seat m1: a late gate open replays the drive’s last rows into the new engine', () => {
+  test('30 s of rows at 72 km/h with the gate closed, then it opens as GNSS is lost: 72 is held on the first frame', async () => {
+    const h = harness();
+    h.ctl.setGate({ ...GATE, appActive: false });
+    await drive(h, 0, 30, { speed: () => 72, frameAt: () => null });
+    h.ctl.setGate(GATE);
+    await drive(h, 30, 32, { speed: () => null });
+    expect(h.ctl.diagnostics().ruleSpeedKmh).toBe(72);
+  });
+});
+
+describe('T14 r1 seat m2: a drowsiness sample carries the episode’s measured length', () => {
+  test('F1, then 8 s closed: one sample, glanceS about 8', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const d = drowsy(await drive(h, 0, 112, { frameAt: eyesShut(100, 108, 112) }));
+    expect(d).toHaveLength(1);
+    expect(d[0]!.glanceS).toBeGreaterThan(7.5);
+    expect(d[0]!.glanceS).toBeLessThan(8.6);
+  });
+});
+
+describe('T14 r1 seat m3: the status says what is monitored', () => {
+  /** HEAD_ONLY: a face and a head pose, the eyes unreadable (a blurred crop) */
+  const headOnly = (t: number) => frame({ tMs: t, blur: 5 });
+  test('HEAD_ONLY under 10 s stays active; at 11 s it is limited / eyes_not_visible', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 20);
+    await drive(h, 20, 25, { frameAt: headOnly });
+    expect(h.ctl.status()).toMatchObject({ camera: 'active', reason: null });
+    await drive(h, 25, 31, { frameAt: headOnly });
+    expect(h.ctl.status()).toMatchObject({ camera: 'limited', reason: 'eyes_not_visible' });
+  });
+  test('LOST in the dark: limited / low_light; LOST in the light: limited / face_lost', async () => {
+    const dark = harness();
+    dark.ctl.setGate(GATE);
+    await drive(dark, 0, 5);
+    await drive(dark, 5, 8, { frameAt: (t) => frame({ tMs: t, face: false, frameLuma: 5 }) });
+    expect(dark.ctl.status()).toMatchObject({ camera: 'limited', reason: 'low_light' });
+    const lit = harness();
+    lit.ctl.setGate(GATE);
+    await drive(lit, 0, 5);
+    await drive(lit, 5, 8, { frameAt: (t) => frame({ tMs: t, face: false, frameLuma: 110 }) });
+    expect(lit.ctl.status()).toMatchObject({ camera: 'limited', reason: 'face_lost' });
+  });
+});
+
+describe('T14 r1 seat nit: gazeNetEvery from config (default 2)', () => {
+  test('a net build sends the net every other frame by default; an override of 1 is sent as 1', async () => {
+    const two = harness({ gazeSource: 'net', gazeNetAvailable: true });
+    two.ctl.setGate(GATE);
+    await drive(two, 0, 5);
+    expect(lastPolicy(two).gazeNetEvery).toBe(2);
+    const one = harness({ gazeSource: 'net', gazeNetAvailable: true, config: { gazeNetEvery: 1 } });
+    one.ctl.setGate(GATE);
+    await drive(one, 0, 5);
+    expect(lastPolicy(one).gazeNetEvery).toBe(1);
+  });
+});
+
+describe('T14 r1 security m-2: a stop never queues', () => {
+  test('a native call that never settles does not hold the stop', async () => {
+    let hang = false;
+    const h = harness({ wrap: (f) => ({ ...f, getPermission: () => (hang ? new Promise<never>(() => {}) : f.getPermission()) }) });
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    hang = true;
+    h.ctl.pushRow(featureRow(3000, 60), POWER); // its permission read hangs, and the queue with it
+    h.ctl.setGate({ ...GATE, optedIn: false });
+    expect(methods(h).at(-1)).toBe('stop');
+    expect(h.fake.nativeState()).toBe('stopped');
+  });
+  test('a permission read that rejects while running counts as closed: native stops', async () => {
+    let reject = false;
+    const h = harness({ wrap: (f) => ({ ...f, getPermission: () => (reject ? Promise.reject(new Error('bridge')) : f.getPermission()) }) });
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    reject = true;
+    await drive(h, 3, 4);
+    expect(h.fake.nativeState()).toBe('stopped');
+    expect(h.ctl.status()).toMatchObject({ camera: 'off', reason: 'permission' });
+  });
+  test('a stop while a start is still pending: the camera is stopped once the start settles', async () => {
+    let release: (() => void) | null = null;
+    const h = harness({
+      wrap: (f) => ({
+        ...f,
+        start: (o) =>
+          new Promise<void>((res) => {
+            release = () => void f.start(o).then(res);
+          }),
+      }),
+    });
+    h.ctl.setGate(GATE); // one queued open, and no row: nothing else is queued that could stop it later
+    for (let i = 0; i < 50 && release === null; i++) await Promise.resolve();
+    expect(release).not.toBeNull();
+    h.ctl.setGate({ ...GATE, optedIn: false });
+    (release as unknown as () => void)();
+    await h.ctl.idle();
+    expect(h.fake.nativeState()).toBe('stopped');
+  });
+});
+
+describe('T14 r1: the permission prompt and the diagnostics the dev panel reads', () => {
+  test('requestPermission asks native only when the permission is the one input closing the gate', async () => {
+    const h = harness();
+    h.ctl.setGate({ ...GATE, optedIn: false });
+    expect(await h.ctl.requestPermission()).toBeNull();
+    expect(methods(h)).not.toContain('requestPermission');
+    const u = harness();
+    u.fake.setPermission('undetermined');
+    u.ctl.setGate(GATE);
+    await drive(u, 0, 2);
+    expect(u.ctl.status().reason).toBe('permission');
+    expect(await u.ctl.requestPermission()).toBe('granted');
+    await drive(u, 2, 4);
+    expect(u.fake.nativeState()).toBe('running');
+  });
+  test('diagnostics carry native’s rates and thermal state (counts and states only)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitStatus();
+    expect(h.ctl.diagnostics().native).toEqual({ fpsActual: expect.any(Number), fpsTarget: expect.any(Number), thermal: 'nominal', gazeNetAvailable: false, gazeNetOn: false });
   });
 });

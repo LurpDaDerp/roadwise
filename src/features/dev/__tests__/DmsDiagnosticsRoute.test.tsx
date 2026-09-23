@@ -1,6 +1,7 @@
 // The DMS diagnostics route (plan Task 16, R-2; rev1 S-M3): a build without the diagnostics flag, and not
-// __DEV__, is sent home and never loads the panel or the native wrapper. DmsDiagnosticsBundle.test.ts
-// proves the same at the bundle level (the production transform drops both requires).
+// __DEV__, is sent home and never loads the panel. DmsDiagnosticsBundle.test.ts proves the same at the bundle
+// level (the production transform drops the require). The route never references the native wrapper: the
+// panel's controller comes from the host's createDefaultDmsController (security T14 m-1).
 import { render, screen } from '@testing-library/react-native';
 import type { ComponentType } from 'react';
 
@@ -16,16 +17,11 @@ jest.mock('expo-router', () => {
   return { Redirect: ({ href }: { href: string }) => <RNText testID="redirect">{href}</RNText> };
 });
 
-const mockLoads = { panel: 0, wrapper: 0 };
+const mockLoads = { panel: 0 };
 jest.mock('@/features/dev/DmsDiagnosticsPanel', () => {
   mockLoads.panel++;
   const { Text: RNText } = jest.requireActual<typeof import('react-native')>('react-native');
-  return { DmsDiagnosticsScreen: ({ native }: { native: unknown }) => <RNText testID="panel">{native === mockWrapper ? 'wrapper' : 'other'}</RNText> };
-});
-const mockWrapper = { isAvailable: () => false };
-jest.mock('../../../../modules/dms-vision', () => {
-  mockLoads.wrapper++;
-  return { __esModule: true, default: mockWrapper };
+  return { DmsDiagnosticsScreen: () => <RNText testID="panel">panel</RNText> };
 });
 
 const g = globalThis as { __DEV__?: boolean };
@@ -43,7 +39,6 @@ function loadRoute(): ComponentType {
 
 beforeEach(() => {
   mockLoads.panel = 0;
-  mockLoads.wrapper = 0;
   mockEnv.diagnostics = false;
   delete process.env.EXPO_PUBLIC_DIAGNOSTICS;
 });
@@ -54,23 +49,23 @@ afterEach(() => {
 });
 
 describe('the route guard', () => {
-  test('no flag and not __DEV__: sent home, and neither the panel nor the wrapper is ever loaded', async () => {
+  test('no flag and not __DEV__: sent home, and the panel is never loaded', async () => {
     g.__DEV__ = false;
     const Page = loadRoute();
     await render(<Page />);
     expect(screen.getByTestId('redirect').props.children).toBe('/');
     expect(screen.queryByTestId('panel')).toBeNull();
-    expect(mockLoads).toEqual({ panel: 0, wrapper: 0 });
+    expect(mockLoads).toEqual({ panel: 0 });
   });
 
-  test('the flag (EXPO_PUBLIC_DIAGNOSTICS=1): the panel, handed the native wrapper', async () => {
+  test('the flag (EXPO_PUBLIC_DIAGNOSTICS=1): the panel', async () => {
     g.__DEV__ = false;
     mockEnv.diagnostics = true;
     process.env.EXPO_PUBLIC_DIAGNOSTICS = '1';
     const Page = loadRoute();
     await render(<Page />);
     expect(screen.queryByTestId('redirect')).toBeNull();
-    expect(screen.getByTestId('panel').props.children).toBe('wrapper');
+    expect(screen.getByTestId('panel')).toBeTruthy();
     expect(mockLoads.panel).toBe(1);
   });
 
@@ -87,6 +82,6 @@ describe('the route guard', () => {
     const Page = loadRoute();
     await render(<Page />);
     expect(screen.getByTestId('redirect').props.children).toBe('/');
-    expect(mockLoads).toEqual({ panel: 0, wrapper: 0 });
+    expect(mockLoads).toEqual({ panel: 0 });
   });
 });

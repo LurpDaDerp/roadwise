@@ -10,7 +10,11 @@ export {
   type DmsHudStatus,
   type DmsSeedResult,
   type DmsSetupCheck,
+  type DmsHostDiagnostics,
+  type DmsNativeView,
 } from './host/controller';
+// M7 builds its controller here: the real native module is bound inside the host (security T14 m-1).
+export { createDefaultDmsController, type DmsDefaultControllerDeps } from './host/default';
 export { createSettingsProfileStore, DMS_PROFILE_KEY, type DmsProfileStore, type SettingsLike } from './host/profileStore';
 export { createFocusQueue } from './adapters/focus';
 export type { AlertKind, DmsAlertCommand } from './engine/alerts';

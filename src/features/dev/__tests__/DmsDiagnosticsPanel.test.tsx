@@ -15,7 +15,7 @@ import { createFakeDmsVision, type FakeDmsVision } from '../../../../modules/dms
 import { recordFromFeatures } from '../../../../modules/dms-vision/src/wire';
 import { frame } from '../../../core/dms/engine/__fixtures__/synth';
 import { featuresFromFrame } from '../../../core/dms/host/__fixtures__/records';
-import { DMS_PROFILE_KEY } from '@/core/dms';
+import { createDmsController, DMS_PROFILE_KEY, type DmsDefaultControllerDeps } from '@/core/dms';
 import { DmsDiagnosticsPanel, DmsDiagnosticsScreen, dmsDiagCopy as copy } from '../DmsDiagnosticsPanel';
 
 const mockSession: { profile: { id: string; age_band: string } | null } = { profile: { id: 'u1', age_band: '18_plus' } };
@@ -89,11 +89,13 @@ const startToken = () => {
   const start = fake.calls.find((c) => c.method === 'start');
   return (start?.args[0] as { gateToken: string } | undefined)?.gateToken ?? null;
 };
+/** The panel's controller on the fake native module (the route's default binds the real one). */
+const mk = (deps: DmsDefaultControllerDeps) => createDmsController({ ...deps, native: fake });
 const text = (id: string) => String(screen.getByTestId(id).props.children);
 
 describe('the gate is the real one', () => {
   test('the stored flag off: the camera stays off (flag_off), and native is never called', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta={false} ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta={false} ageBand="18_plus" />));
     await startDrive();
     expect(text('dms-camera')).toBe('off');
     expect(text('dms-reason')).toBe('flag_off');
@@ -102,7 +104,7 @@ describe('the gate is the real one', () => {
   });
 
   test('not opted in: off (not_opted_in), even with a drive', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await fireEvent.press(screen.getByText(copy.startDrive));
     await seconds(3);
     expect(text('dms-reason')).toBe('not_opted_in');
@@ -110,14 +112,14 @@ describe('the gate is the real one', () => {
   });
 
   test('an age band other than 18_plus: off (age)', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="other" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="other" />));
     await startDrive();
     expect(text('dms-reason')).toBe('age');
     expect(fake.calls).toEqual([]);
   });
 
   test('every input holding: native starts, and the live view counts frames', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     expect(fake.calls.map((c) => c.method)).toContain('start');
     await seconds(3, true);
@@ -126,7 +128,7 @@ describe('the gate is the real one', () => {
   });
 
   test('no drive: nothing starts until the simulated drive does', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await fireEvent.press(screen.getByText(copy.optIn(false)));
     await seconds(3);
     // Before any drive the remote flag has not been latched (it is read at drive start), so the first
@@ -142,7 +144,7 @@ describe('the gate is the real one', () => {
 
 describe('the drive ends', () => {
   test('End drive stops native and shows the summary as counts', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     await seconds(3, true);
     await fireEvent.press(screen.getByText(copy.endDrive));
@@ -152,7 +154,7 @@ describe('the drive ends', () => {
   });
 
   test('leaving the screen disposes the controller: native stops', async () => {
-    const view = await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    const view = await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     await view.unmount();
     await waitFor(() => expect(fake.nativeState()).toBe('stopped'));
@@ -161,7 +163,7 @@ describe('the drive ends', () => {
 
 describe('privacy: the GateToken, frames and landmarks', () => {
   test('the token is never shown, logged or persisted', async () => {
-    const view = await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    const view = await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     await seconds(3, true);
     const token = startToken();
@@ -174,7 +176,7 @@ describe('privacy: the GateToken, frames and landmarks', () => {
   });
 
   test('nothing is logged at all, and nothing is persisted (not even the calibration profile)', async () => {
-    await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     await seconds(5, true);
     await fireEvent.press(screen.getByText(copy.endDrive));
@@ -183,7 +185,7 @@ describe('privacy: the GateToken, frames and landmarks', () => {
   });
 
   test('the live view is counts and states only: no coordinate, landmark or frame value is rendered', async () => {
-    const view = await render(wrap(<DmsDiagnosticsPanel native={fake} cameraBeta ageBand="18_plus" />));
+    const view = await render(wrap(<DmsDiagnosticsPanel createController={mk} cameraBeta ageBand="18_plus" />));
     await startDrive();
     await seconds(3, true);
     const shown = JSON.stringify(view.toJSON());
@@ -196,7 +198,7 @@ describe('privacy: the GateToken, frames and landmarks', () => {
 describe('the screen reads the real gate inputs', () => {
   test('the stored camera_beta flag and the signed-in age band', async () => {
     await createSettingsRepo(db).set(APP_CONFIG_KEY, { flags: { camera_beta: true } });
-    await render(wrap(<DmsDiagnosticsScreen native={fake} />));
+    await render(wrap(<DmsDiagnosticsScreen createController={mk} />));
     await waitFor(() => expect(screen.getByText(copy.optIn(false))).toBeTruthy());
     await act(async () => {
       await Promise.resolve();
@@ -206,7 +208,7 @@ describe('the screen reads the real gate inputs', () => {
   });
 
   test('no stored flag: flag_off (the compiled default)', async () => {
-    await render(wrap(<DmsDiagnosticsScreen native={fake} />));
+    await render(wrap(<DmsDiagnosticsScreen createController={mk} />));
     await startDrive();
     expect(text('dms-reason')).toBe('flag_off');
     expect(fake.calls).toEqual([]);
@@ -215,7 +217,7 @@ describe('the screen reads the real gate inputs', () => {
   test('a u13 or unknown age band: age', async () => {
     await createSettingsRepo(db).set(APP_CONFIG_KEY, { flags: { camera_beta: true } });
     mockSession.profile = { id: 'u1', age_band: 'u13' };
-    await render(wrap(<DmsDiagnosticsScreen native={fake} />));
+    await render(wrap(<DmsDiagnosticsScreen createController={mk} />));
     await startDrive();
     expect(text('dms-reason')).toBe('age');
     mockSession.profile = null;

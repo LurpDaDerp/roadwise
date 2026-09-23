@@ -394,3 +394,44 @@ describe('blinks and the fps meter', () => {
     expect(m.fps()).toBeCloseTo(8, 6); // the old 15 fps frames have left the window
   });
 });
+
+describe('T14 r1 m2: episode_end, the measured length of a drowsiness episode (one per closure episode that reached F1–F3)', () => {
+  const kinds = (ev: FastEvent[]) => ev.map((e) => e.kind);
+  test('F1, then 8 s closed, then open: one episode_end with durMs about 8000, at the reopening', () => {
+    const r = fast(perceive([{ s: 8, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 60);
+    const ends = r.events.filter((e) => e.kind === 'episode_end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.durMs!).toBeGreaterThan(7800);
+    expect(ends[0]!.durMs!).toBeLessThan(8300);
+    expect(ends[0]!.tMs).toBeGreaterThanOrEqual(9000 - 1);
+    expect(kinds(r.events).filter((k) => k === 'microsleep' || k === 'sleep')).toEqual(['microsleep', 'sleep']);
+  });
+  test('a closure that never reached F1 (0.5 s, or 5 s at 5 km/h) has no episode_end', () => {
+    expect(kinds(fast(perceive([{ s: 0.5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 60).events)).not.toContain('episode_end');
+    expect(kinds(fast(perceive([{ s: 5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 5).events)).not.toContain('episode_end');
+  });
+  test('a quality drop ending an F episode silently still ends the episode: episode_end up to the last closed frame', () => {
+    const r = fast(perceive([{ s: 2, spec: { ear: ear(0.1) } }, { s: 1, spec: { blur: 5 } }]), 60); // HEAD_ONLY: not bridged
+    const ends = r.events.filter((e) => e.kind === 'episode_end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.durMs!).toBeGreaterThan(1800);
+    expect(ends[0]!.durMs!).toBeLessThan(2100);
+    expect(kinds(r.events)).not.toContain('blink');
+  });
+  test('flush(tMs) ends an F episode still open (drive end); nothing when none is open', () => {
+    const rules = createFastRules(C);
+    const ps = perceive([{ s: 4, spec: { ear: ear(0.1) } }]);
+    for (const p of ps) rules.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: false });
+    const out = rules.flush();
+    expect(out.map((e) => e.kind)).toEqual(['episode_end']);
+    expect(out[0]!.durMs!).toBeGreaterThan(3800);
+    expect(out[0]!.durMs!).toBeLessThan(4100);
+    expect(rules.flush()).toEqual([]);
+  });
+  test('F1, the eyes open off road, then F3’s no-on-road clause: one episode (the closure), not two', () => {
+    const ps = perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 4, spec: { gaze: { yaw: 40, pitch: -20 } } }]);
+    const r = fast(ps, 60, () => false);
+    expect(kinds(r.events)).toContain('unresponsive');
+    expect(kinds(r.events).filter((k) => k === 'episode_end')).toHaveLength(1);
+  });
+});

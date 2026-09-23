@@ -338,3 +338,32 @@ describe('T13 r1 I1: cameraOff keeps a Critical (the phone overheating says noth
     expect(r.am.critical()).toBe('sleep');
   });
 });
+
+describe('T13 r1 nit: monitoring_paused is a Tier 1 (rule 3: once per tier1EveryS), and the one rule-4 exception', () => {
+  const blindAt = (tMs: number): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 15, speedKnown: true, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true });
+  const live = (tMs: number, requests: AlertRequest[] = []): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 60, speedKnown: true, quality: 'tracking', onRoad: false, eyesOpen: false, warmup: false, requests });
+  /** A Critical at `t0`, the camera off at once, then 61 s blind at a known 15 km/h. */
+  function blindCap(am: ReturnType<typeof createAlertManager>, t0: number): DmsAlertCommand[] {
+    const out: DmsAlertCommand[] = [...am.onFrame(live(t0, [crit('sleep')]))];
+    out.push(...am.cameraOff(t0, EPOCH0 + t0, 'heat'));
+    for (let k = 1; k <= 61; k++) out.push(...am.onFrame(blindAt(t0 + k * 1000)));
+    return out;
+  }
+  test('at 15 km/h (below rule 4’s 20) the first blind cap still says why the sound stopped', () => {
+    const am = createAlertManager(C, { mode: 'live' });
+    expect(blindCap(am, 0).map((c) => `${c.action}:${c.kind}`)).toEqual(['start:sleep', 'stop:sleep', 'once:monitoring_paused']);
+  });
+  test('a second blind cap within 10 min: the Critical stops, monitoring_paused is suppressed (tier1_rate)', () => {
+    const am = createAlertManager(C, { mode: 'live' });
+    blindCap(am, 0);
+    const second = blindCap(am, 120_000);
+    expect(second.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:sleep', 'stop:sleep']);
+    expect(am.stats().log.filter((e) => e.kind === 'monitoring_paused').map((e) => `${e.outcome}:${e.why ?? ''}`)).toEqual(['delivered:', 'suppressed:tier1_rate']);
+  });
+  test('after 10 min it is delivered again', () => {
+    const am = createAlertManager(C, { mode: 'live' });
+    blindCap(am, 0);
+    const later = blindCap(am, 61_000 + C.alerts.tier1EveryS * 1000);
+    expect(later.map((c) => c.kind)).toContain('monitoring_paused');
+  });
+});
