@@ -11,7 +11,10 @@
 //   once per 10 min.
 // D4: after a D1/D2 warning, 3.0 s of OBSERVED off-road time (non-null, non-on-road zones, incl. C-8's
 //   far lateral) with no return to road centre or forward road → unresponsive. Occlusion neither adds
-//   nor clears it: no alert from a LOST frame (T8 review I2).
+//   nor clears it: no alert from a LOST frame (T8 review I2). Once pending it persists below 10 km/h and
+//   keeps accumulating at any speed; it clears only on an on-road frame or after a KNOWN speed below
+//   criticalEndBelowKmh held for criticalEndAfterS (as a Critical ends; unknown speed never clears it;
+//   T8 round-1 review R1-I1). Nothing new starts below 10 (or 20) km/h.
 // Speed gates: below 20 km/h nothing drains or counts (log only); below 10, or unknown, no alert at all.
 import type { DmsConfig, ZoneId, ZoneSpec } from './config';
 import type { CalibrationState } from './calibration';
@@ -55,6 +58,8 @@ export interface AttentionInput {
   headYawSpeedDegS: number | null;
   /** the speed the rules use (ContextState.ruleSpeedKmh); null counts as below 10 */
   ruleSpeedKmh: number | null;
+  /** the speed is measured now (ContextState.speedKnown): only a known low speed ends a pending D4 */
+  speedKnown: boolean;
   /** SEARCH or phone handling: the buffer and the accumulators hold */
   freeze: boolean;
   gates: DistractionGates;
@@ -95,6 +100,8 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
   let d3Lap = { startT: Number.NaN, s: 0 };
   /** observed off-road seconds since a D1/D2 warning; null when none is pending */
   let d4OffS: number | null = null;
+  /** start of the current run of a known speed below criticalEndBelowKmh while D4 is pending */
+  let lowKnownSince: number | null = null;
   const grace = new Map<ZoneId, number>();
 
   function bufferS(speedKmh: number): number {
@@ -113,6 +120,7 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       d1Armed = true;
       d2Armed = true;
       d4OffS = null;
+      lowKnownSince = null;
       grace.clear();
     },
 
@@ -191,12 +199,18 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
 
       // D4 — unresponsive after a D1/D2 warning.
       if (d4OffS !== null && !events.some((e) => e.kind === 'd1_warning' || e.kind === 'd2_warning')) {
-        if (onRoad || !alerting) d4OffS = null;
-        else if (spec !== null) {
+        const al = cfg.alerts;
+        if (x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < al.criticalEndBelowKmh) lowKnownSince ??= x.tMs;
+        else lowKnownSince = null;
+        if (onRoad || (lowKnownSince !== null && x.tMs - lowKnownSince >= al.criticalEndAfterS * 1000 - EPS)) {
+          d4OffS = null;
+          lowKnownSince = null;
+        } else if (spec !== null) {
           // Observed off-road only; a handling freeze with a zone still counts (a phone in hand).
           d4OffS += x.dtS;
           if (d4OffS >= d.d4.returnWithinS - EPS) {
             d4OffS = null;
+            lowKnownSince = null;
             events.push({ kind: 'd4_unresponsive', tMs: x.tMs });
           }
         }

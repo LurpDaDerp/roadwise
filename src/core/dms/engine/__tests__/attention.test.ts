@@ -13,6 +13,8 @@ interface Seg {
   zone: ZoneId | null;
   frames: number;
   speed?: number | null;
+  /** default: the speed is known when it is not null */
+  speedKnown?: boolean;
   freeze?: boolean;
   headYawSpeedDegS?: number;
 }
@@ -33,6 +35,7 @@ function run(segs: Seg[], opts: { fps?: number; sensitivity?: Sensitivity; gates
         zone: s.zone,
         headYawSpeedDegS: s.headYawSpeedDegS ?? 0,
         ruleSpeedKmh: s.speed === undefined ? 60 : s.speed,
+        speedKnown: s.speedKnown ?? s.speed !== null,
         freeze: s.freeze ?? false,
         gates: opts.gates ?? ALL,
       };
@@ -236,7 +239,7 @@ describe('the tunnel rules end to end (rev1 I6): the context tracker feeding the
       const tMs = (i * 1000) / 15;
       if (i % 15 === 0) t.onRow(raw(tMs, tMs < 5000 ? 20 : -1, tMs < 5000), tMs, { imuMoving, localMinutes: 720, tripElapsedS: tMs / 1000 });
       const st = t.at(tMs);
-      const out = a.onFrame({ tMs, dtS: i === 0 ? 0 : 1 / 15, zone: tMs < 60_000 ? 'road_centre' : 'centre_stack', headYawSpeedDegS: 0, ruleSpeedKmh: st.ruleSpeedKmh, freeze: false, gates: { d1: !st.imuAbsentHold, d2: true, d3: true } });
+      const out = a.onFrame({ tMs, dtS: i === 0 ? 0 : 1 / 15, zone: tMs < 60_000 ? 'road_centre' : 'centre_stack', headYawSpeedDegS: 0, ruleSpeedKmh: st.ruleSpeedKmh, speedKnown: st.speedKnown, freeze: false, gates: { d1: !st.imuAbsentHold, d2: true, d3: true } });
       kinds.push(...out.events.map((e) => e.kind));
     }
     return kinds;
@@ -268,5 +271,26 @@ describe('T8 review round 1', () => {
     const out: Seg[] = [road(3)];
     for (let i = 0; i < 3; i++) out.push({ zone: 'lap', frames: 15, freeze: true }, road(60));
     expect(run(out).kinds).not.toContain('d3_phone_pattern');
+  });
+});
+
+describe('T8 round-1 review R1-I1: a pending D4 persists below the alerting speed', () => {
+  const warn: Seg[] = [road(3), { zone: 'centre_stack', frames: 45 }]; // D1 warning at 60 km/h
+  test('decelerating to 8 km/h while still looking away → D4 fires at 3.0 s observed', () => {
+    expect(run([...warn, { zone: 'centre_stack', frames: 45, speed: 8 }]).kinds).toContain('d4_unresponsive');
+  });
+  test('unknown speed never clears it → fires', () => {
+    expect(run([...warn, { zone: 'centre_stack', frames: 45, speed: null }]).kinds).toContain('d4_unresponsive');
+  });
+  test('a KNOWN 5 km/h held for 5 s clears it', () => {
+    const r = run([...warn, { zone: null, frames: 75, speed: 5 }, { zone: 'centre_stack', frames: 60, speed: 5 }]);
+    expect(r.kinds).not.toContain('d4_unresponsive');
+  });
+  test('4 s at 8, one frame at 12, 2 s at 8: the low run restarts, so it is not cleared', () => {
+    const r = run([...warn, { zone: null, frames: 60, speed: 8 }, { zone: null, frames: 1, speed: 12 }, { zone: null, frames: 30, speed: 8 }, { zone: 'centre_stack', frames: 45, speed: 8 }]);
+    expect(r.kinds).toContain('d4_unresponsive');
+  });
+  test('nothing new STARTS below 10 km/h', () => {
+    expect(run([road(3, { speed: 8 }), { zone: 'centre_stack', frames: 200, speed: 8 }]).kinds).not.toContain('d4_unresponsive');
   });
 });
