@@ -78,7 +78,6 @@ export const hubCopy = {
   challenges: {
     title: 'Challenges',
     /** Task 9's words for the same numbers ("driving days" would read as the window). */
-    progress: (pass: number, target: number) => `${pass} of ${target} days counted`,
   },
 
   nextBadge: (text: string) => `Next badge: ${text}`,

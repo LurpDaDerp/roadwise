@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Card, ListRow, Text, useTheme } from '@/ui';
 
 import type { ChallengeDef, Enrolment } from '../api';
-import { CATEGORY_LABEL } from '../copy/common';
+import { CATEGORY_LABEL, goalProgressText } from '../copy/common';
 import { hubCopy as copy } from '../copy/hub';
 import { challengeView } from '../viewModel';
 
@@ -39,7 +39,7 @@ export function ActiveChallenges({
         {rows.map(({ e, def }, i) => {
           const view = challengeView(e, def);
           const title = CATEGORY_LABEL[view.predicate];
-          const subtitle = copy.challenges.progress(view.pass, view.target);
+          const subtitle = goalProgressText(view.pass, view.target);
           return (
             <View
               key={e.id}

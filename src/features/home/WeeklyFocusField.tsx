@@ -5,6 +5,7 @@ import { Pressable, View } from 'react-native';
 import { useDataSource } from '@/data/queries';
 import { RewardsOfflineError } from '@/features/rewards/api';
 import { goalActiveLine, goalSentence } from '@/features/rewards/copy/common';
+import { goalProgressText, useCurrentWeekStart } from '@/features/rewards';
 import { useEnsureWeek } from '@/features/rewards/useEnsureWeek';
 import { useRewards } from '@/features/rewards/useRewards';
 import { currentWeekGoal } from '@/features/rewards/goal/weeks';
@@ -55,10 +56,12 @@ function FocusBody() {
   // No goal for this week yet and online: open it (at most once a session and week, never
   // offline, never from the saved copy — `useEnsureWeek`'s own rules).
   useEnsureWeek();
+  // The server's week (final review m9): undefined while loading, null when only the phone's is known.
+  const weekStart = useCurrentWeekStart();
 
   if (rewards.data) {
-    // The one "this week's goal" rule (final review m5), in the device's week as `useEnsureWeek` asks.
-    const goal = currentWeekGoal(rewards.data.snapshot, dayKey(new Date(now()), deviceZone()));
+    // The one "this week's goal" rule (final review m5), in the server's week (m9).
+    const goal = currentWeekGoal(rewards.data.snapshot, dayKey(new Date(now()), deviceZone()), weekStart);
     if (goal === null) {
       return (
         <Text variant="subhead" tone="muted" testID="weekly-focus-none">
@@ -68,7 +71,7 @@ function FocusBody() {
     }
     const view = goalView(goal);
     const sentence = goalSentence(view.category, view.target);
-    const progress = copy.progress(view.pass, view.target);
+    const progress = goalProgressText(view.pass, view.target);
     // Active: the shared line without its count (the row prints the count itself), never "N more
     // days"; the proration promise only while it can hold, and nothing after a failed day (null).
     const note =

@@ -133,7 +133,7 @@ describe('ChallengesScreen', () => {
   test('Active shows progress in driving days; a row opens its detail', async () => {
     const running = enrolmentRow('phone_down', { pass_days: 6, fail_days: 4 });
     await renderList(snapshot({ challenges: [running] }));
-    expect(screen.getByText('6 of 10 · 4 driving days left')).toBeTruthy();
+    expect(screen.getByText('6 of 10 driving days · 4 driving days left')).toBeTruthy();
     await press(screen.getByTestId('challenge-row-phone_down'));
     expect(mockRouter.push).toHaveBeenCalledWith(challengeHref('phone_down'));
   });
@@ -224,10 +224,10 @@ describe('ChallengeDetailScreen', () => {
     const running = enrolmentRow('phone_down', { pass_days: 6, fail_days: 4, start_day: '2026-09-10' });
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     const { api } = await renderDetail('phone_down', snapshot({ challenges: [running] }));
-    expect(screen.getByText('6 of 10 · 4 driving days left')).toBeTruthy();
+    expect(screen.getByText('6 of 10 driving days · 4 driving days left')).toBeTruthy();
     const bar = screen.getByTestId('challenge-progress');
     expect(bar.props.accessibilityRole).toBe('progressbar');
-    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 10, now: 6, text: '6 of 10 days counted, 4 driving days left' });
+    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 10, now: 6, text: '6 of 10 driving days counted, 4 driving days left' });
     expect(screen.getByText(/^Counts the days you drive, from September 10\./)).toBeTruthy();
     await press(screen.getByTestId('challenge-leave'));
     expect(alert).toHaveBeenCalledTimes(1);
@@ -248,7 +248,7 @@ describe('ChallengeDetailScreen', () => {
     const running = enrolmentRow('safe_run', { pass_days: 0, fail_days: 0, start_day: '2026-09-24' });
     await renderDetail('safe_run', snapshot({ challenges: [running] }));
     expect(screen.getByText(copy.startsTomorrow)).toBeTruthy();
-    expect(screen.getByText('0 of 7 · 10 driving days left')).toBeTruthy();
+    expect(screen.getByText('0 of 7 driving days · 10 driving days left')).toBeTruthy();
   });
 
   test.each(['busy', 'not_available', 'unknown'] as const)('a leave refusal (%s) is worded', async (code) => {

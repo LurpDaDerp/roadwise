@@ -11,9 +11,9 @@ import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } fr
 
 import type { RewardsApi, WeeklyGoal } from '../api';
 import { DayBar } from '../challenges/ChallengeRow';
-import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
+import { goalActiveLine, goalProgressText, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { goalCopy as copy } from '../copy/goal';
-import { useEnsureWeek } from '../useEnsureWeek';
+import { useCurrentWeekStart, useEnsureWeek } from '../useEnsureWeek';
 import { useRewards } from '../useRewards';
 import { goalView } from '../viewModel';
 import { FocusPicker } from './FocusPicker';
@@ -47,11 +47,13 @@ export function WeeklyGoalScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
   const { now } = useDataSource();
   const rewards = useRewards(deps);
   useEnsureWeek(deps);
+  // The server's week (final review m9); undefined while loading, when no goal is claimed.
+  const weekStart = useCurrentWeekStart(deps);
   const [picking, setPicking] = useState(false);
 
   const today = dayKey(new Date(now()), tz ?? deviceZone());
   const data = rewards.data;
-  const weeks = data ? goalWeeks(data.snapshot, today) : null;
+  const weeks = data ? goalWeeks(data.snapshot, today, weekStart) : null;
   const back = router.canGoBack() ? () => router.back() : null;
 
   let body;
@@ -141,7 +143,7 @@ function ThisWeek({ goal }: { goal: WeeklyGoal }) {
         <DayBar
           value={view.pass}
           max={view.target}
-          text={copy.progress(view.pass, view.target)}
+          text={goalProgressText(view.pass, view.target)}
           spoken={copy.progressSpoken(view.pass, view.target)}
           label={copy.progressLabel}
           testID="goal-progress"

@@ -11,7 +11,7 @@ import { Banner, Button, Card, ListRow, Screen, Skeleton, Text, useTheme } from 
 import { RewardsOfflineError, type RewardsSnapshot, type WeeklyGoal } from '../api';
 import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { hubCopy as copy } from '../copy/hub';
-import { useEnsureWeek } from '../useEnsureWeek';
+import { useCurrentWeekStart, useEnsureWeek } from '../useEnsureWeek';
 import { useRewards, type RewardsDeps } from '../useRewards';
 import { classView, goalView, streakView } from '../viewModel';
 import { currentWeekGoal } from '../goal/weeks';
@@ -117,6 +117,7 @@ export function RewardsHubScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: s
   const online = useOnline();
   const rewards = useRewards(deps);
   useEnsureWeek(deps);
+  const weekStart = useCurrentWeekStart(deps);
   const referralOn = useReferralFlag();
   const zone = tz ?? deviceZone();
   const today = dayKey(new Date(now()), zone);
@@ -140,7 +141,7 @@ export function RewardsHubScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: s
     body = <HubSkeleton />;
   } else {
     const { snapshot } = data;
-    const goal = currentWeekGoal(snapshot, today);
+    const goal = currentWeekGoal(snapshot, today, weekStart);
     hasActive = snapshot.challenges.some((c) => c.state === 'active');
     const earnedIds = new Set(snapshot.badges.map((b) => b.badge_id));
     const teaserDefs = snapshot.badgeDefs.filter((d) => d.family !== 'referrals' || referralOn || earnedIds.has(d.id));

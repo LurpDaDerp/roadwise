@@ -259,7 +259,7 @@ describe('RewardsHubScreen — goal, challenges, badges, links', () => {
       ],
     });
     await renderHub(snap);
-    expect(screen.getByTestId('hub-challenge-phone_down')).toHaveTextContent(/No phone use.*6 of 10 days counted/s);
+    expect(screen.getByTestId('hub-challenge-phone_down')).toHaveTextContent(/No phone use.*6 of 10 driving days/s);
     expect(screen.getByTestId('hub-challenge-safe_run')).toBeTruthy();
     expect(screen.queryByTestId('hub-challenge-smooth_ride')).toBeNull();
     await press('hub-challenge-phone_down');

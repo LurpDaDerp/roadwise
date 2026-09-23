@@ -87,9 +87,6 @@ export const homeCopy = {
   /** This week's focus in the RECORD section (§7.B B1 item 6, M5). */
   focus: {
     label: 'This week',
-    /** Passing driving days of the goal's target: "2 of 4 driving days" (Task 9's words). */
-    progress: (pass: number, target: number) =>
-      `${pass} of ${target} ${target === 1 ? 'driving day' : 'driving days'}`,
     /** A new week's goal has not been opened yet (it is opened on the next online look). */
     none: 'No goal for this week yet.',
     offline: "Your weekly goal appears when you're online.",

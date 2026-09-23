@@ -9,7 +9,7 @@
  * (rev1: R-A); no "!", no money words; speed is framed as time within the limit.
  */
 import type { PredicateKey, RewardsRpcCode } from '../api';
-import { BUSY_LINE, pointsText } from './common';
+import { BUSY_LINE, goalProgressText, pointsText } from './common';
 
 const drivingDays = (n: number): string => `${n} driving ${n === 1 ? 'day' : 'days'}`;
 
@@ -44,9 +44,10 @@ export const challengesCopy = {
   completed: 'Completed',
   ended: 'Ended',
   /** "6 of 10 · 4 driving days left" (days to drive in the window, not time). */
-  progress: (pass: number, target: number, remaining: number) => `${pass} of ${target} · ${drivingDays(remaining)} left`,
+  progress: (pass: number, target: number, remaining: number) =>
+    `${goalProgressText(pass, target)} · ${drivingDays(remaining)} left`,
   progressSpoken: (pass: number, target: number, remaining: number) =>
-    `${pass} of ${target} days counted, ${drivingDays(remaining)} left`,
+    `${goalProgressText(pass, target)} counted, ${drivingDays(remaining)} left`,
   progressLabel: 'Progress',
   rulesLabel: 'How it counts',
   /** rev1: R-A. Shown before joining: counting starts the day after. */

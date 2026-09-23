@@ -9,19 +9,15 @@
  * fine"); nothing asks the driver to drive more.
  */
 import type { RewardsRpcCode } from '../api';
-import { BUSY_LINE, pointsText } from './common';
-
-const drivingDays = (n: number): string => `${n} driving ${n === 1 ? 'day' : 'days'}`;
+import { BUSY_LINE, goalProgressText, pointsText } from './common';
 
 export const goalCopy = {
   title: "This week's goal",
   loading: 'Loading your goal',
   focusLabel: 'Focus',
   progressLabel: 'Progress',
-  /** "2 of 4 driving days": the printed line and the bar's value. */
-  progress: (pass: number, target: number) => `${pass} of ${drivingDays(target)}`,
-  /** What the progress bar says to a screen reader. */
-  progressSpoken: (pass: number, target: number) => `${pass} of ${drivingDays(target)} counted`,
+  /** What the progress bar says to a screen reader; the printed line is `goalProgressText`. */
+  progressSpoken: (pass: number, target: number) => `${goalProgressText(pass, target)} counted`,
   /** The open day is never counted before it settles (rev1: R-A). */
   today: 'Today counts when the day closes.',
   pointsLabel: 'Points',

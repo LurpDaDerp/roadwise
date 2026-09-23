@@ -13,7 +13,7 @@ import { CATEGORY_LABEL, OFFLINE_LINE, pointsText } from '../copy/common';
 import { challengeName, challengesCopy as copy } from '../copy/challenges';
 import { currentWeekGoal } from '../goal/weeks';
 import { challengeHref } from '../hub/routes';
-import { useEnsureWeek } from '../useEnsureWeek';
+import { useCurrentWeekStart, useEnsureWeek } from '../useEnsureWeek';
 import { useRewards } from '../useRewards';
 import { challengeView } from '../viewModel';
 import { ChallengeRow, formatInstant } from './ChallengeRow';
@@ -122,6 +122,7 @@ export function ChallengesScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
   const { now } = useDataSource();
   const rewards = useRewards(deps);
   useEnsureWeek(deps);
+  const weekStart = useCurrentWeekStart(deps);
   const [chosen, setChosen] = useState<ChallengeTab | null>(null);
 
   const zone = tz ?? deviceZone();
@@ -158,7 +159,7 @@ export function ChallengesScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
     const defsById = new Map(snap.challengeDefs.map((d) => [d.id, d]));
     const lists = challengeLists(snap);
     const tab = chosen ?? (lists.active.length > 0 ? 'active' : 'discover');
-    const goal = currentWeekGoal(snap, today);
+    const goal = currentWeekGoal(snap, today, weekStart);
     const open = (id: string) => router.push(challengeHref(id));
     tabs = <Tabs value={tab} onChange={setChosen} />;
 
