@@ -70,6 +70,24 @@ export function dbscan(points: readonly AnglePair[], eps: number, minPts: number
 }
 
 /**
+ * One more drive of a recurring candidate: the running mean over drives (drives + 1). If the merged
+ * zone would leave the bounds, the old zone is kept as it was (T7 review R1-m1).
+ */
+export function mergeLearnedZone(old: LearnedZone, cur: MirrorCandidate, cfg: Pick<DmsConfig, 'zones' | 'calibration'>): LearnedZone {
+  const n = old.drives;
+  const mix = (a: number, b: number) => (a * n + b) / (n + 1);
+  const merged: LearnedZone = {
+    id: old.id,
+    yawDeg: mix(old.yawDeg, cur.yaw),
+    pitchDeg: mix(old.pitchDeg, cur.pitch),
+    halfYawDeg: mix(old.halfYawDeg, cur.halfYawDeg),
+    halfPitchDeg: mix(old.halfPitchDeg, cur.halfPitchDeg),
+    drives: n + 1,
+  };
+  return learnedZoneWithinBounds(merged, cfg) ? merged : old;
+}
+
+/**
  * `prior` is the learned zones of a profile whose mount has ALREADY matched; the engine façade starts
  * with [] and calls `setPrior` only on the calibrator's `warm_start` (T7 review m4, Task 12/14).
  */
@@ -214,16 +232,7 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
           out.push({ id: m, yawDeg: cur.yaw, pitchDeg: cur.pitch, halfYawDeg: cur.halfYawDeg, halfPitchDeg: cur.halfPitchDeg, drives: 1 });
           continue;
         }
-        const n = old.drives;
-        const mix = (a: number, b: number) => (a * n + b) / (n + 1);
-        out.push({
-          id: m,
-          yawDeg: mix(old.yawDeg, cur.yaw),
-          pitchDeg: mix(old.pitchDeg, cur.pitch),
-          halfYawDeg: mix(old.halfYawDeg, cur.halfYawDeg),
-          halfPitchDeg: mix(old.halfPitchDeg, cur.halfPitchDeg),
-          drives: n + 1,
-        });
+        out.push(mergeLearnedZone(old, cur, cfg));
       }
       return out;
     },

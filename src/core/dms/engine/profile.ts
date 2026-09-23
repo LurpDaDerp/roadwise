@@ -123,14 +123,14 @@ function signature(x: unknown): MountSignature | null {
   return { yawDeg: s.yawDeg, pitchDeg: s.pitchDeg, rollDeg: s.rollDeg, boxCx: s.boxCx, boxCy: s.boxCy, iod: s.iod };
 }
 
-function learnedZone(x: unknown, cfg: ZoneCfg): LearnedZone | null {
+/** A structurally valid learned zone, or null (which rejects the profile). Bounds are checked by the caller. */
+function learnedZone(x: unknown): LearnedZone | null {
   const k = ['id', 'yawDeg', 'pitchDeg', 'halfYawDeg', 'halfPitchDeg', 'drives'];
   if (!isObj(x) || !keysExactly(x, k)) return null;
   if (x.id !== 'rear_mirror' && x.id !== 'driver_mirror' && x.id !== 'passenger_mirror') return null;
   if (![x.yawDeg, x.pitchDeg, x.halfYawDeg, x.halfPitchDeg, x.drives].every(fin)) return null;
   const z = x as unknown as LearnedZone;
   if (!(z.halfYawDeg > 0) || !(z.halfPitchDeg > 0) || !Number.isInteger(z.drives) || z.drives < 0) return null;
-  if (!learnedZoneWithinBounds(z, cfg)) return null;
   return { id: z.id, yawDeg: z.yawDeg, pitchDeg: z.pitchDeg, halfYawDeg: z.halfYawDeg, halfPitchDeg: z.halfPitchDeg, drives: z.drives };
 }
 
@@ -180,9 +180,10 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
   if (!Array.isArray(x.learnedZones)) return null;
   const learnedZones: LearnedZone[] = [];
   for (const z of x.learnedZones) {
-    const lz = learnedZone(z, cfg);
-    if (lz === null) return null;
-    learnedZones.push(lz);
+    const lz = learnedZone(z);
+    if (lz === null) return null; // a structural error rejects the profile
+    // An out-of-bounds zone is dropped, never the whole profile (T7 review R1-m1).
+    if (learnedZoneWithinBounds(lz, cfg)) learnedZones.push(lz);
   }
   if (!fin(x.savedAtMs) || x.savedAtMs < 0) return null;
   return {

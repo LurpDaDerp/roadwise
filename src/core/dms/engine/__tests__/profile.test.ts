@@ -44,9 +44,7 @@ test.each([
   ['a neutral MAR below the floor', { ...GOOD, neutralMar: 0.01 }],
   ['a learned zone with an unknown id', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], id: 'lap' }] }],
   ['an unknown key', { ...GOOD, extra: 1 }],
-  ['a learned zone wider than 10°', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], halfYawDeg: 30 }] }],
-  ['a learned zone far from its default mirror', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], yawDeg: 60, pitchDeg: 30 }] }],
-  ['a learned zone reaching within 15° of the centre', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], yawDeg: 20, pitchDeg: 5, halfYawDeg: 9 }] }],
+  ['a learned zone with a non-finite field', { ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], halfYawDeg: Number.NaN }] }],
   ['a missing key', (() => { const { savedAtMs: _s, ...rest } = GOOD; return rest; })()],
 ])('refuses %s', (_n, value) => {
   expect(parseProfile(value)).toBeNull();
@@ -75,4 +73,18 @@ test('toProfile after calibration round-trips through parseProfile', () => {
   expect(parseProfile(JSON.parse(JSON.stringify(p)))).toEqual(p);
   // No profile before a pass: nothing learned to save.
   expect(createCalibrator(C, { driverSide: 'left' }).toProfile(1)).toBeNull();
+});
+
+describe('one bad learned zone never drops a whole profile (T7 review R1-m1)', () => {
+  test.each([
+    ['wider than 10°', { halfYawDeg: 30 }],
+    ['far from its default mirror', { yawDeg: 60, pitchDeg: 30 }],
+    ['reaching within 15° of the centre', { yawDeg: 20, pitchDeg: 5, halfYawDeg: 9 }],
+  ])('a learned zone %s is dropped; the rest of the profile loads', (_n, over) => {
+    const good2 = { id: 'driver_mirror' as const, yawDeg: -45, pitchDeg: 0, halfYawDeg: 5, halfPitchDeg: 4, drives: 2 };
+    const p = parseProfile({ ...GOOD, learnedZones: [{ ...GOOD.learnedZones[0], ...over }, good2] });
+    expect(p).not.toBeNull();
+    expect(p!.learnedZones).toEqual([good2]);
+    expect(p!.gazeCentres).toEqual(GOOD.gazeCentres);
+  });
 });

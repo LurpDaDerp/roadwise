@@ -86,6 +86,8 @@ export interface DmsConfig {
     courseMinSpeedMs: number;
     /** §M4 junction: the turn sign is set above this course rate (°/s) */
     turnSignMinDegS: number;
+    /** plan "Capture states" SEARCH: phone handling is handlingScore ≥ this */
+    handlingMinScore: number;
   };
 
   quality: {
@@ -451,7 +453,7 @@ const zone = (
 const DEFAULT: DmsConfig = {
   v: 1,
   gazeSource: 'geometric',
-  context: { rowStaleMs: 3000, tunnelHoldMs: 600_000, unknownStillHoldMs: 10_000, courseMinSpeedMs: 2, turnSignMinDegS: 2 },
+  context: { rowStaleMs: 3000, tunnelHoldMs: 600_000, unknownStillHoldMs: 10_000, courseMinSpeedMs: 2, turnSignMinDegS: 2, handlingMinScore: 0.6 },
   quality: {
     lostMinBoxArea: 0.01,
     lostMaxFaceLuma: 25,
@@ -715,6 +717,7 @@ const FRACTIONS = [
   'nod.closureOpenness',
   'yawn.speechMaxRatio',
   'fatigue.minTrackingShare',
+  'context.handlingMinScore',
   'fatigue.perclosOpennessBelow',
   'summary.goodSessionMinTrackingShare',
 ];

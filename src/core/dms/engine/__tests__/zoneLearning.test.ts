@@ -2,7 +2,7 @@
 // mount (the profile carries the learned zones; profiles are per mount signature).
 import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
 import type { LearnedZone } from '../profile';
-import { createZoneLearner, dbscan } from '../zoneLearning';
+import { createZoneLearner, dbscan, mergeLearnedZone } from '../zoneLearning';
 import { gauss, rng } from '../__fixtures__/synth';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
@@ -239,4 +239,14 @@ describe('T7 review round 1', () => {
     learner.setPrior(prior);
     expect(Object.keys(learner.promoted())).toEqual(['rear_mirror']);
   });
+});
+
+test('T7 review R1-m1: a merge that would leave the bounds keeps the old zone', () => {
+  const cand = { id: 'rear_mirror' as const, yaw: 22, pitch: 7, halfYawDeg: 4, halfPitchDeg: 4, count: 20 };
+  // An old zone at the reach limit (from an older build): merging 1:1 stays legal and is taken…
+  const old1 = { id: 'rear_mirror' as const, yawDeg: 20, pitchDeg: 5, halfYawDeg: 9, halfPitchDeg: 4, drives: 1 };
+  expect(mergeLearnedZone(old1, cand, C)).toMatchObject({ yawDeg: 21, pitchDeg: 6, halfYawDeg: 6.5, drives: 2 });
+  // …but 3:1 it would still reach within 15° of the centre: the old zone is kept as it was.
+  const old3 = { ...old1, drives: 3 };
+  expect(mergeLearnedZone(old3, cand, C)).toEqual(old3);
 });
