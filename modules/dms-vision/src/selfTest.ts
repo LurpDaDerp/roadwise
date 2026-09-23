@@ -120,6 +120,31 @@ const vectorSchema = z.discriminatedUnion('kind', [
       ),
     }),
   }),
+  z.strictObject({
+    ...base,
+    kind: z.literal('focal'),
+    inputs: z.strictObject({
+      cases: z.array(
+        z.strictObject({
+          sensor: z
+            .strictObject({
+              focalLengthMm: num,
+              physicalWidthMm: num,
+              physicalHeightMm: num,
+              pixelArrayWidth: num,
+              pixelArrayHeight: num,
+              activeWidth: num,
+              activeHeight: num,
+            })
+            .nullable(),
+          width: z.number().int().positive(),
+          height: z.number().int().positive(),
+          rotationDeg: rotation,
+        })
+      ),
+    }),
+    expected: z.strictObject({ focalScales: z.array(num) }),
+  }),
 ]);
 
 /** Validate parsed vector files; throws with the first problem. */
@@ -205,8 +230,9 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
     }
     if (typeof r.error === 'string') return { ...result({ error: r.error }), ok: false };
     if (typeof r.skipped === 'string') {
-      // Only the net's vectors may be skipped, and only on a build without the net.
-      const allowed = v.kind === 'onnx' && !out.gazeNetAvailable;
+      // Only the net's vectors may be skipped, and only on a build without the net; and the Android
+      // focal vector on iOS, which has no camera characteristics (it reads the intrinsic matrix).
+      const allowed = (v.kind === 'onnx' && !out.gazeNetAvailable) || (v.kind === 'focal' && out.platform === 'ios');
       return { ...result({ skipped: r.skipped }), ok: allowed };
     }
     switch (v.kind) {
@@ -282,6 +308,9 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
         });
         break;
       }
+      case 'focal':
+        d.nums('focalScales', r.focalScales, v.expected.focalScales);
+        break;
       case 'batcher': {
         // Which append flushed, and how many records went: exact. The anchor times: to the time bound.
         const cases = r.cases as { flushes: unknown }[] | undefined;

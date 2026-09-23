@@ -9,6 +9,7 @@ import {
   bytesToBase64,
   recordBatchOutput,
   runBatcherVector,
+  runFocalVector,
   runGazeInputsVector,
   runHeadPoseVector,
   runStatsTrackerVector,
@@ -42,6 +43,8 @@ function nativeResult(v: GoldenVector, gazeNet: boolean): Record<string, unknown
       return gazeNet ? { ...head, cases: v.expected.cases } : { ...head, skipped: 'gaze net not built' };
     case 'batcher':
       return { ...head, cases: runBatcherVector(v.inputs) };
+    case 'focal':
+      return { ...head, focalScales: runFocalVector(v.inputs) };
   }
 }
 
@@ -184,4 +187,14 @@ test('a port whose anchor epoch is read on a different clock than the record tim
   }));
   results[i] = { ...results[i]!, cases };
   expect(diffSelfTest(vectors, output(results, true)).vectors[i]!.ok).toBe(false);
+});
+
+test('the Android focal vector may be skipped on iOS only', () => {
+  const results = faithful(true);
+  const i = vectors.findIndex((v) => v.kind === 'focal');
+  results[i] = { name: vectors[i]!.name, kind: 'focal', skipped: 'Android camera characteristics only' };
+  const onIos = diffSelfTest(vectors, JSON.stringify({ version: 1, platform: 'ios', gazeNetAvailable: true, results }));
+  expect(onIos.vectors[i]!.ok).toBe(true);
+  const onAndroid = diffSelfTest(vectors, JSON.stringify({ version: 1, platform: 'android', gazeNetAvailable: true, results }));
+  expect(onAndroid.vectors[i]!.ok).toBe(false);
 });

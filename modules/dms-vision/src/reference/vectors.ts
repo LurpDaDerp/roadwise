@@ -3,6 +3,7 @@
 // diffs them against `expected`.
 import { buildFrameBatch } from '../wire';
 import { runBatcher, type BatcherFlush, type BatcherFrame } from './batcher';
+import { focalScale, type SensorGeometry } from './focal';
 import { GazeInputAssembler, SubjectStatisticTracker } from './gazeInputs';
 import { geometry } from './features';
 import { headPoseFromAnyLayout } from './headPose';
@@ -84,6 +85,14 @@ export type GoldenVector =
       /** the wall clock read with a frame's `nowMs` is `nowMs + epochOffsetMs` */
       inputs: { cases: { intervalMs: number; epochOffsetMs: number; frames: BatcherFrame[] }[] };
       expected: { cases: { flushes: BatcherFlush[] }[] };
+    }
+  | {
+      name: string;
+      description: string;
+      kind: 'focal';
+      /** Android camera characteristics (null: the field-of-view fallback); iOS answers `skipped` */
+      inputs: { cases: { sensor: SensorGeometry | null; width: number; height: number; rotationDeg: Rotation }[] };
+      expected: { focalScales: number[] };
     };
 
 export type VectorKind = GoldenVector['kind'];
@@ -177,6 +186,10 @@ export function runHeadPoseVector(inputs: Extract<GoldenVector, { kind: 'headPos
 
 export function runBatcherVector(inputs: Extract<GoldenVector, { kind: 'batcher' }>['inputs']): { flushes: BatcherFlush[] }[] {
   return inputs.cases.map((c) => ({ flushes: runBatcher(c.intervalMs, c.frames, c.epochOffsetMs) }));
+}
+
+export function runFocalVector(inputs: Extract<GoldenVector, { kind: 'focal' }>['inputs']): number[] {
+  return inputs.cases.map((c) => focalScale(c.sensor, c.width, c.height, c.rotationDeg));
 }
 
 /** Upright landmarks of a record frame (for tests). */

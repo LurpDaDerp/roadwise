@@ -27,6 +27,8 @@ enum SelfTest {
         case "statsTracker": result["current"] = try statsTracker(inputs)
         case "headPose": result["poses"] = try headPose(inputs)
         case "batcher": result["cases"] = try batcher(inputs)
+        // The Android focal vector: iOS reads fx from the sample's intrinsic matrix instead.
+        case "focal": result["skipped"] = "Android camera characteristics only"
         case "onnx":
           if !GazeNetFactory.available {
             result["skipped"] = "gaze net not built"

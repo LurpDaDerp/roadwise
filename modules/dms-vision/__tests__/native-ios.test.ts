@@ -292,3 +292,7 @@ test('start reads a cached foreground flag, never main.sync (Task 3 review nit)'
   expect(allCode()).not.toContain('DispatchQueue.main.sync');
   expect(code('DmsVisionModule.swift')).toContain('AppActivity.shared.isActive');
 });
+
+test('the Android focal vector is answered with skipped on iOS (it reads fx from the intrinsic matrix)', () => {
+  expect(code('SelfTest.swift')).toContain('case "focal": result["skipped"] = "Android camera characteristics only"');
+});

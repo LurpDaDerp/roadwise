@@ -1,233 +1,210 @@
+// DmsVision: the RoadWise driver-monitoring native module (Android). README.md is the binding contract.
+// Events: frames (derived feature records, never pixels or landmarks), status (1 Hz), state.
+// Every rejection carries a contract code (DmsError.code). The iOS twin is ios/DmsVisionModule.swift.
+// The AsyncFunction bodies never use a labelled return (EAS build cc91ab36 refused one); each ends
+// in Unit.
+
 package expo.modules.dmsvision
 
 import android.Manifest
 import android.content.Context
-import android.os.Build
-import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
-import expo.modules.interfaces.permissions.Permissions
+import expo.modules.interfaces.permissions.PermissionsResponseListener
+import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
-import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import java.util.Timer
-import java.util.TimerTask
 
-/**
- * DmsVision - the RoadCash driver-monitoring native inference layer (Android).
- *
- * JS contract: see modules/dms-vision/src/index.js and docs/dms/NATIVE_LAYER.md.
- * Events: onFrame (one per processed camera frame), onStatus (1 Hz), onError.
- */
-class DmsVisionModule : Module(), DmsVisionPipeline.FrameListener {
+class DmsVisionModule : Module() {
+  private var controllerOrNull: CaptureController? = null
 
-  private var pipeline: DmsVisionPipeline? = null
-  private val gaze = DmsVisionGaze()
-  private var statusTimer: Timer? = null
-  private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
-  @Volatile private var thermalState: String = "unknown"
+  /** Whether the activity is in the foreground: cached from the activity events, never read by blocking on main. */
+  @Volatile private var foreground = false
 
   private val context: Context
-    get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
-
-  private val permissionsManager: Permissions
-    get() = appContext.permissions ?: throw Exceptions.PermissionsModuleNotFound()
+    get() = appContext.reactContext ?: throw DmsError.state("the React context is gone")
 
   @Synchronized
-  private fun requirePipeline(): DmsVisionPipeline {
-    val existing = pipeline
-    if (existing != null) return existing
-    val created = DmsVisionPipeline(context.applicationContext)
-    created.listener = this
-    pipeline = created
-    return created
+  private fun controller(): CaptureController = controllerOrNull ?: CaptureController(context.applicationContext).also { c ->
+    c.onFrames = { payload -> sendEvent("frames", payload) }
+    c.onState = { state, reason -> sendEvent("state", mapOf("state" to state, "reason" to reason)) }
+    c.onStatus = { status -> sendEvent("status", status) }
+    controllerOrNull = c
+  }
+
+  private fun reject(promise: Promise, e: DmsError) = promise.reject(e.code, e.message, null)
+
+  /** Runs `body` on the controller's session thread and settles `promise` with its result or its contract code. */
+  private fun onSession(promise: Promise, body: (CaptureController) -> Any?) {
+    val c = try {
+      controller()
+    } catch (e: DmsError) {
+      reject(promise, e)
+      null
+    } ?: return
+    c.session.post {
+      try {
+        promise.resolve(body(c))
+      } catch (e: DmsError) {
+        reject(promise, e)
+      } catch (e: Exception) {
+        promise.reject("E_CAMERA", e.message ?: "camera failure", null)
+      }
+    }
+  }
+
+  private fun permission(ask: Boolean, promise: Promise) {
+    val pm = appContext.permissions
+    if (pm == null) {
+      promise.reject("E_UNAVAILABLE", "no permissions module", null)
+      return
+    }
+    val listener = PermissionsResponseListener { result ->
+      val r = result[Manifest.permission.CAMERA]
+      val status = when (r?.status) {
+        PermissionsStatus.GRANTED -> "granted"
+        PermissionsStatus.DENIED -> "denied"
+        else -> "undetermined"
+      }
+      promise.resolve(mapOf("status" to status, "canAskAgain" to (r?.canAskAgain ?: true)))
+    }
+    if (ask) pm.askForPermissions(listener, Manifest.permission.CAMERA) else pm.getPermissions(listener, Manifest.permission.CAMERA)
+  }
+
+  private fun start(opts: StartOptionsRecord, promise: Promise) {
+    val o = try {
+      opts.validated()
+    } catch (e: DmsError) {
+      reject(promise, e)
+      return
+    }
+    if (appContext.permissions?.hasGrantedPermissions(Manifest.permission.CAMERA) != true) {
+      reject(promise, DmsError.permission("camera permission has not been granted"))
+      return
+    }
+    val owner = appContext.currentActivity as? LifecycleOwner
+    onSession(promise) { c ->
+      if (!foreground || owner == null) throw DmsError.notForeground("the app is not in the foreground")
+      c.start(o, owner)
+      null
+    }
+  }
+
+  private fun setPolicy(p: CapturePolicyRecord, promise: Promise) {
+    val v = try {
+      p.validated()
+    } catch (e: DmsError) {
+      reject(promise, e)
+      return
+    }
+    onSession(promise) { c ->
+      c.setPolicy(v)
+      null
+    }
+  }
+
+  private fun modelInfo(promise: Promise) {
+    try {
+      promise.resolve(
+        mapOf(
+          "landmarkerSha256" to DmsAssets.sha256(context, "face_landmarker.task"),
+          "gazeNetAvailable" to GazeNetFactory.available,
+          "gazeSha256" to GazeNetFactory.modelSha256(context),
+          "mediapipe" to "0.10.35",
+          "onnxruntime" to GazeNetFactory.onnxRuntimeVersion
+        )
+      )
+    } catch (e: DmsError) {
+      reject(promise, e)
+    }
+  }
+
+  private fun selfTest(vectorsJson: String, promise: Promise) {
+    try {
+      val ctx = context
+      promise.resolve(SelfTest.run(vectorsJson, GazeNetFactory.available) { GazeNetFactory.make(ctx) })
+    } catch (e: DmsError) {
+      reject(promise, e)
+    } catch (e: Exception) {
+      promise.reject("E_BAD_ARGS", e.message ?: "selfTest failed", null)
+    }
   }
 
   override fun definition() = ModuleDefinition {
     Name("DmsVision")
 
-    Events("onFrame", "onStatus", "onError")
+    Events("frames", "status", "state")
 
     OnCreate {
-      try {
-        thermalState = dmsThermalStateName(context)
-        registerThermalListener()
-      } catch (_: Exception) {
-        thermalState = "unknown"
+      // The starting value, read once on the main thread; the activity events keep it current.
+      Handler(Looper.getMainLooper()).post {
+        val owner = appContext.currentActivity as? LifecycleOwner
+        foreground = owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) == true
       }
     }
 
     OnDestroy {
-      stopStatusTimer()
-      unregisterThermalListener()
-      // Never block the main thread on a camera teardown (unbind + a MediaPipe graph close):
-      // OnDestroy runs on the main thread and stop() waits for the analysis thread to drain.
-      val current = pipeline
-      pipeline = null
-      Thread({
-        try {
-          current?.stop()
-        } catch (_: Exception) {
-          // ignore
-        }
-        gaze.close()
-      }, "DmsVisionTeardown").start()
+      // Never block the main thread on a camera teardown.
+      controllerOrNull?.let { c -> c.session.post { c.stop("user") } }
     }
 
-    // NOTE (docs/dms/INTEGRATION.md §3): there is deliberately NO OnActivityEntersBackground
-    // handler.  The JS AppState listener is the single owner of the camera across app-state
-    // changes; with two owners the JS-visible state and the native session disagreed.  CameraX
-    // still unbinds by itself (the use case is bound to the activity lifecycle), and the
-    // CameraState observer reports that as an error the JS watchdog reacts to.
-
-    Function("isAvailable") { true }
-
-    AsyncFunction("getPermissionsAsync") { promise: Promise ->
-      Permissions.getPermissionsWithPermissionsManager(permissionsManager, promise, Manifest.permission.CAMERA)
+    OnActivityEntersForeground {
+      foreground = true
     }
 
-    AsyncFunction("requestPermissionsAsync") { promise: Promise ->
-      Permissions.askForPermissionsWithPermissionsManager(permissionsManager, promise, Manifest.permission.CAMERA)
+    // The native owner of the camera across app states (plan: Privacy 5): leaving the foreground
+    // stops the session. Native never restarts it; JS does, through the gate, on return.
+    OnActivityEntersBackground {
+      foreground = false
+      controllerOrNull?.let { c -> c.session.post { c.stop("background") } }
     }
 
-    AsyncFunction("start") { targetFps: Double, facing: String, landmarkFrame: String,
-                             mirrorPair: Boolean, rotationOffsetDegrees: Int ->
-      if (mirrorPair) {
-        // TODO(mirror-pair): the promoted research recipe runs the mesh twice (frame + flipped
-        // frame) and averages through the 478-point mirror permutation, worth ~0.32 deg of LBW
-        // error. Out of scope for this version; implement in the pipeline, not in JS.
-        throw DmsVisionException("mirrorPair is not implemented in this version; pass false")
-      }
-      if (!permissionsManager.hasGrantedPermissions(Manifest.permission.CAMERA)) {
-        throw DmsVisionException("camera permission has not been granted")
-      }
-      val activity = appContext.currentActivity
-        ?: throw DmsVisionException("no current activity; the drive screen must be in the foreground")
-      val lifecycleOwner = activity as? LifecycleOwner
-        ?: throw DmsVisionException("the current activity is not a LifecycleOwner")
-
-      gaze.prepare(context)
-      requirePipeline().start(lifecycleOwner, targetFps, facing, landmarkFrame, rotationOffsetDegrees)
-      startStatusTimer()
-    }
-
-    // A bare `return@AsyncFunction` is rejected by the Kotlin compiler for these generic
-    // lambdas ("expected Any?, actual Unit" - EAS build cc91ab36); end each void body with `Unit`.
-    AsyncFunction("stop") {
-      stopStatusTimer()
-      pipeline?.stop()
+    AsyncFunction("getPermission") { promise: Promise ->
+      permission(false, promise)
       Unit
     }
 
-    Function("setTargetFps") { fps: Double ->
-      pipeline?.setTargetFps(fps)
+    AsyncFunction("requestPermission") { promise: Promise ->
+      permission(true, promise)
       Unit
     }
 
-    Function("setIdleMode") { idle: Boolean ->
-      pipeline?.setIdleMode(idle)
+    AsyncFunction("start") { opts: StartOptionsRecord, promise: Promise ->
+      start(opts, promise)
       Unit
     }
 
-    Function("getIntrinsics") {
-      requirePipeline().intrinsicsReport()
+    AsyncFunction("setPolicy") { p: CapturePolicyRecord, promise: Promise ->
+      setPolicy(p, promise)
+      Unit
     }
 
-    Function("getThermalState") {
-      dmsThermalStateName(context).also { thermalState = it }
-    }
-
-    Function("getModelInfo") {
-      val meta = gaze.loadMetadata(context)
-      mapOf(
-        "onnxSha256" to meta.optString("onnx_sha256", ""),
-        "parameters" to meta.optInt("parameters", 0)
-      )
-    }
-
-    AsyncFunction("predictGaze") { cloud: ByteArray, contextTensor: ByteArray, validity: ByteArray ->
-      gaze.predict(context, cloud, contextTensor, validity)
-    }
-  }
-
-  // -------------------------------------------------------------------------------------------
-  // Status
-  // -------------------------------------------------------------------------------------------
-
-  private fun startStatusTimer() {
-    stopStatusTimer()
-    val timer = Timer("DmsVisionStatus", true)
-    timer.scheduleAtFixedRate(object : TimerTask() {
-      override fun run() {
-        try {
-          sendEvent("onStatus", statusPayload(stopped = false))
-        } catch (_: Exception) {
-          // the module may be tearing down
-        }
+    AsyncFunction("stop") { promise: Promise ->
+      onSession(promise) { c ->
+        c.stop("user")
+        null
       }
-    }, 1000L, 1000L)
-    statusTimer = timer
-  }
-
-  private fun stopStatusTimer() {
-    statusTimer?.cancel()
-    statusTimer = null
-  }
-
-  private fun statusPayload(stopped: Boolean): Map<String, Any?> {
-    val counters = pipeline?.takeCounters() ?: Pair(0, 0)
-    return mapOf(
-      "thermal" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) thermalState else "unknown",
-      "lowPower" to dmsLowPowerMode(context),
-      "fps" to if (stopped) 0.0 else counters.first.toDouble(),
-      "dropped" to counters.second,
-      "running" to (pipeline?.isRunning() ?: false)
-    )
-  }
-
-  private fun registerThermalListener() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-    val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
-    val listener = PowerManager.OnThermalStatusChangedListener { status ->
-      thermalState = dmsThermalStatusName(status)
+      Unit
     }
-    try {
-      power.addThermalStatusListener(listener)
-      thermalListener = listener
-    } catch (_: Exception) {
-      thermalListener = null
-    }
-  }
 
-  private fun unregisterThermalListener() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-    val listener = thermalListener ?: return
-    thermalListener = null
-    try {
-      val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-      power?.removeThermalStatusListener(listener)
-    } catch (_: Exception) {
-      // ignore
+    AsyncFunction("getStatus") { promise: Promise ->
+      onSession(promise) { c -> c.snapshot(false) }
+      Unit
     }
-  }
 
-  // -------------------------------------------------------------------------------------------
-  // DmsVisionPipeline.FrameListener
-  // -------------------------------------------------------------------------------------------
-
-  override fun onFrame(payload: Map<String, Any?>) {
-    try {
-      sendEvent("onFrame", payload)
-    } catch (_: Exception) {
-      // the module may be tearing down
+    AsyncFunction("getModelInfo") { promise: Promise ->
+      modelInfo(promise)
+      Unit
     }
-  }
 
-  override fun onFailure(code: String, message: String) {
-    try {
-      sendEvent("onError", mapOf("code" to code, "message" to message))
-    } catch (_: Exception) {
-      // the module may be tearing down
+    AsyncFunction("selfTest") { vectorsJson: String, promise: Promise ->
+      selfTest(vectorsJson, promise)
+      Unit
     }
+
+    View(DmsPreviewView::class) {}
   }
 }

@@ -9,10 +9,10 @@ The optional `gaze_direct` network runs in the same pipeline only in builds made
 `DMS_GAZE_NET=1`. That is a release gate: it never ships in a production binary until counsel
 clears its licence (§7).
 
-> **Status (Tasks 1–3 of the DMS rework).**
+> **Status (Tasks 1–4 of the DMS rework).**
 > - This README and `src/` define the v2 contract, the TS reference of every native feature and the golden vectors.
 > - `ios/` implements the contract (Task 3). Its Foundation-only files pass every golden vector on Linux Swift 6.1.
-> - The Kotlin under `android/` is still V1. It does not implement this contract, and Task 4 rewrites it.
+> - `android/` implements the contract (Task 4). Its JVM-only files pass every golden vector with kotlinc 2.0.21, and the platform files type-check against the Android 15 API, CameraX 1.4.2, MediaPipe 0.10.35 and ONNX Runtime 1.30.0.
 > - Nothing is proven on a device until the D1 build.
 
 This README is **binding** for the Swift and Kotlin implementations. The TypeScript sources are
@@ -165,7 +165,7 @@ The record clock `tMs` counts from device boot, so it is large, and it is **neve
 
 Per platform:
 - **iOS:** `tMs` = the `CMSampleBuffer` presentation timestamp on the host-time clock, in ms. `anchorEpochMs` is derived at the batch's first frame by sampling `CACurrentMediaTime()` (the same clock) and `Date()` together: `anchorEpochMs = dateMs − (nowMs − anchorTMs)`.
-- **Android:** `tMs` = `ImageInfo.timestamp` / 1e6. At session start native picks the timestamp base: whichever of `SystemClock.elapsedRealtimeNanos()` or `SystemClock.uptimeNanos()` lies within 1 s of the first frame's timestamp. `anchorEpochMs` is derived the same way from that clock and `System.currentTimeMillis()`.
+- **Android:** `tMs` = `ImageInfo.timestamp` / 1e6, rebased at the session's first frame (`FrameClock`): the base is whichever of `SystemClock.elapsedRealtimeNanos()` or the uptime clock (`System.nanoTime()`, CLOCK_MONOTONIC; `SystemClock.uptimeNanos()` needs API 33) lies within 1 s of that frame's timestamp, elapsed first. If neither does, the frame clock is shifted onto elapsedRealtime by the offset measured at that first frame. `anchorEpochMs = System.currentTimeMillis() − (baseNow − anchorTMs)`, with `baseNow` read on the same base.
 - Every duration the engine measures uses `tMs`, never frame counts.
 - **Per session.** The clock base can differ between native sessions (a restart after a stop may pick the other Android base). JS keeps `tMs` monotonic only within one session: the host resets its last-accepted `tMs` to null on every new session (`state` → `starting`/`running` after `stopped`).
 
@@ -234,6 +234,8 @@ Regenerate them with `node --experimental-strip-types --disable-warning=Experime
 | `statsTracker` | trainingMean, warmup, windowS, t[], pushes[] (null = NaN) | `current: [[4]…]` |
 | `headPose` | cases (a matrix in EITHER layout, rotationDeg) | `poses: [[yaw, pitch, roll] or null…]`. null means the layout rule found the layout ambiguous |
 | `onnx` | cases (cloud, context, validity) | `cases: [{ gaze[3], rotation[9] }]`. A build without the net answers `skipped` |
+| `batcher` | cases (intervalMs, epochOffsetMs, frames of tMs and nowMs) | `cases: [{ flushes: [{ after, n, anchorTMs, anchorEpochMs }] }]`: the production `Batcher` over the appends (§3 `frames`) |
+| `focal` | cases (Android camera characteristics or null, width, height, rotationDeg) | `focalScales: [...]`: the Android focal length (`src/reference/focal.ts`). iOS answers `skipped`: it reads fx from the sample's intrinsic matrix |
 
 The vectors are synthetic (`THIRD_PARTY.md`). The generator refuses any vector in which a threshold comparison lies within `MARGIN_MIN = 1e-6` (relative) of its threshold.
 

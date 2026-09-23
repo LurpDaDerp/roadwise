@@ -10,6 +10,7 @@ import { MARGIN_MIN, setMarginProbe } from '../src/reference/probe';
 import {
   bytesToBase64,
   runBatcherVector,
+  runFocalVector,
   runGazeInputsVector,
   runHeadPoseVector,
   runRecordVector,
@@ -285,6 +286,36 @@ function batcherFlush(): GoldenVector {
   };
 }
 
+/**
+ * The Android focal length (plan rev1: m11): camera-characteristic fields in, focalScale out. A 4:3
+ * sensor, a 16:9 active array cropped to 4:3, an active array inside a larger pixel array, each
+ * rotation, and the 70 degree field-of-view fallback (no characteristics, and a zero focal length).
+ */
+function focalAndroid(): GoldenVector {
+  const four3 = { focalLengthMm: 2.2, physicalWidthMm: 4.8, physicalHeightMm: 3.6, pixelArrayWidth: 4000, pixelArrayHeight: 3000, activeWidth: 4000, activeHeight: 3000 };
+  const wide = { focalLengthMm: 2.51, physicalWidthMm: 5.645, physicalHeightMm: 3.175, pixelArrayWidth: 4032, pixelArrayHeight: 2268, activeWidth: 4032, activeHeight: 2268 };
+  const inset = { focalLengthMm: 3.1, physicalWidthMm: 5.12, physicalHeightMm: 3.84, pixelArrayWidth: 4000, pixelArrayHeight: 3000, activeWidth: 3968, activeHeight: 2976 };
+  const inputs = {
+    cases: [
+      { sensor: four3, width: 640, height: 480, rotationDeg: 270 as const },
+      { sensor: four3, width: 640, height: 480, rotationDeg: 0 as const },
+      { sensor: wide, width: 640, height: 480, rotationDeg: 90 as const },
+      { sensor: wide, width: 1280, height: 720, rotationDeg: 180 as const },
+      { sensor: inset, width: 640, height: 480, rotationDeg: 270 as const },
+      { sensor: null, width: 640, height: 480, rotationDeg: 270 as const },
+      { sensor: null, width: 640, height: 480, rotationDeg: 0 as const },
+      { sensor: { ...four3, focalLengthMm: 0 }, width: 640, height: 480, rotationDeg: 90 as const },
+    ],
+  };
+  return {
+    name: 'focal-android',
+    description: 'focalScale from Android camera characteristics (centred crop) and the 70 degree fallback; iOS answers skipped',
+    kind: 'focal',
+    inputs,
+    expected: { focalScales: runFocalVector(inputs) },
+  };
+}
+
 export function onnxInputs(): { cloud: number[]; context: number[]; validity: number[] }[] {
   const asm = new GazeInputAssembler();
   const out: { cloud: number[]; context: number[]; validity: number[] }[] = [];
@@ -308,6 +339,7 @@ export function onnxInputs(): { cloud: number[]; context: number[]; validity: nu
 
 export const VECTOR_NAMES = [
   'batcher-flush',
+  'focal-android',
   'gaze-inputs',
   'head-pose',
   'onnx-parity',
@@ -327,6 +359,7 @@ export type V1TrackerFixture = Parameters<typeof statsTracker>[0];
 export function buildVectors(v1Tracker: V1TrackerFixture): Record<string, GoldenVector> {
   const list: [string, () => GoldenVector][] = [
     ['batcher-flush', batcherFlush],
+    ['focal-android', focalAndroid],
     ['gaze-inputs', gazeInputs],
     ['head-pose', headPose],
     ['record-android-rgba-270', recordAndroid],

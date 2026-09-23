@@ -9,6 +9,7 @@ import { FLAG, FRAME_FIELDS, type FrameField } from '../src/constants';
 import {
   base64ToBytes,
   runBatcherVector,
+  runFocalVector,
   runGazeInputsVector,
   runHeadPoseVector,
   runRecordVector,
@@ -81,6 +82,9 @@ describe('every expected is the reference over its inputs', () => {
         break;
       case 'batcher':
         expect(runBatcherVector(v.inputs)).toEqual(v.expected.cases);
+        break;
+      case 'focal':
+        expect(runFocalVector(v.inputs)).toEqual(v.expected.focalScales);
         break;
       default:
         throw new Error('unexpected');
