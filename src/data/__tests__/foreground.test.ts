@@ -31,11 +31,16 @@ function appState(currentState?: string): FakeAppState {
   };
 }
 
-/** Let the settings reads and the job's promise settle. */
+/**
+ * Let the settings reads and the job's promise settle. The sql.js driver and the job are promise-only, so
+ * the whole attempt is microtasks; each `setImmediate` turn drains them all. It was `setTimeout(0)`, which
+ * waits out the OS timer resolution (about 15.6 ms on Windows) on each of the 20 turns: the transition test
+ * spent almost 4 s idle in its 12 settles, and past its 5 s timeout under load (the full-suite flake).
+ */
 async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+      setImmediate(resolve);
     });
   }
 }
