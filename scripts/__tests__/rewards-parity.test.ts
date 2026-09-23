@@ -3,7 +3,7 @@
 // parses the JSON literal out of the migration and deep-compares it, and holds the SQL's inbox.type
 // list and the enqueue trigger's wall-clock hour to the same sources, so a change on either side fails
 // here (M5 Task 2 Step 5; the pattern of 0006's and 0007's parity tests).
-import { REWARDS, rewardRulesJson } from '@scoring';
+import { BADGES, CHALLENGES, REWARDS, rewardRulesJson } from '@scoring';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time; the root
 // tsconfig's `types` is ["jest"], hence local shapes (the appConfig parity test's pattern).
@@ -17,6 +17,18 @@ const { join } = require('node:path') as { join: (...parts: string[]) => string 
 
 const migration = (): string =>
   readFileSync(join(__dirname, '../../supabase/migrations/0009_rewards_core.sql'), 'utf8');
+
+const migration0010 = (): string =>
+  readFileSync(join(__dirname, '../../supabase/migrations/0010_badges_challenges.sql'), 'utf8');
+
+/** The value tuples of `insert into public.<table> (…) values (…), (…) on conflict`, as string fields. */
+function seedRows(sql: string, table: string): string[][] {
+  const insert = new RegExp(`insert into public\\.${table} \\([^)]*\\) values([\\s\\S]*?)on conflict`).exec(sql);
+  if (insert?.[1] === undefined) throw new Error(`no seed insert for ${table}`);
+  return [...insert[1].matchAll(/\(([^()]*)\)/g)].map((m) =>
+    (m[1] ?? '').split(',').map((v) => v.trim().replace(/^'|'$/g, '')),
+  );
+}
 
 /** The JSON literal inside `public.reward_rules()` (between its `$json$` quotes). */
 function sqlRules(sql: string): unknown {
@@ -51,6 +63,31 @@ describe('0009 rewards parity', () => {
 
   it('the inbox.type CHECK lists exactly the six live types', () => {
     expect(inboxTypes(sql)).toEqual(LIVE_TYPES_M5);
+  });
+
+  it('0010 seeds badge_defs with BADGES exactly (all but referrals_1, which 0011 seeds with its producer)', () => {
+    const rows = seedRows(migration0010(), 'badge_defs').map(([id, family, tier, metric, threshold, sort]) => ({
+      id,
+      family,
+      tier,
+      metric,
+      threshold: Number(threshold),
+      sort: Number(sort),
+    }));
+    expect(rows).toHaveLength(15);
+    expect(rows).toEqual(BADGES.filter((b) => b.id !== 'referrals_1').map((b) => ({ ...b })));
+  });
+
+  it('0010 seeds challenge_defs with CHALLENGES exactly', () => {
+    const rows = seedRows(migration0010(), 'challenge_defs').map(([id, predicate, targetDays, windowDays, points, sort]) => ({
+      id,
+      predicate,
+      targetDays: Number(targetDays),
+      windowDays: Number(windowDays),
+      points: Number(points),
+      sort: Number(sort),
+    }));
+    expect(rows).toEqual(CHALLENGES.map((c) => ({ ...c })));
   });
 
   it('the enqueue trigger uses the settle wall-clock hour', () => {

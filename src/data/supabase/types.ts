@@ -55,6 +55,39 @@ export type Database = {
         }
         Relationships: []
       }
+      badge_defs: {
+        Row: {
+          created_at: string
+          family: string
+          id: string
+          metric: string
+          sort: number
+          threshold: number
+          tier: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          family: string
+          id: string
+          metric: string
+          sort: number
+          threshold: number
+          tier: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          family?: string
+          id?: string
+          metric?: string
+          sort?: number
+          threshold?: number
+          tier?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       baselines: {
         Row: {
           computed_at: string
@@ -76,6 +109,42 @@ export type Database = {
           medians?: Json
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      challenge_defs: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          points: number
+          predicate: string
+          sort: number
+          target_days: number
+          updated_at: string
+          window_days: number
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id: string
+          points: number
+          predicate: string
+          sort: number
+          target_days: number
+          updated_at?: string
+          window_days: number
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          points?: number
+          predicate?: string
+          sort?: number
+          target_days?: number
+          updated_at?: string
+          window_days?: number
         }
         Relationships: []
       }
@@ -1138,6 +1207,85 @@ export type Database = {
         }
         Relationships: []
       }
+      user_badges: {
+        Row: {
+          badge_id: string
+          created_at: string
+          earned_at: string
+          user_id: string
+        }
+        Insert: {
+          badge_id: string
+          created_at?: string
+          earned_at: string
+          user_id: string
+        }
+        Update: {
+          badge_id?: string
+          created_at?: string
+          earned_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_badges_badge_id_fkey"
+            columns: ["badge_id"]
+            isOneToOne: false
+            referencedRelation: "badge_defs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_challenges: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          def_id: string
+          ended_at: string | null
+          fail_days: number
+          id: string
+          pass_days: number
+          start_day: string
+          state: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          def_id: string
+          ended_at?: string | null
+          fail_days?: number
+          id?: string
+          pass_days?: number
+          start_day: string
+          state?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          def_id?: string
+          ended_at?: string | null
+          fail_days?: number
+          id?: string
+          pass_days?: number
+          start_day?: string
+          state?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_challenges_def_id_fkey"
+            columns: ["def_id"]
+            isOneToOne: false
+            referencedRelation: "challenge_defs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       weekly_goals: {
         Row: {
           category: string
@@ -1267,6 +1415,8 @@ export type Database = {
         Returns: boolean
       }
       is_underage: { Args: { p_user: string }; Returns: boolean }
+      join_challenge: { Args: { p_def_id: string }; Returns: Json }
+      leave_challenge: { Args: { p_id: string }; Returns: undefined }
       mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
       notification_defaults: { Args: never; Returns: Json }
@@ -1414,6 +1564,11 @@ export type Database = {
         Returns: Json
       }
       set_weekly_focus: { Args: { p_category: string }; Returns: Json }
+      settle_badges: { Args: { p_user: string }; Returns: Json }
+      settle_challenges: {
+        Args: { p_now: string; p_user: string }
+        Returns: Json
+      }
       settle_days: {
         Args: { p_now: string; p_tz: string; p_user: string }
         Returns: string[]

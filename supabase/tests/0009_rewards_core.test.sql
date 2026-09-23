@@ -18,7 +18,7 @@ begin
 end $$;
 
 begin;
-select plan(219);
+select plan(220);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -1026,9 +1026,12 @@ select pg_temp.mkuser(51);
 insert into public.points_ledger (user_id, type, amount, ref_key, balance_after, idempotency_key) values (pg_temp.u(51), 'challenge', 1400, 'seed', 1400, 'seed');
 select pg_temp.drove(pg_temp.u(51), d::date, true) from generate_series(date '2026-06-01', date '2026-06-07', interval '1 day') d;
 select pg_temp.settle(pg_temp.u(51), pg_temp.late());
-select is(array(select row(type, push_state, push_reason)::text from public.inbox where user_id = pg_temp.u(51) and type <> 'trip_summary' order by type),
+select is(array(select row(type, push_state, push_reason)::text from public.inbox where user_id = pg_temp.u(51) and type <> 'trip_summary'
+    and payload ->> 'kind' is distinct from 'badge' order by type),
   array[row('goal_completed', 'pending', null::text)::text, row('level_up', 'skipped', 'inbox_only')::text, row('streak_milestone', 'skipped', 'inbox_only')::text],
   'a settlement producing a goal, a class and a milestone: exactly one pending (the goal), two inbox-only');
+select is((select count(*)::int from public.inbox where user_id = pg_temp.u(51) and payload ->> 'kind' = 'badge' and push_reason is distinct from 'inbox_only'), 0,
+  'the badges that settlement also earned (0010) are inbox-only too: still exactly one pending');
 select pg_temp.drove(pg_temp.u(51), d::date, true) from generate_series(date '2026-06-08', date '2026-06-11', interval '1 day') d;
 select pg_temp.settle(pg_temp.u(51), pg_temp.late());
 select is((select row(push_state, push_reason)::text from public.inbox where user_id = pg_temp.u(51) and dedupe_key = 'goal_completed:weekly:2026-06-08'),
