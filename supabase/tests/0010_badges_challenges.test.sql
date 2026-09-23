@@ -15,6 +15,8 @@ begin
     raise exception '0010_badges_challenges.test.sql runs only against the local Supabase stack';
   end if;
   create extension if not exists dblink with schema extensions;
+  -- no settlement sweep runs while this file does (resumed at the end; a db reset re-creates it active)
+  perform cron.alter_job((select jobid from cron.job where jobname = 'settle-rewards'), active := false);
 end $$;
 
 begin;
@@ -138,10 +140,10 @@ create function pg_temp.bump(p_user uuid, p_i int) returns int language plpgsql 
 declare
   v_n int;
 begin
-  execute 'alter table public.score_daily disable trigger score_daily_touch';
+  execute 'set local session_replication_role = replica';
   update public.score_daily set updated_at = now() + make_interval(mins => p_i) where user_id = p_user and updated_at = now();
   get diagnostics v_n = row_count;
-  execute 'alter table public.score_daily enable trigger score_daily_touch';
+  execute 'set local session_replication_role = origin';
   return v_n;
 end $$;
 
@@ -517,9 +519,9 @@ select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.
   from generate_series(1, 14) i;
 create temp table uc22 as select pg_temp.enrol(pg_temp.u(22), 'safe_run', date '2026-06-01') as id;
 select pg_temp.settle(pg_temp.u(22), pg_temp.late());
-alter table public.score_daily disable trigger score_daily_touch;
+set local session_replication_role = replica;
 update public.score_daily set updated_at = now() - interval '30 days' where user_id = pg_temp.u(22);
-alter table public.score_daily enable trigger score_daily_touch;
+set local session_replication_role = origin;
 create temp table snap22 as select
   (select jsonb_agg(to_jsonb(b) order by b.badge_id) from public.user_badges b where b.user_id = pg_temp.u(22)) as badges,
   (select jsonb_agg(to_jsonb(c) - 'updated_at' order by c.id) from public.user_challenges c where c.user_id = pg_temp.u(22)) as challenges,
@@ -589,3 +591,4 @@ select throws_ok($$ insert into public.user_challenges (user_id, def_id, start_d
 select * from finish();
 rollback;
 drop extension if exists dblink;
+select cron.alter_job((select jobid from cron.job where jobname = 'settle-rewards'), active := true);

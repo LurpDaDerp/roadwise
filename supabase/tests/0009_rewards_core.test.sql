@@ -15,10 +15,12 @@ begin
     raise exception '0009_rewards_core.test.sql runs only against the local Supabase stack';
   end if;
   create extension if not exists dblink with schema extensions;
+  -- no settlement sweep runs while this file does (resumed at the end; a db reset re-creates it active)
+  perform cron.alter_job((select jobid from cron.job where jobname = 'settle-rewards'), active := false);
 end $$;
 
 begin;
-select plan(220);
+select plan(225);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -138,10 +140,10 @@ create function pg_temp.bump(p_user uuid, p_i int) returns int language plpgsql 
 declare
   v_n int;
 begin
-  execute 'alter table public.score_daily disable trigger score_daily_touch';
+  execute 'set local session_replication_role = replica';
   update public.score_daily set updated_at = now() + make_interval(mins => p_i) where user_id = p_user and updated_at = now();
   get diagnostics v_n = row_count;
-  execute 'alter table public.score_daily enable trigger score_daily_touch';
+  execute 'set local session_replication_role = origin';
   return v_n;
 end $$;
 
@@ -257,6 +259,24 @@ select extensions.dblink_exec('rw9_pg', format($q$do $d$ begin perform public.se
   pg_temp.la_close((select today from g_lease)) + interval '1 minute'));
 select is((select n from extensions.dblink('rw9_pg', format($q$select count(*)::int from public.reward_days where user_id = 'c9000000-0000-4000-8000-000000000902' and day = %L$q$,
     (select today from g_lease))) as t(n int)), 1, 'and settles on the next run after it');
+
+-- the procedure bounds every transaction with lock_timeout 2 s (T5 review): a held queue table or a held
+-- progress row ends the run within a few seconds, never a wait
+select extensions.dblink_exec('rw9_pg', $q$insert into public.reward_due (user_id, due_at) values ('c9000000-0000-4000-8000-000000000902', now() - interval '1 minute')
+  on conflict (user_id) do update set due_at = excluded.due_at, failures = 0$q$);
+select extensions.dblink_exec('rw9_s1', 'begin; lock table public.reward_due in access exclusive mode');
+create temp table t_call as select clock_timestamp() as c;
+select is(pg_temp.remote('rw9_s2', 'call public.settle_due_rewards(5)'), 'CALL', 'the CALL with the queue table locked elsewhere returns cleanly');
+select ok(clock_timestamp() - (select c from t_call) < interval '6 seconds', 'within a few seconds (lock_timeout 2 s on the claim)');
+select extensions.dblink_exec('rw9_s1', 'rollback');
+select extensions.dblink_exec('rw9_s1', $q$begin; do $d$ begin
+  perform 1 from public.progress where user_id = 'c9000000-0000-4000-8000-000000000902' for update; end $d$$q$);
+update t_call set c = clock_timestamp();
+select is(pg_temp.remote('rw9_s2', 'call public.settle_due_rewards(5)'), 'CALL', 'the CALL with the user''s progress row held elsewhere returns cleanly');
+select ok(clock_timestamp() - (select c from t_call) < interval '6 seconds', 'within a few seconds (lock_timeout 2 s on the settlement)');
+select extensions.dblink_exec('rw9_s1', 'rollback');
+select is((select n from extensions.dblink('rw9_pg', $q$select failures from public.reward_due where user_id = 'c9000000-0000-4000-8000-000000000902'$q$) as t(n int)), 1,
+  'and the lease backs off as for any failure');
 
 select extensions.dblink_exec('rw9_pg', $q$delete from auth.users where id in
   ('c9000000-0000-4000-8000-000000000901', 'c9000000-0000-4000-8000-000000000902')$q$);
@@ -714,9 +734,9 @@ select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.
 select pg_temp.settle(pg_temp.u(15), pg_temp.late());
 -- P's rows were written in this transaction (updated_at = now()); set them back so a later input's
 -- rewrite (the touch trigger's now()) is the only thing bump() re-stamps
-alter table public.score_daily disable trigger score_daily_touch;
+set local session_replication_role = replica;
 update public.score_daily set updated_at = now() - interval '30 days' where user_id = pg_temp.u(15);
-alter table public.score_daily enable trigger score_daily_touch;
+set local session_replication_role = origin;
 create temp table snapP as select pg_temp.snap(pg_temp.u(15)) as s, pg_temp.contra(pg_temp.u(15)) as c,
   (select array_agg(day order by day) from public.reward_days where user_id = pg_temp.u(15)) as days;
 create temp table prop (i int, kind int, changed boolean);
@@ -1227,3 +1247,4 @@ select is((select row(pr.rewards_start, (select count(*)::int from public.reward
 select * from finish();
 rollback;
 drop extension if exists dblink;
+select cron.alter_job((select jobid from cron.job where jobname = 'settle-rewards'), active := true);

@@ -1,3 +1,6 @@
+-- hosted safety (T5 review): fail fast on a lock rather than queue in front of apply_trip
+set lock_timeout = '5s';
+
 -- 0010_badges_challenges: badges and personal challenges, counted in settled driving days (§R6, §R7).
 --
 -- Objects (every one follows .agent/backend-conventions.md; numbers below are its sections):

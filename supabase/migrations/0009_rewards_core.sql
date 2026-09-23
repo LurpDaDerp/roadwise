@@ -1,3 +1,7 @@
+-- hosted safety (T5 review): a lock this migration cannot get within 5 s fails the push instead of queueing
+-- an ALTER in front of apply_trip's writes (pause the settle-rewards job during the push)
+set lock_timeout = '5s';
+
 -- 0009_rewards_core: the rewards engine's core. Final settled reward days behind a sync watermark,
 -- an idempotent points ledger, an append-only streak with shields, the ISO weekly goal, the
 -- contradiction log, and the settlement procedure pg_cron calls. Everything that turns a day into
@@ -1015,10 +1019,13 @@ begin
 end $$;
 
 -- THE ONE DOCUMENTED EXCEPTION to convention #5 (ruling r1-M1): a procedure that COMMITs cannot carry
--- SET search_path, so every name is schema-qualified and the path is set per transaction. Per user:
--- claim + lease + COMMIT (the row lock is never held while settling, so apply_trip's enqueue never
--- waits), then lock_timeout 2 s and the settlement in a sub-block, then COMMIT outside it. The run stops
--- after 4 minutes or p_limit users (statement_timeout is not enforced inside a CALL; see the header).
+-- SET search_path, so every name is schema-qualified and the path is set per transaction. Every
+-- transaction starts with lock_timeout 2 s (T5 review): the claim and lease, then (after COMMIT, so the
+-- queue row is never locked while settling and apply_trip's enqueue never waits) the settlement in a
+-- sub-block, then COMMIT outside it. A lock the run cannot get within 2 s (55P03) ends the run
+-- cleanly: in the claim nothing was leased; in a settlement the lease backs off as for any failure,
+-- or, if even that cannot lock, simply expires. The run also stops after 4 minutes or p_limit users
+-- (statement_timeout is not enforced inside a CALL; see the header).
 create or replace procedure public.settle_due_rewards(p_limit int default 200)
 language plpgsql as $$
 declare
@@ -1028,18 +1035,27 @@ declare
   v_n int := 0;
   v_done uuid[] := '{}';
   v_start timestamptz := pg_catalog.clock_timestamp();
+  v_stop boolean := false;
 begin
   loop
     perform pg_catalog.set_config('search_path', 'public, pg_temp', true);
+    perform pg_catalog.set_config('lock_timeout', '2s', true);
     exit when v_n >= p_limit or pg_catalog.clock_timestamp() - v_start > interval '4 minutes';
     v_user := null;
-    select d.user_id into v_user from public.reward_due d
-      where d.due_at <= pg_catalog.now() and not (d.user_id = any(v_done))
-      order by d.due_at limit 1 for update skip locked;
-    exit when v_user is null;
-    v_lease := pg_catalog.now() + interval '10 minutes';
-    update public.reward_due set due_at = v_lease where user_id = v_user;
+    begin
+      select d.user_id into v_user from public.reward_due d
+        where d.due_at <= pg_catalog.now() and not (d.user_id = any(v_done))
+        order by d.due_at limit 1 for update skip locked;
+      if v_user is not null then
+        v_lease := pg_catalog.now() + interval '10 minutes';
+        update public.reward_due set due_at = v_lease where user_id = v_user;
+      end if;
+    exception when lock_not_available then
+      v_user := null;
+      v_stop := true;
+    end;
     commit;
+    exit when v_user is null;
     perform pg_catalog.set_config('search_path', 'public, pg_temp', true);
     perform pg_catalog.set_config('lock_timeout', '2s', true);
     perform pg_catalog.set_config('statement_timeout', '20s', true);
@@ -1047,13 +1063,23 @@ begin
     begin
       perform public.settle_rewards(v_user, v_now, v_lease);
     exception when others then
-      perform public.reward_settle_failed(v_user, v_now, v_lease);
+      if sqlstate = '55P03' then
+        v_stop := true;
+      end if;
+      begin
+        perform public.reward_settle_failed(v_user, v_now, v_lease);
+      exception when lock_not_available then
+        v_stop := true;
+      end;
     end;
     commit;
     v_done := v_done || v_user;
     v_n := v_n + 1;
+    exit when v_stop;
   end loop;
-  if v_n >= p_limit or pg_catalog.clock_timestamp() - v_start > interval '4 minutes' then
+  if v_stop then
+    raise log 'settle-rewards stopped on a lock';
+  elsif v_n >= p_limit or pg_catalog.clock_timestamp() - v_start > interval '4 minutes' then
     raise log 'settle-rewards more';
   end if;
 end $$;
