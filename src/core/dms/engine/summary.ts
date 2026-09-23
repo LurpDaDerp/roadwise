@@ -76,7 +76,6 @@ export interface DmsTripSummary {
   calibration: { state: CalibrationState; bumps: number; driverChanges: number; events: CalibrationEvent[] };
 }
 
-const MAX_DT_S = 1;
 /** attentionScore needs at least this share of monitored time with a zone (T11 review m3) */
 const MIN_OBSERVED = 0.5;
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -136,7 +135,8 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
 
   return {
     onFrame(x: SummaryFrame): void {
-      const dt = Math.min(Math.max(0, x.dtS), MAX_DT_S);
+      // A frame gap is unobserved time (T12 review I1): it counts 0.
+      const dt = x.dtS > cfg.closure.maxFrameGapS ? 0 : Math.max(0, x.dtS);
       lastSpeed = x.ruleSpeedKmh;
       nextMinute ??= x.tMs + 60_000;
       if (x.tMs >= nextMinute - 1e-6) {

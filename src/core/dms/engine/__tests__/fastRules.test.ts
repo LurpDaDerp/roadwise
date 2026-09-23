@@ -266,6 +266,59 @@ describe('closure bridging (C-26, T9 review I1)', () => {
   });
 });
 
+describe('frame gaps (T12 review I1): unobserved time never counts', () => {
+  /** Frames at 15 fps with a gap: `before` s of spec A, nothing for `gapS`, then `after` s of spec B. */
+  function withGap(a: Partial<FrameSpec>, beforeS: number, gapS: number, b: Partial<FrameSpec>, afterS: number): Perceived[] {
+    const c = createConditioner(C);
+    const out: Perceived[] = [];
+    const push = (tMs: number, spec: Partial<FrameSpec>) => {
+      const f = frame({ tMs, ...spec });
+      out.push(c.step(f, classifyQuality(f, C), REFS));
+    };
+    let t = 0;
+    for (; t < 1000; t += 1000 / 15) push(t, {});
+    for (; t < 1000 + beforeS * 1000; t += 1000 / 15) push(t, a);
+    t += gapS * 1000;
+    for (const end = t + afterS * 1000; t < end; t += 1000 / 15) push(t, b);
+    return out;
+  }
+  test('a frame after more than maxFrameGapS is a gap; the closure before it ends silently, a new one starts', () => {
+    const ps = withGap({ ear: ear(0.1) }, 0.4, 2, { ear: ear(0.1) }, 1.5);
+    const g = ps.find((p) => p.gap)!;
+    expect(g).toBeDefined();
+    expect(ps.filter((p) => p.gap)).toHaveLength(1);
+    expect(g.eyesClosed).toBe(true);
+    expect(g.closedMs).toBe(0); // a new closure starts at the gap frame
+    const r = fast(ps, 60);
+    const f1 = r.events.find((e) => e.kind === 'microsleep')!;
+    expect(f1.tMs - g.tMs).toBeGreaterThanOrEqual(1000 - 1e-6); // 1.0 s of OBSERVED closure after the gap
+    expect(r.kinds).not.toContain('blink');
+  });
+  test('an active C-26 bridge continues through a gap (its cap still applies)', () => {
+    const c = createConditioner(C);
+    const down = (p: number): Partial<FrameSpec> => ({ head: { yaw: 0, pitch: p, roll: 0 }, gaze: { yaw: 0, pitch: p }, ear: ear(0.1) });
+    const ps: Perceived[] = [];
+    const push = (tMs: number, spec: Partial<FrameSpec>) => {
+      const f = frame({ tMs, ...spec });
+      ps.push(c.step(f, classifyQuality(f, C), REFS));
+    };
+    let t = 0;
+    for (; t < 1000; t += 1000 / 15) push(t, {});
+    for (; t < 1800; t += 1000 / 15) push(t, down(-10));
+    for (; t < 2500; t += 1000 / 15) push(t, { face: false });
+    push(t + 2000, { face: false }); // a 2 s gap inside the bridge
+    expect(ps.at(-1)!.gap).toBe(true);
+    expect(ps.at(-1)!.closureBridged).toBe(true);
+    expect(ps.at(-1)!.eyesClosed).toBe(true);
+  });
+  test('a 0.4 s interval (two frames at 5 fps) is not a gap', () => {
+    const c = createConditioner(C);
+    const a = c.step(frame({ tMs: 0 }), classifyQuality(frame({ tMs: 0 }), C), REFS);
+    const b = c.step(frame({ tMs: 400 }), classifyQuality(frame({ tMs: 400 }), C), REFS);
+    expect([a.gap, b.gap]).toEqual([false, false]);
+  });
+});
+
 describe('the looking-down gate (§M6)', () => {
   const down: Partial<FrameSpec> = { head: { yaw: 0, pitch: -25, roll: 0 }, gaze: { yaw: 0, pitch: -25 } };
   test('openness 0.2 with the head down never counts (a speedometer check)', () => {

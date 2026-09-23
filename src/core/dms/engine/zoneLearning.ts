@@ -95,6 +95,7 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
   const z = cfg.zones;
   const fixations: Fixation[] = [];
   let prior: readonly LearnedZone[] = initialPrior;
+  let promotedCache: Partial<Record<MirrorId, LearnedZone>> | null = null;
   // The I-DT window, O(1) per frame (T7 review m2): running extremes, sums, count and start time.
   let w = { n: 0, t0: 0, t1: 0, sy: 0, sp: 0, y0: 0, y1: 0, p0: 0, p1: 0 };
   let candidates: MirrorCandidate[] = [];
@@ -190,6 +191,7 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
     /** The matched profile's learned zones (on warm_start only). */
     setPrior(zones: readonly LearnedZone[]): void {
       prior = zones;
+      promotedCache = null;
     },
     fixationCount: () => fixations.length,
     cluster,
@@ -203,8 +205,11 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
     candidates: () => [...candidates],
     /** The prior's mirrors seen in ≥ drivesToAdopt drives (the classifier's ellipses). */
     promoted(): Partial<Record<MirrorId, LearnedZone>> {
+      // Cached until the prior changes: the façade asks every frame (T12 review nit).
+      if (promotedCache !== null) return promotedCache;
       const out: Partial<Record<MirrorId, LearnedZone>> = {};
       for (const lz of prior) if (lz.drives >= z.drivesToAdopt) out[lz.id] = lz;
+      promotedCache = out;
       return out;
     },
     /** The prior merged with this drive's candidates (a running mean over drives; drives + 1). */

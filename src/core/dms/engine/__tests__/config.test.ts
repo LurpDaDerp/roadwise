@@ -94,6 +94,7 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.fatigue.perclosOpennessBelow).toBe(0.2);
     expect(c.fatigue.perclosMinTrackingS).toBe(30);
     expect(c.closure.fpsWindowS).toBe(10);
+    expect(c.closure.maxFrameGapS).toBe(0.5); // T12 review I1
     // C-26 closure bridging (T9 review I1)
     expect(c.closure.bridgeMinClosedMs).toBe(500);
     expect(c.closure.bridgeHeadDropDeg).toBe(5);
@@ -224,6 +225,7 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['a gaze-rules fps floor of 0', (c) => (c.distraction.gazeRulesMinFps = 0), /distraction\.gazeRulesMinFps/],
     ['a closure bridge cap at or under F3 (C-26)', (c) => (c.closure.bridgeMaxS = 6), /closure\.bridgeMaxS/],
     ['a zero head-drop window (C-26)', (c) => (c.closure.bridgeDropWindowS = 0), /closure\.bridgeDropWindowS/],
+    ['a frame-gap limit at two 5 fps intervals (T12 review I1)', (c) => (c.closure.maxFrameGapS = 0.4), /closure\.maxFrameGapS/],
     ['a minimum scored weight of 0 (T10 r1 m2)', (c) => (c.fatigue.minScoredWeight = 0), /fatigue\.minScoredWeight/],
     ['a minimum scored weight above 1', (c) => (c.fatigue.minScoredWeight = 1.5), /fatigue\.minScoredWeight/],
   ];

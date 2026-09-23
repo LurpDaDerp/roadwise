@@ -35,6 +35,12 @@ export interface Perceived {
   tMs: number;
   /** since the previous frame, seconds (0 on the first) */
   dtS: number;
+  /**
+   * T12 review I1: more than closure.maxFrameGapS since the previous frame. The time between was not
+   * observed: consumers count 0 for this frame's dt, an unbridged closure ended at the gap (a new one may
+   * start on this frame), and the smoothing restarted. An active C-26 bridge continues.
+   */
+  gap: boolean;
   quality: Quality;
   reasons: QualityReason[];
   /** usable for openness (T6 review C1) */
@@ -171,9 +177,15 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
     step(f, raw, refs) {
       const q = eyeTiers(f, raw);
       const dtS = prevT === null ? 0 : Math.max(0, (f.tMs - prevT) / 1000);
-      if (dtS > 0 && dtS < 1) frameIntervalMs = dtS * 1000;
+      const gap = dtS > cfg.closure.maxFrameGapS;
+      if (dtS > 0 && !gap) frameIntervalMs = dtS * 1000;
       prevT = f.tMs;
-      if (q.quality !== lastQuality) resetSmoothing();
+      if (q.quality !== lastQuality || gap) resetSmoothing();
+      if (gap) {
+        // Unobserved time: an unbridged closure ends silently, and no gaze is held across it.
+        if (!bridged) closed = false;
+        lastGazeRel = null;
+      }
       lastQuality = q.quality;
 
       const toDrv = (a: AnglePair) => toDriverFrame(rollCorrect(a, refs.rollOffsetDeg), refs.driverSide);
@@ -328,6 +340,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       return {
         tMs: f.tMs,
         dtS,
+        gap,
         quality: q.quality,
         reasons: q.reasons,
         usableR: q.usableR,

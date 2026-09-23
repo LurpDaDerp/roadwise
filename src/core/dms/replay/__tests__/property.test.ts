@@ -4,9 +4,9 @@
 //   - the D1 buffer f stays in [0, 1];
 //   - nothing Tier 1/2 is audible below 20 km/h, and nothing at all below 10 km/h except a Critical
 //     (a new one needs ≥ 10 km/h; below it only an escalation of a running episode, T11 I1);
-//   - no alert raised on a LOST frame except C-8 (a Tier 2 start) or a Critical (a C-26 bridge or an
-//     escalation); a Tier 1 or fatigue `once` is exempt: it was raised earlier and held, or by the minute
-//     clock, not by the frame it plays on;
+//   - rule 5 at REQUEST time (T12 review m2): no D1, D2 or phone-pattern request from a LOST frame is
+//     accepted unless it carries c8 (a fatigue burst may play on a LOST frame: ruled acceptable);
+//   - no D1, D2, F1 or F2 on a gap frame (T12 review I1: unobserved time never counts);
 //   - every start has its stop by the end of the drive, and every tier is 1–3;
 //   - the façade never breaks the alert contract (invariantViolations 0: rule 5 and escalations);
 //   - a replay equals itself (determinism), and the summary has no NaN.
@@ -38,7 +38,12 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
     const s = engine.snapshot();
     expect(s.bufferFraction).toBeGreaterThanOrEqual(0);
     expect(s.bufferFraction).toBeLessThanOrEqual(1);
-    for (const c of engine.drain().commands) {
+    const out = engine.drain();
+    if (s.gap) {
+      const onGap = out.events.filter((e) => ['d1_warning', 'd2_warning', 'microsleep', 'sleep'].includes(e.kind));
+      expect({ seed, tMs: it.frame.tMs, onGap }).toEqual({ seed, tMs: it.frame.tMs, onGap: [] });
+    }
+    for (const c of out.commands) {
       commands.push(c);
       if (c.action === 'stop') continue;
       const speed = s.ruleSpeedKmh;
@@ -49,11 +54,12 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
       if (c.tier < 3) {
         expect({ seed, c, speed }).toEqual({ seed, c, speed: expect.any(Number) });
         expect(speed!).toBeGreaterThanOrEqual(20);
-        if (s.quality === 'lost' && c.action === 'start') expect({ seed, c, zone: s.zone }).toEqual({ seed, c, zone: 'far_lateral' });
       }
     }
   }
   const violations = engine.snapshot().invariantViolations;
+  const accepted = engine.alertLog().filter((e) => (e.kind === 'distraction' || e.kind === 'cumulative' || e.kind === 'phone_pattern') && e.quality === 'lost' && e.outcome !== 'suppressed');
+  expect({ seed, accepted: accepted.filter((e) => e.c8 !== true) }).toEqual({ seed, accepted: [] });
   const end = engine.endDrive(d.items.at(-1)!.frame.tMs);
   commands.push(...engine.drain().commands);
   common({ events: [], commands, summary: end.summary, invariantViolations: violations, engine });

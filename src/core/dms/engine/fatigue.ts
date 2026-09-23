@@ -147,8 +147,6 @@ interface Second {
 const newSecond = (k: number): Second => ({ k, trackS: 0, closedS: 0, fpsSum: 0, frames: 0, hot: false, gn: 0, gy: 0, gp: 0, gyy: 0, gpp: 0 });
 const dispersionOf = (n: number, y: number, p: number, yy: number, pp: number) => (n < 2 ? null : Math.sqrt(Math.max(0, yy / n - (y / n) ** 2) + Math.max(0, pp / n - (p / n) ** 2)));
 
-/** A frame's gap is counted up to 1 s (a longer gap is not observed time). */
-const MAX_DT_S = 1;
 
 export function createFatigue(cfg: DmsConfig) {
   const f = cfg.fatigue;
@@ -315,7 +313,8 @@ export function createFatigue(cfg: DmsConfig) {
   return {
     /** Feeds one frame; returns the minute closed at it, if any. */
     onFrame(x: FatigueFrame): FatigueMinute | null {
-      const dt = Math.min(Math.max(0, x.dtS), MAX_DT_S);
+      // A frame gap is unobserved time (T12 review I1): it counts 0, not a capped second.
+      const dt = x.dtS > cfg.closure.maxFrameGapS ? 0 : Math.max(0, x.dtS);
       const k = Math.floor(x.tMs / 1000);
       if (cur === null || cur.k !== k) {
         if (cur !== null) seconds.push(cur);

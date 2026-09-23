@@ -106,6 +106,10 @@ export interface AlertLogEntry {
   flag?: boolean;
   /** rule 7 */
   tag?: 'wrong';
+  /** the quality of the frame that RAISED the request (rule 5 at request time, T12 review m2) */
+  quality?: Quality;
+  /** the request's C-8 flag (D1/D2, D4) */
+  c8?: boolean;
 }
 
 export type AlertCounts = Record<AlertOutcome, number>;
@@ -156,7 +160,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   let nextId = 1;
   let critical: { kind: AlertKind; clearSince: number | null; lowSince: number | null } | null = null;
   let distraction: AlertKind | null = null;
-  const held: { req: AlertRequest; since: number }[] = [];
+  const held: { req: AlertRequest; since: number; raised: Partial<AlertLogEntry> }[] = [];
   const lastTier1 = new Map<AlertKind, number>();
   const warnings = new RingBuffer<number>(16);
   const log = new RingBuffer<AlertLogEntry>(LOG_CAP);
@@ -177,9 +181,11 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
     cmd(out, x, action, req.kind);
     record({ kind: req.kind, tier: tierOf(req.kind), tMs: x.tMs, outcome: muted ? 'muted' : 'delivered', ...extra });
   }
-  function refuse(x: { tMs: number }, req: AlertRequest, outcome: 'dropped' | 'suppressed', why: AlertLogEntry['why']): void {
-    record({ kind: req.kind, tier: tierOf(req.kind), tMs: x.tMs, outcome, why });
+  function refuse(x: { tMs: number }, req: AlertRequest, outcome: 'dropped' | 'suppressed', why: AlertLogEntry['why'], extra: Partial<AlertLogEntry> = {}): void {
+    record({ kind: req.kind, tier: tierOf(req.kind), tMs: x.tMs, outcome, why, ...extra });
   }
+  /** Where a request came from: its frame's quality and its C-8 flag. */
+  const raisedOn = (req: AlertRequest, x: AlertFrame): Partial<AlertLogEntry> => ({ quality: x.quality, ...('c8' in req ? { c8: req.c8 } : {}) });
   const isEscalation = (req: AlertRequest) => req.kind === 'unresponsive' && req.escalation;
 
   return {
@@ -219,6 +225,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       // New requests.
       for (const req of x.requests) {
         const tier = tierOf(req.kind);
+        const from = raisedOn(req, x);
         const r5 = rule5Holds(req, x.quality);
         if (DISTRACTION.has(req.kind)) {
           pendingEscalation = true;
@@ -226,13 +233,13 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         }
         if (tier === 3) {
           if (!isEscalation(req) && (x.ruleSpeedKmh === null || x.ruleSpeedKmh < a.criticalMinStartKmh - EPS)) {
-            refuse(x, req, 'suppressed', 'speed');
+            refuse(x, req, 'suppressed', 'speed', from);
             continue;
           }
           const unverified = isEscalation(req) && critical === null && !pendingEscalation;
           if (!r5) invariantViolations++;
           if (unverified) invariantViolations++;
-          const extra: Partial<AlertLogEntry> = !r5 ? { why: 'rule5_violation' } : unverified ? { why: 'escalation_unverified' } : {};
+          const extra: Partial<AlertLogEntry> = { ...from, ...(!r5 ? { why: 'rule5_violation' } : unverified ? { why: 'escalation_unverified' } : {}) };
           if (critical !== null && critical.kind === req.kind) {
             record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged', ...extra });
             continue;
@@ -248,51 +255,51 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         }
         // Tier 1 and 2: rule 5, rule 6, then rule 4.
         if (!r5) {
-          refuse(x, req, 'suppressed', 'rule5');
+          refuse(x, req, 'suppressed', 'rule5', from);
           continue;
         }
         if (x.warmup && req.kind !== 'distraction') {
-          refuse(x, req, 'suppressed', 'warmup');
+          refuse(x, req, 'suppressed', 'warmup', from);
           continue;
         }
         if (!audible) {
-          refuse(x, req, 'suppressed', 'speed');
+          refuse(x, req, 'suppressed', 'speed', from);
           continue;
         }
         if (DISTRACTION.has(req.kind)) {
           if (critical !== null) {
-            refuse(x, req, 'dropped', 'critical_running');
+            refuse(x, req, 'dropped', 'critical_running', from);
             continue;
           }
           if (distraction !== null) {
-            record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged' });
+            record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged', ...from });
             continue;
           }
           distraction = req.kind;
-          deliver(out, x, req, 'start');
+          deliver(out, x, req, 'start', from);
           // Rule 8: warnings the driver heard.
           warnings.push(x.tMs);
           warnings.dropWhile((t) => t <= x.tMs - a.repeatedGlancesWithinS * 1000);
           if (warnings.size >= a.repeatedGlancesCount) {
             warnings.clear();
-            held.push({ req: { kind: 'repeated_glances' }, since: x.tMs });
+            held.push({ req: { kind: 'repeated_glances' }, since: x.tMs, raised: { quality: x.quality } });
           }
           continue;
         }
         if (tier === 1) {
           const last = lastTier1.get(req.kind);
           if (last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) {
-            refuse(x, req, 'suppressed', 'tier1_rate');
+            refuse(x, req, 'suppressed', 'tier1_rate', from);
             continue;
           }
         }
-        held.push({ req, since: x.tMs });
+        held.push({ req, since: x.tMs, raised: from });
       }
 
       // Held bursts and Tier 1: at most one per frame once nothing louder runs; fatigue first.
       for (let i = held.length - 1; i >= 0; i--) {
         if (x.tMs - held[i]!.since > a.heldBackMaxS * 1000 + EPS) {
-          refuse(x, held[i]!.req, 'dropped', 'held_too_long');
+          refuse(x, held[i]!.req, 'dropped', 'held_too_long', held[i]!.raised);
           held.splice(i, 1);
         }
       }
@@ -302,11 +309,11 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         const h = held[pick]!;
         held.splice(pick, 1);
         const last = lastTier1.get(h.req.kind);
-        if (!audible || x.warmup) refuse(x, h.req, 'suppressed', audible ? 'warmup' : 'speed');
-        else if (tierOf(h.req.kind) === 1 && last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) refuse(x, h.req, 'suppressed', 'tier1_rate');
+        if (!audible || x.warmup) refuse(x, h.req, 'suppressed', audible ? 'warmup' : 'speed', h.raised);
+        else if (tierOf(h.req.kind) === 1 && last !== undefined && x.tMs - last < a.tier1EveryS * 1000 - EPS) refuse(x, h.req, 'suppressed', 'tier1_rate', h.raised);
         else {
           if (tierOf(h.req.kind) === 1) lastTier1.set(h.req.kind, x.tMs);
-          deliver(out, x, h.req, 'once', h.req.kind === 'repeated_glances' ? { flag: true } : {});
+          deliver(out, x, h.req, 'once', { ...h.raised, ...(h.req.kind === 'repeated_glances' ? { flag: true } : {}) });
         }
       }
       return out;
@@ -322,7 +329,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       const x = { tMs, epochMs };
       if (distraction !== null) cmd(out, x, 'stop', distraction);
       if (critical !== null) cmd(out, x, 'stop', critical.kind);
-      for (const h of held) refuse(x, h.req, 'dropped', 'session_end');
+      for (const h of held) refuse(x, h.req, 'dropped', 'session_end', h.raised);
       held.length = 0;
       distraction = null;
       critical = null;

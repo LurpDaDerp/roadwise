@@ -10,10 +10,14 @@
 // F1/F2/microsleep_nod `bridged`; `unresponsive` from F3 (`closure` for its closure clause, `escalation`
 // from the event) and from D4 (`escalation: true`); `c8` when a LOST frame's zone is C-8's far lateral.
 //
+// A frame gap (T12 review I1: `p.gap`, more than closure.maxFrameGapS since the last frame) is unobserved
+// time: the dt given to attention (D1–D4, glances), the warm-up, fatigue and the summary is 0 on it, the
+// yawn detector restarts, and the conditioner has already ended an unbridged closure.
+//
 // A drive owns its own alert manager, summary, fatigue and rule state (T11 r1 carry): `endDrive` stops
 // every sound, builds the summary and the profile, then starts the next drive fresh, warm from that
 // profile. Commands are merged with concat/spread only: the manager's empty array is frozen.
-import { createAlertManager, type AlertRequest, type DmsAlertCommand } from './alerts';
+import { createAlertManager, type AlertLogEntry, type AlertRequest, type DmsAlertCommand } from './alerts';
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
@@ -68,6 +72,8 @@ export interface DmsSnapshot {
   quality: Quality | null;
   calibration: CalibrationState;
   zone: ZoneId | null;
+  /** the last frame came after a frame gap (T12 review I1) */
+  gap: boolean;
   /** the last frame's gaze source (gaze, held, head or none) */
   source: GazeUse | null;
   /** the last frame's rule speed (known, or held under the tunnel rules) */
@@ -96,7 +102,10 @@ export interface DmsEngine {
   summary(): DmsTripSummary;
   /** Ends the drive: stops every sound (the commands go to drain), returns its summary and profile, starts a fresh drive. */
   endDrive(tMs: number): { summary: DmsTripSummary; profile: DmsProfileV1 | null };
+  /** For tests and diagnostics only: it builds a whole summary, so never call it per frame. */
   sizes(): DmsSizes;
+  /** The drive's alert log (each request with the quality of the frame that raised it). */
+  alertLog(): AlertLogEntry[];
 }
 
 const SEED_RING_S = 4;
@@ -111,7 +120,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   let profile: DmsProfileV1 | null = init.profile ?? null;
   let epochOffset = 0;
   let commands: readonly DmsAlertCommand[] = [];
-  let events: DmsEvent[] = [];
+  // An undrained host loses the oldest events, never grows (a ring: O(1) per event, T12 review nit).
+  const events = new RingBuffer<DmsEvent>(PENDING_CAP);
+  /** reused every frame (T12 review nit): the alert manager reads it synchronously and keeps no reference */
+  const requests: AlertRequest[] = [];
 
   // The per-drive state.
   let d = newDrive();
@@ -139,6 +151,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastFrameT: null as number | null,
       lastQuality: null as Quality | null,
       lastZone: null as ZoneId | null,
+      lastGap: false,
       lastSource: null as GazeUse | null,
       lastSpeed: null as number | null,
       bufferFraction: 1,
@@ -150,7 +163,6 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   }
 
   const emit = (e: DmsEvent) => {
-    if (events.length >= PENDING_CAP) events.shift(); // an undrained host loses the oldest, never grows
     events.push(e);
     d.summary.onEvent(e.kind);
   };
@@ -178,6 +190,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Quality and the conditioner: `p` is the only view of quality the rules read (T6 r2 carry 1).
     const refs = { ...d.cal.refs(), gazeNetEvery: host.gazeNetEvery };
     const p = d.cond.step(f, classifyQuality(f, cfg), refs);
+    // Unobserved time counts 0 (T12 review I1).
+    const obsDt = p.gap ? 0 : p.dtS;
+    if (p.gap) d.yawn.reset();
     d.seedRing.push({ frame: f, p });
     d.seedRing.dropWhile((x) => x.frame.tMs < t - SEED_RING_S * 1000);
     d.fps.push(t);
@@ -188,7 +203,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     onCalibrationEvents();
     const calState = d.cal.state();
     // Warm-up (anti-annoyance 6): the first warmupS of driving at ≥ 20 km/h.
-    if (speed !== null && speed >= cfg.distraction.logOnlyBelowKmh) d.drivingAt20S += p.dtS;
+    if (speed !== null && speed >= cfg.distraction.logOnlyBelowKmh) d.drivingAt20S += obsDt;
     d.warmup = d.drivingAt20S < cfg.calibration.warmupS;
 
     // Zones.
@@ -202,6 +217,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     };
     const zone = d.zones.step(p, zc);
     d.lastZone = zone;
+    d.lastGap = p.gap;
     d.lastQuality = p.quality;
     d.lastSource = p.source;
     d.lastSpeed = speed;
@@ -210,7 +226,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const onRoad = zone !== null && zoneClass(zone, cfg) === 'on_road';
     const c8 = p.quality === 'lost' && zone === 'far_lateral';
 
-    const requests: AlertRequest[] = [];
+    requests.length = 0;
     // Attention (D1–D4, glances).
     const gates = distractionGates({
       hasCentre: refs.headCentre !== null,
@@ -222,7 +238,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     });
     const att = d.attention.onFrame({
       tMs: t,
-      dtS: p.dtS,
+      dtS: obsDt,
       zone,
       headYawSpeedDegS: p.headYawSpeedDegS,
       ruleSpeedKmh: speed,
@@ -279,7 +295,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const floor: FatigueFloor = d.fast.fatigueFloor(t);
     const minute = d.fatigue.onFrame({
       tMs: t,
-      dtS: p.dtS,
+      dtS: obsDt,
       quality: p.quality,
       closureBridged: p.closureBridged,
       openness: p.openness,
@@ -312,7 +328,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         requests: requests.length > 0 ? requests : EMPTY_REQ,
       })
     );
-    d.summary.onFrame({ tMs: t, dtS: p.dtS, ruleSpeedKmh: speed, quality: p.quality, zone, gazeRel: p.gazeRel, fps, thermalLevel: host.thermalLevel });
+    d.summary.onFrame({ tMs: t, dtS: obsDt, ruleSpeedKmh: speed, quality: p.quality, zone, gazeRel: p.gazeRel, fps, thermalLevel: host.thermalLevel });
     d.lastFrameT = t;
   }
 
@@ -338,9 +354,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     },
 
     drain() {
-      const out: DmsOutput = { commands, events };
+      const out: DmsOutput = { commands, events: events.toArray() };
       commands = [];
-      events = [];
+      events.clear();
       return out;
     },
 
@@ -350,6 +366,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         quality: d.lastQuality,
         calibration: d.cal.state(),
         zone: d.lastZone,
+        gap: d.lastGap,
         source: d.lastSource,
         ruleSpeedKmh: d.lastSpeed,
         fps: d.fps.fps(),
@@ -388,6 +405,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       return { summary, profile: next };
     },
 
+    alertLog() {
+      return d.alerts.stats().log;
+    },
+
     sizes() {
       const a = d.alerts.stats();
       const f = d.fatigue.stats();
@@ -398,7 +419,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         fatigueTimeline: { size: f.timeline.length, cap: 1440 },
         tier0Minutes: { size: s.tier0.minutes.length, cap: 1440 },
         calibrationEvents: { size: s.calibration.events.length, cap: 64 },
-        pendingEvents: { size: events.length, cap: PENDING_CAP },
+        pendingEvents: { size: events.size, cap: PENDING_CAP },
         pendingCommands: { size: commands.length, cap: PENDING_CAP },
       };
     },

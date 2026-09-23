@@ -288,3 +288,12 @@ describe('T12: critical() reports the running Critical (the façade ends the F3 
     expect(am.critical()).toBeNull();
   });
 });
+
+describe('T12 review m2: the log records the request frame\u2019s quality (rule 5 at request time)', () => {
+  test('each logged request carries its frame quality and, for D1/D2 and D4, its c8', () => {
+    const r = run([{ s: 1, f: { ...off, quality: 'lost' }, req: [dist('distraction', true)] }, { s: 0.1 }, { s: 1, f: { ...off, quality: 'head_only' }, req: [plain('phone_pattern')] }]);
+    const log = r.am.stats().log;
+    expect(log[0]).toMatchObject({ kind: 'distraction', quality: 'lost', c8: true });
+    expect(log[1]).toMatchObject({ kind: 'phone_pattern', quality: 'head_only' });
+  });
+});

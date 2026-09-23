@@ -348,6 +348,12 @@ export interface DmsConfig {
     bridgeHeadDropDeg: number;
     bridgeDropWindowS: number;
     bridgeMaxS: number;
+    /**
+     * T12 review I1: a frame more than this after the previous one is a GAP. The time between is
+     * unobserved: it never counts toward D1/D2, glances, closures, the warm-up, fatigue or the summary.
+     * Above two frame intervals at the lowest capture rate, below every alert time.
+     */
+    maxFrameGapS: number;
   };
 
   nod: {
@@ -619,6 +625,7 @@ const DEFAULT: DmsConfig = {
     bridgeHeadDropDeg: 5,
     bridgeDropWindowS: 1,
     bridgeMaxS: 10,
+    maxFrameGapS: 0.5,
   },
   nod: {
     referenceWithinDeg: 5,
@@ -780,6 +787,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.quality.irisRecencyS > 0)) bad('quality.irisRecencyS', 'must be > 0');
   if (!(c.closure.bridgeMaxS > c.closure.f3.closedS)) bad('closure.bridgeMaxS', 'must exceed closure.f3.closedS (C-26: F3 fires inside a bridge)');
   if (!(c.closure.bridgeDropWindowS > 0)) bad('closure.bridgeDropWindowS', 'must be > 0');
+  const twoSlowFrames = 2 / Math.min(...ALLOWED_FPS);
+  if (!(c.closure.maxFrameGapS > twoSlowFrames + 1e-9)) bad('closure.maxFrameGapS', `must exceed two frame intervals at the lowest capture rate (${twoSlowFrames} s)`);
 
   // Geometric gaze.
   if (!(c.geometric.kEye > 0 && c.geometric.kEye <= 1)) bad('geometric.kEye', 'must lie in (0, 1]');

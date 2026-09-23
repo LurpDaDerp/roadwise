@@ -13,7 +13,10 @@ import { drvToCam, frame, gauss, rng } from '../engine/__fixtures__/synth';
 export interface DriverState {
   /** true gaze, driver frame, degrees */
   gaze: AnglePair;
-  /** head direction, driver frame; default 40 % of the gaze */
+  /**
+   * head direction, driver frame; default: 40 % of the gaze through a first-order lag (τ 200 ms), as real
+   * heads trail the eyes (T12 review m1). An explicit head is used as given (nods, shoulder checks).
+   */
   head?: AnglePair;
   /** eye openness 0–1 (1 = open; the EAR is 0.3 × openness); default 1 */
   openness?: number;
@@ -59,6 +62,8 @@ export interface SynthOpts {
 }
 
 const DEG = Math.PI / 180;
+/** the head's first-order lag behind the eyes (T12 review m1) */
+const HEAD_LAG_S = 0.2;
 export const EPOCH0 = 1_760_000_000_000;
 
 /** Frames and rows for one drive. Deterministic in `seed`. */
@@ -71,9 +76,15 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   const n = Math.round(o.fps * o.seconds);
   let course = 90;
   let nextRowT = 0;
+  let head: AnglePair | null = null;
+  const lag = 1 - Math.exp(-1 / o.fps / HEAD_LAG_S);
   for (let i = 0; i < n; i++) {
     const t = i / o.fps;
-    const s = o.driver(t, r);
+    const raw = o.driver(t, r);
+    // The head: explicit, or trailing 40 % of the gaze.
+    const target = raw.head ?? { yaw: 0.4 * raw.gaze.yaw, pitch: 0.4 * raw.gaze.pitch };
+    head = raw.head !== undefined || head === null ? target : { yaw: head.yaw + (target.yaw - head.yaw) * lag, pitch: head.pitch + (target.pitch - head.pitch) * lag };
+    const s: DriverState = { ...raw, head };
     const netThis = i % (o.netEvery ?? 1) === 0;
     const item: SynthItem = { frame: toFrame(t, s, netThis ? o.source : 'geometric', gain, noise) };
     if (t >= nextRowT - 1e-9) {

@@ -97,6 +97,8 @@ export function createFastRules(cfg: DmsConfig) {
       fps.push(p.tMs);
       const speed = x.ruleSpeedKmh ?? 0;
 
+      // A frame gap ends an unbridged episode silently, like a quality drop (T12 review I1).
+      if (p.gap && !p.closureBridged) episode = null;
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
       if (p.eyesClosed && (p.quality === 'tracking' || p.closureBridged)) {
         episode ??= { onset: p.tMs - p.closedMs, deepSince: null, gated: false, bridged: false, f1: false, f2: false, f3: false };
@@ -146,7 +148,7 @@ export function createFastRules(cfg: DmsConfig) {
       if (pendingF3 !== null && !events.some((e) => e.kind === 'microsleep' || e.kind === 'sleep')) {
         if (x.onRoadGaze === true) pendingF3 = null;
         else if (x.onRoadGaze === false && p.quality !== 'lost') {
-          pendingF3 += p.dtS;
+          pendingF3 += p.gap ? 0 : p.dtS; // observed time only (T12 review I1)
           if (pendingF3 >= cl.f3.noOnRoadS - EPS) {
             pendingF3 = null;
             if (episode !== null) episode.f3 = true;

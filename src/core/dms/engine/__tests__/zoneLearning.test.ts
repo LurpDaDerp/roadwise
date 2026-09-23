@@ -250,3 +250,13 @@ test('T7 review R1-m1: a merge that would leave the bounds keeps the old zone', 
   const old3 = { ...old1, drives: 3 };
   expect(mergeLearnedZone(old3, cand, C)).toEqual(old3);
 });
+
+describe('T12 nit: promoted() is cached until the prior changes', () => {
+  test('the same object on every call; a new one after setPrior', () => {
+    const l = createZoneLearner(C, []);
+    const a = l.promoted();
+    expect(l.promoted()).toBe(a);
+    l.setPrior([]);
+    expect(l.promoted()).not.toBe(a);
+  });
+});

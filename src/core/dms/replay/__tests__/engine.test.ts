@@ -123,6 +123,78 @@ describe('the warm-start prior (T7 m4): set only on warm_start; a mismatched mou
   });
 });
 
+describe('frame gaps are unobserved time (T12 review I1)', () => {
+  /** A drive with the frames in (gapFrom, gapFrom + gapS) removed (the rows still arrive). */
+  const gapped = (fps: number, driver: DriverFn, seconds: number, gapFrom: number, gapS: number, source: 'geometric' | 'net' = 'net') => {
+    const items = synthDrive({ fps, seconds, seed: 13, source, driver });
+    const out: typeof items = [];
+    let pending: (typeof items)[number]['row'];
+    for (const it of items) {
+      const s = it.frame.tMs / 1000;
+      if (s > gapFrom && s < gapFrom + gapS) {
+        pending = it.row ?? pending;
+        continue;
+      }
+      out.push(pending !== undefined && it.row === undefined ? { ...it, row: pending } : it);
+      pending = undefined;
+    }
+    return out;
+  };
+  const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), openness: 1, speedKmh: 60 });
+  test.each([15, 10])('%d fps: 2.5 s on the centre stack, a 3 s gap, then the stack again: no D1 on the frame after the gap; it comes after 0.5 s of observed time', (fps) => {
+    const items = gapped(fps, stack, 110, 102.5, 3);
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    let gapT = -1;
+    const d1: number[] = [];
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+      if (engine.snapshot().gap) gapT = it.frame.tMs;
+      d1.push(...engine.drain().events.filter((e) => e.kind === 'd1_warning').map((e) => e.tMs));
+    }
+    expect(gapT).toBeGreaterThan(105_000);
+    expect(d1).toHaveLength(1);
+    expect(d1[0]!).toBeGreaterThanOrEqual(gapT + 500 - 1000 / fps - 1e-6);
+    expect(d1[0]!).toBeLessThanOrEqual(gapT + 500 + 1000 / fps + 1e-6);
+  });
+  test.each([15, 5])('%d fps: eyes closed 0.4 s, a 2 s gap, closed again: no microsleep until 1.0 s of observed closure', (fps) => {
+    const drv: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 && t < 110 ? 0.1 : 1, speedKmh: 60 });
+    const items = gapped(fps, drv, 108, 100.4, 2);
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    let gapT = -1;
+    const f1: number[] = [];
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+      if (engine.snapshot().gap) gapT = it.frame.tMs;
+      f1.push(...engine.drain().events.filter((e) => e.kind === 'microsleep').map((e) => e.tMs));
+    }
+    expect(f1).toHaveLength(1);
+    expect(f1[0]! - gapT).toBeGreaterThanOrEqual(1000 - 1e-6);
+    expect(f1[0]! - gapT).toBeLessThanOrEqual(1000 + 1000 / fps + 1e-6);
+  });
+  test('D2\u2019s sum is unchanged across a gap', () => {
+    // At 35 km/h (B = 6 s) glances of 1.2 s on the stack, 0.9 s on the road; a 3 s gap inside a glance.
+    const vts: DriverFn = (t, r) => ({ gaze: t >= 100 && (t - 100) % 2.1 < 1.2 ? rel(30, -20) : onRoad(r), openness: 1, speedKmh: 35 });
+    const items = gapped(15, vts, 112, 108.8, 3);
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    let before = -1;
+    let after = -1;
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      const prev = engine.snapshot().d2SumS;
+      engine.pushFrame(it.frame);
+      engine.drain();
+      if (engine.snapshot().gap) {
+        before = prev;
+        after = engine.snapshot().d2SumS;
+      }
+    }
+    expect(before).toBeGreaterThan(3);
+    expect(after).toBeCloseTo(before, 9);
+  });
+});
+
 describe('blinks hold the gaze (the target of the plan negative control)', () => {
   test('an attentive drive: no blink frame falls back to the head, so a blink never becomes a glance', () => {
     const engine = createDmsEngine(C, DEFAULT_INIT);
