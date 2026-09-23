@@ -1,6 +1,6 @@
 // The fatigue score (plan §M7, Task 10): baselines, sub-score ramps, frame-rate-aware weights, the
 // amplifiers, levels, the fast rules' floor, action timers, `insufficient`, and C-26 (bridged time).
-import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
+import { DEFAULT_DMS_CONFIG, resolveDmsConfig, type DmsConfig } from '../config';
 import { createFatigue, createFatigueActions, levelOf, subScore, type FatigueFrame, type FatigueMinute } from '../fatigue';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
@@ -24,6 +24,7 @@ function feed(fz: Fz, fromS: number, toS: number, fps: number, spec: (t: number)
       dtS: 1 / fps,
       quality: 'tracking',
       closureBridged: false,
+      hasHead: true,
       openness: 1,
       lookingDown: false,
       gazeRel: { yaw: 3 * Math.sin((2 * Math.PI * t) / 5), pitch: 2 * Math.cos((2 * Math.PI * t) / 4) },
@@ -217,5 +218,93 @@ describe('insufficient and C-26', () => {
     const { fz } = learned();
     const m = feed(fz, 610, 700, 15, (t) => ((t % 10) < 2 ? { closureBridged: true, openness: 0.1 } : {})).at(-1)!;
     expect(m.sub.perclos).toBe(0);
+  });
+});
+
+describe('rates by observed time (T10 review I1)', () => {
+  /** 40 % of every 10 s LOST (no head, no eyes). */
+  const lost40 = (t: number): Partial<FatigueFrame> => ((t % 10) < 4 ? { quality: 'lost', hasHead: false, openness: null, gazeRel: null } : {});
+  /**
+   * Events by OBSERVED time: a long blink every 10 s, a nod every 20 s and a yawn every 30 s of observed
+   * time (TRACKING for blinks and yawns, a head for nods), whatever the share observed.
+   */
+  function driver(fz: Fz, fps: number, spec: (t: number) => Partial<FatigueFrame>) {
+    let obs = 0;
+    return (t: number) => {
+      const f = spec(t);
+      if ((f.quality ?? 'tracking') !== 'tracking') return;
+      const before = obs;
+      obs += 1 / fps;
+      const crossed = (every: number) => Math.floor(obs / every + 1e-9) > Math.floor(before / every + 1e-9);
+      if (crossed(10)) fz.onBlink({ tMs: t * 1000, durMs: 600, long: true, counted: true });
+      if (crossed(20)) fz.onNod(t * 1000);
+      if (crossed(30)) fz.onYawn(t * 1000);
+    };
+  }
+  const ratio = (m: FatigueMinute, k: 'longBlinks' | 'nods' | 'yawns') => m.raw[k]!.x / m.raw[k]!.b;
+
+  test('a driver identical to the baseline with 40 % of the current window LOST reads as the baseline (not low)', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, undefined, driver(fz, 15, () => ({})));
+    const m = feed(fz, 610, 1600, 15, lost40, driver(fz, 15, lost40)).at(-1)!;
+    expect(m.status).toBe('scored');
+    for (const k of ['longBlinks', 'nods', 'yawns'] as const) {
+      expect(ratio(m, k)).toBeGreaterThan(0.85);
+      expect(ratio(m, k)).toBeLessThan(1.15);
+    }
+  });
+  test('a baseline learned with 40 % LOST, then a fully observed identical driver, reads as the baseline (not high)', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 1100, 15, lost40, driver(fz, 15, lost40)); // learning ends at 600 s (speed, not observation, sets it); scoring continues in the same mode
+    const m = feed(fz, 1100, 2100, 15, undefined, driver(fz, 15, () => ({}))).at(-1)!;
+    expect(m.status).toBe('scored');
+    for (const k of ['longBlinks', 'nods', 'yawns'] as const) {
+      expect(ratio(m, k)).toBeGreaterThan(0.85);
+      expect(ratio(m, k)).toBeLessThan(1.15);
+    }
+    for (const k of ['longBlinks', 'nods', 'yawns'] as const) expect(m.sub[k]).toBeLessThan(0.2);
+  });
+  test('a row observed for under 50 % of its window is dropped as sparse, not degraded', () => {
+    const { fz } = learned();
+    const lost70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'lost', hasHead: false, openness: null, gazeRel: null } : {});
+    feed(fz, 610, 1510, 15, lost70);
+    const m = feed(fz, 1510, 1575, 15).at(-1)!;
+    expect(m.status).toBe('scored');
+    for (const k of ['longBlinks', 'blinkDuration', 'nods', 'yawns', 'dispersion'] as const) expect(m.sub[k]).toBeNull();
+    expect(m.sparse).toEqual(expect.arrayContaining(['longBlinks', 'blinkDuration', 'nods', 'yawns', 'dispersion']));
+    expect(m.sub.perclos).not.toBeNull();
+    expect(m.degraded).toBe(false);
+    expect(m.reason).toBeNull();
+    expect(fz.stats().sparseRowMinutes.nods).toBeGreaterThanOrEqual(1);
+  });
+  test('HEAD_ONLY keeps nods observed (a head pose), not blinks', () => {
+    const { fz } = learned();
+    const head70 = (t: number): Partial<FatigueFrame> => ((t % 10) < 7 ? { quality: 'head_only', openness: null } : {});
+    feed(fz, 610, 1510, 15, head70);
+    const m = feed(fz, 1510, 1575, 15).at(-1)!;
+    expect(m.sub.nods).not.toBeNull();
+    expect(m.sub.longBlinks).toBeNull();
+  });
+});
+
+describe('T10 review m1 and nit', () => {
+  test('PERCLOS needs perclosMinTrackingS of TRACKING in its window, apart from the 50 % minute rule', () => {
+    const cfg = resolveDmsConfig({ fatigue: { perclosMinTrackingS: 45 } });
+    const run = (c: DmsConfig) => {
+      const fz = createFatigue(c);
+      feed(fz, 0, 610, 15);
+      return feed(fz, 610, 730, 15, (t) => ((t % 10) < 3 ? { quality: 'head_only', openness: null } : {})).at(-1)!; // the minute to 720 s: 70 % TRACKING, 42 s
+    };
+    const strict = run(cfg);
+    expect(strict.status).toBe('scored');
+    expect(strict.sub.perclos).toBeNull();
+    expect(strict.perclosDropped).toBe(true);
+    expect(strict.sub.nods).not.toBeNull();
+    expect(run(C).sub.perclos).not.toBeNull();
+  });
+  test('an unknown local time is not night (never 00:00)', () => {
+    const { fz } = learned();
+    const m = feed(fz, 610, 700, 15, (t) => ({ ...perclos20(t), tripElapsedS: 3 * 3600, localMinutes: null }), blinker(fz, 15, 4, 200)).at(-1)!;
+    expect(m.score).toBeCloseTo(30 * 1.15, 6);
   });
 });
