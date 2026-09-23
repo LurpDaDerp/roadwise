@@ -1,0 +1,422 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
+<View
+  style={
+    [
+      {
+        "backgroundColor": "#FFFFFF",
+        "borderColor": "#C9D3E2",
+        "borderRadius": 16,
+        "borderWidth": 1,
+        "gap": 12,
+        "overflow": "hidden",
+        "padding": 16,
+      },
+      undefined,
+    ]
+  }
+  testID="hub-card"
+>
+  <ViewManagerAdapter_ExpoLinearGradient
+    colors={
+      [
+        4294967295,
+        4284008384,
+        4291410160,
+        4294361575,
+      ]
+    }
+    endPoint={
+      [
+        1,
+        0,
+      ]
+    }
+    locations={
+      [
+        0,
+        0.55,
+        0.8,
+        1,
+      ]
+    }
+    pointerEvents="none"
+    startPoint={
+      [
+        0,
+        1,
+      ]
+    }
+    style={
+      [
+        {
+          "bottom": 0,
+          "left": 0,
+          "position": "absolute",
+          "right": 0,
+          "top": 0,
+        },
+        {
+          "opacity": 0.18,
+        },
+      ]
+    }
+  />
+  <View
+    style={
+      {
+        "flexDirection": "row",
+        "flexWrap": "wrap",
+        "gap": 16,
+      }
+    }
+    testID="hub-card-fields"
+  >
+    <View
+      style={
+        [
+          {
+            "gap": 4,
+          },
+          {
+            "flexBasis": 150,
+            "flexGrow": 2,
+          },
+        ]
+      }
+    >
+      <Text
+        allowFontScaling={false}
+        style={
+          [
+            {
+              "color": "#5A6684",
+              "fontFamily": "System",
+              "fontSize": 24,
+              "fontWeight": "400",
+              "lineHeight": 32,
+            },
+            {
+              "borderBottomColor": "#6B7A99",
+              "borderBottomWidth": 0.5,
+              "letterSpacing": 1.2,
+              "paddingBottom": 2,
+              "textTransform": "uppercase",
+            },
+          ]
+        }
+      >
+        Points
+      </Text>
+      <View
+        accessibilityLabel="12,450 points"
+        accessibilityRole="text"
+        accessible={true}
+        testID="hub-points"
+      >
+        <Text
+          allowFontScaling={false}
+          style={
+            [
+              {
+                "color": "#14213D",
+                "fontFamily": "B612Mono_700Bold",
+                "fontSize": 80,
+                "fontVariant": [
+                  "tabular-nums",
+                ],
+                "letterSpacing": -0.5,
+                "lineHeight": 92,
+              },
+              [
+                {
+                  "fontFamily": "B612Mono_700Bold",
+                },
+                {
+                  "fontVariant": [
+                    "tabular-nums",
+                  ],
+                },
+                undefined,
+              ],
+            ]
+          }
+          testID="hub-points-value"
+        >
+          12,450
+        </Text>
+      </View>
+    </View>
+    <View
+      style={
+        [
+          {
+            "gap": 4,
+          },
+          {
+            "flexBasis": 180,
+            "flexGrow": 2,
+          },
+        ]
+      }
+    >
+      <Text
+        allowFontScaling={false}
+        style={
+          [
+            {
+              "color": "#5A6684",
+              "fontFamily": "System",
+              "fontSize": 24,
+              "fontWeight": "400",
+              "lineHeight": 32,
+            },
+            {
+              "borderBottomColor": "#6B7A99",
+              "borderBottomWidth": 0.5,
+              "letterSpacing": 1.2,
+              "paddingBottom": 2,
+              "textTransform": "uppercase",
+            },
+          ]
+        }
+      >
+        Class
+      </Text>
+      <View
+        accessibilityLabel="Class Focused, 2,550 points to Road-wise"
+        accessibilityRole="text"
+        accessible={true}
+        style={
+          {
+            "gap": 8,
+          }
+        }
+        testID="hub-class"
+      >
+        <Text
+          allowFontScaling={false}
+          style={
+            [
+              {
+                "color": "#14213D",
+                "fontFamily": "B612_700Bold",
+                "fontSize": 44,
+                "lineHeight": 56,
+              },
+              [
+                {
+                  "fontFamily": "B612_700Bold",
+                },
+                {},
+                undefined,
+              ],
+            ]
+          }
+          testID="hub-class-name"
+        >
+          Focused
+        </Text>
+        <View
+          accessibilityElementsHidden={true}
+          importantForAccessibility="no-hide-descendants"
+          style={
+            {
+              "backgroundColor": "#F2F5FA",
+              "borderColor": "#6B7A99",
+              "borderRadius": 999,
+              "borderWidth": 0.5,
+              "height": 8,
+              "overflow": "hidden",
+            }
+          }
+          testID="hub-class-bar"
+        >
+          <View
+            style={
+              {
+                "backgroundColor": "#1C3F94",
+                "height": "100%",
+                "width": "63.6%",
+              }
+            }
+            testID="hub-class-bar-fill"
+          />
+        </View>
+        <Text
+          allowFontScaling={false}
+          style={
+            [
+              {
+                "color": "#4A5878",
+                "fontFamily": "System",
+                "fontSize": 26,
+                "fontWeight": "400",
+                "lineHeight": 36,
+              },
+              undefined,
+            ]
+          }
+          testID="hub-class-next"
+        >
+          2,550 to Road-wise
+        </Text>
+      </View>
+    </View>
+    <View
+      style={
+        [
+          {
+            "gap": 4,
+          },
+          {
+            "flexBasis": 120,
+            "flexGrow": 1,
+          },
+        ]
+      }
+    >
+      <Text
+        allowFontScaling={false}
+        style={
+          [
+            {
+              "color": "#5A6684",
+              "fontFamily": "System",
+              "fontSize": 24,
+              "fontWeight": "400",
+              "lineHeight": 32,
+            },
+            {
+              "borderBottomColor": "#6B7A99",
+              "borderBottomWidth": 0.5,
+              "letterSpacing": 1.2,
+              "paddingBottom": 2,
+              "textTransform": "uppercase",
+            },
+          ]
+        }
+      >
+        Streak
+      </Text>
+      <View
+        accessibilityLabel="Streak 112 days, 2 shields"
+        accessibilityRole="text"
+        accessible={true}
+        style={
+          {
+            "gap": 4,
+          }
+        }
+        testID="hub-streak"
+      >
+        <View
+          style={
+            {
+              "alignItems": "baseline",
+              "flexDirection": "row",
+              "flexWrap": "wrap",
+              "gap": 8,
+            }
+          }
+        >
+          <Text
+            allowFontScaling={false}
+            style={
+              [
+                {
+                  "color": "#14213D",
+                  "fontFamily": "B612_700Bold",
+                  "fontSize": 56,
+                  "lineHeight": 68,
+                },
+                [
+                  {
+                    "fontFamily": "B612Mono_700Bold",
+                  },
+                  {
+                    "fontVariant": [
+                      "tabular-nums",
+                    ],
+                  },
+                  undefined,
+                ],
+              ]
+            }
+            testID="hub-streak-days"
+          >
+            112
+          </Text>
+          <Text
+            allowFontScaling={false}
+            style={
+              [
+                {
+                  "color": "#14213D",
+                  "fontFamily": "System",
+                  "fontSize": 30,
+                  "fontWeight": "400",
+                  "lineHeight": 40,
+                },
+                undefined,
+              ]
+            }
+          >
+            days
+          </Text>
+        </View>
+        <View
+          style={
+            {
+              "alignItems": "center",
+              "flexDirection": "row",
+              "gap": 4,
+            }
+          }
+          testID="hub-streak-shields"
+        >
+          <Text
+            allowFontScaling={false}
+            selectable={false}
+            style={
+              [
+                {
+                  "color": "#1C3F94",
+                  "fontSize": 16,
+                },
+                undefined,
+                {
+                  "fontFamily": "ionicons",
+                  "fontStyle": "normal",
+                  "fontWeight": "normal",
+                },
+                {},
+              ]
+            }
+          >
+            
+          </Text>
+          <Text
+            allowFontScaling={false}
+            style={
+              [
+                {
+                  "color": "#14213D",
+                  "fontFamily": "System",
+                  "fontSize": 26,
+                  "fontWeight": "400",
+                  "lineHeight": 36,
+                },
+                undefined,
+              ]
+            }
+          >
+            2 shields
+          </Text>
+        </View>
+      </View>
+    </View>
+  </View>
+</View>
+`;
