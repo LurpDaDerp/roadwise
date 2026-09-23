@@ -90,9 +90,9 @@ async function renderField(before?: (w: Awaited<ReturnType<typeof world>>) => Pr
 }
 
 /** The shared active line (`goalActiveLine`) with no failed day: the proration promise holds. */
-const ACTIVE_LINE = '2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.';
+const ACTIVE_LINE = 'Drive fewer days this week? Keeping it up on each day you drive still counts.';
 const LABEL =
-  'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. 2 of 4 days so far. Drive fewer days this week? Keeping it up on each day you drive still counts. Opens your weekly goal';
+  'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. Drive fewer days this week? Keeping it up on each day you drive still counts. Opens your weekly goal';
 
 test("this week's goal: the sentence, the day count with a bar, and a tap to the goal", async () => {
   await renderField();
@@ -101,6 +101,8 @@ test("this week's goal: the sentence, the day count with a bar, and a tap to the
   expect(within(field).getByText('Keep your phone down on 4 driving days')).toBeOnTheScreen();
   expect(within(field).getByText('2 of 4 driving days')).toBeOnTheScreen();
   expect(within(field).getByText(ACTIVE_LINE)).toBeOnTheScreen();
+  // The count is printed once: the shared line comes without its own.
+  expect(within(field).getAllByText(/2 of 4/)).toHaveLength(1);
   // Never a nudge to drive more.
   expect(within(field).queryByText(/more driving day/)).toBeNull();
   expect(within(field).getByTestId('weekly-focus-bar', { includeHiddenElements: true })).toBeOnTheScreen();
@@ -110,15 +112,17 @@ test("this week's goal: the sentence, the day count with a bar, and a tap to the
   expect(mockServer.opens).toBe(0);
 });
 
-test('after a day that did not pass, the active line keeps the count and drops the proration promise', async () => {
+test('after a day that did not pass, the proration promise is dropped and no line is printed', async () => {
   mockServer.answer = async () => snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 1 }) });
   await renderField();
   expect(
     await screen.findByRole('button', {
-      name: 'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. 2 of 4 days so far. Opens your weekly goal',
+      name: 'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. Opens your weekly goal',
     })
   ).toBeOnTheScreen();
-  expect(screen.getByText('2 of 4 days so far.')).toBeOnTheScreen();
+  // Nothing more to say after a failed day: no line at all, and the count printed once.
+  expect(screen.queryByTestId('weekly-focus-line')).toBeNull();
+  expect(screen.getAllByText(/2 of 4/)).toHaveLength(1);
   expect(screen.queryByText(/Drive fewer days/)).toBeNull();
 });
 

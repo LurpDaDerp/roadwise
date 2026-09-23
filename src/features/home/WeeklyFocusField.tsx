@@ -79,16 +79,17 @@ function FocusBody() {
     const view = goalView(goal);
     const sentence = goalSentence(view.category, view.target);
     const progress = copy.progress(view.pass, view.target);
-    // Active: the shared line (never "N more days"; the proration promise only while it can hold).
+    // Active: the shared line without its count (the row prints the count itself), never "N more
+    // days"; the proration promise only while it can hold, and nothing after a failed day (null).
     const note =
       view.state === 'active'
-        ? goalActiveLine({ pass: view.pass, target: view.target, failDays: view.fail })
+        ? goalActiveLine({ pass: view.pass, target: view.target, failDays: view.fail, withCount: false })
         : view.remainingText;
     return (
       <View style={{ marginHorizontal: -th.space.lg, marginBottom: -th.space.lg }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={copy.spoken([copy.label, sentence, progress, clause(note)])}
+          accessibilityLabel={copy.spoken([copy.label, sentence, progress, ...(note === null ? [] : [clause(note)])])}
           onPress={() => router.push(GOAL_HREF)}
           testID="weekly-focus"
           style={({ pressed }) => [
@@ -113,9 +114,11 @@ function FocusBody() {
                 <ProgressBar pass={view.pass} target={view.target} />
               </View>
             </View>
-            <Text variant="footnote" tone="muted" testID="weekly-focus-line">
-              {note}
-            </Text>
+            {note === null ? null : (
+              <Text variant="footnote" tone="muted" testID="weekly-focus-line">
+                {note}
+              </Text>
+            )}
           </View>
           <Ionicons name="chevron-forward" size={18} color={th.colors.textSubtle} />
         </Pressable>
