@@ -146,6 +146,8 @@ export const DMS_VISION_ERROR_CODES = [
   'E_CAMERA',
   'E_MODEL',
   'E_STATE',
+  /** JS only: native returned a result outside the contract (a native bug; Task 1 review m2). */
+  'E_RESULT',
 ] as const;
 
 export type DmsVisionErrorCode = (typeof DMS_VISION_ERROR_CODES)[number];

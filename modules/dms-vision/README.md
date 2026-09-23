@@ -34,7 +34,7 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 - **Event names.** Declare exactly `Events("frames", "status", "state")`, byte-identical on both platforms.
 - **Methods.** Every name in `DMS_VISION_METHODS` is an `AsyncFunction("<name>")` on both platforms. `isAvailable` is a JS-only check. `addListener` is the Expo event emitter's.
-- **Arguments.** `start` and `setPolicy` each take **one object**, with exactly the keys in `src/types.ts`.
+- **Arguments.** `start` and `setPolicy` each take **one object** (an Expo `Record` on both platforms), with exactly the keys of `startOptionsSchema` / `capturePolicySchema` in `src/wire.ts`. The native text tests pin the `Record` field names to those keys.
 - **Exact keys.** Results and event payloads carry exactly the keys in `src/types.ts`. JS validates with strict schemas.
 - **Privacy.**
   - No pixels, landmarks or images ever leave native code.
@@ -77,12 +77,13 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 | `E_CAMERA` | The camera could not be opened or configured. |
 | `E_MODEL` | A bundled model could not be loaded. |
 | `E_STATE` | `setPolicy` while stopped. |
+| `E_RESULT` | JS only: native returned a result outside the contract. This is a native bug, and the message names the method. |
 
 ## 3. Events
 
 | Event | Payload |
 |---|---|
-| `frames` | `{ v: 1, anchorTMs, anchorEpochMs, n, data }`. `data` holds `n` records of 38 little-endian float32 (§4). It is emitted at most every `BATCH_MS = 100` ms while records are pending, and never while paused or stopped. `anchorTMs`/`anchorEpochMs` pair one instant on the record clock with the wall clock (§5). |
+| `frames` | `{ v: 1, anchorTMs, anchorEpochMs, n, data }`. `data` holds `n` records of 38 little-endian float32 (§4). It is emitted at most every `BATCH_MS = 100` ms while records are pending, and never while paused or stopped. **`anchorTMs` is a double (Swift `Double`, Kotlin `Double`): the FIRST record's clock value in ms.** `anchorEpochMs` (a double) is the wall clock sampled together with it (§5). `data` is `Data` (iOS) / `ByteArray` (Android), which JS receives as a `Uint8Array`. The decoder also accepts an `ArrayBuffer` or another typed-array view. |
 | `status` | Once per second while running or paused: `{ state, fpsTarget, fpsActual, dropped, gazeNetAvailable, gazeNetOn, thermal, thermalLevel, lowPower, latLandmarkP50, latLandmarkP95, latGazeP50, latGazeP95, latTotalP50, latTotalP95, procCpuMsPerS }`. Latencies are `null` until measured (`latGaze*` while the net is off). `procCpuMsPerS` is **process** CPU (iOS `getrusage(RUSAGE_SELF)`, Android `Process.getElapsedCpuTime()`), because MediaPipe runs on threads the module does not own. |
 | `state` | On every change: `{ state: 'stopped' \| 'starting' \| 'running' \| 'paused', reason: 'user' \| 'policy' \| 'background' \| 'interrupted' \| 'thermal' \| 'watchdog' \| 'error' \| 'permission' \| 'released' }`. |
 
@@ -101,7 +102,7 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 | # | Field | Mask | Meaning |
 |---|---|---|---|
-| 0 | `tMs` | A | record clock, ms (§5); non-decreasing |
+| 0 | `tOffMs` | A | the record's time minus the header's `anchorTMs`, ms: ≥ 0, and under a second in practice (§5) |
 | 1 | `face` | A | 0 or 1 |
 | 2 | `boxCx` | F | face box centre x, upright frame, 0–1 |
 | 3 | `boxCy` | F | face box centre y |
@@ -156,9 +157,16 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 ## 5. Time bases
 
-- **iOS:** `tMs` = the `CMSampleBuffer` presentation timestamp on the host-time clock, in ms. The anchor pair is sampled together: `CACurrentMediaTime()` (the same clock) and `Date()`.
-- **Android:** `tMs` = `ImageInfo.timestamp` / 1e6. At session start native picks the timestamp base: whichever of `SystemClock.elapsedRealtimeNanos()` or `SystemClock.uptimeNanos()` lies within 1 s of the first frame's timestamp. The anchor pair samples that clock and `System.currentTimeMillis()` together.
+The record clock `tMs` counts from device boot, so it is large, and it is **never** put in a float32. Float32 holds whole milliseconds only up to 2²⁴ ms (4.66 h of uptime), and steps by 64 ms after a week. So:
+- the batch header carries `anchorTMs` as a double: the first record's `tMs`;
+- each record carries `tOffMs = tMs − anchorTMs` as a float32, computed in double precision natively before the float32 store;
+- JS rebuilds `tMs = anchorTMs + tOffMs` in double precision.
+
+Per platform:
+- **iOS:** `tMs` = the `CMSampleBuffer` presentation timestamp on the host-time clock, in ms. `anchorEpochMs` is derived at the batch's first frame by sampling `CACurrentMediaTime()` (the same clock) and `Date()` together: `anchorEpochMs = dateMs − (nowMs − anchorTMs)`.
+- **Android:** `tMs` = `ImageInfo.timestamp` / 1e6. At session start native picks the timestamp base: whichever of `SystemClock.elapsedRealtimeNanos()` or `SystemClock.uptimeNanos()` lies within 1 s of the first frame's timestamp. `anchorEpochMs` is derived the same way from that clock and `System.currentTimeMillis()`.
 - Every duration the engine measures uses `tMs`, never frame counts.
+- **Per session.** The clock base can differ between native sessions (a restart after a stop may pick the other Android base). JS keeps `tMs` monotonic only within one session: the host resets its last-accepted `tMs` to null on every new session (`state` → `starting`/`running` after `stopped`).
 
 ## 6. Lifecycle owned by native
 

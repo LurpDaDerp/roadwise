@@ -10,7 +10,7 @@
 // (`stop` resolves), and tests inject `createFakeDmsVision()`.
 //
 // Only the DMS host controller (src/core/dms/host) and the dev diagnostics route may import this
-// module (plan rev1: S-M1; enforced by imports.test.ts).
+// module (plan rev1: S-M1). The rule is to be enforced by the plan's Task 15 `imports.test.ts`.
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import type { z } from 'zod';
 import {
@@ -32,6 +32,7 @@ import {
 export * from './types';
 export * from './constants';
 export {
+  buildFrameBatch,
   decodeFrameBatch,
   encodeFrameBatch,
   faceAbsentRecord,
@@ -39,7 +40,7 @@ export {
   parseStatus,
   parseStateEvent,
 } from './wire';
-export type { FrameFeatures, FrameBatch, DecodeResult, RawRecord } from './wire';
+export type { AbsoluteRecord, FrameFeatures, FrameBatch, DecodeResult, RawFrameBatch, RawRecord } from './wire';
 export { createFakeDmsVision } from './fake';
 export type { FakeDmsVision, FakeOptions } from './fake';
 
@@ -82,7 +83,7 @@ async function call<T>(
   const fn = native[method] as (...a: readonly unknown[]) => Promise<unknown>;
   const raw = await fn(...args);
   const parsed = (result as Parser<T>).safeParse(raw);
-  if (!parsed.success) throw new Error(`DmsVision.${method}: invalid result ${safeJson(raw)}`);
+  if (!parsed.success) throw dmsVisionError('E_RESULT', `DmsVision.${method}: invalid result ${safeJson(raw)}`);
   return parsed.data;
 }
 

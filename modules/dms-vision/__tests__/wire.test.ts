@@ -11,19 +11,19 @@ import {
   FRAME_WIRE_VERSION,
 } from '../src/constants';
 import {
+  buildFrameBatch,
   decodeFrameBatch,
   encodeFrameBatch,
   faceAbsentRecord,
   recordFromFeatures,
-  type RawRecord,
 } from '../src/wire';
 
 const idx = (name: (typeof FRAME_FIELDS)[number]) => FRAME_FIELDS.indexOf(name);
 
-/** A fully tracked face: every field finite, no flags. */
+/** A fully tracked face in absolute form (field 0 = tMs): every field finite, no flags. */
 function tracked(tMs: number): number[] {
   const r: number[] = new Array(FRAME_STRIDE).fill(0.5);
-  r[idx('tMs')] = tMs;
+  r[idx('tOffMs')] = tMs;
   r[idx('face')] = 1;
   r[idx('netYaw')] = NaN; // no NET_RAN
   r[idx('netPitch')] = NaN;
@@ -37,15 +37,9 @@ function tracked(tMs: number): number[] {
   return r;
 }
 
+/** A wire batch anchored at the first record (as native anchors it), with header overrides. */
 function batch(records: number[][], over: Record<string, unknown> = {}) {
-  return {
-    v: FRAME_WIRE_VERSION,
-    anchorTMs: 1000,
-    anchorEpochMs: 1_700_000_000_000,
-    n: records.length,
-    data: encodeFrameBatch(records as RawRecord[]),
-    ...over,
-  };
+  return { ...buildFrameBatch(records, 1_700_000_000_000), ...over };
 }
 
 const R_FIELDS = ['earR', 'eyeWR', 'eyeLumaR', 'irisContrastR', 'eyeSatR', 'irisOxR', 'irisOyR'] as const;
@@ -56,16 +50,17 @@ describe('constants', () => {
   test('38 fields, 152 bytes, one mask class per field, no duplicates', () => {
     expect(FRAME_STRIDE).toBe(38);
     expect(FRAME_BYTES).toBe(152);
+    expect(FRAME_WIRE_VERSION).toBe(1);
     expect(FRAME_FIELDS).toHaveLength(38);
     expect(FRAME_MASK).toHaveLength(38);
     expect(new Set(FRAME_FIELDS).size).toBe(38);
-    expect(FRAME_FIELDS[0]).toBe('tMs');
+    expect(FRAME_FIELDS[0]).toBe('tOffMs');
     expect(FRAME_FIELDS[37]).toBe('reserved');
   });
 
   test('the mask classes are the plan table', () => {
     const cls = (n: (typeof FRAME_FIELDS)[number]) => FRAME_MASK[idx(n)];
-    for (const n of ['tMs', 'face', 'frameLuma', 'rotationDeg', 'latLandmarkMs', 'latTotalMs', 'flags', 'reserved'] as const)
+    for (const n of ['tOffMs', 'face', 'frameLuma', 'rotationDeg', 'latLandmarkMs', 'latTotalMs', 'flags', 'reserved'] as const)
       expect(cls(n)).toBe('A');
     for (const n of F_FIELDS) expect(cls(n)).toBe('F');
     for (const n of ['headYaw', 'headPitch', 'headRoll'] as const) expect(cls(n)).toBe('P');
@@ -94,7 +89,7 @@ describe('decode: the happy paths', () => {
     expect(f.netYaw).toBeNull();
     expect(f.rotationDeg).toBe(90);
     expect(f.flags).toBe(0);
-    expect(out.batch!.anchorTMs).toBe(1000);
+    expect(out.batch!.anchorTMs).toBe(1234.5);
     expect(out.batch!.anchorEpochMs).toBe(1_700_000_000_000);
     expect(out.lastTMs).toBe(1234.5);
   });
@@ -166,15 +161,59 @@ describe('decode: the happy paths', () => {
   });
 
   test('an unaligned view is copied, not misread', () => {
-    const data = encodeFrameBatch([tracked(5)]);
-    const padded = new Uint8Array(data.byteLength + 1);
-    padded.set(data, 1);
-    const view = new Uint8Array(padded.buffer, 1, data.byteLength);
-    const out = decodeFrameBatch(batch([], { n: 1, data: view }));
+    const b = batch([tracked(5)]);
+    const padded = new Uint8Array(b.data.byteLength + 1);
+    padded.set(b.data, 1);
+    const view = new Uint8Array(padded.buffer, 1, b.data.byteLength);
+    const out = decodeFrameBatch({ ...b, data: view });
     expect(out.droppedBatch).toBe(false);
     expect(out.batch!.frames[0]!.tMs).toBe(5);
   });
+
+  test('the payload may also arrive as an ArrayBuffer or another typed-array view (review m3)', () => {
+    const b = batch([tracked(5), tracked(6)]);
+    const copy = b.data.slice().buffer;
+    expect(decodeFrameBatch({ ...b, data: copy }).batch!.frames.map((f) => f.tMs)).toEqual([5, 6]);
+    const asInt8 = new Int8Array(b.data.buffer, b.data.byteOffset, b.data.byteLength);
+    expect(decodeFrameBatch({ ...b, data: asInt8 }).batch!.frames.map((f) => f.tMs)).toEqual([5, 6]);
+  });
 });
+
+describe('time: tOffMs against a float64 anchor (Task 1 review C1)', () => {
+  const WEEK_MS = 6.048e8; // a week of uptime: float32 steps by 64 ms here
+  const PERIOD = 1000 / 15; // 66.666… ms at 15 fps
+
+  test('a week-uptime clock keeps sub-microsecond durations', () => {
+    const times = Array.from({ length: 10 }, (_, k) => WEEK_MS + 0.123 + k * PERIOD);
+    const out = decodeFrameBatch(batch(times.map(tracked)));
+    expect(out.droppedRecords).toBe(0);
+    const got = out.batch!.frames.map((f) => f.tMs);
+    expect(out.batch!.anchorTMs).toBe(times[0]);
+    for (let k = 0; k < times.length; k++) expect(Math.abs(got[k]! - times[k]!)).toBeLessThan(1e-4);
+    for (let k = 1; k < times.length; k++) expect(Math.abs(got[k]! - got[k - 1]! - PERIOD)).toBeLessThan(1e-4);
+  });
+
+  test('the same holds across batches of one session', () => {
+    const a = [0, 1, 2].map((k) => WEEK_MS + k * PERIOD);
+    const b = [3, 4, 5].map((k) => WEEK_MS + k * PERIOD);
+    const first = decodeFrameBatch(batch(a.map(tracked)));
+    const second = decodeFrameBatch(batch(b.map(tracked)), first.lastTMs);
+    expect(second.droppedRecords).toBe(0);
+    expect(Math.abs(second.batch!.frames[0]!.tMs - first.lastTMs! - PERIOD)).toBeLessThan(1e-4);
+  });
+
+  test('a negative tOffMs (a record earlier than the anchor) is dropped', () => {
+    const b = batch([tracked(100), tracked(50)]);
+    const out = decodeFrameBatch(b);
+    expect(out.droppedRecords).toBe(1);
+    expect(out.batch!.frames.map((f) => f.tMs)).toEqual([100]);
+  });
+
+  test('a negative anchor is a broken header', () => {
+    expect(decodeFrameBatch(batch([tracked(1)], { anchorTMs: -5 })).droppedBatch).toBe(true);
+  });
+});
+
 
 describe('decode: the mask is required in BOTH directions (one bad record dropped, the rest kept)', () => {
   function expectDropped(mutate: (r: number[]) => void) {
@@ -186,7 +225,7 @@ describe('decode: the mask is required in BOTH directions (one bad record droppe
     expect(out.batch!.frames.map((f) => f.tMs)).toEqual([1, 3]);
   }
 
-  test.each(['tMs', 'face', 'frameLuma', 'rotationDeg', 'latLandmarkMs', 'latTotalMs', 'flags', 'reserved'] as const)(
+  test.each(['tOffMs', 'face', 'frameLuma', 'rotationDeg', 'latLandmarkMs', 'latTotalMs', 'flags', 'reserved'] as const)(
     'A: NaN in %s',
     (n) => expectDropped((r) => (r[idx(n)] = NaN))
   );
@@ -226,7 +265,7 @@ describe('decode: the mask is required in BOTH directions (one bad record droppe
 
   test.each([
     ['+Infinity in headYaw', (r: number[]) => (r[idx('headYaw')] = Infinity)],
-    ['-Infinity in tMs', (r: number[]) => (r[idx('tMs')] = -Infinity)],
+    ['-Infinity in tOffMs', (r: number[]) => (r[idx('tOffMs')] = -Infinity)],
     ['face = 0.5', (r: number[]) => (r[idx('face')] = 0.5)],
     ['flags = 32 (no such bit)', (r: number[]) => (r[idx('flags')] = 32)],
     ['flags = 1.5', (r: number[]) => (r[idx('flags')] = 1.5)],
@@ -234,7 +273,7 @@ describe('decode: the mask is required in BOTH directions (one bad record droppe
     ['rotationDeg = 45', (r: number[]) => (r[idx('rotationDeg')] = 45)],
     ['irisInR = 0.5', (r: number[]) => (r[idx('irisInR')] = 0.5)],
     ['a negative latency', (r: number[]) => (r[idx('latTotalMs')] = -1)],
-    ['a negative tMs', (r: number[]) => (r[idx('tMs')] = -1)],
+    ['a time before the anchor (negative tOffMs)', (r: number[]) => (r[idx('tOffMs')] = -1)],
   ])('%s', (_n, mutate) => expectDropped(mutate));
 
   test('flags must be 0 when there is no face', () =>

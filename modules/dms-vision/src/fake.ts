@@ -16,7 +16,6 @@ import {
   THERMAL_L1_ENTRY_DWELL_MS,
   WATCHDOG_PAUSE_MS,
   WATCHDOG_STOP_MS,
-  FRAME_WIRE_VERSION,
   thermalLevelOf,
   type ThermalLevel,
   type ThermalName,
@@ -36,7 +35,7 @@ import {
   type StateReason,
   type Subscription,
 } from './types';
-import { capturePolicySchema, encodeFrameBatch, startOptionsSchema, type RawRecord } from './wire';
+import { buildFrameBatch, capturePolicySchema, startOptionsSchema, type AbsoluteRecord } from './wire';
 
 /** The pinned model digests (plan keep table). */
 export const LANDMARKER_SHA256 = '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff';
@@ -49,7 +48,7 @@ export interface FakeOptions {
   /** A build with `DMS_GAZE_NET=1`. Default false (the production variant). */
   gazeNetAvailable?: boolean;
   asyncDelivery?: boolean;
-  /** Epoch ms at fake time 0, for batch anchors. */
+  /** Epoch ms at record clock 0, for batch anchors (anchorEpochMs = this + the first record's tMs). */
   epochAtZero?: number;
 }
 
@@ -73,8 +72,11 @@ export interface FakeDmsVision extends DmsVisionApi {
   setLowPower(on: boolean): void;
   /** The next call of `method` rejects with `code`. */
   failNext(method: DmsVisionMethod, code: DmsVisionErrorCode): void;
-  /** Emit one `frames` batch; false (and nothing emitted) unless running. */
-  pushRecords(records: readonly RawRecord[]): boolean;
+  /**
+   * Emit one `frames` batch built from absolute-form records (field 0 = `tMs`), anchored at the first
+   * record as native anchors it; false (and nothing emitted) unless running.
+   */
+  pushRecords(records: readonly AbsoluteRecord[]): boolean;
   /** Emit a `status` event with the current status. */
   emitStatus(): void;
   /** Emit any payload on any event (for tests of the host's validation). */
@@ -319,13 +321,7 @@ export function createFakeDmsVision(opts: FakeOptions = {}): FakeDmsVision {
 
     pushRecords(records) {
       if (state !== 'running' || records.length === 0) return false;
-      emit('frames', {
-        v: FRAME_WIRE_VERSION,
-        anchorTMs: t,
-        anchorEpochMs: epochAtZero + t,
-        n: records.length,
-        data: encodeFrameBatch(records),
-      });
+      emit('frames', buildFrameBatch(records, epochAtZero + records[0]![0]!));
       return true;
     },
 

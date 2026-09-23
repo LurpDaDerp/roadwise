@@ -23,6 +23,7 @@ import type { CapturePolicy, ModelInfo, NativeStatus, PermissionResult, StartOpt
 
 /** One decoded record. Not-computed fields are `null`. */
 export interface FrameFeatures {
+  /** The record clock in ms, rebuilt in double precision as `anchorTMs + tOffMs`. */
   tMs: number;
   face: boolean;
   boxCx: number | null;
@@ -63,7 +64,9 @@ export interface FrameFeatures {
 }
 
 export interface FrameBatch {
+  /** The first record's clock value, ms (a double); every record's `tOffMs` is relative to it. */
   anchorTMs: number;
+  /** Wall-clock epoch ms sampled together with `anchorTMs`. */
   anchorEpochMs: number;
   frames: FrameFeatures[];
 }
@@ -73,14 +76,34 @@ export interface DecodeResult {
   batch: FrameBatch | null;
   droppedBatch: boolean;
   droppedRecords: number;
-  /** The last accepted `tMs` (pass it to the next call to keep records monotonic across batches). */
+  /**
+   * The last accepted `tMs`. Pass it to the next call of the SAME native session to keep records
+   * monotonic across batches; reset to null whenever a new native session starts (the clock base can
+   * change on restart; Task 1 review m1).
+   */
   lastTMs: number | null;
 }
 
-/** A record as 38 numbers in `FRAME_FIELDS` order (NaN = not computed). */
+/** A record as 38 numbers in `FRAME_FIELDS` order (NaN = not computed); field 0 is `tOffMs`. */
 export type RawRecord = readonly number[];
 
+/**
+ * A record whose field 0 holds the ABSOLUTE clock value `tMs` instead of `tOffMs`: the form the
+ * tests, the fake and the vectors build records in. `buildFrameBatch` turns a list of them into a
+ * wire batch whose anchor is the first record's `tMs`.
+ */
+export type AbsoluteRecord = readonly number[];
+
 const HEADER_KEYS = ['anchorEpochMs', 'anchorTMs', 'data', 'n', 'v'];
+
+/** A raw `frames` event payload, as native emits it. */
+export interface RawFrameBatch {
+  v: number;
+  anchorTMs: number;
+  anchorEpochMs: number;
+  n: number;
+  data: Uint8Array;
+}
 const I = Object.fromEntries(FRAME_FIELDS.map((f, i) => [f, i])) as Record<FrameField, number>;
 
 /** Encode records as little-endian float32 (what native's `RecordEncoder` produces). */
@@ -94,7 +117,26 @@ export function encodeFrameBatch(records: readonly RawRecord[]): Uint8Array {
   return out;
 }
 
-/** The record native emits for a processed frame with no face (flags 0, every masked field NaN). */
+/**
+ * A wire batch from records in absolute form: `anchorTMs` = the first record's `tMs` (a double),
+ * each record's field 0 = `tMs − anchorTMs` (what native's encoder does). `anchorEpochMs` is the
+ * wall clock sampled together with the first record's clock value.
+ */
+export function buildFrameBatch(records: readonly AbsoluteRecord[], anchorEpochMs: number): RawFrameBatch {
+  if (records.length === 0) throw new RangeError('a batch needs at least one record');
+  const anchorTMs = records[0]![0]!;
+  const rel = records.map((r) => {
+    const out = [...r];
+    out[0] = r[0]! - anchorTMs;
+    return out;
+  });
+  return { v: FRAME_WIRE_VERSION, anchorTMs, anchorEpochMs, n: records.length, data: encodeFrameBatch(rel) };
+}
+
+/**
+ * The record native emits for a processed frame with no face (flags 0, every masked field NaN), in
+ * absolute form (field 0 = `tMs`; see `buildFrameBatch`).
+ */
 export function faceAbsentRecord(
   tMs: number,
   frameLuma: number,
@@ -103,7 +145,7 @@ export function faceAbsentRecord(
   latTotalMs: number
 ): number[] {
   const r = FRAME_MASK.map((cls) => (cls === 'A' ? 0 : NaN));
-  r[I.tMs] = tMs;
+  r[I.tOffMs] = tMs;
   r[I.face] = 0;
   r[I.frameLuma] = frameLuma;
   r[I.rotationDeg] = rotationDeg;
@@ -114,14 +156,23 @@ export function faceAbsentRecord(
   return r;
 }
 
-/** The raw record for decoded features (null → NaN, face → 0/1, reserved 0). */
+/** The absolute-form record for decoded features (null → NaN, face → 0/1, reserved 0, field 0 = `tMs`). */
 export function recordFromFeatures(f: FrameFeatures): number[] {
   return FRAME_FIELDS.map((name) => {
     if (name === 'reserved') return 0;
     if (name === 'face') return f.face ? 1 : 0;
+    if (name === 'tOffMs') return f.tMs;
     const v = f[name];
     return v === null ? NaN : v;
   });
+}
+
+/** The payload bytes as a Uint8Array view, or null when `data` is not binary. */
+function toBytes(data: unknown): Uint8Array | null {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  return null;
 }
 
 function isInt(v: number): boolean {
@@ -149,7 +200,7 @@ function nanRequired(cls: (typeof FRAME_MASK)[number], face: boolean, flags: num
 }
 
 /** Validate one record read from the wire. Returns the decoded features, or null to drop it. */
-function decodeRecord(v: readonly number[]): FrameFeatures | null {
+function decodeRecord(v: readonly number[], anchorTMs: number): FrameFeatures | null {
   for (const x of v) if (!Number.isNaN(x) && !Number.isFinite(x)) return null; // ±Infinity
   const faceRaw = v[I.face]!;
   const flags = v[I.flags]!;
@@ -162,7 +213,7 @@ function decodeRecord(v: readonly number[]): FrameFeatures | null {
   }
   if (v[I.reserved] !== 0) return null;
   if (!(ALLOWED_ROTATIONS as readonly number[]).includes(v[I.rotationDeg]!)) return null;
-  if (v[I.tMs]! < 0 || v[I.latLandmarkMs]! < 0 || v[I.latTotalMs]! < 0) return null;
+  if (v[I.tOffMs]! < 0 || v[I.latLandmarkMs]! < 0 || v[I.latTotalMs]! < 0) return null;
   if (v[I.frameLuma]! < 0 || v[I.frameLuma]! > 255) return null;
   if (face) {
     const rIn = v[I.irisInR]!;
@@ -175,14 +226,21 @@ function decodeRecord(v: readonly number[]): FrameFeatures | null {
   FRAME_FIELDS.forEach((name, i) => {
     if (name === 'reserved') return;
     const x = v[i]!;
-    out[name] = name === 'face' ? face : Number.isNaN(x) ? null : x;
+    if (name === 'tOffMs') out.tMs = anchorTMs + x; // rebuilt in double precision (review C1)
+    else out[name] = name === 'face' ? face : Number.isNaN(x) ? null : x;
   });
   return out as unknown as FrameFeatures;
 }
 
 /**
- * Decode one `frames` event. `prevTMs` is the last accepted `tMs` from the previous batch; a record
- * earlier than the last accepted one (in this batch or across batches) is dropped.
+ * Decode one `frames` event. Each record's `tMs` is rebuilt as `anchorTMs + tOffMs` in double
+ * precision. `prevTMs` is the last accepted `tMs` from the previous batch OF THE SAME NATIVE SESSION;
+ * a record earlier than the last accepted one (in this batch or across batches) is dropped. The host
+ * resets `prevTMs` to null on every new native session: after a stop, the clock may restart on
+ * another base (Task 1 review m1).
+ *
+ * `data` may arrive as a Uint8Array (expo-modules-core 57 on both platforms), another typed-array
+ * view or an ArrayBuffer (review m3); all are read as bytes.
  */
 export function decodeFrameBatch(raw: unknown, prevTMs: number | null = null): DecodeResult {
   const broken: DecodeResult = { batch: null, droppedBatch: true, droppedRecords: 0, lastTMs: prevTMs };
@@ -192,13 +250,14 @@ export function decodeFrameBatch(raw: unknown, prevTMs: number | null = null): D
   if (keys.length !== HEADER_KEYS.length || keys.some((k, i) => k !== HEADER_KEYS[i])) return broken;
   const { v, anchorTMs, anchorEpochMs, n, data } = o;
   if (v !== FRAME_WIRE_VERSION) return broken;
-  if (typeof anchorTMs !== 'number' || !Number.isFinite(anchorTMs)) return broken;
+  if (typeof anchorTMs !== 'number' || !Number.isFinite(anchorTMs) || anchorTMs < 0) return broken;
   if (typeof anchorEpochMs !== 'number' || !Number.isFinite(anchorEpochMs)) return broken;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) return broken;
-  if (!(data instanceof Uint8Array) || data.byteLength !== n * FRAME_BYTES) return broken;
+  const asBytes = toBytes(data);
+  if (asBytes === null || asBytes.byteLength !== n * FRAME_BYTES) return broken;
 
   // A view whose offset is not 4-aligned is copied so the reads below are plain and exact.
-  const bytes = data.byteOffset % 4 === 0 ? data : new Uint8Array(data);
+  const bytes = asBytes.byteOffset % 4 === 0 ? asBytes : new Uint8Array(asBytes);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const frames: FrameFeatures[] = [];
   let dropped = 0;
@@ -206,7 +265,7 @@ export function decodeFrameBatch(raw: unknown, prevTMs: number | null = null): D
   const values = new Array<number>(FRAME_STRIDE);
   for (let k = 0; k < n; k++) {
     for (let i = 0; i < FRAME_STRIDE; i++) values[i] = view.getFloat32(k * FRAME_BYTES + i * 4, true);
-    const f = decodeRecord(values);
+    const f = decodeRecord(values, anchorTMs);
     if (f === null || (last !== null && f.tMs < last)) {
       dropped++;
       continue;

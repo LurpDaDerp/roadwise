@@ -2,9 +2,17 @@
 // (src/core/dms/policy) imports these, and the Swift and Kotlin text tests read them, so nothing
 // else in the repo may define them. README.md restates each one; `contract.test.ts` keeps it honest.
 
-/** The 38 float32 fields of one frame record, in wire order (plan "Wire contract v1", rev2: R1-I1). */
+/**
+ * The 38 float32 fields of one frame record, in wire order (plan "Wire contract v1", rev2: R1-I1).
+ *
+ * Field 0 is `tOffMs`, the record's time relative to the batch header's `anchorTMs` (a float64, the
+ * FIRST record's clock value), so it is ≥ 0 and under about a second (Task 1 review C1). The record
+ * clock counts from device boot, and float32 holds whole milliseconds only up to 2^24 ms (4.66 h),
+ * so an absolute float32 time would quantise every duration to 8 ms after a day of uptime and 64 ms
+ * after a week. The decoder rebuilds `tMs = anchorTMs + tOffMs` in double precision.
+ */
 export const FRAME_FIELDS = [
-  'tMs',
+  'tOffMs',
   'face',
   'boxCx',
   'boxCy',
@@ -59,7 +67,7 @@ export type FrameField = (typeof FRAME_FIELDS)[number];
 export type MaskClass = 'A' | 'F' | 'P' | 'N' | 'R' | 'L' | 'M';
 
 const MASK_BY_FIELD: Readonly<Record<FrameField, MaskClass>> = {
-  tMs: 'A',
+  tOffMs: 'A',
   face: 'A',
   boxCx: 'F',
   boxCy: 'F',

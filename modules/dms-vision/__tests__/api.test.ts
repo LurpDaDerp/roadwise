@@ -122,6 +122,7 @@ test('the error codes', () => {
     'E_CAMERA',
     'E_MODEL',
     'E_STATE',
+    'E_RESULT',
   ]);
   expect(isDmsVisionError(Object.assign(new Error('x'), { code: 'E_STATE' }), 'E_STATE')).toBe(true);
   expect(isDmsVisionError(Object.assign(new Error('x'), { code: 'E_NOPE' }))).toBe(false);
@@ -176,9 +177,11 @@ describe('arguments are refused before the bridge (E_BAD_ARGS)', () => {
 });
 
 describe('results are validated after the bridge', () => {
-  test('a malformed status rejects, naming the method', async () => {
+  test('a malformed status rejects with E_RESULT, naming the method', async () => {
     mockNative.getStatus!.mockResolvedValueOnce({ ...control.status(), thermalLevel: 7 });
-    await expect(DmsVision.getStatus()).rejects.toThrow(/DmsVision\.getStatus: invalid result/);
+    const err = await DmsVision.getStatus().catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'E_RESULT' });
+    expect(String(err)).toMatch(/DmsVision\.getStatus: invalid result/);
   });
   test('a status with an extra key rejects', async () => {
     mockNative.getStatus!.mockResolvedValueOnce({ ...control.status(), landmarks: [1, 2] });
