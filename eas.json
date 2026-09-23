@@ -5,7 +5,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "env": { "EXPO_PUBLIC_DIAGNOSTICS": "1" }
+      "env": { "EXPO_PUBLIC_DIAGNOSTICS": "1", "DMS_GAZE_NET": "1" }
     },
     "preview": {
       "distribution": "internal",
