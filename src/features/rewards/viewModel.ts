@@ -2,7 +2,7 @@
  * Pure view models over the rewards rows. Nothing here computes a reward: every value is the
  * server's settled one, only arranged for a screen.
  */
-import { levelFor, REWARDS, type LevelNumber, type LevelName } from '@scoring';
+import { LEVELS, REWARDS, type LevelNumber, type LevelName } from '@scoring';
 
 import type {
   BadgeDef,
@@ -31,11 +31,30 @@ export interface ClassView {
   xp: number;
 }
 
-/** The class (level) for the settled XP; a user with no progress row yet is a Learner at 0. */
+/**
+ * The class for the settled progress. The class itself (`level`, `name`, the next class) is the
+ * server's stored `progress.level` — the same value the share card and the `level_up` push use, so
+ * no two surfaces can name different classes, and it never drops if a threshold is later raised
+ * (final review m1). XP only places the driver between that class and the next (`fraction`,
+ * `toNext`). A user with no progress row yet is a Learner at 0.
+ */
 export function classView(progress: Progress | null): ClassView {
   const xp = progress?.xp ?? 0;
-  const l = levelFor(xp);
-  return { ...l, toNext: l.nextXp === null ? null : Math.max(0, l.nextXp - xp), xp };
+  const index = Math.min(LEVELS.length, Math.max(1, progress?.level ?? 1)) - 1;
+  const current = LEVELS[index] ?? LEVELS[0]!;
+  const next = LEVELS[index + 1];
+  if (!next) return { level: current.level, name: current.name, nextName: null, nextXp: null, toNext: null, fraction: 1, xp };
+  const span = next.xp - current.xp;
+  const fraction = Math.min(1, Math.max(0, (xp - current.xp) / span));
+  return {
+    level: current.level,
+    name: current.name,
+    nextName: next.name,
+    nextXp: next.xp,
+    toNext: Math.max(0, next.xp - xp),
+    fraction,
+    xp,
+  };
 }
 
 export interface StreakView {

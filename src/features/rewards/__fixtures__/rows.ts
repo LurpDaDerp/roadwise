@@ -2,7 +2,7 @@
  * Server rows as PostgREST renders them (the selected columns only), and a snapshot built from
  * them. The defs come from `packages/scoring` so they match migration 0010's seed.
  */
-import { BADGES, CHALLENGES } from '@scoring';
+import { BADGES, CHALLENGES, levelFor } from '@scoring';
 
 import type {
   BadgeDef,
@@ -25,12 +25,17 @@ export const iso = (ms: number): string => new Date(ms).toISOString();
 let seq = 0;
 export const nextUuid = (): string => `00000000-0000-4000-8000-${String((seq += 1)).padStart(12, '0')}`;
 
+/**
+ * A progress row. `level` follows `xp` through the class table unless the caller sets it, as the
+ * server keeps them (final review m1: screens print the stored level, so a fixture must be coherent).
+ */
 export function progressRow(over: Partial<Progress> = {}): Progress {
+  const xp = over.xp ?? 1250;
   return {
     user_id: UID,
     points: 1250,
     xp: 1250,
-    level: 1,
+    level: levelFor(xp).level,
     streak_days: 6,
     best_streak: 9,
     safe_days: 12,

@@ -58,9 +58,14 @@ export function pointsText(n: number): string {
 /** Honesty b (the plan's own sentence; a counsel-list item). */
 export const NOT_MONEY = "Points track your progress in RoadWise. They aren't money.";
 
-/** rev1: R-I m7 — true of every case: short and learning days neither count nor restart it. */
+/**
+ * True of every day (final review m7): only a day CONFIRMED as unsafe restarts the streak — a drive
+ * that reaches RoadWise after its day was confirmed (a late day) never does, and neither does any
+ * day that is not confirmed. Days with no drive and the first (learning) days are never unsafe. No
+ * claim about very short days: a short day with a severe event is unsafe.
+ */
 export const STREAK_RULE =
-  "A day with an unsafe drive restarts your streak unless a shield covers it. Days you don't drive, very short days and your first days never do.";
+  "A day confirmed as unsafe restarts your streak unless a shield covers it. Days you don't drive and your first days never do.";
 
 /** rev1: R-A; rev2 ("phones": true with a second signed-in phone). */
 export const CONFIRM_RULE =

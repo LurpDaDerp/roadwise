@@ -62,8 +62,12 @@ describe('the briefed strings, verbatim', () => {
   test('the rules', () => {
     expect(NOT_MONEY).toBe("Points track your progress in RoadWise. They aren't money.");
     expect(STREAK_RULE).toBe(
-      "A day with an unsafe drive restarts your streak unless a shield covers it. Days you don't drive, very short days and your first days never do."
+      "A day confirmed as unsafe restarts your streak unless a shield covers it. Days you don't drive and your first days never do."
     );
+    // final review m7: scoped to confirmed days, and no claim about short days (a short day with a
+    // severe event is unsafe)
+    expect(STREAK_RULE).toMatch(/confirmed as unsafe/);
+    expect(STREAK_RULE).not.toMatch(/short/i);
     expect(CONFIRM_RULE).toBe(
       "A day is confirmed after 2 am, once your phones have uploaded that day's drives — usually the next time you open RoadWise or drive, and never more than 3 days later. After that it doesn't change."
     );

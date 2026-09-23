@@ -136,6 +136,32 @@ describe('fetchRewardsSnapshot', () => {
     await expect(fetchRewardsSnapshot(client)).rejects.toBe(error);
   });
 
+  test('an unknown badge or challenge definition is skipped and reported; the rest stays (final review m3)', async () => {
+    const newBadge = { id: 'night_owl_3', family: 'night', tier: 'bronze', metric: 'night', threshold: 3, sort: 17 };
+    const newChallenge = { ...challengeDefRows()[0], id: 'big_one', points: 400 };
+    const { client } = world({
+      badge_defs: () => ok([...badgeDefRows(), newBadge]),
+      challenge_defs: () => ok([...challengeDefRows(), newChallenge, 'junk']),
+    });
+    const reports: string[] = [];
+    const s = await fetchRewardsSnapshot(client, () => NOW, (error, context) => reports.push(`${context}: ${error.message}`));
+    expect(s.badgeDefs).toHaveLength(16);
+    expect(s.challengeDefs.map((d) => d.id)).toEqual(['phone_down', 'within_limit', 'smooth_ride', 'safe_run']);
+    expect(s.progress?.points).toBe(1250);
+    expect(reports).toEqual([
+      'rewards badge_defs: badge_defs row night_owl_3 skipped: this build cannot read it',
+      'rewards challenge_defs: challenge_defs row big_one skipped: this build cannot read it',
+      'rewards challenge_defs: challenge_defs row ? skipped: this build cannot read it',
+    ]);
+  });
+
+  test("negative control: the driver's own rows stay all-or-nothing", async () => {
+    const { client } = world({ user_badges: () => ok([badgeRow('safe_days_7'), { ...badgeRow('safe_days_30'), extra: 1 }]) });
+    await expect(fetchRewardsSnapshot(client, () => NOW, () => undefined)).rejects.toBeInstanceOf(RewardsDataError);
+    const goals = world({ weekly_goals: () => ok([{ ...goalRow('2026-09-21'), category: 'night' }]) });
+    await expect(fetchRewardsSnapshot(goals.client, () => NOW, () => undefined)).rejects.toBeInstanceOf(RewardsDataError);
+  });
+
   test("a frozen late day ('late', 6b361bf) parses: the snapshot is not refused", async () => {
     const late = rewardDayRow('2026-09-20', { outcome: 'neutral', outcome_reason: 'late', tier: 'none', phone_free: false, points: 0 });
     const { client } = world({ reward_days: () => ok([rewardDayRow('2026-09-21'), late]) });

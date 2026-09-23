@@ -364,13 +364,50 @@ function parseRows<T>(schema: z.ZodType<T>, data: unknown, table: string): T[] {
 }
 
 /**
+ * Definition rows (`badge_defs`, `challenge_defs`) one at a time: a row this build cannot read — a
+ * metric, predicate or range a later milestone adds — is skipped and reported (its id only), never
+ * the whole snapshot. Definitions are the server's catalogue, not the driver's facts: an unknown
+ * one is simply a badge or challenge this build does not offer yet (final review m3). The driver's
+ * own rows stay all-or-nothing (`parseRows`).
+ */
+function parseDefRows<T>(
+  schema: z.ZodType<T>,
+  data: unknown,
+  table: string,
+  report: (error: Error, context: string) => void
+): T[] {
+  if (data === null || data === undefined) return [];
+  if (!Array.isArray(data)) throw new RewardsDataError(table);
+  const rows: T[] = [];
+  for (const raw of data) {
+    const parsed = schema.safeParse(raw);
+    if (parsed.success) {
+      rows.push(parsed.data);
+      continue;
+    }
+    const id = raw !== null && typeof raw === 'object' && typeof (raw as { id?: unknown }).id === 'string'
+      ? (raw as { id: string }).id.slice(0, 40)
+      : '?';
+    report(new Error(`${table} row ${id} skipped: this build cannot read it`), `rewards ${table}`);
+  }
+  return rows;
+}
+
+/** Default report for a skipped definition: a development warning, nothing in production. */
+function warnSkipped(error: Error, context: string): void {
+  if (__DEV__) console.warn(`[rewards] ${context}:`, error.message);
+}
+
+/**
  * The caller's rewards, in parallel selects (RLS: own rows; the defs are readable by every
  * signed-in user). Throws `RewardsOfflineError` when the server could not be reached, the server's
- * own error when it refused, and `RewardsDataError` when an answer cannot be read in full.
+ * own error when it refused, and `RewardsDataError` when one of the driver's own rows cannot be read
+ * in full. Definition rows this build cannot read are skipped and told to `report`.
  */
 export async function fetchRewardsSnapshot(
   client: RewardsClient = appClient(),
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  report: (error: Error, context: string) => void = warnSkipped
 ): Promise<RewardsSnapshot> {
   const [progress, goals, days, badges, badgeDefs, active, past, challengeDefs] = await Promise.all([
     client.from('progress').select(PROGRESS_COLUMNS).limit(1),
@@ -400,12 +437,12 @@ export async function fetchRewardsSnapshot(
     lastGoal: goalRows[1] ?? null,
     days: parseRows(RewardDayRowSchema, days.data, 'reward_days'),
     badges: parseRows(UserBadgeRowSchema, badges.data, 'user_badges'),
-    badgeDefs: parseRows(BadgeDefRowSchema, badgeDefs.data, 'badge_defs'),
+    badgeDefs: parseDefRows(BadgeDefRowSchema, badgeDefs.data, 'badge_defs', report),
     challenges: [
       ...parseRows(UserChallengeRowSchema, active.data, 'user_challenges'),
       ...parseRows(UserChallengeRowSchema, past.data, 'user_challenges'),
     ],
-    challengeDefs: parseRows(ChallengeDefRowSchema, challengeDefs.data, 'challenge_defs'),
+    challengeDefs: parseDefRows(ChallengeDefRowSchema, challengeDefs.data, 'challenge_defs', report),
     fetchedAt: now(),
   };
 }

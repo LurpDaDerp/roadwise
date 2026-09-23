@@ -568,7 +568,7 @@ function rewardsCopy(type: NotificationType, payload: unknown): { title: string;
       return p.data.role === 'invitee'
         ? {
           title: "Your friend's code counts",
-          body: `You finished 3 scored drives. +${p.data.points} points.`,
+          body: `You finished ${REFERRAL_COPY_RULES.qualifyingDrives} scored drives. +${p.data.points} points.`,
           url: '/rewards/invite',
         }
         : {
@@ -619,6 +619,18 @@ export function renderInboxBase(type: NotificationType, payload: unknown): Inbox
   const pushed = renderPush(type, payload);
   return pushed === null ? null : { title: pushed.title, body: pushed.body, url: pushed.url };
 }
+
+/**
+ * The referral rule numbers the copy states (final review m6). The catalog must stay self-contained
+ * (it is synced to Deno), so they are copied here from `REWARDS.REFERRAL` in `packages/scoring`, and
+ * `src/notifications/__tests__/referralRulesParity.test.ts` pins them equal.
+ */
+export const REFERRAL_COPY_RULES = {
+  /** `REWARDS.REFERRAL.QUALIFYING_DRIVES` */
+  qualifyingDrives: 3,
+  /** `REWARDS.REFERRAL.QUALIFY_WITHIN_D` */
+  qualifyWithinDays: 90,
+} as const;
 
 /**
  * Promises and claims no notification may make (rev1: m, narrowed to promises): score guarantees,

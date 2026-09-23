@@ -1,3 +1,5 @@
+import { LEVELS, levelFor } from '@scoring';
+
 import { BANNED_COPY } from '@/notifications/catalog';
 
 import {
@@ -11,7 +13,7 @@ import {
 } from '../viewModel';
 import { badgeDefRows, badgeRow, challengeDefRows, enrolmentRow, goalRow, progressRow, rewardDayRow } from '../__fixtures__/rows';
 
-describe('classView: the class boundaries (levelFor)', () => {
+describe("classView: the class is the server's progress.level (final review m1)", () => {
   test.each([
     [0, 1, 'Learner', 'Steady', 1500],
     [1499, 1, 'Learner', 'Steady', 1],
@@ -23,8 +25,32 @@ describe('classView: the class boundaries (levelFor)', () => {
     [25000, 6, 'Mentor', null, null],
     [99999, 6, 'Mentor', null, null],
   ] as const)('xp %i → level %i %s', (xp, level, name, nextName, toNext) => {
-    const v = classView(progressRow({ xp, points: xp }));
+    const v = classView(progressRow({ xp, points: xp, level }));
     expect(v).toMatchObject({ level, name, nextName, toNext, xp });
+    // the same class the share card and the level_up push name
+    expect(v.name).toBe(levelFor(xp).name);
+  });
+
+  test('the class never disagrees with progress.level, whatever the XP table says', () => {
+    for (const level of [1, 2, 3, 4, 5, 6] as const) {
+      for (const xp of [0, 1499, 1500, 4000, 8000, 15000, 25000, 60000]) {
+        const v = classView(progressRow({ xp, points: xp, level }));
+        expect(v.level).toBe(level);
+        expect(v.name).toBe(LEVELS[level - 1]?.name);
+      }
+    }
+  });
+
+  test('XP past the next threshold, not yet settled into a new level: the stored class, full bar, 0 to go', () => {
+    const v = classView(progressRow({ xp: 5000, points: 5000, level: 2 }));
+    expect(v).toMatchObject({ level: 2, name: 'Steady', nextName: 'Smooth', toNext: 0, fraction: 1 });
+    // negative control: the XP table alone would have said Smooth
+    expect(levelFor(5000).name).toBe('Smooth');
+  });
+
+  test('a threshold raised later never drops the stored class', () => {
+    const v = classView(progressRow({ xp: 3000, points: 3000, level: 3 }));
+    expect(v).toMatchObject({ level: 3, name: 'Smooth', nextName: 'Focused', toNext: 5000, fraction: 0 });
   });
 
   test('no progress yet: Learner, 0', () => {
