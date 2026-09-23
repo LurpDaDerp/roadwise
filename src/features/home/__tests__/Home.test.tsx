@@ -36,6 +36,33 @@ jest.mock('@/lib/env', () => ({ env: { diagnostics: false } }));
 jest.mock('@/data/supabase/profile', () => ({
   fetchProfile: jest.fn(async () => ({ id: 'u1', display_name: 'Maya Chen' })),
 }));
+// The rewards server as it would answer a driver with some progress; this week's goal is opened
+// on request. The hooks, cache and database behind it are the real ones.
+jest.mock('@/features/rewards/api', () => {
+  const actual = jest.requireActual<typeof import('@/features/rewards/api')>('@/features/rewards/api');
+  const rows = jest.requireActual<typeof import('@/features/rewards/__fixtures__/rows')>(
+    '@/features/rewards/__fixtures__/rows'
+  );
+  return {
+    ...actual,
+    defaultRewardsApi: {
+      ...actual.defaultRewardsApi,
+      fetchSnapshot: jest.fn(async () =>
+        rows.snapshot({ progress: rows.progressRow({ xp: 2000, points: 1250, streak_days: 12, shields: 2 }) })
+      ),
+      openMyWeek: jest.fn(async () => ({
+        week_start: '2026-09-21',
+        category: 'phone',
+        source: 'weakest',
+        target_days: 4,
+        pass_days: 0,
+        fail_days: 0,
+        state: 'active',
+        prorated: false,
+      })),
+    },
+  };
+});
 
 function fakeHost(status: DriveState['status'] = 'off') {
   const state = { status, lockedOut: false, role: 'driver', mode: 'mounted', stationarySinceTs: null } as DriveState;
@@ -61,6 +88,15 @@ async function renderHome(
   );
   // The profile has landed: the licence carries the driver's name.
   await screen.findByRole('header', { name: 'Maya Chen' });
+}
+
+/** Every testID in the rendered tree, in reading (depth-first) order. */
+function testIdsInOrder(node: unknown): string[] {
+  if (node === null || typeof node !== 'object') return [];
+  if (Array.isArray(node)) return node.flatMap(testIdsInOrder);
+  const n = node as { props?: { testID?: unknown }; children?: unknown };
+  const own = typeof n.props?.testID === 'string' ? [n.props.testID] : [];
+  return [...own, ...testIdsInOrder(n.children ?? null)];
 }
 
 const SIGN_OUT_WARNING =
@@ -93,6 +129,36 @@ test('Home prints the licence card, the record row, the detection line and Start
 
   await fireEvent.press(screen.getByRole('button', { name: 'Start drive' }));
   expect(mockRouter.push).toHaveBeenCalledWith('/drive/start');
+});
+
+test("the licence card carries the rewards fields, and the record carries this week's focus", async () => {
+  await renderHome();
+  const record = screen.getByTestId('home');
+  const card = within(record).getByTestId('licence-card');
+  expect(
+    await within(card).findByRole('button', {
+      name: 'Class Steady. Streak 12 days, 2 shields. 1,250 points. Opens rewards',
+    })
+  ).toBeOnTheScreen();
+  expect(within(card).getByLabelText('Safe days, 12')).toBeOnTheScreen();
+  // The focus field sits in the RECORD section, after the last drive and before the detection line.
+  const focus = await within(record).findByTestId('weekly-focus-field');
+  expect(within(card).queryByTestId('weekly-focus-field')).toBeNull();
+  expect(focus).toBeOnTheScreen();
+  const ids = testIdsInOrder(screen.toJSON());
+  const order = ['last-trip-empty', 'weekly-focus-field', 'detection-status'].map((id) => ids.indexOf(id));
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+});
+
+test('Home still has exactly one bottom-anchored primary action, outside the scrolling record', async () => {
+  await renderHome();
+  await screen.findByTestId('licence-rewards');
+  const starts = screen.getAllByRole('button', { name: 'Start drive' });
+  expect(starts).toHaveLength(1);
+  expect(within(screen.getByTestId('home')).queryByRole('button', { name: 'Start drive' })).toBeNull();
+  // The rewards region and the focus field are card taps, not second primary actions.
+  expect(within(screen.getByTestId('home')).queryAllByTestId('start-drive')).toHaveLength(0);
 });
 
 test('while a drive is running its banner leads Home, and there is no second Start drive', async () => {

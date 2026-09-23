@@ -8,3 +8,4 @@ export {
 export { HomeBanners, RestoreRetryProvider, type RestoreRetry } from './HomeBanners';
 export { DRIVES_TO_BUILD, LastTripCard } from './LastTripCard';
 export { formatAsOfDay, inLearningPeriod, LicenceCard } from './LicenceCard';
+export { WeeklyFocusField } from './WeeklyFocusField';

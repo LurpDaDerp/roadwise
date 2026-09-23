@@ -30,6 +30,16 @@ export const homeCopy = {
   card: {
     score: 'Score',
     safeDays: 'Safe days',
+    /** The rewards fields (M5): the server's settled values, never counted on this phone. */
+    class: 'Class',
+    streak: 'Streak',
+    points: 'Points',
+    shields: (n: number) => (n === 1 ? '1 shield' : `${n} shields`),
+    /** Shown only once a streak has restarted, so the run it had is not lost from view. */
+    best: (n: number) => `Best ${n}`,
+    rewardsError: "Couldn't read your rewards.",
+    /** Offline with nothing saved on this phone: the cause, not a failure. */
+    rewardsOffline: "Your rewards appear when you're online.",
     /** Printed where a name would go before the profile has one. */
     noName: 'New driver',
     /** The printed date the server computed the score for: "as of Sep 21". */
@@ -52,9 +62,35 @@ export const homeCopy = {
       waiting: 'Long-term score not ready yet. It appears when your drives sync',
       restoring: 'Long-term score: restoring your drives from the server',
       safeDays: (n: number) => `Safe days, ${n}`,
-      safeDaysRestoring: 'Safe days: restoring your drives from the server',
+      safeDaysUnread: (reason: string) => `Safe days: ${reason}`,
       provisional: 'Provisional',
+      /** "Class Steady. Streak 12 days, 2 shields. 1,250 points. Opens rewards" */
+      rewards: (o: { className: string; streak: number; best: number | null; shields: number; points: string }) =>
+        [
+          `Class ${o.className}`,
+          [
+            `Streak ${o.streak} ${o.streak === 1 ? 'day' : 'days'}`,
+            o.best === null ? null : `best ${o.best}`,
+            o.shields > 0 ? (o.shields === 1 ? '1 shield' : `${o.shields} shields`) : null,
+          ]
+            .filter(Boolean)
+            .join(', '),
+          o.points,
+          'Opens rewards',
+        ].join('. '),
     },
+  },
+
+  /** This week's focus in the RECORD section (§7.B B1 item 6, M5). */
+  focus: {
+    label: 'This week',
+    /** Passing driving days of the goal's target: "2 of 4 days". */
+    progress: (pass: number, target: number) => `${pass} of ${target} days`,
+    /** A new week's goal has not been opened yet (it is opened on the next online look). */
+    none: 'No goal for this week yet.',
+    offline: "Your weekly goal appears when you're online.",
+    error: "Couldn't read your weekly goal.",
+    spoken: (parts: readonly string[]) => [...parts, 'Opens your weekly goal'].join('. '),
   },
 
   /** Home's conditional banners (§7.B B1 item 2). */

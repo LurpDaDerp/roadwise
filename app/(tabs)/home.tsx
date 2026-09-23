@@ -13,6 +13,7 @@ import {
   homeCopy,
   LastTripCard,
   LicenceCard,
+  WeeklyFocusField,
 } from '@/features/home';
 import { InboxBell } from '@/features/inbox/InboxBell';
 import { t } from '@/i18n';
@@ -43,8 +44,8 @@ function confirmSignOut(message: string): Promise<boolean> {
 
 /**
  * B1 — Home (§7.B B1, direction contract FIRST VIEWPORT): the header with the inbox bell (B3,
- * Task 18), the status banners, the licence card,
- * the RECORD row, the detection status line, and the bottom-anchored Start drive that the tab
+ * Task 18), the status banners, the licence card (with M5's CLASS, STREAK, SAFE DAYS and POINTS),
+ * the RECORD — the last drive and this week's focus — the detection status line, and the bottom-anchored Start drive that the tab
  * bar's centre Drive action mirrors. Sign-out sits at the foot of the page with its consequence.
  */
 export default function Home() {
@@ -105,6 +106,7 @@ export default function Home() {
           <HomeBanners inProgress={<DriveInProgressBanner />} />
           <LicenceCard name={profile?.display_name} />
           <LastTripCard />
+          <WeeklyFocusField />
           <DetectionStatusLine />
           <View style={{ flexGrow: 1 }} />
           {/* The consequence sits with the control, before the press rather than after it: the next

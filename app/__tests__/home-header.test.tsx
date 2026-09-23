@@ -35,6 +35,33 @@ jest.mock('@/lib/env', () => ({ env: { diagnostics: false } }));
 jest.mock('@/data/supabase/profile', () => ({
   fetchProfile: jest.fn(async () => ({ id: 'u1', display_name: 'Maya Chen' })),
 }));
+// The rewards server as it would answer a driver with some progress; this week's goal is opened
+// on request. The hooks, cache and database behind it are the real ones.
+jest.mock('@/features/rewards/api', () => {
+  const actual = jest.requireActual<typeof import('@/features/rewards/api')>('@/features/rewards/api');
+  const rows = jest.requireActual<typeof import('@/features/rewards/__fixtures__/rows')>(
+    '@/features/rewards/__fixtures__/rows'
+  );
+  return {
+    ...actual,
+    defaultRewardsApi: {
+      ...actual.defaultRewardsApi,
+      fetchSnapshot: jest.fn(async () =>
+        rows.snapshot({ progress: rows.progressRow({ xp: 2000, points: 1250, streak_days: 12, shields: 2 }) })
+      ),
+      openMyWeek: jest.fn(async () => ({
+        week_start: '2026-09-21',
+        category: 'phone',
+        source: 'weakest',
+        target_days: 4,
+        pass_days: 0,
+        fail_days: 0,
+        state: 'active',
+        prorated: false,
+      })),
+    },
+  };
+});
 // The inbox as the server would answer it with nothing in it.
 jest.mock('@/features/inbox/api', () => ({
   ...jest.requireActual('@/features/inbox/api'),
