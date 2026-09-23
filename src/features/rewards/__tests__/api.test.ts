@@ -136,6 +136,16 @@ describe('fetchRewardsSnapshot', () => {
     await expect(fetchRewardsSnapshot(client)).rejects.toBe(error);
   });
 
+  test("a frozen late day ('late', 6b361bf) parses: the snapshot is not refused", async () => {
+    const late = rewardDayRow('2026-09-20', { outcome: 'neutral', outcome_reason: 'late', tier: 'none', phone_free: false, points: 0 });
+    const { client } = world({ reward_days: () => ok([rewardDayRow('2026-09-21'), late]) });
+    const s = await fetchRewardsSnapshot(client);
+    expect(s.days.map((d) => d.outcome_reason)).toEqual(['safe', 'late']);
+    // negative control: a reason the server never writes still refuses the whole snapshot
+    const bad = world({ reward_days: () => ok([{ ...late, outcome_reason: 'lateish' }]) });
+    await expect(fetchRewardsSnapshot(bad.client)).rejects.toBeInstanceOf(RewardsDataError);
+  });
+
   test('one unreadable row refuses the whole snapshot, never a partial one (a dropped day would read as unsettled)', async () => {
     const { client } = world({ reward_days: () => ok([rewardDayRow('2026-09-22'), { ...rewardDayRow('2026-09-21'), extra: true }]) });
     await expect(fetchRewardsSnapshot(client)).rejects.toBeInstanceOf(RewardsDataError);

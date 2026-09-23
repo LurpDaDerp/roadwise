@@ -208,14 +208,9 @@ export type DayAwardResult =
  * snapshot's progress. The row comes from `useRewardDay`, which answers only from a fresh snapshot or
  * the server (offline, a day the saved copy lacks is an error), so the progress it is judged against
  * is as fresh as the row. Unknown stays unknown: `status: 'error'` or `'pending'`, never a guess.
- * Pass `hadScoredDrive: true` when the day is known to have a scored driver drive (D1): a frozen late
- * day's "no drive" row then reads `not_counted` / `after_confirmed` (round 2, m2).
+ * A frozen late day's row (`outcome_reason 'late'`) reads `not_counted` / `after_confirmed`.
  */
-export function useDayAward(
-  day: string,
-  deps: RewardsDeps = {},
-  opts: { hadScoredDrive?: boolean } = {}
-): DayAwardResult {
+export function useDayAward(day: string, deps: RewardsDeps = {}): DayAwardResult {
   const row = useRewardDay(day, deps);
   const rewards = useRewards(deps);
   const progress = rewards.data?.snapshot.progress;
@@ -224,10 +219,10 @@ export function useDayAward(
     if (row.status === 'pending' || progress === undefined) return { status: 'pending', data: undefined, error: null };
     return {
       status: 'success',
-      data: dayAward(row.data, { day, progress, hadScoredDrive: opts.hadScoredDrive }),
+      data: dayAward(row.data, { day, progress }),
       error: null,
     };
-  }, [day, opts.hadScoredDrive, progress, row.data, row.error, row.status]);
+  }, [day, progress, row.data, row.error, row.status]);
 }
 
 function useRewardsMutation<A, R>(deps: Pick<RewardsDeps, 'api'>, call: (api: RewardsApi, arg: A) => Promise<R>) {

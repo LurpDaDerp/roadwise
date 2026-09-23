@@ -187,8 +187,7 @@ export type NotCountedReason = 'before_rewards' | 'after_confirmed';
  * - `not_counted`: no row, and there never will be one — the day is before `rewards_start` (history
  *   from before rewards existed), or at or behind `settled_through` (the frontier passed it: a late
  *   day frozen without value, or skipped); or the row is a frozen late day (`outcome_reason
- *   'no_drive'`, 0 points) of a day the caller knows had a scored driver drive
- *   (`context.hadScoredDrive`, round 2 m2).
+ *   'late'`, round 3).
  * - `pending`: no row yet; it counts once it settles. A new user (no progress row, or
  *   `rewards_start` null) is always pending.
  */
@@ -210,19 +209,16 @@ export type DayAward =
  * settled progress. Without `context` a missing row reads as `pending` (the old behaviour).
  * Offline or with progress unknown, don't call it: the day is unknown (`useRewardDay` errors).
  */
-export function dayAward(
-  row: RewardDay | null,
-  context?: { day: string; progress: Progress | null; hadScoredDrive?: boolean }
-): DayAward {
-  // A late day frozen by the settlement (0009, rev2 I-A) has a row that reads "no drive, 0 points".
-  // When the caller knows the day had a scored driver drive (D1 shows one), that row is a day the
-  // drive reached after it was confirmed, never "settled, no points" (T7 round 2, m2).
-  if (row !== null && context?.hadScoredDrive === true && row.outcome_reason === 'no_drive' && row.points === 0) {
+export function dayAward(row: RewardDay | null, context?: { day: string; progress: Progress | null }): DayAward {
+  // A late day frozen by the settlement (0009 rev2 I-A; `outcome_reason 'late'` since 6b361bf) has a
+  // row but no value: not counted, never "settled, no points" (T7 rounds 2 and 3). A genuine
+  // no-drive day (`'no_drive'`) stays settled.
+  if (row !== null && row.outcome_reason === 'late') {
     return {
       status: 'not_counted',
       settled: false,
       reason: 'after_confirmed',
-      rewardsStart: context.progress?.rewards_start ?? null,
+      rewardsStart: context?.progress?.rewards_start ?? null,
     };
   }
   if (row !== null) {

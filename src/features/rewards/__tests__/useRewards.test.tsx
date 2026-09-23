@@ -353,28 +353,28 @@ describe('useDayAward (T7 round 1, I1)', () => {
     expect(result.data).toEqual({ status: 'pending', settled: false });
   });
 
-  test('a frozen late day with a scored drive (hadScoredDrive): not_counted, after_confirmed', async () => {
-    const frozen = rewardDayRow('2026-09-20', {
+  test("a frozen late day ('late') in the snapshot: not_counted, after_confirmed", async () => {
+    const late = rewardDayRow('2026-09-20', {
+      outcome: 'neutral',
+      outcome_reason: 'late',
+      tier: 'none',
+      phone_free: false,
+      points: 0,
+    });
+    const result = await award('2026-09-20', snapshot({ progress: progressRow(progress), days: [rewardDayRow('2026-09-21'), late] }));
+    expect(result.data).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
+  });
+
+  test("a genuine no-drive day ('no_drive') in the snapshot: settled with no points (negative control)", async () => {
+    const noDrive = rewardDayRow('2026-09-20', {
       outcome: 'neutral',
       outcome_reason: 'no_drive',
       tier: 'none',
       phone_free: false,
       points: 0,
     });
-    const db = await createTestDb();
-    const client = testQueryClient();
-    const { api } = fakeApi(snapshot({ progress: progressRow(progress), days: [rewardDayRow('2026-09-21'), frozen] }));
-    const hook = await renderHook(
-      () => {
-        const r = useDayAward('2026-09-20', { api, appState: fakeAppState() }, { hadScoredDrive: true });
-        void [r.status, r.data, r.error];
-        return r;
-      },
-      { wrapper: wrapperFor(db, client, () => clock) }
-    );
-    await waitFor(() => expect(hook.result.current.status).toBe('success'));
-    expect(hook.result.current.data).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
-    await hook.unmount();
+    const result = await award('2026-09-20', snapshot({ progress: progressRow(progress), days: [rewardDayRow('2026-09-21'), noDrive] }));
+    expect(result.data).toMatchObject({ status: 'settled', settled: true, points: 0 });
   });
 
   test('offline, a day the saved copy lacks: unknown (an error), neither pending nor not_counted', async () => {

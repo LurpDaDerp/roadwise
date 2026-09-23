@@ -89,7 +89,8 @@ export const RewardDayRowSchema = z
     user_id: z.string().uuid(),
     day: dayKey,
     outcome: z.enum(['safe', 'neutral', 'unsafe']),
-    outcome_reason: z.enum(['safe', 'no_drive', 'learning', 'short', 'unsafe', 'zone_hop']),
+    // 'late' (6b361bf): a day that reached the server behind the settlement frontier, frozen without value
+    outcome_reason: z.enum(['safe', 'no_drive', 'learning', 'short', 'unsafe', 'zone_hop', 'late']),
     tier: z.enum(['safe', 'good', 'none']),
     phone_free: z.boolean(),
     camera: z.boolean(),
