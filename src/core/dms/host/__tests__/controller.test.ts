@@ -939,3 +939,88 @@ describe('final review M-5: malformed native events are dropped and counted', ()
     expect(h.ctl.diagnostics().droppedEvents).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Final review, round 2 (integration re-review): R-1, R-2, R-3.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('final review round 2 R-1: a failed resume is never silent', () => {
+  /** Stopped at a light (the policy pauses native), then moving again: native's resume fails. */
+  async function resumeFails(h: H, withEvent: boolean) {
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 12, { speed: () => 0 });
+    expect(h.fake.nativeState()).toBe('paused');
+    // native answers `run` without touching the camera (a failed re-bind / startRunning)
+    const realSetPolicy = h.fake.setPolicy.bind(h.fake);
+    h.fake.setPolicy = async (p) => {
+      if (p.capture === 'run' && h.fake.nativeState() === 'paused') {
+        h.fake.calls.push({ method: 'setPolicy', args: [p] });
+        if (withEvent) h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+        return;
+      }
+      return realSetPolicy(p);
+    };
+    const startsBefore = starts(h);
+    await drive(h, 12, 14, { speed: () => 60, frameAt: () => null });
+    return startsBefore;
+  }
+  test('native reports paused/error on the failed resume: the HUD is honest, then stop() and one start() after 5 s', async () => {
+    const h = harness();
+    const before = await resumeFails(h, true);
+    expect(h.ctl.status().camera).not.toBe('starting');
+    expect(h.ctl.status().reason).toBe('error');
+    await drive(h, 14, 22, { speed: () => 60, frameAt: () => null });
+    expect(methods(h)).toContain('stop');
+    expect(starts(h)).toBe(before + 1);
+  });
+  test('no event at all: after 5 s of `run` with native not running, the guard recovers it the same way', async () => {
+    const h = harness();
+    const before = await resumeFails(h, false);
+    await drive(h, 14, 25, { speed: () => 60, frameAt: () => null });
+    expect(methods(h)).toContain('stop');
+    expect(starts(h)).toBe(before + 1);
+    expect(h.ctl.status().camera).not.toBe('starting');
+  });
+});
+
+describe('final review round 2 R-2: an interruption that ends by itself costs no retry', () => {
+  test('interrupted, then running again 2 s later: no stop, no retry; a second short interruption later recovers too', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'interrupted' });
+    const before = methods(h).filter((m) => m === 'setPolicy').length;
+    await drive(h, 3, 5, { frameAt: () => null });
+    // `run` keeps reaching native during a young interruption, so native can resume once it ends
+    expect(methods(h).filter((m) => m === 'setPolicy').length).toBeGreaterThan(before);
+    h.fake.emitRaw('state', { state: 'running', reason: 'policy' });
+    await drive(h, 5, 30);
+    expect(methods(h).filter((m) => m === 'stop')).toEqual([]);
+    expect(h.ctl.summary()!.camera.retries).toBe(0);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'interrupted' });
+    await drive(h, 30, 32, { frameAt: () => null });
+    h.fake.emitRaw('state', { state: 'running', reason: 'policy' });
+    await drive(h, 32, 40);
+    expect(h.ctl.status()).toMatchObject({ camera: 'active' });
+    expect(h.ctl.summary()!.camera.gaveUp).toBe(false);
+  });
+  test('during the 5 s retry wait the HUD says limited / error, never off with no reason', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+    await drive(h, 3, 5, { frameAt: () => null });
+    expect(h.ctl.status()).toMatchObject({ camera: 'limited', reason: 'error' });
+  });
+  test('retries reset after 10 min of healthy running', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3, { fps: 5 });
+    h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+    await drive(h, 3, 12, { fps: 5 });
+    expect(h.ctl.summary()!.camera.retries).toBe(1);
+    await drive(h, 12, 620, { fps: 5 });
+    expect(h.ctl.summary()!.camera.retries).toBe(0);
+  });
+});

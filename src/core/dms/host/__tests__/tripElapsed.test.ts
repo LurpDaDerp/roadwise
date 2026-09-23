@@ -96,3 +96,17 @@ test('the gate opens 30 min into the drive: tripElapsedS counts from the driveâ€
   expect(mockElapsed.at(-1)!).toBeGreaterThan(1800);
   expect(mockElapsed.at(-1)!).toBeLessThan(1806);
 });
+
+test('final review round 2 R-3: a new drive whose gate opens while the last drive is still ending gets a fresh engine and trip clock', async () => {
+  const h = controller();
+  h.ctl.setGate(GATE);
+  await rows(h, 0, 60);
+  const ending = h.ctl.endDrive(); // not awaited: the next drive starts inside its awaits
+  h.ctl.setGate(GATE);
+  await ending;
+  mockElapsed.length = 0;
+  await rows(h, 61, 121);
+  expect(mockElapsed[0]!).toBeLessThan(2);
+  expect(mockElapsed.at(-1)!).toBeGreaterThan(55);
+  expect(mockElapsed.at(-1)!).toBeLessThan(62);
+});

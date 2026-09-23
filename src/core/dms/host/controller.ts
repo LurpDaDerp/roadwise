@@ -182,6 +182,8 @@ export interface DmsController {
 }
 
 const RETRY_AFTER_MS = 5_000;
+/** Final review round 2 R-2: this long running healthily gives the drive its one retry back. */
+const RETRY_RESET_AFTER_MS = 600_000;
 const ACTIVE_WITHIN_MS = 1_000;
 /** HEAD_ONLY this long (the C-7 notice time) is `limited` / `eyes_not_visible` (T14 r1 m3). */
 const EYES_NOT_VISIBLE_MS = 10_000;
@@ -224,6 +226,12 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let driveEpoch = 0;
   /** final review M-2: the drive end in flight, which a second endDrive() and dispose() wait for */
   let ending: Promise<DmsHostSummary | null> | null = null;
+  /** round 2 R-1: since when the policy has said `run` while native has not been running */
+  let notRunningSince: number | null = null;
+  /** round 2 R-2: since when native has run healthily */
+  let healthySince: number | null = null;
+  /** round 2 R-3: gate inputs that arrived while a drive end was running, applied once it finishes */
+  let queuedGate: DmsGateInputs | null = null;
   let policy = createCapturePolicy();
   let lastOut: PolicyOutput | null = null;
   let setup = false;
@@ -329,6 +337,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     const snap = engine?.snapshot() ?? null;
     const base = { calibration: snap?.calibration ?? null, fatigueLevel: snap?.fatigueLevel ?? ('none' as FatigueLevel), dimAdvised: lastOut?.dimAdvised ?? false };
     if (gaveUp) return { camera: 'off', reason: 'error', ...base };
+    // Round 2 R-2: during the retry wait the camera is off for a fault, and the HUD says so.
+    if (errorAt !== null && closedReason === null) return { camera: 'limited', reason: 'error', ...base };
     if (closedReason !== null || token === null) return { camera: 'off', reason: closedReason ?? null, ...base };
     if (lastOut?.action === 'pause') return { camera: 'paused', reason: lastOut.reason === 'gate' ? null : lastOut.reason, ...base };
     // Final review I-1: native's own pauses are said as they are, never as "starting".
@@ -501,7 +511,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       }
       // Final review I-1: while native holds itself paused (an interruption, an error), `run` does not
       // resume it; the recovery is stop() then start() (pushRow's retry).
-      if (selfPause !== null) {
+      // Round 2 R-2: a young interruption keeps getting `run`, so native resumes the moment it ends (no retry
+      // spent); only an older one, or an error, waits for the stop/start recovery.
+      const young = selfPause !== null && selfPause.reason === 'interrupted' && (lastRow?.ts ?? 0) - selfPause.since < RETRY_AFTER_MS;
+      if (selfPause !== null && !young) {
         publishStatus();
         return;
       }
@@ -612,6 +625,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     lastRow = null; // final review I-4: the next drive's clock never starts from this one's last row
     setup = false; // final review M-3
     selfPause = null;
+    notRunningSince = null;
+    healthySince = null;
     resetDrive();
     recent.clear();
     if (profile !== null) {
@@ -684,11 +699,17 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       }
       if (ev.state === 'stopped' && ev.reason === 'error') failed('E_CAMERA', prev === 'running' || prev === 'paused');
       else if (ev.state === 'stopped' && ev.reason === 'permission') failed('E_PERMISSION', false);
-      else if (ev.state === 'paused' && ev.reason !== 'policy' && ev.reason !== 'user' && prev === 'running') {
+      else if (
+        ev.state === 'paused' &&
+        ev.reason !== 'policy' &&
+        ev.reason !== 'user' &&
+        (prev === 'running' || ((ev.reason === 'error' || ev.reason === 'interrupted') && lastOut?.action === 'run'))
+      ) {
         // Final review I-1: native paused itself (interrupted, error, watchdog, thermal) while we run: the
         // camera is off at speed. A thermal pause is heat; the others are faults, recovered by stop/start.
-        selfPause = { reason: ev.reason, since: lastRow?.ts ?? 0 };
-        if (engine !== null) {
+        // Round 2 R-1: a failed resume (native was already paused, our policy says run) counts too.
+        if (selfPause === null || selfPause.reason !== ev.reason) selfPause = { reason: ev.reason, since: lastRow?.ts ?? 0 };
+        if (engine !== null && prev === 'running') {
           engine.cameraOff(now(), ev.reason === 'thermal' ? 'heat' : 'fault');
           dispatch();
         }
@@ -703,7 +724,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           dispatch();
         }
       } else if (ev.state === 'stopped') {
-        token = null;
+        // Our own stop's event: the token is the gate's business (stopNative), never this event's (round 2 R-2).
         acceptFrames = false;
         startIssued = false;
       }
@@ -722,9 +743,23 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     }),
   ];
 
-  return {
+  const api: DmsController = {
     setGate(g) {
       if (disposed || closing) return;
+      // Round 2 R-3: while the previous drive's end is running, inputs wait for it, so a new drive gets a fresh
+      // engine and trip clock (never the ending drive's engine, nor its resets afterwards).
+      if (ending !== null) {
+        const first = queuedGate === null;
+        queuedGate = { ...g };
+        if (first) {
+          void ending.finally(() => {
+            const q = queuedGate;
+            queuedGate = null;
+            if (q !== null) api.setGate(q);
+          });
+        }
+        return;
+      }
       inputs = { ...g };
       if (g.driveActive && !driveWasActive) {
         // Final review I-4 / M-2 / M-3: a drive starts: its clock starts at its first row, and setup is off.
@@ -749,7 +784,29 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       // wait, is recovered by stop() now and one start() after RETRY_AFTER_MS (SR9), then off for the drive.
       if (selfPause !== null && selfPause.reason !== 'thermal' && (selfPause.reason === 'error' || selfPause.reason === 'watchdog' || row.ts - selfPause.since >= RETRY_AFTER_MS)) {
         failed('E_CAMERA', false);
+        notRunningSince = null;
       }
+      // Round 2 R-1 (belt and braces): `run` for RETRY_AFTER_MS with native not running and no word from it
+      // (a resume that failed silently) is a fault: stop() now, one start() later.
+      if (lastOut?.action === 'run' && closedReason === null && errorAt === null && !gaveUp && nativeState !== 'running' && nativeState !== 'stopped') {
+        notRunningSince ??= row.ts;
+        if (row.ts - notRunningSince >= RETRY_AFTER_MS) {
+          notRunningSince = null;
+          if (engine !== null && selfPause === null) {
+            engine.cameraOff(now(), 'fault');
+            dispatch();
+          }
+          failed('E_CAMERA', false);
+        }
+      } else notRunningSince = null;
+      // Round 2 R-2: ten healthy minutes give the drive its retry back.
+      if (reported === 'running' && selfPause === null && errorAt === null) {
+        healthySince ??= row.ts;
+        if (row.ts - healthySince >= RETRY_RESET_AFTER_MS) {
+          retries = 0;
+          healthySince = row.ts;
+        }
+      } else healthySince = null;
       if (errorAt !== null && !gaveUp && row.ts - errorAt >= RETRY_AFTER_MS) {
         errorAt = null;
         retries++;
@@ -883,4 +940,5 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
 
     diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView } }),
   };
+  return api;
 }
