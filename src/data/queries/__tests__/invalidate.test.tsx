@@ -1,12 +1,12 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import type { Db } from '@/data/db/driver';
 import { createTestDb, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { MILE_M, tripRow } from '@/data/queries/__fixtures__/rows';
 import { createQueryClient } from '@/data/queries/client';
 import { useTrip, useTripEvents, useTrips, type TripDetail } from '@/data/queries/hooks';
-import { queryKeys } from '@/data/queries/keys';
+import { queryKeys, QUERY_ROOTS } from '@/data/queries/keys';
 import {
   invalidateAfterSync,
   invalidateTrip,
@@ -227,4 +227,105 @@ test('a wake after unsubscribing does not mark anything stale', async () => {
   off();
   queue.emit({ source: 'enqueue' });
   expect(client.getQueryState(queryKeys.trips())?.isInvalidated).toBe(false);
+});
+
+describe('the rewards root refreshes only after a sync that settled something (M5 T7 round 2, I2)', () => {
+  let clock = NOW;
+  let fetches = 0;
+
+  beforeEach(() => {
+    clock = NOW;
+    fetches = 0;
+    jest.spyOn(Date, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  /** A mounted rewards query (as Home's card keeps one), counting its fetches, fetched long ago. */
+  async function mountRewards() {
+    const { useQuery } = jest.requireActual<typeof import('@tanstack/react-query')>('@tanstack/react-query');
+    const hook = await renderHook(
+      () => {
+        const q = useQuery({
+          queryKey: ['rewards', 'uid-1'],
+          queryFn: async () => {
+            fetches += 1;
+            return fetches;
+          },
+          staleTime: 5 * 60_000,
+        });
+        void [q.data, q.status];
+        return q;
+      },
+      { wrapper }
+    );
+    await waitFor(() => expect(fetches).toBe(1));
+    clock += 10 * 60_000; // the snapshot is now older than the 60 s floor
+    return hook;
+  }
+
+  const settle = () => act(async () => new Promise<void>((r) => setTimeout(r, 20)));
+  const emit = (events: { emit(c: DataChange): void }, change: DataChange) =>
+    act(async () => {
+      events.emit(change);
+      await new Promise<void>((r) => setTimeout(r, 20));
+    });
+
+  test.each<DataChange>([
+    { source: 'enqueue' },
+    { source: 'finalize' },
+    { source: 'hydrate' },
+    { source: 'sync', result: { done: 0, failed: 1, deferred: 2 } },
+  ])('a %o change leaves rewards unfetched', async (change) => {
+    const events = fakeEmitter<[DataChange]>();
+    detach = subscribeInvalidation(client, { changes: events.subscribe });
+    const hook = await mountRewards();
+    await emit(events, change);
+    await settle();
+    expect(fetches).toBe(1);
+    expect(client.getQueryState(['rewards', 'uid-1'])?.isInvalidated).toBe(false);
+    await hook.unmount();
+  });
+
+  test('a sync with done > 0 refetches once; a second within 60 s does not', async () => {
+    const events = fakeEmitter<[DataChange]>();
+    detach = subscribeInvalidation(client, { changes: events.subscribe });
+    const hook = await mountRewards();
+    await emit(events, { source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
+    await waitFor(() => expect(fetches).toBe(2));
+    clock += 30_000;
+    await emit(events, { source: 'sync', result: { done: 2, failed: 0, deferred: 0 } });
+    await settle();
+    expect(fetches).toBe(2);
+    // negative control: past the 60 s floor, the next settling sync refetches again
+    clock += 31_000;
+    await emit(events, { source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
+    await waitFor(() => expect(fetches).toBe(3));
+    await hook.unmount();
+  });
+
+  test('invalidateAfterSync with no change (a trip action) leaves rewards alone', async () => {
+    const hook = await mountRewards();
+    await act(async () => {
+      await invalidateAfterSync(client);
+    });
+    await settle();
+    expect(fetches).toBe(1);
+    await hook.unmount();
+  });
+
+  test.each<DataChange>([
+    { source: 'enqueue' },
+    { source: 'finalize' },
+    { source: 'hydrate' },
+    { source: 'sync', result: { done: 0, failed: 0, deferred: 1 } },
+  ])('the other roots are unchanged: a %o change still marks every one stale', (change) => {
+    const events = fakeEmitter<[DataChange]>();
+    detach = subscribeInvalidation(client, { changes: events.subscribe });
+    const roots = QUERY_ROOTS.filter((r) => r !== 'rewards');
+    for (const root of roots) client.setQueryData([root, 'x'], 1);
+    events.emit(change);
+    for (const root of roots) expect(client.getQueryState([root, 'x'])?.isInvalidated).toBe(true);
+  });
 });

@@ -82,12 +82,33 @@ export const BUSY_LINE = 'Busy right now. Try again.';
  * Never "N more days": nothing nudges more driving. Used by Task 9 (the goal screen) and Task 10
  * (Home), and by `goalView`'s `remainingText`.
  */
-export function goalActiveLine({ pass, target, failDays }: { pass: number; target: number; failDays: number }): string {
+export function goalActiveLine(args: { pass: number; target: number; failDays: number; withCount?: true }): string;
+export function goalActiveLine(args: {
+  pass: number;
+  target: number;
+  failDays: number;
+  withCount: boolean;
+}): string | null;
+/**
+ * `withCount: false` (round 2) leaves "{pass} of {target} days so far." out, for a surface that shows
+ * the count itself; after a failed day there is then nothing to say (null: no line).
+ */
+export function goalActiveLine({
+  pass,
+  target,
+  failDays,
+  withCount = true,
+}: {
+  pass: number;
+  target: number;
+  failDays: number;
+  withCount?: boolean;
+}): string | null {
+  const proration = 'Drive fewer days this week? Keeping it up on each day you drive still counts.';
   if (pass === 0 && failDays === 0) return 'Counts from the days you drive this week.';
-  if (failDays === 0) {
-    return `${pass} of ${target} days so far. Drive fewer days this week? Keeping it up on each day you drive still counts.`;
-  }
-  return `${pass} of ${target} days so far.`;
+  const count = `${pass} of ${target} days so far.`;
+  if (failDays === 0) return withCount ? `${count} ${proration}` : proration;
+  return withCount ? count : null;
 }
 
 /** `goalView`'s line for a goal that is no longer active (M5 T7 ruling 1, verbatim). */
@@ -106,7 +127,7 @@ export const NOT_COUNTED = {
   title: "This day isn't part of your rewards.",
   /** `rewardsStart` is a `YYYY-MM-DD` day key. */
   beforeRewards: (rewardsStart: string) => `Rewards count from ${dayLabel(rewardsStart)}.`,
-  afterConfirmed: 'It reached RoadWise after the day was confirmed.',
+  afterConfirmed: 'A drive on this day reached RoadWise after the day was confirmed, so the day stays as it was.',
 } as const;
 
 /** "September 21, 2026" for a `YYYY-MM-DD` day key (a calendar date, not an instant). */

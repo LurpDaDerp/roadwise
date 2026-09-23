@@ -130,6 +130,7 @@ describe('useRewards', () => {
     await waitFor(() => expect(fetches(api)).toBe(1));
     // What bootstrap wires for the runtime's query client.
     const detach = subscribeInvalidation(client);
+    clock += 61_000; // past the 60 s floor (round 2, I2)
     await act(async () => {
       emitDataChanged({ source: 'sync', result: { done: 1, failed: 0, deferred: 0 } });
       await new Promise((r) => setTimeout(r, 5));
@@ -350,6 +351,30 @@ describe('useDayAward (T7 round 1, I1)', () => {
   test('a new user with no progress row: pending', async () => {
     const result = await award('2026-09-05', snapshot({ progress: null, days: [] }));
     expect(result.data).toEqual({ status: 'pending', settled: false });
+  });
+
+  test('a frozen late day with a scored drive (hadScoredDrive): not_counted, after_confirmed', async () => {
+    const frozen = rewardDayRow('2026-09-20', {
+      outcome: 'neutral',
+      outcome_reason: 'no_drive',
+      tier: 'none',
+      phone_free: false,
+      points: 0,
+    });
+    const db = await createTestDb();
+    const client = testQueryClient();
+    const { api } = fakeApi(snapshot({ progress: progressRow(progress), days: [rewardDayRow('2026-09-21'), frozen] }));
+    const hook = await renderHook(
+      () => {
+        const r = useDayAward('2026-09-20', { api, appState: fakeAppState() }, { hadScoredDrive: true });
+        void [r.status, r.data, r.error];
+        return r;
+      },
+      { wrapper: wrapperFor(db, client, () => clock) }
+    );
+    await waitFor(() => expect(hook.result.current.status).toBe('success'));
+    expect(hook.result.current.data).toMatchObject({ status: 'not_counted', reason: 'after_confirmed' });
+    await hook.unmount();
   });
 
   test('offline, a day the saved copy lacks: unknown (an error), neither pending nor not_counted', async () => {

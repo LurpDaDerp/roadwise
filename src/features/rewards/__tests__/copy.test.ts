@@ -138,6 +138,26 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
     expect(GOAL_PROGRESS).not.toHaveProperty('toGo');
   });
 
+  describe('goalActiveLine withCount: false (round 2)', () => {
+    test('pass 0, fail 0: the counts-from line', () => {
+      expect(goalActiveLine({ pass: 0, target: 4, failDays: 0, withCount: false })).toBe(
+        'Counts from the days you drive this week.'
+      );
+    });
+    test('fail 0: the proration sentence alone, no count', () => {
+      const line = goalActiveLine({ pass: 2, target: 4, failDays: 0, withCount: false });
+      expect(line).toBe('Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      expect(line).not.toMatch(/of 4/);
+    });
+    test('fail > 0: no line at all', () => {
+      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1, withCount: false })).toBeNull();
+      expect(goalActiveLine({ pass: 0, target: 4, failDays: 2, withCount: false })).toBeNull();
+      // negative control: with the count (the default, or explicit), the count stays
+      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1 })).toBe('1 of 4 days so far.');
+      expect(goalActiveLine({ pass: 1, target: 4, failDays: 1, withCount: true })).toBe('1 of 4 days so far.');
+    });
+  });
+
   describe('goalActiveLine (Task 9 review I1: proration only while no day has failed)', () => {
     const PRORATION = /Drive fewer days this week\? Keeping it up on each day you drive still counts\./;
 
@@ -175,7 +195,9 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
   test('the not-counted lines: honest, never "not settled yet"', () => {
     expect(common.NOT_COUNTED.title).toBe("This day isn't part of your rewards.");
     expect(common.NOT_COUNTED.beforeRewards('2026-09-10')).toBe('Rewards count from September 10, 2026.');
-    expect(common.NOT_COUNTED.afterConfirmed).toBe('It reached RoadWise after the day was confirmed.');
+    expect(common.NOT_COUNTED.afterConfirmed).toBe(
+      'A drive on this day reached RoadWise after the day was confirmed, so the day stays as it was.'
+    );
     const lines = [common.NOT_COUNTED.title, common.NOT_COUNTED.beforeRewards('2026-01-01'), common.NOT_COUNTED.afterConfirmed];
     for (const line of lines) {
       for (const re of BANNED_COPY) expect(re.test(line)).toBe(false);

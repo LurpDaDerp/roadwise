@@ -234,6 +234,46 @@ describe('dayAward: settled | pending | not_counted (T7 round 1, I1)', () => {
     });
   });
 
+  test('a frozen late day (no_drive, 0 points) of a day with a scored drive: not_counted, after_confirmed (round 2, m2)', () => {
+    const frozen = rewardDayRow('2026-09-18', {
+      outcome: 'neutral',
+      outcome_reason: 'no_drive',
+      tier: 'none',
+      phone_free: false,
+      camera: false,
+      points: 0,
+      predicates: {
+        phone: 'neutral',
+        speeding: 'neutral',
+        braking: 'neutral',
+        accel: 'neutral',
+        cornering: 'neutral',
+        smooth: 'neutral',
+        safe: 'neutral',
+      },
+    });
+    expect(dayAward(frozen, { ...ctx('2026-09-18'), hadScoredDrive: true })).toEqual({
+      status: 'not_counted',
+      settled: false,
+      reason: 'after_confirmed',
+      rewardsStart: '2026-09-10',
+    });
+    // negative controls: without knowing of a drive it is a settled day with nothing earned; an
+    // earning row, or a short day, is settled whatever the caller says
+    expect(dayAward(frozen, ctx('2026-09-18'))).toMatchObject({ status: 'settled', points: 0 });
+    expect(dayAward(frozen, { ...ctx('2026-09-18'), hadScoredDrive: false })).toMatchObject({ status: 'settled' });
+    expect(dayAward(row('2026-09-18'), { ...ctx('2026-09-18'), hadScoredDrive: true })).toMatchObject({
+      status: 'settled',
+      points: 30,
+    });
+    expect(
+      dayAward(rewardDayRow('2026-09-18', { outcome: 'neutral', outcome_reason: 'short', tier: 'none', points: 0 }), {
+        ...ctx('2026-09-18'),
+        hadScoredDrive: true,
+      })
+    ).toMatchObject({ status: 'settled' });
+  });
+
   test('no context: the old two-way reading (pending), and `settled` stays a boolean', () => {
     const award = dayAward(null);
     expect(award).toEqual({ status: 'pending', settled: false });

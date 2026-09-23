@@ -183,10 +183,12 @@ export type NotCountedReason = 'before_rewards' | 'after_confirmed';
 /**
  * A day's reward, three ways (M5 T7 round 1, I1). `settled` stays as the boolean it always was, so
  * `if (award.settled)` keeps working; `status` tells the two unsettled cases apart.
- * - `settled`: the day's `reward_days` row exists (final).
+ * - `settled`: the day's `reward_days` row exists (final), except a frozen late day (below).
  * - `not_counted`: no row, and there never will be one — the day is before `rewards_start` (history
  *   from before rewards existed), or at or behind `settled_through` (the frontier passed it: a late
- *   day frozen without value, or skipped).
+ *   day frozen without value, or skipped); or the row is a frozen late day (`outcome_reason
+ *   'no_drive'`, 0 points) of a day the caller knows had a scored driver drive
+ *   (`context.hadScoredDrive`, round 2 m2).
  * - `pending`: no row yet; it counts once it settles. A new user (no progress row, or
  *   `rewards_start` null) is always pending.
  */
@@ -208,7 +210,21 @@ export type DayAward =
  * settled progress. Without `context` a missing row reads as `pending` (the old behaviour).
  * Offline or with progress unknown, don't call it: the day is unknown (`useRewardDay` errors).
  */
-export function dayAward(row: RewardDay | null, context?: { day: string; progress: Progress | null }): DayAward {
+export function dayAward(
+  row: RewardDay | null,
+  context?: { day: string; progress: Progress | null; hadScoredDrive?: boolean }
+): DayAward {
+  // A late day frozen by the settlement (0009, rev2 I-A) has a row that reads "no drive, 0 points".
+  // When the caller knows the day had a scored driver drive (D1 shows one), that row is a day the
+  // drive reached after it was confirmed, never "settled, no points" (T7 round 2, m2).
+  if (row !== null && context?.hadScoredDrive === true && row.outcome_reason === 'no_drive' && row.points === 0) {
+    return {
+      status: 'not_counted',
+      settled: false,
+      reason: 'after_confirmed',
+      rewardsStart: context.progress?.rewards_start ?? null,
+    };
+  }
   if (row !== null) {
     return {
       status: 'settled',
