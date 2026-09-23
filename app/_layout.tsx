@@ -195,6 +195,14 @@ export default function RootLayout() {
     return registerBeforeSignOut(() => unregisterPushToken({ settings }));
   }, [runtime]);
 
+  // The sync watermark's release (M5 R-A), once per runtime beside the token's: with nothing left
+  // to upload, this phone stops holding its owner's reward days (`devices.signed_out_at`). With a
+  // drive still owed it writes nothing (rev2 m1a). Bounded to 2 s; it never holds the sign-out.
+  useEffect(() => {
+    if (runtime === null) return;
+    return registerBeforeSignOut(() => runtime.syncWatermarkBeforeSignOut());
+  }, [runtime]);
+
   // Sign-out sends the deletes this device still owes while the session can (D1 security M-1).
   const flush = useCallback(
     () =>

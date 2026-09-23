@@ -3,7 +3,8 @@
  * permission object last reported for it.
  *
  * Only the columns below are ever sent (never `drive_state`, which the reporter owns, nor
- * `drive_state_at`, which the server stamps, nor the legacy `push_token`). The write is throttled
+ * `drive_state_at`, which the server stamps, nor the legacy `push_token`, nor `synced_through`, the
+ * sync watermark's own; `signed_out_at` is always sent as null — M5 R-A). The write is throttled
  * to once every 6 hours (rev1: O3), unless the app version or the permissions fingerprint changed:
  * `last_seen_at` needs no more than that, and a foreground costs no request it does not need.
  *
@@ -141,6 +142,10 @@ export async function upsertDevice(userId: string, info: DeviceInfo, deps: Upser
     os_version: info.osVersion,
     app_version: info.appVersion,
     last_seen_at: new Date(now).toISOString(),
+    // M5 R-A: a phone signed in again speaks for its owner again, so it holds their reward days
+    // until its next clean drain reports a watermark (`syncWatermark.ts` writes `signed_out_at` at
+    // sign-out, and removes this throttle's stamp so the next sign-in's upsert is not skipped).
+    signed_out_at: null,
     ...(info.permissions ? { permissions: info.permissions as unknown as Database['public']['Tables']['devices']['Insert']['permissions'] } : {}),
   };
   try {

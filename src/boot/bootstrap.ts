@@ -293,6 +293,13 @@ export interface AppRuntime {
    */
   driveStateAbandon(): Promise<void>;
   /**
+   * The before-sign-out half of the sync watermark (M5 R-A, rev2 m1a): with nothing left to upload
+   * and no drive open, `devices.signed_out_at` is written for the stored owner, so a signed-out
+   * phone never holds its former owner's reward days. With a drive still owed it writes nothing (the
+   * server's 72 h cap bounds the hold). Never throws; bounded to 2 s. The root layout registers it.
+   */
+  syncWatermarkBeforeSignOut(): Promise<void>;
+  /**
    * Stops the runner and the hydrator, then the drive host, detaches the cache from the change
    * event and empties it. For teardown; never mid-session. The cache is emptied rather than left to
    * its gc timers because one reason to tear a runtime down is that the device changed hands, and
@@ -607,6 +614,15 @@ async function runLaunch(
   const isBusy = () => engine.drive.isBusy();
 
   enter('sync');
+  // The sync watermark (M5 R-A): written after a drain the runner already makes, never on its own.
+  const watermark = createRuntimeWatermark({
+    db,
+    drive: engine.drive,
+    client: deps.devicesClient,
+    now,
+    tz: currentZone,
+    onError,
+  });
   let runner: SyncRunner | null = null;
   let traceFs: TraceFs | null = null;
   try {
@@ -623,6 +639,7 @@ async function runLaunch(
         appState,
         now,
         onError,
+        onCleanDrain: watermark.onCleanDrain,
       });
     });
     runner = created;
@@ -667,6 +684,7 @@ async function runLaunch(
     now,
     driveStateSettled: () => engine.driveReports?.settled() ?? Promise.resolve(),
     driveStateAbandon: () => engine.driveReports?.abandon() ?? Promise.resolve(),
+    syncWatermarkBeforeSignOut: () => watermark.onSignOut(),
     async refreshConfig() {
       const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
       const flag = () => readFlag(db, 'auto_detect', AUTO_DETECT_FLAG_FALLBACK);
@@ -947,14 +965,7 @@ export function attachDriveStateReporting(opts: {
   }
 
   /** The owner fence, local only: the stored session is the recorded owner, no handover pending. */
-  async function fence(): Promise<string | null> {
-    const owner = await readDeviceOwner(opts.db);
-    if (owner === null) return null;
-    const pending = await settings.get<string>(PENDING_OWNER_KEY);
-    if (pending !== null && pending !== owner) return null;
-    if ((await settings.get<string>(SESSION_UID_KEY)) !== owner) return null;
-    return owner;
-  }
+  const fence = (): Promise<string | null> => readFencedOwner(opts.db);
 
   /** One attempt to bring the server to `desired`. A failure to even try arms the backoff. */
   async function attempt(): Promise<void> {
@@ -1098,6 +1109,71 @@ export function attachDriveStateReporting(opts: {
       dropOutstanding();
     },
   };
+}
+
+/**
+ * The runtime's owner fence, local only (H2 r1 I1): the recorded device owner, when the stored
+ * session user id (`session.uid`) is that owner and no other owner's handover is pending; else
+ * null. It never calls `auth.getSession()`, so an offline token refresh cannot read as "nobody",
+ * and a handover in progress can never be written for under the next driver's session.
+ */
+export async function readFencedOwner(db: Db): Promise<string | null> {
+  const settings = createSettingsRepo(db);
+  const owner = await readDeviceOwner(db);
+  if (owner === null) return null;
+  const pending = await settings.get<string>(PENDING_OWNER_KEY);
+  if (pending !== null && pending !== owner) return null;
+  if ((await settings.get<string>(SESSION_UID_KEY)) !== owner) return null;
+  return owner;
+}
+
+/**
+ * The sync watermark's writer (`src/data/devices/syncWatermark.ts`, M5 R-A) with the runtime's
+ * identity: the fenced stored owner, this install's id, the device's zone for the 02:00 boundary,
+ * and the app client loaded only when a write is actually due (nothing on an armed, idle phone).
+ *
+ * - `onCleanDrain` also needs a live signed-in host: `session.uid` is never cleared at sign-out,
+ *   so the fence alone would let a signed-out phone PATCH under the anon key after every drain.
+ * - `onSignOut` runs inside the sign-out, after the host has already marked itself signed out
+ *   (`suspendForSignOut`) and while the session is still valid, so it uses the fence alone.
+ */
+function createRuntimeWatermark(opts: {
+  db: Db;
+  drive: Pick<DriveHost, 'signedIn'>;
+  client?: import('@/data/devices/register').DevicesClient;
+  now: () => number;
+  tz: () => string;
+  onError: (error: unknown, context: string) => void;
+}): { onCleanDrain(drainStartedAt: number): Promise<void>; onSignOut(): Promise<void> } {
+  /* eslint-disable @typescript-eslint/no-require-imports -- data modules, loaded with the runtime */
+  const { createWatermarkWriter, watermarkClientFor } =
+    require('@/data/devices/syncWatermark') as typeof import('@/data/devices/syncWatermark');
+  const { readInstallId } = require('@/data/devices/installId') as typeof import('@/data/devices/installId');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  type Seam = import('@/data/devices/syncWatermark').WatermarkClient;
+  const settings = createSettingsRepo(opts.db);
+  let seam: Seam | null = null;
+  const client: Seam = {
+    async updateDevice(args) {
+      seam ??= watermarkClientFor(opts.client ?? (await import('@/data/supabase/client')).supabase);
+      return seam.updateDevice(args);
+    },
+  };
+  const base = {
+    db: opts.db,
+    supabase: client,
+    settings,
+    deviceId: () => readInstallId(settings),
+    now: opts.now,
+    tz: opts.tz,
+    onError: opts.onError,
+  };
+  const drains = createWatermarkWriter({
+    ...base,
+    readOwner: async () => (opts.drive.signedIn() ? readFencedOwner(opts.db) : null),
+  });
+  const signOut = createWatermarkWriter({ ...base, readOwner: () => readFencedOwner(opts.db) });
+  return { onCleanDrain: drains.onCleanDrain, onSignOut: signOut.onSignOut };
 }
 
 /** The device owner's age band from the cached profile, or null when there is none. */

@@ -252,6 +252,7 @@ async function fakeRuntime(status: DriveState['status'] = 'armed') {
     drive: host,
     driveStateSettled: jest.fn(async () => {}),
     driveStateAbandon: jest.fn(async () => {}),
+    syncWatermarkBeforeSignOut: jest.fn(async () => {}),
   } as unknown as NonNullable<RuntimeState['runtime']>;
   return { runtime, host, db };
 }
@@ -400,23 +401,24 @@ describe('the push token is released before sign-out (T10, T17)', () => {
     await createSettingsRepo(db).set(PUSH_REGISTRATION_KEY, REGISTRATION);
   }
 
+  // Two tasks per runtime: this one first, then M5's sync watermark release (its own suite below).
   test('one task per runtime: re-renders add none, the switch removes it, the next runtime adds its own', async () => {
     const first = await fakeRuntime();
     await renderWith(first.runtime);
-    expect(mockSessionStore.tasks.size).toBe(1);
-    const task = [...mockSessionStore.tasks][0];
+    expect(mockSessionStore.tasks.size).toBe(2);
+    const tasks = [...mockSessionStore.tasks];
 
     await act(async () => mockSessionStore.set('u1'));
     await act(async () => mockController.set({ status: 'ready' }));
-    expect([...mockSessionStore.tasks]).toEqual([task]);
+    expect([...mockSessionStore.tasks]).toEqual(tasks);
 
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
     expect(mockSessionStore.tasks.size).toBe(0);
 
     const second = await fakeRuntime();
     await act(async () => mockController.set({ status: 'ready', runtime: second.runtime }));
-    expect(mockSessionStore.tasks.size).toBe(1);
-    expect([...mockSessionStore.tasks][0]).not.toBe(task);
+    expect(mockSessionStore.tasks.size).toBe(2);
+    expect([...mockSessionStore.tasks][0]).not.toBe(tasks[0]);
   });
 
   test("runs under the uid the token was registered for: the token is released on the server", async () => {
@@ -437,6 +439,31 @@ describe('the push token is released before sign-out (T10, T17)', () => {
     mockSupabase.sessionUid = 'u2';
     await [...mockSessionStore.tasks][0]?.();
     expect(mockSupabase.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('the sync watermark is released before sign-out (M5 R-A, rev2 m1a)', () => {
+  test("one task per runtime, beside the push token's: it runs that runtime's release", async () => {
+    const first = await fakeRuntime();
+    await renderWith(first.runtime);
+    const watermarkTask = [...mockSessionStore.tasks][1];
+    expect(watermarkTask).toBeDefined();
+    await watermarkTask?.();
+    expect(first.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
+
+    // Re-renders add none.
+    await act(async () => mockSessionStore.set('u1'));
+    expect([...mockSessionStore.tasks][1]).toBe(watermarkTask);
+
+    // A rebuild's cleanup removes it; the next runtime registers its own, bound to itself.
+    await act(async () => mockController.set({ status: 'switching', runtime: null }));
+    const second = await fakeRuntime();
+    await act(async () => mockController.set({ status: 'ready', runtime: second.runtime }));
+    const next = [...mockSessionStore.tasks][1];
+    expect(next).not.toBe(watermarkTask);
+    await next?.();
+    expect(second.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
+    expect(first.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -196,6 +196,14 @@ export interface SyncRunnerDeps {
   batchSize?: number;
   /** Told about anything that went wrong but did not change the outcome (a failed file delete). */
   onError?: (error: unknown, context: string) => void;
+  /**
+   * Called at the end of every drain that ran (M5 R-A), with the instant it started — the sync
+   * watermark's writer (`src/data/devices/syncWatermark.ts`) decides whether the drain was clean.
+   * Never for a drain that did not run (recording, offline, the policy said no), never for a
+   * sign-out's `flushDeletes`, never for a pass of a stopped runner. It adds no drain, wake or
+   * timer: it rides the ones the runner already makes. A rejection is reported and costs nothing.
+   */
+  onCleanDrain?: (drainStartedAt: number) => Promise<void>;
 }
 
 export interface DrainResult {
@@ -974,7 +982,16 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           report(error, 'reopen retryable items');
         }
       }
-      return await pass(at);
+      const mine = generation;
+      const result = await pass(at);
+      if (deps.onCleanDrain && !stale(mine)) {
+        try {
+          await deps.onCleanDrain(at);
+        } catch (error) {
+          report(error, 'clean drain');
+        }
+      }
+      return result;
     } finally {
       draining = false;
       inFlight = null;

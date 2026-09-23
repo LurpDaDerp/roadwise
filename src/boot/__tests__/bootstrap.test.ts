@@ -34,7 +34,7 @@ import {
 } from '@/data/hydrate/hydrate';
 import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
 import { createQueryClient } from '@/data/queries';
-import { createFakeAppState, createFakeFs, createFakeSupabase } from '@/data/sync/__fixtures__/fakes';
+import { createFakeAppState, createFakeFs, createFakeSupabase, functionsFetchError } from '@/data/sync/__fixtures__/fakes';
 import { finalizeIdempotencyKey, SESSION_UID_KEY, traceIdempotencyKey } from '@/data/sync/queue';
 import { createFakeDriveSense } from '@drive-sense';
 import { INSTALL_ID_KEY } from '@/data/devices/installId';
@@ -2011,5 +2011,136 @@ describe('client re-review R1 and R3: the drive-state reporter', () => {
     expect(d.writes).toContain('devices:idle');
     expect(d.writes[d.writes.length - 1]).toBe('devices:idle');
     reporting.release();
+  });
+});
+
+describe('M5 R-A: the sync watermark rides the runner, and the sign-out releases the phone', () => {
+  const INSTALL = 'install-0003';
+
+  /** The `devices` table as the watermark writer updates it. */
+  function watermarkDevices(opts: { fail?: boolean } = {}) {
+    const writes: { patch: Record<string, unknown>; filters: [string, unknown][] }[] = [];
+    const client = {
+      from: (table: string) => ({
+        update: (patch: Record<string, unknown>) => {
+          const write = { patch, filters: [] as [string, unknown][] };
+          const reply = () => {
+            writes.push(write);
+            return opts.fail
+              ? Promise.resolve({ data: null, error: { message: 'offline' } })
+              : Promise.resolve({ data: [{ id: INSTALL, table }], error: null });
+          };
+          const q = {
+            eq: (column: string, value: unknown) => {
+              write.filters.push([column, value]);
+              return q;
+            },
+            select: () => q,
+            abortSignal: () => reply(),
+            then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => reply().then(resolve, reject),
+          };
+          return q;
+        },
+      }),
+    };
+    return { client, writes };
+  }
+
+  async function signedInLaunch(opts: { uid?: string | null; installId?: boolean } = {}) {
+    await migrate(db);
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    if (opts.installId !== false) await settings.set(INSTALL_ID_KEY, INSTALL);
+    const devices = watermarkDevices();
+    const built = deps({
+      supabase: createFakeSupabase({ uid: opts.uid === undefined ? 'user-1' : opts.uid }),
+      devicesClient: devices.client as never,
+    });
+    runtime = await bootstrapApp(built.bootstrapDeps);
+    await runtime.runner.idle();
+    await settle();
+    return { devices, built };
+  }
+
+  const watermarkWrites = (d: ReturnType<typeof watermarkDevices>) =>
+    d.writes.filter((w) => 'synced_through' in w.patch);
+
+  test("launch's first drain, clean: synced_through = the drain's start, on the owner's own row", async () => {
+    const { devices } = await signedInLaunch();
+    expect(watermarkWrites(devices)).toEqual([
+      {
+        patch: { synced_through: new Date(NOW).toISOString() },
+        filters: [
+          ['user_id', 'user-1'],
+          ['id', INSTALL],
+        ],
+      },
+    ]);
+  });
+
+  test('a recovered drive still queued (signed in, but its upload failed): no watermark', async () => {
+    const devices = watermarkDevices();
+    await crashedDrive();
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL);
+    const supabase = createFakeSupabase({ uid: 'user-1', invoke: () => functionsFetchError() });
+    runtime = await bootstrapApp(deps({ supabase, devicesClient: devices.client as never }).bootstrapDeps);
+    await runtime.runner.idle();
+    await settle();
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+    expect(watermarkWrites(devices)).toEqual([]);
+  });
+
+  test('signed out: nothing is written', async () => {
+    const { devices } = await signedInLaunch({ uid: null });
+    expect(devices.writes).toEqual([]);
+  });
+
+  test('another driver pending (a handover not yet rebuilt): nothing is written; once settled, it is', async () => {
+    const { devices } = await signedInLaunch({ installId: false });
+    const settings = createSettingsRepo(db);
+    await settings.set(INSTALL_ID_KEY, INSTALL);
+    // The owner watch saw user-2 sign in; the rebuild has not run yet.
+    await settings.set(PENDING_OWNER_KEY, 'user-2');
+    await runtime!.runner.drainOnce(NOW);
+    expect(devices.writes).toEqual([]);
+    await settings.remove(PENDING_OWNER_KEY);
+    await runtime!.runner.drainOnce(NOW);
+    expect(watermarkWrites(devices)).toHaveLength(1);
+  });
+
+  test('no install id yet: nothing is written', async () => {
+    const { devices } = await signedInLaunch({ installId: false });
+    expect(devices.writes).toEqual([]);
+  });
+
+  test('armed and idle: no timer — nothing more is written without a drain', async () => {
+    const { devices } = await signedInLaunch();
+    for (let i = 0; i < 5; i += 1) await settle();
+    expect(watermarkWrites(devices)).toHaveLength(1);
+  });
+
+  test('before sign-out with nothing pending: signed_out_at = now on the owner\'s row', async () => {
+    const { devices } = await signedInLaunch();
+    await runtime!.syncWatermarkBeforeSignOut();
+    expect(devices.writes.at(-1)).toEqual({
+      patch: { signed_out_at: new Date(NOW).toISOString() },
+      filters: [
+        ['user_id', 'user-1'],
+        ['id', INSTALL],
+      ],
+    });
+  });
+
+  test('before sign-out with a drive still to upload: nothing is written (rev2: m1a)', async () => {
+    const devices = watermarkDevices();
+    await crashedDrive();
+    const settings = createSettingsRepo(db);
+    await settings.set(LAST_USER_KEY, 'user-1');
+    await settings.set(INSTALL_ID_KEY, INSTALL);
+    runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }), devicesClient: devices.client as never, mayDrain: () => false }).bootstrapDeps);
+    await runtime.syncWatermarkBeforeSignOut();
+    expect(devices.writes).toEqual([]);
   });
 });

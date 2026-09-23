@@ -47,7 +47,7 @@ describe('upsertDevice', () => {
     const [call] = fake.to('devices');
     expect(call?.op).toBe('upsert');
     expect(Object.keys(call?.values as object).sort()).toEqual(
-      ['app_version', 'id', 'last_seen_at', 'model', 'os_version', 'permissions', 'platform', 'user_id'].sort()
+      ['app_version', 'id', 'last_seen_at', 'model', 'os_version', 'permissions', 'platform', 'signed_out_at', 'user_id'].sort()
     );
     expect(call?.values).toMatchObject({
       id: 'install-1',
@@ -63,6 +63,15 @@ describe('upsertDevice', () => {
     expect(call?.values).not.toHaveProperty('drive_state');
     expect(call?.values).not.toHaveProperty('drive_state_at');
     expect(call?.values).not.toHaveProperty('push_token');
+  });
+
+  it('sends signed_out_at: null, so signing back in re-enrols the phone (M5 R-A), and never the watermark', async () => {
+    const { fake, deps } = setup();
+    await upsertDevice('user-a', info(), deps);
+    const [call] = fake.to('devices');
+    expect(call?.values).toHaveProperty('signed_out_at', null);
+    // synced_through is the runner's to write after a clean drain; the upsert never moves it.
+    expect(call?.values).not.toHaveProperty('synced_through');
   });
 
   it('leaves permissions out when nothing was reported yet, so the stored object is never blanked', async () => {

@@ -1773,3 +1773,82 @@ describe('the trace goes only after the server accepted the trip (M4 final revie
     expect(await traceItem()).toMatchObject({ status: 'pending' });
   });
 });
+
+describe('onCleanDrain (M5 R-A: the sync watermark rides the drains the runner already makes)', () => {
+  test('called once per drain that ran, with its start, after the pass settled', async () => {
+    await seedQueuedTrip();
+    const calls: { at: number; itemStatus: string | undefined }[] = [];
+    const r = runner({
+      onCleanDrain: async (at) => {
+        calls.push({ at, itemStatus: (await finalizeItem())?.status });
+      },
+    });
+    await r.drainOnce(T0 + 5);
+    expect(calls).toEqual([{ at: T0 + 5, itemStatus: 'done' }]);
+    await r.drainOnce(T0 + 10); // an empty queue is still a drain that ran
+    expect(calls.map((c) => c.at)).toEqual([T0 + 5, T0 + 10]);
+  });
+
+  test('never while recording, nor when the policy forbids the drain, nor offline', async () => {
+    const onCleanDrain = jest.fn(async () => {});
+    recording = true;
+    await runner({ onCleanDrain }).drainOnce(T0);
+    recording = false;
+    await runner({ onCleanDrain, mayDrain: () => false }).drainOnce(T0);
+    const offlineNet = { isWifi: () => false, isOnline: () => false, subscribe: () => () => {} };
+    await runner({ onCleanDrain, net: offlineNet }).drainOnce(T0);
+    expect(onCleanDrain).not.toHaveBeenCalled();
+  });
+
+  test('a sign-out flush of deletes is not a drain: no call', async () => {
+    const onCleanDrain = jest.fn(async () => {});
+    await runner({ onCleanDrain }).flushDeletes(T0);
+    expect(onCleanDrain).not.toHaveBeenCalled();
+  });
+
+  test('a pass that belongs to a stopped runner (the phone changed hands) makes no call', async () => {
+    await seedQueuedTrip();
+    const onCleanDrain = jest.fn(async () => {});
+    let release: () => void = () => {};
+    supabase = createFakeSupabase({
+      uid: UID,
+      invoke: () =>
+        new Promise((resolve) => {
+          release = () => resolve(invokeOk(SERVER_OK));
+        }),
+    });
+    const r = runner({ onCleanDrain });
+    const drain = r.drainOnce(T0);
+    await waitFor(() => supabase.invokes.length === 1);
+    void r.stop();
+    release();
+    await drain;
+    expect(onCleanDrain).not.toHaveBeenCalled();
+  });
+
+  test('one that rejects costs the drain nothing and is reported', async () => {
+    await seedQueuedTrip();
+    const errors: string[] = [];
+    const r = runner({
+      onCleanDrain: async () => {
+        throw new Error('boom');
+      },
+      onError: (_e, context) => errors.push(context),
+    });
+    await expect(r.drainOnce(T0)).resolves.toEqual({ done: 1, failed: 0, deferred: 0 });
+    expect(errors).toEqual(['clean drain']);
+  });
+
+  test('adds no timer and no wake: an armed, idle runner with nothing queued calls it only on the wakes it already had', async () => {
+    const onCleanDrain = jest.fn(async () => {});
+    const appState = createFakeAppState();
+    const r = runner({ onCleanDrain, appState });
+    r.start();
+    await waitFor(() => onCleanDrain.mock.calls.length === 1); // start()'s own first drain
+    for (let i = 0; i < 5; i += 1) await tick();
+    expect(onCleanDrain).toHaveBeenCalledTimes(1);
+    appState.emit('active');
+    await waitFor(() => onCleanDrain.mock.calls.length === 2);
+    await r.stop();
+  });
+});
