@@ -35,7 +35,7 @@ export {
   MIN_STATED_LIMIT,
   parseStatedLimit,
 } from './DisputeSheet';
-export { DayEarnedField, EarnedField } from './EarnedField';
+export { DayEarnedField } from './EarnedField';
 export { EditTripScreen } from './EditTripScreen';
 export { EventDetailScreen } from './EventDetailScreen';
 export { EventListScreen } from './EventListScreen';

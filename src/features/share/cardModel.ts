@@ -184,18 +184,6 @@ export function buildCardModel(input: CardInput, toggles: CardToggles = DEFAULT_
   }
 }
 
-/** Every line the card prints, top to bottom (also what the SVG draws). */
-export function cardLines(model: CardModel): string[] {
-  return [
-    model.wordmark,
-    model.heading,
-    model.primary,
-    ...(model.unit ? [model.unit] : []),
-    ...model.details,
-    ...(model.code ? [copy.card.codeLabel, model.code] : []),
-  ];
-}
-
 /**
  * The card in words: the text Android shares, the message beside the image on iOS, and the
  * preview's accessibility label.

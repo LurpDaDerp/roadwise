@@ -257,7 +257,8 @@ export const insightsCopy = {
       drives: 'Drives',
       miles: 'Miles',
       hours: 'Driving time',
-      safeDays: 'Safe days',
+      /** Not Home's SAFE DAYS (settled, since rewards began): this phone's own days (final review m8). */
+      safeDays: 'Safe days on this phone',
       streak: 'Longest run of safe days',
       bestWeek: 'Best week',
       phoneFreeMiles: 'Phone-free miles',
@@ -269,7 +270,8 @@ export const insightsCopy = {
     /** §10.1: totals are descriptive. */
     note: 'These describe your driving. Nothing here earns points, badges or levels.',
     asDriver: 'Drives where you were the driver.',
-    daysNote: 'Safe days and runs of safe days count once a day has synced.',
+    daysNote:
+      "Safe days here are counted from the drives on this phone, once a day has synced. Home's safe days count only days confirmed since rewards began, so the two can differ.",
     empty: {
       title: 'Nothing on the record yet',
       body: 'Drives you take as the driver are totalled here.',

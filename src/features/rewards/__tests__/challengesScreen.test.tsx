@@ -6,7 +6,8 @@ import { BANNED_COPY } from '@/notifications/catalog';
 
 import { RewardsRpcError, type RewardsRpcCode } from '../api';
 import { ChallengeDetailScreen } from '../challenges/ChallengeDetailScreen';
-import { ChallengesScreen, challengeHref } from '../challenges/ChallengesScreen';
+import { ChallengesScreen } from '../challenges/ChallengesScreen';
+import { challengeHref } from '../hub/routes';
 import { OFFLINE_LINE } from '../copy/common';
 import { challengesCopy as copy } from '../copy/challenges';
 import { resetEnsureWeekForTests } from '../useEnsureWeek';

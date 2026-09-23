@@ -101,7 +101,7 @@ export const hubCopy = {
     hintClose: 'Hides the explanation',
     /** §R1–§R5 in plain words, then the rules every screen shares. */
     paragraphs: [
-      `Each confirmed day earns points for how you drove that day: ${P.safeDay} for a safe day or ${P.goodDay} for a good day. On days you drive at least ${REWARDS.MIN_DRIVING_S / 60} minutes, no phone use adds ${P.phoneFreeDay} and the camera on adds ${P.cameraDay}. A weekly goal adds ${P.weeklyGoal}, and a finished challenge adds its own points. Daily points never count miles or the number of drives.`,
+      `Each confirmed day earns points for how you drove that day: ${P.safeDay} for a safe day or ${P.goodDay} for a good day. On days you drive at least ${REWARDS.MIN_DRIVING_S / 60} minutes, no phone use adds ${P.phoneFreeDay}. A weekly goal adds ${P.weeklyGoal}, and a finished challenge adds its own points. Daily points never count miles or the number of drives.`,
       NOT_MONEY,
       `Your class follows your points: ${classList}. Points you've earned are never taken back.`,
       `${STREAK_RULE} Every ${REWARDS.SHIELD_EVERY_SAFE_DAYS}th safe day adds a shield, and you can hold ${REWARDS.SHIELD_MAX}.`,

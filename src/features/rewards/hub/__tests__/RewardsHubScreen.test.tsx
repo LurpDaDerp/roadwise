@@ -321,9 +321,9 @@ describe('How rewards work — the copy (review m1)', () => {
     expect(points).not.toMatch(/(^|\. )Nothing counts/);
   });
 
-  it('the 10 minutes applies only to the phone-free and camera bonuses', () => {
+  it('the 10 minutes applies only to the phone-free bonus (the camera clause waits for M7, final review m2)', () => {
     expect(points).toContain(
-      '50 for a safe day or 20 for a good day. On days you drive at least 10 minutes, no phone use adds 25 and the camera on adds 10.'
+      '50 for a safe day or 20 for a good day. On days you drive at least 10 minutes, no phone use adds 25.'
     );
     expect(points).not.toMatch(/once you've driven/);
   });
@@ -372,4 +372,8 @@ describe('RewardsHubScreen — how rewards work, and honest copy', () => {
     expect(text).not.toMatch(/store|leaderboard|crew|coming soon/i);
     expect(text).not.toMatch(/in a row/i);
   });
+});
+
+test('the explainer never mentions a camera until the camera exists (final review m2)', () => {
+  for (const paragraph of hubCopy.how.paragraphs) expect(paragraph).not.toMatch(/camera/i);
 });

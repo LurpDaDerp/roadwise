@@ -87,7 +87,9 @@ test('the record prints miles, hours, safe days, the streak and the best week', 
   expect(screen.getByLabelText('Drives, 3')).toBeOnTheScreen();
   expect(screen.getByLabelText('Miles, 40 mi')).toBeOnTheScreen();
   expect(screen.getByLabelText('Driving time, 2 h 00 min')).toBeOnTheScreen();
-  expect(screen.getByLabelText('Safe days, 3 days')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Safe days on this phone, 3 days')).toBeOnTheScreen();
+  // Never the bare label Home uses for its settled count (final review m8).
+  expect(screen.queryByText('Safe days')).toBeNull();
   // Two consecutive safe driving days; the unsafe one in between resets the run.
   expect(screen.getByLabelText('Longest run of safe days, 2 days')).toBeOnTheScreen();
   expect(screen.getByLabelText('Best week, 91 · Week of Jan 19')).toBeOnTheScreen();
@@ -105,7 +107,11 @@ test('nothing on the record is a target, a comparison or a reward', async () => 
     screen.getByText('These describe your driving. Nothing here earns points, badges or levels.')
   ).toBeOnTheScreen();
   expect(screen.getByText('Drives where you were the driver.')).toBeOnTheScreen();
-  expect(screen.getByText('Safe days and runs of safe days count once a day has synced.')).toBeOnTheScreen();
+  expect(
+    screen.getByText(
+      "Safe days here are counted from the drives on this phone, once a day has synced. Home's safe days count only days confirmed since rewards began, so the two can differ."
+    )
+  ).toBeOnTheScreen();
   // Descriptive only: no other driver appears anywhere on the page.
   expect(screen.queryByText(/average|other drivers|than you|rank/i)).toBeNull();
 });

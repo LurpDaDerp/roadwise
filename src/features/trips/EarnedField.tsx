@@ -7,42 +7,7 @@ import { Stamp } from '@/ui/charts';
 
 import { tripCopy as copy } from './copy';
 import { Field, FieldText } from './Field';
-import { earnedView, type EarnedKind, type EarnedView } from './format';
-
-/**
- * The EARNED field as M2 drew it, from the score and the cached day alone. Kept for callers that
- * have no rewards (M2's kinds); the drive summary draws `DayEarnedField` instead.
- */
-export function EarnedField({ kind }: { kind: EarnedKind }) {
-  const th = useTheme();
-  if (kind === 'safeDay') {
-    return (
-      <Field label={copy.earned.label} testID="earned">
-        <View style={{ paddingVertical: th.space.xs }}>
-          <Stamp kind="safeDay" testID="stamp-safe-day" />
-        </View>
-      </Field>
-    );
-  }
-  const text = {
-    goodDay: copy.earned.goodDay,
-    safeOnTrack: copy.earned.safeOnTrack,
-    goodOnTrack: copy.earned.goodOnTrack,
-    counts: copy.earned.counts,
-  }[kind];
-  return (
-    <Field label={copy.earned.label} testID="earned">
-      <FieldText variant="headline" style={{ fontWeight: '400' }}>
-        {text}
-      </FieldText>
-      {kind === 'goodDay' ? null : (
-        <Text variant="footnote" tone="muted">
-          {copy.earned.provisional}
-        </Text>
-      )}
-    </Field>
-  );
-}
+import { earnedView, type EarnedView } from './format';
 
 function EarnedBody({ view }: { view: EarnedView }) {
   const th = useTheme();

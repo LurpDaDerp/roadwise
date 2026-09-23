@@ -13,7 +13,8 @@ import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { hubCopy as copy } from '../copy/hub';
 import { useEnsureWeek } from '../useEnsureWeek';
 import { useRewards, type RewardsDeps } from '../useRewards';
-import { classView, goalView, isoWeekStart, streakView } from '../viewModel';
+import { classView, goalView, streakView } from '../viewModel';
+import { currentWeekGoal } from '../goal/weeks';
 import { ActiveChallenges } from './ActiveChallenges';
 import { ClassField } from './ClassField';
 import { HowRewardsWork } from './HowRewardsWork';
@@ -23,15 +24,6 @@ import { badgeHref, BADGES_HREF, challengeHref, CHALLENGES_HREF, GOAL_HREF, INVI
 import { StreakField } from './StreakField';
 import { TodayLine } from './TodayLine';
 import { useReferralFlag } from './useReferralFlag';
-
-/**
- * This week's goal, or null: the newest goal row counts only when its week is the current ISO week
- * in the phone's zone (T7 concern 4) — offline, before the week is opened, it can be last week's.
- */
-export function thisWeeksGoal(snapshot: RewardsSnapshot, today: string): WeeklyGoal | null {
-  const goal = snapshot.currentGoal;
-  return goal !== null && goal.week_start === isoWeekStart(today) ? goal : null;
-}
 
 /** A new user: no settled progress yet (the server writes the row on the first settlement or week). */
 export const isNewUser = (snapshot: RewardsSnapshot) => snapshot.progress === null || snapshot.progress.xp === 0;
@@ -148,7 +140,7 @@ export function RewardsHubScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: s
     body = <HubSkeleton />;
   } else {
     const { snapshot } = data;
-    const goal = thisWeeksGoal(snapshot, today);
+    const goal = currentWeekGoal(snapshot, today);
     hasActive = snapshot.challenges.some((c) => c.state === 'active');
     const earnedIds = new Set(snapshot.badges.map((b) => b.badge_id));
     const teaserDefs = snapshot.badgeDefs.filter((d) => d.family !== 'referrals' || referralOn || earnedIds.has(d.id));

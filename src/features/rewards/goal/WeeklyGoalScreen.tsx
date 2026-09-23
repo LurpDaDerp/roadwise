@@ -1,4 +1,4 @@
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -9,35 +9,15 @@ import { deviceZone } from '@/lib/deviceZone';
 import { dayKey } from '@/lib/time';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
-import type { RewardsApi, RewardsSnapshot, WeeklyGoal } from '../api';
-import { DayBar, shiftDay } from '../challenges/ChallengeRow';
+import type { RewardsApi, WeeklyGoal } from '../api';
+import { DayBar } from '../challenges/ChallengeRow';
 import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { goalCopy as copy } from '../copy/goal';
 import { useEnsureWeek } from '../useEnsureWeek';
 import { useRewards } from '../useRewards';
-import { goalView, isoWeekStart } from '../viewModel';
+import { goalView } from '../viewModel';
 import { FocusPicker } from './FocusPicker';
-
-/** F2's weekly goal (the notifications' `goal_completed` link). Typed routes are generated at `expo start`. */
-export const GOAL_HREF = '/rewards/goal' as Href;
-
-/**
- * This week's goal and last week's, by ISO week. The snapshot's newest goal is this week's only
- * when its `week_start` is this week's Monday (T7 concern 4): offline, before `open_my_week` has
- * run, it is still last week's and must not be shown as this week's.
- */
-export function goalWeeks(
-  snapshot: Pick<RewardsSnapshot, 'currentGoal' | 'lastGoal'>,
-  today: string
-): { thisWeek: WeeklyGoal | null; lastWeek: WeeklyGoal | null } {
-  const week = isoWeekStart(today);
-  const previous = shiftDay(week, -7);
-  const goals = [snapshot.currentGoal, snapshot.lastGoal].filter((g): g is WeeklyGoal => g !== null);
-  return {
-    thisWeek: goals.find((g) => g.week_start === week) ?? null,
-    lastWeek: goals.find((g) => g.week_start === previous) ?? null,
-  };
-}
+import { goalWeeks } from './weeks';
 
 function lastWeekLine(goal: WeeklyGoal): string {
   const sentence = goalSentence(goal.category, goal.target_days);

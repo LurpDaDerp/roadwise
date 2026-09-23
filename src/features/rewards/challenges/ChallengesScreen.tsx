@@ -1,4 +1,4 @@
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -11,18 +11,12 @@ import { Banner, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui
 import type { ChallengeDef, Enrolment, GoalCategory, RewardsApi, RewardsSnapshot } from '../api';
 import { CATEGORY_LABEL, OFFLINE_LINE, pointsText } from '../copy/common';
 import { challengeName, challengesCopy as copy } from '../copy/challenges';
-import { goalWeeks } from '../goal/WeeklyGoalScreen';
+import { currentWeekGoal } from '../goal/weeks';
+import { challengeHref } from '../hub/routes';
 import { useEnsureWeek } from '../useEnsureWeek';
 import { useRewards } from '../useRewards';
 import { challengeView } from '../viewModel';
 import { ChallengeRow, formatInstant } from './ChallengeRow';
-
-/** F2 (the notifications' `goal_completed` challenge link). Typed routes are generated at `expo start`. */
-export const CHALLENGES_HREF = '/rewards/challenges' as Href;
-
-/** A challenge's page: a def id (join, or its running enrolment) or an enrolment id (a past one). */
-export const challengeHref = (challengeId: string): Href =>
-  ({ pathname: '/rewards/challenges/[challengeId]', params: { challengeId } }) as unknown as Href;
 
 export type ChallengeTab = 'active' | 'discover' | 'done';
 const TABS: readonly ChallengeTab[] = ['active', 'discover', 'done'];
@@ -164,7 +158,7 @@ export function ChallengesScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
     const defsById = new Map(snap.challengeDefs.map((d) => [d.id, d]));
     const lists = challengeLists(snap);
     const tab = chosen ?? (lists.active.length > 0 ? 'active' : 'discover');
-    const goal = goalWeeks(snap, today).thisWeek;
+    const goal = currentWeekGoal(snap, today);
     const open = (id: string) => router.push(challengeHref(id));
     tabs = <Tabs value={tab} onChange={setChosen} />;
 

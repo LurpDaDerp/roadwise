@@ -1,63 +1,17 @@
-import { tripRow } from '@/data/queries/__fixtures__/rows';
-import { toTripSummary } from '@/data/queries/rows';
-import { badgeDefRows, badgeRow, goalRow, progressRow, UID } from '@/features/rewards/__fixtures__/rows';
+import { goalRow, progressRow } from '@/features/rewards/__fixtures__/rows';
 import { BANNED_COPY } from '@/notifications/catalog';
 
 import {
   buildCardModel,
   captionFor,
   CARD_KINDS,
-  cardLines,
   DEFAULT_TOGGLES,
   dateLabel,
   type CardInput,
-  type CardKind,
   type CardToggles,
 } from '../cardModel';
 import { shareCopy } from '../copy';
-
-// Privacy fixtures: none of these may reach a card, whatever the toggles.
-const NAME = 'Avery Quinn';
-const BIRTH = '2009-04-17';
-const PLACE = 'Near Lincoln HS';
-
-const finalTrip = (over: Parameters<typeof tripRow>[0] = {}) =>
-  toTripSummary(
-    tripRow({
-      status: 'final',
-      sync_state: 'synced',
-      score: 92,
-      started_at: Date.parse('2026-09-21T23:47:00Z'),
-      tz: 'America/Los_Angeles',
-      start_label: 'Near Home',
-      end_label: PLACE,
-      polyline: '_p~iF~ps|U_ulLnnqC',
-      start_geohash5: '9q8yy',
-      ...over,
-    })
-  );
-
-/** Something extra on every input a careless build could leak. */
-const leaky = { name: NAME, birthDate: BIRTH, user_id: UID } as Record<string, unknown>;
-
-const INPUTS: Record<CardKind, CardInput> = {
-  trip: { kind: 'trip', trip: finalTrip(), ...leaky },
-  streak: { kind: 'streak', progress: progressRow({ streak_days: 12, best_streak: 30 }), ...leaky },
-  badge: {
-    kind: 'badge',
-    badgeId: 'safe_days_7',
-    badges: [badgeRow('safe_days_7', { earned_at: '2026-09-21T06:15:00+00:00' })],
-    defs: badgeDefRows(),
-    tz: 'UTC',
-    ...leaky,
-  },
-  level: { kind: 'level', progress: progressRow({ xp: 4200, level: 3, safe_days: 42 }), ...leaky },
-  goal: {
-    kind: 'goal',
-    goals: [goalRow('2026-09-21'), goalRow('2026-09-14', { state: 'achieved', pass_days: 4, category: 'braking' })],
-    ...leaky,
-  },
-} as Record<CardKind, CardInput>;
+import { finalTrip, INPUTS, LEAKS, NAME } from '../__fixtures__/cards';
 
 const ALL_TOGGLES: CardToggles = { distance: true, code: true };
 
@@ -70,14 +24,15 @@ describe('buildCardModel: what a card may carry', () => {
     const model = buildCardModel({ ...INPUTS[kind], inviteCode: 'ABCD2345' }, ALL_TOGGLES);
     expect(model).not.toBeNull();
     const json = JSON.stringify(model);
-    for (const banned of [NAME, BIRTH, PLACE, 'Near Home', UID, '_p~iF', '9q8yy']) expect(json).not.toContain(banned);
+    for (const banned of LEAKS) expect(json).not.toContain(banned);
     expect(json).not.toMatch(/\blat\b|\blng\b|polyline|geohash|mph|km\/h/i);
     expect(json).not.toMatch(/\d{1,2}:\d{2}/);
     expect(model?.wordmark).toBe('RoadWise');
     const caption = captionFor(model!);
     expect(caption).not.toMatch(/\d{1,2}:\d{2}/);
     expect(caption).not.toContain(NAME);
-    for (const line of [...cardLines(model!), caption]) {
+    // What the SVG actually draws is checked in ShareCardSvg.test.tsx (final review m10).
+    for (const line of [caption]) {
       expect(line).not.toMatch(/<<|MRZ/);
       expect(line).not.toMatch(/licen[cs]e|\bID\b|DOB|date of birth/i);
       for (const re of BANNED_COPY) expect(line).not.toMatch(re);
