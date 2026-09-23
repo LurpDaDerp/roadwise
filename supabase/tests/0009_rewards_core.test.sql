@@ -284,6 +284,8 @@ select extensions.dblink_exec('rw9_pg', $q$update public.reward_due set due_at =
   where user_id = 'c9000000-0000-4000-8000-000000000902'$q$);
 select extensions.dblink_exec('rw9_s1', $q$begin; do $d$ begin
   perform 1 from public.reward_due where user_id = 'c9000000-0000-4000-8000-000000000902' for update; end $d$$q$);
+-- (hunt review m2) a blocking claim (a regression of skip locked) fails fast here instead of hanging the run
+select extensions.dblink_exec('rw9_s2', $q$set lock_timeout = '3s'; set statement_timeout = '10s'$q$);
 select is((select n from extensions.dblink('rw9_s2', $q$select public.settle_due_rewards_at(10, now())$q$) as t(n int)), 0,
   'P1: a sweep while another session holds the user''s queue row skips the user (skip locked: the sweep never waits)');
 select is((select d from extensions.dblink('rw9_pg', $q$select (due_at <= now() and failures = 0)::text from public.reward_due
@@ -293,6 +295,7 @@ select is((select n from extensions.dblink('rw9_s2', $q$select public.settle_due
   'once the row is released the next sweep claims the user');
 select is((select d from extensions.dblink('rw9_pg', $q$select coalesce((select (due_at > now() and failures = 0)::text from public.reward_due
     where user_id = 'c9000000-0000-4000-8000-000000000902'), 'true')$q$) as t(d text)), 'true', 'and settles it (no longer due, no failure)');
+select extensions.dblink_exec('rw9_s2', 'reset lock_timeout; reset statement_timeout');
 -- (P3) a user swept at a simulated future instant is not due in real time until a write re-queues it
 select extensions.dblink_exec('rw9_pg', $q$insert into public.reward_due (user_id, due_at) values ('c9000000-0000-4000-8000-000000000902', now() - interval '1 minute')
   on conflict (user_id) do update set due_at = excluded.due_at, failures = 0$q$);

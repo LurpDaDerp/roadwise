@@ -458,6 +458,8 @@ async function main() {
     // (rec. 3, 4) a settlement the checks found missing: the day facts' closes and readiness at the last
     // sweep's instant, the progress row, the devices, the queue row; then the user settled directly at that
     // instant, which tells a claim miss (the direct call settles) from a logic bug (it does not). Logged only.
+    // NOTE (hunt review nit): this really calls settle_rewards, which writes (days, ledger, queue row), so the
+    // state after a miss is not independent of the diagnosis: read any check before calling it, never after.
     const explainMiss = (uid, label) => {
       const state = sqlJson(`select json_build_object(
         'at', ${lit(lastAt)}::timestamptz, 'dbNow', now(),
@@ -820,7 +822,7 @@ async function main() {
     }
 
     // ---- J: concurrency ----------------------------------------------------------------
-    section('J concurrency: the CALL settles while 20 uploads run: every upload 200, no lock wait above 2 s', 6);
+    section('J concurrency: the CALL settles while 20 uploads run: every upload 200, no lock wait above 2 s', 7);
     {
       const J = [];
       for (let i = 0; i < 20; i++) J.push(newUser(`j${i}`));
@@ -875,7 +877,7 @@ async function main() {
           J.map(async (u) => {
             const t0 = Date.now();
             const status = (await drive(u, YESTERDAY, 11 + round)).res.status;
-            spans.push([t0, Date.now()]);
+            spans.push([t0, Date.now(), u.id]);
             return status;
           })
         );
@@ -895,11 +897,24 @@ async function main() {
       // is left for the next run, a delay of one sweep. Seen once in 47 runs (19 of 20). The CALL is held to
       // the backlog less those skips, and the next sweep must settle every one of them.
       const leftByCall = J.filter((u) => rewardDay(u.id, YESTERDAY) === null);
+      // (hunt review m1) a user the CALL left must show an in-flight upload: its queue row touched inside the
+      // CALL's window (the enqueue that held it; 2 s either side for the two clocks), or one of its uploads
+      // spanning the CALL's end. Anything else is not a skip-locked claim, and fails.
+      const leftRows = leftByCall.length === 0 ? [] : sqlJson(
+        `select json_agg(json_build_array(user_id, due_at, failures, updated_at)) from public.reward_due where user_id = any(array[${leftByCall.map((u) => lit(u.id)).join(', ')}]::uuid[])`) ?? [];
+      const notSkipLocked = leftByCall.filter((u) => {
+        const row = leftRows.find(([uid]) => uid === u.id);
+        const touched = row ? Date.parse(row[3]) : NaN;
+        const inWindow = Number.isFinite(touched) && touched >= callStart - 2_000 && touched <= callEnd + 2_000;
+        const spanning = spans.some(([a, b, uid]) => uid === u.id && a <= callEnd && b >= callEnd);
+        return !(inWindow || spanning);
+      });
       if (leftByCall.length > 0) {
-        console.log(`   (the concurrent CALL left ${leftByCall.length} backlog user(s) for the next run; their queue rows: ${JSON.stringify(sqlJson(
-          `select json_agg(json_build_array(user_id, due_at, failures, updated_at)) from public.reward_due where user_id = any(array[${leftByCall.map((u) => lit(u.id)).join(', ')}]::uuid[])`))})`);
-        sql(`select public.settle_due_rewards_at(500, now() + interval '5 seconds')`);
+        console.log(`   (the concurrent CALL left ${leftByCall.length} backlog user(s) for the next run; their queue rows: ${JSON.stringify(leftRows)}; CALL window ${iso(callStart)}..${iso(callEnd)})`);
       }
+      check('every user the CALL left was held by an in-flight upload (a skip-locked claim)', notSkipLocked.length === 0,
+        `not a skip-locked claim: ${notSkipLocked.map((u) => u.id).join(', ')}`);
+      if (leftByCall.length > 0) sql(`select public.settle_due_rewards_at(500, now() + interval '5 seconds')`);
       checkEq('the CALL settled the backlog, and the next sweep any user an in-flight upload held (skip locked)',
         J.filter((u) => rewardDay(u.id, YESTERDAY) !== null).length, 20);
       check('the CALL itself settled all but at most two of the backlog', leftByCall.length <= 2, `${leftByCall.length} left for the next run`);
