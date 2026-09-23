@@ -21,9 +21,13 @@
 --     settled day never changes, up or down. checked_through is bookkeeping, not client-readable.
 --   * public.reward_due (#10, #11): the settlement queue, one row per user. RLS on, no policy, no grant.
 --   * public.weekly_goals (#1, #10, #11): one goal per user and ISO week. Owner read.
---   * public.reward_contradictions (append-only, documented): changed_after_settlement,
+--   * public.reward_contradictions (append-only, documented, with one exception): changed_after_settlement,
 --     relabel_with_events and zone_hop, server-only (RLS on, no policy, no grant); M6 reads it through a
---     future definer RPC. Purged after 400 days by purge_reward_audit() (bounded, daily 04:40).
+--     future definer RPC. Purged after 400 days by purge_reward_audit() (bounded, daily 04:40). The
+--     exception (security M-1): a relabel row is one per (drive, target role, local day), and a repeat
+--     updates its lastAt and count in place, so toggling a role cannot grow the table without bound.
+--   * progress.rewards_start (review m3): existing users start earning on their local date of today
+--     (start_rewards_for_existing_users, run once here); no history before it is ever credited.
 --   * the facts and rules: reward_fact (a composite type), reward_day_facts, reward_wall_close,
 --     reward_day_ready, reward_outcome, reward_tier, reward_predicates, valid_reward_predicates,
 --     reward_zone_hop, reward_week_closed, weakest_goal_category, reward_rules (the JSON the app's
@@ -48,7 +52,8 @@
 -- over the zones of the day's trips (deleted included), or the user's zone for a day with no trips. It
 -- is ready once that close has passed and every watermark device (not signed out, seen or synced in the
 -- last 14 days) reports synced_through >= the close, or 72 h after the close whatever the watermarks
--- say. Days ahead of the frontier settle strictly in day order; a score_daily day at or behind the
+-- say (a device holds a day only once it has reported a watermark at all: a null synced_through is a
+-- build that does not report, review m1). Days ahead of the frontier settle strictly in day order; a score_daily day at or behind the
 -- frontier with no reward row is never settled for value: it gets one contradiction and a frozen
 -- neutral/no_drive row. Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
 -- (score_daily plus final driver trips of the day, deleted ones included, and their scored events).
@@ -194,6 +199,9 @@ create table public.progress (
   settled_through date null,
   -- the first safe day of the current run (the milestone dedupe key); null while the streak is 0
   streak_started date null,
+  -- (review m3) the first day that can earn: set at migration time to an existing user's local date, so
+  -- history from before rewards existed is never credited; null (a new user) = unbounded
+  rewards_start date null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -301,6 +309,23 @@ create index reward_contradictions_user_created_idx on public.reward_contradicti
 -- the retention purge's scan
 create index reward_contradictions_created_idx on public.reward_contradictions (created_at);
 
+-- (review m3) no retroactive credit: every user who exists when this migration runs starts earning on
+-- their local date of today. Days before it never get a reward row, a contradiction or a push, and the
+-- settlement frontier starts there. A user created later has no progress row yet: null, unbounded.
+-- A blocked (u13) account gets none (it holds no rewards data). Callable again (idempotent: it only
+-- fills users without a progress row); no API role executes it.
+create or replace function public.start_rewards_for_existing_users() returns int
+language plpgsql set search_path = public as $$
+declare
+  v_count int;
+begin
+  insert into public.progress (user_id, rewards_start)
+  select p.id, public.user_local_date(p.id) from public.profiles p
+  where p.age_band <> 'u13' and not exists (select 1 from public.progress pr where pr.user_id = p.id);
+  get diagnostics v_count = row_count;
+  return v_count;
+end $$;
+
 create trigger progress_touch before update on public.progress for each row execute function public.touch_updated_at();
 create trigger reward_days_touch before update on public.reward_days for each row execute function public.touch_updated_at();
 create trigger reward_due_touch before update on public.reward_due for each row execute function public.touch_updated_at();
@@ -313,6 +338,8 @@ create trigger reward_days_refuse_underage before insert on public.reward_days f
 create trigger reward_due_refuse_underage before insert on public.reward_due for each row execute function public.refuse_underage_writes();
 create trigger weekly_goals_refuse_underage before insert on public.weekly_goals for each row execute function public.refuse_underage_writes();
 create trigger reward_contradictions_refuse_underage before insert on public.reward_contradictions for each row execute function public.refuse_underage_writes();
+
+select public.start_rewards_for_existing_users();
 
 -- the four reward notifications (Task 4's live types)
 alter table public.inbox drop constraint inbox_type_check;
@@ -389,7 +416,7 @@ language sql stable set search_path = public as $$
     and (p_now >= p_wall_close + make_interval(hours => (public.reward_rules() ->> 'SETTLE_CAP_H')::int)
          or not exists (
            select 1 from public.devices d
-           where d.user_id = p_user and d.signed_out_at is null
+           where d.user_id = p_user and d.signed_out_at is null and d.synced_through is not null
              and greatest(d.last_seen_at, coalesce(d.synced_through, '-infinity'::timestamptz))
                  >= p_now - make_interval(days => (public.reward_rules() ->> 'WATERMARK_ACTIVE_D')::int)
              and coalesce(d.synced_through, '-infinity'::timestamptz) < p_wall_close))
@@ -469,6 +496,7 @@ language sql stable set search_path = public as $$
     and not exists (
       select 1 from public.score_daily sd
       where sd.user_id = p_user and sd.day between p_week_start and p_week_start + 6
+        and sd.day >= coalesce((select pr.rewards_start from public.progress pr where pr.user_id = p_user), '-infinity'::date)
         and not exists (select 1 from public.reward_days r where r.user_id = p_user and r.day = sd.day))
 $$;
 
@@ -523,15 +551,16 @@ declare
   v_earns boolean;
   v_neutral constant jsonb := '{"phone":"neutral","speeding":"neutral","braking":"neutral","accel":"neutral","cornering":"neutral","smooth":"neutral","safe":"neutral"}';
   v_days date[] := '{}';
+  v_start date;
   r record;
 begin
-  select pr.settled_through, pr.streak_days into v_frontier, v_streak from public.progress pr where pr.user_id = p_user;
+  select pr.settled_through, pr.streak_days, pr.rewards_start into v_frontier, v_streak, v_start from public.progress pr where pr.user_id = p_user;
 
   -- (rev2: I-A) a day at or behind the frontier with no reward row is never settled for value
   if v_frontier is not null then
     for v_day in
       select sd.day from public.score_daily sd
-      where sd.user_id = p_user and sd.day <= v_frontier
+      where sd.user_id = p_user and sd.day <= v_frontier and sd.day >= coalesce(v_start, '-infinity'::date)
         and not exists (select 1 from public.reward_days rd where rd.user_id = p_user and rd.day = sd.day)
       order by sd.day
     loop
@@ -549,7 +578,8 @@ begin
   end if;
 
   -- days ahead of the frontier, strictly in order: the first day not ready stops the run
-  for f in select x.* from public.reward_day_facts(p_user, coalesce(v_frontier + 1, '-infinity'::date), 'infinity'::date, p_tz) x order by x.day loop
+  for f in select x.* from public.reward_day_facts(p_user, greatest(coalesce(v_frontier + 1, '-infinity'::date), coalesce(v_start, '-infinity'::date)),
+      'infinity'::date, p_tz) x order by x.day loop
     exit when not public.reward_day_ready(p_user, f.wall_close, p_now);
     select o.outcome, o.reason into v_outcome, v_reason from public.reward_outcome(f) o;
     v_tier := public.reward_tier(f);
@@ -705,6 +735,11 @@ begin
 
   insert into public.progress (user_id) values (p_user) on conflict (user_id) do nothing;
   select pr.next_focus into v_focus from public.progress pr where pr.user_id = p_user for update;
+  -- (review n1) the chosen focus is for the week the driver is in: a past week's goal (a delayed
+  -- settlement) takes the weakest category and leaves the focus for the current week
+  if p_week_start <> date_trunc('week', (p_now at time zone coalesce(p_tz, 'UTC'))::date)::date then
+    v_focus := null;
+  end if;
   insert into public.weekly_goals (user_id, week_start, category, source, target_days)
   values (p_user, p_week_start, coalesce(v_focus, public.weakest_goal_category(p_user, p_week_start)),
     case when v_focus is not null then 'chosen' else 'weakest' end,
@@ -735,7 +770,12 @@ begin
   for v_week in select distinct date_trunc('week', d)::date from unnest(coalesce(p_days, '{}'::date[])) d order by 1 loop
     perform public.ensure_week_goal(p_user, v_week, p_tz, p_now);
   end loop;
-  for v_goal in select * from public.weekly_goals g where g.user_id = p_user and g.state = 'active' order by g.week_start loop
+  for v_goal in
+    select g.* from public.weekly_goals g
+    where g.user_id = p_user and g.state = 'active'
+      and g.week_start + 6 >= coalesce((select pr.rewards_start from public.progress pr where pr.user_id = p_user), '-infinity'::date)
+    order by g.week_start
+  loop
     select * into v_counts from public.reward_goal_counts(p_user, v_goal.week_start, v_goal.category);
     v_state := case
       when v_counts.pass_days >= v_goal.target_days then 'achieved'
@@ -844,14 +884,16 @@ declare
   v_next timestamptz;
   v_goal record;
   v_count int;
+  v_start date;
 begin
   -- lock the queue row BEFORE reading the facts: an apply_trip that committed earlier is then in the
   -- facts, and one that commits later waits for this transaction and lowers (or re-inserts) the row
   -- after it, so a new day is never lost between the read and the write
   perform 1 from public.reward_due where user_id = p_user for update;
-  select pr.settled_through into v_frontier from public.progress pr where pr.user_id = p_user;
+  select pr.settled_through, pr.rewards_start into v_frontier, v_start from public.progress pr where pr.user_id = p_user;
   select x.wall_close into v_close
-    from public.reward_day_facts(p_user, coalesce(v_frontier + 1, '-infinity'::date), 'infinity'::date, p_tz) x order by x.day limit 1;
+    from public.reward_day_facts(p_user, greatest(coalesce(v_frontier + 1, '-infinity'::date), coalesce(v_start, '-infinity'::date)),
+      'infinity'::date, p_tz) x order by x.day limit 1;
   if v_close is not null then
     v_next := public.reward_retry_at(v_close, p_now);
   end if;
@@ -864,6 +906,10 @@ begin
                array[coalesce(p_tz, 'UTC')]));
     v_next := least(v_next, public.reward_retry_at(v_close, p_now));
   end loop;
+  -- (review m2) a time at or before now is never written: the sweep would pick the user again at once
+  if v_next is not null and v_next <= p_now then
+    v_next := p_now + interval '1 minute';
+  end if;
 
   if p_lease is null then
     if v_next is null then
@@ -980,6 +1026,7 @@ declare
   v_lease timestamptz;
   v_now timestamptz;
   v_n int := 0;
+  v_done uuid[] := '{}';
   v_start timestamptz := pg_catalog.clock_timestamp();
 begin
   loop
@@ -987,7 +1034,8 @@ begin
     exit when v_n >= p_limit or pg_catalog.clock_timestamp() - v_start > interval '4 minutes';
     v_user := null;
     select d.user_id into v_user from public.reward_due d
-      where d.due_at <= pg_catalog.now() order by d.due_at limit 1 for update skip locked;
+      where d.due_at <= pg_catalog.now() and not (d.user_id = any(v_done))
+      order by d.due_at limit 1 for update skip locked;
     exit when v_user is null;
     v_lease := pg_catalog.now() + interval '10 minutes';
     update public.reward_due set due_at = v_lease where user_id = v_user;
@@ -1002,6 +1050,7 @@ begin
       perform public.reward_settle_failed(v_user, v_now, v_lease);
     end;
     commit;
+    v_done := v_done || v_user;
     v_n := v_n + 1;
   end loop;
   if v_n >= p_limit or pg_catalog.clock_timestamp() - v_start > interval '4 minutes' then
@@ -1041,17 +1090,25 @@ end $$;
 create trigger score_daily_enqueue_reward after insert or update on public.score_daily
   for each row execute function public.enqueue_reward_settlement();
 
--- §R2 relabel audit: one insert, before or after settlement
+-- §R2 relabel audit: one upsert, before or after settlement
 create or replace function public.audit_trip_relabel() returns trigger
 language plpgsql set search_path = public as $$
 begin
+  -- (security M-1) one row per (drive, target role, local day in the drive's zone): toggling a role
+  -- updates that row's lastAt and count instead of adding rows, so the table stays bounded
   insert into public.reward_contradictions (user_id, day, kind, detail, dedupe_key)
   select new.user_id, new.local_day, 'relabel_with_events',
     jsonb_build_object('tripId', new.id, 'from', old.role, 'to', new.role,
-      'daySettled', exists (select 1 from public.reward_days rd where rd.user_id = new.user_id and rd.day = new.local_day)),
-    'relabel:' || new.id || ':' || floor(extract(epoch from now()))::bigint
+      'daySettled', exists (select 1 from public.reward_days rd where rd.user_id = new.user_id and rd.day = new.local_day),
+      'firstAt', now(), 'lastAt', now(), 'count', 1),
+    'relabel:' || new.id || ':' || new.role || ':' || (now() at time zone new.tz)::date
   where exists (select 1 from public.trip_events ev where ev.trip_id = new.id and ev.status = 'scored')
-  on conflict (user_id, dedupe_key) do nothing;
+  on conflict (user_id, dedupe_key) do update
+    set detail = public.reward_contradictions.detail || jsonb_build_object(
+      'lastAt', now(),
+      'count', coalesce((public.reward_contradictions.detail ->> 'count')::int, 1) + 1,
+      'daySettled', coalesce((public.reward_contradictions.detail ->> 'daySettled')::boolean, false)
+                    or coalesce((excluded.detail ->> 'daySettled')::boolean, false));
   return null;
 end $$;
 create trigger trips_audit_relabel after update of role on public.trips
@@ -1192,7 +1249,7 @@ declare
 begin
   foreach f in array array[
     'public.reward_rules()', 'public.clamp_device_watermark()', 'public.valid_reward_predicates(jsonb)',
-    'public.freeze_reward_day()', 'public.reward_wall_close(date, text[])', 'public.reward_day_facts(uuid, date, date, text)',
+    'public.freeze_reward_day()', 'public.reward_wall_close(date, text[])', 'public.reward_day_facts(uuid, date, date, text)', 'public.start_rewards_for_existing_users()',
     'public.reward_day_ready(uuid, timestamptz, timestamptz)', 'public.reward_outcome(public.reward_fact)',
     'public.reward_tier(public.reward_fact)', 'public.reward_predicates(public.reward_fact)',
     'public.reward_fact_summary(public.reward_fact)', 'public.reward_zone_hop(uuid, timestamptz)',

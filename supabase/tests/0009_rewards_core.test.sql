@@ -18,7 +18,7 @@ begin
 end $$;
 
 begin;
-select plan(206);
+select plan(219);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -279,7 +279,7 @@ insert into public.devices (id, user_id, platform, synced_through) select 'dev-'
 -- 1. structure and conventions
 -- ---------------------------------------------------------------------------
 select columns_are('public', 'progress', array['user_id', 'points', 'xp', 'level', 'streak_days', 'best_streak', 'safe_days', 'phone_free_days',
-  'smooth_days', 'goals_achieved', 'challenges_completed', 'referrals_rewarded', 'shields', 'next_focus', 'settled_through', 'streak_started',
+  'smooth_days', 'goals_achieved', 'challenges_completed', 'referrals_rewarded', 'shields', 'next_focus', 'settled_through', 'streak_started', 'rewards_start',
   'created_at', 'updated_at']::name[], 'progress has exactly its columns');
 select columns_are('public', 'points_ledger', array['id', 'user_id', 'type', 'amount', 'ref_key', 'balance_after', 'idempotency_key', 'created_at']::name[],
   'points_ledger has exactly its columns (append-only: no updated_at)');
@@ -675,9 +675,9 @@ select pg_temp.as_service(format('select public.set_trip_role_row(%L, %L, %L)', 
   (select id from public.trips where user_id = pg_temp.u(13) and client_trip_id = 'r2'), 'passenger'));
 select pg_temp.as_service(format('select public.set_trip_role_row(%L, %L, %L)', pg_temp.u(13),
   (select id from public.trips where user_id = pg_temp.u(13) and client_trip_id = 'r3'), 'passenger'));
-select is(array(select row(c.day, c.detail - 'tripId')::text from public.reward_contradictions c where c.user_id = pg_temp.u(13) and c.kind = 'relabel_with_events' order by c.day),
-  array[row(date '2026-06-01', '{"from":"driver","to":"passenger","daySettled":false}'::jsonb)::text,
-        row(date '2026-06-02', '{"from":"driver","to":"passenger","daySettled":true}'::jsonb)::text],
+select is(array(select row(c.day, c.detail - 'tripId' - 'firstAt' - 'lastAt')::text from public.reward_contradictions c where c.user_id = pg_temp.u(13) and c.kind = 'relabel_with_events' order by c.day),
+  array[row(date '2026-06-01', '{"from":"driver","to":"passenger","daySettled":false,"count":1}'::jsonb)::text,
+        row(date '2026-06-02', '{"from":"driver","to":"passenger","daySettled":true,"count":1}'::jsonb)::text],
   'a relabel of a drive with scored events is audited before and after settlement; a drive with no scored events is not');
 
 -- ---------------------------------------------------------------------------
@@ -990,7 +990,8 @@ select is(public.set_weekly_focus('braking') #>> '{applied}', 'next_week', 'afte
 select throws_ok($$ select public.set_weekly_focus('bogus') $$, '22023', 'unknown focus', 'an unknown focus is refused');
 reset role;
 select set_config('request.jwt.claims', '', true);
-select public.ensure_week_goal(pg_temp.u(49), date_trunc('week', (now() at time zone 'UTC')::date)::date + 7, 'UTC', now());
+select public.ensure_week_goal(pg_temp.u(49), date_trunc('week', (now() at time zone 'UTC')::date)::date + 7, 'UTC',
+  (date_trunc('week', (now() at time zone 'UTC')::date)::date + 7)::timestamp at time zone 'UTC' + interval '1 hour');
 select is((select array_agg(category order by week_start) from public.weekly_goals w where w.user_id = pg_temp.u(49)),
   array['speeding', 'braking'], 'next week''s goal takes the chosen focus');
 select is((select next_focus from public.progress where user_id = pg_temp.u(49)), null, 'and consumes it');
@@ -1152,6 +1153,73 @@ select throws_ok($$ select public.open_my_week() $$, '42501', 'account not eligi
 select throws_ok($$ select public.set_weekly_focus('phone') $$, '42501', 'account not eligible', 'nor set a focus');
 reset role;
 select set_config('request.jwt.claims', '', true);
+
+-- ---------------------------------------------------------------------------
+-- 18. fix round 1
+-- ---------------------------------------------------------------------------
+-- (security M-1) toggling a drive's role adds at most one row per target role and day
+select pg_temp.mkuser(95);
+select pg_temp.as_service(format('select public.apply_trip(%L::jsonb)', pg_temp.env(pg_temp.u(95), 't1', date '2026-06-01', 80, 20, false, false, 1)::text));
+do $$
+begin
+  perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
+  for i in 1 .. 10 loop
+    perform public.set_trip_role_row(pg_temp.u(95), (select id from public.trips where user_id = pg_temp.u(95)),
+      case when i % 2 = 1 then 'passenger' else 'driver' end);
+  end loop;
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+select is(array(select row(c.detail ->> 'to', (c.detail ->> 'count')::int)::text from public.reward_contradictions c
+    where c.user_id = pg_temp.u(95) and c.kind = 'relabel_with_events' order by c.detail ->> 'to'),
+  array[row('driver', 5)::text, row('passenger', 5)::text], 'ten role toggles keep one counted row per target role and day (security M-1)');
+select is((select count(*)::int from public.reward_contradictions c where c.user_id = pg_temp.u(95) and c.detail ?& array['firstAt', 'lastAt']), 2,
+  'each keeps its first and last time');
+-- (review m1) a device that has never reported a watermark does not hold a day
+select pg_temp.mkuser(92);
+select pg_temp.drove(pg_temp.u(92), date '2026-06-01', true);
+insert into public.devices (id, user_id, platform, synced_through, last_seen_at) values ('w92', pg_temp.u(92), 'ios', null, pg_temp.la_close(date '2026-06-01'));
+select pg_temp.settle(pg_temp.u(92), pg_temp.la_close(date '2026-06-01'));
+select is((select count(*)::int from public.reward_days where user_id = pg_temp.u(92)), 1,
+  'an active device with a null synced_through (a build that does not report) settles at the wall close');
+-- (review m2) a computed schedule at or before now becomes now + 1 minute; the procedure never takes one user twice
+select pg_temp.mkuser(93);
+select pg_temp.drove(pg_temp.u(93), date '2026-06-01', true);
+select is(public.schedule_next_settle(pg_temp.u(93), 'America/Los_Angeles', pg_temp.late(), null), pg_temp.late() + interval '1 minute',
+  'a schedule that would be at or before now is written as now + 1 minute');
+select is((select due_at from public.reward_due where user_id = pg_temp.u(93)), pg_temp.late() + interval '1 minute', 'and stored so');
+select ok(pg_get_functiondef('public.settle_due_rewards(int)'::regprocedure) ~ 'not \(d\.user_id = any\(v_done\)\)',
+  'the procedure skips a user it already settled in this run');
+-- (review n1) settling a past week's goal leaves the focus for the current week
+select pg_temp.mkuser(94);
+insert into public.progress (user_id, next_focus) values (pg_temp.u(94), 'braking');
+select pg_temp.drove(pg_temp.u(94), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(94), pg_temp.late());
+select is((select row(g.category, g.source, pr.next_focus)::text from public.weekly_goals g join public.progress pr on pr.user_id = g.user_id where g.user_id = pg_temp.u(94)),
+  row('phone', 'weakest', 'braking')::text, 'a past week''s goal takes the weakest category and the focus stays for the current week');
+-- (review m3) no retroactive credit: existing users start today; history before it earns nothing
+select pg_temp.mkuser(90);
+select pg_temp.mkuser(91);
+select pg_temp.drove(pg_temp.u(90), d::date, true) from generate_series(date '2026-06-01', date '2026-06-30', interval '1 day') d;
+select public.start_rewards_for_existing_users();
+select is((select rewards_start from public.progress where user_id = pg_temp.u(90)), public.user_local_date(pg_temp.u(90)),
+  'an existing user starts on their local date of today');
+select is((select count(*)::int from public.progress where user_id = pg_temp.u(4)), 0, 'a u13 account gets no progress row');
+update public.progress set rewards_start = date '2026-07-01' where user_id = pg_temp.u(90);
+delete from public.progress where user_id = pg_temp.u(91);
+select pg_temp.drove(pg_temp.u(90), d::date, true) from generate_series(date '2026-07-01', date '2026-07-02', interval '1 day') d;
+select pg_temp.settle(pg_temp.u(90), pg_temp.late());
+select is((select array_agg(day order by day) from public.reward_days where user_id = pg_temp.u(90)), array[date '2026-07-01', date '2026-07-02'],
+  'thirty days of history before rewards_start get no reward row; the days from it settle normally');
+select is(array[(select count(*)::int from public.points_ledger where user_id = pg_temp.u(90) and type <> 'weekly_goal' and ref_key < '2026-07-01'),
+    (select count(*)::int from public.reward_contradictions where user_id = pg_temp.u(90)),
+    (select count(*)::int from public.inbox where user_id = pg_temp.u(90) and type <> 'trip_summary' and payload ->> 'reachedOn' < '2026-07-01')],
+  array[0, 0, 0], 'no credit, no contradiction and no push for any day before it');
+select is((select array_agg(row(week_start, state, prorated)::text order by week_start) from public.weekly_goals where user_id = pg_temp.u(90)),
+  array[row(date '2026-06-29', 'achieved', true)::text], 'no goal for weeks before it; the week it starts in closes on its own days');
+select pg_temp.drove(pg_temp.u(91), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(91), pg_temp.late());
+select is((select row(pr.rewards_start, (select count(*)::int from public.reward_days r where r.user_id = pr.user_id))::text from public.progress pr where pr.user_id = pg_temp.u(91)),
+  row(null::date, 1)::text, 'a user created after the migration is unbounded');
 
 select * from finish();
 rollback;

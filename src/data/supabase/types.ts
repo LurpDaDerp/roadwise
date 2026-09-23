@@ -590,6 +590,7 @@ export type Database = {
           phone_free_days: number
           points: number
           referrals_rewarded: number
+          rewards_start: string | null
           safe_days: number
           settled_through: string | null
           shields: number
@@ -610,6 +611,7 @@ export type Database = {
           phone_free_days?: number
           points?: number
           referrals_rewarded?: number
+          rewards_start?: string | null
           safe_days?: number
           settled_through?: string | null
           shields?: number
@@ -630,6 +632,7 @@ export type Database = {
           phone_free_days?: number
           points?: number
           referrals_rewarded?: number
+          rewards_start?: string | null
           safe_days?: number
           settled_through?: string | null
           shields?: number
@@ -1444,6 +1447,7 @@ export type Database = {
         }[]
       }
       speed_limit_tiles: { Args: { p_keys: string[] }; Returns: Json }
+      start_rewards_for_existing_users: { Args: never; Returns: number }
       take_global_rate_limit: {
         Args: { p_key: string; p_max: number; p_window: string }
         Returns: boolean
