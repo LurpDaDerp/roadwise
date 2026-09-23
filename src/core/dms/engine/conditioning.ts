@@ -250,6 +250,11 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
           closed = false;
         }
         lastTrackedClosedMs = closed ? f.tMs - closedSince : 0;
+      } else if (q.quality === 'tracking') {
+        // TRACKING without an openness (e.g. past 25° yaw with the near eye unusable) ends the closure
+        // silently, as before C-26: a bridge starts and holds only on HEAD_ONLY/LOST frames (T9 r1 nit).
+        if (bridged) bridgeEnded = true;
+        else closed = false;
       } else if (bridged) {
         // Keep: every LOST frame; a HEAD_ONLY frame only with the head still down and no turn evidence.
         const capped = f.tMs - bridgeStart > cl.bridgeMaxS * 1000 + 1e-6;

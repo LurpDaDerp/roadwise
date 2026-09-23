@@ -9,7 +9,9 @@
 // C-26 (T9 review I1): the deepest nods lose the face. A gap of LOST or null-pitch frames of at most
 // `recoverWithinS` during the drop or after the depth is survived; on reappearance the pitch speed is
 // taken across the gap (the last pitch before it to the first after). The gap counts toward the
-// openness hold only when the conditioner bridged the closure through it.
+// openness hold only when the conditioner bridged the closure through it. A nod whose depth is never
+// observed (the face lost before the drop reaches 15° and back near level on its return) goes unreported
+// by design: the C-26 closure bridge in the conditioner, not this detector, is the Critical path there.
 import type { DmsConfig } from './config';
 import type { Quality } from './quality';
 

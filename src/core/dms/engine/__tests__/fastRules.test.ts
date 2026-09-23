@@ -198,6 +198,27 @@ describe('closure bridging (C-26, T9 review I1)', () => {
     expect(r.kinds).toContain('microsleep');
     expect(r.kinds).not.toContain('blink');
   });
+  test('T9 r1 nit: a TRACKING frame without an openness never starts or keeps a bridge; it ends the closure silently', () => {
+    // Past 25° yaw the near eye alone measures closure; a glared near eye leaves TRACKING (the far eye
+    // usable) with no openness. The yaw is held throughout, so no turn evidence is involved.
+    const turned = (pitch: number, nearGlare: boolean): Partial<FrameSpec> => ({
+      ...head(pitch, 30),
+      ear: ear(0.1),
+      eyeR: { widthPx: 40, ...(nearGlare ? { sat: 0.5 } : {}) },
+      eyeL: { widthPx: 20 },
+    });
+    const start = run((t) => (t < 1 ? head(-10, 30) : t < 1.8 ? turned(-10, false) : turned(-10, true)), 3);
+    expect(at(start, 1.7).eyesClosed).toBe(true);
+    expect(at(start, 2).quality).toBe('tracking');
+    expect(at(start, 2).openness).toBeNull();
+    expect(start.some((p) => p.closureBridged)).toBe(false);
+    expect(at(start, 2).eyesClosed).toBe(false);
+    // Keep: a bridge started by a LOST frame ends on the first TRACKING frame without an openness.
+    const keep = run((t) => (t < 1 ? head(-10, 30) : t < 1.8 ? turned(-10, false) : t < 2.2 ? LOST : turned(-10, true)), 3);
+    expect(at(keep, 2).closureBridged).toBe(true);
+    expect(keep.filter((p) => p.quality === 'tracking').some((p) => p.closureBridged)).toBe(false);
+    expect(at(keep, 2.5).eyesClosed).toBe(false);
+  });
   test('the eye tier holds through a bridge: the face back closed 11 s after the last iris is still TRACKING', () => {
     const ps = run((t) => (t < 1 ? {} : t < 3 ? { ...head(-10), ear: ear(0.1) } : t < 12 ? LOST : { ...head(-10), ear: ear(0.1) }), 13);
     expect(at(ps, 11.9).closureBridged).toBe(true);
