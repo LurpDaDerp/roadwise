@@ -238,6 +238,10 @@ export interface DmsConfig {
     farLateralAfterTurnS: number;
     /** C-18: a fast head turn, °/s */
     fastTurnDegS: number;
+    /** C-8 (rev0): the fast turn must fall within this long before the loss… */
+    fastTurnWindowMs: number;
+    /** …or the last relative head yaw must exceed this */
+    lostLateralYawDeg: number;
     /** §M4 zone learning */
     fixationMaxDispersionDeg: number;
     fixationMinMs: number;
@@ -536,6 +540,8 @@ const DEFAULT: DmsConfig = {
     curveMaxExtendDeg: 15,
     farLateralAfterTurnS: 5,
     fastTurnDegS: 100,
+    fastTurnWindowMs: 300,
+    lostLateralYawDeg: 45,
     fixationMaxDispersionDeg: 2,
     fixationMinMs: 200,
     fixationsPerDrive: 600,
@@ -787,6 +793,9 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
     }
   }
   if (!(c.zones.widenCapDeg >= c.zones.widenDeg)) bad('zones.widenCapDeg', 'must be ≥ widenDeg');
+  // Hysteresis shrinks a zone by its width when entering it: it must leave every rectangle a core.
+  const halfSpans = (c.zones.table ?? []).flatMap((z) => (z.region.kind === 'rect' ? [(z.region.yaw[1] - z.region.yaw[0]) / 2, (z.region.pitch[1] - z.region.pitch[0]) / 2] : []));
+  if (halfSpans.length > 0 && !(c.zones.hysteresisDeg < Math.min(...halfSpans))) bad('zones.hysteresisDeg', 'must be smaller than half of every rectangular zone');
   for (const k of ['curveRows', 'dbscanMinPts', 'drivesToAdopt', 'fixationsPerDrive'] as const) {
     if (!Number.isInteger(c.zones[k]) || c.zones[k] < 1) bad(`zones.${k}`, 'must be a positive integer');
   }
