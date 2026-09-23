@@ -319,3 +319,23 @@ test('the gaze net is created at start whenever the build has it; gazeNetWanted 
 test('AppActivity reads the state synchronously when created on the main thread (round-1 nit)', () => {
   expect(code('AppActivity.swift')).toContain('if Thread.isMainThread');
 });
+
+describe('final review (integration minors), iOS', () => {
+  test('M-4: the cadence is re-applied only when the cap changes, never on every heartbeat', () => {
+    const fn = body(code('CaptureController.swift'), 'applyCadence');
+    expect(fn).toMatch(/if appliedCap == cap \{ return \}/);
+    expect(fn).toMatch(/appliedCap = cap/);
+    expect(body(code('CaptureController.swift'), 'teardown')).toMatch(/appliedCap = nil/);
+  });
+  test('M-5: getStatus (take: false) reads the thermal state and Low Power live', () => {
+    const fn = body(code('CaptureControllerLifecycle.swift'), 'snapshot');
+    expect(fn).toMatch(/s\["thermal"\] = CaptureController\.thermalName\(\)/);
+    expect(fn).toMatch(/s\["lowPower"\] = ProcessInfo\.processInfo\.isLowPowerModeEnabled/);
+  });
+  test('M-6: a runtime error, or a resume that does not start the session, holds the pause (no 1 Hz resume loop)', () => {
+    expect(body(code('CaptureControllerLifecycle.swift'), 'onRuntimeError')).toMatch(/self\.interrupted = true/);
+    const fn = body(code('CaptureController.swift'), 'resume');
+    expect(fn).toMatch(/if !\(session\?\.isRunning \?\? false\)/);
+    expect(fn).toMatch(/interrupted = true/);
+  });
+});

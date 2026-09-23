@@ -161,6 +161,15 @@ describe('arguments are refused before the bridge (E_BAD_ARGS)', () => {
     expect(mockNative.start).not.toHaveBeenCalled();
   });
 
+  test('final review n-1: the refusal message never carries the gate token', async () => {
+    const secret = 'gate-token-9f3a1c7e';
+    const err = await DmsVision.start({ ...START, gateToken: secret, fps: 12 } as unknown as StartOptions).catch((e: Error) => e);
+    expect((err as Error).message).not.toContain(secret);
+    const err2 = await DmsVision.setPolicy({ ...POLICY, gateToken: secret, fps: 0 } as unknown as CapturePolicy).catch((e: Error) => e);
+    expect((err2 as Error).message).not.toContain(secret);
+    expect((err2 as Error).message).toContain('[redacted]');
+  });
+
   test.each([
     ['capture "stop"', { ...POLICY, capture: 'stop' }],
     ['fps 0', { ...POLICY, fps: 0 }],

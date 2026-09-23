@@ -50,9 +50,13 @@ fun CaptureController.emitState(s: String, reason: String) {
   onState?.invoke(s, reason)
 }
 
+/** Final review M-4: a new repeating request only when the cap or the camera changed (some HALs re-converge AE on one). */
 fun CaptureController.applyCadence() {
   val cam = camera ?: return
   val cap = locked { min(fps, thermal.fpsCap) }
+  if (cap == appliedCap && cam === appliedCamera) return
+  appliedCap = cap
+  appliedCamera = cam
   if (cap > 0) CameraSetup.applyCadence(cam, cap)
 }
 
@@ -262,7 +266,8 @@ internal fun CaptureController.snapshot(take: Boolean): Map<String, Any?> {
   val lowPower = CameraSetup.lowPower(context)
   return locked {
     val last = lastStatus
-    if (!take && last != null) return@locked last + ("state" to state)
+    // Final review M-5: between ticks (getStatus) the thermal state and Low Power are read live.
+    if (!take && last != null) return@locked last + ("state" to state) + ("thermal" to thermalName) + ("lowPower" to lowPower)
     val running = state == "running"
     val lm = latLandmark.take()
     val gz = latGaze.take()

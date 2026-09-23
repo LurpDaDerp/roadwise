@@ -399,3 +399,29 @@ test('after an in-flight timeout the next frame gets a fresh bitmap; the old one
   expect(body(fb, 'release')).toMatch(/for \(\(_, b\) in abandoned\) b\.recycle\(\)/);
   expect(fb).toContain('const val MAX_ABANDONED = 4');
 });
+
+describe('final review (integration minors), Android', () => {
+  const lifecycle = () => code('CaptureControllerLifecycle.kt');
+  const cc = () => code('CaptureController.kt');
+  test('M-4: the cadence is re-sent only when the cap (or the camera) changes, never on every heartbeat', () => {
+    const fn = body(lifecycle(), 'applyCadence');
+    expect(fn).toMatch(/if \(cap == appliedCap && cam === appliedCamera\) return/);
+    expect(fn).toMatch(/appliedCap = cap/);
+    expect(body(cc(), 'teardown')).toMatch(/appliedCap = null/);
+  });
+  test('M-5: getStatus (take = false) reads the thermal state and Low Power live', () => {
+    const fn = body(lifecycle(), 'snapshot');
+    expect(fn).toMatch(/last \+ \("state" to state\) \+ \("thermal" to thermalName\) \+ \("lowPower" to lowPower\)/);
+  });
+  test('M-6: a failed re-bind keeps the pause clock and holds the session (no 1 Hz retry): the host recovers by stop/start', () => {
+    const fn = body(cc(), 'resume');
+    expect(fn).toMatch(/pausedSinceMs = pausedWas \?: nowMs\(\)/);
+    expect(fn).toMatch(/interrupted = true/);
+  });
+  test('M-7: the AE range contains the policy fps when one is advertised (lower ≤ fps ≤ upper, the smallest upper), else the old rule', () => {
+    const src = code('CameraSetup.kt');
+    const fn = body(src, 'chooseFpsRange');
+    expect(fn).toMatch(/range\.lower <= fps && fps <= range\.upper/);
+    expect(body(src, 'applyCadence')).toContain('chooseFpsRange(');
+  });
+});

@@ -64,6 +64,7 @@ class CaptureController(internal val context: Context) {
   internal var provider: ProcessCameraProvider? = null
   internal var owner: LifecycleOwner? = null
   internal var camera: Camera? = null
+  internal var appliedCap: Int? = null; internal var appliedCamera: Camera? = null // the AE cap last sent (final review M-4)
   internal var analysisUseCase: ImageAnalysis? = null
   internal var previewUseCase: Preview? = null
   internal var bound = false
@@ -212,7 +213,7 @@ class CaptureController(internal val context: Context) {
   }
 
   fun resume() {
-    locked { pausedSinceMs = null }
+    val pausedWas = locked { pausedSinceMs.also { pausedSinceMs = null } }
     onAnalysis {
       batcher.clear()
       inFlight?.release()
@@ -220,9 +221,8 @@ class CaptureController(internal val context: Context) {
       lastAcceptedMs = -1.0
     }
     if (!bound) {
-      try {
-        bindCamera()
-      } catch (_: Exception) {
+      try { bindCamera() } catch (_: Exception) {
+        locked { pausedSinceMs = pausedWas ?: nowMs(); interrupted = true } // final review M-6: hold the pause; the host recovers by stop/start
         DmsLog.code(DmsLog.Code.CAMERA_ERROR)
         return
       }
@@ -265,7 +265,7 @@ class CaptureController(internal val context: Context) {
     provider = null
     owner = null
     sensor = null
-    locked { token = null; pausedSinceMs = null; setupMode = false; previewAllowed = false; interrupted = false }
+    locked { token = null; pausedSinceMs = null; setupMode = false; previewAllowed = false; interrupted = false; appliedCap = null; appliedCamera = null }
   }
 
   fun flushBatch() {

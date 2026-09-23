@@ -52,7 +52,14 @@ extension CaptureController {
   /// The status payload. `take` consumes the latency windows and the counters (the 1 Hz tick only).
   func snapshot(take: Bool) -> [String: Any?] {
     return locked {
-      if !take, let last = lastStatus { var s = last; s["state"] = state; return s }
+      if !take, let last = lastStatus {
+        // Final review M-5: between ticks (getStatus) the thermal state and Low Power are read live.
+        var s = last
+        s["state"] = state
+        s["thermal"] = CaptureController.thermalName()
+        s["lowPower"] = ProcessInfo.processInfo.isLowPowerModeEnabled
+        return s
+      }
       let running = state == "running"
       let lm = latLandmark.take(), gz = latGaze.take(), tot = latTotal.take()
       var usage = rusage()
@@ -118,8 +125,13 @@ extension CaptureController {
     sessionQueue.async { self.locked { self.interrupted = false } }
   }
 
+  /// Final review M-6: an error holds the pause like an interruption (no resume on every heartbeat); the host
+  /// recovers by stop() then start(), which clears it.
   @objc func onRuntimeError() {
-    sessionQueue.async { if self.currentState == "running" { self.pause("error"); DmsLog.code(.cameraRuntimeError) } }
+    sessionQueue.async {
+      self.locked { self.interrupted = true }
+      if self.currentState == "running" { self.pause("error"); DmsLog.code(.cameraRuntimeError) }
+    }
   }
 
   @objc func onThermal() {

@@ -50,6 +50,26 @@ object CameraSetup {
    * fixed range stops auto-exposure from stretching the exposure in low light). Returns the range
    * sent, or null when the camera keeps its own (the software throttle still holds the cadence).
    */
+  /**
+   * Final review M-7: prefer a range that CONTAINS the policy fps (lower ≤ fps ≤ upper), the smallest upper
+   * (so [5,15] or [7,15] at 5 fps rather than [15,15]: the sensor, and CameraX's RGBA conversion, run no
+   * faster than needed); failing that, the old rule: the smallest upper ≥ fps, then the highest lower.
+   */
+  fun chooseFpsRange(available: Array<Range<Int>>, fps: Int): Range<Int>? {
+    var containing: Range<Int>? = null
+    var best: Range<Int>? = null
+    for (range in available) {
+      if (range.upper < fps) continue
+      if (range.lower <= fps && fps <= range.upper) {
+        val c = containing
+        if (c == null || range.upper < c.upper || (range.upper == c.upper && range.lower > c.lower)) containing = range
+      }
+      val current = best
+      if (current == null || range.upper < current.upper || (range.upper == current.upper && range.lower > current.lower)) best = range
+    }
+    return containing ?: best
+  }
+
   @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
   fun applyCadence(camera: Camera, fps: Int): Range<Int>? {
     val available = try {
@@ -57,13 +77,7 @@ object CameraSetup {
     } catch (_: Exception) {
       null
     } ?: return null
-    var best: Range<Int>? = null
-    for (range in available) {
-      if (range.upper < fps) continue
-      val current = best
-      if (current == null || range.upper < current.upper || (range.upper == current.upper && range.lower > current.lower)) best = range
-    }
-    val wanted = best ?: return null
+    val wanted = chooseFpsRange(available, fps) ?: return null
     return try {
       Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(
         CaptureRequestOptions.Builder().setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, wanted).build()

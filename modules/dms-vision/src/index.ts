@@ -62,6 +62,11 @@ function safeJson(v: unknown): string {
   }
 }
 
+/** The arguments with any `gateToken` replaced (final review n-1: an error message never carries the token). */
+function redact(args: readonly unknown[]): unknown[] {
+  return args.map((a) => (typeof a === 'object' && a !== null && 'gateToken' in a ? { ...(a as object), gateToken: '[redacted]' } : a));
+}
+
 type Parser<T> = { safeParse(v: unknown): { success: true; data: T } | { success: false } };
 
 const voidResult: Parser<void> = {
@@ -79,7 +84,7 @@ async function call<T>(
   result: Parser<T> | z.ZodType<T>
 ): Promise<T> {
   if (!native) throw dmsVisionError('E_UNAVAILABLE', UNAVAILABLE);
-  if (!argsOk) throw dmsVisionError('E_BAD_ARGS', `DmsVision.${method}: invalid arguments ${safeJson(args)}`);
+  if (!argsOk) throw dmsVisionError('E_BAD_ARGS', `DmsVision.${method}: invalid arguments ${safeJson(redact(args))}`);
   const fn = native[method] as (...a: readonly unknown[]) => Promise<unknown>;
   const raw = await fn(...args);
   const parsed = (result as Parser<T>).safeParse(raw);

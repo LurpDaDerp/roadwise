@@ -37,6 +37,8 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
   var processed = 0, dropped = 0
   var latLandmark = LatencyWindow(), latGaze = LatencyWindow(), latTotal = LatencyWindow()
   var lastStatus: [String: Any?]?
+  /// The frame-rate cap last applied (final review M-4: the device is reconfigured only on a change).
+  var appliedCap: Int?
   var cpuPrevMs: Double?, cpuPrevWallMs = 0.0
   /// Between AVCaptureSessionWasInterrupted and …InterruptionEnded: a `run` policy does not resume
   /// until the interruption has ended (Task 3 review m3).
@@ -174,6 +176,13 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     locked { pausedSinceMs = nil }
     videoQueue.sync { self.batcher.clear(); self.inFlight = nil; self.lastAcceptedMs = -1 }
     session?.startRunning()
+    if !(session?.isRunning ?? false) {
+      // Final review M-6: a session that will not start holds the pause (no 1 Hz resume loop); the host
+      // recovers by stop() then start().
+      locked { interrupted = true; pausedSinceMs = CaptureController.hostMs() }
+      DmsLog.code(.cameraRuntimeError)
+      return
+    }
     setState("running", "policy")
     updatePreview()
     DmsLog.code(.sessionResumed)
@@ -195,6 +204,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     lmk?.close()
     net?.close()
     locked { token = nil; pausedSinceMs = nil; setupMode = false; previewAllowed = false; interrupted = false }
+    appliedCap = nil
     updatePreview()
   }
 
@@ -210,6 +220,8 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
   func applyCadence() {
     guard let d = device else { return }
     let cap = locked { min(fps, thermal.fpsCap) }
+    if appliedCap == cap { return }
+    appliedCap = cap
     if cap > 0 { CaptureSetup.applyCadence(d, fps: Double(cap)) }
   }
 
