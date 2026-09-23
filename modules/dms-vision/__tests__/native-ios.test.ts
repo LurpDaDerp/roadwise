@@ -246,3 +246,49 @@ test('the gaze net and ONNX Runtime live only in GazeNet/ (behind the build swit
   expect(net).toContain('static let available = true');
   expect(code('GazeNetStub/GazeNet.swift')).toContain('static let available = false');
 });
+
+/** The body of `func name(` in the controller, up to the next top-level member. */
+function body(src: string, name: string): string {
+  const start = src.indexOf(`func ${name}(`);
+  expect({ name, found: start >= 0 }).toEqual({ name, found: true });
+  const next = src.slice(start + 1).search(/\n  (?:func |var |let |@objc |static |\/\/ MARK)/);
+  return next < 0 ? src.slice(start) : src.slice(start, start + 1 + next);
+}
+
+test('the batcher flushes predictively, with no timer (Task 3 review I1)', () => {
+  expect(code('RecordEncoder.swift')).toContain('nowMs - startedAtMs + intervalMs >= Double(DmsConstants.BATCH_MS)');
+  expect(code('CaptureController.swift')).toMatch(/batcher\.isDue\(nowMs: now, intervalMs: /);
+  const self = code('SelfTest.swift');
+  expect(self).toContain('case "batcher"');
+  expect(self).toContain('Batcher()');
+});
+
+test('pause: paused under the lock, then capture stops, then the flush, then the event; resume starts a fresh batch (Task 3 review m1)', () => {
+  const p = body(code('CaptureController.swift'), 'pause');
+  const order = ['state = "paused"', 'stopRunning()', 'flushBatch()', 'emitState("paused"'].map((s) => p.indexOf(s));
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+  expect(body(code('CaptureController.swift'), 'resume')).toContain('batcher.clear()');
+  // Stop has the same order: stopped first, the flush inside teardown after the session stops.
+  const t = body(code('CaptureController.swift'), 'teardown');
+  expect(t.indexOf('stopRunning()')).toBeLessThan(t.indexOf('flushBatch()'));
+  expect(body(code('CaptureController.swift'), 'stop')).toMatch(/state = "stopped"[\s\S]*teardown\(\)[\s\S]*emitState\("stopped"/);
+  // A result that lands after the pause is dropped.
+  expect(body(code('CaptureController.swift'), 'handleResult')).toContain('guard locked({ state == "running" }) else { return }');
+});
+
+test('a lost landmarker callback holds capture for at most max(3 intervals, 250 ms) (Task 3 review m2)', () => {
+  expect(code('CaptureController.swift')).toContain('max(3 * interval, 250)');
+  expect(code('CaptureController.swift')).not.toMatch(/f\.ptsMs < 1000/);
+});
+
+test('an interruption holds the pause until it ends: no resume churn (Task 3 review m3)', () => {
+  const cc = controller();
+  expect(cc).toContain('.AVCaptureSessionInterruptionEnded');
+  expect(body(code('CaptureController.swift'), 'applyPolicy')).toMatch(/!interrupted/);
+});
+
+test('start reads a cached foreground flag, never main.sync (Task 3 review nit)', () => {
+  expect(allCode()).not.toContain('DispatchQueue.main.sync');
+  expect(code('DmsVisionModule.swift')).toContain('AppActivity.shared.isActive');
+});

@@ -98,6 +98,28 @@ const vectorSchema = z.discriminatedUnion('kind', [
     }),
     expected: z.strictObject({ cases: z.array(z.strictObject({ gaze: z.array(num).length(3), rotation: z.array(num).length(9) })) }),
   }),
+  z.strictObject({
+    ...base,
+    kind: z.literal('batcher'),
+    inputs: z.strictObject({
+      cases: z.array(
+        z.strictObject({
+          intervalMs: num,
+          epochOffsetMs: num,
+          frames: z.array(z.strictObject({ tMs: num, nowMs: num })),
+        })
+      ),
+    }),
+    expected: z.strictObject({
+      cases: z.array(
+        z.strictObject({
+          flushes: z.array(
+            z.strictObject({ after: z.number().int(), n: z.number().int(), anchorTMs: num, anchorEpochMs: num })
+          ),
+        })
+      ),
+    }),
+  }),
 ]);
 
 /** Validate parsed vector files; throws with the first problem. */
@@ -257,6 +279,30 @@ export function diffSelfTest(vectors: readonly GoldenVector[], outputJson: strin
         v.expected.cases.forEach((e, i) => {
           d.nums(`cases[${i}].gaze`, cases[i]!.gaze, e.gaze);
           d.nums(`cases[${i}].rotation`, cases[i]!.rotation, e.rotation);
+        });
+        break;
+      }
+      case 'batcher': {
+        // Which append flushed, and how many records went: exact. The anchor times: to the time bound.
+        const cases = r.cases as { flushes: unknown }[] | undefined;
+        if (!Array.isArray(cases) || cases.length !== v.expected.cases.length) {
+          d.push({ path: 'cases.length', expected: v.expected.cases.length, actual: Array.isArray(cases) ? cases.length : undefined });
+          break;
+        }
+        v.expected.cases.forEach((e, i) => {
+          const flushes = cases[i]!.flushes as { after: unknown; n: unknown; anchorTMs: unknown; anchorEpochMs: unknown }[];
+          if (!Array.isArray(flushes) || flushes.length !== e.flushes.length) {
+            d.push({ path: `cases[${i}].flushes.length`, expected: e.flushes.length, actual: Array.isArray(flushes) ? flushes.length : undefined });
+            return;
+          }
+          e.flushes.forEach((f, k) => {
+            const a = flushes[k]!;
+            const p = `cases[${i}].flushes[${k}]`;
+            if (a.after !== f.after) d.push({ path: `${p}.after`, expected: f.after, actual: typeof a.after === 'number' ? a.after : undefined });
+            if (a.n !== f.n) d.push({ path: `${p}.n`, expected: f.n, actual: typeof a.n === 'number' ? a.n : undefined });
+            d.nums(`${p}.anchorTMs`, [a.anchorTMs], [f.anchorTMs], 0);
+            d.nums(`${p}.anchorEpochMs`, [a.anchorEpochMs], [f.anchorEpochMs], 0);
+          });
         });
         break;
       }

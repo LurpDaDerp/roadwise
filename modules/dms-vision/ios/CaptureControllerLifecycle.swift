@@ -91,6 +91,7 @@ extension CaptureController {
   func addObservers(_ s: AVCaptureSession) {
     let c = NotificationCenter.default
     c.addObserver(self, selector: #selector(onInterrupted), name: .AVCaptureSessionWasInterrupted, object: s)
+    c.addObserver(self, selector: #selector(onInterruptionEnded), name: .AVCaptureSessionInterruptionEnded, object: s)
     c.addObserver(self, selector: #selector(onRuntimeError), name: .AVCaptureSessionRuntimeError, object: s)
     c.addObserver(self, selector: #selector(onThermal), name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
     c.addObserver(self, selector: #selector(onOrientation), name: UIDevice.orientationDidChangeNotification, object: nil)
@@ -106,7 +107,15 @@ extension CaptureController {
   }
 
   @objc func onInterrupted() {
-    sessionQueue.async { if self.currentState == "running" { self.pause("interrupted"); DmsLog.code(.cameraInterrupted) } }
+    sessionQueue.async {
+      self.locked { self.interrupted = true }
+      if self.currentState == "running" { self.pause("interrupted"); DmsLog.code(.cameraInterrupted) }
+    }
+  }
+
+  /// Never resumes by itself: the next `run` policy from JS does (Task 3 review m3).
+  @objc func onInterruptionEnded() {
+    sessionQueue.async { self.locked { self.interrupted = false } }
   }
 
   @objc func onRuntimeError() {

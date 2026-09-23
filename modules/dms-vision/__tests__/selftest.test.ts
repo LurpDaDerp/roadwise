@@ -8,6 +8,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   recordBatchOutput,
+  runBatcherVector,
   runGazeInputsVector,
   runHeadPoseVector,
   runStatsTrackerVector,
@@ -39,6 +40,8 @@ function nativeResult(v: GoldenVector, gazeNet: boolean): Record<string, unknown
       return { ...head, poses: runHeadPoseVector(v.inputs) };
     case 'onnx':
       return gazeNet ? { ...head, cases: v.expected.cases } : { ...head, skipped: 'gaze net not built' };
+    case 'batcher':
+      return { ...head, cases: runBatcherVector(v.inputs) };
   }
 }
 
@@ -147,4 +150,38 @@ test('base64 round trip', () => {
   const bytes = Uint8Array.from({ length: 1000 }, (_, i) => (i * 37) % 256);
   for (const n of [0, 1, 2, 3, 999, 1000]) expect(base64ToBytes(bytesToBase64(bytes.slice(0, n)))).toEqual(bytes.slice(0, n));
   expect(bytesToBase64(new Uint8Array([104, 105]))).toBe('aGk=');
+});
+
+test('a port that keeps the rejected flush rule (flush on a later frame once BATCH_MS old) fails the batcher vector', () => {
+  const results = faithful(true);
+  const i = vectors.findIndex((v) => v.kind === 'batcher');
+  const v = vectors[i]!;
+  if (v.kind !== 'batcher') throw new Error('kind');
+  const late = v.inputs.cases.map((c) => {
+    const flushes: { after: number; n: number; anchorTMs: number; anchorEpochMs: number }[] = [];
+    let first = -1;
+    c.frames.forEach((f, k) => {
+      if (first < 0) first = k;
+      const start = c.frames[first]!;
+      if (f.nowMs - start.nowMs >= 100) {
+        flushes.push({ after: k, n: k - first + 1, anchorTMs: start.tMs, anchorEpochMs: start.tMs + c.epochOffsetMs });
+        first = -1;
+      }
+    });
+    return { flushes };
+  });
+  results[i] = { name: v.name, kind: 'batcher', cases: late };
+  const d = diffSelfTest(vectors, output(results, true));
+  expect(d.ok).toBe(false);
+  expect(d.vectors[i]!.ok).toBe(false);
+});
+
+test('a port whose anchor epoch is read on a different clock than the record times fails', () => {
+  const results = faithful(true);
+  const i = vectors.findIndex((v) => v.kind === 'batcher');
+  const cases = (results[i]!.cases as { flushes: { anchorEpochMs: number }[] }[]).map((c) => ({
+    flushes: c.flushes.map((f) => ({ ...f, anchorEpochMs: f.anchorEpochMs + 30 })), // epoch at append, not at capture
+  }));
+  results[i] = { ...results[i]!, cases };
+  expect(diffSelfTest(vectors, output(results, true)).vectors[i]!.ok).toBe(false);
 });

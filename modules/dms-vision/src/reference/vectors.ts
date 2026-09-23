@@ -2,6 +2,7 @@
 // PRODUCTION classes over the same inputs and returns the "native output" forms below. `selfTest.ts`
 // diffs them against `expected`.
 import { buildFrameBatch } from '../wire';
+import { runBatcher, type BatcherFlush, type BatcherFrame } from './batcher';
 import { GazeInputAssembler, SubjectStatisticTracker } from './gazeInputs';
 import { geometry } from './features';
 import { headPoseFromAnyLayout } from './headPose';
@@ -75,6 +76,14 @@ export type GoldenVector =
       inputs: { cases: { cloud: number[]; context: number[]; validity: number[] }[] };
       /** from Python onnxruntime 1.30.0 (scripts/make-onnx-vectors.py) */
       expected: { cases: { gaze: number[]; rotation: number[] }[] };
+    }
+  | {
+      name: string;
+      description: string;
+      kind: 'batcher';
+      /** the wall clock read with a frame's `nowMs` is `nowMs + epochOffsetMs` */
+      inputs: { cases: { intervalMs: number; epochOffsetMs: number; frames: BatcherFrame[] }[] };
+      expected: { cases: { flushes: BatcherFlush[] }[] };
     };
 
 export type VectorKind = GoldenVector['kind'];
@@ -164,6 +173,10 @@ export function runHeadPoseVector(inputs: Extract<GoldenVector, { kind: 'headPos
     const p = headPoseFromAnyLayout(c.matrix, c.rotationDeg);
     return p === null ? null : [p.yawDeg, p.pitchDeg, p.rollDeg];
   });
+}
+
+export function runBatcherVector(inputs: Extract<GoldenVector, { kind: 'batcher' }>['inputs']): { flushes: BatcherFlush[] }[] {
+  return inputs.cases.map((c) => ({ flushes: runBatcher(c.intervalMs, c.frames, c.epochOffsetMs) }));
 }
 
 /** Upright landmarks of a record frame (for tests). */

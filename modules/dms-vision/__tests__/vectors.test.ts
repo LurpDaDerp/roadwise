@@ -8,6 +8,7 @@
 import { FLAG, FRAME_FIELDS, type FrameField } from '../src/constants';
 import {
   base64ToBytes,
+  runBatcherVector,
   runGazeInputsVector,
   runHeadPoseVector,
   runRecordVector,
@@ -77,6 +78,9 @@ describe('every expected is the reference over its inputs', () => {
         break;
       case 'headPose':
         expect(runHeadPoseVector(v.inputs)).toEqual(v.expected.poses);
+        break;
+      case 'batcher':
+        expect(runBatcherVector(v.inputs)).toEqual(v.expected.cases);
         break;
       default:
         throw new Error('unexpected');

@@ -38,6 +38,9 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
   var latLandmark = LatencyWindow(), latGaze = LatencyWindow(), latTotal = LatencyWindow()
   var lastStatus: [String: Any?]?
   var cpuPrevMs: Double?, cpuPrevWallMs = 0.0
+  /// Between AVCaptureSessionWasInterrupted and …InterruptionEnded: a `run` policy does not resume
+  /// until the interruption has ended (Task 3 review m3).
+  var interrupted = false
   /// Created and closed on sessionQueue, read on videoQueue: hence under the lock.
   var landmarker: Landmarker?
   var gazeNet: GazeNetRunner?
@@ -75,7 +78,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     locked {
       token = newToken; fps = newFps; gazeNetWanted = gazeNet; gazeNetEvery = every
       setupMode = false; previewAllowed = false; lastHeartbeatMs = CaptureController.hostMs(); pausedSinceMs = nil
-      rotationOffsetDegrees = rotationOffset
+      rotationOffsetDegrees = rotationOffset; interrupted = false
     }
     setState("starting", "user")
     do {
@@ -126,31 +129,48 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     if capture == "pause" {
       if st == "running" { pause("policy") }
     } else if st == "paused" {
-      if locked({ thermal.allowsCamera }) { resume() }
+      // Stay paused while the camera is unavailable: no startRunning churn every heartbeat.
+      if locked({ thermal.allowsCamera && !interrupted }) { resume() }
     }
     applyCadence()
     updatePreview()
   }
 
+  /// Stopped under the lock first (late results are dropped), then teardown stops the session and
+  /// flushes, then the event: no `frames` event follows `stopped`.
   func stop(reason: String) {
-    if currentState == "stopped" { return }
+    let was: String = locked {
+      let s = state
+      state = "stopped"
+      return s
+    }
+    if was == "stopped" { return }
     teardown()
-    setState("stopped", reason)
+    emitState("stopped", reason)
     DmsLog.code(reason == "background" ? .backgroundStopped : .sessionStopped)
   }
 
+  /// The order matters (Task 3 review m1): paused under the lock, so a result that lands later is
+  /// dropped; capture stops; the records already accepted are flushed; only then the state event. No
+  /// `frames` event follows `paused`.
   func pause(_ reason: String) {
-    flushBatch()
+    let wasRunning: Bool = locked {
+      if state != "running" { return false }
+      state = "paused"
+      pausedSinceMs = CaptureController.hostMs()
+      return true
+    }
+    if !wasRunning { return }
     session?.stopRunning()
-    locked { pausedSinceMs = CaptureController.hostMs() }
-    setState("paused", reason)
+    flushBatch()
+    emitState("paused", reason)
     updatePreview()
     DmsLog.code(reason == "thermal" ? .thermalPaused : .sessionPaused)
   }
 
   func resume() {
     locked { pausedSinceMs = nil }
-    videoQueue.sync { self.inFlight = nil; self.lastAcceptedMs = -1 }
+    videoQueue.sync { self.batcher.clear(); self.inFlight = nil; self.lastAcceptedMs = -1 }
     session?.startRunning()
     setState("running", "policy")
     updatePreview()
@@ -159,8 +179,8 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
   func teardown() {
     stopTick()
-    flushBatch()
     if let s = session { removeObservers(s); s.stopRunning() }
+    flushBatch()
     session = nil
     device = nil
     let (lmk, net) = locked { () -> (Landmarker?, GazeNetRunner?) in
@@ -172,12 +192,16 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     videoQueue.sync { self.inFlight = nil; self.batcher.clear() }
     lmk?.close()
     net?.close()
-    locked { token = nil; pausedSinceMs = nil; setupMode = false; previewAllowed = false }
+    locked { token = nil; pausedSinceMs = nil; setupMode = false; previewAllowed = false; interrupted = false }
     updatePreview()
   }
 
   func setState(_ s: String, _ reason: String) {
     locked { state = s }
+    emitState(s, reason)
+  }
+
+  func emitState(_ s: String, _ reason: String) {
     onState?(s, reason)
   }
 
@@ -208,7 +232,8 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     let interval = 1000.0 / Double(cap)
     if lastAcceptedMs >= 0 && ptsMs - lastAcceptedMs < interval * 0.85 { return }
     if let f = inFlight {
-      if ptsMs - f.ptsMs < 1000 { locked { dropped += 1 }; return }
+      // A lost callback holds capture for at most three frames, and never under 250 ms (Task 3 review m2).
+      if ptsMs - f.ptsMs < max(3 * interval, 250) { locked { dropped += 1 }; return }
       inFlight = nil
       locked { dropped += 1 }
     }
@@ -235,7 +260,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     if error != nil { locked { dropped += 1 }; return }
     guard locked({ state == "running" }) else { return }
     let latL = CaptureController.hostMs() - f.submitMs
-    let (wantNet, every, netOk, netNow) = locked { (gazeNetWanted, gazeNetEvery, thermal.allowsGazeNet, gazeNet) }
+    let (wantNet, every, netOk, netNow, cap) = locked { (gazeNetWanted, gazeNetEvery, thermal.allowsGazeNet, gazeNet, min(fps, thermal.fpsCap)) }
     frameIndex += 1
     CVPixelBufferLockBaseAddress(f.pixel, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(f.pixel, .readOnly) }
@@ -272,6 +297,6 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
       if netGaze != nil { latGaze.add(gazeMs) }
     }
     batcher.append(record, nowMs: now, epochNowMs: CaptureController.epochMs())
-    if batcher.isDue(nowMs: now), let payload = batcher.flush() { onFrames?(payload) }
+    if batcher.isDue(nowMs: now, intervalMs: 1000.0 / Double(max(cap, 1))), let payload = batcher.flush() { onFrames?(payload) }
   }
 }

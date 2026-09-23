@@ -84,7 +84,7 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 | Event | Payload |
 |---|---|
-| `frames` | `{ v: 1, anchorTMs, anchorEpochMs, n, data }`. `data` holds `n` records of 38 little-endian float32 (§4). It is emitted at most every `BATCH_MS = 100` ms while records are pending, and never while paused or stopped. **`anchorTMs` is a double (Swift `Double`, Kotlin `Double`): the FIRST record's clock value in ms.** `anchorEpochMs` (a double) is the wall clock sampled together with it (§5). `data` is `Data` (iOS) / `ByteArray` (Android), which JS receives as a `Uint8Array`. The decoder also accepts an `ArrayBuffer` or another typed-array view. |
+| `frames` | `{ v: 1, anchorTMs, anchorEpochMs, n, data }`. `data` holds `n` records of 38 little-endian float32 (§4). There is no flush timer: after appending a record, native flushes the batch when the next frame could not arrive before the batch turns `BATCH_MS = 100` ms old, `(now − batchStart) + 1000 / cap ≥ BATCH_MS` (`src/reference/batcher.ts`, the `batcher-flush` vector). At ≤ 10 fps each record goes alone and at 15 fps in pairs, so at nominal cadence no record waits `BATCH_MS`. Pending records are flushed before every `paused`/`stopped` state event, and no `frames` event follows one. **`anchorTMs` is a double (Swift `Double`, Kotlin `Double`): the FIRST record's clock value in ms.** `anchorEpochMs` (a double) is the wall clock sampled together with it (§5). `data` is `Data` (iOS) / `ByteArray` (Android), which JS receives as a `Uint8Array`. The decoder also accepts an `ArrayBuffer` or another typed-array view. |
 | `status` | Once per second while running or paused: `{ state, fpsTarget, fpsActual, dropped, gazeNetAvailable, gazeNetOn, thermal, thermalLevel, lowPower, latLandmarkP50, latLandmarkP95, latGazeP50, latGazeP95, latTotalP50, latTotalP95, procCpuMsPerS }`. Latencies are `null` until measured (`latGaze*` while the net is off). `procCpuMsPerS` is **process** CPU (iOS `getrusage(RUSAGE_SELF)`, Android `Process.getElapsedCpuTime()`), because MediaPipe runs on threads the module does not own. |
 | `state` | On every change: `{ state: 'stopped' \| 'starting' \| 'running' \| 'paused', reason: 'user' \| 'policy' \| 'background' \| 'interrupted' \| 'thermal' \| 'watchdog' \| 'error' \| 'permission' \| 'released' }`. |
 
@@ -137,8 +137,8 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 | 31 | `mouthW` | M | mouth width (61–291) ÷ IOD |
 | 32 | `frameLuma` | A | whole-frame mean luma (every 8th pixel of every 8th row), 0–255 |
 | 33 | `rotationDeg` | A | the buffer → upright rotation applied to this frame (incl. `rotationOffsetDegrees`): 0, 90, 180 or 270 |
-| 34 | `latLandmarkMs` | A | MediaPipe submit → result, ms |
-| 35 | `latTotalMs` | A | capture timestamp → record queued, ms |
+| 34 | `latLandmarkMs` | A | MediaPipe submit → result, ms. It starts at submission (after delivery and the cadence throttle), so it is **not** additive with `latTotalMs` |
+| 35 | `latTotalMs` | A | capture timestamp → record queued, ms. It contains capture → delivery, the throttle, the landmarker, the net and the features; the batch wait comes after it |
 | 36 | `flags` | A | integer bits: `NET_RAN` 1, `EYE_CLIPPED_R` 2, `EYE_CLIPPED_L` 4, `MOUTH_CLIPPED` 8, `POSE_MISSING` 16. **0 when there is no face.** |
 | 37 | `reserved` | A | 0 |
 
@@ -181,7 +181,7 @@ These hold whatever JavaScript does.
   - level 2 (`serious` / `SEVERE`), at once: at most 8 fps with the net off;
   - level 3 (`critical` / `CRITICAL`, `EMERGENCY`, `SHUTDOWN`), at once: `paused/thermal`, and a `run` policy cannot resume it while level 3 holds.
   - A cooler state must hold for `THERMAL_COOL_DWELL_MS = 60000` before the floor steps down.
-- **Interruptions:** the OS taking the camera → `paused/interrupted`, or `paused/error` for a camera error. JS decides whether to restart.
+- **Interruptions:** the OS taking the camera → `paused/interrupted`, or `paused/error` for a camera error. JS decides whether to restart, but a `run` policy resumes an interruption only once it has ended (iOS `AVCaptureSessionInterruptionEnded`; Android the CameraX camera state back to `OPEN`/`CLOSED` without an error). Until then native stays paused and answers `run` without touching the camera, so there is no restart churn.
 - **Preview (C2):** attached only while the latest policy has both `setupMode` and `previewAllowed` true. It is detached on the next policy without them, and on pause, stop and watchdog.
 - The DMS policy pauses the camera after `PAUSE_AFTER_STOP_MS = 5000` at a known stop. That is the policy's rule, not native's; it is listed here because the numbers live together.
 

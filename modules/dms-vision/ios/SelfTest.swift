@@ -1,5 +1,5 @@
 // The native half of the self-test (README §8.3). It runs the PRODUCTION classes (FeatureExtractor,
-// Roi, HeadPose, RecordEncoder, GazeInputAssembler, SubjectStatisticTracker, GazeNetFactory) over the
+// Roi, HeadPose, RecordEncoder, Batcher, GazeInputAssembler, SubjectStatisticTracker, GazeNetFactory) over the
 // golden vectors and returns their outputs; JS diffs them. It never carries a copy of any production
 // logic. Foundation only.
 
@@ -26,6 +26,7 @@ enum SelfTest {
         case "gazeInputs": result["frames"] = try gazeInputs(inputs)
         case "statsTracker": result["current"] = try statsTracker(inputs)
         case "headPose": result["poses"] = try headPose(inputs)
+        case "batcher": result["cases"] = try batcher(inputs)
         case "onnx":
           if !GazeNetFactory.available {
             result["skipped"] = "gaze net not built"
@@ -147,6 +148,27 @@ enum SelfTest {
       // The production path: the layout rule, then the pose (Task 2 review I2).
       guard let p = HeadPose.fromAnyLayout(try nums(c["matrix"]), Int(rot)) else { return NSNull() }
       return [p.yaw, p.pitch, p.roll]
+    }
+  }
+
+  /// The production Batcher over each case's appends; each flush reports which append triggered it.
+  static func batcher(_ inputs: [String: Any]) throws -> [[String: Any]] {
+    guard let cases = inputs["cases"] as? [[String: Any]] else { throw DmsError.badArgs("batcher inputs") }
+    return try cases.map { c in
+      guard let interval = num(c["intervalMs"]), let offset = num(c["epochOffsetMs"]),
+            let frames = c["frames"] as? [[String: Any]] else { throw DmsError.badArgs("batcher case") }
+      let b = Batcher()
+      var flushes: [[String: Any]] = []
+      for (i, f) in frames.enumerated() {
+        guard let t = num(f["tMs"]), let now = num(f["nowMs"]) else { throw DmsError.badArgs("batcher frame") }
+        b.append(FeatureExtractor.faceAbsentRecord(t, 0, 0, 0, 0), nowMs: now, epochNowMs: now + offset)
+        if b.isDue(nowMs: now, intervalMs: interval) {
+          let n = b.count
+          guard let p = b.flush() else { throw DmsError.badArgs("batcher flush") }
+          flushes.append(["after": i, "n": n, "anchorTMs": p["anchorTMs"] ?? NSNull(), "anchorEpochMs": p["anchorEpochMs"] ?? NSNull()])
+        }
+      }
+      return ["flushes": flushes]
     }
   }
 

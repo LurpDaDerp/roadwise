@@ -4,7 +4,6 @@
 
 import AVFoundation
 import ExpoModulesCore
-import UIKit
 
 public final class DmsVisionModule: Module {
   private let controller = CaptureController.shared
@@ -15,6 +14,7 @@ public final class DmsVisionModule: Module {
     Events("frames", "status", "state")
 
     OnCreate {
+      _ = AppActivity.shared
       self.controller.onFrames = { [weak self] payload in self?.sendEvent("frames", payload.mapValues { $0 as Any? }) }
       self.controller.onState = { [weak self] state, reason in self?.sendEvent("state", ["state": state, "reason": reason]) }
       self.controller.onStatus = { [weak self] status in self?.sendEvent("status", status as [String: Any?]) }
@@ -53,8 +53,7 @@ public final class DmsVisionModule: Module {
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
           throw DmsError.permission("camera permission has not been granted")
         }
-        let active = DispatchQueue.main.sync { UIApplication.shared.applicationState == .active }
-        guard active else { throw DmsError.notForeground("the app is not in the foreground") }
+        guard AppActivity.shared.isActive else { throw DmsError.notForeground("the app is not in the foreground") }
         try self.controller.start(token: o.token, fps: o.fps, gazeNet: o.gazeNet, every: o.every, gpu: o.gpu,
                                   rotationOffset: o.rotationOffset)
         promise.resolve(nil)

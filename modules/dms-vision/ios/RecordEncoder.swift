@@ -29,8 +29,10 @@ enum RecordEncoder {
   }
 }
 
-/// Collects records and hands out a `frames` payload once the batch is BATCH_MS old. Pure: the
-/// caller supplies the clock (host-time ms) and the wall clock.
+/// Collects records and hands out `frames` payloads. There is no timer: after each append the batch
+/// is flushed when the NEXT frame could not arrive before it turns BATCH_MS old (Task 3 review I1;
+/// src/reference/batcher.ts, pinned by the `batcher-flush` vector). Pure: the caller supplies the
+/// clock the records are on (host-time ms) and the wall clock read together with it.
 final class Batcher {
   private var records: [[Double]] = []
   private var anchorEpochMs: Double = 0
@@ -48,9 +50,13 @@ final class Batcher {
     records.append(record)
   }
 
-  func isDue(nowMs: Double) -> Bool {
-    return !records.isEmpty && nowMs - startedAtMs >= Double(DmsConstants.BATCH_MS)
+  /// `intervalMs` = 1000 / the capture cap. At ≤ 10 fps every record flushes as it is appended; at
+  /// 15 fps a batch holds two. The subtraction comes first, so it is exactly 0 at the first record.
+  func isDue(nowMs: Double, intervalMs: Double) -> Bool {
+    return !records.isEmpty && nowMs - startedAtMs + intervalMs >= Double(DmsConstants.BATCH_MS)
   }
+
+  var count: Int { return records.count }
 
   /// The `frames` event payload, and resets. nil when empty.
   func flush() -> [String: Any]? {
