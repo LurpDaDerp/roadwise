@@ -15,7 +15,9 @@ export {
   type DmsNativeOwner,
 } from './host/controller';
 // M7 builds its controller here: the real native module is bound inside the host (security T14 m-1).
-export { createDefaultDmsController, type DmsDefaultControllerDeps } from './host/default';
+export { createDefaultDmsController, createDefaultShadowComparator, type DmsDefaultControllerDeps } from './host/default';
+// The dev panel's shadow comparison (both gaze sources, counts and aggregates only). Not for M7.
+export type { DmsShadowComparator, DmsShadowStats, DmsShadowSourceStats } from './host/shadow';
 export { createSettingsProfileStore, DMS_PROFILE_KEY, type DmsProfileStore, type SettingsLike } from './host/profileStore';
 export { createFocusQueue } from './adapters/focus';
 export type { AlertKind, DmsAlertCommand } from './engine/alerts';

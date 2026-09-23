@@ -82,6 +82,10 @@ export interface DmsSnapshot {
   lostLowLight: boolean;
   /** the last frame's gaze source (gaze, held, head or none) */
   source: GazeUse | null;
+  /** with a `gaze` source, which path gave it (the net, or the geometric path); null otherwise */
+  gazeFrom: 'net' | 'geometric' | null;
+  /** the last frame's gaze relative to the road centre, degrees (the diagnostics agreement); null without one */
+  gazeRel: { yaw: number; pitch: number } | null;
   /** the last frame's rule speed (known, or held under the tunnel rules) */
   ruleSpeedKmh: number | null;
   fps: number;
@@ -173,6 +177,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastGap: false,
       lastLowLight: false,
       lastSource: null as GazeUse | null,
+      lastGazeFrom: null as 'net' | 'geometric' | null,
+      lastGazeRel: null as { yaw: number; pitch: number } | null,
       lastSpeed: null as number | null,
       bufferFraction: 1,
       d2SumS: 0,
@@ -245,6 +251,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastLowLight = p.quality === 'lost' && p.reasons.includes('low_light');
     d.lastQuality = p.quality;
     d.lastSource = p.source;
+    d.lastGazeFrom = p.gazeFrom;
+    d.lastGazeRel = p.gazeRel === null ? null : { yaw: p.gazeRel.yaw, pitch: p.gazeRel.pitch };
     d.lastSpeed = speed;
     d.learner.observe(t, p.gazeRel, zone, calState === 'calibrated');
     d.learner.maybeCluster(d.cal.stats().drivingS);
@@ -398,6 +406,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         gap: d.lastGap,
         lostLowLight: d.lastLowLight,
         source: d.lastSource,
+        gazeFrom: d.lastGazeFrom,
+        gazeRel: d.lastGazeRel,
         ruleSpeedKmh: d.lastSpeed,
         fps: d.fps.fps(),
         bufferFraction: d.bufferFraction,

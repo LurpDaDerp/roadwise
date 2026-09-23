@@ -470,6 +470,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       gazeSource: cfg.gazeSource,
       rollOffsetDeg: roll,
       gazeCentre: centres[cfg.gazeSource],
+      geoCentre: centres.geometric,
       headCentre: centres.head,
       openEyeEar: ear,
       pitchReference: pitchReference(),

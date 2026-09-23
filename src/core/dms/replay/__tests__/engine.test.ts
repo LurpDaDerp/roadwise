@@ -58,7 +58,9 @@ describe('a drive owns its alert manager and summary (T11 r1 carry)', () => {
 describe('gazeNetEvery reaches the conditioner (T6 r1 carry)', () => {
   // The net on every 4th frame at 5 fps: an 800 ms gap. A net value is held for max(300 ms, 2 × every ×
   // the 200 ms frame interval): 400 ms with gazeNetEvery 1 (the third frame after a net frame falls back
-  // to the head), 800 ms with 2 (it covers the gap).
+  // to the head), 800 ms with 2 (it covers the gap). Since the final task's cross-seam fix, a frame without
+  // a net value falls back to the geometric path (against its own centre) rather than the head, so the
+  // count is "the net in use" against "anything else".
   const run = (every: 1 | 2) => {
     const engine = createDmsEngine(NET, { ...DEFAULT_INIT, gazeNetEvery: every });
     const items = synthDrive({ fps: 5, seconds: 100, seed: 4, source: 'net', netEvery: 4, driver: scenario('attentive highway').driver });
@@ -68,13 +70,13 @@ describe('gazeNetEvery reaches the conditioner (T6 r1 carry)', () => {
       if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
       engine.pushFrame(it.frame);
       if (it.frame.tMs < 70_000 || engine.snapshot().quality !== 'tracking') continue;
-      const src = engine.snapshot().source;
-      if (src === 'head') head++;
-      if (src === 'gaze') gaze++;
+      const snap = engine.snapshot();
+      if (snap.source === 'gaze' && snap.gazeFrom === 'net') gaze++;
+      else if (snap.source === 'head' || snap.gazeFrom === 'geometric') head++;
     }
     return { head, gaze };
   };
-  test('with gazeNetEvery 2 the net value bridges an 800 ms gap; with 1 a quarter of the frames fall back to the head', () => {
+  test('with gazeNetEvery 2 the net value bridges an 800 ms gap; with 1 a quarter of the frames fall back (geometric, or the head)', () => {
     const two = run(2);
     const one = run(1);
     expect(two.head).toBeLessThan(0.1 * (two.head + two.gaze));

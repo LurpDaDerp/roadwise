@@ -21,6 +21,12 @@ export interface ConditionerRefs {
   rollOffsetDeg: number;
   /** the configured source's road centre (driver frame); null before any */
   gazeCentre: AnglePair | null;
+  /**
+   * the geometric path's road centre, for a net configuration's fallback: with no net value on the frame (the
+   * policy turned the net off, or this build has none), the geometric gaze is used against its own centre
+   * (plan Task 15, the cross-seam table). Optional: absent means no fallback.
+   */
+  geoCentre?: AnglePair | null;
   headCentre: AnglePair | null;
   openEyeEar: EarPair | null;
   /** the head-pitch reference for "looking down" before calibration (rev1 m6), driver frame */
@@ -65,6 +71,8 @@ export interface Perceived {
   /** what the rules use: relative to the source's centre (gaze / held), or the head's (head) */
   gazeRel: AnglePair | null;
   source: GazeUse;
+  /** which path gave a `gaze` source this frame; null for held, head or none */
+  gazeFrom: 'net' | 'geometric' | null;
   /** zone widening this frame asks for (HEAD_ONLY and head fallback) */
   marginDeg: number;
   opennessR: number | null;
@@ -232,7 +240,12 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       }
       if (q.quality === 'lost') lastNet = null;
 
-      const srcCam = refs.gazeSource === 'net' ? netCam : geoCam;
+      // The configured source; a net configuration with no net value falls back to the geometric path, measured
+      // against the geometric centre (never the net's), so the net is used only when it ran.
+      const netFallback = refs.gazeSource === 'net' && netCam === null && geoCam !== null && (refs.geoCentre ?? null) !== null;
+      const srcCam = refs.gazeSource === 'net' ? (netCam ?? (netFallback ? geoCam : null)) : geoCam;
+      const srcCentre = netFallback ? refs.geoCentre! : refs.gazeCentre;
+      const gazeFromSrc: 'net' | 'geometric' = refs.gazeSource === 'net' && !netFallback ? 'net' : 'geometric';
       const gazeDrv = srcCam === null ? null : toDrv(srcCam);
       const headRel = headDrv !== null && refs.headCentre !== null ? relative(headDrv, refs.headCentre) : null;
 
@@ -320,9 +333,9 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
             source = 'held';
             gazeRel = lastGazeRel;
           } else headFallback();
-        } else if (gazeDrv !== null && refs.gazeCentre !== null) {
+        } else if (gazeDrv !== null && srcCentre !== null) {
           source = 'gaze';
-          gazeRel = relative(gazeDrv, refs.gazeCentre);
+          gazeRel = relative(gazeDrv, srcCentre);
           lastGazeRel = gazeRel;
         } else headFallback();
       } else if (q.quality === 'head_only') {
@@ -357,6 +370,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         headRel,
         gazeRel,
         source,
+        gazeFrom: source === 'gaze' ? gazeFromSrc : null,
         marginDeg,
         opennessR: o.r,
         opennessL: o.l,

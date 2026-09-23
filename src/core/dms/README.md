@@ -35,6 +35,13 @@ const dms = createDefaultDmsController({
 | `status()` | any time (`onStatus` fires on change) | `{ camera: 'off' \| 'starting' \| 'active' \| 'limited' \| 'paused', reason, calibration, fatigueLevel, dimAdvised }`. `active` with TRACKING in the last 1 s, or HEAD_ONLY for under 10 s; HEAD_ONLY for 10 s is `limited` / `eyes_not_visible`; no face is `limited` / `low_light` in the dark, else `face_lost`. Word `age` and `flag_off` neutrally ("not available on this account"). |
 | `summary()` / `endDrive()` | during a drive, and at its end | `endDrive` first closes the gate and stops native (synchronously), then stops every sound, saves the profile if calibrated, and returns the trip summary with `pendingFocus`: the focus samples not yet handed out, which belong to the ending trip's scoring. Nothing of the drive carries into the next. |
 | `diagnostics()` | the dev panel | Counts, the engine's rule speed, and native's rates and thermal state. |
+| `dispose()` | sign-out, an account switch, account deletion | Ignores every later call, stops the camera first, then ends the drive and gives back the native owner slot. |
+
+## Status and events
+
+- **Camera values:** `off`, `starting`, `active`, `limited`, `paused`.
+- **Reasons:** the gate's closing input (`not_opted_in`, `flag_off`, `age`, `no_drive`, `mode`, `role`, `app_inactive`, `permission`), `error` (off for the drive after the retry), `busy` (another controller holds the camera), the pauses (`thermal`, `low_light`, `stopped`), and what a limited camera means (`face_lost`, `eyes_not_visible`, `low_light`).
+- **Event kinds:** attention `d1_warning`, `d1_rearmed`, `d2_warning`, `d2_reset`, `d3_phone_pattern`, `d4_unresponsive`, `glance_end`; drowsiness `microsleep`, `sleep`, `unresponsive`, `blink`, `episode_end`, `nod`, `microsleep_nod`, `yawn`; calibration `calibrated`, `provisional`, `uncalibrated`, `camera_bump`, `driver_change`, `baseline_reset`, `warm_start`; and `fatigue_minute`. Events carry zones, durations, levels and scores, never a frame value.
 
 ## Gate inputs (`DmsGateInputs`)
 
