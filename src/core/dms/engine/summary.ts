@@ -4,7 +4,9 @@
 // - Monitored seconds are seconds at a rule speed ≥ 20 km/h, by quality; the TRACKING coverage is their
 //   TRACKING share.
 // - Eyes-off-road seconds: at ≥ 20 km/h, with a zone that is not on-road (mirrors and the cluster count).
-// - attentionScore (U-11, a proposed definition) = round(100 × on-road time / time with a zone), ≥ 20 km/h.
+// - attentionScore (U-11, a proposed definition) = round(100 × on-road time / time with a zone), ≥ 20 km/h,
+//   with attentionObservedShare = time with a zone / monitored time beside it; the score is null below 50 %
+//   observed (T11 review m3: it must not imply it saw the whole trip).
 // - cameraSession: `none` with nothing monitored; `good` with ≥ 10 min monitored, TRACKING ≥ 70 % of it
 //   and ≥ 1 blink per 2 min of TRACKING (liveness against a photo); otherwise `limited`.
 // - The longest non-driving glance, and the Tier 0 count of non-driving glances > 2.0 s (shoulder checks
@@ -14,7 +16,7 @@
 //   ≥ 50 km/h, counted once per run).
 // - Minutes per thermal level and per capture rate (the nearest allowed fps), the fatigue timeline with
 //   its degraded, PERCLOS-dropped and sparse minutes (rev1 R-U4, m9), and the gaze source.
-import type { AlertCounts, AlertKind, AlertLogEntry } from './alerts';
+import type { AlertCounts, AlertKind, AlertStats } from './alerts';
 import type { CalibrationEvent, CalibrationState } from './calibration';
 import { zoneClass } from './zones';
 import type { DmsConfig, ZoneId } from './config';
@@ -68,11 +70,15 @@ export interface DmsTripSummary {
   fpsMinutes: Record<string, number>;
   gazeSource: GazeSource;
   attentionScore: number | null;
+  /** time with a zone / monitored time at ≥ 20 km/h; null with nothing monitored */
+  attentionObservedShare: number | null;
   cameraSession: 'good' | 'limited' | 'none';
   calibration: { state: CalibrationState; bumps: number; driverChanges: number; events: CalibrationEvent[] };
 }
 
 const MAX_DT_S = 1;
+/** attentionScore needs at least this share of monitored time with a zone (T11 review m3) */
+const MIN_OBSERVED = 0.5;
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
 
 export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) {
@@ -196,10 +202,11 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
       if (e.kind === 'camera_bump') bumps++;
       if (e.kind === 'driver_change') driverChanges++;
     },
-    build(inp: { alerts: { byKind: Record<AlertKind, AlertCounts>; log: AlertLogEntry[] }; fatigue: FatigueStats; calibrationState: CalibrationState }): DmsTripSummary {
+    build(inp: { alerts: AlertStats; fatigue: FatigueStats; calibrationState: CalibrationState }): DmsTripSummary {
       const total = monitored.tracking + monitored.head_only + monitored.lost;
       const s = cfg.summary;
       const livenessOk = blinks >= (monitored.tracking / 120) * s.goodSessionMinBlinksPer2Min;
+      const observed = total > 0 ? gazeS / total : null;
       const good = total >= s.goodSessionMinMonitoredS && monitored.tracking / total >= s.goodSessionMinTrackingShare && livenessOk;
       return {
         v: 1,
@@ -225,7 +232,8 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         thermalMinutes: { '0': round3(thermalS['0'] / 60), '1': round3(thermalS['1'] / 60), '2': round3(thermalS['2'] / 60), '3': round3(thermalS['3'] / 60) },
         fpsMinutes: Object.fromEntries(Object.entries(fpsS).map(([k, v]) => [k, round3(v / 60)])),
         gazeSource: opts.gazeSource,
-        attentionScore: gazeS > 0 ? Math.round((100 * onRoadS) / gazeS) : null,
+        attentionScore: gazeS > 0 && observed !== null && observed >= MIN_OBSERVED - 1e-9 ? Math.round((100 * onRoadS) / gazeS) : null,
+        attentionObservedShare: observed === null ? null : round3(observed),
         cameraSession: total <= 0 ? 'none' : good ? 'good' : 'limited',
         calibration: { state: inp.calibrationState, bumps, driverChanges, events: calEvents.toArray() },
       };

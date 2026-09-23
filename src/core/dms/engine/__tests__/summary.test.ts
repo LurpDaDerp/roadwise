@@ -70,6 +70,20 @@ describe('a scripted drive (§M9, U-11)', () => {
     expect(drive({ blinkEvery: 30, speed: 15 }).cameraSession).toBe('none');
     expect(drive({ blinkEvery: 30, speed: 15 }).attentionScore).toBeNull();
   });
+  test('T11 review m3: attentionObservedShare beside the score; the score is null below 50 % observed', () => {
+    const lostFor = (share: number) => {
+      const sm = createSummary(C, { gazeSource: 'geometric' });
+      feed(sm, 0, 600, (t) => ((t % 10) < share * 10 ? { quality: 'lost', zone: null, gazeRel: null } : {}));
+      return build(sm);
+    };
+    const s40 = lostFor(0.4);
+    expect(s40.attentionObservedShare).toBeCloseTo(0.6, 2);
+    expect(s40.attentionScore).toBe(100);
+    const s60 = lostFor(0.6);
+    expect(s60.attentionObservedShare).toBeCloseTo(0.4, 2);
+    expect(s60.attentionScore).toBeNull();
+    expect(build(createSummary(C, { gazeSource: 'net' })).attentionObservedShare).toBeNull();
+  });
   test('JSON-safe, with no NaN, for an empty trip and a full one', () => {
     expect(jsonSafe(build(createSummary(C, { gazeSource: 'net' })))).toBe(true);
     expect(jsonSafe(drive({ blinkEvery: 30 }))).toBe(true);
@@ -80,7 +94,7 @@ describe('counts, glances and the fatigue timeline', () => {
   test('alert counts per kind (delivered, muted, dropped) and event counts pass through', () => {
     const am = createAlertManager(C, { mode: 'live' });
     const base = { epochMs: 0, ruleSpeedKmh: 60, speedKnown: true, quality: 'tracking' as const, onRoad: false, eyesOpen: true, warmup: false };
-    am.onFrame({ ...base, tMs: 0, requests: [{ kind: 'distraction' }] });
+    am.onFrame({ ...base, tMs: 0, requests: [{ kind: 'distraction', c8: false }] });
     am.onFrame({ ...base, tMs: 100, onRoad: true, requests: [{ kind: 'phone_pattern' }] });
     const sm = createSummary(C, { gazeSource: 'net' });
     sm.onEvent('d1_warning');
