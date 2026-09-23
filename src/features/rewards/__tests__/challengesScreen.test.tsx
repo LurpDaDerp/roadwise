@@ -184,7 +184,7 @@ describe('ChallengeDetailScreen', () => {
     expect(screen.getByText('Keep your phone down on 10 of 14 driving days')).toBeTruthy();
     expect(
       screen.getByText(
-        "Counts the days you drive, starting tomorrow. Days you don't drive don't count and never run the clock down. A day counts once it's confirmed, and then it's final."
+        "Counts the days you drive, starting tomorrow. Days you don't drive, very short days and your first days are skipped: they don't use up the challenge. A day counts once it's confirmed, and then it's final."
       )
     ).toBeTruthy();
     expect(screen.getByText('No extra driving needed: every driver gets the same number of days.')).toBeTruthy();
@@ -204,6 +204,7 @@ describe('ChallengeDetailScreen', () => {
     const join = screen.getByTestId('challenge-join');
     expect(join.props.accessibilityState).toMatchObject({ disabled: true });
     expect(screen.getByText(copy.twoActive)).toBeTruthy();
+    expect(join.props.accessibilityHint).toBe(copy.twoActive);
     await press(join);
     expect(api.joinChallenge).not.toHaveBeenCalled();
   });
@@ -278,7 +279,7 @@ describe('ChallengeDetailScreen', () => {
   test('ended: said plainly', async () => {
     const ended = enrolmentRow('within_limit', { state: 'ended', pass_days: 8, fail_days: 6, ended_at: iso(Date.parse('2026-09-20T15:00:00Z')) });
     await renderDetail(ended.id, snapshot({ challenges: [ended] }));
-    expect(screen.getByText('Ended after 14 driving days with 8 counted.')).toBeTruthy();
+    expect(screen.getByText('Ended after 14 driving days with 8 that met it.')).toBeTruthy();
     expect(screen.queryByText(/points added/)).toBeNull();
     assertCopyRules();
   });
@@ -289,8 +290,38 @@ describe('ChallengeDetailScreen', () => {
     const join = screen.getByTestId('challenge-join');
     expect(join.props.accessibilityState).toMatchObject({ disabled: true });
     expect(screen.getByText(copy.joinOffline)).toBeTruthy();
+    expect(join.props.accessibilityHint).toBe(copy.joinOffline);
     await press(join);
     expect(api.joinChallenge).not.toHaveBeenCalled();
+  });
+
+  test('offline and running: Leave is disabled and says why, to a screen reader too', async () => {
+    const running = enrolmentRow('phone_down');
+    const { api } = await renderDetail('phone_down', snapshot({ challenges: [running] }), { online: false });
+    const leave = screen.getByTestId('challenge-leave');
+    expect(leave.props.accessibilityState).toMatchObject({ disabled: true });
+    expect(leave.props.accessibilityHint).toBe(copy.leaveOffline);
+    expect(screen.getByText(copy.leaveOffline)).toBeTruthy();
+    await press(leave);
+    expect(api.leaveChallenge).not.toHaveBeenCalled();
+  });
+
+  test('an enabled Join carries no hint', async () => {
+    await renderDetail('phone_down', snapshot({ challenges: [] }));
+    expect(screen.getByTestId('challenge-join').props.accessibilityHint).toBeUndefined();
+  });
+
+  test('a retired challenge that is not running says it is unavailable, and offers no Join', async () => {
+    const snap = snapshot({ challenges: [] });
+    snap.challengeDefs = snap.challengeDefs.map((d) => (d.id === 'smooth_ride' ? { ...d, active: false } : d));
+    await renderDetail('smooth_ride', snap);
+    expect(screen.queryByTestId('challenge-join')).toBeNull();
+    expect(screen.getByText(copy.joinErrors.invalid)).toBeTruthy();
+  });
+
+  test('the rule never mentions a clock', () => {
+    expect(copy.rules).not.toMatch(/clock/i);
+    expect(copy.rulesFrom('September 10')).not.toMatch(/clock/i);
   });
 
   test('an unknown challenge says so', async () => {

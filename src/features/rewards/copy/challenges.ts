@@ -4,7 +4,7 @@
  * lines — come from `./common`.
  *
  * Rules every string keeps (plan Global Constraints, honesty a–f; §10.1, §10.4, §10.11): a
- * challenge is counted in driving days, so there is no clock, countdown, deadline or "hurry"; not
+ * challenge is counted in driving days, so there is no countdown, deadline or "hurry"; not
  * driving never counts against it; a day counts only once it is confirmed, and then it is final
  * (rev1: R-A); no "!", no money words; speed is framed as time within the limit.
  */
@@ -51,19 +51,19 @@ export const challengesCopy = {
   rulesLabel: 'How it counts',
   /** rev1: R-A. Shown before joining: counting starts the day after. */
   rules:
-    "Counts the days you drive, starting tomorrow. Days you don't drive don't count and never run the clock down. A day counts once it's confirmed, and then it's final.",
+    "Counts the days you drive, starting tomorrow. Days you don't drive, very short days and your first days are skipped: they don't use up the challenge. A day counts once it's confirmed, and then it's final.",
   /** The same rule for a challenge already joined, from its first counted day. */
   rulesFrom: (date: string) =>
-    `Counts the days you drive, from ${date}. Days you don't drive don't count and never run the clock down. A day counts once it's confirmed, and then it's final.`,
+    `Counts the days you drive, from ${date}. Days you don't drive, very short days and your first days are skipped: they don't use up the challenge. A day counts once it's confirmed, and then it's final.`,
   fairness: 'No extra driving needed: every driver gets the same number of days.',
   pointsLabel: 'Points',
   pointsOnComplete: (n: number) => `${pointsText(n)} when it's complete`,
   pointsAdded: (n: number) => `${pointsText(n)} added`,
   startsTomorrow: 'Counting starts tomorrow.',
   completedOn: (date: string) => `Completed on ${date}.`,
-  /** "Ended after 14 driving days with 8 counted." */
+  /** "Ended after 14 driving days with 8 that met it." */
   endedAfter: (drivingDaysCounted: number, pass: number) =>
-    `Ended after ${drivingDays(drivingDaysCounted)} with ${pass} counted.`,
+    `Ended after ${drivingDays(drivingDaysCounted)} with ${pass} that met it.`,
   leftNote: 'You left this challenge.',
   join: 'Join',
   joinAgain: 'Join again',

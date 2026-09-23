@@ -24,9 +24,6 @@ export const goalCopy = {
   progressSpoken: (pass: number, target: number) => `${pass} of ${drivingDays(target)} counted`,
   /** The open day is never counted before it settles (rev1: R-A). */
   today: 'Today counts when the day closes.',
-  /** D6 proration, verbatim at the target of 4. */
-  prorate: (target: number) =>
-    `Drive fewer than ${target} ${target === 1 ? 'day' : 'days'}? Keep it up on every day you drive and it still counts.`,
   pointsLabel: 'Points',
   /** Before it is reached: what reaching it adds — never shown as earned. */
   pointsWhenReached: (n: number) => `${pointsText(n)} when the goal is reached`,

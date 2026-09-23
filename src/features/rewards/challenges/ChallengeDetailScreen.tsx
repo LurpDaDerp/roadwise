@@ -182,6 +182,7 @@ export function ChallengeDetailScreen({
           onPress={() => confirmLeave(id)}
           disabled={!online}
           loading={leave.isPending}
+          accessibilityHint={!online ? copy.leaveOffline : undefined}
           testID="challenge-leave"
         />
         {!online ? (
@@ -203,6 +204,8 @@ export function ChallengeDetailScreen({
           onPress={doJoin}
           disabled={reason !== null}
           loading={join.isPending}
+          // A dimmed button says why to a screen reader too, not only in the footnote beside it.
+          accessibilityHint={reason ?? undefined}
           testID="challenge-join"
         />
         {reason !== null ? (
@@ -211,6 +214,13 @@ export function ChallengeDetailScreen({
           </Text>
         ) : null}
       </>
+    );
+  } else {
+    // A retired def (`active = false`) can't be joined: say so rather than show nothing.
+    action = (
+      <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }} testID="challenge-unavailable">
+        {copy.joinErrors.invalid}
+      </Text>
     );
   }
 

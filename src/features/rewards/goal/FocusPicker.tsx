@@ -70,6 +70,7 @@ export function FocusPicker({
   visible,
   current,
   target,
+  currentCounted = false,
   deps = {},
   onClose,
 }: {
@@ -78,6 +79,11 @@ export function FocusPicker({
   current: GoalCategory | null;
   /** This week's target in driving days, for each option's sentence. */
   target: number;
+  /**
+   * This week's goal already has counted days, so a save sets NEXT week's focus — and choosing this
+   * week's category again is a real choice (it may undo an earlier, different next-week focus).
+   */
+  currentCounted?: boolean;
   deps?: { api?: RewardsApi };
   onClose: () => void;
 }) {
@@ -88,7 +94,7 @@ export function FocusPicker({
   return (
     <Modal visible={open} transparent animationType={th.reduceMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       {/* Mounted only while open: a dismissed sheet forgets its choice. */}
-      {open ? <FocusForm current={current} target={target} deps={deps} onClose={onClose} /> : null}
+      {open ? <FocusForm current={current} target={target} currentCounted={currentCounted} deps={deps} onClose={onClose} /> : null}
     </Modal>
   );
 }
@@ -96,11 +102,13 @@ export function FocusPicker({
 function FocusForm({
   current,
   target,
+  currentCounted,
   deps,
   onClose,
 }: {
   current: GoalCategory | null;
   target: number;
+  currentCounted: boolean;
   deps: { api?: RewardsApi };
   onClose: () => void;
 }) {
@@ -173,7 +181,7 @@ function FocusForm({
           <Button
             label={copy.picker.save}
             onPress={save}
-            disabled={selected === null || selected === current}
+            disabled={selected === null || (selected === current && !currentCounted)}
             loading={setFocus.isPending}
             testID="focus-save"
           />

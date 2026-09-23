@@ -4,7 +4,7 @@ import { BANNED_COPY } from '@/notifications/catalog';
 import { clearInboxClients, setOnline, settleInbox } from '@/features/inbox/__fixtures__/harness';
 
 import { GOAL_CATEGORY_VALUES, RewardsRpcError, type RewardsRpcCode } from '../api';
-import { CATEGORY_LABEL, FOCUS_APPLIED, GOAL_PROGRESS, goalSentence, OFFLINE_LINE } from '../copy/common';
+import { CATEGORY_LABEL, FOCUS_APPLIED, goalActiveLine, GOAL_PROGRESS, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { goalCopy } from '../copy/goal';
 import { WeeklyGoalScreen } from '../goal/WeeklyGoalScreen';
 import { resetEnsureWeekForTests } from '../useEnsureWeek';
@@ -79,16 +79,27 @@ describe('WeeklyGoalScreen', () => {
     expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 4, now: 2, text: '2 of 4 driving days counted' });
   });
 
-  test('an active goal says today counts when the day closes, and states the proration rule', async () => {
-    await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK) }));
+  test('an active goal says today counts when the day closes, with the shared active line', async () => {
+    await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 0 }) }));
     expect(screen.getByText('Today counts when the day closes.')).toBeTruthy();
-    expect(
-      screen.getByText('Drive fewer than 4 days? Keep it up on every day you drive and it still counts.')
-    ).toBeTruthy();
+    expect(screen.getByTestId('goal-line').props.children).toBe(goalActiveLine({ pass: 2, target: 4, failDays: 0 }));
     // what reaching it adds, never shown as added
     expect(screen.getByText('150 points when the goal is reached')).toBeTruthy();
     expect(screen.queryByText(/added/)).toBeNull();
     assertCopyRules();
+  });
+
+  test('I1: the proration promise shows while no day has failed (pass 2 / fail 0)', async () => {
+    await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 0 }) }));
+    expect(screen.getByTestId('goal-line').props.children).toMatch(/Drive fewer days this week\?/);
+  });
+
+  test('I1: after a failed day, no proration promise (pass 1 / fail 1)', async () => {
+    await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 1, fail_days: 1 }) }));
+    expect(screen.getByTestId('goal-line').props.children).toBe(goalActiveLine({ pass: 1, target: 4, failDays: 1 }));
+    const all = renderedStrings(screen.toJSON()).join(' ');
+    expect(all).not.toMatch(/fewer/i);
+    expect(all).not.toMatch(/still counts/i);
   });
 
   test('a reached goal says so (the shared words), with the points added', async () => {
@@ -209,13 +220,23 @@ describe('WeeklyGoalScreen', () => {
     });
 
     test('save is off until a different focus is chosen; cancel closes without a call', async () => {
-      const { api } = await renderGoal();
+      const { api } = await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 0, fail_days: 0 }) }));
       await press(screen.getByText(goalCopy.changeFocus));
       expect(screen.getByTestId('focus-save').props.accessibilityState).toMatchObject({ disabled: true });
       await press(screen.getByText(goalCopy.picker.cancel));
       expect(screen.queryByTestId('focus-options')).toBeNull();
       expect(api.setWeeklyFocus).not.toHaveBeenCalled();
     });
+  });
+
+  test("after a counted day, re-choosing this week's category is a real choice (next week's focus)", async () => {
+    const { api, server } = await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { category: 'phone', pass_days: 1 }) }));
+    server.focusApplied = 'next_week';
+    await press(screen.getByText(goalCopy.changeFocus));
+    expect(screen.getByTestId('focus-save').props.accessibilityState).toMatchObject({ disabled: false });
+    await press(screen.getByText(goalCopy.picker.save));
+    expect(api.setWeeklyFocus).toHaveBeenCalledWith('phone');
+    expect(await screen.findByText(FOCUS_APPLIED.next_week)).toBeTruthy();
   });
 
   test('the rendered copy passes BANNED_COPY and has no countdown words (picker open too)', async () => {

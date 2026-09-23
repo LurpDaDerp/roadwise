@@ -55,8 +55,8 @@ function lastWeekLine(goal: WeeklyGoal): string {
 
 /**
  * F2 · the weekly goal (D6). The focus printed as a sentence, how many driving days have counted
- * (text and a bar that speaks), that today counts only once it closes, the proration rule, and last
- * week's result. Everything is the server's settled value; nothing is counted before it settles.
+ * (text and a bar that speaks), the shared active line (the proration rule only while it can
+ * still hold), that today counts only once it closes, and last week's result. Everything is the server's settled value; nothing is counted before it settles.
  *
  * No primary action: the screen is a record to read. "Change focus" opens the picker, whose Save
  * is the one action inside its sheet.
@@ -138,6 +138,7 @@ export function WeeklyGoalScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
         visible={picking}
         current={weeks?.thisWeek?.category ?? null}
         target={weeks?.thisWeek?.target_days ?? 4}
+        currentCounted={(weeks?.thisWeek?.pass_days ?? 0) + (weeks?.thisWeek?.fail_days ?? 0) > 0}
         deps={deps}
         onClose={() => setPicking(false)}
       />
@@ -146,7 +147,6 @@ export function WeeklyGoalScreen({ deps = {}, tz }: { deps?: { api?: RewardsApi 
 }
 
 function ThisWeek({ goal }: { goal: WeeklyGoal }) {
-  const th = useTheme();
   const view = goalView(goal);
   const active = view.state === 'active';
   return (
@@ -163,18 +163,17 @@ function ThisWeek({ goal }: { goal: WeeklyGoal }) {
           label={copy.progressLabel}
           testID="goal-progress"
         />
+        {/* The shared active line (`goalActiveLine`, via `goalView`): the proration promise only
+            while no day has failed (0009 achieves a short week only with fail_days = 0). A closed
+            state's line is the shared `GOAL_PROGRESS` one. */}
+        <Text variant="subhead" testID="goal-line">
+          {view.remainingText}
+        </Text>
         {active ? (
-          <View style={{ gap: th.space.sm }}>
-            <Text variant="footnote" tone="muted">
-              {copy.today}
-            </Text>
-            <Text variant="subhead">{copy.prorate(view.target)}</Text>
-          </View>
-        ) : (
-          // A closed state's words are the shared ones (`goalView`); the open week's progress and
-          // proration are said above in this screen's own words, so they are not repeated.
-          <Text variant="subhead">{view.remainingText}</Text>
-        )}
+          <Text variant="footnote" tone="muted">
+            {copy.today}
+          </Text>
+        ) : null}
       </Field>
       {view.state === 'active' || view.state === 'achieved' ? (
         <Field label={copy.pointsLabel}>
