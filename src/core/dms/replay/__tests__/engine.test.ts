@@ -7,7 +7,8 @@ import type { DmsProfileV1 } from '../../engine/profile';
 import { parseCsv, replayCsv, toCsv } from '../csv';
 import { DEFAULT_INIT, replayItems } from '../run';
 import { SCENARIOS } from '../scenarios';
-import { onRoad, rel, synthDrive, type DriverFn } from '../synth';
+import { EPOCH0, onRoad, rel, synthDrive, type DriverFn } from '../synth';
+import { frame } from '../../engine/__fixtures__/synth';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
 const NET = { ...C, gazeSource: 'net' } as DmsConfig;
@@ -192,6 +193,57 @@ describe('frame gaps are unobserved time (T12 review I1)', () => {
     }
     expect(before).toBeGreaterThan(3);
     expect(after).toBeCloseTo(before, 9);
+  });
+});
+
+describe('T13 r1 I1: engine.cameraOff keeps a Critical, bounded by criticalBlindMaxS', () => {
+  /** Eyes shut at 100 s at 60 km/h (F1 at 101 s, F2 at 103 s), frames until 104 s, then the camera is off. */
+  const sleepThenBlind = (blindS: number, speedAfter: number) => {
+    const items = synthDrive({ fps: 15, seconds: 104, seed: 14, source: 'net', driver: (t, r) => ({ gaze: onRoad(r), openness: t >= 100 ? 0.1 : 1, speedKmh: 60 }) });
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    const cmds: string[] = [];
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+    }
+    const last = items.at(-1)!;
+    const lastRow = [...items].reverse().find((i) => i.row !== undefined)!.row!;
+    engine.drain();
+    engine.cameraOff(last.frame.tMs, 'heat');
+    for (let k = 1; k <= blindS; k++) {
+      const tMs = last.frame.tMs + k * 1000;
+      const row = { ...lastRow.row, ts: EPOCH0 + tMs, speed: speedAfter / 3.6 };
+      engine.pushRow(row, { ...lastRow.ex, tripElapsedS: tMs / 1000 }, tMs);
+      cmds.push(...engine.drain().commands.map((c) => `${c.action}:${c.kind}`));
+    }
+    return cmds;
+  };
+  test('at a known 60 km/h: still sounding 59 s after the camera went off', () => {
+    expect(sleepThenBlind(59, 60)).toEqual([]);
+  });
+  test('at 60 s: stop, then one Tier 1 monitoring_paused', () => {
+    expect(sleepThenBlind(60, 60)).toEqual(['stop:sleep', 'once:monitoring_paused']);
+  });
+  test('a known 5 km/h for 5 s ends it', () => {
+    expect(sleepThenBlind(8, 5)).toEqual(['stop:sleep']);
+  });
+  test('a running distraction stops at cameraOff', () => {
+    const items = synthDrive({ fps: 15, seconds: 104, seed: 15, source: 'net', driver: (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), openness: 1, speedKmh: 60 }) });
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    for (const it of items) {
+      if (it.row) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+    }
+    expect(sig(engine.drain().commands)).toEqual(['start:distraction']);
+    engine.cameraOff(items.at(-1)!.frame.tMs, 'dark');
+    expect(sig(engine.drain().commands)).toEqual(['stop:distraction']);
+  });
+  test('the snapshot says when a LOST frame is dark (the low-light suspend input)', () => {
+    const engine = createDmsEngine(NET, DEFAULT_INIT);
+    engine.pushFrame(frame({ tMs: 0, face: false, frameLuma: 10 }));
+    expect(engine.snapshot().lostLowLight).toBe(true);
+    engine.pushFrame(frame({ tMs: 67, face: false, frameLuma: 110 }));
+    expect(engine.snapshot().lostLowLight).toBe(false);
   });
 });
 

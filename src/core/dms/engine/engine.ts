@@ -74,6 +74,8 @@ export interface DmsSnapshot {
   zone: ZoneId | null;
   /** the last frame came after a frame gap (T12 review I1) */
   gap: boolean;
+  /** the last frame is LOST because it is too dark (the policy's low-light suspend input, T13 r1 m1) */
+  lostLowLight: boolean;
   /** the last frame's gaze source (gaze, held, head or none) */
   source: GazeUse | null;
   /** the last frame's rule speed (known, or held under the tunnel rules) */
@@ -106,6 +108,12 @@ export interface DmsEngine {
   sizes(): DmsSizes;
   /** The drive's alert log (each request with the quality of the frame that raised it). */
   alertLog(): AlertLogEntry[];
+  /**
+   * The capture policy's cameraOff edge (thermal L3 or the low-light suspend at speed; T13 r1 I1): a
+   * running distraction stops, a running Critical is kept (bounded by alerts.criticalBlindMaxS). Not a
+   * session end: `endDrive` is.
+   */
+  cameraOff(tMs: number, cause: 'heat' | 'dark'): void;
 }
 
 const SEED_RING_S = 4;
@@ -152,6 +160,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastQuality: null as Quality | null,
       lastZone: null as ZoneId | null,
       lastGap: false,
+      lastLowLight: false,
       lastSource: null as GazeUse | null,
       lastSpeed: null as number | null,
       bufferFraction: 1,
@@ -218,6 +227,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const zone = d.zones.step(p, zc);
     d.lastZone = zone;
     d.lastGap = p.gap;
+    d.lastLowLight = p.quality === 'lost' && p.reasons.includes('low_light');
     d.lastQuality = p.quality;
     d.lastSource = p.source;
     d.lastSpeed = speed;
@@ -278,7 +288,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
     // Nods (relative pitch as the conditioner defines it) and yawns.
     const relPitch = p.headRel !== null ? p.headRel.pitch : p.headDrv !== null && refs.pitchReference !== null ? p.headDrv.pitch - refs.pitchReference : null;
-    for (const e of d.nod.onFrame({ tMs: t, quality: p.quality, relPitchDeg: relPitch, openness: p.openness, ruleSpeedKmh: speed, closureBridged: p.closureBridged })) {
+    for (const e of d.nod.onFrame({ tMs: t, quality: p.quality, relPitchDeg: relPitch, openness: p.openness, ruleSpeedKmh: speed, closureBridged: p.closureBridged, gap: p.gap })) {
       emit({ kind: e.kind, tMs: e.tMs });
       d.fatigue.onNod(e.tMs);
       if (e.kind === 'microsleep_nod') {
@@ -344,7 +354,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       if (d.lastFrameT === null || tMs - d.lastFrameT >= 1000) {
         const cs = d.ctx.at(tMs);
         alertStep(() =>
-          d.alerts.onFrame({ tMs, epochMs: tMs + epochOffset, ruleSpeedKmh: cs.ruleSpeedKmh, speedKnown: cs.speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: d.warmup, requests: EMPTY_REQ })
+          d.alerts.onFrame({ tMs, epochMs: tMs + epochOffset, ruleSpeedKmh: cs.ruleSpeedKmh, speedKnown: cs.speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: d.warmup, requests: EMPTY_REQ, blind: true })
         );
       }
     },
@@ -367,6 +377,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         calibration: d.cal.state(),
         zone: d.lastZone,
         gap: d.lastGap,
+        lostLowLight: d.lastLowLight,
         source: d.lastSource,
         ruleSpeedKmh: d.lastSpeed,
         fps: d.fps.fps(),
@@ -403,6 +414,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       if (next !== null) profile = next;
       d = newDrive();
       return { summary, profile: next };
+    },
+
+    cameraOff(tMs, cause) {
+      alertStep(() => d.alerts.cameraOff(tMs, tMs + epochOffset, cause));
     },
 
     alertLog() {

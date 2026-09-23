@@ -435,6 +435,11 @@ export interface DmsConfig {
     criticalMinStartKmh: number;
     criticalEndBelowKmh: number;
     criticalEndAfterS: number;
+    /**
+     * T13 r1 I1: with the camera off at speed (heat, dark) a running Critical keeps sounding; after this
+     * long with no frame it stops (blind_cap) and a Tier 1 `monitoring_paused` plays once.
+     */
+    criticalBlindMaxS: number;
     /** anti-annoyance 8: three Tier 2 distraction warnings in 10 min → a Tier 1 line */
     repeatedGlancesCount: number;
     repeatedGlancesWithinS: number;
@@ -688,6 +693,7 @@ const DEFAULT: DmsConfig = {
     criticalMinStartKmh: 10,
     criticalEndBelowKmh: 10,
     criticalEndAfterS: 5,
+    criticalBlindMaxS: 60,
     repeatedGlancesCount: 3,
     repeatedGlancesWithinS: 600,
   },
@@ -787,6 +793,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.quality.irisRecencyS > 0)) bad('quality.irisRecencyS', 'must be > 0');
   if (!(c.closure.bridgeMaxS > c.closure.f3.closedS)) bad('closure.bridgeMaxS', 'must exceed closure.f3.closedS (C-26: F3 fires inside a bridge)');
   if (!(c.closure.bridgeDropWindowS > 0)) bad('closure.bridgeDropWindowS', 'must be > 0');
+  if (!(c.alerts.criticalBlindMaxS > c.alerts.criticalEndAfterS)) bad('alerts.criticalBlindMaxS', 'must exceed alerts.criticalEndAfterS');
   const twoSlowFrames = 2 / Math.min(...ALLOWED_FPS);
   if (!(c.closure.maxFrameGapS > twoSlowFrames + 1e-9)) bad('closure.maxFrameGapS', `must exceed two frame intervals at the lowest capture rate (${twoSlowFrames} s)`);
 

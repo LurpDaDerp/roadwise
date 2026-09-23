@@ -297,3 +297,44 @@ describe('T12 review m2: the log records the request frame\u2019s quality (rule 
     expect(log[1]).toMatchObject({ kind: 'phone_pattern', quality: 'head_only' });
   });
 });
+
+describe('T13 r1 I1: cameraOff keeps a Critical (the phone overheating says nothing about the driver)', () => {
+  const blind = (tMs: number, speed: number | null = 60, speedKnown = true): AlertFrame => ({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: speed, speedKnown, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [], blind: true });
+  test('a running distraction stops (camera_off); a held Tier 1 is dropped', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction'), plain('phone_pattern')] }]);
+    const cmds = r.am.cameraOff(1000, EPOCH0 + 1000, 'heat');
+    expect(cmds.map((c) => `${c.action}:${c.kind}`)).toEqual(['stop:distraction']);
+    const log = r.am.stats().log;
+    expect(log.find((e) => e.kind === 'distraction' && e.why === 'camera_off')).toBeDefined();
+    expect(log.find((e) => e.kind === 'phone_pattern' && e.outcome === 'dropped' && e.why === 'camera_off')).toBeDefined();
+  });
+  test('a running Critical is kept: at a known 60 km/h it still sounds at 59 s blind, and at 60 s it stops (blind_cap) with one Tier 1 monitoring_paused', () => {
+    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
+    expect(r.am.cameraOff(1000, EPOCH0 + 1000, 'heat')).toEqual([]);
+    const out: DmsAlertCommand[] = [];
+    for (let k = 1; k <= 59; k++) out.push(...r.am.onFrame(blind(1000 + k * 1000)));
+    expect(out).toEqual([]);
+    expect(r.am.critical()).toBe('sleep');
+    out.push(...r.am.onFrame(blind(61_000)));
+    expect(out.map((c) => `${c.action}:${c.kind}:${c.tier}`)).toEqual(['stop:sleep:3', 'once:monitoring_paused:1']);
+    expect(out[1]!.cause).toBe('heat');
+    expect(r.am.stats().log.find((e) => e.kind === 'sleep' && e.why === 'blind_cap')).toBeDefined();
+  });
+  test('a known 5 km/h for 5 s still ends it (no monitoring_paused)', () => {
+    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
+    r.am.cameraOff(1000, EPOCH0 + 1000, 'dark');
+    const out: DmsAlertCommand[] = [];
+    for (let k = 1; k <= 7; k++) out.push(...r.am.onFrame(blind(1000 + k * 1000, 5)));
+    expect(out.map((c) => `${c.action}:${c.kind}`)).toEqual(['stop:sleep']);
+  });
+  test('frames returning clear the blind clock', () => {
+    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
+    r.am.cameraOff(1000, EPOCH0 + 1000, 'heat');
+    for (let k = 1; k <= 30; k++) r.am.onFrame(blind(1000 + k * 1000));
+    r.am.onFrame({ ...blind(31_500), blind: false, quality: 'tracking' }); // the camera is back
+    const out: DmsAlertCommand[] = [];
+    for (let k = 32; k <= 95; k++) out.push(...r.am.onFrame({ ...blind(k * 1000), blind: false, quality: 'tracking' }));
+    expect(out.map((c) => c.kind)).not.toContain('monitoring_paused');
+    expect(r.am.critical()).toBe('sleep');
+  });
+});

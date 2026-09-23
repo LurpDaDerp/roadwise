@@ -24,6 +24,8 @@ export interface NodInput {
   ruleSpeedKmh: number | null;
   /** Perceived.closureBridged (C-26) */
   closureBridged?: boolean;
+  /** Perceived.gap (T12 R1-m1): unobserved time never counts toward the deep-lid hold, unless bridged */
+  gap?: boolean;
 }
 
 export interface NodEvent {
@@ -72,6 +74,7 @@ export function createNodDetector(cfg: Pick<DmsConfig, 'nod'>) {
         return out;
       }
       gapSince = null;
+      if (x.gap === true && x.closureBridged !== true && drop !== null) drop.deepSince = null;
       const pitch = x.relPitchDeg;
       const speed = prev !== null && x.tMs > prev.t ? ((pitch - prev.pitch) * 1000) / (x.tMs - prev.t) : 0;
       prev = { t: x.tMs, pitch };

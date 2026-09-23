@@ -32,7 +32,11 @@
 //     louder tier; the count then restarts.
 //  9. Sensitivity (C-20) scales D1's buffer in attention.ts.
 // Shadow mode decides everything the same and marks every command `muted`. `stopAll` ends the session's
-// sound (drive end, opt-out or revoke, sign-out, engine reset; T11 review m1).
+// sound (drive end, opt-out or revoke, sign-out, engine reset; T11 review m1). `cameraOff` is NOT a
+// session end (T13 r1 I1): the camera going off at speed (heat, dark) stops a running distraction and drops
+// the held items, but KEEPS a running Critical (the phone's heat says nothing about the driver); it then
+// ends on a known < 10 km/h for 5 s, on its clear condition once frames return, or after
+// criticalBlindMaxS with no frame (blind_cap), followed by one Tier 1 `monitoring_paused`.
 import type { DmsConfig } from './config';
 import type { Quality } from './quality';
 import { RingBuffer } from './windows';
@@ -47,9 +51,11 @@ export type AlertKind =
   | 'sleep'
   | 'fatigue_early'
   | 'fatigue'
-  | 'repeated_glances';
+  | 'repeated_glances'
+  /** T13 r1 I1: a Critical stopped after criticalBlindMaxS with the camera off (heat or dark) */
+  | 'monitoring_paused';
 
-export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', 'phone_pattern', 'unresponsive', 'microsleep', 'microsleep_nod', 'sleep', 'fatigue_early', 'fatigue', 'repeated_glances'];
+export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', 'phone_pattern', 'unresponsive', 'microsleep', 'microsleep_nod', 'sleep', 'fatigue_early', 'fatigue', 'repeated_glances', 'monitoring_paused'];
 
 export interface DmsAlertCommand {
   id: number;
@@ -59,6 +65,8 @@ export interface DmsAlertCommand {
   tMs: number;
   epochMs: number;
   muted: boolean;
+  /** `monitoring_paused`: why the camera is off */
+  cause?: 'heat' | 'dark';
 }
 
 /**
@@ -91,6 +99,8 @@ export interface AlertFrame {
   eyesOpen: boolean;
   warmup: boolean;
   requests: readonly AlertRequest[];
+  /** a tick with no camera frame (the façade's 1 Hz row tick while the camera is off) */
+  blind?: boolean;
 }
 
 export type AlertOutcome = 'delivered' | 'muted' | 'merged' | 'dropped' | 'suppressed';
@@ -101,7 +111,7 @@ export interface AlertLogEntry {
   tMs: number;
   outcome: AlertOutcome;
   /** why it was suppressed or dropped, or the invariant a delivered Critical broke */
-  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'escalation_unverified' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end';
+  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'escalation_unverified' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end' | 'camera_off' | 'blind_cap';
   /** rule 8's event flag */
   flag?: boolean;
   /** rule 7 */
@@ -169,6 +179,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   /** a distraction/cumulative request since the last on-road frame or known-low run (T11 round 2) */
   let pendingEscalation = false;
   let pendingLowSince: number | null = null;
+  /** since cameraOff, while no frame has arrived */
+  let blind: { since: number; cause: 'heat' | 'dark' } | null = null;
 
   function record(e: AlertLogEntry): void {
     log.push(e);
@@ -190,6 +202,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
 
   return {
     onFrame(x: AlertFrame): readonly DmsAlertCommand[] {
+      if (x.blind !== true) blind = null; // a frame: the camera is back
       // The escalation corroboration clears as D4's pending state does (no allocation).
       if (pendingEscalation) {
         const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
@@ -219,6 +232,14 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         if (cleared || stopped) {
           cmd(out, x, 'stop', critical.kind);
           critical = null;
+        } else if (blind !== null && x.blind === true && x.tMs - blind.since >= a.criticalBlindMaxS * 1000 - EPS) {
+          // Blind too long: stop, and tell the driver once why monitoring paused.
+          cmd(out, x, 'stop', critical.kind);
+          record({ kind: critical.kind, tier: 3, tMs: x.tMs, outcome: 'dropped', why: 'blind_cap' });
+          critical = null;
+          out.push({ id: nextId++, action: 'once', tier: 1, kind: 'monitoring_paused', tMs: x.tMs, epochMs: x.epochMs, muted, cause: blind.cause });
+          record({ kind: 'monitoring_paused', tier: 1, tMs: x.tMs, outcome: muted ? 'muted' : 'delivered' });
+          blind = null;
         }
       }
 
@@ -320,6 +341,25 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
     },
 
     /**
+     * The camera went off at speed (thermal L3, the low-light suspend; T13 r1 I1): a running distraction
+     * stops (it could never see the road again), the held items are dropped, and a running Critical is
+     * KEPT, bounded by criticalBlindMaxS without frames.
+     */
+    cameraOff(tMs: number, epochMs: number, cause: 'heat' | 'dark'): readonly DmsAlertCommand[] {
+      const out: DmsAlertCommand[] = [];
+      const x = { tMs, epochMs };
+      if (distraction !== null) {
+        cmd(out, x, 'stop', distraction);
+        record({ kind: distraction, tier: 2, tMs, outcome: 'dropped', why: 'camera_off' });
+        distraction = null;
+      }
+      for (const h of held) refuse(x, h.req, 'dropped', 'camera_off', h.raised);
+      held.length = 0;
+      blind = { since: tMs, cause };
+      return out.length > 0 ? out : EMPTY;
+    },
+
+    /**
      * Ends the session's sound: `stop` for a running Critical or distraction, held items dropped
      * (`session_end`), state reset. For drive end, opt-out or revoke, sign-out and engine reset.
      */
@@ -333,6 +373,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       held.length = 0;
       distraction = null;
       critical = null;
+      blind = null;
       return out;
     },
 

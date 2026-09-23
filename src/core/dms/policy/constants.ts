@@ -32,3 +32,19 @@ export const THERMAL_L4_AFTER_MS = 120_000;
 /** Low Power Mode, or the battery below this and not charging → at most POWER_CAP_FPS. */
 export const LOW_BATTERY_PCT = 20;
 export const POWER_CAP_FPS = 8;
+
+/**
+ * The low-light suspend (T13 r1 m1; reversible defaults, user item U-21): LOST because it is too dark, at
+ * ≥ minSpeedKmh, continuously for suspendAfterMs → the camera pauses; while suspended it probes for
+ * probeForMs every probeEveryMs, and a probe that sees a face resumes.
+ */
+export const LOW_LIGHT = { suspendAfterMs: 60_000, minSpeedKmh: 20, probeEveryMs: 300_000, probeForMs: 10_000 } as const;
+
+/** The policy's own numbers, checked (an empty list when they are sound). */
+export function validatePolicyConstants(l: { suspendAfterMs: number; minSpeedKmh: number; probeEveryMs: number; probeForMs: number } = LOW_LIGHT): string[] {
+  const bad: string[] = [];
+  if (!(l.suspendAfterMs > 0)) bad.push('LOW_LIGHT.suspendAfterMs: must be > 0');
+  if (!(l.minSpeedKmh >= 0)) bad.push('LOW_LIGHT.minSpeedKmh: must be ≥ 0');
+  if (!(l.probeForMs > 0 && l.probeForMs < l.probeEveryMs)) bad.push('LOW_LIGHT.probeForMs: must be > 0 and shorter than probeEveryMs');
+  return bad;
+}

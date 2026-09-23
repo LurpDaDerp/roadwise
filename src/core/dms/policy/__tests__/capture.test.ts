@@ -3,6 +3,7 @@
 import type { ThermalName } from '../../../../../modules/dms-vision/src/constants';
 import { capturePolicySchema } from '../../../../../modules/dms-vision/src/wire';
 import { createCapturePolicy, nativePolicy, STATE_TABLE, THERMAL_LADDER, type PolicyInput, type PolicyOutput } from '../capture';
+import { LOW_LIGHT, validatePolicyConstants } from '../constants';
 
 type Q = 'tracking' | 'head_only' | 'lost';
 interface Seg {
@@ -19,6 +20,7 @@ interface Seg {
   battery?: number | null;
   charging?: boolean | null;
   setup?: boolean;
+  /** the engine reports LOST because of low light (frame luma < 25) */
   lowLight?: boolean;
   gazeNetEvery?: 1 | 2;
 }
@@ -69,7 +71,7 @@ function sim(segs: Seg[], policy = createCapturePolicy()): Tick[] {
         batteryLevel: cur.battery,
         charging: cur.charging,
         setup: cur.setup,
-        lowLightSuspend: cur.lowLight,
+        lostLowLight: cur.lowLight,
         gazeNetEvery: cur.gazeNetEvery,
       });
       ticks.push({ t, out });
@@ -134,8 +136,10 @@ describe('each state is reached', () => {
     expect(at(t, 120.1).state).not.toBe('SETUP');
     expect(at(t, 120.1).setupMode).toBe(false);
   });
-  test('the low-light suspend window → PAUSED (reason low_light)', () => {
-    expect(last(sim([{ s: 5 }, { s: 1, lowLight: true }]))).toMatchObject({ action: 'pause', state: 'PAUSED', reason: 'low_light', fps: 0 });
+  test('the low-light suspend (T13 r1 m1, U-21): LOST in low light at ≥ 20 km/h for 60 s → PAUSED (reason low_light), not at 59 s', () => {
+    const t = sim([{ s: 5 }, { s: 62, quality: 'lost', lowLight: true }]);
+    expect(at(t, 5 + 59).state).not.toBe('PAUSED');
+    expect(at(t, 5 + 60.5)).toMatchObject({ action: 'pause', state: 'PAUSED', reason: 'low_light', fps: 0 });
   });
 });
 
@@ -218,11 +222,11 @@ describe('the thermal ladder and its dwells (rev1 m9)', () => {
     expect(at(t, 15 + 59).state).toBe('PAUSED');
     expect(at(t, 15 + 61)).toMatchObject({ state: 'FULL', fps: 8, gazeNet: false });
   });
-  test('stopAlerts: once, on the evaluation where L3 turns the camera off at speed (T11 m1 carry); not when already paused', () => {
+  test('T13 r1 I1 cameraOff: once, when a run goes to PAUSED for heat at speed; not when already paused', () => {
     const t = sim([{ s: 5 }, { s: 5, thermal: 'critical' }]);
-    expect(t.filter((x) => x.out.stopAlerts).map((x) => x.t)).toEqual([5000]);
+    expect(t.filter((x) => x.out.cameraOff !== null).map((x) => [x.t, x.out.cameraOff])).toEqual([[5000, 'heat']]);
     const parked = sim([{ s: 10, speed: 0 }, { s: 5, thermal: 'critical' }]);
-    expect(parked.some((x) => x.out.stopAlerts)).toBe(false);
+    expect(parked.some((x) => x.out.cameraOff !== null)).toBe(false);
   });
 });
 
@@ -259,5 +263,39 @@ describe('the native policy (the wrapper validates it: capturePolicySchema)', ()
     const pause = nativePolicy(last(sim([{ s: 12, speed: 0 }])), 'tok');
     expect(capturePolicySchema.parse(pause)).toMatchObject({ capture: 'pause' });
     expect(nativePolicy(last(sim([{ s: 2, gate: false }])), 'tok')).toBeNull();
+  });
+});
+
+describe('T13 round 1: the camera-off edge and the low-light suspend (m1, U-21 defaults)', () => {
+  test('cameraOff fires once for the low-light suspend at speed (dark), never for the stopped pause', () => {
+    const dark = sim([{ s: 5 }, { s: 70, quality: 'lost', lowLight: true }]);
+    const edges = dark.filter((x) => x.out.cameraOff !== null);
+    expect(edges.map((x) => x.out.cameraOff)).toEqual(['dark']);
+    expect(edges[0]!.t).toBeGreaterThanOrEqual(65_000);
+    const stopped = sim([{ s: 5, speed: 30 }, { s: 12, speed: 0 }]);
+    expect(stopped.some((x) => x.out.state === 'PAUSED')).toBe(true);
+    expect(stopped.some((x) => x.out.cameraOff !== null)).toBe(false);
+  });
+  test('while suspended, a 10 s probe every 5 min at CLOSURE_WATCH (5 fps), then PAUSED again', () => {
+    const t = sim([{ s: 5 }, { s: 400, quality: 'lost', lowLight: true }]);
+    const suspendAt = t.find((x) => x.out.reason === 'low_light')!.t / 1000;
+    expect(at(t, suspendAt + 299).state).toBe('PAUSED');
+    expect(at(t, suspendAt + 301)).toMatchObject({ action: 'run', state: 'CLOSURE_WATCH', fps: 5 });
+    expect(at(t, suspendAt + 311)).toMatchObject({ state: 'PAUSED', reason: 'low_light' });
+    expect(t.filter((x) => x.out.cameraOff !== null)).toHaveLength(1); // a probe ending is not a new camera-off edge
+  });
+  test('a probe that sees a face resumes', () => {
+    const t = sim([{ s: 5 }, { s: 366, quality: 'lost', lowLight: true }, { s: 20, quality: 'tracking', lowLight: false }]);
+    expect(at(t, 380)).toMatchObject({ action: 'run', state: 'FULL' });
+  });
+  test('below 20 km/h, or LOST without low light, never suspends', () => {
+    expect(sim([{ s: 5, speed: 15 }, { s: 70, quality: 'lost', lowLight: true }]).some((x) => x.out.reason === 'low_light')).toBe(false);
+    expect(sim([{ s: 5 }, { s: 70, quality: 'lost', lowLight: false }]).some((x) => x.out.reason === 'low_light')).toBe(false);
+  });
+  test('the numbers are validated', () => {
+    expect(LOW_LIGHT).toEqual({ suspendAfterMs: 60_000, minSpeedKmh: 20, probeEveryMs: 300_000, probeForMs: 10_000 });
+    expect(validatePolicyConstants(LOW_LIGHT)).toEqual([]);
+    expect(validatePolicyConstants({ ...LOW_LIGHT, probeForMs: 300_000 })).toEqual([expect.stringMatching(/probeForMs/)]);
+    expect(validatePolicyConstants({ ...LOW_LIGHT, suspendAfterMs: 0 })).toEqual([expect.stringMatching(/suspendAfterMs/)]);
   });
 });

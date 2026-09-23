@@ -5,7 +5,8 @@
 //
 // States, highest precedence first:
 //   OFF            the gate is closed (no session, fps 0)
-//   PAUSED         thermal L3 (reason `thermal`), the low-light suspend window (`low_light`), or a KNOWN
+//   PAUSED         thermal L3 (reason `thermal`), the low-light suspend (`low_light`: LOST in the dark at
+//                  ≥ 20 km/h for 60 s, probing 10 s every 5 min; U-21 defaults), or a KNOWN
 //                  speed < 10 km/h for PAUSE_AFTER_STOP_MS (`stopped`; never on a held or unknown speed)
 //   SETUP          beginSetup() until endSetup() or 120 s: 15 fps, the net, the preview while stationary
 //   SEARCH         the face LOST > 2 s at ≥ 10 km/h, or phone handling: 5 fps
@@ -35,6 +36,7 @@ import {
   FAST_KMH,
   HEAD_ONLY_RUN_MS,
   LOW_BATTERY_PCT,
+  LOW_LIGHT,
   POWER_CAP_FPS,
   PREVIEW_STILL_KMH,
   PREVIEW_STILL_MS,
@@ -93,8 +95,8 @@ export interface PolicyInput {
   charging: boolean | null;
   /** between beginSetup() and endSetup() */
   setup: boolean;
-  /** the low-light suspend window (host-defined; see the report) */
-  lowLightSuspend: boolean;
+  /** the engine reports this frame LOST because it is too dark (engine.snapshot().lostLowLight) */
+  lostLowLight: boolean;
   gazeNetEvery: 1 | 2;
 }
 
@@ -113,10 +115,11 @@ export interface PolicyOutput {
   /** SEARCH: the engine freezes D1/D2 (engine.setHost({ search })) */
   search: boolean;
   /**
-   * True once, on the evaluation where thermal L3 turns the camera off while the car was running at speed:
-   * the host ends the running alert sound then (T11 m1 carry), and keeps feeding rows.
+   * Once, on the evaluation where a run goes to PAUSED for heat (thermal L3) or the dark (the low-light
+   * suspend) while not stopped (T13 r1 I1): the host calls engine.cameraOff(tMs, cause), which stops a
+   * distraction but KEEPS a Critical, and keeps feeding rows. Null otherwise (and for the stopped pause).
    */
-  stopAlerts: boolean;
+  cameraOff: 'heat' | 'dark' | null;
 }
 
 type SpeedClass = 'stopped' | 'slow' | 'fast';
@@ -145,6 +148,10 @@ export function createCapturePolicy() {
   let coolTarget: ThermalLevel = 0;
   let l3Since: number | null = null;
   let prevState: CaptureState = 'OFF';
+  // The low-light suspend.
+  let darkSince: number | null = null;
+  let suspendedAt: number | null = null;
+  let prevProbing = false;
 
   function onRow(r: PolicyRow): void {
     if (r.speedKmh === null) {
@@ -233,6 +240,25 @@ export function createCapturePolicy() {
       else setupSince = null;
       const inSetup = setupSince !== null && x.tMs - setupSince < SETUP_MAX_MS;
 
+      // The low-light suspend: LOST in the dark at speed for suspendAfterMs; probes; a face resumes.
+      let probing = false;
+      if (!x.gateOpen) {
+        darkSince = null;
+        suspendedAt = null;
+      } else if (suspendedAt === null) {
+        const dark = x.quality === 'lost' && x.lostLowLight && speedClass === 'fast' && (x.row?.speedKmh ?? FAST_KMH) >= LOW_LIGHT.minSpeedKmh;
+        darkSince = dark ? (darkSince ?? x.tMs) : null;
+        if (darkSince !== null && x.tMs - darkSince >= LOW_LIGHT.suspendAfterMs) suspendedAt = x.tMs;
+      } else {
+        const since = x.tMs - suspendedAt;
+        probing = since >= LOW_LIGHT.probeEveryMs && since % LOW_LIGHT.probeEveryMs < LOW_LIGHT.probeForMs;
+        if (probing && (x.quality === 'tracking' || x.quality === 'head_only')) {
+          suspendedAt = null; // a probe saw a face
+          darkSince = null;
+          probing = false;
+        }
+      }
+
       let state: CaptureState;
       let reason: PolicyOutput['reason'] = null;
       if (!x.gateOpen) {
@@ -242,13 +268,14 @@ export function createCapturePolicy() {
         state = 'PAUSED';
         reason = 'thermal';
       } else if (inSetup) state = 'SETUP';
-      else if (x.lowLightSuspend) {
+      else if (suspendedAt !== null && !probing) {
         state = 'PAUSED';
         reason = 'low_light';
       } else if (paused) {
         state = 'PAUSED';
         reason = 'stopped';
-      } else if ((x.quality === 'lost' && x.qualityForMs > SEARCH_LOST_MS && speedClass !== 'stopped') || x.row?.handling === true) state = 'SEARCH';
+      } else if (probing) state = 'CLOSURE_WATCH'; // a low-light probe: 5 fps, landmarks only
+      else if ((x.quality === 'lost' && x.qualityForMs > SEARCH_LOST_MS && speedClass !== 'stopped') || x.row?.handling === true) state = 'SEARCH';
       else if (speedClass === 'fast') state = x.quality === 'head_only' && x.qualityForMs >= HEAD_ONLY_RUN_MS ? 'HEAD_ONLY_RUN' : 'FULL';
       else state = 'CLOSURE_WATCH';
 
@@ -263,8 +290,10 @@ export function createCapturePolicy() {
         fps = Math.min(fps, cap) as DmsFps;
       }
       const running = prevState === 'SEARCH' || prevState === 'CLOSURE_WATCH' || prevState === 'FULL' || prevState === 'HEAD_ONLY_RUN';
-      const stopAlerts = state === 'PAUSED' && reason === 'thermal' && running && speedClass !== 'stopped';
+      const edge = state === 'PAUSED' && running && !prevProbing && speedClass !== 'stopped';
+      const cameraOff = edge && reason === 'thermal' ? 'heat' : edge && reason === 'low_light' ? 'dark' : null;
       prevState = state;
+      prevProbing = probing;
       return {
         action: state === 'OFF' ? 'off' : state === 'PAUSED' ? 'pause' : 'run',
         state,
@@ -277,7 +306,7 @@ export function createCapturePolicy() {
         dimAdvised: l3Since !== null && x.tMs - l3Since >= THERMAL_L4_AFTER_MS,
         thermalLevel: applied,
         search: state === 'SEARCH',
-        stopAlerts,
+        cameraOff,
       };
     },
   };

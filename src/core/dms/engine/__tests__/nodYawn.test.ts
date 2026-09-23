@@ -57,6 +57,23 @@ describe('nods', () => {
     expect(nods(profile(20, 0.6, 0.3, 0.4), lids, 6, 60, { lost: gap, bridged: true })).toEqual(['microsleep_nod']);
     expect(nods(profile(20, 0.6, 0.3, 0.4), lids, 6, 60, { lost: gap, bridged: false })).toEqual(['nod']);
   });
+  test('T12 R1-m1: a frame gap does not count as deep-lid time (unless bridged)', () => {
+    // 15 fps; the frames in (1.28 s, 1.8 s) are missing (a 0.53 s gap); lids at 0.1 for about 0.1 s on each
+    // side of it. The depth is seen at 1.8 s, the recovery after 1.9 s.
+    const d = createNodDetector(C);
+    const kinds: string[] = [];
+    let prevT = -1;
+    const pitch = profile(20, 0.6, 0.3, 0.4);
+    for (let i = 0; i <= 6 * 15; i++) {
+      const t = i / 15;
+      if (t > 1.28 && t < 1.8) continue;
+      const lids = (t >= 1.2 && t <= 1.28) || (t >= 1.8 && t < 1.9) ? 0.1 : 0.3;
+      const gap = prevT >= 0 && t - prevT > 0.5;
+      prevT = t;
+      kinds.push(...d.onFrame({ tMs: t * 1000, quality: 'tracking', relPitchDeg: pitch(t), openness: lids, ruleSpeedKmh: 60, gap }).map((e) => e.kind));
+    }
+    expect(kinds).toEqual(['nod']);
+  });
   test('microsleep_nod needs 20 km/h; below it the nod is still counted', () => {
     const lidsShut = (t: number) => (t >= 1.2 && t < 1.8 ? 0.1 : 0.3);
     expect(nods(profile(20, 0.6, 0.3, 0.4), lidsShut, 6, 15)).toEqual(['nod']);
