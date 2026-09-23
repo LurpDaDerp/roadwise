@@ -16,7 +16,7 @@ const dms = createDefaultDmsController({
 ```
 
 - **`createDefaultDmsController` binds the native module inside the host** (security T14 m-1). M7 never imports `modules/dms-vision` or holds the raw wrapper, whose `start` takes a plain string. `imports.test.ts` fails the build if anything outside `src/core/dms/host` references the wrapper or `createGate`, in any import form, or if anything re-exports either. `createDmsController({ native, … })` is for tests with the fake.
-- **One native owner.** Every `createDefaultDmsController` shares one slot for the camera module: a controller takes it before its first native call of a drive and gives it back at the drive's end and on `dispose()`. Another controller whose gate would open meanwhile stays closed with reason `busy` and makes no native call. **M7 carry:** the HUD maps `busy` to its own message, "camera in use by diagnostics", never a generic off (the dev panel is the only other holder, and it lets go on blur).
+- **One native owner.** Every `createDefaultDmsController` shares one slot for the camera module: a controller takes it before its first native call of a drive and gives it back at the drive's end and on `dispose()`. Another controller whose gate would open meanwhile stays closed with reason `busy` and makes no native call. The slot is taken before the permission read, so a panel whose OS permission is denied still holds it until its drive ends or it is disposed (final review n-3: acceptable for a developer screen). **M7 carry:** the HUD maps `busy` to its own message, "camera in use by diagnostics", never a generic off (the dev panel is the only other holder, and it lets go on blur).
 - **Build it on sign-in and `dispose()` it on sign-out, an account switch or account deletion.** Disposing ignores every later call and stops the camera first, before it ends the drive (security M-2/M-4, T14 I-1).
 - **Clear the profile after disposing:** `await dms.dispose(); await store.clear();` on sign-out and on account deletion. `dispose` may save the uid's profile while it ends the drive, so a `clear()` before it can be undone. Run the handover wipe after both (security T14 m-3).
 - **The gate's nonce** is `expo-crypto` `randomUUID()`. The token never leaves the controller: never log it or store it.
@@ -40,7 +40,7 @@ const dms = createDefaultDmsController({
 ## Status and events
 
 - **Camera values:** `off`, `starting`, `active`, `limited`, `paused`.
-- **Reasons:** the gate's closing input (`not_opted_in`, `flag_off`, `age`, `no_drive`, `mode`, `role`, `app_inactive`, `permission`), `error` (off for the drive after the retry), `busy` (another controller holds the camera), the pauses (`thermal`, `low_light`, `stopped`), and what a limited camera means (`face_lost`, `eyes_not_visible`, `low_light`).
+- **Reasons:** the gate's closing input (`not_opted_in`, `flag_off`, `age`, `no_drive`, `mode`, `role`, `app_inactive`, `permission`), `error` (off for the drive after the retry, or native paused itself on an error while it is recovered), `interrupted` (native paused itself: another app took the camera, or the OS interrupted it; recovered by stop and start after 5 s), `busy` (another controller holds the camera), the pauses (`thermal`, `low_light`, `stopped`), and what a limited camera means (`face_lost`, `eyes_not_visible`, `low_light`).
 - **Event kinds:** attention `d1_warning`, `d1_rearmed`, `d2_warning`, `d2_reset`, `d3_phone_pattern`, `d4_unresponsive`, `glance_end`; drowsiness `microsleep`, `sleep`, `unresponsive`, `blink`, `episode_end`, `nod`, `microsleep_nod`, `yawn`; calibration `calibrated`, `provisional`, `uncalibrated`, `camera_bump`, `driver_change`, `baseline_reset`, `warm_start`; and `fatigue_minute`. Events carry zones, durations, levels and scores, never a frame value.
 
 ## Gate inputs (`DmsGateInputs`)
@@ -81,6 +81,8 @@ Any input that is false, missing or unknown keeps the camera off.
 
 - **Nothing runs while the gate is closed:** no native call (the permission read included), no timer, no listener work. Native failures are silent: one retry after 5 s, then off for the drive.
 - **The camera going off at speed** (heat, darkness, a native fault) keeps a running Critical, bounded at 60 s without frames, and stops a running distraction; M7 keeps calling `pushRow`.
+- **A Critical never sounds forever** (U-23, the user's ruling, reversible): with no TRACKING face for 60 s (`alerts.criticalLostMaxS`; LOST, HEAD_ONLY or no frames, continuously) it stops and one `monitoring_paused` (cause `face_lost`) plays. The accepted cost: a driver slumped out of view gets 60 s of alarm, then the notice. The 60 s without frames is measured from the last frame, whether or not the camera-off was announced.
+- **The summary counts the drive the camera did not see**: `cameraOffS` by cause (heat, dark, fault, gate, paused, stall) at a monitored speed; `trackingCoverage` and `cameraSession` include it, and `thermalMinutes['3']` is the time at L3.
 - **The profile** lives only in `settings['dms.profile'] = { uid, profile }`, is loaded only for the same uid, and is removed on a mismatch. It is face-geometry-derived (interocular distance, face box, pose and eye baselines) and notices when someone else is driving: the A10 copy and counsel (U-2) must cover that.
 
 ## The dev diagnostics panel (`/(app)/dev/dms`)

@@ -55,6 +55,7 @@ const REASONS = {
   permission: true,
   error: true,
   busy: true,
+  interrupted: true,
   thermal: true,
   low_light: true,
   stopped: true,

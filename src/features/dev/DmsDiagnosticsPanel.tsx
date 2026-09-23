@@ -237,6 +237,7 @@ export function DmsDiagnosticsPanel({
     frames: 0,
     droppedBatches: 0,
     droppedRecords: 0,
+    droppedEvents: 0,
     ruleSpeedKmh: null,
     native: null,
   });

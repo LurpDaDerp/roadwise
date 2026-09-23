@@ -2,7 +2,7 @@
 // security T13 M-2/M-3/M-4; T13 r1 I1 cameraOff): the fail-closed lifecycle M7 plugs into.
 import type { FeatureRow } from '@/core/engine/types';
 import { createFakeDmsVision, type FakeDmsVision } from '../../../../../modules/dms-vision/src/fake';
-import { recordFromFeatures } from '../../../../../modules/dms-vision/src/wire';
+import { buildFrameBatch, recordFromFeatures } from '../../../../../modules/dms-vision/src/wire';
 import type { DmsVisionApi } from '../../../../../modules/dms-vision/src/types';
 import type { DmsAlertCommand } from '../../engine/alerts';
 import type { DmsConfigOverrides } from '../../engine/config';
@@ -719,5 +719,223 @@ describe('T14 r2 R1-m3: a native fault during the permission read is not restart
     expect(starts(h)).toBe(1); // rows under 5 s after the fault: still waiting
     await drive(h, 8, 9, { frameAt: () => null });
     expect(starts(h)).toBe(2); // the one retry
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// The final whole-DMS review, integration half (final-review-integration.md): I-1..I-4, M-1..M-3, M-5.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('final review I-1: native pauses and stops itself', () => {
+  test('paused/interrupted during a Critical at 60 km/h: blind_cap + monitoring_paused (fault) at 60 s, an honest HUD', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 104, { frameAt: eyesShut(100, 400, 104) });
+    expect(critStarted(h)).toBe(true);
+    const n = h.alerts.length;
+    h.fake.emitRaw('state', { state: 'paused', reason: 'interrupted' });
+    await drive(h, 104, 106, { frameAt: () => null });
+    expect(h.ctl.status().camera).not.toBe('starting');
+    expect(h.ctl.status()).toMatchObject({ reason: 'interrupted' });
+    await drive(h, 106, 166, { frameAt: () => null });
+    const after = h.alerts.slice(n);
+    expect(after.filter((c) => c.kind === 'monitoring_paused').map((c) => c.cause)).toEqual(['fault']);
+    expect(after.some((c) => c.action === 'stop' && c.tier === 3)).toBe(true);
+  });
+  test('a running distraction, then paused/interrupted: its stop is dispatched at once', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
+    await drive(h, 0, 104, { frameAt: synthFrames(stack, 106, 15) });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction']);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'interrupted' });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
+  });
+  test('a paused/error that persists: stop(), one start() 5 s later, then off for the drive after the second failure', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    expect(starts(h)).toBe(1);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+    await drive(h, 3, 4, { frameAt: () => null });
+    expect(methods(h)).toContain('stop');
+    expect(starts(h)).toBe(1);
+    await drive(h, 4, 9, { frameAt: () => null });
+    expect(starts(h)).toBe(2); // the one retry
+    h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+    await drive(h, 9, 30, { frameAt: () => null });
+    expect(starts(h)).toBe(2);
+    expect(h.ctl.status()).toMatchObject({ camera: 'off', reason: 'error' });
+  });
+  test('an interruption longer than 5 s is recovered by stop() then start()', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'interrupted' });
+    await drive(h, 3, 8, { frameAt: () => null });
+    expect(starts(h)).toBe(1); // under 5 s: native may still end the interruption itself
+    await drive(h, 8, 9, { frameAt: () => null });
+    expect(methods(h).filter((m) => m === 'stop').length).toBeGreaterThanOrEqual(1); // at 5 s: stop()
+    await drive(h, 9, 15, { frameAt: () => null });
+    expect(starts(h)).toBe(2); // and one start() 5 s later
+  });
+  test('native paused/thermal: the HUD says paused / thermal, never starting', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitRaw('state', { state: 'paused', reason: 'thermal' });
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'thermal' });
+  });
+});
+
+describe('final review I-2: no frame reaches the engine after the gate closes', () => {
+  test('role → passenger while a D1 sounds, then a flushed batch that would cross D2/D4: no start after the close', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const phone: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(0, -40) : onRoad(r), speedKmh: 70 });
+    const frames = synthFrames(phone, 110, 15);
+    await drive(h, 0, 103, { frameAt: frames, speed: () => 70 });
+    expect(h.alerts.some((c) => c.action === 'start')).toBe(true);
+    h.ctl.setGate({ ...GATE, role: 'passenger' });
+    const n = h.alerts.length;
+    const framesBefore = h.ctl.diagnostics().frames;
+    // native's teardown flushes what it held: 4 s of the same head-down frames
+    const recs = [];
+    for (let t = 103_000; t < 107_000; t += 1000 / 15) recs.push(recordFromFeatures(featuresFromFrame({ ...(frames(t) ?? frame({ tMs: t })), tMs: t })));
+    h.fake.emitRaw('frames', buildFrameBatch(recs, EPOCH0 + 103_000));
+    expect(h.alerts.slice(n).filter((c) => c.action !== 'stop')).toEqual([]);
+    expect(h.ctl.diagnostics().frames).toBe(framesBefore);
+  });
+  test('the same for sign-out (dispose)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const phone: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(0, -40) : onRoad(r), speedKmh: 70 });
+    const frames = synthFrames(phone, 110, 15);
+    await drive(h, 0, 103, { frameAt: frames, speed: () => 70 });
+    const p = h.ctl.dispose();
+    const framesBefore = h.ctl.diagnostics().frames;
+    const recs = [];
+    for (let t = 103_000; t < 107_000; t += 1000 / 15) recs.push(recordFromFeatures(featuresFromFrame({ ...(frames(t) ?? frame({ tMs: t })), tMs: t })));
+    h.fake.emitRaw('frames', buildFrameBatch(recs, EPOCH0 + 103_000));
+    await p;
+    expect(h.ctl.diagnostics().frames).toBe(framesBefore);
+    expect(h.alerts.filter((c) => c.action === 'start' && c.tMs >= EPOCH0 + 103_000)).toEqual([]);
+  });
+});
+
+describe('final review I-3: native is never started while the policy says PAUSED', () => {
+  test('a long stop: native releases itself at 5 min and is not restarted until the car moves again', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    expect(starts(h)).toBe(1);
+    await drive(h, 5, 400, { speed: () => 0, frameAt: () => null });
+    expect(h.fake.nativeState()).toBe('stopped'); // released by native
+    expect(starts(h)).toBe(1);
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'stopped' });
+    await drive(h, 400, 406, { speed: () => 40 });
+    expect(starts(h)).toBe(2);
+  });
+  test('thermal critical: no start while critical (thermal read fresh while stopped); one start after the cool dwell', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    h.fake.setThermal('critical');
+    h.fake.emitStatus();
+    await drive(h, 5, 400, { frameAt: () => null });
+    expect(h.fake.nativeState()).toBe('stopped');
+    expect(starts(h)).toBe(1);
+    h.fake.setThermal('nominal');
+    await drive(h, 400, 480, { frameAt: () => null });
+    expect(starts(h)).toBe(2);
+  });
+});
+
+describe('final review M-1: late state events never overwrite the controller’s own state', () => {
+  test('a setPolicy refused with E_STATE (native stopped itself) is not a native failure', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.failNext('setPolicy', 'E_STATE');
+    await drive(h, 3, 20);
+    h.fake.failNext('setPolicy', 'E_STATE');
+    await drive(h, 20, 40);
+    expect(h.ctl.status()).toMatchObject({ camera: 'active' });
+    expect(h.ctl.summary()!.camera).toMatchObject({ retries: 0, gaveUp: false });
+  });
+  test('close, reopen and close within one stop’s latency (async delivery): native is stopped after the last close', async () => {
+    const fake = createFakeDmsVision({ epochAtZero: EPOCH0, asyncDelivery: true });
+    const ctl = createDmsController({ native: fake, onAlert: () => {}, onStatus: () => {}, profileStore: { load: async () => null, save: async () => {}, clear: async () => {} }, random: () => 'n' });
+    ctl.setGate(GATE);
+    ctl.pushRow(featureRow(0, 60), POWER);
+    await ctl.idle();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    ctl.setGate({ ...GATE, appActive: false });
+    ctl.setGate(GATE);
+    ctl.setGate({ ...GATE, appActive: false });
+    await ctl.idle();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await ctl.idle();
+    expect(fake.nativeState()).toBe('stopped');
+    expect(fake.calls.at(-1)!.method).toBe('stop');
+  });
+});
+
+describe('final review M-2: a drive end is atomic', () => {
+  test('endDrive() and dispose() together, with a slow save: the engine ends once, and the save lands before dispose resolves', async () => {
+    const saved: unknown[] = [];
+    let release: (() => void) | null = null;
+    const fake = createFakeDmsVision({ epochAtZero: EPOCH0 });
+    const endCalls: number[] = [];
+    const ctl = createDmsController({
+      native: fake,
+      onAlert: () => {},
+      onStatus: () => {},
+      onEvent: () => {},
+      profileStore: { load: async () => null, save: (p) => new Promise<void>((res) => (release = () => (saved.push(p), res()))), clear: async () => {} },
+      random: () => 'n',
+    });
+    const h: H = { fake, ctl, alerts: [], statuses: [], events: [], saved: [] };
+    ctl.setGate(GATE);
+    await drive(h, 0, 90, { frameAt: synthFrames((t, r) => ({ gaze: onRoad(r), speedKmh: 60 }), 90, 15) });
+    const a = ctl.endDrive().then((s) => endCalls.push(s === null ? 0 : 1));
+    const b = ctl.dispose();
+    for (let i = 0; i < 20 && release === null; i++) await Promise.resolve();
+    let disposed = false;
+    void b.then(() => (disposed = true));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(disposed).toBe(false); // dispose waits for the save
+    (release as unknown as () => void)();
+    await a;
+    await b;
+    expect(saved).toHaveLength(1);
+    expect(endCalls).toEqual([1]);
+    expect(ctl.summary()!.calibration.state).toBe('calibrated'); // not overwritten by a second, empty end
+  });
+});
+
+describe('final review M-3: setup does not outlive its drive', () => {
+  test('beginSetup without endSetup, the drive ends: the next drive does not start in SETUP', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    h.ctl.beginSetup();
+    await drive(h, 0, 3, { speed: () => 0 });
+    await h.ctl.endDrive();
+    h.ctl.setGate(GATE);
+    await drive(h, 3, 6, { speed: () => 0 });
+    const last = h.fake.calls.filter((c) => c.method === 'setPolicy').at(-1)!.args[0] as { setupMode: boolean };
+    expect(last.setupMode).toBe(false);
+  });
+});
+
+describe('final review M-5: malformed native events are dropped and counted', () => {
+  test('a state with an unknown value and a status without fields change nothing and are counted', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    h.fake.emitRaw('state', { state: 'exploded', reason: 'x' });
+    h.fake.emitRaw('status', { nope: true });
+    expect(h.ctl.status().camera).toBe('active');
+    expect(h.ctl.diagnostics().droppedEvents).toBe(2);
   });
 });

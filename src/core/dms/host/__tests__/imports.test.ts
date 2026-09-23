@@ -24,7 +24,8 @@ const path = require('node:path') as { join: (...p: string[]) => string; resolve
 
 const ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..');
 const SELF = path.relative(ROOT, path.resolve(__dirname, 'imports.test.ts')).replace(/\\/g, '/');
-const SOURCE = /\.(ts|tsx)$/;
+/** Final review n-2: JavaScript sources too, so a .js/.jsx/.mjs/.cjs file cannot escape the rules. */
+export const SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 function walk(dir: string, deep = true): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -146,6 +147,10 @@ test('nothing re-exports the wrapper or createGate (so neither leaves the host u
 test('`as GateToken` appears only in gate.ts', () => {
   const offenders = files.filter((f) => /as\s+(unknown\s+as\s+)?GateToken\b/.test(f.src) && f.rel !== 'src/core/dms/policy/gate.ts').map((f) => f.rel);
   expect(offenders).toEqual([]);
+});
+
+test('final review n-2: the scan reads JavaScript sources', () => {
+  for (const f of ['a.ts', 'a.tsx', 'a.js', 'a.jsx', 'a.mjs', 'a.cjs']) expect(SOURCE.test(f)).toBe(true);
 });
 
 describe('the scan bites', () => {

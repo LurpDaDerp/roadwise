@@ -38,7 +38,7 @@ function walk(dir: string, ext: RegExp): string[] {
   }
   return out;
 }
-const load = (dirs: string[], ext = /\.(ts|tsx)$/) =>
+const load = (dirs: string[], ext = /\.(ts|tsx|js|jsx|mjs|cjs)$/) => // final review n-2: JavaScript sources too
   dirs
     .flatMap((d) => walk(path.join(ROOT, d), ext))
     .map((f) => ({ rel: path.relative(ROOT, f).replace(/\\/g, '/'), src: fs.readFileSync(f, 'utf8') }))
