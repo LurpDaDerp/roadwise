@@ -20,7 +20,7 @@ begin
 end $$;
 
 begin;
-select plan(246);
+select plan(248);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -635,7 +635,7 @@ select pg_temp.settle(pg_temp.u(1), pg_temp.late());
 select is(pg_temp.snap(pg_temp.u(1)), (select s from snapA), '(i) a dispute recompute after settlement changes nothing settled');
 select is(pg_temp.contra(pg_temp.u(1)), (select c from snapA) + 1, 'and writes exactly one changed_after_settlement row');
 select is((select detail from public.reward_contradictions where user_id = pg_temp.u(1) and kind = 'changed_after_settlement'),
-  '{"settled":{"outcome":"unsafe","tier":"none"},"now":{"outcome":"safe","tier":"safe","scoredAll":1,"severeAll":0,"provisional":false}}'::jsonb,
+  '{"settled":{"outcome":"unsafe","tier":"none","phoneFree":false,"camera":false},"now":{"outcome":"safe","tier":"safe","scoredAll":1,"severeAll":0,"provisional":false,"phoneFree":false,"camera":false}}'::jsonb,
   'the contradiction records the settled result and the facts now (outcomes and counts, no place)');
 select pg_temp.settle(pg_temp.u(1), pg_temp.late());
 select is(pg_temp.contra(pg_temp.u(1)), (select c from snapA) + 1, 'a replayed settlement writes no second row');
@@ -679,8 +679,23 @@ select pg_temp.settle(pg_temp.u(1), pg_temp.late());
 select is(array[pg_temp.snap(pg_temp.u(1)) = (select s from snapA2), pg_temp.contra(pg_temp.u(1)) = (select c from snapA2) + 1], array[true, true],
   'a late unsafe drive after a safe day settled changes nothing settled either, one row');
 select is((select count(*)::int from public.reward_contradictions where user_id = pg_temp.u(1) and kind = 'changed_after_settlement'
-    and (detail -> 'settled') = jsonb_build_object('outcome', detail -> 'now' ->> 'outcome', 'tier', detail -> 'now' ->> 'tier')), 0,
+    and (detail -> 'settled') = jsonb_build_object('outcome', detail -> 'now' ->> 'outcome', 'tier', detail -> 'now' ->> 'tier',
+      'phoneFree', (detail -> 'now' -> 'phoneFree'), 'camera', (detail -> 'now' -> 'camera'))), 0,
   'no changed_after_settlement row records a result equal to the settled one');
+-- (final review m7) a late change that moves only a bonus is recorded
+select pg_temp.mkuser(29);
+select pg_temp.drove(pg_temp.u(29), date '2026-06-01', true);
+select pg_temp.settle(pg_temp.u(29), pg_temp.late());
+set local session_replication_role = replica;
+update public.score_daily set updated_at = now() - interval '30 days' where user_id = pg_temp.u(29);
+set local session_replication_role = origin;
+update public.score_daily set phone_free_day = false where user_id = pg_temp.u(29) and day = '2026-06-01';
+select pg_temp.bump(pg_temp.u(29), 1);
+select pg_temp.settle(pg_temp.u(29), pg_temp.late());
+select is((select row(dedupe_key, detail -> 'settled' -> 'phoneFree', detail -> 'now' -> 'phoneFree')::text from public.reward_contradictions
+    where user_id = pg_temp.u(29) and kind = 'changed_after_settlement'),
+  row('changed:2026-06-01:safe:safe:false:false', 'true'::jsonb, 'false'::jsonb)::text,
+  'a late change that moves only the phone-free bonus (outcome and tier as settled) is recorded, keyed by the bonus');
 select throws_ok($$ update public.reward_days set tier = 'safe' where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',
   'a direct change of a settled day is refused, even as postgres');
 select throws_ok($$ update public.reward_days set streak_after = 9 where user_id = pg_temp.u(1) and day = '2026-06-01' $$, '42501', 'settled days are final',
@@ -768,6 +783,8 @@ declare
   f public.reward_fact;
   v_o text;
   v_t text;
+  v_pf boolean;
+  v_cam boolean;
   v_rd record;
 begin
   perform setseed(0.5);
@@ -818,13 +835,17 @@ begin
       select * into f from public.reward_day_facts(v_user, v_day, v_day, 'America/Los_Angeles');
       select o.outcome into v_o from public.reward_outcome(f) o;
       v_t := public.reward_tier(f);
-      select rd.outcome, rd.tier, rd.outcome_reason into v_rd from public.reward_days rd where rd.user_id = v_user and rd.day = v_day;
+      v_pf := f.phone_free_day and f.driving_s >= 600;
+      v_cam := f.camera_day and f.driving_s >= 600;
+      select rd.outcome, rd.tier, rd.phone_free, rd.camera, rd.outcome_reason into v_rd from public.reward_days rd where rd.user_id = v_user and rd.day = v_day;
       if v_rd.outcome_reason = 'zone_hop' then
         v_t := 'none';
+        v_pf := false;
+        v_cam := false;
         if v_o <> 'unsafe' then v_o := 'neutral'; end if;
       end if;
-      if (v_o, v_t) is distinct from (v_rd.outcome, v_rd.tier) then
-        v_key := v_day || ':' || v_o || ':' || v_t;
+      if (v_o, v_t, v_pf, v_cam) is distinct from (v_rd.outcome, v_rd.tier, v_rd.phone_free, v_rd.camera) then
+        v_key := v_day || ':' || v_o || ':' || v_t || ':' || v_pf || ':' || v_cam;
       end if;
     end if;
     insert into prop values (i, v_kind, v_changed, v_key);
@@ -837,7 +858,7 @@ select is((select jsonb_build_object('days', (select jsonb_agg(to_jsonb(r) - 'ch
     || (pg_temp.snap(pg_temp.u(15)) - 'days')), (select s from snapP),
   'after 60 random late inputs every settled day, the ledger, progress and the goals are unchanged');
 select is(pg_temp.contra(pg_temp.u(15)) - (select c from snapP), (select count(distinct key)::int from prop),
-  'and the contradictions grew by exactly the distinct results the changed days would now settle to (final review m1)');
+  'and the contradictions grew by exactly the distinct results (outcome, tier, bonuses) the changed days would now settle to (final review m1, m7)');
 select ok((select count(distinct key) from prop) < (select count(*) from prop where changed),
   'which is fewer than the inputs that rewrote a score_daily row (rewrites that change nothing record nothing)');
 
@@ -1323,6 +1344,9 @@ select is(public.schedule_next_settle(pg_temp.u(93), 'America/Los_Angeles', pg_t
 select is((select due_at from public.reward_due where user_id = pg_temp.u(93)), pg_temp.late() + interval '1 minute', 'and stored so');
 select ok(pg_get_functiondef('public.settle_due_rewards(int)'::regprocedure) ~ 'not \(d\.user_id = any\(v_done\)\)',
   'the procedure skips a user it already settled in this run');
+select is((select count(*)::int from pg_proc p where p.oid in ('public.settle_due_rewards(int)'::regprocedure, 'public.settle_due_rewards_at(int, timestamptz)'::regprocedure)
+    and p.prosrc ~ 'exception when others then\s+-- \(final review m8\)[^\n]*\n\s+raise log ''settle-rewards user failed: % %'', sqlstate, sqlerrm;'), 2,
+  'both sweeps log a failed settlement''s sqlstate and message, never the user (final review m8)');
 -- (review n1) settling a past week's goal leaves the focus for the current week
 select pg_temp.mkuser(94);
 insert into public.progress (user_id, next_focus) values (pg_temp.u(94), 'braking');

@@ -66,9 +66,10 @@ set lock_timeout = '5s';
 -- neutral/late row (its own reason, so a reader never mistakes it for a day without a drive). Outcome, tier, bonuses and predicates follow §R2 over one statement of facts
 -- (score_daily plus final driver trips of the day, deleted ones included, and their scored events).
 -- A settled day is final: when its score_daily row later moves (updated_at past checked_through) and the
--- day would now settle to a different outcome or tier, one changed_after_settlement contradiction is
--- written per (day, that outcome, that tier), and nothing else changes (final review m1: a write that
--- changes nothing about the day records nothing, and a day can hold at most eight such rows). The zone-hop guard: a day
+-- day would now settle to a different outcome, tier, phone-free or camera bonus, one
+-- changed_after_settlement contradiction is written per (day, that result), and nothing else changes
+-- (final review m1, m7: a write that changes nothing about the day records nothing, and a day can hold
+-- at most 32 such rows). The zone-hop guard: a day
 -- whose close is within 20 h of an already-settled day that earned settles without earning (an unsafe
 -- day stays unsafe) and writes a zone_hop contradiction. Every relabel of a drive with scored events
 -- writes relabel_with_events.
@@ -596,6 +597,8 @@ declare
   v_start date;
   v_now_outcome text;
   v_now_tier text;
+  v_now_pf boolean;
+  v_now_cam boolean;
   r record;
 begin
   select pr.settled_through, pr.streak_days, pr.rewards_start into v_frontier, v_streak, v_start from public.progress pr where pr.user_id = p_user;
@@ -674,29 +677,35 @@ begin
   end loop;
 
   -- a settled day is final: a later change of its score_daily row is recorded, never applied. (final
-  -- review m1) Only a change that would settle the day differently is recorded, once per (day, outcome,
-  -- tier) it would settle to: a rewrite that changes nothing (a same-result dispute, a role toggled back)
-  -- records nothing, and a day holds at most eight rows however often it is rewritten. A zone-hop row is
-  -- compared as the guard would have settled it (no tier; a pass only neutral).
+  -- review m1, m7) Only a change that would settle the day differently (outcome, tier, or either bonus:
+  -- phone-free, camera) is recorded, once per result it would settle to: a rewrite that changes nothing
+  -- (a same-result dispute, a role toggled back) records nothing, and a day holds at most 32 rows
+  -- (3 outcomes x 3 tiers x 2 x 2, less the settled one) however often it is rewritten. A zone-hop row is
+  -- compared as the guard would have settled it (no tier, no bonus; a pass only neutral).
   for r in
-    select rd.day, rd.outcome, rd.outcome_reason, rd.tier, sd.updated_at
+    select rd.day, rd.outcome, rd.outcome_reason, rd.tier, rd.phone_free, rd.camera, sd.updated_at
     from public.reward_days rd join public.score_daily sd on sd.user_id = rd.user_id and sd.day = rd.day
     where rd.user_id = p_user and sd.updated_at > rd.checked_through
   loop
     select * into f from public.reward_day_facts(p_user, r.day, r.day, p_tz);
     select o.outcome into v_now_outcome from public.reward_outcome(f) o;
     v_now_tier := public.reward_tier(f);
+    v_now_pf := f.phone_free_day and f.driving_s >= v_min;
+    v_now_cam := f.camera_day and f.driving_s >= v_min;
     if r.outcome_reason = 'zone_hop' then
       v_now_tier := 'none';
+      v_now_pf := false;
+      v_now_cam := false;
       if v_now_outcome <> 'unsafe' then
         v_now_outcome := 'neutral';
       end if;
     end if;
-    if v_now_outcome is distinct from r.outcome or v_now_tier is distinct from r.tier then
+    if (v_now_outcome, v_now_tier, v_now_pf, v_now_cam) is distinct from (r.outcome, r.tier, r.phone_free, r.camera) then
       insert into public.reward_contradictions (user_id, day, kind, detail, dedupe_key)
       values (p_user, r.day, 'changed_after_settlement',
-        jsonb_build_object('settled', jsonb_build_object('outcome', r.outcome, 'tier', r.tier), 'now', public.reward_fact_summary(f)),
-        'changed:' || r.day || ':' || v_now_outcome || ':' || v_now_tier)
+        jsonb_build_object('settled', jsonb_build_object('outcome', r.outcome, 'tier', r.tier, 'phoneFree', r.phone_free, 'camera', r.camera),
+          'now', public.reward_fact_summary(f) || jsonb_build_object('phoneFree', v_now_pf, 'camera', v_now_cam)),
+        'changed:' || r.day || ':' || v_now_outcome || ':' || v_now_tier || ':' || v_now_pf || ':' || v_now_cam)
       on conflict (user_id, dedupe_key) do nothing;
     end if;
     update public.reward_days set checked_through = r.updated_at where user_id = p_user and day = r.day;
@@ -1061,6 +1070,8 @@ begin
     begin
       perform public.settle_rewards(v_user, p_now, v_lease);
     exception when others then
+      -- (final review m8) the reason, never the user (no personal data in the log)
+      raise log 'settle-rewards user failed: % %', sqlstate, sqlerrm;
       perform public.reward_settle_failed(v_user, p_now, v_lease);
     end;
     v_done := v_done || v_user;
@@ -1119,6 +1130,8 @@ begin
     begin
       perform public.settle_rewards(v_user, v_now, v_lease);
     exception when others then
+      -- (final review m8) the reason, never the user (no personal data in the log)
+      raise log 'settle-rewards user failed: % %', sqlstate, sqlerrm;
       if sqlstate = '55P03' then
         v_stop := true;
       end if;
