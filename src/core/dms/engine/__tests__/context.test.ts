@@ -100,14 +100,46 @@ describe('staleness and the tunnel rules (§M1, rev1 I6)', () => {
   test('unknown speed while the IMU shows motion keeps the last known speed for the rules (10 min)', () => {
     const t = createContextTracker(C);
     t.onRow(row({ ts: 0, speed: 20 }), 0, EX); // 72 km/h
-    for (let s = 1; s <= 60; s++) t.onRow(row({ ts: s * 1000, speed: -1, gnssValid: false }), s * 1000, EX);
+    for (let s = 1; s <= 601; s++) t.onRow(row({ ts: s * 1000, speed: -1, gnssValid: false }), s * 1000, EX); // a tunnel: rows keep coming
     const st = t.at(60_000);
-    expect(st.ctx!.speedKmh).toBeNull();
+    expect(st.speedKnown).toBe(false);
     expect(st.ruleSpeedKmh).toBeCloseTo(72, 6);
     expect(st.speedHeld).toBe(true);
     expect(st.imuAbsentHold).toBe(false);
     expect(t.at(600_000).ruleSpeedKmh).toBeCloseTo(72, 6);
     expect(t.at(600_001).ruleSpeedKmh).toBeNull();
+  });
+  test('T8 review I1: one still row 60 s into a moving tunnel never leaves the held speed', () => {
+    const t = createContextTracker(C);
+    t.onRow(row({ ts: 0, speed: 20 }), 0, EX);
+    const seen: (number | null)[] = [];
+    for (let s = 1; s <= 90; s++) {
+      t.onRow(row({ ts: s * 1000, speed: -1, gnssValid: false }), s * 1000, { ...EX, imuMoving: s !== 60 });
+      for (let k = 0; k < 1000; k += 250) seen.push(t.at(s * 1000 + k).ruleSpeedKmh);
+    }
+    expect(new Set(seen.map((v) => (v === null ? null : Math.round(v))))).toEqual(new Set([72]));
+  });
+  test('T8 review I1: 60 s moving, then still rows: held until 10 s after the FIRST still row, then 0', () => {
+    const t = createContextTracker(C);
+    t.onRow(row({ ts: 0, speed: 20 }), 0, EX);
+    for (let s = 1; s <= 60; s++) t.onRow(row({ ts: s * 1000, speed: -1, gnssValid: false }), s * 1000, EX);
+    for (let s = 61; s <= 72; s++) t.onRow(row({ ts: s * 1000, speed: -1, gnssValid: false }), s * 1000, { ...EX, imuMoving: false });
+    expect(t.at(71_000).ruleSpeedKmh).toBeCloseTo(72, 6);
+    expect(t.at(71_001).ruleSpeedKmh).toBe(0);
+  });
+  test('T8 review m3: when rows stop arriving, motion is unknown: 10 s from the last row, then 0', () => {
+    const t = createContextTracker(C);
+    t.onRow(row({ ts: 0, speed: 20 }), 0, EX);
+    t.onRow(row({ ts: 1000, speed: -1, gnssValid: false }), 1000, EX); // moving, then silence
+    expect(t.at(11_000).ruleSpeedKmh).toBeCloseTo(72, 6);
+    expect(t.at(11_001).ruleSpeedKmh).toBe(0);
+  });
+  test('T8 review m4: speedKnown separates a known speed from a held or inferred one', () => {
+    const t = createContextTracker(C);
+    t.onRow(row({ ts: 0, speed: 0 }), 0, EX);
+    expect(t.at(0)).toMatchObject({ speedKnown: true, ruleSpeedKmh: 0 });
+    t.onRow(row({ ts: 1000, speed: -1, gnssValid: false }), 1000, { ...EX, imuMoving: false });
+    expect(t.at(20_000)).toMatchObject({ speedKnown: false, ruleSpeedKmh: 0 });
   });
   test('unknown speed with the IMU still: the last speed for 10 s, then below 10 km/h', () => {
     const t = createContextTracker(C);

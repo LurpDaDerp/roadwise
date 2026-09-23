@@ -9,7 +9,9 @@
 //   continuously on road centre or forward road RESETS it; it warns at ≥ 10.0 s, re-armed by a reset.
 // D3: ≥ 3 glances with ≥ 1.0 s of lap time whose starts fall within 30 s → one phone_pattern, at most
 //   once per 10 min.
-// D4: no return to road centre or forward road within 3.0 s of a D1/D2 warning → unresponsive.
+// D4: after a D1/D2 warning, 3.0 s of OBSERVED off-road time (non-null, non-on-road zones, incl. C-8's
+//   far lateral) with no return to road centre or forward road → unresponsive. Occlusion neither adds
+//   nor clears it: no alert from a LOST frame (T8 review I2).
 // Speed gates: below 20 km/h nothing drains or counts (log only); below 10, or unknown, no alert at all.
 import type { DmsConfig, ZoneId, ZoneSpec } from './config';
 import type { CalibrationState } from './calibration';
@@ -25,7 +27,7 @@ export interface DistractionGates {
 
 /**
  * Which rules may run: D1 needs a centre (C-5), the gaze-rules fps floor, and no IMU-absent speed hold
- * (T1r1 R1-m1); D2 also needs `calibrated`/`seeded` and no warm-up (§M5) and no pending resume check
+ * (T1r1 R1-m1); D2 also needs `calibrated`/`seeded`/`provisional` and no warm-up (§M5) and no pending resume check
  * (§M3); D3 needs no warm-up and no resume check.
  */
 export function distractionGates(s: {
@@ -39,7 +41,8 @@ export function distractionGates(s: {
   const d1 = s.hasCentre && s.fpsOk && !s.imuAbsentHold;
   return {
     d1,
-    d2: d1 && !s.warmup && !s.resumeCheck && (s.calibState === 'calibrated' || s.calibState === 'seeded'),
+    // `provisional` is a seeded drive that has not passed yet (T8 review m1).
+    d2: d1 && !s.warmup && !s.resumeCheck && (s.calibState === 'calibrated' || s.calibState === 'seeded' || s.calibState === 'provisional'),
     d3: d1 && !s.warmup && !s.resumeCheck,
   };
 }
@@ -88,7 +91,10 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
   let d2ResetDone = false;
   let lastD3T = Number.NEGATIVE_INFINITY;
   let lapCountedFor: number | null = null;
-  let d4Since: number | null = null;
+  /** unfrozen lap seconds in the current glance (D3 ignores time under SEARCH or handling) */
+  let d3Lap = { startT: Number.NaN, s: 0 };
+  /** observed off-road seconds since a D1/D2 warning; null when none is pending */
+  let d4OffS: number | null = null;
   const grace = new Map<ZoneId, number>();
 
   function bufferS(speedKmh: number): number {
@@ -106,7 +112,7 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       f = 1;
       d1Armed = true;
       d2Armed = true;
-      d4Since = null;
+      d4OffS = null;
       grace.clear();
     },
 
@@ -140,7 +146,7 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       if (d1Armed && f <= EPS && alerting && counting && x.gates.d1) {
         d1Armed = false;
         events.push({ kind: 'd1_warning', tMs: x.tMs, zone: g.current?.zone ?? x.zone ?? undefined });
-        d4Since ??= x.tMs;
+        d4OffS ??= 0;
       } else if (!d1Armed && f >= d.d1.rearmFraction - EPS) {
         d1Armed = true;
         events.push({ kind: 'd1_rearmed', tMs: x.tMs });
@@ -165,11 +171,14 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       if (d2Armed && d2SumS >= d.d2.warnS - EPS && alerting && counting && x.gates.d2) {
         d2Armed = false;
         events.push({ kind: 'd2_warning', tMs: x.tMs });
-        d4Since ??= x.tMs;
+        d4OffS ??= 0;
       }
 
       // D3 — the phone pattern: a glance counts once its lap time reaches 1.0 s.
-      if (g.current !== null && lapCountedFor !== g.current.startT && (g.current.perZone.lap ?? 0) >= d.d3.minLapS - EPS && counting && x.gates.d3) {
+      // SEARCH and handling hold it, as they hold D1 and D2 (T8 review m2; C-17: M3 owns handling).
+      if (g.current !== null && d3Lap.startT !== g.current.startT) d3Lap = { startT: g.current.startT, s: 0 };
+      if (!x.freeze && x.zone === 'lap') d3Lap.s += x.dtS;
+      if (!x.freeze && g.current !== null && lapCountedFor !== g.current.startT && d3Lap.s >= d.d3.minLapS - EPS && counting && x.gates.d3) {
         lapCountedFor = g.current.startT;
         lapStarts.push(g.current.startT);
         lapStarts.dropWhile((t) => t < g.current!.startT - d.d3.withinS * 1000);
@@ -181,11 +190,15 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       }
 
       // D4 — unresponsive after a D1/D2 warning.
-      if (d4Since !== null) {
-        if (onRoad || !alerting) d4Since = null;
-        else if (x.tMs - d4Since >= d.d4.returnWithinS * 1000 - EPS) {
-          d4Since = null;
-          events.push({ kind: 'd4_unresponsive', tMs: x.tMs });
+      if (d4OffS !== null && !events.some((e) => e.kind === 'd1_warning' || e.kind === 'd2_warning')) {
+        if (onRoad || !alerting) d4OffS = null;
+        else if (spec !== null) {
+          // Observed off-road only; a handling freeze with a zone still counts (a phone in hand).
+          d4OffS += x.dtS;
+          if (d4OffS >= d.d4.returnWithinS - EPS) {
+            d4OffS = null;
+            events.push({ kind: 'd4_unresponsive', tMs: x.tMs });
+          }
         }
       }
 

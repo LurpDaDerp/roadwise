@@ -70,6 +70,11 @@ export function contextFromRow(r: FeatureRowLike, prev: FeatureRowLike | null, t
 /** The per-frame view: the context (stale speed nulled) and the speed the rules use under the tunnel rules. */
 export interface ContextState {
   ctx: VehicleContext | null;
+  /**
+   * The speed is measured now (not held or inferred). A Critical ends, and the capture pauses, only on
+   * a KNOWN speed (rev1 I6; T8 review m4, carried to Tasks 11 and 13).
+   */
+  speedKnown: boolean;
   /** known speed, or the held last known speed (rev1 I6), or 0 after the still hold; null = none known yet */
   ruleSpeedKmh: number | null;
   /** the rule speed is a held value */
@@ -86,7 +91,8 @@ export function createContextTracker(cfg: Pick<DmsConfig, 'context' | 'calibrati
   /** the last straight-candidate rows (valid fix, course rate known) */
   const window: { ok: boolean }[] = [];
   let lastKnown: { speed: number; t: number } | null = null;
-  let unknownSince: number | null = null;
+  /** the first row of the current continuous run of still rows (T8 review I1); any moving row resets it */
+  let stillSince: number | null = null;
 
   return {
     onRow(r: FeatureRowLike, tMs: number, ex: RowExtras): VehicleContext {
@@ -106,33 +112,33 @@ export function createContextTracker(cfg: Pick<DmsConfig, 'context' | 'calibrati
         if (window.length > c.straightRows) window.shift();
         ctx.straight = window.length === c.straightRows && window.every((w) => w.ok);
       }
-      if (ctx.speedKmh !== null) {
-        lastKnown = { speed: ctx.speedKmh, t: tMs };
-        unknownSince = null;
-      } else if (unknownSince === null) {
-        unknownSince = tMs;
-      }
+      if (ctx.speedKmh !== null) lastKnown = { speed: ctx.speedKmh, t: tMs };
+      stillSince = ex.imuMoving ? null : (stillSince ?? tMs);
       prev = r;
       last = ctx;
       lastRowT = tMs;
       return ctx;
     },
 
+    /**
+     * The tunnel rules (rev1 I6, as fixed by T8 review I1 and m3):
+     * - moving (the current row run is not still): the last known speed is held while
+     *   tMs − lastKnown ≤ tunnelHoldMs, then null (below 10);
+     * - still (a continuous run of still rows since `stillSince`): held while tMs − stillSince ≤
+     *   unknownStillHoldMs, then 0;
+     * - no rows arriving (stale): no motion evidence at all, so the still path from the last row.
+     */
     at(tMs: number): ContextState {
-      if (last === null) return { ctx: null, ruleSpeedKmh: null, speedHeld: false, imuAbsentHold: false };
+      const none = { speedKnown: false, speedHeld: false, imuAbsentHold: false };
+      if (last === null) return { ctx: null, ruleSpeedKmh: null, ...none };
       const stale = tMs - lastRowT > cfg.context.rowStaleMs;
       const ctx: VehicleContext = stale ? { ...last, speedKmh: null, straight: null, courseRateDegS: null, turnSign: 0 } : last;
-      if (ctx.speedKmh !== null) return { ctx, ruleSpeedKmh: ctx.speedKmh, speedHeld: false, imuAbsentHold: false };
-      if (lastKnown === null) return { ctx, ruleSpeedKmh: null, speedHeld: false, imuAbsentHold: false };
-      const since = unknownSince ?? lastRowT;
-      if (last.imuMoving && tMs - lastKnown.t <= cfg.context.tunnelHoldMs) {
-        return { ctx, ruleSpeedKmh: lastKnown.speed, speedHeld: true, imuAbsentHold: !last.imuPresent };
-      }
-      if (!last.imuMoving && tMs - since <= cfg.context.unknownStillHoldMs) {
-        return { ctx, ruleSpeedKmh: lastKnown.speed, speedHeld: true, imuAbsentHold: !last.imuPresent };
-      }
-      // Still after the hold: the car counts as below 10 km/h. Moving past the tunnel hold: unknown.
-      return { ctx, ruleSpeedKmh: last.imuMoving ? null : 0, speedHeld: false, imuAbsentHold: false };
+      if (ctx.speedKmh !== null) return { ctx, ruleSpeedKmh: ctx.speedKmh, ...none, speedKnown: true };
+      if (lastKnown === null) return { ctx, ruleSpeedKmh: null, ...none };
+      const held = { ctx, ruleSpeedKmh: lastKnown.speed, speedKnown: false, speedHeld: true, imuAbsentHold: !last.imuPresent };
+      const stillRef = stale ? (stillSince ?? lastRowT) : stillSince;
+      if (stillRef === null) return tMs - lastKnown.t <= cfg.context.tunnelHoldMs ? held : { ctx, ruleSpeedKmh: null, ...none };
+      return tMs - stillRef <= cfg.context.unknownStillHoldMs ? held : { ctx, ruleSpeedKmh: 0, ...none };
     },
   };
 }

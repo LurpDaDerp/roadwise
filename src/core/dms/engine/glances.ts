@@ -3,6 +3,8 @@
 // zone with the most time. A shoulder check (C-18, rev1 m3: no yaw pulse) is a glance that starts with
 // the head turning > 100°/s, or within 2 s after a mirror glance ended. Occlusion (no zone) freezes
 // everything. Time is attributed per frame: the interval ending at a frame belongs to that frame's zone.
+// Occlusion also BRIDGES an on-road run: 1 s on road, 5 s occluded, 1 s on road counts as a 2 s run
+// (so it can reset VATS). That errs toward fewer warnings; accepted (T8 review nit).
 import type { DmsConfig, ZoneId } from './config';
 
 export interface Glance {

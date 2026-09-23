@@ -144,7 +144,8 @@ describe('gates and freezes', () => {
     expect(distractionGates({ ...base, fpsOk: false })).toEqual({ d1: false, d2: false, d3: false });
     expect(distractionGates({ ...base, warmup: true })).toEqual({ d1: true, d2: false, d3: false });
     expect(distractionGates({ ...base, calibState: 'seeded' })).toEqual({ d1: true, d2: true, d3: true });
-    expect(distractionGates({ ...base, calibState: 'provisional' })).toEqual({ d1: true, d2: false, d3: true });
+    expect(distractionGates({ ...base, calibState: 'provisional' })).toEqual({ d1: true, d2: true, d3: true }); // T8 review m1
+    expect(distractionGates({ ...base, calibState: 'uncalibrated' })).toEqual({ d1: true, d2: false, d3: true });
     expect(distractionGates({ ...base, resumeCheck: true })).toEqual({ d1: true, d2: false, d3: false });
   });
   test('sensitivity: low scales B by 1.15, capped at 3.5 s (≥ 50) — 3.45 s at 60 km/h; 6.0 s at 20–50', () => {
@@ -245,5 +246,27 @@ describe('the tunnel rules end to end (rev1 I6): the context tracker feeding the
   });
   test('60 s without GNSS and the IMU still: after 10 s the car counts as below 10 km/h (no alert)', () => {
     expect(drive(false)).not.toContain('d1_warning');
+  });
+});
+
+describe('T8 review round 1', () => {
+  test('I2: a D1 warning then 4 s of occlusion → no D4 (no alert from a LOST frame)', () => {
+    expect(run([road(3), { zone: 'centre_stack', frames: 45 }, { zone: null, frames: 60 }]).kinds).not.toContain('d4_unresponsive');
+  });
+  test('I2: a warning, 1 s off-road, 2 s occluded, 2 s off-road → D4 once 3.0 s are OBSERVED off-road', () => {
+    const r = run([road(3), { zone: 'centre_stack', frames: 45 }, { zone: 'centre_stack', frames: 15 }, { zone: null, frames: 30 }, { zone: 'centre_stack', frames: 30 }]);
+    const d4 = r.events.find((e) => e.kind === 'd4_unresponsive');
+    expect(d4).toBeDefined();
+    // 1.0 s + 2.0 s observed: the 30th frame of the last segment, at (3 + 45 + 15 + 30 + 29) / 15 s.
+    expect(d4!.tMs).toBeCloseTo(((3 + 45 + 15 + 30 + 29) * 1000) / 15, 6);
+    expect(run([road(3), { zone: 'centre_stack', frames: 45 }, { zone: 'centre_stack', frames: 15 }, { zone: null, frames: 30 }, { zone: 'centre_stack', frames: 29 }]).kinds).not.toContain('d4_unresponsive');
+  });
+  test('I2: a warning, then a C-8 far-lateral loss (evidence) → D4', () => {
+    expect(run([road(3), { zone: 'centre_stack', frames: 45 }, { zone: 'far_lateral', frames: 45 }]).kinds).toContain('d4_unresponsive');
+  });
+  test('m2: D3 is held by SEARCH or handling', () => {
+    const out: Seg[] = [road(3)];
+    for (let i = 0; i < 3; i++) out.push({ zone: 'lap', frames: 15, freeze: true }, road(60));
+    expect(run(out).kinds).not.toContain('d3_phone_pattern');
   });
 });
