@@ -346,3 +346,14 @@ describe('final review round 2, iOS', () => {
     expect(fn).toMatch(/if !\(session\?\.isRunning \?\? false\) \{[\s\S]*emitState\("paused", "error"\)[\s\S]*return/);
   });
 });
+
+describe('final review round 3 (integration R2-1), iOS', () => {
+  test('the thermal floor is reset at start (before the first observe) and at teardown, so a new session never inherits the last one', () => {
+    const floor = body(code('Lifecycle.swift'), 'reset');
+    expect(floor).toMatch(/level = 0/);
+    expect(floor).toMatch(/raw = 0/);
+    const cc = code('CaptureController.swift');
+    expect(body(cc, 'start')).toMatch(/thermal\.reset\(\)[\s\S]*thermal\.observe\(/);
+    expect(body(cc, 'teardown')).toMatch(/thermal\.reset\(\)/);
+  });
+});

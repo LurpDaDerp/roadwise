@@ -80,7 +80,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     locked {
       token = newToken; fps = newFps; gazeNetWanted = gazeNet; gazeNetEvery = every
       setupMode = false; previewAllowed = false; lastHeartbeatMs = CaptureController.hostMs(); pausedSinceMs = nil
-      rotationOffsetDegrees = rotationOffset; interrupted = false
+      rotationOffsetDegrees = rotationOffset; interrupted = false; thermal.reset()
     }
     setState("starting", "user")
     do {
@@ -204,7 +204,7 @@ final class CaptureController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     videoQueue.sync { self.inFlight = nil; self.batcher.clear() }
     lmk?.close()
     net?.close()
-    locked { token = nil; pausedSinceMs = nil; setupMode = false; previewAllowed = false; interrupted = false }
+    locked { token = nil; pausedSinceMs = nil; setupMode = false; previewAllowed = false; interrupted = false; thermal.reset() }
     appliedCap = nil
     updatePreview()
   }

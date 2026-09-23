@@ -123,7 +123,10 @@ export function createFakeDmsVision(opts: FakeOptions = {}): FakeDmsVision {
     if (next === state && next !== 'starting') return;
     state = next;
     if (next === 'paused') pausedAt = t;
-    if (next === 'stopped') token = null;
+    if (next === 'stopped') {
+      token = null;
+      floor = 0; // final review round 3: native resets its thermal floor at teardown (and at start)
+    }
     emit('state', { state: next, reason });
   }
 
@@ -229,6 +232,8 @@ export function createFakeDmsVision(opts: FakeOptions = {}): FakeDmsVision {
       }
       token = options.gateToken;
       lastHeartbeat = t;
+      floor = 0;
+      thermalSince = t; // a fresh floor: the next evaluation applies the OS state as native's first observe does
       policy = { capture: 'run', fps: options.fps, gazeNet: options.gazeNet, gazeNetEvery: options.gazeNetEvery };
       setState('starting', 'user');
       setState('running', 'user');

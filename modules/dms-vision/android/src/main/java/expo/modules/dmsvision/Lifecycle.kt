@@ -33,6 +33,16 @@ class ThermalFloor {
     return level != before
   }
 
+  /**
+   * Forget the floor (final review round 3): at start and at teardown, so a session never inherits
+   * the last one's floor; the next observe applies the OS state as a fresh floor would.
+   */
+  fun reset() {
+    level = 0
+    raw = 0
+    rawSinceMs = 0.0
+  }
+
   val fpsCap: Int get() = DmsConstants.THERMAL_FPS_CAP[level]
   val allowsGazeNet: Boolean get() = DmsConstants.THERMAL_GAZE_NET[level]
   val allowsCamera: Boolean get() = level < 3

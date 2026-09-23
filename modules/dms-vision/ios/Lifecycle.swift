@@ -38,6 +38,14 @@ struct ThermalFloor {
     return level != before
   }
 
+  /// Forget the floor (final review round 3): at start and at teardown, so a session never inherits
+  /// the last one's floor; the next observe applies the OS state as a fresh floor would.
+  mutating func reset() {
+    level = 0
+    raw = 0
+    rawSinceMs = 0
+  }
+
   var fpsCap: Int { return DmsConstants.THERMAL_FPS_CAP[level] }
   var allowsGazeNet: Bool { return DmsConstants.THERMAL_GAZE_NET[level] }
   var allowsCamera: Bool { return level < 3 }

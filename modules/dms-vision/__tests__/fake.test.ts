@@ -213,6 +213,19 @@ describe('the thermal floor', () => {
     expect(s.thermalLevel).toBe(0);
     expect(s.fpsTarget).toBe(15);
   });
+
+  test('final review round 3: a new session starts from the current OS state, never the last session\'s floor', async () => {
+    const { fake } = setup();
+    await fake.start(START);
+    fake.setThermal('critical');
+    expect(fake.nativeState()).toBe('paused');
+    fake.setThermal('nominal');
+    await fake.stop();
+    fake.advance(1_000);
+    await fake.start(START);
+    expect(fake.nativeState()).toBe('running');
+    expect((await fake.getStatus()).thermalLevel).toBe(0);
+  });
 });
 
 describe('the gaze net switch', () => {

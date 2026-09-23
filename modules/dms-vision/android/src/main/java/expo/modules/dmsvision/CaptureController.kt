@@ -114,7 +114,7 @@ class CaptureController(internal val context: Context) {
     locked {
       token = o.token; fps = o.fps; gazeNetWanted = o.gazeNet; gazeNetEvery = o.every
       setupMode = false; previewAllowed = false; lastHeartbeatMs = nowMs(); pausedSinceMs = null
-      rotationOffset = o.rotationOffset; interrupted = false
+      rotationOffset = o.rotationOffset; interrupted = false; thermal.reset()
     }
     setState("starting", "user")
     try {
@@ -265,7 +265,7 @@ class CaptureController(internal val context: Context) {
     provider = null
     owner = null
     sensor = null
-    locked { token = null; pausedSinceMs = null; setupMode = false; previewAllowed = false; interrupted = false; appliedCap = null; appliedCamera = null }
+    locked { token = null; pausedSinceMs = null; setupMode = false; previewAllowed = false; interrupted = false; appliedCap = null; appliedCamera = null; thermal.reset() }
   }
 
   fun flushBatch() {
