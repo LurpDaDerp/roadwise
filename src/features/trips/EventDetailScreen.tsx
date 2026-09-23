@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useTrip, useTripEvents, type TripEventView } from '@/data/queries';
+import { useDayAward } from '@/features/rewards/useRewards';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 import { formatPoints } from '@/ui/charts';
 
@@ -19,7 +20,7 @@ import {
   standingWhy,
   whyItMatters,
 } from './detail';
-import { DisputeSheet } from './DisputeSheet';
+import { ConfirmedDayResultLine, DisputeSheet } from './DisputeSheet';
 import { Field, FieldText } from './Field';
 import { categoryLabel, dateLine, formatClock, isReadingUncertain } from './format';
 import { NOTICE_BORDER, TIGHT } from './layout';
@@ -29,11 +30,21 @@ import { EventMiniMap } from './TripMap';
 import { useReportEvent, type DisputeInput } from './tripActions';
 
 /**
+ * (rev1: R-A) Under an accepted report: when the drive's day is already confirmed, say the report
+ * came off the drive's score and the day's points and streak were final before it. Only a known
+ * settled day counts; pending, not counted, loading and unknown show nothing.
+ */
+function AcceptedOnConfirmedDay({ day }: { day: string }) {
+  const award = useDayAward(day);
+  return <ConfirmedDayResultLine confirmed={award.status === 'success' && award.data.status === 'settled'} />;
+}
+
+/**
  * The standing, said out loud, with the sentence that makes it fair — and, for a refusal, the
  * server's own code behind a disclosure, so support has it and §7.0's "never a code in primary
  * text" holds. The whole notice is one element to a screen reader.
  */
-function StandingNotice({ event, testID }: { event: TripEventView; testID?: string }) {
+function StandingNotice({ event, day, testID }: { event: TripEventView; day: string; testID?: string }) {
   const th = useTheme();
   const [open, setOpen] = useState(false);
   const standing = eventStanding(event);
@@ -65,6 +76,7 @@ function StandingNotice({ event, testID }: { event: TripEventView; testID?: stri
           </Text>
         ) : null}
       </View>
+      {standing === 'reportAccepted' ? <AcceptedOnConfirmedDay day={day} /> : null}
       {code !== null ? (
         <View style={{ alignSelf: 'flex-start', marginLeft: -th.space.lg }}>
           <Button
@@ -229,7 +241,7 @@ export function EventDetailScreen({
         </Field>
       </Card>
 
-      <StandingNotice event={event} testID="standing" />
+      <StandingNotice event={event} day={trip.day} testID="standing" />
 
       {why !== null ? (
         <Field label={copy.event.whyLabel}>

@@ -98,11 +98,6 @@ export const tripCopy = {
     wrong: 'Something wrong?',
     share: 'Share',
     shareUnconfirmed: "You can share a drive once it's confirmed.",
-    /**
-     * Still read by D2 (`TripDetailScreen`, not Task 11's file). The brief deletes it; that needs
-     * D2's share entry to move to F9 as well — reported, not done here. D1 no longer uses it.
-     */
-    shareSoon: 'Share cards are coming soon.',
   },
   /** §7.C C10, verbatim. */
   roles: {

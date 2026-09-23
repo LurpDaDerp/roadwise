@@ -9,9 +9,33 @@ import {
   world,
 } from '@/features/trips/__fixtures__/render';
 import { EventDetailScreen } from '@/features/trips/EventDetailScreen';
+import { pendingDay, serveRewards, settledDay } from '@/features/trips/__fixtures__/rewards';
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
+}));
+// The rewards server is the fixture's double, resolved at call time (the fixture reads this module).
+jest.mock('@/features/rewards/api', () => ({
+  ...jest.requireActual<object>('@/features/rewards/api'),
+  defaultRewardsApi: new Proxy(
+    {},
+    {
+      get: (_target, name: string) => (...args: unknown[]) =>
+        (
+          jest.requireActual<{ rewardsApiDelegate: Record<string, (...a: unknown[]) => unknown> }>(
+            '@/features/trips/__fixtures__/rewards'
+          ).rewardsApiDelegate[name] as (...a: unknown[]) => unknown
+        )(...args),
+    }
+  ),
+}));
+
+beforeEach(() => {
+  serveRewards(pendingDay());
+});
 
 const ID = 'trip-1';
 const EVENT = 'e-speeding';
@@ -273,6 +297,31 @@ describe('what the server said', () => {
     ]);
     expect(screen.getByText('Removed from score (your report)')).toBeOnTheScreen();
     expect(screen.getByTestId('event-points')).toHaveTextContent('None');
+    // The day is not confirmed yet: the report counts normally, and nothing more is said.
+    await waitFor(() => expect(screen.queryByTestId('confirmed-day-result')).toBeNull());
+  });
+
+  test('an accepted report on a confirmed day says the day was already final (rev1: R-A)', async () => {
+    serveRewards(settledDay());
+    await open([
+      speeding({
+        status: 'removed',
+        deduction: 0,
+        corrected: 1,
+        dispute_json: record({ outcome: 'accepted', remainingAllowance: 2, decidedAt: T0 }),
+      }),
+    ]);
+    expect(
+      await screen.findByText("Removed from the drive's score. This day's points and streak were already confirmed.")
+    ).toBeOnTheScreen();
+    expect(screen.getByTestId('standing')).toContainElement(screen.getByTestId('confirmed-day-result'));
+  });
+
+  test('negative control: a report that is not accepted says nothing about the day, confirmed or not', async () => {
+    serveRewards(settledDay());
+    await open([speeding({ dispute_json: record({ outcome: 'denied', deniedReason: 'allowance_7d' }) })]);
+    await screen.findByTestId('standing');
+    expect(screen.queryByTestId('confirmed-day-result')).toBeNull();
   });
 
   test('a report beyond the allowance is honest: recorded, and it did not change the score', async () => {

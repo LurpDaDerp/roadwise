@@ -16,6 +16,8 @@ import { encodePolyline } from '@/lib/polyline';
 
 const mockRouter = routerDouble();
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+// D2 shares through D1's href, and the trips screens now read the rewards (M5 Task 11).
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 // A build that *has* the native maps module. The real package reaches for a TurboModule at import
 // time, so the "no module" half of the branch is a separate suite (`TripMap.test.tsx`) with no
@@ -251,14 +253,28 @@ describe('a drive with a route and two moments', () => {
     });
   });
 
-  test('Edit drive opens D5; sharing waits for its cards', async () => {
+  test('Edit drive opens D5; sharing waits until the drive is confirmed', async () => {
     await open();
     await press(screen.getByRole('button', { name: 'Edit drive' }));
     expect(mockRouter.push).toHaveBeenLastCalledWith({
       pathname: '/(app)/trips/[clientTripId]/edit',
       params: { clientTripId: ID },
     });
+    expect(screen.queryByText('Share cards are coming soon.')).toBeNull();
+    // Still provisional: nothing true to share yet, and it says when there will be.
     expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
+    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+  });
+
+  test('a synced final drive opens the same F9 composer as D1', async () => {
+    const w = await world({ trips: [{ ...scored, status: 'final' }], events: [speeding, possible] });
+    await w.renderScreen(<TripDetailScreen clientTripId={ID} />);
+    await screen.findByTestId('trip-detail');
+    const share = screen.getByRole('button', { name: 'Share' });
+    expect(share).toBeEnabled();
+    expect(screen.queryByText("You can share a drive once it's confirmed.")).toBeNull();
+    await press(share);
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/rewards/share?kind=trip&clientTripId=trip-1');
   });
 
   test('the data-quality grade is a button into how scoring works', async () => {
