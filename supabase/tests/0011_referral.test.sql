@@ -24,7 +24,7 @@ begin
 end $$;
 
 begin;
-select plan(102);
+select plan(111);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -283,8 +283,9 @@ select is((select count(*)::int from pg_proc p where p.oid in ('public.get_my_re
   'the three RPCs are definer, owned by postgres, proconfig exactly search_path=public, lock_timeout=2s');
 select is((select count(*)::int from pg_proc p where p.oid in ('public.settle_referrals(uuid, timestamptz)'::regprocedure, 'public.record_push_token_seen()'::regprocedure,
     'public.normalise_referral_code(text)'::regprocedure, 'public.referrals_available()'::regprocedure, 'public.referral_refusal(text, text)'::regprocedure,
-    'public.refresh_progress(uuid)'::regprocedure, 'public.settle_rewards(uuid, timestamptz, timestamptz)'::regprocedure, 'public.purge_reward_audit()'::regprocedure)
-    and not p.prosecdef and p.proconfig = array['search_path=public']), 8, 'every other function is invoker, pinning search_path');
+    'public.refresh_progress(uuid)'::regprocedure, 'public.settle_rewards(uuid, timestamptz, timestamptz)'::regprocedure, 'public.purge_reward_audit()'::regprocedure,
+    'public.referral_final_at(timestamptz)'::regprocedure, 'public.schedule_next_settle(uuid, text, timestamptz, timestamptz)'::regprocedure)
+    and not p.prosecdef and p.proconfig = array['search_path=public']), 10, 'every other function is invoker, pinning search_path');
 select is(array(select has_function_privilege('authenticated', f, 'execute') from unnest(array['public.get_my_referral_code()', 'public.redeem_referral_code(text)',
     'public.my_referrals()']::regprocedure[]) f), array[true, true, true], 'authenticated executes the three RPCs');
 select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'service_role']) r,
@@ -292,7 +293,8 @@ select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(a
   'anon and the service role execute none of them');
 select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'authenticated', 'service_role']) r,
     unnest(array['public.settle_referrals(uuid, timestamptz)', 'public.record_push_token_seen()', 'public.normalise_referral_code(text)',
-      'public.referrals_available()', 'public.referral_refusal(text, text)']::regprocedure[]) f), false, 'no API role executes a referral helper or settle step');
+      'public.referrals_available()', 'public.referral_refusal(text, text)', 'public.referral_final_at(timestamptz)',
+      'public.schedule_next_settle(uuid, text, timestamptz, timestamptz)']::regprocedure[]) f), false, 'no API role executes a referral helper or settle step');
 select is((select row(id, family, tier, metric, threshold, sort)::text from public.badge_defs where id = 'referrals_1'),
   row('referrals_1', 'referrals', 'bronze', 'referrals', 1, 16)::text, 'referrals_1 is seeded with its producer');
 select is((select value -> 'referral' from public.app_config where key = 'feature_flags'), 'false'::jsonb, 'feature_flags.referral is off (R-F)');
@@ -577,17 +579,55 @@ select is((select count(*)::int from public.push_token_seen where position('shar
 -- expiry
 select pg_temp.redeem_as(pg_temp.u(15), pg_temp.code_of(pg_temp.u(13)));
 select pg_temp.settle(pg_temp.u(15), now() + interval '91 days');
-select is((select status from public.referrals where invitee_id = pg_temp.u(15)), 'expired', '91 days without qualifying: expired');
+select is((select status from public.referrals where invitee_id = pg_temp.u(15)), 'pending', '91 days without qualifying: not yet final, still pending');
+select pg_temp.settle(pg_temp.u(15), now() + interval '96 days');
+select is((select status from public.referrals where invitee_id = pg_temp.u(15)), 'expired', '96 days (past 90 d + 125 h) without qualifying: expired');
 select is(pg_temp.mine(pg_temp.u(15)) ->> 'myCode', 'not_counted', 'an expired row reads not_counted at once');
--- (fix round 1, m2) a pending row reads pending until 90 d + 25 h + 2 h + SETTLE_CAP_H (72 h) after redemption
+-- (fix rounds 1-2, m2/I1) one bound for the display and the state: 90 d + (25 + 26 + 2 + SETTLE_CAP_H) h
+select is(public.referral_final_at(timestamptz '2026-01-01 00:00+00'), timestamptz '2026-01-01 00:00+00' + interval '90 days 125 hours',
+  'referral_final_at is redemption + 90 days + 125 hours');
 select pg_temp.mkuser(20);
 select pg_temp.mkuser(21);
 select pg_temp.code_for(pg_temp.u(20));
 select pg_temp.redeem_as(pg_temp.u(21), pg_temp.code_of(pg_temp.u(20)));
-update public.referrals set redeemed_at = now() - interval '90 days 99 hours' + interval '1 minute' where invitee_id = pg_temp.u(21);
-select is(pg_temp.mine(pg_temp.u(21)) ->> 'myCode', 'pending', 'one minute before 90 days + 99 hours: still pending (a held in-window day can still settle)');
-update public.referrals set redeemed_at = now() - interval '90 days 99 hours' - interval '1 minute' where invitee_id = pg_temp.u(21);
+update public.referrals set redeemed_at = now() - interval '90 days 125 hours' + interval '1 minute' where invitee_id = pg_temp.u(21);
+select is(pg_temp.mine(pg_temp.u(21)) ->> 'myCode', 'pending', 'my_referrals one minute before the bound: still pending (a held in-window day can still settle)');
+update public.referrals set redeemed_at = now() - interval '90 days 125 hours' - interval '1 minute' where invitee_id = pg_temp.u(21);
 select is(pg_temp.mine(pg_temp.u(21)) ->> 'myCode', 'not_counted', 'one minute after: not_counted');
+-- (I1) settlement expires on the same bound, and the scheduler wakes the invitee just after it
+select pg_temp.mkuser(23);
+select pg_temp.redeem_as(pg_temp.u(23), pg_temp.code_of(pg_temp.u(20)));
+create temp table final23 as select public.referral_final_at(redeemed_at) as t from public.referrals where invitee_id = pg_temp.u(23);
+select pg_temp.settle(pg_temp.u(23), (select t from final23) - interval '1 minute');
+select is((select status from public.referrals where invitee_id = pg_temp.u(23)), 'pending', 'a settlement one minute before the bound leaves it pending');
+select is((select due_at from public.reward_due where user_id = pg_temp.u(23)), (select t from final23) + interval '1 minute',
+  'and schedules the invitee one minute after the bound');
+select pg_temp.settle(pg_temp.u(23), (select t from final23) + interval '1 minute');
+select is((select status from public.referrals where invitee_id = pg_temp.u(23)), 'expired', 'that settlement expires it');
+select is((select count(*)::int from public.reward_due where user_id = pg_temp.u(23)), 0, 'and nothing more is scheduled');
+-- (I1) a third drive on the window's last day, held by the watermark past 90 days, still qualifies once it syncs
+select pg_temp.mkuser(22);
+select pg_temp.redeem_as(pg_temp.u(22), pg_temp.code_of(pg_temp.u(20)));
+update public.referrals set redeemed_at = ((pg_temp.today() + 3)::timestamp + interval '12 hours') at time zone 'America/Los_Angeles' - interval '90 days'
+  where invitee_id = pg_temp.u(22);
+select pg_temp.drives(pg_temp.u(22), 3);
+-- the watermarks are future instants here, which devices_clamp_watermark would clamp to now(): set them past it
+set local session_replication_role = replica;
+insert into public.devices (id, user_id, platform, synced_through) values ('w-phone', pg_temp.u(22), 'ios', pg_temp.la_close(pg_temp.today() + 2) + interval '1 minute');
+set local session_replication_role = origin;
+select pg_temp.settle(pg_temp.u(22), pg_temp.la_close(pg_temp.today() + 3) + interval '1 day');
+select is(array[(select status from public.referrals where invitee_id = pg_temp.u(22)),
+    (select count(*)::text from public.reward_days where user_id = pg_temp.u(22) and day = pg_temp.today() + 3)], array['pending', '0'],
+  'past 90 days the last window day is held by the watermark: not settled, and the referral stays pending');
+set local session_replication_role = replica;
+update public.devices set synced_through = pg_temp.la_close(pg_temp.today() + 3) + interval '1 minute' where user_id = pg_temp.u(22);
+set local session_replication_role = origin;
+select pg_temp.settle(pg_temp.u(22), pg_temp.la_close(pg_temp.today() + 3) + interval '1 day');
+select is((select status from public.referrals where invitee_id = pg_temp.u(22)), 'qualified', 'after the sync the day settles and the referral qualifies');
+-- (n3) canRedeem is never null
+select pg_temp.mkuser(24);
+update auth.users set created_at = null where id = pg_temp.u(24);
+select is(pg_temp.mine(pg_temp.u(24)) -> 'canRedeem', 'false'::jsonb, 'canRedeem is false, not null, when the account''s creation time is unknown');
 -- the yearly cap: 20 already rewarded in 365 days
 select pg_temp.mkuser(n) from generate_series(200, 219) n;
 insert into public.referrals (referrer_id, invitee_id, status, redeemed_at, qualified_at, invitee_rewarded, referrer_rewarded)

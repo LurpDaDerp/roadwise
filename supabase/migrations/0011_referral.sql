@@ -47,14 +47,16 @@ set lock_timeout = '5s';
 -- their push_token_seen hash sets intersect → rejected / shared_device, silent to both). Qualified →
 -- the invitee +500 (`referral:invitee:<id>`) and the referrer enqueued at once; the referrer is
 -- credited in their own settlement (`referral:referrer:<id>`) unless 20 were rewarded in the last
--- 365 days (then recorded unrewarded, referrer_cap). Past 90 days without qualifying → expired.
+-- 365 days (then recorded unrewarded, referrer_cap). Not qualified by referral_final_at (90 d + 125 h, the
+-- last in-window day's latest close plus the settlement cap) → expired; schedule_next_settle (replaced
+-- here) wakes a pending invitee just after that bound.
 --
 -- Settlement order now: u13 check; zone; progress lock; settle_days; append_streak; settle_goals;
 -- settle_challenges; settle_referrals; refresh_progress; settle_badges; refresh_progress;
 -- emit_reward_events; schedule_next_settle.
 --
 -- Nothing from 0001-0010 is edited except: a trigger on push_registrations, the badge row, the flag
--- key, and `create or replace` of the four functions above.
+-- key, and `create or replace` of the four functions above and of schedule_next_settle.
 
 -- ---------------------------------------------------------------------------
 -- tables
@@ -141,6 +143,19 @@ $$;
 create or replace function public.referrals_available() returns boolean
 language sql stable set search_path = public as $$
   select coalesce((select (value -> 'referral') = 'true'::jsonb from public.app_config where key = 'feature_flags'), false)
+$$;
+
+-- (fix round 2, I1/m2) the instant after which a pending referral's count is final. Its last countable drive
+-- starts at redeemed_at + QUALIFY_WITHIN_D. That drive's local day ends at most 25 h later (24 h, or 25 on
+-- a DST fall-back day); reward_wall_close is the LATEST 02:00 over all of the day's trip zones, up to 26 h
+-- past the drive's own zone's (UTC+14 against UTC-12), plus the 2 h itself; and reward_day_ready settles
+-- the day at the latest SETTLE_CAP_H after that close. So 90 d + (25 + 26 + 2 + 72) h = 90 d + 125 h:
+-- by then every in-window day has settled (in the same settlement, before settle_referrals runs), and
+-- the referral qualifies or expires, never earlier. my_referrals and settle_referrals both read it.
+create or replace function public.referral_final_at(p_redeemed_at timestamptz) returns timestamptz
+language sql immutable set search_path = public as $$
+  select p_redeemed_at + make_interval(days => (public.reward_rules() -> 'REFERRAL' ->> 'QUALIFY_WITHIN_D')::int,
+    hours => 25 + 26 + 2 + (public.reward_rules() ->> 'SETTLE_CAP_H')::int)
 $$;
 
 -- a refusal that must not roll back the budget take: the body PostgREST gives a raised error, and its status
@@ -302,15 +317,12 @@ begin
     'rewardedThisYear', (select count(*) from public.referrals r where r.referrer_id = v_uid and r.referrer_rewarded
                           and r.qualified_at > now() - interval '365 days'),
     'cap', (v_ref ->> 'YEARLY_CAP')::int,
-    'canRedeem', v_mine.id is null and v_created >= now() - make_interval(days => (v_ref ->> 'REDEEM_WITHIN_D')::int),
+    'canRedeem', coalesce(v_mine.id is null and v_created >= now() - make_interval(days => (v_ref ->> 'REDEEM_WITHIN_D')::int), false),
     'myCode', case
       when v_mine.id is null then 'none'
       when v_mine.status = 'qualified' then 'counted'
-      -- (fix round 1, m2) a drive just inside the window lies on a local day that ends at most 25 h later
-      -- (24 h, or 25 on a DST day), closes 2 h after that, and can be held up to SETTLE_CAP_H past its close;
-      -- a pending row reads pending until all of that has passed, so it never flips to counted
-      when v_mine.status = 'pending' and now() <= v_mine.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int,
-             hours => 25 + 2 + (public.reward_rules() ->> 'SETTLE_CAP_H')::int) then 'pending'
+      -- (fix rounds 1-2, m2) pending until its count is final (referral_final_at), so it never flips to counted
+      when v_mine.status = 'pending' and now() <= public.referral_final_at(v_mine.redeemed_at) then 'pending'
       else 'not_counted' end);
 end $$;
 
@@ -360,7 +372,9 @@ begin
         insert into public.reward_due (user_id, due_at) values (v_r.referrer_id, p_now)
           on conflict (user_id) do update set due_at = least(public.reward_due.due_at, excluded.due_at);
       end if;
-    elsif p_now > v_r.redeemed_at + make_interval(days => (v_ref ->> 'QUALIFY_WITHIN_D')::int) then
+    -- (fix round 2, I1) only once every in-window day has settled: a last-day drive held by the watermark
+    -- still counts when it settles
+    elsif p_now > public.referral_final_at(v_r.redeemed_at) then
       update public.referrals set status = 'expired' where id = v_r.id;
     end if;
   end if;
@@ -456,7 +470,10 @@ begin
     'events', jsonb_array_length(v_events));
 end $$;
 
--- 0010's minimisation, also covering the referral tables (R-H's class reset kept)
+-- 0010's minimisation, also covering the referral tables (R-H's class reset kept). It deletes every
+-- referral row the user is in, the OTHER party's side included: the row names the child, so it cannot stay.
+-- The counterpart keeps any ledger credit and badge already given; a referrer's referrals_rewarded counter
+-- drops by one at their next refresh (fix round 2, n2).
 create or replace function public.minimise_underage_rewards() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -478,6 +495,73 @@ begin
   delete from public.progress where user_id = new.id;
   update public.profiles set level = 1 where id = new.id and level <> 1;
   return null;
+end $$;
+
+-- 0009's §R8 scheduler, now also waking a pending invitee just after referral_final_at (fix round 2, I1), so
+-- an invitee who stops driving still has the referral expired
+create or replace function public.schedule_next_settle(p_user uuid, p_tz text, p_now timestamptz, p_lease timestamptz) returns timestamptz
+language plpgsql set search_path = public as $$
+declare
+  v_frontier date;
+  v_close timestamptz;
+  v_next timestamptz;
+  v_goal record;
+  v_count int;
+  v_start date;
+  v_final timestamptz;
+begin
+  -- lock the queue row BEFORE reading the facts: an apply_trip that committed earlier is then in the
+  -- facts, and one that commits later waits for this transaction and lowers (or re-inserts) the row
+  -- after it, so a new day is never lost between the read and the write
+  perform 1 from public.reward_due where user_id = p_user for update;
+  select pr.settled_through, pr.rewards_start into v_frontier, v_start from public.progress pr where pr.user_id = p_user;
+  select x.wall_close into v_close
+    from public.reward_day_facts(p_user, greatest(coalesce(v_frontier + 1, '-infinity'::date), coalesce(v_start, '-infinity'::date)),
+      'infinity'::date, p_tz) x order by x.day limit 1;
+  if v_close is not null then
+    v_next := public.reward_retry_at(v_close, p_now);
+  end if;
+  for v_goal in
+    select g.week_start from public.weekly_goals g
+    where g.user_id = p_user and g.state = 'active' and g.pass_days + g.fail_days > 0
+  loop
+    v_close := public.reward_wall_close(v_goal.week_start + 6,
+      coalesce((select array_agg(distinct tr.tz) from public.trips tr where tr.user_id = p_user and tr.local_day = v_goal.week_start + 6),
+               array[coalesce(p_tz, 'UTC')]));
+    v_next := least(v_next, public.reward_retry_at(v_close, p_now));
+  end loop;
+  -- a pending referral is settled (then pending means p_now <= its bound) one minute after its bound
+  select public.referral_final_at(r.redeemed_at) into v_final from public.referrals r where r.invitee_id = p_user and r.status = 'pending';
+  if v_final is not null then
+    v_next := least(v_next, v_final + interval '1 minute');
+  end if;
+  -- (review m2) a time at or before now is never written: the sweep would pick the user again at once
+  if v_next is not null and v_next <= p_now then
+    v_next := p_now + interval '1 minute';
+  end if;
+
+  if p_lease is null then
+    if v_next is null then
+      delete from public.reward_due where user_id = p_user;
+    else
+      insert into public.reward_due (user_id, due_at) values (p_user, v_next)
+        on conflict (user_id) do update set due_at = excluded.due_at, failures = 0;
+    end if;
+  elsif v_next is null then
+    -- only an untouched lease is deleted: a concurrent enqueue keeps its row
+    delete from public.reward_due where user_id = p_user and due_at = p_lease;
+  else
+    update public.reward_due
+      set due_at = case when due_at = p_lease then v_next else least(v_next, due_at) end,
+          failures = case when due_at = p_lease then 0 else failures end
+      where user_id = p_user;
+    get diagnostics v_count = row_count;
+    if v_count = 0 then
+      insert into public.reward_due (user_id, due_at) values (p_user, v_next)
+        on conflict (user_id) do update set due_at = least(public.reward_due.due_at, excluded.due_at);
+    end if;
+  end if;
+  return v_next;
 end $$;
 
 -- 0009's retention, also purging push_token_seen after 400 days (r1-M2), each bounded the same way
@@ -519,6 +603,7 @@ revoke all on function public.record_push_token_seen() from public, anon, authen
 revoke all on function public.normalise_referral_code(text) from public, anon, authenticated, service_role;
 revoke all on function public.referrals_available() from public, anon, authenticated, service_role;
 revoke all on function public.referral_refusal(text, text) from public, anon, authenticated, service_role;
+revoke all on function public.referral_final_at(timestamptz) from public, anon, authenticated, service_role;
 revoke all on function public.settle_referrals(uuid, timestamptz) from public, anon, authenticated, service_role;
 revoke all on function public.get_my_referral_code() from public, anon, authenticated, service_role;
 revoke all on function public.redeem_referral_code(text) from public, anon, authenticated, service_role;

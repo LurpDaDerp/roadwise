@@ -1542,6 +1542,7 @@ export type Database = {
       record_push_receipts: { Args: { p: Json }; Returns: number }
       redeem_referral_code: { Args: { p_code: string }; Returns: Json }
       rederive_age_bands: { Args: never; Returns: number }
+      referral_final_at: { Args: { p_redeemed_at: string }; Returns: string }
       referral_refusal: {
         Args: { p_message: string; p_sqlstate: string }
         Returns: Json
