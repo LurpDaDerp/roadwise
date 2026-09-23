@@ -172,3 +172,50 @@ test('head yaw speed (driver frame, °/s)', () => {
   // camera −10°/frame at 15 fps → driver +150°/s (LHD), after the median settles
   expect(out[4]!.headYawSpeedDegS).toBeCloseTo(150, 0);
 });
+
+describe('closures as native emits them (T6 review C1)', () => {
+  test('a 1.2 s closure of both eyes at 60 km/h stays TRACKING: eyesClosed, closedMs ≥ 1000, held → head', () => {
+    const specs: FrameSpec[] = [];
+    for (let i = 0; i < 5; i++) specs.push(at(i, { gaze: { yaw: 8, pitch: 0 } }));
+    for (let i = 5; i < 5 + 19; i++) specs.push(at(i, { ear: [0.05, 0.05] })); // ≈ 1.27 s at 15 fps
+    const out = run(specs);
+    const closed = out.slice(5);
+    expect(closed.every((p) => p.quality === 'tracking')).toBe(true);
+    expect(closed.every((p) => p.eyesClosed)).toBe(true);
+    expect(closed[closed.length - 1]!.closedMs).toBeGreaterThanOrEqual(1000);
+    expect(closed[0]!.source).toBe('held');
+    expect(closed[closed.length - 1]!.source).toBe('head');
+  });
+  test('a blink does not reset the head smoothing (it stays in the TRACKING run)', () => {
+    const yaws = [0, 0, 0, 30, 0, 0];
+    const out = run(yaws.map((y, i) => at(i, { head: { yaw: y, pitch: 0, roll: 0 }, ...(i === 3 || i === 4 ? { ear: [0.05, 0.05] as [number, number] } : {}) })));
+    expect(out.map((p) => Math.round(p.headCam!.yaw) + 0)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe('dropouts (T6 review m2, m4)', () => {
+  const cfgNet = resolveDmsConfig({ gazeSource: 'net' });
+  test('the net extrapolation expires after 300 ms without NET_RAN: then the head with its margin', () => {
+    const specs: FrameSpec[] = [at(0, { net: { yaw: 5, pitch: 0 } })];
+    for (let i = 1; i < 8; i++) specs.push(at(i, { net: null }));
+    const out = run(specs, { gazeSource: 'net' }, cfgNet);
+    expect(out[4]!.netCam).not.toBeNull(); // 267 ms
+    expect(out[5]!.netCam).toBeNull(); // 333 ms
+    expect(out[5]!.source).toBe('head');
+    expect(out[5]!.marginDeg).toBe(5);
+  });
+  test('the extrapolation window grows with gazeNetEvery at low rates (2 × every × interval)', () => {
+    const specs: FrameSpec[] = [{ tMs: 0, net: { yaw: 5, pitch: 0 } }, { tMs: 125, net: null }, { tMs: 250, net: null }, { tMs: 375, net: null }, { tMs: 500, net: null }, { tMs: 625, net: null }];
+    const out = run(specs, { gazeSource: 'net', gazeNetEvery: 2 }, cfgNet);
+    expect(out[4]!.netCam).not.toBeNull(); // 500 ms = 2 × 2 × 125
+    expect(out[5]!.netCam).toBeNull();
+  });
+  test('a closure after a HEAD_ONLY stretch never holds a gaze from before it', () => {
+    const specs: FrameSpec[] = [];
+    for (let i = 0; i < 4; i++) specs.push(at(i, { gaze: { yaw: 20, pitch: 0 } }));
+    for (let i = 4; i < 20; i++) specs.push(at(i, { blur: 5 })); // HEAD_ONLY for ~1 s
+    for (let i = 20; i < 23; i++) specs.push(at(i, { ear: [0.05, 0.05] }));
+    const out = run(specs);
+    expect(out.slice(20).some((p) => p.source === 'held')).toBe(false);
+  });
+});

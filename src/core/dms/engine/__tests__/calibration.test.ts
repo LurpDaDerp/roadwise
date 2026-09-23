@@ -319,3 +319,35 @@ describe('frame-rate invariance', () => {
     expect(dist(centres[2]!, centres[1]!)).toBeLessThan(0.1);
   });
 });
+
+describe('T6 review minors', () => {
+  const MOUNT = { yawDeg: 0, pitchDeg: 0, rollDeg: 0, boxCx: 0.5, boxCy: 0.45, iod: 0.2 };
+  const prof = (over: Partial<DmsProfileV1> = {}): DmsProfileV1 => ({
+    v: 1, driverSide: 'left', orientation: 90, mount: MOUNT, gazeCentres: { geometric: { yaw: -3, pitch: 2 } }, headCentre: { yaw: 0, pitch: 0 },
+    rollOffsetDeg: 0, radiusDeg: 9, openEyeEar: [0.31, 0.29], neutralMar: 0.06, neutralMouthW: 0.9, learnedZones: [], savedAtMs: 1, ...over,
+  });
+  test('m1: a profile with no EAR at all keeps the provisional EAR collection alive', () => {
+    const cal = createCalibrator(C, { driverSide: 'left', profile: prof({ openEyeEar: [null, null] }) });
+    perceive(C, cal, stream({ fps: 15, seconds: 22, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.3, 0.3] }), ctx: () => ({ speedKmh: 30 }) }));
+    expect(cal.state()).toBe('seeded');
+    expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+  });
+  test('m3: a warm start deferred by gaps never overwrites a calibrated state', () => {
+    // A matching profile, but a pause every 4 s keeps the comparisons from finishing until after the pass.
+    const cal = createCalibrator(C, { driverSide: 'left', profile: prof() });
+    const run = perceiver(C, cal);
+    const sample = (t: number, r: () => number) => ({ ...roadSampler(TRUTH)(t, r), headDrv: { yaw: 0, pitch: 0 } });
+    for (let k = 0; k < 20; k++) {
+      run(stream({ fps: 15, seconds: 4, fromMs: k * 4000, seed: 7 + k, sample }));
+      cal.markGap(k * 4000 + 4000);
+    }
+    expect(cal.state()).toBe('calibrated');
+    run(stream({ fps: 15, seconds: 14, fromMs: 80_000, seed: 99, sample }));
+    expect(cal.state()).toBe('calibrated');
+    expect(cal.drainEvents().map((e) => e.kind)).not.toContain('warm_start');
+  });
+  test('nit: a C2 seed gives the minimum radius until a pass', () => {
+    const seed = { gazeCentres: { geometric: { yaw: 0, pitch: 0 }, net: null }, headCentre: { yaw: 0, pitch: 0 }, rollOffsetDeg: 0, mount: MOUNT, orientation: 90 as const, openEyeEar: { r: 0.3, l: 0.3 } };
+    expect(createCalibrator(C, { driverSide: 'left', seed }).radius()).toBe(C.calibration.radiusMinDeg);
+  });
+});

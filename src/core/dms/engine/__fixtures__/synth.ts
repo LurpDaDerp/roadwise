@@ -6,6 +6,9 @@ import type { AnglePair, DriverSide, EngineFrame, EyeFeatures, HeadAngles, Rotat
 
 const RAD = Math.PI / 180;
 
+/** At or below this EAR the synthetic eye is closed and looks like it (irisContrast ≈ 0, irisIn false). */
+export const CLOSED_EAR = 0.1;
+
 /** mulberry32 */
 export function rng(seed: number): () => number {
   let a = seed >>> 0;
@@ -63,8 +66,10 @@ export function frame(s: FrameSpec): EngineFrame {
   const ox = kEye * Math.sin((gaze.yaw - head.yaw) * RAD);
   const oy = kEye * Math.sin(((gaze.pitch - head.pitch) / gPitch) * RAD);
   const [earR, earL] = s.ear ?? [0.3, 0.3];
+  // A closed eye looks the way native emits it (T6 review C1): the contour collapses, so the iris
+  // centre falls outside it (irisIn false) and the ROI is eyelid, so the iris contrast is about 0.
   const mk = (over: Partial<EyeFeatures> | null | undefined, ear: number): EyeFeatures | null =>
-    over === null ? null : eye({ ear, ox, oy, ...(over ?? {}) });
+    over === null ? null : eye({ ear, ox, oy, ...(ear <= CLOSED_EAR ? { irisContrast: 2, irisIn: false } : {}), ...(over ?? {}) });
   if (!face) {
     return {
       tMs: s.tMs,

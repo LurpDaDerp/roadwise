@@ -121,7 +121,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let lastTrackingT: number | null = null;
   let gap: { before: MountSignature | null } | null = null;
   let comparing: Comparison | null = null;
-  let sanity: { trackingS: number; values: number[] } | null = null;
+  let sanity: { trackingS: number; values: number[]; r: number[]; l: number[] } | null = null;
+  /** a rotation bump since the last gap: that resume's signature comparison is skipped (T6 review m3) */
+  let rotationBumpedInGap = false;
   let warmProfile: DmsProfileV1 | null = init.profile && init.profile.driverSide === side ? init.profile : null;
   let tNow = 0;
 
@@ -154,6 +156,22 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     emit('camera_bump', cause);
   }
 
+  /**
+   * The openness sanity check failed (rev2 R1-m2 as ruled by T6 review I3): the EAR becomes AT ONCE the
+   * per-eye p90 of the sanity window's raw EARs (an eye without samples: its old value × the median
+   * openness), never null, so closure rules run throughout; the §M3 re-derivation continues from the same
+   * samples and replaces it when its 20 s are complete.
+   */
+  function baselineReset(win: { trackingS: number; r: number[]; l: number[] }, medianOpenness: number): void {
+    const old = ear;
+    const pick = (xs: number[], prev: number | null | undefined) =>
+      xs.length > 0 ? quantile(xs, c.provisionalEarPercentile) : prev != null ? prev * medianOpenness : null;
+    ear = { r: pick(win.r, old?.r), l: pick(win.l, old?.l) };
+    earFrozen = false;
+    earCollector = { trackingS: win.trackingS, r: [...win.r], l: [...win.l] };
+    emit('baseline_reset');
+  }
+
   function driverChange(): void {
     restartStage1();
     rederiveEar();
@@ -167,6 +185,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     centres.geometric = seed.gazeCentres.geometric;
     centres.net = seed.gazeCentres.net;
     centres.head = seed.headCentre;
+    // A seed carries no spread: the minimum radius until a pass (T6 review nit).
+    radius = radius ?? c.radiusMinDeg;
     roll = seed.rollOffsetDeg;
     if (seed.openEyeEar.r !== null || seed.openEyeEar.l !== null) {
       ear = { ...seed.openEyeEar };
@@ -182,8 +202,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     centres.head = p.headCentre;
     radius = p.radiusDeg;
     roll = p.rollOffsetDeg;
-    ear = { r: p.openEyeEar[0], l: p.openEyeEar[1] };
-    earCollector = null;
+    // A profile without any EAR must not stop the provisional collection (T6 review m1).
+    if (p.openEyeEar[0] !== null || p.openEyeEar[1] !== null) {
+      ear = { r: p.openEyeEar[0], l: p.openEyeEar[1] };
+      earCollector = null;
+    }
     mar = p.neutralMar;
     mouthW = p.neutralMouthW;
     hasSeed = true;
@@ -246,6 +269,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (cmp.kind === 'warm') {
       const p = warmProfile;
       warmProfile = null;
+      if (state === 'calibrated') return; // a deferred warm start never overwrites a pass (T6 review m3)
       if (p !== null && after !== null && lastRotation === p.orientation && compareSignatures(p.mount, after, cfg).match) applyProfile(p);
       return;
     }
@@ -256,16 +280,28 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     else cameraBump('resume');
   }
 
+  /**
+   * A gap begins (a pause, or a long SEARCH). A resume comparison still pending, or a gap not yet
+   * resumed, keeps its own `before`: the signature from before the FIRST gap, so a driver who swapped at
+   * one stop cannot match themselves at the next (T6 review I1). A pending warm start keeps its profile.
+   */
+  function openGap(): void {
+    const pending = comparing !== null && comparing.kind === 'resume' ? comparing.before : undefined;
+    const before = pending !== undefined ? pending : gap !== null ? gap.before : sigWindow.signature();
+    gap = { before };
+    sigWindow.clear();
+    bump.clear();
+    if (comparing !== null && comparing.kind === 'resume') comparing = null;
+    if (comparing !== null && comparing.kind === 'warm') comparing = null; // restarts after the resume
+    sanity = null;
+  }
+
   if (init.seed) applySeed(init.seed);
 
   return {
     markGap(tMs) {
       tNow = tMs;
-      gap = { before: sigWindow.signature() };
-      sigWindow.clear();
-      bump.clear();
-      comparing = null;
-      sanity = null;
+      openGap();
     },
 
     applySeed,
@@ -277,9 +313,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const dt = Math.min(p.dtS, c.admitDtCapS);
       const tracking = p.quality === 'tracking' && p.headCam !== null && f.box !== null && f.iod !== null;
 
-      // A rotation change mid-drive is a camera bump (rev2 R1-I1).
+      // A rotation change mid-drive is a camera bump (rev2 R1-I1); a pending resume comparison is dropped
+      // with it, so one change is one bump (T6 review m3).
       if (p.quality !== 'lost') {
-        if (lastRotation !== null && f.rotationDeg !== lastRotation) cameraBump('rotation');
+        if (lastRotation !== null && f.rotationDeg !== lastRotation) {
+          cameraBump('rotation');
+          if (gap !== null) rotationBumpedInGap = true;
+          if (comparing !== null && comparing.kind === 'resume') comparing = null;
+        }
         lastRotation = f.rotationDeg;
       }
 
@@ -294,17 +335,15 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const ms: MountSample = { t: f.tMs, yaw: head.yaw, pitch: head.pitch, roll: head.roll, cx: box.cx, cy: box.cy, iod: f.iod! };
 
       // A long SEARCH is a gap too (C-6), without markGap.
-      if (gap === null && lastTrackingT !== null && f.tMs - lastTrackingT >= c.longSearchS * 1000) {
-        gap = { before: sigWindow.signature() };
-        sigWindow.clear();
-        bump.clear();
-      }
+      if (gap === null && lastTrackingT !== null && f.tMs - lastTrackingT >= c.longSearchS * 1000) openGap();
       lastTrackingT = f.tMs;
 
-      // The first TRACKING frame after a gap starts the comparison and the openness sanity check.
+      // The first TRACKING frame after a gap starts the comparison and the openness sanity check. After a
+      // rotation bump across the gap the comparison is skipped: a bump is already declared (T6 review m3).
       if (gap !== null) {
-        comparing = { kind: 'resume', before: gap.before, samples: [], trackingS: 0 };
-        sanity = ear !== null ? { trackingS: 0, values: [] } : null;
+        comparing = rotationBumpedInGap ? null : { kind: 'resume', before: gap.before, samples: [], trackingS: 0 };
+        rotationBumpedInGap = false;
+        sanity = ear !== null ? { trackingS: 0, values: [], r: [], l: [] } : null;
         gap = null;
       } else if (warmProfile !== null && comparing === null) {
         comparing = { kind: 'warm', before: warmProfile.mount, samples: [], trackingS: 0 };
@@ -330,22 +369,21 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const relPitch = p.gazeRel?.pitch ?? p.headRel?.pitch ?? (p.headDrv !== null && ref !== null ? p.headDrv.pitch - ref : null);
       if (sanity !== null && p.openness !== null && relPitch !== null && relPitch > c.opennessCheckMinRelPitchDeg) {
         sanity.values.push(p.openness);
+        if (p.usableR && f.eyeR !== null) sanity.r.push(f.eyeR.ear);
+        if (p.usableL && f.eyeL !== null) sanity.l.push(f.eyeL.ear);
         sanity.trackingS += dt;
         if (sanity.trackingS >= c.opennessCheckS) {
-          const m = median(sanity.values);
+          const done = sanity;
           sanity = null;
-          if (m < c.opennessRange[0] || m > c.opennessRange[1]) {
-            ear = null;
-            rederiveEar();
-            emit('baseline_reset');
-          }
+          const m = median(done.values);
+          if (m < c.opennessRange[0] || m > c.opennessRange[1]) baselineReset(done, m);
         }
       }
 
       // The provisional EAR: p90 over 20 s of TRACKING within ±15° of the pitch reference.
       if (earCollector !== null && p.headDrv !== null && ref !== null && Math.abs(p.headDrv.pitch - ref) <= c.provisionalEarWithinDeg) {
-        if (p.reliableR && f.eyeR !== null) earCollector.r.push(f.eyeR.ear);
-        if (p.reliableL && f.eyeL !== null) earCollector.l.push(f.eyeL.ear);
+        if (p.usableR && f.eyeR !== null) earCollector.r.push(f.eyeR.ear);
+        if (p.usableL && f.eyeL !== null) earCollector.l.push(f.eyeL.ear);
         earCollector.trackingS += dt;
         if (earCollector.trackingS >= c.provisionalEarS) {
           const col = earCollector;
@@ -373,8 +411,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           roll: head.roll,
           geo: p.geoCam,
           net: p.netFresh ? p.netCam : null,
-          earR: p.reliableR && f.eyeR !== null ? f.eyeR.ear : null,
-          earL: p.reliableL && f.eyeL !== null ? f.eyeL.ear : null,
+          earR: p.usableR && f.eyeR !== null ? f.eyeR.ear : null,
+          earL: p.usableL && f.eyeL !== null ? f.eyeL.ear : null,
           mar: f.mouth?.mar ?? null,
           mouthW: f.mouth?.widthIod ?? null,
         });
@@ -497,8 +535,8 @@ export function seedFromFrames(pairs: readonly { frame: EngineFrame; p: Perceive
   const geo = use.map(({ p }) => p.geoCam).filter((a): a is AnglePair => a !== null).map(toDrv);
   const net = use.map(({ p }) => (p.netFresh ? p.netCam : null)).filter((a): a is AnglePair => a !== null).map(toDrv);
   const mount = signatureOf(use.map(({ frame: f, p }) => ({ t: f.tMs, yaw: p.headCam!.yaw, pitch: p.headCam!.pitch, roll: p.headCam!.roll, cx: f.box!.cx, cy: f.box!.cy, iod: f.iod! })))!;
-  const er = use.filter(({ frame: f, p }) => p.reliableR && f.eyeR !== null).map(({ frame: f }) => f.eyeR!.ear);
-  const el = use.filter(({ frame: f, p }) => p.reliableL && f.eyeL !== null).map(({ frame: f }) => f.eyeL!.ear);
+  const er = use.filter(({ frame: f, p }) => p.usableR && f.eyeR !== null).map(({ frame: f }) => f.eyeR!.ear);
+  const el = use.filter(({ frame: f, p }) => p.usableL && f.eyeL !== null).map(({ frame: f }) => f.eyeL!.ear);
   return {
     ok: true,
     seed: {

@@ -87,13 +87,13 @@ describe('the binding numbers (plan §M1–§M10)', () => {
     expect(c.nod.closureOpenness).toBe(0.15);
     expect(c.nod.closureHoldS).toBe(0.5);
     expect(c.yawn.absMar).toBe(0.35);
-    expect(c.yawn.minFps).toBe(10);
+    expect(c.yawn.minFps).toBe(9); // T6 review I2: between 10 and 8
   });
   test('the numbers added in Task 6 (Task 5 review m1)', () => {
     expect(c.fatigue.perclosOpennessBelow).toBe(0.2);
     expect(c.fatigue.perclosMinTrackingS).toBe(30);
     expect(c.closure.fpsWindowS).toBe(10);
-    expect(c.distraction.gazeRulesMinFps).toBe(8);
+    expect(c.distraction.gazeRulesMinFps).toBe(6.5);
     expect(c.summary).toEqual({ goodSessionMinMonitoredS: 600, goodSessionMinTrackingShare: 0.7, goodSessionMinBlinksPer2Min: 1 });
   });
   test('the fatigue weights sum to 1 (§M7)', () => {
@@ -241,5 +241,32 @@ describe('resolveDmsConfig (the host override)', () => {
   test('refuses an override that breaks a rule, or names an unknown key', () => {
     expect(() => resolveDmsConfig({ closure: { closedBelow: 0.9 } })).toThrow(/closure/);
     expect(() => resolveDmsConfig({ quality: { bogus: 1 } } as never)).toThrow(/bogus/);
+  });
+});
+
+describe('the fps floors sit between capture rates (T6 review I2)', () => {
+  const c = DEFAULT_DMS_CONFIG;
+  test('the values', () => {
+    expect(c.distraction.gazeRulesMinFps).toBe(6.5);
+    expect(c.closure.blinkMinFps).toBe(12.5);
+    expect(c.fatigue.signals.longBlinks.minFps).toBe(12.5);
+    expect(c.fatigue.signals.blinkDuration.minFps).toBe(12.5);
+    expect(c.fatigue.signals.perclos.minFps).toBe(9);
+    expect(c.fatigue.signals.yawns.minFps).toBe(9);
+    expect(c.yawn.minFps).toBe(9);
+  });
+  test('an exact 15 fps stream, and one with 1 ms of jitter, pass the blink floor; 10 fps does not', () => {
+    for (const dt of [1000 / 15, 1000 / 15 + 1]) expect(1000 / dt).toBeGreaterThanOrEqual(c.closure.blinkMinFps);
+    expect(1000 / 100).toBeLessThan(c.closure.blinkMinFps);
+  });
+  test.each([
+    ['gaze rules at 8', (x: DmsConfig) => (x.distraction.gazeRulesMinFps = 8), /distraction\.gazeRulesMinFps/],
+    ['blinks at 15', (x: DmsConfig) => (x.closure.blinkMinFps = 15), /closure\.blinkMinFps/],
+    ['PERCLOS at 10', (x: DmsConfig) => (x.fatigue.signals.perclos.minFps = 10), /fatigue\.signals\.perclos\.minFps/],
+    ['yawns at 10', (x: DmsConfig) => (x.yawn.minFps = 10), /yawn\.minFps/],
+  ])('a floor equal to a capture rate is refused: %s', (_n, breakIt, path) => {
+    const x = copy();
+    breakIt(x);
+    expect(validateDmsConfig(x).join('\n')).toMatch(path);
   });
 });

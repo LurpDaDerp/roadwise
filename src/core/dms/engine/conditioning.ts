@@ -24,6 +24,8 @@ export interface ConditionerRefs {
   openEyeEar: EarPair | null;
   /** the head-pitch reference for "looking down" before calibration (rev1 m6), driver frame */
   pitchReference: number | null;
+  /** the policy's gazeNetEvery (1 or 2): how long a net value may be carried (T6 review m2); default 1 */
+  gazeNetEvery?: number;
 }
 
 export type GazeUse = 'gaze' | 'held' | 'head' | 'none';
@@ -34,6 +36,10 @@ export interface Perceived {
   dtS: number;
   quality: Quality;
   reasons: QualityReason[];
+  /** usable for openness (T6 review C1) */
+  usableR: boolean;
+  usableL: boolean;
+  /** reliable for the geometric gaze */
   reliableR: boolean;
   reliableL: boolean;
   rotationDeg: Rotation;
@@ -81,7 +87,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
   let prevT: number | null = null;
   let prevHeadDrvYaw: number | null = null;
   let prevHeadT = 0;
-  let lastNet: { net: AnglePair; head: AnglePair } | null = null;
+  let lastNet: { net: AnglePair; head: AnglePair; t: number } | null = null;
+  let frameIntervalMs = 1000 / 15;
   let closed = false;
   let closedSince = 0;
   let lastGazeRel: AnglePair | null = null;
@@ -94,8 +101,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
     if (ear === null) return { r: null, l: null, used: null };
     const r = f.eyeR !== null && ear.r !== null && ear.r > 0 ? f.eyeR.ear / ear.r : null;
     const l = f.eyeL !== null && ear.l !== null && ear.l > 0 ? f.eyeL.ear / ear.l : null;
-    const rr = q.reliableR ? r : null;
-    const ll = q.reliableL ? l : null;
+    const rr = q.usableR ? r : null;
+    const ll = q.usableL ? l : null;
     let used: number | null;
     if (Math.abs(headYaw) > cfg.closure.nearEyeYawDeg) {
       const near = nearEye(f);
@@ -119,6 +126,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
 
     step(f, q, refs) {
       const dtS = prevT === null ? 0 : Math.max(0, (f.tMs - prevT) / 1000);
+      if (dtS > 0 && dtS < 1) frameIntervalMs = dtS * 1000;
       prevT = f.tMs;
       if (q.quality !== lastQuality) resetSmoothing();
       lastQuality = q.quality;
@@ -146,15 +154,23 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         const g = geometricGaze(f.head, f, { r: q.reliableR, l: q.reliableL }, cfg);
         if (g !== null) geoCam = { yaw: gy.push(g.yaw), pitch: gp.push(g.pitch) };
       }
+      if (geoCam === null) {
+        // A dropout of the geometric gaze starts a new smoothing run (T6 review m4).
+        gy.reset();
+        gp.reset();
+      }
 
       // The net: this frame's, or the last corrected by the head change since (rev1 m11).
       let netCam: AnglePair | null = null;
       let netFresh = false;
+      // It expires after max(300 ms, 2 × gazeNetEvery frame intervals) (T6 review m2): then the frame
+      // takes the head fallback with its margin.
+      const netHoldMs = Math.max(cfg.gaze.netHoldMinMs, 2 * (refs.gazeNetEvery ?? 1) * frameIntervalMs);
       if (f.net !== null && headCam !== null) {
         netCam = f.net;
         netFresh = true;
-        lastNet = { net: f.net, head: headCam };
-      } else if (lastNet !== null && headCam !== null && q.quality !== 'lost') {
+        lastNet = { net: f.net, head: headCam, t: f.tMs };
+      } else if (lastNet !== null && headCam !== null && q.quality !== 'lost' && f.tMs - lastNet.t <= netHoldMs + 1e-6) {
         netCam = { yaw: lastNet.net.yaw + (headCam.yaw - lastNet.head.yaw), pitch: lastNet.net.pitch + (headCam.pitch - lastNet.head.pitch) };
       }
       if (q.quality === 'lost') lastNet = null;
@@ -199,7 +215,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       } else if (q.quality === 'head_only') {
         headFallback();
       }
-      if (source !== 'gaze' && source !== 'held') lastGazeRel = source === 'none' ? null : lastGazeRel;
+      // Only a gaze seen this closure's run may be held (T6 review m4).
+      if (source !== 'gaze' && source !== 'held') lastGazeRel = null;
 
       // Looking down: the rules' relative pitch; before any centre, head pitch against the reference.
       const rel = gazeRel as AnglePair | null;
@@ -212,6 +229,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         dtS,
         quality: q.quality,
         reasons: q.reasons,
+        usableR: q.usableR,
+        usableL: q.usableL,
         reliableR: q.reliableR,
         reliableL: q.reliableL,
         rotationDeg: f.rotationDeg,

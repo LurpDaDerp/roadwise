@@ -50,9 +50,10 @@ export class SignatureWindow {
 /**
  * The step test (rev1 m5). Every 0.5 s, with the candidate change point c = now − halfWindow: the
  * medians of [c − halfWindow, c) and [c, now] differ by ≥ bumpAngleDeg in head yaw or pitch, AND the box
- * centre moved ≥ bumpBoxShift or the IOD ≥ bumpIodFrac, AND the angle's transition took ≤ bumpSpanS,
- * measured once the new level has settled. The transition time is measured on the step's own scale (`transitionSeconds`). A slow drift is not
- * a bump, and neither is a head turn that leaves the face box where it was.
+ * centre moved ≥ bumpBoxShift or the IOD ≥ bumpIodFrac, AND the angle's transition took ≤ bumpSpanS.
+ * The step must be whole and settled (both window ends at their levels), and the transition time is
+ * measured on the step's own scale (`transitionSeconds`). A slow drift is not a bump, and neither is a
+ * head turn that leaves the face box where it was.
  */
 export class StepBump {
   private readonly ring: RingBuffer<MountSample>;

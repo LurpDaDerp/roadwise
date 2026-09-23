@@ -96,9 +96,49 @@ describe('the openness sanity check after every resume (rev2 R1-m2)', () => {
     const events = resume(cal, run, 12, { earScale: scale });
     expect(events.includes('baseline_reset')).toBe(reset);
     expect(events).not.toContain('camera_bump');
-    if (reset) expect(cal.openEyeEar()).toBeNull(); // closure waits for the re-derived EAR
+    // Never null (T6 review I3): at once the p90 of the sanity window's raw EARs.
+    expect(cal.openEyeEar()).not.toBeNull();
+    if (reset) expect(cal.openEyeEar()!.r!).toBeCloseTo(0.3 * scale, 9);
+    else expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+  });
+
+  test('closure keeps working through a reset: a 1.2 s closure 2 s after it is seen (T6 review I3)', () => {
+    const { cal, run } = beforeGap();
+    const eyes = (t: number): [number, number] => (t >= 132 && t < 133.2 ? [0.02, 0.02] : [0.15, 0.15]);
+    const out = run(stream({ fps: 15, seconds: 16, fromMs: 120_000, seed: 9, sample: (t) => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: eyes(t) }) }));
+    expect(cal.drainEvents().map((e) => e.kind)).toContain('baseline_reset');
+    const nulls = out.filter((p) => p.tMs > 120_000 && cal.openEyeEar() === null);
+    expect(nulls).toHaveLength(0);
+    const during = out.filter((p) => p.tMs >= 132_000 && p.tMs < 133_200);
+    expect(during.some((p) => p.eyesClosed && p.closedMs >= 1000)).toBe(true);
+  });
+
+  test('the interim EAR is replaced by the re-derived one at 20 s', () => {
+    const { cal, run } = beforeGap();
+    run(stream({ fps: 15, seconds: 12, fromMs: 120_000, seed: 9, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.15, 0.15] }) }));
+    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.15, 9);
+    run(stream({ fps: 15, seconds: 12, fromMs: 132_000, seed: 9, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.18, 0.18] }) }));
+    const e = cal.openEyeEar()!;
+    expect(e.r!).toBeCloseTo(0.18, 9); // the 20 s collection's p90: the later, higher values
   });
 });
+
+test('a second pause before the comparison finishes keeps the first signature (T6 review I1)', () => {
+  const { cal, run } = beforeGap();
+  // 3 s of another driver (a different IOD), then another stop before 5 s of TRACKING
+  run(stream({ fps: 15, seconds: 3, fromMs: 120_000, seed: 9, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), iod: 0.24 }) }));
+  cal.markGap(123_000);
+  run(stream({ fps: 15, seconds: 6, fromMs: 140_000, seed: 10, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), iod: 0.24 }) }));
+  expect(cal.drainEvents().map((e) => e.kind)).toContain('driver_change');
+});
+
+test('a rotation change across a pause is one camera_bump, with no second bump or driver change from the comparison (T6 review m3)', () => {
+  const { cal, run } = beforeGap();
+  run(stream({ fps: 15, seconds: 8, fromMs: 120_000, seed: 9, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), rotationDeg: 270, box: { cx: 0.62, cy: 0.3 } }) }));
+  expect(cal.drainEvents().map((e) => e.kind)).toEqual(['camera_bump']);
+  expect(cal.neutralMar()).not.toBeNull();
+});
+
 
 test('a rotationDeg change mid-drive (90 → 270) is a camera_bump (rev2 R1-I1)', () => {
   const cal = createCalibrator(C, { driverSide: 'left' });

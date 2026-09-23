@@ -9,7 +9,7 @@
 // Validation (validateDmsConfig) is total: every number finite, durations and sizes ≥ 0 unless the
 // path is a signed angle, fractions in [0, 1], ranges ordered, the fatigue weights summing to 1, the
 // zone table complete. configFromJson checks the shape key by key against the default, then validates.
-import { PAUSE_AFTER_STOP_MS } from '../../../../modules/dms-vision/src/constants';
+import { ALLOWED_FPS, PAUSE_AFTER_STOP_MS } from '../../../../modules/dms-vision/src/constants';
 import type { GazeSource, Sensitivity } from './types';
 
 export { PAUSE_AFTER_STOP_MS };
@@ -120,6 +120,8 @@ export interface DmsConfig {
     blinkHoldMs: number;
     /** §M2: HEAD_ONLY (and long closures) use head + this margin */
     headOnlyMarginDeg: number;
+    /** T6 review m2: a net value is carried at most max(this, 2 × gazeNetEvery frame intervals) */
+    netHoldMinMs: number;
   };
 
   geometric: {
@@ -288,7 +290,11 @@ export interface DmsConfig {
     };
     d3: { minGlances: number; minLapS: number; withinS: number; minSpeedKmh: number; cooldownS: number };
     d4: { returnWithinS: number };
-    /** plan §M2 (rev0 "at 5 fps no gaze rule runs"): D1–D4 need a measured fps at or above this */
+    /**
+     * plan §M2 (rev0 "at 5 fps no gaze rule runs"): D1–D4 need a measured fps at or above this. Every fps
+     * floor sits BETWEEN two capture rates, never on one, so measurement noise cannot flip it (T6 review
+     * I2): 6.5 separates 8 from 5.
+     */
     gazeRulesMinFps: number;
     /** C-18 (rev1 m3): a mirror glance ended this recently makes a far-lateral glance a shoulder check */
     shoulderAfterMirrorS: number;
@@ -312,7 +318,7 @@ export interface DmsConfig {
     singleF1HoldS: number;
     /** spec "Fatigue score": a long blink is ≥ 500 ms */
     longBlinkMs: number;
-    /** R-U4: blink statistics only at ≥ 15 fps */
+    /** R-U4: blink statistics only at 15 fps; the floor 12.5 separates 15 from 10 (T6 review I2) */
     blinkMinFps: number;
     /** §M6 (rev0): the measured fps is the median frame dt over the last 10 s */
     fpsWindowS: number;
@@ -346,7 +352,7 @@ export interface DmsConfig {
     speechWindowS: number;
     /** laugh rejection: mouth width ≥ 1.15 × neutral */
     laughWidthRatio: number;
-    /** rev1 m7: disabled below 10 fps */
+    /** rev1 m7: disabled below 10 fps; the floor 9 separates 10 from 8 (T6 review I2) */
     minFps: number;
   };
 
@@ -445,7 +451,7 @@ const DEFAULT: DmsConfig = {
     limitedNoticeS: 10,
     limitedMinSpeedKmh: 20,
   },
-  gaze: { blinkHoldMs: 500, headOnlyMarginDeg: 5 },
+  gaze: { blinkHoldMs: 500, headOnlyMarginDeg: 5, netHoldMinMs: 300 },
   geometric: { kEye: 0.43, gPitch: 1.0, nearEyeYawDeg: 25, fallbackMarginDeg: 5 },
   calibration: {
     straightCourseRateDegS: 2,
@@ -560,7 +566,7 @@ const DEFAULT: DmsConfig = {
     d2: { bucketMs: 100, resetOnRoadS: 2.0, windowS: 30, warnS: 10.0 },
     d3: { minGlances: 3, minLapS: 1.0, withinS: 30, minSpeedKmh: 20, cooldownS: 600 },
     d4: { returnWithinS: 3.0 },
-    gazeRulesMinFps: 8,
+    gazeRulesMinFps: 6.5,
     shoulderAfterMirrorS: 2,
   },
   closure: {
@@ -575,7 +581,7 @@ const DEFAULT: DmsConfig = {
     f4: { windowS: 600, holdS: 900 },
     singleF1HoldS: 900,
     longBlinkMs: 500,
-    blinkMinFps: 15,
+    blinkMinFps: 12.5,
     fpsWindowS: 10,
   },
   nod: {
@@ -600,7 +606,7 @@ const DEFAULT: DmsConfig = {
     speechMaxRatio: 0.35,
     speechWindowS: 2,
     laughWidthRatio: 1.15,
-    minFps: 10,
+    minFps: 9,
   },
   fatigue: {
     activeAfterS: 600,
@@ -608,11 +614,12 @@ const DEFAULT: DmsConfig = {
     everyS: 60,
     minTrackingShare: 0.5,
     signals: {
-      perclos: { windowS: 60, target: 0.15, margin: 0.07, weight: 0.3, minFps: 10 },
-      longBlinks: { windowS: 300, target: 3, margin: 1.5, weight: 0.2, minFps: 15 },
-      blinkDuration: { windowS: 300, target: 1.5, margin: 0.25, weight: 0.15, minFps: 15 },
+      // The floors sit between capture rates (T6 review I2): 9 (on at 10, off at 8), 12.5 (on at 15, off at 10).
+      perclos: { windowS: 60, target: 0.15, margin: 0.07, weight: 0.3, minFps: 9 },
+      longBlinks: { windowS: 300, target: 3, margin: 1.5, weight: 0.2, minFps: 12.5 },
+      blinkDuration: { windowS: 300, target: 1.5, margin: 0.25, weight: 0.15, minFps: 12.5 },
       nods: { windowS: 600, target: 2, margin: 1, weight: 0.15, minFps: 0 },
-      yawns: { windowS: 900, target: 3, margin: 1, weight: 0.1, minFps: 10 },
+      yawns: { windowS: 900, target: 3, margin: 1, weight: 0.1, minFps: 9 },
       dispersion: { windowS: 300, target: 0.5, margin: null, weight: 0.1, minFps: 0 },
     },
     longTripS: 7200,
@@ -783,6 +790,14 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(d1.lowCapFastS >= d1.bufferFastS && d1.lowCapCityS >= d1.bufferCityS)) bad('distraction.d1', 'the Low caps must be ≥ the normal buffers');
   if (!(c.distraction.noAlertBelowKmh <= c.distraction.logOnlyBelowKmh)) bad('distraction.noAlertBelowKmh', 'must be ≤ logOnlyBelowKmh');
   if (!(c.distraction.gazeRulesMinFps > 0)) bad('distraction.gazeRulesMinFps', 'must be > 0');
+  // Every fps floor sits between capture rates, never on one (T6 review I2).
+  const floors: [string, number][] = [
+    ['distraction.gazeRulesMinFps', c.distraction.gazeRulesMinFps],
+    ['closure.blinkMinFps', c.closure.blinkMinFps],
+    ['yawn.minFps', c.yawn.minFps],
+    ...Object.entries(c.fatigue.signals ?? {}).map(([k, s]) => [`fatigue.signals.${k}.minFps`, s.minFps] as [string, number]),
+  ];
+  for (const [path, v] of floors) if ((ALLOWED_FPS as readonly number[]).includes(v)) bad(path, `must not equal a capture rate (${ALLOWED_FPS.join(', ')})`);
   const d2 = c.distraction.d2;
   if (!(d2.bucketMs > 0) || (d2.windowS * 1000) % d2.bucketMs !== 0) bad('distraction.d2.bucketMs', 'must divide the window');
   if (!(d2.warnS <= d2.windowS)) bad('distraction.d2.warnS', 'must be ≤ windowS');
