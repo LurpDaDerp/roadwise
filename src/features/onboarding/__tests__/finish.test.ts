@@ -65,14 +65,27 @@ test('merges onboarded and the onboarding version into flags through the server 
 });
 
 test('a held, allowlisted link is opened instead of Home', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/trips/abc/summary');
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/trips/abc/summary' });
   const d = deps();
   await finishOnboarding(d);
   expect(d.router.replace).toHaveBeenCalledWith('/trips/abc/summary');
 });
 
+test("M5 T12 r1: a link held for another account, or a legacy bare string, is not opened, and is removed", async () => {
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u2', href: '/inbox' });
+  const d = deps();
+  await finishOnboarding(d);
+  expect(d.router.replace).toHaveBeenCalledWith('/(tabs)/home');
+
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/inbox');
+  const legacy = deps();
+  await finishOnboarding(legacy);
+  expect(legacy.router.replace).toHaveBeenCalledWith('/(tabs)/home');
+  expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+});
+
 test('a held link that is not allowlisted is ignored', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/settings/delete-account');
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/settings/delete-account' });
   const d = deps();
   await finishOnboarding(d);
   expect(d.router.replace).toHaveBeenCalledWith('/(tabs)/home');
@@ -84,7 +97,7 @@ test('the navigation lands in the same turn as the refreshed profile, so the gat
   // refresh would be bounced back to onboarding (and the held link re-held, then lost); refreshing
   // and rendering before navigating would send the driver Home. The replace follows the refresh
   // with no await between them.
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/inbox');
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/inbox' });
   let replacedInRefreshTurn = false;
   let refreshed = false;
   const d = deps({
@@ -142,7 +155,7 @@ test('a consent that still fails is kept, and does not stop the finish', async (
 });
 
 test('the onboarding state, the held link and the consents cache are cleared after the finish', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/inbox');
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/inbox' });
   await finishOnboarding(deps());
   expect(await settings.get(ONBOARDING_STEP_KEY)).toBeNull();
   expect(await settings.get(ONBOARDING_PLAN_KEY)).toBeNull();
@@ -173,7 +186,7 @@ test('no session: nothing is written', async () => {
 });
 
 test('"Start a drive now" lands Home with the drive start over it, whatever link was held', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, '/inbox');
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/inbox' });
   const d = deps();
   await finishOnboarding(d, { startDrive: true });
   expect(d.log.slice(-2)).toEqual(['replace:/(tabs)/home', 'push:/drive/start']);

@@ -70,7 +70,8 @@ async function flushPermissionConsents(deps: FinishDeps, userId: string): Promis
  *
  * 1. the permission consents still owed are sent (best effort);
  * 2. `{ onboarded: true, onboardingVersion: 1 }` is merged into `profiles.flags` on the server;
- * 3. the held deep link is read (allowlisted, `readPendingHref`), else Home is the target;
+ * 3. the held deep link is read (allowlisted and held for this account, `readPendingHref`), else
+ *    Home is the target;
  * 4. the profile is refreshed, and the navigation is made **in the same turn** as the refresh
  *    settling — with nothing awaited between them;
  * 5. the onboarding state (step, plan, held link) and the Terms consents cache are cleared.
@@ -99,7 +100,7 @@ export async function finishOnboarding(
   await flushPermissionConsents(deps, userId).catch(() => {});
   await (deps.mergeFlags ?? mergeOwnFlags)({ onboarded: true, onboardingVersion: ONBOARDING_VERSION });
 
-  const target = opts.startDrive ? HOME : ((await readPendingHref(settings)) ?? HOME);
+  const target = opts.startDrive ? HOME : ((await readPendingHref(settings, userId)) ?? HOME);
 
   await deps.refreshProfile();
   router.replace(target as Href);

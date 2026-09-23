@@ -222,7 +222,7 @@ function FriendCode({
         <Text variant="headline" accessibilityRole="header">
           {copy.invite.gotCode}
         </Text>
-        <RedeemCode deps={deps} onSaved={onSaved} />
+        <RedeemCode deps={deps} onSaved={onSaved} ownCode={snapshot.code} />
       </View>
     );
   }

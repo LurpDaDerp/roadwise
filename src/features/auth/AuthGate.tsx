@@ -1,5 +1,5 @@
 import { usePathname, useRouter, useSegments, type Href } from 'expo-router';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
 import { useAppConfig } from '@/data/config/appConfig';
@@ -11,6 +11,11 @@ import { recordConsent } from '@/data/supabase/profile';
 import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
 import {
+  bindHeldJoin,
+  clearHeldJoin,
+  holdJoin,
+  joinHrefFor,
+  markHeldJoinArrival,
   ONBOARDING_PENDING_HREF_KEY,
   PERMISSION_CONSENT_VERSION,
   readPendingPermissionConsents,
@@ -189,7 +194,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (gate !== 'onboarding') return;
     let live = true;
     const uid = userId;
-    void readPendingHref(settings).then((href) => {
+    if (uid === null) return;
+    void readPendingHref(settings, uid).then((href) => {
       // A read never replaces a fresher hold made while it was out (or clears one).
       if (live && uid !== null && href !== null && held.current === null) held.current = { uid, href };
     });
@@ -206,7 +212,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (to === ONBOARDING_START) {
       const href = pendingHrefFor(pathname);
       if (href !== null) holdFor(href);
-      void savePendingHref(settings, pathname).catch(() => {});
+      if (userId !== null) void savePendingHref(settings, pathname, userId).catch(() => {});
     }
     // Setup has just finished while the driver is still inside onboarding: the held link has one
     // owner, this gate, so a render landing between `finishOnboarding`'s refresh and its own
@@ -222,6 +228,107 @@ export function AuthGate({ children }: { children: ReactNode }) {
     router.replace(to as Href);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `holdFor` reads `userId`, listed here
   }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings, inOnboarding, userId]);
+
+  // ---------------------------------------------------------------------------------------------
+  // The signed-out invite hold (M5 T12 r1, "JOIN HOLD"). A `/join/<CODE>` link that arrives while
+  // nobody is signed in is kept in one slot (`auth.heldJoin`, 24 h), bound to the first account
+  // that signs in, and then either moved into the onboarding hold above (setup owed) or opened
+  // once with a push (already set up, no drive busy or open). A sign-out before it is used, a
+  // different account, or an under-13 account drops it. It only ever navigates: the join screen
+  // still asks, and nothing is sent without the Use code tap. Nothing here is logged.
+  // ---------------------------------------------------------------------------------------------
+  const [heldJoin, setHeldJoin] = useState<{ uid: string; href: string } | null>(null);
+  // The hold last acted on (moved, opened or dropped): never acted on twice while its slot's
+  // removal is still on its way. State is only ever set from those async results.
+  const spentJoin = useRef<{ uid: string; href: string } | null>(null);
+  const drop = (hold: { uid: string; href: string } | null) => {
+    spentJoin.current = hold;
+    void clearHeldJoin(settings)
+      .then(() => setHeldJoin(null))
+      .catch(() => {});
+  };
+
+  // Capture: only while signed out, only a canonical invite link. A newer link replaces it.
+  useEffect(() => {
+    if (status !== 'signedOut') return;
+    if (joinHrefFor(pathname) === null) return;
+    void holdJoin(settings, pathname, Date.now()).catch(() => {});
+  }, [status, pathname, settings]);
+
+  // A sign-out (signed in → signed out) before the hold was used drops it, bound or not. A capture
+  // made while already signed out is kept: that is the hold's whole purpose.
+  const lastStatus = useRef(status);
+  useEffect(() => {
+    const was = lastStatus.current;
+    lastStatus.current = status;
+    if (was === 'signedIn' && status === 'signedOut') drop(heldJoin);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the transition matters
+  }, [status, settings]);
+
+  // Bind to the account that signed in (a slot bound to anyone else is removed by the read).
+  useEffect(() => {
+    if (status !== 'signedIn' || userId === null) return;
+    let live = true;
+    const uid = userId;
+    void bindHeldJoin(settings, uid, Date.now())
+      .then((hold) => {
+        if (live) setHeldJoin(hold ? { uid, href: hold.href } : null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [status, userId, settings]);
+
+  // Only this account's, and only one not acted on yet (the stale value after a sign-out or a
+  // switch of account never matches: the status and uid are checked every time).
+  const mineJoin = heldJoin !== null && status === 'signedIn' && heldJoin.uid === userId ? heldJoin : null;
+
+  // Under 13: never offered, dropped without a word.
+  useEffect(() => {
+    if (gate !== 'blocked' || mineJoin === null || spentJoin.current === mineJoin) return;
+    drop(mineJoin);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `drop` reads `settings`, listed here
+  }, [gate, mineJoin, settings]);
+
+  // Setup owed: the invite becomes the onboarding hold (bound to this account), and the slot goes.
+  useEffect(() => {
+    if (gate !== 'onboarding' || mineJoin === null || userId === null || spentJoin.current === mineJoin) return;
+    spentJoin.current = mineJoin;
+    const { href } = mineJoin;
+    held.current = { uid: userId, href };
+    markHeldJoinArrival(href);
+    const uid = userId;
+    void (async () => {
+      await savePendingHref(settings, href, uid);
+      await clearHeldJoin(settings);
+    })()
+      .then(() => setHeldJoin(null))
+      .catch(() => {});
+  }, [gate, mineJoin, userId, settings]);
+
+  // Already set up: opened once, from Home, once no drive is busy or open. The slot is removed
+  // first, so a crash or relaunch can never replay it; push, so Back returns Home.
+  const opening = useRef(false);
+  const onHome = (segments as readonly string[])[0] === '(tabs)';
+  useEffect(() => {
+    if (mineJoin === null || gate !== 'ready' || opening.current || spentJoin.current === mineJoin) return;
+    if (busy || tripOpen || !onHome) return;
+    opening.current = true;
+    const { href } = mineJoin;
+    const hold = mineJoin;
+    void clearHeldJoin(settings)
+      .then(() => {
+        spentJoin.current = hold;
+        setHeldJoin(null);
+        markHeldJoinArrival(href);
+        router.push(href as Href);
+      })
+      .catch(() => {})
+      .finally(() => {
+        opening.current = false;
+      });
+  }, [mineJoin, gate, busy, tripOpen, onHome, settings, router]);
 
   // Once per signed-in session, against the server's row (a cached row may be stale).
   const flushedFor = useRef<string | null>(null);

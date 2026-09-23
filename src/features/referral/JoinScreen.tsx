@@ -1,9 +1,10 @@
 import { normaliseReferralCode, REFERRAL_CODE_PATTERN } from '@scoring';
-import type { Href } from 'expo-router';
-import { useState } from 'react';
+import { useRouter, type Href } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
 import { Field } from '@/features/insights/Field';
+import { clearHeldJoinArrival, isHeldJoinArrival } from '@/features/onboarding/state';
 import { TripTopBar } from '@/features/trips/TopBar';
 import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 
@@ -38,6 +39,10 @@ export function parseJoinParam(param: unknown): string | null {
  *
  * With the referral flag off (the default) it is a plain "not available yet", and a bad link a
  * plain "isn't valid", each with Back.
+ *
+ * Opened by the app from a signed-out hold (M5 T12 r1, security R6), the code was never this
+ * account's choice: if the account can't use a code, or invites are off, it goes Home without a
+ * word. A link carrying the caller's own code is caught here, before any attempt is spent (n1).
  */
 export function JoinScreen({ code: param, deps = {} }: { code: unknown; deps?: ReferralDeps }) {
   const th = useTheme();
@@ -48,6 +53,27 @@ export function JoinScreen({ code: param, deps = {} }: { code: unknown; deps?: R
   const redeem = useRedeemReferralCode(deps);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  // Peeked once (idempotent), cleared after mount: a later direct open of the link is not "held".
+  const [fromHold] = useState(() => code !== null && isHeldJoinArrival(`/join/${code}`));
+  useEffect(() => {
+    if (code !== null) clearHeldJoinArrival(`/join/${code}`);
+  }, [code]);
+
+  const unavailable = referrals.error instanceof ReferralError && referrals.error.code === 'not_available';
+  const cannotUse = referrals.data !== undefined && !referrals.data.snapshot.canRedeem;
+  const dropSilently = fromHold && availability.ready && (!availability.available || unavailable || cannotUse);
+  useEffect(() => {
+    if (dropSilently) router.replace(HOME);
+  }, [dropSilently, router]);
+
+  if (dropSilently) {
+    return (
+      <Screen testID="join-screen">
+        <ReferralLoading testID="join-leaving" />
+      </Screen>
+    );
+  }
 
   if (code === null) {
     return (
@@ -62,13 +88,17 @@ export function JoinScreen({ code: param, deps = {} }: { code: unknown; deps?: R
       </Screen>
     );
   }
-  const unavailable = referrals.error instanceof ReferralError && referrals.error.code === 'not_available';
   if (availability.ready && (!availability.available || unavailable)) {
     return <ReferralUnavailable title={copy.join.title} onBack={leave} testID="join-screen" />;
   }
 
   const use = async () => {
     if (redeem.isPending) return;
+    // n1: the caller's own code, known from their own snapshot, costs no attempt.
+    if (referrals.data?.snapshot.code === code) {
+      setError(copy.error.own_code);
+      return;
+    }
     setError(null);
     try {
       await redeem.mutateAsync(code);

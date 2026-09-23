@@ -21,6 +21,7 @@ const POINTS = pointsText(REWARDS.POINTS.referral);
 const DRIVES = REWARDS.REFERRAL.QUALIFYING_DRIVES;
 const CAP = REWARDS.REFERRAL.YEARLY_CAP;
 const WINDOW_D = REWARDS.REFERRAL.REDEEM_WITHIN_D;
+const QUALIFY_D = REWARDS.REFERRAL.QUALIFY_WITHIN_D;
 
 const UNAVAILABLE = "Invites aren't available yet.";
 const REFUSED = "That code didn't work.";
@@ -38,7 +39,8 @@ export const referralCopy = {
     codeLabel: 'Your code',
     codeSpoken: (spoken: string) => `Your code: ${spoken}`,
     codeError: "Your code couldn't be loaded.",
-    explainer: `You both get ${POINTS} after your friend finishes ${DRIVES} scored drives.`,
+    // m1: credit comes once the drives' days are confirmed (settled), and only within 90 days.
+    explainer: `You both get ${POINTS} once your friend's first ${DRIVES} scored drives are confirmed, within ${QUALIFY_D} days of using your code.`,
     notMoney: NOT_MONEY,
     yearly: `Up to ${CAP} invites a year earn points.`,
     statusLabel: 'Friends',
@@ -54,11 +56,11 @@ export const referralCopy = {
     submit: 'Use code',
     submitHint: "Saves your friend's code on your account",
     badPattern: "That code doesn't look right.",
-    saved: `Code saved. It counts after your first ${DRIVES} scored drives.`,
+    saved: `Code saved. It counts once your first ${DRIVES} scored drives are confirmed, within ${QUALIFY_D} days.`,
   },
   /** The invitee's own status (`my_referrals.myCode`). `none` has no line. */
   mine: {
-    pending: `Your friend's code will count after ${DRIVES} scored drives.`,
+    pending: `Your friend's code counts once your first ${DRIVES} scored drives are confirmed.`,
     counted: `Your friend's code counted: ${POINTS} added.`,
     not_counted: "Your friend's code didn't count this time.",
   } satisfies Record<Exclude<MyCodeStatus, 'none'>, string>,
@@ -72,7 +74,7 @@ export const referralCopy = {
     invalid: "This invite link isn't valid.",
     question: (code: string) => `Use code ${code} from a friend?`,
     questionSpoken: (spoken: string) => `Use code ${spoken} from a friend?`,
-    body: `It counts after your first ${DRIVES} scored drives.`,
+    body: `It counts once your first ${DRIVES} scored drives are confirmed, within ${QUALIFY_D} days.`,
     use: 'Use code',
     notNow: 'Not now',
   },

@@ -182,18 +182,30 @@ export function pendingHrefFor(pathname: unknown): string | null {
   return isAllowedHref(pathname) ? pathname : null;
 }
 
-/** Holds an allowlisted deep link for `finishOnboarding`; anything else is ignored. */
-export async function savePendingHref(settings: SettingsRepo, pathname: unknown): Promise<boolean> {
+/**
+ * Holds an allowlisted deep link for `finishOnboarding`, bound to the account it arrived for
+ * (`{ uid, href }`, M5 T12 r1); anything else is ignored.
+ */
+export async function savePendingHref(settings: SettingsRepo, pathname: unknown, uid: string): Promise<boolean> {
   const href = pendingHrefFor(pathname);
-  if (href === null) return false;
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, href);
+  if (href === null || uid.length === 0) return false;
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid, href });
   return true;
 }
 
-/** The held deep link, re-checked against the allowlist on the way out; null when none. */
-export async function readPendingHref(settings: SettingsRepo): Promise<string | null> {
+/**
+ * The deep link held for `uid`, re-checked against the allowlist on the way out; null when none.
+ * A link held for another account, a malformed value, or a bare string from an older build is
+ * removed and reads as none, so no account ever inherits another's held link.
+ */
+export async function readPendingHref(settings: SettingsRepo, uid: string): Promise<string | null> {
   try {
-    return pendingHrefFor(await settings.get<unknown>(ONBOARDING_PENDING_HREF_KEY));
+    const raw = await settings.get<unknown>(ONBOARDING_PENDING_HREF_KEY);
+    if (raw === null) return null;
+    const record = typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    const href = record !== null && record.uid === uid ? pendingHrefFor(record.href) : null;
+    if (href === null) await settings.remove(ONBOARDING_PENDING_HREF_KEY);
+    return href;
   } catch {
     return null;
   }

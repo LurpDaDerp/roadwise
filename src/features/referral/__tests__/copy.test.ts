@@ -6,16 +6,18 @@ import { referralCopy as copy, shareMessage, spokenCode, spacedCode, statusLine,
 
 describe('referral copy', () => {
   test('the briefed strings, verbatim', () => {
-    expect(copy.invite.explainer).toBe('You both get 500 points after your friend finishes 3 scored drives.');
+    expect(copy.invite.explainer).toBe(
+      "You both get 500 points once your friend's first 3 scored drives are confirmed, within 90 days of using your code."
+    );
     expect(copy.invite.yearly).toBe('Up to 20 invites a year earn points.');
     expect(copy.invite.cap).toBe("You've reached this year's 20 invites that earn points. Friends can still join.");
     expect(copy.invite.share).toBe('Share invite');
     expect(copy.invite.gotCode).toBe('Got a code from a friend?');
     expect(copy.unavailable).toBe("Invites aren't available yet.");
     expect(copy.redeem.badPattern).toBe("That code doesn't look right.");
-    expect(copy.redeem.saved).toBe('Code saved. It counts after your first 3 scored drives.');
+    expect(copy.redeem.saved).toBe('Code saved. It counts once your first 3 scored drives are confirmed, within 90 days.');
     expect(copy.redeem.submit).toBe('Use code');
-    expect(copy.mine.pending).toBe("Your friend's code will count after 3 scored drives.");
+    expect(copy.mine.pending).toBe("Your friend's code counts once your first 3 scored drives are confirmed.");
     expect(copy.mine.not_counted).toBe("Your friend's code didn't count this time.");
     expect(copy.explain.windowClosed).toBe('Codes can be used in your first 14 days.');
     expect(copy.explain.alreadyUsed).toBe("You've already used a friend's code.");
@@ -23,6 +25,9 @@ describe('referral copy', () => {
     expect(copy.join.question('ABCD2345')).toBe('Use code ABCD2345 from a friend?');
     expect(copy.join.use).toBe('Use code');
     expect(copy.join.notNow).toBe('Not now');
+    // m1: the timing names the confirmation and the 90 days, never "after 3 scored drives"
+    expect(copy.join.body).toBe('It counts once your first 3 scored drives are confirmed, within 90 days.');
+    for (const s of allCopyStrings()) expect(s).not.toMatch(/after (your (friend finishes|first) )?3 scored drives/);
   });
 
   test('every refusal has copy', () => {

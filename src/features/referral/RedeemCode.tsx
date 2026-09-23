@@ -30,10 +30,13 @@ export function redeemErrorLine(error: unknown): string {
 export function RedeemCode({
   deps = {},
   onSaved,
+  ownCode = null,
   testID = 'redeem-code',
 }: {
   deps?: Pick<ReferralDeps, 'api'>;
   onSaved: () => void;
+  /** The caller's own code, when known: typing it is refused here, spending no attempt (n1). */
+  ownCode?: string | null;
   testID?: string;
 }) {
   const th = useTheme();
@@ -48,6 +51,10 @@ export function RedeemCode({
     if (redeem.isPending) return;
     if (!REFERRAL_CODE_PATTERN.test(value)) {
       setError(copy.redeem.badPattern);
+      return;
+    }
+    if (ownCode !== null && value === ownCode) {
+      setError(copy.error.own_code);
       return;
     }
     setError(null);

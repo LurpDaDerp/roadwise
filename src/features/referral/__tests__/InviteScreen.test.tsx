@@ -24,6 +24,9 @@ afterEach(async () => {
   jest.clearAllMocks();
 });
 
+/** A friend's code (the caller's own is CODE). */
+const FRIEND = 'MNPQ6789';
+
 const STORE = { ios: 'https://apps.apple.com/app/id1', android: 'https://play.google.com/store/apps/details?id=x' };
 
 async function renderInvite(
@@ -87,7 +90,7 @@ describe('InviteScreen (F10)', () => {
 
   test('the explainer, the not-money line and the yearly limit', async () => {
     await renderInvite();
-    expect(screen.getByText('You both get 500 points after your friend finishes 3 scored drives.')).toBeTruthy();
+    expect(screen.getByText(copy.invite.explainer)).toBeTruthy();
     expect(screen.getByText(NOT_MONEY)).toBeTruthy();
     expect(screen.getByText('Up to 20 invites a year earn points.')).toBeTruthy();
     assertCopyRules();
@@ -167,15 +170,25 @@ describe('InviteScreen (F10)', () => {
       expect(input.props.autoCorrect).toBe(false);
       expect(input.props.autoCapitalize).toBe('characters');
       await act(async () => {
-        fireEvent.changeText(input, 'abcd-2345');
+        fireEvent.changeText(input, 'mnpq-6789');
       });
-      expect(screen.getByTestId('redeem-input').props.value).toBe('ABCD2345');
+      expect(screen.getByTestId('redeem-input').props.value).toBe(FRIEND);
       expect(api.redeemReferralCode).not.toHaveBeenCalled();
       await press(screen.getByRole('button', { name: 'Use code' }));
-      expect(api.redeemReferralCode).toHaveBeenCalledWith('ABCD2345');
+      expect(api.redeemReferralCode).toHaveBeenCalledWith(FRIEND);
       expect(screen.getByText(copy.redeem.saved)).toBeTruthy();
       expect(screen.queryByTestId('redeem-input')).toBeNull();
       assertCopyRules();
+    });
+
+    test("n1: the caller's own code is refused here, spending no attempt", async () => {
+      const { api } = await renderInvite(referrals({ canRedeem: true }));
+      await act(async () => {
+        fireEvent.changeText(screen.getByTestId('redeem-input'), CODE);
+      });
+      await press(screen.getByRole('button', { name: 'Use code' }));
+      expect(api.redeemReferralCode).not.toHaveBeenCalled();
+      expect(screen.getByTestId('redeem-error').props.children).toBe("That's your own code.");
     });
 
     test('the pattern gate: IIII1111 is refused here, with no request', async () => {
@@ -200,7 +213,7 @@ describe('InviteScreen (F10)', () => {
       const { server } = await renderInvite(referrals({ canRedeem: true }));
       server.fail.redeem = code;
       await act(async () => {
-        fireEvent.changeText(screen.getByTestId('redeem-input'), CODE);
+        fireEvent.changeText(screen.getByTestId('redeem-input'), FRIEND);
       });
       await press(screen.getByRole('button', { name: 'Use code' }));
       expect(screen.getByTestId('redeem-error').props.children).toBe(text);
@@ -210,7 +223,7 @@ describe('InviteScreen (F10)', () => {
     test('offline: refused with no request, said plainly', async () => {
       const { api } = await renderInvite(referrals({ canRedeem: true }), { cached: referrals({ canRedeem: true }), offline: true });
       await act(async () => {
-        fireEvent.changeText(screen.getByTestId('redeem-input'), CODE);
+        fireEvent.changeText(screen.getByTestId('redeem-input'), FRIEND);
       });
       await press(screen.getByRole('button', { name: 'Use code' }));
       expect(api.redeemReferralCode).not.toHaveBeenCalled();
@@ -219,7 +232,7 @@ describe('InviteScreen (F10)', () => {
   });
 
   test.each([
-    ['pending', "Your friend's code will count after 3 scored drives."],
+    ['pending', "Your friend's code counts once your first 3 scored drives are confirmed."],
     ['counted', "Your friend's code counted: 500 points added."],
     ['not_counted', "Your friend's code didn't count this time."],
   ] as const)("the friend's code status: %s", async (myCode, text) => {
