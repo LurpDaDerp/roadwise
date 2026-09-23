@@ -263,7 +263,7 @@ describe('a drive with a route and two moments', () => {
     expect(screen.queryByText('Share cards are coming soon.')).toBeNull();
     // Still provisional: nothing true to share yet, and it says when there will be.
     expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
-    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+    expect(screen.getByText("You can share a drive once RoadWise has its final score.")).toBeOnTheScreen();
   });
 
   test('a synced final drive opens the same F9 composer as D1', async () => {
@@ -272,7 +272,7 @@ describe('a drive with a route and two moments', () => {
     await screen.findByTestId('trip-detail');
     const share = screen.getByRole('button', { name: 'Share' });
     expect(share).toBeEnabled();
-    expect(screen.queryByText("You can share a drive once it's confirmed.")).toBeNull();
+    expect(screen.queryByText("You can share a drive once RoadWise has its final score.")).toBeNull();
     await press(share);
     expect(mockRouter.push).toHaveBeenLastCalledWith('/rewards/share?kind=trip&clientTripId=trip-1');
   });

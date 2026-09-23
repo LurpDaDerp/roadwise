@@ -97,7 +97,7 @@ export const tripCopy = {
     fullTrip: 'See full trip',
     wrong: 'Something wrong?',
     share: 'Share',
-    shareUnconfirmed: "You can share a drive once it's confirmed.",
+    shareUnconfirmed: "You can share a drive once RoadWise has its final score.",
   },
   /** §7.C C10, verbatim. */
   roles: {

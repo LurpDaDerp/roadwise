@@ -222,7 +222,7 @@ describe('a scored drive', () => {
     });
     // Not synced yet: nothing true to share, and it says when there will be.
     expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
-    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+    expect(screen.getByText("You can share a drive once RoadWise has its final score.")).toBeOnTheScreen();
     expect(screen.queryByText('Share cards are coming soon.')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Done' }));
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
@@ -235,7 +235,7 @@ describe('sharing (D1 → F9)', () => {
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     const share = await screen.findByRole('button', { name: 'Share' });
     expect(share).toBeEnabled();
-    expect(screen.queryByText("You can share a drive once it's confirmed.")).toBeNull();
+    expect(screen.queryByText("You can share a drive once RoadWise has its final score.")).toBeNull();
     await fireEvent.press(share);
     expect(mockRouter.push).toHaveBeenLastCalledWith('/rewards/share?kind=trip&clientTripId=trip-1');
   });
@@ -249,7 +249,7 @@ describe('sharing (D1 → F9)', () => {
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     const share = await screen.findByRole('button', { name: 'Share' });
     expect(share).toBeDisabled();
-    expect(screen.getByText("You can share a drive once it's confirmed.")).toBeOnTheScreen();
+    expect(screen.getByText("You can share a drive once RoadWise has its final score.")).toBeOnTheScreen();
     await fireEvent.press(share);
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
@@ -339,7 +339,7 @@ describe('what the day earned (D1 item 5, M5)', () => {
       'Streak after this day: 5',
       'Points are for the whole day, not just this drive.',
       'No points for this day',
-      "You can share a drive once it's confirmed.",
+      "You can share a drive once RoadWise has its final score.",
       "Couldn't check this day's points right now.",
     ];
     for (const line of lines) for (const banned of BANNED_COPY) expect(line).not.toMatch(banned);

@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useTrip, useTripEvents } from '@/data/queries';
 import { GOAL_CATEGORY_VALUES, RewardsRpcError, type FocusApplied, type GoalCategory } from '@/features/rewards/api';
 import { BUSY_LINE, FOCUS_APPLIED } from '@/features/rewards/copy/common';
+import { goalCopy } from '@/features/rewards/copy/goal';
 import { useSetWeeklyFocus } from '@/features/rewards/useRewards';
 import { Banner, Button, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
@@ -31,6 +32,8 @@ type FocusState =
 function focusError(error: unknown): string {
   if (error instanceof RewardsRpcError && error.code === 'offline') return copy.tipScreen.offline;
   if (error instanceof RewardsRpcError && error.code === 'busy') return BUSY_LINE;
+  // The same words as the goal screen's focus picker (Task 9) for the same refusal.
+  if (error instanceof RewardsRpcError && error.code === 'limit') return goalCopy.picker.errors.limit;
   return copy.tipScreen.error;
 }
 

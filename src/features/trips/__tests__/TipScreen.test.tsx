@@ -131,6 +131,10 @@ describe('Practice this week (D6 → the weekly focus, §10.4)', () => {
 
     rewards.server.fail.focus = new RewardsRpcError('limit');
     await fireEvent.press(screen.getByRole('button', { name: 'Practice this week' }));
+    expect(await screen.findByText("You've changed your focus a lot today. Try again tomorrow.")).toBeOnTheScreen();
+
+    rewards.server.fail.focus = new RewardsRpcError('unknown');
+    await fireEvent.press(screen.getByRole('button', { name: 'Practice this week' }));
     expect(await screen.findByText("Couldn't save that. Try again.")).toBeOnTheScreen();
   });
 
