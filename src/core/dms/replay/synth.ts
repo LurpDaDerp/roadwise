@@ -37,6 +37,8 @@ export interface DriverState {
   /** the car's turn rate, °/s (+ right); drives the course and the gyro */
   turnDegS?: number;
   handling?: boolean;
+  /** the IMU says the car moves (final review m8: a tunnel is `speedKmh: null` with this true); default speed > 1 */
+  imuMoving?: boolean;
 }
 
 export type DriverFn = (t: number, r: () => number) => DriverState;
@@ -89,7 +91,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
     const item: SynthItem = { frame: toFrame(t, s, netThis ? o.source : 'geometric', gain, noise) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
-      item.row = { row: toRow(t, s, course, o.epoch0 ?? EPOCH0), ex: { imuMoving: (s.speedKmh ?? 0) > 1, localMinutes: o.localMinutes === undefined ? 720 : o.localMinutes, tripElapsedS: t } };
+      item.row = { row: toRow(t, s, course, o.epoch0 ?? EPOCH0), ex: { imuMoving: s.imuMoving ?? (s.speedKmh ?? 0) > 1, localMinutes: o.localMinutes === undefined ? 720 : o.localMinutes, tripElapsedS: t } };
       nextRowT += 1;
     }
     out.push(item);
