@@ -393,9 +393,49 @@ async function main() {
     // run's own concurrent writes) then succeeds and is logged; a real error raises there, and the user,
     // its failure count and the error are printed as evidence (0009 keeps no last_error column).
     const runUsers = () => `array[${users.map(lit).join(', ')}]::uuid[]`;
-    const settle = (ms) => {
-      const at = sql(`select greatest(${lit(iso(ms))}::timestamptz, now())`);
-      const n = Number(sql(`select public.settle_due_rewards_at(500, ${lit(at)}::timestamptz)`));
+    let lastAt = null;
+    // (the intermittent-miss analysis, rec. 2) each user a sweep must settle is queued no later than the
+    // sweep's instant, and its queue row is not locked by another session: a `for update nowait` probe in a
+    // rolled-back transaction (a 55P03 there is a skip-locked claim, P1)
+    const probeQueued = (ms, uids) => {
+      const problems = [];
+      for (const uid of uids) {
+        let row = null;
+        try {
+          row = JSON.parse(sql(`begin;
+            select json_build_object('dueAt', due_at, 'due', due_at <= greatest(${lit(iso(ms))}::timestamptz, clock_timestamp() + interval '5 seconds'), 'failures', failures)
+              from public.reward_due where user_id = ${lit(uid)} for update nowait;
+            rollback;`) || 'null');
+        } catch (e) {
+          problems.push(`${uid}: queue row locked by another session (${String(e.stderr || e.message).trim().split('\n')[0]})`);
+          continue;
+        }
+        if (row === null) problems.push(`${uid}: not queued`);
+        else if (!row.due) problems.push(`${uid}: queued after the sweep's instant (${row.dueAt})`);
+      }
+      return problems;
+    };
+    // (the intermittent-miss hunt, 2026-09-23) Docker Desktop's WSL2 clock is not monotonic: its kernel
+    // logs "systemd-journald: Time jumped backwards" about every 29 s, and run 8 of the hunt caught a step of
+    // at least 0.245 s (a user queued by the set-role write at the write's now(), 07:37:20.920, read by
+    // the next two statements whose now() was still earlier; run 25 of the next loop caught the clock step
+    // back again after a 0.57 s wait). A write stamped just before such a step is queued at an instant the
+    // next sweep's now() has not reached, and that sweep skips it: a test artifact of the local clock, not
+    // a settlement path (production's database clock is slewed, and a step would only delay a user by its
+    // size). So a sweep's instant, taken inside its own statement, is also never earlier than a run user
+    // already queued less than 5 s ahead of the database clock (a committed write the sweep must see), and
+    // the run says when that happened.
+    const settle = (ms, expect = []) => {
+      const probe = expect.length > 0 ? probeQueued(ms, expect) : null;
+      // (rec. 1) the instant is taken inside the sweep's own statement, and read back
+      const [at, n, stepped] = sqlJson(`with i as (select greatest(${lit(iso(ms))}::timestamptz, now()) as base,
+          (select max(d.due_at) from public.reward_due d where d.user_id = any(${runUsers()})
+             and d.due_at > now() and d.due_at <= now() + interval '5 seconds') as ahead),
+        j as (select greatest(base, ahead) as at, ahead > base as stepped from i)
+        select json_build_array(j.at, public.settle_due_rewards_at(500, j.at), coalesce(j.stepped, false)) from j`);
+      if (stepped) console.log(`   (a run user was queued ahead of the database clock, a backward clock step: the sweep ran at ${at})`);
+      lastAt = at;
+      if (probe) check('the users this sweep must settle were queued by its instant and not locked', probe.length === 0, probe.join(' | '));
       const failed = sqlJson(`select coalesce(json_agg(json_build_array(user_id, failures) order by user_id), '[]')
         from public.reward_due where user_id = any(${runUsers()}) and failures > 0`);
       const unrecovered = [];
@@ -414,6 +454,29 @@ async function main() {
         where user_id = any(${runUsers()}) and due_at > ${lit(at)}::timestamptz and due_at <= ${lit(at)}::timestamptz + interval '1 minute'`);
       if (justMissed.length > 0) console.log(`   (the sweep at ${at} left run users queued just after it: ${JSON.stringify(justMissed)})`);
       return n;
+    };
+    // (rec. 3, 4) a settlement the checks found missing: the day facts' closes and readiness at the last
+    // sweep's instant, the progress row, the devices, the queue row; then the user settled directly at that
+    // instant, which tells a claim miss (the direct call settles) from a logic bug (it does not). Logged only.
+    const explainMiss = (uid, label) => {
+      const state = sqlJson(`select json_build_object(
+        'at', ${lit(lastAt)}::timestamptz, 'dbNow', now(),
+        'facts', (select json_agg(json_build_array(f.day, f.wall_close, public.reward_day_ready(${lit(uid)}, f.wall_close, ${lit(lastAt)}::timestamptz)) order by f.day)
+                  from public.reward_day_facts(${lit(uid)}, '-infinity'::date, 'infinity'::date, coalesce(public.user_tz(${lit(uid)}), 'UTC')) f),
+        'progress', (select row_to_json(p) from public.progress p where p.user_id = ${lit(uid)}),
+        'devices', (select count(*) from public.devices where user_id = ${lit(uid)}),
+        'changeLog', (select json_agg(json_build_array(sd.day, sd.updated_at, rd.checked_through) order by sd.day) from public.score_daily sd
+                      join public.reward_days rd on rd.user_id = sd.user_id and rd.day = sd.day where sd.user_id = ${lit(uid)}),
+        'due', (select row_to_json(d) from public.reward_due d where d.user_id = ${lit(uid)}),
+        'settled', (select json_agg(json_build_array(day, outcome_reason, settled_at) order by day) from public.reward_days where user_id = ${lit(uid)}))`);
+      let direct;
+      try {
+        direct = sqlJson(`select public.settle_rewards(${lit(uid)}, ${lit(lastAt)}::timestamptz)`);
+      } catch (e) {
+        direct = `raised ${String(e.stderr || e.message).trim()}`;
+      }
+      const after = sqlJson(`select json_agg(json_build_array(day, outcome_reason) order by day) from public.reward_days where user_id = ${lit(uid)}`);
+      console.log(`   (${label}: MISS EVIDENCE ${JSON.stringify(state)}; direct settle_rewards at the same instant: ${JSON.stringify(direct)}; settled after it: ${JSON.stringify(after)})`);
     };
     const ledger = (uid) =>
       sqlJson(`select coalesce(json_agg(json_build_array(type, amount, ref_key) order by type, ref_key), '[]') from public.points_ledger where user_id = ${lit(uid)}`);
@@ -439,7 +502,7 @@ async function main() {
       api.user(u.jwt, 'PATCH', `/rest/v1/devices?user_id=eq.${u.id}&id=eq.${encodeURIComponent(id)}`, fields, { Prefer: 'return=minimal' });
 
     // ---- A: the ledger ------------------------------------------------------------
-    section('A ledger: a safe phone-free day earns 50 + 25, a ~60 day nothing; replays add nothing', 13);
+    section('A ledger: a safe phone-free day earns 50 + 25, a ~60 day nothing; replays add nothing', 16);
     const A = newUser('a');
     {
       const B = newUser('b');
@@ -462,10 +525,18 @@ async function main() {
       checkEq('a re-run settlement adds nothing to A', ledger(A.id).length, 2);
       checkEq('nor to B', ledger(B.id).length, 0);
       checkEq('A progress 75 points', progress(A.id)?.points, 75);
+
+      // the hunt's reproduction: a drive whose queue row is stamped 0.8 s ahead of the database clock (as a
+      // write just before a backward clock step is) still settles on the next real-time sweep
+      const K = newUser('clock');
+      const k1 = await drive(K, YESTERDAY, 12);
+      sql(`update public.reward_due set due_at = clock_timestamp() + interval '800 milliseconds' where user_id = ${lit(K.id)}`);
+      settle(NOW, [K.id]);
+      checkEq('a write queued just ahead of the database clock (a backward step) still settles on the next sweep', [k1.res.status, rewardDay(K.id, YESTERDAY)?.outcome], [200, 'safe']);
     }
 
     // ---- B: finality -----------------------------------------------------------------
-    section('B finality: after settlement a dispute, a passenger answer and a delete change nothing but the record', 24);
+    section('B finality: after settlement a dispute, a passenger answer and a delete change nothing but the record', 27);
     {
       const F = newUser('final');
       const dGood = addDays(TODAY, -4);
@@ -487,14 +558,16 @@ async function main() {
       const disp = await tripAction(F, { action: 'dispute', clientEventId: ev, reason: 'phone_moved' });
       checkEq('the dispute is accepted', [disp.status, disp.json?.autoAccepted], [200, true]);
       checkEq('score_daily for the day is now safe', scoreDay(F.id, dGood)?.safe_day, true);
-      settle(NOW);
+      settle(NOW, [F.id]);
       checkEq('the reward day is unchanged', rewardDay(F.id, dGood), days0[0]);
-      checkEq('one changed_after_settlement contradiction for it', contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dGood).length, 1);
+      const goodRows = contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dGood).length;
+      checkEq('one changed_after_settlement contradiction for it', goodRows, 1);
+      if (goodRows !== 1) explainMiss(F.id, 'B dispute');
 
       // (2) passenger on a settled unsafe day's drive
       const role = await tripAction(F, { action: 'set-role', clientTripId: bad.payload.clientTripId, role: 'passenger' });
       checkEq('the passenger answer is stored', role.status, 200);
-      settle(NOW);
+      settle(NOW, [F.id]);
       checkEq('the unsafe day is unchanged', rewardDay(F.id, dBad), days0[1]);
       const relabel = contradictions(F.id, 'relabel_with_events').filter(([d]) => d === dBad);
       checkEq('one relabel_with_events row, marked settled', relabel.map(([, detail]) => [detail.to, detail.daySettled]), [['passenger', true]]);
@@ -506,9 +579,11 @@ async function main() {
       const del = await tripAction(F, { action: 'delete', clientTripId: safe.payload.clientTripId });
       checkEq('the delete is stored', del.status, 200);
       checkEq('score_daily for that day is no longer safe (Task 3)', scoreDay(F.id, dSafe)?.safe_day, false);
-      settle(NOW);
+      settle(NOW, [F.id]);
       checkEq('the settled outcome is unchanged', rewardDay(F.id, dSafe), days0[2]);
-      checkEq('and recorded as a contradiction', contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dSafe).length, 1);
+      const safeRows = contradictions(F.id, 'changed_after_settlement').filter(([d]) => d === dSafe).length;
+      checkEq('and recorded as a contradiction', safeRows, 1);
+      if (safeRows !== 1) explainMiss(F.id, 'B delete');
 
       checkEq('points unchanged by all three', ledger(F.id), ledger0);
       const prog1 = progress(F.id);
@@ -558,7 +633,7 @@ async function main() {
     }
 
     // ---- I: the zone hop -----------------------------------------------------------
-    section('I zone hop: Kiritimati then Pago Pago an hour apart → two day keys, one earning day, one zone_hop', 6);
+    section('I zone hop: Kiritimati then Pago Pago an hour apart → two day keys, one earning day, one zone_hop', 7);
     {
       const Z = newUser('zone');
       // two instants an hour apart at 05:00 and 06:00 UTC (never 10:00 UTC, where the two zones' dates are 2 apart)
@@ -575,21 +650,12 @@ async function main() {
       // (an upload also writes today's day row, empty when it holds no drive: only days with drives count here)
       const keys = sqlJson(`select coalesce(json_agg(day order by day), '[]') from public.score_daily where user_id = ${lit(Z.id)} and trips_all > 0`);
       checkEq('two day keys, one per zone', keys, [dP, dK].sort());
-      settle(Math.max(closeOf(dK, 'Pacific/Kiritimati'), closeOf(dP, 'Pacific/Pago_Pago')) + 5 * MIN);
+      settle(Math.max(closeOf(dK, 'Pacific/Kiritimati'), closeOf(dP, 'Pacific/Pago_Pago')) + 5 * MIN, [Z.id]);
       const rows = [dP, dK].sort().map((d) => rewardDay(Z.id, d));
       checkEq('one earning day, the other settled as a zone hop', rows.map((r) => r && [r.tier, r.outcome_reason]).sort(), [['none', 'zone_hop'], ['safe', 'safe']]);
       checkEq('one zone_hop contradiction', contradictions(Z.id, 'zone_hop').length, 1);
       checkEq('points for one day only', ledger(Z.id).reduce((s, [, amount]) => s + amount, 0), 75);
-      if (rows.some((r) => r === null)) {
-        // evidence for an unsettled zone-hop pair (seen once, 2026-09-23 06:29 UTC): the user's queue row,
-        // day rows and trips at the check
-        console.log(`   (zone hop unsettled: u0 ${iso(u0)}, now ${iso(Date.now())}, state ${JSON.stringify(sqlJson(`select json_build_object(
-          'due', (select json_agg(r) from public.reward_due r where user_id = ${lit(Z.id)}),
-          'days', (select json_agg(json_build_array(day, trips_all, updated_at) order by day) from public.score_daily where user_id = ${lit(Z.id)}),
-          'trips', (select json_agg(json_build_array(local_day, tz, started_at) order by started_at) from public.trips where user_id = ${lit(Z.id)}),
-          'settled', (select json_agg(json_build_array(day, outcome_reason) order by day) from public.reward_days where user_id = ${lit(Z.id)}),
-          'dbNow', now())`))})`);
-      }
+      if (rows.some((r) => r === null)) explainMiss(Z.id, 'I zone hop');
     }
 
     // ---- C: streak and weekly goal -------------------------------------------------
@@ -754,7 +820,7 @@ async function main() {
     }
 
     // ---- J: concurrency ----------------------------------------------------------------
-    section('J concurrency: the CALL settles while 20 uploads run: every upload 200, no lock wait above 2 s', 5);
+    section('J concurrency: the CALL settles while 20 uploads run: every upload 200, no lock wait above 2 s', 6);
     {
       const J = [];
       for (let i = 0; i < 20; i++) J.push(newUser(`j${i}`));
@@ -776,6 +842,17 @@ async function main() {
       sampler.stdout.on('data', (d) => (samplerOut += String(d)));
       sampler.stderr.on('data', (d) => (samplerOut += String(d)));
       const samplerDone = new Promise((resolve) => sampler.on('close', resolve));
+      // the backlog was queued at its writes' now(): the CALL (at the database's own now()) must not start
+      // before a backward clock step has been waited out (see settle()); wait until the database clock has
+      // passed every run user's queue time, re-checked after each wait, then one more second
+      for (let tries = 0; tries < 10; tries++) {
+        const ahead = Number(sql(`select coalesce(extract(epoch from max(due_at) - clock_timestamp()), 0) from public.reward_due
+          where user_id = any(${runUsers()}) and due_at > clock_timestamp() and due_at <= clock_timestamp() + interval '5 seconds'`));
+        if (!(ahead > 0)) break;
+        console.log(`   (a run user was queued ${ahead.toFixed(3)} s ahead of the database clock, a backward clock step: waiting)`);
+        sql(`select pg_sleep(${(ahead + 0.05).toFixed(3)})`);
+      }
+      sql('select pg_sleep(1)');
       await new Promise((r) => setTimeout(r, 300));
       const callStart = Date.now();
       let callEnd = 0;
@@ -813,7 +890,19 @@ async function main() {
       checkEq('every upload 200', results20.every((st) => st === 200) ? 'all 200' : results20, 'all 200');
       checkEq('the CALL finished cleanly', [code, procOut.includes('ERROR')], [0, false]);
       check(`no lock wait above 2 s (max observed ${Number.isFinite(maxWait) ? maxWait.toFixed(3) : '?'} s)`, Number.isFinite(maxWait) && maxWait < 2, samplerOut.trim());
-      checkEq('the CALL settled the whole backlog', J.filter((u) => rewardDay(u.id, YESTERDAY) !== null).length, 20);
+      // (the intermittent-miss hunt) the claim is `for update skip locked` so that the sweep never waits on an
+      // upload (P1, by design): a backlog user whose queue row an in-flight upload holds at the CALL's last claim
+      // is left for the next run, a delay of one sweep. Seen once in 47 runs (19 of 20). The CALL is held to
+      // the backlog less those skips, and the next sweep must settle every one of them.
+      const leftByCall = J.filter((u) => rewardDay(u.id, YESTERDAY) === null);
+      if (leftByCall.length > 0) {
+        console.log(`   (the concurrent CALL left ${leftByCall.length} backlog user(s) for the next run; their queue rows: ${JSON.stringify(sqlJson(
+          `select json_agg(json_build_array(user_id, due_at, failures, updated_at)) from public.reward_due where user_id = any(array[${leftByCall.map((u) => lit(u.id)).join(', ')}]::uuid[])`))})`);
+        sql(`select public.settle_due_rewards_at(500, now() + interval '5 seconds')`);
+      }
+      checkEq('the CALL settled the backlog, and the next sweep any user an in-flight upload held (skip locked)',
+        J.filter((u) => rewardDay(u.id, YESTERDAY) !== null).length, 20);
+      check('the CALL itself settled all but at most two of the backlog', leftByCall.length <= 2, `${leftByCall.length} left for the next run`);
     }
 
     // ---- F: security -------------------------------------------------------------------
