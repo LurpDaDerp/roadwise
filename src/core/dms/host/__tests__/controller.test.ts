@@ -1024,3 +1024,62 @@ describe('final review round 2 R-2: an interruption that ends by itself costs no
     expect(h.ctl.summary()!.camera.retries).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Final review, round 3 (integration re-review 2): R2-1, R2-m1.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('final review round 3 R2-1: a native thermal self-pause is not a fault', () => {
+  test('native pauses itself for heat while the host policy still says run: no stop, no retry; `run` keeps flowing and native resumes by itself after the cool dwell', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 3);
+    // no emitStatus: the host has not read the heat yet, so its policy still says run
+    h.fake.setThermal('critical');
+    expect(h.fake.nativeState()).toBe('paused');
+    const before = methods(h).filter((m) => m === 'setPolicy').length;
+    await drive(h, 3, 12, { frameAt: () => null });
+    expect(methods(h)).not.toContain('stop');
+    expect(methods(h).filter((m) => m === 'setPolicy').length).toBeGreaterThan(before);
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'thermal' });
+    h.fake.setThermal('nominal');
+    await drive(h, 12, 80);
+    expect(h.fake.nativeState()).toBe('running');
+    expect(h.ctl.status()).toMatchObject({ camera: 'active' });
+    expect(methods(h)).not.toContain('stop');
+    expect(starts(h)).toBe(1);
+    expect(h.ctl.summary()!.camera).toMatchObject({ retries: 0, gaveUp: false });
+  });
+});
+
+describe('final review round 3 R2-m1: a slow cold start is not a failed resume', () => {
+  test('native.start takes 7 s (a slow Android cold start): the not-running guard waits for it; no stop, no second start', async () => {
+    let release: () => void = () => undefined;
+    let slow = true; // only the first start is slow
+    const h = harness({
+      wrap: (f) => ({
+        ...f,
+        start: async (o) => {
+          if (slow) {
+            slow = false;
+            await new Promise<void>((r) => (release = r));
+          }
+          return f.start(o);
+        },
+      }),
+    });
+    h.ctl.setGate(GATE);
+    for (let s = 0; s <= 7; s++) {
+      if (s * 1000 > h.fake.now()) h.fake.advance(s * 1000 - h.fake.now());
+      h.ctl.pushRow(featureRow(s * 1000, 60), POWER);
+      await new Promise<void>((r) => setImmediate(r)); // let the queued permission read reach native.start
+    }
+    release();
+    await h.ctl.idle();
+    await drive(h, 8, 12);
+    expect(methods(h)).not.toContain('stop');
+    expect(starts(h)).toBe(1);
+    expect(h.ctl.summary()!.camera).toMatchObject({ starts: 1, retries: 0, gaveUp: false });
+    expect(h.fake.nativeState()).toBe('running');
+  });
+});

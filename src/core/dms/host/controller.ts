@@ -513,7 +513,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       // resume it; the recovery is stop() then start() (pushRow's retry).
       // Round 2 R-2: a young interruption keeps getting `run`, so native resumes the moment it ends (no retry
       // spent); only an older one, or an error, waits for the stop/start recovery.
-      const young = selfPause !== null && selfPause.reason === 'interrupted' && (lastRow?.ts ?? 0) - selfPause.since < RETRY_AFTER_MS;
+      // Round 3 R2-1: a thermal self-pause too keeps getting `run` (native resumes on it once cooled; it is
+      // never a fault).
+      const young =
+        selfPause !== null && (selfPause.reason === 'thermal' || (selfPause.reason === 'interrupted' && (lastRow?.ts ?? 0) - selfPause.since < RETRY_AFTER_MS));
       if (selfPause !== null && !young) {
         publishStatus();
         return;
@@ -756,7 +759,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
             const q = queuedGate;
             queuedGate = null;
             if (q !== null) api.setGate(q);
-          });
+          }).catch(() => undefined); // round 3 R2-m2: never an unhandled rejection
         }
         return;
       }
@@ -787,8 +790,18 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         notRunningSince = null;
       }
       // Round 2 R-1 (belt and braces): `run` for RETRY_AFTER_MS with native not running and no word from it
-      // (a resume that failed silently) is a fault: stop() now, one start() later.
-      if (lastOut?.action === 'run' && closedReason === null && errorAt === null && !gaveUp && nativeState !== 'running' && nativeState !== 'stopped') {
+      // (a resume that failed silently) is a fault: stop() now, one start() later. Round 3: never a start still
+      // in flight (R2-m1: a slow Android cold start takes ~7 s) nor native's own thermal pause (R2-1).
+      if (
+        lastOut?.action === 'run' &&
+        closedReason === null &&
+        errorAt === null &&
+        !gaveUp &&
+        !startPending &&
+        selfPause?.reason !== 'thermal' &&
+        nativeState !== 'running' &&
+        nativeState !== 'stopped'
+      ) {
         notRunningSince ??= row.ts;
         if (row.ts - notRunningSince >= RETRY_AFTER_MS) {
           notRunningSince = null;
