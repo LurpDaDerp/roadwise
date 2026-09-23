@@ -143,8 +143,9 @@ describe('anti-annoyance rules (§M8)', () => {
     expect(r.sig).toEqual(['start:sleep']);
     expect(r.am.stats().invariantViolations).toBe(1);
     expect(r.am.stats().log.at(-1)).toMatchObject({ kind: 'sleep', why: 'rule5_violation' });
-    const d4 = run([{ s: 1, f: { ...off, quality: 'lost' }, req: [unr({ c8: false, escalation: true })] }]);
-    expect(d4.sig).toEqual(['start:unresponsive']);
+    // A D4 after a real warning (so the escalation is corroborated, T11 round 2), raised on LOST without C-8.
+    const d4 = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: { ...off, quality: 'lost' }, req: [unr({ c8: false, escalation: true })] }]);
+    expect(d4.sig).toContain('start:unresponsive');
     expect(d4.am.stats().invariantViolations).toBe(1);
     expect(run([{ s: 1, f: { ...asleep, quality: 'head_only' }, req: [crit('microsleep')] }]).am.stats().invariantViolations).toBe(1);
   });
@@ -252,5 +253,27 @@ describe('T11 review nit', () => {
     const b = am.onFrame({ ...idle, tMs: 67 });
     expect(a).toBe(b);
     expect(Object.isFrozen(a)).toBe(true);
+  });
+});
+
+describe('T11 round 2 (R1-m1): an escalation is corroborated, or fails loud', () => {
+  test('a D1 request, then an escalation at 8 km/h → delivered, 0 violations', () => {
+    const r = run([{ s: 1, f: { ...off, ruleSpeedKmh: 25 }, req: [dist('distraction')] }, { s: 1, f: { ...off, ruleSpeedKmh: 8 }, req: [unr({ escalation: true })] }]);
+    expect(r.sig).toContain('start:unresponsive');
+    expect(r.am.stats().invariantViolations).toBe(0);
+  });
+  test('an escalation with no prior warning and no running Critical → still delivered, logged escalation_unverified, 1 violation', () => {
+    const r = run([{ s: 1, f: { ...off, ruleSpeedKmh: 8 }, req: [unr({ escalation: true })] }]);
+    expect(r.sig).toEqual(['start:unresponsive']);
+    expect(r.am.stats().invariantViolations).toBe(1);
+    expect(r.am.stats().log.at(-1)).toMatchObject({ kind: 'unresponsive', why: 'escalation_unverified' });
+  });
+  test('a warning, then an on-road frame, then an escalation → 1 violation; a known < 10 km/h for 5 s clears it too', () => {
+    const onRoadBetween = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 0.1 }, { s: 1, f: off, req: [unr({ escalation: true })] }]);
+    expect(onRoadBetween.am.stats().invariantViolations).toBe(1);
+    const slowBetween = run([{ s: 1, f: { ...off, ruleSpeedKmh: 25 }, req: [dist('distraction')] }, { s: 5.2, f: { ...off, ruleSpeedKmh: 5 } }, { s: 1, f: { ...off, ruleSpeedKmh: 5 }, req: [unr({ escalation: true })] }]);
+    expect(slowBetween.am.stats().invariantViolations).toBe(1);
+    const running = run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [unr({ closure: true, escalation: true })] }]);
+    expect(running.am.stats().invariantViolations).toBe(0);
   });
 });

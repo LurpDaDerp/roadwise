@@ -16,7 +16,11 @@
 //     clause) skips that gate (T8 R1-I1, rev1 I6; T11 review I1). A Critical continues through a
 //     slowdown and through LOST, and ends on its stop condition (the eyes open AND on road for
 //     tier3ClearS) or after a KNOWN speed < 10 km/h held criticalEndAfterS. An unknown, held or
-//     inferred speed never ends it (rev1 I6; T8 review m4: `speedKnown`).
+//     inferred speed never ends it (rev1 I6; T8 review m4: `speedKnown`). An escalation must be
+//     corroborated (T11 round 2): a Critical is running, or a distraction/cumulative request arrived (any
+//     outcome) with no on-road frame and no known < 10 km/h for 5 s since (D4's pending state). An
+//     uncorroborated one is STILL delivered, never gated, and logged `escalation_unverified` in
+//     `invariantViolations`.
 //  5. No distraction alert from a LOST frame except C-8 (`c8`): Tier 1/2 is suppressed. A closure Critical
 //     on HEAD_ONLY/LOST needs a C-26 bridge, and a non-closure `unresponsive` on LOST needs C-8. The
 //     rules already hold this, so for Tier 3 a mismatch is a façade bug: it FAILS LOUD (delivered,
@@ -97,7 +101,7 @@ export interface AlertLogEntry {
   tMs: number;
   outcome: AlertOutcome;
   /** why it was suppressed or dropped, or the invariant a delivered Critical broke */
-  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end';
+  why?: 'speed' | 'warmup' | 'rule5' | 'rule5_violation' | 'escalation_unverified' | 'tier1_rate' | 'held_too_long' | 'critical_running' | 'session_end';
   /** rule 8's event flag */
   flag?: boolean;
   /** rule 7 */
@@ -109,7 +113,7 @@ export type AlertCounts = Record<AlertOutcome, number>;
 export interface AlertStats {
   byKind: Record<AlertKind, AlertCounts>;
   log: AlertLogEntry[];
-  /** Tier 3 rule-5 mismatches delivered anyway (a façade bug); the replay suite asserts 0 */
+  /** Tier 3 rule-5 mismatches and uncorroborated escalations, delivered anyway (a façade bug); the replay asserts 0 */
   invariantViolations: number;
 }
 
@@ -158,6 +162,9 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   const log = new RingBuffer<AlertLogEntry>(LOG_CAP);
   const byKind = Object.fromEntries(ALERT_KINDS.map((k) => [k, { delivered: 0, muted: 0, merged: 0, dropped: 0, suppressed: 0 }])) as Record<AlertKind, AlertCounts>;
   let invariantViolations = 0;
+  /** a distraction/cumulative request since the last on-road frame or known-low run (T11 round 2) */
+  let pendingEscalation = false;
+  let pendingLowSince: number | null = null;
 
   function record(e: AlertLogEntry): void {
     log.push(e);
@@ -177,6 +184,15 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
 
   return {
     onFrame(x: AlertFrame): readonly DmsAlertCommand[] {
+      // The escalation corroboration clears as D4's pending state does (no allocation).
+      if (pendingEscalation) {
+        const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
+        pendingLowSince = knownLow ? (pendingLowSince ?? x.tMs) : null;
+        if (x.onRoad || (pendingLowSince !== null && x.tMs - pendingLowSince >= a.criticalEndAfterS * 1000 - EPS)) {
+          pendingEscalation = false;
+          pendingLowSince = null;
+        }
+      }
       // The fast path, most frames: nothing running, held or requested.
       if (critical === null && distraction === null && held.length === 0 && x.requests.length === 0) return EMPTY;
       const out: DmsAlertCommand[] = [];
@@ -204,13 +220,19 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       for (const req of x.requests) {
         const tier = tierOf(req.kind);
         const r5 = rule5Holds(req, x.quality);
+        if (DISTRACTION.has(req.kind)) {
+          pendingEscalation = true;
+          pendingLowSince = null;
+        }
         if (tier === 3) {
           if (!isEscalation(req) && (x.ruleSpeedKmh === null || x.ruleSpeedKmh < a.criticalMinStartKmh - EPS)) {
             refuse(x, req, 'suppressed', 'speed');
             continue;
           }
+          const unverified = isEscalation(req) && critical === null && !pendingEscalation;
           if (!r5) invariantViolations++;
-          const extra: Partial<AlertLogEntry> = r5 ? {} : { why: 'rule5_violation' };
+          if (unverified) invariantViolations++;
+          const extra: Partial<AlertLogEntry> = !r5 ? { why: 'rule5_violation' } : unverified ? { why: 'escalation_unverified' } : {};
           if (critical !== null && critical.kind === req.kind) {
             record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged', ...extra });
             continue;
