@@ -225,20 +225,27 @@ export async function restoreCarriedHeldJoin(
 }
 
 /**
- * Invite links the app itself opened from a hold, in this process: the join screen reads the mark
- * so an account that can't use a code is sent Home silently instead of being told why (security
- * R6). Opening a link directly is never marked, so that path keeps its explanations.
+ * Invite links the app itself opened from a hold, in this process, keyed by the account they were
+ * opened for (T12 r2 m2): the join screen reads the mark with the session uid, so an account that
+ * can't use a code is sent Home silently instead of being told why (security R6). A mark is set
+ * only by the exit that actually navigates to the link, and every mark goes on a sign-out. Opening
+ * a link directly is never marked, so that path keeps its explanations.
  */
 const heldArrivals = new Set<string>();
+const arrivalKey = (uid: string, href: string) => `${uid} ${href}`;
 
-export function markHeldJoinArrival(href: string): void {
-  heldArrivals.add(href);
+export function markHeldJoinArrival(uid: string, href: string): void {
+  heldArrivals.add(arrivalKey(uid, href));
 }
 
-export function isHeldJoinArrival(href: string): boolean {
-  return heldArrivals.has(href);
+export function isHeldJoinArrival(uid: string | null, href: string): boolean {
+  return uid !== null && heldArrivals.has(arrivalKey(uid, href));
 }
 
-export function clearHeldJoinArrival(href: string): void {
-  heldArrivals.delete(href);
+export function clearHeldJoinArrival(uid: string | null, href: string): void {
+  if (uid !== null) heldArrivals.delete(arrivalKey(uid, href));
+}
+
+export function clearAllHeldJoinArrivals(): void {
+  heldArrivals.clear();
 }

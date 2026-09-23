@@ -12,6 +12,7 @@ import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
 import {
   bindHeldJoin,
+  clearAllHeldJoinArrivals,
   clearHeldJoin,
   holdJoin,
   joinHrefFor,
@@ -222,6 +223,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
       held.current = null;
       const href = mine !== null && status === 'signedIn' && mine.uid === userId ? mine.href : null;
       if (href !== null) void settings.remove(ONBOARDING_PENDING_HREF_KEY).catch(() => {});
+      // An invite link opened by this exit is marked for the join screen (T12 r2 m2).
+      if (href !== null && userId !== null && joinHrefFor(href) === href) markHeldJoinArrival(userId, href);
       router.replace((href ?? HOME) as Href);
       return;
     }
@@ -261,7 +264,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     const was = lastStatus.current;
     lastStatus.current = status;
-    if (was === 'signedIn' && status === 'signedOut') drop(heldJoin);
+    if (was === 'signedIn' && status === 'signedOut') {
+      drop(heldJoin);
+      clearAllHeldJoinArrivals();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the transition matters
   }, [status, settings]);
 
@@ -297,7 +303,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
     spentJoin.current = mineJoin;
     const { href } = mineJoin;
     held.current = { uid: userId, href };
-    markHeldJoinArrival(href);
     const uid = userId;
     void (async () => {
       await savePendingHref(settings, href, uid);
@@ -321,7 +326,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       .then(() => {
         spentJoin.current = hold;
         setHeldJoin(null);
-        markHeldJoinArrival(href);
+        markHeldJoinArrival(hold.uid, href);
         router.push(href as Href);
       })
       .catch(() => {})

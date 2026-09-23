@@ -10,7 +10,7 @@ import { DISCLAIMER_VERSION, legalState } from '@/features/auth/legal';
 import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY, startSignInVisit } from '@/features/auth/pendingConsent';
 import { finishOnboarding } from '@/features/onboarding/finish';
 import {
-  clearHeldJoinArrival,
+  clearAllHeldJoinArrivals,
   HELD_JOIN_KEY,
   HELD_JOIN_TTL_MS,
   isHeldJoinArrival,
@@ -668,7 +668,7 @@ describe('the signed-out invite hold (M5 T12 r1, JOIN HOLD)', () => {
   };
   const slot = () => settings.get<Record<string, unknown>>(HELD_JOIN_KEY);
 
-  afterEach(() => clearHeldJoinArrival(JOIN));
+  afterEach(() => clearAllHeldJoinArrivals());
 
   /** A link opened while nobody is signed in: the gate sends them to Welcome and holds it. */
   async function captured(pathname = '/join/abcd-2345') {
@@ -727,7 +727,7 @@ describe('the signed-out invite hold (M5 T12 r1, JOIN HOLD)', () => {
     await signIn(view, 'u1', READY, ['(tabs)', 'home']);
     expect(mockPush.mock.calls).toEqual([[JOIN]]);
     expect(await slot()).toBeNull();
-    expect(isHeldJoinArrival(JOIN)).toBe(true);
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(true);
     // More renders, and a relaunch, never replay it.
     await view.rerender(gate());
     await settle();
@@ -776,7 +776,7 @@ describe('the signed-out invite hold (M5 T12 r1, JOIN HOLD)', () => {
     expect(mockReplace.mock.calls.map(([h]) => h)).toContain(JOIN);
     expect(mockReplace).not.toHaveBeenCalledWith('/(tabs)/home');
     expect(mockRpc).not.toHaveBeenCalledWith('redeem_referral_code', expect.anything());
-    expect(isHeldJoinArrival(JOIN)).toBe(true);
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(true);
   });
 
   test('the shared phone: A opens the link, B signs up — the hold binds to B, and B is asked (JoinScreen)', async () => {
@@ -896,5 +896,83 @@ describe('the signed-out invite hold (M5 T12 r1, JOIN HOLD)', () => {
     await settle();
     expect(mockReplace).not.toHaveBeenCalledWith('/inbox');
     expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
+  });
+});
+
+describe('T12 round 2: the arrival mark (m2) and the in-memory hold (n3)', () => {
+  const JOIN = '/join/ABCD2345';
+  const settle = async () => {
+    for (let i = 0; i < 4; i += 1) await act(async () => {});
+  };
+  afterEach(() => clearAllHeldJoinArrivals());
+
+  async function signInAfterCapture(profile: Record<string, unknown>, segments: string[]) {
+    const view = await mount({ status: 'signedOut', segments: ['join', '[code]'], pathname: '/join/ABCD2345' });
+    await settle();
+    Object.assign(mockWorld, { status: 'signedIn', uid: 'u1', profile, profileSource: 'network', segments, pathname: '/x' });
+    await view.rerender(gate());
+    await settle();
+    return view;
+  }
+
+  test('a sign-out clears every mark', async () => {
+    const view = await signInAfterCapture(READY, ['(tabs)', 'home']);
+    expect(mockPush).toHaveBeenCalledWith(JOIN);
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(true);
+    Object.assign(mockWorld, { status: 'signedOut', profile: null, profileSource: null, segments: ['(auth)', 'welcome'], pathname: '/welcome' });
+    await view.rerender(gate());
+    await settle();
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(false);
+  });
+
+  test('no mark when nothing navigated to the link: moved into onboarding, then a "Start a drive" finish', async () => {
+    await signInAfterCapture(OWED, ['(onboarding)', '[step]']);
+    expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: JOIN });
+    // Moved, not opened: no mark yet.
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(false);
+    await act(async () => {
+      await finishOnboarding(
+        {
+          settings,
+          userId: 'u1',
+          router: { replace: mockReplace, push: jest.fn() },
+          refreshProfile: async () => {
+            mockWorld.profile = READY;
+          },
+          mergeFlags: async () => ({}),
+        },
+        { startDrive: true }
+      );
+    });
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(false);
+  });
+
+  test('the mark is the account\'s own: set for u1, not for anyone else', async () => {
+    await signInAfterCapture(READY, ['(tabs)', 'home']);
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(true);
+    expect(isHeldJoinArrival('u2', JOIN)).toBe(false);
+    expect(isHeldJoinArrival(null, JOIN)).toBe(false);
+  });
+
+  test('n3: a non-link path resolving to onboarding never clears the held link in memory', async () => {
+    const SEG: Record<string, string[]> = { [JOIN]: ['join', '[code]'], '/(tabs)/home': ['(tabs)', 'home'] };
+    mockReplace.mockImplementation((href: string) => {
+      mockWorld.segments = SEG[href] ?? ['(onboarding)', 'start'];
+    });
+    const view = await signInAfterCapture(OWED, ['(onboarding)', '[step]']);
+    // The stored copy is gone (as if already consumed elsewhere): only memory holds it now.
+    await settings.remove(ONBOARDING_PENDING_HREF_KEY);
+    // The driver wanders to a tab: the gate sends them back to onboarding from a non-link path.
+    Object.assign(mockWorld, { segments: ['(tabs)', 'home'], pathname: '/home' });
+    await view.rerender(gate());
+    await settle();
+    expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
+    mockReplace.mockClear();
+    Object.assign(mockWorld, { segments: ['(onboarding)', '[step]'], pathname: '/ready', profile: READY });
+    await view.rerender(gate());
+    await settle();
+    expect(mockReplace).toHaveBeenCalledWith(JOIN);
+    expect(mockReplace).not.toHaveBeenCalledWith('/(tabs)/home');
+    expect(isHeldJoinArrival('u1', JOIN)).toBe(true);
   });
 });

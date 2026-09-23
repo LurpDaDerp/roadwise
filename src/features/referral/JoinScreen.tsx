@@ -3,6 +3,7 @@ import { useRouter, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
+import { useSession } from '@/data/supabase/session';
 import { Field } from '@/features/insights/Field';
 import { clearHeldJoinArrival, isHeldJoinArrival } from '@/features/onboarding/state';
 import { TripTopBar } from '@/features/trips/TopBar';
@@ -55,10 +56,11 @@ export function JoinScreen({ code: param, deps = {} }: { code: unknown; deps?: R
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   // Peeked once (idempotent), cleared after mount: a later direct open of the link is not "held".
-  const [fromHold] = useState(() => code !== null && isHeldJoinArrival(`/join/${code}`));
+  const uid = useSession().session?.user.id ?? null;
+  const [fromHold] = useState(() => code !== null && isHeldJoinArrival(uid, `/join/${code}`));
   useEffect(() => {
-    if (code !== null) clearHeldJoinArrival(`/join/${code}`);
-  }, [code]);
+    if (code !== null) clearHeldJoinArrival(uid, `/join/${code}`);
+  }, [code, uid]);
 
   const unavailable = referrals.error instanceof ReferralError && referrals.error.code === 'not_available';
   const cannotUse = referrals.data !== undefined && !referrals.data.snapshot.canRedeem;

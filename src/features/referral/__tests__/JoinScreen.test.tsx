@@ -3,13 +3,13 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { renderedStrings } from '@/features/rewards/__fixtures__/goalChallengesWorld';
 import { clearInboxClients, setOnline, settleInbox } from '@/features/inbox/__fixtures__/harness';
 import { JOIN_HREF } from '@/features/notifications/hrefs';
-import { clearHeldJoinArrival, markHeldJoinArrival } from '@/features/onboarding/state';
+import { clearAllHeldJoinArrivals, markHeldJoinArrival } from '@/features/onboarding/state';
 import { BANNED_COPY } from '@/notifications/catalog';
 
 import type { MyReferrals } from '../api';
 import { referralCopy as copy } from '../copy';
 import { JoinScreen } from '../JoinScreen';
-import { CODE, fakeReferralApi, noRefresh, referralWorld, referrals } from '../__fixtures__/world';
+import { CODE, fakeReferralApi, noRefresh, referralWorld, referrals, UID } from '../__fixtures__/world';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/session', () => ({
@@ -19,7 +19,7 @@ const mockRouter = { push: jest.fn(), back: jest.fn(), replace: jest.fn(), canGo
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 
 afterEach(async () => {
-  clearHeldJoinArrival(`/join/${CODE}`);
+  clearAllHeldJoinArrivals();
   await clearInboxClients();
   setOnline(null);
   mockRouter.canGoBack.mockReturnValue(true);
@@ -34,7 +34,7 @@ async function renderJoin(
   state: MyReferrals = referrals({ canRedeem: true, code: OWN }),
   opts: { referral?: boolean; held?: boolean } = {}
 ) {
-  if (opts.held) markHeldJoinArrival(`/join/${CODE}`);
+  if (opts.held) markHeldJoinArrival(UID, `/join/${CODE}`);
   const w = await referralWorld({ referral: opts.referral ?? true });
   const server = fakeReferralApi(state);
   await w.render(<JoinScreen code={param} deps={{ api: server.api, refreshConfig: noRefresh }} />);
@@ -160,7 +160,7 @@ describe('JoinScreen (roadwise://join/<code>)', () => {
     ])('%s: Home, silently, with no card', async (_name, state) => {
       const w = await referralWorld({ referral: true });
       const server = fakeReferralApi(state);
-      markHeldJoinArrival(`/join/${CODE}`);
+      markHeldJoinArrival(UID, `/join/${CODE}`);
       await w.render(<JoinScreen code={CODE} deps={{ api: server.api, refreshConfig: noRefresh }} />);
       await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home'));
       expect(screen.queryByText(copy.explain.windowClosed)).toBeNull();
@@ -172,16 +172,23 @@ describe('JoinScreen (roadwise://join/<code>)', () => {
     test('invites off: Home, silently, and nothing asked of the server', async () => {
       const w = await referralWorld({ referral: false });
       const server = fakeReferralApi();
-      markHeldJoinArrival(`/join/${CODE}`);
+      markHeldJoinArrival(UID, `/join/${CODE}`);
       await w.render(<JoinScreen code={CODE} deps={{ api: server.api, refreshConfig: noRefresh }} />);
       await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home'));
       expect(screen.queryByText(copy.unavailable)).toBeNull();
       expect(server.api.fetchMyReferrals).not.toHaveBeenCalled();
     });
 
+    test("a mark for another account never silences this account's direct open (m2)", async () => {
+      markHeldJoinArrival('someone-else', `/join/${CODE}`);
+      await renderJoin(CODE, referrals({ canRedeem: false, myCode: 'none', code: OWN }));
+      expect(screen.getByText(copy.explain.windowClosed)).toBeTruthy();
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+
     test('the mark is used once: opening the same link directly later explains as usual', async () => {
       const w = await referralWorld({ referral: true });
-      markHeldJoinArrival(`/join/${CODE}`);
+      markHeldJoinArrival(UID, `/join/${CODE}`);
       const first = fakeReferralApi(referrals({ canRedeem: true, code: OWN }));
       const view = await w.render(<JoinScreen code={CODE} deps={{ api: first.api, refreshConfig: noRefresh }} />);
       await screen.findByTestId('join-question');

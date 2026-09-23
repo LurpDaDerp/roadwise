@@ -14,6 +14,8 @@ import { CONSENTS_CACHE_KEY } from './context';
 import {
   PERMISSION_CONSENT_VERSION,
   clearOnboardingState,
+  joinHrefFor,
+  markHeldJoinArrival,
   readPendingPermissionConsents,
   savePendingPermissionConsents,
   type PermissionConsentType,
@@ -103,6 +105,8 @@ export async function finishOnboarding(
   const target = opts.startDrive ? HOME : ((await readPendingHref(settings, userId)) ?? HOME);
 
   await deps.refreshProfile();
+  // A held invite link that this finish opens is marked for the join screen (T12 r2 m2).
+  if (target !== HOME && joinHrefFor(target) === target) markHeldJoinArrival(userId, target);
   router.replace(target as Href);
   if (opts.startDrive) router.push(driveHref(DRIVE_ROUTES.start));
 
