@@ -930,7 +930,7 @@ const DEFAULT: DmsConfig = {
     h1HoldS: 30,
     windowS: 30,
     minWindowS: 20,
-    evalEveryS: 10,
+    evalEveryS: 5,
     h2MinDeg: 4,
     h2Sigmas: 1.5,
     h2Evals: 2,

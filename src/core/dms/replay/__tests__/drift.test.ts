@@ -7,6 +7,7 @@ import type { DmsAlertCommand } from '../../engine/alerts';
 import { createDmsEngine, type DmsEvent, type DmsSnapshot } from '../../engine/engine';
 import type { AnglePair } from '../../engine/types';
 import { DEFAULT_INIT } from '../run';
+import { gauss } from '../../engine/__fixtures__/synth';
 import { blinkOpenness, onRoad, rel, synthDrive, type DriverFn, type DriverState } from '../synth';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
@@ -406,3 +407,42 @@ describe('Task C7: the gaze accuracy monitor (rev2 §2.4; review-C5 Round 1 (d):
   });
 });
 
+
+describe('C7 round 2 (review-C7 R1-H): health sees a shift of a road wider than Stage 1 measured (NC-C7-3c)', () => {
+  // The road's spread after the shift raised by an extra per-frame σ (night noise, a wider scan): the excess test uses
+  // the window's own spread, and beyond the radius a c₀ with no cluster of its own is vacated.
+  const cases: [string, AnglePair, number, number, boolean][] = [];
+  for (const [name, shift] of [['S-U7-WIDE 7° up', { yaw: 0, pitch: 7 }], ['S-U9-WIDE 9° up', { yaw: 0, pitch: 9 }], ['S-U9-WIDE 9° right', { yaw: 9, pitch: 0 }]] as const)
+    for (const extra of [3, 4.5]) for (const fps of [8, 15]) for (const withMirrors of [true, false]) cases.push([name, shift, extra, fps, withMirrors]);
+  test.each(cases)('%s (%o), +%f° spread, %i fps, mirror checks %s: degraded ≤ 60 s after the shift, 0 D1 after 60 s', (_, shift, extra, fps, withMirrors) => {
+    const driver: DriverFn = (t, r) => {
+      const g = onRoad(r);
+      const gaze = t >= 110 ? { yaw: g.yaw + extra * gauss(r), pitch: g.pitch + extra * gauss(r) } : g;
+      return { gaze, openness: blinkOpenness(t), speedKmh: 60, ...(withMirrors ? mirrors(t) : {}), ...(t >= 110 ? { posture: { shift } } : {}) };
+    };
+    const r = play(driver, 110 + 600, { fps, seed: 11 });
+    const deg = r.seconds.find((s) => s.tMs > 110_000 && s.health === 'degraded');
+    expect(deg).toBeDefined();
+    expect(deg!.tMs).toBeLessThanOrEqual(110_000 + 60_000);
+    expect(d1(r, 110_000 + 60_000)).toEqual([]);
+  });
+});
+
+describe('C7 round 2 (R1-H): S-DISPLAY-70-SCAN, a display read across (3° jitter) at 14° and 16°: never degraded', () => {
+  test.each([
+    [{ yaw: 14, pitch: -8 }, 11],
+    [{ yaw: 14, pitch: -8 }, 12],
+    [{ yaw: 16, pitch: -4 }, 11],
+    [{ yaw: 16, pitch: -4 }, 12],
+  ] as const)('%o, seed %i', (target, seed) => {
+    const r = play(
+      drv((t, rr) => {
+        if (t % 20 >= 10 && t % 20 < 10.8) return { gaze: rel(-45, 0) };
+        return t >= 120 && (t - 120) % 3 < 2.1 ? { gaze: rel(target.yaw + 3 * gauss(rr), target.pitch + 3 * gauss(rr)) } : null;
+      }, 80),
+      120 + 720,
+      { seed }
+    );
+    expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
+  });
+});

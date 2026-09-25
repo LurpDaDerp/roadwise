@@ -588,12 +588,14 @@ describe('C2: the sleep family at every speed, and stop-time events', () => {
     const mixed = runF(ps, { stopped: (p) => p.tMs < 3000 });
     expect(mixed.events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: false, level: 'f2' });
     expect(runF(ps).events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: true, level: 'f2' });
-    const f1Only = runF(perceive([{ s: 1.5, spec: { ear: ear(0.1) } }, { s: 0.5, spec: {} }]));
+    // C7 round 2 (the stop ruling): at a stop every closure counts deep-only, F1 at 1.5 s: a 2 s closure reaches F1.
+    const f1Only = runF(perceive([{ s: 2, spec: { ear: ear(0.1) } }, { s: 0.5, spec: {} }]));
     expect(f1Only.events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: true, level: 'f1' });
   });
 
   describe('S3 / U-14: stop-time F1s and the F4 fatigue floor (fatigue.stopEventsFeed)', () => {
-    const twice = perceive([{ s: 1.5, spec: { ear: ear(0.1) } }, { s: 60, spec: {} }, { s: 1.5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]);
+    // C7 round 2 (the stop ruling): at a stop every closure counts deep-only, F1 at 1.5 s: 2 s closures.
+    const twice = perceive([{ s: 2, spec: { ear: ear(0.1) } }, { s: 60, spec: {} }, { s: 2, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]);
     const floorAfter = (feed: 'none' | 'long_and_nod' | 'all', stopped: boolean) => {
       const cfg = { ...C, fatigue: { ...C.fatigue, stopEventsFeed: feed } } as DmsConfig;
       const r = runF(twice, { stopped: () => stopped, speed: stopped ? 0 : 60 }, cfg);
@@ -615,7 +617,8 @@ describe('C2: the sleep family at every speed, and stop-time events', () => {
   });
 
   test("S-STOP-LOOKAROUND (unit): F3's no-on-road watch is frozen while stopped and resumes after the move-off", () => {
-    const ps = perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 16, spec: { gaze: { yaw: 40, pitch: 0 } } }]);
+    // C7 round 2 (the stop ruling): at a stop every closure counts deep-only, F1 at 1.5 s: a 1.6 s closure.
+    const ps = perceive([{ s: 1.6, spec: { ear: ear(0.1) } }, { s: 16, spec: { gaze: { yaw: 40, pitch: 0 } } }]);
     const r = runF(ps, { onRoad: () => false, stopped: (p) => p.tMs < 12_100 });
     const un = r.events.filter((e) => e.kind === 'unresponsive');
     expect(un).toHaveLength(1);

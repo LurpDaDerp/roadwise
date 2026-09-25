@@ -20,7 +20,7 @@
 // the looking-down gate (frozen references). Recovery: every metric good for 60 s of health time.
 import { angularDistanceDeg } from './angles';
 import type { DmsConfig } from './config';
-import { vacatedBeyondNoise } from './posture';
+import { shareNear, vacatedBeyondNoise, vacatedRing } from './posture';
 import type { AnglePair } from './types';
 import { RingBuffer } from './windows';
 
@@ -44,6 +44,8 @@ export interface HealthMetrics {
   h2: number | null;
   h3: number | null;
   h4: number | null;
+  /** C7 round 2: the spread the excess test used (diagnostics) */
+  sigmaEff?: number | null;
 }
 
 export interface HealthMonitor {
@@ -57,14 +59,17 @@ export interface HealthMonitor {
   reset(): void;
 }
 
+/** C7 round 2: beyond the radius, c₀ holds no cluster of its own when its share is below this fraction of the midpoint's */
+const VALLEY_RATIO = 0.6;
+
 /** C7 round 1 (C7-3): the far frames form a second target when this share of them is within 2σ̂ of their own mode */
 const SECOND_CLUSTER_SHARE = 0.6;
 
 /** A mean-shift mode of the window (flat kernel of radius `r`), started from the component-wise median. */
-function modeOf(pts: readonly AnglePair[], r: number): AnglePair {
+function modeOf(pts: readonly AnglePair[], r: number, from?: AnglePair): AnglePair {
   const ys = pts.map((p) => p.yaw).sort((a, b) => a - b);
   const ps = pts.map((p) => p.pitch).sort((a, b) => a - b);
-  let m: AnglePair = { yaw: ys[ys.length >> 1]!, pitch: ps[ps.length >> 1]! };
+  let m: AnglePair = from ?? { yaw: ys[ys.length >> 1]!, pitch: ps[ps.length >> 1]! };
   for (let it = 0; it < 20; it++) {
     let sy = 0;
     let sp = 0;
@@ -118,14 +123,41 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health' | 'calibration
     const mode = modeOf(pts, Math.max(h.h2MinDeg, 2 * sigma));
     lastMode = mode;
     m.h2 = angularDistanceDeg(mode, centre);
-    vacated = vacatedBeyondNoise(
-      pts.map((g) => ({ yaw: g.yaw, pitch: g.pitch, w: 1 })),
-      centre,
-      mode,
-      radius,
-      sigma,
-      excessMax
-    );
+    // C7 round 2 (review-C7 R1-H): the excess test uses the window's OWN spread, σ_eff = min(2σ̂, max(σ̂, σ_w)). σ_w is
+    // the mode cluster's spread measured ACROSS the centre→mode axis, on the frames within 2σ̂ of the mode along it
+    // (a robust σ: the median |offset| ÷ 0.6745). Across the axis, c₀'s cluster cannot widen it; the along-axis
+    // half-normal beyond the mode (the review's form) depends on where the peak is located, which the kernel biases
+    // toward c₀ when a second cluster is near (a 70 % display 5–7° off), and then reads the display's core as spread.
+    // A road wider than Stage 1's σ̂ (night noise, a wider scan) still reads as vacated; a display fixation does not.
+    const d = angularDistanceDeg(mode, centre);
+    let sigmaEff = sigma;
+    if (d > 1e-6) {
+      const ux = (mode.yaw - centre.yaw) / d;
+      const uy = (mode.pitch - centre.pitch) / d;
+      const across: number[] = [];
+      for (const g of pts) {
+        const along = (g.yaw - mode.yaw) * ux + (g.pitch - mode.pitch) * uy;
+        if (Math.abs(along) <= 2 * sigma) across.push(Math.abs((g.yaw - mode.yaw) * -uy + (g.pitch - mode.pitch) * ux));
+      }
+      if (across.length >= 10) {
+        across.sort((x, y) => x - y);
+        const sigmaW = across[across.length >> 1]! / 0.6745;
+        sigmaEff = Math.min(2 * sigma, Math.max(sigma, sigmaW));
+      }
+    }
+    m.sigmaEff = sigmaEff;
+    // A mode within h2MinDeg of the centre is the centre's own cluster: c₀ is not vacated (the test is degenerate there).
+    const dirs = pts.map((g) => ({ yaw: g.yaw, pitch: g.pitch, w: 1 }));
+    vacated = d > h.h2MinDeg && vacatedBeyondNoise(dirs, centre, mode, radius, sigmaEff, excessMax);
+    // C7 round 2: beyond the radius, c₀ also counts as vacated when it holds no cluster of its own: the density at c₀
+    // is well below (VALLEY_RATIO) that halfway to the mode (a wide shifted road falls off monotonically toward c₀; a display reader's
+    // road stays a peak at c₀, with a valley between). The on-road window truncates a road shifted up or down (its
+    // far side is off-road), which the Gaussian tail of the excess test does not model.
+    if (!vacated && d > radius) {
+      const rv = vacatedRing(centre, mode, radius);
+      const mid = { yaw: (centre.yaw + mode.yaw) / 2, pitch: (centre.pitch + mode.pitch) / 2 };
+      vacated = shareNear(dirs, centre, rv) < VALLEY_RATIO * shareNear(dirs, mid, rv);
+    }
     h2Bad = m.h2 > Math.max(h.h2MinDeg, h.h2Sigmas * sigma) && vacated ? h2Bad + 1 : 0;
     h2BadNow = h2Bad >= h.h2Evals;
     // C7 round 1 (C7-3): H3 measures the spread of the CENTRE's own cluster. A second peaked cluster among the frames
@@ -134,7 +166,9 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health' | 'calibration
     // true shift is H2's (vacated beyond noise).
     const bw = Math.max(h.h2MinDeg, 2 * sigma);
     let own = pts;
-    const far = pts.filter((g) => angularDistanceDeg(g, centre) > radius);
+    // C7 round 2 (R1-H): only while c₀ is NOT vacated (c₀ still holds its own cluster: a display reader). After a real
+    // shift H3 counts every frame again, as the backstop it was.
+    const far = vacated ? [] : pts.filter((g) => angularDistanceDeg(g, centre) > radius);
     if (far.length >= Math.max(10, 0.1 * pts.length)) {
       const m2 = modeOf(far, bw);
       const near2 = far.filter((g) => angularDistanceDeg(g, m2) <= bw).length;

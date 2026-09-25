@@ -44,7 +44,8 @@ const SENSOR: Partial<DriverState> = { speedKmh: null, motion: { stop: 'sensor',
 const fEvents = (r: ReplayResult) => r.events.filter((e) => e.kind === 'microsleep' || e.kind === 'sleep' || e.kind === 'microsleep_nod');
 
 describe('S-SLEEP-AT-LIGHT: the sleep family sounds at a light, and open eyes looking anywhere clear it', () => {
-  // Stopped from 95 s; eyes shut 109.5–113.0 s (F1 at about 110.5, F2 at 112.5); then awake, looking around.
+  // Stopped from 95 s; eyes shut 109.5–113.0 s (F1 at about 111.0: C7 round 2, at a stop every closure counts deep-only,
+  // F1 at 1.5 s; F2 at 112.5); then awake, looking around.
   const atLight = (stop: Partial<DriverState>) =>
     drv((t) => (t < 95 ? null : within(t, 109.5, 113) ? { ...stop, openness: 0.1 } : t >= 113 ? { ...stop, gaze: rel(40, 0) } : { ...stop }));
   test.each([
@@ -54,8 +55,8 @@ describe('S-SLEEP-AT-LIGHT: the sleep family sounds at a light, and open eyes lo
     const r = play(atLight(stop), 120);
     expect(sig3(r)).toEqual(['start:microsleep', 'stop:microsleep', 'start:sleep', 'stop:sleep']);
     const [f1, , f2, end] = tier3(r);
-    expect(f1!.tMs).toBeGreaterThanOrEqual(110_400);
-    expect(f1!.tMs).toBeLessThanOrEqual(110_700);
+    expect(f1!.tMs).toBeGreaterThanOrEqual(110_900);
+    expect(f1!.tMs).toBeLessThanOrEqual(111_200);
     expect(f2!.tMs).toBeGreaterThanOrEqual(112_400);
     expect(f2!.tMs).toBeLessThanOrEqual(112_700);
     expect(end!.tMs - 113_000).toBeGreaterThanOrEqual(900);
@@ -155,8 +156,8 @@ describe('S-D4-THEN-SLEEP-STOP: a D4 Critical, then the eyes shut: the stop does
 });
 
 describe('S-STOP-REST-TWICE (U-14): F1 at two lights sounds both times; what it feeds is stopEventsFeed', () => {
-  // Stopped 100–130 s and 200–230 s; the eyes shut 1.5 s at each light.
-  const drive = drv((t) => ({ ...(within(t, 100, 130) || within(t, 200, 230) ? { speedKmh: 0 } : {}), ...(within(t, 109.5, 111) || within(t, 209.5, 211) ? { openness: 0.1 } : {}) }));
+  // Stopped 100–130 s and 200–230 s; the eyes shut 2 s at each light (C7 round 2: a stop's F1 needs 1.5 s deep).
+  const drive = drv((t) => ({ ...(within(t, 100, 130) || within(t, 200, 230) ? { speedKmh: 0 } : {}), ...(within(t, 109.5, 111.5) || within(t, 209.5, 211.5) ? { openness: 0.1 } : {}) }));
   const levelsAfter = (r: ReplayResult, tMs: number) => r.events.filter((e) => e.kind === 'fatigue_minute' && e.tMs > tMs).map((e) => (e as { level: string }).level);
   test("'none' (the default): both sound; the fatigue level stays none (NC-S3)", () => {
     const r = play(drive, 250);
@@ -166,7 +167,7 @@ describe('S-STOP-REST-TWICE (U-14): F1 at two lights sounds both times; what it 
     expect(levelsAfter(r, 111_000).every((l) => l === 'none')).toBe(true);
     expect(r.summary.stopSleepEvents).toBe(2);
   });
-  test("'long_and_nod': an eye rest of 1.5 s feeds nothing either", () => {
+  test("'long_and_nod': an eye rest of 2 s feeds nothing either", () => {
     const r = play(drive, 250, { cfg: feed('long_and_nod') });
     expect(sig3(r)).toHaveLength(4);
     expect(levelsAfter(r, 111_000).every((l) => l === 'none')).toBe(true);
@@ -179,11 +180,12 @@ describe('S-STOP-REST-TWICE (U-14): F1 at two lights sounds both times; what it 
 });
 
 describe('S-STOP-LOOKAROUND: F1 at a light, then looking around: cleared in 1 s, and never F3', () => {
-  const drive = drv((t) => (t < 95 ? null : within(t, 109.5, 110.7) ? { speedKmh: 0, openness: 0.1 } : t >= 110.7 ? { speedKmh: 0, gaze: rel(t % 6 < 3 ? 45 : -45, t % 4 < 2 ? 0 : -25) } : { speedKmh: 0 }));
+  // C7 round 2: the eyes shut 1.7 s (a stop's F1 needs 1.5 s deep).
+  const drive = drv((t) => (t < 95 ? null : within(t, 109.5, 111.2) ? { speedKmh: 0, openness: 0.1 } : t >= 111.2 ? { speedKmh: 0, gaze: rel(t % 6 < 3 ? 45 : -45, t % 4 < 2 ? 0 : -25) } : { speedKmh: 0 }));
   test('one microsleep, cleared about 1 s after the eyes open; no unresponsive', () => {
     const r = play(drive, 140);
     expect(sig3(r)).toEqual(['start:microsleep', 'stop:microsleep']);
-    expect(tier3(r)[1]!.tMs).toBeLessThanOrEqual(112_000);
+    expect(tier3(r)[1]!.tMs).toBeLessThanOrEqual(112_500);
     expect(r.events.map((e) => e.kind)).not.toContain('unresponsive');
   });
 });

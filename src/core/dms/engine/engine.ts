@@ -522,7 +522,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       quality: p.quality,
       closureBridged: p.closureBridged,
       openness: p.openness,
-      lookingDown: p.lookingDown,
+      // C7 round 2 (review-C7 R1-F): PERCLOS takes its looking-down threshold (0.15) inside a latched episode too
+      // (a reading lid hides the iris, so the per-frame value falls back to a level head).
+      lookingDown: p.lookingDown || d.fast.episodeGated(),
       gazeRel: learnRel,
       gazeFrom: p.gazeFrom,
       speedKmh: speed,

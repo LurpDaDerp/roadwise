@@ -83,9 +83,13 @@ const ONE_S = 1000 + FRAME_MS + 1;
 const ONE_HALF_S = 1500 + FRAME_MS + 1;
 
 describe('R-b at a stop: nod-offs at a light (review-C2 §3)', () => {
-  test('S-NODOFF-LIGHT-LEVEL: stopped, head level, lids to 0.05: F1 at 1.0 s + 1 frame', () => {
+  // C7 round 2 (the coordinator's stop ruling, review-C7 Round 1 §3 (b)): at a stop every closure counts deep-only, as
+  // if latched: the level-head nod-off at a light pays the +0.5 s (the pin moves from 1.0 s to 1.5 s).
+  test('S-NODOFF-LIGHT-LEVEL: stopped, head level, lids to 0.05: F1 in (1.0 s, 1.5 s] + 1 frame (the stop ruling)', () => {
     const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(2), () => ({ ear: 0.015 }))]);
-    expect(f1Latency(ps, rules(ps, { stopped: true, speed: 0 }))!).toBeLessThanOrEqual(ONE_S);
+    const lat = f1Latency(ps, rules(ps, { stopped: true, speed: 0 }))!;
+    expect(lat).toBeGreaterThan(ONE_S);
+    expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
   });
   test('S-NODOFF-LIGHT-DIP: stopped, the head dips to −7° within 0.5 s, lids to 0.05: F1 ≤ 1.5 s + 1 frame (R-b latches: the +0.5 s cost)', () => {
     const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(2.5), (i) => { const h = -7 * Math.min(1, i / n(0.5)); return { ear: 0.015, head: h, gaze: h }; })]);
@@ -93,13 +97,21 @@ describe('R-b at a stop: nod-offs at a light (review-C2 §3)', () => {
     expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
     expect(lat).toBeGreaterThan(ONE_S);
   });
-  test('R-b is relative (C7-2): a head already at −8° before onset that stays there is no dip (F1 at 1.0 s); a further 3° dip is', () => {
+  // R-b is defence in depth since the stop ruling (every stop closure counts deep-only); its latch is read directly.
+  test('R-b is relative (C7-2): a head already at −8° before onset that stays there is no dip; a further 3° dip latches', () => {
+    const latchAt = (ps: ReturnType<typeof perceive>) => {
+      const r = createFastRules(C);
+      let set = false;
+      for (const p of ps) {
+        r.onFrame({ p, ruleSpeedKmh: 0, onRoadGaze: !p.eyesClosed, stopped: true, fps: FPS });
+        set ||= r.episodeGated();
+      }
+      return set;
+    };
     const steady = perceive([...repeat(n(1.5), () => ({ head: -8, gaze: -8 })), ...repeat(n(2.5), () => ({ ear: 0.015, head: -8, gaze: -8 }))]);
-    expect(f1Latency(steady, rules(steady, { stopped: true, speed: 0 }))!).toBeLessThanOrEqual(ONE_S);
+    expect(latchAt(steady)).toBe(false);
     const dip = perceive([...repeat(n(1.5), () => ({ head: -8, gaze: -8 })), ...repeat(n(2.5), (i) => { const h = -8 - 3.5 * Math.min(1, i / n(0.5)); return { ear: 0.015, head: h, gaze: h }; })]);
-    const lat = f1Latency(dip, rules(dip, { stopped: true, speed: 0 }))!;
-    expect(lat).toBeGreaterThan(ONE_S);
-    expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
+    expect(latchAt(dip)).toBe(true);
   });
   test('while moving R-b is off (NC-T7c): the same dip gives F1 at 1.0 s + 1 frame', () => {
     const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(2.5), (i) => { const h = -7 * Math.min(1, i / n(0.5)); return { ear: 0.015, head: h, gaze: h }; })]);

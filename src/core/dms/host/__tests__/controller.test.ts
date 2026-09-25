@@ -1224,14 +1224,14 @@ describe('C2: focus samples from stop-time sleep events (fatigue.stopEventsFeed)
     expect((await run('long_and_nod', creep, [[100, 103.5]], 115)).samples).toHaveLength(1);
     expect((await run('all', creep, [[100, 103.5]], 115)).samples).toHaveLength(1);
   });
-  // S-STOP-REST-TWICE: two creeps, a 1.5 s eye rest at each.
+  // S-STOP-REST-TWICE: two creeps, a 2 s eye rest at each (C7 round 2: a stop's F1 needs 1.5 s deep).
   const twice = (t: number) => ((t >= 99 && t < 112) || (t >= 159 && t < 172) ? 7 : 60);
   test.each([
     ['none', 0],
     ['long_and_nod', 0],
     ['all', 2],
   ] as const)("S-STOP-REST-TWICE, '%s': both sound; %i focus samples", async (feed, n) => {
-    const { h, samples } = await run(feed, twice, [[100, 101.5], [160, 161.5]], 175);
+    const { h, samples } = await run(feed, twice, [[100, 102], [160, 162]], 175);
     expect(h.alerts.filter((c) => c.action === 'start' && c.kind === 'microsleep')).toHaveLength(2);
     expect(samples).toHaveLength(n);
   });

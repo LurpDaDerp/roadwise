@@ -213,6 +213,7 @@ export function createFastRules(cfg: DmsConfig) {
     },
 
     measuredFps: () => fps.fps(),
+    episodeGated: () => episode !== null && episode.gated,
 
 
     /** Drive end: an F episode still open reports its length so far; the episode ends. */
@@ -393,8 +394,12 @@ export function createFastRules(cfg: DmsConfig) {
         // reference or centre the looking-down gate cannot be measured, and a steep reading lid (the synth's floor,
         // EAR ≈ 0.051) lies between the deep EAR and the closed EAR; a full closure (EAR ≈ 0.02–0.04) is deep.
         // C6 round 3 (R2-F): its deep time is the bridged run's.
-        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : gated ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
-        const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
+        // C7 round 2 (the coordinator's stop ruling, review-C7 Round 1 §3 option b): while STOPPED every closure counts
+        // deep-only, as if latched (F1 at 1.5 s of openness < 0.15): a reader at a light with no iris and no head dip
+        // is never alarmed; real sleep is deep and still is (+0.5 s at a light).
+        const deepOnly = gated || stopped;
+        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : deepOnly ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
+        const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : deepOnly ? cl.f1.lookDownClosedS : cl.f1.closedS;
         // C7 round 1 (review-C7 C7-4): moving, and never deep for shallowDeepMs: the event is marked shallow.
         const shallow = !stopped && episode.deepMaxMs < cl.shallowDeepMs - EPS;
         const mark = (sh: boolean) => {
@@ -437,7 +442,10 @@ export function createFastRules(cfg: DmsConfig) {
       } else if (episode !== null && p.quality === 'tracking' && !episode.bridged) {
         const durMs = p.tMs - episode.onset;
         // C6 round 1 (C6-2): a prior-mode closure is no blink (the prior feeds no fatigue statistic).
-        if (!episode.prior) events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
+        // C7 round 2 (review-C7 R1-F): a closure of ≥ longBlinkMs that was never deep for shallowDeepMs (a reading lid,
+        // latched or not) is no blink: neither a long blink nor a blink-duration sample. Shorter ones are blinks.
+        const notABlink = durMs >= cl.longBlinkMs && episode.deepMaxMs < cl.shallowDeepMs - EPS;
+        if (!episode.prior && !notABlink) events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
         endEpisode(events, p.tMs, durMs);
       } else {
         endSilently(events); // a quality drop, or the end of a bridged closure: silent (no blink)
