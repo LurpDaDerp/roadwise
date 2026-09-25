@@ -98,6 +98,8 @@ describe('the texting guards (rev1 I1)', () => {
   ])('the texting probe: 15 min at 80 km/h, 60 %% of a 5 s cycle at %s: the centre moves ≤ 0.3° (NC-I1)', (_, phone) => {
     const r = play(drv((t) => (t >= 100 && (t - 100) % 5 < 3 ? { gaze: phone } : null), 80), 100 + 900);
     expect(angularDistanceDeg(at(r, 99_000).centre!, at(r, 999_000).centre!)).toBeLessThanOrEqual(0.3);
+    // C7 round 1 (review-C7 C7-3): a reader of the road-adjacent phone does not degrade health (no +5° on D1).
+    expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
   });
 });
 
@@ -277,10 +279,12 @@ describe('S-DISPLAY-70 (review-C5 C5-1; NC-C5-S4, NC-C5-S2+S4): a display watche
     ['(14°, −8°)', { yaw: 14, pitch: -8 }],
     ['(16°, −4°)', { yaw: 16, pitch: -4 }],
   ] as const).flatMap(([n, target]) => [11, 12, 13].map((seed) => [n, seed, target] as const));
-  test.each(CASES)('%s, seed %i: 12 min, max shift ≤ 2.5°, no slow dual state', (_, seed, target) => {
+  test.each(CASES)('%s, seed %i: 12 min, max shift ≤ 2.5°, no slow dual state; health never degraded (C7-3, NC-C7-3)', (_, seed, target) => {
     const r = play(watcher(target, 0.7, 3), 120 + 720, { seed });
     expect(shifts(r, 839).max).toBeLessThanOrEqual(2.5);
     expect(ev(r, 'posture_dual').filter((e) => e.cause === 'slow')).toEqual([]);
+    // C7 round 1 (review-C7 C7-3): the road is still watched 30 %, c₀ is not vacated beyond noise: D1 keeps its zones.
+    expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
   });
 });
 

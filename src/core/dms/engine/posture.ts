@@ -307,6 +307,20 @@ export function relativelyVacated(dirs: readonly WeightedDir[], c0: AnglePair, c
   return shareNear(dirs, c0, r) < cfg.calibration.posture.vacatedRatio * shareNear(dirs, c1, r);
 }
 
+/**
+ * C5 round 1 (the rule), C7 round 1 (shared with health): c₀ is vacated BEYOND NOISE. The share near c₀ above what
+ * c₁'s own spread puts there (a Gaussian at σ̂: exp(−d²/2σ̂²) of c₁'s share) is at most `excessMax` of c₁'s. A shifted
+ * road leaves c₀ to the noise; a display watched 70 % of the time leaves the road watched 30 %, an excess of about 0.4.
+ */
+export function vacatedBeyondNoise(dirs: readonly WeightedDir[], c0: AnglePair, c1: AnglePair, radius: number, sigma: number, excessMax: number): boolean {
+  const rv = vacatedRing(c0, c1, radius);
+  const s1 = shareNear(dirs, c1, rv);
+  if (!(s1 > 0)) return false;
+  const d = angularDistanceDeg(c0, c1);
+  const expected = s1 * Math.exp(-(d * d) / (2 * sigma * sigma));
+  return (shareNear(dirs, c0, rv) - expected) / s1 <= excessMax;
+}
+
 /** The samples are back at c₀: S(c₀, r_v) ≥ S(c₁, r_v). */
 export function relativeRevert(dirs: readonly WeightedDir[], c0: AnglePair, c1: AnglePair, radius: number, _cfg: Pick<DmsConfig, 'calibration'>): boolean {
   const r = vacatedRing(c0, c1, radius);

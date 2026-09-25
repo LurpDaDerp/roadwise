@@ -15,7 +15,8 @@ function run(m: ReturnType<typeof createHealthMonitor>, seconds: number, gaze: (
   const states: { t: number; degraded: boolean }[] = [];
   for (let i = 0; i < seconds * FPS; i++) {
     const t = (o.t0 ?? 0) + i / FPS;
-    m.step({ tMs: t * 1000, dtS: 1 / FPS, hold: o.hold ?? false, onRoadGaze: gaze(t, r), centre: o.centre ?? CENTRE, radiusDeg: o.radiusDeg ?? 8, sigmaDeg: o.sigmaDeg ?? 3, sourceDiffDeg: o.sourceDiffDeg ?? null });
+    // σ̂ 4.3°: as Stage 1 measures these drives (the σ 4° noise with the natural σ 1.5° scanning, √(4² + 1.5²)).
+    m.step({ tMs: t * 1000, dtS: 1 / FPS, hold: o.hold ?? false, onRoadGaze: gaze(t, r), centre: o.centre ?? CENTRE, radiusDeg: o.radiusDeg ?? 8, sigmaDeg: o.sigmaDeg ?? 4.3, sourceDiffDeg: o.sourceDiffDeg ?? null });
     if (i % FPS === 0) states.push({ t, degraded: m.gazeDegraded() });
   }
   return states;
@@ -32,13 +33,13 @@ describe('the gaze accuracy monitor (H1–H4)', () => {
     expect(x.h2!).toBeLessThan(2);
     expect(x.h3!).toBeLessThan(1.5);
   });
-  test('H2: the road 7° off the centre: degraded within 40 s (two evaluations of a 30 s window)', () => {
+  test('H2: the road 9° off the centre: degraded within 50 s (the window’s mode crossing, then two evaluations)', () => {
     const m = createHealthMonitor(C);
     run(m, 60, around(CENTRE, 4));
-    const st = run(m, 60, around({ yaw: CENTRE.yaw, pitch: CENTRE.pitch + 7 }, 4), { t0: 60 });
+    const st = run(m, 60, around({ yaw: CENTRE.yaw, pitch: CENTRE.pitch + 9 }, 4), { t0: 60 });
     const at = st.find((s) => s.degraded);
     expect(at).toBeDefined();
-    expect(at!.t - 60).toBeLessThanOrEqual(40);
+    expect(at!.t - 60).toBeLessThanOrEqual(50);
     expect(m.metrics().h2!).toBeGreaterThan(5);
   });
   test('H1 and H3: a road spread far wider than the calibrated radius: degraded', () => {
@@ -71,6 +72,12 @@ describe('the gaze accuracy monitor (H1–H4)', () => {
     const st = run(m, 120, around({ yaw: CENTRE.yaw, pitch: CENTRE.pitch + 10 }, 4), { hold: true });
     expect(st.every((s) => !s.degraded)).toBe(true);
     expect(m.metrics().h2).toBeNull();
+  });
+  test('C7 round 1 (C7-3): a second on-road cluster watched 70 % (a display 15° off), the road still watched: never degraded', () => {
+    const m = createHealthMonitor(C);
+    const st = run(m, 600, (t, r) => (t % 3 < 2.1 ? { yaw: CENTRE.yaw + 14 + 3 * gauss(r), pitch: CENTRE.pitch - 5 + 3 * gauss(r) } : { yaw: CENTRE.yaw + 4 * gauss(r), pitch: CENTRE.pitch + 4 * gauss(r) }));
+    expect(st.every((s) => !s.degraded)).toBe(true);
+    expect(m.metrics().h2!).toBeGreaterThan(10); // the mode is the display; c₀ is not vacated beyond noise
   });
   test('off-road frames never count (K2): 70 % of the frames elsewhere, the on-road ones centred: good', () => {
     const m = createHealthMonitor(C);

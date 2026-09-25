@@ -68,6 +68,11 @@ export interface DmsTripSummary {
    * are in `events` too; they always sound, and what else they feed is fatigue.stopEventsFeed (U-14).
    */
   stopSleepEvents: number;
+  /**
+   * C7 round 1 (review-C7 C7-4): the sleep events raised while moving in an episode that was never deep (a reading
+   * lid after a blink on the saccade, say), counted apart. They are in `events` too; they sound, and feed nothing.
+   */
+  shallowSleepEvents: number;
   alerts: Record<AlertKind, AlertCounts>;
   /** rule 7 tags */
   nuisanceTags: number;
@@ -111,6 +116,7 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
   let lastSpeed: number | null = null;
   const events: Record<string, number> = {};
   let stopSleepEvents = 0;
+  let shallowSleepEvents = 0;
   let longest: { durS: number; zone: ZoneId } | null = null;
   let over2s = 0;
   let mirrorChecksFast = 0;
@@ -230,9 +236,10 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
     },
     /** A rule or detector event, by name (d1_warning, microsleep, nod, yawn, …). */
     /** One event; `stopped` (Task C2): a sleep event raised while STOPPED, counted apart too. */
-    onEvent(kind: string, stopped?: boolean): void {
+    onEvent(kind: string, stopped?: boolean, shallow?: boolean): void {
       events[kind] = (events[kind] ?? 0) + 1;
       if (stopped === true) stopSleepEvents++;
+      if (shallow === true) shallowSleepEvents++;
     },
     onCalibration(e: CalibrationEvent): void {
       calEvents.push({ ...e });
@@ -257,6 +264,7 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         trackingCoverage: atSpeed > 0 ? round3(monitored.tracking / atSpeed) : null,
         events: { ...events },
         stopSleepEvents,
+        shallowSleepEvents,
         alerts: inp.alerts.byKind,
         nuisanceTags: inp.alerts.log.filter((e) => e.tag === 'wrong').length,
         longestNonDrivingGlance: longest,

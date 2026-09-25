@@ -40,6 +40,8 @@ interface Frm {
   ear?: number;
   /** the left eye usable but unreliable (the iris not found) */
   leftUnreliable?: boolean;
+  /** the iris seen whatever the EAR (a half-closed lid that still shows it) */
+  irisSeen?: boolean;
 }
 
 function perceive(frames: Frm[], refs: Partial<ConditionerRefs> = {}): Perceived[] {
@@ -49,10 +51,14 @@ function perceive(frames: Frm[], refs: Partial<ConditionerRefs> = {}): Perceived
     const gaze = x.gaze ?? 0;
     const ear = x.ear ?? 0.3;
     const spec: FrameSpec = { tMs: i * FRAME_MS, head: { yaw: 0, pitch: head, roll: 0 }, gaze: { yaw: 0, pitch: gaze }, ear: [ear, ear] };
-    const open = ear > 0.1;
+    const open = ear > 0.1 || x.irisSeen === true;
     if (open && x.pitchR !== undefined) spec.eyeR = { oy: oyFor(x.pitchR, head) };
     if (open && x.pitchL !== undefined) spec.eyeL = { oy: oyFor(x.pitchL, head) };
     if (open && x.leftUnreliable === true) spec.eyeL = { ...(spec.eyeL ?? {}), irisContrast: 2, irisIn: false };
+    if (x.irisSeen === true) {
+      spec.eyeR = { ...(spec.eyeR ?? {}), irisContrast: 40, irisIn: true };
+      spec.eyeL = { ...(spec.eyeL ?? {}), irisContrast: 40, irisIn: true };
+    }
     const f = frame(spec);
     return c.step(f, classifyQuality(f, C), { ...REFS, ...refs });
   });
@@ -87,6 +93,14 @@ describe('R-b at a stop: nod-offs at a light (review-C2 §3)', () => {
     expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
     expect(lat).toBeGreaterThan(ONE_S);
   });
+  test('R-b is relative (C7-2): a head already at −8° before onset that stays there is no dip (F1 at 1.0 s); a further 3° dip is', () => {
+    const steady = perceive([...repeat(n(1.5), () => ({ head: -8, gaze: -8 })), ...repeat(n(2.5), () => ({ ear: 0.015, head: -8, gaze: -8 }))]);
+    expect(f1Latency(steady, rules(steady, { stopped: true, speed: 0 }))!).toBeLessThanOrEqual(ONE_S);
+    const dip = perceive([...repeat(n(1.5), () => ({ head: -8, gaze: -8 })), ...repeat(n(2.5), (i) => { const h = -8 - 3.5 * Math.min(1, i / n(0.5)); return { ear: 0.015, head: h, gaze: h }; })]);
+    const lat = f1Latency(dip, rules(dip, { stopped: true, speed: 0 }))!;
+    expect(lat).toBeGreaterThan(ONE_S);
+    expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
+  });
   test('while moving R-b is off (NC-T7c): the same dip gives F1 at 1.0 s + 1 frame', () => {
     const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(2.5), (i) => { const h = -7 * Math.min(1, i / n(0.5)); return { ear: 0.015, head: h, gaze: h }; })]);
     expect(f1Latency(ps, rules(ps))!).toBeLessThanOrEqual(ONE_S);
@@ -94,10 +108,31 @@ describe('R-b at a stop: nod-offs at a light (review-C2 §3)', () => {
 });
 
 describe('R-a: the raw gaze, the noise guard and the single-frame path (the T7 pre-ruling)', () => {
-  test('S-NODOFF-GAZE-DROP: the gaze falls to −30° within 0.3 s (head level), then the lids close to 0.05: F1 ≤ 1.5 s + 1 frame', () => {
+  // C7 round 1 (review-C7 C7-1): the gaze-set latch stays with the head level (it clears only on a raw frame back up
+  // or the head rising), so a nod-off whose eyes roll down first pays the accepted +0.5 s.
+  test('S-NODOFF-GAZE-DROP: the gaze falls to −30° within 0.3 s (head level), then the lids close to 0.05: F1 in (1.0 s, 1.5 s] + 1 frame', () => {
     const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(0.3), (i) => ({ gaze: (-30 * (i + 1)) / n(0.3) })), ...repeat(n(0.2), () => ({ gaze: -30 })), ...repeat(n(2), () => ({ gaze: -30, ear: 0.015 }))]);
     const lat = f1Latency(ps, rules(ps))!;
+    expect(lat).toBeGreaterThan(ONE_S);
     expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
+  });
+  test('the gaze latch clears on a reliable raw frame back above −12° (the iris seen and up): a closure at 0.2 openness then counts', () => {
+    // Read at −40° (head level), then a half-closed lid (openness 0.25, the iris still seen) whose gaze is back up at
+    // −5°: the latch clears and the closure counts.
+    const ps = perceive([
+      ...repeat(n(1), () => ({})),
+      { gaze: -40, pitchR: -40, pitchL: -40 },
+      ...repeat(n(0.6), () => ({ gaze: -40, ear: 0.015 })),
+      ...repeat(n(2), () => ({ gaze: -5, pitchR: -5, pitchL: -5, ear: 0.075, irisSeen: true })),
+    ]);
+    expect(rules(ps).some((e) => e.kind === 'microsleep')).toBe(true);
+  });
+  test('the gaze latch clears on the head rising 3° above its onset pitch for 300 ms', () => {
+    const ps = perceive([...repeat(n(1), () => ({})), { gaze: -40, pitchR: -40, pitchL: -40, head: -8 }, ...repeat(n(0.6), () => ({ gaze: -40, ear: 0.015, head: -8 })), ...repeat(n(2), () => ({ gaze: -40, ear: 0.075, head: -4 }))]);
+    expect(rules(ps).some((e) => e.kind === 'microsleep')).toBe(true);
+    // the head staying at −8°: latched, the 0.25 lid never counts
+    const held = perceive([...repeat(n(1), () => ({})), { gaze: -40, pitchR: -40, pitchL: -40, head: -8 }, ...repeat(n(2.6), () => ({ gaze: -40, ear: 0.075, head: -8 }))]);
+    expect(rules(held).some((e) => e.kind === 'microsleep')).toBe(false);
   });
 
   /**
@@ -188,5 +223,32 @@ describe('the frozen gate references (rev2 §2.3.6): pull on the live centres ca
   ])('%s: the live centres off by that much, the gate references right: F1 latency unchanged within 1 frame', (_, err) => {
     const off = { yaw: 0, pitch: err };
     expect(Math.abs(nodOff({ gazeCentre: off, headCentre: off, pitchReference: err }) - base)).toBeLessThanOrEqual(FRAME_MS + 1);
+  });
+});
+
+describe('C7 round 1 (review-C7 C7-4): a moving F event of an episode never deep is shallow and feeds nothing', () => {
+  const run = (ear: number, stopped = false) => {
+    const ps = perceive([...repeat(n(1), () => ({})), ...repeat(n(1.5), () => ({ ear }))]);
+    const r = createFastRules(C);
+    const ev: FastEvent[] = [];
+    for (const p of ps) ev.push(...r.onFrame({ p, ruleSpeedKmh: stopped ? 0 : 60, onRoadGaze: !p.eyesClosed, stopped, fps: FPS }).events);
+    for (const e of r.flush()) ev.push(e);
+    return { ev, floor: r.fatigueFloor(ps.at(-1)!.tMs) };
+  };
+  test('a half-closed lid (openness 0.2, never deep) while moving: F1 delivered, shallow, no F4 floor; its episode_end shallow', () => {
+    const { ev, floor } = run(0.06);
+    const f1 = ev.find((e) => e.kind === 'microsleep');
+    expect(f1).toMatchObject({ shallow: true });
+    expect(ev.find((e) => e.kind === 'episode_end')).toMatchObject({ shallow: true });
+    expect(floor).toBe('none');
+  });
+  test('a real microsleep (openness 0.05, deep from the start): not shallow, the F4 floor at drowsy', () => {
+    const { ev, floor } = run(0.015);
+    expect(ev.find((e) => e.kind === 'microsleep')?.shallow).toBeUndefined();
+    expect(floor).toBe('drowsy');
+  });
+  test('stopped events are never marked shallow (their feed is fatigue.stopEventsFeed)', () => {
+    const { ev } = run(0.06, true);
+    expect(ev.find((e) => e.kind === 'microsleep')?.shallow).toBeUndefined();
   });
 });

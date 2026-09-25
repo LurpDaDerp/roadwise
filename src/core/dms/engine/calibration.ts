@@ -56,7 +56,7 @@ import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
 import { createBaselines, type EyeSample } from './baselines';
-import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, shareNear, unimodal, vacatedRing, type CompSignature } from './posture';
+import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, vacatedBeyondNoise as vacatedBeyondNoiseOf, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
@@ -759,12 +759,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * counts, so a display pattern that phase-locks with the mirror checks cannot fool it (the return test alone can).
    */
   function vacatedBeyondNoise(win: readonly WeightedDir[], c0: AnglePair, c1: AnglePair): boolean {
-    const rv = vacatedRing(c0, c1, radius ?? c.radiusMinDeg);
-    const s1 = shareNear(win, c1, rv);
-    if (!(s1 > 0)) return false;
-    const d = angularDistanceDeg(c0, c1);
-    const expected = s1 * Math.exp(-(d * d) / (2 * sigmaHat * sigmaHat));
-    return (shareNear(win, c0, rv) - expected) / s1 <= c.slow.excessMax;
+    return vacatedBeyondNoiseOf(win, c0, c1, radius ?? c.radiusMinDeg, sigmaHat, c.slow.excessMax);
   }
 
   /**

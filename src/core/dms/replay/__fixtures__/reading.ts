@@ -33,7 +33,8 @@ export interface ReadingOpts {
 }
 
 export interface ReadingResult {
-  bouts: { start: number; end: number; blink: boolean }[];
+  /** `sawIris` (C7 round 1): a frame in the first 0.5 s of the bout showed a reliable iris (R-a could read it) */
+  bouts: { start: number; end: number; blink: boolean; sawIris: boolean }[];
   events: DmsEvent[];
   commands: DmsAlertCommand[];
   /** closure episodes during the reading (the longest closedMs of each) */
@@ -42,6 +43,9 @@ export interface ReadingResult {
   t0: number;
   priorFrames: number;
   frames: number;
+  /** the fatigue level at the end, and the highest seen (C7 round 1, C7-4) */
+  fatigueLevel: string;
+  maxFatigueLevel: string;
 }
 
 export function playReading(o: ReadingOpts): ReadingResult {
@@ -51,13 +55,13 @@ export function playReading(o: ReadingOpts): ReadingResult {
   const bouts: ReadingResult['bouts'] = [];
   for (let t = t0; t < t0 + seconds; ) {
     const len = 3 + 5 * r();
-    bouts.push({ start: t, end: Math.min(t + len, t0 + seconds), blink: r() < o.blinkShare });
+    bouts.push({ start: t, end: Math.min(t + len, t0 + seconds), blink: r() < o.blinkShare, sawIris: false });
     t += len + 1 + r();
   }
   let bi = 0;
-  // A bout without an injected blink has none on its saccade: a natural blink from 0.3 s before its start to 0.4 s
-  // after it is dropped (it would be a blink on the saccade, which `blinkShare` controls).
-  const onSaccade = (t: number) => bouts.some((b) => !b.blink && t >= b.start - 0.3 && t < b.start + 0.4);
+  // The saccade's blinks are `blinkShare`'s alone: a natural blink from 0.3 s before a bout's start to 0.4 s after it
+  // is dropped (in an injected bout it would make a double blink, 0.4 s deep, which is not what the variant tests).
+  const onSaccade = (t: number) => bouts.some((b) => t >= b.start - 0.3 && t < b.start + 0.4);
   const driver = (t: number, rr: () => number): DriverState => {
     const blinkNow = t >= t0 && onSaccade(t) ? 1 : blinkOpenness(t);
     const base: DriverState = { gaze: onRoad(rr), openness: blinkNow, speedKmh: t < t0 ? 60 : o.speedKmh };
@@ -70,7 +74,10 @@ export function playReading(o: ReadingOpts): ReadingResult {
   };
   const items = synthDrive({ fps: o.fps, seconds: t0 + seconds, seed: o.seed ?? 7, source: 'geometric', driver, motion: true, lidGaze: true, lidLagS: o.lidLagS, headShare: o.headShare ?? 0.2, irisMinLid: o.irisMinLid });
   const engine = createDmsEngine(o.cfg ?? (DEFAULT_DMS_CONFIG as DmsConfig), { ...DEFAULT_INIT, profile: null });
-  const out: ReadingResult = { bouts, events: [], commands: [], closures: [], t0, priorFrames: 0, frames: 0 };
+  const out: ReadingResult = { bouts, events: [], commands: [], closures: [], t0, priorFrames: 0, frames: 0, fatigueLevel: 'none', maxFatigueLevel: 'none' };
+  const LEVELS = ['none', 'early', 'drowsy', 'severe'];
+  const minContrast = (o.cfg ?? (DEFAULT_DMS_CONFIG as DmsConfig)).quality.eyeMinIrisContrast;
+  let sb = 0;
   let longest = 0;
   for (const it of items) {
     if (it.row !== undefined) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
@@ -79,7 +86,14 @@ export function playReading(o: ReadingOpts): ReadingResult {
     out.events.push(...d.events);
     out.commands.push(...d.commands);
     if (it.frame.tMs < t0 * 1000) continue;
+    const tS = it.frame.tMs / 1000;
+    while (sb < bouts.length - 1 && tS >= bouts[sb]!.start + 0.5) sb++;
+    const bb = bouts[sb]!;
+    const e = it.frame.eyeR;
+    if (tS >= bb.start && tS < bb.start + 0.5 && e !== null && e.irisIn && e.irisContrast >= minContrast) bb.sawIris = true;
     const s = engine.snapshot();
+    out.fatigueLevel = s.fatigueLevel;
+    if (LEVELS.indexOf(s.fatigueLevel) > LEVELS.indexOf(out.maxFatigueLevel)) out.maxFatigueLevel = s.fatigueLevel;
     out.frames++;
     if (s.priorMode) out.priorFrames++;
     if (s.closedMs > 0) longest = Math.max(longest, s.closedMs);

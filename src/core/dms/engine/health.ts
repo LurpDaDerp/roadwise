@@ -5,17 +5,22 @@
 // calibration fault), on moving time only (no evaluation while STOPPED; the health clock stands):
 //   H1  the share within the calibrated radius of the centre, 60 s decayed        bad while < 0.5 for 30 s
 //   H2  |the window's mode − the centre| (a mean-shift mode of the last 30 s)      bad at > max(4°, 1.5σ̂) on 2 evaluations
-//   H3  the window's p85 radius ÷ the calibrated radius                            bad at > 1.5
+//   H3  the p85 radius of the centre's own cluster ÷ the calibrated radius          bad at > 1.5
 //   H4  (net builds) the median |rel_net − rel_geo| over 30 s                       bad at > 6°
 // The window is health's OWN: it is never voided by a warning (review-C5 R2 carry). A miscentring that raises D1
 // warnings voids the calibration's admitted samples, so the rolling path cannot follow it; health still sees it,
 // widens every on-road zone by +5°, the warnings stop, and the rolling path can follow.
+//
+// C7 round 1 (review-C7 C7-3): H1 and H2 may degrade only if c₀ is vacated BEYOND NOISE against the window's mode
+// (C5-1's excess test, calibration.slow.excessMax): a reader of an on-road display who still looks at the road 30–40 %
+// of the time moves the mode but does not vacate c₀, and must not blunt D1 by +5° while distracted. A true shift does.
 //
 // Gaze degraded (any of H1–H4 bad): the zones widen by +5° (never more from health), every distraction rule stays
 // on, the HUD shows 'widened' / 'recalibrating'. Health NEVER re-centres and never moves the closure thresholds or
 // the looking-down gate (frozen references). Recovery: every metric good for 60 s of health time.
 import { angularDistanceDeg } from './angles';
 import type { DmsConfig } from './config';
+import { vacatedBeyondNoise } from './posture';
 import type { AnglePair } from './types';
 import { RingBuffer } from './windows';
 
@@ -52,6 +57,9 @@ export interface HealthMonitor {
   reset(): void;
 }
 
+/** C7 round 1 (C7-3): the far frames form a second target when this share of them is within 2σ̂ of their own mode */
+const SECOND_CLUSTER_SHARE = 0.6;
+
 /** A mean-shift mode of the window (flat kernel of radius `r`), started from the component-wise median. */
 function modeOf(pts: readonly AnglePair[], r: number): AnglePair {
   const ys = pts.map((p) => p.yaw).sort((a, b) => a - b);
@@ -77,8 +85,11 @@ function modeOf(pts: readonly AnglePair[], r: number): AnglePair {
   return m;
 }
 
-export function createHealthMonitor(cfg: Pick<DmsConfig, 'health'>): HealthMonitor {
+export function createHealthMonitor(cfg: Pick<DmsConfig, 'health' | 'calibration'>): HealthMonitor {
   const h = cfg.health;
+  const excessMax = cfg.calibration.slow.excessMax;
+  /** C7 round 1 (C7-3): c₀ vacated beyond noise at the last evaluation (H1 and H2 may degrade only then) */
+  let vacated = false;
   /** health time: moving, calibrated seconds */
   let clock = 0;
   let inW = 0;
@@ -107,9 +118,29 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health'>): HealthMonit
     const mode = modeOf(pts, Math.max(h.h2MinDeg, 2 * sigma));
     lastMode = mode;
     m.h2 = angularDistanceDeg(mode, centre);
-    h2Bad = m.h2 > Math.max(h.h2MinDeg, h.h2Sigmas * sigma) ? h2Bad + 1 : 0;
+    vacated = vacatedBeyondNoise(
+      pts.map((g) => ({ yaw: g.yaw, pitch: g.pitch, w: 1 })),
+      centre,
+      mode,
+      radius,
+      sigma,
+      excessMax
+    );
+    h2Bad = m.h2 > Math.max(h.h2MinDeg, h.h2Sigmas * sigma) && vacated ? h2Bad + 1 : 0;
     h2BadNow = h2Bad >= h.h2Evals;
-    const rs = pts.map((g) => angularDistanceDeg(g, centre)).sort((a, b) => a - b);
+    // C7 round 1 (C7-3): H3 measures the spread of the CENTRE's own cluster. A second peaked cluster among the frames
+    // beyond the radius (an on-road display watched most of the time: most of them within 2σ̂ of their own mode) is a
+    // target, not dispersion, and is left out; frames spread in a ring around the centre are dispersion and count. A
+    // true shift is H2's (vacated beyond noise).
+    const bw = Math.max(h.h2MinDeg, 2 * sigma);
+    let own = pts;
+    const far = pts.filter((g) => angularDistanceDeg(g, centre) > radius);
+    if (far.length >= Math.max(10, 0.1 * pts.length)) {
+      const m2 = modeOf(far, bw);
+      const near2 = far.filter((g) => angularDistanceDeg(g, m2) <= bw).length;
+      if (near2 >= SECOND_CLUSTER_SHARE * far.length) own = pts.filter((g) => angularDistanceDeg(g, centre) <= angularDistanceDeg(g, m2));
+    }
+    const rs = (own.length > 0 ? own : pts).map((g) => angularDistanceDeg(g, centre)).sort((a, b) => a - b);
     m.h3 = rs[Math.min(rs.length - 1, Math.floor(h.h3Percentile * (rs.length - 1)))]! / radius;
     h3BadNow = m.h3 > h.h3MaxRatio;
     if (diffs.size > 0 && clock - diffs.first()!.t >= h.h4WindowS / 2) {
@@ -140,7 +171,7 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health'>): HealthMonit
       m.h1 = totW >= h.minWindowS / 2 ? inW / totW : null;
       if (m.h1 !== null && m.h1 < h.h1MinShare) h1LowSince ??= clock;
       else h1LowSince = null;
-      const h1Bad = h1LowSince !== null && clock - h1LowSince >= h.h1HoldS;
+      const h1Bad = h1LowSince !== null && clock - h1LowSince >= h.h1HoldS && vacated;
       if (clock >= nextEval) {
         nextEval = clock + h.evalEveryS;
         evaluate(x.centre, x.radiusDeg, x.sigmaDeg);
@@ -177,6 +208,7 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health'>): HealthMonit
       goodSince = null;
       m.h1 = m.h2 = m.h3 = m.h4 = null;
       lastMode = null;
+      vacated = false;
     },
   };
 }

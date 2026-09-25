@@ -81,12 +81,12 @@ export function learnableGaze(p: Pick<Perceived, 'source' | 'gazeFrom' | 'gazeRe
 export type DmsEvent =
   | { kind: AttentionEvent['kind']; tMs: number; zone?: ZoneId; durS?: number; shoulderCheck?: boolean }
   /** F1–F3 (and blinks); `stopped` (Task C2): raised while STOPPED */
-  | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean; stopped?: boolean }
+  | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean; stopped?: boolean; shallow?: boolean }
   /**
    * T14 r1 m2: a closure episode that reached F1–F3 ended; its measured length (not counted in the summary).
    * Task C2 (rev5 §4.4): `stopped` when every F event of it was stop-time; `level` the highest reached.
    */
-  | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean; stopped: boolean; level: 'f1' | 'f2' | 'f3' }
+  | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean; stopped: boolean; level: 'f1' | 'f2' | 'f3'; shallow?: boolean }
   | { kind: 'nod' | 'yawn'; tMs: number }
   /** T14 r2 R1-m2: the nod's deep-lid hold, seconds (its drowsiness sample); `stopped` (Task C2) */
   | { kind: 'microsleep_nod'; tMs: number; deepMaxS: number; stopped: boolean }
@@ -102,6 +102,8 @@ export type DmsEvent =
  */
 export function feedsDrowsinessScore(e: DmsEvent, feed: StopEventsFeed): boolean {
   if (e.kind === 'microsleep_nod') return !e.stopped || feed !== 'none';
+  // C7 round 1 (review-C7 C7-4): an episode whose every F event was shallow (never deep) feeds no score.
+  if (e.kind === 'episode_end' && e.shallow === true) return false;
   if (e.kind === 'episode_end') return !e.stopped || feed === 'all' || (feed === 'long_and_nod' && e.level !== 'f1');
   return true;
 }
@@ -293,14 +295,16 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   const emit = (e: DmsEvent) => {
     events.push(e);
     // Task C5: the fatigue evidence gate's events.
-    const hold = e.kind === 'microsleep' || e.kind === 'sleep' || e.kind === 'unresponsive' || e.kind === 'microsleep_nod' || e.kind === 'head_slump' ? 600_000 : e.kind === 'nod' || e.kind === 'yawn' ? 300_000 : 0;
+    // C7 round 1 (C7-4): a shallow F event (moving, never deep) is delivered but sets no fatigue gate.
+    const shallow = 'shallow' in e && e.shallow === true;
+    const hold = shallow ? 0 : e.kind === 'microsleep' || e.kind === 'sleep' || e.kind === 'unresponsive' || e.kind === 'microsleep_nod' || e.kind === 'head_slump' ? 600_000 : e.kind === 'nod' || e.kind === 'yawn' ? 300_000 : 0;
     if (hold > 0) d.fatigueGateUntil = Math.max(d.fatigueGateUntil, e.tMs + hold);
     if (e.kind === 'fatigue_minute' && e.level !== 'none') d.fatigueGateUntil = Math.max(d.fatigueGateUntil, e.tMs + 600_000);
     // episode_end restates an F event's episode for the scoring seam; the summary counts the F events.
-    if (e.kind !== 'episode_end') d.summary.onEvent(e.kind, 'stopped' in e ? e.stopped : undefined);
+    if (e.kind !== 'episode_end') d.summary.onEvent(e.kind, 'stopped' in e ? e.stopped : undefined, shallow);
   };
   const emitFast = (e: FastEvent) => {
-    if (e.kind === 'episode_end') emit({ kind: 'episode_end', tMs: e.tMs, durMs: e.durMs ?? 0, bridged: e.bridged === true, stopped: e.stopped === true, level: e.level ?? 'f1' });
+    if (e.kind === 'episode_end') emit({ kind: 'episode_end', tMs: e.tMs, durMs: e.durMs ?? 0, bridged: e.bridged === true, stopped: e.stopped === true, level: e.level ?? 'f1', ...(e.shallow === true ? { shallow: true } : {}) });
   };
   const addCommands = (c: readonly DmsAlertCommand[]) => {
     if (c.length > 0) commands = commands.concat(c).slice(-PENDING_CAP);
@@ -486,7 +490,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         emit({ kind: 'blink', tMs: e.tMs, durMs: e.durMs, long: e.long });
         continue;
       }
-      emit({ kind: e.kind, tMs: e.tMs, bridged, stopped: e.stopped === true });
+      emit({ kind: e.kind, tMs: e.tMs, bridged, stopped: e.stopped === true, ...(e.shallow === true ? { shallow: true } : {}) });
       if (e.kind === 'microsleep' || e.kind === 'sleep') requests.push({ kind: e.kind, bridged });
       // fastRules sets the origin on every unresponsive; `sleep` is the safe default if one ever did not (a stop
       // never ends a sleep Critical, while a wrong `d4` would silence a sleeping driver at a stop).

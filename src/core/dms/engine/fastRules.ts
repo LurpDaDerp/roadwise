@@ -70,6 +70,12 @@ export interface FastEvent {
    * no-on-road clause always), so the alert manager lets it start below 10 km/h (T11 review I1).
    */
   escalation?: boolean;
+  /**
+   * C7 round 1 (review-C7 C7-4): an F event raised while moving in an episode that was never deep (openness under
+   * lookDownClosedBelow for shallowDeepMs) up to it. It is delivered (a sleep alert), but feeds neither F4, the
+   * fatigue floor, the fatigue gate nor the drowsiness score. On episode_end: every F event of it was shallow.
+   */
+  shallow?: boolean;
   /** blinks, and episode_end (the episode's measured length) */
   durMs?: number;
   long?: boolean;
@@ -112,8 +118,28 @@ export function createFastRules(cfg: DmsConfig) {
     /** the start of the current non-deep stretch within the run (null while deep) */
     pNonDeepSince: number | null;
     gated: boolean;
+    /**
+     * C7 round 1 (review-C7 C7-1, C7-2): what set the latch; each clears on evidence of its own kind. `lGaze`: the
+     * gaze or R-a (clears on a reliable raw frame back up, or the head risen above its onset pitch); `lHead`: the
+     * head fallback (clears on the head above clearPitchDeg); `lRb`: R-b (clears on the head back near `preMed`).
+     */
+    lGaze: boolean;
+    lHead: boolean;
+    lRb: boolean;
+    /** the head pitch (driver frame) at the onset, and the median over the stopPreOnsetS before it (R-b's reference) */
+    onsetHead: number | null;
+    preMed: number | null;
     /** C2: the head above the latch's clear pitch since this time (null while it is not) */
     upSince: number | null;
+    /** C7 round 1: the head risen headRiseDeg above its onset pitch since (the gaze latch's clear) */
+    riseSince: number | null;
+    /** C7 round 1: the head back within stopReturnDeg of preMed since (R-b's clear) */
+    rbSince: number | null;
+    /** C7 round 1 (C7-4): the longest deep run so far, ms; an F event raised moving before shallowDeepMs is shallow */
+    deepMaxMs: number;
+    /** C7 round 1: F events of this episode, and how many were shallow */
+    fCount: number;
+    fShallow: number;
     bridged: boolean;
     f1: boolean;
     f2: boolean;
@@ -123,14 +149,17 @@ export function createFastRules(cfg: DmsConfig) {
     /** C2: this episode has fed F4 */
     fedF4: boolean;
   } | null = null;
-  /** C2: the recent open-eye frames (time, the per-frame looking-down value) for the latch at onset */
-  const openFrames = new RingBuffer<{ t: number; down: boolean }>(64);
+  /** C2: the recent open-eye frames (time, the per-frame looking-down value and its kind) for the latch at onset */
+  const openFrames = new RingBuffer<{ t: number; gaze: boolean; head: boolean }>(64);
+  /** C7 round 1 (C7-2): the recent TRACKING head pitches (driver frame), for R-b's pre-onset median */
+  const headHist = new RingBuffer<{ t: number; pitch: number }>(128);
 
   /** Ends the current episode; one that reached F1–F3 reports its length (T14 r1 m2). */
   function endEpisode(events: FastEvent[], tMs: number, durMs: number): void {
     if (episode !== null && (episode.f1 || episode.f2 || episode.f3)) {
       const level = episode.f3 ? 'f3' : episode.f2 ? 'f2' : 'f1';
-      events.push({ kind: 'episode_end', tMs, durMs, stopped: !episode.anyMoving, level, ...(episode.bridged ? { bridged: true } : {}) });
+      const shallow = episode.fCount > 0 && episode.fShallow === episode.fCount;
+      events.push({ kind: 'episode_end', tMs, durMs, stopped: !episode.anyMoving, level, ...(episode.bridged ? { bridged: true } : {}), ...(shallow ? { shallow: true } : {}) });
     }
     episode = null;
   }
@@ -146,8 +175,11 @@ export function createFastRules(cfg: DmsConfig) {
   let drowsyUntil = Number.NEGATIVE_INFINITY;
   let severeUntil = Number.NEGATIVE_INFINITY;
 
-  function criticalStarted(origin: CriticalOrigin): void {
+  /** C7 round 1 (C7-4): every Critical the pending no-on-road watch belongs to was a shallow F event */
+  let pendingShallow = false;
+  function criticalStarted(origin: CriticalOrigin, shallow = false): void {
     pendingOrigin = pendingF3 === null ? origin : pendingOrigin === 'sleep' || origin === 'sleep' ? 'sleep' : 'd4';
+    pendingShallow = pendingF3 === null ? shallow : pendingShallow && shallow;
     pendingF3 ??= 0;
   }
 
@@ -204,10 +236,14 @@ export function createFastRules(cfg: DmsConfig) {
       // The T7 pre-ruling: one raw frame far beyond noise (p.gazeRawSingleDown) is enough on its own.
       const guarded = rawDown && (p.gazeRawSingleDown || measuredFps() < la.rawGuardMinFps || (lastRawDownT !== null && p.tMs - lastRawDownT <= la.rawGuardMs + EPS));
       if (rawDown) lastRawDownT = p.tMs;
-      const down = p.lookingDown || guarded;
+      // C7 round 1 (C7-1): the kind of evidence: the gaze (a gaze frame, or R-a) or the head (the head fallback).
+      const gazeDown = (p.lookingDown && p.lookingDownFrom !== 'head') || guarded;
+      const headDown = p.lookingDown && p.lookingDownFrom === 'head';
       // C2: the open-eye frames of the lookback carry the looking-down value the latch reads at onset.
-      if (!p.eyesClosed && p.quality === 'tracking') openFrames.push({ t: p.tMs, down });
+      if (!p.eyesClosed && p.quality === 'tracking') openFrames.push({ t: p.tMs, gaze: gazeDown, head: headDown });
       openFrames.dropWhile((f) => f.t < p.tMs - la.lookbackMs);
+      if (p.quality === 'tracking' && p.headDrv !== null) headHist.push({ t: p.tMs, pitch: p.headDrv.pitch });
+      headHist.dropWhile((h) => h.t < p.tMs - (la.stopPreOnsetS + 2) * 1000);
 
       // Final review I1: a bridge the conditioner ended (its cap, on any frame) ends the bridged episode, so a
       // camera stop inside a bridge is never closure time; a closed eye on this frame starts a new episode.
@@ -231,11 +267,48 @@ export function createFastRules(cfg: DmsConfig) {
         if (episode === null) {
           // C2 (S1): the latch at onset, from the open-eye frames of the 500 ms before it.
           const onset = p.tMs - p.closedMs;
-          let downAtOnset = false;
+          let gazeAtOnset = false;
+          let headAtOnset = false;
           openFrames.forEach((f) => {
-            if (f.t >= onset - la.lookbackMs && f.t < onset + EPS && f.down) downAtOnset = true;
+            if (f.t >= onset - la.lookbackMs && f.t < onset + EPS) {
+              gazeAtOnset ||= f.gaze;
+              headAtOnset ||= f.head;
+            }
           });
-          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, pRunMs: null, pLastDeepT: null, pNonDeepSince: null, gated: downAtOnset, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
+          // C7 round 1 (C7-2): R-b's reference, the head's own median over the stopPreOnsetS before onset.
+          const pre: number[] = [];
+          headHist.forEach((h) => {
+            if (h.t >= onset - la.stopPreOnsetS * 1000 - EPS && h.t < onset - EPS) pre.push(h.pitch);
+          });
+          pre.sort((a, b) => a - b);
+          const preMed = pre.length > 0 ? pre[pre.length >> 1]! : null;
+          episode = {
+            onset,
+            lastT: p.tMs,
+            deepSince: null,
+            prior: p.priorMode,
+            pRunMs: null,
+            pLastDeepT: null,
+            pNonDeepSince: null,
+            gated: gazeAtOnset || headAtOnset,
+            lGaze: gazeAtOnset,
+            lHead: headAtOnset,
+            lRb: false,
+            onsetHead: p.headDrv?.pitch ?? null,
+            preMed,
+            upSince: null,
+            riseSince: null,
+            rbSince: null,
+            deepMaxMs: 0,
+            fCount: 0,
+            fShallow: 0,
+            bridged: false,
+            f1: false,
+            f2: false,
+            f3: false,
+            anyMoving: false,
+            fedF4: false,
+          };
         }
         episode.lastT = p.tMs;
         if (p.closureBridged) {
@@ -249,7 +322,10 @@ export function createFastRules(cfg: DmsConfig) {
             ? p.priorOpenness !== null && p.priorOpenness < cl.prior.deepEar / (cl.prior.closedEar / cl.closedBelow)
             : p.openness !== null && p.openness < cl.lookDownClosedBelow;
           if (!deep) episode.deepSince = null;
-          else episode.deepSince ??= p.tMs;
+          else {
+            episode.deepSince ??= p.tMs;
+            episode.deepMaxMs = Math.max(episode.deepMaxMs, p.tMs - episode.deepSince);
+          }
           // C6 round 3 (review-C6 R2-F): the prior's run bridges a non-deep stretch of ≤ reopenMs (a flutter that keeps
           // the closure open must not restart the count); the counted time is the deep frames' observed time.
           if (episode.prior) {
@@ -267,21 +343,49 @@ export function createFastRules(cfg: DmsConfig) {
               }
             }
           }
-          // C2 (S1): a looking-down frame may set the latch; only the head coming up clears it. Task C7 (R-b): while
-          // STOPPED, the head at ≤ stopSetPitchDeg within the first stopSetWindowS sets it too (a fast lid or a blink
-          // on the saccade leaves no gaze to read; an eye-mover's head still dips).
-          const stopDip = stopped && p.tMs - episode.onset <= la.stopSetWindowS * 1000 + EPS && p.headRelPitch !== null && p.headRelPitch <= la.stopSetPitchDeg;
-          if (down || stopDip) {
-            episode.gated = true;
+          // C2 (S1): a looking-down frame may set the latch. C7 round 1 (review-C7): every latch clears on evidence of
+          // the kind that set it (C7-1), and R-b is relative to the head's own pre-onset median (C7-2).
+          const held = (since: number | null) => since !== null && p.tMs - since >= la.clearHoldMs - EPS;
+          const head = p.headDrv?.pitch ?? null;
+          if (gazeDown) {
+            episode.lGaze = true;
+            episode.riseSince = null;
+          } else if (episode.lGaze) {
+            // The gaze latch: a reliable raw frame back above −12° (the iris seen and up), or the head risen.
+            const rawUp = p.gazeRelRawPitch !== null && p.gazeRelRawPitch > cl.lookDownRelPitchDeg + la.gazeClearMarginDeg;
+            const risen = head !== null && episode.onsetHead !== null && head >= episode.onsetHead + la.headRiseDeg;
+            episode.riseSince = risen ? (episode.riseSince ?? p.tMs) : null;
+            if (rawUp || held(episode.riseSince)) {
+              episode.lGaze = false;
+              episode.riseSince = null;
+            }
+          }
+          if (headDown) {
+            episode.lHead = true;
             episode.upSince = null;
-          } else if (episode.gated) {
+          } else if (episode.lHead) {
             const up = p.headRelPitch !== null && p.headRelPitch > la.clearPitchDeg;
             episode.upSince = up ? (episode.upSince ?? p.tMs) : null;
-            if (episode.upSince !== null && p.tMs - episode.upSince >= la.clearHoldMs - EPS) {
-              episode.gated = false;
+            if (held(episode.upSince)) {
+              episode.lHead = false;
               episode.upSince = null;
             }
           }
+          // R-b (STOPPED only): the head stopDipDeg below its pre-onset median within the first stopSetWindowS (a fast
+          // lid or a blink on the saccade leaves no gaze to read; an eye-mover's head still dips a little).
+          const dipped = stopped && p.tMs - episode.onset <= la.stopSetWindowS * 1000 + EPS && head !== null && episode.preMed !== null && head <= episode.preMed - la.stopDipDeg;
+          if (dipped) {
+            episode.lRb = true;
+            episode.rbSince = null;
+          } else if (episode.lRb) {
+            const back = head !== null && episode.preMed !== null && head >= episode.preMed - la.stopReturnDeg;
+            episode.rbSince = back ? (episode.rbSince ?? p.tMs) : null;
+            if (held(episode.rbSince)) {
+              episode.lRb = false;
+              episode.rbSince = null;
+            }
+          }
+          episode.gated = episode.lGaze || episode.lHead || episode.lRb;
         }
         const gated = episode.gated;
         const bridged = episode.bridged ? { bridged: true } : {};
@@ -291,13 +395,20 @@ export function createFastRules(cfg: DmsConfig) {
         // C6 round 3 (R2-F): its deep time is the bridged run's.
         const countedS = (episode.prior ? (episode.pRunMs ?? 0) : gated ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
         const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
+        // C7 round 1 (review-C7 C7-4): moving, and never deep for shallowDeepMs: the event is marked shallow.
+        const shallow = !stopped && episode.deepMaxMs < cl.shallowDeepMs - EPS;
+        const mark = (sh: boolean) => {
+          episode!.fCount++;
+          if (sh) episode!.fShallow++;
+          return sh ? { shallow: true } : {};
+        };
         if (!episode.f1 && countedS >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
           episode.f1 = true;
           if (!stopped) episode.anyMoving = true;
-          events.push({ kind: 'microsleep', tMs: p.tMs, stopped, ...bridged });
-          criticalStarted('sleep');
-          // C2 (U-14): a stop-time F1 feeds F4 only under 'all'.
-          if (!stopped || feed === 'all') {
+          events.push({ kind: 'microsleep', tMs: p.tMs, stopped, ...bridged, ...mark(shallow) });
+          criticalStarted('sleep', shallow);
+          // C2 (U-14): a stop-time F1 feeds F4 only under 'all'. C7 round 1: a shallow one never does.
+          if (!shallow && (!stopped || feed === 'all')) {
             episode.fedF4 = true;
             feedF4(p.tMs);
           }
@@ -305,8 +416,8 @@ export function createFastRules(cfg: DmsConfig) {
         if (!episode.f2 && countedS >= cl.f2.closedS - EPS && speed >= cl.f2.minSpeedKmh) {
           episode.f2 = true;
           if (!stopped) episode.anyMoving = true;
-          events.push({ kind: 'sleep', tMs: p.tMs, stopped, ...bridged });
-          criticalStarted('sleep');
+          events.push({ kind: 'sleep', tMs: p.tMs, stopped, ...bridged, ...mark(shallow) });
+          criticalStarted('sleep', shallow);
           if (stopped && feed === 'long_and_nod' && !episode.fedF4) {
             episode.fedF4 = true;
             feedF4(p.tMs);
@@ -317,7 +428,7 @@ export function createFastRules(cfg: DmsConfig) {
           episode.f3 = true;
           if (!stopped) episode.anyMoving = true;
           pendingF3 = null;
-          events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'closure', escalation: escalation, stopped, origin: 'sleep', ...bridged });
+          events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'closure', escalation: escalation, stopped, origin: 'sleep', ...bridged, ...mark(shallow) });
           if (stopped && feed === 'long_and_nod' && !episode.fedF4) {
             episode.fedF4 = true;
             feedF4(p.tMs);
@@ -344,7 +455,12 @@ export function createFastRules(cfg: DmsConfig) {
               episode.f3 = true;
               episode.anyMoving = true;
             }
-            events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'no_on_road', escalation: true, stopped: false, origin: pendingOrigin, ...(episode?.bridged === true ? { bridged: true } : {}) });
+            // C7 round 1 (C7-4): the escalation of shallow F events only is shallow too.
+            if (episode !== null) {
+              episode.fCount++;
+              if (pendingShallow) episode.fShallow++;
+            }
+            events.push({ kind: 'unresponsive', tMs: p.tMs, clause: 'no_on_road', escalation: true, stopped: false, origin: pendingOrigin, ...(episode?.bridged === true ? { bridged: true } : {}), ...(pendingShallow ? { shallow: true } : {}) });
           }
         }
       }

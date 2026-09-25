@@ -558,11 +558,20 @@ export interface DmsConfig {
      */
     f1: { closedS: number; lookDownClosedS: number; minSpeedKmh: number };
     /**
+     * C7 round 1 (review-C7 C7-4): an F event raised while moving in an episode never deep (openness below
+     * lookDownClosedBelow) for this long is marked shallow: delivered, but it feeds no fatigue statistic.
+     */
+    shallowDeepMs: number;
+    /**
      * Task C7 (rev4 §2.3.6 S1; review-C2 §3, R-a and R-b): the looking-down latch. At a closure's onset it reads the
-     * open-eye frames of lookbackMs before it; it clears only when the head pitch is above clearPitchDeg for
-     * clearHoldMs. R-a: the unsmoothed gaze reads "down" on reliable-eye frames; at ≥ rawGuardMinFps two raw frames
-     * within rawGuardMs are needed. R-b (STOPPED only): the head at ≤ stopSetPitchDeg within the first
-     * stopSetWindowS of an episode sets it.
+     * open-eye frames of lookbackMs before it. R-a: the unsmoothed gaze reads "down" on reliable-eye frames; at
+     * ≥ rawGuardMinFps two raw frames within rawGuardMs are needed.
+     * C7 round 1 (review-C7): every latch clears on evidence of the kind that set it (C7-1). A HEAD-set latch (the
+     * head fallback) clears when the head pitch is above clearPitchDeg for clearHoldMs. A GAZE-set latch (the gaze
+     * or R-a) clears on a reliable raw frame above lookDownRelPitchDeg + gazeClearMarginDeg, or the head risen
+     * headRiseDeg above its onset pitch for clearHoldMs. R-b (STOPPED only; C7-2, relative): the head falling
+     * stopDipDeg below its own median over the stopPreOnsetS before onset, within the first stopSetWindowS; it clears
+     * when the head is back within stopReturnDeg of that median for clearHoldMs.
      */
     latch: {
       lookbackMs: number;
@@ -577,7 +586,11 @@ export interface DmsConfig {
        */
       rawSingleSigmas: number;
       rawEyeAgreeDeg: number;
-      stopSetPitchDeg: number;
+      gazeClearMarginDeg: number;
+      headRiseDeg: number;
+      stopDipDeg: number;
+      stopReturnDeg: number;
+      stopPreOnsetS: number;
       stopSetWindowS: number;
     };
     f2: { closedS: number; minSpeedKmh: number };
@@ -1005,7 +1018,8 @@ const DEFAULT: DmsConfig = {
     lookDownClosedBelow: 0.15,
     prior: { closedEar: 0.06, openEar: 0.12, deepEar: 0.045, f1ClosedS: 1.5, reopenMs: 500 },
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
-    latch: { lookbackMs: 500, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, stopSetPitchDeg: -6, stopSetWindowS: 1.0 },
+    shallowDeepMs: 300,
+    latch: { lookbackMs: 500, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, gazeClearMarginDeg: 3, headRiseDeg: 3, stopDipDeg: 3, stopReturnDeg: 1.5, stopPreOnsetS: 1.0, stopSetWindowS: 1.0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
     f4: { windowS: 600, holdS: 900 },
@@ -1125,7 +1139,7 @@ const SIGNED = [
   /^calibration\.histPitchDeg\b/,
   /^calibration\.opennessCheckMinRelPitchDeg$/,
   /^closure\.lookDownRelPitchDeg$/,
-  /^closure\.latch\.(clearPitchDeg|stopSetPitchDeg)$/,
+  /^closure\.latch\.clearPitchDeg$/,
   /^zones\.table\[\w+\]\.region\./,
 ];
 
@@ -1333,7 +1347,11 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   // Task C7 (review-C2 round 1): the latch's constants.
   const la = cl.latch;
   if (!(la.lookbackMs >= 200)) bad('closure.latch.lookbackMs', 'must be ≥ 200 ms (one frame at 5 fps)');
-  if (!(la.stopSetPitchDeg <= la.clearPitchDeg - 1)) bad('closure.latch.stopSetPitchDeg', 'must be ≤ clearPitchDeg − 1 (no head angle both sets and clears)');
+  // C7 round 1 (C7-2): R-b's set and clear share the pre-onset median, so the clear band must sit inside the set.
+  if (!(cl.shallowDeepMs > 0 && cl.shallowDeepMs < cl.f1.closedS * 1000)) bad('closure.shallowDeepMs', 'must be in (0, f1.closedS)');
+  if (!(la.stopReturnDeg > 0 && la.stopReturnDeg < la.stopDipDeg)) bad('closure.latch.stopReturnDeg', 'must be in (0, stopDipDeg) (no head angle both sets and clears)');
+  if (!(la.stopPreOnsetS >= 0.2)) bad('closure.latch.stopPreOnsetS', 'must be ≥ 0.2 s (one frame at 5 fps)');
+  if (!(la.gazeClearMarginDeg > 0 && la.headRiseDeg > 0)) bad('closure.latch.gazeClearMarginDeg', 'the gaze clears must be > 0');
   if (!(la.clearHoldMs > 0)) bad('closure.latch.clearHoldMs', 'must be > 0');
   if (!(la.rawSingleSigmas >= 2)) bad('closure.latch.rawSingleSigmas', 'must be ≥ 2 (a single frame must lie far beyond noise)');
   if (!(la.rawEyeAgreeDeg > 0)) bad('closure.latch.rawEyeAgreeDeg', 'must be > 0');

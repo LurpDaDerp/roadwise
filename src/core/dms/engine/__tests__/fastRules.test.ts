@@ -369,7 +369,10 @@ describe('the looking-down gate (§M6)', () => {
 describe('F4 (C-25)', () => {
   test('one F1 holds the level at Drowsy for 15 min; two within 10 min force Severe for 15 min', () => {
     const r = createFastRules(C);
-    const at = (tMs: number, closed: boolean) => r.onFrame({ p: { ...perceive([])[0]!, tMs, eyesClosed: closed, closedMs: closed ? 1100 : 0, quality: 'tracking', lookingDown: false, openness: closed ? 0.1 : 1 }, ruleSpeedKmh: 60, onRoadGaze: !closed });
+    // C7 round 1 (C7-4): a real F1 is a deep closure (a shallow one would feed nothing): its frames, F1 at tMs.
+    const at = (tMs: number, closed: boolean) => {
+      for (let k = closed ? 10 : 0; k >= 0; k--) r.onFrame({ p: { ...perceive([])[0]!, tMs: tMs - k * 100, eyesClosed: closed, closedMs: closed ? 1000 - k * 100 : 0, quality: 'tracking', lookingDown: false, openness: closed ? 0.1 : 1 }, ruleSpeedKmh: 60, onRoadGaze: !closed });
+    };
     at(0, true);
     at(100, false);
     expect(r.fatigueFloor(1000)).toBe('drowsy');
@@ -381,7 +384,10 @@ describe('F4 (C-25)', () => {
   });
   test('two F1 more than 10 min apart are not Severe', () => {
     const r = createFastRules(C);
-    const at = (tMs: number, closed: boolean) => r.onFrame({ p: { ...perceive([])[0]!, tMs, eyesClosed: closed, closedMs: closed ? 1100 : 0, quality: 'tracking', lookingDown: false, openness: closed ? 0.1 : 1 }, ruleSpeedKmh: 60, onRoadGaze: !closed });
+    // C7 round 1 (C7-4): a real F1 is a deep closure (a shallow one would feed nothing): its frames, F1 at tMs.
+    const at = (tMs: number, closed: boolean) => {
+      for (let k = closed ? 10 : 0; k >= 0; k--) r.onFrame({ p: { ...perceive([])[0]!, tMs: tMs - k * 100, eyesClosed: closed, closedMs: closed ? 1000 - k * 100 : 0, quality: 'tracking', lookingDown: false, openness: closed ? 0.1 : 1 }, ruleSpeedKmh: 60, onRoadGaze: !closed });
+    };
     at(0, true);
     at(100, false);
     at(600_001, true);
@@ -668,6 +674,8 @@ describe('C2 / S1: the looking-down gate is latched for the episode', () => {
     const f1 = fast(ps, 60).events.find((e) => e.kind === 'microsleep')!;
     const onset = ps.find((p) => p.eyesClosed)!.tMs;
     expect(f1.tMs - onset).toBeLessThanOrEqual(1000 + 70);
+    // C7 round 1 (C7-4): a real (deep) microsleep is never shallow
+    expect(f1.shallow).toBeUndefined();
   });
 
   test('S-NODOFF-GLANCE (rev5 §2, the accepted cost): shut to 0.05 during a cluster glance (gaze −20°, head −7°): F1 at 1.5 s, not 1.0', () => {

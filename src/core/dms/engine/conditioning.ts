@@ -139,6 +139,11 @@ export interface Perceived {
    * rawEyeAgreeDeg.
    */
   gazeRawSingleDown: boolean;
+  /**
+   * C7 round 1 (review-C7 C7-1): what `lookingDown` was measured from: the gaze (a gaze or held frame) or the head
+   * (the head fallback, or the head against the pitch reference before any centre); null when not looking down.
+   */
+  lookingDownFrom: 'gaze' | 'head' | null;
   /** driver-frame head yaw rate, °/s; null without two consecutive heads */
   headYawSpeedDegS: number | null;
 }
@@ -459,6 +464,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       // source's gate reference, the head fallback against the head's), so pull on the live centres cannot move it.
       const rel = gazeRel as AnglePair | null;
       let lookingDown = false;
+      let lookingDownFrom: 'gaze' | 'head' | null = null;
       if (rel !== null) {
         const gateSrc = netFallback ? refs.gateGeoRef : refs.gateGazeRef;
         let offset = 0;
@@ -466,7 +472,11 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
           if (refs.headCentre !== null && headGateRef !== null) offset = refs.headCentre.pitch - headGateRef.pitch;
         } else if (srcCentre !== null && gateSrc !== undefined && gateSrc !== null) offset = srcCentre.pitch - gateSrc.pitch;
         lookingDown = rel.pitch + offset < cfg.closure.lookDownRelPitchDeg;
-      } else if (headDrv !== null && refs.pitchReference !== null) lookingDown = headDrv.pitch - refs.pitchReference < cfg.closure.lookDownRelPitchDeg;
+        if (lookingDown) lookingDownFrom = (source as GazeUse) === 'head' ? 'head' : 'gaze';
+      } else if (headDrv !== null && refs.pitchReference !== null) {
+        lookingDown = headDrv.pitch - refs.pitchReference < cfg.closure.lookDownRelPitchDeg;
+        if (lookingDown) lookingDownFrom = 'head';
+      }
 
       return {
         tMs: f.tMs,
@@ -504,6 +514,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         headRelPitch: relPitch,
         gazeRelRawPitch,
         gazeRawSingleDown,
+        lookingDownFrom,
         headYawSpeedDegS,
       };
     },
