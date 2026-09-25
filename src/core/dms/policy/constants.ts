@@ -51,15 +51,17 @@ export const LOW_LIGHT = { suspendAfterMs: 60_000, minSpeedKmh: 0, probeEveryMs:
 /**
  * Task C3 (rev4 §2.1.5, U-12): no one in the seat. STOPPED with no face box at all (LOST with no box, not in
  * the dark) for afterMs → the camera pauses (`absent`); it probes for probeForMs every probeEveryMs, and a
- * probe that sees a face, or moving evidence, resumes.
+ * probe that sees a face, or moving evidence, resumes. C3 round 2 (review-C3r1 m1): after
+ * backoffAfterFailures consecutive probes that failed to resume (the host's count), one probe every
+ * backoffProbeEveryMs, so a persistent camera fault does not cold-start the models twice a minute.
  */
-export const ABSENT = { afterMs: 180_000, probeEveryMs: 30_000, probeForMs: 5_000, requiresNoBox: true } as const;
+export const ABSENT = { afterMs: 180_000, probeEveryMs: 30_000, probeForMs: 5_000, requiresNoBox: true, backoffAfterFailures: 3, backoffProbeEveryMs: 300_000 } as const;
 
 /** Native releases its models after this long paused (dms-vision MODEL_RELEASE_AFTER_PAUSE_MS); every probe gap is shorter. */
 const MODEL_RELEASE_MS = 300_000;
 
 type LowLight = { suspendAfterMs: number; minSpeedKmh: number; probeEveryMs: number; probeEveryStoppedMs: number; probeForMs: number };
-type Absent = { afterMs: number; probeEveryMs: number; probeForMs: number; requiresNoBox: boolean };
+type Absent = { afterMs: number; probeEveryMs: number; probeForMs: number; requiresNoBox: boolean; backoffAfterFailures: number; backoffProbeEveryMs: number };
 
 /** The policy's own numbers, checked (an empty list when they are sound). */
 export function validatePolicyConstants(l: LowLight = LOW_LIGHT, a: Absent = ABSENT): string[] {
@@ -72,5 +74,7 @@ export function validatePolicyConstants(l: LowLight = LOW_LIGHT, a: Absent = ABS
   if (!(a.afterMs > 0)) bad.push('ABSENT.afterMs: must be > 0');
   if (!(a.probeForMs > 0 && a.probeForMs < a.probeEveryMs)) bad.push('ABSENT.probeForMs: must be > 0 and shorter than probeEveryMs');
   if (!(a.probeEveryMs - a.probeForMs < MODEL_RELEASE_MS)) bad.push('ABSENT.probeEveryMs: a pause must stay under the native model release');
+  if (!(Number.isInteger(a.backoffAfterFailures) && a.backoffAfterFailures >= 1)) bad.push('ABSENT.backoffAfterFailures: must be a whole number ≥ 1');
+  if (!(a.backoffProbeEveryMs >= a.probeEveryMs && a.backoffProbeEveryMs - a.probeForMs < MODEL_RELEASE_MS)) bad.push('ABSENT.backoffProbeEveryMs: must be ≥ probeEveryMs and keep a pause under the native model release');
   return bad;
 }

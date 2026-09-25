@@ -27,6 +27,8 @@ interface Seg {
   noFace?: boolean;
   /** Task C3: the row's motion evidence; undefined = none on the row (older paths, or missing) */
   motion?: PolicyMotion;
+  /** C3 round 2: consecutive empty-seat probes that failed to resume (the host's count) */
+  probeFailures?: number;
   gazeNetEvery?: 1 | 2;
 }
 interface Tick {
@@ -52,6 +54,7 @@ function sim(segs: Seg[], policy = createCapturePolicy()): Tick[] {
     setup: false,
     lowLight: false,
     noFace: false,
+    probeFailures: 0,
     motion: undefined,
     gazeNetEvery: 1,
   };
@@ -80,6 +83,7 @@ function sim(segs: Seg[], policy = createCapturePolicy()): Tick[] {
         setup: cur.setup,
         lostLowLight: cur.lowLight,
         lostNoFace: cur.noFace,
+        absentProbeFailures: cur.probeFailures,
         gazeNetEvery: cur.gazeNetEvery,
       });
       ticks.push({ t, out });
@@ -396,12 +400,39 @@ describe('T13 round 1: the camera-off edge and the low-light suspend (m1, U-21 d
   });
   test('the numbers are validated', () => {
     expect(LOW_LIGHT).toEqual({ suspendAfterMs: 60_000, minSpeedKmh: 0, probeEveryMs: 300_000, probeEveryStoppedMs: 60_000, probeForMs: 10_000 });
-    expect(ABSENT).toEqual({ afterMs: 180_000, probeEveryMs: 30_000, probeForMs: 5_000, requiresNoBox: true });
+    expect(ABSENT).toEqual({ afterMs: 180_000, probeEveryMs: 30_000, probeForMs: 5_000, requiresNoBox: true, backoffAfterFailures: 3, backoffProbeEveryMs: 300_000 });
     expect(STOP_KMH).toBe(10);
     expect(validatePolicyConstants(LOW_LIGHT)).toEqual([]);
     expect(validatePolicyConstants(LOW_LIGHT, { ...ABSENT, probeForMs: 30_000 })).toEqual([expect.stringMatching(/ABSENT.probeForMs/)]);
     expect(validatePolicyConstants({ ...LOW_LIGHT, probeEveryStoppedMs: 400_000 })).toEqual([expect.stringMatching(/probeEveryStoppedMs/)]);
     expect(validatePolicyConstants({ ...LOW_LIGHT, probeForMs: 300_000 })).toEqual(expect.arrayContaining([expect.stringMatching(/LOW_LIGHT.probeForMs/)]));
     expect(validatePolicyConstants({ ...LOW_LIGHT, suspendAfterMs: 0 })).toEqual([expect.stringMatching(/suspendAfterMs/)]);
+  });
+});
+
+// C3 round 2 (review-C3 round 1, C3r1-m1): a persistent probe fault backs off.
+describe('C3 round 2: after 3 consecutive failed empty-seat probes, one probe every 5 min', () => {
+  const probesIn = (t: Tick[], fromS: number, toS: number) => {
+    let n = 0;
+    let prev = false;
+    for (const x of t) {
+      if (x.t < fromS * 1000 || x.t >= toS * 1000) continue;
+      const on = x.out.absent && x.out.action === 'run';
+      if (on && !prev) n++;
+      prev = on;
+    }
+    return n;
+  };
+  const empty: Seg = { s: 900, speed: 0, quality: 'lost', noFace: true };
+  test('with 3 failures, the probes come every 5 min (not every 30 s); fewer failures keep 30 s', () => {
+    const backedOff = sim([{ s: 5, speed: 30 }, { ...empty, probeFailures: 3 }]);
+    expect(probesIn(backedOff, 190, 790)).toBe(2);
+    const normal = sim([{ s: 5, speed: 30 }, { ...empty, probeFailures: 2 }]);
+    expect(probesIn(normal, 190, 790)).toBeGreaterThanOrEqual(19);
+  });
+  test('the numbers are validated (the back-off stays under the model release)', () => {
+    expect(ABSENT.backoffAfterFailures).toBe(3);
+    expect(ABSENT.backoffProbeEveryMs).toBe(300_000);
+    expect(validatePolicyConstants(LOW_LIGHT, { ...ABSENT, backoffProbeEveryMs: 400_000 })).toEqual([expect.stringMatching(/backoffProbeEveryMs/)]);
   });
 });

@@ -1407,3 +1407,35 @@ describe('C3 round 1: an empty-seat probe that fails to resume, and the HUD at a
     expect(h.ctl.status()).toMatchObject({ camera: 'limited', reason: 'face_lost', monitoring: { distraction: 'off', drowsiness: 'limited', reason: 'stopped', why: { distraction: 'stopped', drowsiness: 'face' } } });
   });
 });
+
+// C3 round 2 (review-C3 round 1, C3r1-m1): a persistent empty-seat probe fault backs off to one probe every 5 min.
+describe('C3 round 2: the empty-seat probe back-off', () => {
+  const noFace = (t: number) => frame({ tMs: t, face: false });
+  test('every probe failing: after 3 failures one start per 5 min, not one per 30 s', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 188, { speed: () => 0, frameAt: noFace });
+    const realSetPolicy = h.fake.setPolicy.bind(h.fake);
+    h.fake.setPolicy = async (p) => {
+      if (p.capture === 'run' && h.fake.nativeState() !== 'running' && h.fake.nativeState() !== 'stopped') {
+        h.fake.calls.push({ method: 'setPolicy', args: [p] });
+        h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+        return;
+      }
+      return realSetPolicy(p);
+    };
+    const realStart = h.fake.start.bind(h.fake);
+    h.fake.start = async (o) => {
+      await realStart(o);
+      h.fake.emitRaw('state', { state: 'stopped', reason: 'error' }); // a start that fails at once
+    };
+    await drive(h, 188, 400, { speed: () => 0, frameAt: noFace });
+    const before = starts(h);
+    await drive(h, 400, 1000, { speed: () => 0, frameAt: noFace });
+    expect(starts(h) - before).toBeLessThanOrEqual(3);
+    expect(h.ctl.diagnostics().probeFailures).toBeGreaterThanOrEqual(3);
+    const summary = await h.ctl.endDrive();
+    expect(summary?.camera).toMatchObject({ retries: 0, gaveUp: false });
+  });
+});

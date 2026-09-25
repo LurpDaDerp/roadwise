@@ -65,6 +65,7 @@ const LIVE_FIELDS = [
   'fps',
   'thermal',
   'gazeNet',
+  'probeFailures',
 ] as const;
 type LiveField = (typeof LIVE_FIELDS)[number];
 
@@ -113,6 +114,7 @@ export const dmsDiagCopy = {
     fps: 'Native fps (actual / target)',
     thermal: 'Thermal',
     gazeNet: 'Gaze net (available / on)',
+    probeFailures: 'Empty-seat probe failures',
   } satisfies Record<LiveField, string>,
   none: '—',
 } as const;
@@ -386,6 +388,7 @@ export function DmsDiagnosticsPanel({
     fps: diag.native === null ? copy.none : `${diag.native.fpsActual} / ${diag.native.fpsTarget}`,
     thermal: diag.native?.thermal ?? copy.none,
     gazeNet: diag.native === null ? copy.none : `${diag.native.gazeNetAvailable ? 'yes' : 'no'} / ${diag.native.gazeNetOn ? 'on' : 'off'}`,
+    probeFailures: String(diag.probeFailures),
   };
 
   return (

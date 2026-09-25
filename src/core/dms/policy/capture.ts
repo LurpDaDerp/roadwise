@@ -120,6 +120,8 @@ export interface PolicyInput {
   lostLowLight: boolean;
   /** Task C3: the engine reports this frame LOST with no face box at all (engine.snapshot().lostNoFace) */
   lostNoFace?: boolean;
+  /** C3 round 2: consecutive empty-seat probes that failed to resume (the host's count); from backoffAfterFailures, the back-off */
+  absentProbeFailures?: number;
   gazeNetEvery: 1 | 2;
 }
 
@@ -354,7 +356,8 @@ export function createCapturePolicy() {
         emptySince = null;
         absentProbe.end();
       } else {
-        absentProbing = absentProbe.probing(x.tMs, ABSENT.probeEveryMs, ABSENT.probeForMs);
+        const every = (x.absentProbeFailures ?? 0) >= ABSENT.backoffAfterFailures ? ABSENT.backoffProbeEveryMs : ABSENT.probeEveryMs;
+        absentProbing = absentProbe.probing(x.tMs, every, ABSENT.probeForMs);
         if (absentProbing && face) {
           absentAt = null;
           emptySince = null;

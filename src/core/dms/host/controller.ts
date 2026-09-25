@@ -72,7 +72,7 @@ import { engineFrame } from './frames';
 import { gatedNative } from './native';
 import type { DmsProfileStore } from './profileStore';
 import { createMotionEvidence, MOTION_CONSTANTS, type MotionEvidence } from '@/core/engine/motionEvidence';
-import { STOP_KMH as POLICY_STOP_KMH } from '../policy/constants';
+import { ABSENT, STOP_KMH as POLICY_STOP_KMH } from '../policy/constants';
 import { policyRow, rowExtras } from './rowContext';
 import { monitoringOf, type DmsMonitoring } from './status';
 
@@ -215,6 +215,8 @@ export interface DmsController {
   diagnostics(): DmsHostDiagnostics;
 }
 
+/** C3 round 2: a failed empty-seat probe is not retried within its own probe window */
+const ABSENT_PROBE_FOR_MS = ABSENT.probeForMs + 1_000;
 const RETRY_AFTER_MS = 5_000;
 /** Final review round 2 R-2: this long running healthily gives the drive its one retry back. */
 const RETRY_RESET_AFTER_MS = 600_000;
@@ -318,6 +320,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let motionMismatches = 0;
   /** C3 round 1 (m1): empty-seat probes that failed to resume (not faults; the device pass measures the rate) */
   let probeFailures = 0;
+  /** C3 round 2: the consecutive ones (the policy backs off after ABSENT.backoffAfterFailures); frames from a probe reset it */
+  let probeFailuresInRow = 0;
+  /** C3 round 2: a failed probe is not started again within the same probe (one attempt per probe) */
+  let quietFailT = Number.NEGATIVE_INFINITY;
   // Native status.
   let thermal: ThermalName = 'nominal';
   let lowPower = false;
@@ -584,6 +590,11 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         publishStatus();
         return;
       }
+      // C3 round 2: one attempt per empty-seat probe; a failed one waits for the next probe.
+      if (out !== null && out.absent && nativeState === 'stopped' && (lastRow?.ts ?? 0) - quietFailT < ABSENT_PROBE_FOR_MS) {
+        publishStatus();
+        return;
+      }
       // Final review I-1: while native holds itself paused (an interruption, an error), `run` does not
       // resume it; the recovery is stop() then start() (pushRow's retry).
       // Round 2 R-2: a young interruption keeps getting `run`, so native resumes the moment it ends (no retry
@@ -737,6 +748,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       stats.droppedRecords += res.droppedRecords;
       lastTMs = res.lastTMs;
       sessionOffset ??= res.batch.anchorEpochMs - res.batch.anchorTMs;
+      if (lastOut?.absent === true && res.batch.frames.length > 0) probeFailuresInRow = 0; // a probe delivered frames
       for (const f of res.batch.frames) {
         const ef = engineFrame(f, sessionOffset);
         engine.pushFrame(ef);
@@ -786,6 +798,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       // shown, and the next probe starts it again.
       if (lastOut?.absent === true && (ev.reason === 'error' || ev.reason === 'interrupted') && (ev.state === 'paused' || ev.state === 'stopped')) {
         probeFailures++;
+        probeFailuresInRow++;
+        quietFailT = lastRow?.ts ?? 0;
         stopNative(true);
         publishStatus();
         return;
@@ -907,6 +921,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           // C3 round 1 (m1): an empty-seat probe that did not resume is still absent: stop quietly, no retry.
           notRunningSince = null;
           probeFailures++;
+          probeFailuresInRow++;
+          quietFailT = row.ts;
           stopNative(true);
         } else if (row.ts - notRunningSince >= RETRY_AFTER_MS) {
           notRunningSince = null;
@@ -944,9 +960,11 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         setup,
         lostLowLight: snap?.lostLowLight ?? false,
         lostNoFace: snap?.lostNoFace ?? false,
+        absentProbeFailures: lastOut?.absent === true ? probeFailuresInRow : 0,
         gazeNetEvery: cfg.gazeNetEvery,
       });
       lastOut = out;
+      if (!out.absent) probeFailuresInRow = 0;
       if (engine !== null) {
         if (out.cameraOff !== null) engine.cameraOff(row.ts, out.cameraOff);
         engine.setHost({ thermalLevel: out.thermalLevel, search: out.search, gazeNetEvery: out.gazeNetEvery });

@@ -153,6 +153,7 @@ describe('the gate is the real one', () => {
     await seconds(3, true);
     await waitFor(() => expect(Number(text('dms-frames'))).toBeGreaterThan(0));
     expect(text('dms-camera')).toBe('active');
+    expect(text('dms-probeFailures')).toBe('0'); // C3 round 2 (review-C3r1 m1)
   });
 
   test('no drive: nothing starts until the simulated drive does', async () => {
