@@ -563,6 +563,11 @@ export interface DmsConfig {
      */
     shallowDeepMs: number;
     /**
+     * C7 round 3 (review-C7 R2-S): deep-only counting (latched or stopped) bridges a non-deep stretch of up to this
+     * long while the eye stays closed: a real closed lid's EAR noise flickers over 0.15 frame by frame.
+     */
+    deepBridgeMs: number;
+    /**
      * Task C7 (rev4 §2.3.6 S1; review-C2 §3, R-a and R-b): the looking-down latch. At a closure's onset it reads the
      * open-eye frames of lookbackMs before it. R-a: the unsmoothed gaze reads "down" on reliable-eye frames; at
      * ≥ rawGuardMinFps two raw frames within rawGuardMs are needed.
@@ -1019,6 +1024,7 @@ const DEFAULT: DmsConfig = {
     prior: { closedEar: 0.06, openEar: 0.12, deepEar: 0.045, f1ClosedS: 1.5, reopenMs: 500 },
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
     shallowDeepMs: 300,
+    deepBridgeMs: 300,
     latch: { lookbackMs: 500, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, gazeClearMarginDeg: 3, headRiseDeg: 3, stopDipDeg: 3, stopReturnDeg: 1.5, stopPreOnsetS: 1.0, stopSetWindowS: 1.0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
@@ -1349,6 +1355,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(la.lookbackMs >= 200)) bad('closure.latch.lookbackMs', 'must be ≥ 200 ms (one frame at 5 fps)');
   // C7 round 1 (C7-2): R-b's set and clear share the pre-onset median, so the clear band must sit inside the set.
   if (!(cl.shallowDeepMs > 0 && cl.shallowDeepMs < cl.f1.closedS * 1000)) bad('closure.shallowDeepMs', 'must be in (0, f1.closedS)');
+  if (!(cl.deepBridgeMs > 0 && cl.deepBridgeMs < cl.f1.closedS * 1000)) bad('closure.deepBridgeMs', 'must be in (0, f1.closedS)');
   if (!(la.stopReturnDeg > 0 && la.stopReturnDeg < la.stopDipDeg)) bad('closure.latch.stopReturnDeg', 'must be in (0, stopDipDeg) (no head angle both sets and clears)');
   if (!(la.stopPreOnsetS >= 0.2)) bad('closure.latch.stopPreOnsetS', 'must be ≥ 0.2 s (one frame at 5 fps)');
   if (!(la.gazeClearMarginDeg > 0 && la.headRiseDeg > 0)) bad('closure.latch.gazeClearMarginDeg', 'the gaze clears must be > 0');

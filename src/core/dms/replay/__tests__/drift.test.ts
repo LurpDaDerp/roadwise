@@ -423,8 +423,25 @@ describe('C7 round 2 (review-C7 R1-H): health sees a shift of a road wider than 
     const r = play(driver, 110 + 600, { fps, seed: 11 });
     const deg = r.seconds.find((s) => s.tMs > 110_000 && s.health === 'degraded');
     expect(deg).toBeDefined();
-    expect(deg!.tMs).toBeLessThanOrEqual(110_000 + 60_000);
-    expect(d1(r, 110_000 + 60_000)).toEqual([]);
+    // C7 round 3 (review-C7 R2-V): the narrower valley clause may take the 9° up, +4.5°, 8 fps case to ≤ 90 s (ruled:
+    // a late widening on a shifted road is preferred to degrading a display reader just past the radius).
+    const bound = shift.pitch === 9 && extra === 4.5 && fps === 8 ? 90_000 : 60_000;
+    expect(deg!.tMs).toBeLessThanOrEqual(110_000 + bound);
+    expect(d1(r, 110_000 + bound)).toEqual([]);
+  });
+});
+
+describe('C7 round 3 (review-C7 R2-V): S-DISPLAY-70-NEAR, displays just past the radius never degrade health (NC-C7-3v2)', () => {
+  const targets: AnglePair[] = [
+    { yaw: 9, pitch: 0 },
+    { yaw: 10, pitch: 0 },
+    { yaw: 11, pitch: 0 },
+    { yaw: 8, pitch: -6 },
+    { yaw: 10, pitch: -5 },
+  ];
+  test.each(targets.flatMap((t) => [11, 12].map((seed) => [t, seed] as const)))('%o, seed %i: 12 min at 70 %%: never degraded', (target, seed) => {
+    const r = play(watcher(target, 0.7, 3), 120 + 720, { seed });
+    expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
   });
 });
 

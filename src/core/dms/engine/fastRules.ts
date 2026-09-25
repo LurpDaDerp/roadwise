@@ -106,6 +106,15 @@ export function createFastRules(cfg: DmsConfig) {
     onset: number;
     lastT: number;
     deepSince: number | null;
+    /**
+     * C7 round 3 (review-C7 R2-S): the bridged deep run for deep-only counting (latched, or stopped): its first deep
+     * frame, its last deep frame, and the start of the current non-deep stretch within it. A non-deep stretch of
+     * ≤ closure.deepBridgeMs (the eye still closed) is bridged; a longer one breaks the run. Its time is the run's
+     * elapsed time to its last deep frame (a noisy closed lid flickering over 0.15 is still one closure).
+     */
+    dRunStart: number | null;
+    dLastDeepT: number | null;
+    dNonDeepSince: number | null;
     /** C6 round 1 (C6-2): the episode began in prior mode (no EAR reference): F1 at prior.f1ClosedS, no blink */
     prior: boolean;
     /**
@@ -259,6 +268,9 @@ export function createFastRules(cfg: DmsConfig) {
         if (p.eyesClosed && p.closedMs > 0) {
           episode.onset += p.unobservedMs;
           if (episode.deepSince !== null) episode.deepSince += p.unobservedMs;
+          if (episode.dRunStart !== null) episode.dRunStart += p.unobservedMs;
+          if (episode.dLastDeepT !== null) episode.dLastDeepT += p.unobservedMs;
+          if (episode.dNonDeepSince !== null) episode.dNonDeepSince += p.unobservedMs;
           if (episode.pLastDeepT !== null) episode.pLastDeepT += p.unobservedMs;
           if (episode.pNonDeepSince !== null) episode.pNonDeepSince += p.unobservedMs;
         } else endSilently(events);
@@ -287,6 +299,9 @@ export function createFastRules(cfg: DmsConfig) {
             onset,
             lastT: p.tMs,
             deepSince: null,
+            dRunStart: null,
+            dLastDeepT: null,
+            dNonDeepSince: null,
             prior: p.priorMode,
             pRunMs: null,
             pLastDeepT: null,
@@ -323,9 +338,20 @@ export function createFastRules(cfg: DmsConfig) {
             ? p.priorOpenness !== null && p.priorOpenness < cl.prior.deepEar / (cl.prior.closedEar / cl.closedBelow)
             : p.openness !== null && p.openness < cl.lookDownClosedBelow;
           if (!deep) episode.deepSince = null;
-          else {
-            episode.deepSince ??= p.tMs;
-            episode.deepMaxMs = Math.max(episode.deepMaxMs, p.tMs - episode.deepSince);
+          else episode.deepSince ??= p.tMs;
+          // C7 round 3 (R2-S): the bridged deep run (its length also measures "deep" for C7-4 and R1-F).
+          if (deep) {
+            episode.dRunStart ??= p.tMs;
+            episode.dLastDeepT = p.tMs;
+            episode.dNonDeepSince = null;
+            episode.deepMaxMs = Math.max(episode.deepMaxMs, p.tMs - episode.dRunStart);
+          } else if (episode.dRunStart !== null) {
+            episode.dNonDeepSince ??= p.tMs;
+            if (p.tMs - episode.dNonDeepSince > cl.deepBridgeMs + EPS) {
+              episode.dRunStart = null;
+              episode.dLastDeepT = null;
+              episode.dNonDeepSince = null;
+            }
           }
           // C6 round 3 (review-C6 R2-F): the prior's run bridges a non-deep stretch of ≤ reopenMs (a flutter that keeps
           // the closure open must not restart the count); the counted time is the deep frames' observed time.
@@ -398,7 +424,11 @@ export function createFastRules(cfg: DmsConfig) {
         // deep-only, as if latched (F1 at 1.5 s of openness < 0.15): a reader at a light with no iris and no head dip
         // is never alarmed; real sleep is deep and still is (+0.5 s at a light).
         const deepOnly = gated || stopped;
-        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : deepOnly ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
+        // C7 round 3 (R2-S): deep-only counting uses the bridged run (a single frame at 0.15 no longer restarts it).
+        // Through a C-26 bridge the run stands as at the last TRACKING frame and keeps running (as the deep run did).
+        const runEnd = p.closureBridged && episode.dNonDeepSince === null ? p.tMs : episode.dLastDeepT;
+        const runMs = episode.dRunStart === null || runEnd === null ? 0 : runEnd - episode.dRunStart;
+        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : deepOnly ? runMs : p.closedMs) / 1000;
         const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : deepOnly ? cl.f1.lookDownClosedS : cl.f1.closedS;
         // C7 round 1 (review-C7 C7-4): moving, and never deep for shallowDeepMs: the event is marked shallow.
         const shallow = !stopped && episode.deepMaxMs < cl.shallowDeepMs - EPS;

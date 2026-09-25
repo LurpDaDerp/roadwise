@@ -23,7 +23,8 @@ function drv(over: (t: number, r: () => number) => Partial<DriverState> | null):
 }
 
 function play(driver: DriverFn, seconds: number, o: { fps?: number; cfg?: DmsConfig; lidGaze?: boolean; seed?: number } = {}): ReplayResult {
-  const items = synthDrive({ fps: o.fps ?? 15, seconds, seed: o.seed ?? 1, source: 'geometric', driver, motion: true, lidGaze: o.lidGaze });
+  // C7 round 3 (review-C7 R2-S): the eye's per-frame EAR noise (σ 0.03 openness), so the deep threshold meets a noisy lid.
+  const items = synthDrive({ fps: o.fps ?? 15, seconds, seed: o.seed ?? 1, source: 'geometric', driver, motion: true, lidGaze: o.lidGaze, lidNoise: 0.03 });
   return replayItems(items, o.cfg ?? C, DEFAULT_INIT, { keepOpen: true });
 }
 
@@ -224,5 +225,23 @@ describe('feedsDrowsinessScore (U-14; rev5 §4.4): what a stop-time event feeds 
     for (const v of ['none', 'long_and_nod', 'all'] as const) {
       expect([nod(false), end(false, 'f1'), end(false, 'f2')].map((e) => feedsDrowsinessScore(e, v))).toEqual([true, true, true]);
     }
+  });
+});
+
+describe('S-STOP-NOISY-LID (review-C7 R2-S; NC-C7-8): real sleep at a light with a noisy closed lid alarms on schedule', () => {
+  // Stopped from 120 s; the eyes shut from 140 s for 10 s at openness base ± σ per frame (a device's EAR noise on a
+  // closed eye). At a stop every closure counts deep-only (< 0.15); the bridged run keeps a lid that flickers over it
+  // as one closure.
+  const cases: [number, number, number][] = [];
+  for (const base of [0.1, 0.12]) for (const sd of [0.03, 0.04]) for (const fps of [8, 15]) cases.push([base, sd, fps]);
+  test.each(cases)('closed at %f ± %f, %i fps: F1 ≤ 1.8 s, F2 ≤ 3.6 s, F3 ≤ 7.2 s', (base, sd, fps) => {
+    const driver = drv((t) => (t < 120 ? null : within(t, 140, 150) ? { ...GNSS, openness: base } : { ...GNSS }));
+    const items = synthDrive({ fps, seconds: 155, seed: 1, source: 'geometric', driver, motion: true, lidNoise: sd });
+    const r = replayItems(items, C, DEFAULT_INIT, { keepOpen: true });
+    const first = (k: string) => r.events.find((e) => e.kind === k && e.tMs >= 140_000)?.tMs ?? null;
+    expect(first('microsleep')).not.toBeNull();
+    expect(first('microsleep')! - 140_000).toBeLessThanOrEqual(1800);
+    expect(first('sleep')! - 140_000).toBeLessThanOrEqual(3600);
+    expect(first('unresponsive')! - 140_000).toBeLessThanOrEqual(7200);
   });
 });

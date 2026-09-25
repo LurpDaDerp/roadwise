@@ -128,6 +128,25 @@ describe('R-a: the raw gaze, the noise guard and the single-frame path (the T7 p
     expect(lat).toBeGreaterThan(ONE_S);
     expect(lat).toBeLessThanOrEqual(ONE_HALF_S);
   });
+  // C7 round 3 (review-C7 R2-S): S-GATED-NOISY-LID, S-NODOFF-GAZE-DROP with a noisy closed lid (0.10 and 0.12 ± 0.03
+  // and ± 0.04 per frame): the latched count is the bridged deep run, so F1 comes at 1.5 s, not seconds later.
+  test.each([
+    [0.1, 0.03],
+    [0.1, 0.04],
+    [0.12, 0.03],
+    [0.12, 0.04],
+  ])('S-GATED-NOISY-LID: the gaze drops to −30°, then the lids close at %f ± %f: F1 in (1.0 s, 1.8 s]', (base, sd) => {
+    const r = rng(23);
+    const ps = perceive([
+      ...repeat(n(1), () => ({})),
+      ...repeat(n(0.3), (i) => ({ gaze: (-30 * (i + 1)) / n(0.3) })),
+      ...repeat(n(0.2), () => ({ gaze: -30 })),
+      ...repeat(n(4), () => ({ gaze: -30, ear: 0.3 * Math.max(0.01, base + sd * gauss(r)) })),
+    ]);
+    const lat = f1Latency(ps, rules(ps))!;
+    expect(lat).toBeGreaterThan(ONE_S);
+    expect(lat).toBeLessThanOrEqual(1800);
+  });
   test('the gaze latch clears on a reliable raw frame back above −12° (the iris seen and up): a closure at 0.2 openness then counts', () => {
     // Read at −40° (head level), then a half-closed lid (openness 0.25, the iris still seen) whose gaze is back up at
     // −5°: the latch clears and the closure counts.

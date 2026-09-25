@@ -26,6 +26,8 @@ export interface ReadingOpts {
   irisMinLid: number;
   /** the head's share of the gaze (an eye-mover: 0.2) */
   headShare?: number;
+  /** C7 round 3 (R2-S): the per-frame openness noise σ (default 0.03, a device's EAR noise) */
+  lidNoise?: number;
   /** reading time, seconds (600) */
   seconds?: number;
   seed?: number;
@@ -72,7 +74,7 @@ export function playReading(o: ReadingOpts): ReadingResult {
     const openness = b.blink && t < b.start + 0.2 ? 0.1 : blinkNow;
     return { ...base, gaze: rel(0, o.pitch), openness };
   };
-  const items = synthDrive({ fps: o.fps, seconds: t0 + seconds, seed: o.seed ?? 7, source: 'geometric', driver, motion: true, lidGaze: true, lidLagS: o.lidLagS, headShare: o.headShare ?? 0.2, irisMinLid: o.irisMinLid });
+  const items = synthDrive({ fps: o.fps, seconds: t0 + seconds, seed: o.seed ?? 7, source: 'geometric', driver, motion: true, lidGaze: true, lidLagS: o.lidLagS, headShare: o.headShare ?? 0.2, irisMinLid: o.irisMinLid, lidNoise: o.lidNoise ?? 0.03 });
   const engine = createDmsEngine(o.cfg ?? (DEFAULT_DMS_CONFIG as DmsConfig), { ...DEFAULT_INIT, profile: null });
   const out: ReadingResult = { bouts, events: [], commands: [], closures: [], t0, priorFrames: 0, frames: 0, fatigueLevel: 'none', maxFatigueLevel: 'none' };
   const LEVELS = ['none', 'early', 'drowsy', 'severe'];

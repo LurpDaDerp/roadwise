@@ -110,8 +110,16 @@ export interface SynthOpts {
    * run under both.
    */
   irisMinLid?: number;
+  /**
+   * C7 round 3 (review-C7 R2-S): the per-frame EAR noise on a closed eye, as openness σ (0.03 on a device), added to
+   * every frame whose openness is ≤ LID_NOISE_CLOSED (clamped at 0.01). Off by default; on in the stop and reading
+   * tests, so the deep threshold is exercised with a noisy closed lid.
+   */
+  lidNoise?: number;
 }
 
+/** C7 round 3 (R2-S): `lidNoise` applies to frames at or below this openness (a shut lid, a blink) */
+export const LID_NOISE_CLOSED = 0.12;
 /** The synth lid–gaze coupling's floor (amendment W4: 0.17, so no test sits on the 0.15 deep threshold). */
 export const LID_GAZE_FLOOR = 0.17;
 /** The lid's first-order lag behind the gaze pitch, seconds (Task C2; K12 checks it on device). */
@@ -162,6 +170,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   const lag = 1 - Math.exp(-1 / o.fps / HEAD_LAG_S);
   const lidLag = 1 - Math.exp(-1 / o.fps / (o.lidLagS ?? LID_LAG_S));
   const share = o.headShare ?? 0.4;
+  const lidRng = rng(o.seed * 104729 + 17);
   /** the gaze pitch (relative to the road centre) the lid is following */
   let lidPitch: number | null = null;
   for (let i = 0; i < n; i++) {
@@ -175,7 +184,11 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
     const gazeRelPitch = s.gaze.pitch - ROAD.pitch;
     lidPitch = lidPitch === null ? gazeRelPitch : lidPitch + (gazeRelPitch - lidPitch) * lidLag;
     const lid = o.lidGaze === true ? lidFactor(lidPitch) : 1;
-    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG, o.irisMinLid ?? 0.2) };
+    // The noise lands on CLOSED frames (a shut lid, openness ≤ LID_NOISE_CLOSED), as the review words it; a reading lid
+    // (≥ the 0.17 floor) is left clean, as W4 keeps it off the 0.15 deep threshold (K12 measures the real one).
+    const lidNow = (s.openness ?? 1) * lid;
+    const noisy = o.lidNoise !== undefined && o.lidNoise > 0 && lidNow <= LID_NOISE_CLOSED ? Math.max(0.01, lidNow + o.lidNoise * gauss(lidRng)) : null;
+    const item: SynthItem = { frame: toFrame(t, noisy !== null ? { ...s, openness: noisy } : lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG, o.irisMinLid ?? 0.2) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
       item.row = {
