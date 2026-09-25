@@ -115,7 +115,9 @@ export const EXPECT: Record<string, (r: ReplayResult, fps: number) => void> = {
     expect(bump).toHaveLength(1);
     expect(bump[0]!.tMs).toBeGreaterThanOrEqual(150_000);
     expect(bump[0]!.tMs).toBeLessThan(160_000);
-    expect(kinds(r, 'calibrated').some((e) => e.tMs > bump[0]!.tMs)).toBe(true);
+    // Task C4: a step bump opens the dual state (the centres shifted by the head step), which commits.
+    expect(kinds(r, 'posture_dual').some((e) => e.tMs >= bump[0]!.tMs)).toBe(true);
+    expect(kinds(r, 'posture_commit').some((e) => e.tMs > bump[0]!.tMs)).toBe(true);
   },
   'driver change': (r) => {
     AUDIBLE_NONE(r);

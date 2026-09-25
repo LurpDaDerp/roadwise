@@ -85,6 +85,12 @@ const EVENTS = {
   driver_change: true,
   baseline_reset: true,
   warm_start: true,
+  posture_dual: true,
+  posture_commit: true,
+  posture_revert: true,
+  head_slump: true,
+  driver_change_provisional: true,
+  driver_change_reverted: true,
   fatigue_minute: true,
 } satisfies Record<DmsEvent['kind'], true>;
 /** Task C3: the monitoring reasons (the HUD copy's keys) */

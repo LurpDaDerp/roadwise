@@ -38,10 +38,10 @@ import { createNodDetector } from './nod';
 import type { DmsProfileV1, LearnedZone } from './profile';
 import { classifyQuality, type Quality } from './quality';
 import { createSummary, type DmsTripSummary, type UnobservedCause } from './summary';
-import type { DriverSide, EngineFrame, GazeSource, Sensitivity } from './types';
+import type { AnglePair, DriverSide, EngineFrame, GazeSource, Sensitivity } from './types';
 import { RingBuffer } from './windows';
 import { createYawnDetector } from './yawn';
-import { cameraRel, createTurnExtender, createZoneClassifier, widening, zoneClass, type Extension } from './zones';
+import { cameraRel, combineDual, createTurnExtender, createZoneClassifier, widening, zoneClass, type Extension } from './zones';
 import { createZoneLearner } from './zoneLearning';
 
 export interface DmsEngineInit {
@@ -88,7 +88,8 @@ export type DmsEvent =
   | { kind: 'nod' | 'yawn'; tMs: number }
   /** T14 r2 R1-m2: the nod's deep-lid hold, seconds (its drowsiness sample); `stopped` (Task C2) */
   | { kind: 'microsleep_nod'; tMs: number; deepMaxS: number; stopped: boolean }
-  | { kind: CalibrationEvent['kind']; tMs: number }
+  /** calibration; Task C4: posture_dual / camera_bump / posture_revert carry their cause, posture_commit its demotion */
+  | { kind: CalibrationEvent['kind']; tMs: number; cause?: CalibrationEvent['cause']; demoteMirrors?: boolean }
   | { kind: 'fatigue_minute'; tMs: number; status: FatigueMinute['status']; score: number | null; level: FatigueLevel };
 
 /**
@@ -146,6 +147,10 @@ export interface DmsSnapshot {
    * counting speed), widened (the zones widened), or full
    */
   distraction: 'full' | 'widened' | 'off';
+  /** Task C4: the centres in use (driver frame): the configured gaze source's and the head's */
+  centre: { gaze: AnglePair | null; head: AnglePair | null };
+  /** Task C4: the calibration's HUD cause: posture (an onset, the dual state or probation) or recalibrating */
+  calReason: 'posture' | 'recalibrating' | null;
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -215,6 +220,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       turn: createTurnExtender(cfg, init.driverSide),
       extension: { toward: 0, deg: 0 } as Extension,
       zones: createZoneClassifier(cfg),
+      /** Task C4: the dual state's second classifier (c₁) */
+      zones1: createZoneClassifier(cfg),
       learner: createZoneLearner(cfg, []),
       attention: createAttention(cfg, init.sensitivity),
       fast: createFastRules(cfg),
@@ -273,8 +280,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   function onCalibrationEvents(): void {
     for (const e of d.cal.drainEvents()) {
       if (e.kind === 'warm_start' && profile !== null) d.learner.setPrior(profile.learnedZones);
+      // Task C4 (U-6 A): a seat change large enough, or a new driver, puts the mirrors back at their defaults.
+      if ((e.kind === 'posture_commit' && e.demoteMirrors === true) || e.kind === 'driver_change') d.learner.demote();
       d.summary.onCalibration(e);
-      emit({ kind: e.kind, tMs: e.tMs });
+      emit({ kind: e.kind, tMs: e.tMs, ...(e.cause !== undefined ? { cause: e.cause } : {}), ...(e.demoteMirrors !== undefined ? { demoteMirrors: e.demoteMirrors } : {}) });
     }
   }
 
@@ -294,7 +303,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Unobserved time counts 0 (T12 review I1); C2: so does STOPPED time, for the accounting (rev4 §2.1.10).
     const obsDt = p.gap || stopped ? 0 : p.dtS;
     if (p.gap) d.yawn.reset();
-    d.cal.observe(f, p, cs.ctx);
+    d.cal.observe(f, p, cs.ctx, stopped);
     onCalibrationEvents();
     const calState = d.cal.state();
     // Warm-up (anti-annoyance 6): the first warmupS of driving at ≥ 20 km/h.
@@ -306,11 +315,29 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const zc = {
       radiusDeg: d.cal.radius(),
       cameraRel: centre === null ? null : cameraRel(centre, d.cal.rollOffset(), init.driverSide),
-      widenDeg: widening({ uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking() }, cfg),
+      widenDeg: widening(
+        { uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking(), posture: d.cal.postureWidening(), recalibrating: d.cal.recalibrating() },
+        cfg
+      ),
       extension: d.extension,
       learned: d.learner.promoted(),
     };
-    const zone = d.zones.step(p, zc);
+    const zone0 = d.zones.step(p, zc);
+    // Task C4: in the dual state c₁ classifies too (the same frame, relative to c₁ instead of c₀).
+    const c1 = d.cal.dual();
+    let zone = zone0;
+    if (c1 !== null) {
+      const c0g = refs.gazeCentre;
+      const c0h = refs.headCentre;
+      const delta = (a: AnglePair | null, b: AnglePair | null) => (a === null || b === null ? null : { yaw: a.yaw - b.yaw, pitch: a.pitch - b.pitch });
+      const dg = delta(c0g, c1.gaze);
+      const dh = delta(c0h, c1.head);
+      const shift = (a: AnglePair | null, dd: AnglePair | null) => (a === null || dd === null ? a : { yaw: a.yaw + dd.yaw, pitch: a.pitch + dd.pitch });
+      const p1 = { ...p, gazeRel: shift(p.gazeRel, p.source === 'head' ? dh : dg), headRel: shift(p.headRel, dh) };
+      const centre1 = c1.gaze ?? c1.head;
+      const zone1 = d.zones1.step(p1, { ...zc, cameraRel: centre1 === null ? null : cameraRel(centre1, d.cal.rollOffset(), init.driverSide) });
+      zone = combineDual(zone0, zone1, cfg);
+    } else d.zones1.reset();
     d.lastZone = zone;
     d.lastGap = p.gap;
     d.lastLowLight = p.quality === 'lost' && p.reasons.includes('low_light');
@@ -327,7 +354,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // fallback frames (another gain, another centre) would blur the mirror clusters. Held and head frames are
     // unchanged; the geometric configuration never has a fallback.
     const learnRel = learnableGaze(p, gazeSource);
-    d.learner.observe(t, learnRel, zone, calState === 'calibrated');
+    d.learner.observe(t, learnRel, zone0, calState === 'calibrated' && c1 === null);
     d.learner.maybeCluster(d.cal.drivingS());
     const onRoad = zone !== null && zoneClass(zone, cfg) === 'on_road';
     const c8 = p.quality === 'lost' && zone === 'far_lateral';
@@ -528,6 +555,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         speedState: d.lastSpeedState,
         lostNoFace: d.lastNoFace,
         distraction: d.lastDistraction,
+        centre: { gaze: d.cal.centre(gazeSource) ?? d.cal.centre('geometric'), head: d.cal.centre('head') },
+        calReason: d.cal.reason(),
       };
     },
 

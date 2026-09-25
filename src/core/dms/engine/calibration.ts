@@ -15,11 +15,29 @@
 //   re-derived on any mismatch; the openness sanity check after every resume.
 // - A camera bump from the step test (m5) or a rotationDeg change (rev2 R1-I1) restarts Stage 1.
 // - Warm start from a profile only on a matching mount signature (C-5, C-6); the C2 seed.
-import { rollCorrect, toDriverFrame } from './angles';
+//
+// Task C4 (design rev2 §2.3.0, §2.3.2; rev4 §2.3.2a; rev5 §3; amendments W1–W3):
+// - Posture: a settled rotation-compensated translation (posture.ts) opens the DUAL-CENTRE state: c₀ is kept,
+//   c₁ is the mode of the first searchS of admission (peaked, ≤ searchMaxDeg from c₀, within searchMaxS
+//   observed); both classify (the engine); the commit needs commitS of admitted persistence and the relative
+//   vacated test (a small shift: unimodality); a relative revert for revertS, or undecidedMaxS, reverts; after
+//   a commit, probationS of probation with c₀ as a shadow reverts a commit the samples reverse. A settled pitch
+//   drop with no translation is a head_slump (fatigue evidence), never posture.
+// - A step bump enters the dual state with c₀ shifted by the measured head step (no restart); a resume
+//   mismatch that is not a driver change enters it too; a rotation bump keeps the full restart.
+// - A stop is a gap for posture and the step bump: neither is fed while STOPPED. At the move-off the settled
+//   windows either side of the stop are compared, in order: a camera step (W3), a driver change (armed by a LOST
+//   run of ≥ swapLostS during the stop), a posture translation. A driver change is checked provisionally at the
+//   stop (swapTrackS after the face returns), with an interim EAR (W1: near-forward frames with a blink seen,
+//   floored at interimFloor × the old one), and confirmed after the move-off.
+// - A confirmed driver change (W2) keeps the old centres as a seed: `seeded`, widened, D1 and D2 on; Stage 1
+//   restarts and verifies it.
+import { angularDistanceDeg, rollCorrect, toDriverFrame } from './angles';
 import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
+import { createPostureDetector, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
@@ -27,13 +45,34 @@ import { RingBuffer } from './windows';
 
 export type CalibrationState = 'none' | 'seeded' | 'calibrated' | 'provisional' | 'uncalibrated' | 'recalibrating';
 
-export type CalibrationEventKind = 'calibrated' | 'provisional' | 'uncalibrated' | 'camera_bump' | 'driver_change' | 'baseline_reset' | 'warm_start';
+export type CalibrationEventKind =
+  | 'calibrated'
+  | 'provisional'
+  | 'uncalibrated'
+  | 'camera_bump'
+  | 'driver_change'
+  | 'baseline_reset'
+  | 'warm_start'
+  /** Task C4: the dual-centre state opened (cause: a posture step, a step bump, a resume mismatch, a stop) */
+  | 'posture_dual'
+  /** Task C4: the dual state committed c₁ (demoteMirrors: a large translation, U-6) */
+  | 'posture_commit'
+  /** Task C4: the dual state reverted (relative, undecided, no candidate) or probation reverted a commit */
+  | 'posture_revert'
+  /** Task C4: a settled head-pitch drop with no translation (fatigue evidence) */
+  | 'head_slump'
+  /** Task C4 (rev5 V2): a driver change seen provisionally at a stop */
+  | 'driver_change_provisional'
+  /** Task C4 (rev5 V2): the provisional driver change was not confirmed after the move-off */
+  | 'driver_change_reverted';
 
 export interface CalibrationEvent {
   kind: CalibrationEventKind;
   tMs: number;
-  /** camera_bump only */
-  cause?: 'step' | 'resume' | 'rotation';
+  /** camera_bump: step, resume, rotation, stop; posture_dual: step, bump, resume, stop; posture_revert: relative, undecided, no_candidate, probation */
+  cause?: 'step' | 'resume' | 'rotation' | 'stop' | 'bump' | 'relative' | 'undecided' | 'no_candidate' | 'probation';
+  /** posture_commit: the translation was large enough to demote the learned mirrors (U-6) */
+  demoteMirrors?: boolean;
 }
 
 /** The C2 seed (§M3): medians of the last 3 s of TRACKING with the eyes open, taken while parked. */
@@ -49,7 +88,16 @@ export interface CalibrationSeed {
 export type SeedResult = { ok: true; seed: CalibrationSeed } | { ok: false; reason: 'no_tracking' | 'too_short' | 'unsteady' };
 
 export interface Calibrator {
-  observe(f: EngineFrame, p: Perceived, ctx: VehicleContext | null): void;
+  /** `stopped` (Task C4): the engine's STOPPED state, a gap for posture and the step bump */
+  observe(f: EngineFrame, p: Perceived, ctx: VehicleContext | null, stopped?: boolean): void;
+  /** Task C4: the dual state's c₁ (driver frame) once found; null outside the dual state or while searching */
+  dual(): { gaze: AnglePair | null; head: AnglePair | null } | null;
+  /** Task C4: the posture widening is on (an onset, or the dual state) */
+  postureWidening(): boolean;
+  /** Task C4: recalibrating (a provisional driver change, or a new driver's seed not yet verified) */
+  recalibrating(): boolean;
+  /** Task C4: the HUD's calibration cause */
+  reason(): 'posture' | 'recalibrating' | null;
   /** The camera is about to pause: keep the mount signature for the comparison after the resume. */
   markGap(tMs: number): void;
   applySeed(seed: CalibrationSeed): void;
@@ -96,6 +144,60 @@ interface Comparison {
 
 const MAX_FPS = 30;
 const PITCH_MEDIAN_EVERY_MS = 250;
+/** Task C4: σ̂ before any Stage 1 evaluation (the geometric path's per-frame noise) */
+const SIGMA_DEFAULT = 4;
+/** Task C4 (W1): a blink in the interim window: the mean EAR below this share of its p90, back within BLINK_MAX_MS */
+const BLINK_DIP = 0.6;
+const BLINK_MAX_MS = 600;
+
+type Centres = { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null };
+
+interface Dual {
+  cause: 'step' | 'bump' | 'resume' | 'stop';
+  c0: Centres;
+  /** c₁ once found */
+  c1: Centres | null;
+  enteredT: number;
+  observedS: number;
+  /** the persistence window starts here (the admitted samples since) */
+  since: number;
+  revertS: number;
+  lastEvalT: number;
+  /** consecutive evaluations whose mode agreed within max(1°, SE) */
+  stable: number;
+  /** the step's translation (the mirror demotion) */
+  box: number;
+  iodFrac: number;
+}
+
+interface Probation {
+  c0: Centres;
+  since: number;
+  observedS: number;
+  reverseS: number;
+  lastEvalT: number;
+}
+
+interface StopEpisode {
+  /** the settled window before the stop */
+  before: MountSample[];
+  lostSince: number | null;
+  /** the settled window before the current LOST run */
+  preLost: MountSample[] | null;
+  armed: boolean;
+  /** the provisional check's frames after the face returned */
+  check: { preLost: MountSample[]; samples: MountSample[]; trackingS: number } | null;
+}
+
+interface Provisional {
+  oldEar: EarPair | null;
+  r: number[];
+  l: number[];
+  trackingS: number;
+  blinkSeen: boolean;
+  dipSince: number | null;
+  done: boolean;
+}
 
 export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide; profile?: DmsProfileV1 | null; seed?: CalibrationSeed | null }): Calibrator {
   const c = cfg.calibration;
@@ -113,6 +215,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let pitchNowT = 0;
   const sigWindow = new SignatureWindow(c.signatureS);
   const bump = new StepBump(cfg);
+  // Task C4.
+  const po = c.posture;
+  const posture = createPostureDetector(cfg);
+  let sigmaHat = SIGMA_DEFAULT;
+  let onsetLeftS = 0;
+  let dual: Dual | null = null;
+  let probation: Probation | null = null;
+  let stopEp: StopEpisode | null = null;
+  let postStop: { ep: StopEpisode; samples: MountSample[]; trackingS: number } | null = null;
+  let provisional: Provisional | null = null;
+  /** a new driver's seed not yet verified by Stage 1 (W2) */
+  let seedUnverified = false;
+  let wasStopped = false;
 
   let state: CalibrationState = 'none';
   let admittedS = 0;
@@ -154,6 +269,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     radius = null;
     state = 'recalibrating';
     bump.clear();
+    posture.clear();
+    dual = null;
+    probation = null;
   }
 
   function rederiveEar(): void {
@@ -183,15 +301,305 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     emit('baseline_reset');
   }
 
+  /**
+   * A driver change (rev5 V2, amendment W2): the mount has not moved, so the new driver is seeded from the old
+   * centres (widened until Stage 1 verifies them; D1 and D2 stay on). Stage 1 restarts; the EAR is re-derived
+   * (the interim EAR, or the old one, until the new collector completes); the MAR and the pitch ring are nulled.
+   */
   function driverChange(): void {
+    const keep: Centres = { ...centres };
+    const keepRadius = radius;
     restartStage1();
+    centres.geometric = keep.geometric;
+    centres.net = keep.net;
+    centres.head = keep.head;
+    radius = keepRadius;
+    if (centres.head !== null || centres[cfg.gazeSource] !== null) {
+      hasSeed = true;
+      state = 'seeded';
+      seedUnverified = true;
+    }
     rederiveEar();
+    provisional = null;
     mar = null;
     mouthW = null;
     pitchRing.clear();
     pitchMedianStale = true;
     pitchMedian = null;
     emit('driver_change');
+  }
+
+  // ——— Task C4: the dual-centre state ———
+
+  const shiftCentre = (a: AnglePair | null, d: AnglePair): AnglePair | null => (a === null ? null : { yaw: a.yaw + d.yaw, pitch: a.pitch + d.pitch });
+  /** A camera-frame head step as the driver frame sees it (LHD: yaw flips). */
+  const toDrvDelta = (d: AnglePair): AnglePair => ({ yaw: side === 'left' ? -d.yaw : d.yaw, pitch: d.pitch });
+
+  function enterDual(cause: Dual['cause'], shift: AnglePair | null, box = 0, iodFrac = 0): void {
+    if (centres.head === null && centres[cfg.gazeSource] === null) return; // nothing to keep: Stage 1 decides
+    const drvShift = shift === null ? null : toDrvDelta(shift);
+    if (drvShift !== null) {
+      centres.geometric = shiftCentre(centres.geometric, drvShift);
+      centres.net = shiftCentre(centres.net, drvShift);
+      centres.head = shiftCentre(centres.head, drvShift);
+    }
+    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
+    probation = null;
+    posture.clear();
+    posture.resetFit();
+    bump.clear();
+    emit('posture_dual', cause);
+  }
+
+  function exitDual(cause: 'relative' | 'undecided' | 'no_candidate'): void {
+    if (dual === null) return;
+    centres.geometric = dual.c0.geometric;
+    centres.net = dual.c0.net;
+    centres.head = dual.c0.head;
+    dual = null;
+    emit('posture_revert', cause);
+  }
+
+  /** The admitted samples since `t0` as driver-frame directions of one source. */
+  function dirsSince(t0: number, source: 'geometric' | 'net' | 'head'): WeightedDir[] {
+    const out: WeightedDir[] = [];
+    samples.forEach((sm) => {
+      if (sm.t < t0 || !(sm.w > 0)) return;
+      const a = source === 'head' ? sm.head : source === 'net' ? sm.net : sm.geo;
+      if (a !== null) out.push({ ...toDrv(a, roll), w: sm.w });
+    });
+    return out;
+  }
+  const weightOf = (d: readonly WeightedDir[]) => d.reduce((a, x) => a + x.w, 0);
+  const primary = (): 'geometric' | 'net' => (cfg.gazeSource === 'net' && centres.net !== null ? 'net' : 'geometric');
+
+  function evaluateDual(dt: number): void {
+    const d = dual!;
+    d.observedS += dt;
+    if (tNow - d.lastEvalT < po.evalEveryS * 1000) {
+      if (d.observedS >= po.undecidedMaxS) exitDual('undecided');
+      return;
+    }
+    const sinceLast = (tNow - d.lastEvalT) / 1000;
+    d.lastEvalT = tNow;
+    const src = primary();
+    const r = radius ?? c.radiusMinDeg;
+    const c0 = d.c0[src] ?? d.c0.head;
+    if (c0 === null) {
+      dual = null;
+      return;
+    }
+    if (d.c1 === null) {
+      // The candidate: the mode of the first searchS of admission, peaked, near c₀.
+      const found = dirsSince(d.enteredT, src);
+      if (weightOf(found) >= po.searchS) {
+        const m = modeOf(found, cfg);
+        if (m !== null && angularDistanceDeg(m, c0) <= po.searchMaxDeg && peaked(found, m, sigmaHat, cfg)) {
+          const mh = modeOf(dirsSince(d.enteredT, 'head'), cfg);
+          const other: 'geometric' | 'net' = src === 'net' ? 'geometric' : 'net';
+          const mo = modeOf(dirsSince(d.enteredT, other), cfg);
+          d.c1 = { geometric: src === 'geometric' ? m : mo, net: src === 'net' ? m : mo, head: mh };
+          d.since = d.enteredT;
+        }
+      }
+      if (d.c1 === null && d.observedS >= po.searchMaxS) exitDual('no_candidate');
+      return;
+    }
+    const win = dirsSince(d.since, src);
+    const c1 = d.c1[src] ?? d.c1.head!;
+    // The revert: back at c₀ for revertS (measurable only when c₁ is a separable cluster, beyond the small-shift
+    // bound; a small shift or a bump's pre-shifted c₀ is decided by its commit, or undecided), or undecided too long.
+    const separable = angularDistanceDeg(c0, c1) > po.smallShiftSigmas * sigmaHat;
+    if (separable && relativeRevert(win, c0, c1, r, cfg)) d.revertS += sinceLast;
+    else d.revertS = 0;
+    if (d.revertS >= po.revertS) {
+      exitDual('relative');
+      return;
+    }
+    if (d.observedS >= po.undecidedMaxS) {
+      exitDual('undecided');
+      return;
+    }
+    // Stability: c₁ follows the persistence window's mode; it is stable while consecutive evaluations agree within
+    // max(1°, SE) (SE: σ̂ over the window's frames). A jump restarts the persistence window.
+    const m = modeOf(win, cfg);
+    if (m === null) return;
+    const wSum = weightOf(win);
+    const se = sigmaHat / Math.sqrt(Math.max(1, win.length));
+    const moved = angularDistanceDeg(m, c1);
+    if (moved > Math.max(3, 3 * se) && wSum >= po.searchS) {
+      d.since = tNow - 1; // c₁ jumped (a second step): persistence restarts
+      d.stable = 0;
+    } else d.stable = moved <= Math.max(1, se) ? d.stable + 1 : 0;
+    const mh = modeOf(dirsSince(d.since, 'head'), cfg);
+    d.c1 = { ...d.c1, [src]: m, head: mh ?? d.c1.head };
+    if (wSum < po.commitS || d.stable < 2) return;
+    const dist = angularDistanceDeg(c0, c1);
+    const ok = dist > po.smallShiftSigmas * sigmaHat ? relativelyVacated(win, c0, c1, r, cfg) : unimodal(win, m, r, sigmaHat, cfg);
+    if (!ok) return;
+    commitDual(d);
+  }
+
+  function commitDual(d: Dual): void {
+    const pick = (src: 'geometric' | 'net' | 'head', fallback: AnglePair | null) => {
+      if (fallback === null) return null;
+      return modeOf(dirsSince(d.since, src), cfg) ?? fallback;
+    };
+    const next: Centres = { geometric: pick('geometric', d.c1!.geometric ?? d.c0.geometric), net: pick('net', d.c1!.net ?? d.c0.net), head: pick('head', d.c1!.head ?? d.c0.head) };
+    centres.geometric = next.geometric;
+    centres.net = next.net;
+    centres.head = next.head;
+    const demote = d.box >= po.demoteBoxC || Math.abs(d.iodFrac) >= po.demoteIodFracC;
+    probation = { c0: d.c0, since: tNow, observedS: 0, reverseS: 0, lastEvalT: tNow };
+    dual = null;
+    events.push({ kind: 'posture_commit', tMs: tNow, demoteMirrors: demote });
+  }
+
+  function evaluateProbation(dt: number): void {
+    const pr = probation!;
+    pr.observedS += dt;
+    if (tNow - pr.lastEvalT >= po.evalEveryS * 1000) {
+      const sinceLast = (tNow - pr.lastEvalT) / 1000;
+      pr.lastEvalT = tNow;
+      const src = primary();
+      const committed = centres[src] ?? centres.head;
+      const shadow = pr.c0[src] ?? pr.c0.head;
+      const win = dirsSince(pr.since, src);
+      if (committed !== null && shadow !== null && weightOf(win) >= po.evalEveryS * 2 && relativelyVacated(win, committed, shadow, radius ?? c.radiusMinDeg, cfg)) pr.reverseS += sinceLast;
+      else pr.reverseS = 0;
+      if (pr.reverseS >= po.probationRevertS) {
+        centres.geometric = pr.c0.geometric;
+        centres.net = pr.c0.net;
+        centres.head = pr.c0.head;
+        probation = null;
+        emit('posture_revert', 'probation');
+        return;
+      }
+    }
+    if (pr.observedS >= po.probationS) probation = null;
+  }
+
+  // ——— Task C4: the across-stop comparisons ———
+
+  const compSig = (xs: readonly MountSample[]): CompSignature | null => posture.signature(xs);
+  /** W3: the IOD unchanged and the box shift within ±tolerance of the field-of-view prediction for the head step. */
+  function cameraStep(a: CompSignature, b: CompSignature): AnglePair | null {
+    const dHead = { yaw: b.yaw - a.yaw, pitch: b.pitch - a.pitch };
+    const mag = Math.hypot(dHead.yaw, dHead.pitch);
+    if (mag < c.bumpAngleDeg) return null;
+    if (!(a.iodC > 0) || Math.abs(b.iodC - a.iodC) / a.iodC >= c.resumeTolerance.iodFrac) return null;
+    const box = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+    const predicted = c.stops.cameraStepBoxPerDeg * mag;
+    return Math.abs(box - predicted) <= c.stops.cameraStepTolerance * predicted ? dHead : null;
+  }
+  /** rev5 V2: the driver-change thresholds on the compensated signatures. */
+  const driverChanged = (a: CompSignature, b: CompSignature) =>
+    (a.iodC > 0 && Math.abs(b.iodC - a.iodC) / a.iodC >= c.driverChange.iodFrac) || Math.hypot(b.cx - a.cx, b.cy - a.cy) >= c.driverChange.box;
+  const translated = (a: CompSignature, b: CompSignature) => {
+    const box = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+    const iod = a.iodC > 0 ? (b.iodC - a.iodC) / a.iodC : 0;
+    return box >= po.boxShiftC || Math.abs(iod) >= po.iodFracC ? { box, iod } : null;
+  };
+
+  function beginProvisional(): void {
+    provisional = { oldEar: ear === null ? null : { ...ear }, r: [], l: [], trackingS: 0, blinkSeen: false, dipSince: null, done: false };
+    emit('driver_change_provisional');
+  }
+
+  function revertProvisional(): void {
+    if (provisional === null) return;
+    ear = provisional.oldEar;
+    provisional = null;
+    emit('driver_change_reverted');
+  }
+
+  /** W1: the interim EAR from near-forward frames with a blink seen, floored at interimFloor × the old one. */
+  function collectInterim(f: EngineFrame, p: Perceived, dt: number): void {
+    const pv = provisional!;
+    if (pv.done) return;
+    const hc = centres.head;
+    const near = p.headDrv !== null && hc !== null && Math.abs(p.headDrv.yaw - hc.yaw) <= c.stops.interimNearDeg && Math.abs(p.headDrv.pitch - hc.pitch) <= c.stops.interimNearDeg;
+    if (!near) return;
+    const er = p.usableR && f.eyeR !== null ? f.eyeR.ear : null;
+    const el = p.usableL && f.eyeL !== null ? f.eyeL.ear : null;
+    if (er === null && el === null) return;
+    const mean = er !== null && el !== null ? (er + el) / 2 : (er ?? el)!;
+    const all = [...pv.r, ...pv.l];
+    const ref = all.length >= 10 ? quantile(all, c.provisionalEarPercentile) : null;
+    if (ref !== null && mean < BLINK_DIP * ref) pv.dipSince ??= f.tMs;
+    else {
+      if (pv.dipSince !== null && f.tMs - pv.dipSince <= BLINK_MAX_MS) pv.blinkSeen = true;
+      pv.dipSince = null;
+    }
+    if (er !== null) pv.r.push(er);
+    if (el !== null) pv.l.push(el);
+    pv.trackingS += dt;
+    if (pv.trackingS >= c.stops.swapTrackS && pv.blinkSeen) {
+      pv.done = true;
+      const old = pv.oldEar;
+      const floor = (xs: number[], o: number | null | undefined) => {
+        const v = xs.length > 0 ? quantile(xs, c.provisionalEarPercentile) : null;
+        if (v === null) return o ?? null;
+        return o != null ? Math.max(v, c.stops.interimFloor * o) : v;
+      };
+      ear = { r: floor(pv.r, old?.r), l: floor(pv.l, old?.l) };
+    }
+  }
+
+  /** The stop's episode: the LOST runs that arm the driver-change test, and the provisional check. */
+  function duringStop(f: EngineFrame, p: Perceived, ms: MountSample | null, dt: number): void {
+    const ep = stopEp!;
+    if (p.quality === 'lost') {
+      if (ep.lostSince === null) {
+        ep.lostSince = f.tMs;
+        ep.preLost = sigWindow.samples();
+        ep.check = null;
+      }
+      return;
+    }
+    if (ms === null) return;
+    if (ep.lostSince !== null) {
+      if (f.tMs - ep.lostSince >= c.stops.swapLostS * 1000) {
+        ep.armed = true;
+        ep.check = { preLost: ep.preLost ?? ep.before, samples: [], trackingS: 0 };
+      }
+      ep.lostSince = null;
+    }
+    if (ep.check !== null) {
+      ep.check.samples.push(ms);
+      ep.check.trackingS += dt;
+      if (ep.check.trackingS >= c.stops.swapTrackS) {
+        const chk = ep.check;
+        ep.check = null;
+        const a = compSig(chk.preLost);
+        const b = compSig(chk.samples);
+        if (a !== null && b !== null && cameraStep(a, b) === null && driverChanged(a, b) && provisional === null) beginProvisional();
+      }
+    }
+  }
+
+  /** The first settled window after the move-off, against the one before the stop (W3, V2, then posture). */
+  function afterStop(ps: { ep: StopEpisode; samples: MountSample[] }): void {
+    const a = compSig(ps.ep.before);
+    const b = compSig(ps.samples);
+    if (a === null || b === null) {
+      revertProvisional();
+      return;
+    }
+    const step = cameraStep(a, b);
+    if (step !== null) {
+      revertProvisional();
+      emit('camera_bump', 'stop');
+      enterDual('stop', step, Math.hypot(b.cx - a.cx, b.cy - a.cy), 0);
+      return;
+    }
+    if (ps.ep.armed && driverChanged(a, b)) {
+      driverChange();
+      return;
+    }
+    revertProvisional();
+    const tr = translated(a, b);
+    if (tr !== null) enterDual('stop', null, tr.box, tr.iod);
   }
 
   function applySeed(seed: CalibrationSeed): void {
@@ -264,6 +672,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     centres.head = headPeak === null ? null : refineMode(headDirs, headPeak, cfg);
     radius = main.radius;
     roll = r;
+    // Task C4: σ̂, the within-cluster SD of the primary source (the relative statistics' scale).
+    const within = dirs((s) => (primary === 'net' ? s.net : s.geo)).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
+    if (within.length >= 10) {
+      const sdY = sd(within.map((d) => d.yaw));
+      const sdP = sd(within.map((d) => d.pitch));
+      sigmaHat = Math.max(1, Math.sqrt((sdY * sdY + sdP * sdP) / 2));
+    }
+    seedUnverified = false;
+    dual = null;
+    probation = null;
     if (!earFrozen) {
       const er = all.map((s) => s.earR).filter((x): x is number => x !== null);
       const el = all.map((s) => s.earL).filter((x): x is number => x !== null);
@@ -295,7 +713,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const r = compareSignatures(cmp.before, after, cfg);
     if (r.match) return;
     if (r.driverChange) driverChange();
-    else cameraBump('resume');
+    else {
+      // Task C4 (rev2 §2.3.2, R4): a resume mismatch that is not a driver change enters the dual state, D1 on;
+      // a camera step (W3) shifts c₀ by the head step.
+      const a: CompSignature = { cx: cmp.before.boxCx, cy: cmp.before.boxCy, iodC: cmp.before.iod, yaw: cmp.before.yawDeg, pitch: cmp.before.pitchDeg };
+      const b: CompSignature = { cx: after.boxCx, cy: after.boxCy, iodC: after.iod, yaw: after.yawDeg, pitch: after.pitchDeg };
+      emit('camera_bump', 'resume');
+      enterDual('resume', cameraStep(a, b), Math.hypot(b.cx - a.cx, b.cy - a.cy), a.iodC > 0 ? (b.iodC - a.iodC) / a.iodC : 0);
+    }
   }
 
   /**
@@ -326,16 +751,33 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
     evaluate,
 
-    observe(f, p, ctx) {
+    observe(f, p, ctx, stopped = false) {
       tNow = f.tMs;
       // Final review n4: a gap frame is unobserved time, never driving time.
       const dt = p.gap ? 0 : Math.min(p.dtS, c.admitDtCapS);
       const tracking = p.quality === 'tracking' && p.headCam !== null && f.box !== null && f.iod !== null;
 
+      // Task C4: a stop is a gap for posture and the step bump; the settled windows either side are compared.
+      if (stopped && !wasStopped) {
+        stopEp = postStop !== null ? { ...postStop.ep, lostSince: null, preLost: null, check: null } : { before: sigWindow.samples(), lostSince: null, preLost: null, armed: false, check: null };
+        postStop = null;
+        posture.clear();
+        bump.clear();
+        onsetLeftS = 0;
+      } else if (!stopped && wasStopped && stopEp !== null) {
+        // A LOST run still open at the move-off counts too (the new driver's face first seen while moving).
+        if (stopEp.lostSince !== null && f.tMs - stopEp.lostSince >= c.stops.swapLostS * 1000) stopEp.armed = true;
+        postStop = { ep: stopEp, samples: [], trackingS: 0 };
+        stopEp = null;
+      }
+      wasStopped = stopped;
+
       // A long SEARCH opens its gap BEFORE the rotation check, so a rotation change on the first frame
       // after it is seen as a change across the gap (T6 round-1 nit).
       if (
         gap === null &&
+        stopEp === null &&
+        postStop === null &&
         p.quality === 'tracking' &&
         lastTrackingT !== null &&
         f.tMs - lastTrackingT >= c.longSearchS * 1000
@@ -357,12 +799,24 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (ctx !== null && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh) drivingS += dt;
 
       if (!tracking) {
+        if (stopEp !== null) duringStop(f, p, null, dt);
         evaluateIfDue();
         return;
       }
       const head = p.headCam!;
       const box = f.box!;
       const ms: MountSample = { t: f.tMs, yaw: head.yaw, pitch: head.pitch, roll: head.roll, cx: box.cx, cy: box.cy, iod: f.iod! };
+      if (stopEp !== null) duringStop(f, p, ms, dt);
+      if (provisional !== null) collectInterim(f, p, dt);
+      if (postStop !== null && !stopped && !p.eyesClosed && ctx !== null && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh) {
+        postStop.samples.push(ms);
+        postStop.trackingS += dt;
+        if (postStop.trackingS >= c.resumeCompareS) {
+          const ps = postStop;
+          postStop = null;
+          afterStop(ps);
+        }
+      }
 
       lastTrackingT = f.tMs;
 
@@ -427,8 +881,24 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         }
       }
 
-      // The step-test bump (rev1 m5).
-      if (bump.push(ms)) cameraBump('step');
+      // The step-test bump (rev1 m5): Task C4, into the dual state with c₀ shifted by the head step. The posture
+      // detector (Task C4): a settled translation opens the dual state; a slump is fatigue evidence. Neither is fed
+      // while STOPPED (a stop is a gap).
+      if (!stopped) {
+        const bumpStep = bump.pushStep(ms);
+        if (bumpStep !== null) {
+          emit('camera_bump', 'step');
+          enterDual('bump', bumpStep, c.bumpBoxShift, 0);
+        } else {
+          const out = posture.push(ms);
+          if (out.step !== null && dual === null) enterDual('step', null, Math.hypot(out.step.dBox.x, out.step.dBox.y), out.step.dIodFrac);
+          if (out.slump) emit('head_slump');
+          if (out.onset && dual === null && onsetLeftS <= 0) onsetLeftS = po.onsetWidenMaxS;
+        }
+        if (onsetLeftS > 0) onsetLeftS = dual !== null ? 0 : Math.max(0, onsetLeftS - dt);
+        if (dual !== null) evaluateDual(dt);
+        else if (probation !== null) evaluateProbation(dt);
+      }
 
       // Admission (§M3).
       const admitted =
@@ -453,12 +923,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           admittedS -= s.w;
           return true;
         });
-        if (state === 'calibrated') ema(head, p, dt);
+        if (state === 'calibrated' && dual === null) ema(head, p, dt);
       }
       evaluateIfDue();
     },
 
     state: () => state,
+    dual: () => (dual === null || dual.c1 === null ? null : { gaze: dual.c1[cfg.gazeSource] ?? dual.c1.geometric, head: dual.c1.head }),
+    postureWidening: () => dual !== null || onsetLeftS > 0,
+    recalibrating: () => provisional !== null || seedUnverified,
+    reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 ? 'posture' : null),
     centre: (s) => centres[s],
     radius: () => radius,
     rollOffset: () => roll,

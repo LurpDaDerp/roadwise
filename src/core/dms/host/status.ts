@@ -43,7 +43,7 @@ export interface MonitoringInput {
   /** the HUD status reason */
   reason: string | null;
   /** the engine's view at its last frame; null with no engine */
-  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off' } | null;
+  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null } | null;
 }
 
 /** The headline order: the first family cause in this list wins. */
@@ -61,7 +61,8 @@ function distractionOf(engine: MonitoringInput['engine']): { d: DmsMonitoring['d
   if (engine === null) return { d: 'off', why: null };
   if (engine.speedState === 'stopped') return { d: 'off', why: 'stopped' };
   if (engine.speedState === 'ambiguous') return { d: 'off', why: 'speed_unknown' };
-  return { d: engine.distraction, why: null };
+  // Task C4: the calibration's cause (a posture change being confirmed, a new driver being recalibrated).
+  return { d: engine.distraction, why: engine.calReason ?? null };
 }
 
 export function monitoringOf(x: MonitoringInput): DmsMonitoring {

@@ -48,27 +48,28 @@ test('during the first 5 s after the resume the check is pending (zones widen, D
   expect(cal.resumeChecking()).toBe(true);
 });
 
-test('a different IOD after a pause → driver_change: fresh Stage 1 and fresh EAR/MAR baselines', () => {
+test('a different IOD after a pause → driver_change: Task C4 (W2), the old centres kept as a seed; a fresh Stage 1 and MAR', () => {
   const { cal, run } = beforeGap();
   expect(cal.neutralMar()).not.toBeNull();
   const events = resume(cal, run, 6, { iod: 0.2 * 1.2 });
   expect(events).toContain('driver_change');
-  expect(cal.state()).toBe('recalibrating');
-  expect(cal.centre('geometric')).toBeNull();
+  expect(cal.state()).toBe('seeded');
+  expect(cal.centre('geometric')).not.toBeNull();
+  expect(cal.recalibrating()).toBe(true);
   expect(cal.neutralMar()).toBeNull();
 });
 
-test('a shifted box with the same IOD → camera_bump: MAR kept, the provisional EAR re-derived (rev2 R1-m2)', () => {
+test('a shifted box with the same IOD → camera_bump: Task C4 (rev2 R4), the dual state, D1 on; the MAR and the EAR kept', () => {
   const { cal, run } = beforeGap();
   const mar = cal.neutralMar();
   expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
-  expect(resume(cal, run, 6, { box: { cx: 0.58, cy: 0.45 }, earScale: 1.2 })).toContain('camera_bump');
-  expect(cal.state()).toBe('recalibrating');
+  expect(resume(cal, run, 6, { box: { cx: 0.58, cy: 0.45 }, earScale: 1.2 })).toEqual(expect.arrayContaining(['camera_bump', 'posture_dual']));
+  expect(cal.state()).toBe('calibrated');
+  expect(cal.centre('geometric')).not.toBeNull();
   expect(cal.neutralMar()).toBe(mar);
-  // The old EAR holds until the new one exists (20 s of TRACKING after the resume)…
-  expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+  // The EAR is not re-derived by a resume (the openness check, and T6's rules, move it); an openness of 1.2 is in range.
   const later = createLaterRun(cal, run, 22, { box: { cx: 0.58, cy: 0.45 }, earScale: 1.2 });
-  expect(later.r!).toBeCloseTo(0.36, 9);
+  expect(later.r!).toBeCloseTo(0.3, 9);
 });
 
 function createLaterRun(cal: Calibrator, run: ReturnType<typeof perceiver>, seconds: number, over: Partial<FrameSpec> & { earScale?: number }) {

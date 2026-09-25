@@ -42,6 +42,11 @@ export class SignatureWindow {
     return signatureOf(this.ring.toArray());
   }
 
+  /** Task C4: the window's samples (the across-stop and provisional comparisons). */
+  samples(): MountSample[] {
+    return this.ring.toArray();
+  }
+
   clear(): void {
     this.ring.clear();
   }
@@ -70,39 +75,44 @@ export class StepBump {
 
   /** Adds a TRACKING sample; true when a bump is detected (the window is then cleared). */
   push(s: MountSample): boolean {
+    return this.pushStep(s) !== null;
+  }
+
+  /** Task C4: as push, returning the head step (camera frame, degrees) of a detected bump, else null. */
+  pushStep(s: MountSample): { yaw: number; pitch: number } | null {
     const c = this.cfg.calibration;
     const half = c.bumpHalfWindowS * 1000;
     this.ring.push(s);
     this.ring.dropWhile((x) => x.t < s.t - 2 * half);
-    if (s.t < this.nextCheck) return false;
+    if (s.t < this.nextCheck) return null;
     this.nextCheck = s.t + 500;
     const all = this.ring.toArray();
-    if (all.length < 8 || all[0]!.t > s.t - 2 * half + 1000) return false; // need (nearly) the full span
+    if (all.length < 8 || all[0]!.t > s.t - 2 * half + 1000) return null; // need (nearly) the full span
     const cut = s.t - half;
     const before = all.filter((x) => x.t < cut);
     const after = all.filter((x) => x.t >= cut);
-    if (before.length < 4 || after.length < 4) return false;
+    if (before.length < 4 || after.length < 4) return null;
     const med = (xs: MountSample[], k: keyof Omit<MountSample, 't'>) => median(xs.map((x) => x[k]));
     const dYaw = med(after, 'yaw') - med(before, 'yaw');
     const dPitch = med(after, 'pitch') - med(before, 'pitch');
     const key: 'yaw' | 'pitch' = Math.abs(dYaw) >= Math.abs(dPitch) ? 'yaw' : 'pitch';
     const step = key === 'yaw' ? dYaw : dPitch;
-    if (Math.abs(step) < c.bumpAngleDeg) return false;
+    if (Math.abs(step) < c.bumpAngleDeg) return null;
     // Only a whole, settled step is measured: the window's first and last bumpSpanS must sit at the old
     // and the new level (within 20 % of the step), so a check that cuts the transition never sees a
     // partial step.
     const head = all.filter((x) => x.t < all[0]!.t + c.bumpSpanS * 1000);
     const tail = all.filter((x) => x.t >= s.t - c.bumpSpanS * 1000);
-    if (Math.abs(med(tail, key) - med(after, key)) > 0.2 * Math.abs(step)) return false;
-    if (Math.abs(med(head, key) - med(before, key)) > 0.2 * Math.abs(step)) return false;
+    if (Math.abs(med(tail, key) - med(after, key)) > 0.2 * Math.abs(step)) return null;
+    if (Math.abs(med(head, key) - med(before, key)) > 0.2 * Math.abs(step)) return null;
     const box = Math.hypot(med(after, 'cx') - med(before, 'cx'), med(after, 'cy') - med(before, 'cy'));
     const iodB = med(before, 'iod');
     const iod = iodB > 0 ? Math.abs(med(after, 'iod') - iodB) / iodB : 0;
-    if (box < c.bumpBoxShift && iod < c.bumpIodFrac) return false;
+    if (box < c.bumpBoxShift && iod < c.bumpIodFrac) return null;
     const span = transitionSeconds(all, key, med(before, key), step);
-    if (span === null || span > c.bumpSpanS) return false;
+    if (span === null || span > c.bumpSpanS) return null;
     this.clear();
-    return true;
+    return { yaw: dYaw, pitch: dPitch };
   }
 }
 

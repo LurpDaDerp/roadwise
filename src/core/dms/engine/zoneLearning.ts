@@ -101,6 +101,8 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
   let candidates: MirrorCandidate[] = [];
   let clusteredAt = 0;
   let nextClusterS = z.learnEveryS;
+  /** Task C4 (U-6 A): a seat change or a new driver: the mirrors are back at their defaults, learning stops */
+  let demoted = false;
 
   // Off-road, and never the phone screen: brief phone glances must not become a "mirror" (T7 review I2).
   const offRoad = (id: ZoneId | null) => id !== null && id !== 'phone_screen' && z.table.find((x) => x.id === id)!.class !== 'on_road';
@@ -162,7 +164,7 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
   return {
     /** One frame: the rules' relative direction, its zone, and whether calibration has passed. */
     observe(tMs: number, rel: AnglePair | null, zone: ZoneId | null, calibrated: boolean): void {
-      if (rel === null || !calibrated || !offRoad(zone)) {
+      if (demoted || rel === null || !calibrated || !offRoad(zone)) {
         closeWindow();
         return;
       }
@@ -203,10 +205,24 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
       return true;
     },
     candidates: () => [...candidates],
+    /**
+     * Task C4 (rev2 §2.3.2, U-6 A): a committed seat change (or a driver change) moves where the mirrors appear:
+     * the learned mirrors revert to the defaults for the rest of the drive, and this drive learns nothing (the
+     * profile keeps its prior unchanged).
+     */
+    demote(): void {
+      demoted = true;
+      promotedCache = {};
+      fixations.length = 0;
+      candidates = [];
+      w.n = 0;
+    },
+    demoted: () => demoted,
     /** The prior's mirrors seen in ≥ drivesToAdopt drives (the classifier's ellipses). */
     promoted(): Partial<Record<MirrorId, LearnedZone>> {
       // Cached until the prior changes: the façade asks every frame (T12 review nit).
       if (promotedCache !== null) return promotedCache;
+      if (demoted) return (promotedCache = {});
       const out: Partial<Record<MirrorId, LearnedZone>> = {};
       for (const lz of prior) if (lz.drives >= z.drivesToAdopt) out[lz.id] = lz;
       promotedCache = out;
@@ -214,6 +230,7 @@ export function createZoneLearner(cfg: Pick<DmsConfig, 'zones' | 'calibration'>,
     },
     /** The prior merged with this drive's candidates (a running mean over drives; drives + 1). */
     endDrive(): LearnedZone[] {
+      if (demoted) return [...prior];
       closeWindow();
       if (fixations.length !== clusteredAt) cluster();
       const out: LearnedZone[] = [];

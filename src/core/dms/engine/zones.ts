@@ -40,8 +40,12 @@ export function zoneClass(id: ZoneId, cfg: Pick<DmsConfig, 'zones'>): ZoneClass 
 }
 
 /** C-16: +widenDeg per active condition, capped at widenCapDeg. */
-export function widening(c: { uncalibrated: boolean; warmup: boolean; headOnly: boolean; resumeCheck: boolean }, cfg: Pick<DmsConfig, 'zones'>): number {
-  const n = [c.uncalibrated, c.warmup, c.headOnly, c.resumeCheck].filter(Boolean).length;
+export function widening(
+  c: { uncalibrated: boolean; warmup: boolean; headOnly: boolean; resumeCheck: boolean; posture?: boolean; recalibrating?: boolean },
+  cfg: Pick<DmsConfig, 'zones'>
+): number {
+  // Task C4: a posture onset or the dual state (rev2 §2.3.2), and a new driver's unverified seed (W2), each +5°.
+  const n = [c.uncalibrated, c.warmup, c.headOnly, c.resumeCheck, c.posture === true, c.recalibrating === true].filter(Boolean).length;
   return Math.min(n * cfg.zones.widenDeg, cfg.zones.widenCapDeg);
 }
 
@@ -128,6 +132,19 @@ function inside(zone: ZoneSpec, a: AnglePair, e: number, zc: ZoneContext, cfg: P
     case 'rest':
       return true;
   }
+}
+
+/**
+ * Task C4 (rev2 §2.3.2): the dual-centre classification. Both centres classify every frame: on-road if either
+ * says so; otherwise the zone with the lower D1 weight (the c₀ zone on a tie). D1 then drains, and D2 counts,
+ * only off-road for both.
+ */
+export function combineDual(z0: ZoneId | null, z1: ZoneId | null, cfg: Pick<DmsConfig, 'zones'>): ZoneId | null {
+  if (z0 === null || z1 === null) return z0 ?? z1;
+  if (zoneClass(z0, cfg) === 'on_road') return z0;
+  if (zoneClass(z1, cfg) === 'on_road') return z1;
+  const w = (id: ZoneId) => cfg.zones.table.find((z) => z.id === id)!.weight;
+  return w(z1) < w(z0) ? z1 : z0;
 }
 
 /** The subset of a perceived frame the classifier needs. */

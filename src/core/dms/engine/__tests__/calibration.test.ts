@@ -222,11 +222,14 @@ describe('the step-test bump (rev1 m5)', () => {
     );
     return cal;
   }
-  test('a step over 1.9 s with the box moving is a camera bump: recalibrating, centres discarded', () => {
+  test('a step over 1.9 s with the box moving is a camera bump: Task C4, the dual state with the centres shifted by the head step (not discarded)', () => {
     const cal = bumpRun(1.9, 0.1);
-    expect(cal.drainEvents().map((e) => e.kind)).toContain('camera_bump');
-    expect(cal.state()).toBe('recalibrating');
-    expect(cal.centre('geometric')).toBeNull();
+    const before = { yaw: TRUTH.yaw, pitch: TRUTH.pitch };
+    expect(cal.drainEvents().map((e) => e.kind)).toEqual(expect.arrayContaining(['camera_bump', 'posture_dual']));
+    expect(cal.state()).toBe('calibrated');
+    expect(cal.centre('geometric')).not.toBeNull();
+    expect(cal.centre('head')!.yaw).toBeGreaterThan(6); // the head centre moved by the measured step (10° true)
+    expect(cal.centre('geometric')!.yaw - before.yaw).toBeGreaterThan(8);
     expect(cal.openEyeEar()).not.toBeNull(); // baselines kept
   });
   test('the same step spread over 2.1 s is not', () => {

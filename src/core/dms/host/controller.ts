@@ -410,7 +410,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   function computeStatus(): DmsHudStatus {
     const s = cameraStatus();
     const snap = engine?.snapshot() ?? null;
-    return { ...s, monitoring: monitoringOf({ camera: s.camera, reason: s.reason, engine: snap === null ? null : { speedState: snap.speedState, distraction: snap.distraction } }) };
+    return { ...s, monitoring: monitoringOf({ camera: s.camera, reason: s.reason, engine: snap === null ? null : { speedState: snap.speedState, distraction: snap.distraction, calReason: snap.calReason } }) };
   }
 
   function cameraStatus(): Omit<DmsHudStatus, 'monitoring'> {

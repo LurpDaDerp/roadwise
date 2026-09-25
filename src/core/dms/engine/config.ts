@@ -223,6 +223,63 @@ export interface DmsConfig {
     resumeTolerance: { yawDeg: number; pitchDeg: number; rollDeg: number; box: number; iodFrac: number };
     /** rev1 I7: a mismatch this large is a driver change */
     driverChange: { iodFrac: number; box: number };
+    /**
+     * Task C4 (rev2 §2.3.0–§2.3.2; rev1 K1): the posture detector and the dual-centre state. A settled
+     * rotation-compensated translation (|ΔboxC| ≥ boxShiftC or |ΔiodC| ≥ iodFracC; the transition ≤ spanS; halves
+     * of halfWindowS) opens the dual state; a settled pitch drop of slumpPitchDeg with no translation is a slump.
+     */
+    posture: {
+      boxShiftC: number;
+      iodFracC: number;
+      halfWindowS: number;
+      spanS: number;
+      slumpPitchDeg: number;
+      /** the onset (half the threshold within 2 s, held 1 s) widens the zones for at most this long */
+      onsetWidenMaxS: number;
+      /** the box-on-head-angle least-squares fit, refreshed this often from at least this many samples */
+      fitEveryS: number;
+      /** before the drive's fit: the box moves this much per degree of head rotation (a prior; a device item) */
+      boxPerDegPrior: number;
+      fitMinSamples: number;
+      /** the candidate c₁: the mode of this much admitted weight, within searchMaxS observed, ≤ searchMaxDeg from c₀ */
+      searchS: number;
+      searchMaxS: number;
+      searchMaxDeg: number;
+      /** peaked: the share within ρ = max(4°, 1.3σ̂) of the cluster's weight ≥ this × a single cluster's */
+      peakedRatio: number;
+      /** commit after this much admitted persistence; revert on this much relative revert, or undecided after this */
+      commitS: number;
+      revertS: number;
+      undecidedMaxS: number;
+      /** probation after a commit, and the reversal that reverts it */
+      probationS: number;
+      probationRevertS: number;
+      /** d ≤ this × σ̂ is a small shift (the unimodal path) */
+      smallShiftSigmas: number;
+      /** vacated: S(c₀, r_v) < this × S(c₁, r_v) */
+      vacatedRatio: number;
+      /** unimodal: no second peak ≥ this × the main one */
+      unimodalRatio: number;
+      evalEveryS: number;
+      /** a commit with at least this much translation demotes the learned mirrors (U-6) */
+      demoteBoxC: number;
+      demoteIodFracC: number;
+    };
+    /**
+     * Task C4 (rev5 V2, amendments W1–W3): a driver change across a stop. A LOST run of ≥ swapLostS during the
+     * stop arms it; swapTrackS of TRACKING after the face returns runs the provisional check. The interim EAR is
+     * from near-forward frames (the head within interimNearDeg) with a blink seen, floored at interimFloor × the
+     * old one until confirmed (W1). A camera step (the IOD unchanged, the box shift within cameraStepTolerance of
+     * cameraStepBoxPerDeg × the head step) is classified before a driver change (W3).
+     */
+    stops: {
+      swapLostS: number;
+      swapTrackS: number;
+      interimFloor: number;
+      interimNearDeg: number;
+      cameraStepBoxPerDeg: number;
+      cameraStepTolerance: number;
+    };
     /** rev2 R1-m2 openness sanity check after every resume */
     opennessCheckS: number;
     opennessCheckMinRelPitchDeg: number;
@@ -579,6 +636,33 @@ const DEFAULT: DmsConfig = {
     longSearchS: 30,
     resumeTolerance: { yawDeg: 4, pitchDeg: 4, rollDeg: 3, box: 0.05, iodFrac: 0.1 },
     driverChange: { iodFrac: 0.15, box: 0.15 },
+    posture: {
+      boxShiftC: 0.03,
+      iodFracC: 0.05,
+      halfWindowS: 5,
+      spanS: 4,
+      slumpPitchDeg: 3,
+      onsetWidenMaxS: 15,
+      fitEveryS: 30,
+      boxPerDegPrior: 0.003,
+      fitMinSamples: 150,
+      searchS: 8,
+      searchMaxS: 60,
+      searchMaxDeg: 20,
+      peakedRatio: 0.8,
+      commitS: 60,
+      revertS: 30,
+      undecidedMaxS: 300,
+      probationS: 300,
+      probationRevertS: 60,
+      smallShiftSigmas: 1.2,
+      vacatedRatio: 0.5,
+      unimodalRatio: 0.3,
+      evalEveryS: 5,
+      demoteBoxC: 0.05,
+      demoteIodFracC: 0.06,
+    },
+    stops: { swapLostS: 3, swapTrackS: 5, interimFloor: 0.85, interimNearDeg: 15, cameraStepBoxPerDeg: 0.015, cameraStepTolerance: 0.3 },
     opennessCheckS: 10,
     opennessCheckMinRelPitchDeg: -15,
     opennessRange: [0.6, 1.4],
@@ -853,6 +937,18 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.alerts.criticalEndBelowKmh <= c.alerts.criticalMinStartKmh)) bad('alerts.criticalEndBelowKmh', 'must be ≤ alerts.criticalMinStartKmh');
   if (!(c.alerts.tier3ClearS > 0)) bad('alerts.tier3ClearS', 'must be > 0');
   if (!Number.isInteger(c.fatigue.everyS) || c.fatigue.everyS <= 0) bad('fatigue.everyS', 'must be a positive integer');
+  // Task C4: posture and the across-stop checks.
+  const po = c.calibration.posture;
+  if (!(po.boxShiftC < c.calibration.bumpBoxShift && po.iodFracC < c.calibration.bumpIodFrac)) bad('calibration.posture.boxShiftC', "posture thresholds must lie below the bump's");
+  if (!(po.spanS > 0 && po.spanS < 2 * po.halfWindowS)) bad('calibration.posture.spanS', 'must be > 0 and shorter than the window');
+  if (!(po.commitS >= 30)) bad('calibration.posture.commitS', 'must be ≥ 30');
+  if (!(po.vacatedRatio > 0 && po.vacatedRatio < 1)) bad('calibration.posture.vacatedRatio', 'must lie in (0, 1)');
+  if (!(po.revertS < po.undecidedMaxS && po.searchMaxS < po.undecidedMaxS)) bad('calibration.posture.undecidedMaxS', 'must exceed revertS and searchMaxS');
+  if (!(po.demoteBoxC >= po.boxShiftC && po.demoteIodFracC >= po.iodFracC)) bad('calibration.posture.demoteBoxC', 'must be ≥ the step thresholds');
+  const st = c.calibration.stops;
+  if (!(st.interimFloor > 0 && st.interimFloor <= 1)) bad('calibration.stops.interimFloor', 'must lie in (0, 1]');
+  if (!(st.swapLostS >= 1)) bad('calibration.stops.swapLostS', 'must be ≥ 1');
+  if (!(st.swapTrackS >= 3)) bad('calibration.stops.swapTrackS', 'must be ≥ 3');
   if (!STOP_EVENTS_FEEDS.includes(c.fatigue.stopEventsFeed)) bad('fatigue.stopEventsFeed', `must be one of ${STOP_EVENTS_FEEDS.join(', ')}`);
   for (const [name, row] of Object.entries(c.fatigue.signals)) {
     if (!Number.isInteger(row.windowS) || row.windowS <= 0) bad(`fatigue.signals.${name}.windowS`, 'must be a positive integer');
