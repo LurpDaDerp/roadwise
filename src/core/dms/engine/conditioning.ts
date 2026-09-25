@@ -77,8 +77,18 @@ export interface Perceived {
   marginDeg: number;
   opennessR: number | null;
   opennessL: number | null;
-  /** max over the used reliable eyes (the near eye alone past the yaw limit); null when unknown */
+  /**
+   * max over the used reliable eyes (the near eye alone past the yaw limit); null when unknown. C6 round 1
+   * (C6-2): null in prior mode too, so no fatigue statistic, nod or calibration check reads a prior closure.
+   */
   openness: number | null;
+  /**
+   * C6 round 1 (review-C6 C6-2): no EAR reference exists yet; closure runs on the population prior (absolute
+   * EARs, deep closures only) and only the fast rules read it (`priorOpenness`).
+   */
+  priorMode: boolean;
+  /** C6-2: in prior mode, the used eye's openness against the prior's pseudo-reference (the fast rules' deep test) */
+  priorOpenness: number | null;
   eyesClosed: boolean;
   /** how long the current closure has lasted, ms (0 when open); it keeps running through a bridge */
   closedMs: number;
@@ -128,6 +138,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
   let frameIntervalMs = 1000 / 15;
   let closed = false;
   let closedSince = 0;
+  /** C6 round 1 (C6-2): in prior mode, since when a closure's eye has been back above the prior's closed EAR */
+  let priorAboveSince: number | null = null;
   // C-26 closure bridging: the evidence at the loss, and the bridge itself.
   let lastTrackedClosedMs = 0;
   let bridged = false;
@@ -190,6 +202,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       prevHeadDrvYaw = null;
       lastNet = null;
       closed = false;
+      priorAboveSince = null;
       bridged = false;
       lastTrackedClosedMs = 0;
       pitchHist.clear();
@@ -302,17 +315,29 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       const yawFar = (y: number | null) => y !== null && Math.abs(y) > cfg.zones.lostLateralYawDeg;
 
       // Openness and closure. TRACKING measures it; a loss ends it silently unless C-26 bridges it.
+      // C6 round 1 (review-C6 C6-2): before any EAR reference, the population prior: a pseudo-reference that puts
+      // closedBelow at the prior's closed EAR, and the prior's open EAR as the reopening threshold.
+      const priorMode = refs.openEyeEar === null || (refs.openEyeEar.r === null && refs.openEyeEar.l === null);
+      const priorRef = cl.prior.closedEar / cl.closedBelow;
+      const openAbove = priorMode ? cl.prior.openEar / priorRef : cl.openAbove;
       let o = { r: null as number | null, l: null as number | null, used: null as number | null };
-      if (q.quality === 'tracking' && f.head !== null) o = openness(f, q, refs.openEyeEar, f.head.yaw);
+      if (q.quality === 'tracking' && f.head !== null) o = openness(f, q, priorMode ? { r: priorRef, l: priorRef } : refs.openEyeEar, f.head.yaw);
       let bridgeEnded = false;
       if (o.used !== null) {
         bridged = false; // back in TRACKING: a closed eye continues the same closure, an open one ends it
         if (!closed && o.used < cl.closedBelow) {
           closed = true;
           closedSince = f.tMs;
-        } else if (closed && o.used > cl.openAbove) {
+        } else if (closed && o.used > openAbove) {
           closed = false;
+        } else if (closed && priorMode) {
+          // C6-2: a prior-mode closure also ends once the eye has stayed above the prior's closed EAR for
+          // prior.reopenMs: a low open eye (reading, a squint, a small eye) between the closed and the open EAR
+          // is not a closure, and must not hold the reference collectors or the fatigue gate.
+          priorAboveSince = o.used >= cl.closedBelow ? (priorAboveSince ?? f.tMs) : null;
+          if (priorAboveSince !== null && f.tMs - priorAboveSince >= cl.prior.reopenMs - 1e-6) closed = false;
         }
+        if (!closed || !priorMode) priorAboveSince = null;
         lastTrackedClosedMs = closed ? f.tMs - closedSince : 0;
       } else if (q.quality === 'tracking') {
         // TRACKING without an openness (e.g. past 25° yaw with the near eye unusable) ends the closure
@@ -355,7 +380,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
           continue;
         }
         if (o1 < cfg.closure.closedBelow) episode[side] = true;
-        else if (o1 > cfg.closure.openAbove) episode[side] = false;
+        else if (o1 > openAbove) episode[side] = false;
       }
 
       // The gaze the rules use (§M2).
@@ -412,9 +437,11 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         source,
         gazeFrom: source === 'gaze' ? gazeFromSrc : null,
         marginDeg,
-        opennessR: o.r,
-        opennessL: o.l,
-        openness: o.used,
+        opennessR: priorMode ? null : o.r,
+        opennessL: priorMode ? null : o.l,
+        openness: priorMode ? null : o.used,
+        priorMode,
+        priorOpenness: priorMode ? o.used : null,
         eyesClosed: closed,
         closedMs,
         closureBridged: bridged,

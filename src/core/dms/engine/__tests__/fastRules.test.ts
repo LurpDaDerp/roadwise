@@ -681,3 +681,41 @@ describe('C2 / S1: the looking-down gate is latched for the episode', () => {
     expect(f1.tMs - onset).toBeLessThanOrEqual(1500 + 70);
   });
 });
+
+describe('C6 round 1 (review-C6 C6-2): the population prior before any EAR reference', () => {
+  const PRIOR: Partial<ConditionerRefs> = { openEyeEar: null };
+  const abs = (e: number): [number, number] => [e, e];
+  test('closed below an absolute EAR of 0.06, open above 0.12; a low open eye (0.11) reopens after 500 ms; no openness out', () => {
+    expect(perceive([{ s: 0.2, spec: { ear: abs(0.059) } }], 15, PRIOR).at(-1)!.eyesClosed).toBe(true);
+    expect(perceive([{ s: 0.2, spec: { ear: abs(0.061) } }], 15, PRIOR).at(-1)!.eyesClosed).toBe(false);
+    expect(perceive([{ s: 0.2, spec: { ear: abs(0.03) } }, { s: 0.3, spec: { ear: abs(0.11) } }], 15, PRIOR).at(-1)!.eyesClosed).toBe(true);
+    expect(perceive([{ s: 0.2, spec: { ear: abs(0.03) } }, { s: 0.6, spec: { ear: abs(0.11) } }], 15, PRIOR).at(-1)!.eyesClosed).toBe(false);
+    expect(perceive([{ s: 0.2, spec: { ear: abs(0.03) } }, { s: 0.1, spec: { ear: abs(0.13) } }], 15, PRIOR).at(-1)!.eyesClosed).toBe(false);
+    const p = perceive([{ s: 0.5, spec: { ear: abs(0.03) } }], 15, PRIOR).at(-1)!;
+    expect(p.priorMode).toBe(true);
+    expect(p.openness).toBeNull();
+    expect(p.opennessR).toBeNull();
+    expect(p.priorOpenness).toBeCloseTo(0.15, 6);
+    // with a reference, no prior
+    const q = perceive([{ s: 0.5, spec: { ear: abs(0.03) } }]).at(-1)!;
+    expect(q.priorMode).toBe(false);
+    expect(q.priorOpenness).toBeNull();
+  });
+  test('F1 at 1.5 s (not 1.0 s), F2 at 3 s; a blink is no blink event', () => {
+    const closed = (s: number) => perceive([{ s, spec: { ear: abs(0.03) } }], 15, PRIOR);
+    // n closed frames last (n − 1) intervals: 23 frames = 1.47 s, 24 frames = 1.53 s.
+    expect(fast(closed(23 / 15)).kinds).not.toContain('microsleep');
+    expect(fast(closed(24 / 15)).kinds).toContain('microsleep');
+    expect(fast(closed(3.2)).kinds).toContain('sleep');
+    const blink = perceive([{ s: 0.3, spec: { ear: abs(0.03) } }, { s: 0.5, spec: {} }], 15, PRIOR);
+    expect(fast(blink).kinds).not.toContain('blink');
+    const refBlink = perceive([{ s: 0.3, spec: { ear: abs(0.03) } }, { s: 0.5, spec: {} }]);
+    expect(fast(refBlink).kinds).toContain('blink');
+  });
+  test('the looking-down latch still applies: latched, deep below an EAR of 0.045 (0.05 never counts, 0.04 does)', () => {
+    const down: Partial<FrameSpec> = { head: { yaw: 0, pitch: -20, roll: 0 }, gaze: { yaw: 0, pitch: -30 } };
+    const run = (e: number) => perceive([{ s: 1, spec: down }, { s: 5, spec: { ...down, ear: abs(e) } }], 15, PRIOR);
+    expect(fast(run(0.05)).kinds.filter((k) => k === 'microsleep' || k === 'sleep')).toEqual([]);
+    expect(fast(run(0.04)).kinds).toContain('sleep');
+  });
+});

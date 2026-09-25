@@ -19,6 +19,7 @@ interface Scene {
   hold?: boolean;
   moving?: boolean;
   mar?: number | null;
+  /** the fatigue gate; default: fed back from the baselines' own evidence, as the engine does */
   gate?: boolean;
   blinkEvery?: number;
 }
@@ -31,7 +32,9 @@ function run(b: ReturnType<typeof createBaselines>, scene: (t: number) => Scene,
     const s = scene(t);
     const blink = (t % (s.blinkEvery ?? 4)) < 0.2;
     const ear = (s.ear ?? REF) * (blink ? 0.2 : 1) * (1 + 0.005 * Math.sin(t * 7.1));
-    const eye: EyeSample | null = s.usable === false ? null : { ear, lumaAbs: 100 * (s.luma ?? 1), contrast: 20 * (s.contrast ?? 1), usable: true, reliable: s.reliable ?? true };
+    // C6 round 1: the iris contrast follows the lid (∝ √openness), recorded but never an explanation.
+    const lidRel = Math.min(1, ear / REF);
+    const eye: EyeSample | null = s.usable === false ? null : { ear, contrast: 20 * (s.contrast ?? 1) * Math.sqrt(Math.max(0, lidRel)), usable: true, reliable: s.reliable ?? true };
     const x: BaselineInput = {
       tMs: t * 1000,
       dtS: 1 / FPS,
@@ -43,8 +46,9 @@ function run(b: ReturnType<typeof createBaselines>, scene: (t: number) => Scene,
       r: eye,
       l: eye,
       iodC: 0.2 * (s.iodC ?? 1),
+      faceLuma: 100 * (s.luma ?? 1),
       mar: s.mar === undefined ? 0.08 : s.mar,
-      fatigueGate: s.gate ?? false,
+      fatigueGate: typeof s.gate === 'boolean' ? s.gate : b.lowUnexplained(),
     };
     const o = b.step(x);
     out.push({ t, r: o.ear?.r ?? null, mar: o.mar, events: o.events.map((e) => e.kind) });
@@ -85,7 +89,7 @@ describe('C6 baselines: EAR down only on an explained appearance event (NC-B1, N
   });
   test('a luma drop to 0.5 with the EAR at the table factor: the reference follows the explained drop', () => {
     const b = fresh();
-    const f = explainedFactor(C, { luma: 0.5, contrast: 1, iod: 1 });
+    const f = explainedFactor(C, { luma: 0.5, iod: 1 });
     expect(f).toBeCloseTo(0.8, 6);
     const o = run(b, (t) => (t >= 60 ? { ear: REF * f, luma: 0.5 } : {}), 120);
     expect(Math.abs(last(o).r! / (REF * f) - 1)).toBeLessThanOrEqual(0.03);
@@ -105,7 +109,7 @@ describe('C6 baselines: EAR down only on an explained appearance event (NC-B1, N
   });
   test('an IOD change of ≥ 5 % is an event, explained by the IOD model', () => {
     const b = fresh();
-    const f = explainedFactor(C, { luma: 1, contrast: 1, iod: 1.1 });
+    const f = explainedFactor(C, { luma: 1, iod: 1.1 });
     const o = run(b, (t) => (t >= 60 ? { ear: REF * f, iodC: 1.1 } : {}), 120);
     expect(o.some((x) => x.events.includes('appearance'))).toBe(true);
     expect(Math.abs(last(o).r! / (REF * f) - 1)).toBeLessThanOrEqual(0.03);
@@ -140,10 +144,10 @@ describe('C6 baselines: offered values (the resume paths, R4)', () => {
   test('up is taken; down only with the gate clear and by the explained factor', () => {
     const b = fresh();
     run(b, () => ({}), 30);
-    expect(b.offer({ r: REF * 1.1, l: REF * 1.1 }, { luma: 100, contrast: 20, iodC: 0.2 }).r).toBeCloseTo(REF * 1.1, 9);
+    expect(b.offer({ r: REF * 1.1, l: REF * 1.1 }, { luma: 100, iodC: 0.2 }).r).toBeCloseTo(REF * 1.1, 9);
     const b2 = fresh();
     run(b2, () => ({}), 30);
-    expect(b2.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 100, contrast: 20, iodC: 0.2 }).r!).toBeGreaterThanOrEqual(REF);
+    expect(b2.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 100, iodC: 0.2 }).r!).toBeGreaterThanOrEqual(REF);
     const b3 = fresh();
     run(b3, () => ({}), 30);
     const was3 = b3.offer({ r: REF * 2, l: REF * 2 }, null).r! / 2 / REF; // (a no-op probe of the current reference: up to the cap)
@@ -151,10 +155,10 @@ describe('C6 baselines: offered values (the resume paths, R4)', () => {
     const b3b = fresh();
     run(b3b, () => ({}), 30);
     const cur = b3b.offer({ r: 0, l: 0 }, null, true).r!; // the gate set: a down offer returns the current reference
-    expect(b3b.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 50, contrast: 20, iodC: 0.2 }).r).toBeCloseTo(cur * 0.8, 6);
+    expect(b3b.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 50, iodC: 0.2 }).r).toBeCloseTo(cur * 0.8, 6);
     const b4 = fresh();
     run(b4, () => ({ gate: true }), 30);
-    expect(b4.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 50, contrast: 20, iodC: 0.2 }, true).r!).toBeGreaterThanOrEqual(REF);
+    expect(b4.offer({ r: REF * 0.6, l: REF * 0.6 }, { luma: 50, iodC: 0.2 }, true).r!).toBeGreaterThanOrEqual(REF);
   });
 });
 
@@ -202,5 +206,34 @@ describe('C6 baselines: no reference yet (S-G, the tier change)', () => {
     expect(got).toBeDefined();
     expect(got!.t).toBeLessThanOrEqual(72);
     expect(Math.abs(got!.r! / REF - 1)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+describe('C6 round 1 (review-C6 C6-1): only lid-independent evidence explains a drop (NC-C6-X, NC-C6-T)', () => {
+  test('S-DROOP-CONTRAST: a 1 %/min droop, the iris contrast falling with the lid, the reliable tier lost at 7 min, no profile: the reference ≥ 0.99 × the start; the gate set by 11 min', () => {
+    const b = fresh();
+    let gateAt: number | null = null;
+    const o = run(b, (t) => ({ ear: REF * (1 - 0.01 * (t / 60)), reliable: t < 420 }), 900);
+    for (const x of o) if (gateAt === null && b.lowUnexplained() && x.t > 0) gateAt = x.t;
+    const minR = Math.min(...o.map((x) => x.r!));
+    expect(minR).toBeGreaterThanOrEqual(0.99 * REF);
+    // the gate: the evidence set (an unexplained drop at the tier event, or the low q/b held 60 s) by 11 min
+    const firstEvidence = o.find((x) => x.events.includes('ear_unexplained') || x.events.includes('ear_low_unexplained'));
+    expect(firstEvidence).toBeDefined();
+    expect(firstEvidence!.t).toBeLessThanOrEqual(660);
+    expect(o.some((x) => x.events.includes('ear_lowered'))).toBe(false);
+    void gateAt;
+  });
+  test('a lone tier loss (the face luma and the IOD unchanged) with a lower EAR is fatigue evidence, never a lower reference', () => {
+    const b = fresh();
+    const o = run(b, (t) => (t >= 60 ? { ear: REF * 0.85, reliable: false } : {}), 120);
+    expect(last(o).r!).toBeGreaterThanOrEqual(REF * 0.99);
+    expect(o.some((x) => x.events.includes('ear_unexplained'))).toBe(true);
+  });
+  test('sunglasses on (the face luma of the eye region down ≥ 25 %) with the tier change: explained by the luma, followed', () => {
+    const b = fresh();
+    const f = explainedFactor(C, { luma: 0.7, iod: 1 });
+    const o = run(b, (t) => (t >= 60 ? { ear: REF * f, reliable: false, luma: 0.7 } : {}), 120);
+    expect(Math.abs(last(o).r! / (REF * f) - 1)).toBeLessThanOrEqual(0.03);
   });
 });

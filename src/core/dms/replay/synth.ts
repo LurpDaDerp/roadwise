@@ -210,7 +210,13 @@ function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, no
     box = { cx: (box?.cx ?? 0.5) + (s.posture.box?.dx ?? 0), cy: (box?.cy ?? 0.45) + (s.posture.box?.dy ?? 0) };
     iod = (iod ?? 0.2) * (s.posture.iodScale ?? 1);
   }
-  const lens = s.lens === true ? { irisContrast: 3, irisIn: false } : {};
+  // C6 round 1 (review-C6 C6-1): the eye ROI follows the lid. As it lowers, the iris contrast falls (∝ √openness)
+  // and the ROI luma rises toward the skin's; only the face luma and the IOD are lid-independent. Above a lid of 0.2
+  // the iris is seen whatever the absolute EAR (a reading lid at 0.25 of a 0.3 eye, EAR 0.075, is tracked: C6-2's
+  // S-PRIOR-READ needs it); at or below it the eye keeps the fixture's closed look (contrast ≈ 0, iris outside).
+  const lidOpen = Math.min(1, o);
+  const lens =
+    s.lens === true ? { irisContrast: 3, irisIn: false } : lidOpen > 0.2 && lidOpen < 1 ? { irisContrast: 40 * Math.sqrt(lidOpen), irisIn: true, luma: 1 + 0.3 * (1 - lidOpen) } : {};
   return frame({
     tMs,
     head: { yaw: headCam.yaw, pitch: headCam.pitch, roll: 0 },

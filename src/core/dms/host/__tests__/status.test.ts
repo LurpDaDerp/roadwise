@@ -52,4 +52,9 @@ describe('C3: monitoringOf', () => {
   test('active with no engine view yet: off / off', () => {
     expect(monitoringOf({ camera: 'active', reason: null, engine: null })).toEqual(M('off', 'off', null));
   });
+  test('C6 round 1 (C6-2): no EAR reference yet (the population prior): drowsiness limited, learning_eyes; a stop still heads', () => {
+    expect(monitoringOf({ camera: 'active', reason: null, engine: { ...moving, priorMode: true } })).toEqual(M('full', 'limited', 'learning_eyes', null, 'learning_eyes'));
+    expect(monitoringOf({ camera: 'active', reason: null, engine: { ...stopped, priorMode: true } })).toEqual(M('off', 'limited', 'stopped', 'stopped', 'learning_eyes'));
+    expect(monitoringOf({ camera: 'active', reason: null, engine: { ...moving, priorMode: false } })).toEqual(M('full', 'full', null));
+  });
 });

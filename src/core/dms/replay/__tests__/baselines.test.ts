@@ -50,7 +50,7 @@ const at = (r: Run, tMs: number) => [...r.seconds].reverse().find((s) => s.tMs <
 const kinds = (r: Run, k: string) => r.events.filter((e) => e.kind === k);
 const levels = (r: Run) => r.events.filter((e) => e.kind === 'fatigue_minute').map((e) => (e as { level?: string }).level);
 /** The EAR factor the synth's appearance change carries (consistent with K5's table, the device item). */
-const earOfLuma = (luma: number) => explainedFactor(C, { luma, contrast: 1, iod: 1 });
+const earOfLuma = (luma: number) => explainedFactor(C, { luma, iod: 1 });
 
 describe('S-L1 / S-L2: the EAR follows an appearance change, and fatigue does not rise (rev1 I3/I4; NC-B2, NC-R5)', () => {
   /** Dusk from 120 s to 420 s: the eye luma 1 → 0.5, the raw EAR with it (×0.8 at the end). */
@@ -79,19 +79,22 @@ describe('S-L1 / S-L2: the EAR follows an appearance change, and fatigue does no
 });
 
 describe('S-G: sunglasses off after 10 min (NC-C6-G)', () => {
-  test('re-baselined within 12 s of the lens coming off; 0 false F1', () => {
+  // C6 round 1 (C6-2): 13 s, was 12 s. Before the reference exists the prior sees the blinks as closures, and closure
+  // frames are hold frames, so the 10 s check's eligible time now excludes the blinks' share (5 %).
+  test('re-baselined within 13 s of the lens coming off; 0 false F1', () => {
     const r = play(drv((t) => (t < 600 ? { lens: true } : null)), 720);
     expect(at(r, 599_000).earRef).toBeNull();
     const got = r.seconds.find((s) => s.tMs >= 600_000 && s.earRef !== null);
     expect(got).toBeDefined();
-    expect(got!.tMs).toBeLessThanOrEqual(612_000);
+    expect(got!.tMs).toBeLessThanOrEqual(613_000);
     expect(kinds(r, 'microsleep')).toEqual([]);
   });
 });
 
 describe('S-DROOP60 and S-NIGHT-RATCHET: a droop is never followed down (NC-B1, NC-C6-E)', () => {
   test('S-DROOP60: a 1 %/min droop for 60 min with no PERCLOS rise: the reference falls ≤ 2 %; the fatigue gate is set', () => {
-    const r = play(drv((t) => (t >= 120 ? { earScale: 1 - 0.01 * ((t - 120) / 60) } : null)), 120 + 3600);
+    // C6 round 1: the droop is the LID (openness), so the synth's iris contrast and eye luma fall with it.
+    const r = play(drv((t) => (t >= 120 ? { openness: blinkOpenness(t) * (1 - 0.01 * ((t - 120) / 60)) } : null)), 120 + 3600);
     const e0 = at(r, 110_000).earRef!;
     const min = Math.min(...r.seconds.filter((s) => s.tMs > 120_000).map((s) => s.earRef!));
     expect(min).toBeGreaterThanOrEqual(e0 * 0.98);
@@ -106,7 +109,7 @@ describe('S-DROOP60 and S-NIGHT-RATCHET: a droop is never followed down (NC-B1, 
     // Luma 0.6 in minutes 3–5, 9–11, 15–17 (6 steps), the raw EAR with it; a 0.5 %/min droop underneath.
     const dark = (t: number) => t >= 120 && Math.floor((t - 120) / 120) % 3 === 1;
     const lumaOf = (t: number) => (dark(t) ? 0.6 : 1);
-    const r = play(drv((t) => (t >= 120 ? { eyeLuma: lumaOf(t), earScale: earOfLuma(lumaOf(t)) * (1 - 0.005 * ((t - 120) / 60)) } : null)), 120 + 1260);
+    const r = play(drv((t) => (t >= 120 ? { eyeLuma: lumaOf(t), earScale: earOfLuma(lumaOf(t)), openness: blinkOpenness(t) * (1 - 0.005 * ((t - 120) / 60)) } : null)), 120 + 1260);
     const e0 = at(r, 110_000).earRef!;
     const bright = r.seconds.filter((s) => s.tMs > 130_000 && !dark(s.tMs / 1000) && !dark(s.tMs / 1000 - 30));
     expect(bright.length).toBeGreaterThan(100);

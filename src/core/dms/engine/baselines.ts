@@ -9,9 +9,12 @@
 // - EAR down: NEVER continuous. Only on an appearance event, held appearanceHoldS: a stable change of an eye's
 //   usability/iris tier, the eye luma ≥ appearanceLumaFrac against the luma at the current reference, or the
 //   projected IOD ≥ appearanceIodFrac. A checkS window of eligible frames then gives the observed factor, and the
-//   reference is lowered only with the fatigue gate clear and only by the EXPLAINED factor (the luma and
-//   contrast tables, device item K5, and the IOD model), never the full drop. An unexplained remainder is fatigue
-//   evidence (`lowUnexplained`, held unexplainedHoldS).
+//   reference is lowered only with the fatigue gate clear and only by the EXPLAINED factor, never the full drop.
+//   C6 round 1 (review-C6 C6-1): only lid-INDEPENDENT evidence explains a drop: the FACE luma (the luma table,
+//   device item K5) and the projected IOD (the IOD model), and only when one of them changed by an event's size.
+//   The iris contrast and the eye-ROI luma fall with a lowering lid, so they never explain anything; a lone tier
+//   loss explains nothing (fatigue evidence). An unexplained remainder is fatigue evidence (`lowUnexplained`,
+//   held unexplainedHoldS).
 // - A continuous q/b ≤ lowRatio for lowHoldS with no event is fatigue evidence too, and changes nothing.
 // - The floor: max(earFloorFrac × the drive reference × its appearance correction, earFloorFrac × the profile
 //   EAR). The profile's appearance is not stored yet (T8), so its correction is 1.
@@ -23,10 +26,8 @@ import type { DmsConfig } from './config';
 
 export interface EyeSample {
   ear: number;
-  /** the eye ROI luma, absolute (the eye luma ratio × the face luma) */
-  lumaAbs: number;
-  /** the iris contrast */
-  contrast: number;
+  /** the iris contrast: recorded in the appearance (diagnostics), never an explanation (it falls with the lid) */
+  contrast?: number;
   usable: boolean;
   /** the iris was seen (the reliable tier) */
   reliable: boolean;
@@ -48,6 +49,8 @@ export interface BaselineInput {
   l: EyeSample | null;
   /** the projected IOD (iod / cos yaw cos pitch) */
   iodC: number | null;
+  /** C6 round 1: the FACE ROI luma (lid-independent), null without a face */
+  faceLuma: number | null;
   /** null when there is no mouth */
   mar: number | null;
   fatigueGate: boolean;
@@ -58,11 +61,12 @@ export interface BaselineInput {
   mayDerive?: boolean;
 }
 
-/** The appearance behind a reference: the absolute eye luma, the iris contrast and the projected IOD. */
+/** The appearance behind a reference: the face luma and the projected IOD (lid-independent; C6 round 1). */
 export interface Appearance {
   luma: number;
-  contrast: number;
   iodC: number;
+  /** the mean iris contrast: recorded, never an explanation (C6 round 1); null when unknown */
+  contrast?: number | null;
 }
 
 export type BaselineEventKind = 'appearance' | 'ear_derived' | 'ear_raised' | 'ear_lowered' | 'ear_unexplained' | 'ear_low_unexplained';
@@ -114,10 +118,10 @@ function interp(table: readonly (readonly [number, number])[], x: number): numbe
   return table[table.length - 1]![1];
 }
 
-/** The EAR factor an appearance change explains (ratios now ÷ at the reference): K5's tables and the IOD model. */
-export function explainedFactor(cfg: Pick<DmsConfig, 'calibration'>, ratio: { luma: number; contrast: number; iod: number }): number {
+/** The EAR factor an appearance change explains (ratios now ÷ at the reference): K5's luma table and the IOD model. */
+export function explainedFactor(cfg: Pick<DmsConfig, 'calibration'>, ratio: { luma: number; iod: number }): number {
   const b = cfg.calibration.baselines;
-  return interp(b.lumaEarTable, ratio.luma) * interp(b.contrastEarTable, ratio.contrast) * (1 + b.iodEarPerFrac * (ratio.iod - 1));
+  return interp(b.lumaEarTable, ratio.luma) * (1 + b.iodEarPerFrac * (ratio.iod - 1));
 }
 
 type Tier = 0 | 1 | 2;
@@ -216,16 +220,24 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
 
   const ratios = (now: Appearance, at: Appearance) => ({
     luma: at.luma > 0 ? now.luma / at.luma : 1,
-    contrast: at.contrast > 0 ? now.contrast / at.contrast : 1,
     iod: at.iodC > 0 ? now.iodC / at.iodC : 1,
   });
+  /**
+   * C6 round 1: the factor a change of appearance explains, or 1 when neither the face luma nor the IOD changed
+   * by an event's size (a lone tier change, or small drifts, explain nothing).
+   */
+  const explainedBetween = (now: Appearance, at: Appearance): number => {
+    const rt = ratios(now, at);
+    const sized = Math.abs(rt.luma - 1) >= b.appearanceLumaFrac || Math.abs(rt.iod - 1) >= b.appearanceIodFrac;
+    return sized ? explainedFactor(cfg, rt) : 1;
+  };
 
   /** The floor for one eye: the drive reference (appearance-corrected) and the profile anchor. */
   function floorOf(side: 'r' | 'l', now: Appearance | null = app): number {
     let f = 0;
     const r0 = ref0?.[side] ?? null;
     if (r0 !== null) {
-      const corr = now !== null && ref0App !== null ? explainedFactor(cfg, ratios(now, ref0App)) : 1;
+      const corr = now !== null && ref0App !== null ? explainedBetween(now, ref0App) : 1;
       f = Math.max(f, b.earFloorFrac * r0 * corr);
     }
     const p = profile?.[side] ?? null;
@@ -236,7 +248,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
 
   function adopt(next: EarPair): void {
     ref = next;
-    refApp = app;
+    refApp = app === null ? null : { ...app };
     refTier = { r: tier.r.now, l: tier.l.now };
     appPending = app === null || !tiersSettled();
     hist.r.clear();
@@ -250,7 +262,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     const p = (side: 'r' | 'l', v: number | null) => (v === null ? null : Math.max(v, profile?.[side] != null ? b.earFloorFrac * profile[side]! : 0));
     const next = { r: p('r', ear.r), l: p('l', ear.l) };
     ref0 = next;
-    ref0App = app;
+    ref0App = app === null ? null : { ...app };
     adopt(next);
     if (m !== null) {
       mar = Math.max(m, c.neutralMarFloor);
@@ -265,9 +277,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     const cur = ref;
     // Down only on an appearance event (rev2 §2.3.4): an offered drop explains nothing unless its appearance differs
     // from the reference's by an event's size.
-    const rt = appearance !== null && refApp !== null ? ratios(appearance, refApp) : null;
-    const isEvent = rt !== null && (Math.abs(rt.luma - 1) >= b.appearanceLumaFrac || Math.abs(rt.iod - 1) >= b.appearanceIodFrac);
-    const explained = isEvent ? explainedFactor(cfg, rt) : 1;
+    const explained = appearance !== null && refApp !== null ? explainedBetween(appearance, refApp) : 1;
     let down = false;
     const pick = (side: 'r' | 'l'): number | null => {
       const was = cur[side];
@@ -285,7 +295,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     const oldApp = refApp;
     adopt(next);
     if (keepApp) refApp = oldApp;
-    else if (appearance !== null) refApp = appearance;
+    else if (appearance !== null) refApp = { ...appearance };
     return next;
   }
 
@@ -305,7 +315,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       events.push({ kind: 'ear_derived', tMs: x.tMs });
       return;
     }
-    const explained = app !== null && refApp !== null ? explainedFactor(cfg, ratios(app, refApp)) : 1;
+    const explained = app !== null && refApp !== null ? explainedBetween(app, refApp) : 1;
     const cur = ref;
     let up = false;
     let down = false;
@@ -443,11 +453,25 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       const dt = x.dtS;
       // The appearance (smoothed) and the stable tiers, from TRACKING frames.
       if (x.tracking && dt > 0) {
-        const eyes = [x.r, x.l].filter((e): e is EyeSample => e !== null && e.usable);
-        if (eyes.length > 0 && x.iodC !== null) {
-          const now: Appearance = { luma: eyes.reduce((a, e) => a + e.lumaAbs, 0) / eyes.length, contrast: eyes.reduce((a, e) => a + e.contrast, 0) / eyes.length, iodC: x.iodC };
+        const anyEye = (x.r !== null && x.r.usable) || (x.l !== null && x.l.usable);
+        if (anyEye && x.iodC !== null && x.faceLuma !== null) {
           const k = Math.min(1, dt / APP_TAU_S);
-          app = app === null ? now : { luma: app.luma + k * (now.luma - app.luma), contrast: app.contrast + k * (now.contrast - app.contrast), iodC: app.iodC + k * (now.iodC - app.iodC) };
+          // the contrast (diagnostic) from open-eye frames only: a blink or an episode would pull it down
+          let cs = 0;
+          let cn = 0;
+          if (!x.hold) for (const e of [x.r, x.l]) {
+            if (e !== null && e.usable && e.contrast !== undefined) {
+              cs += e.contrast;
+              cn++;
+            }
+          }
+          const contrast = cn > 0 ? cs / cn : null;
+          if (app === null) app = { luma: x.faceLuma, iodC: x.iodC, contrast };
+          else {
+            app.luma += k * (x.faceLuma - app.luma);
+            app.iodC += k * (x.iodC - app.iodC);
+            app.contrast = contrast === null ? (app.contrast ?? null) : app.contrast == null ? contrast : app.contrast + k * (contrast - app.contrast);
+          }
         }
         for (const side of ['r', 'l'] as const) {
           const t = tier[side];
@@ -462,9 +486,9 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       }
       // The reference's appearance, once known (see appPending).
       if (appPending && ref !== null && app !== null && tiersSettled()) {
-        refApp = app;
+        refApp = { ...app };
         refTier = { r: tier.r.now, l: tier.l.now };
-        ref0App ??= app;
+        ref0App ??= { ...app };
         appPending = false;
       }
 

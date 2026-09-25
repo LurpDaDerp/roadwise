@@ -108,6 +108,7 @@ const MONITORING_REASONS = {
   seed_check: true,
   eyes: true,
   speed_unknown: true,
+  learning_eyes: true,
 } satisfies Record<NonNullable<DmsHudStatus['monitoring']['reason']>, true>;
 const PRESENCE = { lastFaceT: true, absent: true, exitEvidence: true } satisfies Record<keyof DmsPresence, true>;
 /** C5 round 1 (review-C5 deviation 6): the calibration events' causes */

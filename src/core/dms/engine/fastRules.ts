@@ -102,6 +102,8 @@ export function createFastRules(cfg: DmsConfig) {
     onset: number;
     lastT: number;
     deepSince: number | null;
+    /** C6 round 1 (C6-2): the episode began in prior mode (no EAR reference): F1 at prior.f1ClosedS, no blink */
+    prior: boolean;
     gated: boolean;
     /** C2: the head above the latch's clear pitch since this time (null while it is not) */
     upSince: number | null;
@@ -216,7 +218,7 @@ export function createFastRules(cfg: DmsConfig) {
           openFrames.forEach((f) => {
             if (f.t >= onset - LATCH_LOOKBACK_MS && f.t < onset + EPS && f.down) down = true;
           });
-          episode = { onset, lastT: p.tMs, deepSince: null, gated: down, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
+          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, gated: down, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
         }
         episode.lastT = p.tMs;
         if (p.closureBridged) {
@@ -224,7 +226,11 @@ export function createFastRules(cfg: DmsConfig) {
           // closedMs, a deep run continues, a gated closure that was not deep does not count.
           episode.bridged = true;
         } else {
-          const deep = p.openness !== null && p.openness < cl.lookDownClosedBelow;
+          // C6 round 1 (C6-2): in prior mode a latched closure is deep below the prior's deep EAR (0.045), on the
+          // prior's pseudo-openness.
+          const deep = p.priorMode
+            ? p.priorOpenness !== null && p.priorOpenness < cl.prior.deepEar / (cl.prior.closedEar / cl.closedBelow)
+            : p.openness !== null && p.openness < cl.lookDownClosedBelow;
           if (!deep) episode.deepSince = null;
           else episode.deepSince ??= p.tMs;
           // C2 (S1): a looking-down frame may set the latch; only the head coming up clears it.
@@ -243,7 +249,7 @@ export function createFastRules(cfg: DmsConfig) {
         const gated = episode.gated;
         const bridged = episode.bridged ? { bridged: true } : {};
         const countedS = (gated ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
-        const f1S = gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
+        const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
         if (!episode.f1 && countedS >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
           episode.f1 = true;
           if (!stopped) episode.anyMoving = true;
@@ -278,7 +284,8 @@ export function createFastRules(cfg: DmsConfig) {
         }
       } else if (episode !== null && p.quality === 'tracking' && !episode.bridged) {
         const durMs = p.tMs - episode.onset;
-        events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
+        // C6 round 1 (C6-2): a prior-mode closure is no blink (the prior feeds no fatigue statistic).
+        if (!episode.prior) events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
         endEpisode(events, p.tMs, durMs);
       } else {
         endSilently(events); // a quality drop, or the end of a bridged closure: silent (no blink)

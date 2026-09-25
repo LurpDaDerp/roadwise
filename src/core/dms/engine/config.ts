@@ -218,7 +218,7 @@ export interface DmsConfig {
      * Task C6 (rev2 §2.3.4; baselines.ts): the eye and mouth baselines during a drive. EAR up ≤ earUpPctPerMin up to
      * earUpCapFrac × the drive reference; down only on an appearance event (a tier change, the eye luma ≥
      * appearanceLumaFrac against the reference's, the projected IOD ≥ appearanceIodFrac, held appearanceHoldS),
-     * with the fatigue gate clear and by the explained factor only (lumaEarTable × contrastEarTable × (1 +
+     * with the fatigue gate clear and by the explained factor only (the FACE luma's lumaEarTable × (1 +
      * iodEarPerFrac × ΔiodC): device item K5), read from a checkS window; floored at earFloorFrac × the drive
      * reference (appearance-corrected) and × the profile EAR. A q/b ≤ lowRatio for lowHoldS, or a drop the
      * appearance does not explain (by more than explainTol, held unexplainedHoldS), is fatigue evidence.
@@ -242,7 +242,6 @@ export interface DmsConfig {
       lowRatio: number;
       lowHoldS: number;
       lumaEarTable: [number, number][];
-      contrastEarTable: [number, number][];
       iodEarPerFrac: number;
       marUpPctPerMin: number;
       marUpCap10MinFrac: number;
@@ -513,6 +512,15 @@ export interface DmsConfig {
     lookDownRelPitchDeg: number;
     lookDownClosedBelow: number;
     /**
+     * C6 round 1 (review-C6 C6-2): the population-prior fallback, deep closures only, BEFORE any EAR reference
+     * exists (a drive that has not yet moved at the admission speed, a queue, a stop). Absolute EARs: closed below
+     * closedEar, open above openEar (or back above closedEar for reopenMs: a low open eye, reading or squinting, is no
+     * closure); F1 needs f1ClosedS, F2 and F3 as usual; under the looking-down latch, deep below deepEar. It feeds
+     * no fatigue statistic (no openness, no blink) and no calibration, and is replaced as soon as a
+     * reference exists. Device item D-C6-3 tunes the thresholds.
+     */
+    prior: { closedEar: number; openEar: number; deepEar: number; f1ClosedS: number; reopenMs: number };
+    /**
      * The minimum rule speeds of F1–F3: 0 since Task C2 (rev4 §2.1.7, the user's rule: the sleep family runs at
      * every speed while the gate is open). Kept as keys: a negative control restores them.
      */
@@ -779,11 +787,6 @@ const DEFAULT: DmsConfig = {
         [1, 1],
         [2, 1.1],
       ],
-      contrastEarTable: [
-        [0.5, 0.9],
-        [1, 1],
-        [2, 1.05],
-      ],
       iodEarPerFrac: 0.5,
       marUpPctPerMin: 3,
       marUpCap10MinFrac: 0.2,
@@ -925,6 +928,7 @@ const DEFAULT: DmsConfig = {
     nearEyeYawDeg: 25,
     lookDownRelPitchDeg: -15,
     lookDownClosedBelow: 0.15,
+    prior: { closedEar: 0.06, openEar: 0.12, deepEar: 0.045, f1ClosedS: 1.5, reopenMs: 500 },
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
@@ -1140,9 +1144,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(bl.earUpCapFrac > 1)) bad('calibration.baselines.earUpCapFrac', 'must exceed 1');
   if (!(bl.lowRatio > 0 && bl.lowRatio < 1)) bad('calibration.baselines.lowRatio', 'must lie in (0, 1)');
   if (!(bl.appearanceLumaFrac > 0 && bl.appearanceLumaFrac < 1)) bad('calibration.baselines.appearanceLumaFrac', 'must lie in (0, 1)');
-  for (const [k, t] of [['lumaEarTable', bl.lumaEarTable], ['contrastEarTable', bl.contrastEarTable]] as const) {
-    if (!(t.length >= 2 && t.every((row, i) => i === 0 || row[0] > t[i - 1]![0]))) bad(`calibration.baselines.${k}`, 'must have ≥ 2 rows in ascending order');
-  }
+  const lt = bl.lumaEarTable;
+  if (!(lt.length >= 2 && lt.every((row, i) => i === 0 || row[0] > lt[i - 1]![0]))) bad('calibration.baselines.lumaEarTable', 'must have ≥ 2 rows in ascending order');
   if (!(c.fatigue.gatePerclos > 0 && c.fatigue.gatePerclos < 1)) bad('fatigue.gatePerclos', 'must lie in (0, 1)');
   if (!(c.fatigue.blinkRelearnFrac > 0)) bad('fatigue.blinkRelearnFrac', 'must be > 0');
   // Task C4: posture and the across-stop checks.
@@ -1243,6 +1246,12 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(cl.lookDownClosedBelow <= cl.closedBelow)) bad('closure.lookDownClosedBelow', 'must be ≤ closedBelow');
   if (!(cl.f1.closedS < cl.f2.closedS && cl.f2.closedS < cl.f3.closedS)) bad('closure.f1', 'F1 < F2 < F3 closure times');
   if (!(cl.f1.lookDownClosedS >= cl.f1.closedS)) bad('closure.f1.lookDownClosedS', 'must be ≥ f1.closedS');
+  // C6 round 1 (C6-2): the prior's absolute EARs, deep only (below any plausible open eye).
+  const pr = cl.prior;
+  if (!(pr.deepEar > 0 && pr.deepEar < pr.closedEar)) bad('closure.prior.deepEar', 'must be in (0, closedEar)');
+  if (!(pr.closedEar < pr.openEar && pr.openEar < 0.2)) bad('closure.prior.closedEar', 'must satisfy 0 < closedEar < openEar < 0.2');
+  if (!(pr.f1ClosedS >= cl.f1.closedS && pr.f1ClosedS < cl.f2.closedS)) bad('closure.prior.f1ClosedS', 'must be in [f1.closedS, f2.closedS)');
+  if (!(pr.reopenMs >= 200 && pr.reopenMs < pr.f1ClosedS * 1000)) bad('closure.prior.reopenMs', 'must be in [200 ms, f1ClosedS)');
 
   // Nod and yawn.
   if (!(c.nod.closureOpenness < c.nod.opennessBelow)) bad('nod.closureOpenness', 'must be < opennessBelow');

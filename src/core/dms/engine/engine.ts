@@ -158,6 +158,11 @@ export interface DmsSnapshot {
   pitchReference: number | null;
   /** Task C6: the EAR baseline's fatigue evidence (an unexplained drop, or a low q/b held 60 s) */
   earEvidence: boolean;
+  /**
+   * C6 round 1 (review-C6 C6-2): no EAR reference exists yet, so closure runs on the population prior (deep
+   * closures only): the HUD shows drowsiness as limited
+   */
+  priorMode: boolean;
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -597,6 +602,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         earRef: earMean(d.cal.openEyeEar()),
         pitchReference: d.cal.pitchReference(),
         earEvidence: d.cal.earEvidence(),
+        priorMode: earMean(d.cal.openEyeEar()) === null,
       };
     },
 

@@ -7,6 +7,8 @@
 //   speed_unknown  "Speed unknown: distraction alerts paused"
 //   face           "Can't see your face" (C3 round 1, review-C3 m3)
 //   camera         the camera was interrupted or failed (C3 round 1, m3): never an empty cause
+//   learning_eyes  "Learning your eyes: sleep alerts limited" (C6 round 1, C6-2: no EAR reference yet, the
+//                  population prior catches deep closures only)
 // `recalibrating`, `posture` and `seed_check` are set by the calibration tasks (T4, T6); the type holds them.
 // C3 round 1 (m4): each family carries its own cause (`why`); the headline `reason` is the most useful of them,
 // in the order below (a stop is more useful than a lost face at it).
@@ -25,6 +27,7 @@ export type MonitoringReason =
   | 'face'
   | 'eyes'
   | 'speed_unknown'
+  | 'learning_eyes'
   | null;
 
 export interface DmsMonitoring {
@@ -43,11 +46,11 @@ export interface MonitoringInput {
   /** the HUD status reason */
   reason: string | null;
   /** the engine's view at its last frame; null with no engine */
-  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null } | null;
+  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null; priorMode?: boolean } | null;
 }
 
 /** The headline order: the first family cause in this list wins. */
-const HEADLINE: readonly MonitoringReason[] = ['heat', 'dark', 'absent', 'camera', 'app_inactive', 'recalibrating', 'posture', 'seed_check', 'stopped', 'speed_unknown', 'face', 'eyes'];
+const HEADLINE: readonly MonitoringReason[] = ['heat', 'dark', 'absent', 'camera', 'app_inactive', 'recalibrating', 'posture', 'seed_check', 'stopped', 'speed_unknown', 'face', 'eyes', 'learning_eyes'];
 
 function literal(distraction: DmsMonitoring['distraction'], drowsiness: DmsMonitoring['drowsiness'], whyD: MonitoringReason, whyS: MonitoringReason): DmsMonitoring {
   const reason = HEADLINE.find((r) => r === whyD || r === whyS) ?? null;
@@ -88,6 +91,8 @@ export function monitoringOf(x: MonitoringInput): DmsMonitoring {
     case 'active': {
       if (x.engine === null) return both('off', 'off', null);
       const dist = distractionOf(x.engine);
+      // C6 round 1 (C6-2): before any EAR reference the sleep rules catch deep closures only (the prior).
+      if (x.engine.priorMode === true) return literal(dist.d, 'limited', dist.why, 'learning_eyes');
       return literal(dist.d, 'full', dist.why, null);
     }
   }

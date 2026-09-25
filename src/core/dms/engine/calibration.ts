@@ -1359,7 +1359,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       // Task C6 (rev2 §2.3.4): the baselines. Moving, no episode; the reference follows up, and down only on an
       // explained appearance event; with no reference, eyes becoming usable give one (sunglasses off).
       const eyeIn = (e: EngineFrame['eyeR'], usable: boolean, reliable: boolean): EyeSample | null =>
-        e === null ? null : { ear: e.ear, lumaAbs: e.luma * (f.faceLuma ?? 0), contrast: e.irisContrast, usable, reliable };
+        e === null ? null : { ear: e.ear, contrast: e.irisContrast, usable, reliable };
       const bo = baselines.step({
         tMs: f.tMs,
         dtS: dt,
@@ -1371,6 +1371,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         r: eyeIn(f.eyeR, p.usableR, p.reliableR),
         l: eyeIn(f.eyeL, p.usableL, p.reliableL),
         iodC: posture.compensate(ms).iodC,
+        faceLuma: f.faceLuma,
         mar: f.mouth?.mar ?? null,
         fatigueGate,
         mayDerive: eyesUnseenS >= c.baselines.checkS,
