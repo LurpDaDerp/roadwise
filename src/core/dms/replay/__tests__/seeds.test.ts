@@ -170,11 +170,20 @@ describe('the profile appearance (the review-C6 T8 carry; NC-C8-A)', () => {
 });
 
 describe('profile saving (rev2 §2.7; NC-C8-S2)', () => {
-  test('the saved EAR is the verified reference, not the adapted state: a drive whose EAR rose ×1.2 saves the start value', () => {
+  // C8 round 1 (review-C8 C8-2): a reference only ever raised since it was set is saved as raised; a downward
+  // adaptation is never saved (the reference as set is).
+  test('the saved EAR is never a downward adaptation: a dusk drive whose reference followed the luma down saves the start value (NC-C8-S2)', () => {
+    const earOfLuma = (luma: number) => explainedFactor(C, { luma, iod: 1 });
+    const d = drive(attentive((t) => (t >= 150 ? { eyeLuma: 0.5, earScale: earOfLuma(0.5) } : null)), 900, { seed: 10 });
+    expect(at(d, 899_000).earRef!).toBeLessThan(0.3 * earOfLuma(0.5) * 1.05);
+    expect(d.profile).not.toBeNull();
+    expect(Math.abs(d.profile!.openEyeEar[0]! / 0.3 - 1)).toBeLessThanOrEqual(0.03);
+  });
+  test('a reference only ever raised is saved as raised: a drive whose EAR rose ×1.2 saves the raised value', () => {
     const d = drive(attentive((t) => (t >= 150 ? { earScale: 1.2 } : null)), 600, { seed: 10 });
     expect(at(d, 599_000).earRef!).toBeGreaterThan(0.3 * 1.15);
     expect(d.profile).not.toBeNull();
-    expect(d.profile!.openEyeEar[0]!).toBeLessThanOrEqual(0.3 * 1.03);
+    expect(d.profile!.openEyeEar[0]!).toBeGreaterThan(0.3 * 1.15);
   });
   test('a seed-verified drive saves (ended before Stage 1 can evaluate, at 55 s)', () => {
     const d = drive(attentive(), 55, { seed: 11, profile: PROFILE });
@@ -195,6 +204,127 @@ describe('profile saving (rev2 §2.7; NC-C8-S2)', () => {
   });
   test('nothing is saved with gaze health degraded in the last 10 min (the road 7° up from 4 min, no mirror checks)', () => {
     const d = drive((t, r) => ({ gaze: onRoad(r), openness: blinkOpenness(t), speedKmh: 60, ...(t >= 240 ? { posture: { shift: { yaw: 0, pitch: 7 } } } : {}) }), 400, { seed: 14 });
+    expect(d.profile).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// C8 round 1 (review-C8): the warm start retries (C8-1), a drowsy start's EAR is not saved (C8-2), a seed moved onto
+// a display's direction does not verify (C8-3), and a stale profile through a town drive (the S-SEED-TOWN carry).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('S-WARM-TEXTING (review-C8 C8-1; NC-C8-R): a reading start does not throw a good profile away', () => {
+  // A good profile at 60 km/h; the first 0, 20 or 40 s spent reading 8.5 s of every 10 s at a target.
+  const TARGETS: [string, AnglePair][] = [
+    ['the lap (0°, −35°)', rel(0, -35)],
+    ['the lap side (10°, −30°)', rel(10, -30)],
+    ['a held-up phone (8°, −18°)', rel(8, -18)],
+    ['a navigation screen (14°, −8°)', rel(14, -8)],
+  ];
+  const cases: [number, string, AnglePair][] = [];
+  for (const readS of [0, 20, 40]) for (const [n, g] of TARGETS) cases.push([readS, n, g]);
+  test.each(cases)('%i s of reading at %s: warm_start ≤ 15 s after it, verified ≤ 60 s after that', (readS, name, target) => {
+    const d = drive(attentive((t) => (t < readS && t % 10 < 8.5 ? { gaze: target } : null)), 150, { seed: 30, profile: PROFILE });
+    const w = ev(d, 'warm_start');
+    expect(w).toHaveLength(1);
+    expect(w[0]!.tMs).toBeLessThanOrEqual((readS + 15) * 1000);
+    const v = ev(d, 'seed_verified');
+    expect(v).toHaveLength(1);
+    expect(v[0]!.tMs).toBeLessThanOrEqual(w[0]!.tMs + 60_000);
+    if (readS === 40 && name.startsWith('a navigation')) {
+      expect(angularDistanceDeg(at(d, 149_000).centre!, PROFILE.gazeCentres.geometric!)).toBeLessThanOrEqual(1.5);
+    }
+  });
+  test('the 40 s navigation start through 240 s: the centre stays within 1.5° of the truth', () => {
+    const d = drive(attentive((t) => (t < 40 && t % 10 < 8.5 ? { gaze: rel(14, -8) } : null)), 240, { seed: 30, profile: PROFILE });
+    const truth = PROFILE.gazeCentres.geometric!;
+    for (const tMs of [60_000, 120_000, 239_000]) expect(angularDistanceDeg(at(d, tMs).centre!, truth)).toBeLessThanOrEqual(1.5);
+  });
+  test('S-WARM-MOVED: a different face (a real mismatch) is never adopted, through the retries', () => {
+    const d = drive((t, r) => ({ ...attentive()(t, r), otherDriver: true }), 360, { seed: 31, profile: PROFILE });
+    expect(ev(d, 'warm_start')).toEqual([]);
+  });
+});
+
+describe('S-SAVE-DROWSY-START (review-C8 C8-2; NC-C8-S3): a drowsy start does not save its drooped EAR', () => {
+  // No profile, 90 km/h. For the first 300 s the open lid droops to `droop` with slow 0.7 s closures every 9 s (the
+  // review's probe: under 1 s, so no F1, and fatigue is still learning); then 20 min alert.
+  test.each([0.9, 0.85, 0.75])('droop %f: the profile saves the true EAR within 3 %%', (droop) => {
+    const d = drive(
+      attentive((t) => (t < 300 ? { openness: t % 9 < 0.7 ? 0.1 : droop * blinkOpenness(t) } : null), 90),
+      1500,
+      { seed: 32 }
+    );
+    expect(ev(d, 'calibrated').length).toBeGreaterThanOrEqual(1);
+    expect(ev(d, 'microsleep')).toEqual([]);
+    expect(d.profile).not.toBeNull();
+    for (const e of d.profile!.openEyeEar) expect(Math.abs(e! / 0.3 - 1)).toBeLessThanOrEqual(0.03);
+  });
+});
+
+describe("S-SEED-DISPLAY-POSE (review-C8 C8-3; NC-C8-H): a seed moved onto a display's direction with the head unchanged never verifies", () => {
+  // The phone on the dash 25° right of and 15° below the road (off it, as a real mount is: with the synth's default
+  // camera beside the road, a road 16° from c₀ reads as the phone and no dual candidate forms). The profile is this
+  // mount's, its gaze centre moved onto the navigation screen, the head centre unchanged.
+  const MOUNT: AnglePair = { yaw: -25, pitch: 15 };
+  const mounted = (over: (t: number) => Partial<DriverState> | null = () => null): DriverFn => (t, r) => ({ ...attentive(over)(t, r), mountShift: MOUNT });
+  let P: DmsProfileV1;
+  beforeAll(() => {
+    P = drive(mounted(), 300).profile!;
+  });
+  // The warm start matches on the first 12 s of road (the head's signature is the profile's), then 60 s at the
+  // navigation screen, 8.5 s of every 10 s: every window's gaze mode sits on the moved seed; only the head (40 % of
+  // the gaze, 6.4° off its seed) disagrees (NC-C8-H drops the head from the agree test and verifies here). Stage 1 is
+  // held off: a navigation-heavy minute would calibrate Stage 1 onto the screen (the review's Stage 1 carry, outside
+  // the seed rules); this pins the seed verification alone.
+  test('adopted, then a navigation-heavy minute: never verified; the road then replaces the seed (dual, cause seed)', () => {
+    const nav = rel(14, -8);
+    const g = P.gazeCentres.geometric!;
+    const moved: DmsProfileV1 = { ...P, gazeCentres: { geometric: { yaw: g.yaw + 14, pitch: g.pitch - 8 } } };
+    const cfg = resolveDmsConfig({ calibration: { firstEvalDrivingS: 1000, giveUpS: 2000 } });
+    const d = drive(mounted((t) => (t >= 12 && t < 72 && (t - 12) % 10 < 8.5 ? { gaze: nav } : null)), 240, { seed: 33, profile: moved, cfg });
+    expect(ev(d, 'warm_start')).toHaveLength(1);
+    expect(ev(d, 'warm_start')[0]!.tMs).toBeLessThanOrEqual(12_000);
+    expect(ev(d, 'seed_verified')).toEqual([]);
+    expect(ev(d, 'posture_dual').filter((e) => e.cause === 'seed').length).toBeGreaterThanOrEqual(1);
+    expect(angularDistanceDeg(at(d, 239_000).centre!, g)).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('S-SEED-TOWN (the review-C8 carry): a stale profile through a town drive stays widened and is never saved', () => {
+  // 15 min in town: 25 km/h with a 10°/s turn for 4 s of every 20 s, a 20 s stop every 90 s, mirror checks, and a
+  // 7.5 s lap-phone look every 60 s (the city D1 buffer is 6 s). The profile's centres (gaze and head) moved.
+  const town = (): DriverFn =>
+    attentive((t) => {
+      const stop = t % 90 >= 70;
+      const phone = t % 60 >= 30 && t % 60 < 37.5;
+      return { speedKmh: stop ? 0 : 25, turnDegS: !stop && t % 20 < 4 ? 10 : 0, ...(phone ? { gaze: rel(0, -35) } : {}) };
+    });
+  const shifted = (dy: number, dp: number): DmsProfileV1 => {
+    const g = PROFILE.gazeCentres.geometric!;
+    return { ...PROFILE, gazeCentres: { geometric: { yaw: g.yaw + dy, pitch: g.pitch + dp } }, headCentre: { yaw: PROFILE.headCentre.yaw + dy, pitch: PROFILE.headCentre.pitch + dp } };
+  };
+  const inPhone = (tMs: number) => tMs % 60_000 >= 30_000 && tMs % 60_000 < 40_000;
+  const phoneD1 = (d: Drive) => d1(d).filter((c) => inPhone(c.tMs)).length;
+  const falseD1 = (d: Drive) => d1(d).filter((c) => !inPhone(c.tMs)).length;
+  let ref = 0;
+  beforeAll(() => {
+    ref = phoneD1(drive(town(), 900, { seed: 34, profile: PROFILE }));
+  });
+  // Measured (seed 34, 15 looks): the correct profile 15, 8° right 15, 8° up 15, 8° down 12. The downward offset is the
+  // review's lap-direction residual (a stale seed below the road puts part of the lap look in the cluster band, a
+  // driving zone, even widened); it is recorded at its measured value, 3 looks fewer.
+  test.each([
+    ['8° right', 8, 0, 0],
+    ['8° up', 0, 8, 0],
+    ['8° down (the lap-direction residual: 3 fewer)', 0, -8, 3],
+  ] as const)("%s: widened with seed_check, phone D1 as the correct profile's, 0 false D1, not saved", (_, dy, dp, fewer) => {
+    const d = drive(town(), 900, { seed: 34, profile: shifted(dy, dp) });
+    expect(ref).toBeGreaterThanOrEqual(8);
+    expect(phoneD1(d)).toBeGreaterThanOrEqual(ref - fewer);
+    expect(falseD1(d)).toBe(0);
+    expect(ev(d, 'seed_verified')).toEqual([]);
+    expect(at(d, 600_000).calReason).toBe('seed_check');
     expect(d.profile).toBeNull();
   });
 });

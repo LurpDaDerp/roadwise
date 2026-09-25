@@ -90,6 +90,13 @@ export interface Baselines {
   setReference(ear: EarPair, mar: number | null, tMs: number, appearance?: Appearance | null): EarPair;
   /** Task C8: the drive's reference as set (verified, never the adapted state) and its appearance, for the profile */
   reference0(): { ear: EarPair; appearance: Appearance | null } | null;
+  /**
+   * C8 round 1 (review-C8 C8-2): what the profile saves. The reference as set (reference0) or, when the drive's
+   * reference has only ever been RAISED from it (no downward adoption), the current reference, whichever is not lower,
+   * each with its appearance: an upward move is always safe (C6), a downward one is never saved (a drowsy start's
+   * Stage 1 EAR is replaced by the raised value it was corrected to).
+   */
+  savedReference(): { ear: EarPair; appearance: Appearance | null } | null;
   step(x: BaselineInput): BaselineOut;
   /**
    * A value from a resume path (rederiveEar, baselineReset; R4): up is taken; down only with the fatigue gate
@@ -202,6 +209,8 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   let ref0: EarPair | null = null;
   let ref0App: Appearance | null = null;
   let refApp: Appearance | null = null;
+  /** C8 round 1 (C8-2): the drive's reference has only been raised since it was set (no downward adoption) */
+  let onlyRaised = true;
   let refTier: { r: Tier; l: Tier } = { r: 0, l: 0 };
   /**
    * A reference set before its appearance is known (no TRACKING frame yet, or the tiers not settled): the first
@@ -270,6 +279,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   const floored = (side: 'r' | 'l', v: number | null, now: Appearance | null = app) => (v === null ? null : Math.max(v, floorOf(side, now)));
 
   function adopt(next: EarPair): void {
+    if (ref !== null && ((next.r !== null && ref.r !== null && next.r < ref.r - 1e-12) || (next.l !== null && ref.l !== null && next.l < ref.l - 1e-12))) onlyRaised = false;
     ref = next;
     refApp = app === null ? null : { ...app };
     refTier = { r: tier.r.now, l: tier.l.now };
@@ -289,6 +299,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     ref0 = next;
     ref0App = at === null ? null : { ...at };
     adopt(next);
+    onlyRaised = true;
     if (appearance !== null) {
       refApp = { ...appearance };
       appPending = false;
@@ -486,6 +497,13 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     },
     lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
     reference0: () => (ref0 === null ? null : { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } }),
+    savedReference() {
+      if (ref0 === null) return null;
+      const set = { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } };
+      if (!onlyRaised || ref === null) return set;
+      const notLower = (ref.r ?? 0) >= (ref0.r ?? 0) - 1e-12 && (ref.l ?? 0) >= (ref0.l ?? 0) - 1e-12;
+      return notLower ? { ear: { ...ref }, appearance: refApp === null ? set.appearance : { ...refApp } } : set;
+    },
     eyesDegraded: () => h5Degraded,
     appearance: () => (app === null ? null : { ...app }),
     reset() {
@@ -497,6 +515,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       ref0 = null;
       ref0App = null;
       refApp = null;
+      onlyRaised = true;
       mar = null;
       marReads = [];
       check = null;

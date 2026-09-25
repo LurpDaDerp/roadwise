@@ -301,6 +301,12 @@ export interface DmsConfig {
     signatureS: number;
     /** …compared over the first 5 s after a resume */
     resumeCompareS: number;
+    /**
+     * C8 round 1 (review-C8 C8-1): a failed warm-start comparison (a profile's mount signature) retries on each next
+     * resumeCompareS of TRACKING, until it matches, a Stage 1 pass, or this much moving time (a texting start fails
+     * the head-pose signature; a real mount change keeps failing and is never adopted).
+     */
+    warmRetryS: number;
     /** C-6: a SEARCH longer than this also stores and compares a signature */
     longSearchS: number;
     /** C-6 tolerances */
@@ -914,6 +920,7 @@ const DEFAULT: DmsConfig = {
     bumpSpanS: 2,
     signatureS: 10,
     resumeCompareS: 5,
+    warmRetryS: 300,
     longSearchS: 30,
     resumeTolerance: { yawDeg: 4, pitchDeg: 4, rollDeg: 3, box: 0.05, iodFrac: 0.1 },
     driverChange: { iodFrac: 0.15, box: 0.15 },
@@ -1317,6 +1324,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   ordered('calibration.opennessRange', c.calibration.opennessRange);
   ordered('calibration.startOpennessRange', c.calibration.startOpennessRange);
   ordered('calibration.startMarRange', c.calibration.startMarRange);
+  // C8 round 1 (C8-1): the warm start's retries.
+  if (!(c.calibration.warmRetryS > c.calibration.resumeCompareS)) bad('calibration.warmRetryS', 'must be > resumeCompareS');
   // Task C8: seed verification.
   const sv = c.calibration.seed;
   if (!(sv.windowS > 0 && sv.windowS < sv.windowMaxObservedS)) bad('calibration.seed.windowS', 'must be in (0, windowMaxObservedS)');

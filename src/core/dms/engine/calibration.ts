@@ -1335,9 +1335,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const after = signatureOf(cmp.samples);
     if (cmp.kind === 'warm') {
       const p = warmProfile;
-      warmProfile = null;
-      if (state === 'calibrated') return; // a deferred warm start never overwrites a pass (T6 review m3)
-      if (p !== null && after !== null && lastRotation === p.orientation && compareSignatures(p.mount, after, cfg).match) applyProfile(p);
+      if (state === 'calibrated') {
+        warmProfile = null;
+        return; // a deferred warm start never overwrites a pass (T6 review m3)
+      }
+      if (p !== null && after !== null && lastRotation === p.orientation && compareSignatures(p.mount, after, cfg).match) {
+        warmProfile = null;
+        applyProfile(p);
+        return;
+      }
+      // C8 round 1 (review-C8 C8-1): a failed comparison retries on the next resumeCompareS of TRACKING (a driver
+      // texting at the start fails the head-pose signature), until warmRetryS of moving time. A Stage 1 pass ends it
+      // (above); a real mount change keeps failing and is never adopted.
+      if (drivingS >= c.warmRetryS) warmProfile = null;
       return;
     }
     if (cmp.before === null || after === null) return;
@@ -1732,8 +1742,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (!saveableNow() || primary === null || centres.head === null || radius === null || savedMar === null || mouthW === null || mount === null || lastRotation === null) {
         return null;
       }
-      // The verified reference (the drive's as set, never the adapted end state) and its appearance.
-      const r0 = baselines.reference0();
+      // The verified reference (the drive's as set, never a downward adaptation) and its appearance. C8 round 1
+      // (C8-2): a reference only ever raised since it was set is saved as raised (a drowsy start's Stage 1 EAR).
+      const r0 = baselines.savedReference();
       const savedEar = r0?.ear ?? ear;
       const app = r0?.appearance ?? null;
       const gazeCentres: DmsProfileV1['gazeCentres'] = {};
