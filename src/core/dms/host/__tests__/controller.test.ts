@@ -12,7 +12,10 @@ import type { EngineFrame } from '../../engine/types';
 import { frame } from '../../engine/__fixtures__/synth';
 import { EPOCH0, onRoad, rel, synthDrive, type DriverFn } from '../../replay/synth';
 import { featuresFromFrame } from '../__fixtures__/records';
-import { createDmsController, type DmsController, type DmsGateInputs, type DmsHudStatus } from '../controller';
+import { createDmsController, stopThresholdProblems, type DmsController, type DmsGateInputs, type DmsHudStatus } from '../controller';
+import { DEFAULT_DMS_CONFIG } from '../../engine/config';
+import { MOTION_CONSTANTS } from '@/core/engine/motionEvidence';
+import { STOP_KMH as POLICY_STOP_KMH } from '../../policy/constants';
 import * as engineModule from '../../engine/engine';
 
 const GATE: DmsGateInputs = {
@@ -1341,5 +1344,19 @@ describe('C3: presence() (rev4 §2.12.5): booleans and times only', () => {
   test('no drive: nothing known', () => {
     const h = harness();
     expect(h.ctl.presence()).toEqual({ lastFaceT: null, absent: false, exitEvidence: false });
+  });
+});
+
+// C2 round 1 (review-C2 F2): one GNSS stop threshold.
+describe('C2 round 1: the GNSS stop threshold has one value', () => {
+  test('the motion evidence, the engine config and the policy agree (10 km/h)', () => {
+    expect(MOTION_CONSTANTS.STOP_KMH).toBe(10);
+    expect(DEFAULT_DMS_CONFIG.alerts.criticalEndBelowKmh).toBe(MOTION_CONSTANTS.STOP_KMH);
+    expect(POLICY_STOP_KMH).toBe(MOTION_CONSTANTS.STOP_KMH);
+    expect(stopThresholdProblems({ alerts: { ...DEFAULT_DMS_CONFIG.alerts } })).toEqual([]);
+  });
+  test('a config that moves the engine threshold alone is refused when the controller is built', () => {
+    expect(stopThresholdProblems({ alerts: { ...DEFAULT_DMS_CONFIG.alerts, criticalEndBelowKmh: 8 } })).toEqual([expect.stringMatching(/criticalEndBelowKmh/)]);
+    expect(() => harness({ config: { alerts: { criticalEndBelowKmh: 8 } } })).toThrow(/criticalEndBelowKmh/);
   });
 });

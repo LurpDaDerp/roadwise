@@ -21,6 +21,12 @@
 //   - every start has its stop by the end of the drive, and every tier is 1–3;
 //   - the façade never breaks the alert contract (invariantViolations 0: rule 5 and escalations);
 //   - a replay equals itself (determinism), and the summary has no NaN.
+// C2 round 1 (review-C2 F1): half the drives carry motion evidence (sensor stops, ambiguous stillness,
+// tunnels, evidence gaps), and the user's rule is asserted directly:
+//   - no sleep-family request (F1, F2, microsleep_nod) is ever suppressed for speed;
+//   - no D4-origin Critical starts while the engine is STOPPED;
+//   - a sleep-origin Critical stops only on its clear (a TRACKING frame with the eyes open), a cap, the gate
+//     closing, or a replacement; never on a stop.
 //
 // The default run: 20 drives × 2 min. DMS_FULL=1 (a test-only switch, read only by the replay test files,
 // never by the app, eas.json or any build): 200 drives × 10 min. The seeds are fixed and are in each test's
@@ -49,6 +55,8 @@ interface Step {
   closedMs: number;
   /** C2: the running Critical's origin after this step */
   origin: 'sleep' | 'd4' | null;
+  /** C2 round 1: the engine's STOPPED state after this step */
+  stopped: boolean;
   commands: DmsAlertCommand[];
   events: { kind: string; tMs: number }[];
   off: RandomOff | null;
@@ -72,7 +80,7 @@ function play(d: RandomDrive, engine: DmsEngine, onStep?: (s: Step) => void): Dm
     const s = engine.snapshot();
     const out = engine.drain();
     commands.push(...out.commands);
-    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, closedMs: s.closedMs, origin: s.criticalOrigin, commands: [...out.commands], events: [...out.events], off });
+    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, closedMs: s.closedMs, origin: s.criticalOrigin, stopped: s.stopped, commands: [...out.commands], events: [...out.events], off });
   }
   return commands;
 }
@@ -88,7 +96,19 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
   let lastFrame = Number.NEGATIVE_INFINITY;
   let knownLowSince: number | null = null;
   let prevClosedMs = 0;
+  let prevOrigin: 'sleep' | 'd4' | null = null;
   const commands = play(d, engine, (s) => {
+    // C2 round 1 (b): no D4-origin Critical starts while STOPPED.
+    const started3 = s.commands.some((c) => c.tier === 3 && c.action === 'start');
+    if (started3 && s.origin === 'd4') expect({ seed, tMs: s.tMs, d4AtStop: s.stopped }).toEqual({ seed, tMs: s.tMs, d4AtStop: false });
+    // C2 round 1 (c): a sleep-origin Critical stops only on its clear, a cap, the gate closing, or a replacement.
+    const stops3 = s.commands.filter((c) => c.tier === 3 && c.action === 'stop');
+    if (prevOrigin === 'sleep' && stops3.length > 0 && !started3 && s.off === null) {
+      const capped = engine.alertLog().some((e) => e.tMs === s.tMs && (e.why === 'blind_cap' || e.why === 'lost_cap'));
+      const clear = s.quality === 'tracking' && s.closedMs === 0;
+      expect({ seed, tMs: s.tMs, sleepStopExplained: capped || clear }).toEqual({ seed, tMs: s.tMs, sleepStopExplained: true });
+    }
+    prevOrigin = s.origin;
     expect(s.buffer).toBeGreaterThanOrEqual(0);
     expect(s.buffer).toBeLessThanOrEqual(1);
     if (s.gap) {
@@ -132,6 +152,9 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
       }
     }
   });
+  // C2 round 1 (a): no sleep-family request is ever suppressed for speed.
+  const sleepSpeed = engine.alertLog().filter((e) => (e.kind === 'microsleep' || e.kind === 'sleep' || e.kind === 'microsleep_nod') && e.outcome === 'suppressed' && e.why === 'speed');
+  expect({ seed, sleepSpeed }).toEqual({ seed, sleepSpeed: [] });
   const violations = engine.snapshot().invariantViolations;
   const accepted = engine.alertLog().filter((e) => (e.kind === 'distraction' || e.kind === 'cumulative' || e.kind === 'phone_pattern') && e.quality === 'lost' && e.outcome !== 'suppressed');
   expect({ seed, accepted: accepted.filter((e) => e.c8 !== true) }).toEqual({ seed, accepted: [] });
@@ -160,4 +183,28 @@ test('the random drives cover the new stretches (final review m8)', () => {
     return seen;
   });
   expect(bridged).toBe(true);
+});
+
+test('C2 round 1 (review-C2 F1): half the drives carry motion evidence, with sensor stops, ambiguous stillness, tunnels and evidence gaps', () => {
+  const drives = SEEDS.map((s) => randomDrive(s, SECONDS));
+  const withMotion = drives.filter((d) => d.motion);
+  expect(withMotion.length).toBeGreaterThanOrEqual(Math.floor(N / 4));
+  expect(withMotion.length).toBeLessThan(N);
+  const rows = withMotion.flatMap((d) => d.items.filter((it) => it.row !== undefined).map((it) => it.row!.ex.motion));
+  expect(rows.some((m) => m?.stop === 'sensor')).toBe(true);
+  expect(rows.some((m) => m?.ambiguousStill === true)).toBe(true);
+  expect(rows.some((m) => m?.moving === 'weak' && m.vLowKmh !== null)).toBe(true);
+  expect(rows.some((m) => m === undefined)).toBe(true); // an evidence gap
+  // the new states are reached through the engine
+  const states = new Set<string>();
+  for (const d of withMotion.slice(0, 6)) {
+    const engine = createDmsEngine({ ...C, gazeSource: d.source } as DmsConfig, DEFAULT_INIT);
+    for (const it of d.items) {
+      if (it.row !== undefined) engine.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      engine.pushFrame(it.frame);
+      engine.drain();
+      states.add(engine.snapshot().speedState);
+    }
+  }
+  expect([...states]).toEqual(expect.arrayContaining(['stopped', 'moving_known', 'ambiguous', 'moving_after_stop']));
 });

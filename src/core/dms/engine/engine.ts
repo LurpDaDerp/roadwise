@@ -390,6 +390,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       }
       emit({ kind: e.kind, tMs: e.tMs, bridged, stopped: e.stopped === true });
       if (e.kind === 'microsleep' || e.kind === 'sleep') requests.push({ kind: e.kind, bridged });
+      // fastRules sets the origin on every unresponsive; `sleep` is the safe default if one ever did not (a stop
+      // never ends a sleep Critical, while a wrong `d4` would silence a sleeping driver at a stop).
       else requests.push({ kind: 'unresponsive', closure: e.clause === 'closure', bridged, c8, escalation: e.escalation === true, origin: e.origin ?? 'sleep' });
     }
 

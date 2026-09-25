@@ -137,7 +137,7 @@ export function createFastRules(cfg: DmsConfig) {
   let drowsyUntil = Number.NEGATIVE_INFINITY;
   let severeUntil = Number.NEGATIVE_INFINITY;
 
-  function criticalStarted(origin: CriticalOrigin = 'sleep'): void {
+  function criticalStarted(origin: CriticalOrigin): void {
     pendingOrigin = pendingF3 === null ? origin : pendingOrigin === 'sleep' || origin === 'sleep' ? 'sleep' : 'd4';
     pendingF3 ??= 0;
   }

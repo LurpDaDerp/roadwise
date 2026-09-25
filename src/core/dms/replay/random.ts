@@ -5,9 +5,14 @@
 // Final review m8: also nod-offs into LOST (a C-26 bridge: 0.6 s closed, a 25° head drop, then LOST for
 // 0.5–12 s), tunnel legs (no speed, the IMU moving), and `offs`: stretches with no frames while rows go on,
 // either the camera off (the test calls cameraOff at the start) or the gate closed (stopAlerts).
+// C2 round 1 (review-C2 F1): half the drives carry the host's motion evidence on their rows (`motion`): a
+// GNSS stop below 10 km/h, strong movement at 10 or more, and on the legs with no speed a sensor stop, an
+// ambiguous stillness or a tunnel (weak movement, with vLowKmh after a sensor stop), and evidence gaps of up
+// to 5 s (rows with none). Drawn from their own generator, so the drives without it are unchanged.
 import { gauss, rng } from '../engine/__fixtures__/synth';
 import type { GazeSource } from '../engine/types';
 import { TARGET } from './scenarios';
+import type { RowMotion } from '../engine/types';
 import { blinkOpenness, onRoad, rel, synthDrive, type DriverState, type SynthItem } from './synth';
 
 export const PROPERTY_FPS = [5, 8, 10, 15, 30] as const;
@@ -29,6 +34,8 @@ export interface RandomDrive {
   source: GazeSource;
   items: SynthItem[];
   offs: RandomOff[];
+  /** C2 round 1: the rows carry motion evidence */
+  motion: boolean;
 }
 
 /** One random drive of `seconds`. */
@@ -42,7 +49,10 @@ export function randomDrive(seed: number, seconds: number): RandomDrive {
     const u = r();
     const kind: Seg['kind'] = u < 0.48 ? 'road' : u < 0.66 ? 'glance' : u < 0.74 ? 'closure' : u < 0.79 ? 'nod' : u < 0.85 ? 'lost' : u < 0.89 ? 'c8' : u < 0.92 ? 'lens' : u < 0.95 ? 'absent' : 'nodoff';
     const lostFor = 0.5 + r() * 11.5;
-    const len = kind === 'road' ? 2 + r() * 20 : kind === 'closure' ? 0.2 + r() * 7 : kind === 'nod' ? 1.1 : kind === 'lost' || kind === 'absent' ? 0.5 + r() * 15 : kind === 'lens' ? 5 + r() * 30 : kind === 'nodoff' ? 1.1 + lostFor : 0.3 + r() * 4;
+    // C2 round 1: a glance is 0.3–4.3 s, and one in five is 4.3–10 s, so D1 escalates to D4 (and a stop can
+    // follow it: the no-D4-at-a-stop invariant needs D4s to exist).
+    const g = r();
+    const len = kind === 'road' ? 2 + r() * 20 : kind === 'closure' ? 0.2 + r() * 7 : kind === 'nod' ? 1.1 : kind === 'lost' || kind === 'absent' ? 0.5 + r() * 15 : kind === 'lens' ? 5 + r() * 30 : kind === 'nodoff' ? 1.1 + lostFor : g < 0.8 ? 0.3 + g * 5 : 4.3 + (g - 0.8) * 28.5;
     t += len;
     segs.push({ until: t, kind, target: targets[Math.floor(r() * targets.length)], lostAfter: 1.1 });
   }
@@ -118,6 +128,50 @@ export function randomDrive(seed: number, seconds: number): RandomDrive {
   });
   // A row on a dropped frame still arrives (rows come from the drive engine): the frame is dropped and its
   // row moves onto the next kept frame.
+  // C2 round 1: the motion evidence, from its own generator.
+  const rm = rng(seed * 7717 + 3);
+  const motion = rm() < 0.5;
+  if (motion) {
+    // Per leg, in turn from a random offset: a GNSS leg (the speed as drawn), a sensor stop, a tunnel after it
+    // (weak movement; vLowKmh after the sensor stop), or an ambiguous stillness. The last three lose the fix. The
+    // frames do not depend on the speed, so every kind meets every driver behaviour.
+    const cycle = ['gnss', 'sensor', 'tunnel', 'ambiguous'] as const;
+    const offset = Math.floor(rm() * 4);
+    const plan = legs.map((leg, i) => {
+      const kind = leg.speed === null ? cycle[1 + ((i + offset) % 3)]! : cycle[(i + offset) % 4]!;
+      return { kind, dropFix: leg.speed !== null && kind !== 'gnss' };
+    });
+    const evGaps: [number, number][] = [];
+    for (let k = 0; k < Math.floor(seconds / 60); k++) {
+      const g0 = rm() * seconds;
+      evGaps.push([g0, g0 + 1 + rm() * 4]);
+    }
+    let prevKind: string | null = null;
+    let legStart = 0;
+    let li2 = 0;
+    for (const it of all) {
+      if (it.row === undefined) continue;
+      const t = it.frame.tMs / 1000;
+      while (li2 < legs.length - 1 && t >= legs[li2]!.until) {
+        prevKind = plan[li2]!.kind;
+        legStart = legs[li2]!.until;
+        li2++;
+      }
+      const leg = legs[li2]!;
+      const { kind, dropFix } = plan[li2]!;
+      if (dropFix) it.row.row = { ...it.row.row, speed: -1, gnssValid: false };
+      if (evGaps.some(([a, b]) => t >= a && t < b)) continue; // no evidence on this row
+      const into = t - legStart;
+      const v = leg.speed ?? 0;
+      const base: RowMotion = { stop: null, moving: null, quiet: false, vehicleMotion: false, ambiguousStill: false, quietNoFixS: 0, vLowKmh: null, trust: true, gap: false };
+      let m: RowMotion;
+      if (kind === 'gnss') m = { ...base, stop: v < 10 ? 'gnss' : null, moving: v >= 10 ? 'strong' : null, quiet: v < 1 };
+      else if (kind === 'sensor') m = { ...base, stop: 'sensor', quiet: true, quietNoFixS: into };
+      else if (kind === 'ambiguous') m = { ...base, quiet: true, ambiguousStill: into >= 10, quietNoFixS: into };
+      else m = { ...base, moving: 'weak', vLowKmh: prevKind === 'sensor' && into < 120 ? Math.min(40, into * 2) : null };
+      it.row.ex = { ...it.row.ex, motion: m };
+    }
+  }
   const out: SynthItem[] = [];
   let pendingRow: SynthItem['row'];
   for (const it of all) {
@@ -129,5 +183,5 @@ export function randomDrive(seed: number, seconds: number): RandomDrive {
     out.push(pendingRow !== undefined && it.row === undefined ? { ...it, row: pendingRow } : it);
     pendingRow = undefined;
   }
-  return { seed, fps, source, items: out, offs };
+  return { seed, fps, source, items: out, offs, motion };
 }

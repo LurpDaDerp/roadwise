@@ -71,7 +71,8 @@ import { createGate, type DmsGate, type GateClosedReason, type GateToken, type P
 import { engineFrame } from './frames';
 import { gatedNative } from './native';
 import type { DmsProfileStore } from './profileStore';
-import { createMotionEvidence, type MotionEvidence } from '@/core/engine/motionEvidence';
+import { createMotionEvidence, MOTION_CONSTANTS, type MotionEvidence } from '@/core/engine/motionEvidence';
+import { STOP_KMH as POLICY_STOP_KMH } from '../policy/constants';
 import { policyRow, rowExtras } from './rowContext';
 import { monitoringOf, type DmsMonitoring } from './status';
 
@@ -225,8 +226,22 @@ const REPLAY_ROWS = 10;
 /** Task C3 (rev4 §2.12.5): a face box centre this close to the door-side edge of the frame is an exit. */
 const EXIT_EDGE = 0.1;
 
+/**
+ * C2 round 1 (review-C2 F2): the GNSS stop threshold has one value: the motion evidence's STOP_KMH (the
+ * source), the engine's alerts.criticalEndBelowKmh (its STOPPED state) and the capture policy's STOP_KMH.
+ * The engine and the policy may import only their own folders, so the host, which sees all three, checks it.
+ */
+export function stopThresholdProblems(cfg: Pick<DmsConfig, 'alerts'>): string[] {
+  const out: string[] = [];
+  if (cfg.alerts.criticalEndBelowKmh !== MOTION_CONSTANTS.STOP_KMH) out.push(`alerts.criticalEndBelowKmh (${cfg.alerts.criticalEndBelowKmh}) must equal the motion evidence's STOP_KMH (${MOTION_CONSTANTS.STOP_KMH})`);
+  if (POLICY_STOP_KMH !== MOTION_CONSTANTS.STOP_KMH) out.push(`the policy's STOP_KMH (${POLICY_STOP_KMH}) must equal the motion evidence's STOP_KMH (${MOTION_CONSTANTS.STOP_KMH})`);
+  return out;
+}
+
 export function createDmsController(deps: DmsControllerDeps): DmsController {
   const cfg: DmsConfig = resolveDmsConfig(deps.config ?? {});
+  const stopProblems = stopThresholdProblems(cfg);
+  if (stopProblems.length > 0) throw new Error(`DMS config: ${stopProblems.join('; ')}`);
   const native = gatedNative(deps.native);
   const gate = createGate(deps.random ?? (() => randomUUID()));
   let inputs: DmsGateInputs | null = null;
