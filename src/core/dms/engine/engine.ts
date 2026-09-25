@@ -153,6 +153,11 @@ export interface DmsSnapshot {
   calReason: 'posture' | 'recalibrating' | null;
   /** Task C5 (rev2 §2.3.7): the fatigue evidence gate at the last frame (no downward or phone-ward adaptation) */
   fatigueGate: boolean;
+  /** Task C6: the open-eye EAR reference in force (the mean of the eyes'), and the pre-calibration pitch reference (diagnostics) */
+  earRef: number | null;
+  pitchReference: number | null;
+  /** Task C6: the EAR baseline's fatigue evidence (an unexplained drop, or a low q/b held 60 s) */
+  earEvidence: boolean;
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -195,6 +200,13 @@ const SEED_RING_S = 4;
 const PENDING_CAP = 4096;
 const MAX_FPS = 30;
 const EMPTY_REQ: readonly AlertRequest[] = Object.freeze([]);
+
+/** Task C6: the mean of the eyes' EAR baselines (the fatigue rows' scale), or null. */
+function earMean(e: { r: number | null; l: number | null } | null): number | null {
+  if (e === null) return null;
+  const xs = [e.r, e.l].filter((x): x is number => x !== null);
+  return xs.length === 0 ? null : xs.reduce((a, x) => a + x, 0) / xs.length;
+}
 
 export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine {
   // Final review m7: no caller (a test, the replay, a future host path) can run on an invalid config.
@@ -248,6 +260,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastStopped: false,
       /** Task C5 (rev2 §2.3.7): the fatigue evidence gate is set until this time */
       fatigueGateUntil: Number.NEGATIVE_INFINITY,
+      /** Task C6: the fatigue evidence gate at the last frame (one source for the calibrator and the snapshot) */
+      fatigueGateNow: false,
       lastSpeedState: 'unknown' as SpeedState,
       lastNoFace: false,
       lastDistraction: 'off' as 'full' | 'widened' | 'off',
@@ -302,7 +316,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Task C5 (rev2 §2.3.7): the fatigue evidence gate (the part the façade sees today; T6 adds the PERCLOS, long
     // blink and EAR-ratio clauses): an F event or microsleep_nod (10 min), a nod or a yawn (5 min), a head slump
     // (10 min), a fatigue level above none (10 min), and an open closure of ≥ 0.5 s.
-    d.cal.setFatigueGate(t <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500);
+    // Task C6 (rev2 §2.3.7): plus PERCLOS(60 s) ≥ 0.08, ≥ 2 long blinks in 5 min, and the EAR baseline's evidence (an
+    // unexplained drop, or a continuous low q/b).
+    d.fatigueGateNow = t <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500 || d.fatigue.gateEvidence(t) || d.cal.earEvidence();
+    d.cal.setFatigueGate(d.fatigueGateNow);
     const refs = { ...d.cal.refs(), gazeNetEvery: host.gazeNetEvery };
     const p = d.cond.step(f, classifyQuality(f, cfg), refs);
     d.seedRing.push({ frame: f, p });
@@ -452,6 +469,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     }
     for (const e of d.yawn.onFrame({ tMs: t, quality: p.quality, mar: f.mouth?.mar ?? null, mouthW: f.mouth?.widthIod ?? null, neutralMar: d.cal.neutralMar(), neutralMouthW: d.cal.neutralMouthW(), fps })) {
       emit({ kind: 'yawn', tMs: e.tMs });
+      d.cal.onYawn(e.tMs);
       if (!stopped) d.fatigue.onYawn(e.tMs);
     }
 
@@ -472,6 +490,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       tripElapsedS: cs.ctx?.tripElapsedS ?? 0,
       localMinutes: cs.ctx?.localMinutes ?? null,
       floor,
+      earRef: earMean(d.cal.openEyeEar()),
     });
     if (minute !== null) {
       d.fatigueLevel = minute.level;
@@ -574,7 +593,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         distraction: d.lastDistraction,
         centre: { gaze: d.cal.centre(gazeSource) ?? d.cal.centre('geometric'), head: d.cal.centre('head') },
         calReason: d.cal.reason(),
-        fatigueGate: d.lastFrameT !== null && (d.lastFrameT <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500),
+        fatigueGate: d.fatigueGateNow,
+        earRef: earMean(d.cal.openEyeEar()),
+        pitchReference: d.cal.pitchReference(),
+        earEvidence: d.cal.earEvidence(),
       };
     },
 

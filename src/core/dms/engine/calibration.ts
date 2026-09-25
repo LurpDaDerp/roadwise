@@ -55,6 +55,7 @@ import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
+import { createBaselines, type EyeSample } from './baselines';
 import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, shareNear, unimodal, vacatedRing, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
@@ -121,6 +122,10 @@ export interface Calibrator {
   voidAround(tMs: number): void;
   /** Task C5 (rev2 §2.3.7): the fatigue evidence gate: while set, no downward or phone-ward adaptation */
   setFatigueGate(on: boolean): void;
+  /** Task C6 (rev2 §2.3.4, §2.3.7): fatigue evidence from the EAR baseline: an unexplained drop, or a low q/b */
+  earEvidence(): boolean;
+  /** Task C6: a yawn (the MAR baseline never rises within yawnBlockS of one) */
+  onYawn(tMs: number): void;
   /** The camera is about to pause: keep the mount signature for the comparison after the resume. */
   markGap(tMs: number): void;
   applySeed(seed: CalibrationSeed): void;
@@ -139,7 +144,13 @@ export interface Calibrator {
   mountSignature(): MountSignature | null;
   refs(): ConditionerRefs;
   /** C4 round 1: postureIgnored counts posture steps and bumps seen before any centre (Stage 1 decides) */
-  stats(): { drivingS: number; admittedS: number; postureIgnored: number };
+  stats(): {
+    drivingS: number;
+    admittedS: number;
+    postureIgnored: number;
+    /** Task C6: the EAR baseline's changes (derived, raised, lowered by an explained event, an unexplained drop, a low q/b) */
+    baselines: { derived: number; raised: number; lowered: number; unexplained: number; lowUnexplained: number };
+  };
   /** drivingS without building the stats object (final review n1: read per frame) */
   drivingS(): number;
   drainEvents(): CalibrationEvent[];
@@ -183,6 +194,8 @@ const EXCURSION_MIN_FRAMES = 3;
 /** Task C5: the share of the rolling window's weight a small-shift follow needs */
 const SMALL_MIN_WINDOW_FRAC = 0.75;
 const ORIGIN: AnglePair = Object.freeze({ yaw: 0, pitch: 0 });
+/** Task C6 (rev4 S4): the moving-time pitch samples before the running median is a reference */
+const PITCH_MIN_MOVING_S = 10;
 
 type Centres = { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null };
 
@@ -331,6 +344,18 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   /** a rotation bump since the last gap: that resume's signature comparison is skipped (T6 review m3) */
   let rotationBumpedInGap = false;
   let warmProfile: DmsProfileV1 | null = init.profile && init.profile.driverSide === side ? init.profile : null;
+  /**
+   * Task C6 (rev2 §2.3.4): the EAR and MAR baselines during the drive, anchored to the profile's EAR (the floor).
+   * Every derivation goes through `setEar`: a new reference (Stage 1, a seed, a profile, a new driver) or an
+   * offer (the resume paths, R4: up freely; down only with the fatigue gate clear, by the explained factor).
+   */
+  const baselines = createBaselines(cfg, { profileEar: warmProfile !== null ? { r: warmProfile.openEyeEar[0], l: warmProfile.openEyeEar[1] } : null });
+  /** the next derivation is a new person's (a driver change): a new reference, not an offer */
+  let earFresh = false;
+  /** Task C6 (rev4 S4): the moving-time seconds in the pitch ring (the running median is used from 10 s) */
+  let pitchMovingS = 0;
+  /** Task C6: moving seconds with a face but no usable eye (sunglasses) since the last EAR; enough allows a 10 s derivation */
+  let eyesUnseenS = 0;
   let tNow = 0;
 
   const toDrv = (a: AnglePair, r: number) => toDriverFrame(rollCorrect(a, r), side);
@@ -359,6 +384,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     earCollector = { trackingS: 0, r: [], l: [] };
   }
 
+  /** Task C6: the EAR set by a derivation (a new reference) or offered by a resume path (the downward rule). */
+  function setEar(next: EarPair | null, how: 'derive' | 'offer'): void {
+    if (next === null || (next.r === null && next.l === null)) {
+      ear = next;
+      return;
+    }
+    if (how === 'offer' && ear !== null && !earFresh) ear = baselines.offer(next, baselines.appearance(), fatigueGate);
+    else {
+      ear = baselines.setReference(next, mar, tNow);
+      earFresh = false;
+    }
+  }
+
   function cameraBump(cause: 'step' | 'resume' | 'rotation'): void {
     restartStage1();
     if (cause !== 'step') rederiveEar(); // a step bump keeps the baselines (§M3); a resume mismatch re-derives the EAR (rev2 R1-m2)
@@ -375,7 +413,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const old = ear;
     const pick = (xs: number[], prev: number | null | undefined) =>
       xs.length > 0 ? quantile(xs, c.provisionalEarPercentile) : prev != null ? prev * medianOpenness : null;
-    ear = { r: pick(win.r, old?.r), l: pick(win.l, old?.l) };
+    // Task C6 (R4): offered, so it may rise at once but falls only with the fatigue gate clear and by the factor
+    // the appearance explains (a drowsy driver's low openness never lowers the reference).
+    setEar({ r: pick(win.r, old?.r), l: pick(win.l, old?.l) }, 'offer');
     earFrozen = false;
     earCollector = { trackingS: win.trackingS, r: [...win.r], l: [...win.l] };
     emit('baseline_reset');
@@ -400,10 +440,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       seedUnverified = true;
     }
     rederiveEar();
+    earFresh = true; // a new person: the next EAR is a new reference, not an offer (Task C6)
+    baselines.reset();
     provisional = null;
     mar = null;
     mouthW = null;
     pitchRing.clear();
+    pitchMovingS = 0;
     pitchMedianStale = true;
     pitchMedian = null;
     emit('driver_change');
@@ -919,7 +962,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
   function revertProvisional(): void {
     if (provisional === null) return;
-    ear = provisional.oldEar;
+    setEar(provisional.oldEar, 'derive');
     provisional = null;
     emit('driver_change_reverted');
   }
@@ -955,7 +998,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         if (v === null) return o ?? null;
         return o != null ? Math.max(v, c.stops.interimFloor * o) : v;
       };
-      ear = { r: floor(pv.r, old?.r), l: floor(pv.l, old?.l) };
+      setEar({ r: floor(pv.r, old?.r), l: floor(pv.l, old?.l) }, 'derive');
+      earFresh = true; // the confirmed collector replaces it as a new person's reference
     }
   }
 
@@ -1023,7 +1067,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     radius = radius ?? c.radiusMinDeg;
     roll = seed.rollOffsetDeg;
     if (seed.openEyeEar.r !== null || seed.openEyeEar.l !== null) {
-      ear = { ...seed.openEyeEar };
+      setEar({ ...seed.openEyeEar }, 'derive');
       earCollector = null;
     }
     hasSeed = true;
@@ -1037,11 +1081,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     radius = p.radiusDeg;
     roll = p.rollOffsetDeg;
     // A profile without any EAR must not stop the provisional collection (T6 review m1).
+    mar = p.neutralMar;
     if (p.openEyeEar[0] !== null || p.openEyeEar[1] !== null) {
-      ear = { r: p.openEyeEar[0], l: p.openEyeEar[1] };
+      setEar({ r: p.openEyeEar[0], l: p.openEyeEar[1] }, 'derive');
       earCollector = null;
     }
-    mar = p.neutralMar;
     mouthW = p.neutralMouthW;
     hasSeed = true;
     state = 'seeded';
@@ -1050,7 +1094,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
   function pitchReference(): number | null {
     if (centres.head !== null) return centres.head.pitch;
-    if (pitchRing.size === 0) return null;
+    // Task C6 (rev4 S4): the moving-time running median once it has PITCH_MIN_MOVING_S; before that none (the
+    // looking-down gate then uses the gaze term only). A profile or seed gives the head centre above.
+    if (pitchRing.size === 0 || pitchMovingS < PITCH_MIN_MOVING_S) return null;
     if (pitchMedian === null || (pitchMedianStale && pitchNowT - pitchMedianT >= PITCH_MEDIAN_EVERY_MS)) {
       pitchMedian = median(pitchRing.toArray().map((x) => x.pitch));
       pitchMedianStale = false;
@@ -1095,17 +1141,20 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     seedUnverified = false;
     dual = null;
     probation = null;
+    let passEar: EarPair | null = null;
     if (!earFrozen) {
       const er = all.map((s) => s.earR).filter((x): x is number => x !== null);
       const el = all.map((s) => s.earL).filter((x): x is number => x !== null);
       if (er.length > 0 || el.length > 0) {
-        ear = { r: er.length > 0 ? quantile(er, c.provisionalEarPercentile) : null, l: el.length > 0 ? quantile(el, c.provisionalEarPercentile) : null };
+        passEar = { r: er.length > 0 ? quantile(er, c.provisionalEarPercentile) : null, l: el.length > 0 ? quantile(el, c.provisionalEarPercentile) : null };
         earFrozen = true;
         earCollector = null;
       }
     }
     const mars = all.map((s) => s.mar).filter((x): x is number => x !== null);
     if (mars.length > 0) mar = Math.max(median(mars), c.neutralMarFloor);
+    // Task C6: the pass is a new reference for the baselines (the profile floor applies).
+    if (passEar !== null) setEar(passEar, 'derive');
     const mws = all.map((s) => s.mouthW).filter((x): x is number => x !== null);
     if (mws.length > 0) mouthW = median(mws);
     state = 'calibrated';
@@ -1212,6 +1261,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
       if (ctx !== null && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh) drivingS += dt;
 
+      if (p.quality === 'head_only' && !stopped && ctx !== null && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh && ear === null) eyesUnseenS += dt;
       if (!tracking) {
         if (stopEp !== null) duringStop(f, p, null, dt);
         evaluateIfDue();
@@ -1254,8 +1304,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         }
       }
 
-      sigWindow.push(ms);
-      if (p.headDrv !== null) {
+      // Task C6 (rev4 S4): the collectors take moving frames only (not STOPPED, at the admission speed).
+      const moving = !stopped && ctx !== null && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh;
+      if (moving) sigWindow.push(ms);
+      if (p.headDrv !== null && moving) {
+        pitchMovingS += dt;
         pitchRing.push({ t: f.tMs, pitch: p.headDrv.pitch });
         pitchRing.dropWhile((x) => x.t < f.tMs - c.runningMedianS * 1000);
         pitchMedianStale = true;
@@ -1265,7 +1318,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       // The openness sanity check after a resume (rev2 R1-m2).
       const ref = pitchReference();
       const relPitch = p.gazeRel?.pitch ?? p.headRel?.pitch ?? (p.headDrv !== null && ref !== null ? p.headDrv.pitch - ref : null);
-      if (sanity !== null && p.openness !== null && relPitch !== null && relPitch > c.opennessCheckMinRelPitchDeg) {
+      if (sanity !== null && moving && p.openness !== null && relPitch !== null && relPitch > c.opennessCheckMinRelPitchDeg) {
         sanity.values.push(p.openness);
         if (p.usableR && f.eyeR !== null) sanity.r.push(f.eyeR.ear);
         if (p.usableL && f.eyeL !== null) sanity.l.push(f.eyeL.ear);
@@ -1279,7 +1332,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       }
 
       // The provisional EAR: p90 over 20 s of TRACKING within ±15° of the pitch reference.
-      if (earCollector !== null && p.headDrv !== null && ref !== null && Math.abs(p.headDrv.pitch - ref) <= c.provisionalEarWithinDeg) {
+      // Task C6: moving frames only (S4), and only frames with a usable eye count toward its 20 s (a lens that
+      // hides the irises no longer completes it empty).
+      const usableEye = (p.usableR && f.eyeR !== null) || (p.usableL && f.eyeL !== null);
+      // (Its pitch filter uses the ring's median from the first moving sample: the 10 s rule is the gate's.)
+      const earRef = ref ?? (pitchRing.size > 0 ? median(pitchRing.toArray().map((x) => x.pitch)) : null);
+      if (earCollector !== null && moving && usableEye && p.headDrv !== null && earRef !== null && Math.abs(p.headDrv.pitch - earRef) <= c.provisionalEarWithinDeg) {
         if (p.usableR && f.eyeR !== null) earCollector.r.push(f.eyeR.ear);
         if (p.usableL && f.eyeL !== null) earCollector.l.push(f.eyeL.ear);
         earCollector.trackingS += dt;
@@ -1287,13 +1345,41 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           const col = earCollector;
           earCollector = null;
           if (col.r.length > 0 || col.l.length > 0) {
-            ear = {
-              r: col.r.length > 0 ? quantile(col.r, c.provisionalEarPercentile) : null,
-              l: col.l.length > 0 ? quantile(col.l, c.provisionalEarPercentile) : null,
-            };
+            setEar(
+              {
+                r: col.r.length > 0 ? quantile(col.r, c.provisionalEarPercentile) : null,
+                l: col.l.length > 0 ? quantile(col.l, c.provisionalEarPercentile) : null,
+              },
+              'offer'
+            );
           }
         }
       }
+
+      // Task C6 (rev2 §2.3.4): the baselines. Moving, no episode; the reference follows up, and down only on an
+      // explained appearance event; with no reference, eyes becoming usable give one (sunglasses off).
+      const eyeIn = (e: EngineFrame['eyeR'], usable: boolean, reliable: boolean): EyeSample | null =>
+        e === null ? null : { ear: e.ear, lumaAbs: e.luma * (f.faceLuma ?? 0), contrast: e.irisContrast, usable, reliable };
+      const bo = baselines.step({
+        tMs: f.tMs,
+        dtS: dt,
+        moving,
+        tracking: true,
+        hold: p.eyesClosed || p.closureBridged || stopped,
+        headYaw: head.yaw,
+        headPitchRel: p.headDrv !== null && ref !== null ? p.headDrv.pitch - ref : null,
+        r: eyeIn(f.eyeR, p.usableR, p.reliableR),
+        l: eyeIn(f.eyeL, p.usableL, p.reliableL),
+        iodC: posture.compensate(ms).iodC,
+        mar: f.mouth?.mar ?? null,
+        fatigueGate,
+        mayDerive: eyesUnseenS >= c.baselines.checkS,
+      });
+      if (provisional === null && bo.ear !== null && (earCollector === null || ear === null)) {
+        if (ear === null) earCollector = null;
+        ear = bo.ear;
+      }
+      if (bo.mar !== null) mar = bo.mar;
 
       // The step-test bump (rev1 m5): Task C4, into the dual state with c₀ shifted by the head step. The posture
       // detector (Task C4): a settled translation opens the dual state; a slump is fatigue evidence. Neither is fed
@@ -1378,6 +1464,10 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     setFatigueGate(on) {
       fatigueGate = on;
     },
+    earEvidence: () => baselines.lowUnexplained(),
+    onYawn(tMs) {
+      baselines.onYawn(tMs);
+    },
     centre: (s) => centres[s],
     radius: () => radius,
     rollOffset: () => roll,
@@ -1397,7 +1487,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       openEyeEar: ear,
       pitchReference: pitchReference(),
     }),
-    stats: () => ({ drivingS, admittedS: Math.max(0, admittedS), postureIgnored }),
+    stats: () => ({ drivingS, admittedS: Math.max(0, admittedS), postureIgnored, baselines: baselines.stats() }),
     drivingS: () => drivingS,
     drainEvents: () => events.splice(0, events.length),
 

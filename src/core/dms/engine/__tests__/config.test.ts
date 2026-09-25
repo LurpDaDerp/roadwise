@@ -246,6 +246,12 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['a void of 0 s', (c) => (c.calibration.voidS = 0), /calibration\.voidS/],
     ['a search cap under the admissible search', (c) => (c.calibration.posture.searchCapS = 30), /calibration\.posture\.searchCapS/],
     ['a curve-rate limit of 0', (c) => (c.calibration.posture.searchCurveRateDegS = 0), /calibration\.posture\.searchCurveRateDegS/],
+    // Task C6.
+    ['an EAR floor at 0.5', (c) => (c.calibration.baselines.earFloorFrac = 0.5), /calibration\.baselines\.earFloorFrac/],
+    ['an up cap of 1', (c) => (c.calibration.baselines.earUpCapFrac = 1), /calibration\.baselines\.earUpCapFrac/],
+    ['a low ratio of 1', (c) => (c.calibration.baselines.lowRatio = 1), /calibration\.baselines\.lowRatio/],
+    ['an unsorted luma table', (c) => (c.calibration.baselines.lumaEarTable = [[1, 1], [0.5, 0.8]]), /calibration\.baselines\.lumaEarTable/],
+    ['a gate PERCLOS of 0', (c) => (c.fatigue.gatePerclos = 0), /fatigue\.gatePerclos/],
     ['a lowering-commit threshold of 0', (c) => (c.calibration.posture.fatigueCommitPitchDeg = 0), /calibration\.posture\.fatigueCommitPitchDeg/],
   ];
   test.each(cases)('%s', (_name, breakIt, path) => {

@@ -40,6 +40,8 @@ export interface DriverState {
   posture?: { shift?: AnglePair; box?: { dx: number; dy: number }; iodScale?: number };
   /** Task C4: this face's open-eye EAR relative to the default 0.3 (a different driver, or a lean) */
   earScale?: number;
+  /** Task C6: the eye and face luma relative to the default (dusk, a tunnel, night): 1 = the default 120 */
+  eyeLuma?: number;
   /** km/h; null = no GNSS fix */
   speedKmh: number | null;
   /** the car's turn rate, °/s (+ right); drives the course and the gyro */
@@ -218,6 +220,7 @@ function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, no
     eyeR: lens,
     eyeL: lens,
     mar: s.mar ?? 0.08,
+    ...(s.eyeLuma !== undefined ? { faceLuma: 120 * s.eyeLuma } : {}),
     mouthW: s.mouthW ?? 0.9,
     ...(box !== undefined ? { box } : {}),
     ...(iod !== undefined ? { iod } : {}),

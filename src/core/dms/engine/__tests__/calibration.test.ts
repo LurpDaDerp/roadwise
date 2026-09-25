@@ -164,11 +164,11 @@ describe('staying calibrated: the EMA and its drift cap', () => {
 });
 
 describe('open-eye EAR', () => {
-  test('the provisional EAR exists after 20 s of TRACKING, before any centre (§M3, rev1 m6)', () => {
+  test('the provisional EAR exists after 20 s of moving TRACKING, before any centre (§M3, rev1 m6; C6: moving, rev4 S4)', () => {
     const cal = createCalibrator(C, { driverSide: 'left' });
     const run = perceiver(C, cal);
     const r = rng(9);
-    const ears = (s: number) => stream({ fps: 15, seconds: s, sample: () => ({ gazeDrv: TRUTH, ear: [0.28 + r() * 0.04, 0.26 + r() * 0.04] }), ctx: () => ({ speedKmh: 15 }) });
+    const ears = (s: number) => stream({ fps: 15, seconds: s, sample: () => ({ gazeDrv: TRUTH, ear: [0.28 + r() * 0.04, 0.26 + r() * 0.04] }), ctx: () => ({ speedKmh: 25 }) });
     run(ears(19));
     expect(cal.openEyeEar()).toBeNull();
     run(ears(2).map((it) => ({ ...it, frame: { ...it.frame, tMs: it.frame.tMs + 19_000 } })));
@@ -178,14 +178,23 @@ describe('open-eye EAR', () => {
     expect(e.r!).toBeLessThanOrEqual(0.32);
     expect(e.l!).toBeGreaterThan(0.29);
   });
-  test('at the calibration pass the EAR is the p90 of admitted frames, then frozen for the drive', () => {
+  test('at the calibration pass the EAR is the p90 of admitted frames; then (Task C6) it follows up at ≤ 5 %/min', () => {
     const cal = createCalibrator(C, { driverSide: 'left' });
     const run = perceiver(C, cal);
     run(stream({ fps: 15, seconds: 90, seed: 2, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), ear: [0.3, 0.3] }) }));
     expect(cal.state()).toBe('calibrated');
-    expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.3, 9);
     run(stream({ fps: 15, seconds: 120, fromMs: 90_000, seed: 3, sample: (t, r) => ({ ...roadSampler(TRUTH)(t, r), ear: [0.4, 0.4] }) }));
-    expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+    const r = cal.openEyeEar()!.r!;
+    expect(r).toBeGreaterThan(0.3);
+    expect(r).toBeLessThanOrEqual(0.3 * (1 + 0.05 * 2) + 1e-9);
+  });
+  test('Task C6 (rev4 S4; NC-S4): at 15 km/h (or STOPPED) no provisional EAR is collected', () => {
+    const cal = createCalibrator(C, { driverSide: 'left' });
+    const run = perceiver(C, cal);
+    run(stream({ fps: 15, seconds: 40, sample: () => ({ gazeDrv: TRUTH, ear: [0.3, 0.3] }), ctx: () => ({ speedKmh: 15 }) }));
+    expect(cal.openEyeEar()).toBeNull();
+    expect(cal.pitchReference()).toBeNull();
   });
   test('the neutral MAR is floored at 0.05 (rev1 I4, C-23); the neutral mouth width is the median', () => {
     const cal = createCalibrator(C, { driverSide: 'left' });
@@ -195,10 +204,15 @@ describe('open-eye EAR', () => {
   });
 });
 
-test('the pitch reference: the running median head pitch before calibration, the head centre after (rev1 m6)', () => {
+test('the pitch reference: the running median head pitch before calibration, the head centre after (rev1 m6); C6: from 10 s of moving frames (rev4 S4)', () => {
   const cal = createCalibrator(C, { driverSide: 'left' });
   const run = perceiver(C, cal);
-  run(stream({ fps: 15, seconds: 10, sample: () => ({ gazeDrv: { yaw: 0, pitch: 0 }, headDrv: { yaw: 0, pitch: 7 } }), ctx: () => ({ speedKmh: 5 }) }));
+  run(stream({ fps: 15, seconds: 9, sample: () => ({ gazeDrv: { yaw: 0, pitch: 0 }, headDrv: { yaw: 0, pitch: 7 } }), ctx: () => ({ speedKmh: 25 }) }));
+  expect(cal.pitchReference()).toBeNull(); // under 10 s: none (the looking-down gate uses the gaze term only)
+  run(stream({ fps: 15, seconds: 3, fromMs: 9_000, sample: () => ({ gazeDrv: { yaw: 0, pitch: 0 }, headDrv: { yaw: 0, pitch: 7 } }), ctx: () => ({ speedKmh: 25 }) }));
+  expect(cal.pitchReference()).toBeCloseTo(7, 9);
+  // Stop-time frames never feed it (NC-S4): 60 s at a light looking down at a phone leaves it where it was.
+  run(stream({ fps: 15, seconds: 60, fromMs: 12_000, sample: () => ({ gazeDrv: { yaw: 0, pitch: -30 }, headDrv: { yaw: 0, pitch: -20 } }), ctx: () => ({ speedKmh: 0 }) }));
   expect(cal.pitchReference()).toBeCloseTo(7, 9);
 });
 

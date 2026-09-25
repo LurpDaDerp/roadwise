@@ -215,6 +215,42 @@ export interface DmsConfig {
     /** Task C5 (rev1 I1): the admitted samples within ±voidS of a D1/D2/D3 warning are removed (the EMA and every window) */
     voidS: number;
     /**
+     * Task C6 (rev2 §2.3.4; baselines.ts): the eye and mouth baselines during a drive. EAR up ≤ earUpPctPerMin up to
+     * earUpCapFrac × the drive reference; down only on an appearance event (a tier change, the eye luma ≥
+     * appearanceLumaFrac against the reference's, the projected IOD ≥ appearanceIodFrac, held appearanceHoldS),
+     * with the fatigue gate clear and by the explained factor only (lumaEarTable × contrastEarTable × (1 +
+     * iodEarPerFrac × ΔiodC): device item K5), read from a checkS window; floored at earFloorFrac × the drive
+     * reference (appearance-corrected) and × the profile EAR. A q/b ≤ lowRatio for lowHoldS, or a drop the
+     * appearance does not explain (by more than explainTol, held unexplainedHoldS), is fatigue evidence.
+     */
+    baselines: {
+      buckets: number;
+      readEveryS: number;
+      minReadS: number;
+      maxYawDeg: number;
+      maxPitchRelDeg: number;
+      minOpenness: number;
+      earUpPctPerMin: number;
+      earUpCapFrac: number;
+      earFloorFrac: number;
+      appearanceLumaFrac: number;
+      appearanceIodFrac: number;
+      appearanceHoldS: number;
+      checkS: number;
+      explainTol: number;
+      unexplainedHoldS: number;
+      lowRatio: number;
+      lowHoldS: number;
+      lumaEarTable: [number, number][];
+      contrastEarTable: [number, number][];
+      iodEarPerFrac: number;
+      marUpPctPerMin: number;
+      marUpCap10MinFrac: number;
+      marDownPctPerMin: number;
+      talkMarFactor: number;
+      yawnBlockS: number;
+    };
+    /**
      * Task C5 (rev2 §2.3.3): the rolling path. Every everyS over the last windowS of admission: a small shift
      * (minShiftDeg ≤ d ≤ smallShiftSigmas σ̂, unimodal, two evaluations agreeing) or a larger one up to
      * radiusMinDeg (relatively vacated in two evaluations) is followed at ≤ rateDegPerMin. A pitch-down shift
@@ -588,6 +624,20 @@ export interface DmsConfig {
     perclosMinTrackingS: number;
     /** T10 r1 m2: a minute whose surviving row weights sum below this is `insufficient` (nods + dispersion = 0.25 still scores) */
     minScoredWeight: number;
+    /**
+     * Task C6 (rev2 §2.3.5): when the EAR baseline moves more than blinkRelearnFrac from the one the blink rows
+     * were learned under, longBlinks and blinkDuration are sparse for blinkRelearnS of observed time and re-learned.
+     */
+    blinkRelearnFrac: number;
+    blinkRelearnS: number;
+    /**
+     * Task C6 (rev2 §2.3.7): the fatigue evidence gate's fatigue clauses: PERCLOS over gatePerclosWindowS ≥
+     * gatePerclos (with perclosMinTrackingS observed), or ≥ gateLongBlinks long blinks in gateLongBlinkWindowS.
+     */
+    gatePerclos: number;
+    gatePerclosWindowS: number;
+    gateLongBlinks: number;
+    gateLongBlinkWindowS: number;
   };
 
   alerts: {
@@ -705,6 +755,42 @@ const DEFAULT: DmsConfig = {
     emaWithinMinDeg: 3,
     emaMaxDegPerMin: 0.5,
     voidS: 30,
+    baselines: {
+      buckets: 5,
+      readEveryS: 30,
+      minReadS: 20,
+      maxYawDeg: 25,
+      maxPitchRelDeg: 15,
+      minOpenness: 0.6,
+      earUpPctPerMin: 5,
+      earUpCapFrac: 1.4,
+      earFloorFrac: 0.85,
+      appearanceLumaFrac: 0.25,
+      appearanceIodFrac: 0.05,
+      appearanceHoldS: 10,
+      checkS: 10,
+      explainTol: 0.05,
+      unexplainedHoldS: 600,
+      lowRatio: 0.9,
+      lowHoldS: 60,
+      lumaEarTable: [
+        [0.25, 0.7],
+        [0.5, 0.8],
+        [1, 1],
+        [2, 1.1],
+      ],
+      contrastEarTable: [
+        [0.5, 0.9],
+        [1, 1],
+        [2, 1.05],
+      ],
+      iodEarPerFrac: 0.5,
+      marUpPctPerMin: 3,
+      marUpCap10MinFrac: 0.2,
+      marDownPctPerMin: 5,
+      talkMarFactor: 1.5,
+      yawnBlockS: 300,
+    },
     rolling: { windowS: 60, everyS: 30, rateDegPerMin: 3, minShiftDeg: 0.5, maxPitchDownDeg: 2, screenExtraDeg: 12 },
     slow: { persistS: 300, maxShiftDeg: 12.5, scanExcursionsPerMin: 2, excursionMinDeg: 15, excursionReturnS: 3, returnFixationMs: 300, returnShare: 0.8, returnMinCount: 12, returnMinCountRolling: 12, excessMax: 0.15 },
     bumpHalfWindowS: 5,
@@ -908,6 +994,12 @@ const DEFAULT: DmsConfig = {
     perclosOpennessBelow: 0.2,
     perclosMinTrackingS: 30,
     minScoredWeight: 0.25,
+    blinkRelearnFrac: 0.1,
+    blinkRelearnS: 300,
+    gatePerclos: 0.08,
+    gatePerclosWindowS: 60,
+    gateLongBlinks: 2,
+    gateLongBlinkWindowS: 300,
   },
   alerts: {
     tier2RepeatS: 1,
@@ -1042,6 +1134,17 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.calibration.posture.searchCapS >= c.calibration.posture.searchMaxS)) bad('calibration.posture.searchCapS', 'must be ≥ searchMaxS');
   if (!(c.calibration.posture.searchCurveRateDegS > 0)) bad('calibration.posture.searchCurveRateDegS', 'must be > 0');
   if (!(c.calibration.posture.fatigueCommitPitchDeg > 0)) bad('calibration.posture.fatigueCommitPitchDeg', 'must be > 0');
+  // Task C6: the baselines and the fatigue gate's clauses.
+  const bl = c.calibration.baselines;
+  if (!(bl.earFloorFrac >= 0.75 && bl.earFloorFrac <= 0.95)) bad('calibration.baselines.earFloorFrac', 'must lie in [0.75, 0.95]');
+  if (!(bl.earUpCapFrac > 1)) bad('calibration.baselines.earUpCapFrac', 'must exceed 1');
+  if (!(bl.lowRatio > 0 && bl.lowRatio < 1)) bad('calibration.baselines.lowRatio', 'must lie in (0, 1)');
+  if (!(bl.appearanceLumaFrac > 0 && bl.appearanceLumaFrac < 1)) bad('calibration.baselines.appearanceLumaFrac', 'must lie in (0, 1)');
+  for (const [k, t] of [['lumaEarTable', bl.lumaEarTable], ['contrastEarTable', bl.contrastEarTable]] as const) {
+    if (!(t.length >= 2 && t.every((row, i) => i === 0 || row[0] > t[i - 1]![0]))) bad(`calibration.baselines.${k}`, 'must have ≥ 2 rows in ascending order');
+  }
+  if (!(c.fatigue.gatePerclos > 0 && c.fatigue.gatePerclos < 1)) bad('fatigue.gatePerclos', 'must lie in (0, 1)');
+  if (!(c.fatigue.blinkRelearnFrac > 0)) bad('fatigue.blinkRelearnFrac', 'must be > 0');
   // Task C4: posture and the across-stop checks.
   const po = c.calibration.posture;
   if (!(po.boxShiftC < c.calibration.bumpBoxShift && po.iodFracC < c.calibration.bumpIodFrac)) bad('calibration.posture.boxShiftC', "posture thresholds must lie below the bump's");

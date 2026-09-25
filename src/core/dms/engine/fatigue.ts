@@ -63,6 +63,8 @@ export interface FatigueFrame {
   localMinutes: number | null;
   /** the fast rules' fatigue floor at this frame */
   floor: FatigueFloor;
+  /** Task C6 (rev2 §2.3.5): the EAR baseline in force (the mean of the eyes'); null without one */
+  earRef?: number | null;
 }
 
 export interface FatigueAction {
@@ -211,6 +213,15 @@ export function createFatigue(cfg: DmsConfig) {
   let active = false;
   let atSpeed = false;
   let nextMinute: number | null = null;
+  /**
+   * Task C6 (rev2 §2.3.5): the blink rows' baseline apart from the rest (the observed seconds at the blink rows'
+   * fps, the counts), with the EAR baseline it was learned under; re-learned over blinkRelearnS of observed time
+   * when the EAR baseline moves more than blinkRelearnFrac, the rows sparse meanwhile.
+   */
+  const baseBlink = { obsS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0 };
+  let blinkEarRef: number | null = null;
+  let relearn: { obsS: number; longBlinks: number; blinkN: number; blinkDurMs: number } | null = null;
+  const BLINK_ROWS: readonly SignalName[] = ['longBlinks', 'blinkDuration'];
 
   const closedFrame = (x: FatigueFrame) =>
     x.openness !== null && x.openness < (x.lookingDown ? cfg.closure.lookDownClosedBelow : f.perclosOpennessBelow);
@@ -265,10 +276,10 @@ export function createFatigue(cfg: DmsConfig) {
     });
     const lb = win('longBlinks');
     const lbObs = obsIn(lb, 'longBlinks');
-    const lbBase = obsIn(base, 'longBlinks');
+    const lbBase = baseBlink.obsS;
     observed.longBlinks = lbObs;
-    values.longBlinks = { x: lbObs > 0 ? longN / (lbObs / 60) : 0, b: lbBase > 0 ? base.longBlinks / (lbBase / 60) : 0 };
-    const baseMean = base.blinkN > 0 ? base.blinkDurMs / base.blinkN : 0;
+    values.longBlinks = { x: lbObs > 0 ? longN / (lbObs / 60) : 0, b: lbBase > 0 ? baseBlink.longBlinks / (lbBase / 60) : 0 };
+    const baseMean = baseBlink.blinkN > 0 ? baseBlink.blinkDurMs / baseBlink.blinkN : 0;
     observed.blinkDuration = obsIn(win('blinkDuration'), 'blinkDuration');
     values.blinkDuration = { x: durN > 0 && baseMean > 0 ? durSum / durN / baseMean : 1, b: 1 };
     // Counts scaled to a fully observed window.
@@ -310,8 +321,11 @@ export function createFatigue(cfg: DmsConfig) {
       const minObs = s === 'perclos' ? f.perclosMinTrackingS : f.minTrackingShare * sig[s].windowS;
       // Final review m2: a rate row whose baseline has too little observed time (e.g. a hot start below the
       // blink floor) is sparse for the drive, never scored against a zero baseline.
-      const baseTooThin = RATE_ROWS.includes(s) && obsIn(base, s) < f.minTrackingShare * f.activeAfterS - 1e-6;
-      if (observed[s] < minObs - 1e-6 || (s === 'dispersion' && noBaseline) || baseTooThin) {
+      const baseObs = BLINK_ROWS.includes(s) ? baseBlink.obsS : obsIn(base, s);
+      const baseTooThin = RATE_ROWS.includes(s) && baseObs < f.minTrackingShare * f.activeAfterS - 1e-6;
+      // Task C6: the blink rows are sparse while they are re-learned after an EAR-baseline change.
+      const relearning = relearn !== null && BLINK_ROWS.includes(s);
+      if (observed[s] < minObs - 1e-6 || (s === 'dispersion' && noBaseline) || baseTooThin || relearning) {
         sparse.push(s);
         continue;
       }
@@ -395,7 +409,32 @@ export function createFatigue(cfg: DmsConfig) {
           for (let i = 0; i < nTh; i++) if (x.fps >= FPS_THRESHOLDS[i]! - 1e-9) base.trackAt[i]! += dt;
         }
         if (g !== null) addGaze(onNet ? base.net : base, g);
-        if (base.drivingS >= f.activeAfterS - 1e-6 && base.trackS >= f.minTrackingShare * f.activeAfterS - 1e-6) active = true;
+        if (base.drivingS >= f.activeAfterS - 1e-6 && base.trackS >= f.minTrackingShare * f.activeAfterS - 1e-6) {
+          active = true;
+          const th = thOf('longBlinks');
+          baseBlink.obsS = th >= 0 ? base.trackAt[th]! : base.trackS;
+          baseBlink.longBlinks = base.longBlinks;
+          baseBlink.blinkN = base.blinkN;
+          baseBlink.blinkDurMs = base.blinkDurMs;
+          blinkEarRef = x.earRef ?? null;
+        }
+      }
+      // Task C6 (rev2 §2.3.5): the blink rows follow a moved EAR baseline by re-learning.
+      const ref = x.earRef ?? null;
+      if (active && ref !== null) {
+        if (blinkEarRef === null) blinkEarRef = ref;
+        else if (relearn === null && Math.abs(ref / blinkEarRef - 1) > f.blinkRelearnFrac) relearn = { obsS: 0, longBlinks: 0, blinkN: 0, blinkDurMs: 0 };
+        if (relearn !== null && trk && x.fps >= sig.longBlinks.minFps - 1e-9) {
+          relearn.obsS += dt;
+          if (relearn.obsS >= f.blinkRelearnS - 1e-6) {
+            baseBlink.obsS = relearn.obsS;
+            baseBlink.longBlinks = relearn.longBlinks;
+            baseBlink.blinkN = relearn.blinkN;
+            baseBlink.blinkDurMs = relearn.blinkDurMs;
+            blinkEarRef = ref;
+            relearn = null;
+          }
+        }
       }
       nextMinute ??= x.tMs + f.everyS * 1000;
       if (x.tMs < nextMinute - 1e-6) return null;
@@ -413,7 +452,28 @@ export function createFatigue(cfg: DmsConfig) {
         base.blinkDurMs += b.durMs;
         if (b.long) base.longBlinks++;
       }
+      if (relearn !== null) {
+        relearn.blinkN++;
+        relearn.blinkDurMs += b.durMs;
+        if (b.long) relearn.longBlinks++;
+      }
     },
+    /**
+     * Task C6 (rev2 §2.3.7): the fatigue clauses of the fatigue evidence gate at `nowMs`: PERCLOS over the last
+     * gatePerclosWindowS ≥ gatePerclos (with perclosMinTrackingS observed), or ≥ gateLongBlinks long blinks in
+     * gateLongBlinkWindowS.
+     */
+    gateEvidence(nowMs: number): boolean {
+      const pc = over(nowMs, f.gatePerclosWindowS);
+      if (pc.trackS >= f.perclosMinTrackingS - 1e-6 && pc.closedS / pc.trackS >= f.gatePerclos) return true;
+      let n = 0;
+      blinks.forEach((bl) => {
+        if (bl.long && bl.t > nowMs - f.gateLongBlinkWindowS * 1000) n++;
+      });
+      return n >= f.gateLongBlinks;
+    },
+    /** Task C6: the blink rows are being re-learned after an EAR-baseline change */
+    relearning: () => relearn !== null,
     onNod(tMs: number): void {
       nods.push(tMs);
       if (!active && atSpeed) base.nods++;

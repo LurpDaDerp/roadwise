@@ -1,0 +1,524 @@
+// The eye and mouth baselines during a drive (Task C6; design rev2 §2.3.4, rev1 I3, rev3, rev4 §2.3.9). Pure and
+// bounded: the frame clock is the only clock; per eye a 5 × 1-minute histogram, O(1) per frame.
+//
+// - Eligible frames: TRACKING, moving (not STOPPED, ≥ admitMinSpeedKmh), no episode (a closure, a bridge, a yawn
+//   or talking: `hold`), |head yaw| ≤ maxYawDeg, head pitch within ±maxPitchRelDeg of the reference, the eye
+//   usable, and its openness against the current reference ≥ minOpenness.
+// - The p90 is read every readEveryS, never at a boundary inside an episode.
+// - EAR up: ≤ earUpPctPerMin, capped at earUpCapFrac × the drive reference.
+// - EAR down: NEVER continuous. Only on an appearance event, held appearanceHoldS: a stable change of an eye's
+//   usability/iris tier, the eye luma ≥ appearanceLumaFrac against the luma at the current reference, or the
+//   projected IOD ≥ appearanceIodFrac. A checkS window of eligible frames then gives the observed factor, and the
+//   reference is lowered only with the fatigue gate clear and only by the EXPLAINED factor (the luma and
+//   contrast tables, device item K5, and the IOD model), never the full drop. An unexplained remainder is fatigue
+//   evidence (`lowUnexplained`, held unexplainedHoldS).
+// - A continuous q/b ≤ lowRatio for lowHoldS with no event is fatigue evidence too, and changes nothing.
+// - The floor: max(earFloorFrac × the drive reference × its appearance correction, earFloorFrac × the profile
+//   EAR). The profile's appearance is not stored yet (T8), so its correction is 1.
+// - The MAR: up ≤ marUpPctPerMin and ≤ +marUpCap10MinFrac per 10 min, never with a yawn in yawnBlockS; down
+//   ≤ marDownPctPerMin, floored at neutralMarFloor; talking (MAR above talkMarFactor × the reference) excluded.
+// - With no reference (the eyes never usable, e.g. sunglasses), eyes becoming usable give one after checkS.
+import type { EarPair } from './conditioning';
+import type { DmsConfig } from './config';
+
+export interface EyeSample {
+  ear: number;
+  /** the eye ROI luma, absolute (the eye luma ratio × the face luma) */
+  lumaAbs: number;
+  /** the iris contrast */
+  contrast: number;
+  usable: boolean;
+  /** the iris was seen (the reliable tier) */
+  reliable: boolean;
+}
+
+export interface BaselineInput {
+  tMs: number;
+  /** observed seconds since the previous frame (0 on a gap) */
+  dtS: number;
+  /** not STOPPED and at the admission speed (rev4 S4) */
+  moving: boolean;
+  tracking: boolean;
+  /** an episode is running: a closure, a bridge, a yawn or talking (or STOPPED): no change at a boundary */
+  hold: boolean;
+  headYaw: number | null;
+  /** head pitch against the pitch reference */
+  headPitchRel: number | null;
+  r: EyeSample | null;
+  l: EyeSample | null;
+  /** the projected IOD (iod / cos yaw cos pitch) */
+  iodC: number | null;
+  /** null when there is no mouth */
+  mar: number | null;
+  fatigueGate: boolean;
+  /**
+   * With no reference, may usable eyes derive one after checkS (default true)? The calibrator allows it only after
+   * the eyes were unseen for a while (sunglasses off), so a drive start keeps its 20 s provisional collector.
+   */
+  mayDerive?: boolean;
+}
+
+/** The appearance behind a reference: the absolute eye luma, the iris contrast and the projected IOD. */
+export interface Appearance {
+  luma: number;
+  contrast: number;
+  iodC: number;
+}
+
+export type BaselineEventKind = 'appearance' | 'ear_derived' | 'ear_raised' | 'ear_lowered' | 'ear_unexplained' | 'ear_low_unexplained';
+export interface BaselineEvent {
+  kind: BaselineEventKind;
+  tMs: number;
+}
+
+export interface BaselineOut {
+  ear: EarPair | null;
+  mar: number | null;
+  events: BaselineEvent[];
+}
+
+export interface Baselines {
+  /** A derived reference (Stage 1, a seed, a profile, a driver change): the profile floor applies. */
+  setReference(ear: EarPair, mar: number | null, tMs: number): EarPair;
+  step(x: BaselineInput): BaselineOut;
+  /**
+   * A value from a resume path (rederiveEar, baselineReset; R4): up is taken; down only with the fatigue gate
+   * clear and by the factor its appearance explains against the reference's.
+   */
+  offer(candidate: EarPair, appearance: Appearance | null, gate?: boolean): EarPair;
+  onYawn(tMs: number): void;
+  /** fatigue evidence: an unexplained EAR drop (at an event, or a continuous low q/b) */
+  lowUnexplained(): boolean;
+  /** the current appearance (smoothed), for the resume paths */
+  appearance(): Appearance | null;
+  reset(): void;
+  stats(): { derived: number; raised: number; lowered: number; unexplained: number; lowUnexplained: number };
+}
+
+const BINS = 150;
+const BIN = 0.004;
+const APP_TAU_S = 2;
+const TIER_HOLD_S = 1;
+/** a check window takes every eligible frame above this openness (the histogram's minOpenness would hide the drop it measures) */
+const CHECK_MIN_OPENNESS = 0.3;
+
+/** Piecewise-linear lookup; clamped at the ends. */
+function interp(table: readonly (readonly [number, number])[], x: number): number {
+  if (table.length === 0) return 1;
+  if (x <= table[0]![0]) return table[0]![1];
+  for (let i = 1; i < table.length; i++) {
+    const [x1, y1] = table[i]!;
+    const [x0, y0] = table[i - 1]!;
+    if (x <= x1) return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+  }
+  return table[table.length - 1]![1];
+}
+
+/** The EAR factor an appearance change explains (ratios now ÷ at the reference): K5's tables and the IOD model. */
+export function explainedFactor(cfg: Pick<DmsConfig, 'calibration'>, ratio: { luma: number; contrast: number; iod: number }): number {
+  const b = cfg.calibration.baselines;
+  return interp(b.lumaEarTable, ratio.luma) * interp(b.contrastEarTable, ratio.contrast) * (1 + b.iodEarPerFrac * (ratio.iod - 1));
+}
+
+type Tier = 0 | 1 | 2;
+type TierState = { now: Tier; cand: Tier; since: number };
+const tierOf = (e: EyeSample | null): Tier => (e === null || !e.usable ? 0 : e.reliable ? 2 : 1);
+
+/** Per eye, a histogram of 5 one-minute buckets; each bin also sums its values, so a quantile is the bin's mean value (no grid bias). */
+class EarHist {
+  private readonly h: Float64Array;
+  private readonly v: Float64Array;
+  private readonly minute: number[];
+  constructor(private readonly buckets: number) {
+    this.h = new Float64Array(buckets * BINS);
+    this.v = new Float64Array(buckets * BINS);
+    this.minute = new Array<number>(buckets).fill(Number.NEGATIVE_INFINITY);
+  }
+  add(tMs: number, v: number, w: number): void {
+    const m = Math.floor(tMs / 60_000);
+    const i = ((m % this.buckets) + this.buckets) % this.buckets;
+    if (this.minute[i] !== m) {
+      this.h.fill(0, i * BINS, (i + 1) * BINS);
+      this.v.fill(0, i * BINS, (i + 1) * BINS);
+      this.minute[i] = m;
+    }
+    const bin = Math.min(BINS - 1, Math.max(0, Math.floor(v / BIN)));
+    this.h[i * BINS + bin]! += w;
+    this.v[i * BINS + bin]! += w * v;
+  }
+  /** The q-quantile over the buckets of the last `buckets` minutes, and the weight behind it. */
+  quantile(tMs: number, q: number): { v: number; w: number } {
+    const m = Math.floor(tMs / 60_000);
+    let total = 0;
+    const acc = new Float64Array(BINS);
+    const sum = new Float64Array(BINS);
+    for (let i = 0; i < this.buckets; i++) {
+      if (!(this.minute[i]! > m - this.buckets)) continue;
+      for (let j = 0; j < BINS; j++) {
+        const x = this.h[i * BINS + j]!;
+        acc[j]! += x;
+        sum[j]! += this.v[i * BINS + j]!;
+        total += x;
+      }
+    }
+    if (!(total > 0)) return { v: Number.NaN, w: 0 };
+    let run = 0;
+    for (let j = 0; j < BINS; j++) {
+      run += acc[j]!;
+      if (run >= q * total - 1e-12 && acc[j]! > 0) return { v: sum[j]! / acc[j]!, w: total };
+    }
+    return { v: (BINS - 0.5) * BIN, w: total };
+  }
+  clear(): void {
+    this.h.fill(0);
+    this.v.fill(0);
+    this.minute.fill(Number.NEGATIVE_INFINITY);
+  }
+}
+
+export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { profileEar: EarPair | null }): Baselines {
+  const c = cfg.calibration;
+  const b = c.baselines;
+  const profile = init.profileEar;
+  const hist = { r: new EarHist(b.buckets), l: new EarHist(b.buckets) };
+  const marHist = new EarHist(b.buckets);
+  let ref: EarPair | null = null;
+  let ref0: EarPair | null = null;
+  let ref0App: Appearance | null = null;
+  let refApp: Appearance | null = null;
+  let refTier: { r: Tier; l: Tier } = { r: 0, l: 0 };
+  /**
+   * A reference set before its appearance is known (no TRACKING frame yet, or the tiers not settled): the first
+   * settled appearance becomes the reference's (and the drive reference's), so an appearance change is measured
+   * against the appearance the reference was taken under, never against nothing.
+   */
+  let appPending = true;
+  let mar: number | null = null;
+  /** the MAR reference at each read in the last 10 min (the +20 % per 10 min cap) */
+  let marReads: { t: number; v: number }[] = [];
+  let app: Appearance | null = null;
+  const tier: { r: TierState; l: TierState } = { r: { now: 0, cand: 0, since: 0 }, l: { now: 0, cand: 0, since: 0 } };
+  let tiersSeen = false;
+  const tiersSettled = () => tiersSeen && tier.r.cand === tier.r.now && tier.l.cand === tier.l.now;
+  let lumaOffSince: number | null = null;
+  let iodOffSince: number | null = null;
+  let check: { obsS: number; r: number[]; l: number[] } | null = null;
+  let checkCooldownUntil = Number.NEGATIVE_INFINITY;
+  let lastSlot: number | null = null;
+  /** a boundary passed inside an episode: the read waits for its end (never a change while closed or stopped) */
+  let readDue = false;
+  let lowSince: number | null = null;
+  let lowFlag = false;
+  let unexplainedUntil = Number.NEGATIVE_INFINITY;
+  let yawnT = Number.NEGATIVE_INFINITY;
+  let tNow = 0;
+  const stats = { derived: 0, raised: 0, lowered: 0, unexplained: 0, lowUnexplained: 0 };
+
+  const ratios = (now: Appearance, at: Appearance) => ({
+    luma: at.luma > 0 ? now.luma / at.luma : 1,
+    contrast: at.contrast > 0 ? now.contrast / at.contrast : 1,
+    iod: at.iodC > 0 ? now.iodC / at.iodC : 1,
+  });
+
+  /** The floor for one eye: the drive reference (appearance-corrected) and the profile anchor. */
+  function floorOf(side: 'r' | 'l', now: Appearance | null = app): number {
+    let f = 0;
+    const r0 = ref0?.[side] ?? null;
+    if (r0 !== null) {
+      const corr = now !== null && ref0App !== null ? explainedFactor(cfg, ratios(now, ref0App)) : 1;
+      f = Math.max(f, b.earFloorFrac * r0 * corr);
+    }
+    const p = profile?.[side] ?? null;
+    if (p !== null) f = Math.max(f, b.earFloorFrac * p);
+    return f;
+  }
+  const floored = (side: 'r' | 'l', v: number | null, now: Appearance | null = app) => (v === null ? null : Math.max(v, floorOf(side, now)));
+
+  function adopt(next: EarPair): void {
+    ref = next;
+    refApp = app;
+    refTier = { r: tier.r.now, l: tier.l.now };
+    appPending = app === null || !tiersSettled();
+    hist.r.clear();
+    hist.l.clear();
+    lowSince = null;
+    lowFlag = false;
+  }
+
+  function setReference(ear: EarPair, m: number | null, tMs: number): EarPair {
+    tNow = tMs;
+    const p = (side: 'r' | 'l', v: number | null) => (v === null ? null : Math.max(v, profile?.[side] != null ? b.earFloorFrac * profile[side]! : 0));
+    const next = { r: p('r', ear.r), l: p('l', ear.l) };
+    ref0 = next;
+    ref0App = app;
+    adopt(next);
+    if (m !== null) {
+      mar = Math.max(m, c.neutralMarFloor);
+      marReads = [{ t: tMs, v: mar }];
+      marHist.clear();
+    }
+    return next;
+  }
+
+  function offer(cand: EarPair, appearance: Appearance | null, gate = false): EarPair {
+    if (ref === null) return setReference(cand, null, tNow);
+    const cur = ref;
+    // Down only on an appearance event (rev2 §2.3.4): an offered drop explains nothing unless its appearance differs
+    // from the reference's by an event's size.
+    const rt = appearance !== null && refApp !== null ? ratios(appearance, refApp) : null;
+    const isEvent = rt !== null && (Math.abs(rt.luma - 1) >= b.appearanceLumaFrac || Math.abs(rt.iod - 1) >= b.appearanceIodFrac);
+    const explained = isEvent ? explainedFactor(cfg, rt) : 1;
+    let down = false;
+    const pick = (side: 'r' | 'l'): number | null => {
+      const was = cur[side];
+      const v = cand[side];
+      if (v === null) return was;
+      if (was === null) return floored(side, v);
+      if (v >= was) return v;
+      if (gate) return was;
+      const next = Math.max(v, was * Math.min(1, explained));
+      if (next < was) down = true;
+      return floored(side, next, appearance ?? app);
+    };
+    const next = { r: pick('r'), l: pick('l') };
+    const keepApp = !down;
+    const oldApp = refApp;
+    adopt(next);
+    if (keepApp) refApp = oldApp;
+    else if (appearance !== null) refApp = appearance;
+    return next;
+  }
+
+  function resolveCheck(x: BaselineInput, events: BaselineEvent[]): void {
+    const chk = check!;
+    check = null;
+    const p90 = (xs: number[]) => {
+      if (xs.length < 10) return null;
+      const s = [...xs].sort((u, v) => u - v);
+      return s[Math.min(s.length - 1, Math.floor(0.9 * (s.length - 1)))]!;
+    };
+    const obs = { r: p90(chk.r), l: p90(chk.l) };
+    if (ref === null || (ref.r === null && ref.l === null)) {
+      if (obs.r === null && obs.l === null) return;
+      setReference({ r: obs.r, l: obs.l }, null, x.tMs);
+      stats.derived++;
+      events.push({ kind: 'ear_derived', tMs: x.tMs });
+      return;
+    }
+    const explained = app !== null && refApp !== null ? explainedFactor(cfg, ratios(app, refApp)) : 1;
+    const cur = ref;
+    let up = false;
+    let down = false;
+    let unexplained = false;
+    let blocked = false;
+    const pick = (side: 'r' | 'l'): number | null => {
+      const was = cur[side];
+      const v = obs[side];
+      if (v === null) return was;
+      if (was === null) return floored(side, v);
+      const f = v / was;
+      if (f >= 1) {
+        if (f > 1 + 1e-9) up = true;
+        return Math.min(v, (ref0?.[side] ?? was) * b.earUpCapFrac);
+      }
+      if (x.fatigueGate) {
+        blocked = true;
+        return was;
+      }
+      const allowed = Math.min(1, explained);
+      if (f < allowed - b.explainTol) unexplained = true;
+      const next = floored(side, was * Math.max(f, allowed))!;
+      if (next < was - 1e-12) down = true;
+      return next;
+    };
+    const next = { r: pick('r'), l: pick('l') };
+    if (blocked) {
+      // Kept: the appearance stays pending and is checked again once the gate clears.
+      checkCooldownUntil = x.tMs + b.readEveryS * 1000;
+      return;
+    }
+    adopt(next);
+    if (up) {
+      stats.raised++;
+      events.push({ kind: 'ear_raised', tMs: x.tMs });
+    }
+    if (down) {
+      stats.lowered++;
+      events.push({ kind: 'ear_lowered', tMs: x.tMs });
+    }
+    if (unexplained) {
+      stats.unexplained++;
+      unexplainedUntil = x.tMs + b.unexplainedHoldS * 1000;
+      events.push({ kind: 'ear_unexplained', tMs: x.tMs });
+    }
+  }
+
+  function read(x: BaselineInput, events: BaselineEvent[]): void {
+    if (ref !== null && check === null) {
+      let allLow = true;
+      let anyEye = false;
+      const cur = ref;
+      const next: EarPair = { ...cur };
+      for (const side of ['r', 'l'] as const) {
+        const was = cur[side];
+        if (was === null) continue;
+        const q = hist[side].quantile(x.tMs, 0.9);
+        if (!(q.w >= b.minReadS)) {
+          allLow = false;
+          continue;
+        }
+        anyEye = true;
+        if (q.v / was > b.lowRatio) allLow = false;
+        if (q.v > was) {
+          const step = ((ref0?.[side] ?? was) * b.earUpPctPerMin * b.readEveryS) / (100 * 60);
+          next[side] = Math.min(q.v, was + step, (ref0?.[side] ?? was) * b.earUpCapFrac);
+        }
+      }
+      if ((next.r ?? 0) > (cur.r ?? 0) + 1e-12 || (next.l ?? 0) > (cur.l ?? 0) + 1e-12) {
+        ref = next;
+        stats.raised++;
+        events.push({ kind: 'ear_raised', tMs: x.tMs });
+      }
+      // A continuous low q/b with no appearance event: fatigue evidence, nothing changes. A read with no eye's
+      // weight (a droop so deep that every frame is under minOpenness, or the eyes unseen) keeps the state.
+      if (!anyEye) {
+        // no evidence either way
+      } else if (allLow) {
+        lowSince ??= x.tMs;
+        if (x.tMs - lowSince >= b.lowHoldS * 1000 && !lowFlag) {
+          lowFlag = true;
+          stats.lowUnexplained++;
+          events.push({ kind: 'ear_low_unexplained', tMs: x.tMs });
+        }
+      } else {
+        lowSince = null;
+        lowFlag = false;
+      }
+    }
+    // The MAR.
+    if (mar !== null) {
+      const q = marHist.quantile(x.tMs, 0.5);
+      if (q.w >= b.minReadS) {
+        const dtMin = b.readEveryS / 60;
+        marReads = marReads.filter((r) => r.t >= x.tMs - 600_000);
+        const base10 = marReads.length > 0 ? marReads[0]!.v : mar;
+        let next = mar;
+        if (q.v > mar && x.tMs - yawnT > b.yawnBlockS * 1000) next = Math.min(q.v, mar * (1 + (b.marUpPctPerMin / 100) * dtMin), base10 * (1 + b.marUpCap10MinFrac));
+        else if (q.v < mar) next = Math.max(q.v, mar * (1 - (b.marDownPctPerMin / 100) * dtMin), c.neutralMarFloor);
+        mar = Math.max(next, c.neutralMarFloor);
+        marReads.push({ t: x.tMs, v: mar });
+      }
+    }
+  }
+
+  return {
+    setReference,
+    offer,
+    onYawn(tMs) {
+      yawnT = Math.max(yawnT, tMs);
+    },
+    lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
+    appearance: () => (app === null ? null : { ...app }),
+    reset() {
+      ref = null;
+      ref0 = null;
+      ref0App = null;
+      refApp = null;
+      mar = null;
+      marReads = [];
+      check = null;
+      hist.r.clear();
+      hist.l.clear();
+      marHist.clear();
+      lowSince = null;
+      lowFlag = false;
+      lumaOffSince = null;
+      iodOffSince = null;
+    },
+    stats: () => ({ ...stats }),
+
+    step(x) {
+      tNow = x.tMs;
+      const events: BaselineEvent[] = [];
+      const dt = x.dtS;
+      // The appearance (smoothed) and the stable tiers, from TRACKING frames.
+      if (x.tracking && dt > 0) {
+        const eyes = [x.r, x.l].filter((e): e is EyeSample => e !== null && e.usable);
+        if (eyes.length > 0 && x.iodC !== null) {
+          const now: Appearance = { luma: eyes.reduce((a, e) => a + e.lumaAbs, 0) / eyes.length, contrast: eyes.reduce((a, e) => a + e.contrast, 0) / eyes.length, iodC: x.iodC };
+          const k = Math.min(1, dt / APP_TAU_S);
+          app = app === null ? now : { luma: app.luma + k * (now.luma - app.luma), contrast: app.contrast + k * (now.contrast - app.contrast), iodC: app.iodC + k * (now.iodC - app.iodC) };
+        }
+        for (const side of ['r', 'l'] as const) {
+          const t = tier[side];
+          const cand = tierOf(x[side]);
+          if (cand !== t.cand) {
+            t.cand = cand;
+            t.since = x.tMs;
+          }
+          if (t.cand !== t.now && x.tMs - t.since >= TIER_HOLD_S * 1000) t.now = t.cand;
+        }
+        if (!tiersSeen && x.tMs - Math.min(tier.r.since, tier.l.since) >= TIER_HOLD_S * 1000) tiersSeen = true;
+      }
+      // The reference's appearance, once known (see appPending).
+      if (appPending && ref !== null && app !== null && tiersSettled()) {
+        refApp = app;
+        refTier = { r: tier.r.now, l: tier.l.now };
+        ref0App ??= app;
+        appPending = false;
+      }
+
+      // Eligibility (never stopped, never in an episode).
+      const eligible = x.tracking && x.moving && !x.hold && dt > 0 && (x.headYaw === null || Math.abs(x.headYaw) <= b.maxYawDeg) && (x.headPitchRel === null || Math.abs(x.headPitchRel) <= b.maxPitchRelDeg);
+      if (eligible) {
+        for (const side of ['r', 'l'] as const) {
+          const e = x[side];
+          if (e === null || !e.usable) continue;
+          const was = ref?.[side] ?? null;
+          const o = was === null ? 1 : e.ear / was;
+          if (check !== null && o >= CHECK_MIN_OPENNESS) check[side].push(e.ear);
+          if (o >= b.minOpenness) hist[side].add(x.tMs, e.ear, dt);
+        }
+        if (check !== null) check.obsS += dt;
+        if (x.mar !== null && mar !== null && x.mar <= b.talkMarFactor * mar) marHist.add(x.tMs, x.mar, dt);
+      }
+
+      // Appearance events (held), and the eyes becoming usable with no reference.
+      if (check === null && x.tMs >= checkCooldownUntil) {
+        let event = false;
+        if (ref === null || (ref.r === null && ref.l === null)) {
+          event = x.mayDerive !== false && (tier.r.now > 0 || tier.l.now > 0);
+        } else if (app !== null && refApp !== null) {
+          const rt = ratios(app, refApp);
+          lumaOffSince = Math.abs(rt.luma - 1) >= b.appearanceLumaFrac ? (lumaOffSince ?? x.tMs) : null;
+          iodOffSince = Math.abs(rt.iod - 1) >= b.appearanceIodFrac ? (iodOffSince ?? x.tMs) : null;
+          const held = (s: number | null) => s !== null && x.tMs - s >= b.appearanceHoldS * 1000;
+          event = held(lumaOffSince) || held(iodOffSince) || tier.r.now !== refTier.r || tier.l.now !== refTier.l;
+        }
+        if (event) {
+          check = { obsS: 0, r: [], l: [] };
+          lowSince = null;
+          if (ref !== null) events.push({ kind: 'appearance', tMs: x.tMs });
+        }
+      }
+      if (check !== null && check.obsS >= b.checkS) {
+        resolveCheck(x, events);
+        lumaOffSince = null;
+        iodOffSince = null;
+      }
+
+      // The reads at readEveryS boundaries, never inside an episode.
+      const slot = Math.floor(x.tMs / (b.readEveryS * 1000));
+      if (lastSlot === null) lastSlot = slot;
+      else if (slot !== lastSlot) {
+        lastSlot = slot;
+        readDue = true;
+      }
+      if (readDue && !x.hold && x.moving) {
+        readDue = false;
+        read(x, events);
+      }
+      return { ear: ref === null ? null : { ...ref }, mar, events };
+    },
+  };
+}

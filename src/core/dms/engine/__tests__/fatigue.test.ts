@@ -407,3 +407,52 @@ describe('final review n3: the dispersion baseline path must hold at least half 
     expect(ms.at(-1)!.sparse).toContain('dispersion');
   });
 });
+
+// Task C6 (rev2 §2.3.5, §2.3.7): the blink rows follow a moved EAR baseline by re-learning; the fatigue gate's
+// fatigue clauses.
+describe('C6: the blink rows re-learn after an EAR-baseline change (NC-C6-R)', () => {
+  test('a baseline 12 % lower: longBlinks and blinkDuration are sparse for 5 min of observed time, then scored against the re-learned rates', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, () => ({ earRef: 0.3 }), blinker(fz, 15, 4, 200));
+    expect(fz.relearning()).toBe(false);
+    // From 700 s the EAR baseline is 0.264 (−12 %) and the blinks read longer (600 ms) on the new scale.
+    const during = feed(fz, 610, 700 + 290, 15, (t) => ({ earRef: t >= 700 ? 0.264 : 0.3 }), blinker(fz, 15, 4, 600));
+    expect(fz.relearning()).toBe(true);
+    const late = during.filter((m) => m.tMs > 760_000);
+    expect(late.length).toBeGreaterThan(0);
+    for (const m of late) expect(m.sparse).toEqual(expect.arrayContaining(['longBlinks', 'blinkDuration']));
+    const after = feed(fz, 990, 1300, 15, () => ({ earRef: 0.264 }), blinker(fz, 15, 4, 600));
+    expect(fz.relearning()).toBe(false);
+    const scored = after.filter((m) => m.status === 'scored').at(-1)!;
+    expect(scored.sparse).not.toContain('longBlinks');
+    expect(scored.sub.blinkDuration).toBeCloseTo(0, 6); // 600 ms against a re-learned 600 ms
+  });
+  test('a change under 10 % re-learns nothing', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 610, 15, () => ({ earRef: 0.3 }), blinker(fz, 15, 4, 200));
+    feed(fz, 610, 900, 15, () => ({ earRef: 0.28 }), blinker(fz, 15, 4, 200));
+    expect(fz.relearning()).toBe(false);
+  });
+});
+
+describe('C6: the fatigue gate evidence (rev2 §2.3.7; NC-C6-P, NC-C6-L)', () => {
+  test('PERCLOS(60 s) ≥ 0.08 sets it; below does not', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 120, 15);
+    expect(fz.gateEvidence(120_000)).toBe(false);
+    feed(fz, 120, 190, 15, (t) => ((t % 10) < 1 ? { openness: 0.1 } : {})); // 10 % closed
+    expect(fz.gateEvidence(190_000)).toBe(true);
+    const fz2 = createFatigue(C);
+    feed(fz2, 0, 70, 15, (t) => ((t % 20) < 1 ? { openness: 0.1 } : {})); // 5 %
+    expect(fz2.gateEvidence(70_000)).toBe(false);
+  });
+  test('two long blinks in 5 min set it; one does not', () => {
+    const fz = createFatigue(C);
+    feed(fz, 0, 60, 15);
+    fz.onBlink({ tMs: 30_000, durMs: 600, long: true, counted: true });
+    expect(fz.gateEvidence(60_000)).toBe(false);
+    fz.onBlink({ tMs: 50_000, durMs: 600, long: true, counted: true });
+    expect(fz.gateEvidence(60_000)).toBe(true);
+    expect(fz.gateEvidence(360_000)).toBe(false); // out of the window
+  });
+});

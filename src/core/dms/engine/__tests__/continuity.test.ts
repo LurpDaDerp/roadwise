@@ -66,7 +66,7 @@ test('a shifted box with the same IOD → camera_bump: Task C4 (rev2 R4), the du
   expect(resume(cal, run, 6, { box: { cx: 0.58, cy: 0.45 }, earScale: 1.2 })).toEqual(expect.arrayContaining(['camera_bump', 'posture_dual']));
   expect(cal.state()).toBe('calibrated');
   expect(cal.centre('geometric')).not.toBeNull();
-  expect(cal.neutralMar()).toBe(mar);
+  expect(cal.neutralMar()!).toBeCloseTo(mar!, 9);
   // The EAR is not re-derived by a resume (the openness check, and T6's rules, move it); an openness of 1.2 is in range.
   const later = createLaterRun(cal, run, 22, { box: { cx: 0.58, cy: 0.45 }, earScale: 1.2 });
   expect(later.r!).toBeCloseTo(0.3, 9);
@@ -97,10 +97,15 @@ describe('the openness sanity check after every resume (rev2 R1-m2)', () => {
     const events = resume(cal, run, 12, { earScale: scale });
     expect(events.includes('baseline_reset')).toBe(reset);
     expect(events).not.toContain('camera_bump');
-    // Never null (T6 review I3): at once the p90 of the sanity window's raw EARs.
+    // Never null (T6 review I3). Task C6 (R4): a reset raises the EAR at once (the p90 of the sanity window) but
+    // never lowers it without an explaining appearance change: a low openness after a resume is kept as it reads.
     expect(cal.openEyeEar()).not.toBeNull();
-    if (reset) expect(cal.openEyeEar()!.r!).toBeCloseTo(0.3 * scale, 9);
-    else expect(cal.openEyeEar()).toEqual({ r: 0.3, l: 0.3 });
+    const r = cal.openEyeEar()!.r!;
+    if (reset && scale > 1) expect(r).toBeCloseTo(0.3 * scale, 9);
+    else {
+      expect(r).toBeGreaterThanOrEqual(0.3);
+      expect(r).toBeLessThanOrEqual(0.3 * 1.05); // at most the continuous rise (≤ 5 %/min) over the 12 s
+    }
   });
 
   test('closure keeps working through a reset: a 1.2 s closure 2 s after it is seen (T6 review I3)', () => {
@@ -114,13 +119,18 @@ describe('the openness sanity check after every resume (rev2 R1-m2)', () => {
     expect(during.some((p) => p.eyesClosed && p.closedMs >= 1000)).toBe(true);
   });
 
-  test('the interim EAR is replaced by the re-derived one at 20 s', () => {
+  test('Task C6 (S-RED-DROWSY, unit; NC-R4b): a resume that reads drowsy (0.15, then 0.18) never lowers the reference, by the reset or by the 20 s re-derivation', () => {
     const { cal, run } = beforeGap();
     run(stream({ fps: 15, seconds: 12, fromMs: 120_000, seed: 9, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.15, 0.15] }) }));
-    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.15, 9);
+    expect(cal.drainEvents().map((e) => e.kind)).toContain('baseline_reset');
+    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.3, 9);
     run(stream({ fps: 15, seconds: 12, fromMs: 132_000, seed: 9, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.18, 0.18] }) }));
-    const e = cal.openEyeEar()!;
-    expect(e.r!).toBeCloseTo(0.18, 9); // the 20 s collection's p90: the later, higher values
+    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.3, 9);
+  });
+  test('Task C6: a reset that reads higher (×1.5) is taken at once, and the re-derivation follows it up', () => {
+    const { cal, run } = beforeGap();
+    run(stream({ fps: 15, seconds: 12, fromMs: 120_000, seed: 9, sample: () => ({ gazeDrv: TRUTH, headDrv: { yaw: 0, pitch: 0 }, ear: [0.45, 0.45] }) }));
+    expect(cal.openEyeEar()!.r!).toBeCloseTo(0.45, 9);
   });
 });
 

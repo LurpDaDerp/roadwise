@@ -36,7 +36,9 @@ const POWER = { batteryLevel: 80, charging: false, localMinutes: 720 };
  * C3 round 1 (review-C3 m5): the rows' default speed. This file runs at 60 km/h; controller.stopped.test.ts runs
  * it again at 0 km/h, which pins the camera lifecycle, the gate, the retry and the owner slot as independent of
  * speed. The tests whose subject needs a moving car (distraction, calibration, glances, moving-time drowsiness
- * samples, 15 fps at speed) are `movingTest`: skipped at 0 km/h, by design.
+ * samples, 15 fps at speed) are `movingTest`: skipped at 0 km/h, by design. Task C6 (rev4 S4): so are the tests
+ * that raise a Critical in a drive that has never moved, because the EAR is derived from moving frames only (a
+ * stop-time EAR can be a reading or a drowsy one); a drive that moved first keeps its EAR at every stop (C2's tests).
  */
 const ROW_KMH: number = (globalThis as { __DMS_ROW_KMH__?: number }).__DMS_ROW_KMH__ ?? 60;
 const movingTest = ROW_KMH >= 20 ? test : test.skip;
@@ -444,7 +446,7 @@ describe('T14 r1 security I-1: a drive end and a sign-out close the gate first',
 });
 
 describe('T14 r1 seat I1: every open → closed gate transition stops the sound', () => {
-  test('a Critical, then opt-out: its stop in the same setGate call', async () => {
+  movingTest('a Critical, then opt-out: its stop in the same setGate call', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) });
@@ -462,7 +464,7 @@ describe('T14 r1 seat I1: every open → closed gate transition stops the sound'
     h.ctl.setGate({ ...GATE, role: 'passenger' });
     expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
   });
-  test('a Critical, then the permission revoked (read on the next row): stop', async () => {
+  movingTest('a Critical, then the permission revoked (read on the next row): stop', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) });
@@ -666,7 +668,7 @@ describe('T14 r2 R1-m1: a native fault mid-drive is the camera going off (cause 
     h.fake.emitRaw('state', { state: 'stopped', reason: 'error' });
     expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
   });
-  test('a Critical running, then a fault and 60 s of rows at 60 km/h with no frame: blind_cap, then monitoring_paused (fault)', async () => {
+  movingTest('a Critical running, then a fault and 60 s of rows at 60 km/h with no frame: blind_cap, then monitoring_paused (fault)', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 104, { frameAt: eyesShut(100, 400, 104) });
@@ -742,7 +744,7 @@ describe('T14 r2 R1-m3: a native fault during the permission read is not restart
 // ---------------------------------------------------------------------------------------------------------
 
 describe('final review I-1: native pauses and stops itself', () => {
-  test('paused/interrupted during a Critical at 60 km/h: blind_cap + monitoring_paused (fault) at 60 s, an honest HUD', async () => {
+  movingTest('paused/interrupted during a Critical at 60 km/h: blind_cap + monitoring_paused (fault) at 60 s, an honest HUD', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 104, { frameAt: eyesShut(100, 400, 104) });
