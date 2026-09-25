@@ -154,7 +154,7 @@ export interface DmsSnapshot {
   /** Task C4: the centres in use (driver frame): the configured gaze source's and the head's */
   centre: { gaze: AnglePair | null; head: AnglePair | null };
   /** Task C4: the calibration's HUD cause: posture (an onset, the dual state or probation) or recalibrating */
-  calReason: 'posture' | 'recalibrating' | null;
+  calReason: 'posture' | 'recalibrating' | 'seed_check' | null;
   /** Task C5 (rev2 §2.3.7): the fatigue evidence gate at the last frame (no downward or phone-ward adaptation) */
   fatigueGate: boolean;
   /** Task C6: the open-eye EAR reference in force (the mean of the eyes'), and the pre-calibration pitch reference (diagnostics) */
@@ -277,6 +277,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       fatigueGateUntil: Number.NEGATIVE_INFINITY,
       /** Task C6: the fatigue evidence gate at the last frame (one source for the calibrator and the snapshot) */
       fatigueGateNow: false,
+      /** Task C8 (rev2 §2.7): the last frames with the fatigue gate set, and with health degraded (the save rules) */
+      lastGateT: Number.NEGATIVE_INFINITY,
+      lastHealthBadT: Number.NEGATIVE_INFINITY,
       lastSpeedState: 'unknown' as SpeedState,
       lastNoFace: false,
       lastDistraction: 'off' as 'full' | 'widened' | 'off',
@@ -337,6 +340,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // unexplained drop, or a continuous low q/b).
     d.fatigueGateNow = t <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500 || d.fatigue.gateEvidence(t) || d.cal.earEvidence();
     d.cal.setFatigueGate(d.fatigueGateNow);
+    if (d.fatigueGateNow) d.lastGateT = t;
+    if (d.health.gazeDegraded() || d.cal.eyesDegraded()) d.lastHealthBadT = t;
     const refs = { ...d.cal.refs(), gazeNetEvery: host.gazeNetEvery };
     const p = d.cond.step(f, classifyQuality(f, cfg), refs);
     d.seedRing.push({ frame: f, p });
@@ -668,7 +673,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       addCommands(d.alerts.stopAll(tMs, tMs + epochOffset));
       const summary = d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state() });
       const learned: LearnedZone[] = d.learner.endDrive();
-      const next = d.cal.toProfile(tMs + epochOffset, learned);
+      // Task C8 (rev2 §2.7): saved only with gaze and eye health good and the fatigue gate clear for the last
+      // healthyS / gateClearS of the drive (the calibrator adds: calibrated or seed-verified, nothing pending).
+      const sv = cfg.calibration.save;
+      const clean = tMs - d.lastHealthBadT >= sv.healthyS * 1000 && tMs - d.lastGateT >= sv.gateClearS * 1000;
+      const next = clean ? d.cal.toProfile(tMs + epochOffset, learned) : null;
       if (next !== null) profile = next;
       d = newDrive();
       return { summary, profile: next };

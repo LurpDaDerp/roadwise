@@ -88,3 +88,21 @@ describe('one bad learned zone never drops a whole profile (T7 review R1-m1)', (
     expect(p!.gazeCentres).toEqual(GOOD.gazeCentres);
   });
 });
+
+describe('Task C8: the profile appearance and σ̂ (optional keys)', () => {
+  test('a profile with them round-trips; one saved before C8 (without them) still loads', () => {
+    const withApp = { ...GOOD, earAppearance: { faceLuma: 118, iodC: 0.2 }, sigmaDeg: 3.1 };
+    expect(parseProfile(JSON.parse(JSON.stringify(withApp)))).toEqual(withApp);
+    expect(parseProfile(JSON.parse(JSON.stringify(GOOD)))).toEqual(GOOD);
+  });
+  test.each([
+    ['a non-positive luma', { earAppearance: { faceLuma: 0, iodC: 0.2 } }],
+    ['an IOD over 1', { earAppearance: { faceLuma: 100, iodC: 1.5 } }],
+    ['an extra key', { earAppearance: { faceLuma: 100, iodC: 0.2, contrast: 40 } }],
+    ['a missing key', { earAppearance: { faceLuma: 100 } }],
+    ['σ̂ out of range', { sigmaDeg: 50 }],
+    ['σ̂ not a number', { sigmaDeg: 'x' }],
+  ])('rejected: %s', (_, over) => {
+    expect(parseProfile({ ...GOOD, ...over })).toBeNull();
+  });
+});

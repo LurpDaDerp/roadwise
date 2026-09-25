@@ -267,3 +267,21 @@ describe('Task C7: H5, the eye baseline degraded only when corroborated (rev2 §
     expect(b.eyesDegraded()).toBe(false);
   });
 });
+
+describe('Task C8: the profile appearance (the review-C6 T8 carry; NC-C8-A)', () => {
+  const DAY = { luma: 100, iodC: 0.2 };
+  test('a reference set with the profile\'s daylight appearance, adopted at dusk (luma 0.5, EAR ×0.8): followed down by the luma', () => {
+    const b = createBaselines(C, { profileEar: { r: REF, l: REF }, profileAppearance: DAY });
+    b.setReference({ r: REF, l: REF }, 0.08, 0, DAY);
+    const f = explainedFactor(C, { luma: 0.5, iod: 1 });
+    const o = run(b, () => ({ ear: REF * f, luma: 0.5 }), 90);
+    expect(Math.abs(last(o).r! / (REF * f) - 1)).toBeLessThanOrEqual(0.03);
+  });
+  test('the profile floor is corrected by the appearance change: a dusk reference (Stage 1 at dusk) is not lifted to 0.85 × the daylight EAR', () => {
+    const b = createBaselines(C, { profileEar: { r: REF, l: REF }, profileAppearance: DAY });
+    const f = explainedFactor(C, { luma: 0.5, iod: 1 });
+    run(b, () => ({ ear: REF * f, luma: 0.5 }), 5); // the dusk appearance is known
+    const set = b.setReference({ r: REF * f, l: REF * f }, 0.08, 5000);
+    expect(set.r!).toBeCloseTo(REF * f, 6); // uncorrected, the floor would lift it to 0.85 × 0.3 = 0.255
+  });
+});

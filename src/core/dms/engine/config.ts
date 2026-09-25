@@ -406,6 +406,40 @@ export interface DmsConfig {
     opennessCheckS: number;
     opennessCheckMinRelPitchDeg: number;
     opennessRange: [number, number];
+    /**
+     * Task C8 (rev2 §2.2 item 3, I3.4): the start check on the first TRACKING of a drive whose EAR came from a
+     * profile or seed: a 10 s median openness above startOpennessRange[1] re-derives upward, below [0] re-derives
+     * under the downward rule; the MAR (median ÷ reference) outside startMarRange re-derives it.
+     */
+    startOpennessRange: [number, number];
+    startMarRange: [number, number];
+    /**
+     * Task C8 (rev2 §2.2, rev1 I6): seed verification. An unverified seed (profile, C2 seed, a new driver's W2 seed)
+     * widens by +5° with D2 on. Windows of `windowS` admitted weight (TRACKING, eyes open, ≥ admitMinSpeedKmh,
+     * straight or turn rates < curveRateDegS), within windowMaxObservedS of observed time. Per window, for the
+     * primary source and the head: the mode m, the peakedness P in ρ = max(ringMinDeg, ringSigmas·σ̂) against a single
+     * cluster's P₁(σ̂) (peaked: P ≥ peakFrac·P₁), and SE. Agree: peaked and |m − seed| ≤ max(agreeMinDeg, agreeSE·SE)
+     * for both → verified. Disagree: two consecutive peaked windows beyond that bound, agreeing within
+     * max(pairMinDeg, pairSE·SE) → the dual state (cause 'seed'), which commits or reverts by its own rules.
+     */
+    seed: {
+      admitMinSpeedKmh: number;
+      windowS: number;
+      windowMaxObservedS: number;
+      ringMinDeg: number;
+      ringSigmas: number;
+      peakFrac: number;
+      agreeMinDeg: number;
+      agreeSE: number;
+      pairMinDeg: number;
+      pairSE: number;
+      curveRateDegS: number;
+    };
+    /**
+     * Task C8 (rev2 §2.7): a profile is saved only if calibrated or seed-verified, no dual state or probation is
+     * pending, gaze health was good and the fatigue gate clear for the last healthyS / gateClearS of the drive.
+     */
+    save: { healthyS: number; gateClearS: number };
     /** §M3 C2 seed: the last 3 s, ≥ 2 s of frames, gaze SD ≤ 3° */
     seedWindowS: number;
     seedMinS: number;
@@ -924,6 +958,10 @@ const DEFAULT: DmsConfig = {
     opennessCheckS: 10,
     opennessCheckMinRelPitchDeg: -15,
     opennessRange: [0.6, 1.4],
+    startOpennessRange: [0.6, 1.15],
+    startMarRange: [0.7, 1.4],
+    seed: { admitMinSpeedKmh: 30, windowS: 8, windowMaxObservedS: 60, ringMinDeg: 4, ringSigmas: 1.3, peakFrac: 0.8, agreeMinDeg: 3, agreeSE: 2.5, pairMinDeg: 1.5, pairSE: 2, curveRateDegS: 2 },
+    save: { healthyS: 600, gateClearS: 600 },
     seedWindowS: 3,
     seedMinS: 2,
     seedMaxSdDeg: 3,
@@ -1277,6 +1315,15 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   ordered('calibration.histYawDeg', c.calibration.histYawDeg);
   ordered('calibration.histPitchDeg', c.calibration.histPitchDeg);
   ordered('calibration.opennessRange', c.calibration.opennessRange);
+  ordered('calibration.startOpennessRange', c.calibration.startOpennessRange);
+  ordered('calibration.startMarRange', c.calibration.startMarRange);
+  // Task C8: seed verification.
+  const sv = c.calibration.seed;
+  if (!(sv.windowS > 0 && sv.windowS < sv.windowMaxObservedS)) bad('calibration.seed.windowS', 'must be in (0, windowMaxObservedS)');
+  if (!(sv.peakFrac > 0 && sv.peakFrac <= 1)) bad('calibration.seed.peakFrac', 'must be in (0, 1]');
+  if (!(sv.agreeMinDeg < c.calibration.radiusMinDeg)) bad('calibration.seed.agreeMinDeg', 'must be < radiusMinDeg');
+  if (!(sv.pairMinDeg > 0 && sv.pairMinDeg <= sv.agreeMinDeg)) bad('calibration.seed.pairMinDeg', 'must be in (0, agreeMinDeg]');
+  if (!(sv.admitMinSpeedKmh >= c.calibration.admitMinSpeedKmh)) bad('calibration.seed.admitMinSpeedKmh', 'must be ≥ admitMinSpeedKmh');
   if (!(c.calibration.binDeg > 0)) bad('calibration.binDeg', 'must be > 0');
   if (!(c.calibration.radiusMinDeg <= c.calibration.radiusMaxDeg)) bad('calibration.radiusMinDeg', 'must be ≤ radiusMaxDeg');
   if (!(c.calibration.driverChange.iodFrac > c.calibration.resumeTolerance.iodFrac)) {

@@ -82,8 +82,14 @@ export interface BaselineOut {
 }
 
 export interface Baselines {
-  /** A derived reference (Stage 1, a seed, a profile, a driver change): the profile floor applies. */
-  setReference(ear: EarPair, mar: number | null, tMs: number): EarPair;
+  /**
+   * A derived reference (Stage 1, a seed, a profile, a driver change): the profile floor applies. Task C8: a
+   * profile's reference comes with the appearance it was taken under, which becomes the reference's (so an
+   * appearance change since then is an event, and is followed by the factor it explains).
+   */
+  setReference(ear: EarPair, mar: number | null, tMs: number, appearance?: Appearance | null): EarPair;
+  /** Task C8: the drive's reference as set (verified, never the adapted state) and its appearance, for the profile */
+  reference0(): { ear: EarPair; appearance: Appearance | null } | null;
   step(x: BaselineInput): BaselineOut;
   /**
    * A value from a resume path (rederiveEar, baselineReset; R4): up is taken; down only with the fatigue gate
@@ -91,6 +97,8 @@ export interface Baselines {
    */
   offer(candidate: EarPair, appearance: Appearance | null, gate?: boolean): EarPair;
   onYawn(tMs: number): void;
+  /** Task C8 (rev2 §2.2 item 3): the start check re-derived the MAR: a new reference, its history restarted */
+  setMar(m: number, tMs: number): void;
   /** fatigue evidence: an unexplained EAR drop (at an event, or a continuous low q/b) */
   lowUnexplained(): boolean;
   /** Task C7 (H5): the eye baseline is degraded (corroborated) */
@@ -182,10 +190,12 @@ class EarHist {
   }
 }
 
-export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { profileEar: EarPair | null }): Baselines {
+export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { profileEar: EarPair | null; profileAppearance?: Appearance | null }): Baselines {
   const c = cfg.calibration;
   const b = c.baselines;
   const profile = init.profileEar;
+  /** Task C8: the appearance the profile's EAR was taken under (its floor is corrected by the change since) */
+  const profileApp = init.profileAppearance ?? null;
   const hist = { r: new EarHist(b.buckets), l: new EarHist(b.buckets) };
   const marHist = new EarHist(b.buckets);
   let ref: EarPair | null = null;
@@ -247,9 +257,15 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       const corr = now !== null && ref0App !== null ? explainedBetween(now, ref0App) : 1;
       f = Math.max(f, b.earFloorFrac * r0 * corr);
     }
-    const p = profile?.[side] ?? null;
-    if (p !== null) f = Math.max(f, b.earFloorFrac * p);
+    f = Math.max(f, profileFloor(side, now));
     return f;
+  }
+  /** The profile anchor: 0.85 × the profile's EAR, corrected (Task C8) by the appearance change since it was taken. */
+  function profileFloor(side: 'r' | 'l', now: Appearance | null): number {
+    const p = profile?.[side] ?? null;
+    if (p === null) return 0;
+    const corr = now !== null && profileApp !== null ? explainedBetween(now, profileApp) : 1;
+    return b.earFloorFrac * p * corr;
   }
   const floored = (side: 'r' | 'l', v: number | null, now: Appearance | null = app) => (v === null ? null : Math.max(v, floorOf(side, now)));
 
@@ -264,13 +280,19 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     lowFlag = false;
   }
 
-  function setReference(ear: EarPair, m: number | null, tMs: number): EarPair {
+  function setReference(ear: EarPair, m: number | null, tMs: number, appearance: Appearance | null = null): EarPair {
     tNow = tMs;
-    const p = (side: 'r' | 'l', v: number | null) => (v === null ? null : Math.max(v, profile?.[side] != null ? b.earFloorFrac * profile[side]! : 0));
+    // Task C8: with the reference's own appearance given (a profile's), the floor is corrected against it.
+    const at = appearance ?? app;
+    const p = (side: 'r' | 'l', v: number | null) => (v === null ? null : Math.max(v, profileFloor(side, at)));
     const next = { r: p('r', ear.r), l: p('l', ear.l) };
     ref0 = next;
-    ref0App = app === null ? null : { ...app };
+    ref0App = at === null ? null : { ...at };
     adopt(next);
+    if (appearance !== null) {
+      refApp = { ...appearance };
+      appPending = false;
+    }
     if (m !== null) {
       mar = Math.max(m, c.neutralMarFloor);
       marReads = [{ t: tMs, v: mar }];
@@ -457,7 +479,13 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     onYawn(tMs) {
       yawnT = Math.max(yawnT, tMs);
     },
+    setMar(m, tMs) {
+      mar = Math.max(m, c.neutralMarFloor);
+      marReads = [{ t: tMs, v: mar }];
+      marHist.clear();
+    },
     lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
+    reference0: () => (ref0 === null ? null : { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } }),
     eyesDegraded: () => h5Degraded,
     appearance: () => (app === null ? null : { ...app }),
     reset() {

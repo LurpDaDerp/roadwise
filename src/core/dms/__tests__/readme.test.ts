@@ -93,6 +93,7 @@ const EVENTS = {
   driver_change_provisional: true,
   driver_change_reverted: true,
   fatigue_minute: true,
+  seed_verified: true,
 } satisfies Record<DmsEvent['kind'], true>;
 /** Task C3: the monitoring reasons (the HUD copy's keys) */
 const MONITORING_REASONS = {
@@ -119,6 +120,7 @@ const CAUSES = {
   stop: true,
   bump: true,
   slow: true,
+  seed: true,
   relative: true,
   undecided: true,
   no_candidate: true,

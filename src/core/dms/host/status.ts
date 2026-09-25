@@ -46,7 +46,7 @@ export interface MonitoringInput {
   /** the HUD status reason */
   reason: string | null;
   /** the engine's view at its last frame; null with no engine */
-  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null; priorMode?: boolean; eyesDegraded?: boolean } | null;
+  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | 'seed_check' | null; priorMode?: boolean; eyesDegraded?: boolean } | null;
 }
 
 /** The headline order: the first family cause in this list wins. */

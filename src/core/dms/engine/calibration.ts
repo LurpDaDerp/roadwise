@@ -84,13 +84,15 @@ export type CalibrationEventKind =
   /** Task C4 (rev5 V2): a driver change seen provisionally at a stop */
   | 'driver_change_provisional'
   /** Task C4 (rev5 V2): the provisional driver change was not confirmed after the move-off */
-  | 'driver_change_reverted';
+  | 'driver_change_reverted'
+  /** Task C8 (rev2 §2.2): a seed (a profile, a C2 seed, a new driver's W2 seed) verified against fresh evidence */
+  | 'seed_verified';
 
 export interface CalibrationEvent {
   kind: CalibrationEventKind;
   tMs: number;
   /** camera_bump: step, resume, rotation, stop; posture_dual: step, bump, resume, stop, slow; posture_revert: relative, undecided, no_candidate, probation, fatigue */
-  cause?: 'step' | 'resume' | 'rotation' | 'stop' | 'bump' | 'slow' | 'relative' | 'undecided' | 'no_candidate' | 'probation' | 'fatigue';
+  cause?: 'step' | 'resume' | 'rotation' | 'stop' | 'bump' | 'slow' | 'seed' | 'relative' | 'undecided' | 'no_candidate' | 'probation' | 'fatigue';
   /** posture_commit: the translation was large enough to demote the learned mirrors (U-6) */
   demoteMirrors?: boolean;
 }
@@ -116,8 +118,15 @@ export interface Calibrator {
   postureWidening(): boolean;
   /** Task C4: recalibrating (a provisional driver change, or a new driver's seed not yet verified) */
   recalibrating(): boolean;
-  /** Task C4: the HUD's calibration cause */
-  reason(): 'posture' | 'recalibrating' | null;
+  /** Task C4: the HUD's calibration cause. Task C8: an unverified profile or C2 seed is 'seed_check'. */
+  reason(): 'posture' | 'recalibrating' | 'seed_check' | null;
+  /** Task C8: the seed is verified (or there was none): the EMA runs in `seeded` too */
+  seedVerified(): boolean;
+  /**
+   * Task C8 (rev2 §2.7): the profile may be saved: calibrated or seed-verified, and no dual state, probation or
+   * provisional driver change pending (the engine adds health and the fatigue gate).
+   */
+  saveable(): boolean;
   /** Task C5 (rev1 I1): a D1/D2/D3 warning at tMs: the admitted samples within ±voidS are removed */
   voidAround(tMs: number): void;
   /** Task C5 (rev2 §2.3.7): the fatigue evidence gate: while set, no downward or phone-ward adaptation */
@@ -206,7 +215,7 @@ const PITCH_MIN_MOVING_S = 10;
 type Centres = { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null };
 
 interface Dual {
-  cause: 'step' | 'bump' | 'resume' | 'stop' | 'slow';
+  cause: 'step' | 'bump' | 'resume' | 'stop' | 'slow' | 'seed';
   c0: Centres;
   /** c₁ once found */
   c1: Centres | null;
@@ -294,8 +303,25 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let stopEp: StopEpisode | null = null;
   let postStop: { ep: StopEpisode; samples: MountSample[]; trackingS: number } | null = null;
   let provisional: Provisional | null = null;
-  /** a new driver's seed not yet verified by Stage 1 (W2) */
+  /** a seed not yet verified: a new driver's (W2), a profile's or a C2 seed's (Task C8) */
   let seedUnverified = false;
+  /**
+   * Task C8 (rev2 §2.2): the verification windows. Samples are seed-admitted frames (driver frame, the primary
+   * source and the head, weight dt); `prev` is the last window's mode when it was peaked and beyond the agree bound.
+   */
+  let seedCheck: { kind: 'profile' | 'seed' | 'driver'; win: { w: number; g: AnglePair | null; h: AnglePair }[]; winW: number; winObsS: number; prev: AnglePair | null } | null = null;
+  /** σ̂ for the verification: the profile's, else the default (Task C8) */
+  let seedSigma = SIGMA_DEFAULT;
+  /** σ̂ was measured by a Stage 1 pass in this drive (saved to the profile) */
+  let sigmaMeasured = false;
+  /** the adopted profile's σ̂, kept when no pass measures a new one */
+  let warmSigma: number | null = null;
+  /** Task C8 (rev2 §2.7): the verified MAR reference (the pass's, the profile's, or the start check's), never the adapted one */
+  let marVerified: number | null = null;
+  const startSeedCheck = (kind: 'profile' | 'seed' | 'driver') => {
+    seedUnverified = true;
+    seedCheck = { kind, win: [], winW: 0, winObsS: 0, prev: null };
+  };
   let wasStopped = false;
   /**
    * Task C7 (rev2 §2.3.6): the frozen gate references (per gaze source, and the head). Set at the Stage 1 pass
@@ -357,7 +383,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let lastTrackingT: number | null = null;
   let gap: { before: MountSignature | null } | null = null;
   let comparing: Comparison | null = null;
-  let sanity: { trackingS: number; values: number[]; r: number[]; l: number[] } | null = null;
+  /** the openness check: after a resume (opennessRange), or at the start of a drive with a profile or seed EAR (Task C8) */
+  let sanity: { trackingS: number; values: number[]; r: number[]; l: number[]; mar: number[]; range: readonly [number, number]; start: boolean } | null = null;
   /** a rotation bump since the last gap: that resume's signature comparison is skipped (T6 review m3) */
   let rotationBumpedInGap = false;
   let warmProfile: DmsProfileV1 | null = init.profile && init.profile.driverSide === side ? init.profile : null;
@@ -366,7 +393,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * Every derivation goes through `setEar`: a new reference (Stage 1, a seed, a profile, a new driver) or an
    * offer (the resume paths, R4: up freely; down only with the fatigue gate clear, by the explained factor).
    */
-  const baselines = createBaselines(cfg, { profileEar: warmProfile !== null ? { r: warmProfile.openEyeEar[0], l: warmProfile.openEyeEar[1] } : null });
+  const profileAppearance = (pr: DmsProfileV1 | null) => (pr?.earAppearance === undefined ? null : { luma: pr.earAppearance.faceLuma, iodC: pr.earAppearance.iodC });
+  const baselines = createBaselines(cfg, {
+    profileEar: warmProfile !== null ? { r: warmProfile.openEyeEar[0], l: warmProfile.openEyeEar[1] } : null,
+    profileAppearance: profileAppearance(warmProfile),
+  });
   /** the next derivation is a new person's (a driver change): a new reference, not an offer */
   let earFresh = false;
   /** Task C6 (rev4 S4): the moving-time seconds in the pitch ring (the running median is used from 10 s) */
@@ -377,6 +408,91 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
   const toDrv = (a: AnglePair, r: number) => toDriverFrame(rollCorrect(a, r), side);
   const emit = (kind: CalibrationEventKind, cause?: CalibrationEvent['cause']) => events.push(cause ? { kind, tMs: tNow, cause } : { kind, tMs: tNow });
+
+  /**
+   * Task C8 (rev2 §2.2): one verification window. For the primary source and the head: the mode m (a mean shift in
+   * ρ = max(ringMinDeg, ringSigmas·σ̂) from the medians), the peakedness P (the weight share within ρ) against one
+   * cluster's P₁ = 1 − exp(−ρ²/2σ̂²), and SE (the SD within ρ ÷ √n_eff). Both agree → verified. The primary peaked and
+   * beyond the agree bound in two consecutive windows that agree with each other → the dual state (cause 'seed').
+   */
+  function evaluateSeedWindow(sc: NonNullable<typeof seedCheck>): void {
+    const sv = c.seed;
+    const sig = seedSigma;
+    const rho = Math.max(sv.ringMinDeg, sv.ringSigmas * sig);
+    const p1 = 1 - Math.exp(-(rho * rho) / (2 * sig * sig));
+    const stat = (pts: { w: number; a: AnglePair }[]) => {
+      if (pts.length < 5) return null;
+      const ys = pts.map((x) => x.a.yaw).sort((a, b) => a - b);
+      const ps = pts.map((x) => x.a.pitch).sort((a, b) => a - b);
+      let m: AnglePair = { yaw: ys[ys.length >> 1]!, pitch: ps[ps.length >> 1]! };
+      for (let it = 0; it < 20; it++) {
+        let sw = 0;
+        let sy = 0;
+        let sp = 0;
+        for (const x of pts) {
+          if (angularDistanceDeg(x.a, m) <= rho) {
+            sw += x.w;
+            sy += x.w * x.a.yaw;
+            sp += x.w * x.a.pitch;
+          }
+        }
+        if (!(sw > 0)) break;
+        const next = { yaw: sy / sw, pitch: sp / sw };
+        const moved = angularDistanceDeg(next, m);
+        m = next;
+        if (moved < 0.05) break;
+      }
+      let total = 0;
+      let inW = 0;
+      let inW2 = 0;
+      let vy = 0;
+      let vp = 0;
+      for (const x of pts) {
+        total += x.w;
+        if (angularDistanceDeg(x.a, m) <= rho) {
+          inW += x.w;
+          inW2 += x.w * x.w;
+          vy += x.w * (x.a.yaw - m.yaw) ** 2;
+          vp += x.w * (x.a.pitch - m.pitch) ** 2;
+        }
+      }
+      if (!(inW > 0)) return null;
+      const sdIn = Math.sqrt((vy + vp) / (2 * inW));
+      const nEff = (inW * inW) / inW2;
+      return { m, peaked: inW / total >= sv.peakFrac * p1, se: sdIn / Math.sqrt(Math.max(1, nEff)) };
+    };
+    const src = cfg.gazeSource;
+    const seedG = centres[src];
+    const seedH = centres.head;
+    const g = stat(sc.win.filter((x) => x.g !== null).map((x) => ({ w: x.w, a: x.g! })));
+    const h = stat(sc.win.map((x) => ({ w: x.w, a: x.h })));
+    const bound = (s: { se: number }) => Math.max(sv.agreeMinDeg, sv.agreeSE * s.se);
+    const agrees = (s: ReturnType<typeof stat>, seed: AnglePair | null) => seed === null || (s !== null && s.peaked && angularDistanceDeg(s.m, seed) <= bound(s));
+    if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
+      seedUnverified = false;
+      seedCheck = null;
+      emit('seed_verified');
+      return;
+    }
+    // The primary source decides a disagreement (the head when the source has no seed centre).
+    const d = seedG !== null ? g : h;
+    const seed = seedG ?? seedH;
+    if (d !== null && seed !== null && d.peaked && angularDistanceDeg(d.m, seed) > bound(d)) {
+      if (sc.prev !== null && angularDistanceDeg(d.m, sc.prev) <= Math.max(sv.pairMinDeg, sv.pairSE * d.se)) {
+        sc.prev = null;
+        enterDual('seed', null, 0, 0);
+      } else sc.prev = d.m;
+    } else sc.prev = null;
+  }
+
+  function saveableNow(): boolean {
+    return (state === 'calibrated' || (state === 'seeded' && !seedUnverified)) && dual === null && probation === null && provisional === null;
+  }
+
+  /** Task C8 (rev2 §2.6): the EMA runs when calibrated, or seeded and verified */
+  function tracked(): boolean {
+    return state === 'calibrated' || (state === 'seeded' && !seedUnverified);
+  }
 
   function restartStage1(): void {
     gate = null;
@@ -403,14 +519,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   }
 
   /** Task C6: the EAR set by a derivation (a new reference) or offered by a resume path (the downward rule). */
-  function setEar(next: EarPair | null, how: 'derive' | 'offer'): void {
+  function setEar(next: EarPair | null, how: 'derive' | 'offer', appearance: { luma: number; iodC: number } | null = null): void {
     if (next === null || (next.r === null && next.l === null)) {
       ear = next;
       return;
     }
     if (how === 'offer' && ear !== null && !earFresh) ear = baselines.offer(next, baselines.appearance(), fatigueGate);
     else {
-      ear = baselines.setReference(next, mar, tNow);
+      ear = baselines.setReference(next, mar, tNow, appearance);
       earFresh = false;
     }
   }
@@ -455,8 +571,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (centres.head !== null || centres[cfg.gazeSource] !== null) {
       hasSeed = true;
       state = 'seeded';
-      seedUnverified = true;
+      startSeedCheck('driver');
     }
+    marVerified = null;
     rederiveEar();
     earFresh = true; // a new person: the next EAR is a new reference, not an offer (Task C6)
     baselines.reset();
@@ -696,6 +813,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const demote = d.box >= po.demoteBoxC || Math.abs(d.iodFrac) >= po.demoteIodFracC;
     probation = { c0: d.c0, since: tNow, observedS: 0, reverseS: 0, lastEvalT: tNow, gateShift };
     dual = null;
+    // Task C8: a seed's replacement committed: the seed is resolved (replaced, not verified).
+    if (d.cause === 'seed') {
+      seedUnverified = false;
+      seedCheck = null;
+    }
     events.push({ kind: 'posture_commit', tMs: tNow, demoteMirrors: demote });
   }
 
@@ -949,7 +1071,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const cutoff = tNow - c.voidS * 1000;
     emaQueue.dropWhile((e) => {
       if (e.t > cutoff) return false;
-      if (!voided(e.t) && state === 'calibrated' && dual === null) ema(e.head, e.geo, e.net, e.w);
+      if (!voided(e.t) && tracked() && dual === null) ema(e.head, e.geo, e.net, e.w);
       return true;
     });
   }
@@ -1092,8 +1214,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       earCollector = null;
     }
     hasSeed = true;
-    if (state === 'none' || state === 'uncalibrated') state = 'seeded';
+    if (state === 'none' || state === 'uncalibrated') {
+      state = 'seeded';
+      // Task C8 (rev2 §2.2): verified against fresh evidence, widened until then; the start check on its EAR.
+      startSeedCheck('seed');
+      seedSigma = SIGMA_DEFAULT;
+      if (ear !== null) startOpennessCheck();
+    }
     gate = { ...centres }; // Task C7: the seed's references, until the pass
+  }
+
+  /** Task C8 (rev2 §2.2 item 3): the start check on a profile's or seed's EAR and MAR (10 s of moving frames). */
+  function startOpennessCheck(): void {
+    sanity = { trackingS: 0, values: [], r: [], l: [], mar: [], range: c.startOpennessRange, start: true };
   }
 
   function applyProfile(p: DmsProfileV1): void {
@@ -1104,14 +1237,21 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     roll = p.rollOffsetDeg;
     // A profile without any EAR must not stop the provisional collection (T6 review m1).
     mar = p.neutralMar;
+    marVerified = p.neutralMar;
     if (p.openEyeEar[0] !== null || p.openEyeEar[1] !== null) {
-      setEar({ r: p.openEyeEar[0], l: p.openEyeEar[1] }, 'derive');
+      // Task C8 (the review-C6 T8 carry): the reference comes with the appearance it was taken under.
+      setEar({ r: p.openEyeEar[0], l: p.openEyeEar[1] }, 'derive', profileAppearance(p));
       earCollector = null;
     }
     mouthW = p.neutralMouthW;
     hasSeed = true;
     state = 'seeded';
     gate = { ...centres }; // Task C7: the profile's references, until the pass
+    // Task C8 (rev2 §2.2): verified against fresh evidence (widened, HUD seed_check); the start check.
+    startSeedCheck('profile');
+    seedSigma = p.sigmaDeg ?? SIGMA_DEFAULT;
+    warmSigma = p.sigmaDeg ?? null;
+    startOpennessCheck();
     emit('warm_start');
   }
 
@@ -1160,8 +1300,10 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const sdY = sd(within.map((d) => d.yaw));
       const sdP = sd(within.map((d) => d.pitch));
       sigmaHat = Math.max(1, Math.sqrt((sdY * sdY + sdP * sdP) / 2));
+      sigmaMeasured = true;
     }
     seedUnverified = false;
+    seedCheck = null;
     dual = null;
     probation = null;
     let passEar: EarPair | null = null;
@@ -1175,7 +1317,10 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       }
     }
     const mars = all.map((s) => s.mar).filter((x): x is number => x !== null);
-    if (mars.length > 0) mar = Math.max(median(mars), c.neutralMarFloor);
+    if (mars.length > 0) {
+      mar = Math.max(median(mars), c.neutralMarFloor);
+      marVerified = mar;
+    }
     // Task C6: the pass is a new reference for the baselines (the profile floor applies).
     if (passEar !== null) setEar(passEar, 'derive');
     const mws = all.map((s) => s.mouthW).filter((x): x is number => x !== null);
@@ -1313,7 +1458,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (gap !== null) {
         comparing = rotationBumpedInGap ? null : { kind: 'resume', before: gap.before, samples: [], trackingS: 0 };
         rotationBumpedInGap = false;
-        sanity = ear !== null ? { trackingS: 0, values: [], r: [], l: [] } : null;
+        sanity = ear !== null ? { trackingS: 0, values: [], r: [], l: [], mar: [], range: c.opennessRange, start: false } : null;
         gap = null;
       } else if (warmProfile !== null && comparing === null) {
         comparing = { kind: 'warm', before: warmProfile.mount, samples: [], trackingS: 0 };
@@ -1346,12 +1491,24 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         sanity.values.push(p.openness);
         if (p.usableR && f.eyeR !== null) sanity.r.push(f.eyeR.ear);
         if (p.usableL && f.eyeL !== null) sanity.l.push(f.eyeL.ear);
+        if (f.mouth != null && f.mouth.mar !== null) sanity.mar.push(f.mouth.mar);
         sanity.trackingS += dt;
         if (sanity.trackingS >= c.opennessCheckS) {
           const done = sanity;
           sanity = null;
           const m = median(done.values);
-          if (m < c.opennessRange[0] || m > c.opennessRange[1]) baselineReset(done, m);
+          if (m < done.range[0] || m > done.range[1]) baselineReset(done, m);
+          // Task C8 (rev2 §2.2 item 3): at the start, the MAR is checked against startMarRange too.
+          if (done.start && mar !== null && done.mar.length >= 10) {
+            const mm = median(done.mar);
+            const ratio = mm / mar;
+            if (ratio < c.startMarRange[0] || ratio > c.startMarRange[1]) {
+              mar = Math.max(mm, c.neutralMarFloor);
+              marVerified = mar;
+              baselines.setMar(mar, f.tMs);
+              emit('baseline_reset');
+            }
+          }
         }
       }
 
@@ -1441,6 +1598,40 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         }
       }
 
+      // Task C8 (rev2 §2.2): the seed verification windows (seed admission: ≥ 30 km/h, eyes open, straight or
+      // gentle turn rates), while no dual state or probation is running.
+      if (seedCheck !== null && !stopped && dt > 0) {
+        if (dual !== null || probation !== null) {
+          seedCheck.win = [];
+          seedCheck.winW = 0;
+          seedCheck.winObsS = 0;
+        } else {
+          seedCheck.winObsS += dt;
+          const sv = c.seed;
+          const rates = ctx === null ? [] : [ctx.yawRateDegS, ctx.courseRateDegS].filter((x): x is number => x !== null);
+          const calm = ctx !== null && (ctx.straight === true || (rates.length > 0 && rates.every((x) => Math.abs(x) < sv.curveRateDegS)));
+          const srcCam = cfg.gazeSource === 'net' ? (p.netFresh ? p.netCam : null) : p.geoCam;
+          if (!p.eyesClosed && calm && ctx!.speedKmh !== null && ctx!.speedKmh >= sv.admitMinSpeedKmh) {
+            seedCheck.win.push({ w: dt, g: srcCam === null ? null : toDrv(srcCam, roll), h: toDrv(head, roll) });
+            seedCheck.winW += dt;
+          }
+          if (seedCheck.winW >= sv.windowS) {
+            evaluateSeedWindow(seedCheck);
+            if (seedCheck !== null) {
+              seedCheck.win = [];
+              seedCheck.winW = 0;
+              seedCheck.winObsS = 0;
+            }
+          } else if (seedCheck.winObsS >= sv.windowMaxObservedS) {
+            // No window within the observed time: start again, and a pair of windows is no longer consecutive.
+            seedCheck.win = [];
+            seedCheck.winW = 0;
+            seedCheck.winObsS = 0;
+            seedCheck.prev = null;
+          }
+        }
+      }
+
       // Admission (§M3). Task C5: never within voidS after a warning (the samples before it are removed by voidAround).
       const admitted =
         !p.eyesClosed && ctx !== null && ctx.straight === true && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh && dt > 0 && !voided(f.tMs);
@@ -1464,7 +1655,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           admittedS -= s.w;
           return true;
         });
-        if (state === 'calibrated' && dual === null) emaQueue.push({ t: f.tMs, w: dt, head, geo: p.geoCam, net: p.netFresh ? p.netCam : null });
+        if (tracked() && dual === null) emaQueue.push({ t: f.tMs, w: dt, head, geo: p.geoCam, net: p.netFresh ? p.netCam : null });
       }
       drainEma();
       evaluateIfDue();
@@ -1477,7 +1668,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     sigma: () => sigmaHat,
     eyesDegraded: () => baselines.eyesDegraded(),
     recalibrating: () => provisional !== null || seedUnverified,
-    reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 || slowCand !== null ? 'posture' : null),
+    reason: () =>
+      provisional !== null || (seedUnverified && seedCheck?.kind === 'driver')
+        ? 'recalibrating'
+        : seedUnverified
+          ? 'seed_check'
+          : dual !== null || probation !== null || onsetLeftS > 0 || slowCand !== null
+            ? 'posture'
+            : null,
+    seedVerified: () => !seedUnverified,
+    saveable: () => saveableNow(),
     voidAround(tMs) {
       warnings.push(tMs);
       while (warnings.length > 8) warnings.shift();
@@ -1527,9 +1727,15 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     toProfile(savedAtMs, learnedZones = []) {
       const mount = sigWindow.signature();
       const primary = centres[cfg.gazeSource];
-      if (state !== 'calibrated' || primary === null || centres.head === null || radius === null || mar === null || mouthW === null || mount === null || lastRotation === null) {
+      // Task C8 (rev2 §2.7): calibrated or seed-verified, no dual state, probation or provisional driver change.
+      const savedMar = marVerified ?? mar;
+      if (!saveableNow() || primary === null || centres.head === null || radius === null || savedMar === null || mouthW === null || mount === null || lastRotation === null) {
         return null;
       }
+      // The verified reference (the drive's as set, never the adapted end state) and its appearance.
+      const r0 = baselines.reference0();
+      const savedEar = r0?.ear ?? ear;
+      const app = r0?.appearance ?? null;
       const gazeCentres: DmsProfileV1['gazeCentres'] = {};
       if (centres.geometric !== null) gazeCentres.geometric = centres.geometric;
       if (centres.net !== null) gazeCentres.net = centres.net;
@@ -1542,11 +1748,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         headCentre: centres.head,
         rollOffsetDeg: roll,
         radiusDeg: radius,
-        openEyeEar: [ear?.r ?? null, ear?.l ?? null],
-        neutralMar: mar,
+        openEyeEar: [savedEar?.r ?? null, savedEar?.l ?? null],
+        neutralMar: savedMar,
         neutralMouthW: mouthW,
         learnedZones,
         savedAtMs,
+        ...(app !== null && app.luma > 0 && app.iodC > 0 ? { earAppearance: { faceLuma: app.luma, iodC: app.iodC } } : {}),
+        ...(sigmaMeasured ? { sigmaDeg: sigmaHat } : warmSigma !== null ? { sigmaDeg: warmSigma } : {}),
       };
     },
   };

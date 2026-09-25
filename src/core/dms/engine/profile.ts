@@ -41,6 +41,14 @@ export interface DmsProfileV1 {
   neutralMouthW: number;
   learnedZones: LearnedZone[];
   savedAtMs: number;
+  /**
+   * Task C8 (rev2 §2.7; review-C6 the T8 carry): the appearance the EAR reference was taken under (the face ROI
+   * luma and the projected IOD). A profile adopted in another light is corrected by the change. Optional: a profile
+   * saved before C8 has none (its correction is 1).
+   */
+  earAppearance?: { faceLuma: number; iodC: number };
+  /** Task C8: Stage 1's within-cluster SD of the primary source (the seed verification's σ̂); optional */
+  sigmaDeg?: number;
 }
 
 type Cfg = Pick<DmsConfig, 'calibration'>;
@@ -134,6 +142,9 @@ function learnedZone(x: unknown): LearnedZone | null {
   return { id: z.id, yawDeg: z.yawDeg, pitchDeg: z.pitchDeg, halfYawDeg: z.halfYawDeg, halfPitchDeg: z.halfPitchDeg, drives: z.drives };
 }
 
+/** Task C8: keys a profile may carry (older profiles lack them) */
+const OPTIONAL_KEYS = ['earAppearance', 'sigmaDeg'];
+
 const KEYS = [
   'v',
   'driverSide',
@@ -152,7 +163,7 @@ const KEYS = [
 
 /** A stored profile, validated field by field; null when anything is off. */
 export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as DmsConfig): DmsProfileV1 | null {
-  if (!isObj(x) || !keysExactly(x, KEYS)) return null;
+  if (!isObj(x) || !keysExactly(x, KEYS, OPTIONAL_KEYS)) return null;
   if (x.v !== 1) return null;
   if (x.driverSide !== 'left' && x.driverSide !== 'right') return null;
   if (x.orientation !== 0 && x.orientation !== 90 && x.orientation !== 180 && x.orientation !== 270) return null;
@@ -186,6 +197,18 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
     if (learnedZoneWithinBounds(lz, cfg)) learnedZones.push(lz);
   }
   if (!fin(x.savedAtMs) || x.savedAtMs < 0) return null;
+  // Task C8: the optional appearance and σ̂.
+  let earAppearance: DmsProfileV1['earAppearance'] | undefined;
+  if ('earAppearance' in x) {
+    const a = x.earAppearance;
+    if (!isObj(a) || !keysExactly(a, ['faceLuma', 'iodC']) || !fin(a.faceLuma) || !fin(a.iodC) || !(a.faceLuma > 0) || a.faceLuma > 255 || !(a.iodC > 0) || a.iodC > 1) return null;
+    earAppearance = { faceLuma: a.faceLuma, iodC: a.iodC };
+  }
+  let sigmaDeg: number | undefined;
+  if ('sigmaDeg' in x) {
+    if (!fin(x.sigmaDeg) || x.sigmaDeg < 0.5 || x.sigmaDeg > 20) return null;
+    sigmaDeg = x.sigmaDeg;
+  }
   return {
     v: 1,
     driverSide: x.driverSide,
@@ -200,5 +223,7 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
     neutralMouthW: x.neutralMouthW,
     learnedZones,
     savedAtMs: x.savedAtMs,
+    ...(earAppearance !== undefined ? { earAppearance } : {}),
+    ...(sigmaDeg !== undefined ? { sigmaDeg } : {}),
   };
 }

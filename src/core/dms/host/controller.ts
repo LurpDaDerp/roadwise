@@ -697,7 +697,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       dispatch(); // the stops, and the sample of an F episode still open
       const pendingFocus: CameraFocusSample[] = [];
       for (let f = focus.take(); f !== null; f = focus.take()) pendingFocus.push(f);
-      if (r.profile !== null && r.summary.calibration.state === 'calibrated') profile = r.profile;
+      // Task C8 (rev2 §2.7): the engine decides what is saveable (calibrated or seed-verified, health and the fatigue gate).
+      if (r.profile !== null) profile = r.profile;
       summary = { ...r.summary, camera: { starts, retries, gaveUp }, pendingFocus };
       lastSummary = summary;
     }
