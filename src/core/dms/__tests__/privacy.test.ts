@@ -75,7 +75,9 @@ const MODULE_LEAVES = ['constants', 'wire', 'types'].map((l) => `modules/dms-vis
 /** The non-relative imports each group may make (T16 r3, security m-1). */
 const ALLOW: Record<string, readonly string[]> = {
   lane: ['@/core/engine/types', '@/core/engine/machine', '@scoring', 'zod'],
-  host: ['@/core/engine/types', '@/core/engine/machine', 'expo-crypto'],
+  // '@/core/engine/motionEvidence' (Task C1): the shared, pure per-row motion evidence (a function of the
+  // FeatureRow alone, like machine's stillWithoutFix); the host computes it when the caller passes none.
+  host: ['@/core/engine/types', '@/core/engine/machine', '@/core/engine/motionEvidence', 'expo-crypto'],
   module: ['expo-modules-core', 'zod'],
   panel: ['react', 'react-native', 'expo-router', '@/ui', '@/core/dms', '@/core/engine/types', '@/data/config/appConfig', '@/data/queries/context', '@/data/supabase/session'],
   route: ['react', 'expo-router', '@/features/dev/DmsDiagnosticsPanel', '@/features/dev/flags'],

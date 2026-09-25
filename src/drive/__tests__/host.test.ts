@@ -7,6 +7,7 @@ import { T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import { drive, sha256, TZ } from '@/core/engine/__fixtures__/drives';
 import * as finalizeModule from '@/core/engine/finalize';
 import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
+import { createMotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
 import type { FeatureRow, LimitSample } from '@/core/engine/types';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import {
@@ -76,6 +77,7 @@ interface HarnessOptions {
   appState?: import('@/data/foreground').AppStateLike;
   signedOut?: boolean;
   readAgeBand?: () => Promise<string | null>;
+  motionEvidence?: () => MotionEvidenceSource;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -130,6 +132,7 @@ function harness(opts: HarnessOptions = {}) {
     appState: opts.appState,
     signedOut: opts.signedOut,
     readAgeBand: opts.readAgeBand,
+    motionEvidence: opts.motionEvidence,
     scheduler,
     onError: (error, ctx) => errors.push({ error, ctx }),
   });
@@ -1472,5 +1475,62 @@ describe('an under-13 account records nothing (u13 security M-2)', () => {
     await h.host.untilIdle();
     expect(h.host.isBusy()).toBe(false);
     expect((await trips().get(tripId))?.status).toBe('provisional');
+  });
+});
+
+
+// --- Task C1: the shared motion evidence, computed once per row by the host ----------------------------
+
+describe('C1: the motion evidence', () => {
+  /** A real source, counting its calls. */
+  function counted() {
+    const calls = { onRow: 0, reset: 0 };
+    const factory = () => {
+      const real = createMotionEvidence();
+      return {
+        onRow: (r: FeatureRow, o?: { mounted?: boolean }) => {
+          calls.onRow += 1;
+          return real.onRow(r, o);
+        },
+        resetMountReference: () => real.resetMountReference(),
+        reset: () => {
+          calls.reset += 1;
+          real.reset();
+        },
+      } satisfies MotionEvidenceSource;
+    };
+    return { calls, factory };
+  }
+
+  test('once per delivered row, exposed as the latest evidence; null before any row', async () => {
+    const m = counted();
+    const h = harness({ motionEvidence: m.factory });
+    await h.host.start();
+    expect(h.host.motionEvidence()).toBeNull();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    const n = await h.feed(drive(40));
+    expect(m.calls.onRow).toBe(n);
+    const ev = h.host.motionEvidence();
+    expect(ev).not.toBeNull();
+    expect(ev!.stop).toBeNull(); // a known speed of 10 m/s
+    expect(ev!.moving).toBe('strong');
+  });
+
+  test('a new trip starts the evidence afresh', async () => {
+    const m = counted();
+    const h = harness({ motionEvidence: m.factory });
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    const first = drive(30);
+    await h.feed(first);
+    const resetsAfterFirst = m.calls.reset;
+    await h.host.end();
+    await h.host.untilIdle();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    await h.feed(drive(5, { t0: last(first).ts + 60_000 }));
+    expect(m.calls.reset).toBeGreaterThan(resetsAfterFirst);
   });
 });

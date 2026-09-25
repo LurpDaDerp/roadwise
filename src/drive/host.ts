@@ -40,6 +40,7 @@ import { createDetectors } from '@/core/detectors';
 import type { EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
+import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
 import { createRecorder } from '@/core/engine/recorder';
 import { rebuildFromSamples } from '@/core/engine/replay';
 import { roleEvidenceFor } from '@/core/engine/rolePrior';
@@ -154,6 +155,12 @@ export interface DriveHost {
   /** Resolves once the host's queue has drained (tests, diagnostics, orderly shutdown). */
   settled(): Promise<void>;
   snapshot(): DriveState;
+  /**
+   * The shared motion evidence of the latest row (Task C1), computed here once per row and started afresh
+   * for each trip; null before any row. M7 hands it to the DMS controller with the same row; the M3
+   * auto-ends read it from Task C14 on.
+   */
+  motionEvidence(): MotionEvidence | null;
   subscribe(fn: (s: DriveState) => void): () => void;
   /** For the alert player: L1 honours the silent switch only when mounted, unlocked, in front. */
   l1RespectsSilentSwitch(): boolean;
@@ -227,6 +234,11 @@ export interface DriveHostDeps {
   readFlag?: (key: 'auto_detect') => Promise<boolean>;
   appState?: AppStateLike;
   onError?: (e: unknown, ctx: string) => void;
+  /**
+   * The shared motion evidence's factory (Task C1; `src/core/engine/motionEvidence.ts`). Default: the real
+   * one. Tests pass a counting wrapper.
+   */
+  motionEvidence?: () => MotionEvidenceSource;
   /** The tick timer's clock; tests pass a manual one. Defaults to the global timers. */
   scheduler?: Scheduler;
   /** False when the player is a silent stand-in for sound that failed to load. Default true. */
@@ -310,6 +322,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * Cleared by the first wake handled, or by the claim.
    */
   let inheritedCapture = false;
+  /** Task C1: the shared motion evidence, its trip, and the latest row's */
+  const motion = (deps.motionEvidence ?? createMotionEvidence)();
+  let motionTripId: string | null = null;
+  let lastMotion: MotionEvidence | null = null;
   let notified: string | null = null;
   let activeAlert: { decision: AlertDecision; until: number } | null = null;
   let mutedForDrive = false;
@@ -609,6 +625,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   async function onRow(row: FeatureRow): Promise<void> {
+    // Task C1: the motion evidence, once per row, before the engine sees the row. A new trip (another
+    // client trip id) starts it afresh.
+    const snap = engine.snapshot();
+    if (snap.clientTripId !== motionTripId) {
+      motion.reset();
+      motionTripId = snap.clientTripId;
+    }
+    lastMotion = motion.onRow(row, { mounted: snap.mode === 'mounted' });
     currentRow = row;
     recent.push(row);
     if (recent.length > RECENT_ROWS) recent.shift();
@@ -944,6 +968,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
     settled,
     snapshot: () => current,
+    motionEvidence: () => lastMotion,
 
     subscribe(fn) {
       listeners.add(fn);

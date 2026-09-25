@@ -64,3 +64,28 @@ describe('the extras and the policy row', () => {
     expect(policyRow({ ...ROW, handlingScore: 0.59 }).handling).toBe(false);
   });
 });
+
+// Task C1: the shared motion evidence rides the row into the engine and the policy, as given (design
+// rev4 §2.1.2 placement, M-3): computed once per row, never recomputed here.
+describe('the motion evidence (C1)', () => {
+  const ev = { stop: 'sensor', moving: null } as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+  test('rowExtras carries it through unchanged, and omits it when none is given', () => {
+    expect(rowExtras(ROW, { localMinutes: 600 }, 30, ev).motion).toBe(ev);
+    expect('motion' in rowExtras(ROW, { localMinutes: 600 }, 30)).toBe(false);
+  });
+  test('policyRow carries it through unchanged', () => {
+    expect(policyRow(ROW, ev).motion).toBe(ev);
+  });
+});
+
+test('the engine and policy view of the evidence (RowMotion) accepts the shared MotionEvidence (a type test, C1)', () => {
+  const full = null as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+  const view: import('../../engine/types').RowMotion | null = full;
+  expect(view).toBeNull();
+});
+
+test('the policy view of the evidence (PolicyMotion) accepts the shared MotionEvidence (a type test, C1)', () => {
+  const full = null as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+  const view: import('../../policy/capture').PolicyMotion | null = full;
+  expect(view).toBeNull();
+});

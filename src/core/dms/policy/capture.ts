@@ -79,6 +79,19 @@ export interface PolicyRow {
   imuMoving: boolean;
   /** handlingScore ≥ 0.6 */
   handling: boolean;
+  /** the row's shared motion evidence (Task C1), carried as given; read by the stop rules from Task C3 */
+  motion?: PolicyMotion;
+}
+
+/**
+ * The shared motion evidence as the policy reads it (Task C1): structurally a subset of
+ * `src/core/engine/motionEvidence.ts`'s `MotionEvidence` (the policy imports only its own folder; a host
+ * test proves the two assignable).
+ */
+export interface PolicyMotion {
+  stop: 'gnss' | 'sensor' | 'deep' | null;
+  moving: 'strong' | 'weak' | null;
+  ambiguousStill: boolean;
 }
 
 export interface PolicyInput {

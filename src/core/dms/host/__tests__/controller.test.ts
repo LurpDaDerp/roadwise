@@ -13,6 +13,7 @@ import { frame } from '../../engine/__fixtures__/synth';
 import { EPOCH0, onRoad, rel, synthDrive, type DriverFn } from '../../replay/synth';
 import { featuresFromFrame } from '../__fixtures__/records';
 import { createDmsController, type DmsController, type DmsGateInputs, type DmsHudStatus } from '../controller';
+import * as engineModule from '../../engine/engine';
 
 const GATE: DmsGateInputs = {
   optedIn: true,
@@ -1081,5 +1082,72 @@ describe('final review round 3 R2-m1: a slow cold start is not a failed resume',
     expect(starts(h)).toBe(1);
     expect(h.ctl.summary()!.camera).toMatchObject({ starts: 1, retries: 0, gaveUp: false });
     expect(h.fake.nativeState()).toBe('running');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C1: the motion evidence at the controller (calib-parked design rev4 §2.1.2, M-3).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C1: the motion evidence', () => {
+  const ev = (tag: number) => ({ stop: null, moving: null, tag }) as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+
+  test('evidence the caller (M7) passes is used as is, never recomputed', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const e = ev(1);
+    h.ctl.pushRow(featureRow(0, 60), POWER, e);
+    await h.ctl.idle();
+    expect(h.ctl.diagnostics().motion).toBe(e);
+  });
+
+  test('with none passed, the controller computes its own, once per row', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    h.ctl.pushRow(featureRow(0, 60), POWER);
+    const first = h.ctl.diagnostics().motion;
+    expect(first).not.toBeNull();
+    expect(first!.stop).toBeNull();
+    h.ctl.pushRow(featureRow(0, 60), POWER); // the same row again: no new evidence
+    expect(h.ctl.diagnostics().motion).toBe(first);
+  });
+
+  test('the replay into an engine created mid-drive uses the stored evidence, row for row', async () => {
+    const seen: unknown[] = [];
+    const real = engineModule.createDmsEngine;
+    const spy = jest.spyOn(engineModule, 'createDmsEngine').mockImplementation((...args) => {
+      const e = real(...args);
+      const push = e.pushRow.bind(e);
+      e.pushRow = (row, ex, t) => {
+        seen.push(ex.motion);
+        push(row, ex, t);
+      };
+      return e;
+    });
+    try {
+      const h = harness();
+      const stored = [ev(1), ev(2), ev(3)];
+      h.ctl.setGate({ ...GATE, appActive: false }); // gate closed: no engine yet
+      stored.forEach((e, i) => h.ctl.pushRow(featureRow(i * 1000, 60), POWER, e));
+      await h.ctl.idle();
+      expect(seen).toEqual([]);
+      h.ctl.setGate(GATE);
+      await h.ctl.idle();
+      expect(seen.slice(0, 3)).toEqual(stored);
+      expect(seen[0]).toBe(stored[0]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("the controller's own evidence starts afresh at each drive end", async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    for (let s = 0; s < 40; s++) h.ctl.pushRow(featureRow(s * 1000, 60, { frameAligned: true, aLonMean: 0 } as Partial<FeatureRow>), POWER);
+    expect(h.ctl.diagnostics().motion!.bias?.n ?? 0).toBeGreaterThan(0);
+    await h.ctl.endDrive();
+    h.ctl.setGate(GATE);
+    h.ctl.pushRow(featureRow(100_000, 60, { frameAligned: true, aLonMean: 0 } as Partial<FeatureRow>), POWER);
+    expect(h.ctl.diagnostics().motion!.bias).toBeNull();
   });
 });

@@ -240,6 +240,7 @@ export function DmsDiagnosticsPanel({
     droppedEvents: 0,
     ruleSpeedKmh: null,
     native: null,
+    motion: null,
   });
   const [tallies, setTallies] = useState<Tallies>({
     alerts: 0,

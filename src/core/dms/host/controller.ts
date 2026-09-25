@@ -71,6 +71,7 @@ import { createGate, type DmsGate, type GateClosedReason, type GateToken, type P
 import { engineFrame } from './frames';
 import { gatedNative } from './native';
 import type { DmsProfileStore } from './profileStore';
+import { createMotionEvidence, type MotionEvidence } from '@/core/engine/motionEvidence';
 import { policyRow, rowExtras } from './rowContext';
 
 export interface DmsGateInputs extends DmsGate {
@@ -132,6 +133,8 @@ export interface DmsHostDiagnostics {
   ruleSpeedKmh: number | null;
   /** native's last status event, or null before one */
   native: DmsNativeView | null;
+  /** the motion evidence of the last row (Task C1): the caller's, or the controller's own */
+  motion: MotionEvidence | null;
 }
 
 export interface DmsControllerDeps {
@@ -160,7 +163,11 @@ export interface DmsNativeOwner {
 
 export interface DmsController {
   setGate(g: DmsGateInputs): void;
-  pushRow(row: FeatureRow, power: DmsHostPower): CameraFocusSample | null;
+  /**
+   * One 1 Hz row. `motion`: the row's shared motion evidence, computed once per row by the drive host (M7
+   * passes it; Task C1). Without it (the dev panel, tests) the controller computes its own, per drive.
+   */
+  pushRow(row: FeatureRow, power: DmsHostPower, motion?: MotionEvidence): CameraFocusSample | null;
   beginSetup(): void;
   endSetup(): void;
   setupCheck(): DmsSetupCheck;
@@ -252,7 +259,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   /** the first HEAD_ONLY frame since the last TRACKING one */
   let headOnlySince: number | null = null;
   const qualities = new RingBuffer<{ t: number; tracking: boolean }>(60 * 30);
-  const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower }>(REPLAY_ROWS);
+  const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower; motion: MotionEvidence }>(REPLAY_ROWS);
+  /** Task C1: the controller's own evidence when the caller passes none; one per drive. */
+  const ownMotion = createMotionEvidence();
+  let lastMotion: MotionEvidence | null = null;
   // Native status.
   let thermal: ThermalName = 'nominal';
   let lowPower = false;
@@ -459,7 +469,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       // The drive's last rows, so the engine starts with the last known speed, the straight flag and the
       // course rate (T14 r1 m1). Rows only: no frame came before the engine. The trip clock is the drive's
       // own (driveStartTs, set on the drive-start edge whether or not an engine exists; final review I-4).
-      recent.forEach(({ row, power }) => e.pushRow(row, rowExtras(row, power, driveSeconds(row)), row.ts));
+      // Task C1: each row's STORED evidence, never recomputed.
+      recent.forEach(({ row, power, motion }) => e.pushRow(row, rowExtras(row, power, driveSeconds(row), motion), row.ts));
       engine = e;
       dispatch();
     })();
@@ -632,6 +643,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     healthySince = null;
     resetDrive();
     recent.clear();
+    ownMotion.reset(); // Task C1: the next drive's evidence starts afresh
+    lastMotion = null;
     if (profile !== null) {
       try {
         await deps.profileStore.save(profile);
@@ -775,10 +788,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       if (evaluate()) openAndApply();
     },
 
-    pushRow(row, power) {
+    pushRow(row, power, motion) {
       if (disposed || closing) return null;
       lastRow = row;
-      recent.push({ row, power });
+      // Task C1: once per row — the caller's evidence as given, else the controller's own.
+      const ev = motion ?? ownMotion.onRow(row, { mounted: inputs?.mode === 'mounted' });
+      lastMotion = ev;
+      recent.push({ row, power, motion: ev });
       if (driveStartPending) {
         driveStartTs = row.ts;
         driveStartPending = false;
@@ -829,7 +845,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       const out = policy.next({
         tMs: row.ts,
         gateOpen: open,
-        row: policyRow(row),
+        row: policyRow(row, ev),
         quality,
         qualityForMs: quality === null ? 0 : Math.max(0, now() - qualitySince),
         thermal,
@@ -844,7 +860,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       if (engine !== null) {
         if (out.cameraOff !== null) engine.cameraOff(row.ts, out.cameraOff);
         engine.setHost({ thermalLevel: out.thermalLevel, search: out.search, gazeNetEvery: out.gazeNetEvery });
-        engine.pushRow(row, rowExtras(row, power, driveSeconds(row)), row.ts);
+        engine.pushRow(row, rowExtras(row, power, driveSeconds(row), ev), row.ts);
         dispatch();
       }
       if (open) {
@@ -951,7 +967,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } while (p !== ops);
     },
 
-    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView } }),
+    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView }, motion: lastMotion }),
   };
   return api;
 }

@@ -101,3 +101,20 @@ export interface VehicleContext {
   localMinutes: number | null;
   tripElapsedS: number;
 }
+
+/**
+ * The shared motion evidence as the DMS reads it (Task C1). It is structurally the `MotionEvidence` of
+ * `src/core/engine/motionEvidence.ts`, which the host computes once per row; this folder imports only
+ * itself (purity), so the shape is restated here and a host test proves the two assignable.
+ */
+export interface RowMotion {
+  stop: 'gnss' | 'sensor' | 'deep' | null;
+  moving: 'strong' | 'weak' | null;
+  quiet: boolean;
+  vehicleMotion: boolean;
+  ambiguousStill: boolean;
+  quietNoFixS: number;
+  vLowKmh: number | null;
+  trust: boolean;
+  gap: boolean;
+}

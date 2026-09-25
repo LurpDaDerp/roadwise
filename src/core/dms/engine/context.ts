@@ -3,7 +3,7 @@
 // pins it assignable from `FeatureRow` (Task 14). Rows are applied at the latest frame time `tMs`.
 import { courseRateDegS } from './angles';
 import type { DmsConfig } from './config';
-import type { VehicleContext } from './types';
+import type { RowMotion, VehicleContext } from './types';
 
 const DEG = 180 / Math.PI;
 
@@ -33,6 +33,11 @@ export interface RowExtras {
   imuMoving: boolean;
   localMinutes: number | null;
   tripElapsedS: number;
+  /**
+   * The shared motion evidence for this row (Task C1; `src/core/engine/motionEvidence.ts`), computed once
+   * per row by the host and carried here as given. Read by the speed states from Task C2 on.
+   */
+  motion?: RowMotion;
 }
 
 /** C-19: all nine IMU fields 0 means the IMU is absent. */
