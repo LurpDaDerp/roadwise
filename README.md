@@ -22,6 +22,23 @@ Every EAS command is run as `npx eas-cli@24.7.0 …` (the CLI is deliberately no
 
 `eas.json` still refuses any CLI below 24.
 
+## Over-the-air updates (release notes)
+
+The runtime version is the **native fingerprint** (`runtimeVersion: { policy: 'fingerprint' }` in
+`app.config.ts`, pinned by `app/__tests__/app-config.test.ts`): an update reaches only binaries built
+from the same native code, so JS from before a native change (the drive-sense row fields, for
+example) can never reach a newer binary.
+
+- **Publish with the build's environment:** `npx eas-cli@24.7.0 update --channel <channel> --environment <the EAS environment the build used>`.
+  The config reads environment-dependent values (the Google services file, the Maps key); publishing
+  under another environment computes another fingerprint, and the update is then simply not delivered.
+- **Check once after each new build:** `npx eas-cli@24.7.0 fingerprint:compare` against the build (or
+  `npx expo-updates fingerprint:generate` locally and on the build) must report no difference. If the
+  services-file path differs between environments, add a `fingerprint.config.js` source skip for the
+  path (the file's content, not its path, is what the native build depends on).
+- Binaries built before the fingerprint policy (runtime `2.0.0`) receive no further updates: testers
+  install the new build.
+
 ## Verify
 
     npm test                 # Jest — the app, the engine, the scoring package

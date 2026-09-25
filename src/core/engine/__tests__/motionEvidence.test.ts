@@ -376,6 +376,29 @@ describe('never a stop while moving', () => {
     expect(stops(ran)).toEqual([]);
   });
 
+  // C1 round 1 (review-C1 m3): a −0.05 g residual starting on the row right after a real brake, so its
+  // noisy rows at or below −0.06 g can chain onto the proven braking run. 200 seeds, 20–40 km/h after it.
+  test('S-TUN-CHAINED (m3): a −0.05 g residual right after a real 0.15–0.3 g brake never gives a stop at speed (200 seeds)', () => {
+    let chained = 0;
+    for (let seed = 1; seed <= 200; seed++) {
+      const r = prng(seed * 104729);
+      const brakeG = 0.15 + r() * 0.15;
+      const brakeS = 1 + Math.floor(r() * 2); // 1–2 s
+      const warmupDropKmh = 3 * 0.2 * KMH_PER_G_S; // the warm-up's GNSS brake
+      const v0 = 25 + r() * 15 + brakeS * brakeG * KMH_PER_G_S + warmupDropKmh; // lands at 25–40 km/h after the brake
+      // the residual for 20–25 s, then it fades and the cruise turns quiet (the rows a stop entry needs)
+      const residualS = 20 + Math.floor(r() * 6);
+      const ran = run(
+        simulate(v0, [...WARMUP, [2, {}], [1, { fix: false }], [brakeS, { fix: false, a: -brakeG }], [residualS, { fix: false, bias: -0.05, extreme: 0.06 }], [12, { fix: false, extreme: 0.01 }]], { seed, noise: 0.01 })
+      );
+      const firstResidual = ran.length - 12 - residualS;
+      if ((ran[firstResidual]!.row.aLonMean ?? 0) <= -0.06) chained++;
+      for (const x of ran) if (x.ev.stop === 'sensor') expect({ seed, trueKmh: x.trueKmh < MOTION_CONSTANTS.STOP_KMH }).toEqual({ seed, trueKmh: true });
+      expect(ran[ran.length - 1]!.trueKmh).toBeGreaterThanOrEqual(20);
+    }
+    expect(chained).toBeGreaterThan(0); // the chaining case actually occurs in the sweep
+  });
+
   test('S-TUN-UNALIGNED (C-2): a nudge resets alignment, then a smooth no-fix tunnel at 70 km/h gives 0 stops', () => {
     const ran = run(simulate(6, [...WARMUP.map(([n, s]) => [n, { ...s }] as [number, Partial<Sec>]), [1, { aligned: false }], [120, { fix: false, aligned: false }]]));
     expect(stops(ran)).toEqual([]);
@@ -499,6 +522,13 @@ describe('the mount reference', () => {
 });
 
 describe('purity and cost', () => {
+  test('C1 round 1 (m1): the evidence carries its row ts', () => {
+    const m = createMotionEvidence();
+    const rows = simulate(50, [[2, {}]]);
+    expect(m.onRow(rows[0]!.row).ts).toBe(rows[0]!.row.ts);
+    expect(m.onRow(rows[1]!.row).ts).toBe(rows[1]!.row.ts);
+  });
+
   test('a stale or repeated row returns the previous evidence and changes nothing', () => {
     const m = createMotionEvidence();
     const rows = simulate(50, [[3, {}]]);

@@ -1090,12 +1090,13 @@ describe('final review round 3 R2-m1: a slow cold start is not a failed resume',
 // ---------------------------------------------------------------------------------------------------------
 
 describe('C1: the motion evidence', () => {
-  const ev = (tag: number) => ({ stop: null, moving: null, tag }) as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+  /** Evidence for the row at `ts` (C1-m1: evidence is tied to its row by `ts`). */
+  const ev = (tag: number, ts = 0) => ({ stop: null, moving: null, ts, tag }) as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
 
   test('evidence the caller (M7) passes is used as is, never recomputed', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
-    const e = ev(1);
+    const e = ev(1, featureRow(0, 60).ts);
     h.ctl.pushRow(featureRow(0, 60), POWER, e);
     await h.ctl.idle();
     expect(h.ctl.diagnostics().motion).toBe(e);
@@ -1126,7 +1127,7 @@ describe('C1: the motion evidence', () => {
     });
     try {
       const h = harness();
-      const stored = [ev(1), ev(2), ev(3)];
+      const stored = [0, 1, 2].map((i) => ev(i + 1, featureRow(i * 1000, 60).ts));
       h.ctl.setGate({ ...GATE, appActive: false }); // gate closed: no engine yet
       stored.forEach((e, i) => h.ctl.pushRow(featureRow(i * 1000, 60), POWER, e));
       await h.ctl.idle();
@@ -1149,5 +1150,35 @@ describe('C1: the motion evidence', () => {
     h.ctl.setGate(GATE);
     h.ctl.pushRow(featureRow(100_000, 60, { frameAligned: true, aLonMean: 0 } as Partial<FeatureRow>), POWER);
     expect(h.ctl.diagnostics().motion!.bias).toBeNull();
+  });
+});
+
+// C1 round 1 (review-C1 m1, m2): evidence is tied to its row, and the two sources never mix in a drive.
+describe('C1 round 1: evidence tied to its row; no mixed sources', () => {
+  const ev = (ts: number, tag = 0) => ({ stop: null, moving: null, ts, tag }) as unknown as import('@/core/engine/motionEvidence').MotionEvidence;
+
+  test('m1: evidence for another row is not used for this one (counted as a mismatch)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const r0 = featureRow(0, 60);
+    const r1 = featureRow(1000, 60);
+    h.ctl.pushRow(r0, POWER, ev(r0.ts));
+    h.ctl.pushRow(r1, POWER, ev(r0.ts)); // row N+1 with row N's evidence
+    expect(h.ctl.diagnostics().motion).toBeNull();
+    expect(h.ctl.diagnostics().motionMismatches).toBe(1);
+  });
+
+  test('m2: once the caller has passed evidence in a drive, the fallback is never used for the rest of it', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const r0 = featureRow(0, 60);
+    h.ctl.pushRow(r0, POWER, ev(r0.ts, 7));
+    h.ctl.pushRow(featureRow(1000, 60), POWER); // no evidence this time
+    expect(h.ctl.diagnostics().motion).toBeNull();
+    await h.ctl.endDrive();
+    // a new drive: the fallback is allowed again until the caller passes evidence
+    h.ctl.setGate(GATE);
+    h.ctl.pushRow(featureRow(100_000, 60), POWER);
+    expect(h.ctl.diagnostics().motion).not.toBeNull();
   });
 });

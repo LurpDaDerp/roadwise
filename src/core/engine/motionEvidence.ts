@@ -100,6 +100,8 @@ export function validateMotionConstants(c: MotionConstants = MOTION_CONSTANTS): 
 }
 
 export interface MotionEvidence {
+  /** the row this evidence belongs to (its `ts`; C1 round 1, review-C1 m1): a consumer pairs by it */
+  ts: number;
   /** the row shows a stop: a GNSS speed below STOP_KMH, or a latched sensor (or deep-still) stop */
   stop: 'gnss' | 'sensor' | 'deep' | null;
   /** moving evidence on this row; a handling row is never moving */
@@ -485,6 +487,7 @@ export function createMotionEvidence(c: MotionConstants = MOTION_CONSTANTS): Mot
     const ambiguousStill = v === null && stop === null && quietNoFixS >= c.AMBIGUOUS_HOLD_S;
 
     const ev: MotionEvidence = {
+      ts: row.ts,
       stop,
       moving,
       quiet,

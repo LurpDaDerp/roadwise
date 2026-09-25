@@ -10,7 +10,7 @@
 // would receive the rows native buffered for the drive host (README §3, "Buffering") and would
 // count as the watchdog's liveness signal (§6.2), so opening this screen could lose rows or keep
 // an orphaned capture alive. Samples exist only for a drive still recording or not yet saved.
-import DriveSense, { type DriveSenseApi, type DriveSenseState, type ExitInfo, type FeatureRow } from '@drive-sense';
+import DriveSense, { unknownRowKeys, type DriveSenseApi, type DriveSenseState, type ExitInfo, type FeatureRow } from '@drive-sense';
 import { Ionicons } from '@expo/vector-icons';
 import * as Battery from 'expo-battery';
 import { Redirect, useRouter } from 'expo-router';
@@ -50,6 +50,7 @@ export const diagCopy = {
   lastRow: 'Last row',
   captureWasOpen: 'Capture open at last exit',
   lockSignal: 'Lock signal',
+  unknownRowKeys: 'Unknown row keys',
   platform: 'Platform',
   location: 'Location',
   motion: 'Motion',
@@ -278,10 +279,12 @@ function Line({
   value,
   first = false,
   tone = 'default',
+  testID,
 }: {
   label: string;
   value: string;
   first?: boolean;
+  testID?: string;
   tone?: 'default' | 'danger';
 }) {
   const th = useTheme();
@@ -289,6 +292,7 @@ function Line({
     <View
       accessible
       accessibilityLabel={`${label}: ${value}`}
+      testID={testID}
       style={{
         flexDirection: 'row',
         alignItems: 'baseline',
@@ -323,6 +327,8 @@ function SensingLines({ s }: { s: DriveSenseState }) {
       <Line label={diagCopy.lastRow} value={when(s.lastRowTs)} />
       <Line label={diagCopy.captureWasOpen} value={s.captureWasOpen ? diagCopy.yes : diagCopy.no} />
       <Line label={diagCopy.lockSignal} value={s.lockSignal} />
+      {/* C0 round 1 (review-C0r1 m2): keys a newer native build sent that this bundle does not know. */}
+      <Line label={diagCopy.unknownRowKeys} value={String(unknownRowKeys())} testID="diag-unknown-row-keys" />
     </>
   );
 }

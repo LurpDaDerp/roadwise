@@ -1510,7 +1510,8 @@ describe('C1: the motion evidence', () => {
     await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
     await h.host.settled();
     const n = await h.feed(drive(40));
-    expect(m.calls.onRow).toBe(n);
+    // once per row, plus the trip's opening row once more in the new trip's fresh stream (C1 round 1, m4)
+    expect(m.calls.onRow).toBe(n + 1);
     const ev = h.host.motionEvidence();
     expect(ev).not.toBeNull();
     expect(ev!.stop).toBeNull(); // a known speed of 10 m/s
@@ -1532,5 +1533,40 @@ describe('C1: the motion evidence', () => {
     await h.host.settled();
     await h.feed(drive(5, { t0: last(first).ts + 60_000 }));
     expect(m.calls.reset).toBeGreaterThan(resetsAfterFirst);
+  });
+});
+
+describe('C1 round 1 (m4): the row that opens a trip belongs to its evidence', () => {
+  test('after a reset for a new trip, every row of the trip is in the evidence stream, the first included', async () => {
+    const seen: number[] = [];
+    const factory = () => {
+      const real = createMotionEvidence();
+      return {
+        onRow: (r: FeatureRow, o?: { mounted?: boolean }) => {
+          seen.push(r.ts);
+          return real.onRow(r, o);
+        },
+        resetMountReference: () => real.resetMountReference(),
+        reset: () => {
+          seen.length = 0;
+          real.reset();
+        },
+      } satisfies MotionEvidenceSource;
+    };
+    // An auto-detected trip opens ON a row (the candidate confirms): that row must start the new stream.
+    const h = harness({ motionEvidence: factory });
+    await armed(h);
+    h.fake.emit('activity', automotive(h.now() - 5000));
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('candidate');
+    const rows = drive(60, { speed: 15 });
+    let opening: number | null = null;
+    for (const r of rows) {
+      await h.feed([r]);
+      if (opening === null && h.host.snapshot().clientTripId !== null) opening = parseRow(r)!.ts;
+    }
+    expect(opening).not.toBeNull();
+    expect(seen[0]).toBe(opening);
+    expect(h.host.motionEvidence()?.ts).toBe(parseRow(last(rows))!.ts);
   });
 });

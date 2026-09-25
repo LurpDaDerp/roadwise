@@ -625,14 +625,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   async function onRow(row: FeatureRow): Promise<void> {
-    // Task C1: the motion evidence, once per row, before the engine sees the row. A new trip (another
-    // client trip id) starts it afresh.
-    const snap = engine.snapshot();
-    if (snap.clientTripId !== motionTripId) {
-      motion.reset();
-      motionTripId = snap.clientTripId;
-    }
-    lastMotion = motion.onRow(row, { mounted: snap.mode === 'mounted' });
+    // Task C1: the motion evidence, once per row, before the engine sees the row. C1 round 1 (m4): the trip
+    // id is read AFTER the engine's step (below), so the row that opens a trip is recomputed in the new
+    // trip's fresh stream instead of being lost to the old one.
+    const before = engine.snapshot();
+    lastMotion = motion.onRow(row, { mounted: before.mode === 'mounted' });
     currentRow = row;
     recent.push(row);
     if (recent.length > RECENT_ROWS) recent.shift();
@@ -644,6 +641,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       // M1 post-gap note: the engine went back to armed on this very row; it opens the next drive.
       await engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: row.ts });
       await engine.dispatch({ type: 'row', row });
+    }
+    const after = engine.snapshot();
+    if (after.clientTripId !== motionTripId) {
+      motion.reset();
+      motionTripId = after.clientTripId;
+      if (after.clientTripId !== null) lastMotion = motion.onRow(row, { mounted: after.mode === 'mounted' });
     }
   }
 

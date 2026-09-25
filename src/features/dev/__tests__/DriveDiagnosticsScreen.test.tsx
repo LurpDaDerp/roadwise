@@ -1,4 +1,4 @@
-import { createFakeDriveSense } from '@drive-sense';
+import { createFakeDriveSense, parseRow, resetUnknownRowKeys } from '@drive-sense';
 import { render, screen, waitFor } from '@testing-library/react-native';
 import { Text } from 'react-native';
 
@@ -220,5 +220,22 @@ describe('battery (diag.battery)', () => {
   test('before any recorded drive it says so', async () => {
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} />));
     expect(await screen.findByText(/No drive recorded with diagnostics on/)).toBeTruthy();
+  });
+});
+
+// C0 round 1 (review-C0r1 m2): the unknown-row-key counter is on the screen, so a version skew between
+// the native build and the JS bundle is visible in the device pass.
+describe('the unknown row keys (C0r1-m2)', () => {
+  test('parseRow strips an unknown key and the screen shows the count', async () => {
+    resetUnknownRowKeys();
+    parseRow({
+      ts: T, lat: 47.6, lng: -122.3, hAcc: 5, speed: 1, speedAcc: 0.5, course: 90, alt: 10, gnssValid: true,
+      aLonMax: 0, aLonMin: 0, aLatMax: 0, aLatMin: 0, yawRateMax: 0, jerkMax: 0, gravityStability: 1,
+      orientationDelta: 0, handlingScore: 0, locked: false, screenOn: true, appForeground: true, futureField: 1,
+    });
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} />));
+    expect(await screen.findByText('Unknown row keys')).toBeTruthy();
+    expect(screen.getByTestId('diag-unknown-row-keys')).toHaveTextContent(/Unknown row keys\s*1$/);
+    resetUnknownRowKeys();
   });
 });

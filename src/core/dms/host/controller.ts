@@ -133,8 +133,10 @@ export interface DmsHostDiagnostics {
   ruleSpeedKmh: number | null;
   /** native's last status event, or null before one */
   native: DmsNativeView | null;
-  /** the motion evidence of the last row (Task C1): the caller's, or the controller's own */
+  /** the motion evidence of the last row (Task C1): the caller's, or the controller's own; null when none applied */
   motion: MotionEvidence | null;
+  /** rows whose caller evidence belonged to another row (C1 round 1, m1): dropped, never applied */
+  motionMismatches: number;
 }
 
 export interface DmsControllerDeps {
@@ -259,10 +261,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   /** the first HEAD_ONLY frame since the last TRACKING one */
   let headOnlySince: number | null = null;
   const qualities = new RingBuffer<{ t: number; tracking: boolean }>(60 * 30);
-  const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower; motion: MotionEvidence }>(REPLAY_ROWS);
+  const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower; motion: MotionEvidence | undefined }>(REPLAY_ROWS);
   /** Task C1: the controller's own evidence when the caller passes none; one per drive. */
   const ownMotion = createMotionEvidence();
   let lastMotion: MotionEvidence | null = null;
+  /** C1 round 1 (m2): the caller has passed evidence in this drive, so the fallback is never used again in it */
+  let callerMotion = false;
+  let motionMismatches = 0;
   // Native status.
   let thermal: ThermalName = 'nominal';
   let lowPower = false;
@@ -645,6 +650,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     recent.clear();
     ownMotion.reset(); // Task C1: the next drive's evidence starts afresh
     lastMotion = null;
+    callerMotion = false;
     if (profile !== null) {
       try {
         await deps.profileStore.save(profile);
@@ -791,9 +797,16 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     pushRow(row, power, motion) {
       if (disposed || closing) return null;
       lastRow = row;
-      // Task C1: once per row — the caller's evidence as given, else the controller's own.
-      const ev = motion ?? ownMotion.onRow(row, { mounted: inputs?.mode === 'mounted' });
-      lastMotion = ev;
+      // Task C1: once per row — the caller's evidence as given, else the controller's own. C1 round 1: the
+      // caller's is used only for its own row (m1), and once the caller has passed any in a drive the
+      // fallback never fills in for it (m2): a row without matching evidence then has none.
+      let ev: MotionEvidence | undefined;
+      if (motion !== undefined) {
+        callerMotion = true;
+        if (motion.ts === row.ts) ev = motion;
+        else motionMismatches++;
+      } else if (!callerMotion) ev = ownMotion.onRow(row, { mounted: inputs?.mode === 'mounted' });
+      lastMotion = ev ?? null;
       recent.push({ row, power, motion: ev });
       if (driveStartPending) {
         driveStartTs = row.ts;
@@ -967,7 +980,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } while (p !== ops);
     },
 
-    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView }, motion: lastMotion }),
+    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView }, motion: lastMotion, motionMismatches }),
   };
   return api;
 }
