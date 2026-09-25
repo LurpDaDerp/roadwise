@@ -235,6 +235,16 @@ describe('validateDmsConfig refuses each broken rule', () => {
     ['a blind Critical cap no longer than the known-low-speed end (T13 r1 I1)', (c) => (c.alerts.criticalBlindMaxS = 5), /alerts\.criticalBlindMaxS/],
     ['a minimum scored weight of 0 (T10 r1 m2)', (c) => (c.fatigue.minScoredWeight = 0), /fatigue\.minScoredWeight/],
     ['a minimum scored weight above 1', (c) => (c.fatigue.minScoredWeight = 1.5), /fatigue\.minScoredWeight/],
+    // Task C5.
+    ['an EMA gate fraction of 0', (c) => (c.calibration.emaWithinFrac = 0), /calibration\.emaWithinFrac/],
+    ['a rolling rate not above the EMA cap', (c) => (c.calibration.rolling.rateDegPerMin = 0.5), /calibration\.rolling\.rateDegPerMin/],
+    ['a rolling window under two evaluations', (c) => (c.calibration.rolling.windowS = 50), /calibration\.rolling\.windowS/],
+    ['a rolling minimum shift of 0', (c) => (c.calibration.rolling.minShiftDeg = 0), /calibration\.rolling\.minShiftDeg/],
+    ['a slow path inside the radius', (c) => (c.calibration.slow.maxShiftDeg = 10), /calibration\.slow\.maxShiftDeg/],
+    ['a void of 0 s', (c) => (c.calibration.voidS = 0), /calibration\.voidS/],
+    ['a search cap under the admissible search', (c) => (c.calibration.posture.searchCapS = 30), /calibration\.posture\.searchCapS/],
+    ['a curve-rate limit of 0', (c) => (c.calibration.posture.searchCurveRateDegS = 0), /calibration\.posture\.searchCurveRateDegS/],
+    ['a lowering-commit threshold of 0', (c) => (c.calibration.posture.fatigueCommitPitchDeg = 0), /calibration\.posture\.fatigueCommitPitchDeg/],
   ];
   test.each(cases)('%s', (_name, breakIt, path) => {
     const c = copy();

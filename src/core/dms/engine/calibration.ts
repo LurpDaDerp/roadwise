@@ -7,8 +7,17 @@
 //   head centre (rev1 R-gaze), the radius, the roll offset, the Stage 1 open-eye EAR (frozen for the
 //   drive), and the neutral MAR (floored, rev1 I4). 180 s without a pass → provisional (with a seed)
 //   or uncalibrated; evaluation continues.
-// - Staying calibrated: an EMA (τ 180 s) on admitted samples within radius + 5°, capped at
-//   0.5°/min, so a long distraction cannot pull the centre.
+// - Staying calibrated (Task C5; rev1 I1, rev2 §2.3.1, §2.3.3, §2.3.7):
+//   - the EMA (τ 180 s, ≤ 0.5°/min) takes admitted samples within the road core, max(3°, radius/2), applied
+//     voidS late so a D1/D2/D3 warning can void them; a warning removes the admitted samples within ±voidS
+//     from every window (voidAround);
+//   - the rolling path, every 30 s over the last 60 s of admission: a small shift (≥ minShiftDeg, from a nearly
+//     full window, located to convergence) or a larger one up to radiusMinDeg (relatively vacated twice) is
+//     followed at ≤ 3°/min; a pitch-down beyond 2° needs translation evidence;
+//   - the slow path: a peaked, vacated, road-scanned candidate beyond the rolling range persisting 5 min enters
+//     the dual state;
+//   - the fatigue evidence gate (set by the engine): no downward or phone-ward step, and a commit lowering the
+//     head-centre pitch by ≥ fatigueCommitPitchDeg becomes fatigue evidence (head_slump) with c₀ kept.
 // - Before a pass: the running median head pitch (rev1 m6) and the provisional EAR.
 // - Continuity (rev1 I7, rev2 R1-m2): a signature before every gap (markGap, or ≥ 30 s without
 //   TRACKING), compared over the first 5 s after the resume; driver change or camera bump; the EAR
@@ -18,8 +27,8 @@
 //
 // Task C4 (design rev2 §2.3.0, §2.3.2; rev4 §2.3.2a; rev5 §3; amendments W1–W3):
 // - Posture: a settled rotation-compensated translation (posture.ts) opens the DUAL-CENTRE state: c₀ is kept,
-//   c₁ is the mode of the first searchS of admission (peaked, ≤ searchMaxDeg from c₀, within searchMaxS
-//   observed); both classify (the engine); the commit needs commitS of admitted persistence and the relative
+//   c₁ is the mode of the first searchS of admission (peaked, ≤ searchMaxDeg from c₀, within searchMaxS of
+//   admissible observed time, capped at searchCapS: Task C5); both classify (the engine); the commit needs commitS of admitted persistence and the relative
 //   vacated test (a small shift: unimodality); a relative revert for revertS, or undecidedMaxS, reverts; after
 //   a commit, probationS of probation with c₀ as a shadow reverts a commit the samples reverse. A settled pitch
 //   drop with no translation is a head_slump candidate (fatigue evidence once held; never posture).
@@ -42,7 +51,7 @@ import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
-import { createPostureDetector, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, type CompSignature } from './posture';
+import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
@@ -75,8 +84,8 @@ export type CalibrationEventKind =
 export interface CalibrationEvent {
   kind: CalibrationEventKind;
   tMs: number;
-  /** camera_bump: step, resume, rotation, stop; posture_dual: step, bump, resume, stop; posture_revert: relative, undecided, no_candidate, probation */
-  cause?: 'step' | 'resume' | 'rotation' | 'stop' | 'bump' | 'relative' | 'undecided' | 'no_candidate' | 'probation';
+  /** camera_bump: step, resume, rotation, stop; posture_dual: step, bump, resume, stop, slow; posture_revert: relative, undecided, no_candidate, probation, fatigue */
+  cause?: 'step' | 'resume' | 'rotation' | 'stop' | 'bump' | 'slow' | 'relative' | 'undecided' | 'no_candidate' | 'probation' | 'fatigue';
   /** posture_commit: the translation was large enough to demote the learned mirrors (U-6) */
   demoteMirrors?: boolean;
 }
@@ -104,6 +113,10 @@ export interface Calibrator {
   recalibrating(): boolean;
   /** Task C4: the HUD's calibration cause */
   reason(): 'posture' | 'recalibrating' | null;
+  /** Task C5 (rev1 I1): a D1/D2/D3 warning at tMs: the admitted samples within ±voidS are removed */
+  voidAround(tMs: number): void;
+  /** Task C5 (rev2 §2.3.7): the fatigue evidence gate: while set, no downward or phone-ward adaptation */
+  setFatigueGate(on: boolean): void;
   /** The camera is about to pause: keep the mount signature for the comparison after the resume. */
   markGap(tMs: number): void;
   applySeed(seed: CalibrationSeed): void;
@@ -156,17 +169,23 @@ const SIGMA_DEFAULT = 4;
 /** Task C4 (W1): a blink in the interim window: the mean EAR below this share of its p90, back within BLINK_MAX_MS */
 const BLINK_DIP = 0.6;
 const BLINK_MAX_MS = 600;
+/** Task C5: the rolling path's locator radius floor (2σ̂ above it) */
+const LOCATE_MIN_R_DEG = 4;
+/** Task C5: the share of the rolling window's weight a small-shift follow needs */
+const SMALL_MIN_WINDOW_FRAC = 0.75;
 const ORIGIN: AnglePair = Object.freeze({ yaw: 0, pitch: 0 });
 
 type Centres = { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null };
 
 interface Dual {
-  cause: 'step' | 'bump' | 'resume' | 'stop';
+  cause: 'step' | 'bump' | 'resume' | 'stop' | 'slow';
   c0: Centres;
   /** c₁ once found */
   c1: Centres | null;
   enteredT: number;
   observedS: number;
+  /** Task C5: the admissible observed time of the candidate search (a straight row, or low turn rates) */
+  searchObservedS: number;
   /** the persistence window starts here (the admitted samples since) */
   since: number;
   revertS: number;
@@ -252,6 +271,21 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let slumpWatch: SlumpWatch | null = null;
   /** C4 round 1 (review-C4 minor): posture steps and bumps seen before any centre existed */
   let postureIgnored = 0;
+  // Task C5.
+  const warnings: number[] = [];
+  let fatigueGate = false;
+  /** admitted samples awaiting the EMA (applied voidS late, so a warning can still void them) */
+  const emaQueue = new RingBuffer<{ t: number; w: number; head: AnglePair; geo: AnglePair | null; net: AnglePair | null }>(Math.ceil((c.voidS + 2) * MAX_FPS) + 2);
+  let lastRollT = Number.NEGATIVE_INFINITY;
+  let prevRoll: { m: AnglePair; vacated: boolean; se: number } | null = null;
+  /** the rolling path's follow: targets per source until the next evaluation */
+  let follow: Centres | null = null;
+  /** the rolling path is engaged: once a shift has been followed, smaller ones keep it following (the drift's pace) */
+  let engaged = false;
+  let slowCand: { cand: AnglePair; head: AnglePair | null; since: number; admittedS: number; lastT: number } | null = null;
+  /** road-scanning excursions per minute of the slow candidate (by minute since its start), and the one in flight */
+  let scanMinutes: number[] = [];
+  let excursion: { leftT: number } | null = null;
 
   let state: CalibrationState = 'none';
   let admittedS = 0;
@@ -370,7 +404,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       centres.net = shiftCentre(centres.net, drvShift);
       centres.head = shiftCentre(centres.head, drvShift);
     }
-    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
+    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, searchObservedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
     probation = null;
     posture.clear();
     posture.resetFit();
@@ -378,7 +412,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     emit('posture_dual', cause);
   }
 
-  function exitDual(cause: 'relative' | 'undecided' | 'no_candidate'): void {
+  function exitDual(cause: 'relative' | 'undecided' | 'no_candidate' | 'fatigue'): void {
     if (dual === null) return;
     centres.geometric = dual.c0.geometric;
     centres.net = dual.c0.net;
@@ -432,23 +466,33 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * C4 round 1 (review-C4 C4-1 rule 1): a road-like point lies inside c₀'s UNWIDENED on-road zones (the phone
    * circle aside) and is not the phone: more than the phone screen's radius + candidateCameraMarginDeg from an
    * off-road camera, or nearer c₀ than the camera (the road seen from a new posture, as after a bump's pre-shift).
-   * C4 round 2: every c₁ update is held to this, not only the first candidate.
+   * C4 round 2: every c₁ update is held to this, not only the first candidate. Task C5: the slow path's candidate
+   * (beyond c₀'s road zones by design, and corroborated by road scanning instead) is held to the camera clause only.
    */
-  function roadLikeAt(m: AnglePair, c0: AnglePair, camera: AnglePair | null): boolean {
+  function roadLikeAt(m: AnglePair, c0: AnglePair, camera: AnglePair | null, slow = false): boolean {
     const rel = relative(m, c0);
-    if (zoneClass(zoneAt(rel, radius, null, cfg), cfg) !== 'on_road') return false;
+    if (!slow && zoneClass(zoneAt(rel, radius, null, cfg), cfg) !== 'on_road') return false;
     if (camera === null) return true;
     const toCamera = angularDistanceDeg(rel, camera);
     return !(toCamera <= phoneR + po.candidateCameraMarginDeg && toCamera < angularDistanceDeg(rel, ORIGIN));
   }
   /** A road-like candidate: a road-like point, with at most candidateNonDrivingShare of the window in c₀'s distraction zones. */
-  function roadLike(m: AnglePair, dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null): boolean {
-    return roadLikeAt(m, c0, camera) && nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare;
+  function roadLike(m: AnglePair, dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null, slow = false): boolean {
+    return roadLikeAt(m, c0, camera, slow) && (slow || nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare);
   }
 
-  function evaluateDual(dt: number): void {
+  /** Task C5: a row the candidate search counts (straight, or every known turn rate below searchCurveRateDegS). */
+  function searchAdmissible(ctx: VehicleContext | null): boolean {
+    if (ctx === null) return false;
+    if (ctx.straight === true) return true;
+    const rates = [ctx.yawRateDegS, ctx.courseRateDegS].filter((x): x is number => x !== null);
+    return rates.length > 0 && rates.every((x) => Math.abs(x) < po.searchCurveRateDegS);
+  }
+
+  function evaluateDual(dt: number, ctx: VehicleContext | null): void {
     const d = dual!;
     d.observedS += dt;
+    if (searchAdmissible(ctx)) d.searchObservedS += dt;
     if (tNow - d.lastEvalT < po.evalEveryS * 1000) {
       if (d.observedS >= po.undecidedMaxS) exitDual('undecided');
       return;
@@ -476,7 +520,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           d.since = d.enteredT;
         }
       }
-      if (d.c1 === null && d.observedS >= po.searchMaxS) exitDual('no_candidate');
+      if (d.c1 === null && (d.searchObservedS >= po.searchMaxS || d.observedS >= po.searchCapS)) exitDual('no_candidate');
       return;
     }
     const win = dirsSince(d.since, src);
@@ -505,7 +549,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     // C4 round 2 (review-C4 R1-A): c₁ only ever follows a road-like mode. A reading bout makes the short window's
     // mode the phone; c₁ keeps its place (and the persistence its start) instead of jumping onto it, where the
     // limited union would count the phone as c₁'s road centre.
-    if (!roadLikeAt(m, c0, camera)) {
+    if (!roadLikeAt(m, c0, camera, d.cause === 'slow')) {
       d.stable = 0;
       return;
     }
@@ -520,7 +564,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     d.c1 = { ...d.c1, [src]: m, head: mh ?? d.c1.head };
     if (wSum < po.commitS || d.stable < 2) return;
     // C4 round 1 (C4-1 rule 1): the persistence window must stay road-like too (never a commit onto a phone).
-    if (!roadLike(m, win, c0, camera)) return;
+    if (!roadLike(m, win, c0, camera, d.cause === 'slow')) return;
     const dist = angularDistanceDeg(c0, c1);
     const ok = dist > po.smallShiftSigmas * sigmaHat ? relativelyVacated(win, c0, c1, r, cfg) : unimodal(win, m, r, sigmaHat, cfg);
     if (!ok) return;
@@ -533,6 +577,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       return modeOf(dirsSince(d.since, src), cfg) ?? fallback;
     };
     const next: Centres = { geometric: pick('geometric', d.c1!.geometric ?? d.c0.geometric), net: pick('net', d.c1!.net ?? d.c0.net), head: pick('head', d.c1!.head ?? d.c0.head) };
+    // Task C5 (review-C4 §5, rev1 K1-C): a commit that lowers the head-centre pitch by fatigueCommitPitchDeg or
+    // more needs the fatigue gate clear. A slide down the seat while drowsy is fatigue evidence, and c₀ is kept.
+    const src = primary();
+    const from = d.c0.head ?? d.c0[src];
+    const to = d.c0.head !== null ? next.head : next[src];
+    if (fatigueGate && from !== null && to !== null && to.pitch - from.pitch <= -po.fatigueCommitPitchDeg) {
+      exitDual('fatigue');
+      emit('head_slump');
+      return;
+    }
     centres.geometric = next.geometric;
     centres.net = next.net;
     centres.head = next.head;
@@ -564,6 +618,157 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       }
     }
     if (pr.observedS >= po.probationS) probation = null;
+  }
+
+  // ——— Task C5: the void, the rolling path, the slow path ———
+
+  const voided = (t: number) => warnings.some((w) => Math.abs(t - w) <= c.voidS * 1000);
+
+  /** The camera direction in the driver frame (the phone screen), for the screen exclusion (I7). */
+  const cameraDir = (): AnglePair => toDriverFrame(rollCorrect({ yaw: 0, pitch: 0 }, roll), side);
+
+  /** The rolling window's primary directions, the phone screen excluded when the camera is far from the road. */
+  function rollingWindow(src: 'geometric' | 'net' | 'head', centre: AnglePair): WeightedDir[] {
+    const win = dirsSince(tNow - c.rolling.windowS * 1000, src);
+    const cam = cameraDir();
+    const r = radius ?? c.radiusMinDeg;
+    if (angularDistanceDeg(cam, centre) < r + c.rolling.screenExtraDeg) return win;
+    const screen = cfg.zones.table.find((z) => z.id === 'phone_screen')?.region;
+    const screenR = screen !== undefined && screen.kind === 'camera' ? screen.radiusDeg : 8;
+    return win.filter((d) => angularDistanceDeg(d, cam) > screenR);
+  }
+
+  /** A shift the fatigue gate blocks: downward, or toward the phone. */
+  function gateBlocks(from: AnglePair, to: AnglePair): boolean {
+    if (!fatigueGate) return false;
+    const cam = cameraDir();
+    return to.pitch < from.pitch - 1e-9 || angularDistanceDeg(to, cam) < angularDistanceDeg(from, cam) - 1e-9;
+  }
+
+  /** Every rolling.everyS while calibrated (not dual, not in probation): the rolling path, then the slow path. */
+  function evaluateRolling(): void {
+    lastRollT = tNow;
+    follow = null;
+    const wasEngaged = engaged;
+    engaged = false;
+    const src = primary();
+    const cur = centres[src];
+    if (cur === null) return;
+    const r = radius ?? c.radiusMinDeg;
+    const win = rollingWindow(src, cur);
+    const w = weightOf(win);
+    if (w < c.rolling.windowS / 3) {
+      prevRoll = null;
+      return;
+    }
+    const peak = modeOf(win, cfg);
+    if (peak === null) return;
+    // The cluster's centre, located to convergence (its SE, not the histogram's grid, decides a small shift).
+    const m = locate(win, peak, Math.max(LOCATE_MIN_R_DEG, 2 * sigmaHat));
+    const d = angularDistanceDeg(m, cur);
+    const se = sigmaHat / Math.sqrt(Math.max(1, win.length));
+    // Engaged (a drift being followed), the follow continues down to half the minimum shift, so a steady drift is
+    // followed at its pace (rev2 §2.3.3: a lag of about 1.5–2° at 1°/min) instead of every other evaluation; below
+    // that a follow would chase the locator's noise (about ±0.2° on a full window).
+    const minShift = wasEngaged ? c.rolling.minShiftDeg / 2 : c.rolling.minShiftDeg;
+    // A small shift is read from a (nearly) full window only: a window the warnings have voided down to 20 s locates
+    // the centre to about ±0.5°, and a follow would chase that noise (the S-LEAN-PHONE sweep's no-lean runs).
+    const small = d >= minShift && d <= po.smallShiftSigmas * sigmaHat && w >= SMALL_MIN_WINDOW_FRAC * c.rolling.windowS;
+    const large = d > po.smallShiftSigmas * sigmaHat && d <= c.radiusMinDeg;
+    const vacated = large && relativelyVacated(win, cur, m, r, cfg);
+    const agrees = prevRoll !== null && angularDistanceDeg(prevRoll.m, m) <= Math.max(1, se, prevRoll.se);
+    const okSmall = small && agrees && unimodal(win, m, r, sigmaHat, cfg);
+    const okLarge = large && vacated && prevRoll !== null && prevRoll.vacated && agrees;
+    prevRoll = { m, vacated, se };
+    if ((okSmall || okLarge) && m.pitch - cur.pitch >= -c.rolling.maxPitchDownDeg && !gateBlocks(cur, m)) {
+      engaged = true;
+      // The primary source follows its mode; the other gaze source moves by the same shift; the head by its own mode.
+      const shift = { yaw: m.yaw - cur.yaw, pitch: m.pitch - cur.pitch };
+      const headMode = centres.head === null ? null : modeOf(rollingWindow('head', centres.head), cfg);
+      follow = {
+        geometric: src === 'geometric' ? m : shiftCentre(centres.geometric, shift),
+        net: src === 'net' ? m : shiftCentre(centres.net, shift),
+        head: headMode !== null && angularDistanceDeg(headMode, centres.head!) <= d + 2 ? headMode : shiftCentre(centres.head, shift),
+      };
+    }
+    // The slow uncorroborated path (R3b): beyond the rolling range, up to maxShiftDeg.
+    const beyond = d > c.radiusMinDeg && d <= c.slow.maxShiftDeg && peaked(win, m, sigmaHat, cfg) && relativelyVacated(win, cur, m, r, cfg) && !gateBlocks(cur, m) && roadLike(m, win, cur, offRoadCamera(centres), true);
+    if (!beyond) {
+      slowCand = null;
+      return;
+    }
+    if (slowCand === null || angularDistanceDeg(slowCand.cand, m) > Math.max(1.5, 2 * se)) {
+      slowCand = { cand: m, head: modeOf(rollingWindow('head', centres.head ?? cur), cfg), since: tNow, admittedS: 0, lastT: tNow };
+      scanMinutes = [];
+      excursion = null;
+      return;
+    }
+    slowCand.admittedS += weightOf(dirsSince(slowCand.lastT, src));
+    slowCand.lastT = tNow;
+    slowCand.cand = m;
+    if (slowCand.admittedS < c.slow.persistS) return;
+    const minutes = Math.floor(c.slow.persistS / 60);
+    const recent = scanMinutes.slice(-minutes);
+    if (recent.length < minutes || recent.some((n) => n < c.slow.scanExcursionsPerMin)) return;
+    // It enters the dual state with the persisted candidate as c₁ and its data as the persistence window.
+    const cand = slowCand;
+    slowCand = null;
+    enterDual('slow', null, 0, 0);
+    if (dual !== null) {
+      const c1: Centres = { geometric: null, net: null, head: cand.head };
+      c1[src] = cand.cand;
+      const shift = { yaw: cand.cand.yaw - cur.yaw, pitch: cand.cand.pitch - cur.pitch };
+      const other: 'geometric' | 'net' = src === 'net' ? 'geometric' : 'net';
+      c1[other] = shiftCentre(dual.c0[other], shift);
+      dual.c1 = c1;
+      dual.since = cand.since;
+    }
+  }
+
+  /** Road scanning around the slow candidate: an excursion ≥ excursionMinDeg in yaw, back within excursionReturnS. */
+  function trackScanning(p: Perceived): void {
+    const sc = slowCand;
+    if (sc === null || p.eyesClosed) return;
+    const g = cfg.gazeSource === 'net' && p.netCam !== null ? p.netCam : p.geoCam;
+    if (g === null) return;
+    const x = toDrv(g, roll);
+    const minute = Math.floor((tNow - sc.since) / 60_000);
+    while (scanMinutes.length <= minute) scanMinutes.push(0);
+    const away = Math.abs(x.yaw - sc.cand.yaw) >= c.slow.excursionMinDeg;
+    const home = angularDistanceDeg(x, sc.cand) <= (radius ?? c.radiusMinDeg);
+    if (away) excursion ??= { leftT: tNow };
+    else if (home && excursion !== null) {
+      if (tNow - excursion.leftT <= c.slow.excursionReturnS * 1000) scanMinutes[minute] = scanMinutes[minute]! + 1;
+      excursion = null;
+    }
+  }
+
+  /** The rolling follow, per frame: every centre toward its target at ≤ rateDegPerMin. */
+  function applyFollow(dt: number): void {
+    if (follow === null) return;
+    const cap = (c.rolling.rateDegPerMin * dt) / 60;
+    let moving = false;
+    for (const key of ['geometric', 'net', 'head'] as const) {
+      const a = centres[key];
+      const b = follow[key];
+      if (a === null || b === null) continue;
+      const dist = angularDistanceDeg(a, b);
+      if (dist < 1e-6) continue;
+      const k = Math.min(1, cap / dist);
+      centres[key] = { yaw: a.yaw + (b.yaw - a.yaw) * k, pitch: a.pitch + (b.pitch - a.pitch) * k };
+      moving = true;
+    }
+    if (!moving) follow = null;
+  }
+
+  /** The EMA from the queue, voidS late: samples near a warning are dropped, the fatigue gate blocks downward steps. */
+  function drainEma(): void {
+    const cutoff = tNow - c.voidS * 1000;
+    emaQueue.dropWhile((e) => {
+      if (e.t > cutoff) return false;
+      if (!voided(e.t) && state === 'calibrated' && dual === null) ema(e.head, e.geo, e.net, e.w);
+      return true;
+    });
   }
 
   // ——— Task C4: the across-stop comparisons ———
@@ -993,13 +1198,22 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         }
         if (slumpWatch !== null) watchSlump(slumpWatch, ms, p, dt);
         if (onsetLeftS > 0) onsetLeftS = dual !== null ? 0 : Math.max(0, onsetLeftS - dt);
-        if (dual !== null) evaluateDual(dt);
+        if (dual !== null) evaluateDual(dt, ctx);
         else if (probation !== null) evaluateProbation(dt);
+        // Task C5: the rolling and slow paths (calibrated, no dual state, no probation).
+        if (state === 'calibrated' && dual === null && probation === null) {
+          trackScanning(p);
+          if (tNow - lastRollT >= c.rolling.everyS * 1000) evaluateRolling();
+          applyFollow(dt);
+        } else {
+          follow = null;
+          slowCand = null;
+        }
       }
 
-      // Admission (§M3).
+      // Admission (§M3). Task C5: never within voidS after a warning (the samples before it are removed by voidAround).
       const admitted =
-        !p.eyesClosed && ctx !== null && ctx.straight === true && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh && dt > 0;
+        !p.eyesClosed && ctx !== null && ctx.straight === true && ctx.speedKmh !== null && ctx.speedKmh >= c.admitMinSpeedKmh && dt > 0 && !voided(f.tMs);
       if (admitted) {
         samples.push({
           t: f.tMs,
@@ -1020,17 +1234,31 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           admittedS -= s.w;
           return true;
         });
-        if (state === 'calibrated' && dual === null) ema(head, p, dt);
+        if (state === 'calibrated' && dual === null) emaQueue.push({ t: f.tMs, w: dt, head, geo: p.geoCam, net: p.netFresh ? p.netCam : null });
       }
+      drainEma();
       evaluateIfDue();
     },
 
     state: () => state,
     dual: () => (dual === null || dual.c1 === null ? null : { gaze: dual.c1[cfg.gazeSource] ?? dual.c1.geometric, head: dual.c1.head }),
-    // C4 round 2 (review-C4 R1-A): the engine applies this to the road-centre circle only.
-    postureWidening: () => dual !== null || onsetLeftS > 0,
+    // C4 round 2 (review-C4 R1-A): the engine applies this to the road-centre circle only. Task C5: a slow candidate too.
+    postureWidening: () => dual !== null || onsetLeftS > 0 || slowCand !== null,
     recalibrating: () => provisional !== null || seedUnverified,
-    reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 ? 'posture' : null),
+    reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 || slowCand !== null ? 'posture' : null),
+    voidAround(tMs) {
+      warnings.push(tMs);
+      while (warnings.length > 8) warnings.shift();
+      samples.forEach((s) => {
+        if (s.w > 0 && Math.abs(s.t - tMs) <= c.voidS * 1000) {
+          admittedS -= s.w;
+          s.w = 0;
+        }
+      });
+    },
+    setFatigueGate(on) {
+      fatigueGate = on;
+    },
     centre: (s) => centres[s],
     radius: () => radius,
     rollOffset: () => roll,
@@ -1104,11 +1332,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (held && onRoad) emit('head_slump');
   }
 
-  /** The drift-capped EMA of every centre present (spec "Staying calibrated"). */
-  function ema(head: AnglePair, p: Perceived, dt: number): void {
+  /**
+   * The drift-capped EMA of every centre present (spec "Staying calibrated"). Task C5: the gate is the road core,
+   * max(emaWithinMinDeg, emaWithinFrac × radius); while the fatigue gate is set, no downward or phone-ward step.
+   */
+  function ema(head: AnglePair, geo: AnglePair | null, net: AnglePair | null, dt: number): void {
     const cap = (c.emaMaxDegPerMin * dt) / 60;
     const k = dt / c.emaTauS;
-    const gate = (radius ?? c.radiusMinDeg) + c.emaWithinExtraDeg;
+    const gate = Math.max(c.emaWithinMinDeg, c.emaWithinFrac * (radius ?? c.radiusMinDeg));
     const step = (key: 'geometric' | 'net' | 'head', cam: AnglePair | null) => {
       const centre = centres[key];
       if (centre === null || cam === null) return;
@@ -1123,10 +1354,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         sy *= cap / n;
         sp *= cap / n;
       }
-      centres[key] = { yaw: centre.yaw + sy, pitch: centre.pitch + sp };
+      const next = { yaw: centre.yaw + sy, pitch: centre.pitch + sp };
+      if (gateBlocks(centre, next)) return;
+      centres[key] = next;
     };
-    step('geometric', p.geoCam);
-    step('net', p.netFresh ? p.netCam : null);
+    step('geometric', geo);
+    step('net', net);
     step('head', head);
   }
 

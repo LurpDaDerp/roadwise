@@ -360,6 +360,35 @@ export function modeOf(dirs: readonly WeightedDir[], cfg: Pick<DmsConfig, 'calib
   return peak === null ? null : refineMode(dirs, peak, cfg);
 }
 
+const LOCATE_MAX_IT = 20;
+const LOCATE_TOL_DEG = 0.01;
+/**
+ * Task C5: the centre of the cluster at `start`, located to convergence (a flat-kernel mean shift of radius
+ * `radius`, at most LOCATE_MAX_IT steps, until it moves < LOCATE_TOL_DEG). modeOf's refinement (3 steps of
+ * 1.5 × sigmaDeg = 3°) stops short at σ 4° and keeps about 40 % of its start error: a steady drift then reads
+ * about half its size, so the rolling path engages late.
+ */
+export function locate(dirs: readonly WeightedDir[], start: AnglePair, radius: number): AnglePair {
+  let m = start;
+  for (let it = 0; it < LOCATE_MAX_IT; it++) {
+    let w = 0;
+    let y = 0;
+    let p = 0;
+    for (const d of dirs) {
+      if (!(d.w > 0) || Math.hypot(d.yaw - m.yaw, d.pitch - m.pitch) > radius) continue;
+      w += d.w;
+      y += d.w * d.yaw;
+      p += d.w * d.pitch;
+    }
+    if (!(w > 0)) break;
+    const next = { yaw: y / w, pitch: p / w };
+    const moved = Math.hypot(next.yaw - m.yaw, next.pitch - m.pitch);
+    m = next;
+    if (moved < LOCATE_TOL_DEG) break;
+  }
+  return m;
+}
+
 /**
  * Peaked (rev2 §2.2): among the weight within confidenceWithinDeg of the mode, the share within
  * ρ = max(4°, 1.3σ̂) is at least peakedRatio × a single cluster's at σ̂ (1 − exp(−ρ²/2σ̂²)).

@@ -151,6 +151,8 @@ export interface DmsSnapshot {
   centre: { gaze: AnglePair | null; head: AnglePair | null };
   /** Task C4: the calibration's HUD cause: posture (an onset, the dual state or probation) or recalibrating */
   calReason: 'posture' | 'recalibrating' | null;
+  /** Task C5 (rev2 §2.3.7): the fatigue evidence gate at the last frame (no downward or phone-ward adaptation) */
+  fatigueGate: boolean;
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -244,6 +246,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastClosedMs: 0,
       lastSpeed: null as number | null,
       lastStopped: false,
+      /** Task C5 (rev2 §2.3.7): the fatigue evidence gate is set until this time */
+      fatigueGateUntil: Number.NEGATIVE_INFINITY,
       lastSpeedState: 'unknown' as SpeedState,
       lastNoFace: false,
       lastDistraction: 'off' as 'full' | 'widened' | 'off',
@@ -261,6 +265,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
   const emit = (e: DmsEvent) => {
     events.push(e);
+    // Task C5: the fatigue evidence gate's events.
+    const hold = e.kind === 'microsleep' || e.kind === 'sleep' || e.kind === 'unresponsive' || e.kind === 'microsleep_nod' || e.kind === 'head_slump' ? 600_000 : e.kind === 'nod' || e.kind === 'yawn' ? 300_000 : 0;
+    if (hold > 0) d.fatigueGateUntil = Math.max(d.fatigueGateUntil, e.tMs + hold);
+    if (e.kind === 'fatigue_minute' && e.level !== 'none') d.fatigueGateUntil = Math.max(d.fatigueGateUntil, e.tMs + 600_000);
     // episode_end restates an F event's episode for the scoring seam; the summary counts the F events.
     if (e.kind !== 'episode_end') d.summary.onEvent(e.kind, 'stopped' in e ? e.stopped : undefined);
   };
@@ -291,6 +299,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const t = f.tMs;
     const epochMs = t + epochOffset;
     // Quality and the conditioner: `p` is the only view of quality the rules read (T6 r2 carry 1).
+    // Task C5 (rev2 §2.3.7): the fatigue evidence gate (the part the façade sees today; T6 adds the PERCLOS, long
+    // blink and EAR-ratio clauses): an F event or microsleep_nod (10 min), a nod or a yawn (5 min), a head slump
+    // (10 min), a fatigue level above none (10 min), and an open closure of ≥ 0.5 s.
+    d.cal.setFatigueGate(t <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500);
     const refs = { ...d.cal.refs(), gazeNetEvery: host.gazeNetEvery };
     const p = d.cond.step(f, classifyQuality(f, cfg), refs);
     d.seedRing.push({ frame: f, p });
@@ -390,6 +402,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.d2SumS = att.d2SumS;
     for (const e of att.events) {
       if (e.kind === 'glance_end' && e.glance !== undefined) d.summary.onGlance(e.glance);
+      // Task C5 (rev1 I1): a warning voids the admitted samples around it (the EMA and every window).
+      if (e.kind === 'd1_warning' || e.kind === 'd2_warning' || e.kind === 'd3_phone_pattern') d.cal.voidAround(e.tMs);
       emit({ kind: e.kind, tMs: e.tMs, zone: e.zone, durS: e.glance?.durS, shoulderCheck: e.glance?.shoulderCheck });
       if (e.kind === 'd1_warning') requests.push({ kind: 'distraction', c8 });
       else if (e.kind === 'd2_warning') requests.push({ kind: 'cumulative', c8 });
@@ -560,6 +574,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         distraction: d.lastDistraction,
         centre: { gaze: d.cal.centre(gazeSource) ?? d.cal.centre('geometric'), head: d.cal.centre('head') },
         calReason: d.cal.reason(),
+        fatigueGate: d.lastFrameT !== null && (d.lastFrameT <= d.fatigueGateUntil || d.fatigueLevel !== 'none' || d.lastClosedMs >= 500),
       };
     },
 

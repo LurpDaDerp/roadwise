@@ -153,9 +153,13 @@ describe('staying calibrated: the EMA and its drift cap', () => {
     run(stream({ fps: 10, seconds: 600, fromMs: 90_000, seed: 6, sample: (_t, r) => ({ gazeDrv: { yaw: TRUTH.yaw + gauss(r) * 0.5, pitch: TRUTH.pitch - 12 + gauss(r) * 0.5 } }) }));
     return dist(cal.centre('geometric')!, before);
   }
-  test('10 min of phone-staring moves the centre by at most 5° (0.5°/min)', () => {
-    expect(stare(C)).toBeLessThanOrEqual(5.0001);
-    expect(stare(C)).toBeGreaterThan(3); // it does move: the EMA is live
+  test('Task C5 (rev1 I1): 10 min of phone-staring 12° down does not move the centre (the EMA gate is the road core; the slow path needs road scanning; a pitch-down follow needs translation evidence)', () => {
+    expect(stare(C)).toBeLessThanOrEqual(0.3);
+  });
+  test('with the pre-C5 gate (radius + 5°), the same stare pulls the centre (the EMA is live, capped at 0.5°/min)', () => {
+    const old = { ...C, calibration: { ...C.calibration, emaWithinFrac: 1, emaWithinMinDeg: C.calibration.radiusMaxDeg + 5 } } as DmsConfig;
+    expect(stare(old)).toBeGreaterThan(3);
+    expect(stare(old)).toBeLessThanOrEqual(5.0001);
   });
 });
 
@@ -352,5 +356,46 @@ describe('T6 review minors', () => {
   test('nit: a C2 seed gives the minimum radius until a pass', () => {
     const seed = { gazeCentres: { geometric: { yaw: 0, pitch: 0 }, net: null }, headCentre: { yaw: 0, pitch: 0 }, rollOffsetDeg: 0, mount: MOUNT, orientation: 90 as const, openEyeEar: { r: 0.3, l: 0.3 } };
     expect(createCalibrator(C, { driverSide: 'left', seed }).radius()).toBe(C.calibration.radiusMinDeg);
+  });
+});
+
+// Task C5 (rev2 §2.3.1, §2.3.3, §2.3.7; rev1 I1): the void around distraction warnings, and the fatigue gate.
+describe('C5: the void and the fatigue gate', () => {
+  test('voidAround removes the admitted samples within ±30 s of a warning from the window (not a skipped evaluation)', () => {
+    const cal = createCalibrator(C, { driverSide: 'left' });
+    const run = perceiver(C, cal);
+    run(stream({ fps: 15, seconds: 90, seed: 3, sample: roadSampler(TRUTH) }));
+    const before = cal.stats().admittedS;
+    cal.voidAround(80_000);
+    expect(before - cal.stats().admittedS).toBeGreaterThan(25);
+    // and the next 30 s are not admitted either
+    const mid = cal.stats().admittedS;
+    run(stream({ fps: 15, seconds: 5, fromMs: 90_000, seed: 4, sample: roadSampler(TRUTH) }));
+    expect(cal.stats().admittedS).toBeCloseTo(mid, 6);
+  });
+  /** Calibrated at TRUTH, then the whole view drifts down at 1°/min for 8 min (no translation evidence). */
+  function droop(gate: boolean) {
+    const cal = createCalibrator(C, { driverSide: 'left' });
+    const run = perceiver(C, cal);
+    run(stream({ fps: 15, seconds: 90, seed: 3, sample: roadSampler(TRUTH) }));
+    const p0 = cal.centre('geometric')!.pitch;
+    cal.setFatigueGate(gate);
+    run(
+      stream({
+        fps: 15,
+        seconds: 480,
+        fromMs: 90_000,
+        seed: 6,
+        sample: (t, r) => {
+          const s = roadSampler({ yaw: TRUTH.yaw, pitch: TRUTH.pitch - (t - 90) / 60 })(t, r);
+          return s;
+        },
+      })
+    );
+    return cal.centre('geometric')!.pitch - p0;
+  }
+  test('a downward drift is followed with the fatigue gate clear, and not at all while it is set (rev2 §2.3.7)', () => {
+    expect(droop(false)).toBeLessThan(-4);
+    expect(droop(true)).toBeGreaterThan(-0.5);
   });
 });

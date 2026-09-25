@@ -205,8 +205,30 @@ export interface DmsConfig {
     neutralMarFloor: number;
     /** spec "Staying calibrated": EMA τ ≈ 3 min, drift capped at 0.5°/min */
     emaTauS: number;
-    emaWithinExtraDeg: number;
+    /**
+     * Task C5 (rev1 I1, rev2 §2.3.1): the EMA's gate is the road core, max(emaWithinMinDeg, emaWithinFrac ×
+     * radius) (was radius + 5°), so a minority cluster (a phone) never enters the mean
+     */
+    emaWithinFrac: number;
+    emaWithinMinDeg: number;
     emaMaxDegPerMin: number;
+    /** Task C5 (rev1 I1): the admitted samples within ±voidS of a D1/D2/D3 warning are removed (the EMA and every window) */
+    voidS: number;
+    /**
+     * Task C5 (rev2 §2.3.3): the rolling path. Every everyS over the last windowS of admission: a small shift
+     * (minShiftDeg ≤ d ≤ smallShiftSigmas σ̂, unimodal, two evaluations agreeing) or a larger one up to
+     * radiusMinDeg (relatively vacated in two evaluations) is followed at ≤ rateDegPerMin. A pitch-down shift
+     * beyond maxPitchDownDeg needs translation evidence. The phone screen's samples are excluded only when the
+     * camera is at least radius + screenExtraDeg from the centre (I7).
+     */
+    rolling: { windowS: number; everyS: number; rateDegPerMin: number; minShiftDeg: number; maxPitchDownDeg: number; screenExtraDeg: number };
+    /**
+     * Task C5 (rev2 §2.3.3, R3b): the slow uncorroborated path. A peaked, relatively vacated candidate beyond the
+     * rolling range (up to maxShiftDeg) that persists persistS of admission, with a road-scanning pattern every
+     * minute (≥ scanExcursionsPerMin excursions of ≥ excursionMinDeg yaw from it, back within excursionReturnS),
+     * enters the dual state.
+     */
+    slow: { persistS: number; maxShiftDeg: number; scanExcursionsPerMin: number; excursionMinDeg: number; excursionReturnS: number };
     /** rev1 m5 bump step test */
     bumpHalfWindowS: number;
     bumpAngleDeg: number;
@@ -269,7 +291,19 @@ export interface DmsConfig {
       fitMinSamples: number;
       /** the candidate c₁: the mode of this much admitted weight, within searchMaxS observed, ≤ searchMaxDeg from c₀ */
       searchS: number;
+      /**
+       * Task C5 (review-C4 deviation 5): searchMaxS counts ADMISSIBLE observed time only (a straight row, or every
+       * known turn rate below searchCurveRateDegS), with searchCapS of observed time as the cap, so a step in a
+       * long curve is found at its end
+       */
       searchMaxS: number;
+      searchCurveRateDegS: number;
+      searchCapS: number;
+      /**
+       * Task C5 (review-C4 §5, rev1 K1-C): a commit that lowers the head-centre pitch by at least this needs the
+       * fatigue gate clear; otherwise it is fatigue evidence (head_slump) and c₀ is kept
+       */
+      fatigueCommitPitchDeg: number;
       searchMaxDeg: number;
       /** peaked: the share within ρ = max(4°, 1.3σ̂) of the cluster's weight ≥ this × a single cluster's */
       peakedRatio: number;
@@ -650,8 +684,12 @@ const DEFAULT: DmsConfig = {
     provisionalEarWithinDeg: 15,
     neutralMarFloor: 0.05,
     emaTauS: 180,
-    emaWithinExtraDeg: 5,
+    emaWithinFrac: 0.5,
+    emaWithinMinDeg: 3,
     emaMaxDegPerMin: 0.5,
+    voidS: 30,
+    rolling: { windowS: 60, everyS: 30, rateDegPerMin: 3, minShiftDeg: 0.5, maxPitchDownDeg: 2, screenExtraDeg: 12 },
+    slow: { persistS: 300, maxShiftDeg: 20, scanExcursionsPerMin: 2, excursionMinDeg: 15, excursionReturnS: 3 },
     bumpHalfWindowS: 5,
     bumpAngleDeg: 6,
     bumpBoxShift: 0.08,
@@ -682,6 +720,9 @@ const DEFAULT: DmsConfig = {
       fitMinSamples: 150,
       searchS: 8,
       searchMaxS: 60,
+      searchCurveRateDegS: 2,
+      searchCapS: 300,
+      fatigueCommitPitchDeg: 3,
       searchMaxDeg: 20,
       peakedRatio: 0.8,
       commitS: 60,
@@ -971,6 +1012,17 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.alerts.criticalEndBelowKmh <= c.alerts.criticalMinStartKmh)) bad('alerts.criticalEndBelowKmh', 'must be ≤ alerts.criticalMinStartKmh');
   if (!(c.alerts.tier3ClearS > 0)) bad('alerts.tier3ClearS', 'must be > 0');
   if (!Number.isInteger(c.fatigue.everyS) || c.fatigue.everyS <= 0) bad('fatigue.everyS', 'must be a positive integer');
+  // Task C5: the EMA gate, the rolling and slow paths.
+  if (!(c.calibration.emaWithinFrac > 0 && c.calibration.emaWithinFrac <= 1)) bad('calibration.emaWithinFrac', 'must lie in (0, 1]');
+  const ro = c.calibration.rolling;
+  if (!(ro.rateDegPerMin > c.calibration.emaMaxDegPerMin)) bad('calibration.rolling.rateDegPerMin', 'must exceed emaMaxDegPerMin');
+  if (!(ro.windowS >= 2 * ro.everyS)) bad('calibration.rolling.windowS', 'must be ≥ 2 × everyS');
+  if (!(c.calibration.slow.maxShiftDeg > c.calibration.radiusMaxDeg)) bad('calibration.slow.maxShiftDeg', 'must exceed radiusMaxDeg');
+  if (!(ro.minShiftDeg > 0)) bad('calibration.rolling.minShiftDeg', 'must be > 0');
+  if (!(c.calibration.voidS > 0)) bad('calibration.voidS', 'must be > 0');
+  if (!(c.calibration.posture.searchCapS >= c.calibration.posture.searchMaxS)) bad('calibration.posture.searchCapS', 'must be ≥ searchMaxS');
+  if (!(c.calibration.posture.searchCurveRateDegS > 0)) bad('calibration.posture.searchCurveRateDegS', 'must be > 0');
+  if (!(c.calibration.posture.fatigueCommitPitchDeg > 0)) bad('calibration.posture.fatigueCommitPitchDeg', 'must be > 0');
   // Task C4: posture and the across-stop checks.
   const po = c.calibration.posture;
   if (!(po.boxShiftC < c.calibration.bumpBoxShift && po.iodFracC < c.calibration.bumpIodFrac)) bad('calibration.posture.boxShiftC', "posture thresholds must lie below the bump's");
