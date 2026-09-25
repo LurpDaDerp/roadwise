@@ -336,7 +336,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       const p1 = { ...p, gazeRel: shift(p.gazeRel, p.source === 'head' ? dh : dg), headRel: shift(p.headRel, dh) };
       const centre1 = c1.gaze ?? c1.head;
       const zone1 = d.zones1.step(p1, { ...zc, cameraRel: centre1 === null ? null : cameraRel(centre1, d.cal.rollOffset(), init.driverSide) });
-      zone = combineDual(zone0, zone1, cfg);
+      zone = combineDual(zone0, zone1, p1.gazeRel, zc.radiusDeg, cfg);
     } else d.zones1.reset();
     d.lastZone = zone;
     d.lastGap = p.gap;

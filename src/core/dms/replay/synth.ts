@@ -85,6 +85,11 @@ export interface SynthOpts {
    */
   faceGeometry?: boolean;
   /**
+   * C4 round 1 (review-C4 C4-2): the TRUE box-on-head relation of this face (per degree), default FACE_BOX_PER_DEG,
+   * so a test can put the truth at 0.5×, 2× or 0 of the engine's prior (`calibration.posture.boxPerDegPrior`).
+   */
+  boxPerDeg?: number;
+  /**
    * Task C2 (rev4 §2.3.6, rev5 V1, amendment W4): the measured lid follows the gaze down, openness ×
    * clamp(1 − 0.025·max(0, −gazePitch − 10), LID_GAZE_FLOOR, 1), the gaze pitch relative to the road centre.
    * The lid follows the eye with a first-order lag (LID_LAG_S): a lid never drops on the frame the eye
@@ -155,7 +160,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
     const gazeRelPitch = s.gaze.pitch - ROAD.pitch;
     lidPitch = lidPitch === null ? gazeRelPitch : lidPitch + (gazeRelPitch - lidPitch) * lidLag;
     const lid = o.lidGaze === true ? lidFactor(lidPitch) : 1;
-    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false) };
+    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
       item.row = {
@@ -169,7 +174,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   return out;
 }
 
-function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false): EngineFrame {
+function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false, boxPerDeg = FACE_BOX_PER_DEG): EngineFrame {
   const tMs = t * 1000;
   if (s.face === false) return frame({ tMs, face: false });
   const mount = s.mountShift ?? { yaw: 0, pitch: 0 };
@@ -190,8 +195,8 @@ function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, no
     const base = s.otherDriver === true ? { cx: 0.42, cy: 0.52 } : { cx: 0.5, cy: 0.45 };
     const camShift = drvToCam(mount, 'left');
     box = {
-      cx: base.cx + FACE_BOX_PER_DEG * headCam.yaw + CAMERA_BOX_PER_DEG * camShift.yaw + (s.posture?.box?.dx ?? 0),
-      cy: base.cy - FACE_BOX_PER_DEG * headCam.pitch - CAMERA_BOX_PER_DEG * camShift.pitch + (s.posture?.box?.dy ?? 0),
+      cx: base.cx + boxPerDeg * headCam.yaw + CAMERA_BOX_PER_DEG * camShift.yaw + (s.posture?.box?.dx ?? 0),
+      cy: base.cy - boxPerDeg * headCam.pitch - CAMERA_BOX_PER_DEG * camShift.pitch + (s.posture?.box?.dy ?? 0),
       ...(s.otherDriver === true ? { w: 0.36, h: 0.46 } : {}),
     };
     iod = (s.otherDriver === true ? 0.25 : 0.2) * (s.posture?.iodScale ?? 1) * Math.cos(headCam.yaw * DEG) * Math.cos(headCam.pitch * DEG);

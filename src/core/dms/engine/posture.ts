@@ -2,13 +2,15 @@
 // Pure helpers of the calibrator; bounded windows only.
 //
 // - The signal is the TRANSLATION of the face, never a head-angle step alone (K1): the face box with the part
-//   a head rotation explains removed, `boxC = box − B·[yaw, pitch]` (a per-drive least-squares fit, refreshed
-//   every fitEveryS from running sums), and the projected IOD, `iodC = iod / (cos yaw · cos pitch)`.
+//   a head rotation explains removed, `boxC = box − B·[yaw, pitch]` (a per-drive ridge fit toward the prior
+//   boxPerDegPrior, over running sums that decay with fitDecayS; C4 round 1), and the projected IOD,
+//   `iodC = iod / (cos yaw · cos pitch)`. A box shift that the fit's remaining uncertainty could explain from the
+//   step's head change is no evidence (fitUncertainty; C4 round 1).
 // - A settled step: every 500 ms, the medians of the two halves of the last 2 × halfWindowS differ by
 //   |ΔboxC| ≥ boxShiftC or |ΔiodC| ≥ iodFracC; the window's first and last spanS sit at the old and the new level
 //   (within 20 % of the step), and the transition (the time between 20 % and 80 % of the step) took ≤ spanS.
-// - A settled head-pitch drop of slumpPitchDeg or more with no translation is a slump: fatigue evidence, never
-//   posture.
+// - A settled head-pitch drop of slumpPitchDeg or more with no translation is a slump CANDIDATE: the calibrator
+//   emits head_slump only once it has held slumpHoldS with the gaze on the road (C4 round 1, C4-3); never posture.
 // - The onset: half the threshold reached within 2 s and held 1 s; the calibrator widens the zones meanwhile.
 // - The detector is fed TRACKING frames while moving only: a stop is a gap (clear()), and the calibrator
 //   compares the settled windows on both sides of it instead (rev4 §2.3.2a).
@@ -41,8 +43,11 @@ export interface PostureStep {
 
 export interface PostureOut {
   step: PostureStep | null;
+  /** a slump CANDIDATE (C4 round 1): the calibrator watches it for slumpHoldS before any head_slump */
   slump: boolean;
   onset: boolean;
+  /** with `slump`: the head pitch and yaw before the drop (camera frame, degrees) */
+  slumpFrom?: { pitch: number; yaw: number };
 }
 
 /** The compensated signature of a set of frames (the across-stop comparison). */
@@ -68,7 +73,9 @@ const RAD = Math.PI / 180;
 const CHECK_EVERY_MS = 500;
 const ONSET_WITHIN_MS = 2000;
 const ONSET_HOLD_MS = 1000;
-const FIT_RETRY_MS = 5000;
+/** C4 round 1 (review-C4 minors): the returned literals are hoisted (no allocation per frame) */
+const NONE: PostureOut = Object.freeze({ step: null, slump: false, onset: false });
+const ONSET: PostureOut = Object.freeze({ step: null, slump: false, onset: true });
 
 export interface PostureDetector {
   push(s: PostureSample): PostureOut;
@@ -90,31 +97,56 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
   // The fit: running sums of yaw, pitch and the box centre.
   const sum = { n: 0, y: 0, p: 0, yy: 0, pp: 0, yp: 0, x: 0, v: 0, yx: 0, px: 0, yv: 0, pv: 0 };
   /**
-   * Until the drive's own fit succeeds (fitMinSamples frames with the head moving enough to learn from), the
-   * prior: the box centre moves boxPerDegPrior per degree of head yaw (toward image right) and pitch (up). The fit
-   * is retried every FIT_RETRY_MS until it succeeds, then refreshed every fitEveryS. K-item: the prior's value.
+   * The box-on-head relation: a ridge fit toward the prior (the box centre moves boxPerDegPrior per degree of head
+   * yaw toward image right and of pitch up; K-item D-C4-1), over sums that decay with fitDecayS. C4 round 1
+   * (review-C4 C4-2): an axis the head's variance supports (≫ fitRidgeDeg2) is learned, the others stay near the
+   * prior, so an eyes-only driver keeps the prior and a mirror-checking one learns the yaw column.
    */
-  let B = { xy: po.boxPerDegPrior, xp: 0, vy: 0, vp: -po.boxPerDegPrior };
+  const prior = { xy: po.boxPerDegPrior, xp: 0, vy: 0, vp: -po.boxPerDegPrior };
+  let B = { ...prior };
   let nextFit = Number.NEGATIVE_INFINITY;
+  let lastT: number | null = null;
+  /** each axis's unlearned share of the ridge estimate, λ / (variance + λ): 1 before any data */
+  let unlearned = { yaw: 1, pitch: 1 };
+
+  /** The fit learns from every frame; the sums decay with fitDecayS (C4 round 1). */
+  function learn(s: PostureSample): void {
+    const decay = lastT === null ? 1 : Math.exp(-Math.max(0, s.t - lastT) / (po.fitDecayS * 1000));
+    lastT = s.t;
+    for (const k of Object.keys(sum) as (keyof typeof sum)[]) sum[k] *= decay;
+    sum.n++;
+    sum.y += s.yaw;
+    sum.p += s.pitch;
+    sum.yy += s.yaw * s.yaw;
+    sum.pp += s.pitch * s.pitch;
+    sum.yp += s.yaw * s.pitch;
+    sum.x += s.cx;
+    sum.v += s.cy;
+    sum.yx += s.yaw * s.cx;
+    sum.px += s.pitch * s.cx;
+    sum.yv += s.yaw * s.cy;
+    sum.pv += s.pitch * s.cy;
+  }
 
   function refit(t: number): void {
+    nextFit = t + CHECK_EVERY_MS;
     const n = sum.n;
-    if (n < po.fitMinSamples) return;
-    nextFit = t + FIT_RETRY_MS;
+    if (n < po.fitMinSamples) return; // too little yet: the prior
     const my = sum.y / n;
     const mp = sum.p / n;
-    const syy = sum.yy / n - my * my;
-    const spp = sum.pp / n - mp * mp;
+    const lam = po.fitRidgeDeg2;
+    unlearned = { yaw: lam / Math.max(lam, sum.yy / n - my * my + lam), pitch: lam / Math.max(lam, sum.pp / n - mp * mp + lam) };
+    const syy = sum.yy / n - my * my + lam;
+    const spp = sum.pp / n - mp * mp + lam;
     const syp = sum.yp / n - my * mp;
     const det = syy * spp - syp * syp;
-    if (!(det > 1)) return; // the head has not moved enough to learn from: the prior (or the last fit) stays
-    nextFit = t + po.fitEveryS * 1000;
     const mx = sum.x / n;
     const mv = sum.v / n;
-    const syx = sum.yx / n - my * mx;
-    const spx = sum.px / n - mp * mx;
-    const syv = sum.yv / n - my * mv;
-    const spv = sum.pv / n - mp * mv;
+    // (S + λI)⁻¹ (s + λ·B_prior), per box axis.
+    const syx = sum.yx / n - my * mx + lam * prior.xy;
+    const spx = sum.px / n - mp * mx + lam * prior.xp;
+    const syv = sum.yv / n - my * mv + lam * prior.vy;
+    const spv = sum.pv / n - mp * mv + lam * prior.vp;
     const clamp = (b: number) => Math.max(-0.02, Math.min(0.02, b));
     B = {
       xy: clamp((spp * syx - syp * spx) / det),
@@ -179,6 +211,8 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
     resetFit() {
       for (const k of Object.keys(sum) as (keyof typeof sum)[]) sum[k] = 0;
       nextFit = Number.NEGATIVE_INFINITY;
+      B = { ...prior };
+      unlearned = { yaw: 1, pitch: 1 };
     },
 
     clear() {
@@ -194,34 +228,25 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
     },
 
     push(s) {
-      const none: PostureOut = { step: null, slump: false, onset: false };
-      // The fit learns from every frame.
-      sum.n++;
-      sum.y += s.yaw;
-      sum.p += s.pitch;
-      sum.yy += s.yaw * s.yaw;
-      sum.pp += s.pitch * s.pitch;
-      sum.yp += s.yaw * s.pitch;
-      sum.x += s.cx;
-      sum.v += s.cy;
-      sum.yx += s.yaw * s.cx;
-      sum.px += s.pitch * s.cx;
-      sum.yv += s.yaw * s.cy;
-      sum.pv += s.pitch * s.cy;
+      learn(s);
       if (s.t >= nextFit) refit(s.t);
       raw.push(s);
       raw.dropWhile((x) => x.t < s.t - 2 * half);
-      if (s.t < nextCheck) return { ...none, onset: onsetFlag };
+      if (s.t < nextCheck) return onsetFlag ? ONSET : NONE;
       nextCheck = s.t + CHECK_EVERY_MS;
       const all: Comp[] = raw.toArray().map((x) => ({ t: x.t, ...compensate(x), yaw: x.yaw, pitch: x.pitch }));
-      if (all.length < 8 || all[0]!.t > s.t - 2 * half + 1000) return { ...none, onset: onsetFlag };
+      if (all.length < 8 || all[0]!.t > s.t - 2 * half + 1000) return onsetFlag ? ONSET : NONE;
       const cut = s.t - half;
       const before = all.filter((x) => x.t < cut);
       const after = all.filter((x) => x.t >= cut);
-      if (before.length < 4 || after.length < 4) return { ...none, onset: onsetFlag };
+      if (before.length < 4 || after.length < 4) return onsetFlag ? ONSET : NONE;
       const a = levels(before);
       const b = levels(after);
-      const dBox = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+      // C4 round 1 (C4-2): the part of the box shift the fit's remaining uncertainty could explain from the head
+      // change is not evidence (a held look with a wrong prior); only a box shift beyond it counts.
+      const explained = po.boxPerDegPrior * po.fitUncertainty * Math.hypot(unlearned.yaw * (b.yaw - a.yaw), unlearned.pitch * (b.pitch - a.pitch));
+      const dBoxRaw = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+      const dBox = dBoxRaw > explained ? dBoxRaw : 0;
       const dIod = a.iodC > 0 ? (b.iodC - a.iodC) / a.iodC : 0;
 
       // The onset: the last 1 s and the second before it both at half the threshold from the old level.
@@ -239,7 +264,7 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
       const iodRatio = Math.abs(dIod) / po.iodFracC;
       if (boxRatio >= 1 || iodRatio >= 1) {
         const kind = boxRatio >= iodRatio ? 'box' : 'iod';
-        if (!settledAndQuick(all, series(all, kind, a, b), s.t)) return { ...none, onset: onsetFlag };
+        if (!settledAndQuick(all, series(all, kind, a, b), s.t)) return onsetFlag ? ONSET : NONE;
         raw.clear();
         onsetFlag = false;
         return { step: { t: s.t, dBox: { x: b.cx - a.cx, y: b.cy - a.cy }, dIodFrac: dIod, dHead: { yaw: b.yaw - a.yaw, pitch: b.pitch - a.pitch } }, slump: false, onset: false };
@@ -248,9 +273,9 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
       if (b.pitch - a.pitch <= -po.slumpPitchDeg && boxRatio < 0.5 && iodRatio < 0.5 && settledAndQuick(all, series(all, 'pitch', a, b), s.t)) {
         raw.clear();
         onsetFlag = false;
-        return { step: null, slump: true, onset: false };
+        return { step: null, slump: true, onset: false, slumpFrom: { pitch: a.pitch, yaw: a.yaw } };
       }
-      return { ...none, onset: onsetFlag };
+      return onsetFlag ? ONSET : NONE;
     },
   };
 }

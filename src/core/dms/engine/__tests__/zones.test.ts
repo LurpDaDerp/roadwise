@@ -2,7 +2,7 @@
 // extensions, learned mirrors, the phone-screen circle, RHD, and LOST after a fast turn (C-8).
 import { toDriverFrame } from '../angles';
 import { DEFAULT_DMS_CONFIG, resolveDmsConfig, type DmsConfig } from '../config';
-import { cameraRel, createTurnExtender, createZoneClassifier, forwardExtension, widening, zoneClass, type ZoneContext } from '../zones';
+import { cameraRel, combineDual, createTurnExtender, createZoneClassifier, forwardExtension, phoneScreenRadius, widening, zoneAt, zoneClass, type ZoneContext } from '../zones';
 import { ctx } from '../__fixtures__/synth';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
@@ -207,5 +207,27 @@ describe('T7 review round 1', () => {
     k.step(p(0, { headRel: { yaw: 60, pitch: 0 } }), BASE);
     for (let t = 66; t < 1000; t += 66) k.step(p(t, { quality: 'head_only', headRel: null, headYawSpeedDegS: null }), BASE);
     expect(k.step(p(1000, { quality: 'lost', gazeRel: null, headRel: null, headYawSpeedDegS: null }), BASE)).toBeNull();
+  });
+});
+
+describe('C4 round 1: zoneAt and the limited dual union (review-C4 C4-1 rule 2)', () => {
+  test('zoneAt: the unwidened default map, stateless, the camera circle before the forward road', () => {
+    expect(zoneAt({ yaw: 7.9, pitch: 0 }, 8, null, C)).toBe('road_centre');
+    expect(zoneAt({ yaw: 15, pitch: -14 }, 8, null, C)).toBe('centre_stack');
+    expect(zoneAt({ yaw: 10, pitch: -12 }, 8, null, C)).toBe('cluster');
+    expect(zoneAt({ yaw: 20, pitch: -8 }, 8, { yaw: 22, pitch: -10 }, C)).toBe('phone_screen');
+    expect(zoneAt({ yaw: 20, pitch: -8 }, 8, null, C)).toBe('forward_road');
+    expect(phoneScreenRadius(C)).toBe(8);
+  });
+  test('c₀ on-road decides; c₁ makes a frame on-road only inside its unwidened road-centre circle', () => {
+    expect(combineDual('forward_road', 'centre_stack', { yaw: 20, pitch: -20 }, 8, C)).toBe('forward_road');
+    expect(combineDual('centre_stack', 'road_centre', { yaw: 3, pitch: -2 }, 8, C)).toBe('road_centre');
+    // c₁'s forward road (or its widened circle) is not enough: c₀'s zone decides.
+    expect(combineDual('centre_stack', 'forward_road', { yaw: 16, pitch: -8 }, 8, C)).toBe('centre_stack');
+    expect(combineDual('centre_stack', 'road_centre', { yaw: 9, pitch: 0 }, 8, C)).toBe('centre_stack');
+    // Between two off-road zones the lower D1 weight wins (c₀ on a tie).
+    expect(combineDual('lap', 'cluster', { yaw: 0, pitch: -20 }, 8, C)).toBe('cluster');
+    expect(combineDual('centre_stack', 'other', { yaw: 40, pitch: -20 }, 8, C)).toBe('centre_stack');
+    expect(combineDual(null, 'far_lateral', null, 8, C)).toBe('far_lateral');
   });
 });

@@ -236,10 +236,36 @@ export interface DmsConfig {
       slumpPitchDeg: number;
       /** the onset (half the threshold within 2 s, held 1 s) widens the zones for at most this long */
       onsetWidenMaxS: number;
-      /** the box-on-head-angle least-squares fit, refreshed this often from at least this many samples */
-      fitEveryS: number;
       /** before the drive's fit: the box moves this much per degree of head rotation (a prior; a device item) */
       boxPerDegPrior: number;
+      /**
+       * C4 round 1 (review-C4 C4-2): the fit is a ridge toward the prior, λ per axis (deg²): an axis the head's
+       * variance supports is learned, the others stay near the prior. Its sums decay with fitDecayS, so a changed
+       * mount or seat is followed.
+       */
+      fitRidgeDeg2: number;
+      fitDecayS: number;
+      /**
+       * C4 round 1 (C4-2): the box-on-head error, × boxPerDegPrior, a translation must exceed to be a step: a
+       * compensated box shift that an error of this size (scaled by each axis's unlearned share of the ridge,
+       * λ / (variance + λ)) could explain from the step's head change is a look, not a posture step
+       */
+      fitUncertainty: number;
+      /**
+       * C4 round 1 (C4-3): a slump is the lowered head held slumpHoldS of observed time, the head yaw within
+       * slumpYawDeg of its centre, the gaze on the road (c₀'s road_centre or forward_road) for ≥ slumpOnRoadShare
+       */
+      slumpHoldS: number;
+      slumpYawDeg: number;
+      slumpOnRoadShare: number;
+      /**
+       * C4 round 1 (C4-1): a road-like c₁: inside c₀'s unwidened on-road zones, farther than the phone screen's
+       * radius + candidateCameraMarginDeg from the camera, and at most candidateNonDrivingShare of the window's
+       * weight in c₀'s non-driving zones; the revert is measured over the last revertWindowS of admission
+       */
+      candidateCameraMarginDeg: number;
+      candidateNonDrivingShare: number;
+      revertWindowS: number;
       fitMinSamples: number;
       /** the candidate c₁: the mode of this much admitted weight, within searchMaxS observed, ≤ searchMaxDeg from c₀ */
       searchS: number;
@@ -643,8 +669,16 @@ const DEFAULT: DmsConfig = {
       spanS: 4,
       slumpPitchDeg: 3,
       onsetWidenMaxS: 15,
-      fitEveryS: 30,
       boxPerDegPrior: 0.003,
+      fitRidgeDeg2: 20,
+      fitDecayS: 600,
+      fitUncertainty: 1.5,
+      slumpHoldS: 30,
+      slumpYawDeg: 5,
+      slumpOnRoadShare: 0.7,
+      candidateCameraMarginDeg: 4,
+      candidateNonDrivingShare: 0.3,
+      revertWindowS: 30,
       fitMinSamples: 150,
       searchS: 8,
       searchMaxS: 60,

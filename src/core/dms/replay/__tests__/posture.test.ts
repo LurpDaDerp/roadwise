@@ -27,10 +27,10 @@ interface Run {
   frames: { tMs: number; centre: AnglePair | null; head: AnglePair | null; distraction: DmsSnapshot['distraction']; speed: number | null; calReason: DmsSnapshot['calReason'] }[];
 }
 
-function play(driver: DriverFn, seconds: number, o: { fps?: number; source?: 'geometric' | 'net'; cfg?: DmsConfig; lidGaze?: boolean; seed?: number } = {}): Run {
+function play(driver: DriverFn, seconds: number, o: { fps?: number; source?: 'geometric' | 'net'; cfg?: DmsConfig; lidGaze?: boolean; seed?: number; boxPerDeg?: number } = {}): Run {
   const source = o.source ?? 'geometric';
   const cfg = { ...(o.cfg ?? C), gazeSource: source } as DmsConfig;
-  const items = synthDrive({ fps: o.fps ?? 15, seconds, seed: o.seed ?? 11, source, driver, motion: true, faceGeometry: true, lidGaze: o.lidGaze });
+  const items = synthDrive({ fps: o.fps ?? 15, seconds, seed: o.seed ?? 11, source, driver, motion: true, faceGeometry: true, lidGaze: o.lidGaze, boxPerDeg: o.boxPerDeg });
   const engine = createDmsEngine(cfg, DEFAULT_INIT);
   const run: Run = { events: [], commands: [], frames: [] };
   for (const it of items) {
@@ -105,10 +105,20 @@ describe('no false posture (K1): a held head turn, a slump, stares on the road',
     const r = play(drv((t) => (within(t, 110, 118) ? { gaze: rel(20, 0), head: { yaw: 20 * 0.9, pitch: -1.2 } } : null)), 140);
     expect(ev(r, 'posture_dual')).toEqual([]);
   });
-  test('S-SLUMP: the head settles 5° lower with no translation: a head_slump, the centre unchanged, no posture', () => {
-    const r = play(drv((t, rr) => (t >= 110 ? { gaze: { yaw: onRoad(rr).yaw, pitch: onRoad(rr).pitch - 5 }, head: { yaw: 0.8, pitch: -1.2 - 5 } } : null)), 140);
-    expect(ev(r, 'head_slump').length).toBeGreaterThanOrEqual(1);
+  test('S-SLUMP (40 s; C4 round 1): the head settles 5° lower, still looking at the road, no translation: a head_slump after 30 s held; no posture', () => {
+    const r = play(drv((t, rr) => (t >= 110 ? { gaze: { yaw: onRoad(rr).yaw, pitch: onRoad(rr).pitch - 5 }, head: { yaw: 0.8, pitch: -1.2 - 5 } } : null)), 160);
+    const slump = ev(r, 'head_slump');
+    expect(slump.length).toBeGreaterThanOrEqual(1);
+    expect(slump[0]!.tMs).toBeGreaterThanOrEqual(140_000); // held ≥ 30 s
     expect(ev(r, 'posture_dual')).toEqual([]);
+  });
+  test('S-HELD-LOOK (C4 round 1, C4-3): an 8 s look at (35°, −5°) with the head at (20°, −2°): no slump', () => {
+    const r = play(drv((t) => (within(t, 110, 118) ? { gaze: rel(35, -5), head: { yaw: 20, pitch: -2 } } : null)), 160);
+    expect(ev(r, 'head_slump')).toEqual([]);
+  });
+  test('S-READ-DASH (C4 round 1, C4-3; NC-C4-3a): reading a dash phone at (15°, −14°) 6 s of every 10 s for 2 min: no slump', () => {
+    const r = play(drv((t) => (t >= 110 && t < 230 && (t - 110) % 10 < 6 ? { gaze: rel(15, -14) } : null)), 250);
+    expect(ev(r, 'head_slump')).toEqual([]);
   });
   test('S-STARE-ONROAD: a 10 s read at (15°, −8°) every 60 s for 10 min: no posture, the centre moves ≤ 1°, 0 D1', () => {
     const r = play(drv((t) => (t >= 110 && (t - 110) % 60 < 10 ? { gaze: rel(15, -8) } : null)), 710);
@@ -235,5 +245,105 @@ describe('a knocked mount across a stop (rev5 §3; W3)', () => {
     expect(ev(r, 'driver_change_provisional')).toEqual([]);
     expect(ev(r, 'driver_change')).toEqual([]);
     expect(ev(r, 'camera_bump').map((e) => e.cause)).toEqual(['stop']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// C4 round 1 (review-C4 C4-1, C4-2).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C4-1: a lean to read a phone is not a road (S-LEAN-PHONE: NC-C4-1b, NC-C4-1c; S-LEAN-TAP: NC-C4-2e)', () => {
+  /** A dash phone at (15°, −14°) read 6 s of every 10 s from 110 to 230 s; with `lean`, the body leans toward it. */
+  const reading = (lean: boolean) =>
+    drv((t) => ({
+      ...(t >= 110 && t < 230 && (t - 110) % 10 < 6 ? { gaze: rel(15, -14) } : {}),
+      ...(lean && within(t, 110, 230) ? { posture: { box: { dx: 0, dy: 0.04 }, iodScale: 1.08 } } : {}),
+    }));
+  test('S-LEAN-PHONE: D1 starts with the lean within ±1 of the same reading without it, and no commit onto the phone', () => {
+    const plain = play(reading(false), 250);
+    const lean = play(reading(true), 250);
+    const inWindow = (r: Run) => r.commands.filter((c) => c.kind === 'distraction' && c.action === 'start' && c.tMs >= 110_000 && c.tMs < 230_000).length;
+    expect(inWindow(plain)).toBeGreaterThanOrEqual(5);
+    expect(Math.abs(inWindow(lean) - inWindow(plain))).toBeLessThanOrEqual(1);
+    expect(ev(lean, 'posture_commit')).toEqual([]);
+  });
+  test('S-LEAN-TAP: tapping the RoadWise phone itself (the camera) for 8 s with a lean that stays: the phone is never c₁ (any commit keeps the road), D1 during the tap', () => {
+    // The mount 25° right and 15° below the road (a real mount; the synth's default camera sits on the road).
+    const mount = { yaw: -25, pitch: 15 };
+    const camera = { yaw: 25 + 2, pitch: -15 - 3 }; // the driver-frame direction of the camera (the road is at (2, −3))
+    const r = play(
+      drv((t) => ({ mountShift: mount, ...(within(t, 150, 158) ? { gaze: camera, posture: { box: { dx: 0.03, dy: 0.03 }, iodScale: 1.1 } } : t >= 158 ? { posture: { box: { dx: 0.03, dy: 0.03 }, iodScale: 1.1 } } : {}) })),
+      260
+    );
+    // The lean stays after the tap, a real posture change with the gaze unchanged: a commit, if any, lands on the
+    // road (within 1.5° of the centre before the tap), never on the camera.
+    const before = centreAt(r, 149_000).centre!;
+    for (const cm of ev(r, 'posture_commit')) expect(angularDistanceDeg(centreAt(r, cm.tMs + 1).centre!, before)).toBeLessThanOrEqual(1.5);
+    expect(r.frames.filter((f) => f.tMs >= 150_000 && f.centre !== null && angularDistanceDeg(f.centre, before) > 1.5)).toEqual([]);
+    expect(r.commands.some((c) => c.kind === 'distraction' && c.action === 'start' && c.tMs >= 150_000 && c.tMs < 160_000)).toBe(true);
+  });
+});
+
+describe('C4-1 rules 2 and 3: the limited union (S-SHIFT-READ), an ended stare (S-STARE-END)', () => {
+  test('S-SHIFT-READ (NC-C4-1a, NC-C4-1c): after a real recline (the road 8° lower), dash reads that are c₀ centre_stack but c₁ forward_road still start D1 before the commit', () => {
+    const shift = { yaw: 0, pitch: -8 };
+    const r = play(
+      drv((t) => ({ ...(t >= 110 ? { posture: { shift, box: { dx: 0, dy: 0.05 }, iodScale: 1.06 } } : {}), ...(t >= 130 && (t - 130) % 24 < 6 ? { gaze: rel(16, -8) } : {}) })),
+      260
+    );
+    const commit = ev(r, 'posture_commit');
+    const end = commit.length > 0 ? commit[0]!.tMs : 260_000;
+    const d1 = r.commands.filter((c) => c.kind === 'distraction' && c.action === 'start' && c.tMs >= 125_000 && c.tMs < end);
+    expect(d1.length).toBeGreaterThanOrEqual(2);
+  });
+  test('S-STARE-END: a translation with a 40 s stare 12° off, then the road: the stare is never committed; the centre stays on the road', () => {
+    const r = play(drv((t) => ({ ...(t >= 110 ? { posture: { box: { dx: 0.05, dy: 0 } } } : {}), ...(within(t, 110, 150) ? { gaze: rel(12, -4) } : {}) })), 300);
+    const before = centreAt(r, 109_000).centre!;
+    for (const cm of ev(r, 'posture_commit')) expect(angularDistanceDeg(centreAt(r, cm.tMs + 1).centre!, before)).toBeLessThanOrEqual(1.5);
+    expect(angularDistanceDeg(centreAt(r, 299_000).centre!, before)).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('C4-3: a slump is a lower head still looking at the road (S-READ-LAP-40, S-TURN-DOWN-40)', () => {
+  test('S-READ-LAP-40 (NC-C4-3b): a 40 s read of a lap phone, the head 14° lower and straight: no slump (the gaze is off the road)', () => {
+    const r = play(drv((t) => (within(t, 110, 150) ? { gaze: rel(0, -35), head: { yaw: 0.8, pitch: -1.2 - 14 } } : null)), 170);
+    expect(ev(r, 'head_slump')).toEqual([]);
+  });
+  test('S-TURN-DOWN-40 (NC-C4-3c): 40 s looking at the road edge (25°, −6°), the head turned 18° and 4° lower: no slump (the head is turned)', () => {
+    const r = play(drv((t) => (within(t, 110, 150) ? { gaze: rel(25, -6), head: { yaw: 18, pitch: -1.2 - 4 } } : null)), 170);
+    expect(ev(r, 'head_slump')).toEqual([]);
+  });
+});
+
+describe('C4-2: a wrong compensation prior (the true box-on-head at 0.5×, 2× and 0 of it)', () => {
+  const TRUTHS: [string, number][] = [
+    ['0.5×', 0.0015],
+    ['2×', 0.006],
+    ['0 (a static box)', 0],
+  ];
+  test.each(TRUTHS)('%s: S-TURN20 and S-STARE-ONROAD give no dual state (NC-C4-2b; 2×: NC-C4-2e)', (_, boxPerDeg) => {
+    const turn = play(drv((t) => (within(t, 110, 118) ? { gaze: rel(20, 0), head: { yaw: 20 * 0.9, pitch: -1.2 } } : null)), 140, { boxPerDeg });
+    expect(ev(turn, 'posture_dual')).toEqual([]);
+    const stare = play(drv((t) => (t >= 110 && (t - 110) % 60 < 10 ? { gaze: rel(15, -8) } : null)), 400, { boxPerDeg });
+    expect(ev(stare, 'posture_dual')).toEqual([]);
+  });
+  test.each(TRUTHS)('%s: visual time-sharing: D2 at 117.2 s ± 0.35, no dual state (2×: NC-C4-2b)', (_, boxPerDeg) => {
+    // At 35 km/h: 1.2 s on the centre stack, 0.9 s on the road, repeated from 100 s (the replay scenario).
+    const r = play(
+      drv((t) => ({ speedKmh: 35, ...(t >= 100 && t < 120 && (t - 100) % 2.1 < 1.2 ? { gaze: rel(30, -20) } : {}) })),
+      150,
+      { boxPerDeg }
+    );
+    const d2 = r.events.filter((e) => e.kind === 'd2_warning');
+    expect(d2).toHaveLength(1);
+    expect(Math.abs(d2[0]!.tMs - 117_200)).toBeLessThanOrEqual(350);
+    expect(ev(r, 'posture_dual')).toEqual([]);
+  });
+  test.each(TRUTHS)('%s: S-P6 still commits with bias ≤ 1.5°', (_, boxPerDeg) => {
+    const shift = { yaw: 6, pitch: 0 };
+    const r = play(drv((t) => (t >= 110 ? { posture: { shift, box: { dx: 0.05, dy: 0 }, iodScale: 1.07 } } : null)), 230, { boxPerDeg });
+    const commit = ev(r, 'posture_commit');
+    expect(commit.length).toBeGreaterThanOrEqual(1);
+    expect(angularDistanceDeg(centreAt(r, commit[0]!.tMs + 1).centre!, add(centreAt(r, 109_000).centre!, shift))).toBeLessThanOrEqual(1.5);
   });
 });

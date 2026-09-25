@@ -134,15 +134,37 @@ function inside(zone: ZoneSpec, a: AnglePair, e: number, zc: ZoneContext, cfg: P
   }
 }
 
+/** No widening, no extension, no learned mirrors: the default map (C4 round 1). */
+const NO_EXTENSION: Extension = Object.freeze({ toward: 0, deg: 0 }) as Extension;
+const NO_LEARNED: Partial<Record<MirrorId, LearnedZone>> = Object.freeze({});
+
 /**
- * Task C4 (rev2 §2.3.2): the dual-centre classification. Both centres classify every frame: on-road if either
- * says so; otherwise the zone with the lower D1 weight (the c₀ zone on a tie). D1 then drains, and D2 counts,
- * only off-road for both.
+ * C4 round 1 (review-C4 C4-1, C4-3): the zone of a centre-relative direction on the UNWIDENED default map, with
+ * no hysteresis (stateless): the first match in priority order.
  */
-export function combineDual(z0: ZoneId | null, z1: ZoneId | null, cfg: Pick<DmsConfig, 'zones'>): ZoneId | null {
+export function zoneAt(rel: AnglePair, radiusDeg: number | null, camera: AnglePair | null, cfg: Pick<DmsConfig, 'zones' | 'calibration'>): ZoneId {
+  const zc: ZoneContext = { radiusDeg, cameraRel: camera, widenDeg: 0, extension: NO_EXTENSION, learned: NO_LEARNED };
+  for (const z of cfg.zones.table) if (inside(z, rel, 0, zc, cfg)) return z.id;
+  return 'other';
+}
+
+/** The phone-screen circle's radius (the camera zone). */
+export function phoneScreenRadius(cfg: Pick<DmsConfig, 'zones'>): number {
+  const z = cfg.zones.table.find((x) => x.region.kind === 'camera');
+  return z !== undefined && z.region.kind === 'camera' ? z.region.radiusDeg : 0;
+}
+
+/**
+ * Task C4 (rev2 §2.3.2), limited by C4 round 1 (review-C4 C4-1 rule 2): the dual-centre classification. c₀'s
+ * zone decides, except that a frame whose c₁-relative gaze `rel1` is inside c₁'s UNWIDENED road-centre circle
+ * (`radiusDeg`) is on-road; between two off-road zones the lower D1 weight wins (c₀ on a tie). c₁'s wider zones
+ * (its forward road, its widening) never make a frame on-road.
+ */
+export function combineDual(z0: ZoneId | null, z1: ZoneId | null, rel1: AnglePair | null, radiusDeg: number | null, cfg: Pick<DmsConfig, 'zones' | 'calibration'>): ZoneId | null {
   if (z0 === null || z1 === null) return z0 ?? z1;
   if (zoneClass(z0, cfg) === 'on_road') return z0;
-  if (zoneClass(z1, cfg) === 'on_road') return z1;
+  if (rel1 !== null && angularDistanceDeg(rel1, { yaw: 0, pitch: 0 }) <= (radiusDeg ?? cfg.calibration.radiusMinDeg)) return 'road_centre';
+  if (zoneClass(z1, cfg) === 'on_road') return z0;
   const w = (id: ZoneId) => cfg.zones.table.find((z) => z.id === id)!.weight;
   return w(z1) < w(z0) ? z1 : z0;
 }
