@@ -1,11 +1,12 @@
 // C6 round 1 (review-C6 C6-2): the deep-only population-prior fallback. Before any EAR reference exists (a drive
 // that has not yet moved at the admission speed: a queue, a first stop), closure runs on absolute EARs: closed below
 // closure.prior.closedEar (0.06), open above prior.openEar (0.12) or back above the closed EAR for prior.reopenMs;
-// F1 at 1.5 s, F2 and F3 as usual; the looking-down latch still applies, deep below prior.deepEar (0.045). It feeds no fatigue statistic and no
+// C6 round 2 (review-C6 R1-P): F1–F3 count deep time only (a continuous run below prior.deepEar, 0.045), latched or
+// not, F1 at 1.5 s: before any pitch reference the looking-down gate cannot be measured. It feeds no fatigue statistic and no
 // calibration, the HUD shows drowsiness as limited, and it is replaced as soon as a reference exists.
 // Negative controls: NC-C6-P1 (no prior mode: S-FIRST-CRAWL and S-FIRST-STOPPED fail), NC-C6-P2 (a closed EAR of
-// 0.15: S-PRIOR-READ fails; also pinned below as a config-level control) and NC-C6-R (no prior.reopenMs: the squint
-// that moves off never gets a reference).
+// 0.15: S-PRIOR-READ fails; also pinned below as a config-level control), NC-C6-R (no prior.reopenMs: the squint
+// that moves off never gets a reference) and NC-C6-P3 (prior closures count closed time: S-PRIOR-READ-45 fails).
 import { DEFAULT_DMS_CONFIG, validateDmsConfig, type DmsConfig } from '../../engine/config';
 import type { DmsAlertCommand } from '../../engine/alerts';
 import { createDmsEngine, type DmsEvent } from '../../engine/engine';
@@ -98,9 +99,10 @@ describe('C6-2: no false Critical on the prior (S-PRIOR-READ, squint; NC-C6-P2)'
     expect(sleepFamily(r)).toEqual([]);
     expect(criticals(r)).toEqual([]);
   });
-  test('NC-C6-P2 (config level): with a closed EAR of 0.15 the same reading raises sleep Criticals', () => {
+  // C6 round 2 (R1-P): prior closures count deep time only, so the control raises the deep EAR with the closed one.
+  test('NC-C6-P2 (config level): with a closed EAR of 0.15 (deep 0.1) the same reading raises sleep Criticals', () => {
     const cfg = JSON.parse(JSON.stringify(C)) as DmsConfig;
-    cfg.closure.prior = { ...cfg.closure.prior, closedEar: 0.15, openEar: 0.18 };
+    cfg.closure.prior = { ...cfg.closure.prior, closedEar: 0.15, openEar: 0.18, deepEar: 0.1 };
     expect(validateDmsConfig(cfg)).toEqual([]);
     const r = play(reader, 120, { lidGaze: true, cfg });
     expect(criticals(r).length).toBeGreaterThan(0);
@@ -136,3 +138,33 @@ describe('C6-2: eye sizes (S-PRIOR-SMALL, S-PRIOR-LARGE)', () => {
     });
   }
 });
+
+describe('C6 round 2 (review-C6 R1-P): prior-mode closures count deep time only (NC-C6-P3)', () => {
+  /** Stopped from the start, no reference: 8 s bouts reading a lap phone at `pitch`, 2 s looking up, the lid coupled. */
+  const steepReader = (pitch: number) => driver(0, { over: (t) => (t >= 5 && (t - 5) % 10 < 8 ? { gaze: rel(0, pitch) } : null) });
+  test.each([-45, -50])('S-PRIOR-READ%i: 3 min of 8 s bouts at a stop, the lid at its floor (EAR ≈ 0.051, between the deep and the closed EAR): 0 sleep events', (pitch) => {
+    const r = play(steepReader(pitch), 185, { lidGaze: true });
+    expect(r.seconds.every((s) => s.priorMode)).toBe(true);
+    // the reading lid is a prior closure (EAR < 0.06) most of every bout: the rule under test is reached
+    expect(r.seconds.filter((s) => s.closedMs > 1500).length).toBeGreaterThan(60);
+    expect(sleepFamily(r)).toEqual([]);
+    expect(criticals(r)).toEqual([]);
+  });
+  /** Stopped, no reference: cycles of `shutS` at EAR 0.03, then 1.0 s at EAR 0.09 (above the closed EAR). */
+  const flutter = (shutS: number) => (t: number, r: () => number): DriverState => {
+    const k = (t - 10) % (shutS + 1);
+    const openness = t < 10 ? blinkOpenness(t) : k < shutS ? 0.03 / 0.3 : 0.09 / 0.3;
+    return { gaze: onRoad(r), speedKmh: 0, openness };
+  };
+  // The boundary is F1's 1.5 s of deep time (15 fps: 1.53 s); 1.7 s and 1.3 s keep the frame phase off it.
+  test('S-PRIOR-FLUTTER (reopenMs pinned): 1.7 s shut, 1.0 s at EAR 0.09: F1 on every cycle, never F2 (the flutter ends the closure)', () => {
+    const r = play(flutter(1.7), 10 + 2.7 * 20 + 1);
+    expect(kinds(r, 'microsleep')).toHaveLength(20);
+    expect(kinds(r, 'sleep')).toEqual([]);
+  });
+  test('S-PRIOR-FLUTTER: 1.3 s shut, 1.0 s at EAR 0.09: no F1 (the deep run is under 1.5 s; the reopen tail is not deep)', () => {
+    const r = play(flutter(1.3), 10 + 2.3 * 20 + 1);
+    expect(sleepFamily(r)).toEqual([]);
+  });
+});
+

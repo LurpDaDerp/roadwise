@@ -226,8 +226,8 @@ export function createFastRules(cfg: DmsConfig) {
           // closedMs, a deep run continues, a gated closure that was not deep does not count.
           episode.bridged = true;
         } else {
-          // C6 round 1 (C6-2): in prior mode a latched closure is deep below the prior's deep EAR (0.045), on the
-          // prior's pseudo-openness.
+          // C6 round 1 (C6-2): in prior mode deep is below the prior's deep EAR (0.045), on the prior's pseudo-openness.
+          // C6 round 2 (review-C6 R1-P): and in prior mode every closure counts deep time only (below).
           const deep = p.priorMode
             ? p.priorOpenness !== null && p.priorOpenness < cl.prior.deepEar / (cl.prior.closedEar / cl.closedBelow)
             : p.openness !== null && p.openness < cl.lookDownClosedBelow;
@@ -248,7 +248,10 @@ export function createFastRules(cfg: DmsConfig) {
         }
         const gated = episode.gated;
         const bridged = episode.bridged ? { bridged: true } : {};
-        const countedS = (gated ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
+        // C6 round 2 (review-C6 R1-P): a prior-mode episode counts deep time only, latched or not. Before any pitch
+        // reference or centre the looking-down gate cannot be measured, and a steep reading lid (the synth's floor,
+        // EAR ≈ 0.051) lies between the deep EAR and the closed EAR; a full closure (EAR ≈ 0.02–0.04) is deep.
+        const countedS = (gated || episode.prior ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
         const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
         if (!episode.f1 && countedS >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
           episode.f1 = true;

@@ -515,8 +515,8 @@ export interface DmsConfig {
      * C6 round 1 (review-C6 C6-2): the population-prior fallback, deep closures only, BEFORE any EAR reference
      * exists (a drive that has not yet moved at the admission speed, a queue, a stop). Absolute EARs: closed below
      * closedEar, open above openEar (or back above closedEar for reopenMs: a low open eye, reading or squinting, is no
-     * closure); F1 needs f1ClosedS, F2 and F3 as usual; under the looking-down latch, deep below deepEar. It feeds
-     * no fatigue statistic (no openness, no blink) and no calibration, and is replaced as soon as a
+     * closure); F1–F3 count DEEP time only (a continuous run below deepEar; C6 round 2, review-C6 R1-P), F1 at
+     * f1ClosedS. It feeds no fatigue statistic (no openness, no blink) and no calibration, and is replaced as soon as a
      * reference exists. Device item D-C6-3 tunes the thresholds.
      */
     prior: { closedEar: number; openEar: number; deepEar: number; f1ClosedS: number; reopenMs: number };
