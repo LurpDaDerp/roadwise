@@ -3,7 +3,7 @@
 import trace from '../../../src/core/__fixtures__/traces/speeding-corrected.json';
 import { runTrace } from '../../../src/core/replay/runTrace';
 import { parseTrace } from '../../../src/core/replay/trace';
-import { MOTION_ROW_FIELDS, parseRow, ROW_DECIMALS, roundTo } from '../src/rowSchema';
+import { MOTION_ROW_FIELDS, parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
 
 // Jest compiles this suite to CommonJS, so `require` is real at run time; Node's typings are not in
@@ -162,8 +162,21 @@ test('rejects a missing key', () => {
   expect(parseRow(missing)).toBeNull();
 });
 
-test('rejects an extra key', () => {
-  expect(parseRow({ ...good, heading: 90 })).toBeNull();
+// C0 round 1 (review-C0 C0-m1): unknown keys fail soft. A future native build that adds a field must
+// not cost a drive its rows in an older bundle: the key is stripped and counted, the row kept. The
+// strict key contract stays pinned where it belongs, in the native text tests and the vectors.
+test('an extra key is stripped and counted, and the row is kept', () => {
+  resetUnknownRowKeys();
+  expect(parseRow({ ...good, heading: 90 })).toEqual(good);
+  expect(unknownRowKeys()).toBe(1);
+  expect(parseRow({ ...good, heading: 90, pitch: 1 })).toEqual(good);
+  expect(unknownRowKeys()).toBe(3);
+  resetUnknownRowKeys();
+  expect(unknownRowKeys()).toBe(0);
+});
+
+test('a known key with a wrong type still rejects the row (only unknown keys are stripped)', () => {
+  expect(parseRow({ ...good, heading: 90, speed: '10' })).toBeNull();
 });
 
 test.each([null, undefined, 42, 'row', [], [good]])('rejects a non-object: %p', (raw) => {

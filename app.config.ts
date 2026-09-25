@@ -39,7 +39,11 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
   updates: { url: `https://u.expo.dev/${EAS_PROJECT_ID}` },
-  runtimeVersion: { policy: 'appVersion' },
+  // The fingerprint of the native project, not the app version (C0 round 1, review-C0 C0-I1): the row
+  // contract changed in native code (the DMS motion fields), and under appVersion a later OTA from an
+  // older commit would reach a new binary whose rows the old bundle's parser rejects. Each native state
+  // is its own runtime, so an update only ever reaches binaries built from the same native code.
+  runtimeVersion: { policy: 'fingerprint' },
   ios: {
     bundleIdentifier: 'com.lurp.safedrive',
     supportsTablet: false,

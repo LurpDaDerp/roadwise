@@ -160,7 +160,10 @@ implements the same rule, and `EVENT_BUFFER_MAX` in `src/fake.ts` is the number.
 
 `row` payloads must pass `parseRow` (`src/rowSchema.ts`): exactly M1's `FeatureRow` keys
 (`src/core/engine/types.ts`), finite numbers, booleans for the three phone flags, and `ts` a
-non-negative integer epoch ms. The encodings:
+non-negative integer epoch ms. Native emits exactly those keys (pinned by the native text tests and
+the golden vectors). On the JS side an **unknown key fails soft** (C0 round 1): it is stripped and
+counted (`unknownRowKeys()`), and the row is kept, so a future native field can never cost an older
+bundle a drive's rows; a known key with a wrong type still rejects the row. The encodings:
 
 | Situation | Encoding |
 |---|---|

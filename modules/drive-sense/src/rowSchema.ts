@@ -5,6 +5,7 @@
 // adds: `ts` is a non-negative integer epoch ms, because the upload contract accepts only whole
 // milliseconds.
 import { z } from 'zod';
+import { MOTION_ROW_FIELDS } from '../../../src/core/engine/types';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
   DriveSenseState,
@@ -59,7 +60,7 @@ export const ROW_DECIMALS = {
  * kept to 1e-3 like the other accelerometer-derived fields; `accRms` and gravity may be null (IMU
  * absent), which is kept. `MOTION_ROW_FIELDS` (M1) is the one list; finalize strips them.
  */
-export { MOTION_ROW_FIELDS } from '../../../src/core/engine/types';
+export { MOTION_ROW_FIELDS };
 export const MOTION_ROW_DECIMALS = {
   aLonMean: 3,
   accRms: 3,
@@ -83,12 +84,40 @@ export function roundTo(x: number, decimals: number): number {
   return r === 0 ? 0 : r;
 }
 
+/** Every key a `FeatureRow` may carry: the 21 of the contract and the optional motion fields (C0). */
+const ROW_KEYS: ReadonlySet<string> = new Set<string>([
+  'ts', 'lat', 'lng', 'hAcc', 'speed', 'speedAcc', 'course', 'alt', 'gnssValid',
+  'aLonMax', 'aLonMin', 'aLatMax', 'aLatMin', 'yawRateMax', 'jerkMax',
+  'gravityStability', 'orientationDelta', 'handlingScore', 'locked', 'screenOn', 'appForeground',
+  ...MOTION_ROW_FIELDS,
+]);
+
+let unknownKeys = 0;
+/** Unknown row keys stripped since the last reset (diagnostics; C0 round 1, C0-m1). */
+export const unknownRowKeys = (): number => unknownKeys;
+export function resetUnknownRowKeys(): void {
+  unknownKeys = 0;
+}
+
 /**
- * The row if it is exactly a valid `FeatureRow`, as a fresh object with every numeric field
- * rounded to `ROW_DECIMALS`, else null. Never throws.
+ * The row if it is a valid `FeatureRow`, as a fresh object with every numeric field rounded to
+ * `ROW_DECIMALS`, else null. Never throws.
+ *
+ * Unknown keys fail soft (C0 round 1, review-C0 C0-m1): they are stripped and counted
+ * (`unknownRowKeys`), never a dropped row, so a native build that adds a field cannot cost an older
+ * bundle a drive's rows. A known key with a wrong type still rejects the row. The exact key contract
+ * is pinned by the native text tests and the golden vectors.
  */
 export function parseRow(raw: unknown): FeatureRow | null {
-  const parsed = rowWireSchema.safeParse(raw);
+  let input = raw;
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const extra = Object.keys(raw).filter((k) => !ROW_KEYS.has(k));
+    if (extra.length > 0) {
+      unknownKeys += extra.length;
+      input = Object.fromEntries(Object.entries(raw).filter(([k]) => ROW_KEYS.has(k)));
+    }
+  }
+  const parsed = rowWireSchema.safeParse(input);
   if (!parsed.success) return null;
   const row = parsed.data;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {

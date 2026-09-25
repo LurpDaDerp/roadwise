@@ -75,3 +75,17 @@ describe('the Android config', () => {
     ]);
   });
 });
+
+// C0 round 1 (review-C0 C0-I1): the release gate for the row-contract change. With the appVersion
+// policy, a later OTA published from a pre-C0 commit would reach a C0 binary of the same version, and
+// that old bundle's strict parseRow would drop every row of every drive. The fingerprint policy gives
+// each native state its own runtime, so JS only ever reaches a binary built from the same native code.
+describe('the runtime version (release gate, C0-I1)', () => {
+  test('is the fingerprint policy, never appVersion', () => {
+    expect(build().runtimeVersion).toEqual({ policy: 'fingerprint' });
+  });
+
+  test('EAS Update is configured (the policy is only meaningful with an update URL)', () => {
+    expect(build().updates?.url).toMatch(/^https:\/\/u\.expo\.dev\//);
+  });
+});
