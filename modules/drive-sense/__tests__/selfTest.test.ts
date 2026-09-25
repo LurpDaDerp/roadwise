@@ -19,7 +19,7 @@ const clean = () => runSelfTest(vectors, 'ios');
 test('the reference against itself is clean', () => {
   const diff = diffSelfTest(vectors, JSON.stringify(clean()));
   expect(diff.ok).toBe(true);
-  expect(diff.results).toHaveLength(10);
+  expect(diff.results).toHaveLength(11);
   expect(diff.results.every((r) => r.ok && r.mismatches.length === 0)).toBe(true);
   expect(diff.platform).toBe('ios');
 });
@@ -136,4 +136,26 @@ test('parseVectors validates the vector files', () => {
   expect(parseVectors(JSON.stringify([v]))).toEqual([v]);
   expect(() => parseVectors('[{"name":"x","kind":"extract"}]')).toThrow(/vector/);
   expect(() => parseVectors('{}')).toThrow(/vector/);
+});
+
+// DMS C0: a native port that omits a motion field, or emits a number where the reference has null
+// (IMU absent), fails the vector: the new fields are compared like every other.
+test('the motion fields are compared: a missing aLonMean, and a number for a null accRms, both fail (C0)', () => {
+  const out = clean();
+  const cruise = out.results[VECTOR_NAMES.indexOf('cruise')]!;
+  const noImu = out.results[VECTOR_NAMES.indexOf('no-imu')]!;
+  if (!('rows' in cruise) || !('rows' in noImu)) throw new Error('shape');
+  delete (cruise.rows[8] as { aLonMean?: number }).aLonMean;
+  (noImu.rows[0] as { accRms?: number | null }).accRms = 0;
+  const diff = diffSelfTest(vectors, JSON.stringify(out));
+  expect(diff.results.find((x) => x.name === 'cruise')!.mismatches.map((m) => m.path)).toEqual(['rows[8].aLonMean']);
+  expect(diff.results.find((x) => x.name === 'no-imu')!.mismatches.map((m) => m.path)).toEqual(['rows[0].accRms']);
+});
+
+test('null against null is clean (C0)', () => {
+  const diff = diffSelfTest(vectors, JSON.stringify(clean()));
+  const noImu = vectors[VECTOR_NAMES.indexOf('no-imu')]!;
+  if (noImu.kind !== 'extract') throw new Error('shape');
+  expect(noImu.expected.rows[0]!.accRms).toBeNull();
+  expect(diff.results.find((x) => x.name === 'no-imu')!.ok).toBe(true);
 });

@@ -53,7 +53,22 @@ export const ROW_DECIMALS = {
   handlingScore: 3,
 } as const satisfies Record<Exclude<NumericRowKey, 'ts'>, number>;
 
-type NumericRowKey = { [K in keyof FeatureRow]: FeatureRow[K] extends number ? K : never }[keyof FeatureRow];
+/**
+ * The DMS motion fields (Task C0, design rev4 §2.1.1). Optional: rows from before the update and from
+ * an older native build parse without them, and consumers read absent as "no evidence". Numbers are
+ * kept to 1e-3 like the other accelerometer-derived fields; `accRms` and gravity may be null (IMU
+ * absent), which is kept. `MOTION_ROW_FIELDS` (M1) is the one list; finalize strips them.
+ */
+export { MOTION_ROW_FIELDS } from '../../../src/core/engine/types';
+export const MOTION_ROW_DECIMALS = {
+  aLonMean: 3,
+  accRms: 3,
+  gravX: 3,
+  gravY: 3,
+  gravZ: 3,
+} as const;
+
+type NumericRowKey = { [K in keyof FeatureRow]-?: FeatureRow[K] extends number ? K : never }[keyof FeatureRow];
 
 const POW10 = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000] as const;
 
@@ -78,6 +93,10 @@ export function parseRow(raw: unknown): FeatureRow | null {
   const row = parsed.data;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
+  }
+  for (const key of Object.keys(MOTION_ROW_DECIMALS) as (keyof typeof MOTION_ROW_DECIMALS)[]) {
+    const x = row[key];
+    if (typeof x === 'number') row[key] = roundTo(x, MOTION_ROW_DECIMALS[key]);
   }
   return row;
 }

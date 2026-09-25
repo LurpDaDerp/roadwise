@@ -40,7 +40,27 @@ export interface FeatureRow {
   locked: boolean;
   screenOn: boolean;
   appForeground: boolean;
+  // ——— DMS motion evidence (DMS calibration and stops, Task C0; design rev4 §2.1.1) ———
+  // Optional: rows persisted before the drive-sense update, and rows from an older native build under
+  // an OTA update, lack them, and every consumer treats an absent field as "no evidence". They are
+  // DMS-only: `finalize.ts` strips them before the trace and its digest (`MOTION_ROW_FIELDS`).
+  /** the forward frame was aligned this second (absent: false) */
+  frameAligned?: boolean;
+  /** the mean of the second's smoothed longitudinal acceleration, g; 0 when unaligned (absent: 0) */
+  aLonMean?: number;
+  /** the RMS of |user acceleration| over the second, g, frame-free; null with the IMU absent */
+  accRms?: number | null;
+  /** the second's mean gravity direction, unit vector, device frame; null with the IMU absent */
+  gravX?: number | null;
+  gravY?: number | null;
+  gravZ?: number | null;
 }
+
+/**
+ * The DMS-only row fields (Task C0). Stripped from the trace in `finalize.ts`, so the uploaded
+ * digest and the trace file are exactly what they were before the fields existed.
+ */
+export const MOTION_ROW_FIELDS = ['frameAligned', 'aLonMean', 'accRms', 'gravX', 'gravY', 'gravZ'] as const satisfies readonly (keyof FeatureRow)[];
 
 /** The speed limit the map layer believes applies to a row (§9.5 speed-limit source). */
 export interface LimitSample {

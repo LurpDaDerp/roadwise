@@ -388,3 +388,74 @@ describe('the simulated drives (brief assertions)', () => {
     expect(rows[2]!.yawRateMax).toBeGreaterThan(0.05);
   });
 });
+
+// DMS calibration and stops, Task C0: the six per-second motion fields (design rev4 §2.1.1).
+describe('motion fields for the DMS stop and auto-end evidence (C0)', () => {
+  test('IMU absent: frameAligned false, aLonMean 0, accRms and gravity null', () => {
+    const nine = samples(1, () => ({ ua: [0.3, 0.2, 0.1] })).slice(0, 9);
+    const { row } = extractSecond(nine, fix(1, 10), PHONE, T0 + 1000, initialExtractState());
+    expect(row).toMatchObject({ frameAligned: false, aLonMean: 0, accRms: null, gravX: null, gravY: null, gravZ: null });
+  });
+
+  test('unaligned: frameAligned false and aLonMean exactly 0; accRms and gravity still measured', () => {
+    const { row } = extractSecond(samples(1, () => ({ ua: [0, -0.3, 0.4] })), fix(1, 10), PHONE, T0 + 1000, initialExtractState());
+    expect(row.frameAligned).toBe(false);
+    expect(row.aLonMean).toBe(0);
+    expect(row.accRms).toBeCloseTo(0.5, 12); // |ua| = 0.5 on every sample, frame-free
+    expect([row.gravX, row.gravY, row.gravZ]).toEqual([0, 0, -1]);
+  });
+
+  test('aligned: aLonMean is the mean of the smoothed longitudinal values, frameAligned true', () => {
+    const { rows } = accelerate(8, 0.2);
+    expect(rows[5]!.frameAligned).toBe(false);
+    expect(rows[6]!.frameAligned).toBe(true);
+    expect(rows[6]!.aLonMean).toBeCloseTo(0.2, 9);
+    expect(rows[7]!.aLonMean).toBeCloseTo(0.2, 9);
+  });
+
+  test('aLonMean averages the second while aLonMax/aLonMin bound it: a ramp from 0.6 to 0.2 g', () => {
+    const { state } = accelerate(8, 0.2);
+    const ramp = samples(9, (k) => ({ ua: [0, -(0.6 - (0.4 / 24) * k), 0] }));
+    const { row } = extractSecond(ramp, fix(9, 20), PHONE, T0 + 9000, state);
+    // 5-sample smoothing over the carried 0.2 g tail and the ramp, averaged over the 25 samples
+    const tail = [0.2, 0.2, 0.2, 0.2];
+    const lon: number[] = [];
+    const window = [...tail];
+    for (let k = 0; k < 25; k++) {
+      window.push(0.6 - (0.4 / 24) * k);
+      if (window.length > 5) window.shift();
+      lon.push(window.reduce((a, b) => a + b, 0) / window.length);
+    }
+    expect(row.aLonMean).toBeCloseTo(lon.reduce((a, b) => a + b, 0) / lon.length, 9);
+    expect(row.aLonMean!).toBeLessThan(row.aLonMax);
+    expect(row.aLonMean!).toBeGreaterThan(row.aLonMin);
+  });
+
+  test('gravX/Y/Z is the normalised mean gravity direction in the device frame', () => {
+    const tilted: Vec3 = [0, -Math.sin(0.5), -Math.cos(0.5)];
+    const { row } = extractSecond(samples(1, () => ({ g: tilted })), null, PHONE, T0 + 1000, initialExtractState());
+    expect(row.gravX).toBeCloseTo(0, 12);
+    expect(row.gravY).toBeCloseTo(tilted[1], 12);
+    expect(row.gravZ).toBeCloseTo(tilted[2], 12);
+  });
+
+  test('lon-bias vector: an accelerometer bias on a GNSS cruise shows in aLonMean, not in the speed', () => {
+    const rows = byName('lon-bias');
+    const cruise = rows.slice(8); // the bias starts at 7.5 s, after the frame aligned in second 7
+    for (const r of cruise) {
+      expect(r.frameAligned).toBe(true);
+      expect(r.aLonMean!).toBeGreaterThan(-0.04);
+      expect(r.aLonMean!).toBeLessThan(-0.02);
+    }
+    const speeds = cruise.map((r) => r.speed);
+    expect(Math.max(...speeds) - Math.min(...speeds)).toBeLessThan(0.01);
+  });
+
+  test('unaligned start: every row frameAligned false with aLonMean 0', () => {
+    for (const r of byName('unaligned-start')) {
+      expect(r.frameAligned).toBe(false);
+      expect(r.aLonMean).toBe(0);
+      expect(r.accRms).not.toBeNull();
+    }
+  });
+});

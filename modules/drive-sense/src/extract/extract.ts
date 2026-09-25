@@ -100,6 +100,16 @@ const IMU_ABSENT = {
   handlingScore: 0,
 } as const;
 
+/** DMS motion evidence (Task C0) with no IMU: no evidence. Placed after the phone flags, as in a full row. */
+const MOTION_ABSENT = {
+  frameAligned: false,
+  aLonMean: 0,
+  accRms: null,
+  gravX: null,
+  gravY: null,
+  gravZ: null,
+} as const;
+
 /**
  * @param imu the samples with t in (tsMs − 1000, tsMs], oldest first
  * @param fix the last fix that ARRIVED during the second, or null if none did
@@ -124,7 +134,7 @@ export function extractSecond(
   if (imu.length < MIN_IMU_SAMPLES) {
     const last = imu[imu.length - 1];
     return {
-      row: { ts, ...g.fields, ...IMU_ABSENT, ...phoneFields },
+      row: { ts, ...g.fields, ...IMU_ABSENT, ...phoneFields, ...MOTION_ABSENT },
       state: {
         lastFix: g.lastFix,
         prevValidFix: g.prevValidFix,
@@ -144,7 +154,9 @@ export function extractSecond(
   let gSum: Vec3 = [0, 0, 0];
   let tPrev = state.lastImuT;
   let hSum: Vec3 = [0, 0, 0];
+  let uaSq = 0; // Σ|ua|², for accRms (frame-free)
   for (const s of imu) {
+    uaSq += dot(s.ua, s.ua);
     const gi = normalize(s.g);
     gHat.push(gi);
     gSum = add(gSum, gi);
@@ -170,6 +182,7 @@ export function extractSecond(
   let aLatMin = 0;
   let jerkMax = 0;
   let prevLon: ExtractState['prevLon'] = null;
+  let lonSum = 0; // Σ smoothed lon, for aLonMean
   const f = alignment.aligned ? alignment.f : null;
   if (f !== null) {
     const l = normalize(cross(f, gMean)); // left, whatever sign convention ua uses (README §Frames)
@@ -186,6 +199,7 @@ export function extractSecond(
       sm = scale(sm, 1 / window.length);
       const lon = dot(sm, f);
       const lat = dot(sm, l);
+      lonSum += lon;
       if (lon > aLonMax) aLonMax = lon;
       if (lon < aLonMin) aLonMin = lon;
       if (lat > aLatMax) aLatMax = lat;
@@ -218,6 +232,12 @@ export function extractSecond(
       orientationDelta: free.orientationDelta,
       handlingScore: free.handlingScore,
       ...phoneFields,
+      frameAligned: f !== null,
+      aLonMean: f !== null ? lonSum / n : 0,
+      accRms: Math.sqrt(uaSq / n),
+      gravX: gMean[0],
+      gravY: gMean[1],
+      gravZ: gMean[2],
     },
     state: {
       lastFix: g.lastFix,

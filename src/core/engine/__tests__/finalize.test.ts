@@ -4,6 +4,7 @@ import type { AlertDecision } from '@/core/alerts/types';
 import { NO_LIMIT, T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import type { StartEvidence, TripRole, TripSession } from '@/core/engine/engine.types';
 import {
+  canonicalJson,
   FinalizePayloadRefusedError,
   finalizeTrip,
   INVALID_PAYLOAD_SYNC_ERROR,
@@ -16,7 +17,7 @@ import {
 } from '@/core/engine/finalize';
 import { isHabitualDriverRoute, readRolePrior, recordRoleAnswer } from '@/core/engine/rolePrior';
 import { appendRow, closeSession, createSession } from '@/core/engine/session';
-import type { DetectedEvent, FeatureRow } from '@/core/engine/types';
+import { MOTION_ROW_FIELDS, type DetectedEvent, type FeatureRow } from '@/core/engine/types';
 import {
   createEventsRepo,
   createQueueRepo,
@@ -516,6 +517,37 @@ describe('other outcomes', () => {
     expect(JSON.parse(text)).toEqual(rows);
     expect(Object.keys((JSON.parse(text) as FeatureRow[])[0]!)).toEqual(Object.keys(rows[0]!).sort());
     expect(payload.rowsDigest.sha256).toBe(await sha256(text));
+  });
+
+  // DMS calibration and stops, Task C0 (design rev4 §2.1.1, rev5 §4.3): the six per-second motion
+  // fields are DMS-only. The trace and its digest must be byte-identical to a trip without them, one
+  // field at a time, so M1's consumers and the server see nothing new.
+  const MOTION_VALUES: Record<(typeof MOTION_ROW_FIELDS)[number], unknown> = {
+    frameAligned: true,
+    aLonMean: -0.031,
+    accRms: 0.123,
+    gravX: 0.012,
+    gravY: -0.707,
+    gravZ: -0.707,
+  };
+  test.each([...MOTION_ROW_FIELDS])('the trace and digest are unchanged when every row carries %s (C0)', async (field) => {
+    const plain = track(200);
+    const withField = plain.map((r) => ({ ...r, [field]: MOTION_VALUES[field] }) as FeatureRow);
+    await persisted(withField, 200);
+
+    const { payload } = await finalizeTrip(session(withField), deps);
+
+    const text = traceText();
+    expect(text).toBe(canonicalJson(plain));
+    expect(payload.rowsDigest.sha256).toBe(await sha256(canonicalJson(plain)));
+  });
+
+  test('null motion fields (IMU absent) are stripped too (C0)', async () => {
+    const plain = track(50);
+    const withNulls = plain.map((r) => ({ ...r, frameAligned: false, aLonMean: 0, accRms: null, gravX: null, gravY: null, gravZ: null }) as FeatureRow);
+    await persisted(withNulls, 50);
+    await finalizeTrip(session(withNulls), deps);
+    expect(traceText()).toBe(canonicalJson(plain));
   });
 
   describe('hadSevereEvent', () => {

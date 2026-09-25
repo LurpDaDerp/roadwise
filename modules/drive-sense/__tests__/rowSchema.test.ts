@@ -3,7 +3,7 @@
 import trace from '../../../src/core/__fixtures__/traces/speeding-corrected.json';
 import { runTrace } from '../../../src/core/replay/runTrace';
 import { parseTrace } from '../../../src/core/replay/trace';
-import { parseRow, ROW_DECIMALS, roundTo } from '../src/rowSchema';
+import { MOTION_ROW_FIELDS, parseRow, ROW_DECIMALS, roundTo } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
 
 // Jest compiles this suite to CommonJS, so `require` is real at run time; Node's typings are not in
@@ -174,4 +174,55 @@ test('returns a fresh object, not the payload', () => {
   const raw = { ...good };
   const parsed = parseRow(raw);
   expect(parsed).not.toBe(raw);
+});
+
+// DMS calibration and stops, Task C0: the six optional motion fields (design rev4 §2.1.1, rev5 §4.3).
+describe('the optional motion fields (C0)', () => {
+  const withMotion = {
+    ...good,
+    frameAligned: true,
+    aLonMean: -0.0312345,
+    accRms: 0.1234567,
+    gravX: 0.0012345,
+    gravY: -0.7071234,
+    gravZ: -0.7071067,
+  };
+
+  test('an old row without them still parses, and gains none of them (S-OLDROW)', () => {
+    const r = parseRow(good);
+    expect(r).toEqual(good);
+    for (const k of MOTION_ROW_FIELDS) expect(k in r!).toBe(false);
+  });
+
+  test('present, they are kept and rounded to 1e-3', () => {
+    expect(parseRow(withMotion)).toEqual({
+      ...good,
+      frameAligned: true,
+      aLonMean: -0.031,
+      accRms: 0.123,
+      gravX: 0.001,
+      gravY: -0.707,
+      gravZ: -0.707,
+    });
+  });
+
+  test('accRms and gravity may be null (IMU absent); frameAligned and aLonMean may not', () => {
+    const absent = { ...good, frameAligned: false, aLonMean: 0, accRms: null, gravX: null, gravY: null, gravZ: null };
+    expect(parseRow(absent)).toEqual(absent);
+    expect(parseRow({ ...absent, frameAligned: null })).toBeNull();
+    expect(parseRow({ ...absent, aLonMean: null })).toBeNull();
+  });
+
+  test.each([
+    ['frameAligned', 'yes'],
+    ['aLonMean', Number.NaN],
+    ['accRms', Number.POSITIVE_INFINITY],
+    ['gravX', '0.1'],
+  ])('rejects %s = %p', (key, value) => {
+    expect(parseRow({ ...withMotion, [key]: value })).toBeNull();
+  });
+
+  test('the list of motion fields is the six the design names', () => {
+    expect([...MOTION_ROW_FIELDS].sort()).toEqual(['aLonMean', 'accRms', 'frameAligned', 'gravX', 'gravY', 'gravZ']);
+  });
 });

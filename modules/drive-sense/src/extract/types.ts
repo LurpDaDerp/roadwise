@@ -93,6 +93,16 @@ export interface ExtractedRow {
   locked: boolean;
   screenOn: boolean;
   appForeground: boolean;
+  /** the forward frame was aligned this second (DMS motion evidence, Task C0) */
+  frameAligned?: boolean;
+  /** mean of the second's smoothed longitudinal values, g; 0 when unaligned */
+  aLonMean?: number;
+  /** RMS of |ua| over the second, g, frame-free; null with the IMU absent */
+  accRms?: number | null;
+  /** mean gravity direction (unit, device frame); null with the IMU absent */
+  gravX?: number | null;
+  gravY?: number | null;
+  gravZ?: number | null;
 }
 
 /** Forward-axis alignment and its reset detector. */

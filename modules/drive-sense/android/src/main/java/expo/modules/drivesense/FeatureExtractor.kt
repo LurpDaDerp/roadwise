@@ -162,7 +162,9 @@ object FeatureExtractor {
     var gSum = Vec3(0.0, 0.0, 0.0)
     var tPrev = state.lastImuT
     var hSum = Vec3(0.0, 0.0, 0.0)
+    var uaSq = 0.0 // Σ|ua|², for accRms (frame-free)
     for (s in imu) {
+      uaSq += dot(s.ua, s.ua)
       val gi = normalize(s.g)
       gHat.add(gi)
       gSum = add(gSum, gi)
@@ -189,6 +191,7 @@ object FeatureExtractor {
     var aLatMin = 0.0
     var jerkMax = 0.0
     var prevLon: PrevLon? = null
+    var lonSum = 0.0 // Σ smoothed lon, for aLonMean
     val f = if (alignment.aligned) alignment.f else null
     if (f != null) {
       val l = normalize(cross(f, gMean)) // left, whatever sign convention ua uses (README §Frames)
@@ -205,6 +208,7 @@ object FeatureExtractor {
         sm = scale(sm, 1.0 / window.size)
         val lon = dot(sm, f)
         val lat = dot(sm, l)
+        lonSum += lon
         if (lon > aLonMax) aLonMax = lon
         if (lon < aLonMin) aLonMin = lon
         if (lat > aLatMax) aLatMax = lat
@@ -238,7 +242,14 @@ object FeatureExtractor {
         gravityStability = free.gravityStability,
         orientationDelta = free.orientationDelta,
         handlingScore = free.handlingScore,
-        locked = phone.locked, screenOn = phone.screenOn, appForeground = phone.appForeground
+        locked = phone.locked, screenOn = phone.screenOn, appForeground = phone.appForeground,
+        // DMS motion evidence (Task C0)
+        frameAligned = alignment.aligned && f != null,
+        aLonMean = if (f != null) lonSum / n else 0.0,
+        accRms = sqrt(uaSq / n),
+        gravX = gMean.x,
+        gravY = gMean.y,
+        gravZ = gMean.z
       ),
       state = ExtractState(
         lastFix = g.lastFix,

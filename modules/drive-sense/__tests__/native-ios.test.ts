@@ -246,3 +246,31 @@ describe('iOS drive-sense module (text)', () => {
     expect(podspec).toContain("s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication'");
   });
 });
+
+// DMS C0: the six motion fields (design rev4 §2.1.1). The row is the port's; these pin that the
+// Swift row carries them, emits JSON null for the IMU-absent optionals, and computes them in the
+// production extractor.
+describe('native-ios: the motion fields (C0)', () => {
+  const MOTION = ['frameAligned', 'aLonMean', 'accRms', 'gravX', 'gravY', 'gravZ'];
+  it('the row payload carries all six keys, NSNull for a nil optional', () => {
+    const src = code('ExtractMath.swift');
+    for (const k of MOTION) expect(src).toMatch(new RegExp(`"${k}": ${k}(?![A-Za-z0-9])`)); // a payload entry, not just a name
+    expect(src).toMatch(/NSNull\(\)/);
+    expect(src).toMatch(/var accRms: Double\?/);
+    expect(src).toMatch(/var gravX, gravY, gravZ: Double\?/);
+  });
+  it('the non-finite check covers aLonMean and the present optionals', () => {
+    const src = code('ExtractMath.swift');
+    expect(src).toMatch(/\("aLonMean", aLonMean\)/);
+    expect(src).toMatch(/accRms.*isFinite|isFinite.*accRms/s);
+  });
+  it('the extractor sums the smoothed lon for aLonMean, and |ua|² for accRms, over the same samples', () => {
+    const src = code('FeatureExtractor.swift');
+    expect(src).toMatch(/lonSum \+= lon/);
+    expect(src).toMatch(/row\.aLonMean = lonSum \/ Double\(n\)/);
+    expect(src).toMatch(/uaSq \+= vDot\(s\.ua, s\.ua\)/);
+    expect(src).toMatch(/row\.accRms = \(uaSq \/ Double\(n\)\)\.squareRoot\(\)/);
+    expect(src).toMatch(/row\.frameAligned = alignment\.aligned/);
+    expect(src).toMatch(/row\.gravX = gMean\.x/);
+  });
+});

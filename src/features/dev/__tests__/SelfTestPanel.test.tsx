@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { ThemeProvider } from '@/ui';
 
 import { loadVectors, SelfTestPanel, VECTOR_NAMES } from '../SelfTestPanel';
+import { VECTOR_NAMES as DISK_VECTOR_NAMES } from '../../../../modules/drive-sense/scripts/scenarios';
 
 type SelfTestSource = Pick<DriveSenseApi, 'selfTest'>;
 
@@ -35,14 +36,19 @@ async function renderPanel(source: SelfTestSource) {
 test('loads every golden vector from the drive-sense assets, validated', () => {
   const vectors = loadVectors();
   expect(vectors.map((v) => v.name)).toEqual([...VECTOR_NAMES]);
-  expect(VECTOR_NAMES).toHaveLength(10);
+  expect(VECTOR_NAMES).toHaveLength(11);
+});
+
+test('the panel lists exactly the vectors on disk, lon-bias included (DMS C0)', () => {
+  expect([...VECTOR_NAMES].sort()).toEqual([...DISK_VECTOR_NAMES]);
+  expect(VECTOR_NAMES).toContain('lon-bias');
 });
 
 test('sends native the vectors as one JSON array and reports a full match', async () => {
   const source = sourceAnswering(referenceOutput('android'));
   await renderPanel(source);
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
-  expect(await screen.findByText('All 10 vectors match the reference')).toBeTruthy();
+  expect(await screen.findByText('All 11 vectors match the reference')).toBeTruthy();
   const sent = JSON.parse(source.selfTest.mock.calls[0]![0] as string) as { name: string }[];
   expect(sent.map((v) => v.name)).toEqual([...VECTOR_NAMES]);
 });
@@ -50,7 +56,7 @@ test('sends native the vectors as one JSON array and reports a full match', asyn
 test('iOS skipping the gravity-filter and android-raw vectors still passes, and says so', async () => {
   await renderPanel(sourceAnswering(referenceOutput('ios')));
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
-  expect(await screen.findByText('All 10 vectors match the reference')).toBeTruthy();
+  expect(await screen.findByText('All 11 vectors match the reference')).toBeTruthy();
   expect(screen.getAllByText(/Skipped on iOS/)).toHaveLength(2);
 });
 
@@ -61,7 +67,7 @@ test('a perturbed native field is named by its path, with both values', async ()
   brake.rows![8]!.aLonMin = expected + 0.25;
   await renderPanel(sourceAnswering(output));
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
-  expect(await screen.findByText('1 of 10 vectors differ from the reference')).toBeTruthy();
+  expect(await screen.findByText('1 of 11 vectors differ from the reference')).toBeTruthy();
   expect(screen.getByText('hard-brake')).toBeTruthy();
   expect(screen.getByText('rows[8].aLonMin')).toBeTruthy();
   expect(screen.getByText(`expected ${expected.toFixed(4)}, native ${(expected + 0.25).toFixed(4)}`)).toBeTruthy();

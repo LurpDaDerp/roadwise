@@ -139,7 +139,7 @@ object SelfTest {
     val a = JSONArray()
     for (r in rows) {
       val o = JSONObject()
-      for ((k, v) in r.toMap()) o.put(k, v)
+      for ((k, v) in r.toMap()) o.put(k, v ?: JSONObject.NULL) // put(k, null) would drop the key
       a.put(o)
     }
     return a

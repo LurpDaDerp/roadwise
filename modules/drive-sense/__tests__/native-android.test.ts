@@ -369,3 +369,32 @@ describe('native-android: build.gradle pins exact versions', () => {
     expect(g).toContain("'com.google.android.gms:play-services-location:21.3.0'");
   });
 });
+
+// DMS C0: the six motion fields (design rev4 §2.1.1).
+describe('native-android: the motion fields (C0)', () => {
+  const MOTION = ['frameAligned', 'aLonMean', 'accRms', 'gravX', 'gravY', 'gravZ'];
+  it('the row map carries all six keys and may hold nulls', () => {
+    const src = code(kt('Types'));
+    for (const k of MOTION) expect(src).toContain(`"${k}" to ${k}`);
+    expect(src).toMatch(/fun toMap\(\): Map<String, Any\?>/);
+    expect(src).toMatch(/val accRms: Double\?/);
+    expect(src).toMatch(/val gravX: Double\?/);
+  });
+  it('isFinite covers aLonMean and the present optionals', () => {
+    const src = code(kt('Types'));
+    expect(src).toMatch(/aLonMean/);
+    expect(src).toMatch(/listOfNotNull\(accRms, gravX, gravY, gravZ\)/);
+  });
+  it('the self-test writes JSON null, not a dropped key, for a null field', () => {
+    expect(code(kt('SelfTest'))).toMatch(/o\.put\(k, v \?: JSONObject\.NULL\)/);
+  });
+  it('the extractor sums the smoothed lon for aLonMean, and |ua|² for accRms, over the same samples', () => {
+    const src = code(kt('FeatureExtractor'));
+    expect(src).toMatch(/lonSum \+= lon/);
+    expect(src).toMatch(/aLonMean = if \(f != null\) lonSum \/ n else 0\.0/);
+    expect(src).toMatch(/uaSq \+= dot\(s\.ua, s\.ua\)/);
+    expect(src).toMatch(/accRms = sqrt\(uaSq \/ n\)/);
+    expect(src).toMatch(/frameAligned = alignment\.aligned/);
+    expect(src).toMatch(/gravX = gMean\.x/);
+  });
+});

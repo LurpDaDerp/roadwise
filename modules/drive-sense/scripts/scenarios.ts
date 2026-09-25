@@ -163,6 +163,11 @@ export interface Drive {
   courseLagS?: number;
   accelNoise?: number;
   gyroNoise?: number;
+  /**
+   * A longitudinal accelerometer bias, g, the sensor reads on top of the car's true longitudinal
+   * acceleration — it never moves the car (DMS C0: the bias the stop evidence must measure).
+   */
+  aLonBias?: (t: number) => number;
 }
 
 interface Truth {
@@ -209,7 +214,7 @@ function simulate(d: Drive) {
     const theta = phone ? phone.theta(t) : 0;
     const R = phone ? matMul(rot(phone.axis, -theta), MOUNT) : MOUNT;
     const yaw = speed > 0.5 ? (d.aLat(t) * G_MPS2) / speed : 0;
-    const aCar: Vec3 = [-d.aLat(t), d.aLon(t), 0];
+    const aCar: Vec3 = [-d.aLat(t), d.aLon(t) + (d.aLonBias?.(t) ?? 0), 0];
     let aKin = mul(R, aCar);
     if (phone?.lift) aKin = add(aKin, phone.lift(t));
     // θ' by central difference, so the gyro agrees with the attitude the samples report
@@ -535,6 +540,32 @@ function unalignedStart(): GoldenVector {
   );
 }
 
+/**
+ * DMS C0: the frame aligns, then a GNSS cruise at constant speed on which the accelerometer reads a
+ * −0.03 g longitudinal bias from 7.5 s. The bias shows in aLonMean (≈ −0.03), never in the speed —
+ * exactly what the stop evidence's bias estimate measures on cruise rows.
+ */
+function lonBias(): GoldenVector {
+  const d: Drive = {
+    seconds: 10,
+    seed: 11,
+    v0: 5,
+    aLon: alignThen([[7.3, 0]]),
+    aLat: zero,
+    aLonBias: profile([
+      [0, 0],
+      [7.4, 0],
+      [7.5, -0.03],
+      [10, -0.03],
+    ]),
+  };
+  return extractVector(
+    'lon-bias',
+    'Aligns during 7 s at 0.2 g, then cruises at constant GNSS speed while the accelerometer reads a −0.03 g longitudinal bias from 7.5 s: aLonMean ≈ −0.03 on the cruise rows, the speed unchanged (DMS C0).',
+    extractInputs(d)
+  );
+}
+
 /** Raw Android-style samples: at rest, accelerating while yawing, then the phone rotating, with a gap. */
 export function gravityRawBatches(): RawImuSample[][] {
   const d: Drive = {
@@ -722,6 +753,7 @@ export const VECTOR_BUILDERS = {
   'mount-shift': mountShift,
   'no-imu': noImu,
   'unaligned-start': unalignedStart,
+  'lon-bias': lonBias,
   'gravity-filter': gravityFilterVector,
   'android-raw': androidRaw,
 } as const satisfies Record<string, () => GoldenVector>;

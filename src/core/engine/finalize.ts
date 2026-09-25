@@ -54,7 +54,7 @@ import type { Fix, TripSession } from './engine.types';
 import { arbiterStateKey } from './recorder';
 import { longestHandlingRunMinutes } from './rolePrior';
 import { appendRow, createSession, GNSS_JUMP_MPS, roleSourceFor } from './session';
-import type { DetectedEvent, FeatureRow } from './types';
+import { MOTION_ROW_FIELDS, type DetectedEvent, type FeatureRow } from './types';
 
 /**
  * Rows within this distance of the trip's first and last fix stay out of the polyline and off the
@@ -208,6 +208,14 @@ export function canonicalJson(value: unknown): string {
         .map((k) => [k, record[k]])
     );
   });
+}
+
+/** A row without the DMS-only motion fields (`MOTION_ROW_FIELDS`), for the trace and its digest. */
+export function traceRow(row: FeatureRow): FeatureRow {
+  if (!MOTION_ROW_FIELDS.some((k) => k in row)) return row;
+  const out: Record<string, unknown> = { ...row };
+  for (const k of MOTION_ROW_FIELDS) delete out[k];
+  return out as unknown as FeatureRow;
 }
 
 /** The engine's own accumulators, re-run over the durable rows: distance, GNSS share, sustained speed. */
@@ -496,7 +504,9 @@ export async function finalizeTrip(
   const rows = (await samples.range(id, 0, Number.MAX_SAFE_INTEGER)).map(
     (s) => JSON.parse(s.row_json) as FeatureRow
   );
-  const traceJson = canonicalJson(rows);
+  // The DMS-only motion fields (Task C0) never reach the trace or its digest: M1's consumers and the
+  // server see exactly the rows they saw before the fields existed.
+  const traceJson = canonicalJson(rows.map(traceRow));
   const recheck = replay(session, rows);
 
   // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is

@@ -3,7 +3,7 @@
 // fresh generation, and every vector's `expected` must be what the reference computes from its
 // `inputs` — so neither the files nor the reference can drift without this suite failing.
 import { runVector, type GoldenVector } from '../src/extract/vectors';
-import { parseRow, ROW_DECIMALS } from '../src/rowSchema';
+import { MOTION_ROW_DECIMALS, parseRow, ROW_DECIMALS } from '../src/rowSchema';
 import { parseVectors } from '../src/selfTest';
 import type { FeatureRow } from '../src/types';
 import { VECTOR_BUILDERS, VECTOR_NAMES, serializeVector } from '../scripts/scenarios';
@@ -18,6 +18,14 @@ function bridged(row: FeatureRow): FeatureRow {
   for (const [key, decimals] of Object.entries(ROW_DECIMALS) as [keyof typeof ROW_DECIMALS, number][]) {
     const value = Math.round(row[key] * 10 ** decimals) / 10 ** decimals;
     expect(Math.abs(value - row[key])).toBeLessThanOrEqual(0.5 * 10 ** -decimals + 1e-12);
+    out[key] = value === 0 ? 0 : value;
+  }
+  // The optional motion fields (DMS C0): numbers rounded the same way, null and absent kept.
+  for (const [key, decimals] of Object.entries(MOTION_ROW_DECIMALS) as [keyof typeof MOTION_ROW_DECIMALS, number][]) {
+    const x = row[key];
+    if (typeof x !== 'number') continue;
+    const value = Math.round(x * 10 ** decimals) / 10 ** decimals;
+    expect(Math.abs(value - x)).toBeLessThanOrEqual(0.5 * 10 ** -decimals + 1e-12);
     out[key] = value === 0 ? 0 : value;
   }
   return out;
@@ -42,13 +50,14 @@ const onDisk = readdirSync(DIR)
   .sort();
 const text = (name: string): string => readFileSync(join(DIR, `${name}.json`), 'utf8');
 
-test('the nine vectors of the brief plus android-raw (review I1) are on disk, one builder each', () => {
+test('the nine vectors of the brief plus android-raw (review I1) and lon-bias (DMS C0) are on disk, one builder each', () => {
   expect(onDisk).toEqual([
     'android-raw',
     'corner-left',
     'cruise',
     'gravity-filter',
     'hard-brake',
+    'lon-bias',
     'mount-shift',
     'no-imu',
     'phone-pickup',

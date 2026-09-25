@@ -25,7 +25,7 @@ data class FixSample(
 
 data class PhoneSample(val locked: Boolean, val screenOn: Boolean, val appForeground: Boolean)
 
-/** M1's `FeatureRow`, exactly its 21 keys (README §4). */
+/** M1's `FeatureRow`, exactly its 27 keys (README §4); the six DMS motion fields last (Task C0). */
 data class FeatureRow(
   val ts: Long,
   val lat: Double,
@@ -47,10 +47,20 @@ data class FeatureRow(
   val handlingScore: Double,
   val locked: Boolean,
   val screenOn: Boolean,
-  val appForeground: Boolean
+  val appForeground: Boolean,
+  // DMS motion evidence (Task C0): no IMU → false / 0 / null.
+  val frameAligned: Boolean = false,
+  val aLonMean: Double = 0.0,
+  val accRms: Double? = null,
+  val gravX: Double? = null,
+  val gravY: Double? = null,
+  val gravZ: Double? = null
 ) {
-  /** The bridge payload for the `row` event: exactly the contract's keys, finite numbers, integer ts. */
-  fun toMap(): Map<String, Any> = linkedMapOf(
+  /**
+   * The bridge payload for the `row` event: exactly the contract's keys, finite numbers, integer ts;
+   * a null optional is JSON null, never a dropped key.
+   */
+  fun toMap(): Map<String, Any?> = linkedMapOf(
     "ts" to ts,
     "lat" to lat,
     "lng" to lng,
@@ -71,14 +81,20 @@ data class FeatureRow(
     "handlingScore" to handlingScore,
     "locked" to locked,
     "screenOn" to screenOn,
-    "appForeground" to appForeground
+    "appForeground" to appForeground,
+    "frameAligned" to frameAligned,
+    "aLonMean" to aLonMean,
+    "accRms" to accRms,
+    "gravX" to gravX,
+    "gravY" to gravY,
+    "gravZ" to gravZ
   )
 
   /** Every number finite (README §1). A row that is not is never emitted. */
   fun isFinite(): Boolean = listOf(
     lat, lng, hAcc, speed, speedAcc, course, alt, aLonMax, aLonMin, aLatMax, aLatMin,
-    yawRateMax, jerkMax, gravityStability, orientationDelta, handlingScore
-  ).all { it.isFinite() }
+    yawRateMax, jerkMax, gravityStability, orientationDelta, handlingScore, aLonMean
+  ).all { it.isFinite() } && listOfNotNull(accRms, gravX, gravY, gravZ).all { it.isFinite() }
 }
 
 data class LastFix(val lat: Double, val lng: Double, val alt: Double)

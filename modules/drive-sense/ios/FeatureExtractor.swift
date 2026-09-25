@@ -106,7 +106,9 @@ final class FeatureExtractor {
     var gSum = Vec3.zero
     var tPrev = prior.lastImuT
     var hSum = Vec3.zero
+    var uaSq = 0.0 // Σ|ua|², for accRms (frame-free)
     for s in imu {
+      uaSq += vDot(s.ua, s.ua)
       let gi = vNormalize(s.g)
       gHat.append(gi)
       gSum = vAdd(gSum, gi)
@@ -138,6 +140,7 @@ final class FeatureExtractor {
     var aLatMin = 0.0
     var jerkMax = 0.0
     var prevLon: (t: Double, v: Double)?
+    var lonSum = 0.0 // Σ smoothed lon, for aLonMean
     if alignment.aligned, let f = alignment.f {
       let l = vNormalize(vCross(f, gMean)) // left, whatever sign convention ua uses (README §Frames)
       aLonMax = -Double.infinity
@@ -153,6 +156,7 @@ final class FeatureExtractor {
         sm = vScale(sm, 1 / Double(window.count))
         let lon = vDot(sm, f)
         let lat = vDot(sm, l)
+        lonSum += lon
         if lon > aLonMax { aLonMax = lon }
         if lon < aLonMin { aLonMin = lon }
         if lat > aLatMax { aLatMax = lat }
@@ -180,6 +184,13 @@ final class FeatureExtractor {
     row.gravityStability = free.gravityStability
     row.orientationDelta = free.orientationDelta
     row.handlingScore = free.handlingScore
+    // DMS motion evidence (Task C0)
+    row.frameAligned = alignment.aligned && alignment.f != nil
+    if row.frameAligned { row.aLonMean = lonSum / Double(n) }
+    row.accRms = (uaSq / Double(n)).squareRoot()
+    row.gravX = gMean.x
+    row.gravY = gMean.y
+    row.gravZ = gMean.z
 
     state = ExtractState(
       lastFix: g.lastFix, prevValidFix: g.prevValidFix, lastImuT: imu[n - 1].t,

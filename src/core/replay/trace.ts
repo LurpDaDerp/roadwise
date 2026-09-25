@@ -61,6 +61,13 @@ export const featureRowSchema: z.ZodType<FeatureRow> = z.strictObject({
   locked: z.boolean(),
   screenOn: z.boolean(),
   appForeground: z.boolean(),
+  // DMS motion evidence (Task C0): optional, so old rows and traces parse; finite numbers only.
+  frameAligned: z.boolean().optional(),
+  aLonMean: z.number().optional(),
+  accRms: z.number().nullable().optional(),
+  gravX: z.number().nullable().optional(),
+  gravY: z.number().nullable().optional(),
+  gravZ: z.number().nullable().optional(),
 });
 
 export const limitEntrySchema: z.ZodType<LimitEntry> = z.strictObject({
