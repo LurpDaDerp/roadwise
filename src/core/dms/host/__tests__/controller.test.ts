@@ -160,14 +160,16 @@ describe('the lifecycle', () => {
     expect(h.fake.calls.every((c) => (c.args[0] as { gateToken?: string } | undefined)?.gateToken === undefined || (c.args[0] as { gateToken: string }).gateToken === 'nonce-1')).toBe(true);
     expect(h.fake.nativeState()).toBe('running');
   });
-  test('pause when stopped (a known speed < 10 km/h for 5 s), resume when moving', async () => {
+  test('C3 (rev4 §2.1.4): a stop never pauses the camera: SLEEP_WATCH at 5 fps, then 15 fps once moving', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 5);
-    await drive(h, 5, 12, { speed: () => 0 });
-    expect(h.fake.nativeState()).toBe('paused');
-    await drive(h, 12, 15, { speed: () => 30 });
+    await drive(h, 5, 50, { speed: () => 0 });
     expect(h.fake.nativeState()).toBe('running');
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 5 });
+    await drive(h, 50, 55, { speed: () => 30 });
+    expect(h.fake.nativeState()).toBe('running');
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 15 });
   });
   test.each([
     ['opt-out', { optedIn: false }],
@@ -825,17 +827,17 @@ describe('final review I-2: no frame reaches the engine after the gate closes', 
 });
 
 describe('final review I-3: native is never started while the policy says PAUSED', () => {
-  test('a long stop: native releases itself at 5 min and is not restarted until the car moves again', async () => {
+  test('a pause native outlasts (heat): native releases itself at 5 min and is not restarted while PAUSED', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 5);
     expect(starts(h)).toBe(1);
-    await drive(h, 5, 400, { speed: () => 0, frameAt: () => null });
+    h.fake.setThermal('critical');
+    h.fake.emitStatus();
+    await drive(h, 5, 400, { frameAt: () => null });
     expect(h.fake.nativeState()).toBe('stopped'); // released by native
     expect(starts(h)).toBe(1);
-    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'stopped' });
-    await drive(h, 400, 406, { speed: () => 40 });
-    expect(starts(h)).toBe(2);
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'thermal' });
   });
   test('thermal critical: no start while critical (thermal read fresh while stopped); one start after the cool dwell', async () => {
     const h = harness();
@@ -946,11 +948,11 @@ describe('final review M-5: malformed native events are dropped and counted', ()
 // ---------------------------------------------------------------------------------------------------------
 
 describe('final review round 2 R-1: a failed resume is never silent', () => {
-  /** Stopped at a light (the policy pauses native), then moving again: native's resume fails. */
+  /** No one in the seat at a light (C3: the policy pauses native, absent), then moving again: native's resume fails. */
   async function resumeFails(h: H, withEvent: boolean) {
     h.ctl.setGate(GATE);
     await drive(h, 0, 5);
-    await drive(h, 5, 12, { speed: () => 0 });
+    await drive(h, 5, 192, { speed: () => 0, frameAt: (t) => frame({ tMs: t, face: false }) });
     expect(h.fake.nativeState()).toBe('paused');
     // native answers `run` without touching the camera (a failed re-bind / startRunning)
     const realSetPolicy = h.fake.setPolicy.bind(h.fake);
@@ -963,7 +965,7 @@ describe('final review round 2 R-1: a failed resume is never silent', () => {
       return realSetPolicy(p);
     };
     const startsBefore = starts(h);
-    await drive(h, 12, 14, { speed: () => 60, frameAt: () => null });
+    await drive(h, 192, 194, { speed: () => 60, frameAt: () => null });
     return startsBefore;
   }
   test('native reports paused/error on the failed resume: the HUD is honest, then stop() and one start() after 5 s', async () => {
@@ -971,14 +973,14 @@ describe('final review round 2 R-1: a failed resume is never silent', () => {
     const before = await resumeFails(h, true);
     expect(h.ctl.status().camera).not.toBe('starting');
     expect(h.ctl.status().reason).toBe('error');
-    await drive(h, 14, 22, { speed: () => 60, frameAt: () => null });
+    await drive(h, 194, 202, { speed: () => 60, frameAt: () => null });
     expect(methods(h)).toContain('stop');
     expect(starts(h)).toBe(before + 1);
   });
   test('no event at all: after 5 s of `run` with native not running, the guard recovers it the same way', async () => {
     const h = harness();
     const before = await resumeFails(h, false);
-    await drive(h, 14, 25, { speed: () => 60, frameAt: () => null });
+    await drive(h, 194, 205, { speed: () => 60, frameAt: () => null });
     expect(methods(h)).toContain('stop');
     expect(starts(h)).toBe(before + 1);
     expect(h.ctl.status().camera).not.toBe('starting');
@@ -1225,5 +1227,119 @@ describe('C2: focus samples from stop-time sleep events (fatigue.stopEventsFeed)
     expect(h.events.find((e) => e.kind === 'microsleep')).toMatchObject({ stopped: true });
     expect(h.events.find((e) => e.kind === 'sleep')).toMatchObject({ stopped: false });
     expect(samples).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C3 (rev4 §2.1.4, §2.1.5, §2.5, §2.12.5; the C2 carry: the controller tests re-run at 0 km/h).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C3: stops, heat, dark and an empty seat through the controller', () => {
+  const noFace = (t: number) => frame({ tMs: t, face: false });
+  test('S-RED: 45 s at a light: no native stop, start or pause; setPolicy(run, 5 fps); the HUD says stopped', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 20);
+    const n = h.fake.calls.length;
+    await drive(h, 20, 65, { speed: () => 0 });
+    const during = h.fake.calls.slice(n);
+    expect(during.map((c) => c.method).filter((m) => m !== 'setPolicy' && m !== 'getPermission')).toEqual([]);
+    expect(during.filter((c) => c.method === 'setPolicy').every((c) => (c.args[0] as { capture: string; fps: number }).capture === 'run' && (c.args[0] as { fps: number }).fps === 5)).toBe(true);
+    expect(h.ctl.status()).toMatchObject({ camera: 'active', monitoring: { distraction: 'off', drowsiness: 'full', reason: 'stopped' } });
+    await drive(h, 65, 70, { speed: () => 40 });
+    expect(starts(h)).toBe(1);
+    expect(h.ctl.status().monitoring.reason).not.toBe('stopped');
+  });
+  test('S-GO-Q: 5 min of queue cycles: 0 native cycles (one start, no stop, never paused)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 300, { speed: (t) => (t % 23 < 10 ? 20 : 0) });
+    expect(starts(h)).toBe(1);
+    expect(methods(h)).not.toContain('stop');
+    expect(h.fake.calls.filter((c) => c.method === 'setPolicy').every((c) => (c.args[0] as { capture: string }).capture === 'run')).toBe(true);
+  });
+  test('S-ABSENT: no face at a light for 3 min: native paused (absent), probes of 5 s every 30 s; presence says absent', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 188, { speed: () => 0, frameAt: noFace });
+    expect(h.fake.nativeState()).toBe('paused');
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'absent', monitoring: { distraction: 'off', drowsiness: 'limited', reason: 'absent' } });
+    expect(h.ctl.presence()).toMatchObject({ absent: true });
+    await drive(h, 188, 218, { speed: () => 0, frameAt: noFace });
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 5 }); // a probe
+    // a face at the probe resumes
+    await drive(h, 218, 222, { speed: () => 0 });
+    expect(h.fake.nativeState()).toBe('running');
+    expect(h.ctl.presence().absent).toBe(false);
+    expect(starts(h)).toBe(1);
+  });
+  test('S-COLD: after an absent pause of 6 min, the move-off resumes warm: no restart, no retry, frames within 2 s', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 370, { speed: () => 0, frameAt: noFace });
+    expect(h.fake.nativeState()).not.toBe('stopped'); // the probes kept native from releasing its models
+    const framesBefore = h.ctl.diagnostics().frames;
+    await drive(h, 370, 372, { speed: () => 40 });
+    expect(h.ctl.diagnostics().frames).toBeGreaterThan(framesBefore);
+    expect(starts(h)).toBe(1);
+    const summary = await h.ctl.endDrive();
+    expect(summary?.camera).toMatchObject({ retries: 0, gaveUp: false });
+  });
+  test('S-HEAT-STOP: a sleep Critical at a light survives the heat pause to the blind cap, then one monitoring_paused', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    const asleep: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 ? 0.1 : 1, speedKmh: t >= 95 ? 0 : 60 });
+    await drive(h, 0, 102, { speed: (t) => (t >= 95 ? 0 : 60), frameAt: synthFrames(asleep, 104, 15) });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:microsleep']);
+    h.fake.setThermal('critical');
+    h.fake.emitStatus();
+    await drive(h, 102, 150, { speed: () => 0, frameAt: () => null });
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'thermal', monitoring: { distraction: 'off', drowsiness: 'off', reason: 'heat' } });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:microsleep']); // kept
+    await drive(h, 150, 166, { speed: () => 0, frameAt: () => null });
+    expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:microsleep', 'stop:microsleep', 'once:monitoring_paused']);
+  });
+  test('S-DARK-STOP: a dark cabin at a light: LOST in the dark for 60 s pauses (low_light); the HUD says dark', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 70, { speed: () => 0, frameAt: (t) => frame({ tMs: t, face: false, frameLuma: 5 }) });
+    expect(h.fake.nativeState()).toBe('paused');
+    expect(h.ctl.status()).toMatchObject({ camera: 'paused', reason: 'low_light', monitoring: { distraction: 'off', drowsiness: 'limited', reason: 'dark' } });
+    expect(h.ctl.presence().absent).toBe(false); // the dark is not an empty seat
+  });
+});
+
+describe('C3: presence() (rev4 §2.12.5): booleans and times only', () => {
+  const boxAt = (cx: number) => (t: number) => frame({ tMs: t, box: { cx, cy: 0.5, w: 0.3, h: 0.4 } });
+  test('lastFaceT is the frame clock of the last face; no absent pause while moving', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    const p = h.ctl.presence();
+    expect(p.absent).toBe(false);
+    expect(p.lastFaceT).toBeGreaterThan(EPOCH0 + 4_800);
+    expect(p.exitEvidence).toBe(false);
+    expect(Object.keys(p).sort()).toEqual(['absent', 'exitEvidence', 'lastFaceT']);
+  });
+  test.each([
+    ['left', 0.95, true],
+    ['left', 0.5, false],
+    ['left', 0.05, false],
+    ['right', 0.05, true],
+    ['right', 0.95, false],
+  ] as const)('driverSide %s: the last box at cx %d, then the face lost → exitEvidence %s', async (side, cx, want) => {
+    const h = harness();
+    h.ctl.setGate({ ...GATE, driverSide: side });
+    await drive(h, 0, 5, { speed: () => 0, frameAt: boxAt(cx) });
+    expect(h.ctl.presence().exitEvidence).toBe(false); // the face is still there
+    await drive(h, 5, 7, { speed: () => 0, frameAt: (t) => frame({ tMs: t, face: false }) });
+    expect(h.ctl.presence().exitEvidence).toBe(want);
+  });
+  test('no drive: nothing known', () => {
+    const h = harness();
+    expect(h.ctl.presence()).toEqual({ lastFaceT: null, absent: false, exitEvidence: false });
   });
 });

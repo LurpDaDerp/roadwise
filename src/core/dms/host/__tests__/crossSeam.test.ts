@@ -94,7 +94,7 @@ function chain(o: { cfgSource: 'geometric' | 'net'; netAvailable: boolean; gazeN
   return ticks;
 }
 
-// 0–100 s FULL (calibration); 100–130 s at 10 km/h (CLOSURE_WATCH: no net); 130–160 s FULL again;
+// 0–100 s FULL (calibration); 100–130 s at 10 km/h (SLEEP_WATCH: no net); 130–160 s FULL again;
 // 160–190 s thermal `serious` (L2: no net, at once).
 const SEGS: Seg[] = [
   { untilS: 100, speedKmh: 60, thermal: 'nominal' },
@@ -226,7 +226,7 @@ describe('the policy table and the wire table', () => {
       const p = nativePolicy(out, TOKEN);
       if (p !== null) expect(p.gazeNet).toBe(out.gazeNet);
     }
-    expect([...seen].sort()).toEqual(expect.arrayContaining(['CLOSURE_WATCH', 'FULL', 'HEAD_ONLY_RUN', 'OFF', 'PAUSED', 'SEARCH', 'SETUP']));
+    expect([...seen].sort()).toEqual(expect.arrayContaining(['FULL', 'HEAD_ONLY_RUN', 'OFF', 'PAUSED', 'SEARCH', 'SETUP', 'SLEEP_WATCH']));
   });
   test.each([
     ['NET_RAN with a net value: accepted, the engine frame has it', true, true, 'net'],

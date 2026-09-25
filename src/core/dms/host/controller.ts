@@ -73,6 +73,7 @@ import { gatedNative } from './native';
 import type { DmsProfileStore } from './profileStore';
 import { createMotionEvidence, type MotionEvidence } from '@/core/engine/motionEvidence';
 import { policyRow, rowExtras } from './rowContext';
+import { monitoringOf, type DmsMonitoring } from './status';
 
 export interface DmsGateInputs extends DmsGate {
   driverSide: DriverSide;
@@ -89,10 +90,29 @@ export interface DmsHostPower {
 
 export interface DmsHudStatus {
   camera: 'off' | 'starting' | 'active' | 'limited' | 'paused';
-  reason: GateClosedReason | 'error' | 'busy' | 'interrupted' | 'thermal' | 'low_light' | 'stopped' | 'face_lost' | 'eyes_not_visible' | null;
+  /** Task C3: the stop pause is gone; `absent` is no one in the seat at a stop (U-12) */
+  reason: GateClosedReason | 'error' | 'busy' | 'interrupted' | 'thermal' | 'low_light' | 'absent' | 'face_lost' | 'eyes_not_visible' | null;
   calibration: CalibrationState | null;
   fatigueLevel: FatigueLevel;
   dimAdvised: boolean;
+  /** Task C3 (rev4 §2.5): what the distraction and sleep rules are doing, and why (one literal per branch) */
+  monitoring: DmsMonitoring;
+}
+
+/**
+ * Task C3 (rev4 §2.12.5): whether a face is in the driver's seat, for the drive host's auto-end (M3's
+ * `driverPresent`). Booleans and times only, never an image or landmarks.
+ */
+export interface DmsPresence {
+  /** the frame clock (epoch ms) of the last TRACKING or HEAD_ONLY frame; null before one */
+  lastFaceT: number | null;
+  /** the `absent` pause is in force (its probes included) */
+  absent: boolean;
+  /**
+   * the face is lost now and the last face box before the loss was at the door-side edge (its centre-x within
+   * EXIT_EDGE of the driver-side edge of the upright frame). The host adds a confirmed walk (T13).
+   */
+  exitEvidence: boolean;
 }
 
 export interface DmsSetupCheck {
@@ -176,6 +196,8 @@ export interface DmsController {
   seedFromSetup(): DmsSeedResult;
   tagLastAlert(tag: 'wrong'): void;
   status(): DmsHudStatus;
+  /** Task C3: presence for the drive host's auto-end (rev4 §2.12.5) */
+  presence(): DmsPresence;
   summary(): DmsHostSummary | null;
   /** Ends the drive (closing the gate first) and returns its summary, or null when no engine ran. */
   endDrive(): Promise<DmsHostSummary | null>;
@@ -200,6 +222,8 @@ const EYES_NOT_VISIBLE_MS = 10_000;
 const EPISODE_MAX_S = 60;
 /** The rows replayed into an engine created mid-drive (T14 r1 m1). */
 const REPLAY_ROWS = 10;
+/** Task C3 (rev4 §2.12.5): a face box centre this close to the door-side edge of the frame is an exit. */
+const EXIT_EDGE = 0.1;
 
 export function createDmsController(deps: DmsControllerDeps): DmsController {
   const cfg: DmsConfig = resolveDmsConfig(deps.config ?? {});
@@ -260,6 +284,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let lastTrackingT = Number.NEGATIVE_INFINITY;
   /** the first HEAD_ONLY frame since the last TRACKING one */
   let headOnlySince: number | null = null;
+  /** Task C3: the centre-x of the last face box of a TRACKING or HEAD_ONLY frame (presence) */
+  let lastBoxCx: number | null = null;
   const qualities = new RingBuffer<{ t: number; tracking: boolean }>(60 * 30);
   const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower; motion: MotionEvidence | undefined }>(REPLAY_ROWS);
   /** Task C1: the controller's own evidence when the caller passes none; one per drive. */
@@ -291,6 +317,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     lastGoodT = Number.NEGATIVE_INFINITY;
     lastTrackingT = Number.NEGATIVE_INFINITY;
     headOnlySince = null;
+    lastBoxCx = null;
     lastFrame = null;
     qualities.clear();
     lastAlertStartT = null;
@@ -351,6 +378,12 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   }
 
   function computeStatus(): DmsHudStatus {
+    const s = cameraStatus();
+    const snap = engine?.snapshot() ?? null;
+    return { ...s, monitoring: monitoringOf({ camera: s.camera, reason: s.reason, engine: snap === null ? null : { speedState: snap.speedState, distraction: snap.distraction } }) };
+  }
+
+  function cameraStatus(): Omit<DmsHudStatus, 'monitoring'> {
     const snap = engine?.snapshot() ?? null;
     const base = { calibration: snap?.calibration ?? null, fatigueLevel: snap?.fatigueLevel ?? ('none' as FatigueLevel), dimAdvised: lastOut?.dimAdvised ?? false };
     if (gaveUp) return { camera: 'off', reason: 'error', ...base };
@@ -690,7 +723,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           quality = q;
           qualitySince = ef.tMs;
         }
-        if (q === 'tracking' || q === 'head_only') lastGoodT = ef.tMs;
+        if (q === 'tracking' || q === 'head_only') {
+          lastGoodT = ef.tMs;
+          if (ef.box !== null) lastBoxCx = ef.box.cx;
+        }
         if (q === 'tracking') {
           lastTrackingT = ef.tMs;
           headOnlySince = null;
@@ -869,6 +905,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         charging: power.charging,
         setup,
         lostLowLight: snap?.lostLowLight ?? false,
+        lostNoFace: snap?.lostNoFace ?? false,
         gazeNetEvery: cfg.gazeNetEvery,
       });
       lastOut = out;
@@ -933,6 +970,14 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     },
 
     status: computeStatus,
+
+    presence() {
+      const lost = quality === 'lost';
+      const side = inputs?.driverSide ?? 'left';
+      // The upright frame: yaw + toward image right; LHD: the driver's door is image right (RHD: left).
+      const atDoor = lastBoxCx !== null && (side === 'left' ? lastBoxCx >= 1 - EXIT_EDGE : lastBoxCx <= EXIT_EDGE);
+      return { lastFaceT: Number.isFinite(lastGoodT) ? lastGoodT : null, absent: lastOut?.absent === true, exitEvidence: lost && atDoor };
+    },
 
     summary() {
       if (engine === null) return lastSummary;

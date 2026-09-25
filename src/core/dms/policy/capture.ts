@@ -5,23 +5,28 @@
 //
 // States, highest precedence first:
 //   OFF            the gate is closed (no session, fps 0)
-//   PAUSED         thermal L3 (reason `thermal`), the low-light suspend (`low_light`: LOST in the dark at
-//                  ≥ 20 km/h for 60 s, probing 10 s every 5 min; U-21 defaults), or a KNOWN
-//                  speed < 10 km/h for PAUSE_AFTER_STOP_MS (`stopped`; never on a held or unknown speed)
+//   PAUSED         thermal L3 (reason `thermal`); the low-light suspend (`low_light`: LOST in the dark for
+//                  60 s at any speed, probing 10 s every 5 min, every 60 s while stopped; U-21 defaults); or
+//                  no one in the seat (`absent`, Task C3: STOPPED with no face box for 3 min, probing 5 s
+//                  every 30 s, resumed by a face at a probe or by moving evidence; U-12)
 //   SETUP          beginSetup() until endSetup() or 120 s: 15 fps, the net, the preview while stationary
+//   SLEEP_WATCH    Task C3 (rev4 §2.1.4): STOPPED, or a probe of a pause: 5 fps, landmarks only. A stop is
+//                  a cadence change, never a pause or a restart, so monitoring is continuous at move-off.
 //   SEARCH         the face LOST > 2 s at ≥ 10 km/h, or phone handling: 5 fps
 //   HEAD_ONLY_RUN  ≥ 20 km/h with HEAD_ONLY ≥ 5 s: 10 fps
 //   FULL           ≥ 20 km/h: 15 fps, the net every gazeNetEvery frame
-//   CLOSURE_WATCH  below 20 km/h (not paused): 5 fps
-// (SETUP outranks the `stopped` pause, since setup is done parked; L3 outranks everything but OFF.)
+//   SLEEP_WATCH    below 20 km/h: 5 fps
+// (L3 outranks everything but OFF; SETUP is done parked, so it outranks the stop.)
+// STOPPED (Task C3, the engine's state): a fresh row with a known speed below STOP_KMH, or the row's motion
+// evidence showing a stop. A row with no evidence holds the last evidence for ROW_STALE_MS from its row, then
+// is neither stopped nor moving (the C1 round-1 carry).
 // Caps (lowest wins): the thermal floor (after its dwells: L1 only after `fair` for 60 s, L2/L3 at once,
 // any cooler level only after holding 60 s; L4 = L3 for 120 s → dimAdvised), Low Power, and the battery
 // below 20 % while not charging.
 // Speed classes go up when the last 2 known rows reach a threshold and down after 3 known rows below the
 // threshold − 2 km/h. Unknown speed (no fix, speed < 0, or a row older than 3 s) holds the last known
-// class for 10 min with IMU motion, 10 s without, then CLOSURE_WATCH.
+// class for 10 min with IMU motion, 10 s without, then SLEEP_WATCH.
 import {
-  PAUSE_AFTER_STOP_MS,
   THERMAL_COOL_DWELL_MS,
   THERMAL_FLOOR,
   THERMAL_L1_ENTRY_DWELL_MS,
@@ -31,6 +36,7 @@ import {
   type ThermalName,
 } from '../../../../modules/dms-vision/src/constants';
 import {
+  ABSENT,
   DOWN_MARGIN_KMH,
   DOWN_ROWS,
   FAST_KMH,
@@ -44,6 +50,7 @@ import {
   SEARCH_LOST_MS,
   SETUP_MAX_MS,
   SLOW_KMH,
+  STOP_KMH,
   THERMAL_L4_AFTER_MS,
   UNKNOWN_HOLD_MOVING_MS,
   UNKNOWN_HOLD_STILL_MS,
@@ -51,14 +58,14 @@ import {
 } from './constants';
 import type { GateToken } from './gate';
 
-export type CaptureState = 'OFF' | 'PAUSED' | 'SEARCH' | 'CLOSURE_WATCH' | 'FULL' | 'HEAD_ONLY_RUN' | 'SETUP';
+export type CaptureState = 'OFF' | 'PAUSED' | 'SEARCH' | 'SLEEP_WATCH' | 'FULL' | 'HEAD_ONLY_RUN' | 'SETUP';
 
 /** The Budgets' capture-state table, as data. */
 export const STATE_TABLE: Readonly<Record<CaptureState, { camera: boolean; fps: 0 | DmsFps; gazeNet: boolean }>> = {
   OFF: { camera: false, fps: 0, gazeNet: false },
   PAUSED: { camera: false, fps: 0, gazeNet: false },
   SEARCH: { camera: true, fps: 5, gazeNet: false },
-  CLOSURE_WATCH: { camera: true, fps: 5, gazeNet: false },
+  SLEEP_WATCH: { camera: true, fps: 5, gazeNet: false },
   FULL: { camera: true, fps: 15, gazeNet: true },
   HEAD_ONLY_RUN: { camera: true, fps: 10, gazeNet: false },
   SETUP: { camera: true, fps: 15, gazeNet: true },
@@ -79,7 +86,7 @@ export interface PolicyRow {
   imuMoving: boolean;
   /** handlingScore ≥ 0.6 */
   handling: boolean;
-  /** the row's shared motion evidence (Task C1), carried as given; read by the stop rules from Task C3 */
+  /** the row's shared motion evidence (Task C1), carried as given; the stop rules read it (Task C3) */
   motion?: PolicyMotion;
 }
 
@@ -111,13 +118,15 @@ export interface PolicyInput {
   setup: boolean;
   /** the engine reports this frame LOST because it is too dark (engine.snapshot().lostLowLight) */
   lostLowLight: boolean;
+  /** Task C3: the engine reports this frame LOST with no face box at all (engine.snapshot().lostNoFace) */
+  lostNoFace?: boolean;
   gazeNetEvery: 1 | 2;
 }
 
 export interface PolicyOutput {
   action: 'off' | 'pause' | 'run';
   state: CaptureState;
-  reason: 'gate' | 'thermal' | 'low_light' | 'stopped' | null;
+  reason: 'gate' | 'thermal' | 'low_light' | 'absent' | null;
   fps: 0 | DmsFps;
   gazeNet: boolean;
   gazeNetEvery: 1 | 2;
@@ -130,16 +139,45 @@ export interface PolicyOutput {
   search: boolean;
   /**
    * Once, on the evaluation where a run goes to PAUSED for heat (thermal L3) or the dark (the low-light
-   * suspend) while not stopped (T13 r1 I1): the host calls engine.cameraOff(tMs, cause), which stops a
-   * distraction but KEEPS a Critical, and keeps feeding rows. Null otherwise (and for the stopped pause).
+   * suspend), at any speed (T13 r1 I1; Task C3: at stops too): the host calls engine.cameraOff(tMs, cause),
+   * which stops a distraction but KEEPS a Critical, and keeps feeding rows. Null otherwise (and never for
+   * the `absent` pause: an empty seat is not the camera going off).
    */
   cameraOff: 'heat' | 'dark' | null;
+  /** Task C3: STOPPED on this evaluation (the HUD's "Stopped: watching for sleep only") */
+  stopped: boolean;
+  /** Task C3: the `absent` pause is in force, its probes included (presence()) */
+  absent: boolean;
 }
 
 type SpeedClass = 'stopped' | 'slow' | 'fast';
 const RANK: Record<SpeedClass, number> = { stopped: 0, slow: 1, fast: 2 };
 const classOf = (kmh: number): SpeedClass => (kmh >= FAST_KMH ? 'fast' : kmh >= SLOW_KMH ? 'slow' : 'stopped');
 const downThreshold = (c: SpeedClass) => (c === 'fast' ? FAST_KMH : SLOW_KMH) - DOWN_MARGIN_KMH;
+
+/** A probe schedule: a probe of `forMs` starts every `everyMs` from the pause's start (the period read at each start). */
+function createProber() {
+  let next: number | null = null;
+  let start: number | null = null;
+  return {
+    begin(t: number, everyMs: number): void {
+      next = t + everyMs;
+      start = null;
+    },
+    end(): void {
+      next = null;
+      start = null;
+    },
+    probing(t: number, everyMs: number, forMs: number): boolean {
+      if (next === null) return false;
+      while (t >= next) {
+        start = next;
+        next = start + everyMs;
+      }
+      return start !== null && t < start + forMs;
+    },
+  };
+}
 
 export function createCapturePolicy() {
   // Speed.
@@ -149,9 +187,10 @@ export function createCapturePolicy() {
   let downCount = 0;
   let unknownSince: number | null = null;
   let unknownMoving = false;
-  // The pause and the preview.
-  let lowSince: number | null = null;
-  let paused = false;
+  // Task C3: the last motion evidence and its row time (held ROW_STALE_MS; the C1 round-1 carry).
+  let evidence: PolicyMotion | null = null;
+  let evidenceT = Number.NEGATIVE_INFINITY;
+  // The preview.
   let stillSince: number | null = null;
   // Setup.
   let setupSince: number | null = null;
@@ -165,17 +204,24 @@ export function createCapturePolicy() {
   // The low-light suspend.
   let darkSince: number | null = null;
   let suspendedAt: number | null = null;
+  const darkProbe = createProber();
+  // Task C3: the absent pause.
+  let emptySince: number | null = null;
+  let absentAt: number | null = null;
+  const absentProbe = createProber();
   let prevProbing = false;
 
   function onRow(r: PolicyRow): void {
+    if (r.motion !== undefined) {
+      evidence = r.motion;
+      evidenceT = r.tMs;
+    }
     if (r.speedKmh === null) {
       unknownSince ??= r.tMs;
       unknownMoving = r.imuMoving;
       recentKnown.length = 0;
       downCount = 0;
-      lowSince = null; // the pause never starts on an unknown speed (rev2 R1-m1)
       stillSince = null;
-      if (paused && r.imuMoving) paused = false; // resume on IMU motion with unknown speed
       return;
     }
     const v = r.speedKmh;
@@ -198,12 +244,22 @@ export function createCapturePolicy() {
         }
       } else downCount = 0;
     }
-    if (v < SLOW_KMH) lowSince ??= r.tMs;
-    else {
-      lowSince = null;
-      paused = false; // resume on the first row ≥ 10 km/h
-    }
     stillSince = v < PREVIEW_STILL_KMH ? (stillSince ?? r.tMs) : null;
+  }
+
+  /** Task C3: the evidence in force at `t` (held ROW_STALE_MS from its row), or null. */
+  const evidenceAt = (t: number) => (t - evidenceT <= ROW_STALE_MS ? evidence : null);
+  /** Task C3: STOPPED at `t`: a fresh known speed below STOP_KMH, or the evidence's stop. */
+  function stoppedAt(t: number, row: PolicyRow | null): boolean {
+    if (row === null || t - row.tMs > ROW_STALE_MS) return false;
+    if (row.speedKmh !== null) return row.speedKmh < STOP_KMH;
+    return evidenceAt(t)?.stop != null;
+  }
+  /** Task C3: moving evidence at `t`: a fresh known speed of STOP_KMH or more, or the evidence moving. */
+  function movingAt(t: number, row: PolicyRow | null): boolean {
+    if (row === null || t - row.tMs > ROW_STALE_MS) return false;
+    if (row.speedKmh !== null) return row.speedKmh >= STOP_KMH;
+    return evidenceAt(t)?.moving != null;
   }
 
   /** The speed class at `t`: known, held under the unknown-speed rules, or CLOSURE_WATCH's. */
@@ -249,27 +305,61 @@ export function createCapturePolicy() {
       thermal(x.tMs, x.thermal);
       const speedClass = classAt(x.tMs, x.row);
       const rowFresh = x.row !== null && x.tMs - x.row.tMs <= ROW_STALE_MS && x.row.speedKmh !== null;
-      if (!paused && rowFresh && lowSince !== null && x.tMs - lowSince >= PAUSE_AFTER_STOP_MS) paused = true;
+      const stopped = stoppedAt(x.tMs, x.row);
+      const face = x.quality === 'tracking' || x.quality === 'head_only';
       if (x.setup) setupSince ??= x.tMs;
       else setupSince = null;
       const inSetup = setupSince !== null && x.tMs - setupSince < SETUP_MAX_MS;
 
-      // The low-light suspend: LOST in the dark at speed for suspendAfterMs; probes; a face resumes.
+      // The low-light suspend: LOST in the dark for suspendAfterMs (C3: at any speed); probes; a face resumes.
       let probing = false;
+      const darkEvery = stopped ? LOW_LIGHT.probeEveryStoppedMs : LOW_LIGHT.probeEveryMs;
       if (!x.gateOpen) {
         darkSince = null;
         suspendedAt = null;
+        darkProbe.end();
       } else if (suspendedAt === null) {
-        const dark = x.quality === 'lost' && x.lostLowLight && speedClass === 'fast' && (x.row?.speedKmh ?? FAST_KMH) >= LOW_LIGHT.minSpeedKmh;
+        const dark = x.quality === 'lost' && x.lostLowLight && (x.row?.speedKmh ?? LOW_LIGHT.minSpeedKmh) >= LOW_LIGHT.minSpeedKmh;
         darkSince = dark ? (darkSince ?? x.tMs) : null;
-        if (darkSince !== null && x.tMs - darkSince >= LOW_LIGHT.suspendAfterMs) suspendedAt = x.tMs;
+        if (darkSince !== null && x.tMs - darkSince >= LOW_LIGHT.suspendAfterMs) {
+          suspendedAt = x.tMs;
+          darkProbe.begin(x.tMs, darkEvery);
+        }
       } else {
-        const since = x.tMs - suspendedAt;
-        probing = since >= LOW_LIGHT.probeEveryMs && since % LOW_LIGHT.probeEveryMs < LOW_LIGHT.probeForMs;
-        if (probing && (x.quality === 'tracking' || x.quality === 'head_only')) {
+        probing = darkProbe.probing(x.tMs, darkEvery, LOW_LIGHT.probeForMs);
+        if (probing && face) {
           suspendedAt = null; // a probe saw a face
           darkSince = null;
+          darkProbe.end();
           probing = false;
+        }
+      }
+
+      // Task C3 (U-12): no one in the seat at a stop. Armed only while STOPPED with no face box at all (not in
+      // the dark: that is the suspend above); resumed by a face at a probe, or by moving evidence.
+      let absentProbing = false;
+      if (!x.gateOpen) {
+        emptySince = null;
+        absentAt = null;
+        absentProbe.end();
+      } else if (absentAt === null) {
+        const noBox = x.quality === 'lost' && (ABSENT.requiresNoBox ? x.lostNoFace === true : true) && !x.lostLowLight;
+        emptySince = stopped && noBox ? (emptySince ?? x.tMs) : null;
+        if (emptySince !== null && x.tMs - emptySince >= ABSENT.afterMs) {
+          absentAt = x.tMs;
+          absentProbe.begin(x.tMs, ABSENT.probeEveryMs);
+        }
+      } else if (movingAt(x.tMs, x.row)) {
+        absentAt = null;
+        emptySince = null;
+        absentProbe.end();
+      } else {
+        absentProbing = absentProbe.probing(x.tMs, ABSENT.probeEveryMs, ABSENT.probeForMs);
+        if (absentProbing && face) {
+          absentAt = null;
+          emptySince = null;
+          absentProbe.end();
+          absentProbing = false;
         }
       }
 
@@ -285,13 +375,14 @@ export function createCapturePolicy() {
       else if (suspendedAt !== null && !probing) {
         state = 'PAUSED';
         reason = 'low_light';
-      } else if (paused) {
+      } else if (absentAt !== null && !absentProbing) {
         state = 'PAUSED';
-        reason = 'stopped';
-      } else if (probing) state = 'CLOSURE_WATCH'; // a low-light probe: 5 fps, landmarks only
+        reason = 'absent';
+      } else if (probing || absentProbing) state = 'SLEEP_WATCH'; // a probe: 5 fps, landmarks only
+      else if (stopped) state = 'SLEEP_WATCH'; // C3: a stop is a cadence change, never a pause
       else if ((x.quality === 'lost' && x.qualityForMs > SEARCH_LOST_MS && speedClass !== 'stopped') || x.row?.handling === true) state = 'SEARCH';
       else if (speedClass === 'fast') state = x.quality === 'head_only' && x.qualityForMs >= HEAD_ONLY_RUN_MS ? 'HEAD_ONLY_RUN' : 'FULL';
-      else state = 'CLOSURE_WATCH';
+      else state = 'SLEEP_WATCH';
 
       // The caps, lowest wins.
       const floor = THERMAL_FLOOR[applied]!;
@@ -303,11 +394,12 @@ export function createCapturePolicy() {
         if (x.batteryLevel !== null && x.batteryLevel < LOW_BATTERY_PCT && x.charging !== true) cap = Math.min(cap, POWER_CAP_FPS);
         fps = Math.min(fps, cap) as DmsFps;
       }
-      const running = prevState === 'SEARCH' || prevState === 'CLOSURE_WATCH' || prevState === 'FULL' || prevState === 'HEAD_ONLY_RUN';
-      const edge = state === 'PAUSED' && running && !prevProbing && speedClass !== 'stopped';
+      const running = prevState === 'SEARCH' || prevState === 'SLEEP_WATCH' || prevState === 'FULL' || prevState === 'HEAD_ONLY_RUN';
+      // C3: at stops too (a running SLEEP_WATCH going off for heat or the dark keeps a sleep Critical to the blind cap).
+      const edge = state === 'PAUSED' && running && !prevProbing;
       const cameraOff = edge && reason === 'thermal' ? 'heat' : edge && reason === 'low_light' ? 'dark' : null;
       prevState = state;
-      prevProbing = probing;
+      prevProbing = probing || absentProbing;
       return {
         action: state === 'OFF' ? 'off' : state === 'PAUSED' ? 'pause' : 'run',
         state,
@@ -321,6 +413,8 @@ export function createCapturePolicy() {
         thermalLevel: applied,
         search: state === 'SEARCH',
         cameraOff,
+        stopped,
+        absent: absentAt !== null,
       };
     },
   };

@@ -30,7 +30,7 @@ import { createAttention, distractionGates, type AttentionEvent } from './attent
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
 import { validateDmsConfig, type DmsConfig, type StopEventsFeed, type ZoneId } from './config';
-import { createContextTracker, type FeatureRowLike, type RowExtras } from './context';
+import { createContextTracker, type FeatureRowLike, type RowExtras, type SpeedState } from './context';
 import { createFpsMeter } from './eyes';
 import { createFastRules, type FastEvent, type FatigueFloor } from './fastRules';
 import { createFatigue, type FatigueLevel, type FatigueMinute } from './fatigue';
@@ -137,6 +137,15 @@ export interface DmsSnapshot {
   criticalOrigin: 'sleep' | 'd4' | null;
   /** Task C2: the last frame's speed state was STOPPED */
   stopped: boolean;
+  /** Task C3: the last frame's speed state (the HUD's monitoring reason) */
+  speedState: SpeedState;
+  /** Task C3: the last frame is LOST with no face box at all, not for the dark (the policy's `absent` input) */
+  lostNoFace: boolean;
+  /**
+   * Task C3: what D1–D3 do at the last frame (the HUD's monitoring): off (a gate, STOPPED, AMBIGUOUS or below the
+   * counting speed), widened (the zones widened), or full
+   */
+  distraction: 'full' | 'widened' | 'off';
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -228,6 +237,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastClosedMs: 0,
       lastSpeed: null as number | null,
       lastStopped: false,
+      lastSpeedState: 'unknown' as SpeedState,
+      lastNoFace: false,
+      lastDistraction: 'off' as 'full' | 'widened' | 'off',
       bufferFraction: 1,
       d2SumS: 0,
       fatigueLevel: 'none' as FatigueLevel,
@@ -302,6 +314,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastZone = zone;
     d.lastGap = p.gap;
     d.lastLowLight = p.quality === 'lost' && p.reasons.includes('low_light');
+    d.lastNoFace = p.quality === 'lost' && p.reasons.includes('no_face') && !p.reasons.includes('low_light');
     d.lastQuality = p.quality;
     d.lastSource = p.source;
     d.lastGazeFrom = p.gazeFrom;
@@ -309,6 +322,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastGazeRel = p.gazeRel === null ? null : { yaw: p.gazeRel.yaw, pitch: p.gazeRel.pitch };
     d.lastSpeed = speed;
     d.lastStopped = stopped;
+    d.lastSpeedState = cs.speedState;
     // Zones are learned in the configured path's coordinates only (T16 r3 m1): a net configuration's geometric
     // fallback frames (another gain, another centre) would blur the mirror clusters. Held and head frames are
     // unchanged; the geometric configuration never has a fallback.
@@ -341,6 +355,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       gates,
     });
     d.bufferFraction = att.bufferFraction;
+    const counting = speed !== null && speed >= cfg.distraction.logOnlyBelowKmh;
+    d.lastDistraction = !gates.d1 || stopped || !counting ? 'off' : zc.widenDeg > 0 ? 'widened' : 'full';
     d.d2SumS = att.d2SumS;
     for (const e of att.events) {
       if (e.kind === 'glance_end' && e.glance !== undefined) d.summary.onGlance(e.glance);
@@ -507,6 +523,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         invariantViolations: d.alerts.violations(),
         criticalOrigin: d.alerts.criticalOrigin(),
         stopped: d.lastStopped,
+        speedState: d.lastSpeedState,
+        lostNoFace: d.lastNoFace,
+        distraction: d.lastDistraction,
       };
     },
 

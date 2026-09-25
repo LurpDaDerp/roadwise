@@ -6,7 +6,7 @@
 import { createFakeDmsVision } from '../../../../modules/dms-vision/src/fake';
 import { ALERT_KINDS } from '../engine/alerts';
 import type { DmsEvent } from '../engine/engine';
-import { createDmsController, type DmsGateInputs, type DmsHudStatus } from '../host/controller';
+import { createDmsController, type DmsGateInputs, type DmsHudStatus, type DmsPresence } from '../host/controller';
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node types
@@ -58,7 +58,7 @@ const REASONS = {
   interrupted: true,
   thermal: true,
   low_light: true,
-  stopped: true,
+  absent: true,
   face_lost: true,
   eyes_not_visible: true,
 } satisfies Record<NonNullable<DmsHudStatus['reason']>, true>;
@@ -87,6 +87,20 @@ const EVENTS = {
   warm_start: true,
   fatigue_minute: true,
 } satisfies Record<DmsEvent['kind'], true>;
+/** Task C3: the monitoring reasons (the HUD copy's keys) */
+const MONITORING_REASONS = {
+  stopped: true,
+  heat: true,
+  dark: true,
+  absent: true,
+  app_inactive: true,
+  recalibrating: true,
+  posture: true,
+  seed_check: true,
+  eyes: true,
+  speed_unknown: true,
+} satisfies Record<NonNullable<DmsHudStatus['monitoring']['reason']>, true>;
+const PRESENCE = { lastFaceT: true, absent: true, exitEvidence: true } satisfies Record<keyof DmsPresence, true>;
 
 test('the Calls table names every controller method (idle is for tests only)', () => {
   const calls = section('Calls');
@@ -106,6 +120,11 @@ test('the gate inputs are exactly DmsGateInputs', () => {
 test('the status: camera values and reasons', () => {
   expect(listed('- **Camera values:**')).toEqual(keys(CAMERA));
   expect(listed('- **Reasons:**')).toEqual(keys(REASONS));
+});
+
+test('C3: the monitoring reasons and the presence fields', () => {
+  expect(listed('- **Monitoring reasons:**')).toEqual(keys(MONITORING_REASONS));
+  expect(listed('- **Presence:**')).toEqual(keys(PRESENCE));
 });
 
 test('the alert kinds are exactly ALERT_KINDS', () => {
