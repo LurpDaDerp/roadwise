@@ -252,20 +252,24 @@ describe('a knocked mount across a stop (rev5 §3; W3)', () => {
 // C4 round 1 (review-C4 C4-1, C4-2).
 // ---------------------------------------------------------------------------------------------------------
 
-describe('C4-1: a lean to read a phone is not a road (S-LEAN-PHONE: NC-C4-1b, NC-C4-1c; S-LEAN-TAP: NC-C4-2e)', () => {
-  /** A dash phone at (15°, −14°) read 6 s of every 10 s from 110 to 230 s; with `lean`, the body leans toward it. */
-  const reading = (lean: boolean) =>
+describe('C4-1: a lean to read a phone is not a road (S-LEAN-PHONE: NC-C4-1b, NC-C4r2b, NC-C4r2c; S-LEAN-TAP: NC-C4-2e)', () => {
+  /**
+   * C4 round 2 (review-C4 R1-A): the reviewer's probe. A 60 s lean from 110 s (box dy +0.04, IOD ×1.08) while a
+   * dash phone at (15°, −14°) is read `share` × 10 s of every 10 s from 110 to 230 s.
+   */
+  const reading = (lean: boolean, share: number) =>
     drv((t) => ({
-      ...(t >= 110 && t < 230 && (t - 110) % 10 < 6 ? { gaze: rel(15, -14) } : {}),
-      ...(lean && within(t, 110, 230) ? { posture: { box: { dx: 0, dy: 0.04 }, iodScale: 1.08 } } : {}),
+      ...(t >= 110 && t < 230 && (t - 110) % 10 < share * 10 ? { gaze: rel(15, -14) } : {}),
+      ...(lean && within(t, 110, 170) ? { posture: { box: { dx: 0, dy: 0.04 }, iodScale: 1.08 } } : {}),
     }));
-  test('S-LEAN-PHONE: D1 starts with the lean within ±1 of the same reading without it, and no commit onto the phone', () => {
-    const plain = play(reading(false), 250);
-    const lean = play(reading(true), 250);
-    const inWindow = (r: Run) => r.commands.filter((c) => c.kind === 'distraction' && c.action === 'start' && c.tMs >= 110_000 && c.tMs < 230_000).length;
-    expect(inWindow(plain)).toBeGreaterThanOrEqual(5);
-    expect(Math.abs(inWindow(lean) - inWindow(plain))).toBeLessThanOrEqual(1);
-    expect(ev(lean, 'posture_commit')).toEqual([]);
+  const inWindow = (r: Run) => r.commands.filter((c) => c.kind === 'distraction' && c.action === 'start' && c.tMs >= 110_000 && c.tMs < 230_000).length;
+  const SWEEP = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20].flatMap((seed) => [0.5, 0.6, 0.7].map((share) => [seed, share] as const));
+  test.each(SWEEP)('S-LEAN-PHONE (seed %i, share %d): D1 starts with the lean ≥ the no-lean count − 1; no commit onto the phone', (seed, share) => {
+    const plain = play(reading(false, share), 250, { seed });
+    const lean = play(reading(true, share), 250, { seed });
+    expect(inWindow(lean)).toBeGreaterThanOrEqual(inWindow(plain) - 1);
+    const before = centreAt(lean, 109_000).centre!;
+    for (const cm of ev(lean, 'posture_commit')) expect(angularDistanceDeg(centreAt(lean, cm.tMs + 1).centre!, before)).toBeLessThanOrEqual(1.5);
   });
   test('S-LEAN-TAP: tapping the RoadWise phone itself (the camera) for 8 s with a lean that stays: the phone is never c₁ (any commit keeps the road), D1 during the tap', () => {
     // The mount 25° right and 15° below the road (a real mount; the synth's default camera sits on the road).
@@ -284,8 +288,26 @@ describe('C4-1: a lean to read a phone is not a road (S-LEAN-PHONE: NC-C4-1b, NC
   });
 });
 
+describe('C4 round 2 (R1-A): a real posture step in every direction commits with no false D1 (S-P11-UP: NC-C4r2a; S-P9-UP: NC-C4r2d)', () => {
+  const DIRS: [string, AnglePair, { dx: number; dy: number }, number][] = [
+    ['S-P9-UP', { yaw: 0, pitch: 9 }, { dx: 0, dy: -0.06 }, 1.05],
+    ['S-P11-UP', { yaw: 0, pitch: 11 }, { dx: 0, dy: -0.07 }, 1.05],
+    ['S-P10-DOWN', { yaw: 0, pitch: -10 }, { dx: 0, dy: 0.06 }, 0.95],
+    ['S-P10-MIRROR', { yaw: -10, pitch: 0 }, { dx: 0.06, dy: 0 }, 1.04],
+    ['S-P10-STACK', { yaw: 8, pitch: -6 }, { dx: -0.05, dy: 0.04 }, 1.04],
+  ];
+  test.each(DIRS)('%s: committed ≤ 90 s with bias ≤ 1.5°, 0 false D1', (_, shift, box, iodScale) => {
+    const r = play(drv((t) => (t >= 110 ? { posture: { shift, box, iodScale } } : null)), 230);
+    const commit = ev(r, 'posture_commit');
+    expect(commit.length).toBeGreaterThanOrEqual(1);
+    expect(commit[0]!.tMs).toBeLessThanOrEqual(200_000);
+    expect(angularDistanceDeg(centreAt(r, commit[0]!.tMs + 1).centre!, add(centreAt(r, 109_000).centre!, shift))).toBeLessThanOrEqual(1.5);
+    expect(d1After(r, 105_000)).toEqual([]);
+  });
+});
+
 describe('C4-1 rules 2 and 3: the limited union (S-SHIFT-READ), an ended stare (S-STARE-END)', () => {
-  test('S-SHIFT-READ (NC-C4-1a, NC-C4-1c): after a real recline (the road 8° lower), dash reads that are c₀ centre_stack but c₁ forward_road still start D1 before the commit', () => {
+  test('S-SHIFT-READ (NC-C4-1a): after a real recline (the road 8° lower), dash reads that are c₀ centre_stack but c₁ forward_road still start D1 before the commit', () => {
     const shift = { yaw: 0, pitch: -8 };
     const r = play(
       drv((t) => ({ ...(t >= 110 ? { posture: { shift, box: { dx: 0, dy: 0.05 }, iodScale: 1.06 } } : {}), ...(t >= 130 && (t - 130) % 24 < 6 ? { gaze: rel(16, -8) } : {}) })),

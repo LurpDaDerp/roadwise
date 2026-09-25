@@ -24,8 +24,8 @@
 //   a commit, probationS of probation with c₀ as a shadow reverts a commit the samples reverse. A settled pitch
 //   drop with no translation is a head_slump candidate (fatigue evidence once held; never posture).
 // - C4 round 1 (review-C4): c₁ must be road-like (C4-1: inside c₀'s unwidened on-road zones, not the phone, at
-//   most candidateNonDrivingShare of the window in c₀'s non-driving zones); the posture widening is withheld while
-//   the window or the last 5 s reads as distraction; the revert is measured on the last revertWindowS; the step
+//   most candidateNonDrivingShare of the window in c₀'s distraction zones, never `other`: C4 round 2); the posture
+//   widening widens the road-centre circle only (round 2); the revert is measured on the last revertWindowS; the step
 //   bump reads the compensated box; a slump candidate becomes head_slump only after slumpHoldS with the head
 //   straight and the gaze on the road (C4-3); the interim EAR also needs a near-forward gaze.
 // - A step bump enters the dual state with c₀ shifted by the measured head step (no restart); a resume
@@ -47,7 +47,7 @@ import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSigna
 import { median, quantile, sd } from './stats';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
 import { RingBuffer } from './windows';
-import { cameraRel, phoneScreenRadius, zoneAt, zoneClass } from './zones';
+import { cameraRel, isDistractionZone, phoneScreenRadius, zoneAt, zoneClass } from './zones';
 
 export type CalibrationState = 'none' | 'seeded' | 'calibrated' | 'provisional' | 'uncalibrated' | 'recalibrating';
 
@@ -156,8 +156,6 @@ const SIGMA_DEFAULT = 4;
 /** Task C4 (W1): a blink in the interim window: the mean EAR below this share of its p90, back within BLINK_MAX_MS */
 const BLINK_DIP = 0.6;
 const BLINK_MAX_MS = 600;
-/** C4 round 1 (C4-1): the recent window the posture widening is withheld on */
-const RECENT_ND_MS = 5000;
 const ORIGIN: AnglePair = Object.freeze({ yaw: 0, pitch: 0 });
 
 type Centres = { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null };
@@ -178,11 +176,6 @@ interface Dual {
   /** the step's translation (the mirror demotion) */
   box: number;
   iodFrac: number;
-  /**
-   * C4 round 1 (C4-1): the last evaluated window held more than candidateNonDrivingShare in c₀'s non-driving
-   * zones (a lean to read, not a seat change): the posture widening is off while it does
-   */
-  nonRoad: boolean;
 }
 
 /** C4 round 1 (review-C4 C4-3): a slump candidate under watch */
@@ -259,14 +252,6 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let slumpWatch: SlumpWatch | null = null;
   /** C4 round 1 (review-C4 minor): posture steps and bumps seen before any centre existed */
   let postureIgnored = 0;
-  /**
-   * C4 round 1 (C4-1): the last RECENT_ND_MS of moving TRACKING frames with a gaze, and the weight of those in
-   * the current centre's unwidened non-driving zones: the posture widening is withheld while that share is above
-   * candidateNonDrivingShare (a driver reading a phone is not looking at a shifted road).
-   */
-  const recentNd = new RingBuffer<{ t: number; w: number; nd: boolean }>(Math.ceil((RECENT_ND_MS / 1000) * MAX_FPS) + 2);
-  let recentW = 0;
-  let recentNdW = 0;
 
   let state: CalibrationState = 'none';
   let admittedS = 0;
@@ -385,7 +370,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       centres.net = shiftCentre(centres.net, drvShift);
       centres.head = shiftCentre(centres.head, drvShift);
     }
-    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac, nonRoad: false };
+    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
     probation = null;
     posture.clear();
     posture.resetFit();
@@ -420,32 +405,45 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const g = cs[cfg.gazeSource] ?? cs.geometric;
     return g === null ? null : cameraRel(g, roll, side);
   };
-  /** The share of `dirs`' weight in the non-driving zones of c₀'s unwidened map. */
+  /**
+   * The share of `dirs`' weight in the DISTRACTION zones of c₀'s unwidened map (C4 round 2, R1-A: never `other`,
+   * where a raised posture puts the road itself).
+   */
   function nonDrivingShare(dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null): number {
     let total = 0;
     let nd = 0;
     for (const x of dirs) {
       total += x.w;
-      if (zoneClass(zoneAt(relative(x, c0), radius, camera, cfg), cfg) === 'non_driving') nd += x.w;
+      if (isDistractionZone(zoneAt(relative(x, c0), radius, camera, cfg), cfg)) nd += x.w;
     }
     return total > 0 ? nd / total : 0;
   }
   /**
-   * C4 round 1 (review-C4 C4-1 rule 1): a road-like candidate lies inside c₀'s UNWIDENED on-road zones, more than
-   * the phone screen's radius + candidateCameraMarginDeg from the camera, with at most candidateNonDrivingShare of
-   * the window in c₀'s non-driving zones. A lean to read or tap a phone is never a road.
+   * The camera relative to c₀ for the posture tests, or null when it lies inside c₀'s road-centre circle: a camera
+   * there is looked at whenever the road is, and no zone rule can tell the two apart (review-C4 round 1, deviation
+   * 1 accepted). C4 round 2: its phone-screen circle then neither makes a raised road `phone_screen` nor counts as
+   * distraction.
    */
-  function roadLike(m: AnglePair, dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null): boolean {
+  function offRoadCamera(cs: Centres): AnglePair | null {
+    const cam = cameraOf(cs);
+    return cam !== null && angularDistanceDeg(cam, ORIGIN) > (radius ?? c.radiusMinDeg) ? cam : null;
+  }
+  /**
+   * C4 round 1 (review-C4 C4-1 rule 1): a road-like point lies inside c₀'s UNWIDENED on-road zones (the phone
+   * circle aside) and is not the phone: more than the phone screen's radius + candidateCameraMarginDeg from an
+   * off-road camera, or nearer c₀ than the camera (the road seen from a new posture, as after a bump's pre-shift).
+   * C4 round 2: every c₁ update is held to this, not only the first candidate.
+   */
+  function roadLikeAt(m: AnglePair, c0: AnglePair, camera: AnglePair | null): boolean {
     const rel = relative(m, c0);
-    if (zoneClass(zoneAt(rel, radius, camera, cfg), cfg) !== 'on_road') return false;
-    // (A camera inside c₀'s road-centre circle is looked at whenever the road is: the zone map gives the road
-    // priority there, and so does this rule. A candidate nearer c₀ than the camera is the road seen from a new
-    // posture, not the phone: a mount near the road, or a bump's pre-shifted c₀, still commits.)
-    if (camera !== null && angularDistanceDeg(camera, ORIGIN) > (radius ?? c.radiusMinDeg)) {
-      const toCamera = angularDistanceDeg(rel, camera);
-      if (toCamera <= phoneR + po.candidateCameraMarginDeg && toCamera < angularDistanceDeg(rel, ORIGIN)) return false;
-    }
-    return nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare;
+    if (zoneClass(zoneAt(rel, radius, null, cfg), cfg) !== 'on_road') return false;
+    if (camera === null) return true;
+    const toCamera = angularDistanceDeg(rel, camera);
+    return !(toCamera <= phoneR + po.candidateCameraMarginDeg && toCamera < angularDistanceDeg(rel, ORIGIN));
+  }
+  /** A road-like candidate: a road-like point, with at most candidateNonDrivingShare of the window in c₀'s distraction zones. */
+  function roadLike(m: AnglePair, dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null): boolean {
+    return roadLikeAt(m, c0, camera) && nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare;
   }
 
   function evaluateDual(dt: number): void {
@@ -464,12 +462,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       dual = null;
       return;
     }
-    const camera = cameraOf(d.c0);
+    const camera = offRoadCamera(d.c0);
     if (d.c1 === null) {
       // The candidate: the mode of the first searchS of admission, peaked, near c₀, road-like (C4 round 1).
       const found = dirsSince(d.enteredT, src);
       if (weightOf(found) >= po.searchS) {
-        d.nonRoad = nonDrivingShare(found, c0, camera) > po.candidateNonDrivingShare;
         const m = modeOf(found, cfg);
         if (m !== null && angularDistanceDeg(m, c0) <= po.searchMaxDeg && peaked(found, m, sigmaHat, cfg) && roadLike(m, found, c0, camera)) {
           const mh = modeOf(dirsSince(d.enteredT, 'head'), cfg);
@@ -484,10 +481,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
     const win = dirsSince(d.since, src);
     const c1 = d.c1[src] ?? d.c1.head!;
-    d.nonRoad = nonDrivingShare(win, c0, camera) > po.candidateNonDrivingShare;
     // The revert: back at c₀ for revertS (measurable only when c₁ is a separable cluster, beyond the small-shift
     // bound; a small shift or a bump's pre-shifted c₀ is decided by its commit, or undecided), or undecided too long.
     // C4 round 1 (C4-1 rule 3): measured on the last revertWindowS of admission, so an ended lean reverts promptly.
+    // Defence in depth (review-C4 round 1): today c₁ follows the window mode and jumps back to c₀ before this can
+    // accrue, but the rolling window keeps a future change to that restart rule from reopening the cumulative hole.
     const separable = angularDistanceDeg(c0, c1) > po.smallShiftSigmas * sigmaHat;
     const recent = dirsSince(Math.max(d.since, tNow - po.revertWindowS * 1000), src);
     if (separable && relativeRevert(recent, c0, c1, r, cfg)) d.revertS += sinceLast;
@@ -504,6 +502,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     // max(1°, SE) (SE: σ̂ over the window's frames). A jump restarts the persistence window.
     const m = modeOf(win, cfg);
     if (m === null) return;
+    // C4 round 2 (review-C4 R1-A): c₁ only ever follows a road-like mode. A reading bout makes the short window's
+    // mode the phone; c₁ keeps its place (and the persistence its start) instead of jumping onto it, where the
+    // limited union would count the phone as c₁'s road centre.
+    if (!roadLikeAt(m, c0, camera)) {
+      d.stable = 0;
+      return;
+    }
     const wSum = weightOf(win);
     const se = sigmaHat / Math.sqrt(Math.max(1, win.length));
     const moved = angularDistanceDeg(m, c1);
@@ -849,9 +854,6 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         bump.clear();
         onsetLeftS = 0;
         slumpWatch = null;
-        recentNd.clear();
-        recentW = 0;
-        recentNdW = 0;
       } else if (!stopped && wasStopped && stopEp !== null) {
         // A LOST run still open at the move-off counts too (the new driver's face first seen while moving).
         if (stopEp.lostSince !== null && f.tMs - stopEp.lostSince >= c.stops.swapLostS * 1000) stopEp.armed = true;
@@ -990,18 +992,6 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           if (out.onset && dual === null && onsetLeftS <= 0) onsetLeftS = po.onsetWidenMaxS;
         }
         if (slumpWatch !== null) watchSlump(slumpWatch, ms, p, dt);
-        if (p.gazeRel !== null && dt > 0) {
-          const nd = zoneClass(zoneAt(p.gazeRel, radius, cameraOf(centres), cfg), cfg) === 'non_driving';
-          recentNd.push({ t: f.tMs, w: dt, nd });
-          recentW += dt;
-          if (nd) recentNdW += dt;
-        }
-        recentNd.dropWhile((x) => {
-          if (x.t >= f.tMs - RECENT_ND_MS) return false;
-          recentW -= x.w;
-          if (x.nd) recentNdW -= x.w;
-          return true;
-        });
         if (onsetLeftS > 0) onsetLeftS = dual !== null ? 0 : Math.max(0, onsetLeftS - dt);
         if (dual !== null) evaluateDual(dt);
         else if (probation !== null) evaluateProbation(dt);
@@ -1037,9 +1027,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
     state: () => state,
     dual: () => (dual === null || dual.c1 === null ? null : { gaze: dual.c1[cfg.gazeSource] ?? dual.c1.geometric, head: dual.c1.head }),
-    // C4 round 1 (C4-1): no posture widening while the dual state's window, or the last 5 s, reads as distraction
-    // relative to c₀ (a lean to read a phone is not a shifted road).
-    postureWidening: () => ((dual !== null && !dual.nonRoad) || onsetLeftS > 0) && !(recentW > 0 && recentNdW > po.candidateNonDrivingShare * recentW),
+    // C4 round 2 (review-C4 R1-A): the engine applies this to the road-centre circle only.
+    postureWidening: () => dual !== null || onsetLeftS > 0,
     recalibrating: () => provisional !== null || seedUnverified,
     reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 ? 'posture' : null),
     centre: (s) => centres[s],

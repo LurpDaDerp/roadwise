@@ -312,13 +312,16 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
 
     // Zones.
     const centre = refs.gazeCentre ?? refs.headCentre;
+    // C4 round 2 (review-C4 R1-A): the posture and onset widening widens the road-centre circle only.
+    const widenDeg = widening(
+      { uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking(), recalibrating: d.cal.recalibrating() },
+      cfg
+    );
     const zc = {
       radiusDeg: d.cal.radius(),
       cameraRel: centre === null ? null : cameraRel(centre, d.cal.rollOffset(), init.driverSide),
-      widenDeg: widening(
-        { uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking(), posture: d.cal.postureWidening(), recalibrating: d.cal.recalibrating() },
-        cfg
-      ),
+      widenDeg,
+      centreWidenDeg: d.cal.postureWidening() ? Math.min(cfg.zones.widenDeg, cfg.zones.widenCapDeg - widenDeg) : 0,
       extension: d.extension,
       learned: d.learner.promoted(),
     };
@@ -383,7 +386,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     });
     d.bufferFraction = att.bufferFraction;
     const counting = speed !== null && speed >= cfg.distraction.logOnlyBelowKmh;
-    d.lastDistraction = !gates.d1 || stopped || !counting ? 'off' : zc.widenDeg > 0 ? 'widened' : 'full';
+    d.lastDistraction = !gates.d1 || stopped || !counting ? 'off' : zc.widenDeg > 0 || zc.centreWidenDeg > 0 ? 'widened' : 'full';
     d.d2SumS = att.d2SumS;
     for (const e of att.events) {
       if (e.kind === 'glance_end' && e.glance !== undefined) d.summary.onGlance(e.glance);

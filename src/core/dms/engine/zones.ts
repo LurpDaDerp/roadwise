@@ -30,6 +30,12 @@ export interface ZoneContext {
   cameraRel: AnglePair | null;
   /** total on-road widening, from `widening()` */
   widenDeg: number;
+  /**
+   * C4 round 2 (review-C4 R1-A): the posture and onset widening, which widens the road-centre circle ONLY (never
+   * forward_road's rectangle): a real step of up to radius + 5° stays covered, and a dash phone below the forward
+   * road stays off-road
+   */
+  centreWidenDeg?: number;
   extension: Extension;
   /** promoted learned mirrors */
   learned: Partial<Record<MirrorId, LearnedZone>>;
@@ -114,7 +120,7 @@ function inside(zone: ZoneSpec, a: AnglePair, e: number, zc: ZoneContext, cfg: P
   const w = onRoad ? zc.widenDeg : 0;
   switch (r.kind) {
     case 'centre':
-      return angularDistanceDeg(a, { yaw: 0, pitch: 0 }) <= (zc.radiusDeg ?? cfg.calibration.radiusMinDeg) + w + e;
+      return angularDistanceDeg(a, { yaw: 0, pitch: 0 }) <= (zc.radiusDeg ?? cfg.calibration.radiusMinDeg) + w + (zc.centreWidenDeg ?? 0) + e;
     case 'camera':
       return zc.cameraRel !== null && angularDistanceDeg(a, zc.cameraRel) <= r.radiusDeg + e;
     case 'rect': {
@@ -146,6 +152,15 @@ export function zoneAt(rel: AnglePair, radiusDeg: number | null, camera: AnglePa
   const zc: ZoneContext = { radiusDeg, cameraRel: camera, widenDeg: 0, extension: NO_EXTENSION, learned: NO_LEARNED };
   for (const z of cfg.zones.table) if (inside(z, rel, 0, zc, cfg)) return z.id;
   return 'other';
+}
+
+/**
+ * C4 round 2 (review-C4 R1-A): a distraction zone, what the posture tests' distraction shares count: every
+ * non-driving zone except `other`, the catch-all that includes above the road, where a raised posture puts the
+ * road itself (phone_screen, centre_stack, lap, far_lateral by default).
+ */
+export function isDistractionZone(id: ZoneId, cfg: Pick<DmsConfig, 'zones'>): boolean {
+  return id !== 'other' && zoneClass(id, cfg) === 'non_driving';
 }
 
 /** The phone-screen circle's radius (the camera zone). */
