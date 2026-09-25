@@ -150,9 +150,9 @@ describe('C6 round 2 (review-C6 R1-P): prior-mode closures count deep time only 
     expect(sleepFamily(r)).toEqual([]);
     expect(criticals(r)).toEqual([]);
   });
-  /** Stopped, no reference: cycles of `shutS` at EAR 0.03, then 1.0 s at EAR 0.09 (above the closed EAR). */
-  const flutter = (shutS: number) => (t: number, r: () => number): DriverState => {
-    const k = (t - 10) % (shutS + 1);
+  /** Stopped, no reference: cycles of `shutS` at EAR 0.03, then `flutS` (1.0 s) at EAR 0.09 (above the closed EAR). */
+  const flutter = (shutS: number, flutS = 1) => (t: number, r: () => number): DriverState => {
+    const k = (t - 10) % (shutS + flutS);
     const openness = t < 10 ? blinkOpenness(t) : k < shutS ? 0.03 / 0.3 : 0.09 / 0.3;
     return { gaze: onRoad(r), speedKmh: 0, openness };
   };
@@ -162,9 +162,44 @@ describe('C6 round 2 (review-C6 R1-P): prior-mode closures count deep time only 
     expect(kinds(r, 'microsleep')).toHaveLength(20);
     expect(kinds(r, 'sleep')).toEqual([]);
   });
-  test('S-PRIOR-FLUTTER: 1.3 s shut, 1.0 s at EAR 0.09: no F1 (the deep run is under 1.5 s; the reopen tail is not deep)', () => {
+  // The prior's stated limit (review-C6 Round 2): each continuous closure (flutters under reopenMs bridged) needs 1.5 s of
+  // deep time; shuts of 1.0–1.5 s separated by flutters of ≥ 0.6 s (a real reopening) do not alarm until the first
+  // moving reference.
+  test('S-PRIOR-FLUTTER (the stated limit): 1.3 s shut, 1.0 s at EAR 0.09: no F1 (each closure holds under 1.5 s of deep time)', () => {
     const r = play(flutter(1.3), 10 + 2.3 * 20 + 1);
     expect(sleepFamily(r)).toEqual([]);
+  });
+});
+
+describe('C6 round 3 (review-C6 R2-F): short flutters are bridged in the prior deep run (NC-C6-P4)', () => {
+  const flutter = (shutS: number, flutS: number) => (t: number, r: () => number): DriverState => {
+    const k = (t - 10) % (shutS + flutS);
+    const openness = t < 10 ? blinkOpenness(t) : k < shutS ? 0.03 / 0.3 : 0.09 / 0.3;
+    return { gaze: onRoad(r), speedKmh: 0, openness };
+  };
+  const firstAt = (r: Run, k: string) => kinds(r, k)[0]?.tMs ?? null;
+  test('S-PRIOR-FLUTTER-SHORT: 1.3 s shut, 0.3 s flutter: F1 by the 2nd cycle, F2 by the 3rd', () => {
+    const r = play(flutter(1.3, 0.3), 10 + 1.6 * 12);
+    expect(firstAt(r, 'microsleep')).not.toBeNull();
+    expect(firstAt(r, 'microsleep')!).toBeLessThan(10_000 + 2 * 1600);
+    expect(firstAt(r, 'sleep')).not.toBeNull();
+    expect(firstAt(r, 'sleep')!).toBeLessThan(10_000 + 3 * 1600);
+  });
+  test('1.0 s shut, 0.25 s flutter: F1 by the 2nd cycle', () => {
+    const r = play(flutter(1.0, 0.25), 10 + 1.25 * 12);
+    expect(firstAt(r, 'microsleep')).not.toBeNull();
+    expect(firstAt(r, 'microsleep')!).toBeLessThan(10_000 + 2 * 1250);
+  });
+  test('2.0 s shut, 0.3 s flutter: F1, then F2 and F3 in turn', () => {
+    const r = play(flutter(2.0, 0.3), 10 + 2.3 * 5);
+    const f1 = firstAt(r, 'microsleep');
+    const f2 = firstAt(r, 'sleep');
+    const f3 = firstAt(r, 'unresponsive');
+    expect(f1).not.toBeNull();
+    expect(f2).not.toBeNull();
+    expect(f3).not.toBeNull();
+    expect(f1!).toBeLessThan(f2!);
+    expect(f2!).toBeLessThan(f3!);
   });
 });
 

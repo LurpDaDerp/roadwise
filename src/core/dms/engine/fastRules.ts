@@ -104,6 +104,15 @@ export function createFastRules(cfg: DmsConfig) {
     deepSince: number | null;
     /** C6 round 1 (C6-2): the episode began in prior mode (no EAR reference): F1 at prior.f1ClosedS, no blink */
     prior: boolean;
+    /**
+     * C6 round 3 (review-C6 R2-F): the prior's deep run, ms of deep frames' observed time; null when there is none.
+     * A non-deep stretch of ≤ prior.reopenMs is bridged (it adds nothing); a longer one breaks the run.
+     */
+    pRunMs: number | null;
+    /** the last deep frame of the run (null in none) */
+    pLastDeepT: number | null;
+    /** the start of the current non-deep stretch within the run (null while deep) */
+    pNonDeepSince: number | null;
     gated: boolean;
     /** C2: the head above the latch's clear pitch since this time (null while it is not) */
     upSince: number | null;
@@ -207,6 +216,8 @@ export function createFastRules(cfg: DmsConfig) {
         if (p.eyesClosed && p.closedMs > 0) {
           episode.onset += p.unobservedMs;
           if (episode.deepSince !== null) episode.deepSince += p.unobservedMs;
+          if (episode.pLastDeepT !== null) episode.pLastDeepT += p.unobservedMs;
+          if (episode.pNonDeepSince !== null) episode.pNonDeepSince += p.unobservedMs;
         } else endSilently(events);
       }
       // The episode: TRACKING, or a C-26 bridge; any other quality drop ends it silently.
@@ -218,7 +229,7 @@ export function createFastRules(cfg: DmsConfig) {
           openFrames.forEach((f) => {
             if (f.t >= onset - LATCH_LOOKBACK_MS && f.t < onset + EPS && f.down) down = true;
           });
-          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, gated: down, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
+          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, pRunMs: null, pLastDeepT: null, pNonDeepSince: null, gated: down, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
         }
         episode.lastT = p.tMs;
         if (p.closureBridged) {
@@ -233,6 +244,23 @@ export function createFastRules(cfg: DmsConfig) {
             : p.openness !== null && p.openness < cl.lookDownClosedBelow;
           if (!deep) episode.deepSince = null;
           else episode.deepSince ??= p.tMs;
+          // C6 round 3 (review-C6 R2-F): the prior's run bridges a non-deep stretch of ≤ reopenMs (a flutter that keeps
+          // the closure open must not restart the count); the counted time is the deep frames' observed time.
+          if (episode.prior) {
+            if (deep) {
+              if (episode.pRunMs === null) episode.pRunMs = 0;
+              else if (episode.pNonDeepSince === null && episode.pLastDeepT !== null) episode.pRunMs += p.tMs - episode.pLastDeepT;
+              episode.pLastDeepT = p.tMs;
+              episode.pNonDeepSince = null;
+            } else if (episode.pRunMs !== null) {
+              episode.pNonDeepSince ??= p.tMs;
+              if (p.tMs - episode.pNonDeepSince > cl.prior.reopenMs + EPS) {
+                episode.pRunMs = null;
+                episode.pLastDeepT = null;
+                episode.pNonDeepSince = null;
+              }
+            }
+          }
           // C2 (S1): a looking-down frame may set the latch; only the head coming up clears it.
           if (p.lookingDown) {
             episode.gated = true;
@@ -251,7 +279,8 @@ export function createFastRules(cfg: DmsConfig) {
         // C6 round 2 (review-C6 R1-P): a prior-mode episode counts deep time only, latched or not. Before any pitch
         // reference or centre the looking-down gate cannot be measured, and a steep reading lid (the synth's floor,
         // EAR ≈ 0.051) lies between the deep EAR and the closed EAR; a full closure (EAR ≈ 0.02–0.04) is deep.
-        const countedS = (gated || episode.prior ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
+        // C6 round 3 (R2-F): its deep time is the bridged run's.
+        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : gated ? (episode.deepSince === null ? 0 : p.tMs - episode.deepSince) : p.closedMs) / 1000;
         const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : gated ? cl.f1.lookDownClosedS : cl.f1.closedS;
         if (!episode.f1 && countedS >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
           episode.f1 = true;
