@@ -10,9 +10,8 @@
 // ambiguous stillness or a tunnel (weak movement, with vLowKmh after a sensor stop), and evidence gaps of up
 // to 5 s (rows with none). Drawn from their own generator, so the drives without it are unchanged.
 import { gauss, rng } from '../engine/__fixtures__/synth';
-import type { GazeSource } from '../engine/types';
+import type { GazeSource, RowMotion } from '../engine/types';
 import { TARGET } from './scenarios';
-import type { RowMotion } from '../engine/types';
 import { blinkOpenness, onRoad, rel, synthDrive, type DriverState, type SynthItem } from './synth';
 
 export const PROPERTY_FPS = [5, 8, 10, 15, 30] as const;

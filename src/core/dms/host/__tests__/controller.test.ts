@@ -32,6 +32,15 @@ const GATE: DmsGateInputs = {
 };
 const POWER = { batteryLevel: 80, charging: false, localMinutes: 720 };
 
+/**
+ * C3 round 1 (review-C3 m5): the rows' default speed. This file runs at 60 km/h; controller.stopped.test.ts runs
+ * it again at 0 km/h, which pins the camera lifecycle, the gate, the retry and the owner slot as independent of
+ * speed. The tests whose subject needs a moving car (distraction, calibration, glances, moving-time drowsiness
+ * samples, 15 fps at speed) are `movingTest`: skipped at 0 km/h, by design.
+ */
+const ROW_KMH: number = (globalThis as { __DMS_ROW_KMH__?: number }).__DMS_ROW_KMH__ ?? 60;
+const movingTest = ROW_KMH >= 20 ? test : test.skip;
+
 function featureRow(tMs: number, speedKmh: number | null, over: Partial<FeatureRow> = {}): FeatureRow {
   return {
     ts: EPOCH0 + tMs,
@@ -100,7 +109,7 @@ async function drive(h: H, fromS: number, toS: number, o: { fps?: number; speed?
     const tMs = i * step;
     if (tMs > h.fake.now()) h.fake.advance(tMs - h.fake.now());
     if (i % fps === 0) {
-      const f = h.ctl.pushRow(featureRow(tMs, (o.speed ?? (() => 60))(tMs / 1000), o.row?.(tMs / 1000)), POWER);
+      const f = h.ctl.pushRow(featureRow(tMs, (o.speed ?? (() => ROW_KMH))(tMs / 1000), o.row?.(tMs / 1000)), POWER);
       if (f !== null) focus.push(f);
       await h.ctl.idle();
     }
@@ -252,7 +261,7 @@ describe('frames, events and the status', () => {
     expect(h.ctl.diagnostics().droppedBatches).toBe(1);
     expect(h.ctl.diagnostics().frames).toBeGreaterThan(40);
   });
-  test('events are on the epoch clock (the batch anchors)', async () => {
+  movingTest('events are on the epoch clock (the batch anchors)', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 90, { frameAt: synthFrames((t, r) => ({ gaze: onRoad(r), speedKmh: 60 }), 90, 15) });
@@ -282,7 +291,7 @@ describe('frames, events and the status', () => {
     expect(h.ctl.status().camera).not.toBe('active');
     expect(h.statuses.at(-1)!.camera).not.toBe('active');
   });
-  test('onAlert throwing never breaks the controller', async () => {
+  movingTest('onAlert throwing never breaks the controller', async () => {
     const h = harness({ onAlertThrows: true });
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 && t < 103.5 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
@@ -292,7 +301,7 @@ describe('frames, events and the status', () => {
 });
 
 describe('scoring, the profile and the gaze source', () => {
-  test('a CameraFocusSample for a non-driving glance > 2 s, returned from pushRow; never for a mirror', async () => {
+  movingTest('a CameraFocusSample for a non-driving glance > 2 s, returned from pushRow; never for a mirror', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const glances: DriverFn = (t, r) => ({ gaze: t >= 100 && t < 102.6 ? rel(0, -40) : t >= 110 && t < 113 ? rel(27, 10) : onRoad(r), speedKmh: 60 });
@@ -300,7 +309,7 @@ describe('scoring, the profile and the gaze source', () => {
     expect(focus).toHaveLength(1);
     expect(focus[0]).toMatchObject({ kind: 'glance', glanceS: expect.closeTo(2.6, 0) });
   });
-  test('endDrive saves the profile only when calibrated; a short drive saves nothing', async () => {
+  movingTest('endDrive saves the profile only when calibrated; a short drive saves nothing', async () => {
     const long = harness();
     long.ctl.setGate(GATE);
     await drive(long, 0, 90, { frameAt: synthFrames((t, r) => ({ gaze: onRoad(r), speedKmh: 60 }), 90, 15) });
@@ -373,7 +382,7 @@ describe('setup (C2) and the thermal camera-off edge', () => {
     const h = harness();
     expect(h.ctl.setupCheck()).toEqual({ faceVisible: 'unknown', bothEyesTracked: 'unknown', lightingOk: 'unknown', angleOk: 'unknown', phoneSteady: 'unknown' });
   });
-  test('thermal L3 at speed: the running distraction stops (cameraOff), native pauses', async () => {
+  movingTest('thermal L3 at speed: the running distraction stops (cameraOff), native pauses', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
@@ -444,7 +453,7 @@ describe('T14 r1 seat I1: every open → closed gate transition stops the sound'
     h.ctl.setGate({ ...GATE, optedIn: false });
     expect(h.alerts.slice(n).map((c) => `${c.action}:${c.tier}`)).toEqual(['stop:3']);
   });
-  test('a distraction, then the role → passenger: stop', async () => {
+  movingTest('a distraction, then the role → passenger: stop', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
@@ -475,7 +484,7 @@ describe('T14 r1 seat I1: every open → closed gate transition stops the sound'
 });
 
 describe('T14 r1 seat I2: nothing of one drive leaks into the next', () => {
-  test('a drowsiness sample still queued at drive end is returned in pendingFocus; the next drive’s first row returns null', async () => {
+  movingTest('a drowsiness sample still queued at drive end is returned in pendingFocus; the next drive’s first row returns null', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) }); // still shut at the end: the episode is open
@@ -484,7 +493,7 @@ describe('T14 r1 seat I2: nothing of one drive leaks into the next', () => {
     h.ctl.setGate(GATE);
     expect(h.ctl.pushRow(featureRow(200_000, 60), POWER)).toBeNull();
   });
-  test('a drive that ended in LOST: the next drive does not start in SEARCH (15 fps at 60 km/h, not 5)', async () => {
+  movingTest('a drive that ended in LOST: the next drive does not start in SEARCH (15 fps at 60 km/h, not 5)', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 10);
@@ -502,7 +511,7 @@ describe('T14 r1 seat I2: nothing of one drive leaks into the next', () => {
     await h.ctl.endDrive();
     expect(h.ctl.setupCheck().faceVisible).toBe('unknown');
   });
-  test('an F episode in each of two back-to-back drives: one sample each, none carried or merged across', async () => {
+  movingTest('an F episode in each of two back-to-back drives: one sample each, none carried or merged across', async () => {
     // (F1 needs the open-eye baseline, so drive 2 runs past its own calibration before its episode.)
     const h = harness();
     h.ctl.setGate(GATE);
@@ -527,7 +536,7 @@ describe('T14 r1 seat m1: a late gate open replays the drive’s last rows into 
 });
 
 describe('T14 r1 seat m2: a drowsiness sample carries the episode’s measured length', () => {
-  test('F1, then 8 s closed: one sample, glanceS about 8', async () => {
+  movingTest('F1, then 8 s closed: one sample, glanceS about 8', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const d = drowsy(await drive(h, 0, 112, { frameAt: eyesShut(100, 108, 112) }));
@@ -648,7 +657,7 @@ describe('T14 r1: the permission prompt and the diagnostics the dev panel reads'
 // ---------------------------------------------------------------------------------------------------------
 
 describe('T14 r2 R1-m1: a native fault mid-drive is the camera going off (cause fault)', () => {
-  test('a distraction running, then native stopped/error: its stop at once', async () => {
+  movingTest('a distraction running, then native stopped/error: its stop at once', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
@@ -673,7 +682,7 @@ describe('T14 r2 R1-m1: a native fault mid-drive is the camera going off (cause 
 });
 
 describe('T14 r2 R1-m2: a microsleep_nod is a drowsiness sample of its deep-lid time', () => {
-  test('one microsleep_nod: one drowsiness sample, 0.5 s or more', async () => {
+  movingTest('one microsleep_nod: one drowsiness sample, 0.5 s or more', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     // At 100 s the head drops 20° over 0.5 s, holds 0.3 s and recovers over 0.3 s; the lids are shut
@@ -748,7 +757,7 @@ describe('final review I-1: native pauses and stops itself', () => {
     expect(after.filter((c) => c.kind === 'monitoring_paused').map((c) => c.cause)).toEqual(['fault']);
     expect(after.some((c) => c.action === 'stop' && c.tier === 3)).toBe(true);
   });
-  test('a running distraction, then paused/interrupted: its stop is dispatched at once', async () => {
+  movingTest('a running distraction, then paused/interrupted: its stop is dispatched at once', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
@@ -888,7 +897,7 @@ describe('final review M-1: late state events never overwrite the controller’s
 });
 
 describe('final review M-2: a drive end is atomic', () => {
-  test('endDrive() and dispose() together, with a slow save: the engine ends once, and the save lands before dispose resolves', async () => {
+  movingTest('endDrive() and dispose() together, with a slow save: the engine ends once, and the save lands before dispose resolves', async () => {
     const saved: unknown[] = [];
     let release: (() => void) | null = null;
     const fake = createFakeDmsVision({ epochAtZero: EPOCH0 });
@@ -1358,5 +1367,43 @@ describe('C2 round 1: the GNSS stop threshold has one value', () => {
   test('a config that moves the engine threshold alone is refused when the controller is built', () => {
     expect(stopThresholdProblems({ alerts: { ...DEFAULT_DMS_CONFIG.alerts, criticalEndBelowKmh: 8 } })).toEqual([expect.stringMatching(/criticalEndBelowKmh/)]);
     expect(() => harness({ config: { alerts: { criticalEndBelowKmh: 8 } } })).toThrow(/criticalEndBelowKmh/);
+  });
+});
+
+// C3 round 1 (review-C3 m1, m4).
+describe('C3 round 1: an empty-seat probe that fails to resume, and the HUD at a stop with the face lost', () => {
+  const noFace = (t: number) => frame({ tMs: t, face: false });
+  test('m1: a probe whose resume fails (paused/error) counts as still absent: no retry spent, no fault shown; the next probe starts again', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 188, { speed: () => 0, frameAt: noFace });
+    expect(h.ctl.presence().absent).toBe(true);
+    // the probe at about +30 s: native answers `run` with a failed rebind
+    const realSetPolicy = h.fake.setPolicy.bind(h.fake);
+    let failOnce = true;
+    h.fake.setPolicy = async (p) => {
+      if (failOnce && p.capture === 'run' && h.fake.nativeState() === 'paused') {
+        failOnce = false;
+        h.fake.calls.push({ method: 'setPolicy', args: [p] });
+        h.fake.emitRaw('state', { state: 'paused', reason: 'error' });
+        return;
+      }
+      return realSetPolicy(p);
+    };
+    const startsBefore = starts(h);
+    await drive(h, 188, 260, { speed: () => 0, frameAt: noFace });
+    expect(h.ctl.status().reason).not.toBe('error');
+    expect(h.ctl.presence().absent).toBe(true);
+    expect(starts(h)).toBeGreaterThan(startsBefore); // the next probe started native again
+    const summary = await h.ctl.endDrive();
+    expect(summary?.camera).toMatchObject({ retries: 0, gaveUp: false });
+  });
+  test('m4: at a stop with the face lost, the HUD says stopped (distraction) and face (the sleep rules)', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 5);
+    await drive(h, 5, 12, { speed: () => 0, frameAt: noFace });
+    expect(h.ctl.status()).toMatchObject({ camera: 'limited', reason: 'face_lost', monitoring: { distraction: 'off', drowsiness: 'limited', reason: 'stopped', why: { distraction: 'stopped', drowsiness: 'face' } } });
   });
 });

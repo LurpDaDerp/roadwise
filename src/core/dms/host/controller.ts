@@ -158,6 +158,8 @@ export interface DmsHostDiagnostics {
   motion: MotionEvidence | null;
   /** rows whose caller evidence belonged to another row (C1 round 1, m1): dropped, never applied */
   motionMismatches: number;
+  /** C3 round 1 (review-C3 m1): empty-seat probes whose resume failed, counted as still absent */
+  probeFailures: number;
 }
 
 export interface DmsControllerDeps {
@@ -223,7 +225,12 @@ const EYES_NOT_VISIBLE_MS = 10_000;
 const EPISODE_MAX_S = 60;
 /** The rows replayed into an engine created mid-drive (T14 r1 m1). */
 const REPLAY_ROWS = 10;
-/** Task C3 (rev4 §2.12.5): a face box centre this close to the door-side edge of the frame is an exit. */
+/**
+ * Task C3 (rev4 §2.12.5): a face box centre this close to the door-side edge of the frame is an exit. C3 round 1
+ * (review-C3 m2): MediaPipe often loses the face before its centre is this close, so a real exit may read false.
+ * That fails safe (driverPresent stays null, and the no-movement end comes at 20 min, not 10); device item
+ * D-C3-5 logs the last box centre at real exits to tune it (0.2 is the likely value).
+ */
 const EXIT_EDGE = 0.1;
 
 /**
@@ -309,6 +316,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   /** C1 round 1 (m2): the caller has passed evidence in this drive, so the fallback is never used again in it */
   let callerMotion = false;
   let motionMismatches = 0;
+  /** C3 round 1 (m1): empty-seat probes that failed to resume (not faults; the device pass measures the rate) */
+  let probeFailures = 0;
   // Native status.
   let thermal: ThermalName = 'nominal';
   let lowPower = false;
@@ -772,6 +781,15 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         selfPause = null;
         if (startPending || prev === 'paused') acceptFrames = token !== null;
       }
+      // C3 round 1 (review-C3 m1): during the empty-seat pause a probe whose resume fails (a transient rebind
+      // failure) counts as still absent: native is stopped quietly (the token kept), no retry is spent, no fault
+      // shown, and the next probe starts it again.
+      if (lastOut?.absent === true && (ev.reason === 'error' || ev.reason === 'interrupted') && (ev.state === 'paused' || ev.state === 'stopped')) {
+        probeFailures++;
+        stopNative(true);
+        publishStatus();
+        return;
+      }
       if (ev.state === 'stopped' && ev.reason === 'error') failed('E_CAMERA', prev === 'running' || prev === 'paused');
       else if (ev.state === 'stopped' && ev.reason === 'permission') failed('E_PERMISSION', false);
       else if (
@@ -885,7 +903,12 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         nativeState !== 'stopped'
       ) {
         notRunningSince ??= row.ts;
-        if (row.ts - notRunningSince >= RETRY_AFTER_MS) {
+        if (row.ts - notRunningSince >= RETRY_AFTER_MS && lastOut.absent) {
+          // C3 round 1 (m1): an empty-seat probe that did not resume is still absent: stop quietly, no retry.
+          notRunningSince = null;
+          probeFailures++;
+          stopNative(true);
+        } else if (row.ts - notRunningSince >= RETRY_AFTER_MS) {
           notRunningSince = null;
           if (engine !== null && selfPause === null) {
             engine.cameraOff(now(), 'fault');
@@ -1042,7 +1065,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } while (p !== ops);
     },
 
-    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView }, motion: lastMotion, motionMismatches }),
+    diagnostics: () => ({ ...stats, ruleSpeedKmh: engine?.snapshot().ruleSpeedKmh ?? null, native: nativeView === null ? null : { ...nativeView }, motion: lastMotion, motionMismatches, probeFailures }),
   };
   return api;
 }

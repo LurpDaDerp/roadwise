@@ -5,17 +5,37 @@
 //   dark           "Too dark to see you; sleep alerts limited"
 //   absent         "No one in the driver's seat"
 //   speed_unknown  "Speed unknown: distraction alerts paused"
+//   face           "Can't see your face" (C3 round 1, review-C3 m3)
+//   camera         the camera was interrupted or failed (C3 round 1, m3): never an empty cause
 // `recalibrating`, `posture` and `seed_check` are set by the calibration tasks (T4, T6); the type holds them.
+// C3 round 1 (m4): each family carries its own cause (`why`); the headline `reason` is the most useful of them,
+// in the order below (a stop is more useful than a lost face at it).
 import type { SpeedState } from '../engine/context';
 
-export type MonitoringReason = 'stopped' | 'heat' | 'dark' | 'absent' | 'app_inactive' | 'recalibrating' | 'posture' | 'seed_check' | 'eyes' | 'speed_unknown' | null;
+export type MonitoringReason =
+  | 'stopped'
+  | 'heat'
+  | 'dark'
+  | 'absent'
+  | 'app_inactive'
+  | 'camera'
+  | 'recalibrating'
+  | 'posture'
+  | 'seed_check'
+  | 'face'
+  | 'eyes'
+  | 'speed_unknown'
+  | null;
 
 export interface DmsMonitoring {
   /** D1–D3: counting as specified, counting with widened zones, or not counting */
   distraction: 'full' | 'widened' | 'off';
   /** the sleep family: every rule, some (no eyes: nods and the C-26 bridge only), or none */
   drowsiness: 'full' | 'limited' | 'off';
+  /** the headline cause (the HUD line) */
   reason: MonitoringReason;
+  /** C3 round 1: each family's own cause */
+  why: { distraction: MonitoringReason; drowsiness: MonitoringReason };
 }
 
 export interface MonitoringInput {
@@ -26,29 +46,48 @@ export interface MonitoringInput {
   engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off' } | null;
 }
 
-const OFF: DmsMonitoring = { distraction: 'off', drowsiness: 'off', reason: null };
+/** The headline order: the first family cause in this list wins. */
+const HEADLINE: readonly MonitoringReason[] = ['heat', 'dark', 'absent', 'camera', 'app_inactive', 'recalibrating', 'posture', 'seed_check', 'stopped', 'speed_unknown', 'face', 'eyes'];
+
+function literal(distraction: DmsMonitoring['distraction'], drowsiness: DmsMonitoring['drowsiness'], whyD: MonitoringReason, whyS: MonitoringReason): DmsMonitoring {
+  const reason = HEADLINE.find((r) => r === whyD || r === whyS) ?? null;
+  return { distraction, drowsiness, reason, why: { distraction: whyD, drowsiness: whyS } };
+}
+
+const both = (d: DmsMonitoring['distraction'], s: DmsMonitoring['drowsiness'], r: MonitoringReason) => literal(d, s, r, r);
+
+/** The distraction side from the engine: off with its cause at a stop or an unknown speed, else the engine's value. */
+function distractionOf(engine: MonitoringInput['engine']): { d: DmsMonitoring['distraction']; why: MonitoringReason } {
+  if (engine === null) return { d: 'off', why: null };
+  if (engine.speedState === 'stopped') return { d: 'off', why: 'stopped' };
+  if (engine.speedState === 'ambiguous') return { d: 'off', why: 'speed_unknown' };
+  return { d: engine.distraction, why: null };
+}
 
 export function monitoringOf(x: MonitoringInput): DmsMonitoring {
   switch (x.camera) {
     case 'off':
-      return { ...OFF, reason: x.reason === 'app_inactive' ? 'app_inactive' : null };
+      return both('off', 'off', x.reason === 'app_inactive' ? 'app_inactive' : x.reason === 'error' ? 'camera' : null);
     case 'starting':
-      return OFF;
+      return both('off', 'off', null);
     case 'paused':
-      if (x.reason === 'thermal') return { ...OFF, reason: 'heat' };
-      if (x.reason === 'low_light') return { distraction: 'off', drowsiness: 'limited', reason: 'dark' };
-      if (x.reason === 'absent') return { distraction: 'off', drowsiness: 'limited', reason: 'absent' };
-      return OFF;
-    case 'limited':
-      if (x.reason === 'low_light') return { distraction: 'off', drowsiness: 'limited', reason: 'dark' };
-      if (x.reason === 'eyes_not_visible') return { distraction: x.engine?.distraction ?? 'off', drowsiness: 'limited', reason: 'eyes' };
-      if (x.reason === 'face_lost') return { distraction: 'off', drowsiness: 'limited', reason: 'eyes' };
-      return OFF;
+      if (x.reason === 'thermal') return both('off', 'off', 'heat');
+      if (x.reason === 'low_light') return both('off', 'limited', 'dark');
+      if (x.reason === 'absent') return both('off', 'limited', 'absent');
+      if (x.reason === 'interrupted' || x.reason === 'error') return both('off', 'off', 'camera');
+      return both('off', 'off', null);
+    case 'limited': {
+      if (x.reason === 'low_light') return both('off', 'limited', 'dark');
+      if (x.reason === 'interrupted' || x.reason === 'error') return both('off', 'off', 'camera');
+      const dist = distractionOf(x.engine);
+      if (x.reason === 'eyes_not_visible') return literal(dist.d, 'limited', dist.why, 'eyes');
+      if (x.reason === 'face_lost') return literal('off', 'limited', dist.why ?? 'face', 'face');
+      return both('off', 'off', 'camera');
+    }
     case 'active': {
-      if (x.engine === null) return OFF;
-      if (x.engine.speedState === 'stopped') return { distraction: 'off', drowsiness: 'full', reason: 'stopped' };
-      if (x.engine.speedState === 'ambiguous') return { distraction: 'off', drowsiness: 'full', reason: 'speed_unknown' };
-      return { distraction: x.engine.distraction, drowsiness: 'full', reason: null };
+      if (x.engine === null) return both('off', 'off', null);
+      const dist = distractionOf(x.engine);
+      return literal(dist.d, 'full', dist.why, null);
     }
   }
 }

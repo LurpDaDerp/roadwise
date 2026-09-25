@@ -94,6 +94,8 @@ const MONITORING_REASONS = {
   dark: true,
   absent: true,
   app_inactive: true,
+  camera: true,
+  face: true,
   recalibrating: true,
   posture: true,
   seed_check: true,

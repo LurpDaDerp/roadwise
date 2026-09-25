@@ -242,6 +242,7 @@ export function DmsDiagnosticsPanel({
     native: null,
     motion: null,
     motionMismatches: 0,
+    probeFailures: 0,
   });
   const [tallies, setTallies] = useState<Tallies>({
     alerts: 0,
