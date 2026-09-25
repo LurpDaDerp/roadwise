@@ -57,4 +57,8 @@ describe('C3: monitoringOf', () => {
     expect(monitoringOf({ camera: 'active', reason: null, engine: { ...stopped, priorMode: true } })).toEqual(M('off', 'limited', 'stopped', 'stopped', 'learning_eyes'));
     expect(monitoringOf({ camera: 'active', reason: null, engine: { ...moving, priorMode: false } })).toEqual(M('full', 'full', null));
   });
+  test('Task C7 (H5): the eye baseline degraded: drowsiness limited, eyes; health widening reads as widened / recalibrating', () => {
+    expect(monitoringOf({ camera: 'active', reason: null, engine: { ...moving, eyesDegraded: true } })).toEqual(M('full', 'limited', 'eyes', null, 'eyes'));
+    expect(monitoringOf({ camera: 'active', reason: null, engine: { speedState: 'moving_known', distraction: 'widened', calReason: 'recalibrating' } })).toEqual(M('widened', 'full', 'recalibrating', 'recalibrating', null));
+  });
 });

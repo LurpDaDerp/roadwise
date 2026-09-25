@@ -46,7 +46,7 @@ export interface MonitoringInput {
   /** the HUD status reason */
   reason: string | null;
   /** the engine's view at its last frame; null with no engine */
-  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null; priorMode?: boolean } | null;
+  engine: { speedState: SpeedState; distraction: 'full' | 'widened' | 'off'; calReason?: 'posture' | 'recalibrating' | null; priorMode?: boolean; eyesDegraded?: boolean } | null;
 }
 
 /** The headline order: the first family cause in this list wins. */
@@ -93,6 +93,8 @@ export function monitoringOf(x: MonitoringInput): DmsMonitoring {
       const dist = distractionOf(x.engine);
       // C6 round 1 (C6-2): before any EAR reference the sleep rules catch deep closures only (the prior).
       if (x.engine.priorMode === true) return literal(dist.d, 'limited', dist.why, 'learning_eyes');
+      // Task C7 (H5): the eye baseline degraded (corroborated): "Eye tracking limited"; every rule stays on.
+      if (x.engine.eyesDegraded === true) return literal(dist.d, 'limited', dist.why, 'eyes');
       return literal(dist.d, 'full', dist.why, null);
     }
   }

@@ -241,6 +241,16 @@ export interface DmsConfig {
       unexplainedHoldS: number;
       lowRatio: number;
       lowHoldS: number;
+      /**
+       * Task C7 (rev2 §2.4 H5, rev1 K2): the eyes are degraded when every read eye's q/b is above h5Hi, or below
+       * h5Lo WITH a face-luma or IOD appearance event within h5CorroborateS (a downward ratio alone is fatigue
+       * evidence, never degradation), held h5HoldS; they recover after h5HoldS good. HUD only: every closure rule
+       * and fatigue signal stays.
+       */
+      h5Lo: number;
+      h5Hi: number;
+      h5HoldS: number;
+      h5CorroborateS: number;
       lumaEarTable: [number, number][];
       iodEarPerFrac: number;
       marUpPctPerMin: number;
@@ -404,6 +414,28 @@ export interface DmsConfig {
     warmupS: number;
   };
 
+  /**
+   * Task C7 (rev2 §2.4, rev1 K2): the gaze accuracy monitor (health.ts). H1–H4 on on-road frames of moving,
+   * calibrated time; degraded → the on-road zones widen by zones.widenDeg; never a re-centre. Recovery after
+   * recoverS of every metric good. H5 (the eyes) lives in the EAR baseline (calibration.baselines.h5*).
+   */
+  health: {
+    h1TauS: number;
+    h1MinShare: number;
+    h1HoldS: number;
+    windowS: number;
+    minWindowS: number;
+    evalEveryS: number;
+    h2MinDeg: number;
+    h2Sigmas: number;
+    h2Evals: number;
+    h3Percentile: number;
+    h3MaxRatio: number;
+    h4WindowS: number;
+    h4MaxDeg: number;
+    recoverS: number;
+  };
+
   zones: {
     table: ZoneSpec[];
     /** §M4; spec "Smoothing": 2–3° */
@@ -525,6 +557,29 @@ export interface DmsConfig {
      * every speed while the gate is open). Kept as keys: a negative control restores them.
      */
     f1: { closedS: number; lookDownClosedS: number; minSpeedKmh: number };
+    /**
+     * Task C7 (rev4 §2.3.6 S1; review-C2 §3, R-a and R-b): the looking-down latch. At a closure's onset it reads the
+     * open-eye frames of lookbackMs before it; it clears only when the head pitch is above clearPitchDeg for
+     * clearHoldMs. R-a: the unsmoothed gaze reads "down" on reliable-eye frames; at ≥ rawGuardMinFps two raw frames
+     * within rawGuardMs are needed. R-b (STOPPED only): the head at ≤ stopSetPitchDeg within the first
+     * stopSetWindowS of an episode sets it.
+     */
+    latch: {
+      lookbackMs: number;
+      clearPitchDeg: number;
+      clearHoldMs: number;
+      rawGuardMs: number;
+      rawGuardMinFps: number;
+      /**
+       * T7 pre-ruling (review-C6 Round 2): ONE raw frame sets the latch when its pitch is below
+       * lookDownRelPitchDeg − rawSingleSigmas·σ̂ (−27° at σ̂ 4°), every usable eye is reliable on it, and the two
+       * eyes' raw pitches agree within rawEyeAgreeDeg (a descending lid's partly covered iris biases one eye).
+       */
+      rawSingleSigmas: number;
+      rawEyeAgreeDeg: number;
+      stopSetPitchDeg: number;
+      stopSetWindowS: number;
+    };
     f2: { closedS: number; minSpeedKmh: number };
     f3: { closedS: number; noOnRoadS: number; minSpeedKmh: number };
     /** §M6 F4 (C-25, a plan choice): two F1 within 10 min → Severe for 15 min */
@@ -781,6 +836,10 @@ const DEFAULT: DmsConfig = {
       unexplainedHoldS: 600,
       lowRatio: 0.9,
       lowHoldS: 60,
+      h5Lo: 0.8,
+      h5Hi: 1.25,
+      h5HoldS: 60,
+      h5CorroborateS: 600,
       lumaEarTable: [
         [0.25, 0.7],
         [0.5, 0.8],
@@ -851,6 +910,22 @@ const DEFAULT: DmsConfig = {
     seedMinS: 2,
     seedMaxSdDeg: 3,
     warmupS: 60,
+  },
+  health: {
+    h1TauS: 60,
+    h1MinShare: 0.5,
+    h1HoldS: 30,
+    windowS: 30,
+    minWindowS: 20,
+    evalEveryS: 10,
+    h2MinDeg: 4,
+    h2Sigmas: 1.5,
+    h2Evals: 2,
+    h3Percentile: 0.85,
+    h3MaxRatio: 1.5,
+    h4WindowS: 30,
+    h4MaxDeg: 6,
+    recoverS: 60,
   },
   zones: {
     // §M4 table; spec "The zones built from the road centre" and Rule D1's grace and weights.
@@ -930,6 +1005,7 @@ const DEFAULT: DmsConfig = {
     lookDownClosedBelow: 0.15,
     prior: { closedEar: 0.06, openEar: 0.12, deepEar: 0.045, f1ClosedS: 1.5, reopenMs: 500 },
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
+    latch: { lookbackMs: 500, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, stopSetPitchDeg: -6, stopSetWindowS: 1.0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
     f4: { windowS: 600, holdS: 900 },
@@ -1049,6 +1125,7 @@ const SIGNED = [
   /^calibration\.histPitchDeg\b/,
   /^calibration\.opennessCheckMinRelPitchDeg$/,
   /^closure\.lookDownRelPitchDeg$/,
+  /^closure\.latch\.(clearPitchDeg|stopSetPitchDeg)$/,
   /^zones\.table\[\w+\]\.region\./,
 ];
 
@@ -1240,10 +1317,28 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(d2.warnS <= d2.windowS)) bad('distraction.d2.warnS', 'must be ≤ windowS');
   if (!Number.isInteger(c.distraction.d3.minGlances) || c.distraction.d3.minGlances < 1) bad('distraction.d3.minGlances', 'must be a positive integer');
 
+  // Task C7: health.
+  const he = c.health;
+  if (!(he.h1MinShare > 0 && he.h1MinShare < 1)) bad('health.h1MinShare', 'must be in (0, 1)');
+  if (!(he.minWindowS < he.windowS)) bad('health.minWindowS', 'must be < windowS');
+  if (!(he.evalEveryS > 0 && he.evalEveryS <= he.windowS)) bad('health.evalEveryS', 'must be in (0, windowS]');
+  if (!Number.isInteger(he.h2Evals) || he.h2Evals < 1) bad('health.h2Evals', 'must be a positive integer');
+  if (!(he.h3Percentile > 0 && he.h3Percentile < 1)) bad('health.h3Percentile', 'must be in (0, 1)');
+  if (!(he.h3MaxRatio > 1)) bad('health.h3MaxRatio', 'must be > 1');
+
   // Closure.
   const cl = c.closure;
   if (!(cl.closedBelow < cl.openAbove)) bad('closure.closedBelow', 'must be < openAbove (hysteresis)');
   if (!(cl.lookDownClosedBelow <= cl.closedBelow)) bad('closure.lookDownClosedBelow', 'must be ≤ closedBelow');
+  // Task C7 (review-C2 round 1): the latch's constants.
+  const la = cl.latch;
+  if (!(la.lookbackMs >= 200)) bad('closure.latch.lookbackMs', 'must be ≥ 200 ms (one frame at 5 fps)');
+  if (!(la.stopSetPitchDeg <= la.clearPitchDeg - 1)) bad('closure.latch.stopSetPitchDeg', 'must be ≤ clearPitchDeg − 1 (no head angle both sets and clears)');
+  if (!(la.clearHoldMs > 0)) bad('closure.latch.clearHoldMs', 'must be > 0');
+  if (!(la.rawSingleSigmas >= 2)) bad('closure.latch.rawSingleSigmas', 'must be ≥ 2 (a single frame must lie far beyond noise)');
+  if (!(la.rawEyeAgreeDeg > 0)) bad('closure.latch.rawEyeAgreeDeg', 'must be > 0');
+  if (!(la.stopSetWindowS <= cl.f1.closedS)) bad('closure.latch.stopSetWindowS', 'must be ≤ f1.closedS (R-b acts before F1 can fire)');
+  if (!(la.clearPitchDeg < 0 && la.clearPitchDeg > cl.lookDownRelPitchDeg)) bad('closure.latch.clearPitchDeg', 'must lie between lookDownRelPitchDeg and 0');
   if (!(cl.f1.closedS < cl.f2.closedS && cl.f2.closedS < cl.f3.closedS)) bad('closure.f1', 'F1 < F2 < F3 closure times');
   if (!(cl.f1.lookDownClosedS >= cl.f1.closedS)) bad('closure.f1.lookDownClosedS', 'must be ≥ f1.closedS');
   // C6 round 1 (C6-2): the prior's absolute EARs, deep only (below any plausible open eye).

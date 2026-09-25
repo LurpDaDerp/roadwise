@@ -237,3 +237,33 @@ describe('C6 round 1 (review-C6 C6-1): only lid-independent evidence explains a 
     expect(Math.abs(last(o).r! / (REF * f) - 1)).toBeLessThanOrEqual(0.03);
   });
 });
+
+describe('Task C7: H5, the eye baseline degraded only when corroborated (rev2 §2.4; NC-K2b)', () => {
+  test('a face-luma event (0.5, explains ×0.8) with the EAR at ×0.6: the reference stops at ×0.8, q/b 0.75 held 60 s: degraded', () => {
+    const b = fresh();
+    run(b, (t) => (t >= 60 ? { ear: REF * 0.6, luma: 0.5 } : {}), 300);
+    expect(b.eyesDegraded()).toBe(true);
+  });
+  test('a droop to ×0.7 with NO appearance event: fatigue evidence, never degraded (NC-K2b)', () => {
+    const b = fresh();
+    const seen: boolean[] = [];
+    run(b, (t) => {
+      seen.push(b.eyesDegraded());
+      return t >= 60 ? { ear: REF * 0.7 } : {};
+    }, 600);
+    expect(b.lowUnexplained()).toBe(true);
+    expect(seen.some(Boolean)).toBe(false);
+  });
+  test('upward beyond the follow: ×2 (the reference capped at ×1.4, q/b 1.43): degraded', () => {
+    const b = fresh();
+    run(b, (t) => (t >= 60 ? { ear: REF * 2 } : {}), 900);
+    expect(b.eyesDegraded()).toBe(true);
+  });
+  test('×1.6 is followed at 5 %/min: degraded while q/b > 1.25, good again 60 s after it falls under', () => {
+    const b = fresh();
+    run(b, (t) => (t >= 60 ? { ear: REF * 1.6 } : {}), 240);
+    expect(b.eyesDegraded()).toBe(true);
+    run(b, () => ({ ear: REF * 1.6 }), 600, 240);
+    expect(b.eyesDegraded()).toBe(false);
+  });
+});

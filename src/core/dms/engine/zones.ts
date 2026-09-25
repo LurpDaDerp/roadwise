@@ -47,11 +47,12 @@ export function zoneClass(id: ZoneId, cfg: Pick<DmsConfig, 'zones'>): ZoneClass 
 
 /** C-16: +widenDeg per active condition, capped at widenCapDeg. */
 export function widening(
-  c: { uncalibrated: boolean; warmup: boolean; headOnly: boolean; resumeCheck: boolean; posture?: boolean; recalibrating?: boolean },
+  c: { uncalibrated: boolean; warmup: boolean; headOnly: boolean; resumeCheck: boolean; posture?: boolean; recalibrating?: boolean; health?: boolean },
   cfg: Pick<DmsConfig, 'zones'>
 ): number {
   // Task C4: a posture onset or the dual state (rev2 §2.3.2), and a new driver's unverified seed (W2), each +5°.
-  const n = [c.uncalibrated, c.warmup, c.headOnly, c.resumeCheck, c.posture === true, c.recalibrating === true].filter(Boolean).length;
+  // Task C7 (rev2 §2.4): gaze health degraded, +5° (never more from health).
+  const n = [c.uncalibrated, c.warmup, c.headOnly, c.resumeCheck, c.posture === true, c.recalibrating === true, c.health === true].filter(Boolean).length;
   return Math.min(n * cfg.zones.widenDeg, cfg.zones.widenCapDeg);
 }
 

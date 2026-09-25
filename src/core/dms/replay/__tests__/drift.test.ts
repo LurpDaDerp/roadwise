@@ -23,7 +23,7 @@ interface Run {
   events: DmsEvent[];
   commands: DmsAlertCommand[];
   /** once a second: time, the primary centre, the distraction state */
-  seconds: { tMs: number; centre: AnglePair | null; distraction: DmsSnapshot['distraction'] }[];
+  seconds: { tMs: number; centre: AnglePair | null; distraction: DmsSnapshot['distraction']; health: DmsSnapshot['health']['gaze']; calReason: DmsSnapshot['calReason'] }[];
 }
 
 function play(driver: DriverFn, seconds: number, o: { fps?: number; cfg?: DmsConfig; seed?: number } = {}): Run {
@@ -40,7 +40,7 @@ function play(driver: DriverFn, seconds: number, o: { fps?: number; cfg?: DmsCon
     if (it.frame.tMs >= next) {
       next += 1000;
       const s = engine.snapshot();
-      run.seconds.push({ tMs: it.frame.tMs, centre: s.centre.gaze, distraction: s.distraction });
+      run.seconds.push({ tMs: it.frame.tMs, centre: s.centre.gaze, distraction: s.distraction, health: s.health.gaze, calReason: s.calReason });
     }
   }
   return run;
@@ -320,12 +320,24 @@ describe('C5 round 2 (R1-a): an uncorroborated shift at 8 fps is followed (retur
   test('S-U5.5-8FPS: 5.5° yaw: followed, bias ≤ 1.5° at the end', () => {
     expect(bias({ yaw: 5.5, pitch: 0 })).toBeLessThanOrEqual(1.5);
   });
-  // KNOWN FAILING until T7 (review-C5 round 1 carry): the road 7° up puts road frames above the forward road, the
-  // false D1 warnings (about one every 20 s) void the admitted samples ±30 s, and the rolling window never holds
-  // the weight to follow. T7's health widening removes those false D1s; this test then passes and must be turned
-  // into a plain test (test.failing fails the day it passes).
-  test.failing('S-U7-UP-8FPS: 7° up: followed, bias ≤ 1.5° at the end (T7 carry: the warnings void the recovery)', () => {
-    expect(bias({ yaw: 0, pitch: 7 })).toBeLessThanOrEqual(1.5);
+  // Task C7 (the binding carry; review-C5 Round 1 (d), Round 2): the road 7° up puts road frames above the forward
+  // road; the false D1 warnings void the admitted samples ±30 s, which locked the rolling path out (the test was
+  // test.failing until T7). Health's own window is never voided: H2 sees the offset, the zones widen, the warnings
+  // stop, and the rolling path follows.
+  test('S-U7-UP-8FPS: 7° up: health degraded ≤ 60 s after the shift, 0 D1 after it (HUD widened), followed (bias ≤ 1.5°), health recovers', () => {
+    const shift = { yaw: 0, pitch: 7 };
+    const r = play(drv((t) => ({ ...mirrors(t), ...(t >= 110 ? { posture: { shift } } : {}) })), 110 + 600, { fps: 8, seed: 11 });
+    const deg = r.seconds.find((s) => s.tMs > 110_000 && s.health === 'degraded');
+    expect(deg).toBeDefined();
+    expect(deg!.tMs).toBeLessThanOrEqual(110_000 + 60_000);
+    // the zones widen from the next frame on (the widening reads the health of the frame before)
+    const after = at(r, deg!.tMs + 1000);
+    expect(after.distraction).toBe('widened');
+    expect(after.calReason).toBe('recalibrating');
+    expect(d1(r, deg!.tMs)).toEqual([]);
+    const c0 = at(r, 109_000).centre!;
+    expect(angularDistanceDeg(at(r, 709_000).centre!, { yaw: c0.yaw + shift.yaw, pitch: c0.pitch + shift.pitch })).toBeLessThanOrEqual(1.5);
+    expect(at(r, 709_000).health).toBe('good');
   });
 });
 
@@ -358,3 +370,35 @@ describe('a phone-ward commit needs the fatigue gate clear (review-C5 §4; NC-C5
     expect(ev(r, 'posture_commit').length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('Task C7: the gaze accuracy monitor (rev2 §2.4; review-C5 Round 1 (d): S-U7-NOMIRROR; NC-K2a)', () => {
+  // A driver who never checks a mirror never gets a large rolling follow (C5 (d)): the residual is safe only because
+  // health widens. The shift stays uncorrected (health never re-centres), the HUD says so, and no false D1 sounds.
+  test.each([8, 15])('S-U7-NOMIRROR at %i fps: 7° up, no mirror checks: degraded ≤ 60 s, 0 D1 after it, widened to the end; never re-centred', (fps) => {
+    const shift = { yaw: 0, pitch: 7 };
+    const r = play(drv((t) => (t >= 110 ? { posture: { shift } } : null)), 110 + 600, { fps, seed: 11 });
+    const deg = r.seconds.find((s) => s.tMs > 110_000 && s.health === 'degraded');
+    expect(deg).toBeDefined();
+    expect(deg!.tMs).toBeLessThanOrEqual(110_000 + 60_000);
+    expect(d1(r, deg!.tMs)).toEqual([]);
+    expect(r.seconds.filter((s) => s.tMs > deg!.tMs).every((s) => s.distraction === 'widened' && s.health === 'degraded')).toBe(true);
+    // health never re-centres (NC-K2a): the centre stays well short of the 7° shift
+    expect(angularDistanceDeg(at(r, 109_000).centre!, at(r, 709_000).centre!)).toBeLessThanOrEqual(2.5);
+  });
+  test('S-HEALTH-CLEAN: 30 min of ordinary driving with mirror checks: never degraded, the HUD full', () => {
+    const r = play(drv((t) => mirrors(t)), 1800, { seed: 12 });
+    expect(r.seconds.filter((s) => s.tMs > 120_000).every((s) => s.health === 'good')).toBe(true);
+  });
+  test('S-TEXT and the texting probe read no calibration fault: health stays good', () => {
+    const r = play(
+      drv((t) => {
+        if (t < 100) return null;
+        const k = (t - 100) % 9;
+        return k < 2.5 ? { gaze: rel(0, -12) } : k >= 4.5 && k < 7 ? { gaze: rel(5, -35) } : null;
+      }),
+      700
+    );
+    expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
+  });
+});
+

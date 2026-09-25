@@ -7,7 +7,7 @@
 // a left-hand drive) and converted to the camera frame.
 import type { FeatureRowLike, RowExtras } from '../engine/context';
 import type { AnglePair, EngineFrame, GazeSource, RowMotion } from '../engine/types';
-import { drvToCam, frame, gauss, rng } from '../engine/__fixtures__/synth';
+import { CLOSED_EAR, drvToCam, frame, gauss, rng } from '../engine/__fixtures__/synth';
 
 /** What the driver and the car do at time t (seconds). Everything but `gaze` has a default. */
 export interface DriverState {
@@ -98,6 +98,18 @@ export interface SynthOpts {
    * arrives (K12 measures it on both platforms).
    */
   lidGaze?: boolean;
+  /** Task C7 (review-C2 §3): the lid's lag behind the gaze, seconds; default LID_LAG_S (150 ms). The fast lid is 0.05. */
+  lidLagS?: number;
+  /**
+   * Task C7: the head's share of the gaze when the driver gives none (an eye-mover is 0.2); default 0.4.
+   */
+  headShare?: number;
+  /**
+   * Task C7: the lid openness above which the iris is seen (a reliable eye). Default 0.2 (C6 round 1). The C2
+   * reviewer's model is 0.33 (the fixture's old look: an EAR ≤ 0.1 of a 0.3 eye has no iris); the reading tests
+   * run under both.
+   */
+  irisMinLid?: number;
 }
 
 /** The synth lid–gaze coupling's floor (amendment W4: 0.17, so no test sits on the 0.15 deep threshold). */
@@ -148,21 +160,22 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   let nextRowT = 0;
   let head: AnglePair | null = null;
   const lag = 1 - Math.exp(-1 / o.fps / HEAD_LAG_S);
-  const lidLag = 1 - Math.exp(-1 / o.fps / LID_LAG_S);
+  const lidLag = 1 - Math.exp(-1 / o.fps / (o.lidLagS ?? LID_LAG_S));
+  const share = o.headShare ?? 0.4;
   /** the gaze pitch (relative to the road centre) the lid is following */
   let lidPitch: number | null = null;
   for (let i = 0; i < n; i++) {
     const t = i / o.fps;
     const raw = o.driver(t, r);
-    // The head: explicit, or trailing 40 % of the gaze.
-    const target = raw.head ?? { yaw: 0.4 * raw.gaze.yaw, pitch: 0.4 * raw.gaze.pitch };
+    // The head: explicit, or trailing `headShare` (40 %) of the gaze.
+    const target = raw.head ?? { yaw: share * raw.gaze.yaw, pitch: share * raw.gaze.pitch };
     head = raw.head !== undefined || head === null ? target : { yaw: head.yaw + (target.yaw - head.yaw) * lag, pitch: head.pitch + (target.pitch - head.pitch) * lag };
     const s: DriverState = { ...raw, head };
     const netThis = i % (o.netEvery ?? 1) === 0;
     const gazeRelPitch = s.gaze.pitch - ROAD.pitch;
     lidPitch = lidPitch === null ? gazeRelPitch : lidPitch + (gazeRelPitch - lidPitch) * lidLag;
     const lid = o.lidGaze === true ? lidFactor(lidPitch) : 1;
-    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG) };
+    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG, o.irisMinLid ?? 0.2) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
       item.row = {
@@ -176,7 +189,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   return out;
 }
 
-function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false, boxPerDeg = FACE_BOX_PER_DEG): EngineFrame {
+function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false, boxPerDeg = FACE_BOX_PER_DEG, irisMinLid = 0.2): EngineFrame {
   const tMs = t * 1000;
   if (s.face === false) return frame({ tMs, face: false });
   const mount = s.mountShift ?? { yaw: 0, pitch: 0 };
@@ -211,12 +224,19 @@ function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, no
     iod = (iod ?? 0.2) * (s.posture.iodScale ?? 1);
   }
   // C6 round 1 (review-C6 C6-1): the eye ROI follows the lid. As it lowers, the iris contrast falls (∝ √openness)
-  // and the ROI luma rises toward the skin's; only the face luma and the IOD are lid-independent. Above a lid of 0.2
-  // the iris is seen whatever the absolute EAR (a reading lid at 0.25 of a 0.3 eye, EAR 0.075, is tracked: C6-2's
-  // S-PRIOR-READ needs it); at or below it the eye keeps the fixture's closed look (contrast ≈ 0, iris outside).
+  // and the ROI luma rises toward the skin's; only the face luma and the IOD are lid-independent. Above a lid of
+  // `irisMinLid` (0.2) the iris is seen whatever the absolute EAR (a reading lid at 0.25 of a 0.3 eye, EAR 0.075, is
+  // tracked: C6-2's S-PRIOR-READ needs it); at or below it the eye has the fixture's closed look (contrast ≈ 0, the
+  // iris outside the contour).
   const lidOpen = Math.min(1, o);
   const lens =
-    s.lens === true ? { irisContrast: 3, irisIn: false } : lidOpen > 0.2 && lidOpen < 1 ? { irisContrast: 40 * Math.sqrt(lidOpen), irisIn: true, luma: 1 + 0.3 * (1 - lidOpen) } : {};
+    s.lens === true
+      ? { irisContrast: 3, irisIn: false }
+      : lidOpen > irisMinLid && lidOpen < 1
+        ? { irisContrast: 40 * Math.sqrt(lidOpen), irisIn: true, luma: 1 + 0.3 * (1 - lidOpen) }
+        : lidOpen <= irisMinLid && ear > CLOSED_EAR
+          ? { irisContrast: 2, irisIn: false }
+          : {};
   return frame({
     tMs,
     head: { yaw: headCam.yaw, pitch: headCam.pitch, roll: 0 },

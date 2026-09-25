@@ -93,6 +93,8 @@ export interface Baselines {
   onYawn(tMs: number): void;
   /** fatigue evidence: an unexplained EAR drop (at an event, or a continuous low q/b) */
   lowUnexplained(): boolean;
+  /** Task C7 (H5): the eye baseline is degraded (corroborated) */
+  eyesDegraded(): boolean;
   /** the current appearance (smoothed), for the resume paths */
   appearance(): Appearance | null;
   reset(): void;
@@ -212,6 +214,11 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   /** a boundary passed inside an episode: the read waits for its end (never a change while closed or stopped) */
   let readDue = false;
   let lowSince: number | null = null;
+  /** Task C7 (H5) */
+  let lastAppEventT = Number.NEGATIVE_INFINITY;
+  let h5BadSince: number | null = null;
+  let h5GoodSince: number | null = null;
+  let h5Degraded = false;
   let lowFlag = false;
   let unexplainedUntil = Number.NEGATIVE_INFINITY;
   let yawnT = Number.NEGATIVE_INFINITY;
@@ -367,6 +374,8 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     if (ref !== null && check === null) {
       let allLow = true;
       let anyEye = false;
+      let allHigh = true;
+      let allH5Low = true;
       const cur = ref;
       const next: EarPair = { ...cur };
       for (const side of ['r', 'l'] as const) {
@@ -379,6 +388,8 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
         }
         anyEye = true;
         if (q.v / was > b.lowRatio) allLow = false;
+        if (!(q.v / was > b.h5Hi)) allHigh = false;
+        if (!(q.v / was < b.h5Lo)) allH5Low = false;
         if (q.v > was) {
           const step = ((ref0?.[side] ?? was) * b.earUpPctPerMin * b.readEveryS) / (100 * 60);
           next[side] = Math.min(q.v, was + step, (ref0?.[side] ?? was) * b.earUpCapFrac);
@@ -404,6 +415,25 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
         lowSince = null;
         lowFlag = false;
       }
+      // Task C7 (H5): up alone, or down WITH a face-luma/IOD event (corroborated); held, and recovered, h5HoldS.
+      if (anyEye) {
+        const corroborated = x.tMs - lastAppEventT <= b.h5CorroborateS * 1000;
+        const bad = allHigh || (allH5Low && corroborated);
+        if (bad) {
+          h5GoodSince = null;
+          h5BadSince ??= x.tMs;
+          if (x.tMs - h5BadSince >= b.h5HoldS * 1000) h5Degraded = true;
+        } else {
+          h5BadSince = null;
+          if (h5Degraded) {
+            h5GoodSince ??= x.tMs;
+            if (x.tMs - h5GoodSince >= b.h5HoldS * 1000) {
+              h5Degraded = false;
+              h5GoodSince = null;
+            }
+          }
+        }
+      }
     }
     // The MAR.
     if (mar !== null) {
@@ -428,9 +458,14 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       yawnT = Math.max(yawnT, tMs);
     },
     lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
+    eyesDegraded: () => h5Degraded,
     appearance: () => (app === null ? null : { ...app }),
     reset() {
       ref = null;
+      lastAppEventT = Number.NEGATIVE_INFINITY;
+      h5BadSince = null;
+      h5GoodSince = null;
+      h5Degraded = false;
       ref0 = null;
       ref0App = null;
       refApp = null;
@@ -517,6 +552,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
           lumaOffSince = Math.abs(rt.luma - 1) >= b.appearanceLumaFrac ? (lumaOffSince ?? x.tMs) : null;
           iodOffSince = Math.abs(rt.iod - 1) >= b.appearanceIodFrac ? (iodOffSince ?? x.tMs) : null;
           const held = (s: number | null) => s !== null && x.tMs - s >= b.appearanceHoldS * 1000;
+          if (held(lumaOffSince) || held(iodOffSince)) lastAppEventT = x.tMs; // Task C7: H5's corroboration
           event = held(lumaOffSince) || held(iodOffSince) || tier.r.now !== refTier.r || tier.l.now !== refTier.l;
         }
         if (event) {

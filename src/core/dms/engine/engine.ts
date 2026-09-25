@@ -25,6 +25,7 @@
 // A drive owns its own alert manager, summary, fatigue and rule state (T11 r1 carry): `endDrive` stops
 // every sound, builds the summary and the profile, then starts the next drive fresh, warm from that
 // profile. Commands are merged with concat/spread only: the manager's empty array is frozen.
+import { rollCorrect, toDriverFrame } from './angles';
 import { createAlertManager, LOG_CAP, type AlertLogEntry, type AlertRequest, type CameraOffCause, type DmsAlertCommand } from './alerts';
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
@@ -34,6 +35,7 @@ import { createContextTracker, type FeatureRowLike, type RowExtras, type SpeedSt
 import { createFpsMeter } from './eyes';
 import { createFastRules, type FastEvent, type FatigueFloor } from './fastRules';
 import { createFatigue, type FatigueLevel, type FatigueMinute } from './fatigue';
+import { createHealthMonitor, type HealthMetrics } from './health';
 import { createNodDetector } from './nod';
 import type { DmsProfileV1, LearnedZone } from './profile';
 import { classifyQuality, type Quality } from './quality';
@@ -163,6 +165,11 @@ export interface DmsSnapshot {
    * closures only): the HUD shows drowsiness as limited
    */
   priorMode: boolean;
+  /**
+   * Task C7 (rev2 §2.4): the accuracy monitor. Gaze degraded widens the on-road zones by +5° (the HUD 'widened',
+   * 'recalibrating'); eyes degraded (H5, corroborated) shows drowsiness 'limited' ('eyes'). Never a re-centre.
+   */
+  health: { gaze: 'good' | 'degraded'; eyes: 'good' | 'degraded'; metrics: HealthMetrics; degradedS: number };
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -244,6 +251,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       learner: createZoneLearner(cfg, []),
       attention: createAttention(cfg, init.sensitivity),
       fast: createFastRules(cfg),
+      health: createHealthMonitor(cfg),
       nod: createNodDetector(cfg),
       yawn: createYawnDetector(cfg),
       fatigue: createFatigue(cfg),
@@ -348,7 +356,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const centre = refs.gazeCentre ?? refs.headCentre;
     // C4 round 2 (review-C4 R1-A): the posture and onset widening widens the road-centre circle only.
     const widenDeg = widening(
-      { uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking(), recalibrating: d.cal.recalibrating() },
+      { uncalibrated: calState !== 'calibrated' && calState !== 'seeded', warmup: d.warmup, headOnly: p.quality === 'head_only' || p.marginDeg > 0, resumeCheck: d.cal.resumeChecking(), recalibrating: d.cal.recalibrating(), health: d.health.gazeDegraded() },
       cfg
     );
     const zc = {
@@ -395,6 +403,30 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.learner.maybeCluster(d.cal.drivingS());
     const onRoad = zone !== null && zoneClass(zone, cfg) === 'on_road';
     const c8 = p.quality === 'lost' && zone === 'far_lateral';
+    // Task C7 (rev2 §2.4): the gaze accuracy monitor, on on-road gaze frames of moving, calibrated, single-centre time.
+    const calibratedNow = calState === 'calibrated' || calState === 'seeded';
+    if (!calibratedNow) d.health.reset();
+    let sourceDiffDeg: number | null = null;
+    if (gazeSource === 'net' && p.netFresh && p.netCam !== null && p.geoCam !== null) {
+      const cn = d.cal.centre('net');
+      const cg = d.cal.centre('geometric');
+      if (cn !== null && cg !== null) {
+        const drv = (a: AnglePair) => toDriverFrame(rollCorrect(a, d.cal.rollOffset()), init.driverSide);
+        const n = drv(p.netCam);
+        const g = drv(p.geoCam);
+        sourceDiffDeg = Math.hypot(n.yaw - cn.yaw - (g.yaw - cg.yaw), n.pitch - cn.pitch - (g.pitch - cg.pitch));
+      }
+    }
+    d.health.step({
+      tMs: t,
+      dtS: obsDt,
+      hold: stopped || !calibratedNow || c1 !== null || d.cal.postureWidening(),
+      onRoadGaze: onRoad && p.source === 'gaze' && p.gazeDrv !== null ? p.gazeDrv : null,
+      centre: refs.gazeCentre,
+      radiusDeg: d.cal.radius(),
+      sigmaDeg: d.cal.sigma(),
+      sourceDiffDeg,
+    });
 
     requests.length = 0;
     // Attention (D1–D4, glances).
@@ -597,12 +629,14 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         lostNoFace: d.lastNoFace,
         distraction: d.lastDistraction,
         centre: { gaze: d.cal.centre(gazeSource) ?? d.cal.centre('geometric'), head: d.cal.centre('head') },
-        calReason: d.cal.reason(),
+        // Task C7: gaze health degraded reads as recalibrating on the HUD (the zones widened).
+        calReason: d.cal.reason() ?? (d.health.gazeDegraded() ? 'recalibrating' : null),
         fatigueGate: d.fatigueGateNow,
         earRef: earMean(d.cal.openEyeEar()),
         pitchReference: d.cal.pitchReference(),
         earEvidence: d.cal.earEvidence(),
         priorMode: earMean(d.cal.openEyeEar()) === null,
+        health: { gaze: d.health.gazeDegraded() ? 'degraded' : 'good', eyes: d.cal.eyesDegraded() ? 'degraded' : 'good', metrics: d.health.metrics(), degradedS: d.health.degradedS() },
       };
     },
 

@@ -37,6 +37,11 @@ const attentive: DriverFn = (t, r) => ({ gaze: onRoad(r), speedKmh: 80 });
 const glances: DriverFn = (t, r) => ({ gaze: t >= 100 && (t - 100) % 60 < 3.4 ? rel(20, -25) : onRoad(r), speedKmh: 60 });
 
 describe('the shadow comparator', () => {
+  test('Task C7 (review-C2 Round 1 minor): its engines refuse a stop threshold that disagrees with the motion evidence, as the controller does', () => {
+    const fake = createFakeDmsVision({ gazeNetAvailable: true, epochAtZero: EPOCH0 });
+    expect(() => createShadowComparator(fake, { config: { alerts: { criticalEndBelowKmh: 8 } } })).toThrow(/criticalEndBelowKmh/);
+    expect(() => createShadowComparator(fake)).not.toThrow();
+  });
   test('it only listens: no native call or query, whatever it is fed', async () => {
     const fake = createFakeDmsVision({ gazeNetAvailable: true, epochAtZero: EPOCH0 });
     await running(fake);

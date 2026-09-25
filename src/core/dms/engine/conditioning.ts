@@ -33,6 +33,17 @@ export interface ConditionerRefs {
   pitchReference: number | null;
   /** the policy's gazeNetEvery (1 or 2): how long a net value may be carried (T6 review m2); default 1 */
   gazeNetEvery?: number;
+  /**
+   * Task C7 (rev2 §2.3.6): the FROZEN gate references the looking-down gate and its latch are measured against:
+   * the configured source's, the geometric path's (the raw gaze, R-a) and the head's. Set at the Stage 1 pass or
+   * from a seed or profile, moved only by a committed translation step or a step bump's head step, never by the
+   * EMA, rolling, slow or health paths. Absent: the live centres (the tests' plain refs).
+   */
+  gateGazeRef?: AnglePair | null;
+  gateGeoRef?: AnglePair | null;
+  gateHeadRef?: AnglePair | null;
+  /** Task C7: σ̂ of the raw geometric gaze (Stage 1's within-cluster SD; default 4°), for R-a's single-frame test */
+  rawSigmaDeg?: number;
 }
 
 export type GazeUse = 'gaze' | 'held' | 'head' | 'none';
@@ -112,9 +123,22 @@ export interface Perceived {
   lookingDown: boolean;
   /**
    * Task C2 (rev4 §2.3.6): the head pitch relative to the head centre (before any centre, the pitch
-   * reference), degrees; null without a head or a reference. The looking-down latch clears on it.
+   * reference), degrees; null without a head or a reference. The looking-down latch clears on it. Task C7:
+   * against the frozen gateHeadRef when there is one.
    */
   headRelPitch: number | null;
+  /**
+   * Task C7 (review-C2 §3 R-a): the UNSMOOTHED geometric gaze pitch against the frozen geometric gate reference,
+   * on frames with a reliable eye (the iris seen); null otherwise. The latch reads it: Median3 lags a saccade by
+   * up to two frames, which at 5 fps is past the lid's fall.
+   */
+  gazeRelRawPitch: number | null;
+  /**
+   * Task C7 (the T7 pre-ruling): this raw frame alone reads "down" for the latch: gazeRelRawPitch below
+   * lookDownRelPitchDeg − rawSingleSigmas·σ̂, every usable eye reliable, and the two eyes' raw pitches within
+   * rawEyeAgreeDeg.
+   */
+  gazeRawSingleDown: boolean;
   /** driver-frame head yaw rate, °/s; null without two consecutive heads */
   headYawSpeedDegS: number | null;
 }
@@ -265,11 +289,30 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         prevHeadDrvYaw = null;
       }
 
-      // The geometric gaze (camera frame), smoothed.
+      // The geometric gaze (camera frame), smoothed; and (Task C7, R-a) its raw pitch against the gate reference.
       let geoCam: AnglePair | null = null;
+      let gazeRelRawPitch: number | null = null;
+      let gazeRawSingleDown = false;
       if (q.quality === 'tracking' && f.head !== null) {
         const g = geometricGaze(f.head, f, { r: q.reliableR, l: q.reliableL }, cfg);
-        if (g !== null) geoCam = { yaw: gy.push(g.yaw), pitch: gp.push(g.pitch) };
+        if (g !== null) {
+          geoCam = { yaw: gy.push(g.yaw), pitch: gp.push(g.pitch) };
+          const rawRef = refs.gateGeoRef !== undefined ? refs.gateGeoRef : (refs.geoCentre ?? (refs.gazeSource === 'geometric' ? refs.gazeCentre : null));
+          if ((q.reliableR || q.reliableL) && rawRef !== null) {
+            gazeRelRawPitch = toDrv(g).pitch - rawRef.pitch;
+            // Task C7 (the T7 pre-ruling): the single-frame test. Every usable eye reliable, and the eyes agree.
+            const la = cfg.closure.latch;
+            const allReliable = (!q.usableR || q.reliableR) && (!q.usableL || q.reliableL);
+            let agree = true;
+            if (q.reliableR && q.reliableL) {
+              const gr = geometricGaze(f.head, f, { r: true, l: false }, cfg);
+              const gl = geometricGaze(f.head, f, { r: false, l: true }, cfg);
+              agree = gr === null || gl === null || Math.abs(toDrv(gr).pitch - toDrv(gl).pitch) <= la.rawEyeAgreeDeg;
+            }
+            const beyond = cfg.closure.lookDownRelPitchDeg - la.rawSingleSigmas * (refs.rawSigmaDeg ?? 4);
+            gazeRawSingleDown = allReliable && agree && gazeRelRawPitch < beyond;
+          }
+        }
       }
       if (geoCam === null) {
         // A dropout of the geometric gaze starts a new smoothing run (T6 review m4).
@@ -304,7 +347,9 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       // The head evidence C-26 needs: relative pitch (to the head centre, or the pre-calibration
       // reference), its last second, and the C-8 turn signals (yaw speed in the fast-turn window, yaw).
       const cl = cfg.closure;
-      const relPitch = headDrv === null ? null : refs.headCentre !== null ? headDrv.pitch - refs.headCentre.pitch : refs.pitchReference !== null ? headDrv.pitch - refs.pitchReference : null;
+      // Task C7: against the frozen gate head reference when there is one.
+      const headGateRef = refs.gateHeadRef !== undefined ? refs.gateHeadRef : refs.headCentre;
+      const relPitch = headDrv === null ? null : headGateRef !== null ? headDrv.pitch - headGateRef.pitch : refs.pitchReference !== null ? headDrv.pitch - refs.pitchReference : null;
       if (relPitch !== null) pitchHist.push({ t: f.tMs, v: relPitch });
       pitchHist.dropWhile((s) => s.t < f.tMs - cl.bridgeDropWindowS * 1000);
       if (headYawSpeedDegS !== null) yawSpeeds.push({ t: f.tMs, v: headYawSpeedDegS });
@@ -409,11 +454,19 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
       // Only a gaze seen this closure's run may be held (T6 review m4).
       if (source !== 'gaze' && source !== 'held') lastGazeRel = null;
 
-      // Looking down: the rules' relative pitch; before any centre, head pitch against the reference.
+      // Looking down: the rules' relative pitch; before any centre, head pitch against the reference. Task C7
+      // (rev2 §2.3.6): today's rule exactly, against the FROZEN gate references (a gaze or held frame against the
+      // source's gate reference, the head fallback against the head's), so pull on the live centres cannot move it.
       const rel = gazeRel as AnglePair | null;
       let lookingDown = false;
-      if (rel !== null) lookingDown = rel.pitch < cfg.closure.lookDownRelPitchDeg;
-      else if (headDrv !== null && refs.pitchReference !== null) lookingDown = headDrv.pitch - refs.pitchReference < cfg.closure.lookDownRelPitchDeg;
+      if (rel !== null) {
+        const gateSrc = netFallback ? refs.gateGeoRef : refs.gateGazeRef;
+        let offset = 0;
+        if ((source as GazeUse) === 'head') {
+          if (refs.headCentre !== null && headGateRef !== null) offset = refs.headCentre.pitch - headGateRef.pitch;
+        } else if (srcCentre !== null && gateSrc !== undefined && gateSrc !== null) offset = srcCentre.pitch - gateSrc.pitch;
+        lookingDown = rel.pitch + offset < cfg.closure.lookDownRelPitchDeg;
+      } else if (headDrv !== null && refs.pitchReference !== null) lookingDown = headDrv.pitch - refs.pitchReference < cfg.closure.lookDownRelPitchDeg;
 
       return {
         tMs: f.tMs,
@@ -449,6 +502,8 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         unobservedMs,
         lookingDown,
         headRelPitch: relPitch,
+        gazeRelRawPitch,
+        gazeRawSingleDown,
         headYawSpeedDegS,
       };
     },

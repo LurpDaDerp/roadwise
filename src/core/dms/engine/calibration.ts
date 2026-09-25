@@ -143,6 +143,12 @@ export interface Calibrator {
   resumeChecking(): boolean;
   mountSignature(): MountSignature | null;
   refs(): ConditionerRefs;
+  /** Task C7: σ̂, the primary source's within-cluster SD (Stage 1), for the health monitor */
+  sigma(): number;
+  /** Task C7 (H5): the eye baseline is degraded (corroborated; never on a downward ratio alone) */
+  eyesDegraded(): boolean;
+  /** Task C7: the frozen gate references (null before the pass, a seed or a profile) */
+  gateRefs(): { geometric: AnglePair | null; net: AnglePair | null; head: AnglePair | null } | null;
   /** C4 round 1: postureIgnored counts posture steps and bumps seen before any centre (Stage 1 decides) */
   stats(): {
     drivingS: number;
@@ -237,6 +243,8 @@ interface Probation {
   observedS: number;
   reverseS: number;
   lastEvalT: number;
+  /** Task C7: the gate references' shift at the commit (undone by a probation revert) */
+  gateShift: AnglePair | null;
 }
 
 interface StopEpisode {
@@ -289,6 +297,15 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   /** a new driver's seed not yet verified by Stage 1 (W2) */
   let seedUnverified = false;
   let wasStopped = false;
+  /**
+   * Task C7 (rev2 §2.3.6): the frozen gate references (per gaze source, and the head). Set at the Stage 1 pass
+   * and from a seed or profile; moved only by a committed translation step (by the head-centre change) and by a
+   * step bump's (or a camera step's) head step; never by the EMA, rolling, slow or health paths.
+   */
+  let gate: Centres | null = null;
+  const shiftGate = (d: AnglePair) => {
+    if (gate !== null) gate = { geometric: shiftCentre(gate.geometric, d), net: shiftCentre(gate.net, d), head: shiftCentre(gate.head, d) };
+  };
   /** C4 round 1 (C4-3) */
   let slumpWatch: SlumpWatch | null = null;
   /** C4 round 1 (review-C4 minor): posture steps and bumps seen before any centre existed */
@@ -362,6 +379,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   const emit = (kind: CalibrationEventKind, cause?: CalibrationEvent['cause']) => events.push(cause ? { kind, tMs: tNow, cause } : { kind, tMs: tNow });
 
   function restartStage1(): void {
+    gate = null;
     samples.clear();
     admittedS = 0;
     drivingS = 0;
@@ -468,6 +486,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       centres.geometric = shiftCentre(centres.geometric, drvShift);
       centres.net = shiftCentre(centres.net, drvShift);
       centres.head = shiftCentre(centres.head, drvShift);
+      shiftGate(drvShift); // Task C7: a step bump's (a camera step's) head step moves the gate references too
     }
     dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, searchObservedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
     probation = null;
@@ -668,8 +687,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     centres.geometric = next.geometric;
     centres.net = next.net;
     centres.head = next.head;
+    // Task C7: a committed TRANSLATION step moves the gate references by the head-centre change (the slow path's
+    // uncorroborated commit does not: it is no translation step).
+    const h0 = d.c0.head ?? d.c0[src];
+    const h1 = next.head ?? next[src];
+    const gateShift = d.cause !== 'slow' && h0 !== null && h1 !== null ? { yaw: h1.yaw - h0.yaw, pitch: h1.pitch - h0.pitch } : null;
+    if (gateShift !== null) shiftGate(gateShift);
     const demote = d.box >= po.demoteBoxC || Math.abs(d.iodFrac) >= po.demoteIodFracC;
-    probation = { c0: d.c0, since: tNow, observedS: 0, reverseS: 0, lastEvalT: tNow };
+    probation = { c0: d.c0, since: tNow, observedS: 0, reverseS: 0, lastEvalT: tNow, gateShift };
     dual = null;
     events.push({ kind: 'posture_commit', tMs: tNow, demoteMirrors: demote });
   }
@@ -690,6 +715,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         centres.geometric = pr.c0.geometric;
         centres.net = pr.c0.net;
         centres.head = pr.c0.head;
+        if (pr.gateShift !== null) shiftGate({ yaw: -pr.gateShift.yaw, pitch: -pr.gateShift.pitch });
         probation = null;
         emit('posture_revert', 'probation');
         return;
@@ -1072,6 +1098,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
     hasSeed = true;
     if (state === 'none' || state === 'uncalibrated') state = 'seeded';
+    gate = { ...centres }; // Task C7: the seed's references, until the pass
   }
 
   function applyProfile(p: DmsProfileV1): void {
@@ -1089,6 +1116,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     mouthW = p.neutralMouthW;
     hasSeed = true;
     state = 'seeded';
+    gate = { ...centres }; // Task C7: the profile's references, until the pass
     emit('warm_start');
   }
 
@@ -1158,6 +1186,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const mws = all.map((s) => s.mouthW).filter((x): x is number => x !== null);
     if (mws.length > 0) mouthW = median(mws);
     state = 'calibrated';
+    gate = { ...centres }; // Task C7: the gate references freeze at the pass
     emit('calibrated');
     return true;
   }
@@ -1450,6 +1479,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     dual: () => (dual === null || dual.c1 === null ? null : { gaze: dual.c1[cfg.gazeSource] ?? dual.c1.geometric, head: dual.c1.head }),
     // C4 round 2 (review-C4 R1-A): the engine applies this to the road-centre circle only. Task C5: a slow candidate too.
     postureWidening: () => dual !== null || onsetLeftS > 0 || slowCand !== null,
+    sigma: () => sigmaHat,
+    eyesDegraded: () => baselines.eyesDegraded(),
     recalibrating: () => provisional !== null || seedUnverified,
     reason: () => (provisional !== null || seedUnverified ? 'recalibrating' : dual !== null || probation !== null || onsetLeftS > 0 || slowCand !== null ? 'posture' : null),
     voidAround(tMs) {
@@ -1487,7 +1518,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       headCentre: centres.head,
       openEyeEar: ear,
       pitchReference: pitchReference(),
+      gateGazeRef: gate?.[cfg.gazeSource] ?? null,
+      gateGeoRef: gate?.geometric ?? null,
+      gateHeadRef: gate?.head ?? null,
+      // Task C7: the raw path is geometric; its σ̂ is Stage 1's when the primary source is geometric, else the default.
+      rawSigmaDeg: cfg.gazeSource === 'geometric' ? sigmaHat : SIGMA_DEFAULT,
     }),
+    gateRefs: () => (gate === null ? null : { ...gate }),
     stats: () => ({ drivingS, admittedS: Math.max(0, admittedS), postureIgnored, baselines: baselines.stats() }),
     drivingS: () => drivingS,
     drainEvents: () => events.splice(0, events.length),

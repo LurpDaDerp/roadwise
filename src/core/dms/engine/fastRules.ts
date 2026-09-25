@@ -88,15 +88,13 @@ export interface FastEvent {
 export type FatigueFloor = 'none' | 'drowsy' | 'severe';
 
 const EPS = 1e-6;
-/** C2 (rev4 §2.3.6): the latch reads the open-eye frames of this long before onset */
-const LATCH_LOOKBACK_MS = 500;
-/** C2: the latch clears when the head pitch against its reference is above this for LATCH_CLEAR_MS */
-const LATCH_CLEAR_PITCH_DEG = -5;
-const LATCH_CLEAR_MS = 300;
 
 export function createFastRules(cfg: DmsConfig) {
   const cl = cfg.closure;
+  const la = cl.latch;
   const feed = cfg.fatigue.stopEventsFeed;
+  /** Task C7 (R-a): the last raw gaze-down frame (the noise guard at ≥ rawGuardMinFps) */
+  let lastRawDownT: number | null = null;
   const fps = createFpsMeter(cfg);
   let episode: {
     onset: number;
@@ -199,9 +197,17 @@ export function createFastRules(cfg: DmsConfig) {
       const measuredFps = () => x.fps ?? fps.fps();
       const speed = x.ruleSpeedKmh ?? 0;
       const stopped = x.stopped === true;
-      // C2: the open-eye frames of the last 500 ms carry the looking-down value the latch reads at onset.
-      if (!p.eyesClosed && p.quality === 'tracking') openFrames.push({ t: p.tMs, down: p.lookingDown });
-      openFrames.dropWhile((f) => f.t < p.tMs - LATCH_LOOKBACK_MS);
+      // Task C7 (review-C2 §3 R-a): a frame reads "down" for the latch by today's per-frame value, or by the RAW gaze
+      // (reliable-eye frames only) below the gate pitch; at ≥ rawGuardMinFps a raw frame needs another within
+      // rawGuardMs (a single σ-4° outlier is not a look down).
+      const rawDown = p.gazeRelRawPitch !== null && p.gazeRelRawPitch < cl.lookDownRelPitchDeg;
+      // The T7 pre-ruling: one raw frame far beyond noise (p.gazeRawSingleDown) is enough on its own.
+      const guarded = rawDown && (p.gazeRawSingleDown || measuredFps() < la.rawGuardMinFps || (lastRawDownT !== null && p.tMs - lastRawDownT <= la.rawGuardMs + EPS));
+      if (rawDown) lastRawDownT = p.tMs;
+      const down = p.lookingDown || guarded;
+      // C2: the open-eye frames of the lookback carry the looking-down value the latch reads at onset.
+      if (!p.eyesClosed && p.quality === 'tracking') openFrames.push({ t: p.tMs, down });
+      openFrames.dropWhile((f) => f.t < p.tMs - la.lookbackMs);
 
       // Final review I1: a bridge the conditioner ended (its cap, on any frame) ends the bridged episode, so a
       // camera stop inside a bridge is never closure time; a closed eye on this frame starts a new episode.
@@ -225,11 +231,11 @@ export function createFastRules(cfg: DmsConfig) {
         if (episode === null) {
           // C2 (S1): the latch at onset, from the open-eye frames of the 500 ms before it.
           const onset = p.tMs - p.closedMs;
-          let down = false;
+          let downAtOnset = false;
           openFrames.forEach((f) => {
-            if (f.t >= onset - LATCH_LOOKBACK_MS && f.t < onset + EPS && f.down) down = true;
+            if (f.t >= onset - la.lookbackMs && f.t < onset + EPS && f.down) downAtOnset = true;
           });
-          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, pRunMs: null, pLastDeepT: null, pNonDeepSince: null, gated: down, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
+          episode = { onset, lastT: p.tMs, deepSince: null, prior: p.priorMode, pRunMs: null, pLastDeepT: null, pNonDeepSince: null, gated: downAtOnset, upSince: null, bridged: false, f1: false, f2: false, f3: false, anyMoving: false, fedF4: false };
         }
         episode.lastT = p.tMs;
         if (p.closureBridged) {
@@ -261,14 +267,17 @@ export function createFastRules(cfg: DmsConfig) {
               }
             }
           }
-          // C2 (S1): a looking-down frame may set the latch; only the head coming up clears it.
-          if (p.lookingDown) {
+          // C2 (S1): a looking-down frame may set the latch; only the head coming up clears it. Task C7 (R-b): while
+          // STOPPED, the head at ≤ stopSetPitchDeg within the first stopSetWindowS sets it too (a fast lid or a blink
+          // on the saccade leaves no gaze to read; an eye-mover's head still dips).
+          const stopDip = stopped && p.tMs - episode.onset <= la.stopSetWindowS * 1000 + EPS && p.headRelPitch !== null && p.headRelPitch <= la.stopSetPitchDeg;
+          if (down || stopDip) {
             episode.gated = true;
             episode.upSince = null;
           } else if (episode.gated) {
-            const up = p.headRelPitch !== null && p.headRelPitch > LATCH_CLEAR_PITCH_DEG;
+            const up = p.headRelPitch !== null && p.headRelPitch > la.clearPitchDeg;
             episode.upSince = up ? (episode.upSince ?? p.tMs) : null;
-            if (episode.upSince !== null && p.tMs - episode.upSince >= LATCH_CLEAR_MS - EPS) {
+            if (episode.upSince !== null && p.tMs - episode.upSince >= la.clearHoldMs - EPS) {
               episode.gated = false;
               episode.upSince = null;
             }

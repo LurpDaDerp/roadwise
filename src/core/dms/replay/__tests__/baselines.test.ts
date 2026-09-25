@@ -24,7 +24,7 @@ interface Run {
   events: DmsEvent[];
   commands: DmsAlertCommand[];
   /** once a second */
-  seconds: { tMs: number; earRef: number | null; pitchRef: number | null; fatigueGate: boolean; earEvidence: boolean; level: string }[];
+  seconds: { tMs: number; earRef: number | null; pitchRef: number | null; fatigueGate: boolean; earEvidence: boolean; level: string; eyes: 'good' | 'degraded' }[];
 }
 
 function play(driver: DriverFn, seconds: number, o: { fps?: number; cfg?: DmsConfig; seed?: number; profile?: DmsProfileV1 | null; lidGaze?: boolean } = {}): Run {
@@ -41,7 +41,7 @@ function play(driver: DriverFn, seconds: number, o: { fps?: number; cfg?: DmsCon
     if (it.frame.tMs >= next) {
       next += 1000;
       const s = engine.snapshot();
-      run.seconds.push({ tMs: it.frame.tMs, earRef: s.earRef, pitchRef: s.pitchReference, fatigueGate: s.fatigueGate, earEvidence: s.earEvidence, level: s.fatigueLevel });
+      run.seconds.push({ tMs: it.frame.tMs, earRef: s.earRef, pitchRef: s.pitchReference, fatigueGate: s.fatigueGate, earEvidence: s.earEvidence, level: s.fatigueLevel, eyes: s.health.eyes });
     }
   }
   return run;
@@ -104,6 +104,8 @@ describe('S-DROOP60 and S-NIGHT-RATCHET: a droop is never followed down (NC-B1, 
       expect(at(r, 120_000 + tS * 1000).earEvidence).toBe(true);
       expect(at(r, 120_000 + tS * 1000).fatigueGate).toBe(true);
     }
+    // Task C7 (H5, NC-K2b): a downward ratio alone is fatigue evidence, never "eye tracking limited".
+    expect(r.seconds.every((s) => s.eyes === 'good')).toBe(true);
   });
   test('S-NIGHT-RATCHET: a droop plus 6 luma steps (tunnels): the reference ≥ 0.85 × the start value always, back at full luma', () => {
     // Luma 0.6 in minutes 3–5, 9–11, 15–17 (6 steps), the raw EAR with it; a 0.5 %/min droop underneath.

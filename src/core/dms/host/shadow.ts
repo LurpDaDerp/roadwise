@@ -21,7 +21,7 @@ import { decodeFrameBatch } from '../../../../modules/dms-vision/src/wire';
 import { resolveDmsConfig, type DmsConfigOverrides } from '../engine/config';
 import { createDmsEngine, type DmsEngine } from '../engine/engine';
 import type { DriverSide } from '../engine/types';
-import type { DmsHostPower } from './controller';
+import { stopThresholdProblems, type DmsHostPower } from './controller';
 import { engineFrame } from './frames';
 import { rowExtras } from './rowContext';
 
@@ -93,6 +93,9 @@ function createHistogram() {
 function createSource(config: DmsConfigOverrides, gazeSource: 'geometric' | 'net', driverSide: DriverSide) {
   // The net engine is pure net: no geometric fallback (T16 r3 m3).
   const cfg = resolveDmsConfig({ ...config, gazeSource, gaze: { ...config.gaze, netFallback: gazeSource === 'geometric' } });
+  // Task C7 (review-C2 Round 1 minor): the shadow's engines use the controller's stop-threshold check too.
+  const stopProblems = stopThresholdProblems(cfg);
+  if (stopProblems.length > 0) throw new Error(`DMS shadow config: ${stopProblems.join('; ')}`);
   const make = () => createDmsEngine(cfg, { driverSide, sensitivity: 'normal', alerts: 'shadow', profile: null });
   let engine: DmsEngine = make();
   const totals = { frames: 0, observedMs: 0, alerts: 0, fallbackFrames: 0, byKind: {} as Record<string, number> };

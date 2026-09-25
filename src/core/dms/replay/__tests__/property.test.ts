@@ -85,8 +85,14 @@ function play(d: RandomDrive, engine: DmsEngine, onStep?: (s: Step) => void): Dm
   return commands;
 }
 
-test.each(SEEDS)('random drive, seed %d', (seed) => {
-  const d = randomDrive(seed, SECONDS);
+test.each(SEEDS)('random drive, seed %d', (seed) => runSeed(seed, SECONDS));
+
+// Task C7 (review-C2 Round 1, R1-a): the two DMS_FULL seeds that pin NC-E2 (1009) and NC-C2h (1164) run at 600 s in
+// the default suite too, so both negative controls bite without DMS_FULL.
+if (!FULL) test.each([1009, 1164])('random drive, seed %d at 600 s (the pinned DMS_FULL seeds)', (seed) => runSeed(seed, 600));
+
+function runSeed(seed: number, seconds: number): void {
+  const d = randomDrive(seed, seconds);
   const cfg = { ...C, gazeSource: d.source } as DmsConfig;
   const engine = createDmsEngine(cfg, DEFAULT_INIT);
   // Known-low runs from the rows (a fix, < 10 km/h), for the Critical lifetime bound.
@@ -97,7 +103,11 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
   let knownLowSince: number | null = null;
   let prevClosedMs = 0;
   let prevOrigin: 'sleep' | 'd4' | null = null;
+  /** C7 (review-C2 Round 1, R1-a): TRACKING with the eyes open continuously since this time */
+  let openSince: number | null = null;
   const commands = play(d, engine, (s) => {
+    if (s.frame && s.quality === 'tracking' && s.closedMs === 0) openSince ??= s.tMs;
+    else if (s.frame) openSince = null;
     // C2 round 1 (b): no D4-origin Critical starts while STOPPED.
     const started3 = s.commands.some((c) => c.tier === 3 && c.action === 'start');
     if (started3 && s.origin === 'd4') expect({ seed, tMs: s.tMs, d4AtStop: s.stopped }).toEqual({ seed, tMs: s.tMs, d4AtStop: false });
@@ -105,7 +115,8 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
     const stops3 = s.commands.filter((c) => c.tier === 3 && c.action === 'stop');
     if (prevOrigin === 'sleep' && stops3.length > 0 && !started3 && s.off === null) {
       const capped = engine.alertLog().some((e) => e.tMs === s.tMs && (e.why === 'blind_cap' || e.why === 'lost_cap'));
-      const clear = s.quality === 'tracking' && s.closedMs === 0;
+      // R1-a: the clear must have HELD for tier3ClearS (the eyes open on TRACKING frames for the last 1 s).
+      const clear = openSince !== null && s.tMs - openSince >= A.tier3ClearS * 1000 - 100;
       expect({ seed, tMs: s.tMs, sleepStopExplained: capped || clear }).toEqual({ seed, tMs: s.tMs, sleepStopExplained: true });
     }
     prevOrigin = s.origin;
@@ -167,7 +178,7 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
   again.endDrive(d.items.at(-1)!.frame.tMs);
   commands2.push(...again.drain().commands);
   expect(commands2).toEqual(commands);
-});
+}
 
 test('the random drives cover the new stretches (final review m8)', () => {
   const drives = SEEDS.map((s) => randomDrive(s, SECONDS));
@@ -206,5 +217,6 @@ test('C2 round 1 (review-C2 F1): half the drives carry motion evidence, with sen
       states.add(engine.snapshot().speedState);
     }
   }
-  expect([...states]).toEqual(expect.arrayContaining(['stopped', 'moving_known', 'ambiguous', 'moving_after_stop']));
+  // C7 (review-C2 Round 1, R1-b): evidence gaps reach 5 s, over rowStaleMs (3 s), so `unknown` is reached too.
+  expect([...states]).toEqual(expect.arrayContaining(['stopped', 'moving_known', 'ambiguous', 'moving_after_stop', 'unknown']));
 });
