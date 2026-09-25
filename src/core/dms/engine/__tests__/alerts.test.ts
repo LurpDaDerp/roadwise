@@ -39,13 +39,17 @@ const off: Partial<AlertFrame> = { onRoad: false };
 const asleep: Partial<AlertFrame> = { onRoad: false, eyesOpen: false };
 /** A closure Critical (F1, F2, microsleep_nod): `bridged` is required by type (T11 review I2). */
 const crit = (kind: 'microsleep' | 'sleep' | 'microsleep_nod', bridged = false): AlertRequest => ({ kind, bridged });
-/** `unresponsive`: closure (F3), no-on-road (F3's second clause) or D4; every flag required. */
-const unr = (o: Partial<{ closure: boolean; bridged: boolean; c8: boolean; escalation: boolean }> = {}): AlertRequest => ({
+/**
+ * `unresponsive`: closure (F3), no-on-road (F3's second clause) or D4; every flag required. The origin (C2,
+ * rev4 §2.1.8) defaults to the sleep family for F3's closure clause and to D4 otherwise.
+ */
+const unr = (o: Partial<{ closure: boolean; bridged: boolean; c8: boolean; escalation: boolean; origin: 'sleep' | 'd4' }> = {}): AlertRequest => ({
   kind: 'unresponsive',
   closure: o.closure ?? false,
   bridged: o.bridged ?? false,
   c8: o.c8 ?? false,
   escalation: o.escalation ?? false,
+  origin: o.origin ?? (o.closure === true ? 'sleep' : 'd4'),
 });
 const dist = (kind: 'distraction' | 'cumulative', c8 = false): AlertRequest => ({ kind, c8 });
 const plain = (kind: 'phone_pattern' | 'fatigue_early' | 'fatigue' | 'repeated_glances'): AlertRequest => ({ kind });
@@ -75,24 +79,37 @@ describe('the state diagram (§M8)', () => {
   });
 });
 
-describe('the Critical speed rules (rule 4, rev1 I6, T8 review m4)', () => {
-  test('a Critical may start at ≥ 10 km/h, not at 9 or with no speed', () => {
-    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 10 }, req: [crit('sleep')] }]).sig).toEqual(['start:sleep']);
-    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 9 }, req: [crit('sleep')] }]).sig).toEqual([]);
-    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [crit('sleep')] }]).sig).toEqual([]);
+describe('the Critical speed rules (rule 4, rev1 I6, T8 review m4; C2: they bind the D4 origin only)', () => {
+  // C2 (rev4 §2.1.7, §2.1.8): the sleep family starts at any speed and no stop ends it; a D4-origin Critical
+  // keeps the start gate (for a request that is not an escalation) and the end after 5 s stopped. A frame with
+  // no `stopped` reads a KNOWN speed below 10 as stopped (the older callers).
+  const warn = { s: 1, f: off, req: [dist('distraction')] };
+  const d4 = (f: Partial<AlertFrame> = asleep) => ({ s: 1, f, req: [unr({ escalation: true, origin: 'd4' })] });
+  const D4_SIG = ['start:distraction', 'stop:distraction', 'start:unresponsive'];
+  test('a D4-origin request that is not an escalation may start at ≥ 10 km/h, not at 9 or with no speed', () => {
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 10 }, req: [unr({ origin: 'd4' })] }]).sig).toEqual(['start:unresponsive']);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 9 }, req: [unr({ origin: 'd4' })] }]).sig).toEqual([]);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [unr({ origin: 'd4' })] }]).sig).toEqual([]);
   });
-  test('it continues through a slowdown and ends only after a KNOWN speed < 10 km/h for 5 s', () => {
-    const slow = (s: number) => run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s, f: { ...asleep, ruleSpeedKmh: 5 } }]);
-    expect(slow(4.9).sig).toEqual(['start:sleep']);
-    expect(slow(5.1).sig).toEqual(['start:sleep', 'stop:sleep']);
+  test('the sleep family starts at 9 km/h and with no speed at all (C2)', () => {
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 9 }, req: [crit('sleep')] }]).sig).toEqual(['start:sleep']);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [crit('sleep')] }]).sig).toEqual(['start:sleep']);
   });
-  test('an unknown (or held, inferred) speed never ends it', () => {
-    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 60, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false } }, { s: 30, f: { ...asleep, ruleSpeedKmh: 0, speedKnown: false } }]);
-    expect(r.sig).toEqual(['start:sleep']);
+  test('a D4-origin Critical continues through a slowdown and ends only after a KNOWN speed < 10 km/h for 5 s', () => {
+    const slow = (s: number) => run([warn, d4(), { s, f: { ...asleep, ruleSpeedKmh: 5 } }]);
+    expect(slow(4.9).sig).toEqual(D4_SIG);
+    expect(slow(5.1).sig).toEqual([...D4_SIG, 'stop:unresponsive']);
+  });
+  test('a sleep Critical does not end on a known speed < 10 km/h (C2)', () => {
+    expect(run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 30, f: { ...asleep, ruleSpeedKmh: 5 } }]).sig).toEqual(['start:sleep']);
+  });
+  test('an unknown (or held, inferred) speed never ends a D4-origin Critical', () => {
+    const r = run([warn, d4(), { s: 60, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false } }, { s: 30, f: { ...asleep, ruleSpeedKmh: 0, speedKnown: false } }]);
+    expect(r.sig).toEqual(D4_SIG);
   });
   test('a known ≥ 10 km/h frame restarts the 5 s', () => {
-    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 4, f: { ...asleep, ruleSpeedKmh: 5 } }, { s: 0.1, f: { ...asleep, ruleSpeedKmh: 12 } }, { s: 4, f: { ...asleep, ruleSpeedKmh: 5 } }]);
-    expect(r.sig).toEqual(['start:sleep']);
+    const r = run([warn, d4(), { s: 4, f: { ...asleep, ruleSpeedKmh: 5 } }, { s: 0.1, f: { ...asleep, ruleSpeedKmh: 12 } }, { s: 4, f: { ...asleep, ruleSpeedKmh: 5 } }]);
+    expect(r.sig).toEqual(D4_SIG);
   });
 });
 
@@ -215,8 +232,9 @@ describe('T11 review I1: escalations skip the Critical start gate', () => {
     const r = run([{ s: 1, f: { ...off, ruleSpeedKmh: 25 }, req: [dist('distraction')] }, { s: 1, f: { ...off, ruleSpeedKmh: null, speedKnown: false }, req: [unr({ escalation: true })] }]);
     expect(r.sig).toContain('start:unresponsive');
   });
-  test('a fresh microsleep at 8 km/h is still suppressed', () => {
-    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 8 }, req: [crit('microsleep')] }]).sig).toEqual([]);
+  test('C2: a fresh microsleep at 8 km/h starts (the sleep family is exempt); a fresh D4 request that is not an escalation is suppressed', () => {
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 8 }, req: [crit('microsleep')] }]).sig).toEqual(['start:microsleep']);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 8 }, req: [unr({ origin: 'd4' })] }]).sig).toEqual([]);
   });
   test('sleep running, then F3 (an escalation) at an unknown speed replaces it', () => {
     const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [unr({ closure: true, escalation: true })] }]);
@@ -233,15 +251,23 @@ describe('T11 review m1: stopAll, and ticking without the camera', () => {
     expect(r.am.stats().log.at(-1)).toMatchObject({ kind: 'fatigue', outcome: 'dropped', why: 'session_end' });
     expect(r.am.stopAll(3000, EPOCH0 + 3000)).toEqual([]);
   });
-  test('frames at 1 Hz with quality lost and a known 5 km/h end a Critical after 5 s', () => {
+  test('frames at 1 Hz with quality lost and a known 5 km/h end a D4-origin Critical after 5 s (C2: a sleep one never)', () => {
     const am = createAlertManager(C, { mode: 'live' });
-    run([{ s: 1, f: asleep, req: [crit('sleep')] }], 'live', am);
+    run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: asleep, req: [unr({ escalation: true, origin: 'd4' })] }], 'live', am);
     const out: string[] = [];
     for (let k = 1; k <= 7; k++) {
-      const tMs = 1000 + k * 1000;
+      const tMs = 2000 + k * 1000;
       out.push(...am.onFrame({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 5, speedKnown: true, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [] }).map((c) => `${c.action}:${c.kind}@${c.tMs}`));
     }
-    expect(out).toEqual(['stop:sleep@7000']);
+    expect(out).toEqual(['stop:unresponsive@8000']);
+    const sleepAm = createAlertManager(C, { mode: 'live' });
+    run([{ s: 1, f: asleep, req: [crit('sleep')] }], 'live', sleepAm);
+    const none: string[] = [];
+    for (let k = 1; k <= 7; k++) {
+      const tMs = 1000 + k * 1000;
+      none.push(...sleepAm.onFrame({ tMs, epochMs: EPOCH0 + tMs, ruleSpeedKmh: 5, speedKnown: true, quality: 'lost', onRoad: false, eyesOpen: false, warmup: false, requests: [] }).map((c) => c.action));
+    }
+    expect(none).toEqual([]);
   });
 });
 
@@ -320,12 +346,17 @@ describe('T13 r1 I1: cameraOff keeps a Critical (the phone overheating says noth
     expect(out[1]!.cause).toBe('heat');
     expect(r.am.stats().log.find((e) => e.kind === 'sleep' && e.why === 'blind_cap')).toBeDefined();
   });
-  test('a known 5 km/h for 5 s still ends it (no monitoring_paused)', () => {
-    const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
-    r.am.cameraOff(1000, EPOCH0 + 1000, 'dark');
+  test('a known 5 km/h for 5 s still ends a D4-origin Critical (no monitoring_paused); C2: a sleep one runs on', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: asleep, req: [unr({ escalation: true, origin: 'd4' })] }]);
+    r.am.cameraOff(2000, EPOCH0 + 2000, 'dark');
     const out: DmsAlertCommand[] = [];
-    for (let k = 1; k <= 7; k++) out.push(...r.am.onFrame(blind(1000 + k * 1000, 5)));
-    expect(out.map((c) => `${c.action}:${c.kind}`)).toEqual(['stop:sleep']);
+    for (let k = 1; k <= 7; k++) out.push(...r.am.onFrame(blind(2000 + k * 1000, 5)));
+    expect(out.map((c) => `${c.action}:${c.kind}`)).toEqual(['stop:unresponsive']);
+    const s2 = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
+    s2.am.cameraOff(1000, EPOCH0 + 1000, 'dark');
+    const none: DmsAlertCommand[] = [];
+    for (let k = 1; k <= 7; k++) none.push(...s2.am.onFrame(blind(1000 + k * 1000, 5)));
+    expect(none).toEqual([]);
   });
   test('frames returning clear the blind clock', () => {
     const r = run([{ s: 1, f: asleep, req: [crit('sleep')] }]);
@@ -416,13 +447,88 @@ describe('final review round 3 nit: several Criticals on one frame', () => {
     expect(r.am.stats().invariantViolations).toBe(0);
     expect(r.am.stats().byKind.microsleep.merged).toBe(1);
   });
-  test('a lower Critical refused for speed does not block the higher one', () => {
-    const r = run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 5 }, req: [crit('sleep'), unr({ escalation: true })] }]);
-    expect(r.sig).toEqual(['start:unresponsive']);
-    expect(r.am.stats().byKind.sleep.suppressed).toBe(1);
+  test('a Critical refused for speed does not block another (C2: only a D4 request that is not an escalation can be refused)', () => {
+    const r = run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 5 }, req: [unr({ origin: 'd4' }), crit('sleep')] }]);
+    expect(r.sig).toEqual(['start:sleep']);
+    expect(r.am.stats().byKind.unresponsive.suppressed).toBe(1);
   });
   test('F1 and F2 on one frame: sleep only; a later F3 still escalates', () => {
     const r = run([{ s: 1, f: asleep, req: [crit('sleep'), crit('microsleep')] }, { s: 1, f: asleep, req: [unr({ closure: true })] }]);
     expect(r.sig).toEqual(['start:sleep', 'stop:sleep', 'start:unresponsive']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C2 (calib-parked design rev4 §2.1.7, §2.1.8; S2): the sleep family at every speed, origins, stops.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C2: the sleep family and stops', () => {
+  const stopped: Partial<AlertFrame> = { ...asleep, ruleSpeedKmh: 0, speedKnown: true, stopped: true };
+  const sensorStopped: Partial<AlertFrame> = { ...asleep, ruleSpeedKmh: 0, speedKnown: false, stopped: true };
+  const d4 = () => unr({ escalation: true, origin: 'd4' });
+
+  test('a sleep-family Critical starts at 0 km/h, stopped, and with no speed at all', () => {
+    expect(run([{ s: 1, f: stopped, req: [crit('sleep')] }]).sig).toEqual(['start:sleep']);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: null, speedKnown: false }, req: [crit('microsleep')] }]).sig).toEqual(['start:microsleep']);
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 3 }, req: [crit('microsleep_nod')] }]).sig).toEqual(['start:microsleep_nod']);
+  });
+
+  test('S-CRIT-STOP-SLEEP (unit): no stop ends a sleep Critical, GNSS or sensor', () => {
+    expect(run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 30, f: stopped }]).sig).toEqual(['start:sleep']);
+    expect(run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 30, f: sensorStopped }]).sig).toEqual(['start:sleep']);
+  });
+
+  test('while stopped, eyes open for 1 s clears it with the gaze anywhere; while moving the gaze must be on the road', () => {
+    const atLight = run([{ s: 1, f: stopped, req: [crit('sleep')] }, { s: 1.2, f: { ...stopped, eyesOpen: true, onRoad: false } }]);
+    expect(atLight.sig).toEqual(['start:sleep', 'stop:sleep']);
+    const moving = run([{ s: 1, f: asleep, req: [crit('sleep')] }, { s: 3, f: { ...asleep, eyesOpen: true, onRoad: false } }]);
+    expect(moving.sig).toEqual(['start:sleep']);
+  });
+
+  test('S-D4-STOP (unit): a D4-origin Critical ends after 5 s of STOPPED, GNSS or sensor', () => {
+    const warn = { s: 1, f: off, req: [dist('distraction')] };
+    for (const f of [stopped, sensorStopped]) {
+      expect(run([warn, { s: 1, f: off, req: [d4()] }, { s: 4.9, f }]).sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive']);
+      expect(run([warn, { s: 1, f: off, req: [d4()] }, { s: 5.1, f }]).sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive', 'stop:unresponsive']);
+    }
+  });
+
+  test('S-D4-THEN-SLEEP-STOP (unit, NC-S2): F3 closure merging into a D4 Critical upgrades it to sleep; the stop no longer ends it', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: off, req: [d4()] }, { s: 1, f: asleep, req: [unr({ closure: true, escalation: true, origin: 'sleep' })] }, { s: 20, f: stopped }]);
+    expect(r.sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive']);
+    expect(r.am.stats().byKind.unresponsive.merged).toBe(1);
+    expect(r.am.criticalOrigin()).toBe('sleep');
+  });
+
+  test('a D4 no-on-road request merging into a D4 Critical keeps the D4 origin: the stop ends it at 5 s', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: off, req: [d4()] }, { s: 1, f: off, req: [unr({ escalation: true, origin: 'd4' })] }, { s: 5.1, f: stopped }]);
+    expect(r.sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive', 'stop:unresponsive']);
+  });
+
+  test('a microsleep request over a D4 Critical replaces it (as today) with a sleep-origin Critical the stop does not end', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: off, req: [d4()] }, { s: 1, f: asleep, req: [crit('microsleep')] }, { s: 20, f: stopped }]);
+    expect(r.sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive', 'stop:unresponsive', 'start:microsleep']);
+  });
+
+  test('a pending D4 (the corroboration) clears after 5 s STOPPED, a sensor stop included', () => {
+    // A warning, 5.1 s at a sensor stop, then a D4 escalation: uncorroborated (counted), since the pending cleared.
+    const cleared = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 5.1, f: { ...off, ...sensorStopped, eyesOpen: true } }, { s: 1, f: off, req: [d4()] }]);
+    expect(cleared.am.violations()).toBe(1);
+    const held = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 4.5, f: { ...off, ...sensorStopped, eyesOpen: true } }, { s: 1, f: off, req: [d4()] }]);
+    expect(held.am.violations()).toBe(0);
+  });
+
+  test('while stopped, a D4-origin Critical is not cleared by open eyes off the road (only its 5 s stop end)', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: off, req: [d4()] }, { s: 3, f: { ...off, ...stopped, eyesOpen: true, onRoad: false } }]);
+    expect(r.sig).toEqual(['start:distraction', 'stop:distraction', 'start:unresponsive']);
+  });
+
+  test('a D4 escalation over a running sleep Critical keeps the sleep origin: the stop does not end it', () => {
+    const r = run([{ s: 1, f: off, req: [dist('distraction')] }, { s: 1, f: asleep, req: [crit('sleep')] }, { s: 1, f: { ...asleep, onRoad: false }, req: [d4()] }, { s: 20, f: stopped }]);
+    expect(r.sig).toEqual(['start:distraction', 'stop:distraction', 'start:sleep', 'stop:sleep', 'start:unresponsive']);
+  });
+
+  test('an F3 closure escalation (origin sleep) at 2 km/h starts: the speed gate reads only D4', () => {
+    expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 2 }, req: [unr({ closure: true, origin: 'sleep' })] }]).sig).toEqual(['start:unresponsive']);
   });
 });

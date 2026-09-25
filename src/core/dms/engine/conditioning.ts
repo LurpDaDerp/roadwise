@@ -100,6 +100,11 @@ export interface Perceived {
    */
   unobservedMs: number;
   lookingDown: boolean;
+  /**
+   * Task C2 (rev4 §2.3.6): the head pitch relative to the head centre (before any centre, the pitch
+   * reference), degrees; null without a head or a reference. The looking-down latch clears on it.
+   */
+  headRelPitch: number | null;
   /** driver-frame head yaw rate, °/s; null without two consecutive heads */
   headYawSpeedDegS: number | null;
 }
@@ -416,6 +421,7 @@ export function createConditioner(cfg: DmsConfig): Conditioner {
         bridgeEnded,
         unobservedMs,
         lookingDown,
+        headRelPitch: relPitch,
         headYawSpeedDegS,
       };
     },

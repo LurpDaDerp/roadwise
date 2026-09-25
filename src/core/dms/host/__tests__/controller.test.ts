@@ -1182,3 +1182,48 @@ describe('C1 round 1: evidence tied to its row; no mixed sources', () => {
     expect(h.ctl.diagnostics().motion).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C2 (rev4 §2.1.9, rev5 §4.4, U-14): stop-time sleep events feed the trip score per stopEventsFeed.
+// A creep at 7 km/h with a fix is STOPPED; the capture's stop pause (5 s below 10 km/h, until T3) comes after.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C2: focus samples from stop-time sleep events (fatigue.stopEventsFeed)', () => {
+  const shut = (spans: [number, number][], seconds: number) => synthFrames((t, r) => ({ gaze: onRoad(r), openness: spans.some(([a, b]) => t >= a && t < b) ? 0.1 : 1, speedKmh: 60 }), seconds, 15);
+  const run = async (feed: 'none' | 'long_and_nod' | 'all' | undefined, speed: (t: number) => number, spans: [number, number][], seconds: number) => {
+    const h = harness(feed === undefined ? {} : { config: { fatigue: { stopEventsFeed: feed } } });
+    h.ctl.setGate(GATE);
+    const focus = await drive(h, 0, seconds, { speed, frameAt: shut(spans, seconds) });
+    return { h, samples: drowsy(focus) };
+  };
+  // S-CREEP-ASLEEP: 7 km/h from 99 s; shut 100–103.5 s: F1 at 101 s, F2 at 103 s, both stop-time.
+  const creep = (t: number) => (t >= 99 && t < 112 ? 7 : 60);
+  test("S-CREEP-ASLEEP, 'none' (the default): it sounds, and no focus sample", async () => {
+    const { h, samples } = await run(undefined, creep, [[100, 103.5]], 115);
+    expect(h.events.find((e) => e.kind === 'sleep')).toMatchObject({ stopped: true });
+    expect(h.alerts.some((c) => c.action === 'start' && c.kind === 'sleep')).toBe(true);
+    expect(samples).toHaveLength(0);
+  });
+  test("S-CREEP-ASLEEP, 'long_and_nod': a ≥ 3 s closure feeds one sample; 'all' too", async () => {
+    expect((await run('long_and_nod', creep, [[100, 103.5]], 115)).samples).toHaveLength(1);
+    expect((await run('all', creep, [[100, 103.5]], 115)).samples).toHaveLength(1);
+  });
+  // S-STOP-REST-TWICE: two creeps, a 1.5 s eye rest at each.
+  const twice = (t: number) => ((t >= 99 && t < 112) || (t >= 159 && t < 172) ? 7 : 60);
+  test.each([
+    ['none', 0],
+    ['long_and_nod', 0],
+    ['all', 2],
+  ] as const)("S-STOP-REST-TWICE, '%s': both sound; %i focus samples", async (feed, n) => {
+    const { h, samples } = await run(feed, twice, [[100, 101.5], [160, 161.5]], 175);
+    expect(h.alerts.filter((c) => c.action === 'start' && c.kind === 'microsleep')).toHaveLength(2);
+    expect(samples).toHaveLength(n);
+  });
+  // S-SPAN-MOVEOFF: F1 at the creep, then the car moves off with the eyes still shut: F2 at 15 km/h.
+  test("S-SPAN-MOVEOFF, 'none': an episode with a moving-time F-event feeds its sample", async () => {
+    const { h, samples } = await run(undefined, (t) => (t >= 99 && t < 101.5 ? 7 : t >= 101.5 && t < 112 ? 15 : 60), [[100, 103.5]], 115);
+    expect(h.events.find((e) => e.kind === 'microsleep')).toMatchObject({ stopped: true });
+    expect(h.events.find((e) => e.kind === 'sleep')).toMatchObject({ stopped: false });
+    expect(samples).toHaveLength(1);
+  });
+});

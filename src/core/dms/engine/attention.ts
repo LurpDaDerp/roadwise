@@ -14,7 +14,9 @@
 //   nor clears it: no alert from a LOST frame (T8 review I2). Once pending it persists below 10 km/h and
 //   keeps accumulating at any speed; it clears only on an on-road frame or after a KNOWN speed below
 //   criticalEndBelowKmh held for criticalEndAfterS (as a Critical ends; unknown speed never clears it;
-//   T8 round-1 review R1-I1). Nothing new starts below 10 (or 20) km/h.
+//   T8 round-1 review R1-I1). Nothing new starts below 10 (or 20) km/h. Task C2: the clear reads the engine's
+//   STOPPED state when given (a sensor stop included), and the façade gives 0 dt while STOPPED, so a pending
+//   D4 does not count stop time.
 // Speed gates: below 20 km/h nothing drains or counts (log only); below 10, or unknown, no alert at all.
 import type { DmsConfig, ZoneId, ZoneSpec } from './config';
 import type { CalibrationState } from './calibration';
@@ -40,8 +42,10 @@ export function distractionGates(s: {
   resumeCheck: boolean;
   fpsOk: boolean;
   imuAbsentHold: boolean;
+  /** Task C2 (U-7): AMBIGUOUS_STILL, the held speed without motion or stop evidence: D1–D3 frozen */
+  speedAmbiguous?: boolean;
 }): DistractionGates {
-  const d1 = s.hasCentre && s.fpsOk && !s.imuAbsentHold;
+  const d1 = s.hasCentre && s.fpsOk && !s.imuAbsentHold && s.speedAmbiguous !== true;
   return {
     d1,
     // `provisional` is a seeded drive that has not passed yet (T8 review m1).
@@ -60,6 +64,11 @@ export interface AttentionInput {
   ruleSpeedKmh: number | null;
   /** the speed is measured now (ContextState.speedKnown): only a known low speed ends a pending D4 */
   speedKnown: boolean;
+  /**
+   * Task C2 (rev4 §2.1.8): the engine's STOPPED state. 5 s of it clears a pending D4, a sensor stop included.
+   * Absent (older callers): a KNOWN speed below criticalEndBelowKmh.
+   */
+  stopped?: boolean;
   /** SEARCH or phone handling: the buffer and the accumulators hold */
   freeze: boolean;
   gates: DistractionGates;
@@ -137,10 +146,10 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
      * Final review m5: a row tick with no frame advances D4's known-low clear, as the alert manager's
      * corroboration advances on it (so a known stop during a camera pause clears both, never one).
      */
-    rowTick(tMs: number, speedKnown: boolean, ruleSpeedKmh: number | null) {
+    rowTick(tMs: number, speedKnown: boolean, ruleSpeedKmh: number | null, stopped?: boolean) {
       if (d4OffS === null) return;
       const al = cfg.alerts;
-      if (speedKnown && ruleSpeedKmh !== null && ruleSpeedKmh < al.criticalEndBelowKmh) {
+      if (stopped ?? (speedKnown && ruleSpeedKmh !== null && ruleSpeedKmh < al.criticalEndBelowKmh)) {
         lowKnownSince ??= tMs;
         if (tMs - lowKnownSince >= al.criticalEndAfterS * 1000 - EPS) {
           d4OffS = null;
@@ -225,7 +234,7 @@ export function createAttention(cfg: DmsConfig, sensitivity: Sensitivity) {
       // D4 — unresponsive after a D1/D2 warning.
       if (d4OffS !== null && !events.some((e) => e.kind === 'd1_warning' || e.kind === 'd2_warning')) {
         const al = cfg.alerts;
-        if (x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < al.criticalEndBelowKmh) lowKnownSince ??= x.tMs;
+        if (x.stopped ?? (x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < al.criticalEndBelowKmh)) lowKnownSince ??= x.tMs;
         else lowKnownSince = null;
         if (onRoad || (lowKnownSince !== null && x.tMs - lowKnownSince >= al.criticalEndAfterS * 1000 - EPS)) {
           d4OffS = null;

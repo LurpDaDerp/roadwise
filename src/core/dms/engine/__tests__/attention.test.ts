@@ -17,6 +17,8 @@ interface Seg {
   speedKnown?: boolean;
   freeze?: boolean;
   headYawSpeedDegS?: number;
+  /** C2: the engine's STOPPED state; absent = not given (the older callers) */
+  stopped?: boolean;
 }
 
 /** Runs segments at `fps` and returns every event, with the buffer after each frame. */
@@ -38,6 +40,7 @@ function run(segs: Seg[], opts: { fps?: number; sensitivity?: Sensitivity; gates
         speedKnown: s.speedKnown ?? s.speed !== null,
         freeze: s.freeze ?? false,
         gates: opts.gates ?? ALL,
+        ...(s.stopped === undefined ? {} : { stopped: s.stopped }),
       };
       const out = a.onFrame(input);
       events.push(...out.events);
@@ -292,5 +295,43 @@ describe('T8 round-1 review R1-I1: a pending D4 persists below the alerting spee
   });
   test('nothing new STARTS below 10 km/h', () => {
     expect(run([road(3, { speed: 8 }), { zone: 'centre_stack', frames: 200, speed: 8 }]).kinds).not.toContain('d4_unresponsive');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C2 (rev4 §2.1.8, §2.1.10; rev3 §2.1.3): a pending D4 clears after 5 s STOPPED of either kind;
+// AMBIGUOUS_STILL freezes D1–D3.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C2: a pending D4 clears after 5 s STOPPED, a sensor stop included', () => {
+  const warn: Seg[] = [road(3), { zone: 'centre_stack', frames: 45 }]; // D1 warning at 60 km/h
+  const sensor = (frames: number): Seg => ({ zone: null, frames, speed: 0, speedKnown: false, stopped: true });
+  test('5 s at a sensor stop (speed not known) clears it; the look-away after it never fires', () => {
+    expect(run([...warn, sensor(80), { zone: 'centre_stack', frames: 60 }]).kinds).not.toContain('d4_unresponsive');
+  });
+  test('4.6 s at a sensor stop does not: it fires once moving again', () => {
+    expect(run([...warn, sensor(70), { zone: 'centre_stack', frames: 60 }]).kinds).toContain('d4_unresponsive');
+  });
+  test('the row tick (no frames) clears it on STOPPED too', () => {
+    const a = createAttention(C, 'normal');
+    let t = 0;
+    const step = (zone: ZoneId | null, n: number) => {
+      for (let i = 0; i < n; i++, t += 1000 / 15) a.onFrame({ tMs: t, dtS: 1 / 15, zone, headYawSpeedDegS: 0, ruleSpeedKmh: 60, speedKnown: true, freeze: false, gates: ALL });
+    };
+    step('road_centre', 3);
+    step('centre_stack', 45);
+    for (let k = 1; k <= 6; k++) a.rowTick(t + k * 1000, false, 0, true);
+    t += 7000;
+    const out: string[] = [];
+    for (let i = 0; i < 60; i++, t += 1000 / 15) out.push(...a.onFrame({ tMs: t, dtS: 1 / 15, zone: 'centre_stack', headYawSpeedDegS: 0, ruleSpeedKmh: 60, speedKnown: true, freeze: false, gates: ALL }).events.map((e) => e.kind));
+    expect(out).not.toContain('d4_unresponsive');
+  });
+});
+
+describe('C2: AMBIGUOUS_STILL freezes D1–D3 (U-7)', () => {
+  test('distractionGates with the speed ambiguous: d1, d2 and d3 all off', () => {
+    const base = { hasCentre: true, warmup: false, calibState: 'calibrated' as const, resumeCheck: false, fpsOk: true, imuAbsentHold: false };
+    expect(distractionGates(base)).toEqual({ d1: true, d2: true, d3: true });
+    expect(distractionGates({ ...base, speedAmbiguous: true })).toEqual({ d1: false, d2: false, d3: false });
   });
 });

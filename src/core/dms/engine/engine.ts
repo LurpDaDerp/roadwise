@@ -14,6 +14,14 @@
 // time: the dt given to attention (D1–D4, glances), the warm-up, fatigue and the summary is 0 on it, the
 // yawn detector restarts, and the conditioner has already ended an unbridged closure.
 //
+// Task C2 (rev4 §2.1.3, §2.1.7–§2.1.10; rev5 §4.4): the context's speed state (from the host's motion
+// evidence on the rows) reaches every rule. While STOPPED the accounting dt is 0 for attention (D1–D4,
+// glances), the warm-up, fatigue and the summary, and blinks, nods and yawns do not reach the fatigue
+// statistics; the sleep family (F1–F3, microsleep_nod) runs at every speed, its events carry `stopped`, and
+// what the stop-time ones feed is fatigue.stopEventsFeed (F4 in fastRules; the trip score through
+// `feedsDrowsinessScore`, which the controller reads). AMBIGUOUS_STILL freezes D1–D3. The alert manager gets
+// `stopped` for its clear and its D4-origin end; requests carry their origin.
+//
 // A drive owns its own alert manager, summary, fatigue and rule state (T11 r1 carry): `endDrive` stops
 // every sound, builds the summary and the profile, then starts the next drive fresh, warm from that
 // profile. Commands are merged with concat/spread only: the manager's empty array is frozen.
@@ -21,7 +29,7 @@ import { createAlertManager, LOG_CAP, type AlertLogEntry, type AlertRequest, typ
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
 import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
-import { validateDmsConfig, type DmsConfig, type ZoneId } from './config';
+import { validateDmsConfig, type DmsConfig, type StopEventsFeed, type ZoneId } from './config';
 import { createContextTracker, type FeatureRowLike, type RowExtras } from './context';
 import { createFpsMeter } from './eyes';
 import { createFastRules, type FastEvent, type FatigueFloor } from './fastRules';
@@ -70,14 +78,30 @@ export function learnableGaze(p: Pick<Perceived, 'source' | 'gazeFrom' | 'gazeRe
 
 export type DmsEvent =
   | { kind: AttentionEvent['kind']; tMs: number; zone?: ZoneId; durS?: number; shoulderCheck?: boolean }
-  | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean }
-  /** T14 r1 m2: a closure episode that reached F1–F3 ended; its measured length (not counted in the summary) */
-  | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean }
+  /** F1–F3 (and blinks); `stopped` (Task C2): raised while STOPPED */
+  | { kind: Exclude<FastEvent['kind'], 'episode_end'>; tMs: number; bridged?: boolean; durMs?: number; long?: boolean; stopped?: boolean }
+  /**
+   * T14 r1 m2: a closure episode that reached F1–F3 ended; its measured length (not counted in the summary).
+   * Task C2 (rev5 §4.4): `stopped` when every F event of it was stop-time; `level` the highest reached.
+   */
+  | { kind: 'episode_end'; tMs: number; durMs: number; bridged: boolean; stopped: boolean; level: 'f1' | 'f2' | 'f3' }
   | { kind: 'nod' | 'yawn'; tMs: number }
-  /** T14 r2 R1-m2: the nod's deep-lid hold, seconds (its drowsiness sample) */
-  | { kind: 'microsleep_nod'; tMs: number; deepMaxS: number }
+  /** T14 r2 R1-m2: the nod's deep-lid hold, seconds (its drowsiness sample); `stopped` (Task C2) */
+  | { kind: 'microsleep_nod'; tMs: number; deepMaxS: number; stopped: boolean }
   | { kind: CalibrationEvent['kind']; tMs: number }
   | { kind: 'fatigue_minute'; tMs: number; status: FatigueMinute['status']; score: number | null; level: FatigueLevel };
+
+/**
+ * Task C2 (rev4 §2.1.9, rev5 §4.4, U-14): whether a drowsiness event feeds the trip score (the controller's
+ * focus samples). Moving-time events always do. A stop-time microsleep_nod feeds unless 'none'; a stop-time
+ * episode (every F event of it stop-time) feeds under 'all', and under 'long_and_nod' when it reached F2 or F3
+ * (a closure of 3 s or more). Other events are not decided here.
+ */
+export function feedsDrowsinessScore(e: DmsEvent, feed: StopEventsFeed): boolean {
+  if (e.kind === 'microsleep_nod') return !e.stopped || feed !== 'none';
+  if (e.kind === 'episode_end') return !e.stopped || feed === 'all' || (feed === 'long_and_nod' && e.level !== 'f1');
+  return true;
+}
 
 export interface DmsOutput {
   commands: readonly DmsAlertCommand[];
@@ -109,6 +133,10 @@ export interface DmsSnapshot {
   fatigueLevel: FatigueLevel;
   warmup: boolean;
   invariantViolations: number;
+  /** Task C2: the running Critical's origin (a `sleep` one is never ended by a stop); null with none */
+  criticalOrigin: 'sleep' | 'd4' | null;
+  /** Task C2: the last frame's speed state was STOPPED */
+  stopped: boolean;
 }
 
 /** The lengths of the engine's growing buffers against their caps (the bounded-memory checks). */
@@ -199,6 +227,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastGazeRel: null as { yaw: number; pitch: number } | null,
       lastClosedMs: 0,
       lastSpeed: null as number | null,
+      lastStopped: false,
       bufferFraction: 1,
       d2SumS: 0,
       fatigueLevel: 'none' as FatigueLevel,
@@ -214,10 +243,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   const emit = (e: DmsEvent) => {
     events.push(e);
     // episode_end restates an F event's episode for the scoring seam; the summary counts the F events.
-    if (e.kind !== 'episode_end') d.summary.onEvent(e.kind);
+    if (e.kind !== 'episode_end') d.summary.onEvent(e.kind, 'stopped' in e ? e.stopped : undefined);
   };
   const emitFast = (e: FastEvent) => {
-    if (e.kind === 'episode_end') emit({ kind: 'episode_end', tMs: e.tMs, durMs: e.durMs ?? 0, bridged: e.bridged === true });
+    if (e.kind === 'episode_end') emit({ kind: 'episode_end', tMs: e.tMs, durMs: e.durMs ?? 0, bridged: e.bridged === true, stopped: e.stopped === true, level: e.level ?? 'f1' });
   };
   const addCommands = (c: readonly DmsAlertCommand[]) => {
     if (c.length > 0) commands = commands.concat(c).slice(-PENDING_CAP);
@@ -243,15 +272,16 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     // Quality and the conditioner: `p` is the only view of quality the rules read (T6 r2 carry 1).
     const refs = { ...d.cal.refs(), gazeNetEvery: host.gazeNetEvery };
     const p = d.cond.step(f, classifyQuality(f, cfg), refs);
-    // Unobserved time counts 0 (T12 review I1).
-    const obsDt = p.gap ? 0 : p.dtS;
-    if (p.gap) d.yawn.reset();
     d.seedRing.push({ frame: f, p });
     d.seedRing.dropWhile((x) => x.frame.tMs < t - SEED_RING_S * 1000);
     d.fps.push(t);
     const fps = d.fps.fps();
     const cs = d.ctx.at(t);
     const speed = cs.ruleSpeedKmh;
+    const stopped = cs.stopped;
+    // Unobserved time counts 0 (T12 review I1); C2: so does STOPPED time, for the accounting (rev4 §2.1.10).
+    const obsDt = p.gap || stopped ? 0 : p.dtS;
+    if (p.gap) d.yawn.reset();
     d.cal.observe(f, p, cs.ctx);
     onCalibrationEvents();
     const calState = d.cal.state();
@@ -278,6 +308,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     d.lastClosedMs = p.closedMs;
     d.lastGazeRel = p.gazeRel === null ? null : { yaw: p.gazeRel.yaw, pitch: p.gazeRel.pitch };
     d.lastSpeed = speed;
+    d.lastStopped = stopped;
     // Zones are learned in the configured path's coordinates only (T16 r3 m1): a net configuration's geometric
     // fallback frames (another gain, another centre) would blur the mirror clusters. Held and head frames are
     // unchanged; the geometric configuration never has a fallback.
@@ -296,6 +327,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       resumeCheck: d.cal.resumeChecking(),
       fpsOk: fps >= cfg.distraction.gazeRulesMinFps,
       imuAbsentHold: cs.imuAbsentHold,
+      speedAmbiguous: cs.distractionFrozen,
     });
     const att = d.attention.onFrame({
       tMs: t,
@@ -304,6 +336,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       headYawSpeedDegS: p.headYawSpeedDegS,
       ruleSpeedKmh: speed,
       speedKnown: cs.speedKnown,
+      stopped,
       freeze: host.search || (cs.ctx?.handling ?? false),
       gates,
     });
@@ -316,44 +349,48 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       else if (e.kind === 'd2_warning') requests.push({ kind: 'cumulative', c8 });
       else if (e.kind === 'd3_phone_pattern') requests.push({ kind: 'phone_pattern' });
       else if (e.kind === 'd4_unresponsive') {
-        requests.push({ kind: 'unresponsive', closure: false, bridged: false, c8, escalation: true });
-        d.fast.criticalStarted();
+        requests.push({ kind: 'unresponsive', closure: false, bridged: false, c8, escalation: true, origin: 'd4' });
+        d.fast.criticalStarted('d4');
       }
     }
 
     // The fast rules (F1–F4, blinks). With no zone (before calibration, or occluded) the direction is
     // unknown: null neither clears nor feeds F3's no-on-road watch.
     const onRoadGaze = zone === null ? null : onRoad && !p.eyesClosed;
-    for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze, fps }).events) {
+    for (const e of d.fast.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze, fps, stopped }).events) {
       const bridged = e.bridged === true;
       if (e.kind === 'episode_end') {
         emitFast(e);
         continue;
       }
       if (e.kind === 'blink') {
-        d.fatigue.onBlink({ tMs: e.tMs, durMs: e.durMs ?? 0, long: e.long === true, counted: e.counted === true });
-        d.summary.onBlink(e.tMs);
+        // C2: blink statistics are frozen while STOPPED (rev4 §2.1.10).
+        if (!stopped) {
+          d.fatigue.onBlink({ tMs: e.tMs, durMs: e.durMs ?? 0, long: e.long === true, counted: e.counted === true });
+          d.summary.onBlink(e.tMs);
+        }
         emit({ kind: 'blink', tMs: e.tMs, durMs: e.durMs, long: e.long });
         continue;
       }
-      emit({ kind: e.kind, tMs: e.tMs, bridged });
+      emit({ kind: e.kind, tMs: e.tMs, bridged, stopped: e.stopped === true });
       if (e.kind === 'microsleep' || e.kind === 'sleep') requests.push({ kind: e.kind, bridged });
-      else requests.push({ kind: 'unresponsive', closure: e.clause === 'closure', bridged, c8, escalation: e.escalation === true });
+      else requests.push({ kind: 'unresponsive', closure: e.clause === 'closure', bridged, c8, escalation: e.escalation === true, origin: e.origin ?? 'sleep' });
     }
 
     // Nods (relative pitch as the conditioner defines it) and yawns.
     const relPitch = p.headRel !== null ? p.headRel.pitch : p.headDrv !== null && refs.pitchReference !== null ? p.headDrv.pitch - refs.pitchReference : null;
     for (const e of d.nod.onFrame({ tMs: t, quality: p.quality, relPitchDeg: relPitch, openness: p.openness, ruleSpeedKmh: speed, closureBridged: p.closureBridged, gap: p.gap })) {
-      emit(e.kind === 'microsleep_nod' ? { kind: 'microsleep_nod', tMs: e.tMs, deepMaxS: e.deepMaxS ?? 0 } : { kind: 'nod', tMs: e.tMs });
-      d.fatigue.onNod(e.tMs);
+      emit(e.kind === 'microsleep_nod' ? { kind: 'microsleep_nod', tMs: e.tMs, deepMaxS: e.deepMaxS ?? 0, stopped } : { kind: 'nod', tMs: e.tMs });
+      // C2: nod statistics are frozen while STOPPED (rev4 §2.1.10).
+      if (!stopped) d.fatigue.onNod(e.tMs);
       if (e.kind === 'microsleep_nod') {
         requests.push({ kind: 'microsleep_nod', bridged: p.closureBridged });
-        d.fast.criticalStarted();
+        d.fast.criticalStarted('sleep');
       }
     }
     for (const e of d.yawn.onFrame({ tMs: t, quality: p.quality, mar: f.mouth?.mar ?? null, mouthW: f.mouth?.widthIod ?? null, neutralMar: d.cal.neutralMar(), neutralMouthW: d.cal.neutralMouthW(), fps })) {
       emit({ kind: 'yawn', tMs: e.tMs });
-      d.fatigue.onYawn(e.tMs);
+      if (!stopped) d.fatigue.onYawn(e.tMs);
     }
 
     // Fatigue (T10 feeds).
@@ -393,6 +430,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         warmup: d.warmup,
         requests: requests.length > 0 ? requests : EMPTY_REQ,
         gap: p.gap,
+        stopped,
       })
     );
     d.summary.onFrame({ tMs: t, dtS: obsDt, ruleSpeedKmh: speed, quality: p.quality, zone, gazeRel: p.gazeRel, fps, thermalLevel: host.thermalLevel, gazeFrom: p.gazeFrom });
@@ -426,10 +464,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
             warmup: d.warmup,
             requests: EMPTY_REQ,
             blind: true,
+            stopped: cs.stopped,
             ...(d.lastFrameT === null ? {} : { blindSinceMs: d.lastFrameT }),
           })
         );
-        d.attention.rowTick(tMs, cs.speedKnown, cs.ruleSpeedKmh);
+        d.attention.rowTick(tMs, cs.speedKnown, cs.ruleSpeedKmh, cs.stopped);
         const from = Math.max(d.lastFrameT ?? Number.NEGATIVE_INFINITY, d.lastTickT ?? Number.NEGATIVE_INFINITY);
         if (Number.isFinite(from) && tMs > from) d.summary.onUnobserved((tMs - from) / 1000, d.offCause ?? host.offCause ?? 'stall', host.thermalLevel, cs.ruleSpeedKmh);
         d.lastTickT = tMs;
@@ -466,6 +505,8 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         fatigueLevel: d.fatigueLevel,
         warmup: d.warmup,
         invariantViolations: d.alerts.violations(),
+        criticalOrigin: d.alerts.criticalOrigin(),
+        stopped: d.lastStopped,
       };
     },
 

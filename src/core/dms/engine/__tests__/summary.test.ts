@@ -190,3 +190,17 @@ describe('the Tier 0 log (§M5 "Logged only")', () => {
     expect(build(sm).tier0.noScanningEpisodes).toBe(0);
   });
 });
+
+// Task C2 (rev4 §2.1.9): the stop-time sleep events are counted apart.
+describe('C2: stopSleepEvents', () => {
+  test('an F event raised while STOPPED counts in events and in stopSleepEvents; a moving one only in events', () => {
+    const s = createSummary(DEFAULT_DMS_CONFIG as DmsConfig, { gazeSource: 'geometric' });
+    s.onEvent('microsleep', true);
+    s.onEvent('sleep', false);
+    s.onEvent('microsleep_nod', true);
+    s.onEvent('d1_warning');
+    const b = s.build({ alerts: createAlertManager(DEFAULT_DMS_CONFIG as DmsConfig, { mode: 'live' }).stats(), fatigue: createFatigue(DEFAULT_DMS_CONFIG as DmsConfig).stats(), calibrationState: 'calibrated' });
+    expect(b.events).toMatchObject({ microsleep: 1, sleep: 1, microsleep_nod: 1, d1_warning: 1 });
+    expect(b.stopSleepEvents).toBe(2);
+  });
+});

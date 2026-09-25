@@ -67,6 +67,7 @@ Any input that is false, missing or unknown keeps the camera off.
 
 - A non-driving glance over 2 s: `kind: 'glance'`.
 - Each closure episode that reached F1–F3: `kind: 'drowsiness'`, `glanceS` = the episode's measured length (at most 60 s), sent when the episode ends. Each `microsleep_nod`: `glanceS` = its deep-lid time, at least 0.5 s. Each minute at fatigue drowsy or severe: `glanceS: 60`.
+- **Stop-time sleep events** (raised while the car is stopped or creeping below 10 km/h, U-14): they always sound and are counted in the summary (`stopSleepEvents`). What else they feed is `fatigue.stopEventsFeed`: `'none'` (the default) gives no focus sample and no fatigue level; `'long_and_nod'` counts only closures that reached F2 or F3 (3 s or more) and `microsleep_nod`; `'all'` counts everything. An episode counts as stop-time only if every F event in it was raised while stopped: one that fires again after the move-off is moving-time.
 
 ## Where the data may go (security T14 m-3)
 
@@ -81,6 +82,7 @@ Any input that is false, missing or unknown keeps the camera off.
 
 - **Nothing runs while the gate is closed:** no native call (the permission read included), no timer, no listener work. Native failures are silent: one retry after 5 s, then off for the drive.
 - **The camera going off at speed** (heat, darkness, a native fault) keeps a running Critical, bounded at 60 s without frames, and stops a running distraction; M7 keeps calling `pushRow`.
+- **Sleep alerts at every speed** (Task C2, the user's rule): F1, F2, F3 and `microsleep_nod` fire at any speed, stopped included, and no stop ends a sleep Critical. While stopped it ends when the eyes are open for 1 s, the gaze anywhere; while moving, the gaze must be on the road. A D4 (distraction) Critical ends after 5 s stopped. Everything else stays silent below its floor (20 km/h; D4 10 km/h), and while stopped the distraction and fatigue accounting is frozen. "Stopped" is a GNSS speed below 10 km/h or the drive host's sensor stop (`motionEvidence`, passed with each row); when the evidence goes missing, the last one is held for 3 s (`context.rowStaleMs`) and then the speed is unknown, neither stopped nor moving.
 - **A Critical never sounds forever** (U-23, the user's ruling, reversible): with no TRACKING face for 60 s (`alerts.criticalLostMaxS`; LOST, HEAD_ONLY or no frames, continuously) it stops and one `monitoring_paused` (cause `face_lost`) plays. The accepted cost: a driver slumped out of view gets 60 s of alarm, then the notice. The 60 s without frames is measured from the last frame, whether or not the camera-off was announced.
 - **The summary counts the drive the camera did not see**: `cameraOffS` by cause (heat, dark, fault, gate, paused, stall) at a monitored speed; `trackingCoverage` and `cameraSession` include it, and `thermalMinutes['3']` is the time at L3.
 - **The profile** lives only in `settings['dms.profile'] = { uid, profile }`, is loaded only for the same uid, and is removed on a mismatch. It is face-geometry-derived (interocular distance, face box, pose and eye baselines) and notices when someone else is driving: the A10 copy and counsel (U-2) must cover that.

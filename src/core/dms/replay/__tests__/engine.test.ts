@@ -227,8 +227,8 @@ describe('T13 r1 I1: engine.cameraOff keeps a Critical, bounded by criticalBlind
   test('at 60 s: stop, then one Tier 1 monitoring_paused', () => {
     expect(sleepThenBlind(60, 60)).toEqual(['stop:sleep', 'once:monitoring_paused']);
   });
-  test('a known 5 km/h for 5 s ends it', () => {
-    expect(sleepThenBlind(8, 5)).toEqual(['stop:sleep']);
+  test('C2: a known 5 km/h does not end a sleep Critical (only its clear or a cap): still sounding 8 s in', () => {
+    expect(sleepThenBlind(8, 5)).toEqual([]);
   });
   test('a running distraction stops at cameraOff', () => {
     const items = synthDrive({ fps: 15, seconds: 104, seed: 15, source: 'net', driver: (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), openness: 1, speedKmh: 60 }) });
@@ -270,10 +270,10 @@ describe('blinks hold the gaze (the target of the plan negative control)', () =>
 });
 
 describe('escalations reach the manager (T11 I1): F3 after F1 at a known 8 km/h', () => {
-  test('eyes shut at 60 km/h (F1), then slowing to 8 km/h: the F3 no-on-road clause still starts', () => {
+  test('eyes shut at 60 km/h (F1), then slowing to 8 km/h: F2 (C2: at every speed), then F3 escalates', () => {
     const slowing: DriverFn = (t, r) => ({ gaze: onRoad(r), openness: t >= 100 && t < 107 ? 0.1 : 1, speedKmh: t < 101.5 ? 60 : 8 });
     const r = replayItems(synthDrive({ fps: 15, seconds: 110, seed: 9, source: 'geometric', driver: slowing }), C);
-    expect(r.events.filter((e) => e.kind === 'sleep')).toEqual([]); // F2 needs 10 km/h
+    expect(r.events.filter((e) => e.kind === 'sleep')).toHaveLength(1); // C2: F2 at 8 km/h (STOPPED)
     const f3 = r.commands.find((c) => c.kind === 'unresponsive' && c.action === 'start');
     expect(f3).toBeDefined();
     expect(r.invariantViolations).toBe(0);

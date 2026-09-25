@@ -59,7 +59,7 @@ import { createFocusQueue } from '../adapters/focus';
 import type { DmsAlertCommand } from '../engine/alerts';
 import type { CalibrationState } from '../engine/calibration';
 import { resolveDmsConfig, type DmsConfig, type DmsConfigOverrides } from '../engine/config';
-import { createDmsEngine, type DmsEngine, type DmsEvent } from '../engine/engine';
+import { createDmsEngine, feedsDrowsinessScore, type DmsEngine, type DmsEvent } from '../engine/engine';
 import type { FatigueLevel } from '../engine/fatigue';
 import { parseProfile } from '../engine/profile';
 import type { Quality } from '../engine/quality';
@@ -337,11 +337,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         });
         focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibrated: engine.snapshot().calibration === 'calibrated', lastAlertStartT });
       } else if (e.kind === 'microsleep_nod') {
-        // A nod-off is its own drowsiness episode, with no closure episode (T14 r2 R1-m2).
-        focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)));
+        // A nod-off is its own drowsiness episode, with no closure episode (T14 r2 R1-m2). Task C2 (U-14): a
+        // stop-time one feeds the score per fatigue.stopEventsFeed.
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)));
       } else if (e.kind === 'episode_end') {
-        // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2).
-        focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000));
+        // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2). Task C2
+        // (U-14, rev5 §4.4): a stop-time episode (every F event of it stop-time) per fatigue.stopEventsFeed.
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000));
       } else if (e.kind === 'fatigue_minute' && 'level' in e && (e.level === 'drowsy' || e.level === 'severe')) {
         focus.drowsiness(60);
       }

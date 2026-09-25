@@ -6,7 +6,7 @@
 // error of up to 15 %; the net σ 2.5°. The true gaze is in the DRIVER frame (+yaw toward the passenger for
 // a left-hand drive) and converted to the camera frame.
 import type { FeatureRowLike, RowExtras } from '../engine/context';
-import type { AnglePair, EngineFrame, GazeSource } from '../engine/types';
+import type { AnglePair, EngineFrame, GazeSource, RowMotion } from '../engine/types';
 import { drvToCam, frame, gauss, rng } from '../engine/__fixtures__/synth';
 
 /** What the driver and the car do at time t (seconds). Everything but `gaze` has a default. */
@@ -39,6 +39,11 @@ export interface DriverState {
   handling?: boolean;
   /** the IMU says the car moves (final review m8: a tunnel is `speedKmh: null` with this true); default speed > 1 */
   imuMoving?: boolean;
+  /**
+   * Task C2: the row's motion evidence, over the default (SynthOpts.motion): a GNSS stop below 10 km/h,
+   * `strong` moving at ≥ 10 km/h, nothing else. A sensor stop is `{ stop: 'sensor' }` with `speedKmh: null`.
+   */
+  motion?: Partial<RowMotion>;
 }
 
 export type DriverFn = (t: number, r: () => number) => DriverState;
@@ -61,6 +66,42 @@ export interface SynthOpts {
   localMinutes?: number | null;
   /** the gaze net runs on every n-th frame only (the policy's gazeNetEvery); default 1 */
   netEvery?: number;
+  /** Task C2: attach motion evidence to every row (the host's, as `RowExtras.motion`); default off */
+  motion?: boolean;
+  /**
+   * Task C2 (rev4 §2.3.6, rev5 V1, amendment W4): the measured lid follows the gaze down, openness ×
+   * clamp(1 − 0.025·max(0, −gazePitch − 10), LID_GAZE_FLOOR, 1), the gaze pitch relative to the road centre.
+   * The lid follows the eye with a first-order lag (LID_LAG_S): a lid never drops on the frame the eye
+   * arrives (K12 measures it on both platforms).
+   */
+  lidGaze?: boolean;
+}
+
+/** The synth lid–gaze coupling's floor (amendment W4: 0.17, so no test sits on the 0.15 deep threshold). */
+export const LID_GAZE_FLOOR = 0.17;
+/** The lid's first-order lag behind the gaze pitch, seconds (Task C2; K12 checks it on device). */
+export const LID_LAG_S = 0.15;
+
+/** The lid factor for a gaze pitch relative to the road centre (degrees; down is negative). */
+export function lidFactor(relPitchDeg: number): number {
+  return Math.min(1, Math.max(LID_GAZE_FLOOR, 1 - 0.025 * Math.max(0, -relPitchDeg - 10)));
+}
+
+/** The default motion evidence of a synth row (Task C2), with the driver's override. */
+export function synthMotion(s: Pick<DriverState, 'speedKmh' | 'motion'>): RowMotion {
+  const v = s.speedKmh;
+  return {
+    stop: v !== null && v < 10 ? 'gnss' : null,
+    moving: v !== null && v >= 10 ? 'strong' : null,
+    quiet: v !== null && v < 1,
+    vehicleMotion: false,
+    ambiguousStill: false,
+    quietNoFixS: 0,
+    vLowKmh: null,
+    trust: true,
+    gap: false,
+    ...s.motion,
+  };
 }
 
 const DEG = Math.PI / 180;
@@ -80,6 +121,9 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   let nextRowT = 0;
   let head: AnglePair | null = null;
   const lag = 1 - Math.exp(-1 / o.fps / HEAD_LAG_S);
+  const lidLag = 1 - Math.exp(-1 / o.fps / LID_LAG_S);
+  /** the gaze pitch (relative to the road centre) the lid is following */
+  let lidPitch: number | null = null;
   for (let i = 0; i < n; i++) {
     const t = i / o.fps;
     const raw = o.driver(t, r);
@@ -88,10 +132,16 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
     head = raw.head !== undefined || head === null ? target : { yaw: head.yaw + (target.yaw - head.yaw) * lag, pitch: head.pitch + (target.pitch - head.pitch) * lag };
     const s: DriverState = { ...raw, head };
     const netThis = i % (o.netEvery ?? 1) === 0;
-    const item: SynthItem = { frame: toFrame(t, s, netThis ? o.source : 'geometric', gain, noise) };
+    const gazeRelPitch = s.gaze.pitch - ROAD.pitch;
+    lidPitch = lidPitch === null ? gazeRelPitch : lidPitch + (gazeRelPitch - lidPitch) * lidLag;
+    const lid = o.lidGaze === true ? lidFactor(lidPitch) : 1;
+    const item: SynthItem = { frame: toFrame(t, lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
-      item.row = { row: toRow(t, s, course, o.epoch0 ?? EPOCH0), ex: { imuMoving: s.imuMoving ?? (s.speedKmh ?? 0) > 1, localMinutes: o.localMinutes === undefined ? 720 : o.localMinutes, tripElapsedS: t } };
+      item.row = {
+        row: toRow(t, s, course, o.epoch0 ?? EPOCH0),
+        ex: { imuMoving: s.imuMoving ?? (s.speedKmh ?? 0) > 1, localMinutes: o.localMinutes === undefined ? 720 : o.localMinutes, tripElapsedS: t, ...(o.motion === true ? { motion: synthMotion(s) } : {}) },
+      };
       nextRowT += 1;
     }
     out.push(item);

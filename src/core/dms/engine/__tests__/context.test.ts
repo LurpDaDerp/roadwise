@@ -3,6 +3,7 @@
 // presence; staleness; and the tunnel rules for unknown speed.
 import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
 import { contextFromRow, createContextTracker, imuPresent, type FeatureRowLike } from '../context';
+import type { RowMotion } from '../types';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
 const RAD = Math.PI / 180;
@@ -156,5 +157,106 @@ describe('staleness and the tunnel rules (§M1, rev1 I6)', () => {
     const st = t.at(1000);
     expect(st.ruleSpeedKmh).toBeCloseTo(72, 6);
     expect(st.imuAbsentHold).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C2 (rev4 §2.1.3, rev3 §2.1.3; E2 fixed; the C1 round-1 carry on absent evidence).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C2: the speed states from the motion evidence', () => {
+  const M = (o: Partial<RowMotion> = {}): RowMotion => ({ stop: null, moving: null, quiet: false, vehicleMotion: false, ambiguousStill: false, quietNoFixS: 0, vLowKmh: null, trust: true, gap: false, ...o });
+  const noFix = (ts: number) => row({ ts, gnssValid: false, speed: -1 });
+  const kmh = (ts: number, v: number) => row({ ts, speed: v / 3.6 });
+  const exM = (m?: RowMotion) => (m === undefined ? EX : { ...EX, motion: m });
+  /** A tracker that has seen 50 km/h, then a sensor stop at 1 s. */
+  const sensorStop = () => {
+    const t = createContextTracker(C);
+    t.onRow(kmh(0, 50), 0, exM(M({ moving: 'strong' })));
+    t.onRow(noFix(1000), 1000, exM(M({ stop: 'sensor', quiet: true })));
+    return t;
+  };
+
+  test('a GNSS stop (a known speed below 10) is STOPPED, with the known speed', () => {
+    const t = createContextTracker(C);
+    t.onRow(kmh(0, 7), 0, exM(M({ stop: 'gnss' })));
+    expect(t.at(100)).toMatchObject({ speedState: 'stopped', stopped: true, speedKnown: true, ruleSpeedKmh: expect.closeTo(7, 6) });
+  });
+
+  test('with no motion evidence in the drive (older paths), a known speed below 10 is STOPPED and 30 is not', () => {
+    const t = createContextTracker(C);
+    t.onRow(kmh(0, 7), 0, EX);
+    expect(t.at(100)).toMatchObject({ stopped: true, speedState: 'stopped' });
+    t.onRow(kmh(1000, 30), 1000, EX);
+    expect(t.at(1100)).toMatchObject({ stopped: false, speedState: 'moving_known' });
+  });
+
+  test('a sensor stop with no fix is STOPPED at rule speed 0, not a known speed', () => {
+    expect(sensorStop().at(1100)).toMatchObject({ speedState: 'stopped', stopped: true, speedKnown: false, ruleSpeedKmh: 0, speedHeld: false });
+  });
+
+  test('E2 (NC-E5): after a sensor stop ends with no fix, the rule speed is vLowKmh or null, never the pre-stop 50', () => {
+    const t = sensorStop();
+    t.onRow(noFix(2000), 2000, exM(M({ moving: 'strong', vLowKmh: 12 })));
+    expect(t.at(2100)).toMatchObject({ speedState: 'moving_after_stop', stopped: false, speedKnown: false, ruleSpeedKmh: 12 });
+    t.onRow(noFix(3000), 3000, exM(M({ moving: 'weak', vLowKmh: null })));
+    expect(t.at(3100)).toMatchObject({ speedState: 'moving_after_stop', ruleSpeedKmh: null });
+    t.onRow(kmh(4000, 40), 4000, exM(M({ moving: 'strong' })));
+    expect(t.at(4100)).toMatchObject({ speedState: 'moving_known', ruleSpeedKmh: expect.closeTo(40, 6) });
+    // after a fix, a later tunnel holds the known 40 again (moving_held)
+    t.onRow(noFix(5000), 5000, exM(M({ moving: 'weak' })));
+    expect(t.at(5100)).toMatchObject({ speedState: 'moving_held', ruleSpeedKmh: expect.closeTo(40, 6), speedHeld: true });
+  });
+
+  test('AMBIGUOUS_STILL: the held speed stays (the sleep family and D4 read it); D1–D3 are frozen', () => {
+    const t = createContextTracker(C);
+    t.onRow(kmh(0, 70), 0, exM(M({ moving: 'strong' })));
+    for (let s = 1; s <= 12; s++) t.onRow(noFix(s * 1000), s * 1000, exM(M({ quiet: true, quietNoFixS: s, ambiguousStill: s >= 10 })));
+    expect(t.at(12_100)).toMatchObject({ speedState: 'ambiguous', stopped: false, ruleSpeedKmh: expect.closeTo(70, 6), speedHeld: true, distractionFrozen: true });
+  });
+
+  test('MOVING_HELD: no fix, no stop, not yet ambiguous: the last known speed is held and D1–D3 run', () => {
+    const t = createContextTracker(C);
+    t.onRow(kmh(0, 70), 0, exM(M({ moving: 'strong' })));
+    for (let s = 1; s <= 9; s++) t.onRow(noFix(s * 1000), s * 1000, exM(M({ quiet: true, quietNoFixS: s })));
+    expect(t.at(9100)).toMatchObject({ speedState: 'moving_held', stopped: false, ruleSpeedKmh: expect.closeTo(70, 6), speedHeld: true, distractionFrozen: false });
+  });
+
+  describe('the C1 round-1 carry: a row with no evidence after evidence was seen in the drive', () => {
+    test('a sensor stop is held for at most rowStaleMs from the last evidence, then the state is unknown: neither stopped nor moving', () => {
+      const t = sensorStop(); // evidence at 1000
+      t.onRow(noFix(2000), 2000, EX);
+      t.onRow(noFix(3000), 3000, EX);
+      expect(t.at(3900)).toMatchObject({ stopped: true, speedState: 'stopped' });
+      t.onRow(noFix(4000), 4000, EX);
+      expect(t.at(4100)).toMatchObject({ stopped: false, speedState: 'unknown', ruleSpeedKmh: null, speedHeld: false, speedKnown: false });
+    });
+
+    test('a held moving speed is held for at most rowStaleMs, then unknown: never the held 70 (not moving)', () => {
+      const t = createContextTracker(C);
+      t.onRow(kmh(0, 70), 0, exM(M({ moving: 'strong' })));
+      t.onRow(noFix(1000), 1000, exM(M({ moving: 'weak' })));
+      t.onRow(noFix(2000), 2000, EX);
+      t.onRow(noFix(3000), 3000, EX);
+      expect(t.at(3900)).toMatchObject({ speedState: 'moving_held', ruleSpeedKmh: expect.closeTo(70, 6) });
+      t.onRow(noFix(4000), 4000, EX);
+      expect(t.at(4100)).toMatchObject({ speedState: 'unknown', stopped: false, ruleSpeedKmh: null });
+    });
+
+    test('a known speed on a row with no evidence still decides by itself (the GNSS speed is the row, not evidence)', () => {
+      const t = sensorStop();
+      for (let s = 2; s <= 6; s++) t.onRow(kmh(s * 1000, 40), s * 1000, EX);
+      expect(t.at(6100)).toMatchObject({ speedState: 'moving_known', stopped: false, ruleSpeedKmh: expect.closeTo(40, 6) });
+      t.onRow(kmh(7000, 5), 7000, EX);
+      expect(t.at(7100)).toMatchObject({ speedState: 'stopped', stopped: true });
+    });
+
+    test('evidence returning ends the unknown state at once', () => {
+      const t = sensorStop();
+      for (let s = 2; s <= 6; s++) t.onRow(noFix(s * 1000), s * 1000, EX);
+      expect(t.at(6100)).toMatchObject({ speedState: 'unknown' });
+      t.onRow(noFix(7000), 7000, exM(M({ stop: 'sensor' })));
+      expect(t.at(7100)).toMatchObject({ speedState: 'stopped', stopped: true });
+    });
   });
 });

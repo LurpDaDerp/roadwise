@@ -1,6 +1,6 @@
 // Eye closure and the fast rules (plan §M6, C-22, C-25, rev1 I2/I6): closure by the max reliable eye,
 // hysteresis, the near eye, the looking-down gate, F1–F4, blinks and the fps meter.
-import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
+import { DEFAULT_DMS_CONFIG, resolveDmsConfig, type DmsConfig } from '../config';
 import { createConditioner, type ConditionerRefs, type Perceived } from '../conditioning';
 import { createFpsMeter } from '../eyes';
 import { createFastRules, type FastEvent } from '../fastRules';
@@ -33,13 +33,19 @@ function perceive(segs: { s: number; spec: Partial<FrameSpec> }[], fps = 15, ref
   return out;
 }
 
-function fast(ps: Perceived[], speed: number | null = 60, onRoad = (p: Perceived) => !p.eyesClosed && p.source === 'gaze') {
-  const r = createFastRules(C);
+function fast(ps: Perceived[], speed: number | null = 60, onRoad = (p: Perceived) => !p.eyesClosed && p.source === 'gaze', cfg: DmsConfig = C) {
+  const r = createFastRules(cfg);
   const events: FastEvent[] = [];
   for (const p of ps) events.push(...r.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze: onRoad(p) }).events);
   return { events, kinds: events.map((e) => e.kind), rules: r };
 }
 const ear = (o: number): [number, number] => [0.3 * o, 0.3 * o];
+/**
+ * The spec's old speed gates (F1 20 km/h, F2/F3 10), 0 since Task C2 (rev4 §2.1.7). The gate mechanics stay
+ * config, and the tests of them run on this.
+ */
+const GATED = resolveDmsConfig({ closure: { f1: { minSpeedKmh: 20 }, f2: { minSpeedKmh: 10 }, f3: { minSpeedKmh: 10 } } });
+const DEFAULT_ON_ROAD = (p: Perceived) => !p.eyesClosed && p.source === 'gaze';
 
 describe('closure measurement (§M6, C-22)', () => {
   test('closed at 0.29, not at 0.31', () => {
@@ -68,15 +74,18 @@ describe('F1–F3 (§M6)', () => {
     // n closed frames last (n − 1) intervals: 15 frames = 0.93 s, 16 frames = 1.0 s.
     expect(fast(closedFor(15 / 15), 25).kinds).not.toContain('microsleep');
     expect(fast(closedFor(16 / 15), 25).kinds).toContain('microsleep');
-    expect(fast(closedFor(5), 19).kinds).not.toContain('microsleep');
+    expect(fast(closedFor(5), 19, DEFAULT_ON_ROAD, GATED).kinds).not.toContain('microsleep');
+    // C2: the default config has no gate
+    expect(fast(closedFor(5), 19).kinds).toContain('microsleep');
+    expect(fast(closedFor(5), 0).kinds).toContain('microsleep');
   });
   test('F1 at the 0.1/0.45 split never fires: the max eye is open (the mean would fire)', () => {
     expect(fast(perceive([{ s: 3, spec: { ear: [0.03, 0.135] } }]), 60).kinds).not.toContain('microsleep');
   });
   test('F2 sleep at 3.0 s at 12 km/h; F3 unresponsive at 6.0 s', () => {
-    const r = fast(closedFor(6.2), 12);
+    const r = fast(closedFor(6.2), 12, DEFAULT_ON_ROAD, GATED);
     expect(r.kinds).toContain('sleep');
-    expect(r.kinds).not.toContain('microsleep'); // F1 needs 20 km/h
+    expect(r.kinds).not.toContain('microsleep'); // F1 needs 20 km/h (the old gate)
     const sleep = r.events.find((e) => e.kind === 'sleep')!;
     expect(sleep.tMs - 1000).toBeGreaterThanOrEqual(3000 - 67);
     expect(sleep.tMs - 1000).toBeLessThan(3000 + 67);
@@ -130,12 +139,12 @@ describe('F1–F3 (§M6)', () => {
     expect(esc).toMatchObject({ clause: 'no_on_road', escalation: true }); // F1 at 1.0 s, no on-road gaze 3 s later
     // F2 and F3 share the ≥ 10 km/h gate and F2's threshold is lower, so the closure clause always follows
     // F2 in its episode: an escalation even when both fire on the frame the speed first reaches 10.
-    const late = createFastRules(C);
+    const late = createFastRules(GATED);
     const ev: FastEvent[] = [];
     ps.forEach((p) => ev.push(...late.onFrame({ p, ruleSpeedKmh: p.tMs < 7500 ? 5 : 15, onRoadGaze: true }).events));
     expect(ev.filter((e) => e.kind !== 'blink').map((e) => e.kind)).toEqual(['sleep', 'unresponsive']);
     expect(ev.find((e) => e.kind === 'unresponsive')).toMatchObject({ clause: 'closure', escalation: true });
-    const esc2 = createFastRules(C);
+    const esc2 = createFastRules(GATED);
     const ev2: FastEvent[] = [];
     ps.forEach((p) => ev2.push(...esc2.onFrame({ p, ruleSpeedKmh: 12, onRoadGaze: true }).events)); // on road: only the closure clause
     expect(ev2.filter((e) => e.kind === 'unresponsive')).toEqual([expect.objectContaining({ clause: 'closure', escalation: true })]);
@@ -435,7 +444,7 @@ describe('T14 r1 m2: episode_end, the measured length of a drowsiness episode (o
   });
   test('a closure that never reached F1 (0.5 s, or 5 s at 5 km/h) has no episode_end', () => {
     expect(kinds(fast(perceive([{ s: 0.5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 60).events)).not.toContain('episode_end');
-    expect(kinds(fast(perceive([{ s: 5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 5).events)).not.toContain('episode_end');
+    expect(kinds(fast(perceive([{ s: 5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]), 5, DEFAULT_ON_ROAD, GATED).events)).not.toContain('episode_end');
   });
   test('a quality drop ending an F episode silently still ends the episode: episode_end up to the last closed frame', () => {
     const r = fast(perceive([{ s: 2, spec: { ear: ear(0.1) } }, { s: 1, spec: { blur: 5 } }]), 60); // HEAD_ONLY: not bridged
@@ -535,5 +544,140 @@ describe('final review I1/m8: the bridge cap applies across a gap, whatever the 
     expect(first.bridgeEnded).toBe(true);
     expect(events.filter((e) => e.tMs >= back && ['microsleep', 'sleep', 'unresponsive'].includes(e.kind))).toEqual([]);
     expect(events.filter((e) => e.kind === 'episode_end' && (e.durMs ?? 0) > CAP * 1000)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Task C2 (calib-parked design rev4 §2.1.7–§2.1.9, §2.3.6; rev5 §2, §4.4; amendment W4).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('C2: the sleep family at every speed, and stop-time events', () => {
+  const closedFor = (s: number, o = 0.1) => perceive([{ s, spec: { ear: ear(o) } }]);
+  function runF(ps: Perceived[], x: { speed?: number | null; stopped?: (p: Perceived) => boolean; onRoad?: (p: Perceived) => boolean | null } = {}, cfg: DmsConfig = C) {
+    const r = createFastRules(cfg);
+    const events: FastEvent[] = [];
+    for (const p of ps) events.push(...r.onFrame({ p, ruleSpeedKmh: x.speed === undefined ? 0 : x.speed, onRoadGaze: x.onRoad ? x.onRoad(p) : true, stopped: x.stopped ? x.stopped(p) : true }).events);
+    return { events, kinds: events.map((e) => e.kind), rules: r };
+  }
+
+  test('S-SLEEP-AT-LIGHT (unit): F1 at 1.0 s and F2 at 3.0 s at 0 km/h, and with no speed at all', () => {
+    expect(runF(closedFor(3.2)).kinds).toEqual(expect.arrayContaining(['microsleep', 'sleep']));
+    expect(runF(closedFor(3.2), { speed: null }).kinds).toEqual(expect.arrayContaining(['microsleep', 'sleep']));
+  });
+
+  test('S-CREEP-ASLEEP (unit): F2 at 7 km/h', () => {
+    expect(runF(closedFor(4), { speed: 7 }).kinds).toContain('sleep');
+  });
+
+  test('events raised while stopped carry stopped: true; while moving, stopped: false', () => {
+    const atStop = runF(closedFor(3.2));
+    for (const e of atStop.events.filter((x) => x.kind === 'microsleep' || x.kind === 'sleep')) expect(e.stopped).toBe(true);
+    const moving = runF(closedFor(3.2), { speed: 60, stopped: () => false });
+    for (const e of moving.events.filter((x) => x.kind === 'microsleep' || x.kind === 'sleep')) expect(e.stopped).toBe(false);
+  });
+
+  test('rev5 §4.4: an episode_end is stop-time only if all its F-events were; it carries the level reached', () => {
+    // F1 at a stop, then the car moves with the eyes still shut: F2 while moving.
+    const ps = perceive([{ s: 3.5, spec: { ear: ear(0.1) } }, { s: 0.5, spec: {} }]);
+    const mixed = runF(ps, { stopped: (p) => p.tMs < 3000 });
+    expect(mixed.events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: false, level: 'f2' });
+    expect(runF(ps).events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: true, level: 'f2' });
+    const f1Only = runF(perceive([{ s: 1.5, spec: { ear: ear(0.1) } }, { s: 0.5, spec: {} }]));
+    expect(f1Only.events.find((e) => e.kind === 'episode_end')).toMatchObject({ stopped: true, level: 'f1' });
+  });
+
+  describe('S3 / U-14: stop-time F1s and the F4 fatigue floor (fatigue.stopEventsFeed)', () => {
+    const twice = perceive([{ s: 1.5, spec: { ear: ear(0.1) } }, { s: 60, spec: {} }, { s: 1.5, spec: { ear: ear(0.1) } }, { s: 1, spec: {} }]);
+    const floorAfter = (feed: 'none' | 'long_and_nod' | 'all', stopped: boolean) => {
+      const cfg = { ...C, fatigue: { ...C.fatigue, stopEventsFeed: feed } } as DmsConfig;
+      const r = runF(twice, { stopped: () => stopped, speed: stopped ? 0 : 60 }, cfg);
+      return r.rules.fatigueFloor(twice.at(-1)!.tMs);
+    };
+    test("'none' (the default, U-14 a): two stop-time F1s leave the floor at none", () => {
+      expect(C.fatigue.stopEventsFeed).toBe('none');
+      expect(floorAfter('none', true)).toBe('none');
+    });
+    test("'long_and_nod': a stop-time F1 (an eye rest) does not feed F4 either", () => {
+      expect(floorAfter('long_and_nod', true)).toBe('none');
+    });
+    test("'all': stop-time F1s feed it as moving ones do (Severe)", () => {
+      expect(floorAfter('all', true)).toBe('severe');
+    });
+    test('while moving, every value feeds F4 as today', () => {
+      for (const feed of ['none', 'long_and_nod', 'all'] as const) expect(floorAfter(feed, false)).toBe('severe');
+    });
+  });
+
+  test("S-STOP-LOOKAROUND (unit): F3's no-on-road watch is frozen while stopped and resumes after the move-off", () => {
+    const ps = perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 16, spec: { gaze: { yaw: 40, pitch: 0 } } }]);
+    const r = runF(ps, { onRoad: () => false, stopped: (p) => p.tMs < 12_100 });
+    const un = r.events.filter((e) => e.kind === 'unresponsive');
+    expect(un).toHaveLength(1);
+    expect(un[0]!.tMs).toBeGreaterThanOrEqual(12_100 + 3000 - 70);
+  });
+
+  test("S2: F3's no-on-road clause inherits the origin of the Critical it escalates", () => {
+    const ps = perceive([{ s: 5, spec: { gaze: { yaw: 40, pitch: 0 } } }]);
+    const afterD4 = createFastRules(C);
+    afterD4.criticalStarted('d4');
+    const ev: FastEvent[] = [];
+    ps.forEach((p) => ev.push(...afterD4.onFrame({ p, ruleSpeedKmh: 60, onRoadGaze: false, stopped: false }).events));
+    expect(ev.find((e) => e.kind === 'unresponsive')).toMatchObject({ clause: 'no_on_road', origin: 'd4' });
+    const afterF1 = runF(perceive([{ s: 1.1, spec: { ear: ear(0.1) } }, { s: 4, spec: { gaze: { yaw: 40, pitch: 0 } } }]), { speed: 60, stopped: () => false, onRoad: () => false });
+    expect(afterF1.events.find((e) => e.kind === 'unresponsive')).toMatchObject({ clause: 'no_on_road', origin: 'sleep' });
+    const closure = runF(closedFor(6.5), { speed: 60, stopped: () => false, onRoad: () => true });
+    expect(closure.events.find((e) => e.kind === 'unresponsive' && e.clause === 'closure')).toMatchObject({ origin: 'sleep' });
+  });
+});
+
+describe('C2 / S1: the looking-down gate is latched for the episode', () => {
+  // An eye-mover: the head follows only 20 % of the gaze. REFS put the centres at 0, so rel = absolute.
+  const reading = (gazePitch: number, closedS: number, o = 0.2): Perceived[] =>
+    perceive([
+      { s: 0.4, spec: { gaze: { yaw: 0, pitch: gazePitch }, head: { yaw: 0, pitch: 0.2 * gazePitch, roll: 0 } } },
+      { s: closedS, spec: { gaze: { yaw: 0, pitch: gazePitch }, head: { yaw: 0, pitch: 0.2 * gazePitch, roll: 0 }, ear: ear(o) } },
+    ]);
+
+  test('S-STOP-READ-EYEMOVER (unit): a lid at 0.20 reading at −40° (head −8°) for 4 s never gives F1', () => {
+    expect(fast(reading(-40, 4), 60).kinds).not.toContain('microsleep');
+  });
+
+  test('the latched episode still counts a DEEP closure (openness < 0.15): F1 at 1.5 s of it', () => {
+    const ps = reading(-40, 3, 0.1);
+    const f1 = fast(ps, 60).events.find((e) => e.kind === 'microsleep')!;
+    const onset = ps.find((p) => p.eyesClosed)!.tMs;
+    expect(f1.tMs - onset).toBeGreaterThanOrEqual(1500 - 70);
+    expect(f1.tMs - onset).toBeLessThanOrEqual(1500 + 70);
+  });
+
+  test('the head coming up (above −5° for 300 ms) clears the latch', () => {
+    const ps = perceive([
+      { s: 0.4, spec: { gaze: { yaw: 0, pitch: -40 }, head: { yaw: 0, pitch: -8, roll: 0 } } },
+      { s: 0.6, spec: { gaze: { yaw: 0, pitch: -40 }, head: { yaw: 0, pitch: -8, roll: 0 }, ear: ear(0.2) } },
+      { s: 1.5, spec: { gaze: { yaw: 0, pitch: 0 }, head: { yaw: 0, pitch: 0, roll: 0 }, ear: ear(0.2) } },
+    ]);
+    expect(fast(ps, 60).kinds).toContain('microsleep');
+  });
+
+  test('S-NODOFF-12 (unit): a microsleep whose head drops to −12° during the closure fires at 1.0 s, as today', () => {
+    const ps = perceive([
+      { s: 0.5, spec: {} },
+      { s: 0.5, spec: { ear: ear(0.1), head: { yaw: 0, pitch: -6, roll: 0 }, gaze: { yaw: 0, pitch: -6 } } },
+      { s: 1, spec: { ear: ear(0.1), head: { yaw: 0, pitch: -12, roll: 0 }, gaze: { yaw: 0, pitch: -12 } } },
+    ]);
+    const f1 = fast(ps, 60).events.find((e) => e.kind === 'microsleep')!;
+    const onset = ps.find((p) => p.eyesClosed)!.tMs;
+    expect(f1.tMs - onset).toBeLessThanOrEqual(1000 + 70);
+  });
+
+  test('S-NODOFF-GLANCE (rev5 §2, the accepted cost): shut to 0.05 during a cluster glance (gaze −20°, head −7°): F1 at 1.5 s, not 1.0', () => {
+    const ps = perceive([
+      { s: 0.5, spec: { gaze: { yaw: 0, pitch: -20 }, head: { yaw: 0, pitch: -7, roll: 0 } } },
+      { s: 2, spec: { gaze: { yaw: 0, pitch: -20 }, head: { yaw: 0, pitch: -7, roll: 0 }, ear: ear(0.05) } },
+    ]);
+    const f1 = fast(ps, 60).events.find((e) => e.kind === 'microsleep')!;
+    const onset = ps.find((p) => p.eyesClosed)!.tMs;
+    expect(f1.tMs - onset).toBeGreaterThan(1000 + 70);
+    expect(f1.tMs - onset).toBeLessThanOrEqual(1500 + 70);
   });
 });

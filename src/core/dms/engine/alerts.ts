@@ -38,7 +38,19 @@
 // session end (T13 r1 I1): the camera going off at speed (heat, dark) stops a running distraction and drops
 // the held items, but KEEPS a running Critical (the phone's heat says nothing about the driver); it then
 // ends on a known < 10 km/h for 5 s, on its clear condition once frames return, or after
-// criticalBlindMaxS with no frame (blind_cap), followed by one Tier 1 `monitoring_paused`. The blind cap is
+// criticalBlindMaxS with no frame (blind_cap), followed by one Tier 1 `monitoring_paused`.
+//
+// Task C2 (rev4 §2.1.7, §2.1.8; the user's rule "sleep alerts always on"): every Critical carries an ORIGIN,
+// `sleep` (F1, F2, microsleep_nod, F3's closure clause, and F3's no-on-road clause after one of them) or `d4`
+// (D4, and F3's no-on-road clause after it).
+//  - Starts: the sleep family is exempt from criticalMinStartKmh; a D4 request keeps it (an escalation skips it).
+//  - A request merging into a running Critical of the same kind upgrades its origin to `sleep` when the request
+//    is sleep-family. A Critical that replaces a running one is `sleep` when either is (sleep dominates).
+//  - Ends: a `d4` Critical ends after criticalEndAfterS of STOPPED (the frame's `stopped`, a sensor stop
+//    included; absent, a KNOWN speed below criticalEndBelowKmh). A `sleep` Critical ends only on its clear,
+//    the lost cap or the blind cap, never on a stop. While STOPPED, a `sleep` Critical clears on the eyes
+//    open for tier3ClearS with the gaze anywhere; while moving, on the road as before.
+//  - The escalation's corroboration (D4's pending state) clears after criticalEndAfterS of STOPPED too. The blind cap is
 // measured from the LAST FRAME (the façade's blind ticks carry `blindSinceMs`; final review I2), so frames
 // that simply stop are capped too (cause `fault` when no cameraOff named one), and a late in-flight frame
 // moves it only by its own lateness. U-23 (final review I3): a Critical with no TRACKING face for
@@ -91,8 +103,10 @@ export type AlertRequest =
   /**
    * F3 (closure: its closure clause), F3's no-on-road clause, or D4. `escalation`: D4 after a D1/D2
    * warning, F3 in an F1/F2 episode, F3's no-on-road clause. `c8`: raised on a C-8 far-lateral LOST frame.
+   * `origin` (Task C2): `sleep` for F3's closure clause and for the no-on-road clause after a sleep Critical;
+   * `d4` for D4 and the no-on-road clause after it.
    */
-  | { kind: 'unresponsive'; closure: boolean; bridged: boolean; c8: boolean; escalation: boolean }
+  | { kind: 'unresponsive'; closure: boolean; bridged: boolean; c8: boolean; escalation: boolean; origin: CriticalOrigin }
   /** D1, D2 */
   | { kind: 'distraction' | 'cumulative'; c8: boolean }
   | { kind: 'phone_pattern' | 'fatigue_early' | 'fatigue' | 'repeated_glances' };
@@ -121,9 +135,17 @@ export interface AlertFrame {
   blindSinceMs?: number;
   /** this frame came after a frame gap (final review m9): the clear condition restarts */
   gap?: boolean;
+  /**
+   * Task C2: the engine's STOPPED state (a GNSS stop or a sensor stop). Absent (older callers): a KNOWN speed
+   * below criticalEndBelowKmh.
+   */
+  stopped?: boolean;
 }
 
 export type AlertOutcome = 'delivered' | 'muted' | 'merged' | 'dropped' | 'suppressed';
+
+/** Task C2 (rev4 §2.1.8): where a Critical came from; a `sleep` Critical is never ended by a stop. */
+export type CriticalOrigin = 'sleep' | 'd4';
 
 export interface AlertLogEntry {
   kind: AlertKind;
@@ -157,6 +179,8 @@ const DISTRACTION: ReadonlySet<AlertKind> = new Set(['distraction', 'cumulative'
 /** A Critical's rank: several on one frame start only the highest (final review round 3 nit). */
 const CRITICAL_RANK: Partial<Record<AlertKind, number>> = { microsleep: 1, microsleep_nod: 1, sleep: 2, unresponsive: 3 };
 const rankOf = (req: AlertRequest) => CRITICAL_RANK[req.kind] ?? 0;
+/** Task C2: a request's origin; F1, F2 and microsleep_nod are always the sleep family. */
+const originOf = (req: AlertRequest): CriticalOrigin => (req.kind === 'unresponsive' ? req.origin : 'sleep');
 
 export function tierOf(kind: AlertKind): 1 | 2 | 3 {
   if (CRITICAL.has(kind)) return 3;
@@ -195,7 +219,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   const a = cfg.alerts;
   const muted = opts.mode === 'shadow';
   let nextId = 1;
-  let critical: { kind: AlertKind; clearSince: number | null; lowSince: number | null; startT: number } | null = null;
+  let critical: { kind: AlertKind; origin: CriticalOrigin; clearSince: number | null; lowSince: number | null; startT: number } | null = null;
   let distraction: AlertKind | null = null;
   const held: { req: AlertRequest; since: number; raised: Partial<AlertLogEntry> }[] = [];
   const lastTier1 = new Map<AlertKind, number>();
@@ -258,9 +282,9 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         if (x.quality === 'tracking') lastTrackingT = x.tMs;
       } else backSince = null;
       // The escalation corroboration clears as D4's pending state does (no allocation).
+      const atStop = x.stopped ?? (x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh);
       if (pendingEscalation) {
-        const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
-        pendingLowSince = knownLow ? (pendingLowSince ?? x.tMs) : null;
+        pendingLowSince = atStop ? (pendingLowSince ?? x.tMs) : null;
         if (x.onRoad || (pendingLowSince !== null && x.tMs - pendingLowSince >= a.criticalEndAfterS * 1000 - EPS)) {
           pendingEscalation = false;
           pendingLowSince = null;
@@ -277,11 +301,13 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
         distraction = null;
       }
       if (critical !== null) {
-        const clear = x.eyesOpen && x.onRoad;
+        const sleepOrigin = critical.origin === 'sleep';
+        // C2: while STOPPED an awake driver may look anywhere (a sleep Critical); while moving, on the road.
+        const clear = x.eyesOpen && (x.onRoad || (sleepOrigin && x.stopped === true));
         // Final review m9: two clear instants across a gap are not a clear second.
         critical.clearSince = clear ? (x.gap === true ? x.tMs : (critical.clearSince ?? x.tMs)) : null;
-        const knownLow = x.speedKnown && x.ruleSpeedKmh !== null && x.ruleSpeedKmh < a.criticalEndBelowKmh;
-        critical.lowSince = knownLow ? (critical.lowSince ?? x.tMs) : null;
+        // C2: only a D4-origin Critical ends at a stop.
+        critical.lowSince = atStop && !sleepOrigin ? (critical.lowSince ?? x.tMs) : null;
         const cleared = critical.clearSince !== null && x.tMs - critical.clearSince >= a.tier3ClearS * 1000 - EPS;
         const stopped = critical.lowSince !== null && x.tMs - critical.lowSince >= a.criticalEndAfterS * 1000 - EPS;
         if (cleared || stopped) {
@@ -299,7 +325,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       // New requests. Round 3 nit: several Criticals on one frame (F1–F3 at a speed-gate lift) start only the
       // highest; the others are logged as merged, so the host never chirps three starts. The requests keep
       // their order (an accepted Critical earlier on the frame still verifies an escalation after it).
-      const speedOk = (req: AlertRequest) => isEscalation(req) || (x.ruleSpeedKmh !== null && x.ruleSpeedKmh >= a.criticalMinStartKmh - EPS);
+      // C2: the sleep family is exempt from the start gate; a D4 request keeps it (an escalation skips it).
+      const speedOk = (req: AlertRequest) => isEscalation(req) || originOf(req) === 'sleep' || (x.ruleSpeedKmh !== null && x.ruleSpeedKmh >= a.criticalMinStartKmh - EPS);
       const topRank = Math.max(0, ...x.requests.filter((r) => tierOf(r.kind) === 3 && speedOk(r)).map(rankOf));
       let criticalAcceptedNow = false;
       let criticalStartedNow = false;
@@ -322,6 +349,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
           if (unverified) invariantViolations++;
           const extra: Partial<AlertLogEntry> = { ...from, ...(!r5 ? { why: 'rule5_violation' } : unverified ? { why: 'escalation_unverified' } : {}) };
           if ((critical !== null && critical.kind === req.kind) || criticalStartedNow || rankOf(req) < topRank) {
+            // C2 (S2): a sleep-family request merging into the running Critical upgrades its origin.
+            if (critical !== null && originOf(req) === 'sleep') critical.origin = 'sleep';
             record({ kind: req.kind, tier, tMs: x.tMs, outcome: 'merged', ...extra });
             continue;
           }
@@ -330,7 +359,9 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
             distraction = null;
           }
           if (critical !== null) cmd(out, x, 'stop', critical.kind);
-          critical = { kind: req.kind, clearSince: null, lowSince: null, startT: x.tMs };
+          // C2: a Critical replacing a sleep Critical stays sleep (sleep dominates).
+          const origin: CriticalOrigin = critical !== null && critical.origin === 'sleep' ? 'sleep' : originOf(req);
+          critical = { kind: req.kind, origin, clearSince: null, lowSince: null, startT: x.tMs };
           criticalStartedNow = true;
           deliver(out, x, req, 'start', extra);
           continue;
@@ -452,6 +483,11 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
     /** The running Critical's kind, or null (the façade ends F3's no-on-road watch with it, Task 12). */
     critical(): AlertKind | null {
       return critical === null ? null : critical.kind;
+    },
+
+    /** Task C2: the running Critical's origin, or null. */
+    criticalOrigin(): CriticalOrigin | null {
+      return critical === null ? null : critical.origin;
     },
 
     /** Rule 7: tags the last logged alert; never changes live behaviour. */

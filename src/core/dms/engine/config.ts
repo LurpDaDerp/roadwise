@@ -32,6 +32,10 @@ export type ZoneId = (typeof ZONE_IDS)[number];
 
 export type ZoneClass = 'on_road' | 'driving' | 'non_driving';
 
+/** Task C2 (U-14): what stop-time sleep events feed (`fatigue.stopEventsFeed`). */
+export const STOP_EVENTS_FEEDS = ['none', 'long_and_nod', 'all'] as const;
+export type StopEventsFeed = (typeof STOP_EVENTS_FEEDS)[number];
+
 /** Regions in the driver frame, relative to the road centre (degrees). */
 export type ZoneRegion =
   /** the calibrated road-centre circle (radius from §M3) */
@@ -338,6 +342,10 @@ export interface DmsConfig {
     /** §M6 looking-down gate */
     lookDownRelPitchDeg: number;
     lookDownClosedBelow: number;
+    /**
+     * The minimum rule speeds of F1–F3: 0 since Task C2 (rev4 §2.1.7, the user's rule: the sleep family runs at
+     * every speed while the gate is open). Kept as keys: a negative control restores them.
+     */
     f1: { closedS: number; lookDownClosedS: number; minSpeedKmh: number };
     f2: { closedS: number; minSpeedKmh: number };
     f3: { closedS: number; noOnRoadS: number; minSpeedKmh: number };
@@ -411,6 +419,13 @@ export interface DmsConfig {
     /** §M7 */
     activeAfterS: number;
     minSpeedKmh: number;
+    /**
+     * Task C2 (rev4 §2.1.9, rev5 §4.4, U-14): what the sleep events raised while STOPPED feed, beyond the Tier 3
+     * sound, the log and the summary count (always). 'none' (U-14 a, the default): neither F4's fatigue floor
+     * nor the trip score; 'long_and_nod': only F2/F3 episodes (closures of 3 s or more) and microsleep_nod;
+     * 'all': everything, as moving events.
+     */
+    stopEventsFeed: StopEventsFeed;
     everyS: number;
     minTrackingShare: number;
     signals: {
@@ -648,9 +663,9 @@ const DEFAULT: DmsConfig = {
     nearEyeYawDeg: 25,
     lookDownRelPitchDeg: -15,
     lookDownClosedBelow: 0.15,
-    f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 20 },
-    f2: { closedS: 3.0, minSpeedKmh: 10 },
-    f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 10 },
+    f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
+    f2: { closedS: 3.0, minSpeedKmh: 0 },
+    f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
     f4: { windowS: 600, holdS: 900 },
     singleF1HoldS: 900,
     longBlinkMs: 500,
@@ -672,7 +687,9 @@ const DEFAULT: DmsConfig = {
     recoverWithinS: 2.0,
     closureOpenness: 0.15,
     closureHoldS: 0.5,
-    minSpeedKmh: 20,
+    // Task C2 (rev4 §2.1.7): microsleep_nod at every speed (was 20). A nod's fatigue count is unchanged
+    // (every nod while moving; the engine freezes nod statistics while STOPPED).
+    minSpeedKmh: 0,
   },
   yawn: {
     openness: 2.5,
@@ -690,6 +707,7 @@ const DEFAULT: DmsConfig = {
   fatigue: {
     activeAfterS: 600,
     minSpeedKmh: 20,
+    stopEventsFeed: 'none',
     everyS: 60,
     minTrackingShare: 0.5,
     signals: {
@@ -835,6 +853,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(c.alerts.criticalEndBelowKmh <= c.alerts.criticalMinStartKmh)) bad('alerts.criticalEndBelowKmh', 'must be ≤ alerts.criticalMinStartKmh');
   if (!(c.alerts.tier3ClearS > 0)) bad('alerts.tier3ClearS', 'must be > 0');
   if (!Number.isInteger(c.fatigue.everyS) || c.fatigue.everyS <= 0) bad('fatigue.everyS', 'must be a positive integer');
+  if (!STOP_EVENTS_FEEDS.includes(c.fatigue.stopEventsFeed)) bad('fatigue.stopEventsFeed', `must be one of ${STOP_EVENTS_FEEDS.join(', ')}`);
   for (const [name, row] of Object.entries(c.fatigue.signals)) {
     if (!Number.isInteger(row.windowS) || row.windowS <= 0) bad(`fatigue.signals.${name}.windowS`, 'must be a positive integer');
   }

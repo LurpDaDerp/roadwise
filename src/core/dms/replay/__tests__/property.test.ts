@@ -5,7 +5,7 @@
 // closed (stopAlerts). For every drive:
 //   - the D1 buffer f stays in [0, 1];
 //   - nothing Tier 1/2 is audible below 20 km/h, and nothing at all below 10 km/h except a Critical
-//     (a new one needs ≥ 10 km/h; below it only an escalation of a running episode, T11 I1);
+//     (Task C2: the sleep family at every speed; D4 never fires while STOPPED, a known speed below 10);
 //   - rule 5 at REQUEST time (T12 review m2): no D1, D2 or phone-pattern request from a LOST frame is
 //     accepted unless it carries c8 (a fatigue burst may play on a LOST frame: ruled acceptable);
 //   - a gap frame adds no time: no D1 or D2 on a gap frame, and the closure time (`closedMs`) on a gap frame
@@ -16,7 +16,8 @@
 //   - a Critical's LIFETIME is bounded (final review m8), not only paired with a stop at the drive's end:
 //       · it stops within criticalLostMaxS + 1 s of the later of its start and the last TRACKING frame (U-23);
 //       · within criticalBlindMaxS + 1 s of the last frame (I2);
-//       · within criticalEndAfterS + 1 s of a known speed < 10 km/h (rows with a fix);
+//       · a D4-origin one within criticalEndAfterS + 1 s of a known speed < 10 km/h (rows with a fix); Task C2:
+//         a sleep-origin one is never ended by a stop, so only its clear and the caps bound it;
 //   - every start has its stop by the end of the drive, and every tier is 1–3;
 //   - the façade never breaks the alert contract (invariantViolations 0: rule 5 and escalations);
 //   - a replay equals itself (determinism), and the summary has no NaN.
@@ -46,6 +47,8 @@ interface Step {
   speed: number | null;
   buffer: number;
   closedMs: number;
+  /** C2: the running Critical's origin after this step */
+  origin: 'sleep' | 'd4' | null;
   commands: DmsAlertCommand[];
   events: { kind: string; tMs: number }[];
   off: RandomOff | null;
@@ -69,7 +72,7 @@ function play(d: RandomDrive, engine: DmsEngine, onStep?: (s: Step) => void): Dm
     const s = engine.snapshot();
     const out = engine.drain();
     commands.push(...out.commands);
-    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, closedMs: s.closedMs, commands: [...out.commands], events: [...out.events], off });
+    onStep?.({ tMs: t, frame: off === null, gap: off === null && s.gap, quality: off === null ? s.quality : null, speed: s.ruleSpeedKmh, buffer: s.bufferFraction, closedMs: s.closedMs, origin: s.criticalOrigin, commands: [...out.commands], events: [...out.events], off });
   }
   return commands;
 }
@@ -107,14 +110,15 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
       if (s.off?.kind === 'gate') expect({ seed, c, gate: true }).toEqual({ seed, c: expect.objectContaining({ kind: 'monitoring_paused' }), gate: true });
       else if (s.off?.kind === 'camera' && c.tier < 3) expect({ seed, c }).toEqual({ seed, c: expect.objectContaining({ kind: 'monitoring_paused' }) });
       const speed = s.speed;
-      if (c.tier === 3 && (speed === null || speed < 10)) {
-        // Below 10 km/h (or with no speed) only an escalation may start a Critical: always `unresponsive`.
-        expect({ seed, c }).toEqual({ seed, c: expect.objectContaining({ kind: 'unresponsive' }) });
-      }
       if (c.tier < 3 && c.kind !== 'monitoring_paused') {
         expect({ seed, c, speed }).toEqual({ seed, c, speed: expect.any(Number) });
         expect(speed!).toBeGreaterThanOrEqual(20);
       }
+    }
+    // C2: D4 never fires while STOPPED (a known speed below 10: its accounting is frozen, rev4 §2.1.10).
+    if (knownLowSince !== null) {
+      const d4 = s.events.filter((e) => e.kind === 'd4_unresponsive');
+      expect({ seed, tMs: s.tMs, d4 }).toEqual({ seed, tMs: s.tMs, d4: [] });
     }
     if (critical !== null) {
       // The lifetime bounds: never sounding past a cap by more than a second (and one row tick).
@@ -122,7 +126,7 @@ test.each(SEEDS)('random drive, seed %d', (seed) => {
       const since = Math.max(critical.since, lastTracking);
       expect({ seed, tMs: s.tMs, lostFor: s.tMs - since <= A.criticalLostMaxS * 1000 + slack }).toEqual({ seed, tMs: s.tMs, lostFor: true });
       expect({ seed, tMs: s.tMs, blindFor: s.tMs - Math.max(critical.since, lastFrame) <= A.criticalBlindMaxS * 1000 + slack }).toEqual({ seed, tMs: s.tMs, blindFor: true });
-      if (knownLowSince !== null) {
+      if (knownLowSince !== null && s.origin === 'd4') {
         const lowFor = s.tMs - Math.max(knownLowSince, critical.since);
         expect({ seed, tMs: s.tMs, lowFor: lowFor <= (A.criticalEndAfterS + 3) * 1000 + slack }).toEqual({ seed, tMs: s.tMs, lowFor: true });
       }

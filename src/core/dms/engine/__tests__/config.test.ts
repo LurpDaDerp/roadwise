@@ -82,9 +82,11 @@ describe('the binding numbers (plan §M1–§M10)', () => {
   test('closure, nod and yawn (§M6)', () => {
     expect(c.closure.closedBelow).toBe(0.3);
     expect(c.closure.openAbove).toBe(0.45);
-    expect(c.closure.f1).toEqual({ closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 20 });
-    expect(c.closure.f2).toEqual({ closedS: 3.0, minSpeedKmh: 10 });
-    expect(c.closure.f3).toEqual({ closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 10 });
+    // C2 (rev4 §2.1.7): the sleep family runs at every speed.
+    expect(c.closure.f1).toEqual({ closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 });
+    expect(c.closure.f2).toEqual({ closedS: 3.0, minSpeedKmh: 0 });
+    expect(c.closure.f3).toEqual({ closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 });
+    expect(c.nod.minSpeedKmh).toBe(0);
     expect(c.nod.closureOpenness).toBe(0.15);
     expect(c.nod.closureHoldS).toBe(0.5);
     expect(c.yawn.absMar).toBe(0.35);
@@ -327,5 +329,17 @@ describe('final review m7: the ordering constraints the code relies on', () => {
     const { createDmsEngine } = require('../engine') as typeof import('../engine');
     const bad = { ...DEFAULT_DMS_CONFIG, alerts: { ...DEFAULT_DMS_CONFIG.alerts, tier3ClearS: 0 } } as DmsConfig;
     expect(() => createDmsEngine(bad, { driverSide: 'left', sensitivity: 'normal', alerts: 'live' })).toThrow(/tier3ClearS/);
+  });
+});
+
+// Task C2 (rev4 §2.1.9, U-14 (a)): what stop-time sleep events feed.
+describe('C2: fatigue.stopEventsFeed', () => {
+  test("the default is 'none' (U-14 a)", () => {
+    expect(DEFAULT_DMS_CONFIG.fatigue.stopEventsFeed).toBe('none');
+  });
+  test("'long_and_nod' and 'all' are accepted; anything else is refused", () => {
+    expect(resolveDmsConfig({ fatigue: { stopEventsFeed: 'long_and_nod' } }).fatigue.stopEventsFeed).toBe('long_and_nod');
+    expect(resolveDmsConfig({ fatigue: { stopEventsFeed: 'all' } }).fatigue.stopEventsFeed).toBe('all');
+    expect(() => resolveDmsConfig({ fatigue: { stopEventsFeed: 'some' as 'all' } })).toThrow(/stopEventsFeed/);
   });
 });

@@ -1,13 +1,13 @@
 // Nods (plan §M6, C-15, rev1 I3) and yawns (§M6, C-23, rev1 I4 and m7).
-import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
+import { DEFAULT_DMS_CONFIG, resolveDmsConfig, type DmsConfig } from '../config';
 import { createNodDetector, type NodInput } from '../nod';
 import { createYawnDetector, speechRatio, type YawnInput } from '../yawn';
 
 const C = DEFAULT_DMS_CONFIG as DmsConfig;
 
 /** A nod stream at 15 fps from pitch(t) and openness(t) (relative head pitch, degrees). */
-function nods(pitch: (t: number) => number, openness: (t: number) => number | null, seconds = 6, speed = 60, gap: { lost: (t: number) => boolean; bridged?: boolean } | null = null) {
-  const d = createNodDetector(C);
+function nods(pitch: (t: number) => number, openness: (t: number) => number | null, seconds = 6, speed = 60, gap: { lost: (t: number) => boolean; bridged?: boolean } | null = null, cfg: DmsConfig = C) {
+  const d = createNodDetector(cfg);
   const kinds: string[] = [];
   for (let i = 0; i <= seconds * 15; i++) {
     const t = i / 15;
@@ -74,9 +74,15 @@ describe('nods', () => {
     }
     expect(kinds).toEqual(['nod']);
   });
-  test('microsleep_nod needs 20 km/h; below it the nod is still counted', () => {
+  test('the minimum speed is config: with the old 20 km/h, below it the nod is still counted as a nod', () => {
     const lidsShut = (t: number) => (t >= 1.2 && t < 1.8 ? 0.1 : 0.3);
-    expect(nods(profile(20, 0.6, 0.3, 0.4), lidsShut, 6, 15)).toEqual(['nod']);
+    const gated = resolveDmsConfig({ nod: { minSpeedKmh: 20 } });
+    expect(nods(profile(20, 0.6, 0.3, 0.4), lidsShut, 6, 15, null, gated)).toEqual(['nod']);
+  });
+  test('C2 (rev4 §2.1.7): microsleep_nod at every speed by default, 15 km/h and a stop', () => {
+    const lidsShut = (t: number) => (t >= 1.2 && t < 1.8 ? 0.1 : 0.3);
+    expect(nods(profile(20, 0.6, 0.3, 0.4), lidsShut, 6, 15)).toEqual(['microsleep_nod']);
+    expect(nods(profile(20, 0.6, 0.3, 0.4), lidsShut, 6, 0)).toEqual(['microsleep_nod']);
   });
 });
 
