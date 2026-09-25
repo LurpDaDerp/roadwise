@@ -14,10 +14,12 @@
 //   - the rolling path, every 30 s over the last 60 s of admission: a small shift (≥ minShiftDeg, from a nearly
 //     full window, located to convergence) or a larger one up to radiusMinDeg (relatively vacated twice) is
 //     followed at ≤ 3°/min; a pitch-down beyond 2° needs translation evidence;
-//   - the slow path: a peaked, vacated, road-scanned candidate beyond the rolling range persisting 5 min enters
-//     the dual state;
-//   - the fatigue evidence gate (set by the engine): no downward or phone-ward step, and a commit lowering the
-//     head-centre pitch by ≥ fatigueCommitPitchDeg becomes fatigue evidence (head_slump) with c₀ kept.
+//   - the slow path: a peaked, vacated, road-scanned candidate beyond the rolling range, up to 12.5°, not in a
+//     distraction zone, persisting 5 min enters the dual state; the driver's returns after road-scanning
+//     excursions must land nearer it than c₀ (≥ 80 % of ≥ 10), and so for a rolling large shift (≥ 4; C5 round 1);
+//   - the fatigue evidence gate (set by the engine): no downward or phone-ward step; a commit lowering the
+//     head-centre pitch by ≥ fatigueCommitPitchDeg becomes fatigue evidence (head_slump) with c₀ kept, and a
+//     phone-ward commit is refused (C5 round 1).
 // - Before a pass: the running median head pitch (rev1 m6) and the provisional EAR.
 // - Continuity (rev1 I7, rev2 R1-m2): a signature before every gap (markGap, or ≥ 30 s without
 //   TRACKING), compared over the first 5 s after the resume; driver change or camera bump; the EAR
@@ -51,7 +53,7 @@ import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
-import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, type CompSignature } from './posture';
+import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, shareNear, unimodal, vacatedRing, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
@@ -171,6 +173,11 @@ const BLINK_DIP = 0.6;
 const BLINK_MAX_MS = 600;
 /** Task C5: the rolling path's locator radius floor (2σ̂ above it) */
 const LOCATE_MIN_R_DEG = 4;
+/** C5 round 1: the excursion returns kept (≥ 10 per 5 min at two a minute) */
+const RETURNS_KEPT = 128;
+/** C5 round 1: an excursion is the gaze away for at least this long, over at least EXCURSION_MIN_FRAMES frames (not noise) */
+const EXCURSION_MIN_MS = 400;
+const EXCURSION_MIN_FRAMES = 3;
 /** Task C5: the share of the rolling window's weight a small-shift follow needs */
 const SMALL_MIN_WINDOW_FRAC = 0.75;
 const ORIGIN: AnglePair = Object.freeze({ yaw: 0, pitch: 0 });
@@ -278,14 +285,27 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   const emaQueue = new RingBuffer<{ t: number; w: number; head: AnglePair; geo: AnglePair | null; net: AnglePair | null }>(Math.ceil((c.voidS + 2) * MAX_FPS) + 2);
   let lastRollT = Number.NEGATIVE_INFINITY;
   let prevRoll: { m: AnglePair; vacated: boolean; se: number } | null = null;
+  /**
+   * C5 round 1: the rolling path's current large candidate: its mode, the centre when it appeared, since when, and
+   * whether the returns since then have corroborated it (latched while the candidate persists)
+   */
+  let largeCand: { m: AnglePair; from: AnglePair; since: number; ok: boolean } | null = null;
   /** the rolling path's follow: targets per source until the next evaluation */
   let follow: Centres | null = null;
   /** the rolling path is engaged: once a shift has been followed, smaller ones keep it following (the drift's pace) */
   let engaged = false;
   let slowCand: { cand: AnglePair; head: AnglePair | null; since: number; admittedS: number; lastT: number } | null = null;
   /** road-scanning excursions per minute of the slow candidate (by minute since its start), and the one in flight */
-  let scanMinutes: number[] = [];
-  let excursion: { leftT: number } | null = null;
+  /**
+   * C5 round 1 (review-C5 C5-1): the road-scanning excursions (≥ excursionMinDeg yaw from the centre, back within
+   * excursionReturnS) and where each returned to: the first fixation of returnFixationMs after it (every frame
+   * within the radius of the run's mean). A shifted road is returned to every time; a display watched 70 % of the
+   * time about 70 %.
+   */
+  const returns = new RingBuffer<{ t: number; at: AnglePair }>(RETURNS_KEPT);
+  let excursion: { leftT: number; backT: number | null; run: { t: number; x: AnglePair }[] } | null = null;
+  /** the gaze away from the centre since, and for how many frames (an excursion once long enough) */
+  let away: { since: number; frames: number } | null = null;
 
   let state: CalibrationState = 'none';
   let admittedS = 0;
@@ -466,19 +486,24 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * C4 round 1 (review-C4 C4-1 rule 1): a road-like point lies inside c₀'s UNWIDENED on-road zones (the phone
    * circle aside) and is not the phone: more than the phone screen's radius + candidateCameraMarginDeg from an
    * off-road camera, or nearer c₀ than the camera (the road seen from a new posture, as after a bump's pre-shift).
-   * C4 round 2: every c₁ update is held to this, not only the first candidate. Task C5: the slow path's candidate
-   * (beyond c₀'s road zones by design, and corroborated by road scanning instead) is held to the camera clause only.
+   * C4 round 2: every c₁ update is held to this, not only the first candidate. Task C5 (C5 round 1, C5-1 rule 3):
+   * the slow path's candidate is beyond c₀'s on-road zones by design, so that test is waived for it; it must still
+   * not be in c₀'s distraction zones (and roadLike's distraction share applies), and road scanning's return points
+   * corroborate it.
    */
   function roadLikeAt(m: AnglePair, c0: AnglePair, camera: AnglePair | null, slow = false): boolean {
     const rel = relative(m, c0);
-    if (!slow && zoneClass(zoneAt(rel, radius, null, cfg), cfg) !== 'on_road') return false;
+    const z = zoneAt(rel, radius, null, cfg);
+    // C5 round 1 (C5-1 rule 3): a slow candidate is beyond c₀'s on-road zones by design, but never in its
+    // distraction zones.
+    if (slow ? isDistractionZone(z, cfg) : zoneClass(z, cfg) !== 'on_road') return false;
     if (camera === null) return true;
     const toCamera = angularDistanceDeg(rel, camera);
     return !(toCamera <= phoneR + po.candidateCameraMarginDeg && toCamera < angularDistanceDeg(rel, ORIGIN));
   }
   /** A road-like candidate: a road-like point, with at most candidateNonDrivingShare of the window in c₀'s distraction zones. */
   function roadLike(m: AnglePair, dirs: readonly WeightedDir[], c0: AnglePair, camera: AnglePair | null, slow = false): boolean {
-    return roadLikeAt(m, c0, camera, slow) && (slow || nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare);
+    return roadLikeAt(m, c0, camera, slow) && nonDrivingShare(dirs, c0, camera) <= po.candidateNonDrivingShare;
   }
 
   /** Task C5: a row the candidate search counts (straight, or every known turn rate below searchCurveRateDegS). */
@@ -587,6 +612,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       emit('head_slump');
       return;
     }
+    // C5 round 1 (review-C5 §4): a phone-ward commit needs the gate clear too (no adaptation toward the phone while
+    // fatigued); it is refused and c₀ kept.
+    const g0 = d.c0[src] ?? d.c0.head;
+    const g1 = next[src] ?? next.head;
+    if (fatigueGate && g0 !== null && g1 !== null && phoneWard(g0, g1)) {
+      exitDual('fatigue');
+      return;
+    }
     centres.geometric = next.geometric;
     centres.net = next.net;
     centres.head = next.head;
@@ -641,8 +674,41 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   /** A shift the fatigue gate blocks: downward, or toward the phone. */
   function gateBlocks(from: AnglePair, to: AnglePair): boolean {
     if (!fatigueGate) return false;
+    return to.pitch < from.pitch - 1e-9 || phoneWard(from, to);
+  }
+  const phoneWard = (from: AnglePair, to: AnglePair) => {
     const cam = cameraDir();
-    return to.pitch < from.pitch - 1e-9 || angularDistanceDeg(to, cam) < angularDistanceDeg(from, cam) - 1e-9;
+    return angularDistanceDeg(to, cam) < angularDistanceDeg(from, cam) - 1e-9;
+  };
+
+  /**
+   * C5 round 1: c₀ is vacated BEYOND NOISE. The share near c₀ above what c₁'s own spread puts there (a Gaussian at
+   * σ̂: exp(−d²/2σ̂²) of c₁'s share) is at most slow.excessMax of c₁'s. A shifted road leaves c₀ to the noise; a
+   * display watched 70 % of the time leaves the road watched 30 %, an excess of about 0.4. Every admitted sample
+   * counts, so a display pattern that phase-locks with the mirror checks cannot fool it (the return test alone can).
+   */
+  function vacatedBeyondNoise(win: readonly WeightedDir[], c0: AnglePair, c1: AnglePair): boolean {
+    const rv = vacatedRing(c0, c1, radius ?? c.radiusMinDeg);
+    const s1 = shareNear(win, c1, rv);
+    if (!(s1 > 0)) return false;
+    const d = angularDistanceDeg(c0, c1);
+    const expected = s1 * Math.exp(-(d * d) / (2 * sigmaHat * sigmaHat));
+    return (shareNear(win, c0, rv) - expected) / s1 <= c.slow.excessMax;
+  }
+
+  /**
+   * C5 round 1 (C5-1 rule 2): the excursion returns since `t0` corroborate `cand` against `cur`: at least `minN`
+   * of them, and ≥ returnShare landed nearer the candidate than the centre.
+   */
+  function returnsCorroborate(t0: number, cand: AnglePair, cur: AnglePair, minN: number): boolean {
+    let n = 0;
+    let near = 0;
+    returns.forEach((r) => {
+      if (r.t < t0) return;
+      n++;
+      if (angularDistanceDeg(r.at, cand) < angularDistanceDeg(r.at, cur)) near++;
+    });
+    return n >= minN && near >= c.slow.returnShare * n;
   }
 
   /** Every rolling.everyS while calibrated (not dual, not in probation): the rolling path, then the slow path. */
@@ -677,8 +743,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const large = d > po.smallShiftSigmas * sigmaHat && d <= c.radiusMinDeg;
     const vacated = large && relativelyVacated(win, cur, m, r, cfg);
     const agrees = prevRoll !== null && angularDistanceDeg(prevRoll.m, m) <= Math.max(1, se, prevRoll.se);
-    const okSmall = small && agrees && unimodal(win, m, r, sigmaHat, cfg);
-    const okLarge = large && vacated && prevRoll !== null && prevRoll.vacated && agrees;
+    const okSmall = small && agrees && unimodal(win, m, r, sigmaHat, cfg) && peaked(win, m, sigmaHat, cfg);
+    // C5 round 1 (C5-1 rule 2): a large shift is followed only where the driver returns after an excursion: in the
+    // two agreeing windows, ≥ returnMinCountRolling returns, ≥ returnShare of them nearer m (else the follow waits).
+    // (The returns count from the candidate's appearance against the centre then, so a landing on c₀ keeps blocking
+    // (a 70 % display passes ≥ 12 returns at ≥ 95 % with p ≈ 0.7¹² ≈ 1 %); once corroborated the candidate stays
+    // so while it persists, so the follow is not re-qualified at every evaluation.)
+    if (!large) largeCand = null;
+    else if (largeCand === null || angularDistanceDeg(largeCand.m, m) > Math.max(1.5, 2 * se)) largeCand = { m, from: cur, since: tNow, ok: false };
+    if (largeCand !== null && !largeCand.ok) largeCand.ok = returnsCorroborate(largeCand.since, largeCand.m, largeCand.from, c.slow.returnMinCountRolling);
+    const okLarge = large && vacated && prevRoll !== null && prevRoll.vacated && agrees && largeCand !== null && largeCand.ok && vacatedBeyondNoise(win, cur, m);
     prevRoll = { m, vacated, se };
     if ((okSmall || okLarge) && m.pitch - cur.pitch >= -c.rolling.maxPitchDownDeg && !gateBlocks(cur, m)) {
       engaged = true;
@@ -692,24 +766,31 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       };
     }
     // The slow uncorroborated path (R3b): beyond the rolling range, up to maxShiftDeg.
-    const beyond = d > c.radiusMinDeg && d <= c.slow.maxShiftDeg && peaked(win, m, sigmaHat, cfg) && relativelyVacated(win, cur, m, r, cfg) && !gateBlocks(cur, m) && roadLike(m, win, cur, offRoadCamera(centres), true);
+    const beyond = d > c.radiusMinDeg && d <= c.slow.maxShiftDeg && peaked(win, m, sigmaHat, cfg) && relativelyVacated(win, cur, m, r, cfg) && vacatedBeyondNoise(win, cur, m) && !gateBlocks(cur, m) && roadLike(m, win, cur, offRoadCamera(centres), true);
+    // (C5 round 1, C5-1 rules 1 and 3: capped at maxShiftDeg 12.5°; the candidate not in c₀'s distraction zones and
+    // the window's distraction share ≤ candidateNonDrivingShare, via roadLike's slow branch.)
     if (!beyond) {
       slowCand = null;
       return;
     }
     if (slowCand === null || angularDistanceDeg(slowCand.cand, m) > Math.max(1.5, 2 * se)) {
       slowCand = { cand: m, head: modeOf(rollingWindow('head', centres.head ?? cur), cfg), since: tNow, admittedS: 0, lastT: tNow };
-      scanMinutes = [];
-      excursion = null;
       return;
     }
     slowCand.admittedS += weightOf(dirsSince(slowCand.lastT, src));
     slowCand.lastT = tNow;
     slowCand.cand = m;
     if (slowCand.admittedS < c.slow.persistS) return;
+    // Road scanning: ≥ scanExcursionsPerMin excursions in each of the last minutes, and (C5 round 1, C5-1 rule 2)
+    // ≥ returnShare of ≥ returnMinCount returns in the persistence window nearer the candidate than c₀.
     const minutes = Math.floor(c.slow.persistS / 60);
-    const recent = scanMinutes.slice(-minutes);
-    if (recent.length < minutes || recent.some((n) => n < c.slow.scanExcursionsPerMin)) return;
+    const perMinute = new Array<number>(minutes).fill(0);
+    returns.forEach((r) => {
+      const k = Math.floor((tNow - r.t) / 60_000);
+      if (k >= 0 && k < minutes) perMinute[k]!++;
+    });
+    if (perMinute.some((n) => n < c.slow.scanExcursionsPerMin)) return;
+    if (!returnsCorroborate(slowCand.since, m, cur, c.slow.returnMinCount)) return;
     // It enters the dual state with the persisted candidate as c₁ and its data as the persistence window.
     const cand = slowCand;
     slowCand = null;
@@ -725,21 +806,57 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
   }
 
-  /** Road scanning around the slow candidate: an excursion ≥ excursionMinDeg in yaw, back within excursionReturnS. */
+  /**
+   * Road scanning (C5 round 1, C5-1): an excursion ≥ excursionMinDeg in yaw from the centre (held EXCURSION_MIN_MS
+   * over EXCURSION_MIN_FRAMES frames, so gaze noise is none), back within excursionReturnS; then the first fixation of returnFixationMs (every frame within the radius of the run's
+   * mean) is where the driver returned. A new excursion first, or no fixation within excursionReturnS, drops it.
+   */
   function trackScanning(p: Perceived): void {
-    const sc = slowCand;
-    if (sc === null || p.eyesClosed) return;
+    const cur = centres[primary()];
+    if (cur === null || p.eyesClosed) return;
     const g = cfg.gazeSource === 'net' && p.netCam !== null ? p.netCam : p.geoCam;
     if (g === null) return;
     const x = toDrv(g, roll);
-    const minute = Math.floor((tNow - sc.since) / 60_000);
-    while (scanMinutes.length <= minute) scanMinutes.push(0);
-    const away = Math.abs(x.yaw - sc.cand.yaw) >= c.slow.excursionMinDeg;
-    const home = angularDistanceDeg(x, sc.cand) <= (radius ?? c.radiusMinDeg);
-    if (away) excursion ??= { leftT: tNow };
-    else if (home && excursion !== null) {
-      if (tNow - excursion.leftT <= c.slow.excursionReturnS * 1000) scanMinutes[minute] = scanMinutes[minute]! + 1;
+    if (Math.abs(x.yaw - cur.yaw) >= c.slow.excursionMinDeg) {
+      away = away === null ? { since: tNow, frames: 1 } : { since: away.since, frames: away.frames + 1 };
+      if (tNow - away.since >= EXCURSION_MIN_MS && away.frames >= EXCURSION_MIN_FRAMES && (excursion === null || excursion.backT !== null)) {
+        excursion = { leftT: away.since, backT: null, run: [] };
+      }
+      return;
+    }
+    away = null;
+    if (excursion === null) return;
+    if (excursion.backT === null) {
+      if (tNow - excursion.leftT > c.slow.excursionReturnS * 1000) {
+        excursion = null;
+        return;
+      }
+      excursion.backT = tNow;
+    }
+    if (tNow - excursion.backT > c.slow.excursionReturnS * 1000) {
       excursion = null;
+      return;
+    }
+    const run = excursion.run;
+    run.push({ t: tNow, x });
+    const r = radius ?? c.radiusMinDeg;
+    // The run is the frames since the first one within the radius of the rest's mean.
+    while (run.length > 1) {
+      let y = 0;
+      let pch = 0;
+      for (const f of run) {
+        y += f.x.yaw;
+        pch += f.x.pitch;
+      }
+      const mean = { yaw: y / run.length, pitch: pch / run.length };
+      if (run.every((f) => angularDistanceDeg(f.x, mean) <= r)) {
+        if (tNow - run[0]!.t >= c.slow.returnFixationMs) {
+          returns.push({ t: tNow, at: mean });
+          excursion = null;
+        }
+        return;
+      }
+      run.shift();
     }
   }
 

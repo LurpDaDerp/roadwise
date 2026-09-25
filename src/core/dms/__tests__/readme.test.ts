@@ -5,6 +5,7 @@
 // so a new status reason, event kind or gate input fails here until the README names it.
 import { createFakeDmsVision } from '../../../../modules/dms-vision/src/fake';
 import { ALERT_KINDS } from '../engine/alerts';
+import type { CalibrationEvent } from '../engine/calibration';
 import type { DmsEvent } from '../engine/engine';
 import { createDmsController, type DmsGateInputs, type DmsHudStatus, type DmsPresence } from '../host/controller';
 
@@ -109,6 +110,20 @@ const MONITORING_REASONS = {
   speed_unknown: true,
 } satisfies Record<NonNullable<DmsHudStatus['monitoring']['reason']>, true>;
 const PRESENCE = { lastFaceT: true, absent: true, exitEvidence: true } satisfies Record<keyof DmsPresence, true>;
+/** C5 round 1 (review-C5 deviation 6): the calibration events' causes */
+const CAUSES = {
+  step: true,
+  resume: true,
+  rotation: true,
+  stop: true,
+  bump: true,
+  slow: true,
+  relative: true,
+  undecided: true,
+  no_candidate: true,
+  probation: true,
+  fatigue: true,
+} satisfies Record<NonNullable<CalibrationEvent['cause']>, true>;
 
 test('the Calls table names every controller method (idle is for tests only)', () => {
   const calls = section('Calls');
@@ -128,6 +143,10 @@ test('the gate inputs are exactly DmsGateInputs', () => {
 test('the status: camera values and reasons', () => {
   expect(listed('- **Camera values:**')).toEqual(keys(CAMERA));
   expect(listed('- **Reasons:**')).toEqual(keys(REASONS));
+});
+
+test('C5: the calibration causes', () => {
+  expect(listed('- **Calibration causes:**')).toEqual(keys(CAUSES));
 });
 
 test('C3: the monitoring reasons and the presence fields', () => {

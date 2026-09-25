@@ -128,6 +128,8 @@ describe('S-U12: an uncorroborated 12° shift is followed by the slow path (NC-R
 // ---------------------------------------------------------------------------------------------------------
 
 const within = (t: number, a: number, b: number) => t >= a && t < b;
+/** Ordinary mirror checks: the rear mirror at 5 s and the driver mirror at 11 s of every 15 s (0.8 s each). */
+const mirrors = (t: number): Partial<DriverState> => (t % 15 >= 5 && t % 15 < 5.8 ? { gaze: rel(27, 10) } : t % 15 >= 11 && t % 15 < 11.8 ? { gaze: rel(-45, 0) } : {});
 const ev = (r: Run, kind: string) => r.events.filter((e) => e.kind === kind) as (DmsEvent & { cause?: string })[];
 /** The first second from `fromMs` at which the centre is within 1.5° of `target` and stays there to the end. */
 function settledAt(r: Run, fromMs: number, target: AnglePair): number | null {
@@ -200,10 +202,10 @@ describe('S-P6-CURVE-120 (review-C4 deviation 5): the candidate search counts ad
   });
 });
 
-describe('S-P6-SMALLBOX (review-C4 round 1, deviation 3): a translation below the fit-uncertainty margin is followed by the rolling path', () => {
+describe('S-P6-SMALLBOX (review-C4 round 1, deviation 3): a translation below the fit-uncertainty margin is followed by the rolling path (with ordinary mirror checks: C5 round 1)', () => {
   test('a 6° step with a box shift of 0.03 and no IOD change: followed within 7 min with bias ≤ 1.5°, 0 false D1', () => {
     const shift = { yaw: 6, pitch: 0 };
-    const r = play(drv((t) => (t >= 110 ? { posture: { shift, box: { dx: 0.03, dy: 0 } } } : null)), 110 + 480);
+    const r = play(drv((t) => ({ ...mirrors(t), ...(t >= 110 ? { posture: { shift, box: { dx: 0.03, dy: 0 } } } : {}) })), 110 + 480);
     const c0 = at(r, 109_000).centre!;
     const back = settledAt(r, 110_000, { yaw: c0.yaw + shift.yaw, pitch: c0.pitch });
     expect(back).not.toBeNull();
@@ -216,7 +218,7 @@ describe('S-P6-THEN-READ (C4 approval carry): a real step, then a minute of 50 %
   test('followed within 7 min with bias ≤ 1.5°; D1 fires during the reading', () => {
     const shift = { yaw: 6, pitch: 0 };
     const r = play(
-      drv((t) => ({ ...(t >= 110 ? { posture: { shift, box: { dx: 0.05, dy: 0 }, iodScale: 1.07 } } : {}), ...(within(t, 110, 170) && (t - 110) % 10 < 5 ? { gaze: rel(15, -14) } : {}) })),
+      drv((t) => ({ ...mirrors(t), ...(t >= 110 ? { posture: { shift, box: { dx: 0.05, dy: 0 }, iodScale: 1.07 } } : {}), ...(within(t, 110, 170) && (t - 110) % 10 < 5 ? { gaze: rel(15, -14) } : {}) })),
       110 + 480
     );
     const c0 = at(r, 109_000).centre!;
@@ -247,5 +249,93 @@ describe('S-LEAN-NEARPHONE (C4 approval carry): the phone mounted inside the roa
       expect(back).not.toBeNull();
       expect(back! - cm.tMs).toBeLessThanOrEqual(300_000);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// C5 round 1 (review-C5): a display watched most of the time is not a road; the 40 % reader's bound; the
+// fatigue gate on a phone-ward commit.
+// ---------------------------------------------------------------------------------------------------------
+
+/** The review's attack: attentive at 80 km/h until calibrated (120 s), then `share` of every `periodS` at `target`, a driver-mirror check every 20 s. */
+function watcher(target: AnglePair, share: number, periodS: number) {
+  return drv((t) => {
+    if (t % 20 >= 10 && t % 20 < 10.8) return { gaze: rel(-45, 0) };
+    return t >= 120 && (t - 120) % periodS < share * periodS ? { gaze: rel(target.yaw, target.pitch) } : null;
+  }, 80);
+}
+/** The centre's max and final shift from the calibrated one (at 119 s). */
+function shifts(r: Run, untilS: number) {
+  const c0 = at(r, 119_000).centre!;
+  const d = r.seconds.filter((s) => s.tMs >= 120_000 && s.centre !== null).map((s) => angularDistanceDeg(s.centre!, c0));
+  return { max: Math.max(...d), final: angularDistanceDeg(at(r, untilS * 1000).centre!, c0) };
+}
+
+describe('S-DISPLAY-70 (review-C5 C5-1; NC-C5-S4, NC-C5-S2+S4): a display watched 70 % of the time never pulls the centre', () => {
+  const CASES = ([
+    ['(7°, −1°)', { yaw: 7, pitch: -1 }],
+    ['(14°, −8°)', { yaw: 14, pitch: -8 }],
+    ['(16°, −4°)', { yaw: 16, pitch: -4 }],
+  ] as const).flatMap(([n, target]) => [11, 12, 13].map((seed) => [n, seed, target] as const));
+  test.each(CASES)('%s, seed %i: 12 min, max shift ≤ 2.5°, no slow dual state', (_, seed, target) => {
+    const r = play(watcher(target, 0.7, 3), 120 + 720, { seed });
+    expect(shifts(r, 839).max).toBeLessThanOrEqual(2.5);
+    expect(ev(r, 'posture_dual').filter((e) => e.cause === 'slow')).toEqual([]);
+  });
+});
+
+describe('C5-1 rules one at a time (NC-C5-S1, NC-C5-S2)', () => {
+  test('S-U16-CAP (NC-C5-S1): an uncorroborated 16° shift is beyond the slow path (12.5°): never followed by it', () => {
+    const shift = { yaw: 16, pitch: 0 };
+    const r = play(drv((t) => ({ ...mirrors(t), ...(t >= 110 ? { posture: { shift } } : {}) })), 110 + 600);
+    expect(ev(r, 'posture_dual').filter((e) => e.cause === 'slow')).toEqual([]);
+    const c0 = at(r, 109_000).centre!;
+    expect(angularDistanceDeg(at(r, 709_000).centre!, c0)).toBeLessThanOrEqual(2.5);
+  });
+  /** A display watched 90 % of the time, except the 2 s after each driver-mirror check, when the driver looks at the road. */
+  function roadAfterMirrors(target: AnglePair) {
+    return drv((t) => {
+      if (t % 20 >= 10 && t % 20 < 10.8) return { gaze: rel(-45, 0) };
+      if (t % 20 >= 10.8 && t % 20 < 12.8) return null;
+      return t >= 120 ? { gaze: rel(target.yaw, target.pitch) } : null;
+    }, 80);
+  }
+  test.each([
+    ['(7°, −1°), the rolling large path', { yaw: 7, pitch: -1 }],
+    ['(10°, −6°), the slow path', { yaw: 10, pitch: -6 }],
+  ] as const)('S-DISPLAY-90-RETURNS (NC-C5-S2) %s: the driver returns to the road after every mirror check: no follow, no slow dual', (_, target) => {
+    const r = play(roadAfterMirrors(target), 120 + 720, { seed: 11 });
+    expect(shifts(r, 839).max).toBeLessThanOrEqual(2.5);
+    expect(ev(r, 'posture_dual').filter((e) => e.cause === 'slow')).toEqual([]);
+  });
+});
+
+describe('S-40-DISPLAY (review-C5 deviation 1; NC-C5-K): a 40 % reader at an on-road display moves the centre ≤ 2.5°, ending ≤ 1.5°', () => {
+  test.each([11, 12, 13])('seed %i: 1.5 s on, 2.25 s off at (8°, −4°) for 10 min', (seed) => {
+    const r = play(watcher({ yaw: 8, pitch: -4 }, 0.4, 3.75), 120 + 600, { seed });
+    const sh = shifts(r, 719);
+    expect(sh.max).toBeLessThanOrEqual(2.5);
+    expect(sh.final).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('a phone-ward commit needs the fatigue gate clear (review-C5 §4; NC-C5-F2)', () => {
+  // The mount 25° right and 15° below the road, so the camera is off the road; the step moves the road 8° toward it.
+  const toward = (drowsy: boolean) =>
+    drv((t) => ({
+      mountShift: { yaw: -25, pitch: 15 },
+      ...(drowsy && within(t, 100, 101.2) ? { openness: 0.1 } : {}),
+      ...(t >= 110 ? { posture: { shift: { yaw: 8, pitch: 0 }, box: { dx: 0.05, dy: 0 }, iodScale: 1.07 } } : {}),
+    }));
+  test('drowsy (a microsleep 10 s before): no commit, posture_revert(fatigue), c₀ kept', () => {
+    const r = play(toward(true), 260);
+    expect(ev(r, 'microsleep').length).toBeGreaterThanOrEqual(1);
+    expect(ev(r, 'posture_commit')).toEqual([]);
+    expect(ev(r, 'posture_revert').map((e) => e.cause)).toContain('fatigue');
+    expect(angularDistanceDeg(at(r, 259_000).centre!, at(r, 109_000).centre!)).toBeLessThanOrEqual(1);
+  });
+  test('the control, alert: committed 8° over', () => {
+    const r = play(toward(false), 260);
+    expect(ev(r, 'posture_commit').length).toBeGreaterThanOrEqual(1);
   });
 });
