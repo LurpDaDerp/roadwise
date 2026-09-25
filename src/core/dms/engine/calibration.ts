@@ -16,7 +16,9 @@
 //     followed at ≤ 3°/min; a pitch-down beyond 2° needs translation evidence;
 //   - the slow path: a peaked, vacated, road-scanned candidate beyond the rolling range, up to 12.5°, not in a
 //     distraction zone, persisting 5 min enters the dual state; the driver's returns after road-scanning
-//     excursions must land nearer it than c₀ (≥ 80 % of ≥ 10), and so for a rolling large shift (≥ 4; C5 round 1);
+//     excursions must land nearer it than c₀ (≥ slow.returnShare 0.8 of ≥ slow.returnMinCount 12 since it appeared),
+//     and so for a rolling large shift (≥ slow.returnMinCountRolling 12, latched per candidate), and c₀ must be
+//     vacated beyond noise (≤ slow.excessMax 0.15; C5 rounds 1 and 2);
 //   - the fatigue evidence gate (set by the engine): no downward or phone-ward step; a commit lowering the
 //     head-centre pitch by ≥ fatigueCommitPitchDeg becomes fatigue evidence (head_slump) with c₀ kept, and a
 //     phone-ward commit is refused (C5 round 1).
@@ -303,7 +305,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * time about 70 %.
    */
   const returns = new RingBuffer<{ t: number; at: AnglePair }>(RETURNS_KEPT);
-  let excursion: { leftT: number; backT: number | null; run: { t: number; x: AnglePair }[] } | null = null;
+  let excursion: { leftT: number; backT: number | null; run: { t: number; x: AnglePair }[]; sy: number; sp: number } | null = null;
   /** the gaze away from the centre since, and for how many frames (an excursion once long enough) */
   let away: { since: number; frames: number } | null = null;
 
@@ -746,9 +748,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const okSmall = small && agrees && unimodal(win, m, r, sigmaHat, cfg) && peaked(win, m, sigmaHat, cfg);
     // C5 round 1 (C5-1 rule 2): a large shift is followed only where the driver returns after an excursion: in the
     // two agreeing windows, ≥ returnMinCountRolling returns, ≥ returnShare of them nearer m (else the follow waits).
-    // (The returns count from the candidate's appearance against the centre then, so a landing on c₀ keeps blocking
-    // (a 70 % display passes ≥ 12 returns at ≥ 95 % with p ≈ 0.7¹² ≈ 1 %); once corroborated the candidate stays
-    // so while it persists, so the follow is not re-qualified at every evaluation.)
+    // (The returns count from the candidate's appearance against the centre then; once corroborated the candidate
+    // stays so while it persists, so the follow is not re-qualified at every evaluation. C5 round 2: at 0.8 a display
+    // watched 70 % of the time can pass the return test; vacatedBeyondNoise holds it.)
     if (!large) largeCand = null;
     else if (largeCand === null || angularDistanceDeg(largeCand.m, m) > Math.max(1.5, 2 * se)) largeCand = { m, from: cur, since: tNow, ok: false };
     if (largeCand !== null && !largeCand.ok) largeCand.ok = returnsCorroborate(largeCand.since, largeCand.m, largeCand.from, c.slow.returnMinCountRolling);
@@ -820,7 +822,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (Math.abs(x.yaw - cur.yaw) >= c.slow.excursionMinDeg) {
       away = away === null ? { since: tNow, frames: 1 } : { since: away.since, frames: away.frames + 1 };
       if (tNow - away.since >= EXCURSION_MIN_MS && away.frames >= EXCURSION_MIN_FRAMES && (excursion === null || excursion.backT !== null)) {
-        excursion = { leftT: away.since, backT: null, run: [] };
+        excursion = { leftT: away.since, backT: null, run: [], sy: 0, sp: 0 };
       }
       return;
     }
@@ -837,18 +839,16 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       excursion = null;
       return;
     }
-    const run = excursion.run;
+    const ex = excursion;
+    const run = ex.run;
     run.push({ t: tNow, x });
+    ex.sy += x.yaw;
+    ex.sp += x.pitch;
     const r = radius ?? c.radiusMinDeg;
-    // The run is the frames since the first one within the radius of the rest's mean.
+    // The run is the frames since the first one within the radius of the rest's mean (running sums: each frame
+    // leaves the run once, so this is amortised O(run) per frame; review-C5 round 1 minor).
     while (run.length > 1) {
-      let y = 0;
-      let pch = 0;
-      for (const f of run) {
-        y += f.x.yaw;
-        pch += f.x.pitch;
-      }
-      const mean = { yaw: y / run.length, pitch: pch / run.length };
+      const mean = { yaw: ex.sy / run.length, pitch: ex.sp / run.length };
       if (run.every((f) => angularDistanceDeg(f.x, mean) <= r)) {
         if (tNow - run[0]!.t >= c.slow.returnFixationMs) {
           returns.push({ t: tNow, at: mean });
@@ -856,7 +856,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         }
         return;
       }
-      run.shift();
+      const gone = run.shift()!;
+      ex.sy -= gone.x.yaw;
+      ex.sp -= gone.x.pitch;
     }
   }
 

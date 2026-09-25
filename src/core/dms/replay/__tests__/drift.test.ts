@@ -310,6 +310,25 @@ describe('C5-1 rules one at a time (NC-C5-S1, NC-C5-S2)', () => {
   });
 });
 
+describe('C5 round 2 (R1-a): an uncorroborated shift at 8 fps is followed (return fixation noise; NC-C5-R95)', () => {
+  /** An uncorroborated shift (the angles only) at 110 s, ordinary mirror checks, 10 min at 8 fps: the bias at the end. */
+  const bias = (shift: AnglePair) => {
+    const r = play(drv((t) => ({ ...mirrors(t), ...(t >= 110 ? { posture: { shift } } : {}) })), 110 + 600, { fps: 8, seed: 11 });
+    const c0 = at(r, 109_000).centre!;
+    return angularDistanceDeg(at(r, 709_000).centre!, { yaw: c0.yaw + shift.yaw, pitch: c0.pitch + shift.pitch });
+  };
+  test('S-U5.5-8FPS: 5.5° yaw: followed, bias ≤ 1.5° at the end', () => {
+    expect(bias({ yaw: 5.5, pitch: 0 })).toBeLessThanOrEqual(1.5);
+  });
+  // KNOWN FAILING until T7 (review-C5 round 1 carry): the road 7° up puts road frames above the forward road, the
+  // false D1 warnings (about one every 20 s) void the admitted samples ±30 s, and the rolling window never holds
+  // the weight to follow. T7's health widening removes those false D1s; this test then passes and must be turned
+  // into a plain test (test.failing fails the day it passes).
+  test.failing('S-U7-UP-8FPS: 7° up: followed, bias ≤ 1.5° at the end (T7 carry: the warnings void the recovery)', () => {
+    expect(bias({ yaw: 0, pitch: 7 })).toBeLessThanOrEqual(1.5);
+  });
+});
+
 describe('S-40-DISPLAY (review-C5 deviation 1; NC-C5-K): a 40 % reader at an on-road display moves the centre ≤ 2.5°, ending ≤ 1.5°', () => {
   test.each([11, 12, 13])('seed %i: 1.5 s on, 2.25 s off at (8°, −4°) for 10 min', (seed) => {
     const r = play(watcher({ yaw: 8, pitch: -4 }, 0.4, 3.75), 120 + 600, { seed });

@@ -229,8 +229,9 @@ export interface DmsConfig {
      * enters the dual state. C5 round 1 (review-C5 C5-1): maxShiftDeg is radiusMinDeg + 4.5° (12.5°), and the
      * return points corroborate it: after each excursion the first fixation of returnFixationMs lands nearer the
      * candidate than c₀ for ≥ returnShare of ≥ returnMinCount excursions since the candidate appeared (the rolling
-     * large path: of ≥ returnMinCountRolling, or it waits). A shifted road is returned to every time; a display
-     * watched 70 % of the time about 70 %, which passes 12 returns at 95 % with p ≈ 0.7¹² ≈ 1 %.
+     * large path: of ≥ returnMinCountRolling, or it waits). A shifted road is returned to every time, less the
+     * fixation noise (at 8 fps a 300 ms fixation is 2–3 frames: about 86 % land nearer a 5.5° shift), so the share
+     * is 0.8 (C5 round 2); a display watched 70 % of the time is held by excessMax (c₀ vacated beyond noise).
      */
     slow: {
       persistS: number;
@@ -705,7 +706,7 @@ const DEFAULT: DmsConfig = {
     emaMaxDegPerMin: 0.5,
     voidS: 30,
     rolling: { windowS: 60, everyS: 30, rateDegPerMin: 3, minShiftDeg: 0.5, maxPitchDownDeg: 2, screenExtraDeg: 12 },
-    slow: { persistS: 300, maxShiftDeg: 12.5, scanExcursionsPerMin: 2, excursionMinDeg: 15, excursionReturnS: 3, returnFixationMs: 300, returnShare: 0.95, returnMinCount: 12, returnMinCountRolling: 12, excessMax: 0.15 },
+    slow: { persistS: 300, maxShiftDeg: 12.5, scanExcursionsPerMin: 2, excursionMinDeg: 15, excursionReturnS: 3, returnFixationMs: 300, returnShare: 0.8, returnMinCount: 12, returnMinCountRolling: 12, excessMax: 0.15 },
     bumpHalfWindowS: 5,
     bumpAngleDeg: 6,
     bumpBoxShift: 0.08,
