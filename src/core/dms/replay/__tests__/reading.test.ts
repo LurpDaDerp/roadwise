@@ -104,18 +104,18 @@ describe('S-READING-40/-45: the same at 60 km/h, 15 fps', () => {
 
 // C7 round 2 (review-C7 R1-F): a lap reader is not graded drowsy. PERCLOS takes its looking-down threshold (0.15)
 // inside a latched episode too, and a closure of ≥ 500 ms that was never deep for 300 ms is no blink.
-describe('S-READING-FATIGUE: reading at 60 km/h raises no fatigue level (NC-C7-5, NC-C7-6)', () => {
+describe('S-READING-FATIGUE: reading at 60 km/h raises no fatigue level (NC-C7-5, NC-C7-6, NC-C7-13)', () => {
   const cases: [number, number, number][] = [];
   for (const pitch of PITCH) for (const lag of [0.15, 0.05]) for (const iris of IRIS) cases.push([pitch, lag, iris]);
-  // C7 round 4: the level none (the ruling's target). The scored minutes are pinned at ≤ 25: measured 0.5–0.8 at −40°
-  // and 21.1–21.4 at −45°, where a reading closure that holds a natural blink is deep for ≥ 300 ms and counts as a long
-  // blink (the long-blink and blink-duration rows); the level stays none (early is 40).
-  test.each(cases)('%i°, lid lag %f s, iris model %f, 15 fps, no blink on the saccade: the level none, every scored minute ≤ 25', (pitch, lag, iris) => {
+  // C7 round 5 (review-C7 Round 4, should-fix; NC-C7-13): the level none, and every scored minute back at ≤ 20: in an
+  // episode latched at any point the blink is its longest deep run, so a reading closure that holds a natural blink is
+  // that blink (round 4 counted the whole 3–8 s closure as one long blink: 21.1–21.4 at −45°).
+  test.each(cases)('%i°, lid lag %f s, iris model %f, 15 fps, no blink on the saccade: the level none, every scored minute ≤ 20', (pitch, lag, iris) => {
     const x = playReading({ pitch, fps: 15, lidLagS: lag, blinkShare: 0, speedKmh: 60, calibrated: true, irisMinLid: iris, seconds: SECS });
     expect(x.maxFatigueLevel).toBe('none');
     const scores = x.events.filter((e): e is Extract<DmsEvent, { kind: 'fatigue_minute' }> => e.kind === 'fatigue_minute').map((e) => e.score).filter((s): s is number => s !== null);
     expect(scores.length).toBeGreaterThan(0);
-    expect(Math.max(...scores)).toBeLessThanOrEqual(25);
+    expect(Math.max(...scores)).toBeLessThanOrEqual(20);
   });
 });
 
@@ -204,5 +204,23 @@ describe('S-READING-LOOKUP (review-C7 Round 4 ruling, A; NC-C7-11): no F1 raised
     const x = playReading({ pitch, fps, lidLagS: lag, blinkShare: 0, speedKmh: speed, calibrated: true, irisMinLid: 0.2, seconds: SECS });
     const atLookUp = f1s(x).filter((e) => x.bouts.some((b) => e.tMs >= b.end * 1000 && e.tMs < (b.end + 1) * 1000));
     expect(atLookUp).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// C7 round 5 (review-C7 R4-C; NC-C7-12): deep-only counting in the moving crawl band (rule speed < 20 km/h). The
+// capture runs 5 fps there (SLEEP_WATCH); a reader whose lid follows the gaze within 50 ms leaves no gaze frame, and
+// before this round got a sleep Critical on every bout (82 of 83, 233 Critical commands in 10 min).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('S-READING-CRAWL (review-C7 R4-C; NC-C7-12): reading at 12 and 15 km/h, 5 fps: 0 F1, fatigue none', () => {
+  const cases: [number, number, number][] = [];
+  for (const speed of [12, 15]) for (const lag of [0.05, 0.15]) for (const iris of IRIS) cases.push([speed, lag, iris]);
+  test.each(cases)('%i km/h, lid lag %f s, iris model %f, −45°, the 0.20 floor', (speed, lag, iris) => {
+    const x = playReading({ pitch: -45, fps: 5, lidLagS: lag, blinkShare: 0, speedKmh: speed, calibrated: true, irisMinLid: iris, seconds: SECS });
+    expect(x.closures.filter((c) => c > 1200).length).toBeGreaterThanOrEqual(5);
+    expect(f1s(x)).toEqual([]);
+    expect(sleepCriticals(x)).toEqual([]);
+    expect(x.maxFatigueLevel).toBe('none');
   });
 });

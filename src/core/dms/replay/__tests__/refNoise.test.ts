@@ -78,3 +78,34 @@ describe('S-REF-FLUTTER (review-C7 Round 4, B): a fluttering lid at a drowsy sta
     expect(v!).toBeLessThanOrEqual(0.3 + 0.002);
   });
 });
+
+// C7 round 5 (review-C7 Round 4, item 3): the up-only reads let the reference creep with the corrected read's
+// one-sided scatter. The reviewer's probe: it saturates by about 15 min and ends 2 h at +2.0 to +3.2 %. Pinned at 2 h
+// ≤ +3.5 % (DMS_FULL: 2 h drives at 80 km/h, EAR σ 0.012, the cap). The K12 margin is measured against the reference
+// as it stands after this creep (D-C2-2).
+const FULL = process.env.DMS_FULL === '1';
+(FULL ? describe : describe.skip)('S-REF-CREEP-2H (DMS_FULL): the reference creep over 2 h stays ≤ +3.5 %', () => {
+  test.each([
+    [5, 1],
+    [5, 2],
+    [5, 3],
+    [15, 1],
+    [15, 2],
+    [15, 3],
+  ])('%i fps, seed %i', (fps, seed) => {
+    const items = synthDrive({ fps, seconds: 7200, seed, source: 'geometric', driver: (t, r) => ({ gaze: onRoad(r), openness: blinkOpenness(t), speedKmh: 80 }), motion: true, lidNoise: 0.012 / 0.3 });
+    const e = createDmsEngine(C, { ...DEFAULT_INIT, profile: null });
+    let max = 0;
+    for (const it of items) {
+      if (it.row !== undefined) e.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      e.pushFrame(it.frame);
+      e.drain();
+      const v = e.snapshot().earRef;
+      if (v !== null) max = Math.max(max, v);
+    }
+    // At 2 h (measured +2.3 to +3.2 %); at any time ≤ +4 % (the 20 s provisional EAR at 5 fps reached +3.7 % once,
+    // before the Stage 1 pass replaced it).
+    expect(e.snapshot().earRef! / 0.3 - 1).toBeLessThanOrEqual(0.035);
+    expect(max / 0.3 - 1).toBeLessThanOrEqual(0.04);
+  });
+});

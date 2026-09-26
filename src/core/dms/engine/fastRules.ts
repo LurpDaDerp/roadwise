@@ -134,6 +134,8 @@ export function createFastRules(cfg: DmsConfig) {
     /** the start of the current non-deep stretch within the run (null while deep) */
     pNonDeepSince: number | null;
     gated: boolean;
+    /** C7 round 5 (review-C7 Round 4, should-fix): the episode was latched at any point (its blink is its deep run) */
+    everGated: boolean;
     /**
      * C7 round 1 (review-C7 C7-1, C7-2): what set the latch; each clears on evidence of its own kind. `lGaze`: the
      * gaze or R-a (clears on a reliable raw frame back up, or the head risen above its onset pitch); `lHead`: the
@@ -338,6 +340,7 @@ export function createFastRules(cfg: DmsConfig) {
             pLastDeepT: null,
             pNonDeepSince: null,
             gated: gazeAtOnset || headAtOnset,
+            everGated: gazeAtOnset || headAtOnset,
             lGaze: gazeAtOnset,
             lHead: headAtOnset,
             lRb: false,
@@ -455,6 +458,7 @@ export function createFastRules(cfg: DmsConfig) {
           const wasGated = episode.gated;
           episode.gated = episode.lGaze || episode.lHead || episode.lRb;
           if (wasGated && !episode.gated) episode.closedAtClear = p.closedMs;
+          if (episode.gated) episode.everGated = true;
         }
         const gated = episode.gated;
         const bridged = episode.bridged ? { bridged: true } : {};
@@ -465,7 +469,11 @@ export function createFastRules(cfg: DmsConfig) {
         // C7 round 2 (the coordinator's stop ruling, review-C7 Round 1 §3 option b): while STOPPED every closure counts
         // deep-only, as if latched (F1 at 1.5 s of openness < 0.15): a reader at a light with no iris and no head dip
         // is never alarmed; real sleep is deep and still is (+0.5 s at a light).
-        const deepOnly = gated || stopped;
+        // C7 round 5 (review-C7 R4-C): and in the moving crawl band (rule speed below distraction.logOnlyBelowKmh): the
+        // capture runs 5 fps there (SLEEP_WATCH), so a fast lid leaves no gaze frame and a phone reader in stop-and-go
+        // traffic would get a sleep Critical on every bout; real sleep is deep, at +0.5 s as at a light.
+        const crawl = x.ruleSpeedKmh !== null && x.ruleSpeedKmh < cfg.distraction.logOnlyBelowKmh - EPS;
+        const deepOnly = gated || stopped || crawl;
         // C7 round 3 (R2-S): deep-only counting uses the bridged run (a single frame at 0.15 no longer restarts it).
         // Through a C-26 bridge the run stands as at the last TRACKING frame and keeps running (as the deep run did).
         const runEnd = p.closureBridged && episode.dNonDeepSince === null ? p.tMs : episode.dLastDeepT;
@@ -519,7 +527,11 @@ export function createFastRules(cfg: DmsConfig) {
         // C7 round 2 (review-C7 R1-F): a closure of ≥ longBlinkMs that was never deep for shallowDeepMs (a reading lid,
         // latched or not) is no blink: neither a long blink nor a blink-duration sample. Shorter ones are blinks.
         const notABlink = durMs >= cl.longBlinkMs && episode.deepMaxMs < cl.shallowDeepMs - EPS;
-        if (!episode.prior && !notABlink) events.push({ kind: 'blink', tMs: p.tMs, durMs, long: durMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
+        // C7 round 5 (review-C7 Round 4, should-fix): in an episode latched at any point, the blink is its longest
+        // bridged deep run (a reading episode that holds a natural blink is that blink, not a 3–8 s long blink).
+        const blinkMs = episode.everGated ? episode.deepMaxMs : durMs;
+        const isBlink = episode.everGated ? episode.deepMaxMs > EPS : !notABlink;
+        if (!episode.prior && isBlink) events.push({ kind: 'blink', tMs: p.tMs, durMs: blinkMs, long: blinkMs >= cl.longBlinkMs, counted: measuredFps() >= cl.blinkMinFps });
         endEpisode(events, p.tMs, durMs);
       } else {
         endSilently(events); // a quality drop, or the end of a bridged closure: silent (no blink)

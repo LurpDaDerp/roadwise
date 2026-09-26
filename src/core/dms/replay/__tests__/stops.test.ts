@@ -245,3 +245,16 @@ describe('S-STOP-NOISY-LID (review-C7 R2-S; NC-C7-8): real sleep at a light with
     expect(first('unresponsive')! - 140_000).toBeLessThanOrEqual(7200);
   });
 });
+
+describe('S-NODOFF-CRAWL (review-C7 R4-C): real sleep while creeping below 20 km/h alarms at F1 ≤ 1.5 s + 1 frame', () => {
+  // Moving at 12 km/h from 120 s (the crawl band: deep-only counting, as at a light); the eyes shut from 140 s for 10 s
+  // at openness 0.05 ± 0.03 per frame (a real closure is deep). F1 at 1.5 s of deep closure, + one frame.
+  test.each([5, 8, 15])('%i fps', (fps) => {
+    const driver = drv((t) => (t < 120 ? null : { speedKmh: 12, ...(within(t, 140, 150) ? { openness: 0.05 } : {}) }));
+    const items = synthDrive({ fps, seconds: 155, seed: 2, source: 'geometric', driver, motion: true, lidNoise: 0.03 });
+    const r = replayItems(items, C, DEFAULT_INIT, { keepOpen: true });
+    const f1 = r.events.find((e) => e.kind === 'microsleep' && e.tMs >= 140_000);
+    expect(f1).toBeDefined();
+    expect(f1!.tMs - 140_000).toBeLessThanOrEqual(1500 + 1000 / fps + 1e-6);
+  });
+});
