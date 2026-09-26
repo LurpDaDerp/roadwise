@@ -526,7 +526,9 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       dtS: obsDt,
       quality: p.quality,
       closureBridged: p.closureBridged,
-      openness: p.openness,
+      // C7 round 4 (review-C7 R3-M): inside a latched episode PERCLOS reads the median of the last 3 openness values
+      // against its 0.15 threshold, as the fast rules' deep decision does.
+      openness: d.fast.episodeGated() ? (d.fast.deepOpenness() ?? p.openness) : p.openness,
       // C7 round 2 (review-C7 R1-F): PERCLOS takes its looking-down threshold (0.15) inside a latched episode too
       // (a reading lid hides the iris, so the per-frame value falls back to a level head).
       lookingDown: p.lookingDown || d.fast.episodeGated(),

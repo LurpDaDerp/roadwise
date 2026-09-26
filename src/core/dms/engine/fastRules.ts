@@ -95,6 +95,13 @@ export type FatigueFloor = 'none' | 'drowsy' | 'severe';
 
 const EPS = 1e-6;
 
+/** C7 round 4 (review-C7 R3-M): the median of up to 3 values; the last value itself until there are 3. */
+export function median3(xs: readonly number[]): number {
+  if (xs.length < 3) return xs[xs.length - 1]!;
+  const [a, b, c] = xs as [number, number, number];
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+}
+
 export function createFastRules(cfg: DmsConfig) {
   const cl = cfg.closure;
   const la = cl.latch;
@@ -146,6 +153,20 @@ export function createFastRules(cfg: DmsConfig) {
     rbSince: number | null;
     /** C7 round 1 (C7-4): the longest deep run so far, ms; an F event raised moving before shallowDeepMs is shallow */
     deepMaxMs: number;
+    /**
+     * C7 round 4 (review-C7 R3-M): the episode's last 3 openness values. "Deep" is decided on their median (the
+     * frame's own value until there are 3), so a lid's per-frame EAR noise does not flicker a reading lid 0.02 above
+     * the threshold into deep time.
+     */
+    lastOpen: number[];
+    /** C7 round 4: the median of lastOpen at the last frame (null before the first openness) */
+    medOpen: number | null;
+    /**
+     * C7 round 4 (review-C7 Round 4 ruling, A): the episode's closedMs when its latch last cleared with the episode
+     * continuing. The ungated count is closedMs since then: the time already latched was explained by the
+     * looking-down evidence and never counts (a reader's lagging lid at the look-up).
+     */
+    closedAtClear: number | null;
     /** C7 round 1: F events of this episode, and how many were shallow */
     fCount: number;
     fShallow: number;
@@ -223,6 +244,11 @@ export function createFastRules(cfg: DmsConfig) {
 
     measuredFps: () => fps.fps(),
     episodeGated: () => episode !== null && episode.gated,
+    /**
+     * C7 round 4 (review-C7 R3-M): the openness PERCLOS compares with its 0.15 threshold inside a latched episode,
+     * the median of the episode's last 3 values (null: no episode, or no openness yet).
+     */
+    deepOpenness: () => (episode === null ? null : episode.medOpen),
 
 
     /** Drive end: an F episode still open reports its length so far; the episode ends. */
@@ -251,7 +277,12 @@ export function createFastRules(cfg: DmsConfig) {
       const headDown = p.lookingDown && p.lookingDownFrom === 'head';
       // C2: the open-eye frames of the lookback carry the looking-down value the latch reads at onset.
       if (!p.eyesClosed && p.quality === 'tracking') openFrames.push({ t: p.tMs, gaze: gazeDown, head: headDown });
-      openFrames.dropWhile((f) => f.t < p.tMs - la.lookbackMs);
+      // C7 round 4: the lookback spans at least lookbackFrames frame intervals. The noise-corrected reference (B)
+      // reads a lowering lid about 4 % more open, so at 5 fps with a lagging lid the closure starts a frame later,
+      // and the 500 ms lookback lost the reading saccade's gaze frame (S-READING-LEVELHEAD at 5 fps).
+      const fpsNow = measuredFps();
+      const lookback = Math.max(la.lookbackMs, fpsNow > 0 ? (la.lookbackFrames * 1000) / fpsNow : 0);
+      openFrames.dropWhile((f) => f.t < p.tMs - lookback);
       if (p.quality === 'tracking' && p.headDrv !== null) headHist.push({ t: p.tMs, pitch: p.headDrv.pitch });
       headHist.dropWhile((h) => h.t < p.tMs - (la.stopPreOnsetS + 2) * 1000);
 
@@ -283,7 +314,7 @@ export function createFastRules(cfg: DmsConfig) {
           let gazeAtOnset = false;
           let headAtOnset = false;
           openFrames.forEach((f) => {
-            if (f.t >= onset - la.lookbackMs && f.t < onset + EPS) {
+            if (f.t >= onset - lookback - EPS && f.t < onset + EPS) {
               gazeAtOnset ||= f.gaze;
               headAtOnset ||= f.head;
             }
@@ -316,6 +347,9 @@ export function createFastRules(cfg: DmsConfig) {
             riseSince: null,
             rbSince: null,
             deepMaxMs: 0,
+            lastOpen: [],
+            medOpen: null,
+            closedAtClear: null,
             fCount: 0,
             fShallow: 0,
             bridged: false,
@@ -334,9 +368,15 @@ export function createFastRules(cfg: DmsConfig) {
         } else {
           // C6 round 1 (C6-2): in prior mode deep is below the prior's deep EAR (0.045), on the prior's pseudo-openness.
           // C6 round 2 (review-C6 R1-P): and in prior mode every closure counts deep time only (below).
+          // C7 round 4 (review-C7 R3-M): outside prior mode, deep is decided on the median of the last 3 openness values.
+          if (p.openness !== null) {
+            episode.lastOpen.push(p.openness);
+            if (episode.lastOpen.length > 3) episode.lastOpen.shift();
+            episode.medOpen = median3(episode.lastOpen);
+          }
           const deep = p.priorMode
             ? p.priorOpenness !== null && p.priorOpenness < cl.prior.deepEar / (cl.prior.closedEar / cl.closedBelow)
-            : p.openness !== null && p.openness < cl.lookDownClosedBelow;
+            : p.openness !== null && episode.medOpen !== null && episode.medOpen < cl.lookDownClosedBelow;
           if (!deep) episode.deepSince = null;
           else episode.deepSince ??= p.tMs;
           // C7 round 3 (R2-S): the bridged deep run (its length also measures "deep" for C7-4 and R1-F).
@@ -412,7 +452,9 @@ export function createFastRules(cfg: DmsConfig) {
               episode.rbSince = null;
             }
           }
+          const wasGated = episode.gated;
           episode.gated = episode.lGaze || episode.lHead || episode.lRb;
+          if (wasGated && !episode.gated) episode.closedAtClear = p.closedMs;
         }
         const gated = episode.gated;
         const bridged = episode.bridged ? { bridged: true } : {};
@@ -428,7 +470,9 @@ export function createFastRules(cfg: DmsConfig) {
         // Through a C-26 bridge the run stands as at the last TRACKING frame and keeps running (as the deep run did).
         const runEnd = p.closureBridged && episode.dNonDeepSince === null ? p.tMs : episode.dLastDeepT;
         const runMs = episode.dRunStart === null || runEnd === null ? 0 : runEnd - episode.dRunStart;
-        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : deepOnly ? runMs : p.closedMs) / 1000;
+        // C7 round 4 (A): after a latch clears, the ungated count is the closure since the clear.
+        const ungatedMs = Math.max(0, p.closedMs - (episode.closedAtClear ?? 0));
+        const countedS = (episode.prior ? (episode.pRunMs ?? 0) : deepOnly ? runMs : ungatedMs) / 1000;
         const f1S = episode.prior ? Math.max(cl.prior.f1ClosedS, gated ? cl.f1.lookDownClosedS : 0) : deepOnly ? cl.f1.lookDownClosedS : cl.f1.closedS;
         // C7 round 1 (review-C7 C7-4): moving, and never deep for shallowDeepMs: the event is marked shallow.
         const shallow = !stopped && episode.deepMaxMs < cl.shallowDeepMs - EPS;

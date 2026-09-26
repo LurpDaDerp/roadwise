@@ -328,3 +328,20 @@ describe('S-SEED-TOWN (the review-C8 carry): a stale profile through a town driv
     expect(d.profile).toBeNull();
   });
 });
+
+describe('C7 round 4 (review-C7 Round 4 ruling, B): a legacy profile (the inflated P90) is lowered once, by at most 8 %', () => {
+  test('a saved profile is marked earNoiseCorrected', () => {
+    expect(PROFILE.earNoiseCorrected).toBe(true);
+  });
+  test.each([
+    [1.05, 0.3],
+    [1.15, 0.92 * 1.15 * 0.3],
+  ])('a legacy profile %f × the true EAR: the first pass takes the reference to %f (±1.5 %%)', (inflate, want) => {
+    const { earNoiseCorrected: _, ...rest } = PROFILE;
+    const legacy: DmsProfileV1 = { ...rest, openEyeEar: [0.3 * inflate, 0.3 * inflate] };
+    const d = drive(attentive(), 120, { seed: 40, profile: legacy });
+    const pass = ev(d, 'calibrated');
+    expect(pass).toHaveLength(1);
+    expect(Math.abs(at(d, pass[0]!.tMs + 1000).earRef! / want - 1)).toBeLessThanOrEqual(0.015);
+  });
+});

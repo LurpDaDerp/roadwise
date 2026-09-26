@@ -174,9 +174,12 @@ describe('open-eye EAR', () => {
     run(ears(2).map((it) => ({ ...it, frame: { ...it.frame, tMs: it.frame.tMs + 19_000 } })));
     const e = cal.openEyeEar()!;
     expect(cal.centre('geometric')).toBeNull();
-    expect(e.r!).toBeGreaterThan(0.31);
-    expect(e.r!).toBeLessThanOrEqual(0.32);
-    expect(e.l!).toBeGreaterThan(0.29);
+    // C7 round 4 (review-C7 Round 4 ruling, B): these EARs are pure frame-to-frame noise (uniform ±0.02), so the
+    // noise-corrected P90 sits at the median (0.30 and 0.28), where the raw P90 was about 0.316 and 0.296.
+    expect(e.r!).toBeGreaterThan(0.297);
+    expect(e.r!).toBeLessThanOrEqual(0.31);
+    expect(e.l!).toBeGreaterThan(0.277);
+    expect(e.l!).toBeLessThanOrEqual(0.29);
   });
   test('at the calibration pass the EAR is the p90 of admitted frames; then (Task C6) it follows up at ≤ 5 %/min', () => {
     const cal = createCalibrator(C, { driverSide: 'left' });

@@ -100,7 +100,10 @@ describe('S-DROOP60 and S-NIGHT-RATCHET: a droop is never followed down (NC-B1, 
     expect(min).toBeGreaterThanOrEqual(e0 * 0.98);
     // The q/b ≤ 0.9 from about 11 min (a 10 % droop, held 60 s): fatigue evidence, the gate set, to the end.
     expect(at(r, 120_000 + 540_000).earEvidence).toBe(false);
-    for (const tS of [900, 1800, 2700, 3600]) {
+    // C7 round 4: the evidence begins at about 15 min (the 5-minute read window lags the droop). The EAR histograms'
+    // finer bins (0.001, for the noise-corrected read) read the P90 without the coarse bin mean's downward bias,
+    // one read (60 s) later than the 0.004 bins did: checked from 16 min.
+    for (const tS of [960, 1800, 2700, 3600]) {
       expect(at(r, 120_000 + tS * 1000).earEvidence).toBe(true);
       expect(at(r, 120_000 + tS * 1000).fatigueGate).toBe(true);
     }

@@ -98,6 +98,11 @@ export interface SynthOpts {
    * arrives (K12 measures it on both platforms).
    */
   lidGaze?: boolean;
+  /**
+   * C7 round 4 (review-C7 Round 4 ruling): the lid–gaze coupling's floor; default LID_GAZE_FLOOR (0.20, the K12
+   * release gate's margin). 0.17 is the recorded overlap case (S-READING-NOISE), 0.18 its intermediate target.
+   */
+  lidFloor?: number;
   /** Task C7 (review-C2 §3): the lid's lag behind the gaze, seconds; default LID_LAG_S (150 ms). The fast lid is 0.05. */
   lidLagS?: number;
   /**
@@ -111,23 +116,20 @@ export interface SynthOpts {
    */
   irisMinLid?: number;
   /**
-   * C7 round 3 (review-C7 R2-S): the per-frame EAR noise on a closed eye, as openness σ (0.03 on a device), added to
-   * every frame whose openness is ≤ LID_NOISE_CLOSED (clamped at 0.01). Off by default; on in the stop and reading
-   * tests, so the deep threshold is exercised with a noisy closed lid.
+   * C7 round 3 (review-C7 R2-S), round 4 (R3-M): the per-frame EAR noise, as openness σ (0.03 on a device), added to
+   * EVERY frame's openness (clamped at 0.01): sensor noise does not know whether the lid is shut, so a reading lid at
+   * the 0.17 floor gets it too. Off by default; on in the stop and reading tests.
    */
   lidNoise?: number;
 }
-
-/** C7 round 3 (R2-S): `lidNoise` applies to frames at or below this openness (a shut lid, a blink) */
-export const LID_NOISE_CLOSED = 0.12;
-/** The synth lid–gaze coupling's floor (amendment W4: 0.17, so no test sits on the 0.15 deep threshold). */
-export const LID_GAZE_FLOOR = 0.17;
+/** The synth lid–gaze coupling's floor. Amendment W4 set 0.17; C7 round 4 (review-C7 Round 4 ruling) raises it to 0.20 for the asserted reader-protection suites, the K12 release gate's margin (0.17 stays as the recorded overlap measurement). */
+export const LID_GAZE_FLOOR = 0.2;
 /** The lid's first-order lag behind the gaze pitch, seconds (Task C2; K12 checks it on device). */
 export const LID_LAG_S = 0.15;
 
 /** The lid factor for a gaze pitch relative to the road centre (degrees; down is negative). */
-export function lidFactor(relPitchDeg: number): number {
-  return Math.min(1, Math.max(LID_GAZE_FLOOR, 1 - 0.025 * Math.max(0, -relPitchDeg - 10)));
+export function lidFactor(relPitchDeg: number, floor = LID_GAZE_FLOOR): number {
+  return Math.min(1, Math.max(floor, 1 - 0.025 * Math.max(0, -relPitchDeg - 10)));
 }
 
 /** The default motion evidence of a synth row (Task C2), with the driver's override. */
@@ -183,12 +185,11 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
     const netThis = i % (o.netEvery ?? 1) === 0;
     const gazeRelPitch = s.gaze.pitch - ROAD.pitch;
     lidPitch = lidPitch === null ? gazeRelPitch : lidPitch + (gazeRelPitch - lidPitch) * lidLag;
-    const lid = o.lidGaze === true ? lidFactor(lidPitch) : 1;
-    // The noise lands on CLOSED frames (a shut lid, openness ≤ LID_NOISE_CLOSED), as the review words it; a reading lid
-    // (≥ the 0.17 floor) is left clean, as W4 keeps it off the 0.15 deep threshold (K12 measures the real one).
+    const lid = o.lidGaze === true ? lidFactor(lidPitch, o.lidFloor) : 1;
+    // C7 round 4 (review-C7 R3-M): the EAR noise lands on every frame, a reading lid at its floor included.
     const lidNow = (s.openness ?? 1) * lid;
-    const noisy = o.lidNoise !== undefined && o.lidNoise > 0 && lidNow <= LID_NOISE_CLOSED ? Math.max(0.01, lidNow + o.lidNoise * gauss(lidRng)) : null;
-    const item: SynthItem = { frame: toFrame(t, noisy !== null ? { ...s, openness: noisy } : lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG, o.irisMinLid ?? 0.2) };
+    const noisy = o.lidNoise !== undefined && o.lidNoise > 0 ? Math.max(0.01, lidNow + o.lidNoise * gauss(lidRng)) : null;
+    const item: SynthItem = { frame: toFrame(t, noisy !== null ? { ...s, openness: noisy } : lid === 1 ? s : { ...s, openness: (s.openness ?? 1) * lid }, netThis ? o.source : 'geometric', gain, noise, o.faceGeometry !== false, o.boxPerDeg ?? FACE_BOX_PER_DEG, o.irisMinLid ?? 0.2, noisy !== null ? lidNow : undefined) };
     if (t >= nextRowT - 1e-9) {
       course = (course + (s.turnDegS ?? 0) + 360) % 360;
       item.row = {
@@ -202,7 +203,7 @@ export function synthDrive(o: SynthOpts): SynthItem[] {
   return out;
 }
 
-function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false, boxPerDeg = FACE_BOX_PER_DEG, irisMinLid = 0.2): EngineFrame {
+function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, noise: () => number, geometry = false, boxPerDeg = FACE_BOX_PER_DEG, irisMinLid = 0.2, trueLid?: number): EngineFrame {
   const tMs = t * 1000;
   if (s.face === false) return frame({ tMs, face: false });
   const mount = s.mountShift ?? { yaw: 0, pitch: 0 };
@@ -241,7 +242,8 @@ function toFrame(t: number, s: DriverState, source: GazeSource, gain: number, no
   // `irisMinLid` (0.2) the iris is seen whatever the absolute EAR (a reading lid at 0.25 of a 0.3 eye, EAR 0.075, is
   // tracked: C6-2's S-PRIOR-READ needs it); at or below it the eye has the fixture's closed look (contrast ≈ 0, the
   // iris outside the contour).
-  const lidOpen = Math.min(1, o);
+  // C7 round 4: with `lidNoise`, the noise is the EAR's (landmark noise); the iris is seen by the TRUE lid.
+  const lidOpen = Math.min(1, trueLid ?? o);
   const lens =
     s.lens === true
       ? { irisContrast: 3, irisIn: false }

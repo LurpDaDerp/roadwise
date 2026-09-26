@@ -49,6 +49,11 @@ export interface DmsProfileV1 {
   earAppearance?: { faceLuma: number; iodC: number };
   /** Task C8: Stage 1's within-cluster SD of the primary source (the seed verification's σ̂); optional */
   sigmaDeg?: number;
+  /**
+   * C7 round 4 (review-C7 Round 4 ruling, B): the EAR was saved with the noise-corrected reference. A profile without
+   * it (the inflated P90) may be lowered once, by the drive's first Stage 1 pass, by at most legacyEarMaxLowerFrac.
+   */
+  earNoiseCorrected?: true;
 }
 
 type Cfg = Pick<DmsConfig, 'calibration'>;
@@ -143,7 +148,7 @@ function learnedZone(x: unknown): LearnedZone | null {
 }
 
 /** Task C8: keys a profile may carry (older profiles lack them) */
-const OPTIONAL_KEYS = ['earAppearance', 'sigmaDeg'];
+const OPTIONAL_KEYS = ['earAppearance', 'sigmaDeg', 'earNoiseCorrected'];
 
 const KEYS = [
   'v',
@@ -204,6 +209,7 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
     if (!isObj(a) || !keysExactly(a, ['faceLuma', 'iodC']) || !fin(a.faceLuma) || !fin(a.iodC) || !(a.faceLuma > 0) || a.faceLuma > 255 || !(a.iodC > 0) || a.iodC > 1) return null;
     earAppearance = { faceLuma: a.faceLuma, iodC: a.iodC };
   }
+  if ('earNoiseCorrected' in x && x.earNoiseCorrected !== true) return null;
   let sigmaDeg: number | undefined;
   if ('sigmaDeg' in x) {
     if (!fin(x.sigmaDeg) || x.sigmaDeg < 0.5 || x.sigmaDeg > 20) return null;
@@ -225,5 +231,6 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
     savedAtMs: x.savedAtMs,
     ...(earAppearance !== undefined ? { earAppearance } : {}),
     ...(sigmaDeg !== undefined ? { sigmaDeg } : {}),
+    ...(x.earNoiseCorrected === true ? { earNoiseCorrected: true as const } : {}),
   };
 }

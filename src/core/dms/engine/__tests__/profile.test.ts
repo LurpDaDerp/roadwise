@@ -95,6 +95,10 @@ describe('Task C8: the profile appearance and σ̂ (optional keys)', () => {
     expect(parseProfile(JSON.parse(JSON.stringify(withApp)))).toEqual(withApp);
     expect(parseProfile(JSON.parse(JSON.stringify(GOOD)))).toEqual(GOOD);
   });
+  test('C7 round 4: earNoiseCorrected round-trips', () => {
+    const corrected = { ...GOOD, earNoiseCorrected: true as const };
+    expect(parseProfile(JSON.parse(JSON.stringify(corrected)))).toEqual(corrected);
+  });
   test.each([
     ['a non-positive luma', { earAppearance: { faceLuma: 0, iodC: 0.2 } }],
     ['an IOD over 1', { earAppearance: { faceLuma: 100, iodC: 1.5 } }],
@@ -102,6 +106,7 @@ describe('Task C8: the profile appearance and σ̂ (optional keys)', () => {
     ['a missing key', { earAppearance: { faceLuma: 100 } }],
     ['σ̂ out of range', { sigmaDeg: 50 }],
     ['σ̂ not a number', { sigmaDeg: 'x' }],
+    ['earNoiseCorrected not true (C7 round 4)', { earNoiseCorrected: false }],
   ])('rejected: %s', (_, over) => {
     expect(parseProfile({ ...GOOD, ...over })).toBeNull();
   });

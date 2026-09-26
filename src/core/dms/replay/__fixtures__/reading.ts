@@ -1,6 +1,6 @@
 // Task C7 (review-C2 §3; rev4 §2.3.6; rev5 §2): the eye-mover reading drives, shared by reading.test.ts. An
 // eye-mover (the head at 20 % of the gaze, lagging 200 ms) reads a lap phone at −40° or −45° in bouts of 3–8 s,
-// separated by 1–2 s looks up at the road; the lid follows the gaze (lidGaze, the floor 0.17, a lag of 150 ms or
+// separated by 1–2 s looks up at the road; the lid follows the gaze (lidGaze, the floor 0.20 (C7 round 4; 0.17 recorded as the K12 overlap case), a lag of 150 ms or
 // 50 ms); in `blinkShare` of the bouts a blink lands on the saccade down. Before the bouts the driver either
 // drives 120 s at 60 km/h (so the calibration, the EAR and the gate references exist) or not at all (C6-2's
 // prior mode: no reference of any kind).
@@ -26,8 +26,10 @@ export interface ReadingOpts {
   irisMinLid: number;
   /** the head's share of the gaze (an eye-mover: 0.2) */
   headShare?: number;
-  /** C7 round 3 (R2-S): the per-frame openness noise σ (default 0.03, a device's EAR noise) */
+  /** C7 round 3 (R2-S): the per-frame openness noise σ (default 0.03, a device's EAR noise), on every frame (round 4) */
   lidNoise?: number;
+  /** C7 round 4: the synth lid floor (default the synth's LID_GAZE_FLOOR, 0.20; 0.17 the recorded overlap case) */
+  lidFloor?: number;
   /** reading time, seconds (600) */
   seconds?: number;
   seed?: number;
@@ -74,7 +76,7 @@ export function playReading(o: ReadingOpts): ReadingResult {
     const openness = b.blink && t < b.start + 0.2 ? 0.1 : blinkNow;
     return { ...base, gaze: rel(0, o.pitch), openness };
   };
-  const items = synthDrive({ fps: o.fps, seconds: t0 + seconds, seed: o.seed ?? 7, source: 'geometric', driver, motion: true, lidGaze: true, lidLagS: o.lidLagS, headShare: o.headShare ?? 0.2, irisMinLid: o.irisMinLid, lidNoise: o.lidNoise ?? 0.03 });
+  const items = synthDrive({ fps: o.fps, seconds: t0 + seconds, seed: o.seed ?? 7, source: 'geometric', driver, motion: true, lidGaze: true, lidLagS: o.lidLagS, headShare: o.headShare ?? 0.2, irisMinLid: o.irisMinLid, lidNoise: o.lidNoise ?? 0.03, lidFloor: o.lidFloor });
   const engine = createDmsEngine(o.cfg ?? (DEFAULT_DMS_CONFIG as DmsConfig), { ...DEFAULT_INIT, profile: null });
   const out: ReadingResult = { bouts, events: [], commands: [], closures: [], t0, priorFrames: 0, frames: 0, fatigueLevel: 'none', maxFatigueLevel: 'none' };
   const LEVELS = ['none', 'early', 'drowsy', 'severe'];

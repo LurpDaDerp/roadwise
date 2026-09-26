@@ -59,6 +59,7 @@ import { createBaselines, type EyeSample } from './baselines';
 import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, vacatedBeyondNoise as vacatedBeyondNoiseOf, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
+import { correctedRef, noiseOfSeries } from './earNoise';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
 import { RingBuffer } from './windows';
 import { cameraRel, isDistractionZone, phoneScreenRadius, zoneAt, zoneClass } from './zones';
@@ -376,6 +377,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let roll = 0;
   let ear: EarPair | null = null;
   let earFrozen = false;
+  /** C7 round 4 (B): a legacy profile's EAR, until the drive's first pass (which may lower it ≤ 8 %) */
+  let legacyEar: EarPair | null = null;
   let earCollector: { trackingS: number; r: number[]; l: number[] } | null = { trackingS: 0, r: [], l: [] };
   let mar: number | null = null;
   let mouthW: number | null = null;
@@ -519,6 +522,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   }
 
   /** Task C6: the EAR set by a derivation (a new reference) or offered by a resume path (the downward rule). */
+  /** C7 round 4 (review-C7 Round 4 ruling, B): an open-eye reference from a window: the noise-corrected P90. */
+  function refOf(xs: number[], side: 'r' | 'l'): number | null {
+    return correctedRef(xs, baselines.noiseSigma(side));
+  }
+
   function setEar(next: EarPair | null, how: 'derive' | 'offer', appearance: { luma: number; iodC: number } | null = null): void {
     if (next === null || (next.r === null && next.l === null)) {
       ear = next;
@@ -545,11 +553,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    */
   function baselineReset(win: { trackingS: number; r: number[]; l: number[] }, medianOpenness: number): void {
     const old = ear;
-    const pick = (xs: number[], prev: number | null | undefined) =>
-      xs.length > 0 ? quantile(xs, c.provisionalEarPercentile) : prev != null ? prev * medianOpenness : null;
+    // C7 round 4 (B): the noise-corrected P90.
+    const pick = (xs: number[], prev: number | null | undefined, side: 'r' | 'l') =>
+      xs.length > 0 ? refOf(xs, side) : prev != null ? prev * medianOpenness : null;
     // Task C6 (R4): offered, so it may rise at once but falls only with the fatigue gate clear and by the factor
     // the appearance explains (a drowsy driver's low openness never lowers the reference).
-    setEar({ r: pick(win.r, old?.r), l: pick(win.l, old?.l) }, 'offer');
+    setEar({ r: pick(win.r, old?.r, 'r'), l: pick(win.l, old?.l, 'l') }, 'offer');
     earFrozen = false;
     earCollector = { trackingS: win.trackingS, r: [...win.r], l: [...win.l] };
     emit('baseline_reset');
@@ -561,6 +570,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * (the interim EAR, or the old one, until the new collector completes); the MAR and the pitch ring are nulled.
    */
   function driverChange(): void {
+    legacyEar = null; // C7 round 4: a new driver's pass is not bounded by the old driver's legacy profile
     const keep: Centres = { ...centres };
     const keepRadius = radius;
     restartStage1();
@@ -1136,12 +1146,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (pv.trackingS >= c.stops.swapTrackS && pv.blinkSeen) {
       pv.done = true;
       const old = pv.oldEar;
-      const floor = (xs: number[], o: number | null | undefined) => {
-        const v = xs.length > 0 ? quantile(xs, c.provisionalEarPercentile) : null;
+      const floor = (xs: number[], o: number | null | undefined, side: 'r' | 'l') => {
+        const v = xs.length > 0 ? refOf(xs, side) : null;
         if (v === null) return o ?? null;
         return o != null ? Math.max(v, c.stops.interimFloor * o) : v;
       };
-      setEar({ r: floor(pv.r, old?.r), l: floor(pv.l, old?.l) }, 'derive');
+      setEar({ r: floor(pv.r, old?.r, 'r'), l: floor(pv.l, old?.l, 'l') }, 'derive');
       earFresh = true; // the confirmed collector replaces it as a new person's reference
     }
   }
@@ -1238,6 +1248,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     // A profile without any EAR must not stop the provisional collection (T6 review m1).
     mar = p.neutralMar;
     marVerified = p.neutralMar;
+    // C7 round 4 (B): a legacy profile's EAR (the inflated P90) may be lowered once, by the first pass, ≤ 8 %.
+    legacyEar = p.earNoiseCorrected === true ? null : { r: p.openEyeEar[0], l: p.openEyeEar[1] };
     if (p.openEyeEar[0] !== null || p.openEyeEar[1] !== null) {
       // Task C8 (the review-C6 T8 carry): the reference comes with the appearance it was taken under.
       setEar({ r: p.openEyeEar[0], l: p.openEyeEar[1] }, 'derive', profileAppearance(p));
@@ -1311,7 +1323,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const er = all.map((s) => s.earR).filter((x): x is number => x !== null);
       const el = all.map((s) => s.earL).filter((x): x is number => x !== null);
       if (er.length > 0 || el.length > 0) {
-        passEar = { r: er.length > 0 ? quantile(er, c.provisionalEarPercentile) : null, l: el.length > 0 ? quantile(el, c.provisionalEarPercentile) : null };
+        passEar = { r: er.length > 0 ? refOf(er, 'r') : null, l: el.length > 0 ? refOf(el, 'l') : null };
         earFrozen = true;
         earCollector = null;
       }
@@ -1321,6 +1333,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       mar = Math.max(median(mars), c.neutralMarFloor);
       marVerified = mar;
     }
+    // C7 round 4 (B): the first pass after a legacy profile lowers its EAR by at most legacyEarMaxLowerFrac.
+    if (passEar !== null && legacyEar !== null) {
+      const lg = legacyEar;
+      const lim = (v: number | null, o: number | null) => (v === null || o === null ? v : Math.max(v, (1 - c.legacyEarMaxLowerFrac) * o));
+      passEar = { r: lim(passEar.r, lg.r), l: lim(passEar.l, lg.l) };
+    }
+    legacyEar = null;
     // Task C6: the pass is a new reference for the baselines (the profile floor applies).
     if (passEar !== null) setEar(passEar, 'derive');
     const mws = all.map((s) => s.mouthW).filter((x): x is number => x !== null);
@@ -1538,8 +1557,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           if (col.r.length > 0 || col.l.length > 0) {
             setEar(
               {
-                r: col.r.length > 0 ? quantile(col.r, c.provisionalEarPercentile) : null,
-                l: col.l.length > 0 ? quantile(col.l, c.provisionalEarPercentile) : null,
+                r: col.r.length > 0 ? refOf(col.r, 'r') : null,
+                l: col.l.length > 0 ? refOf(col.l, 'l') : null,
               },
               'offer'
             );
@@ -1766,6 +1785,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         savedAtMs,
         ...(app !== null && app.luma > 0 && app.iodC > 0 ? { earAppearance: { faceLuma: app.luma, iodC: app.iodC } } : {}),
         ...(sigmaMeasured ? { sigmaDeg: sigmaHat } : warmSigma !== null ? { sigmaDeg: warmSigma } : {}),
+        earNoiseCorrected: true,
       };
     },
   };
@@ -1858,6 +1878,10 @@ export function seedFromFrames(pairs: readonly { frame: EngineFrame; p: Perceive
   const mount = signatureOf(use.map(({ frame: f, p }) => ({ t: f.tMs, yaw: p.headCam!.yaw, pitch: p.headCam!.pitch, roll: p.headCam!.roll, cx: f.box!.cx, cy: f.box!.cy, iod: f.iod! })))!;
   const er = use.filter(({ frame: f, p }) => p.usableR && f.eyeR !== null).map(({ frame: f }) => f.eyeR!.ear);
   const el = use.filter(({ frame: f, p }) => p.usableL && f.eyeL !== null).map(({ frame: f }) => f.eyeL!.ear);
+  // C7 round 4 (B): the noise-corrected P90, its noise from the window's own consecutive frames.
+  const cap = c.baselines.earNoiseMaxSd;
+  const tr = use.filter(({ frame: f, p }) => p.usableR && f.eyeR !== null).map(({ frame: f }) => f.tMs);
+  const tl = use.filter(({ frame: f, p }) => p.usableL && f.eyeL !== null).map(({ frame: f }) => f.tMs);
   return {
     ok: true,
     seed: {
@@ -1866,7 +1890,7 @@ export function seedFromFrames(pairs: readonly { frame: EngineFrame; p: Perceive
       rollOffsetDeg: roll,
       mount,
       orientation: use[use.length - 1]!.frame.rotationDeg,
-      openEyeEar: { r: er.length > 0 ? quantile(er, c.provisionalEarPercentile) : null, l: el.length > 0 ? quantile(el, c.provisionalEarPercentile) : null },
+      openEyeEar: { r: correctedRef(er, noiseOfSeries(tr, er, cap)), l: correctedRef(el, noiseOfSeries(tl, el, cap)) },
     },
   };
 }

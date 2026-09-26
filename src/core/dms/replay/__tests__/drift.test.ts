@@ -463,3 +463,25 @@ describe('C7 round 2 (R1-H): S-DISPLAY-70-SCAN, a display read across (3° jitte
     expect(r.seconds.every((s) => s.health === 'good')).toBe(true);
   });
 });
+
+// C7 round 4 (review-C7 Round 3, R2-A accepted pending D-C7-3): S-U7-WIDE-P, a road wide ONLY in pitch after an upward
+// shift, as a RECORDED measurement (not asserted; the numbers are in task-C7-report.md, Round 4): the degrade time and
+// the D1 count after 60 s. The discriminator (dwell structure) needs device fixation data (D-C7-3).
+describe('S-U7-WIDE-P (recorded, not asserted): a pitch-only wide road after an upward shift', () => {
+  const cases: [string, AnglePair, number, number, boolean][] = [];
+  for (const [name, shift] of [['7° up', { yaw: 0, pitch: 7 }], ['9° up', { yaw: 0, pitch: 9 }]] as const)
+    for (const extra of [4.5, 6]) for (const fps of [8, 15]) for (const withMirrors of [true, false]) cases.push([name, shift, extra, fps, withMirrors]);
+  test.each(cases)('%s (%o), +%f° pitch spread, %i fps, mirror checks %s: the degrade time and the late D1s are measured', (_, shift, extra, fps, withMirrors) => {
+    const driver: DriverFn = (t, r) => {
+      const g = onRoad(r);
+      const gaze = t >= 110 ? { yaw: g.yaw, pitch: g.pitch + extra * gauss(r) } : g;
+      return { gaze, openness: blinkOpenness(t), speedKmh: 60, ...(withMirrors ? mirrors(t) : {}), ...(t >= 110 ? { posture: { shift } } : {}) };
+    };
+    const r = play(driver, 110 + 600, { fps, seed: 11 });
+    const deg = r.seconds.find((s) => s.tMs > 110_000 && s.health === 'degraded');
+    const measured = { degradeS: deg === undefined ? null : (deg.tMs - 110_000) / 1000, lateD1: d1(r, 170_000).length };
+    // Recorded only: a well-formed measurement.
+    expect(measured.degradeS === null || measured.degradeS > 0).toBe(true);
+    expect(measured.lateD1).toBeGreaterThanOrEqual(0);
+  });
+});

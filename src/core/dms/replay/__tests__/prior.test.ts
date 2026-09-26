@@ -21,8 +21,8 @@ interface Run {
   seconds: { tMs: number; earRef: number | null; priorMode: boolean; closedMs: number }[];
 }
 
-function play(driver: DriverFn, seconds: number, o: { cfg?: DmsConfig; lidGaze?: boolean; seed?: number } = {}): Run {
-  const items = synthDrive({ fps: 15, seconds, seed: o.seed ?? 31, source: 'geometric', driver, motion: true, lidGaze: o.lidGaze });
+function play(driver: DriverFn, seconds: number, o: { cfg?: DmsConfig; lidGaze?: boolean; seed?: number; lidFloor?: number } = {}): Run {
+  const items = synthDrive({ fps: 15, seconds, seed: o.seed ?? 31, source: 'geometric', driver, motion: true, lidGaze: o.lidGaze, lidFloor: o.lidFloor });
   const engine = createDmsEngine(o.cfg ?? C, { ...DEFAULT_INIT, profile: null });
   const run: Run = { events: [], commands: [], seconds: [] };
   let next = 0;
@@ -143,7 +143,8 @@ describe('C6 round 2 (review-C6 R1-P): prior-mode closures count deep time only 
   /** Stopped from the start, no reference: 8 s bouts reading a lap phone at `pitch`, 2 s looking up, the lid coupled. */
   const steepReader = (pitch: number) => driver(0, { over: (t) => (t >= 5 && (t - 5) % 10 < 8 ? { gaze: rel(0, pitch) } : null) });
   test.each([-45, -50])('S-PRIOR-READ%i: 3 min of 8 s bouts at a stop, the lid at its floor (EAR ≈ 0.051, between the deep and the closed EAR): 0 sleep events', (pitch) => {
-    const r = play(steepReader(pitch), 185, { lidGaze: true });
+    // C7 round 4: the lid floor at 0.17 (EAR 0.051), the geometry this rule is about (the synth's default is now 0.20).
+    const r = play(steepReader(pitch), 185, { lidGaze: true, lidFloor: 0.17 });
     expect(r.seconds.every((s) => s.priorMode)).toBe(true);
     // the reading lid is a prior closure (EAR < 0.06) most of every bout: the rule under test is reached
     expect(r.seconds.filter((s) => s.closedMs > 1500).length).toBeGreaterThan(60);

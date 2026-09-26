@@ -239,6 +239,11 @@ export interface DmsConfig {
       checkS: number;
       explainTol: number;
       unexplainedHoldS: number;
+      /**
+       * C7 round 4 (review-C7 Round 4 ruling, B): the cap on the frame-to-frame EAR noise σ_n that the noise-corrected
+       * open-eye reference removes (the deconvolved P90). K12 measures the real value.
+       */
+      earNoiseMaxSd: number;
       lowRatio: number;
       lowHoldS: number;
       /**
@@ -307,6 +312,11 @@ export interface DmsConfig {
      * the head-pose signature; a real mount change keeps failing and is never adopted).
      */
     warmRetryS: number;
+    /**
+     * C7 round 4 (review-C7 Round 4 ruling, B): a legacy profile (no `earNoiseCorrected`, its EAR the inflated P90)
+     * may be lowered once, by the drive's first Stage 1 pass, by at most this fraction.
+     */
+    legacyEarMaxLowerFrac: number;
     /** C-6: a SEARCH longer than this also stores and compares a signature */
     longSearchS: number;
     /** C-6 tolerances */
@@ -620,6 +630,8 @@ export interface DmsConfig {
      */
     latch: {
       lookbackMs: number;
+      /** C7 round 4: …and at least this many frame intervals (at 5 fps, 800 ms: a lagging lid crosses closedBelow 3–4 frames after the saccade) */
+      lookbackFrames: number;
       clearPitchDeg: number;
       clearHoldMs: number;
       rawGuardMs: number;
@@ -892,6 +904,7 @@ const DEFAULT: DmsConfig = {
       checkS: 10,
       explainTol: 0.05,
       unexplainedHoldS: 600,
+      earNoiseMaxSd: 0.012,
       lowRatio: 0.9,
       lowHoldS: 60,
       h5Lo: 0.8,
@@ -921,6 +934,7 @@ const DEFAULT: DmsConfig = {
     signatureS: 10,
     resumeCompareS: 5,
     warmRetryS: 300,
+    legacyEarMaxLowerFrac: 0.08,
     longSearchS: 30,
     resumeTolerance: { yawDeg: 4, pitchDeg: 4, rollDeg: 3, box: 0.05, iodFrac: 0.1 },
     driverChange: { iodFrac: 0.15, box: 0.15 },
@@ -1070,7 +1084,7 @@ const DEFAULT: DmsConfig = {
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
     shallowDeepMs: 300,
     deepBridgeMs: 300,
-    latch: { lookbackMs: 500, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, gazeClearMarginDeg: 3, headRiseDeg: 3, stopDipDeg: 3, stopReturnDeg: 1.5, stopPreOnsetS: 1.0, stopSetWindowS: 1.0 },
+    latch: { lookbackMs: 500, lookbackFrames: 4, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, gazeClearMarginDeg: 3, headRiseDeg: 3, stopDipDeg: 3, stopReturnDeg: 1.5, stopPreOnsetS: 1.0, stopSetWindowS: 1.0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
     f4: { windowS: 600, holdS: 900 },
@@ -1285,6 +1299,8 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(bl.earFloorFrac >= 0.75 && bl.earFloorFrac <= 0.95)) bad('calibration.baselines.earFloorFrac', 'must lie in [0.75, 0.95]');
   if (!(bl.earUpCapFrac > 1)) bad('calibration.baselines.earUpCapFrac', 'must exceed 1');
   if (!(bl.lowRatio > 0 && bl.lowRatio < 1)) bad('calibration.baselines.lowRatio', 'must lie in (0, 1)');
+  if (!(bl.earNoiseMaxSd > 0 && bl.earNoiseMaxSd < 0.05)) bad('calibration.baselines.earNoiseMaxSd', 'must lie in (0, 0.05)');
+  if (!(c.calibration.legacyEarMaxLowerFrac >= 0 && c.calibration.legacyEarMaxLowerFrac < 1 - bl.earFloorFrac)) bad('calibration.legacyEarMaxLowerFrac', 'must lie in [0, 1 − earFloorFrac)');
   if (!(bl.appearanceLumaFrac > 0 && bl.appearanceLumaFrac < 1)) bad('calibration.baselines.appearanceLumaFrac', 'must lie in (0, 1)');
   const lt = bl.lumaEarTable;
   if (!(lt.length >= 2 && lt.every((row, i) => i === 0 || row[0] > lt[i - 1]![0]))) bad('calibration.baselines.lumaEarTable', 'must have ≥ 2 rows in ascending order');
@@ -1409,6 +1425,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   // Task C7 (review-C2 round 1): the latch's constants.
   const la = cl.latch;
   if (!(la.lookbackMs >= 200)) bad('closure.latch.lookbackMs', 'must be ≥ 200 ms (one frame at 5 fps)');
+  if (!(la.lookbackFrames >= 1 && la.lookbackFrames <= 5)) bad('closure.latch.lookbackFrames', 'must be in [1, 5]');
   // C7 round 1 (C7-2): R-b's set and clear share the pre-onset median, so the clear band must sit inside the set.
   if (!(cl.shallowDeepMs > 0 && cl.shallowDeepMs < cl.f1.closedS * 1000)) bad('closure.shallowDeepMs', 'must be in (0, f1.closedS)');
   if (!(cl.deepBridgeMs > 0 && cl.deepBridgeMs < cl.f1.closedS * 1000)) bad('closure.deepBridgeMs', 'must be in (0, f1.closedS)');

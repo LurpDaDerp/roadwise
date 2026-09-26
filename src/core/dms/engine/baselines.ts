@@ -23,6 +23,7 @@
 // - With no reference (the eyes never usable, e.g. sunglasses), eyes becoming usable give one after checkS.
 import type { EarPair } from './conditioning';
 import type { DmsConfig } from './config';
+import { correctedRef, deconvolvedP90, EarNoiseMeter } from './earNoise';
 
 export interface EyeSample {
   ear: number;
@@ -90,6 +91,8 @@ export interface Baselines {
   setReference(ear: EarPair, mar: number | null, tMs: number, appearance?: Appearance | null): EarPair;
   /** Task C8: the drive's reference as set (verified, never the adapted state) and its appearance, for the profile */
   reference0(): { ear: EarPair; appearance: Appearance | null } | null;
+  /** C7 round 4 (B): one eye's frame-to-frame EAR noise σ_n (capped), null before enough open pairs */
+  noiseSigma(side: 'r' | 'l'): number | null;
   /**
    * C8 round 1 (review-C8 C8-2): what the profile saves. The reference as set (reference0) or, when the drive's
    * reference has only ever been RAISED from it (no downward adoption), the current reference, whichever is not lower,
@@ -118,6 +121,12 @@ export interface Baselines {
 
 const BINS = 150;
 const BIN = 0.004;
+/**
+ * C7 round 4 (review-C7 Round 4 ruling, B): the EAR histograms' bins are 0.001 (0 to 0.6), so the deconvolved read's
+ * P90 and median are well inside the noise σ (0.009–0.012 EAR) the correction removes; the MAR keeps 0.004.
+ */
+const EAR_BINS = 600;
+const EAR_BIN = 0.001;
 const APP_TAU_S = 2;
 const TIER_HOLD_S = 1;
 /** a check window takes every eligible frame above this openness (the histogram's minOpenness would hide the drop it measures) */
@@ -150,45 +159,47 @@ class EarHist {
   private readonly h: Float64Array;
   private readonly v: Float64Array;
   private readonly minute: number[];
-  constructor(private readonly buckets: number) {
-    this.h = new Float64Array(buckets * BINS);
-    this.v = new Float64Array(buckets * BINS);
+  constructor(private readonly buckets: number, private readonly bin = BIN, private readonly bins = BINS) {
+    this.h = new Float64Array(buckets * this.bins);
+    this.v = new Float64Array(buckets * this.bins);
     this.minute = new Array<number>(buckets).fill(Number.NEGATIVE_INFINITY);
   }
   add(tMs: number, v: number, w: number): void {
     const m = Math.floor(tMs / 60_000);
     const i = ((m % this.buckets) + this.buckets) % this.buckets;
     if (this.minute[i] !== m) {
-      this.h.fill(0, i * BINS, (i + 1) * BINS);
-      this.v.fill(0, i * BINS, (i + 1) * BINS);
+      this.h.fill(0, i * this.bins, (i + 1) * this.bins);
+      this.v.fill(0, i * this.bins, (i + 1) * this.bins);
       this.minute[i] = m;
     }
-    const bin = Math.min(BINS - 1, Math.max(0, Math.floor(v / BIN)));
-    this.h[i * BINS + bin]! += w;
-    this.v[i * BINS + bin]! += w * v;
+    const bin = Math.min(this.bins - 1, Math.max(0, Math.floor(v / this.bin)));
+    this.h[i * this.bins + bin]! += w;
+    this.v[i * this.bins + bin]! += w * v;
   }
   /** The q-quantile over the buckets of the last `buckets` minutes, and the weight behind it. */
   quantile(tMs: number, q: number): { v: number; w: number } {
     const m = Math.floor(tMs / 60_000);
     let total = 0;
-    const acc = new Float64Array(BINS);
-    const sum = new Float64Array(BINS);
+    const acc = new Float64Array(this.bins);
+    const sum = new Float64Array(this.bins);
     for (let i = 0; i < this.buckets; i++) {
       if (!(this.minute[i]! > m - this.buckets)) continue;
-      for (let j = 0; j < BINS; j++) {
-        const x = this.h[i * BINS + j]!;
+      for (let j = 0; j < this.bins; j++) {
+        const x = this.h[i * this.bins + j]!;
         acc[j]! += x;
-        sum[j]! += this.v[i * BINS + j]!;
+        sum[j]! += this.v[i * this.bins + j]!;
         total += x;
       }
     }
     if (!(total > 0)) return { v: Number.NaN, w: 0 };
     let run = 0;
-    for (let j = 0; j < BINS; j++) {
+    for (let j = 0; j < this.bins; j++) {
       run += acc[j]!;
-      if (run >= q * total - 1e-12 && acc[j]! > 0) return { v: sum[j]! / acc[j]!, w: total };
+      if (run >= q * total - 1e-12 && acc[j]! > 0) {
+        return { v: sum[j]! / acc[j]!, w: total };
+      }
     }
-    return { v: (BINS - 0.5) * BIN, w: total };
+    return { v: (this.bins - 0.5) * this.bin, w: total };
   }
   clear(): void {
     this.h.fill(0);
@@ -203,7 +214,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   const profile = init.profileEar;
   /** Task C8: the appearance the profile's EAR was taken under (its floor is corrected by the change since) */
   const profileApp = init.profileAppearance ?? null;
-  const hist = { r: new EarHist(b.buckets), l: new EarHist(b.buckets) };
+  const hist = { r: new EarHist(b.buckets, EAR_BIN, EAR_BINS), l: new EarHist(b.buckets, EAR_BIN, EAR_BINS) };
   const marHist = new EarHist(b.buckets);
   let ref: EarPair | null = null;
   let ref0: EarPair | null = null;
@@ -211,6 +222,9 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   let refApp: Appearance | null = null;
   /** C8 round 1 (C8-2): the drive's reference has only been raised since it was set (no downward adoption) */
   let onlyRaised = true;
+  /** C7 round 4 (review-C7 Round 4 ruling, B): the frame-to-frame EAR noise, for the noise-corrected P90 */
+  const noise = new EarNoiseMeter(b.earNoiseMaxSd);
+  const sigmaOf = (side: 'r' | 'l') => noise.sigma(side, tNow);
   let refTier: { r: Tier; l: Tier } = { r: 0, l: 0 };
   /**
    * A reference set before its appearance is known (no TRACKING frame yet, or the tiers not settled): the first
@@ -342,12 +356,9 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
   function resolveCheck(x: BaselineInput, events: BaselineEvent[]): void {
     const chk = check!;
     check = null;
-    const p90 = (xs: number[]) => {
-      if (xs.length < 10) return null;
-      const s = [...xs].sort((u, v) => u - v);
-      return s[Math.min(s.length - 1, Math.floor(0.9 * (s.length - 1)))]!;
-    };
-    const obs = { r: p90(chk.r), l: p90(chk.l) };
+    // C7 round 4 (B): the noise-corrected P90.
+    const p90 = (xs: number[], side: 'r' | 'l') => (xs.length < 10 ? null : correctedRef(xs, sigmaOf(side)));
+    const obs = { r: p90(chk.r, 'r'), l: p90(chk.l, 'l') };
     if (ref === null || (ref.r === null && ref.l === null)) {
       if (obs.r === null && obs.l === null) return;
       setReference({ r: obs.r, l: obs.l }, null, x.tMs);
@@ -414,7 +425,10 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       for (const side of ['r', 'l'] as const) {
         const was = cur[side];
         if (was === null) continue;
-        const q = hist[side].quantile(x.tMs, 0.9);
+        // C7 round 4 (B): the read uses the reference's estimator (the noise-corrected P90), so q/b keeps its meaning.
+        const q90 = hist[side].quantile(x.tMs, 0.9);
+        const q50 = hist[side].quantile(x.tMs, 0.5);
+        const q = { v: q90.w > 0 && q50.w > 0 ? deconvolvedP90(q90.v, q50.v, sigmaOf(side)) : q90.v, w: q90.w };
         if (!(q.w >= b.minReadS)) {
           allLow = false;
           continue;
@@ -497,6 +511,7 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     },
     lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
     reference0: () => (ref0 === null ? null : { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } }),
+    noiseSigma: (side) => sigmaOf(side),
     savedReference() {
       if (ref0 === null) return null;
       const set = { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } };
@@ -533,6 +548,14 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       tNow = x.tMs;
       const events: BaselineEvent[] = [];
       const dt = x.dtS;
+      // C7 round 4 (B): the frame-to-frame noise, from every TRACKING frame's usable eyes.
+      if (x.tracking) {
+        noise.frame(x.tMs);
+        for (const side of ['r', 'l'] as const) {
+          const e = x[side];
+          noise.eye(side, x.tMs, e !== null && e.usable ? e.ear : null, ref?.[side] ?? null);
+        }
+      }
       // The appearance (smoothed) and the stable tiers, from TRACKING frames.
       if (x.tracking && dt > 0) {
         const anyEye = (x.r !== null && x.r.usable) || (x.l !== null && x.l.usable);
