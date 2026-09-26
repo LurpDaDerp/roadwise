@@ -623,6 +623,12 @@ export interface DmsConfig {
      */
     deepBridgeMs: number;
     /**
+     * C7 round 5 (review-C7 R4-C), its own key since round 6: below this rule speed every closure counts deep-only, as
+     * at a stop (the crawl band, where the capture runs 5 fps); at or above it an unlatched shallow closure is the
+     * eyes_on_road alert (R4-T).
+     */
+    deepOnlyBelowKmh: number;
+    /**
      * Task C7 (rev4 §2.3.6 S1; review-C2 §3, R-a and R-b): the looking-down latch. At a closure's onset it reads the
      * open-eye frames of lookbackMs before it. R-a: the unsmoothed gaze reads "down" on reliable-eye frames; at
      * ≥ rawGuardMinFps two raw frames within rawGuardMs are needed.
@@ -1089,6 +1095,7 @@ const DEFAULT: DmsConfig = {
     f1: { closedS: 1.0, lookDownClosedS: 1.5, minSpeedKmh: 0 },
     shallowDeepMs: 300,
     deepBridgeMs: 300,
+    deepOnlyBelowKmh: 20,
     latch: { lookbackMs: 500, lookbackFrames: 4, clearPitchDeg: -5, clearHoldMs: 300, rawGuardMs: 300, rawGuardMinFps: 10, rawSingleSigmas: 3, rawEyeAgreeDeg: 8, gazeClearMarginDeg: 3, headRiseDeg: 3, stopDipDeg: 3, stopReturnDeg: 1.5, stopPreOnsetS: 1.0, stopSetWindowS: 1.0 },
     f2: { closedS: 3.0, minSpeedKmh: 0 },
     f3: { closedS: 6.0, noOnRoadS: 3.0, minSpeedKmh: 0 },
@@ -1435,6 +1442,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   // C7 round 1 (C7-2): R-b's set and clear share the pre-onset median, so the clear band must sit inside the set.
   if (!(cl.shallowDeepMs > 0 && cl.shallowDeepMs < cl.f1.closedS * 1000)) bad('closure.shallowDeepMs', 'must be in (0, f1.closedS)');
   if (!(cl.deepBridgeMs > 0 && cl.deepBridgeMs < cl.f1.closedS * 1000)) bad('closure.deepBridgeMs', 'must be in (0, f1.closedS)');
+  if (!(cl.deepOnlyBelowKmh >= 10 && cl.deepOnlyBelowKmh <= c.distraction.logOnlyBelowKmh)) bad('closure.deepOnlyBelowKmh', 'must be in [10, distraction.logOnlyBelowKmh]');
   if (!(la.stopReturnDeg > 0 && la.stopReturnDeg < la.stopDipDeg)) bad('closure.latch.stopReturnDeg', 'must be in (0, stopDipDeg) (no head angle both sets and clears)');
   if (!(la.stopPreOnsetS >= 0.2)) bad('closure.latch.stopPreOnsetS', 'must be ≥ 0.2 s (one frame at 5 fps)');
   if (!(la.gazeClearMarginDeg > 0 && la.headRiseDeg > 0)) bad('closure.latch.gazeClearMarginDeg', 'the gaze clears must be > 0');

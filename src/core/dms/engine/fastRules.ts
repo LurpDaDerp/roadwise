@@ -56,7 +56,12 @@ export interface FastInput {
   stopped?: boolean;
 }
 
-export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink' | 'episode_end';
+/**
+ * C7 round 6 (review-C7 R4-T, the user's decision): `eyes_off` is a shallow closure while moving at ≥ 20 km/h (never
+ * deep for shallowDeepMs, unlatched) that reached F1's time: the eyes are not on the road, which is not sleep. It
+ * becomes a Tier 2 "eyes on the road" alert; F1/F2 wait for a deep run, F3 still fires at 6 s.
+ */
+export type FastEventKind = 'microsleep' | 'sleep' | 'unresponsive' | 'blink' | 'episode_end' | 'eyes_off';
 
 export interface FastEvent {
   kind: FastEventKind;
@@ -174,6 +179,8 @@ export function createFastRules(cfg: DmsConfig) {
     fShallow: number;
     bridged: boolean;
     f1: boolean;
+    /** C7 round 6 (R4-T): an eyes-off alert was raised in this episode (F1/F2 then count its deep run only) */
+    eyesOff: boolean;
     f2: boolean;
     f3: boolean;
     /** C2: an F event of this episode was raised while moving */
@@ -357,6 +364,7 @@ export function createFastRules(cfg: DmsConfig) {
             fShallow: 0,
             bridged: false,
             f1: false,
+            eyesOff: false,
             f2: false,
             f3: false,
             anyMoving: false,
@@ -469,10 +477,10 @@ export function createFastRules(cfg: DmsConfig) {
         // C7 round 2 (the coordinator's stop ruling, review-C7 Round 1 §3 option b): while STOPPED every closure counts
         // deep-only, as if latched (F1 at 1.5 s of openness < 0.15): a reader at a light with no iris and no head dip
         // is never alarmed; real sleep is deep and still is (+0.5 s at a light).
-        // C7 round 5 (review-C7 R4-C): and in the moving crawl band (rule speed below distraction.logOnlyBelowKmh): the
+        // C7 round 5 (review-C7 R4-C): and in the moving crawl band (rule speed below closure.deepOnlyBelowKmh, 20): the
         // capture runs 5 fps there (SLEEP_WATCH), so a fast lid leaves no gaze frame and a phone reader in stop-and-go
         // traffic would get a sleep Critical on every bout; real sleep is deep, at +0.5 s as at a light.
-        const crawl = x.ruleSpeedKmh !== null && x.ruleSpeedKmh < cfg.distraction.logOnlyBelowKmh - EPS;
+        const crawl = x.ruleSpeedKmh !== null && x.ruleSpeedKmh < cl.deepOnlyBelowKmh - EPS;
         const deepOnly = gated || stopped || crawl;
         // C7 round 3 (R2-S): deep-only counting uses the bridged run (a single frame at 0.15 no longer restarts it).
         // Through a C-26 bridge the run stands as at the last TRACKING frame and keeps running (as the deep run did).
@@ -489,7 +497,17 @@ export function createFastRules(cfg: DmsConfig) {
           if (sh) episode!.fShallow++;
           return sh ? { shallow: true } : {};
         };
-        if (!episode.f1 && countedS >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
+        // C7 round 6 (review-C7 R4-T, the user's decision): while moving at ≥ 20 km/h, an unlatched closure that has not
+        // been deep for shallowDeepMs is "eyes off the road", not sleep. At F1's time it raises one eyes_off (a Tier 2
+        // alert); F1 and F2 then wait for the bridged median-3 deep run to reach their times (a real closure turning
+        // deep), and F3 still fires at f3.closedS of closure (6 s).
+        const eyesOffMode = !deepOnly && !episode.prior && speed >= cl.deepOnlyBelowKmh - EPS && episode.deepMaxMs < cl.shallowDeepMs - EPS;
+        if (eyesOffMode && !episode.eyesOff && ungatedMs / 1000 >= cl.f1.closedS - EPS) {
+          episode.eyesOff = true;
+          events.push({ kind: 'eyes_off', tMs: p.tMs, ...bridged });
+        }
+        const f12S = episode.eyesOff ? runMs / 1000 : countedS;
+        if (!episode.f1 && !eyesOffMode && f12S >= f1S - EPS && speed >= cl.f1.minSpeedKmh) {
           episode.f1 = true;
           if (!stopped) episode.anyMoving = true;
           events.push({ kind: 'microsleep', tMs: p.tMs, stopped, ...bridged, ...mark(shallow) });
@@ -500,7 +518,7 @@ export function createFastRules(cfg: DmsConfig) {
             feedF4(p.tMs);
           }
         }
-        if (!episode.f2 && countedS >= cl.f2.closedS - EPS && speed >= cl.f2.minSpeedKmh) {
+        if (!episode.f2 && !eyesOffMode && f12S >= cl.f2.closedS - EPS && speed >= cl.f2.minSpeedKmh) {
           episode.f2 = true;
           if (!stopped) episode.anyMoving = true;
           events.push({ kind: 'sleep', tMs: p.tMs, stopped, ...bridged, ...mark(shallow) });

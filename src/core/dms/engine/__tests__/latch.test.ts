@@ -266,11 +266,13 @@ describe('C7 round 1 (review-C7 C7-4): a moving F event of an episode never deep
     for (const e of r.flush()) ev.push(e);
     return { ev, floor: r.fatigueFloor(ps.at(-1)!.tMs) };
   };
-  test('a half-closed lid (openness 0.2, never deep) while moving: F1 delivered, shallow, no F4 floor; its episode_end shallow', () => {
+  // C7 round 6 (review-C7 R4-T, the user's decision): at speed a never-deep closure is eyes_off (a Tier 2 alert), no
+  // longer a shallow F1: no microsleep, no F level (so no episode_end), no F4 floor.
+  test('a half-closed lid (openness 0.2, never deep) while moving: eyes_off, no F1, no episode_end, no F4 floor', () => {
     const { ev, floor } = run(0.06);
-    const f1 = ev.find((e) => e.kind === 'microsleep');
-    expect(f1).toMatchObject({ shallow: true });
-    expect(ev.find((e) => e.kind === 'episode_end')).toMatchObject({ shallow: true });
+    expect(ev.filter((e) => e.kind === 'eyes_off')).toHaveLength(1);
+    expect(ev.find((e) => e.kind === 'microsleep')).toBeUndefined();
+    expect(ev.find((e) => e.kind === 'episode_end')).toBeUndefined();
     expect(floor).toBe('none');
   });
   test('a real microsleep (openness 0.05, deep from the start): not shallow, the F4 floor at drowsy', () => {
@@ -281,5 +283,44 @@ describe('C7 round 1 (review-C7 C7-4): a moving F event of an episode never deep
   test('stopped events are never marked shallow (their feed is fatigue.stopEventsFeed)', () => {
     const { ev } = run(0.06, true);
     expect(ev.find((e) => e.kind === 'microsleep')?.shallow).toBeUndefined();
+  });
+});
+
+describe('C7 round 6 (review-C7 R4-T, the user\'s decision): a shallow closure at speed is eyes off the road (NC-C7-14, NC-C7-15, NC-C7-16)', () => {
+  const run = (seq: [number, number][], speed = 60) => {
+    const ps = perceive([...repeat(n(1), () => ({})), ...seq.flatMap(([s, ear]) => repeat(n(s), () => ({ ear })))]);
+    const onset = ps.find((p) => p.eyesClosed)!.tMs;
+    const r = createFastRules(C);
+    const ev: FastEvent[] = [];
+    for (const p of ps) ev.push(...r.onFrame({ p, ruleSpeedKmh: speed, onRoadGaze: !p.eyesClosed, stopped: false, fps: FPS }).events);
+    for (const e of r.flush()) ev.push(e);
+    return { ev, onset, at: (k: string) => ev.find((e) => e.kind === k)?.tMs ?? null };
+  };
+  test('a 7 s shallow closure (0.2): eyes_off at 1.0 s, no F1 or F2, F3 at 6 s (the escalation), shallow (NC-C7-15)', () => {
+    const { ev, onset, at } = run([[7, 0.06]]);
+    expect(at('eyes_off')! - onset).toBeGreaterThanOrEqual(1000 - 70);
+    expect(at('eyes_off')! - onset).toBeLessThanOrEqual(1000 + 70);
+    expect(at('microsleep')).toBeNull();
+    expect(at('sleep')).toBeNull();
+    const f3 = ev.find((e) => e.kind === 'unresponsive')!;
+    expect(f3.tMs - onset).toBeGreaterThanOrEqual(6000 - 70);
+    expect(f3.tMs - onset).toBeLessThanOrEqual(6000 + 70);
+    expect(f3.shallow).toBe(true);
+  });
+  test('a shallow closure that turns deep at 2 s: F1 when the deep run reaches F1\'s 1.0 s, not at once (NC-C7-16)', () => {
+    const { onset, at } = run([[2, 0.06], [3, 0.015]]);
+    expect(at('eyes_off')).not.toBeNull();
+    const f1 = at('microsleep')!;
+    expect(f1 - onset).toBeGreaterThanOrEqual(3000 - 140);
+    expect(f1 - onset).toBeLessThanOrEqual(3000 + 140);
+  });
+  test('a real nod-off at speed (deep from the start): F1 at 1.0 s as a sleep Critical, no eyes_off (NC-C7-14)', () => {
+    const { onset, at } = run([[3, 0.015]]);
+    expect(at('eyes_off')).toBeNull();
+    expect(at('microsleep')! - onset).toBeLessThanOrEqual(1000 + 70);
+  });
+  test('below closure.deepOnlyBelowKmh (the crawl band) a shallow closure raises nothing', () => {
+    const { ev } = run([[7, 0.06]], 15);
+    expect(ev.filter((e) => e.kind !== 'blink')).toEqual([]);
   });
 });

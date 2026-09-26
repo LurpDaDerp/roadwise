@@ -665,7 +665,11 @@ describe('C2 / S1: the looking-down gate is latched for the episode', () => {
       { s: 0.6, spec: { gaze: { yaw: 0, pitch: -40 }, head: { yaw: 0, pitch: -8, roll: 0 }, ear: ear(0.2) } },
       { s: 1.5, spec: { gaze: { yaw: 0, pitch: 0 }, head: { yaw: 0, pitch: 0, roll: 0 }, ear: ear(0.2) } },
     ]);
-    expect(fast(ps, 60).kinds).toContain('microsleep');
+    // The closure counts again after the clear. C7 round 6 (R4-T): a lid at 0.2 is never deep, so at 60 km/h it is the
+    // eyes-off alert, not a microsleep.
+    const k = fast(ps, 60).kinds;
+    expect(k).toContain('eyes_off');
+    expect(k).not.toContain('microsleep');
   });
 
   test('S-NODOFF-12 (unit): a microsleep whose head drops to −12° during the closure fires at 1.0 s, as today', () => {

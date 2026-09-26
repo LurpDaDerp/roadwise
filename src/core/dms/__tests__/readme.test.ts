@@ -79,6 +79,7 @@ const EVENTS = {
   nod: true,
   microsleep_nod: true,
   yawn: true,
+  eyes_off: true,
   calibrated: true,
   provisional: true,
   uncalibrated: true,

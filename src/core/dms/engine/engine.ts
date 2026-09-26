@@ -495,6 +495,13 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
         emit({ kind: 'blink', tMs: e.tMs, durMs: e.durMs, long: e.long });
         continue;
       }
+      // C7 round 6 (review-C7 R4-T): eyes off the road at speed: a Tier 2 alert of the distraction family (rule 1, rule 5,
+      // the merge with D1, the Tier 2 cadence); it feeds no fatigue statistic, gate or score.
+      if (e.kind === 'eyes_off') {
+        emit({ kind: 'eyes_off', tMs: e.tMs, bridged, stopped: false });
+        requests.push({ kind: 'eyes_on_road', c8: false });
+        continue;
+      }
       emit({ kind: e.kind, tMs: e.tMs, bridged, stopped: e.stopped === true, ...(e.shallow === true ? { shallow: true } : {}) });
       if (e.kind === 'microsleep' || e.kind === 'sleep') requests.push({ kind: e.kind, bridged });
       // fastRules sets the origin on every unresponsive; `sleep` is the safe default if one ever did not (a stop

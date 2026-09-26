@@ -532,3 +532,37 @@ describe('C2: the sleep family and stops', () => {
     expect(run([{ s: 1, f: { ...asleep, ruleSpeedKmh: 2 }, req: [unr({ closure: true, origin: 'sleep' })] }]).sig).toEqual(['start:unresponsive']);
   });
 });
+
+// C7 round 6 (review-C7 R4-T, the user's decision): eyes_on_road is a Tier 2 alert of the distraction family.
+describe('C7 round 6: eyes_on_road', () => {
+  const eyes: AlertRequest = { kind: 'eyes_on_road', c8: false };
+  test('Tier 2: starts off the road, stops on the first on-road frame (rule 1)', () => {
+    const r = run([{ s: 1, f: asleep, req: [eyes] }, { s: 0.2 }]);
+    expect(r.sig).toEqual(['start:eyes_on_road', 'stop:eyes_on_road']);
+    expect(r.cmds[0]!.tier).toBe(2);
+  });
+  test('D1 does not double-alert: a D1 while it runs merges, and it merges into a running D1', () => {
+    const a = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 0.5, f: off, req: [dist('distraction')] }]);
+    expect(a.sig).toEqual(['start:eyes_on_road']);
+    expect(a.am.stats().byKind.distraction.merged).toBe(1);
+    const b = run([{ s: 0.5, f: off, req: [dist('distraction')] }, { s: 0.5, f: asleep, req: [eyes] }]);
+    expect(b.sig).toEqual(['start:distraction']);
+    expect(b.am.stats().byKind.eyes_on_road.merged).toBe(1);
+  });
+  test('dropped while a Critical runs; a sleep Critical replaces it', () => {
+    const a = run([{ s: 0.5, f: asleep, req: [crit('microsleep')] }, { s: 0.5, f: asleep, req: [eyes] }]);
+    expect(a.sig).toEqual(['start:microsleep']);
+    expect(a.am.stats().byKind.eyes_on_road.dropped).toBe(1);
+    const b = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 0.5, f: asleep, req: [unr({ closure: true, escalation: true })] }]);
+    expect(b.sig).toEqual(['start:eyes_on_road', 'stop:eyes_on_road', 'start:unresponsive']);
+  });
+  test('rule 5 (not from a LOST frame), rule 4 (not below 20 km/h); allowed in the warm-up, as D1', () => {
+    expect(run([{ s: 0.5, f: { ...asleep, quality: 'lost' }, req: [eyes] }]).sig).toEqual([]);
+    expect(run([{ s: 0.5, f: { ...asleep, ruleSpeedKmh: 15 }, req: [eyes] }]).sig).toEqual([]);
+    expect(run([{ s: 0.5, f: { ...asleep, warmup: true }, req: [eyes] }]).sig).toEqual(['start:eyes_on_road']);
+  });
+  test('it corroborates a following escalation (F3 at 6 s is not an unverified escalation)', () => {
+    const r = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 5, f: asleep }, { s: 0.5, f: asleep, req: [unr({ closure: true, escalation: true })] }]);
+    expect(r.am.stats().invariantViolations).toBe(0);
+  });
+});

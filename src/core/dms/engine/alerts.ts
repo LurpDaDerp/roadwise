@@ -63,6 +63,8 @@ import { RingBuffer } from './windows';
 export type AlertKind =
   | 'distraction'
   | 'cumulative'
+  /** C7 round 6 (review-C7 R4-T): a shallow closure at speed, eyes off the road (Tier 2, the distraction family) */
+  | 'eyes_on_road'
   | 'phone_pattern'
   | 'unresponsive'
   | 'microsleep'
@@ -74,7 +76,7 @@ export type AlertKind =
   /** T13 r1 I1: a Critical stopped after criticalBlindMaxS with the camera off (heat or dark) */
   | 'monitoring_paused';
 
-export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', 'phone_pattern', 'unresponsive', 'microsleep', 'microsleep_nod', 'sleep', 'fatigue_early', 'fatigue', 'repeated_glances', 'monitoring_paused'];
+export const ALERT_KINDS: readonly AlertKind[] = ['distraction', 'cumulative', 'eyes_on_road', 'phone_pattern', 'unresponsive', 'microsleep', 'microsleep_nod', 'sleep', 'fatigue_early', 'fatigue', 'repeated_glances', 'monitoring_paused'];
 
 /** Why the camera went off at speed: heat (thermal L3), the dark (the low-light suspend) or a native fault (T14 r2 R1-m1). */
 export type CameraOffCause = 'heat' | 'dark' | 'fault';
@@ -107,8 +109,8 @@ export type AlertRequest =
    * `d4` for D4 and the no-on-road clause after it.
    */
   | { kind: 'unresponsive'; closure: boolean; bridged: boolean; c8: boolean; escalation: boolean; origin: CriticalOrigin }
-  /** D1, D2 */
-  | { kind: 'distraction' | 'cumulative'; c8: boolean }
+  /** D1, D2; C7 round 6: eyes_on_road (a shallow closure at speed) */
+  | { kind: 'distraction' | 'cumulative' | 'eyes_on_road'; c8: boolean }
   | { kind: 'phone_pattern' | 'fatigue_early' | 'fatigue' | 'repeated_glances' };
 
 export interface AlertFrame {
@@ -174,7 +176,7 @@ export interface AlertStats {
 }
 
 const CRITICAL: ReadonlySet<AlertKind> = new Set(['unresponsive', 'microsleep', 'microsleep_nod', 'sleep']);
-const DISTRACTION: ReadonlySet<AlertKind> = new Set(['distraction', 'cumulative']);
+const DISTRACTION: ReadonlySet<AlertKind> = new Set(['distraction', 'cumulative', 'eyes_on_road']);
 
 /** A Critical's rank: several on one frame start only the highest (final review round 3 nit). */
 const CRITICAL_RANK: Partial<Record<AlertKind, number>> = { microsleep: 1, microsleep_nod: 1, sleep: 2, unresponsive: 3 };
@@ -203,6 +205,7 @@ function rule5Holds(req: AlertRequest, quality: Quality): boolean {
       return quality !== 'lost' || req.c8;
     case 'distraction':
     case 'cumulative':
+    case 'eyes_on_road':
       return quality !== 'lost' || req.c8;
     case 'phone_pattern':
       return quality !== 'lost';
@@ -371,7 +374,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
           refuse(x, req, 'suppressed', 'rule5', from);
           continue;
         }
-        if (x.warmup && req.kind !== 'distraction') {
+        // C7 round 6: eyes_on_road stands in for a sleep Critical, which the warm-up lets through: it plays as D1 does.
+        if (x.warmup && req.kind !== 'distraction' && req.kind !== 'eyes_on_road') {
           refuse(x, req, 'suppressed', 'warmup', from);
           continue;
         }
