@@ -39,8 +39,8 @@ function kernel(sigmaBins: number, half: number): Float64Array {
   return k;
 }
 
-/** The smoothed histogram's peak with parabolic refinement; null when nothing falls inside it. */
-export function histogramMode(samples: readonly WeightedDir[], cfg: Cfg): AnglePair | null {
+/** The smoothed histogram (1° bins, Gaussian σ = sigmaDeg), or null when nothing falls inside it. */
+function smoothed(samples: readonly WeightedDir[], cfg: Cfg): { sm: Float64Array; nY: number; nP: number } | null {
   const c = cfg.calibration;
   const [y0, y1] = c.histYawDeg;
   const [p0, p1] = c.histPitchDeg;
@@ -70,9 +70,6 @@ export function histogramMode(samples: readonly WeightedDir[], cfg: Cfg): AngleP
     }
   }
   const sm = new Float64Array(nY * nP);
-  let best = -1;
-  let bi = 0;
-  let bj = 0;
   for (let j = 0; j < nP; j++) {
     for (let i = 0; i < nY; i++) {
       let v = 0;
@@ -81,6 +78,35 @@ export function histogramMode(samples: readonly WeightedDir[], cfg: Cfg): AngleP
         if (jj >= 0 && jj < nP) v += tmp[jj * nY + i]! * k[d + half]!;
       }
       sm[j * nY + i] = v;
+    }
+  }
+  return { sm, nY, nP };
+}
+
+/** A bin's position with parabolic sub-bin refinement. */
+function refined(sm: Float64Array, nY: number, nP: number, bi: number, bj: number, cfg: Cfg): AnglePair {
+  const c = cfg.calibration;
+  const at = (i: number, j: number) => (i >= 0 && i < nY && j >= 0 && j < nP ? sm[j * nY + i]! : 0);
+  const best = at(bi, bj);
+  const refine = (l: number, m: number, r: number) => {
+    const den = l - 2 * m + r;
+    return den < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (l - r)) / den)) : 0;
+  };
+  const di = refine(at(bi - 1, bj), best, at(bi + 1, bj));
+  const dj = refine(at(bi, bj - 1), best, at(bi, bj + 1));
+  return { yaw: c.histYawDeg[0] + (bi + 0.5 + di) * c.binDeg, pitch: c.histPitchDeg[0] + (bj + 0.5 + dj) * c.binDeg };
+}
+
+/** The smoothed histogram's peak with parabolic refinement; null when nothing falls inside it. */
+export function histogramMode(samples: readonly WeightedDir[], cfg: Cfg): AnglePair | null {
+  const s = smoothed(samples, cfg);
+  if (s === null) return null;
+  let best = -1;
+  let bi = 0;
+  let bj = 0;
+  for (let j = 0; j < s.nP; j++) {
+    for (let i = 0; i < s.nY; i++) {
+      const v = s.sm[j * s.nY + i]!;
       if (v > best) {
         best = v;
         bi = i;
@@ -88,14 +114,28 @@ export function histogramMode(samples: readonly WeightedDir[], cfg: Cfg): AngleP
       }
     }
   }
-  const at = (i: number, j: number) => (i >= 0 && i < nY && j >= 0 && j < nP ? sm[j * nY + i]! : 0);
-  const refine = (l: number, m: number, r: number) => {
-    const den = l - 2 * m + r;
-    return den < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (l - r)) / den)) : 0;
-  };
-  const di = refine(at(bi - 1, bj), best, at(bi + 1, bj));
-  const dj = refine(at(bi, bj - 1), best, at(bi, bj + 1));
-  return { yaw: y0 + (bi + 0.5 + di) * c.binDeg, pitch: p0 + (bj + 0.5 + dj) * c.binDeg };
+  return refined(s.sm, s.nY, s.nP, bi, bj, cfg);
+}
+
+/**
+ * Task C9 (T9, review-C9 S1-1): the smoothed histogram's local maxima (above all 8 neighbours), highest first, at
+ * most `max` of them, each refined as the mode is.
+ */
+export function histogramPeaks(samples: readonly WeightedDir[], cfg: Cfg, max = 4): { at: AnglePair; v: number }[] {
+  const s = smoothed(samples, cfg);
+  if (s === null) return [];
+  const out: { i: number; j: number; v: number }[] = [];
+  for (let j = 1; j < s.nP - 1; j++) {
+    for (let i = 1; i < s.nY - 1; i++) {
+      const v = s.sm[j * s.nY + i]!;
+      if (!(v > 0)) continue;
+      let peak = true;
+      for (let dj = -1; dj <= 1 && peak; dj++) for (let di = -1; di <= 1; di++) if ((di !== 0 || dj !== 0) && s.sm[(j + dj) * s.nY + i + di]! > v) { peak = false; break; }
+      if (peak) out.push({ i, j, v });
+    }
+  }
+  out.sort((a, b) => b.v - a.v);
+  return out.slice(0, max).map((x) => ({ at: refined(s.sm, s.nY, s.nP, x.i, x.j, cfg), v: x.v }));
 }
 
 /**

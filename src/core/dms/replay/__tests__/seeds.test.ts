@@ -437,3 +437,16 @@ describe('S-DISPUTE-GLANCE (review-C8 Round 2; NC-C8-P1): one window at the disp
     for (const tMs of [80_000, 199_000]) expect(angularDistanceDeg(at(d, tMs).centre!, truth)).toBeLessThanOrEqual(1.5);
   });
 });
+
+describe('S-SEED-DISPLAY (review-C9 T9-1; NC-T9-P): a good profile verifies with a display watched 20–30 % of the time', () => {
+  // A navigation display at (14°, −8°) watched 3 s of every 10 s (30 %) or 2 s (20 %) from the start: the road's
+  // cluster is peaked LOCALLY (W(ρ)/W(2ρ)); C8's relative peakedness counted the display against it and kept the
+  // good seed unverified for the drive.
+  test.each([0.2, 0.3])('share %f: verified within 60 s, never replaced', (share) => {
+    const d = drive(attentive((t) => (t % 10 < share * 10 ? { gaze: rel(14, -8) } : null)), 150, { seed: 54, profile: PROFILE });
+    const v = ev(d, 'seed_verified');
+    expect(v).toHaveLength(1);
+    expect(v[0]!.tMs).toBeLessThanOrEqual(60_000);
+    expect(ev(d, 'posture_dual').filter((e) => e.cause === 'seed')).toEqual([]);
+  });
+});

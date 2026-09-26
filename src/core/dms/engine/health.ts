@@ -20,7 +20,7 @@
 // the looking-down gate (frozen references). Recovery: every metric good for 60 s of health time.
 import { angularDistanceDeg } from './angles';
 import type { DmsConfig } from './config';
-import { vacatedBeyondNoise } from './posture';
+import { sigmaEffOf, vacatedBeyondNoise } from './posture';
 import type { AnglePair } from './types';
 import { RingBuffer } from './windows';
 
@@ -131,21 +131,7 @@ export function createHealthMonitor(cfg: Pick<DmsConfig, 'health' | 'calibration
     // and that display degrades (seeds 11, 12, 13); a second, narrower kernel and a "c₀ still holds a cluster" mean-shift
     // test did not fix it either. Reported; a road wide only along the shift axis is the stated residual.
     const d = angularDistanceDeg(mode, centre);
-    let sigmaEff = sigma;
-    if (d > 1e-6) {
-      const ux = (mode.yaw - centre.yaw) / d;
-      const uy = (mode.pitch - centre.pitch) / d;
-      const across: number[] = [];
-      for (const g of pts) {
-        const along = (g.yaw - mode.yaw) * ux + (g.pitch - mode.pitch) * uy;
-        if (Math.abs(along) <= 2 * sigma) across.push(Math.abs((g.yaw - mode.yaw) * -uy + (g.pitch - mode.pitch) * ux));
-      }
-      if (across.length >= 10) {
-        across.sort((x, y) => x - y);
-        const sigmaW = across[across.length >> 1]! / 0.6745;
-        sigmaEff = Math.min(2 * sigma, Math.max(sigma, sigmaW));
-      }
-    }
+    const sigmaEff = sigmaEffOf(pts, centre, mode, sigma);
     m.sigmaEff = sigmaEff;
     // A mode within h2MinDeg of the centre is the centre's own cluster: c₀ is not vacated (the test is degenerate there).
     const dirs = pts.map((g) => ({ yaw: g.yaw, pitch: g.pitch, w: 1 }));

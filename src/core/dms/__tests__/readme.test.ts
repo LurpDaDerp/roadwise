@@ -95,6 +95,7 @@ const EVENTS = {
   driver_change_reverted: true,
   fatigue_minute: true,
   seed_verified: true,
+  posture_suspect: true,
 } satisfies Record<DmsEvent['kind'], true>;
 /** Task C3: the monitoring reasons (the HUD copy's keys) */
 const MONITORING_REASONS = {

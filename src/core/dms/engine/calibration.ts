@@ -55,14 +55,16 @@ import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
+import { bestShift, DirTemplate, templateShare, windowCells, type TemplateSnapshot } from './template';
 import { createBaselines, type EyeSample, type RefSnapshot } from './baselines';
-import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, vacatedBeyondNoise as vacatedBeyondNoiseOf, type CompSignature } from './posture';
+import { createPostureDetector, locate, modeOf, peaked, peakedLocal, relativelyVacated, relativeRevert, shareNear, sigmaEffOf, unimodal, vacatedBeyondNoise as vacatedBeyondNoiseOf, vacatedRing, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
 import { correctedRef, noiseOfSeries } from './earNoise';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
 import { RingBuffer } from './windows';
 import { cameraRel, isDistractionZone, phoneScreenRadius, zoneAt, zoneClass } from './zones';
+import { chooseRoad, clusterRho, fixationMedians, roadConfidence, roadSide, type RoadChoice } from './stage1';
 
 export type CalibrationState = 'none' | 'seeded' | 'calibrated' | 'provisional' | 'uncalibrated' | 'recalibrating';
 
@@ -87,7 +89,12 @@ export type CalibrationEventKind =
   /** Task C4 (rev5 V2): the provisional driver change was not confirmed after the move-off */
   | 'driver_change_reverted'
   /** Task C8 (rev2 §2.2): a seed (a profile, a C2 seed, a new driver's W2 seed) verified against fresh evidence */
-  | 'seed_verified';
+  | 'seed_verified'
+  /**
+   * Task C9 (T9-3): a corroborated posture step did not resolve (no candidate, or undecided): c₀ is kept but suspect,
+   * widened and re-verified, with a background Stage 1
+   */
+  | 'posture_suspect';
 
 export interface CalibrationEvent {
   kind: CalibrationEventKind;
@@ -204,6 +211,14 @@ const BLINK_MAX_MS = 600;
 const LOCATE_MIN_R_DEG = 4;
 /** C5 round 1: the excursion returns kept (≥ 10 per 5 min at two a minute) */
 const RETURNS_KEPT = 128;
+/** Task C9 (S1-1 (d)): the pre-pass scanning reference's refresh period and minimum sample count */
+const STAGE_REF_EVERY_MS = 5000;
+const STAGE_REF_MIN_N = 30;
+/** Task C9 (S1-1, deviation): the fixation block for the two-cluster detection */
+const FIXATION_BLOCK_MS = 500;
+const FIXATION_KERNEL_DEG = 1;
+/** the blocks must cover this share of the window's weight, else the frames are used */
+const FIXATION_MIN_COVER = 0.5;
 /** C5 round 1: an excursion is the gaze away for at least this long, over at least EXCURSION_MIN_FRAMES frames (not noise) */
 const EXCURSION_MIN_MS = 400;
 const EXCURSION_MIN_FRAMES = 3;
@@ -233,6 +248,17 @@ interface Dual {
   /** the step's translation (the mirror demotion) */
   box: number;
   iodFrac: number;
+  /**
+   * Task C9 (T9-2): the templates (primary source and head) snapshotted at entry, for the translation search; null
+   * when the cause is not a corroborated physical step, or the template is too thin (the mode search then)
+   */
+  tmpl: { src: TemplateSnapshot; head: TemplateSnapshot | null } | null;
+  /** T9-2: the current translation of the candidate (primary source and head), once found by the template */
+  delta: { src: AnglePair; head: AnglePair | null } | null;
+  /** T9-2: a step bump's pre-shift of c₀ (driver frame); the template's translation is measured from before it */
+  pre: AnglePair | null;
+  /** T9-2: test (c)'s outcomes over the candidate's evaluations (passed, evaluated): a majority decides at the margin */
+  vac: { ok: number; n: number };
 }
 
 /** C4 round 1 (review-C4 C4-3): a slump candidate under watch */
@@ -317,7 +343,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * a VERIFIED seed: `pass` is its primary centre, `agreeN` the consecutive peaked windows that agree with it.
    */
   let seedCheck: {
-    kind: 'profile' | 'seed' | 'driver' | 'dispute';
+    kind: 'profile' | 'seed' | 'driver' | 'dispute' | 'posture';
     win: { w: number; g: AnglePair | null; h: AnglePair }[];
     winW: number;
     winObsS: number;
@@ -338,9 +364,21 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let warmSigma: number | null = null;
   /** Task C8 (rev2 §2.7): the verified MAR reference (the pass's, the profile's, or the start check's), never the adapted one */
   let marVerified: number | null = null;
-  const startSeedCheck = (kind: 'profile' | 'seed' | 'driver') => {
+  const startSeedCheck = (kind: 'profile' | 'seed' | 'driver' | 'posture') => {
     seedUnverified = true;
     seedCheck = { kind, win: [], winW: 0, winObsS: 0, prev: null };
+  };
+  /**
+   * Task C9 (T9-3): a corroborated step that did not resolve leaves the centres suspect: a background Stage 1 runs
+   * (its pass replaces the centres) while the posture seed check verifies c₀.
+   */
+  let bgStage1 = false;
+  /** Task C9 (T9-2): the gaze templates (decayed histograms of the admitted directions, calibrated and non-dual) */
+  const tmpl = { geometric: new DirTemplate(po.templateTauS), net: new DirTemplate(po.templateTauS), head: new DirTemplate(po.templateTauS) };
+  const clearTemplates = () => {
+    tmpl.geometric.clear();
+    tmpl.net.clear();
+    tmpl.head.clear();
   };
   let wasStopped = false;
   /**
@@ -384,6 +422,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   let excursion: { leftT: number; backT: number | null; run: { t: number; x: AnglePair }[]; sy: number; sp: number } | null = null;
   /** the gaze away from the centre since, and for how many frames (an excursion once long enough) */
   let away: { since: number; frames: number } | null = null;
+  /** Task C9 (S1-1 (d)): road scanning's reference before any centre (the Stage 1 window's median direction) */
+  let stageRef: AnglePair | null = null;
+  let stageRefT = Number.NEGATIVE_INFINITY;
 
   let state: CalibrationState = 'none';
   let admittedS = 0;
@@ -437,16 +478,27 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * cluster's P₁ = 1 − exp(−ρ²/2σ̂²), and SE (the SD within ρ ÷ √n_eff). Both agree → verified. The primary peaked and
    * beyond the agree bound in two consecutive windows that agree with each other → the dual state (cause 'seed').
    */
+  /** Task C9 (S1-2): a seed window's road choice (S1-1 on its frames; the camera off the road by the window's head). */
+  function seedWindowRoad(gd: readonly WeightedDir[], win: readonly { h: AnglePair }[]): RoadChoice | 'wait' | null {
+    const camera = toDrv({ yaw: 0, pitch: 0 }, roll);
+    const head = { yaw: median(win.map((x) => x.h.yaw)), pitch: median(win.map((x) => x.h.pitch)) };
+    const back: AnglePair[] = [];
+    returns.forEach((x) => {
+      if (x.t >= tNow - c.windowS * 1000) back.push(x.at);
+    });
+    return chooseRoad(gd, { sigma: seedSigma, camera, cameraOffRoad: angularDistanceDeg(camera, head) >= c.radiusMinDeg, returns: back }, cfg);
+  }
+
   function evaluateSeedWindow(sc: NonNullable<typeof seedCheck>): void {
     const sv = c.seed;
     const sig = seedSigma;
     const rho = Math.max(sv.ringMinDeg, sv.ringSigmas * sig);
     const p1 = 1 - Math.exp(-(rho * rho) / (2 * sig * sig));
-    const stat = (pts: { w: number; a: AnglePair }[]) => {
+    const stat = (pts: { w: number; a: AnglePair }[], start: AnglePair | null = null) => {
       if (pts.length < 5) return null;
       const ys = pts.map((x) => x.a.yaw).sort((a, b) => a - b);
       const ps = pts.map((x) => x.a.pitch).sort((a, b) => a - b);
-      let m: AnglePair = { yaw: ys[ys.length >> 1]!, pitch: ps[ps.length >> 1]! };
+      let m: AnglePair = start ?? { yaw: ys[ys.length >> 1]!, pitch: ps[ps.length >> 1]! };
       for (let it = 0; it < 20; it++) {
         let sw = 0;
         let sy = 0;
@@ -464,13 +516,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         m = next;
         if (moved < 0.05) break;
       }
-      let total = 0;
       let inW = 0;
       let inW2 = 0;
       let vy = 0;
       let vp = 0;
       for (const x of pts) {
-        total += x.w;
         if (angularDistanceDeg(x.a, m) <= rho) {
           inW += x.w;
           inW2 += x.w * x.w;
@@ -481,20 +531,48 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (!(inW > 0)) return null;
       const sdIn = Math.sqrt((vy + vp) / (2 * inW));
       const nEff = (inW * inW) / inW2;
-      return { m, peaked: inW / total >= sv.peakFrac * p1, se: sdIn / Math.sqrt(Math.max(1, nEff)) };
+      // Task C9 (T9-1): LOCAL peakedness, W(ρ) ÷ W(2ρ) against a single cluster's P₁(ρ) ÷ P₁(2ρ): a display watched
+      // part of the time no longer keeps a good seed unverified.
+      let in2 = 0;
+      for (const x of pts) if (angularDistanceDeg(x.a, m) <= 2 * rho) in2 += x.w;
+      const p2 = 1 - Math.exp(-(4 * rho * rho) / (2 * sig * sig));
+      return { m, peaked: in2 > 0 && inW / in2 >= sv.peakFrac * (p1 / p2), se: sdIn / Math.sqrt(Math.max(1, nEff)) };
     };
     const src = cfg.gazeSource;
     const seedG = centres[src];
     const seedH = centres.head;
-    const g = stat(sc.win.filter((x) => x.g !== null).map((x) => ({ w: x.w, a: x.g! })));
-    const h = stat(sc.win.map((x) => ({ w: x.w, a: x.h })));
+    // Task C9 (review-C9 S1-2): the window's cluster choice follows S1-1: with a second cluster the mode is the road's
+    // (its mean shift starts there) and the head takes the frames on the road's side; undecided ('wait'), the window
+    // is neutral.
+    const gd: WeightedDir[] = [];
+    for (const x of sc.win) if (x.g !== null) gd.push({ yaw: x.g.yaw, pitch: x.g.pitch, w: x.w });
+    const ch = gd.length >= 5 ? seedWindowRoad(gd, sc.win) : null;
+    const neutral = ch === 'wait';
+    const two = ch !== null && ch !== 'wait' && ch.other !== null ? ch : null;
+    const g = neutral ? null : stat(sc.win.filter((x) => x.g !== null).map((x) => ({ w: x.w, a: x.g! })), two === null ? null : two.road);
+    const h = neutral ? null : stat((two === null ? sc.win : sc.win.filter((x) => x.g === null || roadSide(x.g, two))).map((x) => ({ w: x.w, a: x.h })));
+    // S1-2: a window disagrees only when the seed is vacated beyond noise there (sigma_eff as health's H2): a display
+    // watched 60-85 % of the time with the road still at the seed leaves an excess of about 0.2-0.5.
+    // Deviation (measured): an 8 s window can fall entirely in an 85 % display's time (1.5 s of road in 10 s), and two
+    // such windows are a vacated pair. A window whose mode sits on the Stage 1 window's OTHER cluster (S1-1 on the
+    // admitted samples: a display the driver keeps returning from) is neutral too.
+    let known: RoadChoice | null | undefined;
+    const onOther = (m: AnglePair) => {
+      if (known === undefined) known = stage1Choice(samples.toArray().filter((x) => x.w > 0), roll, tNow);
+      return known !== null && known.other !== null && !roadSide(m, known);
+    };
+    const vacatedSeed = (dd: NonNullable<ReturnType<typeof stat>>, seed: AnglePair, useG: boolean) => {
+      const dirs = useG ? gd : sc.win.map((x) => ({ yaw: x.h.yaw, pitch: x.h.pitch, w: x.w }));
+      if (useG && onOther(dd.m)) return false;
+      return vacatedBeyondNoiseOf(dirs, seed, dd.m, radius ?? c.radiusMinDeg, sigmaEffOf(dirs, seed, dd.m, sig), c.slow.excessMax);
+    };
     const bound = (s: { se: number }) => Math.max(sv.agreeMinDeg, sv.agreeSE * s.se);
     const agrees = (s: ReturnType<typeof stat>, seed: AnglePair | null) => seed === null || (s !== null && s.peaked && angularDistanceDeg(s.m, seed) <= bound(s));
     // C8 round 2 (review-C8 R1-P): a disputed pass. A window that agrees with the verified seed discards the pass
     // (Stage 1 restarts); two consecutive peaked windows that agree with the pass centre (the pair bound) and not
     // with the seed open the dual state (cause 'seed'), which commits by the dual rules: a real move is followed.
     if (sc.kind === 'dispute') {
-      if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
+      if (!neutral && agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
         seedCheck = null;
         restartPassWindow();
         // C8 round 3: the seed wins a dispute against an unverified profile: the profile is verified by that window.
@@ -512,10 +590,11 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         lastEvalT = null;
         return;
       }
+      if (neutral) return;
       const dd = seedG !== null ? g : h;
       const seedC = seedG ?? seedH;
       const withPass = dd !== null && dd.peaked && sc.pass !== undefined && angularDistanceDeg(dd.m, sc.pass) <= Math.max(sv.pairMinDeg, sv.pairSE * dd.se);
-      const offSeed = dd !== null && seedC !== null && angularDistanceDeg(dd.m, seedC) > bound(dd);
+      const offSeed = dd !== null && seedC !== null && angularDistanceDeg(dd.m, seedC) > bound(dd) && vacatedSeed(dd, seedC, seedG !== null);
       sc.agreeN = withPass && offSeed ? (sc.agreeN ?? 0) + 1 : 0;
       if ((sc.agreeN ?? 0) >= 2) {
         seedCheck = null;
@@ -523,9 +602,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       }
       return;
     }
+    if (neutral) return;
     if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
       // C8 round 2 (review-C8 minor): a verified C2 seed ends the warm start's retries.
       if (sc.kind === 'seed') warmProfile = null;
+      // Task C9 (T9-3): a verified c₀ ends the suspicion (and its background Stage 1).
+      if (sc.kind === 'posture') bgStage1 = false;
       seedUnverified = false;
       seedCheck = null;
       emit('seed_verified');
@@ -535,6 +617,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const d = seedG !== null ? g : h;
     const seed = seedG ?? seedH;
     if (d !== null && seed !== null && d.peaked && angularDistanceDeg(d.m, seed) > bound(d)) {
+      // S1-2: not vacated beyond noise: neutral (the pair's prev is kept).
+      if (!vacatedSeed(d, seed, seedG !== null)) return;
       sc.disagreed = true;
       if (sc.prev !== null && angularDistanceDeg(d.m, sc.prev) <= Math.max(sv.pairMinDeg, sv.pairSE * d.se)) {
         sc.prev = null;
@@ -553,6 +637,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   }
 
   function restartStage1(): void {
+    clearTemplates();
+    bgStage1 = false;
     gate = null;
     samples.clear();
     admittedS = 0;
@@ -560,6 +646,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     lastEvalT = null;
     gaveUp = false;
     hasSeed = false;
+    stageRef = null;
+    stageRefT = Number.NEGATIVE_INFINITY;
     centres.geometric = null;
     centres.net = null;
     centres.head = null;
@@ -670,7 +758,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       centres.head = shiftCentre(centres.head, drvShift);
       shiftGate(drvShift); // Task C7: a step bump's (a camera step's) head step moves the gate references too
     }
-    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, searchObservedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac };
+    // T9-2: the translation search for a corroborated physical step (not a seed dispute, not the slow path).
+    const src0 = primary();
+    const corroborated = cause === 'step' || cause === 'bump' || cause === 'resume' || cause === 'stop';
+    const snap = corroborated && tmpl[src0].weight(tNow) >= po.templateMinS ? tmpl[src0].snapshot(tNow) : null;
+    const snapHead = snap !== null ? tmpl.head.snapshot(tNow) : null;
+    dual = { cause, c0: { ...centres }, c1: null, enteredT: tNow, observedS: 0, searchObservedS: 0, since: tNow, revertS: 0, lastEvalT: tNow, stable: 0, box, iodFrac, tmpl: snap === null ? null : { src: snap, head: snapHead }, delta: null, pre: drvShift, vac: { ok: 0, n: 0 } };
     probation = null;
     posture.clear();
     posture.resetFit();
@@ -680,11 +773,22 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
   function exitDual(cause: 'relative' | 'undecided' | 'no_candidate' | 'fatigue'): void {
     if (dual === null) return;
+    const was = dual;
     centres.geometric = dual.c0.geometric;
     centres.net = dual.c0.net;
     centres.head = dual.c0.head;
     dual = null;
     emit('posture_revert', cause);
+    // Task C9 (T9-3): a step on corroborated evidence that did not resolve keeps c₀ but marks it suspect: widened
+    // (+5°, D2 on, HUD recalibrating), verified by the seed windows (a disagreeing pair opens a 'seed' dual), and a
+    // background Stage 1 whose pass replaces the centres. A false alarm verifies within about 60 s.
+    const corroborated = was.cause === 'step' || was.cause === 'bump' || was.cause === 'resume' || was.cause === 'stop';
+    if (corroborated && (cause === 'no_candidate' || cause === 'undecided') && state === 'calibrated') {
+      startSeedCheck('posture');
+      bgStage1 = true;
+      restartPassWindow();
+      emit('posture_suspect');
+    }
   }
 
   /** The admitted samples since `t0` as driver-frame directions of one source. */
@@ -760,6 +864,118 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     return rates.length > 0 && rates.every((x) => Math.abs(x) < po.searchCurveRateDegS);
   }
 
+  /** Task C9 (T9-2): a centre before a step bump's pre-shift (the template's frame). */
+  function unshift<T extends AnglePair | null>(a: T, pre: AnglePair | null): T {
+    if (a === null || pre === null) return a;
+    return { yaw: a.yaw - pre.yaw, pitch: a.pitch - pre.pitch } as T;
+  }
+
+  /**
+   * Task C9 (T9-2): c₀ vacated beyond the SHIFTED TEMPLATE. W's share within r_v of c₀, less R shifted by Δ's share
+   * there, is at most slow.excessMax × W's share within r_v of c₀ + Δ: a display the step moved onto c₀ is predicted.
+   */
+  function vacatedBeyondTemplate(win: readonly WeightedDir[], R: TemplateSnapshot, c0: AnglePair, delta: AnglePair): boolean {
+    const c1 = { yaw: c0.yaw + delta.yaw, pitch: c0.pitch + delta.pitch };
+    const rv = vacatedRing(c0, c1, radius ?? c.radiusMinDeg);
+    const w1 = shareNear(win, c1, rv);
+    if (!(w1 > 0)) return false;
+    const predicted = templateShare(R.grid, { yaw: c0.yaw - delta.yaw, pitch: c0.pitch - delta.pitch }, rv);
+    return shareNear(win, c0, rv) - predicted <= c.slow.excessMax * w1;
+  }
+
+  /**
+   * Task C9 (T9-2, deviation): test (b)'s gain. A shift within the small-shift range (≤ smallShiftSigmas σ̂, where the
+   * σ 4° clusters overlap most) moves s(Δ) − s(0) only about 0.1 at 3°: it needs templateSmallGainMin there (the
+   * match (a) and the persistence still apply; (c) applies only to separable shifts, as the commit's own test does).
+   */
+  const gainMin = (delta: AnglePair) => (Math.hypot(delta.yaw, delta.pitch) <= po.smallShiftSigmas * sigmaHat ? po.templateSmallGainMin : po.templateGainMin);
+
+  /** Task C9 (T9-2): the template candidate (a), (b), (c), (d); null when any test fails. */
+  function templateCandidate(d: Dual, found: readonly WeightedDir[], c0s: AnglePair, camera: AnglePair | null, src: 'geometric' | 'net'): { c1: Centres; delta: { src: AnglePair; head: AnglePair | null } } | null {
+    const t = d.tmpl!;
+    const c0 = unshift(c0s, d.pre);
+    const W = windowCells(found);
+    const b = bestShift(W, t.src.grid, po.searchMaxDeg);
+    if (!(b.s >= po.templateMatchMin) || !(b.s - b.s0 >= gainMin(b.delta))) return null;
+    const separable = Math.hypot(b.delta.yaw, b.delta.pitch) > po.smallShiftSigmas * sigmaHat;
+    if (separable && !vacatedBeyondTemplate(found, t.src, c0, b.delta)) return null;
+    const c1 = { yaw: c0.yaw + b.delta.yaw, pitch: c0.pitch + b.delta.pitch };
+    // Road-like against the dual's own c₀ (a step bump's c₀ is already pre-shifted; the camera is relative to it): the
+    // point test only. The window's distraction share (C4 round 2's guard for a MODE candidate, which a phone read
+    // most of the time could become) does not apply: the translation moves the whole distribution, and test (c) above
+    // already refuses a window whose road is still watched at c₀ (a lean to read a phone); a 40 % display partly in
+    // the centre-stack zone would otherwise block every real step.
+    if (!roadLikeAt(c1, c0s, camera)) return null;
+    let hd: AnglePair | null = null;
+    if (t.head !== null && d.c0.head !== null) hd = bestShift(windowCells(dirsSince(d.enteredT, 'head')), t.head.grid, po.searchMaxDeg).delta;
+    const other: 'geometric' | 'net' = src === 'net' ? 'geometric' : 'net';
+    const sh = (a: AnglePair | null, dl: AnglePair | null) => (a === null || dl === null ? a : { yaw: a.yaw + dl.yaw, pitch: a.pitch + dl.pitch });
+    const next: Centres = { geometric: null, net: null, head: sh(unshift(d.c0.head, d.pre), hd ?? b.delta) };
+    next[src] = c1;
+    next[other] = sh(unshift(d.c0[other], d.pre), b.delta);
+    return { c1: next, delta: { src: b.delta, head: hd } };
+  }
+
+  /**
+   * Task C9 (T9-2): a template candidate's persistence and commit. Δ follows the persistence window's best
+   * translation near the current one (±2°); stable while consecutive evaluations agree within max(1°, SE); the
+   * revert as before; the commit needs commitS of persistence, the match and the gain, and c₀ vacated beyond the
+   * shifted template (when separable).
+   */
+  function evaluateTemplateDual(d: Dual, win: readonly WeightedDir[], c0s: AnglePair, camera: AnglePair | null, src: 'geometric' | 'net', r: number, sinceLast: number): void {
+    const t = d.tmpl!;
+    const c0 = unshift(c0s, d.pre);
+    const cur = d.delta!;
+    const c1 = { yaw: c0.yaw + cur.src.yaw, pitch: c0.pitch + cur.src.pitch };
+    const separable = angularDistanceDeg(c0, c1) > po.smallShiftSigmas * sigmaHat;
+    const recent = dirsSince(Math.max(d.since, tNow - po.revertWindowS * 1000), src);
+    if (separable && relativeRevert(recent, c0, c1, r, cfg)) d.revertS += sinceLast;
+    else d.revertS = 0;
+    if (d.revertS >= po.revertS) {
+      exitDual('relative');
+      return;
+    }
+    if (d.observedS >= po.undecidedMaxS) {
+      exitDual('undecided');
+      return;
+    }
+    const W = windowCells(win);
+    const b = bestShift(W, t.src.grid, po.searchMaxDeg, cur.src, 2);
+    const se = sigmaHat / Math.sqrt(Math.max(1, win.length));
+    const moved = Math.hypot(b.delta.yaw - cur.src.yaw, b.delta.pitch - cur.src.pitch);
+    d.stable = moved <= Math.max(1, se) ? d.stable + 1 : 0;
+    let hd = cur.head;
+    if (t.head !== null && cur.head !== null) hd = bestShift(windowCells(dirsSince(d.since, 'head')), t.head.grid, po.searchMaxDeg, cur.head, 2).delta;
+    d.delta = { src: b.delta, head: hd };
+    const other: 'geometric' | 'net' = src === 'net' ? 'geometric' : 'net';
+    const sh = (a: AnglePair | null, dl: AnglePair | null) => (a === null || dl === null ? a : { yaw: a.yaw + dl.yaw, pitch: a.pitch + dl.pitch });
+    const next: Centres = { geometric: null, net: null, head: sh(unshift(d.c0.head, d.pre), hd ?? b.delta) };
+    next[src] = { yaw: c0.yaw + b.delta.yaw, pitch: c0.pitch + b.delta.pitch };
+    next[other] = sh(unshift(d.c0[other], d.pre), b.delta);
+    d.c1 = next;
+    // (c) is tallied at every evaluation of the candidate (the commit below takes the majority at the margin).
+    const vacNow = vacatedBeyondTemplate(win, t.src, c0, b.delta);
+    d.vac.n++;
+    if (vacNow) d.vac.ok++;
+    if (weightOf(win) < po.commitS || d.stable < 2) return;
+    if (!(b.s >= po.templateMatchMin) || !(b.s - b.s0 >= gainMin(b.delta))) return;
+    const c1n = next[src]!;
+    if (!roadLikeAt(c1n, c0s, camera)) return;
+    const sepNow = angularDistanceDeg(c0, c1n) > po.smallShiftSigmas * sigmaHat;
+    // Test (c) at the margin (a shift just past the small-shift range, where c₀ still holds the cluster's tail) flips
+    // from one evaluation to the next with the window's sampling: the commit takes the majority of the candidate's
+    // evaluations (at least 3), or the test passing now.
+    if (sepNow && !vacNow && !(d.vac.n >= 3 && d.vac.ok * 2 >= d.vac.n)) return;
+    // The committed centres: the translation places them (a display cannot pull it); the window's own samples near
+    // c₀ + Δ fix them (a mean shift within ρ, as the mode's refinement), finer than the template's 2° cells.
+    const rho = Math.max(4, 1.3 * sigmaHat);
+    const fixAt = (dirs: readonly WeightedDir[], at: AnglePair | null) => (at === null || weightOf(dirs) < po.searchS ? at : locate(dirs, at, rho));
+    const done: Centres = { geometric: null, net: null, head: fixAt(dirsSince(d.since, 'head'), next.head) };
+    done[src] = fixAt(win, next[src]);
+    done[other] = fixAt(dirsSince(d.since, other), next[other]);
+    commitDual(d, done);
+  }
+
   function evaluateDual(dt: number, ctx: VehicleContext | null): void {
     const d = dual!;
     d.observedS += dt;
@@ -779,11 +995,29 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
     const camera = offRoadCamera(d.c0);
     if (d.c1 === null) {
-      // The candidate: the mode of the first searchS of admission, peaked, near c₀, road-like (C4 round 1).
       const found = dirsSince(d.enteredT, src);
-      if (weightOf(found) >= po.searchS) {
-        const m = modeOf(found, cfg);
-        if (m !== null && angularDistanceDeg(m, c0) <= po.searchMaxDeg && peaked(found, m, sigmaHat, cfg) && roadLike(m, found, c0, camera)) {
+      if (weightOf(found) >= po.searchS && d.tmpl !== null) {
+        // Task C9 (T9-2): the translation that maps the pre-step template onto the window.
+        const t = templateCandidate(d, found, c0, camera, src);
+        if (t !== null) {
+          d.c1 = t.c1;
+          d.delta = t.delta;
+          d.since = d.enteredT;
+        }
+      } else if (weightOf(found) >= po.searchS) {
+        // The candidate: the mode of the first searchS of admission, peaked (T9-1: locally), near c₀, road-like.
+        const m = dualMode(d, found, d.enteredT);
+        // Task C9 (S1-2): a 'seed' dual whose road (S1-1) is the seed itself was opened by windows wholly on a display
+        // (an 85 % start, before Stage 1 knows its two clusters): the seed stands, and its verification resumes.
+        if (d.cause === 'seed' && m !== null && angularDistanceDeg(m, c0) <= c.seed.agreeMinDeg) {
+          exitDual('relative');
+          if (seedCheck !== null) {
+            seedCheck.prev = null;
+            seedCheck.disagreed = false;
+          }
+          return;
+        }
+        if (m !== null && angularDistanceDeg(m, c0) <= po.searchMaxDeg && peakedLocal(found, m, sigmaHat, po.peakedRatio) && roadLike(m, found, c0, camera)) {
           const mh = modeOf(dirsSince(d.enteredT, 'head'), cfg);
           const other: 'geometric' | 'net' = src === 'net' ? 'geometric' : 'net';
           const mo = modeOf(dirsSince(d.enteredT, other), cfg);
@@ -795,6 +1029,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       return;
     }
     const win = dirsSince(d.since, src);
+    // Task C9 (T9-2): a template candidate follows the window's best translation near its own, and commits on the
+    // template's tests (a display near c₀ is predicted by the shifted template, not counted against the commit).
+    if (d.delta !== null && d.tmpl !== null) {
+      evaluateTemplateDual(d, win, c0, camera, src, r, sinceLast);
+      return;
+    }
     const c1 = d.c1[src] ?? d.c1.head!;
     // The revert: back at c₀ for revertS (measurable only when c₁ is a separable cluster, beyond the small-shift
     // bound; a small shift or a bump's pre-shifted c₀ is decided by its commit, or undecided), or undecided too long.
@@ -815,7 +1055,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
     // Stability: c₁ follows the persistence window's mode; it is stable while consecutive evaluations agree within
     // max(1°, SE) (SE: σ̂ over the window's frames). A jump restarts the persistence window.
-    const m = modeOf(win, cfg);
+    const m = dualMode(d, win, d.since);
     if (m === null) return;
     // C4 round 2 (review-C4 R1-A): c₁ only ever follows a road-like mode. A reading bout makes the short window's
     // mode the phone; c₁ keeps its place (and the persistence its start) instead of jumping onto it, where the
@@ -839,15 +1079,29 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const dist = angularDistanceDeg(c0, c1);
     const ok = dist > po.smallShiftSigmas * sigmaHat ? relativelyVacated(win, c0, c1, r, cfg) : unimodal(win, m, r, sigmaHat, cfg);
     if (!ok) return;
+    // Task C9 (review-C9 S1-2): a seed's replacement commits only with the seed vacated beyond noise (no template
+    // exists before a pass: the prediction is c1's own spread, C5-1's test) as well as road-like (above).
+    if (d.cause === 'seed' && !vacatedBeyondNoise(win, c0, c1)) return;
     commitDual(d);
   }
 
-  function commitDual(d: Dual): void {
+  /**
+   * The dual state's mode of a window. Task C9 (review-C9 S1-2): a 'seed' dual's follows S1-1's road choice (on the
+   * samples since `t0`), so a display watched more than the road is never its candidate; undecided, none.
+   */
+  function dualMode(d: Dual, dirs: readonly WeightedDir[], t0: number): AnglePair | null {
+    if (d.cause !== 'seed') return modeOf(dirs, cfg);
+    const ch = stage1Choice(samples.toArray().filter((x) => x.t >= t0 && x.w > 0), roll, tNow);
+    return ch === null ? null : refineMode(dirs, ch.road, cfg);
+  }
+
+  function commitDual(d: Dual, given: Centres | null = null): void {
     const pick = (src: 'geometric' | 'net' | 'head', fallback: AnglePair | null) => {
       if (fallback === null) return null;
       return modeOf(dirsSince(d.since, src), cfg) ?? fallback;
     };
-    const next: Centres = { geometric: pick('geometric', d.c1!.geometric ?? d.c0.geometric), net: pick('net', d.c1!.net ?? d.c0.net), head: pick('head', d.c1!.head ?? d.c0.head) };
+    // Task C9 (T9-2): a template commit takes c₀ + Δ (the whole distribution's translation), not the window's modes.
+    const next: Centres = given ?? { geometric: pick('geometric', d.c1!.geometric ?? d.c0.geometric), net: pick('net', d.c1!.net ?? d.c0.net), head: pick('head', d.c1!.head ?? d.c0.head) };
     // Task C5 (review-C4 §5, rev1 K1-C): a commit that lowers the head-centre pitch by fatigueCommitPitchDeg or
     // more needs the fatigue gate clear. A slide down the seat while drowsy is fatigue evidence, and c₀ is kept.
     const src = primary();
@@ -869,6 +1123,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     centres.geometric = next.geometric;
     centres.net = next.net;
     centres.head = next.head;
+    clearTemplates(); // T9-2: the old posture's directions are no longer the road's
     // Task C7: a committed TRANSLATION step moves the gate references by the head-centre change (the slow path's
     // uncorroborated commit does not: it is no translation step).
     const h0 = d.c0.head ?? d.c0[src];
@@ -965,7 +1220,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   }
 
   /** Every rolling.everyS while calibrated (not dual, not in probation): the rolling path, then the slow path. */
-  function evaluateRolling(): void {
+  function evaluateRolling(smallOnly = false): void {
     lastRollT = tNow;
     follow = null;
     const wasEngaged = engaged;
@@ -992,11 +1247,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const minShift = wasEngaged ? c.rolling.minShiftDeg / 2 : c.rolling.minShiftDeg;
     // A small shift is read from a (nearly) full window only: a window the warnings have voided down to 20 s locates
     // the centre to about ±0.5°, and a follow would chase that noise (the S-LEAN-PHONE sweep's no-lean runs).
-    const small = d >= minShift && d <= po.smallShiftSigmas * sigmaHat && w >= SMALL_MIN_WINDOW_FRAC * c.rolling.windowS;
+    // Task C9 (T9): "full" counts the admitted, unvoided weight before the phone-screen exclusion (a display near the
+    // phone, excluded from the rolling window, is no voided window: the road's frames locate the centre as well).
+    const wAdmitted = weightOf(dirsSince(tNow - c.rolling.windowS * 1000, src));
+    const small = d >= minShift && d <= po.smallShiftSigmas * sigmaHat && wAdmitted >= SMALL_MIN_WINDOW_FRAC * c.rolling.windowS;
     const large = d > po.smallShiftSigmas * sigmaHat && d <= c.radiusMinDeg;
     const vacated = large && relativelyVacated(win, cur, m, r, cfg);
     const agrees = prevRoll !== null && angularDistanceDeg(prevRoll.m, m) <= Math.max(1, se, prevRoll.se);
-    const okSmall = small && agrees && unimodal(win, m, r, sigmaHat, cfg) && peaked(win, m, sigmaHat, cfg);
+    // Task C9 (T9, deviation): a road cluster with a display watched far from it (no second peak within 2ρ, locally
+    // peaked, T9-1) is followed too, so a slow drift under a display is not left unfollowed (S-2H-MANY-DISPLAY). A
+    // display within 2ρ (a broad mode between it and the road, S-40-DISPLAY's case) keeps C5 (c)'s relative test.
+    const rhoS = Math.max(4, 1.3 * sigmaHat);
+    const separatedDisplay = () => unimodal(win, m, r, sigmaHat, cfg, 2 * rhoS) && peakedLocal(win, m, sigmaHat, po.peakedRatio);
+    const okSmall = small && agrees && ((unimodal(win, m, r, sigmaHat, cfg) && peaked(win, m, sigmaHat, cfg)) || separatedDisplay());
     // C5 round 1 (C5-1 rule 2): a large shift is followed only where the driver returns after an excursion: in the
     // two agreeing windows, ≥ returnMinCountRolling returns, ≥ returnShare of them nearer m (else the follow waits).
     // (The returns count from the candidate's appearance against the centre then; once corroborated the candidate
@@ -1005,7 +1268,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (!large) largeCand = null;
     else if (largeCand === null || angularDistanceDeg(largeCand.m, m) > Math.max(1.5, 2 * se)) largeCand = { m, from: cur, since: tNow, ok: false };
     if (largeCand !== null && !largeCand.ok) largeCand.ok = returnsCorroborate(largeCand.since, largeCand.m, largeCand.from, c.slow.returnMinCountRolling);
-    const okLarge = large && vacated && prevRoll !== null && prevRoll.vacated && agrees && largeCand !== null && largeCand.ok && vacatedBeyondNoise(win, cur, m);
+    const okLarge = !smallOnly && large && vacated && prevRoll !== null && prevRoll.vacated && agrees && largeCand !== null && largeCand.ok && vacatedBeyondNoise(win, cur, m);
     prevRoll = { m, vacated, se };
     if ((okSmall || okLarge) && m.pitch - cur.pitch >= -c.rolling.maxPitchDownDeg && !gateBlocks(cur, m)) {
       engaged = true;
@@ -1018,8 +1281,8 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         head: headMode !== null && angularDistanceDeg(headMode, centres.head!) <= d + 2 ? headMode : shiftCentre(centres.head, shift),
       };
     }
-    // The slow uncorroborated path (R3b): beyond the rolling range, up to maxShiftDeg.
-    const beyond = d > c.radiusMinDeg && d <= c.slow.maxShiftDeg && peaked(win, m, sigmaHat, cfg) && relativelyVacated(win, cur, m, r, cfg) && vacatedBeyondNoise(win, cur, m) && !gateBlocks(cur, m) && roadLike(m, win, cur, offRoadCamera(centres), true);
+    // The slow uncorroborated path (R3b): beyond the rolling range, up to maxShiftDeg (not during probation).
+    const beyond = !smallOnly && d > c.radiusMinDeg && d <= c.slow.maxShiftDeg && peaked(win, m, sigmaHat, cfg) && relativelyVacated(win, cur, m, r, cfg) && vacatedBeyondNoise(win, cur, m) && !gateBlocks(cur, m) && roadLike(m, win, cur, offRoadCamera(centres), true);
     // (C5 round 1, C5-1 rules 1 and 3: capped at maxShiftDeg 12.5°; the candidate not in c₀'s distraction zones and
     // the window's distraction share ≤ candidateNonDrivingShare, via roadLike's slow branch.)
     if (!beyond) {
@@ -1064,8 +1327,29 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * over EXCURSION_MIN_FRAMES frames, so gaze noise is none), back within excursionReturnS; then the first fixation of returnFixationMs (every frame within the radius of the run's
    * mean) is where the driver returned. A new excursion first, or no fixation within excursionReturnS, drops it.
    */
-  function trackScanning(p: Perceived): void {
-    const cur = centres[primary()];
+  /**
+   * Task C9 (S1-1 (d)): before any centre, road scanning's reference is the admitted window's median direction
+   * (refreshed every STAGE_REF_EVERY_MS): a display beside the road and the road both lie within excursionMinDeg of it,
+   * the mirrors beyond.
+   */
+  function stageRefNow(): AnglePair | null {
+    if (tNow - stageRefT < STAGE_REF_EVERY_MS) return stageRef;
+    stageRefT = tNow;
+    const ys: number[] = [];
+    const ps: number[] = [];
+    samples.forEach((s) => {
+      const a = cfg.gazeSource === 'net' && s.net !== null ? s.net : s.geo;
+      if (a === null || !(s.w > 0)) return;
+      const d = toDrv(a, roll);
+      ys.push(d.yaw);
+      ps.push(d.pitch);
+    });
+    stageRef = ys.length >= STAGE_REF_MIN_N ? { yaw: median(ys), pitch: median(ps) } : null;
+    return stageRef;
+  }
+
+  function trackScanning(p: Perceived, ref: AnglePair | null = null): void {
+    const cur = ref ?? centres[primary()];
     if (cur === null || p.eyesClosed) return;
     const g = cfg.gazeSource === 'net' && p.netCam !== null ? p.netCam : p.geoCam;
     if (g === null) return;
@@ -1337,6 +1621,42 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     return pitchMedian;
   }
 
+  /**
+   * Task C9 (review-C9 S1-1): the road cluster of a Stage 1 window (null: no pass yet). The camera is off the road when
+   * the head's forward (the window's median head direction) is ≥ radiusMinDeg from it; the returns are the mirror
+   * checks' landing points in the window (tracked from the window's median direction before any centre exists).
+   */
+  function stage1Choice(all: readonly Sample[], r: number, t: number): RoadChoice | null {
+    const camera = toDrv({ yaw: 0, pitch: 0 }, r);
+    const hy: number[] = [];
+    const hp: number[] = [];
+    for (const s of all) {
+      const h = toDrv(s.head, r);
+      hy.push(h.yaw);
+      hp.push(h.pitch);
+    }
+    const headFwd = { yaw: median(hy), pitch: median(hp) };
+    const back: AnglePair[] = [];
+    returns.forEach((x) => {
+      if (x.t >= t - c.windowS * 1000) back.push(x.at);
+    });
+    // The clusters are detected on half-second fixation medians (σ̂ ÷ √frames per block for ρ), not single frames;
+    // on the frames themselves when the source is too sparse for blocks (a net run every few frames).
+    const xs = all.map((s) => {
+      const a = cfg.gazeSource === 'net' ? s.net : s.geo;
+      return { t: s.t, a: a === null ? null : toDrv(a, r), w: s.w };
+    });
+    const fx = fixationMedians(xs, FIXATION_BLOCK_MS);
+    let wAll = 0;
+    for (const x of xs) if (x.a !== null) wAll += x.w;
+    const opts = { sigma: sigmaHat, camera, cameraOffRoad: angularDistanceDeg(camera, headFwd) >= c.radiusMinDeg, returns: back };
+    const ch =
+      weightOf(fx.dirs) >= FIXATION_MIN_COVER * wAll
+        ? chooseRoad(fx.dirs, { ...opts, rho: clusterRho(sigmaHat / Math.sqrt(fx.perBlock)), kernelDeg: FIXATION_KERNEL_DEG }, cfg)
+        : chooseRoad(xs.filter((x) => x.a !== null).map((x) => ({ yaw: x.a!.yaw, pitch: x.a!.pitch, w: x.w })), opts, cfg);
+    return ch === null || ch === 'wait' ? null : ch;
+  }
+
   function evaluate(t: number): boolean {
     lastEvalT = t;
     samples.dropWhile((s) => s.t < t - c.windowS * 1000);
@@ -1352,8 +1672,35 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       return out;
     };
     const primary = cfg.gazeSource;
-    const main = evaluateCluster(dirs((s) => (primary === 'net' ? s.net : s.geo)), cfg);
-    if (main === null || !main.passed) return false;
+    const pickP = (s: Sample) => (primary === 'net' ? s.net : s.geo);
+    // Task C9 (review-C9 S1-1): the two-cluster Stage 1. With a second cluster the road is chosen (the camera, the
+    // mirrors, the higher pitch, the returns), its confidence excludes the other cluster's core, and everything the
+    // pass takes (radius, σ̂, the other source, the head, EAR and MAR) comes from the frames on the road's side.
+    const ch = stage1Choice(all, r, t);
+    if (ch === null) return false;
+    const onSide = (s: Sample) => {
+      const a = pickP(s);
+      return a === null || roadSide(toDrv(a, r), ch);
+    };
+    const road = ch.other === null ? all : all.filter(onSide);
+    const roadDirs = (pick: (s: Sample) => AnglePair | null): WeightedDir[] => {
+      const out: WeightedDir[] = [];
+      for (const s of road) {
+        const a = pick(s);
+        if (a !== null) out.push({ ...toDrv(a, r), w: s.w });
+      }
+      return out;
+    };
+    const main1 = evaluateCluster(roadDirs(pickP), cfg);
+    if (main1 === null) return false;
+    // With a second cluster the road holds less of the window (40 % at a 60 % display) and the histogram mode's noise
+    // grows (1.7° in S-WARM-NAV seed 33): the centre is located to convergence (C5's locate at max(4°, 2σ̂)) on the
+    // road's side, its radius at most half the clusters' separation (on all the frames an 85 % display's tail pulls a
+    // mean shift onto it).
+    const main0 = ch.other === null ? main1 : { ...main1, mode: locate(roadDirs(pickP), main1.mode, Math.min(Math.max(LOCATE_MIN_R_DEG, 2 * sigmaHat), angularDistanceDeg(ch.road, ch.other) / 2)) };
+    const share = ch.other === null ? main0.share : roadConfidence(dirs(pickP), { ...ch, road: main0.mode }, c.confidenceWithinDeg, clusterRho(sigmaHat));
+    const main = { ...main0, share, passed: share >= c.confidenceMinShare };
+    if (!main.passed) return false;
     // C8 round 2 (review-C8 R1-P): a pass that disagrees with a VERIFIED seed does not replace the centres (a first
     // minute spent on a display must not overwrite a profile fresh road evidence verified). Its EAR and MAR are taken
     // by the existing rules; the verification windows restart as a dispute against the pass centre.
@@ -1363,28 +1710,28 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     // may come before the first agreeing window (S-WARM-NAV seed 34). A refuted (prev set) or other seed is replaced.
     const unrefutedProfile = seedUnverified && dual === null && seedCheck !== null && seedCheck.kind === 'profile' && seedCheck.disagreed !== true;
     if (state === 'seeded' && (!seedUnverified || unrefutedProfile) && seedNow !== null) {
-      const pts = dirs((s) => (primary === 'net' ? s.net : s.geo)).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
+      const pts = roadDirs(pickP).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
       const my = pts.reduce((a, d) => a + d.yaw, 0) / Math.max(1, pts.length);
       const mp = pts.reduce((a, d) => a + d.pitch, 0) / Math.max(1, pts.length);
       const sdIn = pts.length > 1 ? Math.sqrt(pts.reduce((a, d) => a + (d.yaw - my) ** 2 + (d.pitch - mp) ** 2, 0) / (2 * pts.length)) : 0;
       const se = sdIn / Math.sqrt(Math.max(1, pts.length));
       if (angularDistanceDeg(main.mode, seedNow) > Math.max(c.seed.agreeMinDeg, c.seed.agreeSE * se)) {
-        takePassEarMar(all);
+        takePassEarMar(road);
         seedCheck = { kind: 'dispute', win: [], winW: 0, winObsS: 0, prev: null, pass: main.mode, agreeN: 0, unverifiedProfile: seedUnverified, admS: 0 };
         return false;
       }
     }
     centres[primary] = main.mode;
     const other: GazeSource = primary === 'net' ? 'geometric' : 'net';
-    const o = evaluateCluster(dirs((s) => (other === 'net' ? s.net : s.geo)), cfg);
+    const o = evaluateCluster(roadDirs((s) => (other === 'net' ? s.net : s.geo)), cfg);
     centres[other] = o !== null && o.passed ? o.mode : null;
-    const headDirs = dirs((s) => s.head);
+    const headDirs = roadDirs((s) => s.head);
     const headPeak = histogramMode(headDirs, cfg);
     centres.head = headPeak === null ? null : refineMode(headDirs, headPeak, cfg);
     radius = main.radius;
     roll = r;
     // Task C4: σ̂, the within-cluster SD of the primary source (the relative statistics' scale).
-    const within = dirs((s) => (primary === 'net' ? s.net : s.geo)).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
+    const within = roadDirs(pickP).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
     if (within.length >= 10) {
       const sdY = sd(within.map((d) => d.yaw));
       const sdP = sd(within.map((d) => d.pitch));
@@ -1393,9 +1740,10 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     }
     seedUnverified = false;
     seedCheck = null;
+    bgStage1 = false;
     dual = null;
     probation = null;
-    takePassEarMar(all);
+    takePassEarMar(road);
     state = 'calibrated';
     gate = { ...centres }; // Task C7: the gate references freeze at the pass
     emit('calibrated');
@@ -1698,7 +2046,10 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           slumpWatch = null;
         } else {
           const out = posture.push(ms);
-          if (out.step !== null && dual === null) enterDual('step', null, Math.hypot(out.step.dBox.x, out.step.dBox.y), out.step.dIodFrac);
+          if (out.step !== null && dual === null) {
+            enterDual('step', null, Math.hypot(out.step.dBox.x, out.step.dBox.y), out.step.dIodFrac);
+            slumpWatch = null; // Task C9: the translation explains the head's drop; it is no slump
+          }
           if (out.slump && out.slumpFrom !== undefined) {
             slumpWatch ??= { from: out.slumpFrom, yawRef: centres.head?.yaw ?? null, observedS: 0, loweredS: 0, yawOkS: 0, gazeS: 0, onRoadS: 0 };
           }
@@ -1708,14 +2059,20 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         if (onsetLeftS > 0) onsetLeftS = dual !== null ? 0 : Math.max(0, onsetLeftS - dt);
         if (dual !== null) evaluateDual(dt, ctx);
         else if (probation !== null) evaluateProbation(dt);
-        // Task C5: the rolling and slow paths (calibrated, no dual state, no probation).
-        if (state === 'calibrated' && dual === null && probation === null) {
+        // Task C5: the rolling and slow paths (calibrated, no dual state, no probation). Task C9 (T9, the display-free
+        // S-2H-MANY's root cause): during probation the rolling path's SMALL follow runs too, so a slow drift is not left
+        // unfollowed for the 300 s after every commit (the EMA barely moves at the geometric path's σ 4°); the large
+        // follow and the slow path still wait for the probation's end.
+        if (state === 'calibrated' && dual === null) {
           trackScanning(p);
-          if (tNow - lastRollT >= c.rolling.everyS * 1000) evaluateRolling();
+          if (tNow - lastRollT >= c.rolling.everyS * 1000) evaluateRolling(probation !== null);
           applyFollow(dt);
         } else {
           follow = null;
           slowCand = null;
+          // Task C9 (review-C9 S1-1 (d)): the mirror-check returns are tracked before the pass too (from the seed's
+          // centre, or from the Stage 1 window's median direction), for the two-cluster return test.
+          if (dual === null) trackScanning(p, centres[primary()] ?? stageRefNow());
         }
       }
 
@@ -1778,6 +2135,12 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           return true;
         });
         if (tracked() && dual === null) emaQueue.push({ t: f.tMs, w: dt, head, geo: p.geoCam, net: p.netFresh ? p.netCam : null });
+        // Task C9 (T9-2): the templates take the admitted directions in calibrated, non-dual time.
+        if (state === 'calibrated' && dual === null) {
+          if (p.geoCam !== null) tmpl.geometric.add(toDrv(p.geoCam, roll), dt, f.tMs);
+          if (p.netFresh && p.netCam !== null) tmpl.net.add(toDrv(p.netCam, roll), dt, f.tMs);
+          tmpl.head.add(toDrv(head, roll), dt, f.tMs);
+        }
       }
       drainEma();
       evaluateIfDue();
@@ -1786,12 +2149,14 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     state: () => state,
     dual: () => (dual === null || dual.c1 === null ? null : { gaze: dual.c1[cfg.gazeSource] ?? dual.c1.geometric, head: dual.c1.head }),
     // C4 round 2 (review-C4 R1-A): the engine applies this to the road-centre circle only. Task C5: a slow candidate too.
-    postureWidening: () => dual !== null || onsetLeftS > 0 || slowCand !== null,
+    // Task C9 (T9-3): a suspect centre widens the road-centre circle only (C4 round 2's posture widening), so a phone
+    // read during a lean still warns.
+    postureWidening: () => dual !== null || onsetLeftS > 0 || slowCand !== null || (seedUnverified && seedCheck?.kind === 'posture'),
     sigma: () => sigmaHat,
     eyesDegraded: () => baselines.eyesDegraded(),
-    recalibrating: () => provisional !== null || seedUnverified,
+    recalibrating: () => provisional !== null || (seedUnverified && seedCheck?.kind !== 'posture'),
     reason: () =>
-      provisional !== null || (seedUnverified && seedCheck?.kind === 'driver')
+      provisional !== null || (seedUnverified && (seedCheck?.kind === 'driver' || seedCheck?.kind === 'posture'))
         ? 'recalibrating'
         : seedUnverified
           ? 'seed_check'
@@ -1938,12 +2303,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   }
 
   function evaluateIfDue(): void {
-    if (state === 'calibrated') return;
+    if (state === 'calibrated' && !bgStage1) return;
     if (seedCheck !== null && seedCheck.kind === 'dispute') return; // C8 round 2: one dispute at a time
     if (drivingS >= c.firstEvalDrivingS && admittedS >= c.firstEvalAdmittedS && (lastEvalT === null || tNow - lastEvalT >= c.reevalEveryS * 1000)) {
       if (evaluate(tNow)) return;
     }
-    if (!gaveUp && drivingS >= c.giveUpS) {
+    // T9-3: a background Stage 1 (the centres suspect, still calibrated) never gives up the calibration.
+    if (!gaveUp && state !== 'calibrated' && drivingS >= c.giveUpS) {
       gaveUp = true;
       const outcome = hasSeed ? 'provisional' : 'uncalibrated';
       state = outcome;

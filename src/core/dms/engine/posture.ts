@@ -94,6 +94,8 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
   const raw = new RingBuffer<PostureSample>(Math.ceil(2 * po.halfWindowS * MAX_FPS) + 2);
   let nextCheck = Number.NEGATIVE_INFINITY;
   let onsetFlag = false;
+  /** Task C9: a slump candidate was reported from this window (once; the window is kept for a later step) */
+  let slumped = false;
   // The fit: running sums of yaw, pitch and the box centre.
   const sum = { n: 0, y: 0, p: 0, yy: 0, pp: 0, yp: 0, x: 0, v: 0, yx: 0, px: 0, yv: 0, pv: 0 };
   /**
@@ -217,6 +219,7 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
 
     clear() {
       raw.clear();
+      slumped = false;
       nextCheck = Number.NEGATIVE_INFINITY;
       onsetFlag = false;
     },
@@ -267,12 +270,16 @@ export function createPostureDetector(cfg: Pick<DmsConfig, 'calibration'>): Post
         if (!settledAndQuick(all, series(all, kind, a, b), s.t)) return onsetFlag ? ONSET : NONE;
         raw.clear();
         onsetFlag = false;
+        slumped = false;
         return { step: { t: s.t, dBox: { x: b.cx - a.cx, y: b.cy - a.cy }, dIodFrac: dIod, dHead: { yaw: b.yaw - a.yaw, pitch: b.pitch - a.pitch } }, slump: false, onset: false };
       }
       // A slump: the head settles lower with no translation.
-      if (b.pitch - a.pitch <= -po.slumpPitchDeg && boxRatio < 0.5 && iodRatio < 0.5 && settledAndQuick(all, series(all, 'pitch', a, b), s.t)) {
-        raw.clear();
+      // Task C9 (T9): a slump is only a candidate (the calibrator watches it for slumpHoldS), so the window is KEPT: a
+      // translation whose head-pitch median settles before its box median (a display glanced at 20 % of the time
+      // flips the pitch median first) is still found as a step a few checks later, instead of being lost to the slump.
+      if (!slumped && b.pitch - a.pitch <= -po.slumpPitchDeg && boxRatio < 0.5 && iodRatio < 0.5 && settledAndQuick(all, series(all, 'pitch', a, b), s.t)) {
         onsetFlag = false;
+        slumped = true;
         return { step: null, slump: true, onset: false, slumpFrom: { pitch: a.pitch, yaw: a.yaw } };
       }
       return onsetFlag ? ONSET : NONE;
@@ -321,6 +328,27 @@ export function vacatedBeyondNoise(dirs: readonly WeightedDir[], c0: AnglePair, 
   return (shareNear(dirs, c0, rv) - expected) / s1 <= excessMax;
 }
 
+/**
+ * C7 round 2 (review-C7 R1-H): the excess test's σ_eff = min(2σ̂, max(σ̂, σ_w)), σ_w the mode cluster's robust spread
+ * (median ÷ 0.6745) ACROSS the centre→mode axis, on the frames within 2σ̂ of the mode along it (c₀'s cluster cannot
+ * widen it). Task C9 (S1-2): shared by health's H2 and the seed windows' vacated test.
+ */
+export function sigmaEffOf(pts: readonly AnglePair[], centre: AnglePair, mode: AnglePair, sigma: number): number {
+  const d = angularDistanceDeg(mode, centre);
+  if (!(d > 1e-6)) return sigma;
+  const ux = (mode.yaw - centre.yaw) / d;
+  const uy = (mode.pitch - centre.pitch) / d;
+  const across: number[] = [];
+  for (const g of pts) {
+    const along = (g.yaw - mode.yaw) * ux + (g.pitch - mode.pitch) * uy;
+    if (Math.abs(along) <= 2 * sigma) across.push(Math.abs((g.yaw - mode.yaw) * -uy + (g.pitch - mode.pitch) * ux));
+  }
+  if (across.length < 10) return sigma;
+  across.sort((x, y) => x - y);
+  const sigmaW = across[across.length >> 1]! / 0.6745;
+  return Math.min(2 * sigma, Math.max(sigma, sigmaW));
+}
+
 /** The samples are back at c₀: S(c₀, r_v) ≥ S(c₁, r_v). */
 export function relativeRevert(dirs: readonly WeightedDir[], c0: AnglePair, c1: AnglePair, radius: number, _cfg: Pick<DmsConfig, 'calibration'>): boolean {
   const r = vacatedRing(c0, c1, radius);
@@ -331,9 +359,9 @@ export function relativeRevert(dirs: readonly WeightedDir[], c0: AnglePair, c1: 
  * Unimodal around `mode`: no second peak (a local maximum of 3 × 3 sums of 2° cells) within radius + 10°,
  * beyond 2σ̂ of the mode, holding unimodalRatio of the main one's weight.
  */
-export function unimodal(dirs: readonly WeightedDir[], mode: AnglePair, radius: number, sigma: number, cfg: Pick<DmsConfig, 'calibration'>): boolean {
+export function unimodal(dirs: readonly WeightedDir[], mode: AnglePair, radius: number, sigma: number, cfg: Pick<DmsConfig, 'calibration'>, reachDeg?: number): boolean {
   const cell = 2;
-  const reach = radius + 10;
+  const reach = reachDeg ?? radius + 10;
   const n = Math.ceil(reach / cell);
   const size = 2 * n + 1;
   const grid = new Float64Array(size * size);
@@ -414,4 +442,28 @@ export function peaked(dirs: readonly WeightedDir[], mode: AnglePair, sigma: num
   if (inner.length === 0) return false;
   const single = 1 - Math.exp(-(rho * rho) / (2 * sigma * sigma));
   return shareNear(inner, mode, rho) >= c.posture.peakedRatio * single;
+}
+
+/**
+ * Task C9 (T9; review-C9 T9-1): LOCAL peakedness, for the dual state's candidate search and the C8 seed windows:
+ * W(ρ) ÷ W(2ρ) ≥ peakedRatio × P₁(ρ)/P₁(2ρ), with W(x) the weight within x of the mode, P₁(x) = 1 − exp(−x²/2σ̂²) and
+ * ρ = max(4°, 1.3σ̂). A display beyond about 2ρ of the road does not enter the ratio and a nearer one enters both
+ * terms, so a road cluster with a display watched 20 % of the time is still peaked. (The slow path's small-shift test,
+ * C5 (c), keeps the relative form: a broad mode between the road and a 40 % display must not pass it.)
+ */
+export function peakedLocal(dirs: readonly WeightedDir[], mode: AnglePair, sigma: number, ratio: number): boolean {
+  const rho = Math.max(4, 1.3 * sigma);
+  const p1 = (x: number) => 1 - Math.exp(-(x * x) / (2 * sigma * sigma));
+  let w1 = 0;
+  let w2 = 0;
+  for (const d of dirs) {
+    if (!(d.w > 0)) continue;
+    const dist = angularDistanceDeg(d, mode);
+    if (dist <= 2 * rho) {
+      w2 += d.w;
+      if (dist <= rho) w1 += d.w;
+    }
+  }
+  if (!(w2 > 0)) return false;
+  return w1 / w2 >= ratio * (p1(rho) / p1(2 * rho));
 }
