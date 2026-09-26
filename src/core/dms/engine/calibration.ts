@@ -55,7 +55,7 @@ import type { ConditionerRefs, EarPair, Perceived } from './conditioning';
 import type { DmsConfig } from './config';
 import { SignatureWindow, StepBump, signatureOf, type MountSample } from './continuity';
 import { evaluateCluster, histogramMode, refineMode, type WeightedDir } from './histogram';
-import { createBaselines, type EyeSample } from './baselines';
+import { createBaselines, type EyeSample, type RefSnapshot } from './baselines';
 import { createPostureDetector, locate, modeOf, peaked, relativelyVacated, relativeRevert, unimodal, vacatedBeyondNoise as vacatedBeyondNoiseOf, type CompSignature } from './posture';
 import { compareSignatures, type DmsProfileV1, type LearnedZone, type MountSignature } from './profile';
 import { median, quantile, sd } from './stats';
@@ -270,6 +270,8 @@ interface StopEpisode {
 
 interface Provisional {
   oldEar: EarPair | null;
+  /** C8 round 2 (review-C8 minor 1): the baselines' reference state before the check, restored on revert */
+  oldRef: RefSnapshot;
   r: number[];
   l: number[];
   trackingS: number;
@@ -310,7 +312,21 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
    * Task C8 (rev2 §2.2): the verification windows. Samples are seed-admitted frames (driver frame, the primary
    * source and the head, weight dt); `prev` is the last window's mode when it was peaked and beyond the agree bound.
    */
-  let seedCheck: { kind: 'profile' | 'seed' | 'driver'; win: { w: number; g: AnglePair | null; h: AnglePair }[]; winW: number; winObsS: number; prev: AnglePair | null } | null = null;
+  /**
+   * The seed verification windows. C8 round 2 (review-C8 R1-P): kind 'dispute' is a Stage 1 pass that disagreed with
+   * a VERIFIED seed: `pass` is its primary centre, `agreeN` the consecutive peaked windows that agree with it.
+   */
+  let seedCheck: {
+    kind: 'profile' | 'seed' | 'driver' | 'dispute';
+    win: { w: number; g: AnglePair | null; h: AnglePair }[];
+    winW: number;
+    winObsS: number;
+    prev: AnglePair | null;
+    pass?: AnglePair;
+    agreeN?: number;
+    /** a peaked window has disagreed with the seed (it is refuted, or being refuted) */
+    disagreed?: boolean;
+  } | null = null;
   /** σ̂ for the verification: the profile's, else the default (Task C8) */
   let seedSigma = SIGMA_DEFAULT;
   /** σ̂ was measured by a Stage 1 pass in this drive (saved to the profile) */
@@ -471,7 +487,29 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const h = stat(sc.win.map((x) => ({ w: x.w, a: x.h })));
     const bound = (s: { se: number }) => Math.max(sv.agreeMinDeg, sv.agreeSE * s.se);
     const agrees = (s: ReturnType<typeof stat>, seed: AnglePair | null) => seed === null || (s !== null && s.peaked && angularDistanceDeg(s.m, seed) <= bound(s));
+    // C8 round 2 (review-C8 R1-P): a disputed pass. A window that agrees with the verified seed discards the pass
+    // (Stage 1 restarts); two consecutive peaked windows that agree with the pass centre (the pair bound) and not
+    // with the seed open the dual state (cause 'seed'), which commits by the dual rules: a real move is followed.
+    if (sc.kind === 'dispute') {
+      if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
+        seedCheck = null;
+        restartPassWindow();
+        return;
+      }
+      const dd = seedG !== null ? g : h;
+      const seedC = seedG ?? seedH;
+      const withPass = dd !== null && dd.peaked && sc.pass !== undefined && angularDistanceDeg(dd.m, sc.pass) <= Math.max(sv.pairMinDeg, sv.pairSE * dd.se);
+      const offSeed = dd !== null && seedC !== null && angularDistanceDeg(dd.m, seedC) > bound(dd);
+      sc.agreeN = withPass && offSeed ? (sc.agreeN ?? 0) + 1 : 0;
+      if ((sc.agreeN ?? 0) >= 2) {
+        seedCheck = null;
+        enterDual('seed', null, 0, 0);
+      }
+      return;
+    }
     if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
+      // C8 round 2 (review-C8 minor): a verified C2 seed ends the warm start's retries.
+      if (sc.kind === 'seed') warmProfile = null;
       seedUnverified = false;
       seedCheck = null;
       emit('seed_verified');
@@ -481,6 +519,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const d = seedG !== null ? g : h;
     const seed = seedG ?? seedH;
     if (d !== null && seed !== null && d.peaked && angularDistanceDeg(d.m, seed) > bound(d)) {
+      sc.disagreed = true;
       if (sc.prev !== null && angularDistanceDeg(d.m, sc.prev) <= Math.max(sv.pairMinDeg, sv.pairSE * d.se)) {
         sc.prev = null;
         enterDual('seed', null, 0, 0);
@@ -1109,13 +1148,15 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   };
 
   function beginProvisional(): void {
-    provisional = { oldEar: ear === null ? null : { ...ear }, r: [], l: [], trackingS: 0, blinkSeen: false, dipSince: null, done: false };
+    provisional = { oldEar: ear === null ? null : { ...ear }, oldRef: baselines.snapshotRef(), r: [], l: [], trackingS: 0, blinkSeen: false, dipSince: null, done: false };
     emit('driver_change_provisional');
   }
 
   function revertProvisional(): void {
     if (provisional === null) return;
-    setEar(provisional.oldEar, 'derive');
+    // C8 round 2 (review-C8 minor 1): the reference state as it was, labels included (not re-set at revert time).
+    baselines.restoreRef(provisional.oldRef);
+    ear = provisional.oldEar === null ? null : { ...provisional.oldEar };
     provisional = null;
     emit('driver_change_reverted');
   }
@@ -1297,6 +1338,26 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const primary = cfg.gazeSource;
     const main = evaluateCluster(dirs((s) => (primary === 'net' ? s.net : s.geo)), cfg);
     if (main === null || !main.passed) return false;
+    // C8 round 2 (review-C8 R1-P): a pass that disagrees with a VERIFIED seed does not replace the centres (a first
+    // minute spent on a display must not overwrite a profile fresh road evidence verified). Its EAR and MAR are taken
+    // by the existing rules; the verification windows restart as a dispute against the pass centre.
+    const seedNow = centres[primary];
+    // Deviation (C8 round 2): an adopted profile still being verified, with no disagreeing window yet (not refuted),
+    // is protected too: a navigation start ends at 40 s, the warm start matches at 45 s, and the first pass (60 s)
+    // may come before the first agreeing window (S-WARM-NAV seed 34). A refuted (prev set) or other seed is replaced.
+    const unrefutedProfile = seedUnverified && dual === null && seedCheck !== null && seedCheck.kind === 'profile' && seedCheck.disagreed !== true;
+    if (state === 'seeded' && (!seedUnverified || unrefutedProfile) && seedNow !== null) {
+      const pts = dirs((s) => (primary === 'net' ? s.net : s.geo)).filter((d) => angularDistanceDeg(d, main.mode) <= main.radius);
+      const my = pts.reduce((a, d) => a + d.yaw, 0) / Math.max(1, pts.length);
+      const mp = pts.reduce((a, d) => a + d.pitch, 0) / Math.max(1, pts.length);
+      const sdIn = pts.length > 1 ? Math.sqrt(pts.reduce((a, d) => a + (d.yaw - my) ** 2 + (d.pitch - mp) ** 2, 0) / (2 * pts.length)) : 0;
+      const se = sdIn / Math.sqrt(Math.max(1, pts.length));
+      if (angularDistanceDeg(main.mode, seedNow) > Math.max(c.seed.agreeMinDeg, c.seed.agreeSE * se)) {
+        takePassEarMar(all);
+        seedCheck = { kind: 'dispute', win: [], winW: 0, winObsS: 0, prev: null, pass: main.mode, agreeN: 0 };
+        return false;
+      }
+    }
     centres[primary] = main.mode;
     const other: GazeSource = primary === 'net' ? 'geometric' : 'net';
     const o = evaluateCluster(dirs((s) => (other === 'net' ? s.net : s.geo)), cfg);
@@ -1318,6 +1379,15 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     seedCheck = null;
     dual = null;
     probation = null;
+    takePassEarMar(all);
+    state = 'calibrated';
+    gate = { ...centres }; // Task C7: the gate references freeze at the pass
+    emit('calibrated');
+    return true;
+  }
+
+  /** A pass's EAR, MAR and mouth width (C8 round 2: also taken by a pass disputed against a verified seed). */
+  function takePassEarMar(all: readonly Sample[]): void {
     let passEar: EarPair | null = null;
     if (!earFrozen) {
       const er = all.map((s) => s.earR).filter((x): x is number => x !== null);
@@ -1344,10 +1414,13 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     if (passEar !== null) setEar(passEar, 'derive');
     const mws = all.map((s) => s.mouthW).filter((x): x is number => x !== null);
     if (mws.length > 0) mouthW = median(mws);
-    state = 'calibrated';
-    gate = { ...centres }; // Task C7: the gate references freeze at the pass
-    emit('calibrated');
-    return true;
+  }
+
+  /** C8 round 2 (R1-P): a disputed pass discarded: Stage 1 collects a fresh window (the verified centres kept). */
+  function restartPassWindow(): void {
+    samples.clear();
+    admittedS = 0;
+    lastEvalT = null;
   }
 
   function finishComparison(cmp: Comparison): void {
@@ -1359,6 +1432,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
         return; // a deferred warm start never overwrites a pass (T6 review m3)
       }
       if (p !== null && after !== null && lastRotation === p.orientation && compareSignatures(p.mount, after, cfg).match) {
+        // C8 round 2 (review-C8 minor): a late match while a dual state, probation or provisional driver change is
+        // running (a C2-seeded drive) waits until it ends: the retry continues, and matches again then.
+        if (dual !== null || probation !== null || provisional !== null) return;
         warmProfile = null;
         applyProfile(p);
         return;
@@ -1846,6 +1922,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
 
   function evaluateIfDue(): void {
     if (state === 'calibrated') return;
+    if (seedCheck !== null && seedCheck.kind === 'dispute') return; // C8 round 2: one dispute at a time
     if (drivingS >= c.firstEvalDrivingS && admittedS >= c.firstEvalAdmittedS && (lastEvalT === null || tNow - lastEvalT >= c.reevalEveryS * 1000)) {
       if (evaluate(tNow)) return;
     }

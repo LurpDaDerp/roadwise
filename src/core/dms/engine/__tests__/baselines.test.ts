@@ -285,3 +285,26 @@ describe('Task C8: the profile appearance (the review-C6 T8 carry; NC-C8-A)', ()
     expect(set.r!).toBeCloseTo(REF * f, 6); // uncorrected, the floor would lift it to 0.85 × 0.3 = 0.255
   });
 });
+
+describe('C8 round 2 (review-C8 minors): the appearance labels of a saved reference', () => {
+  test('minor 2: a raise labels the reference with the appearance it was read under', () => {
+    const b = fresh();
+    // the appearance settles at luma 100, then drifts to 115 (below an appearance event's size) as the EAR rises ×1.1
+    run(b, () => ({}), 30);
+    run(b, () => ({ ear: REF * 1.1, luma: 1.15 }), 300, 30);
+    const saved = b.savedReference()!;
+    expect(saved.ear.r!).toBeGreaterThan(REF * 1.05);
+    expect(saved.appearance!.luma).toBeGreaterThan(110);
+  });
+  test('minor 1: snapshotRef / restoreRef bring back the reference state with its labels', () => {
+    const b = fresh();
+    run(b, () => ({}), 30);
+    const snap = b.snapshotRef();
+    b.setReference({ r: 0.25, l: 0.25 }, 0.08, 40_000, { luma: 60, iodC: 0.2 });
+    expect(b.reference0()!.ear.r).toBeCloseTo(0.25, 9);
+    b.restoreRef(snap);
+    expect(b.reference0()!.ear.r).toBeCloseTo(REF, 9);
+    expect(b.reference0()!.appearance).toEqual(snap.ref0App);
+    expect(b.savedReference()!.appearance).toEqual(snap.refApp ?? snap.ref0App);
+  });
+});

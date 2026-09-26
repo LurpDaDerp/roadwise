@@ -62,6 +62,15 @@ export interface BaselineInput {
   mayDerive?: boolean;
 }
 
+/** C8 round 2: the baselines' reference state (see `snapshotRef`). */
+export interface RefSnapshot {
+  ref0: EarPair | null;
+  ref0App: Appearance | null;
+  ref: EarPair | null;
+  refApp: Appearance | null;
+  onlyRaised: boolean;
+}
+
 /** The appearance behind a reference: the face luma and the projected IOD (lid-independent; C6 round 1). */
 export interface Appearance {
   luma: number;
@@ -93,6 +102,12 @@ export interface Baselines {
   reference0(): { ear: EarPair; appearance: Appearance | null } | null;
   /** C7 round 4 (B): one eye's frame-to-frame EAR noise σ_n (capped), null before enough open pairs */
   noiseSigma(side: 'r' | 'l'): number | null;
+  /**
+   * C8 round 2 (review-C8 minor 1): the reference state (ref0 and its appearance, the reference and its appearance,
+   * onlyRaised), for a provisional driver-change check to restore on revert with the labels it had.
+   */
+  snapshotRef(): RefSnapshot;
+  restoreRef(s: RefSnapshot): void;
   /**
    * C8 round 1 (review-C8 C8-2): what the profile saves. The reference as set (reference0) or, when the drive's
    * reference has only ever been RAISED from it (no downward adoption), the current reference, whichever is not lower,
@@ -444,6 +459,8 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
       }
       if ((next.r ?? 0) > (cur.r ?? 0) + 1e-12 || (next.l ?? 0) > (cur.l ?? 0) + 1e-12) {
         ref = next;
+        // C8 round 2 (review-C8 minor 2): the raised reference is labelled with the appearance it was read under.
+        if (app !== null) refApp = { ...app };
         stats.raised++;
         events.push({ kind: 'ear_raised', tMs: x.tMs });
       }
@@ -512,6 +529,25 @@ export function createBaselines(cfg: Pick<DmsConfig, 'calibration'>, init: { pro
     lowUnexplained: () => lowFlag || tNow <= unexplainedUntil,
     reference0: () => (ref0 === null ? null : { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } }),
     noiseSigma: (side) => sigmaOf(side),
+    snapshotRef: () => ({
+      ref0: ref0 === null ? null : { ...ref0 },
+      ref0App: ref0App === null ? null : { ...ref0App },
+      ref: ref === null ? null : { ...ref },
+      refApp: refApp === null ? null : { ...refApp },
+      onlyRaised,
+    }),
+    restoreRef(sn) {
+      ref0 = sn.ref0 === null ? null : { ...sn.ref0 };
+      ref0App = sn.ref0App === null ? null : { ...sn.ref0App };
+      ref = sn.ref === null ? null : { ...sn.ref };
+      refApp = sn.refApp === null ? null : { ...sn.refApp };
+      onlyRaised = sn.onlyRaised;
+      appPending = false;
+      hist.r.clear();
+      hist.l.clear();
+      lowSince = null;
+      lowFlag = false;
+    },
     savedReference() {
       if (ref0 === null) return null;
       const set = { ear: { ...ref0 }, appearance: ref0App === null ? null : { ...ref0App } };

@@ -345,3 +345,60 @@ describe('C7 round 4 (review-C7 Round 4 ruling, B): a legacy profile (the inflat
     expect(Math.abs(at(d, pass[0]!.tMs + 1000).earRef! / want - 1)).toBeLessThanOrEqual(0.015);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// C8 round 2 (review-C8 Round 1, R1-P): a Stage 1 pass that disagrees with a VERIFIED seed does not replace it; it
+// opens a dispute (the verification windows against the pass centre): two agreeing windows follow a real move
+// through the dual state, a window agreeing with the seed discards the pass.
+// ---------------------------------------------------------------------------------------------------------
+
+describe('S-WARM-NAV (review-C8 R1-P; NC-C8-P): a navigation start does not overwrite a verified profile', () => {
+  const cases: [number, number][] = [];
+  for (const readS of [30, 40]) for (let seed = 30; seed <= 37; seed++) cases.push([readS, seed]);
+  test.each(cases)('%i s at the navigation screen (14°, −8°), seed %i: ≤ 1.5° from the truth at 120 s and 239 s', (readS, seed) => {
+    const d = drive(attentive((t) => (t < readS && t % 10 < 8.5 ? { gaze: rel(14, -8) } : null)), 240, { seed, profile: PROFILE });
+    const truth = PROFILE.gazeCentres.geometric!;
+    expect(angularDistanceDeg(at(d, 120_000).centre!, truth)).toBeLessThanOrEqual(1.5);
+    expect(angularDistanceDeg(at(d, 239_000).centre!, truth)).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('S-VERIFIED-THEN-MOVE (review-C8 R1-P): a verified profile, then a real 8° posture shift, is followed', () => {
+  test('the seat moved at 70 s (8° right, the box and the IOD with it): the centre follows within 120 s, ≤ 1.5°', () => {
+    const shift = { yaw: 8, pitch: 0 };
+    const d = drive(attentive((t) => (t >= 70 ? { posture: { shift, box: { dx: 0.055, dy: 0 }, iodScale: 1.07 } } : null)), 260, { seed: 41, profile: PROFILE });
+    expect(ev(d, 'seed_verified')).toHaveLength(1);
+    expect(ev(d, 'seed_verified')[0]!.tMs).toBeLessThan(70_000);
+    const g = PROFILE.gazeCentres.geometric!;
+    const want = { yaw: g.yaw + shift.yaw, pitch: g.pitch + shift.pitch };
+    expect(angularDistanceDeg(at(d, 190_000).centre!, want)).toBeLessThanOrEqual(1.5);
+    expect(angularDistanceDeg(at(d, 259_000).centre!, want)).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('C8 round 2 (review-C8 minor): a verified C2 seed ends the warm start retries', () => {
+  // The driver starts leaning (the face box and IOD moved: the profile's mount signature fails), the host takes a C2
+  // seed at 3 s from that posture, which verifies (11 s); at 40 s the driver sits back as in the profile, which would
+  // match (a camera_bump and a dual state follow, committed at 109 s, then probation). The outcome is pinned; the rule
+  // itself is not isolated here (the deferral and the retry cap also keep the profile out in this drive).
+  test('a C2 seed at 3 s in a leaning posture, verified; the driver sits back at 40 s: the profile is not adopted after the verification', () => {
+    const lean = { shift: { yaw: 8, pitch: -4 }, box: { dx: 0.1, dy: 0.05 }, iodScale: 1.15 };
+    const items = synthDrive({ fps: 15, seconds: 150, seed: 42, source: 'geometric', driver: attentive((t) => (t < 40 ? { posture: lean } : null)), motion: true, faceGeometry: true });
+    const e = createDmsEngine(C, { ...DEFAULT_INIT, profile: PROFILE });
+    const events: string[] = [];
+    let seeded = false;
+    for (const it of items) {
+      if (it.row !== undefined) e.pushRow(it.row.row, it.row.ex, it.frame.tMs);
+      e.pushFrame(it.frame);
+      if (!seeded && it.frame.tMs >= 3000) {
+        seeded = e.seedFromSetup().ok;
+      }
+      events.push(...e.drain().events.map((x) => `${Math.round(x.tMs / 1000)}:${x.kind}`));
+    }
+    expect(seeded).toBe(true);
+    const verified = events.filter((x) => x.endsWith(':seed_verified'));
+    expect(verified.length).toBeGreaterThanOrEqual(1);
+    const vT = Number(verified[0]!.split(':')[0]);
+    expect(events.filter((x) => x.endsWith(':warm_start') && Number(x.split(':')[0]) > vT)).toEqual([]);
+  });
+});
