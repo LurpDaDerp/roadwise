@@ -402,3 +402,38 @@ describe('C8 round 2 (review-C8 minor): a verified C2 seed ends the warm start r
     expect(events.filter((x) => x.endsWith(':warm_start') && Number(x.split(':')[0]) > vT)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// C8 round 3 (review-C8 Round 2): the dispute against an unverified profile times out for the pass (R2-D); the
+// dispute needs two windows agreeing with the pass (S-DISPUTE-GLANCE pins NC-C8-P1).
+// ---------------------------------------------------------------------------------------------------------
+
+describe('S-STALE-DISPLAY (review-C8 R2-D; NC-C8-D): a stale profile with a 30 % display is replaced by the correct pass', () => {
+  // 60 km/h straight, a navigation display at (14°, −8°) watched 3 s of every 10 s; the profile's centres (gaze and
+  // head) stale by 8°. The display keeps the verification windows un-peaked, so the profile is never refuted; the
+  // correct Stage 1 pass is disputed, and the dispute resolves for it after disputeMaxS (60 s) of seed-admitted time.
+  const cases: [string, number, number, number][] = [];
+  for (const [n, dy, dp] of [['8° right', 8, 0], ['8° up', 0, 8]] as const) for (const seed of [51, 52]) cases.push([n, dy, dp, seed]);
+  test.each(cases)('%s (%i, %i), seed %i: ≤ 1.5° from the truth by 180 s', (_, dy, dp, seed) => {
+    const g = PROFILE.gazeCentres.geometric!;
+    const stale: DmsProfileV1 = { ...PROFILE, gazeCentres: { geometric: { yaw: g.yaw + dy, pitch: g.pitch + dp } }, headCentre: { yaw: PROFILE.headCentre.yaw + dy, pitch: PROFILE.headCentre.pitch + dp } };
+    const d = drive(attentive((t) => (t % 10 < 3 ? { gaze: rel(14, -8) } : null)), 240, { seed, profile: stale });
+    expect(angularDistanceDeg(at(d, 180_000).centre!, g)).toBeLessThanOrEqual(1.5);
+    expect(angularDistanceDeg(at(d, 239_000).centre!, g)).toBeLessThanOrEqual(1.5);
+  });
+});
+
+describe('S-DISPUTE-GLANCE (review-C8 Round 2; NC-C8-P1): one window at the disputed pass does not open the dual state', () => {
+  // A verified profile (the road to 25 s; verified at 22 s), then a navigation screen at (9°, −6°) 8.5 s of every
+  // 10 s to 70 s: the Stage 1 pass (60 s) lands on the screen and is disputed; the first window after it is still on
+  // the screen; then the road. Two consecutive windows at the pass are needed to open the dual state, so none opens;
+  // the next road window agrees with the seed and discards the pass (a later pass, at 98 s, agrees).
+  test('no dual state with cause seed; the centre stays on the truth', () => {
+    const d = drive(attentive((t) => (t >= 25 && t < 70 && t % 10 < 8.5 ? { gaze: rel(9, -6) } : null)), 200, { seed: 53, profile: PROFILE });
+    expect(ev(d, 'seed_verified')).toHaveLength(1);
+    expect(ev(d, 'seed_verified')[0]!.tMs).toBeLessThan(25_000);
+    expect(ev(d, 'posture_dual').filter((e) => e.cause === 'seed')).toEqual([]);
+    const truth = PROFILE.gazeCentres.geometric!;
+    for (const tMs of [80_000, 199_000]) expect(angularDistanceDeg(at(d, tMs).centre!, truth)).toBeLessThanOrEqual(1.5);
+  });
+});

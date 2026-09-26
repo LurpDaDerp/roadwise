@@ -450,6 +450,11 @@ export interface DmsConfig {
       pairMinDeg: number;
       pairSE: number;
       curveRateDegS: number;
+      /**
+       * C8 round 3 (review-C8 R2-D): a dispute against an UNVERIFIED profile resolves for the pass unless a window
+       * agrees with the seed within this much seed-admitted time after the pass (a verified seed's stays open-ended).
+       */
+      disputeMaxS: number;
     };
     /**
      * Task C8 (rev2 §2.7): a profile is saved only if calibrated or seed-verified, no dual state or probation is
@@ -981,7 +986,7 @@ const DEFAULT: DmsConfig = {
     opennessRange: [0.6, 1.4],
     startOpennessRange: [0.6, 1.15],
     startMarRange: [0.7, 1.4],
-    seed: { admitMinSpeedKmh: 30, windowS: 8, windowMaxObservedS: 60, ringMinDeg: 4, ringSigmas: 1.3, peakFrac: 0.8, agreeMinDeg: 3, agreeSE: 2.5, pairMinDeg: 1.5, pairSE: 2, curveRateDegS: 2 },
+    seed: { admitMinSpeedKmh: 30, windowS: 8, windowMaxObservedS: 60, ringMinDeg: 4, ringSigmas: 1.3, peakFrac: 0.8, agreeMinDeg: 3, agreeSE: 2.5, pairMinDeg: 1.5, pairSE: 2, curveRateDegS: 2, disputeMaxS: 60 },
     save: { healthyS: 600, gateClearS: 600 },
     seedWindowS: 3,
     seedMinS: 2,
@@ -1349,6 +1354,7 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(sv.agreeMinDeg < c.calibration.radiusMinDeg)) bad('calibration.seed.agreeMinDeg', 'must be < radiusMinDeg');
   if (!(sv.pairMinDeg > 0 && sv.pairMinDeg <= sv.agreeMinDeg)) bad('calibration.seed.pairMinDeg', 'must be in (0, agreeMinDeg]');
   if (!(sv.admitMinSpeedKmh >= c.calibration.admitMinSpeedKmh)) bad('calibration.seed.admitMinSpeedKmh', 'must be ≥ admitMinSpeedKmh');
+  if (!(sv.disputeMaxS >= sv.windowS)) bad('calibration.seed.disputeMaxS', 'must be ≥ windowS');
   if (!(c.calibration.binDeg > 0)) bad('calibration.binDeg', 'must be > 0');
   if (!(c.calibration.radiusMinDeg <= c.calibration.radiusMaxDeg)) bad('calibration.radiusMinDeg', 'must be ≤ radiusMaxDeg');
   if (!(c.calibration.driverChange.iodFrac > c.calibration.resumeTolerance.iodFrac)) {

@@ -317,6 +317,21 @@ describe('seeds and warm start (§M3, C-5, C-6)', () => {
     expect(cal.state()).toBe('none');
     expect(cal.centre('geometric')).toBeNull();
   });
+  // C8 round 3 (review-C8 Round 2; NC-C8-C2): a verified C2 seed ends the warm start's retries. The driver's head is
+  // turned 6° while the C2 seed is taken and verified (the profile's mount signature fails); then the head returns to
+  // the profile's pose, where a retry would match. No dual state opens in between (isolated from the deferral).
+  test('C8 round 3: a verified C2 seed ends the retries: a later matching warm comparison does not warm-start', () => {
+    const seed = { gazeCentres: { geometric: TRUTH, net: null }, headCentre: { yaw: 6, pitch: 0 }, rollOffsetDeg: 0, mount: { ...MOUNT, yawDeg: -6 }, orientation: 90 as const, openEyeEar: { r: 0.3, l: 0.3 } };
+    const cal = createCalibrator(C, { driverSide: 'left', profile: profile(), seed });
+    const headYaw = (t: number) => (t < 40 ? 6 : t < 50 ? 6 - 0.6 * (t - 40) : 0);
+    const items = stream({ fps: 15, seconds: 100, seed: 5, sample: (t, r) => ({ gazeDrv: { yaw: TRUTH.yaw + gauss(r) * 2, pitch: TRUTH.pitch + gauss(r) * 2 }, headDrv: { yaw: headYaw(t), pitch: 0 } }), ctx: () => ({ speedKmh: 60 }) });
+    perceive(C, cal, items);
+    const kinds = cal.drainEvents().map((e) => e.kind);
+    expect(kinds).toContain('seed_verified');
+    expect(kinds).not.toContain('posture_dual');
+    expect(kinds).not.toContain('camera_bump');
+    expect(kinds).not.toContain('warm_start');
+  });
 });
 
 describe('frame-rate invariance', () => {

@@ -326,6 +326,9 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     agreeN?: number;
     /** a peaked window has disagreed with the seed (it is refuted, or being refuted) */
     disagreed?: boolean;
+    /** C8 round 3 (R2-D): the dispute is against an UNVERIFIED profile, and its seed-admitted time so far */
+    unverifiedProfile?: boolean;
+    admS?: number;
   } | null = null;
   /** σ̂ for the verification: the profile's, else the default (Task C8) */
   let seedSigma = SIGMA_DEFAULT;
@@ -494,6 +497,19 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       if (agrees(g, seedG) && agrees(h, seedH) && (seedG !== null ? g !== null : h !== null)) {
         seedCheck = null;
         restartPassWindow();
+        // C8 round 3: the seed wins a dispute against an unverified profile: the profile is verified by that window.
+        if (sc.unverifiedProfile === true) {
+          seedUnverified = false;
+          emit('seed_verified');
+        }
+        return;
+      }
+      // C8 round 3 (review-C8 R2-D): against an UNVERIFIED profile, the dispute resolves for the pass unless the seed
+      // wins within disputeMaxS of seed-admitted time: the profile is marked refuted and Stage 1 evaluates again at
+      // once (its pass then replaces the centres). A display that keeps the windows un-peaked cannot hold it open.
+      if (sc.unverifiedProfile === true && (sc.admS ?? 0) >= sv.disputeMaxS) {
+        seedCheck = { kind: 'profile', win: [], winW: 0, winObsS: 0, prev: null, disagreed: true };
+        lastEvalT = null;
         return;
       }
       const dd = seedG !== null ? g : h;
@@ -1354,7 +1370,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
       const se = sdIn / Math.sqrt(Math.max(1, pts.length));
       if (angularDistanceDeg(main.mode, seedNow) > Math.max(c.seed.agreeMinDeg, c.seed.agreeSE * se)) {
         takePassEarMar(all);
-        seedCheck = { kind: 'dispute', win: [], winW: 0, winObsS: 0, prev: null, pass: main.mode, agreeN: 0 };
+        seedCheck = { kind: 'dispute', win: [], winW: 0, winObsS: 0, prev: null, pass: main.mode, agreeN: 0, unverifiedProfile: seedUnverified, admS: 0 };
         return false;
       }
     }
@@ -1719,6 +1735,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
           if (!p.eyesClosed && calm && ctx!.speedKmh !== null && ctx!.speedKmh >= sv.admitMinSpeedKmh) {
             seedCheck.win.push({ w: dt, g: srcCam === null ? null : toDrv(srcCam, roll), h: toDrv(head, roll) });
             seedCheck.winW += dt;
+            if (seedCheck.kind === 'dispute') seedCheck.admS = (seedCheck.admS ?? 0) + dt;
           }
           if (seedCheck.winW >= sv.windowS) {
             evaluateSeedWindow(seedCheck);
