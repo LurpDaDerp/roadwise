@@ -1,29 +1,17 @@
 /**
- * The number the SOS button dials: the region's single emergency number, from the device's
- * locale. 911 by default — it and 112 are the two numbers handsets and networks route to
- * emergency services almost everywhere, whatever the local number is. A tiny table, not a
- * gazetteer: only regions whose number is one of the well-known few.
+ * The number the SOS button dials. Only the two numbers every GSM/LTE handset treats as an
+ * emergency call wherever it is (3GPP): 911 in the North American numbering plan, 112 elsewhere.
+ * The locale is only a hint (a UK-English phone may be in the US), which is why no local number
+ * such as 999 or 000 is ever chosen: the universal ones reach emergency services either way.
  */
 
 export const DEFAULT_EMERGENCY_NUMBER = '911';
 
-const BY_NUMBER: Record<string, readonly string[]> = {
-  // The EU/EEA single number and the countries that share it.
-  '112': [
-    'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IS', 'IE',
-    'IT', 'LV', 'LI', 'LT', 'LU', 'MT', 'NL', 'NO', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
-    'CH', 'TR', 'UA', 'RS', 'ME', 'MK', 'BA', 'AL', 'MD', 'GE', 'RU', 'KZ', 'IN', 'ZA', 'IL',
-    'KR', 'BR', 'AR', 'CL', 'CO', 'PE', 'EC', 'VN',
-  ],
-  '999': ['GB', 'HK', 'MY', 'SG', 'KE', 'BD', 'QA', 'BH', 'KW', 'AE', 'ZW', 'MU', 'TT', 'JM'],
-  '000': ['AU'],
-  '111': ['NZ'],
-  '911': ['US', 'CA', 'MX', 'PH', 'CR', 'PA', 'DO', 'UY', 'PY', 'BO', 'GT', 'HN', 'SV', 'NI'],
-};
-
-const BY_REGION: ReadonlyMap<string, string> = new Map(
-  Object.entries(BY_NUMBER).flatMap(([number, regions]) => regions.map((r) => [r, number]))
-);
+/** Regions where 911 is the local number; everywhere else gets 112. */
+const NINE_ONE_ONE: ReadonlySet<string> = new Set([
+  'US', 'CA', 'MX', 'PR', 'VI', 'GU', 'AS', 'MP', 'PH', 'CR', 'PA', 'DO', 'UY', 'PY', 'BO',
+  'GT', 'HN', 'SV', 'NI',
+]);
 
 /**
  * The region subtag of a BCP 47 tag ("en-US" → "US", "zh-Hant-TW" → "TW", "es-419" → "419"), or
@@ -39,10 +27,10 @@ export function regionOfLocale(tag: string | null | undefined): string | null {
   return null;
 }
 
-/** The emergency number for a region code; the default for an unknown or unlisted one. */
+/** 911 for a North American region or an unknown one, 112 for any other. */
 export function emergencyNumberFor(region: string | null | undefined): string {
   if (!region) return DEFAULT_EMERGENCY_NUMBER;
-  return BY_REGION.get(region.toUpperCase()) ?? DEFAULT_EMERGENCY_NUMBER;
+  return NINE_ONE_ONE.has(region.toUpperCase()) ? '911' : '112';
 }
 
 /** The device's region as `Intl` reports its default locale; null when it reports none. */

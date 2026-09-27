@@ -27,22 +27,23 @@ describe('emergencyNumberFor', () => {
     ['US', '911'],
     ['CA', '911'],
     ['MX', '911'],
-    ['GB', '999'],
-    ['HK', '999'],
+    ['PR', '911'],
+    ['GB', '112'],
+    ['HK', '112'],
     ['DE', '112'],
     ['FR', '112'],
     ['IN', '112'],
-    ['AU', '000'],
-    ['NZ', '111'],
+    ['AU', '112'],
+    ['NZ', '112'],
     ['fr', '112'],
   ])('%s → %s', (region, number) => {
     expect(emergencyNumberFor(region)).toBe(number);
   });
 
-  test('an unknown or missing region gets the default, which is 911', () => {
+  test('only the universal numbers are ever dialled; a missing region gets 911', () => {
     expect(DEFAULT_EMERGENCY_NUMBER).toBe('911');
-    expect(emergencyNumberFor('ZZ')).toBe('911');
-    expect(emergencyNumberFor('419')).toBe('911');
+    expect(emergencyNumberFor('ZZ')).toBe('112');
+    expect(emergencyNumberFor('419')).toBe('112');
     expect(emergencyNumberFor(null)).toBe('911');
     expect(emergencyNumberFor(undefined)).toBe('911');
   });
@@ -56,7 +57,7 @@ describe('the device', () => {
       .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
       .mockReturnValue({ locale: 'en-GB' } as Intl.ResolvedDateTimeFormatOptions);
     expect(deviceRegion()).toBe('GB');
-    expect(deviceEmergencyNumber()).toBe('999');
+    expect(deviceEmergencyNumber()).toBe('112');
   });
 
   test('falls back to 911 when Intl says nothing usable', () => {

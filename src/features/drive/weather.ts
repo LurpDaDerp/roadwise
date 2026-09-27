@@ -69,10 +69,13 @@ export function weatherHazardOf(c: OpenMeteoCurrent): WeatherHazard | null {
   return null;
 }
 
-/** The request. The position is rounded to ~100 m: weather needs no more, and the API sees no more. */
+/**
+ * The request. The position is rounded to one decimal (about 10 km): enough for a weather
+ * hazard, and too coarse to say where the driver is.
+ */
 export function openMeteoUrl(latitude: number, longitude: number): string {
-  const lat = encodeURIComponent(latitude.toFixed(3));
-  const lng = encodeURIComponent(longitude.toFixed(3));
+  const lat = encodeURIComponent(latitude.toFixed(1));
+  const lng = encodeURIComponent(longitude.toFixed(1));
   return (
     'https://api.open-meteo.com/v1/forecast' +
     `?latitude=${lat}&longitude=${lng}&current=${WEATHER_CURRENT_VARS}` +

@@ -68,11 +68,11 @@ describe('weatherHazardOf — at most one hazard, the most dangerous first', () 
   });
 });
 
-test('the request asks Open-Meteo for the current conditions at a ~100 m position', () => {
+test('the request asks Open-Meteo for the current conditions at a ~10 km position', () => {
   const url = openMeteoUrl(47.60621, -122.33207);
   expect(url.startsWith('https://api.open-meteo.com/v1/forecast?')).toBe(true);
-  expect(url).toContain('latitude=47.606');
-  expect(url).toContain('longitude=-122.332');
+  expect(url).toContain('latitude=47.6&');
+  expect(url).toContain('longitude=-122.3&');
   expect(url).toContain(`current=${WEATHER_CURRENT_VARS}`);
   expect(url).toContain('wind_speed_unit=kmh');
   expect(WEATHER_CURRENT_VARS.split(',')).toEqual(['weather_code', 'wind_gusts_10m', 'visibility']);

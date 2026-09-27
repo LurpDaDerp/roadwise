@@ -66,7 +66,7 @@ export const settingsCopy = {
 
   privacy: {
     title: 'Privacy and data',
-    what: 'RoadWise keeps your drives, scores, rewards and settings on its servers so they follow you to a new phone. Raw GPS traces are removed after 14 days.',
+    what: 'RoadWise keeps your drives, scores, rewards and settings on its servers so they follow you to a new phone. Raw GPS traces are removed after 14 days. During a drive, an area about 10 km across is sent to Open-Meteo to check for severe weather.',
     export: {
       title: 'Export my data',
       body: 'A copy of everything RoadWise keeps about you, in one JSON file.',

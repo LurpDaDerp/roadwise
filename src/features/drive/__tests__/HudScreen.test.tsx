@@ -365,7 +365,7 @@ describe('HudScreen: the weather hazard bar (Open-Meteo)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const url = mockFetch.mock.calls[0]![0];
     expect(url).toContain('api.open-meteo.com/v1/forecast');
-    expect(url).toContain('latitude=47.600');
+    expect(url).toContain('latitude=47.6&');
     expect(url).toContain('current=weather_code,wind_gusts_10m,visibility');
   });
 
@@ -447,7 +447,7 @@ describe('HudScreen: touch policy — two hold-to-act controls, nothing else', (
       .mockReturnValue({ locale: 'en-GB' } as Intl.ResolvedDateTimeFormatOptions);
     const h = await renderHud({ lockedOut: true });
     await hold('hud-sos');
-    expect(open).toHaveBeenCalledWith('tel:999');
+    expect(open).toHaveBeenCalledWith('tel:112');
     expect(h.host.end).not.toHaveBeenCalled();
     jest.restoreAllMocks();
   });

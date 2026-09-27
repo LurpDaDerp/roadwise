@@ -322,17 +322,16 @@ describe('LockoutGate: what it dismisses at the onset', () => {
 });
 
 describe('LockoutGate: keep-awake and Android back', () => {
-  test('keep-awake is on for a mounted trip while another route shows, and off once parked', async () => {
+  test('keep-awake is on for a mounted trip while another route shows, and off when it ends', async () => {
     const app = await renderApp({}, ['/home']);
     expect(keepAwake.activateKeepAwakeAsync).not.toHaveBeenCalled();
     await app.push(STOPPED);
     expect(keepAwake.activateKeepAwakeAsync).toHaveBeenCalledWith(KEEP_AWAKE_TAG);
     await app.push(MOVING);
-    expect(keepAwake.deactivateKeepAwake).not.toHaveBeenCalled();
-    // `ending` is the parked window before auto-end: the screen may sleep again.
     await app.push({ status: 'ending', lockedOut: false, speedMps: 0 });
-    expect(keepAwake.deactivateKeepAwake).toHaveBeenCalledWith(KEEP_AWAKE_TAG);
+    expect(keepAwake.deactivateKeepAwake).not.toHaveBeenCalled();
     await app.push({ status: 'armed', clientTripId: null });
+    expect(keepAwake.deactivateKeepAwake).toHaveBeenCalledWith(KEEP_AWAKE_TAG);
     expect(keepAwake.activateKeepAwakeAsync).toHaveBeenCalledTimes(1);
   });
 
