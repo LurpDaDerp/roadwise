@@ -1,12 +1,6 @@
-import { t } from '@/i18n';
-import { Screen, Text } from '@/ui';
+import { FamilyScreen } from '@/features/family';
 
+/** The Family tab (lean M6): the family's map, where each member is, and the family's places. */
 export default function Family() {
-  return (
-    <Screen bottomInset={false}>
-      <Text variant="title1" accessibilityRole="header">
-        {t('tabs.family')}
-      </Text>
-    </Screen>
-  );
+  return <FamilyScreen />;
 }
