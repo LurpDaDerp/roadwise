@@ -59,7 +59,6 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
         'Motion data tells RoadWise when a drive starts and ends, and helps spot hard braking or phone handling.',
       NSCameraUsageDescription:
         'Optional camera coaching looks for eyes off the road. Frames are processed on your phone and never saved or uploaded.',
-      NSPhotoLibraryUsageDescription: 'Choose a profile photo.',
       UIBackgroundModes: ['location'],
     },
   },
