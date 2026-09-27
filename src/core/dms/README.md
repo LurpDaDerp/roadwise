@@ -65,7 +65,7 @@ Any input that is false, missing or unknown keeps the camera off.
 `{ id, action: 'start' | 'stop' | 'once', tier: 1 | 2 | 3, kind, tMs, epochMs, muted, cause? }`
 
 - **Tier 3** (Critical): `microsleep`, `sleep`, `unresponsive`, `microsleep_nod`. Continuous, and louder every 2 s, until `stop`.
-- **Tier 2:** `distraction`, `cumulative` and `eyes_on_road` repeat every 1 s until `stop`. The eyes-on-road alert (C7 round 6, the user's decision R4-T) is a closure at 20 km/h or more that was never deep (the eyes lowered, not shut): it plays as a distraction alert (it stops when the eyes are back on the road, merges with D1, and never counts as drowsiness), and becomes a sleep Critical only if the closure turns deep or lasts 6 s. `fatigue` is a single burst (`once`).
+- **Tier 2:** `distraction`, `cumulative` and `eyes_on_road` repeat every 1 s until `stop`. The eyes-on-road alert (C7 round 6, the user's decision R4-T) is a closure at 20 km/h or more that was never deep (the eyes lowered, not shut): it plays as a distraction alert (it stops when the eyes are open and back on the road, C7 round 7: not on a gaze that merely reads on-road while the eyes are still lowered; it merges with D1, and never counts as drowsiness), and becomes a sleep Critical only if the closure turns deep or lasts 6 s. `fatigue` is a single burst (`once`).
 - **Tier 1** (`once`): `phone_pattern`, `fatigue_early`, `repeated_glances`, `monitoring_paused` (with `cause: 'heat' | 'dark' | 'fault'`; at most once per 10 min, and at any speed, since it replaces a Critical that was already sounding).
 - M7 maps each kind to a tone and a voice key. A throwing `onAlert` never breaks the controller.
 

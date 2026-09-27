@@ -536,10 +536,31 @@ describe('C2: the sleep family and stops', () => {
 // C7 round 6 (review-C7 R4-T, the user's decision): eyes_on_road is a Tier 2 alert of the distraction family.
 describe('C7 round 6: eyes_on_road', () => {
   const eyes: AlertRequest = { kind: 'eyes_on_road', c8: false };
-  test('Tier 2: starts off the road, stops on the first on-road frame (rule 1)', () => {
+  test('Tier 2: starts off the road, stops on the first frame with the eyes open on the road', () => {
     const r = run([{ s: 1, f: asleep, req: [eyes] }, { s: 0.2 }]);
     expect(r.sig).toEqual(['start:eyes_on_road', 'stop:eyes_on_road']);
     expect(r.cmds[0]!.tier).toBe(2);
+  });
+  // C7 round 7 (review-C7 R6-1; NC-C7-18): its evidence is the closure. A shallow closure with no iris reads
+  // on-road from the held or head gaze: rule 1 cut the alert one frame after its start.
+  test('C7 round 7: on-road with the eyes still shut, or eyes open off the road, it keeps running', () => {
+    const r = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 3, f: { onRoad: true, eyesOpen: false } }, { s: 2, f: { onRoad: false, eyesOpen: true } }, { s: 0.2 }]);
+    expect(r.sig).toEqual(['start:eyes_on_road', 'stop:eyes_on_road']);
+    expect(r.cmds[1]!.tMs).toBeGreaterThanOrEqual(5500 - 1e-6); // the first frame of the last segment
+    // D1 keeps rule 1: its evidence is the gaze
+    expect(run([{ s: 0.5, f: off, req: [dist('distraction')] }, { s: 0.2, f: { onRoad: true, eyesOpen: false } }]).sig).toEqual([
+      'start:distraction',
+      'stop:distraction',
+    ]);
+  });
+  test('C7 round 7: with no TRACKING face for criticalLostMaxS it stops (its clear is unobservable); rule 4 still stops it', () => {
+    const lost = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: C.alerts.criticalLostMaxS + 1, f: { ...asleep, quality: 'lost' } }]);
+    expect(lost.sig).toEqual(['start:eyes_on_road', 'stop:eyes_on_road']);
+    expect(lost.cmds[1]!.tMs).toBeGreaterThanOrEqual(C.alerts.criticalLostMaxS * 1000);
+    expect(run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 0.2, f: { ...asleep, ruleSpeedKmh: 15 } }]).sig).toEqual([
+      'start:eyes_on_road',
+      'stop:eyes_on_road',
+    ]);
   });
   test('D1 does not double-alert: a D1 while it runs merges, and it merges into a running D1', () => {
     const a = run([{ s: 0.5, f: asleep, req: [eyes] }, { s: 0.5, f: off, req: [dist('distraction')] }]);

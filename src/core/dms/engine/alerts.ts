@@ -224,6 +224,8 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
   let nextId = 1;
   let critical: { kind: AlertKind; origin: CriticalOrigin; clearSince: number | null; lowSince: number | null; startT: number } | null = null;
   let distraction: AlertKind | null = null;
+  /** C7 round 7: when the running distraction started (eyes_on_road's lost cap) */
+  let distractionStartT = 0;
   const held: { req: AlertRequest; since: number; raised: Partial<AlertLogEntry> }[] = [];
   const lastTier1 = new Map<AlertKind, number>();
   const warnings = new RingBuffer<number>(16);
@@ -299,9 +301,19 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
       const audible = x.ruleSpeedKmh !== null && x.ruleSpeedKmh >= cfg.distraction.logOnlyBelowKmh - EPS;
 
       // Running states first: rule 1, rule 4, the Critical's end.
-      if (distraction !== null && (x.onRoad || !audible)) {
-        cmd(out, x, 'stop', distraction);
-        distraction = null;
+      // C7 round 7 (review-C7 R6-1): eyes_on_road's evidence is the closure, not the gaze: during a shallow
+      // closure with no iris the held or head gaze reads on-road, and rule 1 cut it one frame after its start. It
+      // ends when the eyes are open AND on the road (a sleep Critical's moving clear), when a Critical replaces
+      // it, at rule 4, or with no TRACKING face for criticalLostMaxS (its clear unobservable, as a Critical's).
+      if (distraction !== null) {
+        const ended =
+          distraction === 'eyes_on_road'
+            ? (x.eyesOpen && x.onRoad) || x.tMs - Math.max(distractionStartT, lastTrackingT) >= a.criticalLostMaxS * 1000 - EPS
+            : x.onRoad;
+        if (ended || !audible) {
+          cmd(out, x, 'stop', distraction);
+          distraction = null;
+        }
       }
       if (critical !== null) {
         const sleepOrigin = critical.origin === 'sleep';
@@ -393,6 +405,7 @@ export function createAlertManager(cfg: DmsConfig, opts: { mode: 'live' | 'shado
             continue;
           }
           distraction = req.kind;
+          distractionStartT = x.tMs;
           deliver(out, x, req, 'start', from);
           // Rule 8: warnings the driver heard.
           warnings.push(x.tMs);

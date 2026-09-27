@@ -22,6 +22,21 @@ describe('S-READING-FASTLID (review-C7 R4-T; NC-C7-14): the 8–10 fps reader wi
     expect(x.commands.filter((c) => c.kind === 'eyes_on_road').every((c) => c.tier === 2)).toBe(true);
     expect(starts('microsleep') + starts('sleep')).toBeLessThanOrEqual(2);
     expect(starts('unresponsive')).toBeLessThanOrEqual(long);
+    // C7 round 7 (review-C7 R6-1; NC-C7-18): each eyes_on_road RUNS until its bout ends or a Critical replaces
+    // it. Measured: stops 0.0–0.39 s after the bout's end (the clear needs the eyes open AND on the road: the
+    // gaze's return from −45° takes 2–3 frames at 8 fps), or at the Critical's start.
+    for (const s of x.commands.filter((c) => c.kind === 'eyes_on_road' && c.action === 'start')) {
+      const stop = x.commands.find((c) => c.kind === 'eyes_on_road' && c.action === 'stop' && c.tMs >= s.tMs);
+      expect(stop).toBeDefined();
+      const replaced = x.commands.some((c) => c.tier === 3 && c.action === 'start' && c.tMs === stop!.tMs);
+      if (replaced) continue;
+      const bout = x.bouts.find((b) => b.start * 1000 <= s.tMs && s.tMs <= b.end * 1000);
+      expect(bout).toBeDefined();
+      expect(stop!.tMs).toBeGreaterThanOrEqual(bout!.end * 1000 - 1000 / fps);
+      expect(stop!.tMs).toBeLessThanOrEqual(bout!.end * 1000 + 500);
+    }
+    // The blips no longer count as heard warnings (they set off repeated_glances before the fix).
+    expect(starts('repeated_glances')).toBe(0);
   });
 });
 
@@ -51,7 +66,49 @@ describe('S-EYES-6S (review-C7 R4-T; NC-C7-15): a shallow closure lasting 6 s es
     expect(crit.map((c) => c.kind)).toEqual(['unresponsive']);
     expect(crit[0]!.tMs - 100_000).toBeGreaterThanOrEqual(5900);
     expect(crit[0]!.tMs - 100_000).toBeLessThanOrEqual(6100);
+    // C7 round 7 (R6-1; NC-C7-18): the alert RUNS from its start until the Critical replaces it (one stop, at the
+    // Critical's start), and F3 is a corroborated escalation.
+    const eyeCmds = r.commands.filter((c) => c.kind === 'eyes_on_road' && c.tMs >= 100_000);
+    expect(eyeCmds.map((c) => c.action)).toEqual(['start', 'stop']);
+    expect(eyeCmds[1]!.tMs).toBe(crit[0]!.tMs);
+    expect(r.invariantViolations).toBe(0);
     const end = r.events.find((e) => e.kind === 'episode_end' && e.tMs >= 100_000);
     expect(end).toMatchObject({ shallow: true });
+  });
+});
+
+describe('S-NODOFF-SLOWDROOP (review-C7 Round 6 pin; NC-C7-18): a lid that droops for d s before closing', () => {
+  // 60 km/h: the lid at 0.25 (shallow) for d s from 100 s, then closed at 0.05 ± 0.03 until 108 s. The first alert
+  // is always at 1.0 s; the sleep Critical at d + 1.0 s, capped by F3 at 6 s. From 1.0 s the
+  // Tier 2 eyes_on_road RUNS until the Critical replaces it. A droop shorter than F1's time is deep by then: F1 at
+  // 1.0 s. The deep run is decided by the median of 3 (1–2 frames). Measured (8 / 15 fps): d 0.5 → a Critical at 1.00 s;
+  // 1.0 → 2.13 / 2.07; 1.5 → 2.63 / 2.60; 2.5 → 3.63 / 3.60.
+  const cases: [number, number][] = [];
+  for (const fps of [8, 15]) for (const d of [0.5, 1, 1.5, 2.5]) cases.push([fps, d]);
+  test.each(cases)('%i fps, droop %f s', (fps, d) => {
+    const driver: DriverFn = (t, r) => ({
+      gaze: onRoad(r),
+      openness: t >= 100 && t < 100 + d ? 0.25 : t >= 100 + d && t < 108 ? 0.05 : blinkOpenness(t),
+      speedKmh: 60,
+    });
+    const r = replayItems(synthDrive({ fps, seconds: 115, seed: 3, source: 'geometric', driver, motion: true, lidNoise: 0.03 }), C, DEFAULT_INIT, { keepOpen: true });
+    const frame = 1000 / fps;
+    const after = r.commands.filter((c) => c.tMs >= 100_000 && c.tMs < 110_000);
+    const first = after[0]!;
+    expect(first.action).toBe('start');
+    expect(first.tMs - 100_000).toBeGreaterThanOrEqual(1000 - 1e-6);
+    expect(first.tMs - 100_000).toBeLessThanOrEqual(1000 + frame + 1e-6);
+    const crit = after.find((c) => c.tier === 3 && c.action === 'start')!;
+    expect(crit).toBeDefined();
+    // deep before F1's time: F1 at 1.0 s; else the deep run's 1.0 s (+ the median-3 deep decision's 1–2 frames)
+    const want = d < 1 ? 1000 : Math.min(6000, (d + 1) * 1000);
+    expect(crit.tMs - 100_000).toBeGreaterThanOrEqual(want - 1e-6);
+    expect(crit.tMs - 100_000).toBeLessThanOrEqual(want + 2 * frame + 1e-6);
+    if (first.kind === 'eyes_on_road') {
+      // running from its start to the Critical: its only stop is at the Critical's start
+      const eyes = after.filter((c) => c.kind === 'eyes_on_road');
+      expect(eyes.map((c) => c.action)).toEqual(['start', 'stop']);
+      expect(eyes[1]!.tMs).toBe(crit.tMs);
+    } else expect(first.tier).toBe(3);
   });
 });
