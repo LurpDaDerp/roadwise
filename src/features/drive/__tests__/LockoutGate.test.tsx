@@ -13,6 +13,7 @@ import { DriveProvider } from '@/drive/DriveProvider';
 import type { DriveHost, DriveState } from '@/drive/host';
 import { DisputeSheet } from '@/features/trips/DisputeSheet';
 import { ThemeProvider } from '@/ui';
+import { HUD } from '@/ui/drive';
 
 import { hudCopy } from '../hudCopy';
 import { HudRouteScreen, KEEP_AWAKE_TAG, LockoutGate } from '../LockoutGate';
@@ -213,7 +214,10 @@ describe('LockoutGate: the overlay', () => {
     const app = await renderApp(STOPPED, ['/home']);
     await app.push(MOVING);
     expect(screen.getByTestId('hud-screen')).toBeTruthy();
-    expect(screen.getByTestId('hud-touch-shield')).toBeTruthy();
+    // The only controls are the two hold-to-act buttons.
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(screen.getByTestId('hud-sos')).toBeTruthy();
+    expect(screen.getByTestId('hud-end')).toBeTruthy();
     const below = screen.getByText('/home', { includeHiddenElements: true });
     expect(isHiddenFromAccessibility(below)).toBe(true);
     const underlay = screen.getByTestId('lockout-underlay', { includeHiddenElements: true });
@@ -269,7 +273,7 @@ describe('LockoutGate: what it dismisses at the onset', () => {
     expect(screen.getByText('trip detail', { includeHiddenElements: true })).toBeTruthy();
   });
 
-  test('N-I1: lockout begins on /drive/hud — the HUD route survives, no second HUD, and C6 appears at the next stop', async () => {
+  test('N-I1: lockout begins on /drive/hud — the HUD route survives, no second HUD, and End is there at the next stop', async () => {
     const app = await renderApp(STOPPED, ['/home', '/drive/hud']);
     await app.push(MOVING);
     expect(mockRouter.dismissAll).not.toHaveBeenCalled();
@@ -279,7 +283,7 @@ describe('LockoutGate: what it dismisses at the onset', () => {
     expect(isHiddenFromAccessibility(screen.getByTestId('hud-screen'))).toBe(false);
     await app.push(STOPPED);
     await act(() => jest.advanceTimersByTime(0));
-    expect(screen.getByRole('button', { name: hudCopy.stopped.endDrive })).toBeTruthy();
+    expect(screen.getByRole('button', { name: hudCopy.hud.endLabel })).toBeTruthy();
   });
 
   test('lockout begins on /drive/pocket: nothing extra', async () => {
@@ -318,16 +322,17 @@ describe('LockoutGate: what it dismisses at the onset', () => {
 });
 
 describe('LockoutGate: keep-awake and Android back', () => {
-  test('keep-awake is on for a mounted trip while another route shows, and off when it ends', async () => {
+  test('keep-awake is on for a mounted trip while another route shows, and off once parked', async () => {
     const app = await renderApp({}, ['/home']);
     expect(keepAwake.activateKeepAwakeAsync).not.toHaveBeenCalled();
     await app.push(STOPPED);
     expect(keepAwake.activateKeepAwakeAsync).toHaveBeenCalledWith(KEEP_AWAKE_TAG);
     await app.push(MOVING);
-    await app.push({ status: 'ending', lockedOut: false, speedMps: 0 });
     expect(keepAwake.deactivateKeepAwake).not.toHaveBeenCalled();
-    await app.push({ status: 'armed', clientTripId: null });
+    // `ending` is the parked window before auto-end: the screen may sleep again.
+    await app.push({ status: 'ending', lockedOut: false, speedMps: 0 });
     expect(keepAwake.deactivateKeepAwake).toHaveBeenCalledWith(KEEP_AWAKE_TAG);
+    await app.push({ status: 'armed', clientTripId: null });
     expect(keepAwake.activateKeepAwakeAsync).toHaveBeenCalledTimes(1);
   });
 
@@ -364,12 +369,13 @@ describe('LockoutGate: keep-awake and Android back', () => {
   });
 });
 
-test('the overlay HUD is the black HUD world', async () => {
+test('the overlay HUD is the ink-black HUD world, and a tap on End ends nothing', async () => {
   const app = await renderApp(STOPPED, ['/home']);
   await app.push(MOVING);
   const root = StyleSheet.flatten(screen.getByTestId('hud-screen').props.style);
-  expect(root.backgroundColor).toBe('#000000');
-  await fireEvent.press(screen.getByTestId('hud-touch-shield'));
+  expect(root.backgroundColor).toBe(HUD.day.ground);
+  await fireEvent.press(screen.getByTestId('hud-end'));
+  await act(() => jest.advanceTimersByTime(5000));
   expect(app.host.end).not.toHaveBeenCalled();
 });
 

@@ -1,9 +1,10 @@
 import { CONSTANTS } from '@scoring';
 
-import type { AlertDecision, AlertKind, AlertLevel, AlertVoiceKey } from '@/core/alerts/types';
+import type { AlertLevel } from '@/core/alerts/types';
 import { limitActionable } from '@/core/detectors/common';
 import type { LimitSample } from '@/core/engine/types';
-import { t } from '@/i18n';
+
+import type { HaloLevel } from './hudTokens';
 
 /**
  * The one place the HUD decides what it may display (§13.2: unknown is "—", never a stale or
@@ -40,51 +41,71 @@ export function hudLimitMph(limit: LimitSample | null, speedKnown: boolean): num
 }
 
 /**
- * Past the tolerance over a limit the sign itself would show, on a speed the readout itself would
- * show. Instantaneous: this is the readout's state (C3), not the arbiter's alert (§13.4).
- *
- * Judged on the RAW m/s values, not the rounded numerals — deliberately. It is the same comparison
- * the speeding detector and arbiter make (`speed − limit > SPEEDING_TOLERANCE_MPS`), so the readout
- * turns red exactly when the app would count the second as speeding. The cost is that the numerals
- * can read, say, "40" against "35" while red (40.4 mph). Do not "fix" this to rounded values: the HUD
- * would then disagree with the alert.
+ * m/s over a limit the sign itself would show, on a speed the readout itself would show — negative
+ * under it; null when either is "—". Judged on the RAW m/s values, not the rounded numerals,
+ * deliberately: it is the same comparison the speeding detector and arbiter make, so the halo
+ * shifts colour exactly when the app would count the second as speeding.
+ */
+export function overLimitMps(
+  speedMps: number,
+  speedKnown: boolean,
+  limit: LimitSample | null
+): number | null {
+  if (hudSpeedMph(speedMps, speedKnown) === null) return null;
+  if (hudLimitMph(limit, speedKnown) === null) return null;
+  return speedMps - (limit!.limitMps as number);
+}
+
+/**
+ * Past the tolerance over a limit the sign would show. Instantaneous: this is the readout's state
+ * (C3), not the arbiter's alert (§13.4). The numerals can read, say, "40" against "35" while
+ * amber (40.4 mph); do not "fix" this to rounded values: the HUD would then disagree with the alert.
  */
 export function hudSpeeding(
   speedMps: number,
   speedKnown: boolean,
   limit: LimitSample | null
 ): boolean {
-  if (hudSpeedMph(speedMps, speedKnown) === null) return false;
-  if (hudLimitMph(limit, speedKnown) === null) return false;
-  return speedMps - (limit!.limitMps as number) > CONSTANTS.SPEEDING_TOLERANCE_MPS;
+  const over = overLimitMps(speedMps, speedKnown, limit);
+  return over !== null && over > CONSTANTS.SPEEDING_TOLERANCE_MPS;
 }
 
-// --- overlay words (SR3: no text longer than 3 words on the HUD while moving) -------------------
+// --- the status halo -----------------------------------------------------------------------------
+
+/** Well over: the tolerance plus 10 mph (16 km/h) makes the halo critical without waiting for L3. */
+export const HALO_CRITICAL_OVER_MPS = CONSTANTS.SPEEDING_TOLERANCE_MPS + 10 * MPS_PER_MPH;
+/** A harsh event (braking, acceleration, cornering) keeps the halo on attention this long. */
+export const HARSH_RECENT_MS = 10_000;
+
+export interface HaloInput {
+  /** `overLimitMps`: m/s over the shown limit, or null when there is no speed or limit to judge. */
+  overMps: number | null;
+  /** The level of the alert now showing, or null. */
+  alertLevel: AlertLevel | null;
+  /** Milliseconds since the last harsh event, or null when there was none this trip. */
+  harshAgeMs: number | null;
+}
+
+/**
+ * The status halo (and the numerals' colour), from the three things that can unsettle a drive.
+ * Critical: an urgent (L3) alert, or speeding well over. Attention: any other alert, a harsh event
+ * in the last `HARSH_RECENT_MS`, or over the tolerance. Calm otherwise.
+ */
+export function haloLevel(i: HaloInput): HaloLevel {
+  if (i.alertLevel === 3) return 'critical';
+  if (i.overMps !== null && i.overMps >= HALO_CRITICAL_OVER_MPS) return 'critical';
+  if (i.alertLevel === 1 || i.alertLevel === 2) return 'attention';
+  if (i.harshAgeMs !== null && i.harshAgeMs >= 0 && i.harshAgeMs < HARSH_RECENT_MS) {
+    return 'attention';
+  }
+  if (i.overMps !== null && i.overMps > CONSTANTS.SPEEDING_TOLERANCE_MPS) return 'attention';
+  return 'calm';
+}
+
+// --- words (SR3: no text longer than 3 words on the HUD while moving) ------------------------------
 
 export const HUD_MAX_WORDS = 3;
 
 export function countWords(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
-}
-
-/** Each kind's own short phrase, used when a decision's phrase is absent, not an alert or too long. */
-const KIND_WORDS: Record<AlertKind, Record<AlertLevel, AlertVoiceKey>> = {
-  speeding: { 1: 'alert.easeOff', 2: 'alert.easeOff', 3: 'alert.slowDown' },
-  phone: { 1: 'alert.phoneDown', 2: 'alert.phoneDown', 3: 'alert.phoneDown' },
-  eyes_off: { 1: 'alert.eyesUp', 2: 'alert.eyesUp', 3: 'alert.eyesUp' },
-  drowsy: { 1: 'alert.drowsy', 2: 'alert.drowsy', 3: 'alert.drowsy' },
-  break: { 1: 'alert.drowsy', 2: 'alert.drowsy', 3: 'alert.drowsy' },
-};
-
-/** Not alert phrases: the drive-start confirmation is spoken, never an overlay label. */
-const NOT_ALERT_WORDS: ReadonlySet<AlertVoiceKey> = new Set(['alert.recording']);
-
-/** The words an L2/L3 overlay prints: the decision's own phrase when it fits in three words. */
-export function overlayWords(decision: Pick<AlertDecision, 'kind' | 'level' | 'voice'>): string {
-  const own = decision.voice;
-  if (own && !NOT_ALERT_WORDS.has(own)) {
-    const words = t(own);
-    if (countWords(words) <= HUD_MAX_WORDS) return words;
-  }
-  return t(KIND_WORDS[decision.kind][decision.level]);
 }

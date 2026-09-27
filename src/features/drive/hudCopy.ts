@@ -4,16 +4,47 @@ import type { Href } from 'expo-router';
  * The words on the drive screens (C3, C4c, C6, the lockout card and the in-progress banner).
  *
  * Anything a driver may see while moving holds to SR3: three words at most, no sentence to read.
- * The stopped panel and the banner appear only while stopped or on a parked phone, so they may say
- * a little more, but each control still names its action. Spoken-only strings (screen-reader
- * labels, the stopped announcement) may be full sentences: they are heard, not read.
+ * The stopped panel and the in-progress banner appear only while stopped or on a parked phone, so
+ * they may say a little more, but each control still names its action. Spoken-only strings
+ * (screen-reader labels and hints, the stopped announcement) may be full sentences: they are
+ * heard, not read.
  *
  * English only for M3 (ruling U1 concern 3); the M8 i18n pass moves these into `en.ts`.
  */
 export const hudCopy = {
+  /** The mounted HUD (C3): its two hold-to-act controls and the trip timer. */
   hud: {
-    /** The full-screen shield while locked: a screen reader's name for it. */
-    shieldLabel: 'Drive screen. Touch and hold to mute the alert.',
+    sos: 'SOS',
+    sosLabel: 'Emergency call',
+    sosHint: 'Hold for two seconds to open the phone dialer with the emergency number.',
+    end: 'End drive',
+    endLabel: 'End drive',
+    endHint: 'Hold for two seconds to end the drive.',
+    timerLabel: (hours: number, minutes: number) =>
+      `Driving for ${hours} ${hours === 1 ? 'hour' : 'hours'} and ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`,
+  },
+  /** The top bar's one weather hazard (Open-Meteo), two words at most. */
+  hazard: {
+    thunderstorm: 'Thunderstorm',
+    icy_rain: 'Icy rain',
+    heavy_snow: 'Heavy snow',
+    dense_fog: 'Dense fog',
+    heavy_rain: 'Heavy rain',
+    strong_wind: 'Strong wind',
+    label: (words: string) => `Weather hazard: ${words}`,
+  },
+  /** The event banner: a few seconds of words during or just after a high-risk event. */
+  event: {
+    braking: 'Hard braking',
+    accel: 'Rapid acceleration',
+    cornering: 'Sharp turn',
+    speeding: 'Slow down',
+    phone: 'Phone down',
+    eyes_off: 'Eyes on road',
+    drowsy: 'Take a break',
+    break: 'Take a break',
+    /** Under "Take a break" on the two-hour suggestion: how long the drive has run. */
+    breakDetail: (hours: number) => `${hours} h driving`,
   },
   alerts: {
     /** SR3: three words; shown when the alert sounds failed to load (ruling H2 item 6). */

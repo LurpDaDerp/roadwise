@@ -6,7 +6,7 @@ import { t } from '@/i18n';
 
 import { fontFamilies } from '../fonts';
 import { hudLimitMph } from './hudSelectors';
-import { hudPalette, SIGN_NUMERAL_PT } from './hudTokens';
+import { hudPalette, SIGN_HEIGHT_PT, SIGN_NUMERAL_PT, SIGN_WIDTH_PT } from './hudTokens';
 
 export type SpeedSignProps = {
   /** The snapshot's `limit`, as the engine matched it. The sign decides whether it may show it. */
@@ -16,8 +16,6 @@ export type SpeedSignProps = {
   night: boolean;
 };
 
-const WIDTH = 96;
-const HEIGHT = 120; // the US regulatory sign's 4:5 (MUTCD R2-1, 24 × 30 in)
 const LEGEND_PT = 15;
 
 /**
@@ -71,8 +69,8 @@ export const SpeedSign = memo(SpeedSignView, speedSignPropsEqual);
 
 const styles = StyleSheet.create({
   face: {
-    width: WIDTH,
-    height: HEIGHT,
+    width: SIGN_WIDTH_PT,
+    height: SIGN_HEIGHT_PT,
     borderRadius: 10,
     padding: 4,
   },

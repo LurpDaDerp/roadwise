@@ -69,7 +69,8 @@ export function LockoutGate({ children }: { children: ReactNode }) {
     if (router.canDismiss()) router.dismissAll();
   }, [lockedOut, pathname, tripRoute, router]);
 
-  const keepAwake = mode === 'mounted' && tripRecords(status);
+  // Only while the car is on the move: once parked (`ending`), the screen may sleep again (battery).
+  const keepAwake = mode === 'mounted' && status === 'recording';
   useEffect(() => {
     if (!keepAwake) return;
     void activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});

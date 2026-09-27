@@ -138,12 +138,12 @@ describe('LockoutGate under the real router', () => {
     expect(app.getPathname()).toBe('/drive/hud');
     expect(screen.getAllByTestId('hud-screen')).toHaveLength(1);
     expect(screen.queryByText('home')).toBeNull();
-    expect(screen.getByTestId('hud-touch-shield')).toBeTruthy();
+    expect(screen.getByTestId('hud-end')).toBeTruthy();
 
-    // And at the next stop the HUD is still the route, with its stopped panel back.
+    // And at the next stop the HUD is still the route, its End still there.
     await drive.push({ speedMps: 0, lockedOut: false, stoppedPanel: true, stationarySinceTs: T + 60_000 });
     expect(app.getPathname()).toBe('/drive/hud');
     expect(screen.getAllByTestId('hud-screen')).toHaveLength(1);
-    expect(screen.getByTestId('stopped-panel')).toBeTruthy();
+    expect(screen.getByTestId('hud-end')).toBeTruthy();
   });
 });

@@ -1,13 +1,15 @@
 import { CONSTANTS } from '@scoring';
 
-import type { AlertDecision, AlertKind, AlertLevel } from '@/core/alerts/types';
 import type { LimitSample } from '@/core/engine/types';
 import {
   countWords,
+  HALO_CRITICAL_OVER_MPS,
+  haloLevel,
+  HARSH_RECENT_MS,
   hudLimitMph,
   hudSpeedMph,
   hudSpeeding,
-  overlayWords,
+  overLimitMps,
 } from '@/ui/drive/hudSelectors';
 
 const MPH = CONSTANTS.MPH;
@@ -101,50 +103,65 @@ describe('hudSpeeding — only on a speed and a limit the HUD would itself displ
   });
 });
 
-describe('overlayWords — at most three words on the HUD (SR3)', () => {
-  const decision = (kind: AlertKind, level: AlertLevel, voice?: AlertDecision['voice']) =>
-    ({
-      id: 'a',
-      kind,
-      level,
-      ts: 0,
-      ...(voice ? { voice } : null),
-    }) as AlertDecision;
-
-  test("uses the decision's own phrase", () => {
-    expect(overlayWords(decision('phone', 2, 'alert.phoneDown'))).toBe('Phone down');
-    expect(overlayWords(decision('speeding', 3, 'alert.slowDown'))).toBe('Slow down');
+describe('overLimitMps — the raw margin, gated exactly like the sign and the readout', () => {
+  test('signed m/s over the shown limit', () => {
+    expect(overLimitMps(45 * MPH, true, limit(35))).toBeCloseTo(10 * MPH, 6);
+    expect(overLimitMps(30 * MPH, true, limit(35))).toBeCloseTo(-5 * MPH, 6);
   });
 
-  test('the four-word break suggestion falls back to a three-word label', () => {
-    const words = overlayWords(decision('break', 2, 'alert.takeABreak'));
-    expect(countWords(words)).toBeLessThanOrEqual(3);
-    expect(words).toBe('Take a break');
+  test('null without a speed or a limit the HUD would show', () => {
+    expect(overLimitMps(45 * MPH, false, limit(35))).toBeNull();
+    expect(overLimitMps(45 * MPH, true, limit(35, { matchConfidence: 0.65 }))).toBeNull();
+    expect(overLimitMps(45 * MPH, true, UNKNOWN)).toBeNull();
+    expect(overLimitMps(45 * MPH, true, null)).toBeNull();
+  });
+});
+
+describe('haloLevel — the status halo, a pure function of what can unsettle a drive', () => {
+  const tol = CONSTANTS.SPEEDING_TOLERANCE_MPS;
+  const quiet = { overMps: null, alertLevel: null, harshAgeMs: null } as const;
+
+  test('calm with nothing to report, including under the limit and at the tolerance', () => {
+    expect(haloLevel(quiet)).toBe('calm');
+    expect(haloLevel({ ...quiet, overMps: -3 })).toBe('calm');
+    expect(haloLevel({ ...quiet, overMps: tol })).toBe('calm');
   });
 
-  const kinds: AlertKind[] = ['speeding', 'phone', 'eyes_off', 'drowsy', 'break'];
-  const levels: AlertLevel[] = [1, 2, 3];
-  const voices: (AlertDecision['voice'] | undefined)[] = [
-    undefined,
-    'alert.easeOff',
-    'alert.slowDown',
-    'alert.phoneDown',
-    'alert.eyesUp',
-    'alert.drowsy',
-    'alert.takeABreak',
-    'alert.recording',
-  ];
-  test('every kind, level and phrase combination stays within three words', () => {
-    for (const k of kinds)
-      for (const l of levels)
-        for (const v of voices) {
-          const words = overlayWords(decision(k, l, v));
-          expect(words.length).toBeGreaterThan(0);
-          expect(countWords(words)).toBeLessThanOrEqual(3);
-        }
+  test('over the tolerance is attention; the tolerance plus 10 mph is critical', () => {
+    expect(haloLevel({ ...quiet, overMps: tol + 0.1 })).toBe('attention');
+    expect(HALO_CRITICAL_OVER_MPS).toBeCloseTo(tol + 10 * MPH, 6);
+    expect(haloLevel({ ...quiet, overMps: HALO_CRITICAL_OVER_MPS - 0.01 })).toBe('attention');
+    expect(haloLevel({ ...quiet, overMps: HALO_CRITICAL_OVER_MPS })).toBe('critical');
   });
 
-  test('the drive-start phrase is not an alert and never labels one', () => {
-    expect(overlayWords(decision('phone', 2, 'alert.recording'))).toBe('Phone down');
+  test('an L1 or L2 alert is attention, an L3 alert is critical, whatever the speed', () => {
+    expect(haloLevel({ ...quiet, alertLevel: 1 })).toBe('attention');
+    expect(haloLevel({ ...quiet, alertLevel: 2 })).toBe('attention');
+    expect(haloLevel({ ...quiet, alertLevel: 3 })).toBe('critical');
+    expect(haloLevel({ ...quiet, alertLevel: 3, overMps: -5 })).toBe('critical');
+    expect(haloLevel({ ...quiet, alertLevel: 1, overMps: HALO_CRITICAL_OVER_MPS })).toBe(
+      'critical'
+    );
   });
+
+  test('a harsh event in the last 10 s is attention; older, or none, is calm', () => {
+    expect(haloLevel({ ...quiet, harshAgeMs: 0 })).toBe('attention');
+    expect(haloLevel({ ...quiet, harshAgeMs: HARSH_RECENT_MS - 1 })).toBe('attention');
+    expect(haloLevel({ ...quiet, harshAgeMs: HARSH_RECENT_MS })).toBe('calm');
+    expect(haloLevel({ ...quiet, harshAgeMs: -1 })).toBe('calm');
+    expect(HARSH_RECENT_MS).toBe(10_000);
+  });
+
+  test('the parts combine to the most serious judgement', () => {
+    expect(haloLevel({ overMps: tol + 0.1, alertLevel: null, harshAgeMs: 0 })).toBe('attention');
+    expect(haloLevel({ overMps: tol + 0.1, alertLevel: 3, harshAgeMs: 0 })).toBe('critical');
+    expect(haloLevel({ overMps: HALO_CRITICAL_OVER_MPS, alertLevel: 1, harshAgeMs: 50_000 })).toBe(
+      'critical'
+    );
+  });
+});
+
+test('countWords counts words, not spaces', () => {
+  expect(countWords('  Take a break ')).toBe(3);
+  expect(countWords('')).toBe(0);
 });
