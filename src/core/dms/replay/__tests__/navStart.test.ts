@@ -100,6 +100,29 @@ describe('S-NAV-START-MIRRORS (review-C9 C9-1; NC-S1-3): a display, frequent mir
   });
 });
 
+describe('S-NAV-START-HIGH (review-C9 C9r1-1; NC-S1-H): a display mounted ABOVE the road line', () => {
+  // The review's probe: a display at (6°, 8°), (0°, 9°) or (10°, 7°), watched 20, 40 or 60 % of every 10 s for the whole
+  // drive, the usual mirror checks every 15 s and the road for 1.3 s after each. Rule (c) (the higher) picked a 60 %
+  // display: a pass 8–13° off in 6 of 6. C9 round 2: the returns (≥ 6, ≥ 80 % nearer one cluster) decide BEFORE the
+  // pitch when they say more than the clusters' occupancy would (binomial tail ≤ returnAlpha, 0.05). Measured: every
+  // first pass correct (0.1–0.8°), at 60 or 90 s.
+  // Stated (a separate limit, reported): after the pass, with a 60 % display 7.6° above the road for the whole drive,
+  // the rolling path's small follow creeps toward it in one run ((0°, 9°), seed 1: 4.1° by 165 s; (0°, 9°) 40 %,
+  // seed 1: 1.8°). The per-frame mode of the two merges between them, and the pitch-down cap guards only a LOW display.
+  // The known limit, recorded: with NO mirror checks there are no returns, and a 60 % high display is passed onto
+  // (8–13° off, 6 of 6), as before C9.
+  const cases: [number, number, number, number][] = [];
+  for (const [y, p] of [[6, 8], [0, 9], [10, 7]] as const) for (const share of [0.2, 0.4, 0.6]) for (const seed of [1, 2]) cases.push([y, p, share, seed]);
+  test.each(cases)('(%i°, %i°) at %f, seed %i: the first pass on the road; never onto the display', (y, p, share, seed) => {
+    const truth = truthOf(seed);
+    const d = navDrive({ seed, share, at: { yaw: y, pitch: p }, startS: 240, seconds: 200, roadAfterMirrorS: 1.3 });
+    const t = firstCalS(d);
+    if (t !== null) expect(angularDistanceDeg(d.passes[0]!.centre, truth)).toBeLessThanOrEqual(1.5);
+    // never onto the display (≥ 7.6° from the road in the engine's frame): the post-pass creep stays short of halfway
+    expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(4.5);
+  });
+});
+
 describe('S-FIRST-CAL (review-C9, the cost pin): 20 normal starts calibrate as before', () => {
   // Before T9 (measured on the parent commit with the same drive): all 20 at 60.1 s, the first evaluation.
   const BEFORE_MEDIAN_S = 60.1;

@@ -71,13 +71,14 @@ function phoneRadius(cfg: Cfg): number {
 }
 
 /**
- * The road cluster of a window, 'wait' when two clusters cannot be told apart yet (or the only cluster is the phone
- * screen), null for an empty window.
+ * C9 round 2: the window's clusters (S1-1's detection: the top peak, then up to MAX_CLUSTERS − 1 more ≥ 2ρ from every
+ * one taken, each holding clusterMinShare within ρ and locally peaked on its own side), strongest first; [] for an
+ * empty window.
  */
-export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg): RoadChoice | 'wait' | null {
+export function findClusters(dirs: readonly WeightedDir[], o: Pick<RoadOpts, 'sigma' | 'rho' | 'kernelDeg'>, cfg: Cfg): AnglePair[] {
   const tc = cfg.calibration.twoCluster;
   const peaks = histogramPeaks(dirs, o.kernelDeg === undefined ? cfg : { calibration: { ...cfg.calibration, sigmaDeg: o.kernelDeg, kernelHalfBins: Math.ceil(3 * o.kernelDeg) } }, 12);
-  if (peaks.length === 0) return null;
+  if (peaks.length === 0) return [];
   const rho = o.rho ?? clusterRho(o.sigma);
   // C9 round 1 (C9-1): up to MAX_CLUSTERS clusters, the top peak and then each next peak ≥ 2ρ from every one taken
   // that holds clusterMinShare within ρ and is locally peaked on its own side (the frames nearer it than any cluster
@@ -96,6 +97,18 @@ export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg):
       takenAt.push(pk.at);
     }
   }
+  return taken;
+}
+
+/**
+ * The road cluster of a window, 'wait' when two clusters cannot be told apart yet (or the only cluster is the phone
+ * screen), null for an empty window.
+ */
+export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg): RoadChoice | 'wait' | null {
+  const tc = cfg.calibration.twoCluster;
+  const rho = o.rho ?? clusterRho(o.sigma);
+  const taken = findClusters(dirs, o, cfg);
+  if (taken.length === 0) return null;
   // C9 round 1 (C9-1): a cluster inside a default mirror rectangle relative to another cluster that is not itself a
   // mirror is a mirror (rule (b) first, on every pair): dropped before the choice. A frequent mirror then no longer
   // hides the road behind a display.
@@ -129,16 +142,43 @@ export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg):
   const bMirror = inMirror(b, a, cfg);
   const aMirror = inMirror(a, b, cfg);
   if (bMirror !== aMirror) return pick(bMirror ? a : b, 'mirror');
-  // (c) the higher
-  if (Math.abs(a.pitch - b.pitch) >= tc.pitchMinDeg) return pick(a.pitch > b.pitch ? a : b, 'pitch');
-  // (d) the returns
+  // (d) the returns: where the driver lands after a mirror check.
   const n = o.returns.length;
-  if (n < tc.returnMinN) return 'wait';
   let nearA = 0;
   for (const r of o.returns) if (angularDistanceDeg(r, a) < angularDistanceDeg(r, b)) nearA++;
-  if (nearA >= tc.returnShare * n) return pick(a, 'returns');
-  if (n - nearA >= tc.returnShare * n) return pick(b, 'returns');
+  const returnsPick = n < tc.returnMinN ? null : nearA >= tc.returnShare * n ? a : n - nearA >= tc.returnShare * n ? b : null;
+  // C9 round 2 (review-C9 C9r1-1): the returns go BEFORE the pitch prior (c) when they say more than the clusters'
+  // occupancy would: the binomial chance of at least that many returns landing on the picked cluster, were they to
+  // land in proportion to the two cores' weights, is ≤ returnAlpha. A display mounted ABOVE the road, watched 60 % of
+  // the time, with the driver back on the road after each check (returns ~100 % on a 30–40 % cluster) is then the
+  // returns' call, not the higher pitch's. Returns that merely follow the occupancy (a display watched 85 % of the
+  // time, taken straight back after each check) are no such evidence, and the pitch prior decides.
+  if (returnsPick !== null) {
+    const wa = shareNear(dirs, a, rho);
+    const wb = shareNear(dirs, b, rho);
+    const occ = wa + wb > 0 ? (returnsPick === a ? wa : wb) / (wa + wb) : 0.5;
+    const k = returnsPick === a ? nearA : n - nearA;
+    if (binomialTail(n, k, occ) <= tc.returnAlpha) return pick(returnsPick, 'returns');
+  }
+  // (c) the higher
+  if (Math.abs(a.pitch - b.pitch) >= tc.pitchMinDeg) return pick(a.pitch > b.pitch ? a : b, 'pitch');
+  // (d) side by side: the returns decide on their share alone, else wait
+  if (returnsPick !== null) return pick(returnsPick, 'returns');
   return 'wait';
+}
+
+/** P(X ≥ k) for X ~ Binomial(n, p). */
+export function binomialTail(n: number, k: number, p: number): number {
+  if (k <= 0) return 1;
+  if (k > n) return 0;
+  const q = Math.min(1, Math.max(0, p));
+  let term = Math.pow(1 - q, n); // P(X = 0)
+  let cdf = 0;
+  for (let i = 0; i < k; i++) {
+    cdf += term;
+    term = q >= 1 ? 0 : (term * (n - i) * q) / ((i + 1) * (1 - q));
+  }
+  return Math.max(0, 1 - cdf);
 }
 
 /**

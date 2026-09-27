@@ -2,7 +2,7 @@
 import { angularDistanceDeg } from '../angles';
 import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
 import type { WeightedDir } from '../histogram';
-import { chooseRoad, fixationMedians, roadConfidence, roadSide, type RoadChoice } from '../stage1';
+import { binomialTail, chooseRoad, fixationMedians, roadConfidence, roadSide, type RoadChoice } from '../stage1';
 import type { AnglePair } from '../types';
 import { gauss, rng } from '../__fixtures__/synth';
 
@@ -95,6 +95,33 @@ describe('chooseRoad (S1-1)', () => {
   test('a second peak within 2ρ is the first cluster\'s own spread, not a cluster', () => {
     const ch = road(chooseRoad(clusters([[R, 120], [{ yaw: R.yaw + 6, pitch: R.pitch }, 80]]), NONE, C));
     expect(ch.other).toBeNull();
+  });
+});
+
+describe('C9 round 2 (review-C9 C9r1-1): the returns before the pitch, when beyond the occupancy', () => {
+  const R = { yaw: 2, pitch: -3 };
+  const HIGH = { yaw: 2, pitch: 6 };
+  const back = (nRoad: number, nDisp: number, disp: AnglePair) => [...Array.from({ length: nRoad }, () => R), ...Array.from({ length: nDisp }, () => disp)];
+  test('a 60 % display ABOVE the road, the driver back on the road after each check: the returns pick the road', () => {
+    const dirs = clusters([[HIGH, 120], [R, 80]]);
+    expect(road(chooseRoad(dirs, NONE, C)).road.pitch).toBeGreaterThan(3); // the pitch prior alone: the display
+    const ch = road(chooseRoad(dirs, { ...NONE, returns: back(8, 0, HIGH) }, C));
+    expect(ch.rule).toBe('returns');
+    expect(near(ch.road, R)).toBe(true);
+  });
+  test('returns that only follow the occupancy (an 85 % display taken straight back) leave it to the pitch', () => {
+    const LOW = { yaw: 11, pitch: -10 };
+    const dirs = clusters([[LOW, 170], [R, 30]]);
+    const ch = road(chooseRoad(dirs, { ...NONE, returns: back(0, 8, LOW) }, C));
+    expect(ch.rule).toBe('pitch');
+    expect(near(ch.road, R)).toBe(true);
+  });
+  test('binomialTail', () => {
+    expect(binomialTail(8, 8, 0.5)).toBeCloseTo(1 / 256, 10);
+    expect(binomialTail(8, 0, 0.3)).toBe(1);
+    expect(binomialTail(8, 9, 0.3)).toBe(0);
+    expect(binomialTail(10, 3, 0.2)).toBeCloseTo(0.3222004736, 8);
+    expect(binomialTail(6, 6, 1)).toBeCloseTo(1, 12);
   });
 });
 
