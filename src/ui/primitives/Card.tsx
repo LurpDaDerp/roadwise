@@ -35,8 +35,8 @@ export function Card({ children, variant = 'plain', padded = true, style, testID
       ]}
     >
       {isLicense ? (
-        // The laminate: it leaves the card face as the surface colour and only builds into teal,
-        // lilac and pink across the top-right third, so there is no seam to give the overlay away.
+        // The laminate: it leaves the card face as the surface colour and only builds into navy,
+        // yellow and gold across the top-right third, so there is no seam to give the overlay away.
         <LinearGradient
           pointerEvents="none"
           colors={[t.colors.surface, t.colors.sheen[0], t.colors.sheen[1], t.colors.sheen[2]]}

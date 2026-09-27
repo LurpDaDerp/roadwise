@@ -48,7 +48,7 @@ function isGrade(kind: StampKind): kind is Grade {
 }
 
 /**
- * A rubber stamp on the licence: a double-ruled box, inked in the state magenta (or ID blue for a
+ * A rubber stamp on the licence: a double-ruled box, inked in the stamp gold (or the accent for a
  * data-quality grade), pressed at eight degrees. The wash behind the letters is the ink bleeding
  * into the paper, and it is what keeps the word legible when the stamp lands across a printed
  * line such as the score ring. Motion is a single thump on mount; with reduce motion on the

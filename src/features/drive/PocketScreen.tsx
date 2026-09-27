@@ -86,7 +86,7 @@ export function PocketScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000000' },
+  root: { flex: 1, backgroundColor: tokens.color.hud.bg },
   fill: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: tokens.space.sm },
   label: { color: POCKET_INK, fontFamily: fontFamilies.field, textAlign: 'center' },
 });

@@ -11,10 +11,10 @@ import { hudCopy } from './hudCopy';
 
 /**
  * The quiet print of the drive's dark screens (the pocket screen, the parked card's second line):
- * dim next to the HUD's lit numerals, yet still 5.3:1 on black, so a word is legible to anyone who
- * does look.
+ * a navy-tinted grey, dim next to the HUD's lit numerals, yet still 5.3:1 on black, so a word is
+ * legible to anyone who does look.
  */
-export const POCKET_INK = '#7F7F7F';
+export const POCKET_INK = '#6E8299';
 
 const TITLE_PT = 32;
 const LINE_PT = 20;
@@ -78,7 +78,7 @@ export function ParkedOnlyCard() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: tokens.color.hud.bg,
     alignItems: 'center',
     justifyContent: 'center',
     gap: tokens.space.lg,

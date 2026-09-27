@@ -27,8 +27,8 @@ import { ICON, NOTICE_BORDER, TOUCH } from './layout';
  * - The map is hidden from assistive technology. A screen reader is given the timeline, which
  *   says everything the pins do in words; a map that announced "Google Map" and nothing else
  *   would be noise between two useful headings.
- * - The route is drawn in **two inks and two patterns**: solid ID blue within the limit, dashed
- *   stamp magenta where a speeding episode was recorded (§14: never colour alone). The legend
+ * - The route is drawn in **two inks and two patterns**: solid accent navy within the limit, dashed
+ *   danger red where a speeding episode was recorded (§14: never colour alone). The legend
  *   under the map names both, so the pattern is readable without the map.
  */
 export type MapsModule = typeof import('react-native-maps');
@@ -69,7 +69,7 @@ const PIN_SIZE = 28;
  * risks a pale blue line on pale roads. Ink and *pattern* both carry the meaning (§14), and the
  * legend beside the map is drawn from the same two values.
  */
-const MAP_INK = { normal: tokens.color.light.accent, over: tokens.color.light.stamp } as const;
+const MAP_INK = { normal: tokens.color.light.accent, over: tokens.color.light.danger } as const;
 
 function Legend() {
   const th = useTheme();

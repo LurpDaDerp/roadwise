@@ -39,7 +39,7 @@ export type ScoreRingProps = {
 };
 
 /**
- * The score as a printed gauge: a hairline track, one arc of ID blue drawn to the score, and the
+ * The score as a printed gauge: a hairline track, one arc of the accent drawn to the score, and the
  * numeral as the largest text on the card. No glow, no gradient, one colour whatever the band —
  * the band is a word under the number, never a colour the driver has to decode. The arc draws in
  * over 600 ms; with reduce motion on it is drawn already.

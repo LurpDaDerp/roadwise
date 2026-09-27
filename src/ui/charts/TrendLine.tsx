@@ -48,7 +48,7 @@ const WASH: Record<ScoreBand, number> = {
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
- * The long-term score by period: a 2 dp line of ID blue with ringed markers, the band floors as
+ * The long-term score by period: a 2 dp line of the accent with ringed markers, the band floors as
  * hairlines with their numerals in the gutter, and the four bands washed behind the line. Only
  * the two ends carry a value, and the last one names its band — the rest is the table's job. A
  * period with no score breaks the line rather than being bridged. Drawn for a card face: the

@@ -52,13 +52,13 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSLocationWhenInUseUsageDescription:
-        'RoadWise reads your speed and the road you are on while you drive so it can coach you and score the drive.',
+        'RoadWise uses your location during a drive to measure speed and distance and to look up speed limits.',
       NSLocationAlwaysAndWhenInUseUsageDescription:
-        'With Always access, RoadWise can start recording a drive by itself when your phone senses you are in a moving car, so you never have to open the app.',
+        'RoadWise uses your location in the background to detect and record drives automatically, even when the app is closed. If you turn on family location sharing, it also shares your latest location with your family.',
       NSMotionUsageDescription:
         'Motion data tells RoadWise when a drive starts and ends, and helps spot hard braking or phone handling.',
       NSCameraUsageDescription:
-        'Optional camera coaching looks for eyes off the road. Frames are processed on your phone and never saved or uploaded.',
+        'Optional camera coaching checks for looking away from the road and signs of drowsiness. Frames are processed on your phone and never saved or uploaded.',
       UIBackgroundModes: ['location'],
     },
   },
@@ -74,7 +74,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
     // tile and nothing crashes. iOS uses Apple Maps and needs no key.
     config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },
-    adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000000' },
+    adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
     // Left out when there is no FCM credential: see `googleServicesFile` above.
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
     permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'],
@@ -90,8 +90,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     // RECORD_AUDIO permission.
     ['expo-audio', { microphonePermission: false, recordAudioAndroid: false, enableBackgroundPlayback: true }],
     // The Android status-bar icon: the app mark as a white glyph on transparent (96 x 96), tinted
-    // ID blue in the shade.
-    ['expo-notifications', { icon: './assets/notification-icon.png', color: '#1C3F94' }],
+    // school-bus yellow in the shade.
+    ['expo-notifications', { icon: './assets/notification-icon.png', color: '#FFC300' }],
     'expo-font',
     'expo-web-browser',
     [
@@ -103,7 +103,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
         isAndroidMotionActivityEnabled: true,
       },
     ],
-    ['expo-splash-screen', { image: './assets/splash.png', imageWidth: 160, resizeMode: 'contain', backgroundColor: '#000000' }],
+    ['expo-splash-screen', { image: './assets/splash.png', imageWidth: 160, resizeMode: 'contain', backgroundColor: '#000814' }],
   ],
   experiments: { typedRoutes: true },
 });

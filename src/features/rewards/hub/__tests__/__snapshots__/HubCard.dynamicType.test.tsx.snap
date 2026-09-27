@@ -6,7 +6,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
     [
       {
         "backgroundColor": "#FFFFFF",
-        "borderColor": "#C9D3E2",
+        "borderColor": "#C6D3E2",
         "borderRadius": 16,
         "borderWidth": 1,
         "gap": 12,
@@ -22,9 +22,9 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
     colors={
       [
         4294967295,
-        4284008384,
-        4291410160,
-        4294361575,
+        4291812587,
+        4294956554,
+        4294951680,
       ]
     }
     endPoint={
@@ -91,14 +91,14 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
         style={
           [
             {
-              "color": "#5A6684",
+              "color": "#566B84",
               "fontFamily": "System",
               "fontSize": 24,
               "fontWeight": "400",
               "lineHeight": 32,
             },
             {
-              "borderBottomColor": "#6B7A99",
+              "borderBottomColor": "#5E7690",
               "borderBottomWidth": 0.5,
               "letterSpacing": 1.2,
               "paddingBottom": 2,
@@ -120,7 +120,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
           style={
             [
               {
-                "color": "#14213D",
+                "color": "#001D3D",
                 "fontFamily": "B612Mono_700Bold",
                 "fontSize": 80,
                 "fontVariant": [
@@ -166,14 +166,14 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
         style={
           [
             {
-              "color": "#5A6684",
+              "color": "#566B84",
               "fontFamily": "System",
               "fontSize": 24,
               "fontWeight": "400",
               "lineHeight": 32,
             },
             {
-              "borderBottomColor": "#6B7A99",
+              "borderBottomColor": "#5E7690",
               "borderBottomWidth": 0.5,
               "letterSpacing": 1.2,
               "paddingBottom": 2,
@@ -200,7 +200,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
           style={
             [
               {
-                "color": "#14213D",
+                "color": "#001D3D",
                 "fontFamily": "B612_700Bold",
                 "fontSize": 44,
                 "lineHeight": 56,
@@ -223,8 +223,8 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
           importantForAccessibility="no-hide-descendants"
           style={
             {
-              "backgroundColor": "#F2F5FA",
-              "borderColor": "#6B7A99",
+              "backgroundColor": "#EDF2F8",
+              "borderColor": "#5E7690",
               "borderRadius": 999,
               "borderWidth": 0.5,
               "height": 8,
@@ -236,7 +236,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
           <View
             style={
               {
-                "backgroundColor": "#1C3F94",
+                "backgroundColor": "#003566",
                 "height": "100%",
                 "width": "63.6%",
               }
@@ -249,7 +249,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
           style={
             [
               {
-                "color": "#4A5878",
+                "color": "#3D5470",
                 "fontFamily": "System",
                 "fontSize": 26,
                 "fontWeight": "400",
@@ -282,14 +282,14 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
         style={
           [
             {
-              "color": "#5A6684",
+              "color": "#566B84",
               "fontFamily": "System",
               "fontSize": 24,
               "fontWeight": "400",
               "lineHeight": 32,
             },
             {
-              "borderBottomColor": "#6B7A99",
+              "borderBottomColor": "#5E7690",
               "borderBottomWidth": 0.5,
               "letterSpacing": 1.2,
               "paddingBottom": 2,
@@ -326,7 +326,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
             style={
               [
                 {
-                  "color": "#14213D",
+                  "color": "#001D3D",
                   "fontFamily": "B612_700Bold",
                   "fontSize": 56,
                   "lineHeight": 68,
@@ -353,7 +353,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
             style={
               [
                 {
-                  "color": "#14213D",
+                  "color": "#001D3D",
                   "fontFamily": "System",
                   "fontSize": 30,
                   "fontWeight": "400",
@@ -382,7 +382,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
             style={
               [
                 {
-                  "color": "#1C3F94",
+                  "color": "#003566",
                   "fontSize": 16,
                 },
                 undefined,
@@ -402,7 +402,7 @@ exports[`the hub card at 200 % Dynamic Type snapshot 1`] = `
             style={
               [
                 {
-                  "color": "#14213D",
+                  "color": "#001D3D",
                   "fontFamily": "System",
                   "fontSize": 26,
                   "fontWeight": "400",

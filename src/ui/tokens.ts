@@ -3,9 +3,9 @@ import type { TextStyle } from 'react-native';
 import { fontFamilies } from './fonts';
 
 /**
- * "The License Card": the app is the licence a new driver is proud of. Card-white faces on a cool
- * desk grey, ink navy print, ID blue on every control, rubber-stamp magenta for states, and a
- * laminate sheen that only ever sits on a card face. Dark mode is the same card under blacklight.
+ * Navy and gold: ink-black and prussian-blue grounds with regal-navy raised faces, school-bus
+ * yellow on every control and gold for stamps and highlights. Light mode is the same palette on a
+ * pale navy-tinted ground, with navy controls and a darkened gold wherever gold has to be read.
  *
  * Every value here is measured, not eyeballed — `src/ui/__tests__/tokens.test.ts` holds the floor.
  */
@@ -38,7 +38,7 @@ export type ColorSet = {
   /** Rubber-stamp ink for states: PROVISIONAL, SAFE DAY, PASSENGER, DISPUTED. */
   stamp: string;
   stampFaint: string;
-  /** Laminate sheen, teal to lilac to pink. Card faces only. */
+  /** Laminate sheen, navy to yellow to gold. Card faces only. */
   sheen: [string, string, string];
 };
 
@@ -78,61 +78,61 @@ export type TypeScale = Record<
 >;
 
 const light: ColorSet = {
-  bg: '#EEF1F5',
-  bgElevated: '#F7F9FC',
+  bg: '#EEF3F9',
+  bgElevated: '#F6F9FC',
   surface: '#FFFFFF',
-  surfaceRaised: '#F2F5FA',
-  border: '#C9D3E2',
-  borderStrong: '#6B7A99',
-  divider: '#DFE6F0',
-  text: '#14213D',
-  textMuted: '#4A5878',
-  textSubtle: '#5A6684',
+  surfaceRaised: '#EDF2F8',
+  border: '#C6D3E2',
+  borderStrong: '#5E7690',
+  divider: '#DCE5EF',
+  text: '#001D3D',
+  textMuted: '#3D5470',
+  textSubtle: '#566B84',
   textInverse: '#FFFFFF',
-  accent: '#1C3F94',
-  accentText: '#FFFFFF',
-  accentFaint: '#E7ECF8',
-  danger: '#B01B2E',
-  dangerFaint: '#FBE9EB',
-  warning: '#9A6400',
-  warningFaint: '#FBF1DF',
-  success: '#0F6B47',
-  successFaint: '#E4F2EB',
-  info: '#10707A',
-  infoFaint: '#E2F1F2',
-  scrim: 'rgba(20, 33, 61, 0.55)',
-  stamp: '#C81870',
-  stampFaint: '#FAE7F0',
-  sheen: ['#58C7C0', '#C9B8F0', '#F6C1E7'],
+  accent: '#003566',
+  accentText: '#FFD60A',
+  accentFaint: '#E3ECF6',
+  danger: '#B3202F',
+  dangerFaint: '#FBE8EA',
+  warning: '#A34E00',
+  warningFaint: '#FCEEDC',
+  success: '#0B6E5A',
+  successFaint: '#E0F2EE',
+  info: '#1B5E8C',
+  infoFaint: '#E2EEF7',
+  scrim: 'rgba(0, 8, 20, 0.55)',
+  stamp: '#7A5C00',
+  stampFaint: '#FFF4CC',
+  sheen: ['#CFDCEB', '#FFD60A', '#FFC300'],
 };
 
 const dark: ColorSet = {
-  bg: '#0B1230',
-  bgElevated: '#101740',
-  surface: '#141C40',
-  surfaceRaised: '#1D2757',
-  border: '#2C3768',
-  borderStrong: '#8FA0CC',
-  divider: '#222C58',
-  text: '#E8EEFF',
-  textMuted: '#A9B8E0',
-  textSubtle: '#8494C2',
-  textInverse: '#0B1230',
-  accent: '#8FB4FF',
-  accentText: '#0B1230',
-  accentFaint: '#182253',
-  danger: '#FF8A9E',
-  dangerFaint: '#3B1526',
-  warning: '#FFC24D',
-  warningFaint: '#3A2A10',
-  success: '#5FD6A4',
-  successFaint: '#10331F',
-  info: '#6FD8D2',
-  infoFaint: '#0F3136',
-  scrim: 'rgba(3, 6, 20, 0.65)',
-  stamp: '#FF4FA3',
-  stampFaint: '#3A132B',
-  sheen: ['#58C7C0', '#C9B8F0', '#F6C1E7'],
+  bg: '#000814',
+  bgElevated: '#001D3D',
+  surface: '#001D3D',
+  surfaceRaised: '#003566',
+  border: '#1C4370',
+  borderStrong: '#6F88A5',
+  divider: '#0E2F55',
+  text: '#E8EFF7',
+  textMuted: '#9DB0C6',
+  textSubtle: '#7F93AC',
+  textInverse: '#000814',
+  accent: '#FFC300',
+  accentText: '#000814',
+  accentFaint: '#2A2608',
+  danger: '#FF8A8A',
+  dangerFaint: '#3A1522',
+  warning: '#FF9F43',
+  warningFaint: '#3A2410',
+  success: '#4FD1B0',
+  successFaint: '#08332F',
+  info: '#7CC0F5',
+  infoFaint: '#0A2E4F',
+  scrim: 'rgba(0, 4, 10, 0.7)',
+  stamp: '#FFD60A',
+  stampFaint: '#332B05',
+  sheen: ['#003566', '#FFC300', '#FFD60A'],
 };
 
 const hud: HudSet = {

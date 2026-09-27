@@ -67,7 +67,7 @@ test('label overrides the word on a state stamp and the caption on a grade stamp
   expect(screen.getByTestId('grade').props.accessibilityLabel).toBe('Data quality C, GPS gaps');
 });
 
-test('a state stamp is inked in stamp magenta, a grade stamp in ID blue', async () => {
+test('a state stamp is inked in stamp gold, a grade stamp in the accent', async () => {
   await render(
     <>
       <Stamp kind="safeDay" testID="state" />

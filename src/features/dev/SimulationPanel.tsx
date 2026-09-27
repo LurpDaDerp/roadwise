@@ -45,7 +45,7 @@ import { DriveContext, DriveProvider } from '@/drive/DriveProvider';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
-import { Banner, Button, Card, Text, useTheme } from '@/ui';
+import { Banner, Button, Card, Text, tokens, useTheme } from '@/ui';
 
 import { corridorOf, createFakeLimits } from './fakeLimits';
 
@@ -590,5 +590,5 @@ function Choice({
 
 const styles = StyleSheet.create({
   label: { textTransform: 'uppercase', letterSpacing: 1.2 },
-  hudGround: { flex: 1, backgroundColor: '#000000' },
+  hudGround: { flex: 1, backgroundColor: tokens.color.hud.bg },
 });

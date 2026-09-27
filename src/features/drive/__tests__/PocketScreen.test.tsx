@@ -7,6 +7,7 @@ import type { DriveHost, DriveState } from '@/drive/host';
 import { contrastRatio, ThemeProvider } from '@/ui';
 
 import { hudCopy } from '../hudCopy';
+import { POCKET_INK } from '../ParkedOnlyCard';
 import { PocketScreen } from '../PocketScreen';
 
 const mockRouter = { replace: jest.fn(), push: jest.fn() };
@@ -186,7 +187,7 @@ describe('PocketScreen: sound alerts unavailable (ruling H2 item 6)', () => {
   test("drawn in the pocket screen's dim print; a tap at speed still does nothing", async () => {
     await renderPocket({ alertsAvailable: false, lockedOut: true });
     const words = screen.getByText(hudCopy.alerts.unavailable);
-    expect(StyleSheet.flatten(words.props.style).color).toBe('#7F7F7F');
+    expect(StyleSheet.flatten(words.props.style).color).toBe(POCKET_INK);
     await fireEvent.press(screen.getByTestId('pocket-tap-area'));
     expect(screen.queryByRole('button')).toBeNull();
   });

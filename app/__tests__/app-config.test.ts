@@ -71,7 +71,7 @@ describe('the Android config', () => {
     jest.spyOn(fs, 'existsSync').mockReturnValue(false);
     expect(build().plugins).toContainEqual([
       'expo-notifications',
-      { icon: './assets/notification-icon.png', color: '#1C3F94' },
+      { icon: './assets/notification-icon.png', color: '#FFC300' },
     ]);
   });
 });
