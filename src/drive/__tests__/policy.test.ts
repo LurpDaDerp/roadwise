@@ -9,6 +9,7 @@ import {
   activityEvent,
   captureCommands,
   capturePlan,
+  confirmWalk,
   createNightClock,
   detectorContext,
   endDriveAllowed,
@@ -17,11 +18,15 @@ import {
   isShortDrive,
   l1RespectsSilentSwitch,
   limitOptions,
+  mountSameCarRow,
   notificationStateOf,
   permissionsAllowArming,
+  sameCarEvidence,
   shouldArm,
   shouldSelfDispatch,
   wakeStart,
+  walkCandidate,
+  type WalkEvidence,
 } from '@/drive/policy';
 
 const T = 1_700_000_000_000;
@@ -175,6 +180,56 @@ describe('activity events', () => {
       expect(activityEvent({ ...act(type, 0, 'high'), exit: true }, T)).toBeNull();
     }
     expect(wakeStart([act('automotive', -120), { ...act('walking', -10, 'high'), exit: true }])).toBe(T - 120_000);
+  });
+});
+
+describe('T13: walking away (rev4 §2.12.2, §2.13.4; rev5 §4.2)', () => {
+  test('walkCandidate: a decisive walk opens it (its own time) and keeps it; an EXIT or a non-walking update ends it', () => {
+    const c = walkCandidate(null, act('walking', 0, 'medium'));
+    expect(c).toEqual({ startTs: T });
+    expect(walkCandidate(c, act('running', 5, 'high'))).toBe(c);
+    expect(walkCandidate(c, act('walking', 6, 'low'))).toBe(c);
+    expect(walkCandidate(null, act('walking', 6, 'low'))).toBeNull();
+    expect(walkCandidate(c, { ...act('walking', 7, 'high'), exit: true })).toBeNull();
+    for (const type of ['automotive', 'stationary', 'cycling', 'unknown'] as const) expect(walkCandidate(c, act(type, 8))).toBeNull();
+  });
+
+  test('confirmWalk: 20 s held; no speed above 3 m/s, no strong vehicle row in the last 20 s; no face within 10 s', () => {
+    const c = { startTs: T };
+    const rows = (over: Partial<WalkEvidence> = {}) => Array.from({ length: 25 }, (_, i) => ({ ts: T + i * 1000, speedMps: 1.3, vehicleMotion: false, ...over }));
+    expect(confirmWalk(c, T + 19_900, rows(), null)).toBe(false);
+    expect(confirmWalk(c, T + 20_000, rows(), null)).toBe(true);
+    expect(confirmWalk(c, T + 20_000, rows({ speedMps: 3.1 }), null)).toBe(false);
+    expect(confirmWalk(c, T + 20_000, rows({ speedMps: null }), null)).toBe(true); // no fix: not evaluated
+    expect(confirmWalk(c, T + 20_000, rows({ vehicleMotion: true }), null)).toBe(false);
+    expect(confirmWalk(c, T + 20_000, rows(), T + 10_000)).toBe(false);
+    expect(confirmWalk(c, T + 20_000, rows(), T + 9_000)).toBe(true);
+    // a fast row older than the window no longer vetoes (the vetoes hold it open; they never end it)
+    const old = [{ ts: T - 5_000, speedMps: 9, vehicleMotion: true }, ...rows()];
+    expect(confirmWalk(c, T + 20_000, old, null)).toBe(true);
+  });
+
+  test('sameCarEvidence: (c) manual, (a) a face within 30 s of the first moving row, (b) the quiet mount 10 s', () => {
+    const base = { firstMovingTs: T, lastFaceT: null, mountRunS: 0, manual: false };
+    expect(sameCarEvidence(base)).toBeNull();
+    expect(sameCarEvidence({ ...base, manual: true })).toBe('manual');
+    expect(sameCarEvidence({ ...base, lastFaceT: T + 30_000 })).toBe('face');
+    expect(sameCarEvidence({ ...base, lastFaceT: T - 31_000 })).toBeNull();
+    expect(sameCarEvidence({ ...base, mountRunS: 9.9 })).toBeNull();
+    expect(sameCarEvidence({ ...base, mountRunS: 10 })).toBe('mount');
+  });
+
+  test('mountSameCarRow (rev5 §4.2): matched AND quiet AND unhandled', () => {
+    const r = row({ handlingScore: 0 });
+    expect(mountSameCarRow({ mountMatch: true, mountQuiet: true }, r)).toBe(true);
+    expect(mountSameCarRow({ mountMatch: true, mountQuiet: false }, r)).toBe(false);
+    expect(mountSameCarRow({ mountMatch: null, mountQuiet: true }, r)).toBe(false);
+    expect(mountSameCarRow({ mountMatch: true, mountQuiet: true }, row({ handlingScore: 0.4 }))).toBe(false);
+  });
+
+  test('capturePlan: a same-car hold in the gap window captures at full rate (the IMU for the mount test)', () => {
+    expect(capturePlan('ending', 'mounted')).toEqual({ on: true, rate: 'low', mode: 'mounted' });
+    expect(capturePlan('ending', 'mounted', { sameCarHold: true })).toEqual({ on: true, rate: 'full', mode: 'mounted' });
   });
 });
 

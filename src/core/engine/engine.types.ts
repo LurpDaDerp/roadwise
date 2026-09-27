@@ -195,7 +195,15 @@ export type EngineEvent =
       /** epoch ms the OS motion history says the drive began, to backfill `startedAt`. */
       candidateStartTs?: number;
     }
-  | { type: 'activity'; automotive: boolean; walking: boolean; ts: number; candidateStartTs?: number }
+  | {
+      type: 'activity';
+      automotive: boolean;
+      walking: boolean;
+      ts: number;
+      candidateStartTs?: number;
+      /** DMS calib T13 (rev4 §2.12.2): a confirmed walk's start (the drive host's); M3 trims to it from T14 */
+      walkStartTs?: number;
+    }
   | {
       type: 'manualStart';
       mode: DriveMode;

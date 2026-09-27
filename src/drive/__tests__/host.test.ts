@@ -7,7 +7,7 @@ import { T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import { drive, sha256, TZ } from '@/core/engine/__fixtures__/drives';
 import * as finalizeModule from '@/core/engine/finalize';
 import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
-import { createMotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
+import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
 import type { FeatureRow, LimitSample } from '@/core/engine/types';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import {
@@ -22,7 +22,7 @@ import { LAST_USER_KEY } from '@/boot/device';
 import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
 import * as events from '@/data/events';
 import { createDriveHost, playerInputs, type DriveHost, type DriveState } from '@/drive/host';
-import { AUTO_DETECT_SETTING_KEY } from '@/drive/policy';
+import { AUTO_DETECT_SETTING_KEY, WALK_CONFIRM_S } from '@/drive/policy';
 import type { Scheduler } from '@/drive/ticks';
 import { geohash5 } from '@/lib/geo';
 
@@ -78,6 +78,8 @@ interface HarnessOptions {
   signedOut?: boolean;
   readAgeBand?: () => Promise<string | null>;
   motionEvidence?: () => MotionEvidenceSource;
+  /** DMS calib T13: the driver-seat presence (the DMS controller's `presence()`) */
+  presence?: () => { lastFaceT: number | null } | null;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -133,6 +135,7 @@ function harness(opts: HarnessOptions = {}) {
     signedOut: opts.signedOut,
     readAgeBand: opts.readAgeBand,
     motionEvidence: opts.motionEvidence,
+    presence: opts.presence,
     scheduler,
     onError: (error, ctx) => errors.push({ error, ctx }),
   });
@@ -452,16 +455,23 @@ describe('ending, the gap window and after it', () => {
     expect(last(h.fake.calls)).toBe('stopCapture');
   });
 
-  test('walking with low confidence is ignored; at medium it ends the drive', async () => {
+  test('walking with low confidence is ignored; at medium it ends the drive once confirmed (T13: 20 s)', async () => {
     const h = harness();
     await h.host.start();
     await h.host.manualStart({ mode: 'pocket', passenger: false, evidence: 'tap' });
-    await h.feed(drive(20));
+    const moving = drive(20);
+    await h.feed(moving);
+    const parked = still(10, last(moving));
+    await h.feed(parked);
     h.fake.emit('activity', { type: 'walking', confidence: 'low', ts: h.now() });
     await h.host.settled();
+    await h.feed(still(25, last(parked)));
     expect(h.host.snapshot().status).toBe('recording');
-    h.fake.emit('activity', { type: 'walking', confidence: 'medium', ts: h.now() });
+    const t = h.now();
+    h.fake.emit('activity', { type: 'walking', confidence: 'medium', ts: t });
     await h.host.settled();
+    expect(h.host.snapshot().status).toBe('recording');
+    await h.advance(WALK_CONFIRM_S * 1000 + 100);
     expect(h.host.snapshot().status).toBe('ending');
   });
 
@@ -479,8 +489,12 @@ describe('ending, the gap window and after it', () => {
     expect(h.fake.transition({ type: 'walking', confidence: 'high', ts: h.now(), exit: true })).toBe(true);
     await h.host.settled();
     expect(h.host.snapshot().status).toBe('recording');
+    // parked, then the walk: confirmed after 20 s (T13)
+    await h.feed(still(10, row({ ts: h.now(), speed: 0 })));
     expect(h.fake.transition({ type: 'walking', confidence: 'high', ts: h.now() })).toBe(true);
     await h.host.settled();
+    expect(h.host.snapshot().status).toBe('recording');
+    await h.advance(WALK_CONFIRM_S * 1000 + 100);
     expect(h.host.snapshot().status).toBe('ending');
   });
 
@@ -521,6 +535,252 @@ async function orphan(evidence: 'tap' | 'movingStart' = 'tap'): Promise<{ trip: 
   expect(trip.checkpoint_ts).toBe(rows[89]?.ts);
   return { trip, rows };
 }
+
+// --- DMS calib T13: walking away (rev4 §2.12.2, §2.13.4; rev5 §4.2) ----------------------------------------
+
+/** A real motion-evidence source whose fields `over(row)` names are overridden (the mount, the vehicle rows). */
+function stubEvidence(over: (r: FeatureRow) => Partial<MotionEvidence>) {
+  return (): MotionEvidenceSource => {
+    const real = createMotionEvidence();
+    return {
+      onRow: (r, o) => ({ ...real.onRow(r, o), ...over(r) }),
+      resetMountReference: () => real.resetMountReference(),
+      reset: () => real.reset(),
+    };
+  };
+}
+
+/** `n` rows at `speed` after `after`, one a second (a walk at 1.3 m/s by default). */
+function onFoot(n: number, after: FeatureRow, speed = 1.3): FeatureRow[] {
+  return Array.from({ length: n }, (_, i) => row({ ts: after.ts + (i + 1) * 1000, lat: after.lat, lng: after.lng, speed, course: -1 }));
+}
+
+const walking = (ts: number, over: Partial<MotionActivity> = {}): MotionActivity => ({ type: 'walking', confidence: 'high', ts, ...over });
+
+/** A drive of 60 s in `mode`, then parked 20 s; returns the last parked row. */
+async function driveThenPark(h: ReturnType<typeof harness>, mode: 'mounted' | 'pocket' = 'mounted'): Promise<FeatureRow> {
+  await h.host.manualStart({ mode, passenger: false, evidence: 'tap' });
+  const moving = drive(60);
+  await h.feed(moving);
+  const parked = still(20, last(moving));
+  await h.feed(parked);
+  expect(h.host.snapshot().status).toBe('recording');
+  return last(parked);
+}
+
+/** Feed rows one at a time; the time (row ts) the status first became `status`, or null. */
+async function feedUntil(h: ReturnType<typeof harness>, rows: readonly FeatureRow[], status: string): Promise<number | null> {
+  for (const r of rows) {
+    await h.feed([r]);
+    if (h.host.snapshot().status === status) return r.ts;
+  }
+  return null;
+}
+
+/** Walk away from a parked drive until the confirmed walk puts it in `ending`; returns the last walking row. */
+async function walkAway(h: ReturnType<typeof harness>, parked: FeatureRow): Promise<FeatureRow> {
+  const t = h.now();
+  h.fake.emit('activity', walking(t));
+  await h.host.settled();
+  const steps = onFoot(25, parked);
+  const at = await feedUntil(h, steps, 'ending');
+  expect(at).not.toBeNull();
+  return steps.find((r) => r.ts === at) as FeatureRow;
+}
+
+describe('T13: the walk is confirmed before it ends a drive (rev4 §2.12.2; NC-W1…W3)', () => {
+  test('S-END-WALK: a walk after parking ends the drive ≤ 25 s after it starts (20 s held)', async () => {
+    const h = harness();
+    await h.host.start();
+    const parked = await driveThenPark(h);
+    const t = h.now();
+    h.fake.emit('activity', walking(t));
+    await h.host.settled();
+    const at = await feedUntil(h, onFoot(30, parked), 'ending');
+    expect(at).not.toBeNull();
+    expect(at! - t).toBeGreaterThanOrEqual(WALK_CONFIRM_S * 1000 - 1000);
+    expect(at! - t).toBeLessThanOrEqual(25_000);
+  });
+
+  test('S-END-SHAKE (NC-W1): a 5 s walking burst at a light ends nothing (iOS: a stationary update; Android: an EXIT)', async () => {
+    for (const platform of ['ios', 'android'] as const) {
+      const h = harness({ platform });
+      await h.host.start();
+      const parked = await driveThenPark(h);
+      h.fake.emit('activity', walking(h.now()));
+      await h.host.settled();
+      const burst = onFoot(5, parked);
+      await h.feed(burst);
+      h.fake.emit('activity', platform === 'ios' ? { type: 'stationary', confidence: 'high', ts: h.now() } : walking(h.now(), { exit: true }));
+      await h.host.settled();
+      expect(await feedUntil(h, still(60, last(burst)), 'ending')).toBeNull();
+      await h.advance(30_000);
+      expect(h.host.snapshot().status).toBe('recording');
+    }
+  });
+
+  test('S-END-BUS (NC-W2): a passenger walking in a moving bus: the speed vetoes it', async () => {
+    const h = harness();
+    await h.host.start();
+    await h.host.manualStart({ mode: 'pocket', passenger: false, evidence: 'tap' });
+    const moving = drive(60, { speed: 8 });
+    await h.feed(moving);
+    h.fake.emit('activity', walking(h.now()));
+    await h.host.settled();
+    expect(await feedUntil(h, drive(60, { t0: last(moving).ts + 1000, speed: 8 }), 'ending')).toBeNull();
+  });
+
+  test('S-END-SEAT (NC-W3): walking reported with the face in the seat ends nothing; the face gone 10 s, it does', async () => {
+    let face: number | null = null;
+    const h = harness({ presence: () => ({ lastFaceT: face }) });
+    await h.host.start();
+    const parked = await driveThenPark(h);
+    h.fake.emit('activity', walking(h.now()));
+    await h.host.settled();
+    const seated = onFoot(40, parked, 0);
+    for (const r of seated) {
+      face = r.ts; // TRACKING every frame
+      await h.feed([r]);
+    }
+    expect(h.host.snapshot().status).toBe('recording');
+    const lostAt = face as number;
+    const at = await feedUntil(h, onFoot(20, last(seated)), 'ending');
+    expect(at).not.toBeNull();
+    expect(at! - lostAt).toBeGreaterThanOrEqual(10_000);
+    expect(at! - lostAt).toBeLessThanOrEqual(12_000);
+  });
+
+  test('a strong vehicle row in the 20 s vetoes it (the car itself accelerating)', async () => {
+    let strong = true;
+    const h = harness({ motionEvidence: stubEvidence(() => ({ vehicleMotion: strong })) });
+    await h.host.start();
+    const parked = await driveThenPark(h);
+    h.fake.emit('activity', walking(h.now()));
+    await h.host.settled();
+    const rows = onFoot(40, parked, 0);
+    expect(await feedUntil(h, rows, 'ending')).toBeNull();
+    strong = false;
+    expect(await feedUntil(h, onFoot(25, last(rows), 0), 'ending')).not.toBeNull();
+  });
+});
+
+describe('T13: a resume after a walking end needs same-car evidence (rev4 §2.13.4, rev5 §4.2; NC-W6)', () => {
+  // the phone taken to pay (in the hand while walking), then back in the mount: matched and quiet once driving
+  const quietMount = stubEvidence((r) => ({ mountMatch: r.speed > 5, mountQuiet: r.speed > 5 }));
+
+  test('S-END-FUEL: the phone mounted, back in 6 min: the mount (matched, quiet, unhandled 10 s) resumes ONE trip', async () => {
+    const h = harness({ motionEvidence: quietMount });
+    await h.host.start();
+    const parked = await driveThenPark(h);
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    const back = drive(40, { t0: walked.ts + 6 * 60_000, speed: 12 });
+    await h.feed(back.slice(0, 5));
+    expect(h.host.snapshot().status).toBe('ending'); // held for the evidence
+    expect(last(h.fake.calls)).toBe('setCaptureRate:full'); // the IMU on for the mount test
+    await h.feed(back.slice(5));
+    const s = h.host.snapshot();
+    expect(s.status).toBe('recording');
+    expect(s.clientTripId).toBe(first);
+    expect(s.lastFinalized).toBeNull();
+  });
+
+  test('S-END-PNR (NC-W6): walked to a bus that leaves within 8 min: the first trip ends, the bus is a second trip', async () => {
+    const h = harness({ motionEvidence: stubEvidence(() => ({ mountMatch: false, mountQuiet: false })) });
+    await armed(h);
+    const parked = await driveThenPark(h);
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    const bus = drive(90, { t0: walked.ts + 5 * 60_000, speed: 10 });
+    await h.feed(bus);
+    const s = h.host.snapshot();
+    expect(s.lastFinalized).toMatchObject({ clientTripId: first, ok: true });
+    expect(s.status).toBe('recording');
+    expect(s.clientTripId).not.toBe(first);
+    // the second trip opened by the auto-detect path (a new candidate), not a resume of the driver's trip
+    expect(s.startedAt).toBeGreaterThanOrEqual(bus[0]!.ts);
+  });
+
+  test('S-END-TAXI: a phone in a pocket in another car: two trips', async () => {
+    const h = harness();
+    await armed(h);
+    const parked = await driveThenPark(h, 'pocket');
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    await h.feed(drive(90, { t0: walked.ts + 4 * 60_000, speed: 12 }));
+    const s = h.host.snapshot();
+    expect(s.lastFinalized).toMatchObject({ clientTripId: first });
+    expect(s.clientTripId).not.toBe(first);
+  });
+
+  test('S-END-BUS-POCKET (rev5 R4-m2): an upright jacket pocket matches the mount gravity but is loud: two trips', async () => {
+    const h = harness({ motionEvidence: stubEvidence(() => ({ mountMatch: true, mountQuiet: false })) });
+    await armed(h);
+    const parked = await driveThenPark(h);
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    await h.feed(drive(90, { t0: walked.ts + 5 * 60_000, speed: 10 }));
+    const s = h.host.snapshot();
+    expect(s.lastFinalized).toMatchObject({ clientTripId: first });
+    expect(s.clientTripId).not.toBe(first);
+  });
+
+  test('(c) a manual start while held resumes the same trip; (a) a face within 30 s of the first moving row does too', async () => {
+    const h = harness({ motionEvidence: stubEvidence(() => ({ mountMatch: false })) });
+    await h.host.start();
+    const parked = await driveThenPark(h);
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    await h.feed(drive(3, { t0: walked.ts + 60_000, speed: 12 }));
+    expect(h.host.snapshot().status).toBe('ending');
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.host.snapshot().clientTripId).toBe(first);
+
+    let face: number | null = null;
+    const h2 = harness({ presence: () => ({ lastFaceT: face }), motionEvidence: stubEvidence(() => ({ mountMatch: false })) });
+    await h2.host.start();
+    const parked2 = await driveThenPark(h2);
+    const first2 = h2.host.snapshot().clientTripId;
+    const walked2 = await walkAway(h2, parked2);
+    face = null;
+    const back = drive(10, { t0: walked2.ts + 60_000, speed: 12 });
+    await h2.feed(back.slice(0, 3));
+    expect(h2.host.snapshot().status).toBe('ending');
+    face = back[2]!.ts; // the DMS sees the driver's face
+    await h2.feed(back.slice(3));
+    expect(h2.host.snapshot().status).toBe('recording');
+    expect(h2.host.snapshot().clientTripId).toBe(first2);
+  });
+
+  test('an automotive update in the gap window is held too; with no evidence it opens nothing of the old trip', async () => {
+    const h = harness({ motionEvidence: stubEvidence(() => ({ mountMatch: false })) });
+    await armed(h);
+    const parked = await driveThenPark(h);
+    const first = h.host.snapshot().clientTripId;
+    const walked = await walkAway(h, parked);
+    h.setClock(walked.ts + 60_000);
+    h.fake.emit('activity', { type: 'automotive', confidence: 'high', ts: h.now() });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('ending');
+    await h.advance(31_000);
+    const s = h.host.snapshot();
+    expect(s.lastFinalized).toMatchObject({ clientTripId: first });
+    // the held automotive update, replayed after the end, opens a candidate (auto-detect is on)
+    expect(s.status).toBe('candidate');
+  });
+
+  test('after a standstill (not walking) end, a resume needs no same-car evidence, as before', async () => {
+    const h = harness({ motionEvidence: stubEvidence(() => ({ mountMatch: false })) });
+    await h.host.start();
+    const at = await recordingThenStill(h);
+    const first = h.host.snapshot().clientTripId;
+    await h.feed([row({ ts: at.ts + 60_000, lat: at.lat, lng: at.lng, speed: 12 })]);
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.host.snapshot().clientTripId).toBe(first);
+  });
+});
 
 describe('start({ adopt }) (rev1: I2)', () => {
   test('with a buffered wake already queued: exactly one recording trip, adopted before any listener', async () => {

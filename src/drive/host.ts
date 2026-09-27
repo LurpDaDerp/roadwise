@@ -30,13 +30,14 @@
 // user's choice being off, OR the feature flag being off, OR Always location missing, OR the arm
 // having been refused. It does not mean "the user turned auto-record off"; that intent is
 // `autoDetectEnabled()` (M4 seam ruling N-m2).
-import type { ThermalLevel } from '@drive-sense';
+import type { MotionActivity, ThermalLevel } from '@drive-sense';
 import { parseRow } from '@drive-sense';
 
 import { createArbiter } from '@/core/alerts/arbiter';
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision, AlertVoiceKey } from '@/core/alerts/types';
 import { createDetectors } from '@/core/detectors';
+import { knownSpeed } from '@/core/detectors/common';
 import type { EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
@@ -59,6 +60,7 @@ import {
   activityEvent,
   captureCommands,
   capturePlan,
+  confirmWalk,
   createNightClock,
   detectorContext,
   endDriveAllowed,
@@ -68,16 +70,24 @@ import {
   isShortDrive,
   l1RespectsSilentSwitch,
   limitOptions,
+  mountSameCarRow,
   notificationStateOf,
+  resumesTrip,
+  SAME_CAR_HOLD_S,
+  sameCarEvidence,
   shouldArm,
   shouldSelfDispatch,
   wakeStart,
   WAKE_HISTORY_S,
+  WALK_CONFIRM_S,
+  walkCandidate,
   type CaptureBelief,
   type CaptureCommand,
+  type WalkCandidate,
+  type WalkEvidence,
 } from './policy';
 import type { DriveSource } from './source';
-import { createTicker, type Scheduler } from './ticks';
+import { createTicker, realScheduler, type Scheduler } from './ticks';
 
 export type { DriveSource } from './source';
 
@@ -250,6 +260,19 @@ export interface DriveHostDeps {
    * UI then hands every change in through `setAgeBand`. A read that fails counts as unknown.
    */
   readAgeBand?: () => Promise<string | null>;
+  /**
+   * DMS calib T13 (rev4 §2.12.5): the driver-seat presence, from the DMS controller's `presence()` while its gate is
+   * open (M7 binds it); null or absent when no DMS runs. Times and booleans only, never an image.
+   */
+  presence?: () => DriverPresence | null;
+}
+
+/**
+ * The part of the DMS controller's `presence()` the drive host reads (rev4 §2.12.5): the frame clock (epoch ms) of the
+ * last TRACKING or HEAD_ONLY frame, null before one.
+ */
+export interface DriverPresence {
+  lastFaceT: number | null;
 }
 
 /** Scored driver trips: the learning period's count (rev1: m). */
@@ -364,6 +387,24 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const listeners = new Set<(s: DriveState) => void>();
   const nightClock = createNightClock(scoring.CONSTANTS);
   let ctxCache: { key: string; value: Omit<DetectorContext, 'mode'> } | null = null;
+  // DMS calib T13 (rev4 §2.12.2, §2.13.4): walking away.
+  /** the walk being timed while recording (its own start), and the rows' evidence of the last WALK_CONFIRM_S + */
+  let walk: WalkCandidate | null = null;
+  const walkRows: WalkEvidence[] = [];
+  let walkTimer: unknown = null;
+  /** the trip whose `ending` was a confirmed walk: a resume of it needs same-car evidence */
+  let walkEndedTrip: string | null = null;
+  /** the continuous run of same-car mount rows (rev5 §4.2), from the row that began it */
+  let mountRunSince: number | null = null;
+  /** the latest row's time (held rows included) */
+  let lastRowTs = 0;
+  /**
+   * A resume held for same-car evidence: the first moving row's time and what arrived since (rows and activities),
+   * released to the engine with the evidence, or after an `end` without it (a new trip opens by the usual path).
+   */
+  let hold: { firstMovingTs: number; items: ({ kind: 'row'; row: FeatureRow } | { kind: 'activity'; a: MotionActivity })[] } | null = null;
+  let holdTimer: unknown = null;
+  const walkScheduler = deps.scheduler ?? realScheduler;
 
   // --- engine wiring -------------------------------------------------------------------------------
 
@@ -576,7 +617,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   async function reconcileCapture(s: EngineSnapshot): Promise<void> {
-    const plan = capturePlan(s.status, s.mode);
+    const plan = capturePlan(s.status, s.mode, { sameCarHold: hold !== null });
     if (inheritedCapture && plan !== 'keep' && !plan.on) return;
     const key = plan === 'keep' ? 'keep' : plan.on ? `${plan.rate}|${plan.mode}` : 'off';
     if (key === refusedPlan) return;
@@ -630,6 +671,23 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // trip's fresh stream instead of being lost to the old one.
     const before = engine.snapshot();
     lastMotion = motion.onRow(row, { mounted: before.mode === 'mounted' });
+    // DMS calib T13: the walk's evidence, the same-car mount run, and a resume held for same-car evidence.
+    walkRows.push({ ts: row.ts, speedMps: knownSpeed(row), vehicleMotion: lastMotion.vehicleMotion });
+    while (walkRows.length > 0 && (walkRows[0] as WalkEvidence).ts < row.ts - (WALK_CONFIRM_S + 10) * 1000) walkRows.shift();
+    mountRunSince = mountSameCarRow(lastMotion, row) ? (mountRunSince ?? row.ts) : null;
+    lastRowTs = row.ts;
+    if (holdsResume(before) && (hold !== null || resumeTrigger(row))) {
+      hold ??= openHold(row.ts);
+      hold.items.push({ kind: 'row', row });
+      await decideHold(row.ts);
+      return;
+    }
+    await rowToEngine(row);
+    await checkWalk();
+  }
+
+  /** The row into the engine: the recording state's inputs, the self-dispatch, the motion stream per trip. */
+  async function rowToEngine(row: FeatureRow): Promise<void> {
     currentRow = row;
     recent.push(row);
     if (recent.length > RECENT_ROWS) recent.shift();
@@ -650,15 +708,125 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  // --- walking away (DMS calib T13; rev4 §2.12.2, §2.13.4; rev5 §4.2) ------------------------------------------
+
+  /**
+   * A motion update. While recording, a decisive walk is timed and confirmed (never an `ending` at once); an EXIT or a
+   * non-walking update ends the timing. In a walking end's gap window, an automotive update is a resume that waits
+   * for same-car evidence. Otherwise as before.
+   */
+  async function onActivity(a: MotionActivity): Promise<void> {
+    const s = engine.snapshot();
+    if (s.status === 'recording') {
+      walk = walkCandidate(walk, a);
+      scheduleWalkCheck();
+      if (a.type === 'walking' || a.type === 'running') {
+        await checkWalk();
+        return;
+      }
+    } else if (walk !== null) {
+      walk = null;
+    }
+    if (holdsResume(s) && (hold !== null || a.type === 'automotive')) {
+      hold ??= openHold(now());
+      hold.items.push({ kind: 'activity', a });
+      await decideHold(now());
+      return;
+    }
+    const e = activityEvent(a, now());
+    if (e) await engine.dispatch(e);
+  }
+
+  function scheduleWalkCheck(): void {
+    if (walkTimer !== null) walkScheduler.clearTimeout(walkTimer);
+    walkTimer = null;
+    if (walk === null) return;
+    const due = walk.startTs + WALK_CONFIRM_S * 1000 - now();
+    walkTimer = walkScheduler.setTimeout(() => {
+      walkTimer = null;
+      void run(checkWalk, 'walk');
+    }, Math.max(0, due) + 50);
+  }
+
+  /** rev4 §2.12.2: a walk held WALK_CONFIRM_S, no fast or strong vehicle row in it, no face in the seat: `ending`. */
+  async function checkWalk(): Promise<void> {
+    const s = engine.snapshot();
+    if (walk === null) return;
+    if (s.status !== 'recording') {
+      walk = null;
+      return;
+    }
+    const lastFaceT = presenceNow()?.lastFaceT ?? null;
+    if (!confirmWalk(walk, now(), walkRows, lastFaceT)) return;
+    const walkStartTs = walk.startTs;
+    walk = null;
+    walkEndedTrip = s.clientTripId;
+    await engine.dispatch({ type: 'activity', automotive: false, walking: true, ts: now(), walkStartTs });
+  }
+
+  function presenceNow(): DriverPresence | null {
+    try {
+      return deps.presence?.() ?? null;
+    } catch (e) {
+      report(e, 'presence');
+      return null;
+    }
+  }
+
+  /** In a walking end's gap window: a resume there needs same-car evidence (rev4 §2.13.4). */
+  function holdsResume(s: EngineSnapshot): boolean {
+    if (walkEndedTrip === null) return false;
+    if (s.status === 'ending' && s.clientTripId === walkEndedTrip) return true;
+    walkEndedTrip = null; // resumed, finalized or replaced: the walk's end is over
+    return false;
+  }
+
+  const resumeTrigger = resumesTrip;
+
+  function openHold(firstMovingTs: number): NonNullable<typeof hold> {
+    if (holdTimer !== null) walkScheduler.clearTimeout(holdTimer);
+    holdTimer = walkScheduler.setTimeout(() => {
+      holdTimer = null;
+      void run(() => decideHold(now()), 'sameCar');
+    }, SAME_CAR_HOLD_S * 1000 + 50);
+    return { firstMovingTs, items: [] };
+  }
+
+  /**
+   * The held resume: released to the engine on same-car evidence (the trip resumes); without it by SAME_CAR_HOLD_S
+   * after the first moving row, the walked-away trip is ended and the movement replayed as new (a new trip by the usual
+   * path: an auto-detect candidate, or nothing for a manual-only driver).
+   */
+  async function decideHold(at: number, manual = false): Promise<void> {
+    const h = hold;
+    if (h === null) return;
+    const s = engine.snapshot();
+    const still = s.status === 'ending' && s.clientTripId === walkEndedTrip;
+    const mountRunS = mountRunSince === null ? 0 : (lastRowTs - mountRunSince) / 1000;
+    const evidence = still ? sameCarEvidence({ firstMovingTs: h.firstMovingTs, lastFaceT: presenceNow()?.lastFaceT ?? null, mountRunS, manual }) : null;
+    const expired = at - h.firstMovingTs >= SAME_CAR_HOLD_S * 1000;
+    if (still && evidence === null && !expired) return;
+    hold = null;
+    if (holdTimer !== null) walkScheduler.clearTimeout(holdTimer);
+    holdTimer = null;
+    walkEndedTrip = null;
+    if (still && evidence === null) await engine.dispatch({ type: 'end', ts: now() });
+    for (const it of h.items) {
+      if (it.kind === 'row') {
+        await rowToEngine(it.row);
+      } else {
+        const e = activityEvent(it.a, now());
+        if (e) await engine.dispatch(e);
+      }
+    }
+  }
+
   function attachNative(): void {
     subscriptions.push(
       remover(source.addListener('wake', (p) => void run(() => onWake(p.reason), 'wake'))),
       remover(
         source.addListener('activity', (a) => {
-          void run(async () => {
-            const e = activityEvent(a, now());
-            if (e) await engine.dispatch(e);
-          }, 'activity');
+          void run(() => onActivity(a), 'activity');
         })
       ),
       remover(
@@ -913,6 +1081,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         // account (u13 security M-2): it would sit on the phone and fail as a permanent 403.
         if (signedOut || ageBand === 'u13') return;
         await engine.dispatch({ type: 'manualStart', mode, passenger, evidence, ts: now() });
+        // DMS calib T13 (rev4 §2.13.4 (c)): a manual start is same-car evidence: a held resume is released.
+        if (hold !== null) await decideHold(now(), true);
       }, 'manualStart'),
 
     end: () => dispatch('end', { type: 'end', ts: now() }),
