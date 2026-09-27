@@ -49,6 +49,14 @@ jest.mock('../steps/ReadyStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { ReadyStep: (p: object) => <PlaceholderStep {...p} step="ready" /> };
 });
+jest.mock('@/features/camera/CameraStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { CameraStep: (p: object) => <PlaceholderStep {...p} step="camera" /> };
+});
+jest.mock('@/features/family/FamilyStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { FamilyStep: (p: object) => <PlaceholderStep {...p} step="family" /> };
+});
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => {
@@ -102,7 +110,7 @@ describe('OnboardingStepper', () => {
 
   it('sends a known step that is not in this flow to the step it resumes at', async () => {
     await renderStepper('camera', ctx());
-    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/ready');
+    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/family');
     await renderStepper('location', ctx({ ageBand: 'u13' }));
     expect(screen.getAllByTestId('redirect').at(-1)).toHaveTextContent(
       '/(onboarding)/not-eligible'
@@ -134,7 +142,7 @@ describe('OnboardingStepper', () => {
   it('clamps a saved step the flow no longer has', async () => {
     await saveStep(settings, 'auto-detect');
     await renderStepper('start', ctx({ features: { autoDetect: false, guardianInvites: false } }));
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/ready'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/family'));
   });
 
   it('waits for the context before resuming from start', async () => {
@@ -153,7 +161,7 @@ describe('OnboardingStepper', () => {
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 2 of 5')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 6')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
@@ -205,7 +213,7 @@ describe('OnboardingStepper', () => {
       'terms',
       ctx({ termsCurrent: false, drivingStage: 'unknown' })
     );
-    expect(screen.getByText('Step 1 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 8')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
@@ -213,14 +221,14 @@ describe('OnboardingStepper', () => {
         </ThemeProvider>
       );
     await at('profile', ctx({ drivingStage: 'unknown' }));
-    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 8')).toBeOnTheScreen();
     await at('location', ctx());
-    expect(screen.getByText('Step 3 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // Killed at "Step 3 of 7": Terms and the profile were passed, and have since left the flow.
+    // Killed at "Step 3 of 8": Terms and the profile were passed, and have since left the flow.
     await saveStep(settings, 'location');
     await savePlan(settings, [
       'terms',
@@ -229,6 +237,7 @@ describe('OnboardingStepper', () => {
       'motion',
       'notifications',
       'auto-detect',
+      'family',
       'ready',
     ]);
     const view = await renderStepper('start', ctx());
@@ -238,7 +247,7 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 3 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
     await waitFor(async () =>
       expect(await readSavedPlan(settings)).toEqual([
         'terms',
@@ -247,6 +256,7 @@ describe('OnboardingStepper', () => {
         'motion',
         'notifications',
         'auto-detect',
+        'family',
         'ready',
       ])
     );
@@ -266,7 +276,7 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={fresh} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 1 of 5')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 6')).toBeOnTheScreen();
     await act(async () => {});
   });
 

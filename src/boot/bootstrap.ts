@@ -249,6 +249,16 @@ export interface BootstrapDeps {
   attachSummaryNotifier?:
     | ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> })
     | null;
+  /**
+   * Lean M6's family location poster (`attachFamilyLocation`): posts this phone's location to the
+   * family from the drive's own rows, drive-sense's OS wakes and the app coming to the front, at most
+   * once a minute and only while the account shares. Default: the real one. `null`: none.
+   */
+  attachFamilyLocation?:
+    | ((ctx: { db: Db; source: DriveSource; drive: DriveHost; appState: AppStateLike; now: () => number }) => {
+        detach(): void;
+      })
+    | null;
   /** iOS backup exclusion (plan R4). Default: drive-sense's `excludeFromBackup`. */
   excludeFromBackup?: (uri: string) => Promise<void>;
   /** The directory the database lives in. Default: expo-sqlite's `defaultDatabaseDirectory`. */
@@ -580,6 +590,17 @@ async function runLaunch(
         onError(error, 'summary notifier');
       }
     }
+    // The family location poster (lean M6): listens to the rows, wakes and foregrounds this launch
+    // already receives, and starts nothing of its own.
+    let familyLocation: { detach(): void } | null = null;
+    const attachFamily = deps.attachFamilyLocation === undefined ? defaultFamilyLocation : deps.attachFamilyLocation;
+    if (attachFamily) {
+      try {
+        familyLocation = attachFamily({ db, source, drive, appState, now });
+      } catch (error) {
+        onError(error, 'family location');
+      }
+    }
     // The drive state the server holds pushes on (ruling T10 (4)): reported by the runtime, so a
     // drive the Android headless task records with no screen says `recording`, then `idle`.
     // Attached for every launch, signed out included (M4 final review I1): a fresh install launches
@@ -613,6 +634,7 @@ async function runLaunch(
         await camera.settled();
         await camera.dispose();
       }
+      familyLocation?.detach();
       driveReports?.release();
       unmountDiagnostics();
       // Bounded like the wipe's cancel (final re-review n5): a hung notifications call must not
@@ -1219,6 +1241,26 @@ function defaultCamera(
     const { createDefaultCameraBridge } = require('@/features/camera/defaultBridge') as typeof import('@/features/camera/defaultBridge');
     return createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), readAgeBand, onError });
   };
+}
+
+/** Lean M6's family location poster. Required lazily: expo-location is loaded only when attached. */
+function defaultFamilyLocation(ctx: {
+  db: Db;
+  source: DriveSource;
+  drive: DriveHost;
+  appState: AppStateLike;
+  now: () => number;
+}): { detach(): void } {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-location, only when attached
+  const { attachFamilyLocation, expoLastKnown } = require('@/features/family/location') as typeof import('@/features/family/location');
+  return attachFamilyLocation({
+    db: ctx.db,
+    source: ctx.source,
+    recording: () => ctx.drive.snapshot().status === 'recording',
+    appState: ctx.appState,
+    now: ctx.now,
+    lastKnown: expoLastKnown,
+  });
 }
 
 /** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */

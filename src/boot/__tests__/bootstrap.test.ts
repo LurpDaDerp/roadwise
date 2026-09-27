@@ -159,9 +159,10 @@ function deps(over: Partial<BootstrapDeps> = {}) {
     source: driveSense,
     limits,
     createPlayer: async () => silentPlayer(),
-    // Neither the diagnostics recorder nor the summary notifier is the subject here.
+    // Neither the diagnostics recorder, the summary notifier nor the family poster is the subject here.
     mountDiagnostics: null,
     attachSummaryNotifier: null,
+    attachFamilyLocation: null,
     appConfig,
     tz: TZ,
     now: () => NOW,
@@ -235,6 +236,21 @@ test('the cache is wired to the change event, and stop() detaches everything', a
   queryClient.clear();
 });
 
+
+test('the family location poster is attached to this launch, and stop() detaches it', async () => {
+  const detach = jest.fn();
+  const attachFamilyLocation = jest.fn(() => ({ detach }));
+  const { bootstrapDeps, appState, driveSense } = deps({ attachFamilyLocation });
+  runtime = await bootstrapApp(bootstrapDeps);
+  expect(attachFamilyLocation).toHaveBeenCalledTimes(1);
+  expect(attachFamilyLocation).toHaveBeenCalledWith(
+    expect.objectContaining({ db, source: driveSense, drive: runtime.drive, appState })
+  );
+  expect(detach).not.toHaveBeenCalled();
+  await runtime.stop();
+  runtime = null;
+  expect(detach).toHaveBeenCalledTimes(1);
+});
 
 /**
  * The device owner `uid` affirmed the background-location disclosure (Task 19 r1): the host arms

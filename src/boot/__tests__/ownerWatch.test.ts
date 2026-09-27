@@ -101,6 +101,7 @@ function depsFor(supabase: BootstrapDeps['supabase'], over: Partial<BootstrapDep
     createPlayer: async () => ({ deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} }),
     mountDiagnostics: null,
     attachSummaryNotifier: null,
+    attachFamilyLocation: null,
     tz: TZ,
     now: () => NOW,
     onError: () => {},

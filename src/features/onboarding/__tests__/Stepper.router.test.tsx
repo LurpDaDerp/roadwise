@@ -62,6 +62,14 @@ jest.mock('../steps/ReadyStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { ReadyStep: (p: object) => <PlaceholderStep {...p} step="ready" /> };
 });
+jest.mock('@/features/camera/CameraStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { CameraStep: (p: object) => <PlaceholderStep {...p} step="camera" /> };
+});
+jest.mock('@/features/family/FamilyStep', () => {
+  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
+  return { FamilyStep: (p: object) => <PlaceholderStep {...p} step="family" /> };
+});
 
 const ADULT: FlowContext = {
   platform: 'android',
@@ -181,21 +189,21 @@ describe('the stepper under a covering screen', () => {
   });
 
   test('a context change under the cover does not bring the step’s listener back to life', async () => {
-    const app = renderRouter(routes, { initialUrl: '/ready' });
+    const app = renderRouter(routes, { initialUrl: '/family' });
     await app;
     await push('/cover');
     // A profile or config refresh while covered changes where Back goes (auto-detect leaves the
-    // flow, so Back from ready becomes notifications): a plain effect would re-subscribe here and
+    // flow, so Back from family becomes notifications): a plain effect would re-subscribe here and
     // become the newest listener, ahead of the navigator's.
     await setCtx({ ...ADULT, features: { autoDetect: false, guardianInvites: false } });
 
     await pressBack();
 
-    expect(app.getPathname()).toBe('/ready');
+    expect(app.getPathname()).toBe('/family');
   });
 
   test('control: after that change, with the step focused again, Back follows the new flow', async () => {
-    const app = renderRouter(routes, { initialUrl: '/ready' });
+    const app = renderRouter(routes, { initialUrl: '/family' });
     await app;
     await push('/cover');
     await setCtx({ ...ADULT, features: { autoDetect: false, guardianInvites: false } });

@@ -30,7 +30,7 @@ function ctx(over: Partial<FlowContext> = {}): FlowContext {
   };
 }
 
-const DRIVER_SETUP: StepId[] = ['location', 'motion', 'notifications', 'auto-detect', 'ready'];
+const DRIVER_SETUP: StepId[] = ['location', 'motion', 'notifications', 'auto-detect', 'family', 'ready'];
 const ALL_AVAILABLE = Object.fromEntries(STEP_IDS.map((s) => [s, true])) as Record<StepId, boolean>;
 
 describe('stepsFor', () => {
@@ -126,7 +126,7 @@ describe('stepsFor', () => {
   });
 
   it('gives a non-driver no location, motion, notifications, auto-detect or camera step', () => {
-    expect(stepsFor(ctx({ drivingStage: 'non_driver' }))).toEqual(['ready']);
+    expect(stepsFor(ctx({ drivingStage: 'non_driver' }))).toEqual(['family', 'ready']);
     expect(stepsFor(ctx({ drivingStage: 'non_driver' }), ALL_AVAILABLE)).toEqual([
       'family',
       'ready',
@@ -139,7 +139,7 @@ describe('stepsFor', () => {
           features: { autoDetect: true, guardianInvites: true },
         })
       )
-    ).toEqual(['guardian', 'ready']);
+    ).toEqual(['guardian', 'family', 'ready']);
   });
 
   it('leaves auto-detect out when the feature is off', () => {
@@ -147,16 +147,17 @@ describe('stepsFor', () => {
       'location',
       'motion',
       'notifications',
+      'family',
       'ready',
     ]);
   });
 
-  it('holds camera (M7) and family (M6) back until their milestones make them available', () => {
-    expect(STEP_AVAILABLE.camera).toBe(false);
-    expect(STEP_AVAILABLE.family).toBe(false);
+  it('offers the camera beta to adult drivers while its flag is on, and the family step to everyone', () => {
+    expect(STEP_AVAILABLE.camera).toBe(true);
+    expect(STEP_AVAILABLE.family).toBe(true);
+    const beta = { autoDetect: true, guardianInvites: false, cameraBeta: true };
     expect(stepsFor(ctx())).not.toContain('camera');
-    expect(stepsFor(ctx())).not.toContain('family');
-    expect(stepsFor(ctx(), ALL_AVAILABLE)).toEqual([
+    expect(stepsFor(ctx({ features: beta }))).toEqual([
       'location',
       'motion',
       'notifications',
@@ -165,6 +166,9 @@ describe('stepsFor', () => {
       'family',
       'ready',
     ]);
+    expect(stepsFor(ctx({ ageBand: '13_17', features: beta }))).not.toContain('camera');
+    expect(stepsFor(ctx({ drivingStage: 'non_driver', features: beta }))).toEqual(['family', 'ready']);
+    expect(stepsFor(ctx(), ALL_AVAILABLE)).toContain('family');
   });
 
   it.each(['permit', 'new', 'developing', 'experienced'] as const)(
@@ -202,15 +206,16 @@ describe('nextStep', () => {
   it('skips steps the context leaves out', () => {
     expect(
       nextStep(ctx({ features: { autoDetect: false, guardianInvites: false } }), 'notifications')
-    ).toBe('ready');
-    expect(nextStep(ctx({ drivingStage: 'non_driver' }), 'profile')).toBe('ready');
+    ).toBe('family');
+    expect(nextStep(ctx({ drivingStage: 'non_driver' }), 'profile')).toBe('family');
   });
 });
 
 describe('previousStep', () => {
   it('goes back through the setup steps', () => {
     expect(previousStep(ctx(), 'motion')).toBe('location');
-    expect(previousStep(ctx(), 'ready')).toBe('auto-detect');
+    expect(previousStep(ctx(), 'ready')).toBe('family');
+    expect(previousStep(ctx(), 'family')).toBe('auto-detect');
   });
 
   it('never goes back into terms once they are accepted', () => {
@@ -236,7 +241,7 @@ describe('previousStep', () => {
 
   it('steps over what the context leaves out', () => {
     expect(
-      previousStep(ctx({ features: { autoDetect: false, guardianInvites: false } }), 'ready')
+      previousStep(ctx({ features: { autoDetect: false, guardianInvites: false } }), 'family')
     ).toBe('notifications');
   });
 });
@@ -260,9 +265,9 @@ describe('resumeStep', () => {
   it('clamps a saved step the flow no longer has to the next one it does', () => {
     expect(
       resumeStep(ctx({ features: { autoDetect: false, guardianInvites: false } }), 'auto-detect')
-    ).toBe('ready');
-    expect(resumeStep(ctx(), 'camera')).toBe('ready');
-    expect(resumeStep(ctx({ drivingStage: 'non_driver' }), 'motion')).toBe('ready');
+    ).toBe('family');
+    expect(resumeStep(ctx(), 'camera')).toBe('family');
+    expect(resumeStep(ctx({ drivingStage: 'non_driver' }), 'motion')).toBe('family');
     // A step saved before the flow began (Terms, since accepted) resumes at the start.
     expect(resumeStep(ctx(), 'terms')).toBe('location');
     expect(resumeStep(ctx(), 'profile')).toBe('location');
@@ -289,17 +294,17 @@ describe('sessionPlan and stepPosition', () => {
   it('numbers the steps of the flow from one', () => {
     const plan = sessionPlan(ctx(), 'motion');
     expect(plan).toEqual(DRIVER_SETUP);
-    expect(stepPosition(plan, 'motion')).toEqual({ index: 2, total: 5 });
+    expect(stepPosition(plan, 'motion')).toEqual({ index: 2, total: 6 });
   });
 
   it('keeps the steps already passed this session in the count, so it never runs backwards', () => {
     const first = sessionPlan(ctx({ termsCurrent: false, drivingStage: 'unknown' }), 'terms');
-    expect(stepPosition(first, 'terms')).toEqual({ index: 1, total: 7 });
+    expect(stepPosition(first, 'terms')).toEqual({ index: 1, total: 8 });
     // Terms accepted and the profile saved: both leave `stepsFor`, but not the session's count.
     const second = sessionPlan(ctx({ drivingStage: 'unknown' }), 'profile', first);
-    expect(stepPosition(second, 'profile')).toEqual({ index: 2, total: 7 });
+    expect(stepPosition(second, 'profile')).toEqual({ index: 2, total: 8 });
     const third = sessionPlan(ctx(), 'location', second);
-    expect(stepPosition(third, 'location')).toEqual({ index: 3, total: 7 });
+    expect(stepPosition(third, 'location')).toEqual({ index: 3, total: 8 });
   });
 
   it('grows when the profile reveals a step that was not known before', () => {
@@ -309,7 +314,7 @@ describe('sessionPlan and stepPosition', () => {
       features: { autoDetect: true, guardianInvites: true },
     });
     const after = sessionPlan(teen, 'guardian', before);
-    expect(stepPosition(after, 'guardian')).toEqual({ index: 2, total: 7 });
+    expect(stepPosition(after, 'guardian')).toEqual({ index: 2, total: 8 });
   });
 
   it('drops steps ahead that the context no longer includes', () => {
@@ -319,7 +324,7 @@ describe('sessionPlan and stepPosition', () => {
       'motion',
       before
     );
-    expect(after).toEqual(['location', 'motion', 'notifications', 'ready']);
+    expect(after).toEqual(['location', 'motion', 'notifications', 'family', 'ready']);
   });
 });
 

@@ -33,8 +33,8 @@ export type StepId = (typeof STEP_IDS)[number];
 export type StepParam = StepId | 'start';
 
 /**
- * Steps whose milestone has not shipped are held out of every flow: camera setup (A10) arrives
- * with M7, the family asks (A11) with M6. Flip the flag in the milestone that builds the step.
+ * Steps whose milestone has not shipped are held out of every flow. Camera (A10, lane B) and family
+ * (A11, lean M6) are built and on.
  */
 export const STEP_AVAILABLE: Readonly<Record<StepId, boolean>> = {
   terms: true,
@@ -45,8 +45,8 @@ export const STEP_AVAILABLE: Readonly<Record<StepId, boolean>> = {
   motion: true,
   notifications: true,
   'auto-detect': true,
-  camera: false,
-  family: false,
+  camera: true,
+  family: true,
   ready: true,
 };
 
@@ -71,7 +71,8 @@ export interface FlowContext {
   /** Both documents have a URL. The terms step reads it; the flow does not branch on it. */
   termsPublished: boolean;
   minorConsentMode: MinorConsentMode;
-  features: { autoDetect: boolean; guardianInvites: boolean };
+  /** `cameraBeta`: `feature_flags.camera_beta` (absent reads as off). */
+  features: { autoDetect: boolean; guardianInvites: boolean; cameraBeta?: boolean };
 }
 
 export interface StepPosition {
@@ -147,7 +148,8 @@ export function stepsFor(
     motion: driver,
     notifications: driver,
     'auto-detect': driver && ctx.features.autoDetect,
-    camera: driver,
+    // The camera beta is offered to adult drivers only, and only while its flag is on.
+    camera: driver && ctx.ageBand === '18_plus' && ctx.features.cameraBeta === true,
     family: true,
     ready: true,
   };

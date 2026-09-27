@@ -1,5 +1,8 @@
 import type { ComponentType } from 'react';
 
+import { CameraStep } from '@/features/camera/CameraStep';
+import { FamilyStep } from '@/features/family/FamilyStep';
+
 import type { FlowContext, StepId } from './flow';
 import { AutoDetectStep } from './steps/AutoDetectStep';
 import { GuardianStep } from './steps/GuardianStep';
@@ -7,7 +10,6 @@ import { LocationStep } from './steps/LocationStep';
 import { MotionStep } from './steps/MotionStep';
 import { NotEligibleStep } from './steps/NotEligibleStep';
 import { NotificationsStep } from './steps/NotificationsStep';
-import { PlaceholderStep } from './steps/PlaceholderStep';
 import { ProfileStep } from './steps/ProfileStep';
 import { ReadyStep } from './steps/ReadyStep';
 import { TermsStep } from './steps/TermsStep';
@@ -24,19 +26,11 @@ export interface StepProps {
   onBack?: () => void;
 }
 
-function placeholderFor(step: StepId): ComponentType<StepProps> {
-  function Placeholder(props: StepProps) {
-    return <PlaceholderStep {...props} step={step} />;
-  }
-  Placeholder.displayName = `PlaceholderStep(${step})`;
-  return Placeholder;
-}
-
 /**
  * Every step id to the component that renders it. Only the OB lane edits this table: Task 12
  * replaces `terms`, `profile` and `not-eligible`; Task 13 `guardian`; Task 14 `location`, `motion`,
- * `notifications`, `auto-detect` and `ready`. `camera` (M7) and `family` (M6) stay placeholders and
- * out of every flow until `STEP_AVAILABLE` turns them on.
+ * `notifications`, `auto-detect` and `ready`. `camera` is lane B's (the camera beta) and `family` the
+ * lean M6 step (join or start a family).
  */
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
   terms: TermsStep,
@@ -48,8 +42,8 @@ export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> =
   motion: MotionStep,
   notifications: NotificationsStep,
   'auto-detect': AutoDetectStep,
-  camera: placeholderFor('camera'),
-  family: placeholderFor('family'),
+  camera: CameraStep,
+  family: FamilyStep,
   // Finishes onboarding itself (`finishOnboarding`), so the stepper's exit after it is never used.
   ready: ReadyStep,
 };

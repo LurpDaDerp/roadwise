@@ -120,7 +120,7 @@ describe('buildFlowContext', () => {
       termsCurrent: true,
       termsPublished: false,
       minorConsentMode: 'guardian_consent_required',
-      features: { autoDetect: false, guardianInvites: true },
+      features: { autoDetect: false, guardianInvites: true, cameraBeta: false },
     });
   });
 

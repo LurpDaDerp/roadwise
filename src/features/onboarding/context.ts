@@ -115,6 +115,7 @@ export function buildFlowContext(input: {
     features: {
       autoDetect: input.config.flags.auto_detect,
       guardianInvites: input.config.flags.guardian_invites,
+      cameraBeta: input.config.flags.camera_beta,
     },
   };
 }
