@@ -30,9 +30,6 @@ const P0_TYPES: NotificationType[] = [
   'goal_completed',
   'level_up',
   'referral_qualified',
-  'family_membership',
-  'family_sharing_changed',
-  'family_digest',
   'data_export_ready',
   'transparency_reminder',
 ];
@@ -149,13 +146,12 @@ describe('the catalog', () => {
     }
   });
 
-  test('rewards rows are M5, family rows M6 in the family cap class, export M8, transparency M6 promo', () => {
+  test('rewards rows are M5, export M8, transparency M6 promo; lean M6 sends no family notification', () => {
     for (const t of ['goal_completed', 'level_up', 'referral_qualified'] as const) {
       expect(CATALOG[t].producer).toBe('M5');
     }
-    for (const t of ['family_membership', 'family_sharing_changed', 'family_digest'] as const) {
-      expect(CATALOG[t]).toMatchObject({ producer: 'M6', capClass: 'family', category: 'family' });
-    }
+    expect(ALL.filter((e) => e.capClass === 'family')).toEqual([]);
+    expect(ALL.map((e) => e.type).filter((t) => t.startsWith('family_'))).toEqual([]);
     expect(CATALOG.transparency_reminder).toMatchObject({ producer: 'M6', capClass: 'promo' });
     expect(CATALOG.data_export_ready.producer).toBe('M8');
   });
@@ -229,9 +225,11 @@ describe('the daily cap (§11.1 rule 2)', () => {
     }
   });
 
-  test('family rows are exempt; standard and promo rows count', () => {
-    expect(countsTowardDailyCap('family_digest')).toBe(false);
-    expect(countsTowardDailyCap('family_membership')).toBe(false);
+  test('family-class rows are exempt; standard and promo rows count', () => {
+    // No row is in the family class today; the exemption stays the rule for one that is.
+    const withFamilyRow = { ...CATALOG, missed_drive: { ...CATALOG.missed_drive, capClass: 'family' as const } };
+    expect(countsTowardDailyCap('missed_drive', withFamilyRow)).toBe(false);
+    expect(countsTowardDailyCap('missed_drive')).toBe(true);
     expect(countsTowardDailyCap('permission_lapsed')).toBe(true);
     expect(countsTowardDailyCap('transparency_reminder')).toBe(true);
   });

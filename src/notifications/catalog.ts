@@ -28,9 +28,6 @@ export type NotificationType =
   | 'goal_completed'
   | 'level_up'
   | 'referral_qualified'
-  | 'family_membership'
-  | 'family_sharing_changed'
-  | 'family_digest'
   | 'data_export_ready'
   | 'transparency_reminder';
 
@@ -215,40 +212,6 @@ export const buildCatalog = (driveSummaryCountsTowardDailyCap: boolean): Catalog
     live: true,
     ttlHours: 48,
     window: DAYTIME_WINDOW,
-  }),
-  // Reserved: no producer, no copy yet.
-  family_membership: entry({
-    type: 'family_membership',
-    category: 'family',
-    capClass: 'family',
-    priority: 'normal',
-    androidChannel: 'family',
-    delivery: 'push',
-    producer: 'M6',
-    live: false,
-    ttlHours: 72,
-  }),
-  family_sharing_changed: entry({
-    type: 'family_sharing_changed',
-    category: 'family',
-    capClass: 'family',
-    priority: 'normal',
-    androidChannel: 'family',
-    delivery: 'push',
-    producer: 'M6',
-    live: false,
-    ttlHours: 72,
-  }),
-  family_digest: entry({
-    type: 'family_digest',
-    category: 'family',
-    capClass: 'family',
-    priority: 'normal',
-    androidChannel: 'family',
-    delivery: 'push',
-    producer: 'M6',
-    live: false,
-    ttlHours: 72,
   }),
   data_export_ready: entry({
     type: 'data_export_ready',

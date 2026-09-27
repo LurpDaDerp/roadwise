@@ -10,8 +10,9 @@ set lock_timeout = '5s';
 -- guardian consent step stays as it is (dark, flagged).
 --
 -- Objects (every one follows .agent/backend-conventions.md):
---   * public.families: name, code (6 of the 31-letter alphabet, unique), code_expires_at (7 days,
---     rotatable). No user reference.
+--   * public.families: name, code (6 of the 31-letter alphabet, unique), code_expires_at (48 h,
+--     rotatable). A code is SINGLE-USE: a successful join replaces it (security review I-1: a leaked
+--     code must not keep exposing a teen's live location and places). No user reference.
 --   * public.family_members: (family_id, user_id) pk, user_id unique (one family per person), role
 --     admin|member (the creator is the admin), sharing_location (default false).
 --   * public.member_locations: ONE row per person, overwritten (never a history): lat, lng, accuracy_m,
@@ -30,7 +31,12 @@ set lock_timeout = '5s';
 --     or malformed code reads the same ('invalid code'); refusals after the take are RETURNED (0011's
 --     referral_refusal: the PostgREST error body and status) so the take commits.
 --   * post_my_location is rate-limited server-side: a post within 20 s of the member's last accepted one
---     is not written ({ accepted: false }). Refused while sharing is off or outside a family.
+--     is not written ({ accepted: false }). Refused while sharing is off or outside a family. It holds
+--     the member row `for share` until it commits (review m-1), so a racing sharing-off or leave waits
+--     and then deletes the row this post wrote.
+--   * The background-location disclosure pd-2 names family sharing. set_location_sharing(true) and
+--     post_my_location both refuse ('location disclosure required') an account without an unrevoked
+--     `consents` row { background_location, pd-<n> } with n >= 2 (family_check_disclosure).
 --   * Privacy: a location is visible only to members of the same family, only while its owner shares,
 --     and only while under 24 h old; turning sharing off, leaving or being removed deletes the row at
 --     once; purge_member_locations (hourly cron `purge-member-locations`) deletes rows older than 24 h.
@@ -145,6 +151,20 @@ begin
   end if;
 end $$;
 
+-- refuses an account that has not accepted the background-location disclosure naming family sharing:
+-- an unrevoked consents row { background_location, pd-<n> } with n >= 2
+create or replace function public.family_check_disclosure(p_uid uuid) returns void
+language plpgsql stable set search_path = public as $$
+begin
+  if not exists (
+    select 1 from public.consents c
+    where c.user_id = p_uid and c.type = 'background_location' and c.revoked_at is null
+      and c.version ~ '^pd-[0-9]{1,6}$' and substr(c.version, 4)::int >= 2
+  ) then
+    raise exception 'location disclosure required' using errcode = 'insufficient_privilege';
+  end if;
+end $$;
+
 -- the caller's family id, or a refusal
 create or replace function public.family_of(p_uid uuid) returns uuid
 language plpgsql stable set search_path = public as $$
@@ -195,7 +215,7 @@ begin
   loop
     begin
       insert into public.families (name, code, code_expires_at)
-        values (v_name, public.family_new_code(), now() + interval '7 days')
+        values (v_name, public.family_new_code(), now() + interval '48 hours')
         returning id into v_id;
       exit;
     exception when unique_violation then
@@ -223,6 +243,7 @@ declare
   v_start timestamptz;
   v_code text;
   v_family uuid;
+  v_retries int := 0;
 begin
   if v_uid is null then
     raise exception 'join_family requires an authenticated user' using errcode = 'insufficient_privilege';
@@ -257,6 +278,19 @@ begin
     return public.referral_refusal('42501', 'family is full');
   end if;
   insert into public.family_members (family_id, user_id, role) values (v_family, v_uid, 'member');
+  -- single-use (review I-1): the code just used stops working; the admin's screen shows the new one
+  loop
+    begin
+      update public.families set code = public.family_new_code(), code_expires_at = now() + interval '48 hours'
+        where id = v_family;
+      exit;
+    exception when unique_violation then
+      v_retries := v_retries + 1;
+      if v_retries > 5 then
+        raise;
+      end if;
+    end;
+  end loop;
   return jsonb_build_object('familyId', v_family);
 end $$;
 
@@ -298,14 +332,14 @@ begin
   end if;
 end $$;
 
--- the admin replaces the join code (the old one stops working at once); { code, codeExpiresAt }
+-- the admin replaces the join code (the old one stops working at once); { code, codeExpiresAt }. 48 h, once.
 create or replace function public.rotate_family_code() returns jsonb
 language plpgsql security definer set search_path = public set lock_timeout = '2s' as $$
 declare
   v_uid uuid := auth.uid();
   v_family uuid;
   v_code text;
-  v_expires timestamptz := now() + interval '7 days';
+  v_expires timestamptz := now() + interval '48 hours';
   v_retries int := 0;
 begin
   if v_uid is null then
@@ -330,7 +364,8 @@ begin
   return jsonb_build_object('code', v_code, 'codeExpiresAt', v_expires);
 end $$;
 
--- turn the caller's location sharing on or off; off deletes their location row at once
+-- turn the caller's location sharing on or off; off deletes their location row at once. On needs the
+-- pd-2 disclosure accepted first; off never does.
 create or replace function public.set_location_sharing(p_on boolean) returns void
 language plpgsql security definer set search_path = public set lock_timeout = '2s' as $$
 declare
@@ -346,13 +381,18 @@ begin
   if not found then
     raise exception 'not in a family' using errcode = 'invalid_parameter_value';
   end if;
+  if p_on then
+    -- raised after the update, which it rolls back with the call
+    perform public.family_check_disclosure(v_uid);
+  end if;
   if not p_on then
     delete from public.member_locations where user_id = v_uid;
   end if;
 end $$;
 
--- overwrite the caller's one location row; { accepted }. Refused unless the caller is in a family and
--- shares; not written within 20 s of the last accepted post (the server's rate limit).
+-- overwrite the caller's one location row; { accepted }. Refused unless the caller is in a family,
+-- shares and has accepted pd-2; not written within 20 s of the last accepted post (the server's rate
+-- limit). The member row is held `for share` to commit, so sharing-off and leave wait for this post.
 create or replace function public.post_my_location(p_lat double precision, p_lng double precision, p_accuracy_m real,
   p_driving boolean) returns jsonb
 language plpgsql security definer set search_path = public set lock_timeout = '2s' as $$
@@ -367,9 +407,11 @@ begin
      or p_accuracy_m is null or p_accuracy_m not between 0 and 10000 or p_driving is null then
     raise exception 'invalid location' using errcode = 'invalid_parameter_value';
   end if;
-  if not exists (select 1 from public.family_members m where m.user_id = v_uid and m.sharing_location) then
+  perform 1 from public.family_members m where m.user_id = v_uid and m.sharing_location for share;
+  if not found then
     raise exception 'location sharing is off' using errcode = 'insufficient_privilege';
   end if;
+  perform public.family_check_disclosure(v_uid);
   insert into public.member_locations as l (user_id, lat, lng, accuracy_m, driving, updated_at)
     values (v_uid, p_lat, p_lng, p_accuracy_m, p_driving, now())
     on conflict (user_id) do update
@@ -536,6 +578,7 @@ revoke all on public.family_places from anon, authenticated, service_role;
 revoke all on function public.family_members_after_delete() from public, anon, authenticated, service_role;
 revoke all on function public.family_new_code() from public, anon, authenticated, service_role;
 revoke all on function public.family_check_eligible(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.family_check_disclosure(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.family_of(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.family_check_place(text, text, double precision, double precision, int) from public, anon, authenticated, service_role;
 revoke all on function public.purge_member_locations() from public, anon, authenticated, service_role;

@@ -197,7 +197,7 @@ describe('the background-location consent', () => {
     const settings = createSettingsRepo(await createTestDb());
     const record = jest.fn(async () => ({}));
     expect(await recordDisclosureConsent(settings, signedIn('u1'), record)).toBe(true);
-    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
     expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
   });
 
@@ -205,9 +205,9 @@ describe('the background-location consent', () => {
     const settings = createSettingsRepo(await createTestDb());
     const record = jest.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({});
     expect(await recordDisclosureConsent(settings, signedIn('u1'), record)).toBe(false);
-    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-2', userId: 'u1' });
     await flushPendingDisclosureConsent(settings, 'u1', record);
-    expect(record).toHaveBeenLastCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(record).toHaveBeenLastCalledWith('u1', { type: 'background_location', version: 'pd-2' });
     expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toBeNull();
     await flushPendingDisclosureConsent(settings, 'u1', record);
     expect(record).toHaveBeenCalledTimes(2);
@@ -220,10 +220,10 @@ describe('the background-location consent', () => {
     record.mockClear();
     await flushPendingDisclosureConsent(settings, 'driver-b', record);
     expect(record).not.toHaveBeenCalled();
-    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'driver-a' });
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-2', userId: 'driver-a' });
     // Negative control: under its own account it goes.
     await flushPendingDisclosureConsent(settings, 'driver-a', record);
-    expect(record).toHaveBeenCalledWith('driver-a', { type: 'background_location', version: 'pd-1' });
+    expect(record).toHaveBeenCalledWith('driver-a', { type: 'background_location', version: 'pd-2' });
   });
 
   test('session lost mid-flow: kept bound to the account shown the disclosure, never sent now', async () => {
@@ -231,11 +231,11 @@ describe('the background-location consent', () => {
     const record = jest.fn(async () => ({}));
     expect(await recordDisclosureConsent(settings, { shownTo: 'u1', sessionUid: null }, record)).toBe(false);
     expect(record).not.toHaveBeenCalled();
-    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+    expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-2', userId: 'u1' });
     await flushPendingDisclosureConsent(settings, 'someone-else', record);
     expect(record).not.toHaveBeenCalled();
     await flushPendingDisclosureConsent(settings, 'u1', record);
-    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(record).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   });
 
   test('security r1-M1: shown to nobody known — nothing recorded or kept, whoever is signed in', async () => {

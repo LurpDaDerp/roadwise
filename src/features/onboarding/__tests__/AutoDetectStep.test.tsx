@@ -213,8 +213,8 @@ describe('this account has not affirmed the disclosure (Task 19 r1, security I-1
     await press(await screen.findByTestId('auto-record-turn-on'));
     await press(await screen.findByTestId('disclosure-continue'));
     await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
-    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
-    expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
+    expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-2', at: T0, uid: 'u1' });
     // The consent is recorded before auto-record is turned on.
     const consentAt = (recordConsent as jest.Mock).mock.invocationCallOrder[0] as number;
     const onAt = (host.setAutoDetect as jest.Mock).mock.invocationCallOrder[0] as number;

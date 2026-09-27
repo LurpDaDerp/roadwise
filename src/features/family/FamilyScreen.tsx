@@ -3,10 +3,14 @@ import { useFocusEffect, useRouter, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, Switch, View } from 'react-native';
 
+import { useDataSource } from '@/data/queries';
+import { recordConsent } from '@/data/supabase/profile';
+import { useSession } from '@/data/supabase/session';
 import { Banner, Button, ListRow, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import type { Family, FamilyMember, FamilyPlace } from './api';
 import { familyCopy as copy } from './copy';
+import { acceptFamilyDisclosure, familyDisclosureWords, type RecordFamilyConsent } from './disclosure';
 import { FamilyMap } from './FamilyMap';
 import { FamilyStart } from './FamilyStart';
 import { errorText, useArea, type ReverseGeocode } from './parts';
@@ -21,6 +25,8 @@ export interface FamilyScreenDeps extends FamilyDeps {
   reverseGeocode?: ReverseGeocode;
   /** The confirmation dialog (default React Native `Alert.alert`). */
   alert?: typeof Alert.alert;
+  /** Records the pd-2 consent when sharing is turned on (default `recordConsent`). */
+  recordConsent?: RecordFamilyConsent;
 }
 
 /** Polls while the screen is focused; stops the moment it is not. */
@@ -168,7 +174,10 @@ function PlaceRow({ place, onPress }: { place: FamilyPlace; onPress: () => void 
 
 /**
  * "Share my location": asks before turning on (who will see what) and before turning off (the last
- * location is deleted), in both directions, and shows the server's answer, not the tap.
+ * location is deleted), in both directions, and shows the server's answer, not the tap. Turning on
+ * shows the background-location disclosure's words for family sharing (pd-2: only its new words to
+ * an account that accepted pd-1, all of it otherwise), and confirming records that acceptance, the
+ * consent the server requires, before sharing is turned on.
  */
 function SharingSwitch({ on, deps }: { on: boolean; deps: FamilyScreenDeps }) {
   const th = useTheme();
@@ -178,24 +187,61 @@ function SharingSwitch({ on, deps }: { on: boolean; deps: FamilyScreenDeps }) {
   const [pending, setPending] = useState<boolean | null>(null);
   const shown = pending ?? on;
   const alert = deps.alert ?? Alert.alert;
+  const { db } = useDataSource();
+  const uid = useSession().session?.user.id ?? null;
 
-  const change = (next: boolean) => {
-    const words = next ? copy.confirmShareOn : copy.confirmShareOff;
+  const send = (next: boolean) =>
+    actions.setSharing.mutate(next, {
+      onError: (e) => setError(errorText(e)),
+      onSettled: () => setPending(null),
+    });
+
+  const turnOn = async () => {
+    if (uid === null) return;
+    const disclosure = await familyDisclosureWords(db, uid).catch(() => null);
+    if (disclosure === null) {
+      setError(copy.errors.unknown);
+      return;
+    }
+    const words = copy.confirmShareOn;
+    alert(words.title, words.withDisclosure(words.body, disclosure), [
+      { text: words.cancel, style: 'cancel' },
+      {
+        text: words.confirm,
+        onPress: () => {
+          setError(null);
+          setPending(true);
+          acceptFamilyDisclosure(db, uid, (deps.now ?? Date.now)(), deps.recordConsent ?? recordConsent).then(
+            () => send(true),
+            () => {
+              setPending(null);
+              setError(words.consentFailed);
+            }
+          );
+        },
+      },
+    ]);
+  };
+
+  const turnOff = () => {
+    const words = copy.confirmShareOff;
     alert(words.title, words.body, [
       { text: words.cancel, style: 'cancel' },
       {
         text: words.confirm,
-        style: next ? 'default' : 'destructive',
+        style: 'destructive',
         onPress: () => {
           setError(null);
-          setPending(next);
-          actions.setSharing.mutate(next, {
-            onError: (e) => setError(errorText(e)),
-            onSettled: () => setPending(null),
-          });
+          setPending(false);
+          send(false);
         },
       },
     ]);
+  };
+
+  const change = (next: boolean) => {
+    if (next) void turnOn();
+    else turnOff();
   };
 
   return (

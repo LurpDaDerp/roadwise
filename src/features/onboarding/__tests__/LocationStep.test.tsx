@@ -162,7 +162,7 @@ describe('Android', () => {
       await press(await screen.findByTestId('disclosure-continue'));
       await waitFor(() => expect(consents('background_location')).toHaveLength(1));
       expect(consents('background_location')[0]?.[0]).toBe('u1');
-      expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
+      expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-2', at: T0, uid: 'u1' });
     });
 
     test('affirmed by the previous owner: still this account’s disclosure', async () => {

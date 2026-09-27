@@ -294,22 +294,16 @@ Deno.test('cap: one local send and one server send today → capped', () => {
 });
 
 Deno.test('cap: a family-class send is not counted', () => {
-  const d = decide(
-    item(
-      {},
-      {
-        localSentToday: 1,
-        recent: [
-          { type: 'family_membership', pushedAt: NOW - H },
-          { type: 'family_digest', pushedAt: NOW - 2 * H },
-          { type: 'family_sharing_changed', pushedAt: NOW - 3 * H },
-        ],
-      }
-    ),
-    NOW,
-    CATALOG
-  );
-  assertEquals(reason(d), 'send');
+  // No catalog row is in the family class since lean M6 cut its notifications; the exemption is
+  // still the cap's rule, so a catalog with one row moved into the class exercises it.
+  const withFamilyRow: Catalog = { ...CATALOG, missed_drive: { ...CATALOG.missed_drive, capClass: 'family' } };
+  const recent = [
+    { type: 'missed_drive', pushedAt: NOW - H },
+    { type: 'missed_drive', pushedAt: NOW - 2 * H },
+  ];
+  assertEquals(reason(decide(item({}, { localSentToday: 1, recent }), NOW, withFamilyRow)), 'send');
+  // control: the same sends in the standard class fill the cap
+  assert(reason(decide(item({}, { localSentToday: 1, recent }), NOW, CATALOG)) !== 'send');
 });
 
 Deno.test('cap: an unknown type in recent counts (the conservative reading)', () => {

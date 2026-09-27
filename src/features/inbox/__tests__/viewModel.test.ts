@@ -159,7 +159,7 @@ describe('toItemView — other types', () => {
   it('unknown, non-live and malformed rows render nothing', () => {
     // A rewards type carrying some other type's payload fails its schema.
     expect(toItemView(inboxRow({ type: 'streak_milestone' }), missing, NOW, TZ)).toBeNull();
-    expect(toItemView(inboxRow({ type: 'family_digest', payload: {} }), missing, NOW, TZ)).toBeNull();
+    expect(toItemView(inboxRow({ type: 'data_export_ready', payload: {} }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(inboxRow({ type: 'something_new' }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(inboxRow({ payload: { clientTripId: 'trip-1' } }), missing, NOW, TZ)).toBeNull();
     expect(toItemView(lapseRow({ payload: { permission: 'camera' } }), missing, NOW, TZ)).toBeNull();
@@ -195,7 +195,6 @@ describe('countServerPushesToday', () => {
       pushed(T0 - 3.5 * 60 * 60_000), // 00:30 LA today
       pushed(T0 - 5 * 60 * 60_000), // 23:00 LA yesterday
       pushed(null), // never pushed
-      pushed(T0 - 60_000, 'family_digest'), // family: exempt
     ];
     expect(countServerPushesToday(rows, LA, T0)).toBe(2);
     // The same rows in UTC: 12:00 on the 5th, so 23:00 LA (07:00 UTC) is today there.

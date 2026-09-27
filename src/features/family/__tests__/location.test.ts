@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions/keys';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Db } from '@/data/db/driver';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
@@ -46,6 +47,8 @@ const flush = async () => {
 beforeEach(async () => {
   db = await createTestDb();
   await createSettingsRepo(db).set(SESSION_UID_KEY, UID);
+  // pd-2, the disclosure naming family sharing, affirmed by this account (the tests below remove it)
+  await createSettingsRepo(db).set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-2', at: 1, uid: UID });
   clock = 1_000_000;
   recording = true;
   lastKnown = { lat: 47.62, lng: -122.35, accuracyM: 20 };
@@ -66,6 +69,67 @@ function attach() {
   });
   return { source, appState, postLocation, poster };
 }
+
+describe('pd-2 gates every post', () => {
+  const tryAll = async (h: ReturnType<typeof attach>) => {
+    h.source.emit('row', row());
+    await flush();
+    clock += 61_000;
+    h.source.emit('wake', { reason: 'significant-change' });
+    await flush();
+    clock += 61_000;
+    lastKnown = { lat: 47.7, lng: -122.4, accuracyM: 20 };
+    h.appState.emit('active');
+    await flush();
+  };
+
+  it.each([
+    ['no affirmation', null],
+    ['a pd-1 affirmation (words that do not name family sharing)', { version: 'pd-1', at: 1, uid: UID }],
+    ['a pd-2 affirmation by another account', { version: 'pd-2', at: 1, uid: 'someone-else' }],
+  ])('with %s: no drive row, wake or foreground posts', async (_label, affirmation) => {
+    const settings = createSettingsRepo(db);
+    if (affirmation === null) await settings.remove(DISCLOSURE_AFFIRMED_KEY);
+    else await settings.set(DISCLOSURE_AFFIRMED_KEY, affirmation);
+    await writeSharingRecord(db, UID, true);
+    const h = attach();
+    await tryAll(h);
+    expect(h.postLocation).not.toHaveBeenCalled();
+    h.poster.detach();
+  });
+
+  it('control: with pd-2 affirmed by this account, each of them posts', async () => {
+    await writeSharingRecord(db, UID, true);
+    const h = attach();
+    await tryAll(h);
+    expect(h.postLocation).toHaveBeenCalledTimes(3);
+    h.poster.detach();
+  });
+
+  it('a server refusal for a consent not yet recorded is not reported as an error', async () => {
+    await writeSharingRecord(db, UID, true);
+    const onError = jest.fn();
+    const postLocation = jest.fn(async () => {
+      throw new FamilyError('disclosure_required');
+    });
+    const source = fakeSource();
+    const poster = attachFamilyLocation({
+      db,
+      source,
+      recording: () => true,
+      appState: fakeAppState(),
+      now: () => clock,
+      lastKnown: async () => lastKnown,
+      api: { postLocation },
+      onError,
+    });
+    source.emit('row', row());
+    await flush();
+    expect(postLocation).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    poster.detach();
+  });
+});
 
 it('posts nothing while sharing is off, and nothing for another account', async () => {
   const { source, appState, postLocation, poster } = attach();

@@ -74,7 +74,7 @@ test('Always granted, but this account never affirmed the disclosure: turning on
     fireEvent.press(await screen.findByTestId('disclosure-continue'));
   });
   await waitFor(() => expect(host.setAutoDetect).toHaveBeenCalledWith(true));
-  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
 });
 
 test('a disclosure affirmed below the arming minimum does not count', async () => {

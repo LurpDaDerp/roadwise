@@ -1,7 +1,9 @@
 import { act, fireEvent, screen } from '@testing-library/react-native';
 import type { Alert } from 'react-native';
 
+import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions/keys';
 import { createSettingsRepo } from '@/data/db/settings';
+import { DISCLOSURE_FAMILY_TEXT, DISCLOSURE_TEXT } from '@/features/drive/detectionCopy';
 import { clearInboxClients, inboxWorld, settleInbox } from '@/features/inbox/__fixtures__/harness';
 
 import type { FamilySnapshot } from '../api';
@@ -36,14 +38,21 @@ const alertPressing = (choose: string) =>
     buttons?.find((b) => b.text === choose)?.onPress?.();
   }) as unknown as typeof Alert.alert;
 
-async function renderFamily(snapshot: FamilySnapshot = { family: family() }, alert?: typeof Alert.alert) {
+async function renderFamily(
+  snapshot: FamilySnapshot = { family: family() },
+  alert?: typeof Alert.alert,
+  recordConsent: jest.Mock<Promise<unknown>, any[]> = jest.fn(async () => ({}))
+) {
   const w = await inboxWorld();
   const server = fakeFamilyApi(snapshot);
   const reverseGeocode = jest.fn(async () => [{ district: 'Capitol Hill' }]);
-  await w.render(<FamilyScreen deps={{ api: server.api, now: () => NOW, reverseGeocode, alert }} />);
+  await w.render(<FamilyScreen deps={{ api: server.api, now: () => NOW, reverseGeocode, alert, recordConsent }} />);
   await settleInbox();
-  return { ...w, ...server, reverseGeocode };
+  return { ...w, ...server, reverseGeocode, recordConsent };
 }
+
+/** This account accepted the pd-1 disclosure (before family sharing existed). */
+const PD1 = { version: 'pd-1', at: 1, uid: UID };
 
 describe('FamilyScreen', () => {
   it('with no family: what it is for, and join or start one', async () => {
@@ -103,26 +112,63 @@ describe('FamilyScreen', () => {
     expect(screen.getByTestId(`family-member-${OTHER}`)).toHaveTextContent(/Near Capitol Hill · 5 min ago/);
   });
 
-  it('turning sharing on asks first, then shares and records it on the phone', async () => {
+  it('turning sharing on shows pd-2\'s family words, records pd-2, then shares and records it on the phone', async () => {
     const alert = alertPressing('Share');
-    const { api, db } = await renderFamily({ family: family() }, alert);
+    const { api, db, recordConsent } = await renderFamily({ family: family() }, alert);
+    await createSettingsRepo(db).set(DISCLOSURE_AFFIRMED_KEY, PD1);
     expect(screen.getByTestId('family-sharing').props.value).toBe(false);
     await act(async () => {
       fireEvent(screen.getByTestId('family-sharing'), 'valueChange', true);
     });
     await settleInbox();
-    expect(alert).toHaveBeenCalledWith('Share your location?', expect.any(String), expect.any(Array));
+    const body = (alert as unknown as jest.Mock).mock.calls[0][1] as string;
+    expect((alert as unknown as jest.Mock).mock.calls[0][0]).toBe('Share your location?');
+    expect(body).toContain(DISCLOSURE_FAMILY_TEXT);
+    expect(body).toContain('even when the app is closed');
+    // pd-1 was accepted: only the new words, not the whole disclosure again
+    expect(body).not.toContain(DISCLOSURE_TEXT.heading);
+    expect(recordConsent).toHaveBeenCalledWith(UID, { type: 'background_location', version: 'pd-2' });
+    expect(recordConsent.mock.invocationCallOrder[0]).toBeLessThan(api.setSharing.mock.invocationCallOrder[0]!);
     expect(api.setSharing).toHaveBeenCalledWith(true);
+    expect(await createSettingsRepo(db).get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-2', at: NOW, uid: UID });
     expect(await createSettingsRepo(db).get(FAMILY_SHARING_KEY)).toEqual({ uid: UID, on: true });
     expect(screen.getByTestId('family-sharing-hint')).toHaveTextContent('Your family can see where you are.');
   });
 
-  it('declining the prompt changes nothing', async () => {
+  it('an account that never saw the disclosure is shown all of pd-2', async () => {
     const alert = alertPressing('Not now');
-    const { api } = await renderFamily({ family: family() }, alert);
+    await renderFamily({ family: family() }, alert);
     await act(async () => {
       fireEvent(screen.getByTestId('family-sharing'), 'valueChange', true);
     });
+    const body = (alert as unknown as jest.Mock).mock.calls[0][1] as string;
+    expect(body).toContain(DISCLOSURE_TEXT.heading);
+    expect(body).toContain(DISCLOSURE_TEXT.body);
+  });
+
+  it('when the consent cannot be recorded, sharing is not turned on', async () => {
+    const alert = alertPressing('Share');
+    const failing = jest.fn(async (_uid: string, _consent: { type: 'background_location'; version: string }): Promise<unknown> => {
+      throw new Error('offline');
+    });
+    const { api, db } = await renderFamily({ family: family() }, alert, failing);
+    await act(async () => {
+      fireEvent(screen.getByTestId('family-sharing'), 'valueChange', true);
+    });
+    await settleInbox();
+    expect(api.setSharing).not.toHaveBeenCalled();
+    expect(await createSettingsRepo(db).get(DISCLOSURE_AFFIRMED_KEY)).toBeNull();
+    expect(screen.getByTestId('family-sharing-error')).toHaveTextContent(/Couldn't save your agreement/);
+    expect(screen.getByTestId('family-sharing').props.value).toBe(false);
+  });
+
+  it('declining the prompt changes nothing', async () => {
+    const alert = alertPressing('Not now');
+    const { api, recordConsent } = await renderFamily({ family: family() }, alert);
+    await act(async () => {
+      fireEvent(screen.getByTestId('family-sharing'), 'valueChange', true);
+    });
+    expect(recordConsent).not.toHaveBeenCalled();
     expect(api.setSharing).not.toHaveBeenCalled();
     expect(screen.getByTestId('family-sharing').props.value).toBe(false);
   });

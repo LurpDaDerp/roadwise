@@ -10,7 +10,7 @@
  */
 
 /** Names the words in `DISCLOSURE_TEXT`; stored as `consents.version` for `background_location`. */
-export const DISCLOSURE_VERSION = 'pd-1';
+export const DISCLOSURE_VERSION = 'pd-2';
 
 /**
  * Google Play's prominent disclosure for background location, shown before any background
@@ -22,10 +22,17 @@ export const DISCLOSURE_VERSION = 'pd-1';
  * Lookups begin while a possible drive is still being checked, so the text never says they happen
  * only during recorded drives; and a confirmed drive keeps its candidate pre-roll, so it says
  * location is kept "as part of a recorded drive", not "only while a drive is being recorded".
- * Showing drives to a guardian (M6) needs 'pd-2' and a fresh consent. On counsel's list before any
- * store build.
+ * pd-2 (lean M6) adds family location sharing, which posts the latest location from the OS's
+ * background wakes (`DISCLOSURE_FAMILY_TEXT`, the only new words): pd-1 said location was kept only
+ * as part of a recorded drive, which stops being true once a member shares. A pd-1 affirmation still
+ * arms auto-record (`ARMING_DISCLOSURE_MIN_VERSION`); family sharing needs pd-2
+ * (`FAMILY_DISCLOSURE_MIN_VERSION`), accepted at this screen or at the Family tab's sharing prompt,
+ * which shows these words. On counsel's list before any store build.
  */
+export const DISCLOSURE_FAMILY_TEXT =
+  'If you turn on location sharing in a family, RoadWise also shares your latest location with your family, even when the app is closed or not in use: it is updated as you drive or move around, kept as one location that is replaced each time (never a history), and deleted when you stop sharing or leave the family, or after 24 hours.';
+
 export const DISCLOSURE_TEXT = {
   heading: 'Allow RoadWise to use your location in the background',
-  body: 'RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. While a drive is being detected or recorded, your location is used to look up speed limits; where open map data has no limit, the location (without your account ID) may be sent to Amazon Location Service to find it. RoadWise also uses your phone’s motion activity to detect when a drive starts and ends. Location is kept only as part of a recorded drive. It is stored with your account to score your drives and is never sold. The detailed route of each drive is uploaded and kept for up to 14 days so disputed events can be checked.',
+  body: `RoadWise collects location data to detect and record your drives automatically — measuring your speed, distance and the roads you drive — even when the app is closed or not in use. While a drive is being detected or recorded, your location is used to look up speed limits; where open map data has no limit, the location (without your account ID) may be sent to Amazon Location Service to find it. RoadWise also uses your phone’s motion activity to detect when a drive starts and ends. Drive locations are kept as part of a recorded drive. They are stored with your account to score your drives and is never sold. The detailed route of each drive is uploaded and kept for up to 14 days so disputed events can be checked. ${DISCLOSURE_FAMILY_TEXT}`,
 } as const;

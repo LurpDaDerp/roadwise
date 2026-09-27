@@ -1,4 +1,5 @@
--- 0012_family: family groups, join codes, location sharing (off by default, one overwritten row, 24 h),
+-- 0012_family: family groups, single-use join codes (48 h), location sharing (off by default, gated on
+-- the pd-2 background-location consent, one overwritten row, 24 h),
 -- family places, the admin handover and dissolution, the account cascade and the under-13 minimisation.
 --
 -- pgTAP is installed by 0001's test file outside its transaction; repeating it keeps this file runnable
@@ -15,7 +16,7 @@ begin
 end $$;
 
 begin;
-select plan(107);
+select plan(118);
 
 -- ---------------------------------------------------------------------------
 -- builders
@@ -79,6 +80,10 @@ create function pg_temp.refusal(p_code text, p_message text) returns jsonb langu
 $$;
 create function pg_temp.fam(p_user uuid) returns uuid language sql as $$ select family_id from public.family_members where user_id = p_user $$;
 create function pg_temp.code(p_family uuid) returns text language sql as $$ select code from public.families where id = p_family $$;
+-- a background-location consent row, as the phone records it when the disclosure is accepted
+create function pg_temp.consent(n int, p_version text default 'pd-2') returns void language sql as $$
+  insert into public.consents (user_id, type, version) values (pg_temp.u(n), 'background_location', p_version)
+$$;
 create function pg_temp.snap(p_user uuid) returns jsonb language sql as $$
   select pg_temp.run(p_user, 'select public.family_snapshot()::text')::jsonb
 $$;
@@ -95,8 +100,10 @@ select extensions.dblink_exec('rw12_pg', $q$insert into auth.users (id, email, c
   ('c9000000-0000-4000-8000-000000000902', 'f12-b@example.com', now())$q$);
 select extensions.dblink_exec('rw12_pg', $q$update public.private_profiles set birth_date = date '1990-01-01' where user_id in
   ('c9000000-0000-4000-8000-000000000901', 'c9000000-0000-4000-8000-000000000902')$q$);
+select extensions.dblink_exec('rw12_pg', $q$insert into public.consents (user_id, type, version)
+  values ('c9000000-0000-4000-8000-000000000901', 'background_location', 'pd-2')$q$);
 select extensions.dblink_exec('rw12_pg', $q$insert into public.families (id, name, code, code_expires_at)
-  values ('c1200000-0000-4000-8000-000000000001', 'Fresh', 'ABCD23', now() + interval '7 days')$q$);
+  values ('c1200000-0000-4000-8000-000000000001', 'Fresh', 'ABCD23', now() + interval '48 hours')$q$);
 select extensions.dblink_exec('rw12_pg', $q$insert into public.family_members (family_id, user_id, role)
   values ('c1200000-0000-4000-8000-000000000001', 'c9000000-0000-4000-8000-000000000902', 'admin')$q$);
 select is(pg_temp.fresh_client($q$select public.family_snapshot()::text$q$)::jsonb, '{"family": null}'::jsonb,
@@ -164,9 +171,10 @@ select is((select count(*)::int from pg_proc p where p.oid in ('public.create_fa
     and p.prosecdef and p.proowner = 'postgres'::regrole and p.proconfig = array['search_path=public', 'lock_timeout=2s']), 10,
   'the ten RPCs are definer, owned by postgres, proconfig exactly search_path=public, lock_timeout=2s');
 select is((select count(*)::int from pg_proc p where p.oid in ('public.family_new_code()'::regprocedure, 'public.family_check_eligible(uuid)'::regprocedure,
+    'public.family_check_disclosure(uuid)'::regprocedure,
     'public.family_of(uuid)'::regprocedure, 'public.family_check_place(text, text, double precision, double precision, int)'::regprocedure,
     'public.purge_member_locations()'::regprocedure)
-    and not p.prosecdef and p.proconfig = array['search_path=public']), 5, 'the helpers are invoker, pinning search_path');
+    and not p.prosecdef and p.proconfig = array['search_path=public']), 6, 'the helpers are invoker, pinning search_path');
 select is((select row(p.prosecdef, p.proowner = 'postgres'::regrole, p.proconfig)::text from pg_proc p
     where p.oid = 'public.family_members_after_delete()'::regprocedure), row(true, true, array['search_path=public'])::text,
   'the delete trigger is definer, owned by postgres, pinning search_path');
@@ -180,7 +188,7 @@ select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(a
       'public.post_my_location(double precision, double precision, real, boolean)']::regprocedure[]) f), false,
   'anon and the service role execute none of them');
 select is((select bool_or(has_function_privilege(r, f, 'execute')) from unnest(array['anon', 'authenticated', 'service_role']) r,
-    unnest(array['public.family_new_code()', 'public.family_check_eligible(uuid)', 'public.family_of(uuid)',
+    unnest(array['public.family_new_code()', 'public.family_check_eligible(uuid)', 'public.family_check_disclosure(uuid)', 'public.family_of(uuid)',
       'public.family_check_place(text, text, double precision, double precision, int)', 'public.purge_member_locations()',
       'public.family_members_after_delete()']::regprocedure[]) f), false, 'no API role executes a helper');
 select is((select row(schedule, command)::text from cron.job where jobname = 'purge-member-locations'),
@@ -292,9 +300,9 @@ select throws_ok($$ select public.create_family('x') $$, '42501', 'create_family
 select throws_ok($$ select pg_temp.run(pg_temp.u(1), $q$select public.create_family('   ')$q$) $$, '22023', 'invalid name', 'a blank name is refused');
 select is(pg_temp.run(pg_temp.u(1), $q$select public.create_family('  The Parks  ')::text$q$)::jsonb ->> 'familyId', pg_temp.fam(pg_temp.u(1))::text,
   'create_family makes a family with its creator in it');
-select is((select row(f.name, f.code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$', f.code_expires_at = now() + interval '7 days', m.role, m.sharing_location)::text
+select is((select row(f.name, f.code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$', f.code_expires_at = now() + interval '48 hours', m.role, m.sharing_location)::text
     from public.families f join public.family_members m on m.family_id = f.id where m.user_id = pg_temp.u(1)),
-  row('The Parks', true, true, 'admin', false)::text, 'trimmed name, a 6-character code for 7 days, the creator admin, sharing off by default');
+  row('The Parks', true, true, 'admin', false)::text, 'trimmed name, a 6-character code for 48 hours, the creator admin, sharing off by default');
 select throws_ok($$ select pg_temp.run(pg_temp.u(1), $q$select public.create_family('Again')$q$) $$, '22023', 'already in a family', 'one family per person');
 create temp table fam1 as select pg_temp.fam(pg_temp.u(1)) as id, pg_temp.code(pg_temp.fam(pg_temp.u(1))) as code;
 select is(pg_temp.run(pg_temp.u(2), format('select public.join_family(%L)::text', ' ' || lower(substr((select code from fam1), 1, 3)) || '-'
@@ -302,28 +310,40 @@ select is(pg_temp.run(pg_temp.u(2), format('select public.join_family(%L)::text'
   'a code typed in lower case with a dash and spaces joins');
 select is((select role from public.family_members where user_id = pg_temp.u(2)), 'member', 'a joiner is a member');
 select is(pg_temp.budget(pg_temp.u(2)), 1, 'a join spends one attempt');
+-- single-use (review I-1): the join replaced the code
+select is(array[pg_temp.code((select id from fam1)) <> (select code from fam1),
+    (select code_expires_at = now() + interval '48 hours' from public.families where id = (select id from fam1))], array[true, true],
+  'a join replaces the code with a new one, good for 48 hours');
+select is(pg_temp.run(pg_temp.u(17), format('select public.join_family(%L)::text', (select code from fam1)))::jsonb, pg_temp.refusal('22023', 'invalid code'),
+  'a code works once: the one just used no longer joins');
+select is(pg_temp.fam(pg_temp.u(17)), null, 'and adds no one');
 select is(pg_temp.run(pg_temp.u(3), $q$select public.join_family('ZZZZ22')::text$q$)::jsonb, pg_temp.refusal('22023', 'invalid code'),
   'a well-formed code that does not exist: invalid code');
 select is(pg_temp.run(pg_temp.u(3), $q$select public.join_family('not a code!')::text$q$)::jsonb, pg_temp.refusal('22023', 'invalid code'),
   'a malformed code: the same answer');
 select is(pg_temp.budget(pg_temp.u(3)), 2, 'each wrong code spends one attempt (the refusal is returned, so the take commits)');
 update public.families set code_expires_at = now() - interval '1 second' where id = (select id from fam1);
-select is(pg_temp.run(pg_temp.u(3), format('select public.join_family(%L)::text', (select code from fam1)))::jsonb, pg_temp.refusal('22023', 'invalid code'),
+select is(pg_temp.run(pg_temp.u(3), format('select public.join_family(%L)::text', pg_temp.code((select id from fam1))))::jsonb, pg_temp.refusal('22023', 'invalid code'),
   'an expired code: the same answer');
-update public.families set code_expires_at = now() + interval '7 days' where id = (select id from fam1);
+update public.families set code_expires_at = now() + interval '48 hours' where id = (select id from fam1);
 select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.join_family('ZZZZ22')$q$) $$, '22023', 'already in a family',
   'a member cannot join another family');
 select is(pg_temp.budget(pg_temp.u(2)), 1, 'and that refusal spends no attempt');
 select pg_temp.run(pg_temp.u(3), format('select public.join_family(%L)::text', 'ZZZZ2' || n)) from generate_series(2, 8) n;
-select throws_ok(format('select pg_temp.run(%L::uuid, %L)', pg_temp.u(3), format('select public.join_family(%L)', (select code from fam1))), '42501', 'too many attempts',
+select throws_ok(format('select pg_temp.run(%L::uuid, %L)', pg_temp.u(3), format('select public.join_family(%L)', pg_temp.code((select id from fam1)))), '42501', 'too many attempts',
   'the 11th attempt in 24 h is refused, even with the right code');
 update public.rate_limits set count = 0 where user_id = pg_temp.u(3) and key = 'family_join';
-select is(pg_temp.run(pg_temp.u(3), format('select public.join_family(%L)::text', (select code from fam1)))::jsonb ? 'familyId', true,
+select is(pg_temp.run(pg_temp.u(3), format('select public.join_family(%L)::text', pg_temp.code((select id from fam1))))::jsonb ? 'familyId', true,
   'a teen can join');
--- full at eight
-select pg_temp.run(pg_temp.u(n), format('select public.join_family(%L)::text', (select code from fam1))) from generate_series(10, 14) n;
+-- full at eight: each joiner is given the admin's current code
+do $$
+begin
+  for n in 10 .. 14 loop
+    perform pg_temp.run(pg_temp.u(n), format('select public.join_family(%L)::text', pg_temp.code((select id from fam1))));
+  end loop;
+end $$;
 select is((select count(*)::int from public.family_members where family_id = (select id from fam1)), 8, 'eight members');
-select is(pg_temp.run(pg_temp.u(15), format('select public.join_family(%L)::text', (select code from fam1)))::jsonb, pg_temp.refusal('42501', 'family is full'),
+select is(pg_temp.run(pg_temp.u(15), format('select public.join_family(%L)::text', pg_temp.code((select id from fam1))))::jsonb, pg_temp.refusal('42501', 'family is full'),
   'a ninth is refused: family is full');
 select is(pg_temp.fam(pg_temp.u(15)), null, 'and is not added');
 -- the other family
@@ -335,7 +355,7 @@ select pg_temp.run(pg_temp.u(20), $q$select public.create_family('Others')::text
 select is(pg_temp.snap(pg_temp.u(16)), '{"family": null}'::jsonb, 'outside a family: null');
 select is((select array_agg(k order by k) from jsonb_object_keys(pg_temp.snap(pg_temp.u(1)) -> 'family') k),
   array['code', 'codeExpiresAt', 'id', 'members', 'myRole', 'mySharing', 'name', 'places'], 'the snapshot has exactly its keys');
-select is(array[pg_temp.snap(pg_temp.u(1)) -> 'family' ->> 'code', pg_temp.snap(pg_temp.u(2)) -> 'family' ->> 'code'], array[(select code from fam1), null],
+select is(array[pg_temp.snap(pg_temp.u(1)) -> 'family' ->> 'code', pg_temp.snap(pg_temp.u(2)) -> 'family' ->> 'code'], array[pg_temp.code((select id from fam1)), null],
   'the code is shown to the admin only');
 select is((select array_agg(k order by k) from jsonb_object_keys(pg_temp.snap(pg_temp.u(1)) -> 'family' -> 'members' -> 0) k),
   array['isMe', 'location', 'name', 'role', 'sharing', 'userId'], 'a member has exactly its keys');
@@ -345,15 +365,35 @@ select is((select count(*)::int from jsonb_array_elements(pg_temp.snap(pg_temp.u
   'another family sees only its own member');
 
 -- ---------------------------------------------------------------------------
--- 4. location: sharing off by default, the rate limit, 24 h, off deletes
+-- 4. location: sharing off by default, the pd-2 consent, the rate limit, 24 h, off deletes
 -- ---------------------------------------------------------------------------
+select pg_temp.consent(n) from unnest(array[3, 10, 11]) n;
 select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.post_my_location(47.6, -122.3, 10, false)$q$) $$, '42501', 'location sharing is off',
   'nothing is posted while sharing is off');
 select throws_ok($$ select pg_temp.run(pg_temp.u(16), $q$select public.post_my_location(47.6, -122.3, 10, false)$q$) $$, '42501', 'location sharing is off',
   'nor outside a family');
 select throws_ok($$ select pg_temp.run(pg_temp.u(16), $q$select public.set_location_sharing(true)$q$) $$, '22023', 'not in a family',
   'sharing needs a family');
-select pg_temp.run(pg_temp.u(2), $q$select public.set_location_sharing(true)$q$);
+-- the background-location disclosure naming family sharing (pd-2) must be accepted first
+select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.set_location_sharing(true)$q$) $$, '42501', 'location disclosure required',
+  'no background-location consent: sharing cannot be turned on');
+select pg_temp.consent(2, 'pd-1');
+select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.set_location_sharing(true)$q$) $$, '42501', 'location disclosure required',
+  'a pd-1 consent (words that do not name family sharing) is not enough');
+select pg_temp.consent(2, 'pd-2');
+update public.consents set revoked_at = now() where user_id = pg_temp.u(2) and version = 'pd-2';
+select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.set_location_sharing(true)$q$) $$, '42501', 'location disclosure required',
+  'nor is a revoked pd-2 consent');
+select is((select sharing_location from public.family_members where user_id = pg_temp.u(2)), false, 'sharing stays off');
+select pg_temp.consent(2, 'pd-2');
+select lives_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.set_location_sharing(true)$q$) $$, 'with pd-2 accepted, sharing turns on');
+update public.consents set revoked_at = now() where user_id = pg_temp.u(2) and type = 'background_location';
+select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.post_my_location(47.6, -122.3, 10, false)$q$) $$, '42501', 'location disclosure required',
+  'every post needs the pd-2 consent: revoked, the post is refused');
+select is((select count(*)::int from public.member_locations where user_id = pg_temp.u(2)), 0, 'and writes nothing');
+select pg_temp.consent(2, 'pd-10');
+select is((select prosrc ~ 'm\.sharing_location for share' from pg_proc where oid = 'public.post_my_location(double precision, double precision, real, boolean)'::regprocedure),
+  true, 'post_my_location holds the member row for share, so a racing sharing-off or leave waits for it (review m-1)');
 select throws_ok($$ select pg_temp.run(pg_temp.u(2), $q$select public.post_my_location(91, -122.3, 10, false)$q$) $$, '22023', 'invalid location',
   'a latitude off the globe is refused');
 select is(pg_temp.run(pg_temp.u(2), $q$select public.post_my_location(47.61, -122.33, 12.5, true)::text$q$)::jsonb, '{"accepted": true}'::jsonb,

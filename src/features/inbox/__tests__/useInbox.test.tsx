@@ -115,7 +115,6 @@ describe('countServerPushesToday (the cap’s server half)', () => {
     const rows = [
       lapseRow({ id: nextId(), pushed_at: iso(T0 - 60_000) }),
       lapseRow({ id: nextId(), pushed_at: iso(T0 - 2 * 86_400_000) }),
-      inboxRow({ id: nextId(), type: 'family_digest', pushed_at: iso(T0 - 60_000) }),
     ];
     expect(countServerPushesToday(rows, 'UTC', T0)).toBe(1);
   });

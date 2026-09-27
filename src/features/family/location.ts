@@ -11,6 +11,9 @@
  * - **Nothing while sharing is off**, or signed out, or for another account: every attempt first
  *   reads the local sharing record (`family.sharing`, written by the Family screen from the server's
  *   answer) and the session's uid (`session.uid`), both from the phone's own database.
+ * - **Nothing without pd-2:** every post needs this account's affirmation of the background-location
+ *   disclosure that names family sharing (`familyDisclosureAccepted`). The server checks the same
+ *   consent and refuses the post without it.
  *
  * The server rate-limits too (20 s), and refuses a post while sharing is off; that refusal turns the
  * local record off so the phone stops trying.
@@ -22,6 +25,7 @@ import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { haversineMeters } from '@/lib/geo';
 
 import { defaultFamilyApi, FamilyError, type FamilyApi, type LocationInput } from './api';
+import { familyDisclosureAccepted } from './disclosure';
 
 export const MIN_POST_INTERVAL_MS = 60_000;
 /** A wake or front fix this close to the last posted one is "still here": nothing is posted. */
@@ -45,19 +49,20 @@ export async function writeSharingRecord(db: Db, uid: string, on: boolean): Prom
   await createSettingsRepo(db).set(FAMILY_SHARING_KEY, { uid, on });
 }
 
-async function sharingOn(db: Db): Promise<boolean> {
+/** Sharing is on for the signed-in account, and it has accepted pd-2. */
+async function mayPost(db: Db): Promise<boolean> {
   const settings = createSettingsRepo(db);
   const [record, uid] = await Promise.all([
     settings.get<SharingRecord>(FAMILY_SHARING_KEY),
     settings.get<string>(SESSION_UID_KEY),
   ]);
-  return (
+  const on =
     typeof uid === 'string' &&
     record !== null &&
     typeof record === 'object' &&
     record.on === true &&
-    record.uid === uid
-  );
+    record.uid === uid;
+  return on && (await familyDisclosureAccepted(db, uid));
 }
 
 export interface Fix {
@@ -116,7 +121,7 @@ export function attachFamilyLocation(deps: FamilyLocationDeps): FamilyLocationPo
     lastPostAt = now;
     inflight = (async () => {
       try {
-        if (!(await sharingOn(deps.db))) return;
+        if (!(await mayPost(deps.db))) return;
         const input: LocationInput = { lat: fix.lat, lng: fix.lng, accuracyM: fix.accuracyM, driving };
         await api.postLocation(input);
         lastPosted = fix;
@@ -126,6 +131,8 @@ export function attachFamilyLocation(deps: FamilyLocationDeps): FamilyLocationPo
           if (typeof uid === 'string') await writeSharingRecord(deps.db, uid, false).catch(() => undefined);
           return;
         }
+        // The server has no pd-2 consent yet (recorded offline, still owed): not an error to report.
+        if (error instanceof FamilyError && error.code === 'disclosure_required') return;
         deps.onError?.(error, `family location (${context})`);
       } finally {
         inflight = null;

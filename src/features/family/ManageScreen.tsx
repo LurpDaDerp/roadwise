@@ -21,17 +21,20 @@ export interface ManageDeps extends FamilyDeps {
 /** "Sat 4 Oct" for the code's expiry. */
 function dayLabel(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
 /**
- * Family settings: the join code (the admin: share it, or replace it), the members (the admin can
+ * Family settings: the join code (the admin: share it, or replace it; it works once, for 48 hours), the members (the admin can
  * remove anyone else), and Leave. Every removal asks first and says what it deletes.
  */
 export function ManageScreen({ deps = {} }: { deps?: ManageDeps }) {
   const th = useTheme();
   const router = useRouter();
-  const family = useFamily(deps);
+  // Polled while open: a code works once, so after someone joins the admin sees the new one here.
+  const family = useFamily({ ...deps, poll: true });
   const leaveScreen = () => (router.canGoBack() ? router.back() : router.replace(FAMILY_TAB));
   const data = family.data?.family;
 
@@ -106,7 +109,7 @@ function Manage({ family, deps, onLeft }: { family: Family; deps: ManageDeps; on
               </Text>
             </View>
             {family.codeExpiresAt !== null ? (
-              <Text variant="subhead" tone="muted">
+              <Text variant="subhead" tone="muted" testID="family-code-hint">
                 {copy.manage.codeExpires(dayLabel(family.codeExpiresAt))}
               </Text>
             ) : null}

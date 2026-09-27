@@ -82,8 +82,8 @@ test('Continue: affirmation stored, ONE Always request, consent recorded only on
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
   expect(requests(adapter)).toEqual(['requestLocationAlways:firstDriveDone=true']);
   // Bound to the account shown the words (Task 19 r1): arming checks it against the owner.
-  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
-  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-2', at: T0, uid: 'u1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBeNull();
   // The driver tapped: the 14-day history is stamped so the app's own offers wait.
   expect(await settings.get(PROMPTS_KEY)).toEqual({ locationAlways: T0 });
@@ -98,7 +98,7 @@ test('an OS denial after Continue: the consent stands (Continue is the affirmati
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('declined'));
   // Round 2 (security r1-M1): recorded at Continue, whatever the OS answers.
   expect(recordConsent).toHaveBeenCalledTimes(1);
-  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   expect(await settings.get(MANUAL_BY_CHOICE_KEY)).toBe(true);
   expect(host.setAutoDetect).not.toHaveBeenCalled();
 });
@@ -116,7 +116,7 @@ describe('round 2 (security r1-M1): the consent is recorded at Continue', () => 
     expect(affirmationCovers(await settings.get(DISCLOSURE_AFFIRMED_KEY), 'u1')).toBe(true);
     // And the consent row exists for the account shown the words — recorded once, at Continue.
     expect(recordConsent).toHaveBeenCalledTimes(1);
-    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   });
 
   test('the app killed on the Settings trip: the consent was already recorded at Continue', async () => {
@@ -124,7 +124,7 @@ describe('round 2 (security r1-M1): the consent is recorded at Continue', () => 
     const { recordConsent } = await renderDisclosure(adapter);
     await press(await screen.findByTestId('disclosure-continue'));
     await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
-    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   });
 
   test('a later grant does not record it twice', async () => {
@@ -181,7 +181,7 @@ describe('round 2 (security r1-M1): the consent is recorded at Continue', () => 
     const { settings } = await renderDisclosure(adapter, { consent });
     await press(await screen.findByTestId('disclosure-continue'));
     await waitFor(() =>
-      expect(settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).resolves.toEqual({ version: 'pd-1', userId: 'u1' })
+      expect(settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).resolves.toEqual({ version: 'pd-2', userId: 'u1' })
     );
   });
 });
@@ -211,8 +211,8 @@ test('an inherited Always (already granted): Continue still records this account
   const { settings, onResult, recordConsent } = await renderDisclosure(adapter);
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
-  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-1', at: T0, uid: 'u1' });
-  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  expect(await settings.get(DISCLOSURE_AFFIRMED_KEY)).toEqual({ version: 'pd-2', at: T0, uid: 'u1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
 });
 
 test('an auto-record entry (the offers, B2’s repair): Continue says the driver wants it on', async () => {
@@ -274,7 +274,7 @@ test('when the OS can no longer ask: Open Settings, and the grant is picked up o
   adapter.current = snap({ platform: 'ios', location: 'always' });
   await act(async () => appState.foreground());
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
-  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-1' });
+  expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'background_location', version: 'pd-2' });
   expect(adapter.log.some((c) => c.startsWith('requestLocationAlways'))).toBe(false);
 });
 
@@ -329,7 +329,7 @@ test('offline: the grant still counts, and the consent is kept to send later', a
   const { onResult, settings } = await renderDisclosure(adapter, { consent });
   await press(await screen.findByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
-  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-2', userId: 'u1' });
 });
 
 test('security M-3: the session is lost mid-flow; the consent is kept bound to the account shown the disclosure', async () => {
@@ -343,7 +343,7 @@ test('security M-3: the session is lost mid-flow; the consent is kept bound to t
   await press(screen.getByTestId('disclosure-continue'));
   await waitFor(() => expect(onResult).toHaveBeenCalledWith('always'));
   expect(recordConsent).not.toHaveBeenCalled();
-  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-1', userId: 'u1' });
+  expect(await settings.get(PENDING_DISCLOSURE_CONSENT_KEY)).toEqual({ version: 'pd-2', userId: 'u1' });
 });
 
 test('security r1-M1: shown with no account — nothing recorded, not even for the device owner', async () => {

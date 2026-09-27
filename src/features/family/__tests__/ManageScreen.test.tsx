@@ -41,6 +41,12 @@ describe('ManageScreen', () => {
       fireEvent.press(screen.getByTestId('family-share-code'));
     });
     expect(share).toHaveBeenCalledWith({ message: expect.stringContaining('ABC234') });
+    expect(share).toHaveBeenCalledWith({ message: expect.stringContaining('It works once, for 48 hours.') });
+  });
+
+  it('says the code works once, and that a new one appears after someone joins', async () => {
+    await renderManage();
+    expect(screen.getByTestId('family-code-hint')).toHaveTextContent(/^Works once, until .+\. After someone joins, a new code appears here\./);
   });
 
   it('a member sees no code and no Remove', async () => {

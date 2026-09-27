@@ -44,7 +44,10 @@ export const familyCopy = {
 
   confirmShareOn: {
     title: 'Share your location?',
-    body: 'Everyone in your family will see where you are, updated as you drive and move around, and when you open RoadWise. You can turn it off at any time.',
+    body: 'Everyone in your family will see where you are. You can turn it off at any time.',
+    /** The prompt's words: the plain answer first, then the disclosure words this account must accept. */
+    withDisclosure: (body: string, disclosure: string) => `${body}\n\n${disclosure}`,
+    consentFailed: "Couldn't save your agreement. Check your connection and try again.",
     confirm: 'Share',
     cancel: 'Not now',
   },
@@ -70,11 +73,12 @@ export const familyCopy = {
   manage: {
     title: 'Family settings',
     codeLabel: 'Join code',
-    codeExpires: (when: string) => `Works until ${when}. Anyone with it can join, up to 8 people.`,
+    codeExpires: (when: string) =>
+      `Works once, until ${when}. After someone joins, a new code appears here. Up to 8 people.`,
     codeSpoken: (spoken: string) => `Join code: ${spoken}`,
     share: 'Share code',
     shareMessage: (name: string, code: string) =>
-      `Join "${name}" on RoadWise: open Family, tap Join with a code, and enter ${code}.`,
+      `Join "${name}" on RoadWise: open Family, tap Join with a code, and enter ${code}. It works once, for 48 hours.`,
     rotate: 'Get a new code',
     rotateHint: 'The old code stops working.',
     membersLabel: 'Members',
@@ -133,6 +137,7 @@ export const familyCopy = {
     not_in_family: "You're not in that family any more.",
     not_admin: 'Only the family admin can do that.',
     sharing_off: 'Location sharing is off.',
+    disclosure_required: "Your family can't see your location until you agree to background location sharing. Try turning sharing on again.",
     invalid_place: 'Check the name, address and distance.',
     too_many_places: 'A family can save up to 20 places.',
     unknown: 'Something went wrong. Try again.',

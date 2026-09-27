@@ -17,6 +17,13 @@
 /** The oldest disclosure whose affirmation still lets auto-record arm. */
 export const ARMING_DISCLOSURE_MIN_VERSION = 'pd-1';
 
+/**
+ * The oldest disclosure that names family location sharing (lean M6). Every family location post
+ * needs an affirmation at or above it, and so does the server (`post_my_location` and turning
+ * sharing on refuse an account without an unrevoked `background_location` consent at pd-2 or later).
+ */
+export const FAMILY_DISCLOSURE_MIN_VERSION = 'pd-2';
+
 export interface DisclosureAffirmation {
   /** `DISCLOSURE_VERSION` of the words shown, `pd-<n>`. */
   version: string;
