@@ -9,7 +9,9 @@
  *   quiet-hours field or a category, so null fields keep following `notification_defaults`
  *   (rev1: m). Update, then insert when there is no row (no upsert: 42501 on `user_id`).
  * - **Silent.** Every failure resolves `'error'` and goes to `onError`; it never throws.
- * - **Battery (§3.5).** It runs only when the app comes to the front: one read, at most one write.
+ * - **Battery (§3.5).** It runs only when the app comes to the front: one read, at most one write,
+ *   and nothing at all when the zone and today's count are what the last sync sent less than
+ *   `SYNC_FRESH_MS` ago (the count changes a couple of times a day at most).
  */
 import { normaliseZone } from '@/core/engine/finalize';
 import type { Db } from '@/data/db/driver';
@@ -36,6 +38,12 @@ export interface SyncPrefsDeps {
 }
 
 export type SyncResult = 'unchanged' | 'saved' | 'error';
+
+/** A sync whose inputs match the last one is skipped for this long. */
+export const SYNC_FRESH_MS = 6 * 60 * 60_000;
+const LAST_SYNC_KEY = 'notifications.lastSync';
+
+type LastSync = { fingerprint: string; at: number };
 
 /** The columns (tz and today's count) that differ between the phone and the row. */
 function patchFor(row: PrefsRow | null, tz: string, local: { day: string; count: number }): PrefsPatch {
@@ -65,6 +73,11 @@ export async function syncNotificationPrefs(userId: string, deps: SyncPrefsDeps)
   let read = false;
   try {
     const local = await readLocalSent(settings, tz, now);
+    const fingerprint = `${userId}|${tz}|${local.day}|${local.count}`;
+    const last = await settings.get<LastSync>(LAST_SYNC_KEY).catch(() => null);
+    if (last?.fingerprint === fingerprint && now - last.at >= 0 && now - last.at < SYNC_FRESH_MS) {
+      return 'unchanged';
+    }
     const client = deps.client ?? (await import('@/data/supabase/client')).supabase;
     row = await readPrefs(userId, client);
     read = true;
@@ -72,6 +85,7 @@ export async function syncNotificationPrefs(userId: string, deps: SyncPrefsDeps)
     const wrote = Object.keys(patch).length > 0;
     if (wrote) row = await savePrefs(userId, patch, client);
     await cache();
+    await settings.set(LAST_SYNC_KEY, { fingerprint, at: now } satisfies LastSync).catch(() => undefined);
     return wrote ? 'saved' : 'unchanged';
   } catch (error) {
     onError(error, 'notification prefs sync');

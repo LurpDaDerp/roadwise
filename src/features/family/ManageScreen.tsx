@@ -8,6 +8,7 @@ import { Banner, Button, Card, ListRow, Screen, Skeleton, Text, useTheme } from 
 import type { Family, FamilyMember } from './api';
 import { familyCopy as copy, spacedCode, spokenCode } from './copy';
 import { errorText, FieldLabel } from './parts';
+import { useFocused } from './FamilyScreen';
 import { memberName } from './presence';
 import { useFamily, useFamilyActions, type FamilyDeps } from './useFamily';
 
@@ -33,8 +34,9 @@ function dayLabel(iso: string): string {
 export function ManageScreen({ deps = {} }: { deps?: ManageDeps }) {
   const th = useTheme();
   const router = useRouter();
-  // Polled while open: a code works once, so after someone joins the admin sees the new one here.
-  const family = useFamily({ ...deps, poll: true });
+  // Polled while in view: a code works once, so after someone joins the admin sees the new one here.
+  const focused = useFocused();
+  const family = useFamily({ ...deps, poll: focused });
   const leaveScreen = () => (router.canGoBack() ? router.back() : router.replace(FAMILY_TAB));
   const data = family.data?.family;
 

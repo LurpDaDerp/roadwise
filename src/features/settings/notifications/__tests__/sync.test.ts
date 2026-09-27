@@ -1,7 +1,7 @@
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Db } from '@/data/db/driver';
-import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
+import { SYNC_FRESH_MS, syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { LOCAL_SENT_KEY, PREFS_CACHE_KEY } from '@/notifications/keys';
 import { recordLocalSent } from '@/notifications/localDelivery';
 
@@ -125,6 +125,21 @@ describe('syncNotificationPrefs', () => {
     expect(await run(server)).toBe('error');
     const cached = await createSettingsRepo(db).get<{ quiet: { enabled: boolean } }>(PREFS_CACHE_KEY);
     expect(cached?.quiet.enabled).toBe(false);
+  });
+
+  it('skips the round trip when nothing changed since a sync less than SYNC_FRESH_MS ago', async () => {
+    const server = createFakePrefsServer([{ user_id: UID, tz: LA }]);
+    await run(server);
+    const after = server.calls.length;
+    expect(await run(server, { now: NOW + 60_000 })).toBe('unchanged');
+    expect(server.calls).toHaveLength(after);
+    // A new count or a stale stamp reads again.
+    await recordLocalSent(createSettingsRepo(db), LA, NOW + 60_000);
+    await run(server, { now: NOW + 120_000 });
+    expect(server.calls.length).toBeGreaterThan(after);
+    const again = server.calls.length;
+    await run(server, { now: NOW + 120_000 + SYNC_FRESH_MS });
+    expect(server.calls.length).toBeGreaterThan(again);
   });
 
   it('never throws, even with no onError', async () => {

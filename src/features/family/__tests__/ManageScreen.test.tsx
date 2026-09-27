@@ -11,7 +11,14 @@ jest.mock('@/data/supabase/session', () => ({
   useSession: () => ({ session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } }),
 }));
 const mockRouter = { push: jest.fn(), back: jest.fn(), replace: jest.fn(), canGoBack: jest.fn(() => true) };
-jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('expo-router', () => ({
+  useRouter: () => mockRouter,
+  useFocusEffect: (cb: () => void | (() => void)) => {
+    const { useEffect } = jest.requireActual<typeof import('react')>('react');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => cb(), []);
+  },
+}));
 
 afterEach(async () => {
   await clearInboxClients();

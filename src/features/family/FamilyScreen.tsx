@@ -30,7 +30,7 @@ export interface FamilyScreenDeps extends FamilyDeps {
 }
 
 /** Polls while the screen is focused; stops the moment it is not. */
-function useFocused(): boolean {
+export function useFocused(): boolean {
   const [focused, setFocused] = useState(false);
   useFocusEffect(
     useCallback(() => {
