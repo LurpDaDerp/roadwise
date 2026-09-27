@@ -11,9 +11,11 @@ import type {
   Arbiter,
   ArbiterInput,
   ArbiterState,
+  HapticIntensity,
 } from './types';
 
 const {
+  MPH,
   ALERT_BREAK_AFTER_S,
   ALERT_BUDGET_L1_PER_10MIN,
   ALERT_BUDGET_WINDOW_S,
@@ -39,6 +41,25 @@ const {
 type SpeedingBand = 0 | 1 | 2 | 3;
 
 /**
+ * Where the speeding vibration steps up, in m/s over the limit: 1 anywhere past the tolerance,
+ * then 2 at the L2 line (15 over), 3 at the L3 line (20 over), 4 at 25 over. The strength follows
+ * how far over the driver is, whatever the band says — a band is about persistence as much as
+ * speed, and a pocketed phone should say "how much" with its buzz.
+ */
+export const SPEEDING_INTENSITY_STEPS_MPS: readonly number[] = [
+  ALERT_L2_OVER_MPS,
+  ALERT_L3_OVER_MPS,
+  25 * MPH,
+];
+
+/** How hard a speeding alert vibrates for the plain over-limit at decision time. */
+export function speedingIntensity(overMps: number): HapticIntensity {
+  let intensity = 1;
+  for (const step of SPEEDING_INTENSITY_STEPS_MPS) if (overMps >= step) intensity += 1;
+  return intensity as HapticIntensity;
+}
+
+/**
  * A rule that would fire on this row. Rules are evaluated in priority order but only the winner is
  * committed, so a phone alert that lost to a drowsiness alert is still pending on the next row.
  */
@@ -47,6 +68,8 @@ interface Candidate {
   level: AlertLevel;
   voice: AlertVoiceKey;
   eventId?: string;
+  /** Speeding only: the vibration strength for how far over the driver is right now. */
+  intensity?: HapticIntensity;
   /** Record that this candidate was the decision (delivered or budget-suppressed). */
   commit(): void;
 }
@@ -144,6 +167,7 @@ export function createArbiter(state: ArbiterState): Arbiter {
       kind: 'speeding',
       level: band,
       voice: band === 3 ? 'alert.slowDown' : 'alert.easeOff',
+      intensity: speedingIntensity(input.overMps),
       commit: () => {
         alertedBand = band;
         lastSpeedingAlertTs = input.ts;
@@ -276,6 +300,7 @@ export function createArbiter(state: ArbiterState): Arbiter {
       voice: candidate.voice,
     };
     if (candidate.eventId !== undefined) decision.eventId = candidate.eventId;
+    if (candidate.intensity !== undefined) decision.intensity = candidate.intensity;
     // A muted drive or a passenger trip: decided, on record, never played — and never counted
     // against the budget, since nobody heard it.
     // Only L1 is rationed; a warning or an urgent alert always plays.

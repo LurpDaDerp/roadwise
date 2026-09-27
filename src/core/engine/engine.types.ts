@@ -172,6 +172,12 @@ export interface EngineDeps {
    */
   createArbiter(resume?: ArbiterState): Arbiter;
   onAlert(decision: AlertDecision): void;
+  /**
+   * Every detector event as it closes on a row, with whether that row is live (false for a
+   * candidate row replayed at confirmation). The host's harsh-driving feedback reads it; events
+   * closed by the trip-end flush are not reported. A throw is reported and costs the row nothing.
+   */
+  onEvent?(event: DetectedEvent, live: boolean): void;
   /** Every `CHECKPOINT_S` rows. Owns persistence; a rejection leaves the checkpoint unrecorded. */
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
   /** Once per trip with the closed session; the finalizer scores and stores it. */

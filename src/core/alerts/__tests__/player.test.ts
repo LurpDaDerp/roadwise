@@ -1,7 +1,9 @@
 import { t } from "@/i18n";
 
 import {
+  asAlertStyle,
   createAlertPlayer,
+  HAPTIC_INTENSITY_FOR_LEVEL,
   STEP_TIMEOUT_MS,
   TONE_GAIN,
   TONE_GAIN_IN_CALL,
@@ -12,7 +14,7 @@ import {
   type SessionKind,
   type VoicePort,
 } from "../player";
-import type { AlertDecision, AlertLevel } from "../types";
+import type { AlertDecision, AlertLevel, AlertStyle } from "../types";
 
 type Call = string;
 
@@ -25,6 +27,7 @@ interface Rig {
     call: boolean;
     l1Silent: boolean;
     deliverable: boolean;
+    style: AlertStyle;
   };
   /** Resolves the tone currently held by `holdPlay`. */
   release: () => void;
@@ -45,6 +48,7 @@ function rig(
     call: false,
     l1Silent: false,
     deliverable: true,
+    style: "both" as AlertStyle,
   };
   let pendingPlay: (() => void) | null = null;
 
@@ -79,8 +83,8 @@ function rig(
     ...overrides.voice,
   };
   const haptics: HapticsPort = {
-    pattern: async (kind) => {
-      calls.push(`haptic:${kind}`);
+    pattern: async (intensity) => {
+      calls.push(`haptic:${intensity}`);
     },
     ...overrides.haptics,
   };
@@ -98,6 +102,7 @@ function rig(
       voice,
       haptics,
       voiceEnabled: () => flags.voice,
+      alertStyle: () => flags.style,
       callActive: () => flags.call,
       l1RespectsSilentSwitch: () => flags.l1Silent,
       deliverable: () => flags.deliverable,
@@ -132,17 +137,18 @@ const count = (calls: Call[], what: Call) =>
 
 describe("alert player", () => {
   describe("call order per level (audio first, then haptic; §8.8)", () => {
-    it("L1 is a tone only, on the playback session when the silent switch does not apply", async () => {
+    it("L1 is a tone and one pulse, on the playback session when the silent switch does not apply", async () => {
       const r = rig();
       await createAlertPlayer(r.deps).deliver(decision(1));
       expect(r.calls).toEqual([
         "activate:playback",
         `play:1@${TONE_GAIN[1]}`,
         "deactivate",
+        "haptic:1",
       ]);
     });
 
-    it("L2 is tone, voice, release, then a double pulse", async () => {
+    it("L2 is tone, voice, release, then a medium pulse", async () => {
       const r = rig();
       await createAlertPlayer(r.deps).deliver(decision(2));
       expect(r.calls).toEqual([
@@ -150,11 +156,11 @@ describe("alert player", () => {
         `play:2@${TONE_GAIN[2]}`,
         `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
         "deactivate",
-        "haptic:double",
+        "haptic:2",
       ]);
     });
 
-    it("L3 is tone, voice, release, then the long pattern", async () => {
+    it("L3 is tone, voice, release, then the heaviest pattern", async () => {
       const r = rig();
       await createAlertPlayer(r.deps).deliver(decision(3));
       expect(r.calls).toEqual([
@@ -162,7 +168,7 @@ describe("alert player", () => {
         `play:3@${TONE_GAIN[3]}`,
         `speak:${t("alert.drowsy")}@${VOICE_GAIN}`,
         "deactivate",
-        "haptic:long",
+        "haptic:4",
       ]);
     });
 
@@ -175,7 +181,161 @@ describe("alert player", () => {
         "activate:playback",
         `play:2@${TONE_GAIN[2]}`,
         "deactivate",
-        "haptic:double",
+        "haptic:2",
+      ]);
+    });
+
+    it("a decision that carries its own strength (speeding, from how far over) vibrates at it, whatever the level", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      await player.deliver(decision(1, { intensity: 3 }));
+      await player.deliver(decision(2, { id: "l2", intensity: 4 }));
+      await player.deliver(decision(3, { id: "l3", intensity: 1 }));
+      expect(r.calls.filter((c) => c.startsWith("haptic"))).toEqual([
+        "haptic:3",
+        "haptic:4",
+        "haptic:1",
+      ]);
+      expect(HAPTIC_INTENSITY_FOR_LEVEL).toEqual({ 1: 1, 2: 2, 3: 4 });
+    });
+  });
+
+  describe("alert style (Alerts and sounds)", () => {
+    it("vibration only: no session, no tone, no voice — the pulse alone, at the same strength", async () => {
+      const r = rig();
+      r.flags.style = "vibration";
+      const player = createAlertPlayer(r.deps);
+      await player.deliver(decision(1));
+      await player.deliver(decision(2, { id: "l2" }));
+      await player.deliver(decision(3, { id: "l3", intensity: 3 }));
+      expect(r.calls).toEqual(["haptic:1", "haptic:2", "haptic:3"]);
+    });
+
+    it("sound only: tone and voice as usual, never a pulse", async () => {
+      const r = rig();
+      r.flags.style = "sound";
+      const player = createAlertPlayer(r.deps);
+      await player.deliver(decision(1));
+      await player.deliver(decision(2, { id: "l2" }));
+      expect(r.calls).toEqual([
+        "activate:playback",
+        `play:1@${TONE_GAIN[1]}`,
+        "deactivate",
+        "activate:playback",
+        `play:2@${TONE_GAIN[2]}`,
+        `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
+        "deactivate",
+      ]);
+    });
+
+    it("the voice switch still governs speech under sound and both; vibration only never speaks the announcement either", async () => {
+      const r = rig();
+      r.flags.style = "sound";
+      r.flags.voice = false;
+      const player = createAlertPlayer(r.deps);
+      await player.deliver(decision(2));
+      expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
+      r.flags.voice = true;
+      r.flags.style = "vibration";
+      await player.announce("alert.recording");
+      expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
+      expect(r.calls.filter((c) => c.startsWith("activate"))).toHaveLength(1);
+    });
+
+    it("vibration only never marks the alerts unavailable or available: nothing sounded", async () => {
+      const r = rig({ audio: { play: () => Promise.reject(new Error("tone")) } });
+      r.flags.style = "vibration";
+      const seen: string[] = [];
+      const player = createAlertPlayer({
+        ...r.deps,
+        onUnavailable: () => seen.push("unavailable"),
+        onAvailable: () => seen.push("available"),
+      });
+      await player.deliver(decision(2));
+      expect(seen).toEqual([]);
+      expect(r.errors).toEqual([]);
+    });
+
+    it("no style dependency, a throwing one, or an unknown stored value all mean both", async () => {
+      const r = rig();
+      delete r.deps.alertStyle;
+      await createAlertPlayer(r.deps).deliver(decision(1));
+      expect(r.calls).toContain("haptic:1");
+      expect(r.calls).toContain(`play:1@${TONE_GAIN[1]}`);
+      const r2 = rig();
+      r2.deps.alertStyle = () => {
+        throw new Error("settings");
+      };
+      await createAlertPlayer(r2.deps).deliver(decision(1));
+      expect(r2.errors).toHaveLength(1);
+      expect(r2.calls).toContain("haptic:1");
+      expect(r2.calls).toContain(`play:1@${TONE_GAIN[1]}`);
+      expect(asAlertStyle("loud")).toBe("both");
+      expect(asAlertStyle(undefined)).toBe("both");
+      expect(asAlertStyle("sound")).toBe("sound");
+    });
+
+    it("an idle release owed to a vibration-only item is still paid once (P2-N1)", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      r.flags.style = "vibration";
+      const delivering = player.deliver(decision(1));
+      const stopping = player.stopCurrent();
+      await Promise.all([delivering, stopping]);
+      expect(count(r.calls, "deactivate")).toBe(1);
+      expect(r.calls).toContain("haptic:1");
+    });
+  });
+
+  describe("feedback (a harsh-driving nudge: the L1 tone and a pulse at the given strength, no voice)", () => {
+    it("plays the L1 tone on L1's session rule, releases, then pulses at the strength named", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      await player.feedback!({ id: "e1", ts: 1, intensity: 2 });
+      expect(r.calls).toEqual([
+        "activate:playback",
+        `play:1@${TONE_GAIN[1]}`,
+        "deactivate",
+        "haptic:2",
+      ]);
+    });
+
+    it("honours the style, the call and the passenger rule like a decision", async () => {
+      const r = rig();
+      const player = createAlertPlayer(r.deps);
+      r.flags.style = "vibration";
+      await player.feedback!({ id: "e1", ts: 1, intensity: 2 });
+      expect(r.calls).toEqual(["haptic:2"]);
+      r.calls.length = 0;
+      r.flags.style = "sound";
+      r.flags.call = true;
+      await player.feedback!({ id: "e2", ts: 2, intensity: 2 });
+      expect(r.calls).toEqual([
+        "activate:playback",
+        `play:1@${TONE_GAIN_IN_CALL[1]}`,
+        "deactivate",
+      ]);
+      r.calls.length = 0;
+      r.flags.deliverable = false;
+      await player.feedback!({ id: "e3", ts: 3, intensity: 2 });
+      expect(r.calls).toEqual([]);
+    });
+
+    it("queues behind a decision already playing, never over it", async () => {
+      const r = rig({ holdPlay: true });
+      const player = createAlertPlayer(r.deps);
+      const first = player.deliver(decision(2));
+      const nudge = player.feedback!({ id: "e1", ts: 1, intensity: 2 });
+      await flush();
+      expect(r.calls).toEqual(["activate:playback", `play:2@${TONE_GAIN[2]}`]);
+      r.release();
+      await first;
+      await flush();
+      r.release();
+      await nudge;
+      expect(r.calls.filter((c) => c.startsWith("play"))).toEqual([
+        `play:2@${TONE_GAIN[2]}`,
+        `play:1@${TONE_GAIN[1]}`,
       ]);
     });
   });
@@ -214,8 +374,8 @@ describe("alert player", () => {
     await player.deliver(decision(2));
     await player.deliver(decision(3));
     expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
-    expect(r.calls).toContain("haptic:double");
-    expect(r.calls).toContain("haptic:long");
+    expect(r.calls).toContain("haptic:2");
+    expect(r.calls).toContain("haptic:4");
   });
 
   it("call active: tones at the in-call gain, no voice, haptics kept", async () => {
@@ -231,7 +391,7 @@ describe("alert player", () => {
       `play:3@${TONE_GAIN_IN_CALL[3]}`,
     ]);
     expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
-    expect(r.calls).toContain("haptic:long");
+    expect(r.calls).toContain("haptic:4");
   });
 
   describe("gains (tone files are full scale; loudness lives here)", () => {
@@ -317,7 +477,7 @@ describe("alert player", () => {
       const secondActivate = r.calls.lastIndexOf("activate:playback");
       expect(firstDeactivate).toBeGreaterThan(-1);
       expect(secondActivate).toBeGreaterThan(firstDeactivate);
-      expect(r.calls.indexOf("haptic:long")).toBeLessThan(secondActivate);
+      expect(r.calls.indexOf("haptic:4")).toBeLessThan(secondActivate);
     });
   });
 
@@ -333,7 +493,7 @@ describe("alert player", () => {
         "activate:playback",
         `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
         "deactivate",
-        "haptic:double",
+        "haptic:2",
       ]);
     });
 
@@ -343,7 +503,7 @@ describe("alert player", () => {
       });
       await createAlertPlayer(r.deps).deliver(decision(1));
       expect(r.errors).toHaveLength(1);
-      expect(r.calls).toEqual([`play:1@${TONE_GAIN[1]}`, "deactivate"]);
+      expect(r.calls).toEqual([`play:1@${TONE_GAIN[1]}`, "deactivate", "haptic:1"]);
     });
 
     it("a rejecting voice, haptic or deactivate each report once and never reject", async () => {
@@ -517,6 +677,7 @@ describe("alert player", () => {
         "activate:playback",
         `play:1@${TONE_GAIN[1]}`,
         "deactivate",
+        "haptic:1",
       ]);
     });
   });

@@ -9,6 +9,19 @@ export type AlertLevel = 1 | 2 | 3;
 
 export type AlertKind = 'speeding' | 'phone' | 'eyes_off' | 'drowsy' | 'break';
 
+/**
+ * How hard an alert vibrates: 1 is one short pulse, 4 the longest, heaviest pattern. Every
+ * delivered alert vibrates; the strength is the arbiter's for speeding (how far over the limit)
+ * and the level's for everything else (`HAPTIC_INTENSITY_FOR_LEVEL` in the player).
+ */
+export type HapticIntensity = 1 | 2 | 3 | 4;
+
+/**
+ * The driver's alert style (Alerts and sounds): `both` is the default; `vibration` plays no tone
+ * and no voice and never touches the audio session; `sound` never vibrates.
+ */
+export type AlertStyle = 'both' | 'vibration' | 'sound';
+
 /** The `alert.*` keys in `src/i18n/en.ts`; voice phrases are ≤ 3 words (§8.8 step 4). */
 export type AlertVoiceKey = Extract<StringKey, `alert.${string}`>;
 
@@ -21,6 +34,11 @@ export interface AlertDecision {
   /** epoch ms — always the `ts` of the row that produced the decision, never wall-clock. */
   ts: number;
   voice?: AlertVoiceKey;
+  /**
+   * How hard this alert vibrates. The arbiter sets it for speeding from `overMps` at decision
+   * time (`speedingIntensity`); absent, the player maps it from the level.
+   */
+  intensity?: HapticIntensity;
   /**
    * Decided but not delivered: the L1 budget was spent (§13.4 "log silently and summarize after
    * the trip"), the driver muted the drive (`muteAll`), or the trip is a passenger's

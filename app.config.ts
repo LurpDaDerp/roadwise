@@ -77,7 +77,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
     // Left out when there is no FCM credential: see `googleServicesFile` above.
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
-    permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED'],
+    permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED', 'android.permission.VIBRATE'],
   },
   extra: { eas: { projectId: EAS_PROJECT_ID } },
   plugins: [

@@ -10,6 +10,8 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { homeCopy } from '@/features/home/copy';
 import { clearQueryClients, routerDouble, world } from '@/features/trips/__fixtures__/render';
 
+import { alertStyleCopy } from '../alerts/copy';
+import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } from '../alerts/stylePref';
 import { resetVoicePrefForTests, VOICE_PREF_KEY, voicePrefEnabled } from '../alerts/voicePref';
 import { settingsCopy as copy } from '../copy';
 import { DeleteAccountScreen } from '../DeleteAccountScreen';
@@ -63,6 +65,7 @@ beforeEach(() => {
   mockSession.profile = { display_name: 'Maya Chen', age_band: '18_plus' };
   mockSession.signOut.mockImplementation(async () => ({ signedOut: true }));
   resetVoicePrefForTests();
+  resetAlertStylePrefForTests();
 });
 afterEach(() => clearQueryClients());
 
@@ -172,6 +175,27 @@ describe('AlertsScreen (H4)', () => {
     await createSettingsRepo(w.db).set(VOICE_PREF_KEY, false);
     await w.renderScreen(<AlertsScreen />);
     await waitFor(() => expect(screen.getByRole('switch', { name: copy.alerts.voice.title }).props.value).toBe(false));
+  });
+
+  test('alert style: sound and vibration by default; a choice is checked, cached for the player and kept on the phone', async () => {
+    const w = await render(<AlertsScreen />);
+    const checked = (name: string) => screen.getByRole('radio', { name }).props.accessibilityState.checked as boolean;
+    expect(checked(alertStyleCopy.options.both)).toBe(true);
+    expect(checked(alertStyleCopy.options.vibration)).toBe(false);
+    await fireEvent.press(screen.getByTestId('alerts-style-vibration'));
+    await waitFor(() => expect(checked(alertStyleCopy.options.vibration)).toBe(true));
+    expect(checked(alertStyleCopy.options.both)).toBe(false);
+    expect(alertStylePref()).toBe('vibration');
+    expect(await createSettingsRepo(w.db).get(ALERT_STYLE_PREF_KEY)).toBe('vibration');
+  });
+
+  test('a stored alert style is read when the screen opens', async () => {
+    const w = await world();
+    await createSettingsRepo(w.db).set(ALERT_STYLE_PREF_KEY, 'sound');
+    await w.renderScreen(<AlertsScreen />);
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: alertStyleCopy.options.sound }).props.accessibilityState.checked).toBe(true)
+    );
   });
 
   test('the test alert plays on a tap, and says when it could not', async () => {

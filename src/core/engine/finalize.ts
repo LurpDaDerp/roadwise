@@ -446,12 +446,16 @@ export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
  * reports it like any finalize failure.
  */
 export class FinalizePayloadRefusedError extends Error {
-  constructor(
-    readonly clientTripId: string,
-    readonly paths: string[]
-  ) {
+  // Plain fields, not constructor parameter properties: Node's strip-types mode (the backend e2e
+  // script) refuses that syntax.
+  readonly clientTripId: string;
+  readonly paths: string[];
+
+  constructor(clientTripId: string, paths: string[]) {
     super(`trip ${clientTripId} does not fit the upload contract (${paths.join(', ') || 'root'}); stored as failed`);
     this.name = 'FinalizePayloadRefusedError';
+    this.clientTripId = clientTripId;
+    this.paths = paths;
   }
 }
 

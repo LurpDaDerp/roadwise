@@ -1899,3 +1899,47 @@ describe("I'm driving now (final review M4)", () => {
     expect(only(h.finalized).statedDriver).toBeUndefined();
   });
 });
+
+describe('onEvent: every detector event as it closes, with whether its row was live', () => {
+  const G = 9.80665;
+  /** A GNSS-agreed 0.35 g brake at row `at`, held slower for three rows, at the FAST cruise otherwise. */
+  const brakeAt =
+    (at: number) =>
+    (i: number): Partial<FeatureRow> => ({
+      speed: i >= at && i < at + 3 ? mph(20) - 0.25 * G : mph(20),
+      aLonMin: i === at ? -0.35 : -0.02,
+    });
+
+  test('a brake on a recording trip is reported once, live, and lands on the session too', async () => {
+    const h = await recording();
+    const onEvent = jest.fn();
+    h.deps.onEvent = onEvent;
+    const s = await h.drive(0, 12, brakeAt(5));
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ category: 'braking', alertable: true }), true);
+    await endNow(h, s);
+    expect(only(h.finalized).events.map((e) => e.category)).toContain('braking');
+  });
+
+  test('a candidate row replayed at confirmation reports its events as not live', async () => {
+    const h = await armed();
+    const onEvent = jest.fn();
+    h.deps.onEvent = onEvent;
+    await h.engine.dispatch({ type: 'wake', reason: 'activityTransition', ts: at(0) });
+    await h.drive(0, AUTO_DETECT_CONFIRM_S, brakeAt(2));
+    expect(h.status()).toBe('recording');
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ category: 'braking' }), false);
+  });
+
+  test('a throwing onEvent is reported through onError and costs the row nothing', async () => {
+    const h = await recording({ onError: true });
+    h.deps.onEvent = () => {
+      throw new Error('event sink failed');
+    };
+    const s = await h.drive(0, 12, brakeAt(5));
+    expect(h.errors.map(String)).toEqual([expect.stringContaining('event sink failed')]);
+    await endNow(h, s);
+    expect(only(h.finalized).events.map((e) => e.category)).toContain('braking');
+  });
+});

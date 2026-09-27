@@ -491,7 +491,17 @@ export function createEngine(deps: EngineDeps): Engine {
     appendRow(s, row, limit);
     maybePrefetch(row, s.distanceM);
     const full: DetectorContext = { ...ctx, mode: s.mode };
-    s.events.push(...trip.detectors.push(row, limit, full));
+    const closed = trip.detectors.push(row, limit, full);
+    s.events.push(...closed);
+    if (deps.onEvent) {
+      for (const event of closed) {
+        try {
+          deps.onEvent(event, live);
+        } catch (err) {
+          deps.onError?.(err);
+        }
+      }
+    }
     const input = arbiterInput(row, limit, full, trip.detectors);
     if (live) deliver(trip.arbiter.consider(input), row.ts, trip.detectors);
     updateFlags(row);

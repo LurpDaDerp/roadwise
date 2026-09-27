@@ -11,12 +11,12 @@ import type {
   MotionActivity,
 } from '@drive-sense';
 
-import type { AlertLevel } from '@/core/alerts/types';
+import type { AlertLevel, HapticIntensity } from '@/core/alerts/types';
 import { gnssPoor, knownSpeed } from '@/core/detectors/common';
 import { AUTO_END } from '@/core/engine/autoEnd';
 import type { EngineEvent, EngineSnapshot, EngineStatus } from '@/core/engine/engine.types';
 import { nightAt } from '@/core/engine/finalize';
-import type { DetectorContext, DriveMode, FeatureRow } from '@/core/engine/types';
+import type { DetectedEvent, DetectorContext, DriveMode, FeatureRow } from '@/core/engine/types';
 
 const { AUTO_DETECT_WINDOW_S, LOCKOUT_SPEED_MPS, MIN_SCORED_DISTANCE_M, MIN_SCORED_DURATION_S } =
   CONSTANTS;
@@ -33,6 +33,22 @@ export const ALERT_SHOWN_MS: Readonly<Record<AlertLevel, number>> = Object.freez
   2: 5000,
   3: 8000,
 });
+
+/** The harsh-driving kinds the HUD banner and the feedback nudge are about. */
+export type HarshKind = 'braking' | 'accel' | 'cornering';
+
+const HARSH_KINDS: ReadonlySet<string> = new Set<HarshKind>(['braking', 'accel', 'cornering']);
+
+/** A harsh-driving event worth telling the driver about now: braking, accel or cornering, at alertable confidence. */
+export function harshKindOf(event: Pick<DetectedEvent, 'category' | 'alertable'>): HarshKind | null {
+  return event.alertable && HARSH_KINDS.has(event.category) ? (event.category as HarshKind) : null;
+}
+
+/** At most one harsh-driving nudge (and banner) per this long, on the row clock. */
+export const HARSH_FEEDBACK_MIN_GAP_MS = 10_000;
+
+/** A harsh-driving nudge is the L1 tone with a medium vibration. */
+export const HARSH_FEEDBACK_INTENSITY: HapticIntensity = 2;
 
 export const isBusyStatus = (status: EngineStatus): boolean =>
   status === 'candidate' || status === 'recording' || status === 'ending' || status === 'finalizing';

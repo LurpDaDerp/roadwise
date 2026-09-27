@@ -45,6 +45,7 @@ import { DriveContext, DriveProvider } from '@/drive/DriveProvider';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
+import { alertStylePref } from '@/features/settings/alerts/stylePref';
 import { Banner, Button, Card, Text, tokens, useTheme } from '@/ui';
 
 import { corridorOf, createFakeLimits } from './fakeLimits';
@@ -207,6 +208,7 @@ export function createSimulation(opts: SimulationOptions): Simulation {
     },
     stopCurrent: () => (yielded ? Promise.resolve() : inner.stopCurrent()),
     announce: (key) => (yielded ? Promise.resolve() : inner.announce(key)),
+    feedback: (f) => (yielded || !inner.feedback ? Promise.resolve() : inner.feedback(f)),
   };
 
   let ids = 0;
@@ -292,11 +294,12 @@ export function createSimulation(opts: SimulationOptions): Simulation {
   };
 }
 
-/** The real player, as H2 builds it: tones, voice and haptics through the Expo ports. */
+/** The real player, as H2 builds it: tones, voice and vibration through the Expo ports, in the chosen alert style. */
 async function createRealPlayer(getHost: () => DriveHost | undefined): Promise<AlertPlayer> {
   return createAlertPlayer({
     ...(await createExpoAlertPorts()),
     voiceEnabled: () => true,
+    alertStyle: alertStylePref,
     ...playerInputs(getHost),
   });
 }

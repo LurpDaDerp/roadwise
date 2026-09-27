@@ -65,6 +65,9 @@ import {
   detectorContext,
   endDriveAllowed,
   gpsQuality,
+  HARSH_FEEDBACK_INTENSITY,
+  HARSH_FEEDBACK_MIN_GAP_MS,
+  harshKindOf,
   isBusyStatus,
   isIdleStatus,
   isShortDrive,
@@ -127,6 +130,21 @@ export interface DriveState extends EngineSnapshot {
    * nothing says "on" while the host is not armed. Always set by the host; optional in the type.
    */
   autoDetectArmed?: boolean;
+  /**
+   * The most recent harsh-driving event of the open trip (hard braking, rapid acceleration, sharp
+   * turn), stamped on the row clock; null before the first one and on every new trip. The HUD's
+   * event banner shows it for a few seconds after `ts`. Optional so existing fixtures stay valid.
+   */
+  harshEvent?: HarshEventNotice | null;
+}
+
+export type HarshEventKind = 'braking' | 'accel' | 'cornering';
+
+export interface HarshEventNotice {
+  id: string;
+  kind: HarshEventKind;
+  /** epoch ms, row clock */
+  ts: number;
 }
 
 export interface DriveHost {
@@ -363,6 +381,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let lastMotion: MotionEvidence | null = null;
   let notified: string | null = null;
   let activeAlert: { decision: AlertDecision; until: number } | null = null;
+  /** The open trip's latest harsh-driving event (the HUD banner's), and when the last nudge went. */
+  let harshEvent: HarshEventNotice | null = null;
+  let lastHarshTs: number | null = null;
   let mutedForDrive = false;
   let adoptMuted = false;
   /** A sound failed during this drive (I2); reset when the next trip opens. */
@@ -492,6 +513,23 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       activeAlert = { decision, until: decision.ts + ALERT_SHOWN_MS[decision.level] };
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     },
+    // Harsh driving (hard braking, rapid acceleration, sharp cornering): the banner and one short
+    // nudge, on the live row that closed the event. Not an arbiter decision: it goes straight to
+    // the player, with the same silences applied here — never on a passenger trip or a muted
+    // drive, at most one per HARSH_FEEDBACK_MIN_GAP_MS. The player re-reads the role as the
+    // nudge starts, so a switch to passenger meanwhile still silences it (§8.15).
+    onEvent(event, live) {
+      const kind = harshKindOf(event);
+      if (!live || kind === null) return;
+      const s = engine.snapshot();
+      if (s.status !== 'recording' || s.role !== 'driver' || mutedForDrive) return;
+      const ts = currentRow?.ts ?? now();
+      if (lastHarshTs !== null && ts - lastHarshTs < HARSH_FEEDBACK_MIN_GAP_MS) return;
+      lastHarshTs = ts;
+      harshEvent = { id: event.id, kind, ts };
+      publish();
+      player.feedback?.({ id: event.id, ts, intensity: HARSH_FEEDBACK_INTENSITY }).catch((e: unknown) => report(e, 'player'));
+    },
     onCheckpoint: (session) =>
       persist ? createRecorder(db, { tz: tz(), now }).onCheckpoint(session) : Promise.resolve(),
     onFinalize,
@@ -505,6 +543,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     return Object.freeze({
       ...engine.snapshot(),
       activeAlert: activeAlert?.decision ?? null,
+      harshEvent,
       mutedForDrive,
       gps: gpsQuality(currentRow),
       thermal,
@@ -539,7 +578,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       prevTripId = s.clientTripId;
     }
     if (s.status !== prevStatus) {
-      if (s.status !== 'recording') activeAlert = null;
+      if (s.status !== 'recording') {
+        activeAlert = null;
+        harshEvent = null;
+      }
       if (isIdleStatus(s.status) && isBusyStatus(prevStatus)) closed = true;
       prevStatus = s.status;
     }
@@ -548,6 +590,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       mutedForDrive = adoptMuted;
       adoptMuted = false;
       soundFailedThisDrive = false;
+      harshEvent = null;
+      lastHarshTs = null;
       startTripPending = true;
       if (currentRow?.gnssValid) startTripNow(currentRow);
     }

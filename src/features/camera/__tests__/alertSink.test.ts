@@ -1,9 +1,10 @@
+import type { AlertStyle } from '@/core/alerts/types';
 import type { DmsAlertCommand } from '@/core/dms';
 
-import { CALL_GAIN, createDmsAlertSink, MAX_REPEAT_MS, TIER3_GAIN_START } from '../alertSink';
+import { CALL_GAIN, createDmsAlertSink, HAPTIC_INTENSITY_FOR_TIER, MAX_REPEAT_MS, TIER3_GAIN_START } from '../alertSink';
 import { cameraVoice } from '../copy';
 
-function ports(opts: { voice?: boolean; call?: boolean } = {}) {
+function ports(opts: { voice?: boolean; call?: boolean; style?: AlertStyle } = {}) {
   const log: string[] = [];
   const volumes: number[] = [];
   let t = 0;
@@ -24,6 +25,7 @@ function ports(opts: { voice?: boolean; call?: boolean } = {}) {
     },
     haptics: { pattern: async (k) => void log.push(`haptic:${k}`) },
     voiceEnabled: () => opts.voice ?? true,
+    alertStyle: opts.style === undefined ? undefined : () => opts.style as AlertStyle,
     callActive: () => opts.call ?? false,
     now: () => t,
     wait: async (ms) => {
@@ -33,6 +35,8 @@ function ports(opts: { voice?: boolean; call?: boolean } = {}) {
   });
   return { sink, log, volumes, advance: (ms: number) => (t += ms) };
 }
+
+const audio = (l: string) => /^(activate|tone|say|audio\.stop|deactivate|voice\.stop)/.test(l);
 
 let id = 0;
 const cmd = (action: DmsAlertCommand['action'], tier: 1 | 2 | 3, kind: DmsAlertCommand['kind'], muted = false): DmsAlertCommand => ({
@@ -49,11 +53,41 @@ const flush = async (n = 20) => {
   for (let i = 0; i < n; i++) await Promise.resolve();
 };
 
-test('once: one tone of its tier and its phrase, then the session is released', async () => {
+test('once: one tone of its tier and its phrase, then the session is released; one light pulse beside the tone', async () => {
   const { sink, log } = ports();
   sink.handle(cmd('once', 1, 'fatigue_early'));
   await sink.idle();
-  expect(log).toEqual(['activate:playback', 'tone:1', `say:${cameraVoice.fatigue_early}`, 'audio.stop', 'deactivate']);
+  expect(log.filter(audio)).toEqual(['activate:playback', 'tone:1', `say:${cameraVoice.fatigue_early}`, 'audio.stop', 'deactivate']);
+  expect(log.filter((l) => l.startsWith('haptic:'))).toEqual(['haptic:1']);
+  expect(HAPTIC_INTENSITY_FOR_TIER).toEqual({ 1: 1, 2: 2, 3: 4 });
+});
+
+test('vibration only: no session, tone or phrase at all; the pulses repeat on the tier cadence until the stop', async () => {
+  const once = ports({ style: 'vibration' });
+  once.sink.handle(cmd('once', 1, 'fatigue_early'));
+  await once.sink.idle();
+  expect(once.log).toEqual(['haptic:1']);
+
+  const t3 = ports({ style: 'vibration' });
+  t3.sink.handle(cmd('start', 3, 'sleep'));
+  await flush(40);
+  t3.sink.handle(cmd('stop', 3, 'sleep'));
+  await t3.sink.idle();
+  const pulses = t3.log.filter((l) => l === 'haptic:4').length;
+  expect(pulses).toBeGreaterThan(1);
+  // Nothing sounded: the stop's port calls are idle no-ops, and the session was never activated.
+  expect(t3.log.filter((l) => !l.startsWith('haptic:'))).toEqual(['audio.stop', 'voice.stop']);
+});
+
+test('sound only: tones and phrases as usual, never a pulse', async () => {
+  const { sink, log } = ports({ style: 'sound' });
+  sink.handle(cmd('start', 2, 'distraction'));
+  await flush(40);
+  sink.handle(cmd('stop', 2, 'distraction'));
+  await sink.idle();
+  expect(log.some((l) => l.startsWith('haptic:'))).toBe(false);
+  expect(log.filter((l) => l === 'tone:2').length).toBeGreaterThan(1);
+  expect(log.slice(-2)).toEqual(['audio.stop', 'deactivate']);
 });
 
 test('a muted command (shadow mode) touches nothing', async () => {
@@ -64,7 +98,7 @@ test('a muted command (shadow mode) touches nothing', async () => {
   expect(log).toEqual([]);
 });
 
-test('tier 2 repeats until its stop; the phrase and the double haptic once', async () => {
+test('tier 2 repeats until its stop; the phrase once, a medium pulse with every tone', async () => {
   const { sink, log } = ports();
   sink.handle(cmd('start', 2, 'distraction'));
   await flush(60);
@@ -73,11 +107,11 @@ test('tier 2 repeats until its stop; the phrase and the double haptic once', asy
   const tones = log.filter((l) => l === 'tone:2').length;
   expect(tones).toBeGreaterThan(1);
   expect(log.filter((l) => l.startsWith('say:'))).toEqual([`say:${cameraVoice.distraction}`]);
-  expect(log.filter((l) => l.startsWith('haptic:'))).toEqual(['haptic:double']);
+  expect(log.filter((l) => l.startsWith('haptic:'))).toEqual(Array<string>(tones).fill('haptic:2'));
   expect(log.slice(-2)).toEqual(['audio.stop', 'deactivate']);
 });
 
-test('tier 3 sounds continuously, louder every 2 s up to full, until its stop', async () => {
+test('tier 3 sounds continuously, louder every 2 s up to full, the heaviest pulse with every tone, until its stop', async () => {
   const { sink, log, volumes } = ports();
   sink.handle(cmd('start', 3, 'sleep'));
   await flush(80);
@@ -86,7 +120,7 @@ test('tier 3 sounds continuously, louder every 2 s up to full, until its stop', 
   expect(volumes[0]).toBeCloseTo(TIER3_GAIN_START);
   expect(Math.max(...volumes)).toBeCloseTo(1);
   for (let i = 1; i < volumes.length; i++) expect(volumes[i]!).toBeGreaterThanOrEqual(volumes[i - 1]!);
-  expect(log).toContain('haptic:long');
+  expect(log.filter((l) => l === 'haptic:4')).toHaveLength(volumes.length);
   expect(log).toContain(`say:${cameraVoice.sleep}`);
 });
 

@@ -1,6 +1,32 @@
 // The real ports behind the alert player: expo-audio for tones and the audio session, expo-speech
-// for phrases, expo-haptics for pulses. Loaded lazily, so nothing native is touched until the host
-// asks for the ports, and no native player exists until an alert actually plays.
+// for phrases, React Native's `Vibration` for the pulses. Loaded lazily, so nothing native is
+// touched until the host asks for the ports, and no native player exists until an alert actually
+// plays.
+//
+// Vibration (why `Vibration`, not expo-haptics): the point of vibrating is a phone in a pocket or
+// on the seat, screen locked. expo-haptics drives the Taptic engine (`UIFeedbackGenerator` on iOS),
+// which is faint through clothing and does not fire at all while the app is not frontmost — on
+// screen lock, or behind a navigation app — so it cannot serve that driver. `Vibration.vibrate`
+// is the OS vibrator: on Android `Vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))`
+// (default amplitude, works from the recording foreground service with the screen off; needs
+// `android.permission.VIBRATE`, which expo-haptics' library manifest still merges in); on iOS
+// `AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)`, the full-strength ~400 ms system buzz,
+// which fires with the app backgrounded as long as the process runs (the drive keeps the
+// `location` and `audio` background modes). Strength is therefore expressed as more and longer
+// pulses (`ANDROID_VIBRATION`) or more buzzes (`IOS_VIBRATION`), never as amplitude: iOS has no
+// amplitude API, and Android's default amplitude is already the strongest the driver has chosen.
+// iOS reads a pattern as [delay, gap, gap, …] with a fixed buzz at the end of each entry; the
+// port waits the pattern's length before resolving, so the player's queue never stacks pulses.
+//
+// To check on a real device (both platforms, phone in a pocket, screen locked, music playing):
+// - every level vibrates, L1 included, and 1 → 4 feel clearly stronger in that order;
+// - the pulses arrive with the app backgrounded (iOS: also with the silent switch on; Android:
+//   also under a silent ringer and Do Not Disturb — the `VIBRATE` permission is in the merged
+//   manifest, `adb shell dumpsys package com.lurp.safedrive | grep VIBRATE`);
+// - "Vibration only" never ducks or pauses music, and "Sound only" never vibrates;
+// - iOS: `kSystemSoundID_Vibrate` does nothing on iPad and may be a no-op with "Vibrate on
+//   Silent" and "Vibrate on Ring" both off in Settings › Sounds — confirm which, and say so in
+//   the setting's hint if it matters.
 //
 // Session mapping (confirmed against expo-audio 57.0.5's native sources):
 // - `activate(kind)` → `setAudioModeAsync(audioModeFor(kind, Platform.OS))` then
@@ -32,7 +58,7 @@
 //   status loop every `updateInterval` for as long as it exists, which would be a timer running
 //   while the app is armed but idle (design §3.5).
 import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
-import { Platform } from "react-native";
+import { Platform, Vibration } from "react-native";
 
 import type {
   AlertPlayerDeps,
@@ -41,7 +67,7 @@ import type {
   SessionKind,
   VoicePort,
 } from "./player";
-import type { AlertLevel } from "./types";
+import type { AlertLevel, HapticIntensity } from "./types";
 
 /** The tone lengths P1 rendered (ms): L1 180, L2 300, L3 880. */
 export const TONE_MS: Readonly<Record<AlertLevel, number>> = {
@@ -57,8 +83,41 @@ export const TONE_MS: Readonly<Record<AlertLevel, number>> = {
  */
 export const TONE_FINISH_MARGIN_MS = 1500;
 
-/** Gap between the two pulses of the L2 double pulse, and between the beats of L3's long pattern. */
-export const HAPTIC_GAP_MS = 140;
+/**
+ * Android waveforms per strength, ms: [delay, on, off, on, …]. One short pulse; two; three longer;
+ * four long, heavy ones. Tunable on the device pass — what matters is that each step is felt as
+ * clearly more than the last through a pocket.
+ */
+export const ANDROID_VIBRATION: Readonly<Record<HapticIntensity, readonly number[]>> = {
+  1: [0, 120],
+  2: [0, 160, 120, 160],
+  3: [0, 220, 110, 220, 110, 220],
+  4: [0, 400, 100, 400, 100, 400, 100, 400],
+};
+
+/** The length of iOS's one system buzz (`kSystemSoundID_Vibrate`), which no pattern can change. */
+export const IOS_BUZZ_MS = 400;
+
+/**
+ * iOS patterns per strength, as React Native reads them: `[0, gap, gap, …]` — a buzz at once,
+ * then one more after each gap. So strength is the number of buzzes, one to four, 500 ms apart
+ * (a gap shorter than the buzz would run them together).
+ */
+export const IOS_VIBRATION: Readonly<Record<HapticIntensity, readonly number[]>> = {
+  1: [0],
+  2: [0, 500],
+  3: [0, 500, 500],
+  4: [0, 500, 500, 500],
+};
+
+/** How long a pattern runs on `os`, so the port can resolve when it has finished. */
+export function vibrationMs(intensity: HapticIntensity, os: string): number {
+  if (os === "ios") {
+    const gaps = IOS_VIBRATION[intensity].reduce((sum, ms) => sum + ms, 0);
+    return gaps + IOS_BUZZ_MS;
+  }
+  return ANDROID_VIBRATION[intensity].reduce((sum, ms) => sum + ms, 0);
+}
 
 /** A failed iOS deactivation (the session still busy) is retried once after this long. */
 export const DEACTIVATE_RETRY_MS = 150;
@@ -119,7 +178,6 @@ export async function createExpoAlertPorts(): Promise<
   /* eslint-disable @typescript-eslint/no-require-imports -- deferred native modules, see above */
   const Audio = require("expo-audio") as typeof import("expo-audio");
   const Speech = require("expo-speech") as typeof import("expo-speech");
-  const Haptics = require("expo-haptics") as typeof import("expo-haptics");
   /* eslint-enable @typescript-eslint/no-require-imports */
 
   let tone: { player: ExpoAudioPlayer; finish: () => void } | null = null;
@@ -249,18 +307,13 @@ export async function createExpoAlertPorts(): Promise<
   };
 
   const haptics: HapticsPort = {
-    async pattern(kind) {
-      if (kind === "double") {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-        await sleep(HAPTIC_GAP_MS);
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-        return;
-      }
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      await sleep(HAPTIC_GAP_MS);
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-      await sleep(HAPTIC_GAP_MS);
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    async pattern(intensity) {
+      const os = Platform.OS;
+      // A pattern still running is replaced: on iOS a second `vibrate` is otherwise ignored
+      // outright, on Android the vibrator restarts either way.
+      Vibration.cancel();
+      Vibration.vibrate([...(os === "ios" ? IOS_VIBRATION : ANDROID_VIBRATION)[intensity]]);
+      await sleep(vibrationMs(intensity, os));
     },
   };
 

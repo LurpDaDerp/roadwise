@@ -2,9 +2,16 @@
 // (product spec §8.8 "Receiving a warning", §13.4 alert policy).
 //
 // What it decides:
-// - Level mapping: L1 is a tone only; L2 is tone, voice (when enabled) and a double pulse; L3 is
-//   tone, voice and the long pattern. Audio first, haptic last (§8.8 step 4 — the visual is the
-//   HUD's, drawn by the host from the same decision).
+// - Level mapping: L1 is a tone; L2 is tone and voice (when enabled); L3 is tone and voice. Every
+//   level vibrates, at a strength the decision carries (speeding: how far over the limit) or the
+//   level implies (`HAPTIC_INTENSITY_FOR_LEVEL`). Audio first, haptic last (§8.8 step 4 — the
+//   visual is the HUD's, drawn by the host from the same decision).
+// - Alert style (`alertStyle`, the Alerts and sounds setting): `vibration` plays no tone and no
+//   voice and never activates or ducks the audio session; `sound` never vibrates; `both` (the
+//   default) does both. The voice switch still governs speech under `both` and `sound`.
+// - Feedback (`feedback`): a harsh-driving event is not an arbiter decision — the host sends one
+//   short nudge, the L1 tone and a vibration at the strength it names, on the same rules
+//   (style, passenger, call) and never a voice.
 // - Audio session per level (R14, as amended by ruling P2-I1): L1 honours the silent switch only
 //   when the host says the trip is mounted AND RoadWise is frontmost (`AppState.currentState ===
 //   'active'`). iOS silences silent-switch-respecting categories whenever the app is not frontmost —
@@ -40,7 +47,13 @@
 // nothing is playing.
 import { t } from "@/i18n";
 
-import type { AlertDecision, AlertLevel, AlertVoiceKey } from "./types";
+import type {
+  AlertDecision,
+  AlertLevel,
+  AlertStyle,
+  AlertVoiceKey,
+  HapticIntensity,
+} from "./types";
 
 export type SessionKind = "respectSilent" | "playback";
 
@@ -61,7 +74,16 @@ export interface VoicePort {
 }
 
 export interface HapticsPort {
-  pattern(kind: "double" | "long"): Promise<void>;
+  /** Vibrate at the given strength; resolves when the pattern has finished. */
+  pattern(intensity: HapticIntensity): Promise<void>;
+}
+
+/** A short nudge that is not an arbiter decision: the host's harsh-driving feedback. */
+export interface AlertFeedback {
+  id: string;
+  /** epoch ms, row clock */
+  ts: number;
+  intensity: HapticIntensity;
 }
 
 export interface AlertPlayerDeps {
@@ -70,6 +92,8 @@ export interface AlertPlayerDeps {
   haptics: HapticsPort;
   /** Default true; H4 in M4 exposes the setting. */
   voiceEnabled(): boolean;
+  /** The Alerts and sounds style, read live per alert. Omitted (or throwing) means `both`. */
+  alertStyle?(): AlertStyle;
   /** iOS only (drive-sense `call`): tones at `TONE_GAIN_IN_CALL`, no voice. */
   callActive(): boolean;
   /**
@@ -109,8 +133,14 @@ export interface AlertPlayer {
    * and pays the release on exit even if it plays nothing (P2-N1).
    */
   stopCurrent(): Promise<void>;
-  /** "Recording" at start (§8.4). Spoken on L1's session rule; silent with voice off or on a call. */
+  /** "Recording" at start (§8.4). Spoken on L1's session rule; silent with voice off, on a call, or vibration-only. */
   announce(key: AlertVoiceKey): Promise<void>;
+  /**
+   * One short nudge — the L1 tone and a vibration at `intensity`, no voice — for a harsh-driving
+   * event. Same queue, style, passenger and call rules as `deliver`. Optional so silent stand-ins
+   * and test doubles need not implement it; the host calls it only when present.
+   */
+  feedback?(feedback: AlertFeedback): Promise<void>;
 }
 
 /**
@@ -139,12 +169,30 @@ export const VOICE_GAIN = 1.0;
  */
 export const STEP_TIMEOUT_MS = 5000;
 
-const HAPTIC_FOR_LEVEL: Readonly<Record<AlertLevel, "double" | "long" | null>> =
-  {
-    1: null,
-    2: "double",
-    3: "long",
-  };
+/**
+ * How hard an alert vibrates when its decision carries no strength of its own: a nudge is one
+ * pulse, a warning two, an urgent alert the heaviest pattern.
+ */
+export const HAPTIC_INTENSITY_FOR_LEVEL: Readonly<Record<AlertLevel, HapticIntensity>> = {
+  1: 1,
+  2: 2,
+  3: 4,
+};
+
+const STYLES: readonly AlertStyle[] = ["both", "vibration", "sound"];
+
+/** A stored or injected value that is not a style reads as the default, `both`. */
+export function asAlertStyle(value: unknown): AlertStyle {
+  return STYLES.includes(value as AlertStyle) ? (value as AlertStyle) : "both";
+}
+
+/** What one queued item plays: a decision's sound and pulse, or a feedback's. */
+interface Playable {
+  level: AlertLevel;
+  /** Spoken (L2 and up, voice on, no call) when present. */
+  voice?: AlertVoiceKey;
+  intensity: HapticIntensity;
+}
 
 interface Run {
   stopped: boolean;
@@ -298,38 +346,65 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
     return enqueue(releaseSession);
   }
 
+  function style(): AlertStyle {
+    const fn = deps.alertStyle;
+    return fn ? asAlertStyle(read(() => fn.call(deps), "both")) : "both";
+  }
+
+  /**
+   * One item on the queue: tone, then voice, then the session release (unless the style is
+   * vibration-only, when the audio session is never touched), then the pulse (unless sound-only).
+   */
+  async function play(run: Run, item: Playable): Promise<void> {
+    if (!deliverable()) return;
+    const chosen = style();
+    const { level } = item;
+    if (chosen !== "vibration") {
+      try {
+        const onCall = read(() => deps.callActive(), false);
+        const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
+        const activated = await step(run, () => audio.activate(kind));
+        const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
+        const played = await step(run, () => audio.play(level, { volume }));
+        // Silent for the driver, and they must be able to see that (I2); a sound that worked
+        // clears an earlier mark (n2).
+        if (!activated || !played) unavailable();
+        else if (!run.stopped) available();
+        const key = item.voice;
+        if (
+          level >= 2 &&
+          key &&
+          !onCall &&
+          read(() => deps.voiceEnabled(), true)
+        ) {
+          await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
+        }
+      } finally {
+        await releaseSession();
+      }
+    }
+    if (chosen !== "sound") {
+      await step(run, () => haptics.pattern(item.intensity));
+    }
+  }
+
   return {
     deliver(decision) {
       if (decision.suppressed || !isLevel(decision.level))
         return Promise.resolve();
       const level = decision.level;
-      return enqueue(async (run) => {
-        if (!deliverable()) return;
-        try {
-          const onCall = read(() => deps.callActive(), false);
-          const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
-          const activated = await step(run, () => audio.activate(kind));
-          const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
-          const played = await step(run, () => audio.play(level, { volume }));
-          // Silent for the driver, and they must be able to see that (I2); a sound that worked
-          // clears an earlier mark (n2).
-          if (!activated || !played) unavailable();
-          else if (!run.stopped) available();
-          const key = decision.voice;
-          if (
-            level >= 2 &&
-            key &&
-            !onCall &&
-            read(() => deps.voiceEnabled(), true)
-          ) {
-            await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
-          }
-        } finally {
-          await releaseSession();
-        }
-        const haptic = HAPTIC_FOR_LEVEL[level];
-        if (haptic) await step(run, () => haptics.pattern(haptic));
-      });
+      const item: Playable = {
+        level,
+        intensity: decision.intensity ?? HAPTIC_INTENSITY_FOR_LEVEL[level],
+      };
+      if (decision.voice !== undefined) item.voice = decision.voice;
+      return enqueue((run) => play(run, item));
+    },
+
+    feedback(feedback) {
+      return enqueue((run) =>
+        play(run, { level: 1, intensity: feedback.intensity }),
+      );
     },
 
     async stopCurrent() {
@@ -358,6 +433,8 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         if (!deliverable()) return;
         if (read(() => deps.callActive(), false)) return;
         if (!read(() => deps.voiceEnabled(), true)) return;
+        // Vibration-only: nothing is spoken, and the audio session stays untouched.
+        if (style() === "vibration") return;
         try {
           await step(run, () => audio.activate(sessionForL1()));
           await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));

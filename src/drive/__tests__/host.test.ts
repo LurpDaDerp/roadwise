@@ -2,9 +2,10 @@
 import * as scoring from '@scoring';
 import { createFakeDriveSense, parseRow, type MotionActivity } from '@drive-sense';
 
+import type { AlertFeedback } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 import { T0, limit, mph, row } from '@/core/detectors/__fixtures__/rows';
-import { drive, sha256, TZ } from '@/core/engine/__fixtures__/drives';
+import { drive, G, sha256, SPEED, TZ } from '@/core/engine/__fixtures__/drives';
 import * as finalizeModule from '@/core/engine/finalize';
 import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
 import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
@@ -106,6 +107,7 @@ function harness(opts: HarnessOptions = {}) {
     deliver: jest.fn(async (_d: AlertDecision) => {}),
     stopCurrent: jest.fn(async () => {}),
     announce: jest.fn(async () => {}),
+    feedback: jest.fn(async (_f: AlertFeedback) => {}),
   };
   const writes: string[] = [];
   let failures = opts.writeFailures ?? 0;
@@ -1062,6 +1064,84 @@ describe('alerts', () => {
     await h.host.manualStart({ mode: 'pocket', passenger: true, evidence: 'tap' });
     await h.feed(fast(60));
     expect(h.player.deliver).not.toHaveBeenCalled();
+  });
+});
+
+describe('harsh-driving feedback (the banner state and one short nudge)', () => {
+  /** `n` cruising rows with a GNSS-agreed 0.35 g brake at each index in `at` (the drives fixture's brake, several times). */
+  function brakes(n: number, at: readonly number[]): FeatureRow[] {
+    const base = drive(n);
+    return base.map((r, i) => {
+      const braking = at.some((b) => i >= b && i < b + 3);
+      return { ...r, speed: braking ? SPEED - 0.25 * G : SPEED, aLonMin: at.includes(i) ? -0.35 : -0.02 };
+    });
+  }
+  /** The row a brake at `i` closes on: the episode (one row) ends, is held two seconds, then released. */
+  const releasedAt = (i: number) => T0 + (i + 2) * 1000;
+
+  async function driving(opts: { passenger?: boolean } = {}) {
+    const h = harness();
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: opts.passenger ?? false, evidence: 'tap' });
+    return h;
+  }
+
+  test('a hard brake on a driver trip: published on the row that closed it, and one medium nudge to the player', async () => {
+    const h = await driving();
+    await h.feed(brakes(12, [5]));
+    expect(h.host.snapshot().harshEvent).toEqual({ id: expect.any(String), kind: 'braking', ts: releasedAt(5) });
+    expect(h.player.feedback).toHaveBeenCalledTimes(1);
+    expect(h.player.feedback).toHaveBeenCalledWith({ id: h.host.snapshot().harshEvent?.id, ts: releasedAt(5), intensity: 2 });
+    // Not an arbiter decision: no overlay, nothing through `deliver`.
+    expect(h.host.snapshot().activeAlert).toBeNull();
+    expect(h.player.deliver).not.toHaveBeenCalled();
+  });
+
+  test('at most one nudge per ten seconds; the next brake after that gets its own', async () => {
+    const close = await driving();
+    await close.feed(brakes(20, [5, 10]));
+    expect(close.player.feedback).toHaveBeenCalledTimes(1);
+    expect(close.host.snapshot().harshEvent?.ts).toBe(releasedAt(5));
+    const apart = await driving();
+    await apart.feed(brakes(30, [5, 20]));
+    expect(apart.player.feedback).toHaveBeenCalledTimes(2);
+    expect(apart.host.snapshot().harshEvent?.ts).toBe(releasedAt(20));
+  });
+
+  test('never on a passenger trip, and never on a drive muted for the drive', async () => {
+    const passenger = await driving({ passenger: true });
+    await passenger.feed(brakes(12, [5]));
+    expect(passenger.player.feedback).not.toHaveBeenCalled();
+    expect(passenger.host.snapshot().harshEvent).toBeNull();
+    const muted = await driving();
+    await muted.feed(brakes(3, []));
+    await muted.host.muteForDrive();
+    await muted.feed(brakes(12, [5]).slice(3));
+    expect(muted.player.feedback).not.toHaveBeenCalled();
+    expect(muted.host.snapshot().harshEvent).toBeNull();
+  });
+
+  test('cleared when the trip ends, and null on the next trip', async () => {
+    const h = await driving();
+    await h.feed(brakes(12, [5]));
+    expect(h.host.snapshot().harshEvent).not.toBeNull();
+    await h.host.end();
+    await h.host.untilIdle();
+    expect(h.host.snapshot().harshEvent).toBeNull();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.host.settled();
+    expect(h.host.snapshot().harshEvent).toBeNull();
+    // The gap is per trip: a brake early in the new trip is nudged even within ten seconds of the last.
+    await h.feed(brakes(12, [5]).map((r) => ({ ...r, ts: r.ts + 13_000 })));
+    expect(h.player.feedback).toHaveBeenCalledTimes(2);
+  });
+
+  test('a player without feedback (a silent stand-in) still gets the banner state', async () => {
+    const h = await driving();
+    delete (h.player as { feedback?: unknown }).feedback;
+    await h.feed(brakes(12, [5]));
+    expect(h.host.snapshot().harshEvent).toMatchObject({ kind: 'braking' });
+    expect(h.errors).toEqual([]);
   });
 
   test('announce goes to the player', async () => {

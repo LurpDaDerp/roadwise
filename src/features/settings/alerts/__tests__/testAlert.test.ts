@@ -29,18 +29,27 @@ function ports(opts: { toneFails?: boolean } = {}) {
         stop: jest.fn(async () => {}),
       },
       haptics: {
-        pattern: jest.fn(async (kind: string) => {
-          calls.push(`pulse:${kind}`);
+        pattern: jest.fn(async (intensity: number) => {
+          calls.push(`pulse:${intensity}`);
         }),
       },
     }),
   };
 }
 
-test('plays what a drive plays for an L2 warning: the tone and the phrase, the audio let go, then the pulse', async () => {
+test('plays what a drive plays for an L2 warning: the tone and the phrase, the audio let go, then a medium pulse', async () => {
   const p = ports();
   expect(await playTestAlert({ loadPorts: p.load, voiceEnabled: () => true })).toBe('played');
-  expect(p.calls).toEqual(['activate:playback', 'tone:2', 'say:Slow down', 'release', 'pulse:double']);
+  expect(p.calls).toEqual(['activate:playback', 'tone:2', 'say:Slow down', 'release', 'pulse:2']);
+});
+
+test('in the chosen style: vibration only never touches audio; sound only never pulses', async () => {
+  const vib = ports();
+  expect(await playTestAlert({ loadPorts: vib.load, voiceEnabled: () => true, alertStyle: () => 'vibration' })).toBe('played');
+  expect(vib.calls).toEqual(['pulse:2']);
+  const snd = ports();
+  expect(await playTestAlert({ loadPorts: snd.load, voiceEnabled: () => true, alertStyle: () => 'sound' })).toBe('played');
+  expect(snd.calls).toEqual(['activate:playback', 'tone:2', 'say:Slow down', 'release']);
 });
 
 test('voice off: the tone and the pulse, no phrase', async () => {

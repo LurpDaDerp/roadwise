@@ -63,6 +63,7 @@ import { onDataChanged } from '@/data/events';
 import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import type { CameraBridge } from '@/features/camera/bridge';
+import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import type { Database } from '@/data/supabase/types';
@@ -1301,11 +1302,14 @@ function defaultPlayer(
   // at its first alert, and the host marks alerts unavailable (and clears it when one sounds).
   return async (inputs) => {
     const ports = await createExpoAlertPorts();
-    // Lane C's Alerts & sounds switch (H4): read before the first alert, then live (the camera's voice lines read it too).
-    await loadVoicePref(createSettingsRepo(db));
+    // Lane C's Alerts & sounds settings (H4): the voice switch and the alert style, read before the
+    // first alert, then live (the camera's alert sink reads both too).
+    const settings = createSettingsRepo(db);
+    await Promise.all([loadVoicePref(settings), loadAlertStylePref(settings)]);
     return createAlertPlayer({
       ...ports,
       voiceEnabled: voicePrefEnabled,
+      alertStyle: alertStylePref,
       ...inputs,
       onError: (error) => onError(error, 'alert player'),
     });

@@ -1,6 +1,6 @@
 // The expo ports against mocked native modules: the session option names and order, a tone that
 // resolves on its finish event (or its bounded fallback), players freed after each tone, speech
-// resolving on done/stop, and the haptic patterns.
+// resolving on done/stop, and the vibration patterns per platform.
 //
 // `setAudioModeAsync` is mocked faithfully, not permissively (review P2-C1): on iOS it applies
 // expo-audio 57.0.5's own `AudioUtils.validateAudioMode` (ios/AudioUtils.swift), over the native
@@ -8,18 +8,21 @@
 // native module rejects. The JS layer hands the mode to iOS unchanged (build/ExpoAudio.js).
 // Android has no validator, so there the mock accepts anything, as the native module does.
 import * as Audio from "expo-audio";
-import * as Haptics from "expo-haptics";
 import * as Speech from "expo-speech";
 // `mock` prefix: the hoisted jest.mock factory below may reference it (read at call time).
-import { Platform as mockPlatform } from "react-native";
+import { Platform as mockPlatform, Vibration } from "react-native";
 
 import {
   ANDROID_RESPECT_SILENT_MODE,
+  ANDROID_VIBRATION,
   createExpoAlertPorts,
+  IOS_BUZZ_MS,
   IOS_RESPECT_SILENT_MODE,
+  IOS_VIBRATION,
   PLAYBACK_MODE,
   TONE_FINISH_MARGIN_MS,
   TONE_MS,
+  vibrationMs,
 } from "../adapters";
 
 /**
@@ -105,13 +108,6 @@ jest.mock("expo-speech", () => ({
     mockSpoken.push({ text, options });
   }),
   stop: jest.fn(async () => {}),
-}));
-
-jest.mock("expo-haptics", () => ({
-  ImpactFeedbackStyle: { Heavy: "heavy" },
-  NotificationFeedbackType: { Warning: "warning" },
-  impactAsync: jest.fn(async () => {}),
-  notificationAsync: jest.fn(async () => {}),
 }));
 
 // jest-expo stubs every asset to the same value; give each tone file its own so the mapping shows.
@@ -415,23 +411,63 @@ describe("expo alert ports", () => {
     expect(Speech.stop).toHaveBeenCalled();
   });
 
-  it("haptics: a double pulse is two heavy impacts; the long pattern is a warning and two impacts", async () => {
-    const { haptics } = await createExpoAlertPorts();
-    await haptics.pattern("double");
-    expect((Haptics.impactAsync as jest.Mock).mock.calls).toEqual([
-      ["heavy"],
-      ["heavy"],
-    ]);
-    expect(Haptics.notificationAsync).not.toHaveBeenCalled();
-    jest.clearAllMocks();
-    await haptics.pattern("long");
-    expect((Haptics.notificationAsync as jest.Mock).mock.calls).toEqual([
-      ["warning"],
-    ]);
-    expect((Haptics.impactAsync as jest.Mock).mock.calls).toEqual([
-      ["heavy"],
-      ["heavy"],
-    ]);
+  describe("vibration: the OS vibrator through React Native's Vibration, per platform", () => {
+    let restoreOS: (() => void) | null = null;
+    const setOS = (os: "ios" | "android") => {
+      restoreOS = jest.replaceProperty(mockPlatform, "OS", os).restore;
+    };
+    let vibrate: jest.SpyInstance;
+    let cancel: jest.SpyInstance;
+    beforeEach(() => {
+      jest.useFakeTimers();
+      vibrate = jest.spyOn(Vibration, "vibrate").mockImplementation(() => {});
+      cancel = jest.spyOn(Vibration, "cancel").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      restoreOS?.();
+      restoreOS = null;
+      jest.useRealTimers();
+    });
+
+    it("Android: each strength is its waveform, a running one cancelled first, and the port waits the pattern out", async () => {
+      setOS("android");
+      const { haptics } = await createExpoAlertPorts();
+      for (const intensity of [1, 2, 3, 4] as const) {
+        let done = false;
+        const pulsing = haptics.pattern(intensity).then(() => {
+          done = true;
+        });
+        expect(vibrate).toHaveBeenLastCalledWith([...ANDROID_VIBRATION[intensity]]);
+        await jest.advanceTimersByTimeAsync(vibrationMs(intensity, "android") - 1);
+        expect(done).toBe(false);
+        await jest.advanceTimersByTimeAsync(2);
+        await pulsing;
+      }
+      expect(cancel).toHaveBeenCalledTimes(4);
+    });
+
+    it("iOS: strength is the number of system buzzes, 500 ms apart, and the wait covers the last buzz", async () => {
+      setOS("ios");
+      const { haptics } = await createExpoAlertPorts();
+      const pulsing = haptics.pattern(4);
+      expect(vibrate).toHaveBeenLastCalledWith([0, 500, 500, 500]);
+      expect(IOS_VIBRATION[1]).toEqual([0]);
+      expect(vibrationMs(4, "ios")).toBe(1500 + IOS_BUZZ_MS);
+      await jest.advanceTimersByTimeAsync(vibrationMs(4, "ios") + 1);
+      await pulsing;
+    });
+
+    it("every step up is longer and has at least as many pulses on both platforms", () => {
+      for (const os of ["android", "ios"]) {
+        for (const intensity of [2, 3, 4] as const) {
+          const below = (intensity - 1) as 1 | 2 | 3;
+          expect(vibrationMs(intensity, os)).toBeGreaterThan(vibrationMs(below, os));
+        }
+      }
+      const pulses = (p: readonly number[]) => Math.ceil(p.length / 2);
+      expect([1, 2, 3, 4].map((i) => pulses(ANDROID_VIBRATION[i as 1 | 2 | 3 | 4]))).toEqual([1, 2, 3, 4]);
+      expect([1, 2, 3, 4].map((i) => IOS_VIBRATION[i as 1 | 2 | 3 | 4].length)).toEqual([1, 2, 3, 4]);
+    });
   });
 });
 

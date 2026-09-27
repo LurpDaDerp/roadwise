@@ -1,5 +1,5 @@
 import { CONSTANTS } from '@scoring';
-import { createArbiter } from '@/core/alerts/arbiter';
+import { createArbiter, SPEEDING_INTENSITY_STEPS_MPS, speedingIntensity } from '@/core/alerts/arbiter';
 import { en } from '@/i18n/en';
 import type { AlertVoiceKey, ArbiterInput, ArbiterState } from '@/core/alerts/types';
 import type { StringKey } from '@/i18n';
@@ -80,6 +80,53 @@ describe('rule 2: speeding', () => {
     }
     // The same row at full quality is an L3 — only `q` was holding it back.
     expect(tick(21, { ...speedingRow(21, OVER_20), q: Q_FULL_AT })).toMatchObject({ level: 3 });
+  });
+
+  describe('vibration strength follows how far over the limit the driver is (the decision carries it)', () => {
+    test('1 just past the tolerance, 2 at 15 over, 3 at 20 over, 4 at 25 over', () => {
+      expect(SPEEDING_INTENSITY_STEPS_MPS).toEqual([mph(15), mph(20), mph(25)]);
+      expect(speedingIntensity(SPEEDING_TOLERANCE_MPS + 0.01)).toBe(1);
+      expect(speedingIntensity(mph(14.9))).toBe(1);
+      expect(speedingIntensity(mph(15))).toBe(2);
+      expect(speedingIntensity(mph(19.9))).toBe(2);
+      expect(speedingIntensity(mph(20))).toBe(3);
+      expect(speedingIntensity(mph(24.9))).toBe(3);
+      expect(speedingIntensity(mph(25))).toBe(4);
+      expect(speedingIntensity(mph(60))).toBe(4);
+    });
+
+    test('an L1 at 12 over carries 1; an L2 opened at 15 over carries 2; an L3 at 20 over carries 3', () => {
+      const l1 = harness();
+      for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) l1.tick(s, speedingRow(s, OVER_12));
+      expect(l1.tick(ALERT_L1_SPEEDING_MIN_S, speedingRow(ALERT_L1_SPEEDING_MIN_S, OVER_12))).toMatchObject({ level: 1, intensity: 1 });
+      const l2 = harness();
+      for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) l2.tick(s, speedingRow(s, OVER_15));
+      expect(l2.tick(5, speedingRow(5, OVER_15))).toMatchObject({ level: 2, intensity: 2 });
+      const l3 = harness();
+      for (let s = 0; s < CONSTANTS.ALERT_L3_MIN_S; s += 1) l3.tick(s, speedingRow(s, OVER_20));
+      expect(l3.tick(CONSTANTS.ALERT_L3_MIN_S, speedingRow(CONSTANTS.ALERT_L3_MIN_S, OVER_20))).toMatchObject({ level: 3, intensity: 3 });
+    });
+
+    test('a repeat re-reads the strength: the same band, harder when the driver is further over', () => {
+      const { tick } = harness();
+      for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) tick(s, speedingRow(s, OVER_15));
+      expect(tick(5, speedingRow(5, OVER_15))).toMatchObject({ level: 2, intensity: 2 });
+      const realertAtS = 5 + ALERT_REALERT_S;
+      for (let s = 6; s < realertAtS; s += 1) expect(tick(s, speedingRow(s, mph(19)))).toBeNull();
+      // Still L2 (20 over has not held ALERT_L3_MIN_S yet at this row), but 25 over now.
+      expect(tick(realertAtS, speedingRow(realertAtS, mph(25)))).toMatchObject({ level: 2, intensity: 4 });
+    });
+
+    test('the learning period softens the level, not the strength; other kinds carry none', () => {
+      const learning = harness({ tripIndex: 0 });
+      for (let s = 0; s < ALERT_L1_SPEEDING_MIN_S; s += 1) learning.tick(s, speedingRow(s, OVER_20));
+      const d = learning.tick(5, speedingRow(5, OVER_20));
+      expect(d).toMatchObject({ level: 1, intensity: 3 });
+      const phone = harness();
+      const p = phone.tick(0, { phoneEpisode: { id: 'p1', durationS: CONSTANTS.PHONE_HANDLING_MIN_S }, speedMps: mph(35) });
+      expect(p).toMatchObject({ kind: 'phone' });
+      expect(p?.intensity).toBeUndefined();
+    });
   });
 
   test('opens at L2 when already ALERT_L2_OVER_MPS over the limit', () => {
