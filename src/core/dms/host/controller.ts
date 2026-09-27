@@ -986,7 +986,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       if (open && engine !== null) {
         const dtS = policyRowT === null ? 0 : Math.min(POLICY_ROW_MAX_S, Math.max(0, (row.ts - policyRowT) / 1000));
         if (out.stopped) policyS.stoppedS += dtS;
-        if (out.stopped && out.action === 'run') policyS.sleepWatchS += dtS;
+        if (out.stopped && out.state === 'SLEEP_WATCH') policyS.sleepWatchS += dtS; // C-SUM minor: probes included, never SETUP
         if (out.absent) policyS.absentS += dtS;
         policyRowT = row.ts;
       } else policyRowT = null;

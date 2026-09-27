@@ -2,7 +2,7 @@
 import { angularDistanceDeg } from '../angles';
 import { DEFAULT_DMS_CONFIG, type DmsConfig } from '../config';
 import type { WeightedDir } from '../histogram';
-import { binomialTail, chooseRoad, fixationMedians, roadConfidence, roadSide, type RoadChoice } from '../stage1';
+import { chooseRoad, fixationMedians, roadConfidence, roadSide, type RoadChoice } from '../stage1';
 import type { AnglePair } from '../types';
 import { gauss, rng } from '../__fixtures__/synth';
 
@@ -98,30 +98,20 @@ describe('chooseRoad (S1-1)', () => {
   });
 });
 
-describe('C9 round 2 (review-C9 C9r1-1): the returns before the pitch, when beyond the occupancy', () => {
+describe('C9 round 3 (review-C9 R2-R): the pitch before the returns', () => {
   const R = { yaw: 2, pitch: -3 };
-  const HIGH = { yaw: 2, pitch: 6 };
   const back = (nRoad: number, nDisp: number, disp: AnglePair) => [...Array.from({ length: nRoad }, () => R), ...Array.from({ length: nDisp }, () => disp)];
-  test('a 60 % display ABOVE the road, the driver back on the road after each check: the returns pick the road', () => {
-    const dirs = clusters([[HIGH, 120], [R, 80]]);
-    expect(road(chooseRoad(dirs, NONE, C)).road.pitch).toBeGreaterThan(3); // the pitch prior alone: the display
-    const ch = road(chooseRoad(dirs, { ...NONE, returns: back(8, 0, HIGH) }, C));
-    expect(ch.rule).toBe('returns');
-    expect(near(ch.road, R)).toBe(true);
-  });
-  test('returns that only follow the occupancy (an 85 % display taken straight back) leave it to the pitch', () => {
+  test('a low display the reader goes back to after each check (returns on the display): the pitch picks the road', () => {
     const LOW = { yaw: 11, pitch: -10 };
-    const dirs = clusters([[LOW, 170], [R, 30]]);
-    const ch = road(chooseRoad(dirs, { ...NONE, returns: back(0, 8, LOW) }, C));
+    const ch = road(chooseRoad(clusters([[LOW, 120], [R, 80]]), { ...NONE, returns: back(0, 8, LOW) }, C));
     expect(ch.rule).toBe('pitch');
     expect(near(ch.road, R)).toBe(true);
   });
-  test('binomialTail', () => {
-    expect(binomialTail(8, 8, 0.5)).toBeCloseTo(1 / 256, 10);
-    expect(binomialTail(8, 0, 0.3)).toBe(1);
-    expect(binomialTail(8, 9, 0.3)).toBe(0);
-    expect(binomialTail(10, 3, 0.2)).toBeCloseTo(0.3222004736, 8);
-    expect(binomialTail(6, 6, 1)).toBeCloseTo(1, 12);
+  test('the known limit: a display ABOVE the road watched more than it is chosen by the pitch, whatever the returns', () => {
+    const HIGH = { yaw: 2, pitch: 6 };
+    const ch = road(chooseRoad(clusters([[HIGH, 120], [R, 80]]), { ...NONE, returns: back(8, 0, HIGH) }, C));
+    expect(ch.rule).toBe('pitch');
+    expect(near(ch.road, HIGH)).toBe(true);
   });
 });
 

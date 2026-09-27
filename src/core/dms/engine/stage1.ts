@@ -106,7 +106,6 @@ export function findClusters(dirs: readonly WeightedDir[], o: Pick<RoadOpts, 'si
  */
 export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg): RoadChoice | 'wait' | null {
   const tc = cfg.calibration.twoCluster;
-  const rho = o.rho ?? clusterRho(o.sigma);
   const taken = findClusters(dirs, o, cfg);
   if (taken.length === 0) return null;
   // C9 round 1 (C9-1): a cluster inside a default mirror rectangle relative to another cluster that is not itself a
@@ -142,43 +141,19 @@ export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg):
   const bMirror = inMirror(b, a, cfg);
   const aMirror = inMirror(a, b, cfg);
   if (bMirror !== aMirror) return pick(bMirror ? a : b, 'mirror');
-  // (d) the returns: where the driver lands after a mirror check.
+  // (c) the higher. C9 round 3 (review-C9 R2-R): the pitch before the returns, restored. Returns land on the LOWER
+  // cluster both for a reader under a high display (the road) and for one who goes back to a low display after each
+  // check (the display, far more common), so they cannot override the pitch; a display mounted above the road and
+  // watched heavily is a recorded known limit.
+  if (Math.abs(a.pitch - b.pitch) >= tc.pitchMinDeg) return pick(a.pitch > b.pitch ? a : b, 'pitch');
+  // (d) the returns, side by side only
   const n = o.returns.length;
+  if (n < tc.returnMinN) return 'wait';
   let nearA = 0;
   for (const r of o.returns) if (angularDistanceDeg(r, a) < angularDistanceDeg(r, b)) nearA++;
-  const returnsPick = n < tc.returnMinN ? null : nearA >= tc.returnShare * n ? a : n - nearA >= tc.returnShare * n ? b : null;
-  // C9 round 2 (review-C9 C9r1-1): the returns go BEFORE the pitch prior (c) when they say more than the clusters'
-  // occupancy would: the binomial chance of at least that many returns landing on the picked cluster, were they to
-  // land in proportion to the two cores' weights, is ≤ returnAlpha. A display mounted ABOVE the road, watched 60 % of
-  // the time, with the driver back on the road after each check (returns ~100 % on a 30–40 % cluster) is then the
-  // returns' call, not the higher pitch's. Returns that merely follow the occupancy (a display watched 85 % of the
-  // time, taken straight back after each check) are no such evidence, and the pitch prior decides.
-  if (returnsPick !== null) {
-    const wa = shareNear(dirs, a, rho);
-    const wb = shareNear(dirs, b, rho);
-    const occ = wa + wb > 0 ? (returnsPick === a ? wa : wb) / (wa + wb) : 0.5;
-    const k = returnsPick === a ? nearA : n - nearA;
-    if (binomialTail(n, k, occ) <= tc.returnAlpha) return pick(returnsPick, 'returns');
-  }
-  // (c) the higher
-  if (Math.abs(a.pitch - b.pitch) >= tc.pitchMinDeg) return pick(a.pitch > b.pitch ? a : b, 'pitch');
-  // (d) side by side: the returns decide on their share alone, else wait
-  if (returnsPick !== null) return pick(returnsPick, 'returns');
+  if (nearA >= tc.returnShare * n) return pick(a, 'returns');
+  if (n - nearA >= tc.returnShare * n) return pick(b, 'returns');
   return 'wait';
-}
-
-/** P(X ≥ k) for X ~ Binomial(n, p). */
-export function binomialTail(n: number, k: number, p: number): number {
-  if (k <= 0) return 1;
-  if (k > n) return 0;
-  const q = Math.min(1, Math.max(0, p));
-  let term = Math.pow(1 - q, n); // P(X = 0)
-  let cdf = 0;
-  for (let i = 0; i < k; i++) {
-    cdf += term;
-    term = q >= 1 ? 0 : (term * (n - i) * q) / ((i + 1) * (1 - q));
-  }
-  return Math.max(0, 1 - cdf);
 }
 
 /**

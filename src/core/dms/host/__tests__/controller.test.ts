@@ -1274,6 +1274,23 @@ describe('C3: stops, heat, dark and an empty seat through the controller', () =>
     expect(end?.policy.stoppedS).toBeCloseTo(seat.stoppedS, 0);
     expect(end?.stops.stoppedFatigueMinutes).toBeGreaterThanOrEqual(3);
   });
+  // review-CSUM minor (NC-CSUM-SW): sleepWatchS is the policy STATE SLEEP_WATCH (probes included), never SETUP
+  // (15 fps, the net), which also runs the camera while stopped.
+  movingTest('C-SUM: a setup while parked adds 0 to sleepWatchS; the stop after it counts', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 20);
+    h.ctl.beginSetup();
+    await drive(h, 20, 80, { speed: () => 0 });
+    const inSetup = h.ctl.summary()!.policy;
+    expect(inSetup.stoppedS).toBeGreaterThanOrEqual(58);
+    expect(inSetup.sleepWatchS).toBe(0);
+    h.ctl.endSetup();
+    await drive(h, 80, 110, { speed: () => 0 });
+    const after = h.ctl.summary()!.policy;
+    expect(after.sleepWatchS).toBeGreaterThanOrEqual(28);
+    expect(after.sleepWatchS).toBeCloseTo(after.stoppedS - inSetup.stoppedS, 0);
+  });
   test('S-RED: 45 s at a light: no native stop, start or pause; setPolicy(run, 5 fps); the HUD says stopped', async () => {
     const h = harness();
     h.ctl.setGate(GATE);

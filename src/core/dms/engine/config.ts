@@ -472,10 +472,9 @@ export interface DmsConfig {
      * Task C9 (T9; review-C9 S1-1): the two-cluster Stage 1. A second histogram peak ≥ 2ρ from the first is a cluster
      * when it holds ≥ clusterMinShare of the window within ρ and is locally peaked; the road is then chosen by the
      * camera, the mirrors, a pitch difference ≥ pitchMinDeg (the higher), or ≥ returnMinN mirror-check returns of
-     * which ≥ returnShare landed nearer it (else no pass yet). C9 round 2: the returns go before the pitch when the
-     * binomial chance of that many landing on the picked cluster by its occupancy alone is ≤ returnAlpha.
+     * which ≥ returnShare landed nearer it (else no pass yet).
      */
-    twoCluster: { clusterMinShare: number; pitchMinDeg: number; returnMinN: number; returnShare: number; returnAlpha: number };
+    twoCluster: { clusterMinShare: number; pitchMinDeg: number; returnMinN: number; returnShare: number };
     /**
      * Task C8 (rev2 §2.7): a profile is saved only if calibrated or seed-verified, no dual state or probation is
      * pending, gaze health was good and the fatigue gate clear for the last healthyS / gateClearS of the drive.
@@ -1018,7 +1017,7 @@ const DEFAULT: DmsConfig = {
     startOpennessRange: [0.6, 1.15],
     startMarRange: [0.7, 1.4],
     seed: { admitMinSpeedKmh: 30, windowS: 8, windowMaxObservedS: 60, ringMinDeg: 4, ringSigmas: 1.3, peakFrac: 0.8, agreeMinDeg: 3, agreeSE: 2.5, pairMinDeg: 1.5, pairSE: 2, curveRateDegS: 2, disputeMaxS: 60 },
-    twoCluster: { clusterMinShare: 0.1, pitchMinDeg: 3, returnMinN: 6, returnShare: 0.8, returnAlpha: 0.05 },
+    twoCluster: { clusterMinShare: 0.1, pitchMinDeg: 3, returnMinN: 6, returnShare: 0.8 },
     save: { healthyS: 600, gateClearS: 600 },
     seedWindowS: 3,
     seedMinS: 2,
@@ -1395,7 +1394,6 @@ export function validateDmsConfig(input: DeepReadonly<DmsConfig> | DmsConfig): s
   if (!(tc.pitchMinDeg > 0)) bad('calibration.twoCluster.pitchMinDeg', 'must be > 0');
   if (!(Number.isInteger(tc.returnMinN) && tc.returnMinN >= 1)) bad('calibration.twoCluster.returnMinN', 'must be an integer ≥ 1');
   if (!(tc.returnShare > 0.5)) bad('calibration.twoCluster.returnShare', 'must be > 0.5');
-  if (!(tc.returnAlpha > 0 && tc.returnAlpha < 0.5)) bad('calibration.twoCluster.returnAlpha', 'must be in (0, 0.5)');
   if (!(c.calibration.binDeg > 0)) bad('calibration.binDeg', 'must be > 0');
   if (!(c.calibration.radiusMinDeg <= c.calibration.radiusMaxDeg)) bad('calibration.radiusMinDeg', 'must be ≤ radiusMaxDeg');
   if (!(c.calibration.driverChange.iodFrac > c.calibration.resumeTolerance.iodFrac)) {

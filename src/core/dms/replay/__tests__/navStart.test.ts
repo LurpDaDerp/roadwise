@@ -100,26 +100,54 @@ describe('S-NAV-START-MIRRORS (review-C9 C9-1; NC-S1-3): a display, frequent mir
   });
 });
 
-describe('S-NAV-START-HIGH (review-C9 C9r1-1; NC-S1-H): a display mounted ABOVE the road line', () => {
+describe('S-NAV-START-RESUME (review-C9 R2-R; NC-S1-H2): a reader who goes back to the display after each mirror check', () => {
+  // The review's probe: the display resumed for 2 s after each mirror check (glance at the mirror, back to the phone),
+  // a share of 30, 45 or 60 % otherwise, mirror checks every 15 s, 240 s. The returns land on the DISPLAY well beyond
+  // its occupancy: returns-before-pitch (C9 round 2) passed onto it in 13 of 18. Pitch before returns (restored):
+  // measured, every pass correct (0.1–0.4°) or no pass yet, never onto the display.
+  const cases: [number, number, number, number][] = [];
+  for (const [y, p] of [[14, -8], [9, -6], [0, -15]] as const) for (const share of [0.3, 0.45, 0.6]) for (const seed of [1, 2]) cases.push([y, p, share, seed]);
+  test.each(cases)('(%i°, %i°) at %f, seed %i: correct or not yet; never onto the display', (y, p, share, seed) => {
+    const truth = truthOf(seed);
+    const d = navDrive({ seed, share, at: { yaw: y, pitch: p }, startS: 240, seconds: 240, displayAfterMirrorS: 2 });
+    if (firstCalS(d) !== null) {
+      expect(angularDistanceDeg(d.passes[0]!.centre, truth)).toBeLessThanOrEqual(1.5);
+      expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(1.5);
+    }
+  });
+});
+
+describe('S-NAV-START-HIGH (review-C9 R2-R, re-cut): a display mounted ABOVE the road line; 40 and 60 % are a KNOWN LIMIT', () => {
   // The review's probe: a display at (6°, 8°), (0°, 9°) or (10°, 7°), watched 20, 40 or 60 % of every 10 s for the whole
-  // drive, the usual mirror checks every 15 s and the road for 1.3 s after each. Rule (c) (the higher) picked a 60 %
-  // display: a pass 8–13° off in 6 of 6. C9 round 2: the returns (≥ 6, ≥ 80 % nearer one cluster) decide BEFORE the
-  // pitch when they say more than the clusters' occupancy would (binomial tail ≤ returnAlpha, 0.05). Measured: every
-  // first pass correct (0.1–0.8°), at 60 or 90 s.
-  // Stated (a separate limit, reported): after the pass, with a 60 % display 7.6° above the road for the whole drive,
-  // the rolling path's small follow creeps toward it in one run ((0°, 9°), seed 1: 4.1° by 165 s; (0°, 9°) 40 %,
-  // seed 1: 1.8°). The per-frame mode of the two merges between them, and the pitch-down cap guards only a LOW display.
-  // The known limit, recorded: with NO mirror checks there are no returns, and a 60 % high display is passed onto
-  // (8–13° off, 6 of 6), as before C9.
+  // drive, the usual mirror checks every 15 s and the road for 1.3 s after each. The pitch rule (c) picks the higher
+  // cluster, and the returns cannot override it (S-NAV-START-RESUME: their evidence has the same form as a reader's
+  // who goes back to a LOW display). So:
+  // - 20 %: asserted correct (the display is no cluster of its own at ≥ clusterMinShare beside the road).
+  // - 40 and 60 %: the KNOWN LIMIT (README "Known limits: a display above the road"; device pass D-C9-1), recorded as
+  //   measured: no pass, a pass on the road (the two merged at frame level), or a pass onto the display (≥ 7° off).
+  //   A road pass never creeps onto the display (≤ 2°, R2-C's road-side follow).
+  type Outcome = 'road' | 'none' | 'display';
+  const RECORDED: Record<string, [Outcome, Outcome]> = {
+    '6,8,0.4': ['road', 'none'],
+    '6,8,0.6': ['none', 'none'],
+    '0,9,0.4': ['road', 'none'],
+    '0,9,0.6': ['road', 'none'],
+    '10,7,0.4': ['none', 'none'],
+    '10,7,0.6': ['display', 'display'],
+  };
   const cases: [number, number, number, number][] = [];
   for (const [y, p] of [[6, 8], [0, 9], [10, 7]] as const) for (const share of [0.2, 0.4, 0.6]) for (const seed of [1, 2]) cases.push([y, p, share, seed]);
-  test.each(cases)('(%i°, %i°) at %f, seed %i: the first pass on the road; never onto the display', (y, p, share, seed) => {
+  test.each(cases)('(%i°, %i°) at %f, seed %i', (y, p, share, seed) => {
     const truth = truthOf(seed);
     const d = navDrive({ seed, share, at: { yaw: y, pitch: p }, startS: 240, seconds: 200, roadAfterMirrorS: 1.3 });
     const t = firstCalS(d);
-    if (t !== null) expect(angularDistanceDeg(d.passes[0]!.centre, truth)).toBeLessThanOrEqual(1.5);
-    // never onto the display (≥ 7.6° from the road in the engine's frame): the post-pass creep stays short of halfway
-    expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(4.5);
+    const off = t === null ? null : angularDistanceDeg(d.passes[0]!.centre, truth);
+    const outcome: Outcome = off === null ? 'none' : off <= 1.5 ? 'road' : off >= 7 ? 'display' : ('between' as Outcome);
+    if (share === 0.2) {
+      expect(outcome).toBe('road');
+      expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(1.5);
+    } else expect(outcome).toBe(RECORDED[`${y},${p},${share}`]![seed - 1]);
+    if (outcome === 'road') expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(2);
   });
 });
 

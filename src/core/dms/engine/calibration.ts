@@ -64,7 +64,7 @@ import { correctedRef, noiseOfSeries } from './earNoise';
 import type { AnglePair, DriverSide, EngineFrame, GazeSource, Rotation, VehicleContext } from './types';
 import { RingBuffer } from './windows';
 import { cameraRel, isDistractionZone, phoneScreenRadius, zoneAt, zoneClass } from './zones';
-import { chooseRoad, clusterRho, fixationMedians, roadConfidence, roadSide, type RoadChoice } from './stage1';
+import { chooseRoad, clusterRho, findClusters, fixationMedians, roadConfidence, roadSide, type RoadChoice } from './stage1';
 
 export type CalibrationState = 'none' | 'seeded' | 'calibrated' | 'provisional' | 'uncalibrated' | 'recalibrating';
 
@@ -217,6 +217,9 @@ const STAGE_REF_MIN_N = 30;
 /** Task C9 (S1-1, deviation): the fixation block for the two-cluster detection */
 const FIXATION_BLOCK_MS = 500;
 const FIXATION_KERNEL_DEG = 1;
+/** C9 round 3 (R2-C): the rolling road-side mode's block-scale ρ floor, and the fewest blocks (and side frames) it reads */
+const ROLL_SIDE_RHO_MIN_DEG = 1.5;
+const ROLL_SIDE_MIN_BLOCKS = 10;
 /** the blocks must cover this share of the window's weight, else the frames are used */
 const FIXATION_MIN_COVER = 0.5;
 /** C5 round 1: an excursion is the gaze away for at least this long, over at least EXCURSION_MIN_FRAMES frames (not noise) */
@@ -400,7 +403,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
   /** admitted samples awaiting the EMA (applied voidS late, so a warning can still void them) */
   const emaQueue = new RingBuffer<{ t: number; w: number; head: AnglePair; geo: AnglePair | null; net: AnglePair | null }>(Math.ceil((c.voidS + 2) * MAX_FPS) + 2);
   let lastRollT = Number.NEGATIVE_INFINITY;
-  let prevRoll: { m: AnglePair; vacated: boolean; se: number } | null = null;
+  let prevRoll: { m: AnglePair; vacated: boolean; se: number; side?: boolean } | null = null;
   /**
    * C5 round 1: the rolling path's current large candidate: its mode, the centre when it appeared, since when, and
    * whether the returns since then have corroborated it (latched while the candidate persists)
@@ -1184,6 +1187,41 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     return win.filter((d) => angularDistanceDeg(d, cam) > screenR);
   }
 
+  /**
+   * C9 round 3 (R2-C): the rolling window's road-side mode. The clusters come from `findClusters` on the window's
+   * half-second fixation medians at the block scale (σ_b = σ̂/√n, ρ_b = max(1.5°, 1.3σ_b), a 1° kernel); the road is the
+   * cluster nearest `cur`; the mode is `locate` on the per-frame frames nearer it than any other cluster, from it, within
+   * min(max(4°, 2σ̂), half the nearest separation).
+   * - null (the per-frame mode `m0` stands): too few blocks or side frames, or ONE block cluster within ρ_b of `m0`.
+   * - 'hold' (no follow on this window; deviation, measured): ONE block cluster farther than ρ_b from `m0` (the frame
+   *   mode is a blend of two masses the blocks resolved only one of: the review's 2.8° outlier, (0°, 7°) 60 % seed 1,
+   *   where the one cluster was the DISPLAY and the blend follow ran), or two clusters about equally near `cur` (within
+   *   ρ_b: a centre already between them cannot tell which is the road).
+   */
+  function roadSideMode(win: readonly WeightedDir[], cur: AnglePair, m0: AnglePair): AnglePair | 'hold' | null {
+    const xs: { t: number; a: AnglePair | null; w: number }[] = [];
+    samples.forEach((sm) => {
+      if (sm.t < tNow - c.rolling.windowS * 1000 || !(sm.w > 0)) return;
+      const a = cfg.gazeSource === 'net' ? sm.net : sm.geo;
+      xs.push({ t: sm.t, a: a === null ? null : toDrv(a, roll), w: sm.w });
+    });
+    const fm = fixationMedians(xs, FIXATION_BLOCK_MS);
+    if (fm.dirs.length < ROLL_SIDE_MIN_BLOCKS) return null;
+    const sigmaB = sigmaHat / Math.sqrt(Math.max(1, fm.perBlock));
+    const rhoB = Math.max(ROLL_SIDE_RHO_MIN_DEG, 1.3 * sigmaB);
+    const cl = findClusters(fm.dirs, { sigma: sigmaB, rho: rhoB, kernelDeg: FIXATION_KERNEL_DEG }, cfg);
+    if (cl.length === 0) return null;
+    if (cl.length < 2) return angularDistanceDeg(cl[0]!, m0) > rhoB ? 'hold' : null;
+    const byCur = [...cl].sort((p, q) => angularDistanceDeg(p, cur) - angularDistanceDeg(q, cur));
+    const road = byCur[0]!;
+    if (angularDistanceDeg(byCur[1]!, cur) - angularDistanceDeg(road, cur) < rhoB) return 'hold';
+    const others = cl.filter((q) => q !== road);
+    const side = win.filter((d) => others.every((o) => angularDistanceDeg(d, road) <= angularDistanceDeg(d, o)));
+    if (side.length < ROLL_SIDE_MIN_BLOCKS) return null;
+    const half = Math.min(...others.map((o) => angularDistanceDeg(o, road) / 2));
+    return locate(side, road, Math.min(Math.max(LOCATE_MIN_R_DEG, 2 * sigmaHat), half));
+  }
+
   /** A shift the fatigue gate blocks: downward, or toward the phone. */
   function gateBlocks(from: AnglePair, to: AnglePair): boolean {
     if (!fatigueGate) return false;
@@ -1238,7 +1276,29 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const peak = modeOf(win, cfg);
     if (peak === null) return;
     // The cluster's centre, located to convergence (its SE, not the histogram's grid, decides a small shift).
-    const m = locate(win, peak, Math.max(LOCATE_MIN_R_DEG, 2 * sigmaHat));
+    let m = locate(win, peak, Math.max(LOCATE_MIN_R_DEG, 2 * sigmaHat));
+    // C9 round 3 (review-C9 R2-C; the user's "no drift over time"): a display 7–9° from the road merges with it into ONE
+    // per-frame mode, and the locate from the window's peak lands between them: the small follow walked the centre
+    // toward a display (3.5–5° in 15 min). When a small follow is possible, the window's clusters are found on its
+    // half-second fixation medians at the BLOCK scale (ρ_b = max(1.5°, 1.3σ̂/√n): a display 7° away is about 4σ there);
+    // with two or more, the follow reads the per-frame frames on the side of the cluster nearest the centre.
+    // A road-side mode agrees only with a road-side mode (deviation, measured: S-DISPLAY-70 (7°, −1°) seed 13): the
+    // window a display first appears in has a road cluster pulled toward it by the transition blocks and the display's
+    // per-frame tail; agreeing with the display-free window before it, it made a 0.9° follow toward the display, the EMA
+    // carried it on, and health read c₀ as vacated. Two road-side windows in a row are the steady two-cluster case.
+    // Not in probation (smallOnly; deviation, measured: S-2H-MANY-DISPLAY (7°, −1°) 20 %, plan 1, 8 fps): after a
+    // posture commit the rolling path settles the new centre, and the road-side locate (its radius capped at half the
+    // separation) is noisier than the window's: it followed a 1.2° low reading and the segment took 228 s to settle
+    // (75 s before). The creep it cures is a steady drive's, never a probation's.
+    let side = false;
+    if (!smallOnly && angularDistanceDeg(m, cur) <= po.smallShiftSigmas * sigmaHat + 1) {
+      const rs = roadSideMode(win, cur, m);
+      if (rs === 'hold') m = cur;
+      else if (rs !== null) {
+        m = rs;
+        side = true;
+      }
+    }
     const d = angularDistanceDeg(m, cur);
     const se = sigmaHat / Math.sqrt(Math.max(1, win.length));
     // Engaged (a drift being followed), the follow continues down to half the minimum shift, so a steady drift is
@@ -1253,7 +1313,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     const small = d >= minShift && d <= po.smallShiftSigmas * sigmaHat && wAdmitted >= SMALL_MIN_WINDOW_FRAC * c.rolling.windowS;
     const large = d > po.smallShiftSigmas * sigmaHat && d <= c.radiusMinDeg;
     const vacated = large && relativelyVacated(win, cur, m, r, cfg);
-    const agrees = prevRoll !== null && angularDistanceDeg(prevRoll.m, m) <= Math.max(1, se, prevRoll.se);
+    const agrees = prevRoll !== null && angularDistanceDeg(prevRoll.m, m) <= Math.max(1, se, prevRoll.se) && (!side || prevRoll.side === true);
     // Task C9 (T9, deviation): a road cluster with a display watched far from it (no second peak within 2ρ, locally
     // peaked, T9-1) is followed too, so a slow drift under a display is not left unfollowed (S-2H-MANY-DISPLAY). A
     // display within 2ρ (a broad mode between it and the road, S-40-DISPLAY's case) keeps C5 (c)'s relative test.
@@ -1269,7 +1329,7 @@ export function createCalibrator(cfg: DmsConfig, init: { driverSide: DriverSide;
     else if (largeCand === null || angularDistanceDeg(largeCand.m, m) > Math.max(1.5, 2 * se)) largeCand = { m, from: cur, since: tNow, ok: false };
     if (largeCand !== null && !largeCand.ok) largeCand.ok = returnsCorroborate(largeCand.since, largeCand.m, largeCand.from, c.slow.returnMinCountRolling);
     const okLarge = !smallOnly && large && vacated && prevRoll !== null && prevRoll.vacated && agrees && largeCand !== null && largeCand.ok && vacatedBeyondNoise(win, cur, m);
-    prevRoll = { m, vacated, se };
+    prevRoll = { m, vacated, se, side };
     if ((okSmall || okLarge) && m.pitch - cur.pitch >= -c.rolling.maxPitchDownDeg && !gateBlocks(cur, m)) {
       engaged = true;
       // The primary source follows its mode; the other gaze source moves by the same shift; the head by its own mode.

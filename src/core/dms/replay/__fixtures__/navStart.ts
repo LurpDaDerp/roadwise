@@ -44,6 +44,10 @@ export interface NavStart {
    * every `every` s (from 1 s into each period), the road for 0.5 s after it, the display pattern otherwise.
    */
   frequentMirror?: { every: number; which: 'rear' | 'driver' };
+  /** C9 round 3 (S-NAV-START-RESUME): after each mirror check the reader goes back to the display for this long */
+  displayAfterMirrorS?: number;
+  /** C9 round 3 (S-HIGH-DISPLAY-CREEP): the display pattern starts here (a correct pass first), default 0 */
+  displayFromS?: number;
 }
 
 export interface NavResult {
@@ -83,7 +87,9 @@ export function navDrive(o: NavStart): NavResult {
       return { gaze: g, openness: blinkOpenness(t), speedKmh: 60, ...(mount !== undefined ? { mountShift: mount } : {}) };
     }
     const m = o.mirrors === false ? null : mirrorAt(t);
-    const reading = t < o.startS && t % 10 < o.share * 10 && !(o.roadAfterMirrorS !== undefined && o.mirrors !== false && sinceMirror(t) < o.roadAfterMirrorS);
+    const inStart = t < o.startS && t >= (o.displayFromS ?? 0);
+    const resumed = o.displayAfterMirrorS !== undefined && o.mirrors !== false && sinceMirror(t) < o.displayAfterMirrorS;
+    const reading = inStart && (resumed || (t % 10 < o.share * 10 && !(o.roadAfterMirrorS !== undefined && o.mirrors !== false && sinceMirror(t) < o.roadAfterMirrorS)));
     return { gaze: m ?? (reading ? display : onRoad(r)), openness: blinkOpenness(t), speedKmh: 60, ...(mount !== undefined ? { mountShift: mount } : {}) };
   };
   const items = synthDrive({ fps: 15, seconds: o.seconds, seed: o.seed, source: 'geometric', driver, motion: true });
