@@ -12,9 +12,8 @@ import { RewardsOfflineError, type BadgeDef, type BadgeMetric, type EarnedBadge,
 import { badgesCopy as copy, FAMILY_TITLE } from '../copy/badges';
 import { OFFLINE_LINE } from '../copy/common';
 import { badgeHref } from '../hub/routes';
-import { useReferralFlag } from '../hub/useReferralFlag';
 import { useRewards, type RewardsDeps } from '../useRewards';
-import { badgeCurrent } from '../viewModel';
+import { badgeCurrent, badgeShown } from '../viewModel';
 import { BadgeSeal, isKnownBadge } from './BadgeSeal';
 import { useFreshBadges } from './seen';
 
@@ -25,16 +24,12 @@ export interface BadgeFamily {
   defs: KnownBadgeDef[];
 }
 
-/**
- * The defs the grid shows, grouped by family in display order. The referral badge is shown only
- * while inviting is available, or once it has been earned: a locked badge for a feature the driver
- * cannot use would promise something that isn't there.
- */
-export function badgeFamilies(snapshot: RewardsSnapshot, referralOn: boolean): BadgeFamily[] {
+/** The defs the grid shows (`badgeShown`), grouped by family in display order. */
+export function badgeFamilies(snapshot: RewardsSnapshot): BadgeFamily[] {
   const earned = new Set(snapshot.badges.map((b) => b.badge_id));
   const defs = [...snapshot.badgeDefs]
     .filter((d): d is KnownBadgeDef => isKnownBadge(d.id))
-    .filter((d) => d.family !== 'referrals' || referralOn || earned.has(d.id))
+    .filter((d) => badgeShown(d, earned))
     .sort((a, b) => a.sort - b.sort);
   const families: BadgeFamily[] = [];
   for (const def of defs) {
@@ -62,7 +57,6 @@ export function BadgesScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: strin
   const { now } = useDataSource();
   const uid = useSession().session?.user.id ?? null;
   const rewards = useRewards(deps);
-  const referralOn = useReferralFlag();
   const data = rewards.data;
   const fresh = useFreshBadges(uid, data?.snapshot.badges.map((b) => b.badge_id));
   const zone = tz ?? deviceZone();
@@ -95,7 +89,7 @@ export function BadgesScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: strin
   } else {
     const { snapshot } = data;
     const byId = new Map<string, EarnedBadge>(snapshot.badges.map((b) => [b.badge_id, b]));
-    const families = badgeFamilies(snapshot, referralOn);
+    const families = badgeFamilies(snapshot);
     const total = families.reduce((sum, f) => sum + f.defs.length, 0);
     const earnedCount = families.reduce((sum, f) => sum + f.defs.filter((d) => byId.has(d.id)).length, 0);
     body = (

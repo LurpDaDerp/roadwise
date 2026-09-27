@@ -13,17 +13,16 @@ import { goalActiveLine, goalSentence, OFFLINE_LINE } from '../copy/common';
 import { hubCopy as copy } from '../copy/hub';
 import { useCurrentWeekStart, useEnsureWeek } from '../useEnsureWeek';
 import { useRewards, type RewardsDeps } from '../useRewards';
-import { classView, goalView, streakView } from '../viewModel';
+import { badgeShown, classView, goalView, streakView } from '../viewModel';
 import { currentWeekGoal } from '../goal/weeks';
 import { ActiveChallenges } from './ActiveChallenges';
 import { ClassField } from './ClassField';
 import { HowRewardsWork } from './HowRewardsWork';
 import { NextBadge } from './NextBadge';
 import { PointsField } from './PointsField';
-import { badgeHref, BADGES_HREF, challengeHref, CHALLENGES_HREF, GOAL_HREF, INVITE_HREF } from './routes';
+import { badgeHref, BADGES_HREF, challengeHref, CHALLENGES_HREF, GOAL_HREF } from './routes';
 import { StreakField } from './StreakField';
 import { TodayLine } from './TodayLine';
-import { useReferralFlag } from './useReferralFlag';
 
 /** A new user: no settled progress yet (the server writes the row on the first settlement or week). */
 export const isNewUser = (snapshot: RewardsSnapshot) => snapshot.progress === null || snapshot.progress.xp === 0;
@@ -118,7 +117,6 @@ export function RewardsHubScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: s
   const rewards = useRewards(deps);
   useEnsureWeek(deps);
   const weekStart = useCurrentWeekStart(deps);
-  const referralOn = useReferralFlag();
   const zone = tz ?? deviceZone();
   const today = dayKey(new Date(now()), zone);
   const data = rewards.data;
@@ -144,13 +142,10 @@ export function RewardsHubScreen({ deps = {}, tz }: { deps?: RewardsDeps; tz?: s
     const goal = currentWeekGoal(snapshot, today, weekStart);
     hasActive = snapshot.challenges.some((c) => c.state === 'active');
     const earnedIds = new Set(snapshot.badges.map((b) => b.badge_id));
-    const teaserDefs = snapshot.badgeDefs.filter((d) => d.family !== 'referrals' || referralOn || earnedIds.has(d.id));
+    const teaserDefs = snapshot.badgeDefs.filter((d) => badgeShown(d, earnedIds));
     const links = [
       { key: 'badges', label: copy.links.badges, icon: 'ribbon-outline' as const, href: BADGES_HREF },
       { key: 'challenges', label: copy.links.challenges, icon: 'trail-sign-outline' as const, href: CHALLENGES_HREF },
-      ...(referralOn
-        ? [{ key: 'invite', label: copy.links.invite, icon: 'person-add-outline' as const, href: INVITE_HREF }]
-        : []),
     ];
     body = (
       <>

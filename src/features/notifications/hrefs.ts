@@ -7,12 +7,6 @@
 
 export const SUMMARY_HREF = /^\/trips\/([A-Za-z0-9_-]{1,64})\/summary$/;
 
-/**
- * An invite link, `roadwise://join/<code>` (M5 §R10): the 8-character referral code in its own
- * alphabet, upper case only. Allowlisted so onboarding holds and replays it (M4's `authGuard`).
- */
-export const JOIN_HREF = /^\/join\/([ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8})$/;
-
 export const ALLOWED_HREFS: readonly RegExp[] = [
   SUMMARY_HREF,
   /^\/trips$/,
@@ -23,8 +17,6 @@ export const ALLOWED_HREFS: readonly RegExp[] = [
   /^\/rewards\/goal$/,
   /^\/rewards\/challenges$/,
   /^\/rewards\/badges$/,
-  /^\/rewards\/invite$/,
-  JOIN_HREF,
 ];
 
 /** Whether `url` is exactly one of the allowlisted routes. */

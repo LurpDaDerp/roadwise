@@ -84,7 +84,6 @@ export const hubCopy = {
   links: {
     badges: 'Badges',
     challenges: 'Challenges',
-    invite: 'Invite friends',
   },
 
   findChallenge: 'Find a challenge',

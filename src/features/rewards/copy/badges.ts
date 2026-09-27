@@ -79,8 +79,6 @@ export const badgesCopy = {
     earned: (name: string, tier: string, date: string) => `${name}, ${tier} badge, earned ${date}`,
     locked: (name: string, tier: string) => `${name}, ${tier} badge, locked`,
   },
-  share: 'Share',
-  shareHint: 'Opens a card you can share',
   unknown: "This badge isn't in RoadWise.",
   back: 'Back',
   error: "Couldn't load your badges.",

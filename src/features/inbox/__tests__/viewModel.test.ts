@@ -328,8 +328,8 @@ describe('toItemView — the rewards notifications (M5)', () => {
     ['goal_completed', { kind: 'challenge', challengeId: 'smooth_ride', points: 150 }, 'Challenge complete', 'You finished a challenge. +150 points.', '/rewards/challenges'],
     ['level_up', { kind: 'level', level: 2, name: 'Steady' }, 'New class: Steady', 'Your RoadWise card now shows Steady.', '/rewards'],
     ['level_up', { kind: 'badge', badgeId: 'weekly_goals_1', tier: 'bronze' }, 'New badge', 'You earned a bronze badge. Tap to see it.', '/rewards/badges'],
-    ['referral_qualified', { role: 'invitee', points: 500 }, "Your friend's code counts", 'You finished 3 scored drives. +500 points.', '/rewards/invite'],
-    ['referral_qualified', { role: 'referrer', points: 500 }, 'An invite counts', 'One of your invites counts now. +500 points.', '/rewards/invite'],
+    ['referral_qualified', { role: 'invitee', points: 500 }, "Your friend's code counts", 'You finished 3 scored drives. +500 points.', '/rewards'],
+    ['referral_qualified', { role: 'referrer', points: 500 }, 'An invite counts', 'One of your invites counts now. +500 points.', '/rewards'],
   ] as const)('%s renders its words and opens its screen', (type, payload, title, body, href) => {
     const v = toItemView(rewardRow(type, payload), missing, NOW, TZ);
     expect(v).toMatchObject({ type, title, body, href, note: null, dispute: null, clientTripId: null, unread: true });

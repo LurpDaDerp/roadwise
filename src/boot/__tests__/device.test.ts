@@ -15,7 +15,6 @@ import {
 import { createTestDb, seedDay, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { eventRow, T0, tripRow } from '@/data/queries/__fixtures__/rows';
 import { currentOwnerUid, enqueueTraceUpload, SESSION_UID_KEY } from '@/data/sync/queue';
-import { HELD_JOIN_KEY, HELD_JOIN_TTL_MS, holdJoin } from '@/features/onboarding/state';
 
 const TRIP = 'trip-1';
 
@@ -266,79 +265,18 @@ describe('the owner check', () => {
   });
 });
 
-describe('the held invite across a handover (M5 T12 r1b, security R4)', () => {
-  const JOIN = '/join/ABCD2345';
-  const held = () => createSettingsRepo(db).get(HELD_JOIN_KEY);
-
-  test("A's phone, a join link opened while signed out, then B signs up: B gets the hold, and nothing else survives", async () => {
+describe('a handover keeps nothing', () => {
+  test("A's settings, including a signed-out invite hold an older build left, do not survive B's sign-in", async () => {
     await seedEverything();
     await rememberDeviceOwner(db, 'user-a');
     const s = createSettingsRepo(db);
     await s.set('units', 'imperial');
-    await holdJoin(s, '/join/abcd2345', Date.now() - 60_000);
+    // The F10 invite hold is gone (scope.md lane C addition); a key an older build wrote is wiped like any other.
+    await s.set('auth.heldJoin', { href: '/join/ABCD2345', heldAt: Date.now(), uid: null });
 
     expect(await ensureDeviceOwner(db, 'user-b', { traces: fakeTraces().traces })).toBe('wiped');
 
-    expect(await held()).toEqual({ href: JOIN, heldAt: expect.any(Number), uid: 'user-b' });
-    expect(await s.get('units')).toBeNull();
     const { rows } = await db.execute('SELECT key FROM settings ORDER BY key');
-    expect(rows.map((r) => String(r.key)).sort()).toEqual([HELD_JOIN_KEY, LAST_USER_KEY, SESSION_UID_KEY].sort());
-  });
-
-  test('a hold the gate already bound to B before the wipe ran is carried too', async () => {
-    await seedEverything();
-    await rememberDeviceOwner(db, 'user-a');
-    await createSettingsRepo(db).set(HELD_JOIN_KEY, { href: JOIN, heldAt: Date.now(), uid: 'user-b' });
-    await ensureDeviceOwner(db, 'user-b', { traces: fakeTraces().traces });
-    expect((await held()) as { uid: string }).toMatchObject({ href: JOIN, uid: 'user-b' });
-  });
-
-  test('a hold bound to A is never carried to B', async () => {
-    await seedEverything();
-    await rememberDeviceOwner(db, 'user-a');
-    await createSettingsRepo(db).set(HELD_JOIN_KEY, { href: JOIN, heldAt: Date.now(), uid: 'user-a' });
-    await ensureDeviceOwner(db, 'user-b', { traces: fakeTraces().traces });
-    expect(await held()).toBeNull();
-  });
-
-  test('an expired or tampered hold is never carried', async () => {
-    for (const value of [
-      { href: JOIN, heldAt: Date.now() - HELD_JOIN_TTL_MS - 1, uid: null },
-      { href: '/inbox', heldAt: Date.now(), uid: null },
-    ]) {
-      await rememberDeviceOwner(db, 'user-a');
-      await createSettingsRepo(db).set(HELD_JOIN_KEY, value);
-      await ensureDeviceOwner(db, 'user-b', { traces: fakeTraces().traces });
-      expect(await held()).toBeNull();
-    }
-  });
-
-  test('a wipe with no incoming driver carries nothing', async () => {
-    await seedEverything();
-    await holdJoin(createSettingsRepo(db), JOIN, Date.now());
-    await wipeDevice(db, { traces: fakeTraces().traces });
-    expect(await held()).toBeNull();
-    expect(await totals()).toEqual(emptyTotals);
-  });
-
-  test('a write-back that fails is reported and loses the invite (fail closed); the wipe is done', async () => {
-    await seedEverything();
-    await holdJoin(createSettingsRepo(db), JOIN, Date.now());
-    const reported: string[] = [];
-    const realTransaction = db.transaction.bind(db);
-    const realExecute = db.execute.bind(db);
-    let wiped = false;
-    (db as { transaction: typeof db.transaction }).transaction = async (fn) => {
-      const out = await realTransaction(fn);
-      wiped = true;
-      return out;
-    };
-    (db as { execute: typeof db.execute }).execute = async (sql, params) => {
-      if (wiped && /INSERT OR REPLACE INTO settings/.test(sql)) throw new Error('disk full');
-      return realExecute(sql, params);
-    };
-    await wipeDevice(db, { traces: fakeTraces().traces, onError: (_e, c) => reported.push(c), incomingUid: 'user-b' });
-    expect(reported).toEqual(['wipe carry']);
-    expect(await totals()).toEqual(emptyTotals);
+    expect(rows.map((r) => String(r.key)).sort()).toEqual([LAST_USER_KEY, SESSION_UID_KEY].sort());
   });
 });

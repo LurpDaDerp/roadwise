@@ -22,7 +22,6 @@ import { TripHeader } from './TripHeader';
 import { TripRouteField } from './TripMap';
 import { TripTimeline } from './TripTimeline';
 import { HOME_HREF, tripEditHref, tripEventHref } from './routes';
-import { tripShareHref } from './TripSummaryScreen';
 
 function DetailSkeleton() {
   const th = useTheme();
@@ -136,8 +135,6 @@ export function TripDetailScreen({ clientTripId }: { clientTripId: string }) {
   }
 
   const { trip, unscoredReason } = detail;
-  // D2 shares like D1 (F9): only a confirmed drive — synced, final — has something true to share.
-  const shareable = trip.syncState === 'synced' && trip.status === 'final';
   const events = eventsQuery.data ?? [];
   const rows = timelineRows(trip, events);
   const route = routeFor(trip);
@@ -198,21 +195,7 @@ export function TripDetailScreen({ clientTripId }: { clientTripId: string }) {
           onPress={() => router.push(tripEditHref(clientTripId))}
           testID="edit-trip"
         />
-        <Button
-          label={copy.footer.share}
-          variant="ghost"
-          size="md"
-          onPress={shareable ? () => router.push(tripShareHref(clientTripId)) : () => {}}
-          disabled={!shareable}
-          accessibilityHint={shareable ? undefined : copy.footer.shareUnconfirmed}
-          testID="share"
-        />
       </View>
-      {shareable ? null : (
-        <Text variant="footnote" tone="subtle">
-          {copy.footer.shareUnconfirmed}
-        </Text>
-      )}
     </Screen>
   );
 }

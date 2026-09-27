@@ -166,6 +166,15 @@ export const BADGE_METRIC_COUNTER: Readonly<Record<BadgeMetric, keyof Progress>>
 };
 
 /** A badge's counter now, from the settled progress (0 with no progress yet). */
+/**
+ * Whether a badge is shown at all. The app has no inviting (F10 is removed), so the referral badge
+ * is shown only once it has been earned: a locked badge for a feature the driver cannot use would
+ * promise something that isn't there.
+ */
+export function badgeShown(def: Pick<BadgeDef, 'id' | 'family'>, earned: ReadonlySet<string>): boolean {
+  return def.family !== 'referrals' || earned.has(def.id);
+}
+
 export function badgeCurrent(progress: Progress | null, metric: BadgeMetric): number {
   const value = progress?.[BADGE_METRIC_COUNTER[metric]];
   return typeof value === 'number' ? value : 0;

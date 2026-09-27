@@ -160,13 +160,13 @@ describe('renderPush — the rewards notifications', () => {
     expect(renderPush('referral_qualified', { role: 'invitee', points: 500 })).toEqual({
       title: "Your friend's code counts",
       body: 'You finished 3 scored drives. +500 points.',
-      url: '/rewards/invite',
+      url: '/rewards',
       channelId: 'rewards',
     });
     expect(renderPush('referral_qualified', { role: 'referrer', points: 500 })).toEqual({
       title: 'An invite counts',
       body: 'One of your invites counts now. +500 points.',
-      url: '/rewards/invite',
+      url: '/rewards',
       channelId: 'rewards',
     });
   });

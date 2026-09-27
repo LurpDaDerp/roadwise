@@ -1,5 +1,5 @@
 import { LEVELS } from '@scoring';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import { clearInboxClients, setOnline, settleInbox } from '@/features/inbox/__fixtures__/harness';
 import { routerDouble } from '@/features/trips/__fixtures__/render';
@@ -18,7 +18,7 @@ import {
 } from '../../__fixtures__/rows';
 import { dayPayload, fakeRewardsApi, renderedStrings, rewardsWorld, type WorldSeed } from '../__fixtures__/harness';
 import { RewardsHubScreen } from '../RewardsHubScreen';
-import { BADGES_HREF, badgeHref, challengeHref, CHALLENGES_HREF, GOAL_HREF, INVITE_HREF } from '../routes';
+import { BADGES_HREF, badgeHref, challengeHref, CHALLENGES_HREF, GOAL_HREF } from '../routes';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 const mockRouter = routerDouble();
@@ -47,7 +47,7 @@ async function renderHub(snap = snapshot(), seed: WorldSeed = {}) {
   return { ...w, ...server };
 }
 
-/** Lets the local settings reads (the referral flag, today's day row) land inside `act`. */
+/** Lets the local settings reads (today's day row) land inside `act`. */
 const flush = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)));
 
 /** A press, and whatever it started, inside one `act`. */
@@ -291,26 +291,14 @@ describe('RewardsHubScreen — goal, challenges, badges, links', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(badgeHref('safe_days_30'));
   });
 
-  it('links: Badges and Challenges; Invite friends hidden while the referral flag is off', async () => {
-    await renderHub(snapshot(), { referral: false });
+  it('links: Badges and Challenges, and nothing else (inviting is gone)', async () => {
+    await renderHub();
     await press('hub-link-badges');
     expect(mockRouter.push).toHaveBeenCalledWith(BADGES_HREF);
     await press('hub-link-challenges');
     expect(mockRouter.push).toHaveBeenCalledWith(CHALLENGES_HREF);
     expect(screen.queryByTestId('hub-link-invite')).toBeNull();
-    expect(screen.queryByText(hubCopy.links.invite)).toBeNull();
-  });
-
-  it('Invite friends hidden when the flag was never fetched (local default off)', async () => {
-    await renderHub();
-    expect(screen.queryByTestId('hub-link-invite')).toBeNull();
-  });
-
-  it('Invite friends shown when the referral flag is on', async () => {
-    await renderHub(snapshot(), { referral: true });
-    await waitFor(() => expect(screen.getByTestId('hub-link-invite')).toBeTruthy());
-    await press('hub-link-invite');
-    expect(mockRouter.push).toHaveBeenCalledWith(INVITE_HREF);
+    expect(screen.queryByText(/invite/i)).toBeNull();
   });
 });
 
@@ -364,8 +352,7 @@ describe('RewardsHubScreen — how rewards work, and honest copy', () => {
 
   it('rendered text passes BANNED_COPY (NOT_MONEY included), with no store, leaderboard, crew or coming soon', async () => {
     const snap = snapshot({ progress: progressRow({ streak_days: 0, best_streak: 30, shields: 2 }), challenges: [] });
-    await renderHub(snap, { referral: true, days: [[TODAY, dayPayload({ safeDay: true })]] });
-    await waitFor(() => expect(screen.getByTestId('hub-link-invite')).toBeTruthy());
+    await renderHub(snap, { days: [[TODAY, dayPayload({ safeDay: true })]] });
     await expandHow();
     const text = allText();
     expect(text).toContain(NOT_MONEY);

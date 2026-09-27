@@ -107,7 +107,7 @@ export { PAGE_SIZE, TripHistoryScreen } from './TripHistoryScreen';
 export { EventMiniMap, loadMaps, resetMapsCache, TripRouteField } from './TripMap';
 export { TripScoreField } from './TripScoreField';
 export { TripStatusChip, type TripStatusChipKind } from './TripStatusChip';
-export { tripShareHref, TripSummaryScreen } from './TripSummaryScreen';
+export { TripSummaryScreen } from './TripSummaryScreen';
 export { spokenRow, TripTimeline } from './TripTimeline';
 export {
   DELETE_TRIP_KIND,

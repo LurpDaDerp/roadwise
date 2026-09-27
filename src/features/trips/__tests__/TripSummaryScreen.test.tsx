@@ -234,7 +234,7 @@ describe('a scored drive', () => {
     expect(screen.getByText(/saved from its last checkpoint/)).toBeOnTheScreen();
   });
 
-  test('the footer links name the rest of the trip; sharing waits until the drive is confirmed', async () => {
+  test('the footer links name the rest of the trip, and there is no share (F9 is gone)', async () => {
     const w = await world({ trips: [scored] });
     await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
     await screen.findByText('Near Home → Near Lincoln HS');
@@ -248,38 +248,9 @@ describe('a scored drive', () => {
       pathname: '/(app)/trips/[clientTripId]/events',
       params: { clientTripId: ID },
     });
-    // Not synced yet: nothing true to share, and it says when there will be.
-    expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
-    expect(screen.getByText("You can share a drive once RoadWise has its final score.")).toBeOnTheScreen();
-    expect(screen.queryByText('Share cards are coming soon.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Done' }));
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
-  });
-});
-
-describe('sharing (D1 → F9)', () => {
-  test('a synced final drive opens the share composer for this drive', async () => {
-    const w = await world({ trips: [tripRow({ client_trip_id: ID, score: 88, status: 'final', sync_state: 'synced' })] });
-    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
-    const share = await screen.findByRole('button', { name: 'Share' });
-    expect(share).toBeEnabled();
-    expect(screen.queryByText("You can share a drive once RoadWise has its final score.")).toBeNull();
-    await fireEvent.press(share);
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/rewards/share?kind=trip&clientTripId=trip-1');
-  });
-
-  test.each([
-    ['synced but provisional', { status: 'provisional', sync_state: 'synced' }],
-    ['final but queued', { status: 'final', sync_state: 'queued' }],
-    ['final but refused', { status: 'final', sync_state: 'failed' }],
-  ] as const)('%s: disabled, with the reason', async (_name, over) => {
-    const w = await world({ trips: [tripRow({ client_trip_id: ID, score: 88, ...over })] });
-    await w.renderScreen(<TripSummaryScreen clientTripId={ID} />);
-    const share = await screen.findByRole('button', { name: 'Share' });
-    expect(share).toBeDisabled();
-    expect(screen.getByText("You can share a drive once RoadWise has its final score.")).toBeOnTheScreen();
-    await fireEvent.press(share);
-    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 });
 
@@ -360,14 +331,13 @@ describe('what the day earned (D1 item 5, M5)', () => {
     expect(screen.queryByText('Safe day on track')).toBeNull();
   });
 
-  test('every new Earned and share line passes BANNED_COPY', () => {
+  test('every new Earned line passes BANNED_COPY', () => {
     const lines = [
       'Safe day · +75 points',
       'Safe day, 75 points for the day',
       'Streak after this day: 5',
       'Points are for the whole day, not just this drive.',
       'No points for this day',
-      "You can share a drive once RoadWise has its final score.",
       "Couldn't check this day's points right now.",
     ];
     for (const line of lines) for (const banned of BANNED_COPY) expect(line).not.toMatch(banned);

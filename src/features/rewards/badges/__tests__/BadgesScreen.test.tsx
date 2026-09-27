@@ -71,25 +71,23 @@ describe('BadgesScreen', () => {
   });
 
   it('all earned: every seal dated, none locked', async () => {
-    await renderBadges(snapshot({ badges: allIds.map((id) => badgeRow(id, { earned_at: earnedAt })) }), {
-      referral: true,
-    });
+    await renderBadges(snapshot({ badges: allIds.map((id) => badgeRow(id, { earned_at: earnedAt })) }));
     expect(screen.getByTestId('badges-summary')).toHaveTextContent('16 of 16 earned');
     expect(screen.queryByText('Locked', { includeHiddenElements: true })).toBeNull();
     for (const id of allIds) expect(screen.getByTestId(`badge-${id}`)).toHaveTextContent(/Earned Sep 21/);
   });
 
   it('grouped by family, in display order, with a heading per family', async () => {
-    await renderBadges(snapshot(), { referral: true });
+    await renderBadges(snapshot({ badges: [badgeRow('referrals_1')] }));
     const headers = screen.getAllByRole('header').map((h) => h.props.children);
     expect(headers).toEqual(['Badges', 'Safe days', 'No phone use', 'Smooth driving', 'Weekly goals', 'Challenges', 'Friends']);
   });
 
-  it('the referral badge is hidden while inviting is off, unless it was earned', async () => {
-    await renderBadges(snapshot(), { referral: false });
+  it('the referral badge is shown only once earned: the app has no inviting', async () => {
+    await renderBadges(snapshot());
     expect(screen.queryByTestId('badge-referrals_1')).toBeNull();
     await clearInboxClients();
-    await renderBadges(snapshot({ badges: [badgeRow('referrals_1')] }), { referral: false });
+    await renderBadges(snapshot({ badges: [badgeRow('referrals_1')] }));
     expect(screen.getByTestId('badge-referrals_1')).toBeTruthy();
   });
 
@@ -130,7 +128,7 @@ describe('BadgesScreen', () => {
   });
 
   it('rendered text passes BANNED_COPY', async () => {
-    await renderBadges(snapshot(), { referral: true });
+    await renderBadges(snapshot({ badges: [badgeRow('referrals_1')] }));
     const text = renderedStrings(screen.getByTestId('badges-screen')).join('\n');
     for (const re of BANNED_COPY) expect(text).not.toMatch(re);
     expect(text).not.toMatch(/store|leaderboard|crew|coming soon|miles?\b|\btrips?\b/i);

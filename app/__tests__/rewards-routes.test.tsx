@@ -1,16 +1,16 @@
 /**
  * M5 Task 14: the rewards routes are wired. Every M5 route file exists and renders its own screen
  * (with its route params passed through); every allowlisted M5 href — what a rewards notification
- * or a held invite link may open — resolves to a route file; and the inbox's type CHECK equals the
- * catalog's LIVE_TYPES (six types; rev1: R-I n1).
+ * may open — resolves to a route file; the removed F9/F10 routes stay removed (scope.md lane C
+ * addition); and the inbox's type CHECK equals the catalog's LIVE_TYPES (six types; rev1: R-I n1).
  *
- * The screens themselves are their tasks' subject (Tasks 8, 9, 12, 13); here each is a stub that
+ * The screens themselves are their tasks' subject (Tasks 8 and 9); here each is a stub that
  * shows which screen a route rendered and with what, so a route pointing at the wrong screen, or
  * dropping its param, fails.
  */
 import { render, screen } from '@testing-library/react-native';
 
-import { ALLOWED_HREFS, JOIN_HREF } from '@/features/notifications/hrefs';
+import { ALLOWED_HREFS } from '@/features/notifications/hrefs';
 import { LIVE_TYPES } from '@/notifications/catalog';
 
 import BadgeRoute from '../(app)/rewards/badges/[badgeId]';
@@ -18,10 +18,7 @@ import BadgesRoute from '../(app)/rewards/badges/index';
 import ChallengeDetailRoute from '../(app)/rewards/challenges/[challengeId]';
 import ChallengesRoute from '../(app)/rewards/challenges/index';
 import WeeklyGoalRoute from '../(app)/rewards/goal';
-import InviteRoute from '../(app)/rewards/invite';
-import ShareRoute from '../(app)/rewards/share';
 import RewardsTab from '../(tabs)/rewards';
-import JoinRoute from '../join/[code]';
 
 let mockParams: Record<string, unknown> = {};
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
@@ -42,9 +39,6 @@ jest.mock('@/features/rewards/challenges/ChallengeDetailScreen', () => ({
 }));
 jest.mock('@/features/rewards/badges/BadgesScreen', () => ({ BadgesScreen: mockStub('BadgesScreen') }));
 jest.mock('@/features/rewards/badges/BadgeDetailScreen', () => ({ BadgeDetailScreen: mockStub('BadgeDetailScreen') }));
-jest.mock('@/features/referral/InviteScreen', () => ({ InviteScreen: mockStub('InviteScreen') }));
-jest.mock('@/features/referral/JoinScreen', () => ({ JoinScreen: mockStub('JoinScreen') }));
-jest.mock('@/features/share/ShareComposerScreen', () => ({ ShareComposerScreen: mockStub('ShareComposerScreen') }));
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time; the root
 // tsconfig's `types` is ["jest"], hence local shapes (the migration parity tests' pattern).
@@ -104,22 +98,17 @@ const ROUTES: {
     params: { badgeId: 'safe_days_7' },
     props: { badgeId: 'safe_days_7' },
   },
-  { file: '(app)/rewards/invite.tsx', Route: InviteRoute, screen: 'InviteScreen', params: {}, props: {} },
-  {
-    file: '(app)/rewards/share.tsx',
-    Route: ShareRoute,
-    screen: 'ShareComposerScreen',
-    params: { kind: 'badge', badgeId: 'safe_days_7' },
-    props: { params: { kind: 'badge', badgeId: 'safe_days_7' } },
-  },
-  {
-    file: 'join/[code].tsx',
-    Route: JoinRoute,
-    screen: 'JoinScreen',
-    params: { code: 'ABCD2345' },
-    props: { code: 'ABCD2345' },
-  },
 ];
+
+test('the removed F9 and F10 routes are gone, and no href reaches them', () => {
+  for (const file of ['(app)/rewards/invite.tsx', '(app)/rewards/share.tsx', 'join/[code].tsx', 'join']) {
+    expect(fs.existsSync(path.join(APP, file))).toBe(false);
+  }
+  for (const href of ['/rewards/invite', '/rewards/share', '/join/ABCD2345']) {
+    expect(ALLOWED_HREFS.some((re) => re.test(href))).toBe(false);
+    expect(routeFileFor(href)).toBeNull();
+  }
+});
 
 describe('every M5 route file exists and renders its screen', () => {
   test.each(ROUTES)('$file → $screen', async ({ file, Route, screen: name, params, props }) => {
@@ -182,8 +171,6 @@ describe('every allowlisted M5 href resolves to a route', () => {
     ['/rewards/goal', '(app)/rewards/goal.tsx'],
     ['/rewards/challenges', '(app)/rewards/challenges/index.tsx'],
     ['/rewards/badges', '(app)/rewards/badges/index.tsx'],
-    ['/rewards/invite', '(app)/rewards/invite.tsx'],
-    ['/join/ABCD2345', 'join/[code].tsx'],
   ];
 
   test.each(M5_HREFS)('%s → app/%s', (href, file) => {
@@ -196,7 +183,6 @@ describe('every allowlisted M5 href resolves to a route', () => {
     const m5 = ALLOWED_HREFS.filter((re) => !m4.some((h) => re.test(h)));
     expect(m5).toHaveLength(M5_HREFS.length);
     for (const re of m5) expect(M5_HREFS.some(([href]) => re.test(href))).toBe(true);
-    expect(m5).toContain(JOIN_HREF);
   });
 
   test('an href that is not allowlisted is not taken for one (the resolver is not permissive)', () => {

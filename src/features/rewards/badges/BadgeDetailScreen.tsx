@@ -5,12 +5,11 @@ import { useDataSource } from '@/data/queries';
 import { useSession } from '@/data/supabase/session';
 import { TripTopBar } from '@/features/trips/TopBar';
 import { deviceZone } from '@/lib/deviceZone';
-import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
+import { Banner, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { RewardsOfflineError } from '../api';
 import { BADGE_COPY, badgesCopy as copy } from '../copy/badges';
 import { BADGE_TIER_LABEL, OFFLINE_LINE } from '../copy/common';
-import { shareBadgeHref } from '../hub/routes';
 import { ProgressBar } from '../ui/ProgressBar';
 import { Seal } from '../ui/Seal';
 import { useRewards, type RewardsDeps } from '../useRewards';
@@ -20,7 +19,7 @@ import { useFreshBadges } from './seen';
 
 /**
  * F3 · One badge: the seal, its criterion, and either the day it was earned or the progress so far.
- * The one primary action, *Share*, exists only for an earned badge and opens the F9 composer.
+ * No primary action: the badge is a record.
  */
 export function BadgeDetailScreen({ badgeId, deps = {}, tz }: { badgeId: string; deps?: RewardsDeps; tz?: string }) {
   const th = useTheme();
@@ -36,7 +35,6 @@ export function BadgeDetailScreen({ badgeId, deps = {}, tz }: { badgeId: string;
   const back = router.canGoBack() ? () => router.back() : null;
 
   let body;
-  let share = null;
   if (data === undefined && rewards.isError) {
     const offline = rewards.error instanceof RewardsOfflineError;
     body = (
@@ -108,27 +106,16 @@ export function BadgeDetailScreen({ badgeId, deps = {}, tz }: { badgeId: string;
         </View>
       </Card>
     );
-    if (earned) {
-      share = (
-        <Button
-          testID="badge-share"
-          label={copy.share}
-          accessibilityHint={copy.shareHint}
-          onPress={() => router.push(shareBadgeHref(badgeId))}
-        />
-      );
-    }
   }
 
   return (
     <Screen testID="badge-detail-screen">
       <TripTopBar title={copy.title} onBack={back} />
-      {/* The record scrolls (200 % type); Share stays anchored under it. */}
+      {/* The record scrolls (200 % type). */}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: th.space.lg }} showsVerticalScrollIndicator={false}>
         {data?.offline ? <Banner testID="badge-offline" tone="info" message={OFFLINE_LINE} /> : null}
         {body}
       </ScrollView>
-      {share}
     </Screen>
   );
 }

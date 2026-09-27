@@ -1,9 +1,10 @@
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useScoreDaily, useTrip, useTripEvents } from '@/data/queries';
 import { Banner, Button, Card, EmptyState, Screen, Skeleton, Text, useTheme } from '@/ui';
+import { CameraCoachingCard } from '@/features/camera/CameraCoachingCard';
 
 import { tripCopy as copy } from './copy';
 import { DayEarnedField } from './EarnedField';
@@ -60,45 +61,12 @@ function SummarySkeleton() {
   );
 }
 
-/**
- * F9's composer for this drive (Task 13 builds the route; the plan fixes its interface:
- * `/rewards/share?kind=trip&clientTripId=<id>`). Not yet in Expo Router's generated union until
- * that file exists, hence the one cast.
- */
-export const tripShareHref = (clientTripId: string): Href =>
-  `/rewards/share?kind=trip&clientTripId=${encodeURIComponent(clientTripId)}` as Href;
-
-function FooterLinks({
-  onFullTrip,
-  onSomethingWrong,
-  onShare,
-}: {
-  onFullTrip: () => void;
-  onSomethingWrong: () => void;
-  /** Null until the drive is confirmed (synced, final): there is nothing true to share before. */
-  onShare: (() => void) | null;
-}) {
+function FooterLinks({ onFullTrip, onSomethingWrong }: { onFullTrip: () => void; onSomethingWrong: () => void }) {
   const th = useTheme();
   return (
-    <View style={{ gap: th.space.xs }}>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: th.space.sm }}>
-        <Button label={copy.footer.fullTrip} variant="ghost" size="md" onPress={onFullTrip} />
-        <Button label={copy.footer.wrong} variant="ghost" size="md" onPress={onSomethingWrong} />
-        <Button
-          label={copy.footer.share}
-          variant="ghost"
-          size="md"
-          onPress={onShare ?? (() => {})}
-          disabled={onShare === null}
-          accessibilityHint={onShare === null ? copy.footer.shareUnconfirmed : undefined}
-          testID="share"
-        />
-      </View>
-      {onShare === null ? (
-        <Text variant="footnote" tone="subtle">
-          {copy.footer.shareUnconfirmed}
-        </Text>
-      ) : null}
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: th.space.sm }}>
+      <Button label={copy.footer.fullTrip} variant="ghost" size="md" onPress={onFullTrip} />
+      <Button label={copy.footer.wrong} variant="ghost" size="md" onPress={onSomethingWrong} />
     </View>
   );
 }
@@ -175,7 +143,6 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
   const highlights = highlightsFor(trip, events);
   const { tip } = tipForTrip(detail, events);
   const perfect = isPerfect(trip);
-  const shareable = trip.syncState === 'synced' && trip.status === 'final';
 
   return (
     <Screen scroll testID="trip-summary">
@@ -197,12 +164,12 @@ export function TripSummaryScreen({ clientTripId }: { clientTripId: string }) {
       {tip ? (
         <TipCard tip={tip} onPress={() => router.push(tripTipHref(clientTripId))} testID="tip-card" />
       ) : null}
+      <CameraCoachingCard clientTripId={clientTripId} />
       {trip.scored ? <DayEarnedField trip={trip} day={dayQuery.data?.[0] ?? null} /> : null}
 
       <FooterLinks
         onFullTrip={() => router.push(tripDetailHref(clientTripId))}
         onSomethingWrong={() => router.push(tripEventsHref(clientTripId))}
-        onShare={shareable ? () => router.push(tripShareHref(clientTripId)) : null}
       />
 
       <View style={{ flexGrow: 1, minHeight: th.space.lg }} />

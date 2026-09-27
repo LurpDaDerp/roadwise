@@ -6,7 +6,6 @@
 import { render } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
-import { APP_CONFIG_KEY } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTestDb, seedDay, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { testQueryClient } from '@/features/inbox/__fixtures__/harness';
@@ -46,8 +45,6 @@ export function fakeRewardsApi(initial: RewardsSnapshot = baseSnapshot()) {
 export interface WorldSeed {
   /** `[day, payload]` rows for the day cache (today's line). */
   days?: readonly [string, unknown][];
-  /** The cached app config's `referral` flag; absent means never fetched (off). */
-  referral?: boolean;
   /** A snapshot cached for this uid (for offline). */
   cached?: RewardsSnapshot;
   /** Settings rows to write before render. */
@@ -58,9 +55,6 @@ export async function rewardsWorld(seed: WorldSeed = {}) {
   const db = await createTestDb();
   for (const [day, payload] of seed.days ?? []) await seedDay(db, day, payload, NOW);
   const settings = createSettingsRepo(db);
-  if (seed.referral !== undefined) {
-    await settings.set(APP_CONFIG_KEY, { flags: { referral: seed.referral }, values: {}, fetchedAt: NOW });
-  }
   if (seed.cached) await writeCachedRewards(settings, UID, seed.cached);
   for (const [key, value] of Object.entries(seed.settings ?? {})) await settings.set(key, value);
   const client = testQueryClient();

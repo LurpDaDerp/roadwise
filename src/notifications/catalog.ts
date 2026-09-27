@@ -569,12 +569,12 @@ function rewardsCopy(type: NotificationType, payload: unknown): { title: string;
         ? {
           title: "Your friend's code counts",
           body: `You finished ${REFERRAL_COPY_RULES.qualifyingDrives} scored drives. +${p.data.points} points.`,
-          url: '/rewards/invite',
+          url: '/rewards',
         }
         : {
           title: 'An invite counts',
           body: `One of your invites counts now. +${p.data.points} points.`,
-          url: '/rewards/invite',
+          url: '/rewards',
         };
     }
     default:
