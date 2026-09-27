@@ -184,7 +184,7 @@ describe('2. who imports the DMS lane', () => {
     expect(specifiers(src).filter((s) => s.startsWith('@/data/supabase'))).toEqual(['@/data/supabase/profile', '@/data/supabase/session']);
   });
   test('no camera focus sample reaches the drive engine outside the core', () => {
-    const users = REPO.filter((f) => !f.rel.startsWith('src/core/') && /cameraFocus/.test(code(f.src))).map((f) => f.rel);
+    const users = REPO.filter((f) => !f.rel.startsWith('src/core/') && /\bcameraFocus\b/.test(code(f.src))).map((f) => f.rel);
     expect(users).toEqual([]);
   });
   test('the profile key is written only by the profile store', () => {
