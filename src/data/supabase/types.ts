@@ -291,6 +291,112 @@ export type Database = {
           },
         ]
       }
+      families: {
+        Row: {
+          code: string
+          code_expires_at: string
+          created_at: string
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          code_expires_at: string
+          created_at?: string
+          id?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          code_expires_at?: string
+          created_at?: string
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      family_members: {
+        Row: {
+          created_at: string
+          family_id: string
+          role: string
+          sharing_location: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          role: string
+          sharing_location?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          role?: string
+          sharing_location?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_members_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      family_places: {
+        Row: {
+          address: string
+          created_at: string
+          family_id: string
+          id: string
+          lat: number
+          lng: number
+          name: string
+          radius_m: number
+          updated_at: string
+        }
+        Insert: {
+          address?: string
+          created_at?: string
+          family_id: string
+          id?: string
+          lat: number
+          lng: number
+          name: string
+          radius_m?: number
+          updated_at?: string
+        }
+        Update: {
+          address?: string
+          created_at?: string
+          family_id?: string
+          id?: string
+          lat?: number
+          lng?: number
+          name?: string
+          radius_m?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_places_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       global_rate_limits: {
         Row: {
           count: number
@@ -501,6 +607,33 @@ export type Database = {
           stated_limits_mph?: number[]
           status?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      member_locations: {
+        Row: {
+          accuracy_m: number
+          driving: boolean
+          lat: number
+          lng: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          accuracy_m: number
+          driving?: boolean
+          lat: number
+          lng: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          accuracy_m?: number
+          driving?: boolean
+          lat?: number
+          lng?: number
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -1446,7 +1579,9 @@ export type Database = {
       }
       clear_trace_paths: { Args: { p_keys: string[] }; Returns: number }
       count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
+      create_family: { Args: { p_name: string }; Returns: Json }
       create_guardian_invite: { Args: never; Returns: Json }
+      delete_family_place: { Args: { p_id: string }; Returns: undefined }
       derive_age_band: { Args: { birth_date: string }; Returns: string }
       derive_age_band_on: {
         Args: { p_as_of: string; p_birth_date: string }
@@ -1492,6 +1627,20 @@ export type Database = {
         Args: { p_after_name: string; p_limit: number }
         Returns: Json
       }
+      family_check_eligible: { Args: { p_uid: string }; Returns: undefined }
+      family_check_place: {
+        Args: {
+          p_address: string
+          p_lat: number
+          p_lng: number
+          p_name: string
+          p_radius_m: number
+        }
+        Returns: undefined
+      }
+      family_new_code: { Args: never; Returns: string }
+      family_of: { Args: { p_uid: string }; Returns: string }
+      family_snapshot: { Args: never; Returns: Json }
       get_my_referral_code: { Args: never; Returns: Json }
       guardian_link_state: { Args: never; Returns: Json }
       inbox_subject_gone: {
@@ -1505,13 +1654,25 @@ export type Database = {
       }
       is_underage: { Args: { p_user: string }; Returns: boolean }
       join_challenge: { Args: { p_def_id: string }; Returns: Json }
+      join_family: { Args: { p_code: string }; Returns: Json }
       leave_challenge: { Args: { p_id: string }; Returns: undefined }
+      leave_family: { Args: never; Returns: undefined }
       mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
       merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
       my_referrals: { Args: never; Returns: Json }
       normalise_referral_code: { Args: { p_input: string }; Returns: string }
       notification_defaults: { Args: never; Returns: Json }
       open_my_week: { Args: never; Returns: Json }
+      post_my_location: {
+        Args: {
+          p_accuracy_m: number
+          p_driving: boolean
+          p_lat: number
+          p_lng: number
+        }
+        Returns: Json
+      }
+      purge_member_locations: { Args: never; Returns: number }
       purge_reward_audit: { Args: never; Returns: number }
       purge_traces_signature: {
         Args: { p_key: string; p_ts: number }
@@ -1561,6 +1722,7 @@ export type Database = {
         Args: { p_holder: string; p_job: string }
         Returns: boolean
       }
+      remove_family_member: { Args: { p_user: string }; Returns: undefined }
       require_baselines: {
         Args: { p_baselines: Json; p_fn: string }
         Returns: undefined
@@ -1652,11 +1814,24 @@ export type Database = {
         Args: { p_user: string; p_wall_close: string }
         Returns: boolean
       }
+      rotate_family_code: { Args: never; Returns: Json }
+      save_family_place: {
+        Args: {
+          p_address: string
+          p_id: string
+          p_lat: number
+          p_lng: number
+          p_name: string
+          p_radius_m: number
+        }
+        Returns: Json
+      }
       schedule_next_settle: {
         Args: { p_lease: string; p_now: string; p_tz: string; p_user: string }
         Returns: string
       }
       set_birth_date: { Args: { p_birth_date: string }; Returns: undefined }
+      set_location_sharing: { Args: { p_on: boolean }; Returns: undefined }
       set_trip_role_row: {
         Args: { p_role: string; p_trip_id: string; p_user: string }
         Returns: Json
