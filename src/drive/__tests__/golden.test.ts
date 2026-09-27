@@ -85,6 +85,8 @@ const TILE_BUFFER_M = 30;
 const M_PER_DEG = 111_320;
 const TILE_TTL_MS = 30 * 24 * 3600 * 1000;
 const HOUR = 3600 * 1000;
+/** The rows at or after each drive's end (C14 round 1: out of the trace and the digest), measured: the last row. */
+const TAIL = [1, 1] as const;
 
 const coordsOf = (wkt: string): [number, number][] =>
   wkt.split(',').map((pair) => {
@@ -543,8 +545,11 @@ describe('the M3 golden: native events to the queued upload, with real speed lim
       expect(payload.limitCoveragePct).toBeGreaterThanOrEqual(90);
       expect(payload.limitCoveragePct).toBeCloseTo(coverage(t.lookups), 10);
 
-      // The trace and the digest describe the rows as parseRow rounded them (D2).
-      const rows = raw.map((r) => parseRow(r)!);
+      // The trace and the digest describe the rows as parseRow rounded them (D2), before the trip's end: C14 round 1
+      // (review-C14 I1) keeps every row at or after `ended_at` out of the trace, its digest and every metric.
+      const all = raw.map((r) => parseRow(r)!);
+      const rows = all.filter((r) => r.ts < row.ended_at!);
+      expect(all.length - rows.length).toBe(TAIL[t === one ? 0 : 1]);
       const text = canonicalJson(rows);
       expect(text).not.toBe(canonicalJson(raw)); // the rounding is real on these fixtures
       expect(payload.tracePath).toBe(tracePathFor(t.id));

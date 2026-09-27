@@ -313,6 +313,19 @@ describe('T14: the catch-all (controller amendment R5-1; NC-W10)', () => {
     await h.drive(10, FAST);
     expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'trip-1' });
   });
+
+  // C14 round 1 (review-C14 m1; NC-C14-m1): a seated, face-verified driver in a long crawl is not walked away.
+  test('S-JAM-60-PRESENT: the same crawl with a driver in the seat: no no_movement end; the catch-all resumes once the seat is empty', async () => {
+    const h = harness();
+    await h.start();
+    await h.drive(60, FAST);
+    const crawl = (i: number): Partial<FeatureRow> => ({ speed: 1 + (i % 7) / 7, accRms: 0.04, lng: (i * 1.5) / 88_000 });
+    expect(await h.drive(75 * MIN, crawl, () => ({ driverPresent: true }), 'ending')).toBeNull();
+    // the face goes (no camera evidence at all): the hold lasts 60 s from the last seated row, then R5-1 ends it
+    const e = await h.drive(3 * MIN, crawl, () => ({ driverPresent: null }), 'ending');
+    expect(e).toBe(60 + 75 * MIN + AUTO_END.NO_MOVEMENT_PRESENT_HOLD_S - 1);
+    expect(h.engine.snapshot().endCause).toBe('no_movement');
+  });
 });
 
 describe('T14: the trim and the end cause (rev4 §2.13.5; NC-W7)', () => {

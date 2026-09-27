@@ -981,7 +981,8 @@ describe('a payload the contract refuses', () => {
     const rows = track(300);
     await persisted(rows, 300);
 
-    const error = await finalizeTrip(session(rows, { events: [p1] }), refusing()).catch((e: unknown) => e);
+    // p1 moved inside this 300 s drive (C14 round 1: an event at or after the end is dropped with its rows)
+    const error = await finalizeTrip(session(rows, { events: [{ ...p1, startedAt: T0 + 100_000 }] }), refusing()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(FinalizePayloadRefusedError);
     expect((error as FinalizePayloadRefusedError).paths).toEqual(['cameraSession']);
 
@@ -1153,5 +1154,77 @@ describe('simplifyTrack (Douglas–Peucker per chunk of at most 1000 points)', (
   test('a short track is exactly what the primitive gives', () => {
     const pts = smooth(500);
     expect(simplifyTrack(pts, POLYLINE_EPSILON_M)).toEqual(simplify(pts, POLYLINE_EPSILON_M));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// C14 round 1 (review-C14 I1; rev4 §2.13.5 "recorded but never counted"): an automatic end trims `endedAt` back to
+// where driving stopped; the rows after it stay in the session but nothing derived from them is counted or uploaded.
+// The engine half of each scenario (the end and its trim) is pinned in autoEnd.test.ts; this is the finalize half.
+// NC-C14-I1: finalize over every row again, and these fail.
+// ---------------------------------------------------------------------------------------------------------
+describe('C14 round 1 (I1): nothing after the end is counted or uploaded', () => {
+  const DRIVE_S = 60;
+  /** 60 s east at 10 m/s, then the parking spot */
+  const driving = (): FeatureRow[] => Array.from({ length: DRIVE_S }, (_, i) =>
+    row({ ts: T0 + i * 1000, lat: SF.lat, lng: SF.lng + (i * SPEED) / M_PER_DEG_LNG, speed: SPEED, course: 90, aLonMax: 0.02, aLonMin: -0.02 }));
+  const PARK = { lat: SF.lat, lng: SF.lng + ((DRIVE_S - 1) * SPEED) / M_PER_DEG_LNG };
+  const ENDED = T0 + DRIVE_S * 1000;
+  /** `n` rows from second `from`, walking east of the parking spot at 1.3 m/s (the phone carried) */
+  const walking = (from: number, n: number, accRms: number | undefined): FeatureRow[] => Array.from({ length: n }, (_, k) =>
+    row({ ts: T0 + (from + k) * 1000, lat: PARK.lat, lng: PARK.lng + ((k + 1) * 1.3) / M_PER_DEG_LNG, speed: 1.3, course: 90, accRms, handlingScore: 0.5 }));
+  /** `n` parked rows from second `from`, the fix jittering ±4 m around the spot */
+  const parked = (from: number, n: number): FeatureRow[] => Array.from({ length: n }, (_, k) =>
+    row({ ts: T0 + (from + k) * 1000, lat: PARK.lat + (((k * 7919) % 9) - 4) / M_PER_DEG_LAT, lng: PARK.lng + (((k * 104729) % 9) - 4) / M_PER_DEG_LNG, speed: 0 }));
+  /** the drive's own distance: 59 steps of 10 m */
+  const DRIVE_M = (DRIVE_S - 1) * SPEED;
+  const early = ev({ id: 'e1', category: 'braking', startedAt: T0 + 30_000, durationS: 1, q: 0.8, measured: { peakG: 0.42 }, source: 'both' });
+  const late = ev({ id: 'e2', category: 'braking', startedAt: T0 + 200_000, durationS: 1, q: 0.8, measured: { peakG: 0.42 }, source: 'both' });
+
+  async function finalizeTrimmed(rows: FeatureRow[], events: DetectedEvent[] = []) {
+    await persisted(rows, rows.length);
+    const out = await finalizeTrip(session(rows, { endedAt: ENDED, events }), deps);
+    const trace = JSON.parse(traceText()) as FeatureRow[];
+    return { ...out, trace };
+  }
+  function expectDriveOnly(r: Awaited<ReturnType<typeof finalizeTrimmed>>) {
+    expect(r.payload.endedAt).toBe(ENDED);
+    expect(r.payload.distanceM).toBeGreaterThan(DRIVE_M - 5);
+    expect(r.payload.distanceM).toBeLessThan(DRIVE_M + 5);
+    expect(r.trip.distance_m).toBe(r.payload.distanceM);
+    // the trace and its digest: the drive's rows only
+    expect(r.trace).toHaveLength(DRIVE_S);
+    expect(r.trace.every((x) => x.ts < ENDED)).toBe(true);
+    expect(r.payload.rowsDigest.count).toBe(DRIVE_S);
+    // the polyline stops at the parking place (before its privacy trim): no point east of it
+    for (const p of decodePolyline(r.payload.polyline)) expect(p.lng).toBeLessThanOrEqual(PARK.lng + 1e-5);
+    expect(r.payload.endGeohash5).toBe(geohash5(PARK.lat, PARK.lng));
+  }
+
+  test('S-END-CARRY (a pedestrian end): 10 min walked with the phone, trimmed to parking: the drive only', async () => {
+    const rows = [...driving(), ...parked(DRIVE_S, 30), ...walking(DRIVE_S + 30, 600, 0.2)];
+    const r = await finalizeTrimmed(rows, [early, late]);
+    expectDriveOnly(r);
+    // the event after the end is dropped with its rows; the one during the drive keeps its coordinates' rule
+    expect(r.payload.events.map((e) => e.id)).toEqual(['e1']);
+    expect(r.events.map((e) => e.id)).toEqual(['e1']);
+  });
+
+  test('S-END-CARRY-OLD (the catch-all): an hour carried around town on old rows, trimmed to parking: the drive only', async () => {
+    const rows = [...driving(), ...walking(DRIVE_S, 3600, undefined)];
+    expectDriveOnly(await finalizeTrimmed(rows));
+  });
+
+  test('a present 30 min standstill (standstill_present): 30 min of jittered fixes add nothing', async () => {
+    const rows = [...driving(), ...parked(DRIVE_S, 30 * 60)];
+    expectDriveOnly(await finalizeTrimmed(rows));
+  });
+
+  test('a session with no end (a recovery) keeps every row', async () => {
+    const rows = [...driving(), ...walking(DRIVE_S, 100, 0.2)];
+    await persisted(rows, rows.length);
+    const s = { ...session(rows), endedAt: null } as unknown as Readonly<TripSession>;
+    const r = await finalizeTrip(s, deps);
+    expect(r.payload.rowsDigest.count).toBe(rows.length);
   });
 });

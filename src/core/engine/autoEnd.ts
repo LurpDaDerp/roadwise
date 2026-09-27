@@ -13,7 +13,9 @@
 //   no driver in the seat, gait (accRms ≥ WALK_RMS_G on ≥ 60 % of the rows), and leaving: sustained handling
 //   (handlingScore > 0 on ≥ 50 % of the rows of the last minute) or the mount lost for a minute.
 // - **No movement at all** (R5-1): 60 min without a row ≥ 2.2 m/s or a strong vehicle row, whatever else: every
-//   open trip is bounded, even with old rows (no accRms) or no IMU.
+//   open trip is bounded, even with old rows (no accRms) or no IMU. C14 round 1 (review-C14 m1): except while a driver
+//   is in the seat (`driverPresent` true on a row of the last 60 s): a seated, face-verified driver in a long crawl is
+//   not walked away, and ending there would close the DMS gate (no sleep alerts). Without a camera (null) R5-1 stands.
 // Every end trims to where driving stopped (§2.13.5): the standstill's start, the walk's start, or just past the last
 // vehicle movement, whichever is first. The trip stays reversible for GAP_MERGE_S (10 min).
 import { CONSTANTS } from '@scoring';
@@ -55,6 +57,8 @@ export const AUTO_END = Object.freeze({
   MOUNT_LOST_HOLD_S: 60,
   /** R5-1: the catch-all */
   NO_MOVEMENT_END_S: 3600,
+  /** C14 round 1 (m1): the catch-all holds while `driverPresent` was true on a row this recent */
+  NO_MOVEMENT_PRESENT_HOLD_S: 60,
   /** A row gap longer than this breaks the pedestrian window's contiguity */
   PEDESTRIAN_MAX_ROW_GAP_S: 5,
 });
@@ -123,6 +127,8 @@ export function createAutoEnd(c: AutoEndConfig = AUTO_END) {
   /** R5-1's clock: the same rows ("whatever the other evidence says") */
   let lastFastTs: number | null = null;
   let lastAutomotiveTs: number | null = null;
+  /** C14 round 1 (m1): the last row with a driver in the seat */
+  let lastPresentTs: number | null = null;
   let startTs: number | null = null;
   const ped: PedRow[] = [];
 
@@ -132,6 +138,7 @@ export function createAutoEnd(c: AutoEndConfig = AUTO_END) {
     lastVehicleMotionTs = null;
     lastFastTs = null;
     lastAutomotiveTs = null;
+    lastPresentTs = null;
     startTs = null;
     ped.length = 0;
   }
@@ -146,6 +153,7 @@ export function createAutoEnd(c: AutoEndConfig = AUTO_END) {
       lastVehicleMotionTs = r.ts;
       lastFastTs = r.ts;
     }
+    if (ev.driverPresent === true) lastPresentTs = r.ts;
 
     // The standstill run and its break (rev5 §4.1).
     const stillRow = ev.stop !== null || (speed !== null && speed < c.STANDSTILL_SPEED_MPS);
@@ -202,7 +210,8 @@ export function createAutoEnd(c: AutoEndConfig = AUTO_END) {
     if (pedestrian(r, ev, through)) return { cause: 'pedestrian', stoppedAt: pastMovement() };
     // 4. The catch-all (R5-1).
     const since = lastFastTs ?? startTs;
-    if (through - since >= c.NO_MOVEMENT_END_S * 1000) return { cause: 'no_movement', stoppedAt: pastMovement() };
+    const seated = lastPresentTs !== null && r.ts - lastPresentTs < c.NO_MOVEMENT_PRESENT_HOLD_S * 1000;
+    if (!seated && through - since >= c.NO_MOVEMENT_END_S * 1000) return { cause: 'no_movement', stoppedAt: pastMovement() };
     return null;
   }
 

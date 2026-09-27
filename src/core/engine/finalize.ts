@@ -501,9 +501,15 @@ export async function finalizeTrip(
   if (tail.length > 0) await samples.appendMany(id, tail.map((row) => ({ ts: row.ts, row })));
 
   // 2. The durable rows become the trace text, the digest and the metrics.
-  const rows = (await samples.range(id, 0, Number.MAX_SAFE_INTEGER)).map(
-    (s) => JSON.parse(s.row_json) as FeatureRow
-  );
+  // C14 round 1 (review-C14 I1; rev4 §2.13.5 "recorded but never counted"): only the rows before the trip's end.
+  // An automatic end trims `endedAt` back to where driving stopped, and the rows after it (a walk to the door, an hour
+  // carried around town, a long standstill's jitter) stay in the session; nothing derived from them is counted or
+  // uploaded: not the distance, the GNSS share, the sustained speed, the IMU flag, the role, the polyline, the event
+  // coordinates, the trace or its digest. A session with no end (a recovery) keeps every row.
+  const endCut = session.endedAt ?? Number.POSITIVE_INFINITY;
+  const rows = (await samples.range(id, 0, Number.MAX_SAFE_INTEGER))
+    .map((s) => JSON.parse(s.row_json) as FeatureRow)
+    .filter((r) => r.ts < endCut);
   // The DMS-only motion fields (Task C0) never reach the trace or its digest: M1's consumers and the
   // server see exactly the rows they saw before the fields existed.
   const traceJson = canonicalJson(rows.map(traceRow));
@@ -511,7 +517,9 @@ export async function finalizeTrip(
 
   // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is
   //    written out as 0 so the trip is kept rather than refused by the contract.
-  const merged = mergeEvents(session.events.map((e) => sanitizeEvent(e, startedAt)));
+  // C14 round 1 (I1): an event from at or after the end is dropped with its rows (none is expected below the lockout
+  // speed; pinned).
+  const merged = mergeEvents(session.events.filter((e) => e.startedAt < endCut).map((e) => sanitizeEvent(e, startedAt)));
   // Who drove decides whether there is a score at all: `unknown` is unscored as role_unknown.
   const decided = decideRole(session, rows, merged, deps);
   const measured: TripMetrics = {
