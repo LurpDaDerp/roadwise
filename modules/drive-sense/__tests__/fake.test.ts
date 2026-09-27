@@ -141,6 +141,20 @@ describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)',
   });
 });
 
+describe('a stale registration heals itself (C12 round 1, review-C12 m1; NC-C12-1)', () => {
+  test('left behind by an abnormal end: its first transition, unarmed and not capturing, removes it and delivers nothing', async () => {
+    const fake = await capturing({ platform: 'android' });
+    await fake.stopCapture();
+    fake.strandSubscription();
+    expect(fake.activitySubscribed).toBe(true);
+    const got = jest.fn();
+    fake.addListener('activity', got);
+    expect(fake.transition({ type: 'walking', confidence: 'high', ts: 1 })).toBe(false);
+    expect(fake.activitySubscribed).toBe(false);
+    expect(got).not.toHaveBeenCalled();
+  });
+});
+
 describe('errors and permissions (review I4, README §2 "Errors")', () => {
   const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string }) => e.code);
 

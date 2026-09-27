@@ -30,6 +30,12 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     val prefs = DriveSensePrefs.init(context)
     if (intent.action != ActivityTransitions.ACTION || !ActivityTransitionResult.hasResult(intent)) return
+    // C12 round 1 (review-C12 m1): neither armed nor capturing, this is a stale registration (a capture that
+    // ended without endCapture, or a late subscribe): remove it, and store nothing for a user who never armed.
+    if (!prefs.armed && !CaptureService.isCapturing) {
+      ActivityTransitions.unsubscribe(context)
+      return
+    }
     val result = ActivityTransitionResult.extractResult(intent) ?: return
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
@@ -63,7 +69,6 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     TransitionStore.append(context, mapped)
 
     val capturing = CaptureService.isCapturing
-    if (!prefs.armed && !capturing) return // a stale subscription: nothing to tell JS
     for (m in live) EventBus.emit("activity", m)
 
     val wakeTs = vehicleEnterTs
@@ -138,7 +143,12 @@ object ActivityTransitions {
     try {
       if (!DriveSensePermissions.motionGranted(context) || !DriveSensePermissions.playServicesAvailable(context)) return
       subscribe(context) { e ->
-        if (e != null) Log.w(TAG, "activity transitions not subscribed for this capture: ${e.javaClass.simpleName}")
+        if (e != null) {
+          Log.w(TAG, "activity transitions not subscribed for this capture: ${e.javaClass.simpleName}")
+        } else if (!CaptureService.isCapturing) {
+          // C12 round 1 (m1): the capture ended before this subscribe completed: undo it unless armed.
+          unsubscribeAfterCapture(context)
+        }
       }
     } catch (e: Exception) {
       Log.w(TAG, "activity transitions not subscribed for this capture: ${e.javaClass.simpleName}")

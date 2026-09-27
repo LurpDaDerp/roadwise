@@ -116,7 +116,7 @@ cleared then too, so `BootReceiver` does not re-arm without permission.
 | Event | Payload | When |
 |---|---|---|
 | `wake` | `{ reason, ts }`, reason ∈ `significantChange` / `activityTransition` / `boot` / `geofence` | an OS wake while armed (iOS location-key launch or region exit; Android activity transition, boot, package replaced) |
-| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change while armed or capturing (Android: subscribed by the arming or by the capture itself) |
+| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change while armed or capturing (Android: subscribed by the arming or by the capture itself; a registration left by a capture that ended abnormally is removed at its first transition, at `onDestroy` and at the next launch, and stores nothing — C12 round 1) |
 | `row` | a `FeatureRow` (§4) | once per second while capturing at `full`; once per fix at `low` |
 | `screen` | `{ locked, on, ts }` | lock/screen change while capturing (Android `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`; iOS on a change of the 1 Hz poll) |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |

@@ -244,6 +244,11 @@ export interface FakeControls {
   failCaptureSubscribe(fail: boolean): void;
   /** Whether the activity feed is subscribed now: by the arming, or by a capture (motion granted). */
   readonly activitySubscribed: boolean;
+  /**
+   * C12 round 1: the capture's registration survives its end (an abnormal end: a kill, a refused restart, a late
+   * subscribe). Its first transition, neither armed nor capturing, removes it and delivers nothing (self-heal).
+   */
+  strandSubscription(): void;
 }
 
 // `ExtractedRow` (the reference's own copy of the row shape) and M1's `FeatureRow` must stay

@@ -119,6 +119,16 @@ describe('wakes: the motion history decides (§8.5, Appendix A)', () => {
     expect(wakeStart([act('automotive', -120), act('walking', -10, 'medium')])).toBeNull();
   });
 
+  // C12 round 1 (review-C12 m2): Android now stores ENTER RUNNING. It must act on the candidate exactly as walking.
+  test('a RUNNING entry in the history acts exactly as a walking one', () => {
+    for (const conf of ['high', 'medium', 'low'] as const) {
+      const walk = wakeStart([act('automotive', -120), act('walking', -10, conf)]);
+      expect(wakeStart([act('automotive', -120), act('running', -10, conf)])).toBe(walk);
+      expect(wakeStart([act('running', -150, conf), act('automotive', -90)])).toBe(wakeStart([act('walking', -150, conf), act('automotive', -90)]));
+    }
+    expect(wakeStart([act('automotive', -120), act('running', -10, 'high')])).toBeNull();
+  });
+
   test('low-confidence walking is not evidence either way', () => {
     expect(wakeStart([act('automotive', -120), act('walking', -10, 'low')])).toBe(T - 120_000);
   });

@@ -331,6 +331,9 @@ class CaptureService : Service() {
     // capture was open, the next process reports captureWasOpen and JS decides (rev1: I2).
     handler.post { stopSources() }
     isCapturing = false
+    // C12 round 1 (review-C12 m1): a capture that ends here (the system, a kill, a refused sticky restart)
+    // never ran endCapture: its walking feed goes too, unless armed.
+    ActivityTransitions.unsubscribeAfterCapture(this)
     currentRate = null
     currentMode = null
     captureStartedAt = null

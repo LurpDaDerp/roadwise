@@ -216,7 +216,30 @@ describe('native-android: arming and wakes', () => {
     expect(disarm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
     const arm = /AsyncFunction\("arm"\)[\s\S]*?\n {4}\}/.exec(mod)?.[0] ?? '';
     expect(arm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
-    expect(mod.match(/ActivityTransitions\.unsubscribe\(/g)).toHaveLength(3);
+    // disarm, a refused arm, getState's revoke, and (C12 round 1) the launch clean-up
+    expect(mod.match(/ActivityTransitions\.unsubscribe\(/g)).toHaveLength(4);
+  });
+
+  // C12 round 1 (review-C12 m1; NC-C12-1): no stale registration survives an abnormal end.
+  it('the receiver checks "not armed and not capturing" FIRST: it unsubscribes and stores nothing', () => {
+    const src = code(kt('ActivityTransitionReceiver'));
+    const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    const stale = on.indexOf('if (!prefs.armed && !CaptureService.isCapturing) {');
+    expect(stale).toBeGreaterThan(-1);
+    expect(on.slice(stale, stale + 200)).toMatch(/ActivityTransitions\.unsubscribe\(context\)\s*return/);
+    expect(stale).toBeLessThan(on.indexOf('ActivityTransitionResult.extractResult'));
+    expect(stale).toBeLessThan(on.indexOf('TransitionStore.append'));
+  });
+
+  it('onDestroy, the launch and a late subscribe clean up too', () => {
+    const svc = code(kt('CaptureService'));
+    const destroy = /override fun onDestroy\(\)[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(destroy).toMatch(/ActivityTransitions\.unsubscribeAfterCapture\(this\)/);
+    const create = /OnCreate \{[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(create).toMatch(/if \(!prefs\.armed && !CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(context\)/);
+    const rx = code(kt('ActivityTransitionReceiver'));
+    const fn = /fun subscribeForCapture\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
+    expect(fn).toMatch(/else if \(!CaptureService\.isCapturing\) \{\s*unsubscribeAfterCapture\(context\)/);
   });
 
   it('requestMotionPermission requests ACTIVITY_RECOGNITION at run time on API 29+', () => {

@@ -42,8 +42,11 @@ class DriveSenseModule : Module() {
     Events("wake", "activity", "row", "screen", "thermal", "notificationAction", "call")
 
     OnCreate {
-      DriveSensePrefs.init(context)
+      val prefs = DriveSensePrefs.init(context)
       EventBus.attach(emitter)
+      // C12 round 1 (review-C12 m1): at launch, neither armed nor capturing, no registration may survive
+      // (a capture that ended abnormally in an earlier process). Idempotent.
+      if (!prefs.armed && !CaptureService.isCapturing) ActivityTransitions.unsubscribe(context)
     }
 
     OnDestroy {

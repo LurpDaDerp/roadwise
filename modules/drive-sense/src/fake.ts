@@ -294,9 +294,17 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     transition(a) {
       const subscribed = state.armed || captureFeed;
-      if (!subscribed || !(state.armed || state.capturing)) return false;
+      if (!subscribed) return false;
+      // C12 round 1 (review-C12 m1): neither armed nor capturing, a stale registration heals itself.
+      if (!state.armed && !state.capturing) {
+        captureFeed = false;
+        return false;
+      }
       emitRaw('activity', { ...a });
       return true;
+    },
+    strandSubscription() {
+      captureFeed = true;
     },
     failCaptureSubscribe(fail) {
       captureSubscribeFails = fail;
