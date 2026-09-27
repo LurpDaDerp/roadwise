@@ -40,7 +40,7 @@ supabase/data/downloads/
 .superpowers/
 PRODUCT.md
 DESIGN.md
-docs/superpowers/
+docs/
 
 # os / editor
 .DS_Store
