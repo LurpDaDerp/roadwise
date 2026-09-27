@@ -142,6 +142,23 @@ describe('counts, glances and the fatigue timeline', () => {
     expect(s.calibration.driverChanges).toBe(1);
     expect(s.calibration.events.map((e) => e.kind)).toEqual(['calibrated', 'camera_bump', 'driver_change']);
   });
+  // C-SUM (rev4 §2.5)
+  test('C-SUM: postureStepsAtStops counts the across-stop dual states only; the engine accounting passes through, rounded', () => {
+    const sm = createSummary(C, { gazeSource: 'geometric' });
+    sm.onCalibration({ kind: 'posture_dual', tMs: 100_000, cause: 'stop' });
+    sm.onCalibration({ kind: 'posture_dual', tMs: 200_000, cause: 'step' });
+    sm.onCalibration({ kind: 'camera_bump', tMs: 300_000, cause: 'stop' });
+    sm.onCalibration({ kind: 'posture_dual', tMs: 400_000, cause: 'stop' });
+    expect(build(sm).stops).toEqual({ seedUnverifiedS: 0, healthDegradedS: 0, stoppedFatigueMinutes: 0, postureStepsAtStops: 2 });
+    const s = sm.build({
+      alerts: createAlertManager(C, { mode: 'live' }).stats(),
+      fatigue: createFatigue(C).stats(),
+      calibrationState: 'seeded',
+      stops: { seedUnverifiedS: 41.23456, healthDegradedS: 12.5, stoppedFatigueMinutes: 3 },
+    });
+    expect(s.stops).toEqual({ seedUnverifiedS: 41.235, healthDegradedS: 12.5, stoppedFatigueMinutes: 3, postureStepsAtStops: 2 });
+    expect(jsonSafe(s)).toBe(true);
+  });
 });
 
 describe('thermal and frame-rate minutes (rev1 R-U4, m9)', () => {

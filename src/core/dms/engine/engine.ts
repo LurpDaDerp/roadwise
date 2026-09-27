@@ -239,6 +239,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   // The per-drive state.
   let d = newDrive();
 
+  /** C-SUM: the summary's stop accounting of the drive now */
+  function stopsOf(): { seedUnverifiedS: number; healthDegradedS: number; stoppedFatigueMinutes: number } {
+    return { seedUnverifiedS: d.seedUnverifiedS, healthDegradedS: d.health.degradedS(), stoppedFatigueMinutes: d.stoppedFatigueMinutes };
+  }
+
   function newDrive() {
     const cal: Calibrator = createCalibrator(cfg, { driverSide: init.driverSide, profile });
     return {
@@ -273,6 +278,11 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       lastClosedMs: 0,
       lastSpeed: null as number | null,
       lastStopped: false,
+      // C-SUM (rev4 §2.5): the summary's stop accounting
+      seedUnverifiedS: 0,
+      fatigueMinuteS: 0,
+      fatigueMinuteStoppedS: 0,
+      stoppedFatigueMinutes: 0,
       /** Task C5 (rev2 §2.3.7): the fatigue evidence gate is set until this time */
       fatigueGateUntil: Number.NEGATIVE_INFINITY,
       /** Task C6: the fatigue evidence gate at the last frame (one source for the calibrator and the snapshot) */
@@ -353,8 +363,13 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     const stopped = cs.stopped;
     // Unobserved time counts 0 (T12 review I1); C2: so does STOPPED time, for the accounting (rev4 §2.1.10).
     const obsDt = p.gap || stopped ? 0 : p.dtS;
+    // C-SUM: camera time (a frame gap counts 0, a stop counts), for the seed and the fatigue minute's stopped share.
+    const camDt = p.gap ? 0 : p.dtS;
+    d.fatigueMinuteS += camDt;
+    if (stopped) d.fatigueMinuteStoppedS += camDt;
     if (p.gap) d.yawn.reset();
     d.cal.observe(f, p, cs.ctx, stopped);
+    if (!d.cal.seedVerified()) d.seedUnverifiedS += camDt; // C-SUM
     onCalibrationEvents();
     const calState = d.cal.state();
     // Warm-up (anti-annoyance 6): the first warmupS of driving at ≥ 20 km/h.
@@ -550,6 +565,10 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       earRef: earMean(d.cal.openEyeEar()),
     });
     if (minute !== null) {
+      // C-SUM: a fatigue minute more than half STOPPED (its statistics frozen) is counted apart.
+      if (d.fatigueMinuteS > 0 && d.fatigueMinuteStoppedS > 0.5 * d.fatigueMinuteS) d.stoppedFatigueMinutes++;
+      d.fatigueMinuteS = 0;
+      d.fatigueMinuteStoppedS = 0;
       d.fatigueLevel = minute.level;
       emit({ kind: 'fatigue_minute', tMs: minute.tMs, status: minute.status, score: minute.score, level: minute.level });
       for (const a of minute.actions) requests.push({ kind: a.kind });
@@ -674,13 +693,13 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     },
 
     summary() {
-      return d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state() });
+      return d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state(), stops: stopsOf() });
     },
 
     endDrive(tMs) {
       for (const e of d.fast.flush()) emitFast(e); // an F episode still open ends with the drive
       addCommands(d.alerts.stopAll(tMs, tMs + epochOffset));
-      const summary = d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state() });
+      const summary = d.summary.build({ alerts: d.alerts.stats(), fatigue: d.fatigue.stats(), calibrationState: d.cal.state(), stops: stopsOf() });
       const learned: LearnedZone[] = d.learner.endDrive();
       // Task C8 (rev2 §2.7): saved only with gaze and eye health good and the fatigue gate clear for the last
       // healthyS / gateClearS of the drive (the calibrator adds: calibrated or seed-verified, nothing pending).
@@ -711,7 +730,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
     sizes() {
       const a = d.alerts.stats();
       const f = d.fatigue.stats();
-      const s = d.summary.build({ alerts: a, fatigue: f, calibrationState: d.cal.state() });
+      const s = d.summary.build({ alerts: a, fatigue: f, calibrationState: d.cal.state(), stops: stopsOf() });
       return {
         seedRing: { size: d.seedRing.size, cap: d.seedRing.capacity },
         alertLog: { size: a.log.length, cap: LOG_CAP },

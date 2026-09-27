@@ -129,6 +129,14 @@ export type DmsSeedResult = { ok: true; warmStart: false } | { ok: false; reason
 export type DmsHostSummary = DmsTripSummary & {
   camera: { starts: number; retries: number; gaveUp: boolean };
   /**
+   * C-SUM (rev4 §2.5): the capture policy's stop time, on the row clock (1 Hz; a row gap counts at most
+   * POLICY_ROW_MAX_S), while the drive's gate is open. `stoppedS`: STOPPED (the HUD's "Stopped: watching for sleep
+   * only"); `sleepWatchS`: of that, with the camera running SLEEP_WATCH (5 fps, sleep rules only); `absentS`: the
+   * empty-seat pause, its probes included (U-12). Heat and dark pauses at a stop are in `stoppedS` but not in
+   * `sleepWatchS`.
+   */
+  policy: { stoppedS: number; sleepWatchS: number; absentS: number };
+  /**
    * The focus samples not yet handed out by pushRow when the drive ended (T14 r1 I2): M7 gives them to the
    * ending trip's scoring (drowsiness samples are never dropped). Empty on summary() mid-drive.
    */
@@ -218,6 +226,8 @@ export interface DmsController {
 /** C3 round 2: a failed empty-seat probe is not retried within its own probe window */
 const ABSENT_PROBE_FOR_MS = ABSENT.probeForMs + 1_000;
 const RETRY_AFTER_MS = 5_000;
+/** C-SUM: a row gap counts at most this long toward the policy's stop time (the rows are 1 Hz; a longer gap is unobserved) */
+const POLICY_ROW_MAX_S = 5;
 /** Final review round 2 R-2: this long running healthily gives the drive its one retry back. */
 const RETRY_RESET_AFTER_MS = 600_000;
 const ACTIVE_WITHIN_MS = 1_000;
@@ -333,6 +343,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   let retries = 0;
   let gaveUp = false;
   let starts = 0;
+  /** C-SUM: the capture policy's stop time this drive (row clock) */
+  let policyS = { stoppedS: 0, sleepWatchS: 0, absentS: 0 };
+  let policyRowT: number | null = null;
+  const policySummary = () => ({ stoppedS: Math.round(policyS.stoppedS * 1000) / 1000, sleepWatchS: Math.round(policyS.sleepWatchS * 1000) / 1000, absentS: Math.round(policyS.absentS * 1000) / 1000 });
   // Stats, focus, status.
   const stats = { droppedBatches: 0, droppedRecords: 0, frames: 0, droppedEvents: 0 };
   let focus = createFocusQueue(cfg);
@@ -699,7 +713,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       for (let f = focus.take(); f !== null; f = focus.take()) pendingFocus.push(f);
       // Task C8 (rev2 §2.7): the engine decides what is saveable (calibrated or seed-verified, health and the fatigue gate).
       if (r.profile !== null) profile = r.profile;
-      summary = { ...r.summary, camera: { starts, retries, gaveUp }, pendingFocus };
+      summary = { ...r.summary, camera: { starts, retries, gaveUp }, policy: policySummary(), pendingFocus };
       lastSummary = summary;
     }
     // Every synchronous reset before any await (final review M-2): a next drive opening meanwhile starts clean.
@@ -710,6 +724,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     retries = 0;
     gaveUp = false;
     starts = 0;
+    policyS = { stoppedS: 0, sleepWatchS: 0, absentS: 0 };
+    policyRowT = null;
     driveStartTs = null;
     driveStartPending = false;
     lastRow = null; // final review I-4: the next drive's clock never starts from this one's last row
@@ -966,6 +982,14 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       });
       lastOut = out;
       if (!out.absent) probeFailuresInRow = 0;
+      // C-SUM: the policy's stop time, on the row clock, while the drive's gate is open.
+      if (open && engine !== null) {
+        const dtS = policyRowT === null ? 0 : Math.min(POLICY_ROW_MAX_S, Math.max(0, (row.ts - policyRowT) / 1000));
+        if (out.stopped) policyS.stoppedS += dtS;
+        if (out.stopped && out.action === 'run') policyS.sleepWatchS += dtS;
+        if (out.absent) policyS.absentS += dtS;
+        policyRowT = row.ts;
+      } else policyRowT = null;
       if (engine !== null) {
         if (out.cameraOff !== null) engine.cameraOff(row.ts, out.cameraOff);
         engine.setHost({ thermalLevel: out.thermalLevel, search: out.search, gazeNetEvery: out.gazeNetEvery });
@@ -1038,7 +1062,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
 
     summary() {
       if (engine === null) return lastSummary;
-      return { ...engine.summary(), camera: { starts, retries, gaveUp }, pendingFocus: [] };
+      return { ...engine.summary(), camera: { starts, retries, gaveUp }, policy: policySummary(), pendingFocus: [] };
     },
 
     async endDrive() {

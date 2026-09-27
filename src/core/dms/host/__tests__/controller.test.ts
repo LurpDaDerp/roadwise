@@ -1250,6 +1250,30 @@ describe('C2: focus samples from stop-time sleep events (fatigue.stopEventsFeed)
 
 describe('C3: stops, heat, dark and an empty seat through the controller', () => {
   const noFace = (t: number) => frame({ tMs: t, face: false });
+  // C-SUM (rev4 §2.5): the policy's stop time in the summary, on the row clock.
+  movingTest('C-SUM: stoppedS, sleepWatchS and absentS: moving 20 s, a 60 s light with a face, a 4 min empty seat, moving', async () => {
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 20);
+    expect(h.ctl.summary()?.policy).toEqual({ stoppedS: 0, sleepWatchS: 0, absentS: 0 });
+    await drive(h, 20, 80, { speed: () => 0 });
+    const light = h.ctl.summary()!.policy;
+    expect(light.stoppedS).toBeGreaterThanOrEqual(58);
+    expect(light.stoppedS).toBeLessThanOrEqual(61);
+    expect(light.sleepWatchS).toBeCloseTo(light.stoppedS, 3); // SLEEP_WATCH the whole light
+    expect(light.absentS).toBe(0);
+    await drive(h, 80, 320, { speed: () => 0, frameAt: noFace });
+    const seat = h.ctl.summary()!.policy;
+    expect(seat.stoppedS).toBeGreaterThanOrEqual(light.stoppedS + 238);
+    expect(seat.absentS).toBeGreaterThan(30); // paused from about 3 min without a face
+    expect(seat.absentS).toBeLessThan(seat.stoppedS - light.stoppedS);
+    // the pause is not SLEEP_WATCH (the camera is off), except its probes
+    expect(seat.sleepWatchS).toBeLessThan(seat.stoppedS);
+    await drive(h, 320, 340, { speed: () => 40 });
+    const end = await h.ctl.endDrive();
+    expect(end?.policy.stoppedS).toBeCloseTo(seat.stoppedS, 0);
+    expect(end?.stops.stoppedFatigueMinutes).toBeGreaterThanOrEqual(3);
+  });
   test('S-RED: 45 s at a light: no native stop, start or pause; setPolicy(run, 5 fps); the HUD says stopped', async () => {
     const h = harness();
     h.ctl.setGate(GATE);

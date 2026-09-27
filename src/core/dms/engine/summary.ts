@@ -73,6 +73,18 @@ export interface DmsTripSummary {
    * lid after a blink on the saccade, say), counted apart. They are in `events` too; they sound, and feed nothing.
    */
   shallowSleepEvents: number;
+  /**
+   * C-SUM (rev4 §2.5): the stops and the calibration's honesty numbers.
+   * - `seedUnverifiedS`: camera-frame seconds (frame gaps excluded, stops included) with a seed not yet verified: a
+   *   profile's, a C2 seed's, a new driver's (W2), or a centre left suspect by an unresolved posture step (T9-3).
+   * - `healthDegradedS`: the gaze-accuracy monitor's degraded seconds (C7), on its own clock: observed moving time,
+   *   calibrated, no dual state or posture widening (the time it can judge).
+   * - `stoppedFatigueMinutes`: fatigue minutes more than half of whose camera time was STOPPED. Their blink, nod,
+   *   yawn and PERCLOS statistics are frozen (rev4 §2.1.10), so they are never scored on stop time.
+   * - `postureStepsAtStops`: dual states opened by the across-stop comparison (cause `stop`: a posture translation
+   *   seen across a stop, C4); a camera knocked across a stop is a `camera_bump` and counts in `calibration.bumps`.
+   */
+  stops: { seedUnverifiedS: number; healthDegradedS: number; stoppedFatigueMinutes: number; postureStepsAtStops: number };
   alerts: Record<AlertKind, AlertCounts>;
   /** rule 7 tags */
   nuisanceTags: number;
@@ -130,6 +142,7 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
   const calEvents = new RingBuffer<CalibrationEvent>(64);
   let bumps = 0;
   let driverChanges = 0;
+  let postureStepsAtStops = 0;
   // Tier 0 minutes.
   const minutes = new RingBuffer<Tier0Minute>(1440);
   let nextMinute: number | null = null;
@@ -245,8 +258,15 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
       calEvents.push({ ...e });
       if (e.kind === 'camera_bump') bumps++;
       if (e.kind === 'driver_change') driverChanges++;
+      if (e.kind === 'posture_dual' && e.cause === 'stop') postureStepsAtStops++;
     },
-    build(inp: { alerts: AlertStats; fatigue: FatigueStats; calibrationState: CalibrationState }): DmsTripSummary {
+    build(inp: {
+      alerts: AlertStats;
+      fatigue: FatigueStats;
+      calibrationState: CalibrationState;
+      /** C-SUM: the engine's accounting (absent in unit tests of the rest: zeros) */
+      stops?: { seedUnverifiedS: number; healthDegradedS: number; stoppedFatigueMinutes: number };
+    }): DmsTripSummary {
       const total = monitored.tracking + monitored.head_only + monitored.lost;
       const off = UNOBSERVED_CAUSES.reduce((acc, c) => acc + offS[c], 0);
       const atSpeed = total + off;
@@ -265,6 +285,12 @@ export function createSummary(cfg: DmsConfig, opts: { gazeSource: GazeSource }) 
         events: { ...events },
         stopSleepEvents,
         shallowSleepEvents,
+        stops: {
+          seedUnverifiedS: round3(inp.stops?.seedUnverifiedS ?? 0),
+          healthDegradedS: round3(inp.stops?.healthDegradedS ?? 0),
+          stoppedFatigueMinutes: inp.stops?.stoppedFatigueMinutes ?? 0,
+          postureStepsAtStops,
+        },
         alerts: inp.alerts.byKind,
         nuisanceTags: inp.alerts.log.filter((e) => e.tag === 'wrong').length,
         longestNonDrivingGlance: longest,
