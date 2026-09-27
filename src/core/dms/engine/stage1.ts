@@ -22,7 +22,15 @@ export interface RoadChoice {
   /** the other cluster's, or null with one cluster */
   other: AnglePair | null;
   rule: RoadRule;
+  /**
+   * C9 round 1 (C9-1): every cluster that is not the road (the other, and any mirror dropped before the choice).
+   * Their cores leave the confidence's denominator. Absent: the other alone.
+   */
+  excluded?: readonly AnglePair[];
 }
+
+/** C9 round 1 (C9-1): at most this many clusters are looked at (a display, a frequent mirror and the road). */
+export const MAX_CLUSTERS = 3;
 
 export interface RoadOpts {
   /** σ̂ per frame (the local peakedness, T9-1) */
@@ -71,23 +79,45 @@ export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg):
   const peaks = histogramPeaks(dirs, o.kernelDeg === undefined ? cfg : { calibration: { ...cfg.calibration, sigmaDeg: o.kernelDeg, kernelHalfBins: Math.ceil(3 * o.kernelDeg) } }, 12);
   if (peaks.length === 0) return null;
   const rho = o.rho ?? clusterRho(o.sigma);
-  const a = refineMode(dirs, peaks[0]!.at, cfg);
-  let b: AnglePair | null = null;
-  const second = peaks.slice(1).find((p) => angularDistanceDeg(p.at, peaks[0]!.at) >= 2 * rho);
-  if (second !== undefined) {
-    const m = refineMode(dirs, second.at, cfg);
-    // Local peakedness on its own side (the frames nearer it than the first cluster): the first cluster's tail is no
-    // dispersion of the second's.
-    const own = dirs.filter((d) => angularDistanceDeg(d, m) < angularDistanceDeg(d, a));
-    if (shareNear(dirs, m, rho) >= tc.clusterMinShare && peakedLocal(own, m, o.sigma, cfg.calibration.posture.peakedRatio)) b = m;
+  // C9 round 1 (C9-1): up to MAX_CLUSTERS clusters, the top peak and then each next peak ≥ 2ρ from every one taken
+  // that holds clusterMinShare within ρ and is locally peaked on its own side (the frames nearer it than any cluster
+  // taken: another cluster's tail is no dispersion of its own).
+  const taken: AnglePair[] = [refineMode(dirs, peaks[0]!.at, cfg)];
+  const takenAt: AnglePair[] = [peaks[0]!.at];
+  for (const pk of peaks.slice(1)) {
+    if (taken.length >= MAX_CLUSTERS) break;
+    if (takenAt.some((q) => angularDistanceDeg(pk.at, q) < 2 * rho)) continue;
+    const m = refineMode(dirs, pk.at, cfg);
+    // the refined centres too: a peak on another cluster's flank refines toward it (a display 7° from the road)
+    if (taken.some((q) => angularDistanceDeg(m, q) < 2 * rho)) continue;
+    const own = dirs.filter((d) => taken.every((t) => angularDistanceDeg(d, m) < angularDistanceDeg(d, t)));
+    if (shareNear(dirs, m, rho) >= tc.clusterMinShare && peakedLocal(own, m, o.sigma, cfg.calibration.posture.peakedRatio)) {
+      taken.push(m);
+      takenAt.push(pk.at);
+    }
   }
+  // C9 round 1 (C9-1): a cluster inside a default mirror rectangle relative to another cluster that is not itself a
+  // mirror is a mirror (rule (b) first, on every pair): dropped before the choice. A frequent mirror then no longer
+  // hides the road behind a display.
+  const isMirror = taken.map((x, i) => taken.some((q, j) => j !== i && inMirror(x, q, cfg)));
+  const dropped: AnglePair[] = [];
+  const kept: AnglePair[] = [];
+  taken.forEach((x, i) => (taken.some((q, j) => j !== i && !isMirror[j] && inMirror(x, q, cfg)) ? dropped : kept).push(x));
+  if (kept.length === 0) kept.push(...dropped.splice(0));
   const camLimit = phoneRadius(cfg) + cfg.calibration.posture.candidateCameraMarginDeg;
   const cam = o.cameraOffRoad ? o.camera : null;
-  if (b === null) {
+  const a = kept[0]!;
+  if (kept.length === 1) {
     if (cam !== null && angularDistanceDeg(a, cam) <= camLimit) return 'wait';
-    return { road: a, other: null, rule: 'single' };
+    // a road and its mirror(s): rule (b), as before, with the mirror as the other cluster
+    return dropped.length > 0 ? { road: a, other: dropped[0]!, rule: 'mirror', excluded: dropped } : { road: a, other: null, rule: 'single' };
   }
-  const pick = (road: AnglePair, rule: RoadRule): RoadChoice => ({ road, other: road === a ? b : a, rule });
+  const b = kept[1]!;
+  const rest = [...kept.slice(2), ...dropped];
+  const pick = (road: AnglePair, rule: RoadRule): RoadChoice => {
+    const other = road === a ? b : a;
+    return { road, other, rule, excluded: [other, ...rest] };
+  };
   // (a) the camera
   if (cam !== null) {
     const da = angularDistanceDeg(a, cam);
@@ -95,7 +125,7 @@ export function chooseRoad(dirs: readonly WeightedDir[], o: RoadOpts, cfg: Cfg):
     if (da <= camLimit && db > da) return pick(b, 'camera');
     if (db <= camLimit && da > db) return pick(a, 'camera');
   }
-  // (b) the mirrors
+  // (b) the mirrors (a pair that are each the other's mirror is left to (c) and (d))
   const bMirror = inMirror(b, a, cfg);
   const aMirror = inMirror(a, b, cfg);
   if (bMirror !== aMirror) return pick(bMirror ? a : b, 'mirror');
@@ -164,14 +194,19 @@ export function roadSide(x: AnglePair, ch: RoadChoice): boolean {
  * weight within ρ of its peak (the H3 exclusion: a display neither delays nor blocks a pass).
  */
 export function roadConfidence(dirs: readonly WeightedDir[], ch: RoadChoice, withinDeg: number, rho: number): number {
+  const ex = ch.excluded ?? (ch.other !== null ? [ch.other] : []);
+  // C9 round 1 (C9-1): each non-road cluster's core reaches max(ρ, min(2ρ, half its distance to the road)): ρ holds
+  // only about 57 % of a σ̂ 4° cluster, 2ρ about 95 %, and half the separation keeps the road's own frames out.
+  const reach = ex.map((x) => Math.max(rho, Math.min(2 * rho, angularDistanceDeg(x, ch.road) / 2)));
   let total = 0;
   let inside = 0;
   let other = 0;
   for (const d of dirs) {
     if (!(d.w > 0)) continue;
     total += d.w;
-    if (ch.other !== null && angularDistanceDeg(d, ch.other) <= rho) other += d.w;
+    // every non-road cluster's core, each frame once, and never a frame counted for the road (share ≤ 1)
     if (roadSide(d, ch) && angularDistanceDeg(d, ch.road) <= withinDeg) inside += d.w;
+    else if (ex.some((x, i) => angularDistanceDeg(d, x) <= reach[i]!)) other += d.w;
   }
   const den = total - other;
   return den > 0 ? inside / den : 0;

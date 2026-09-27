@@ -39,6 +39,11 @@ export interface NavStart {
   roadAfterMirrorS?: number;
   profile?: DmsProfileV1 | null;
   cfg?: DmsConfig;
+  /**
+   * C9 round 1 (S-NAV-START-MIRRORS, the review's probe): instead of the 15 s pattern, one mirror checked 0.8 s of
+   * every `every` s (from 1 s into each period), the road for 0.5 s after it, the display pattern otherwise.
+   */
+  frequentMirror?: { every: number; which: 'rear' | 'driver' };
 }
 
 export interface NavResult {
@@ -71,6 +76,12 @@ export function navDrive(o: NavStart): NavResult {
   const mount = o.camera === true ? PHONE_MOUNT : undefined;
   const display = o.camera === true ? AT_CAMERA : rel(o.at.yaw, o.at.pitch);
   const driver = (t: number, r: () => number): DriverState => {
+    const fm = o.frequentMirror;
+    if (fm !== undefined) {
+      const k = t % fm.every;
+      const g = k >= 1 && k < 1.8 ? (fm.which === 'rear' ? rel(27, 10) : rel(-45, 0)) : t < o.startS && t % 10 < o.share * 10 && !(k >= 1 && k < 2.3) ? display : onRoad(r);
+      return { gaze: g, openness: blinkOpenness(t), speedKmh: 60, ...(mount !== undefined ? { mountShift: mount } : {}) };
+    }
     const m = o.mirrors === false ? null : mirrorAt(t);
     const reading = t < o.startS && t % 10 < o.share * 10 && !(o.roadAfterMirrorS !== undefined && o.mirrors !== false && sinceMirror(t) < o.roadAfterMirrorS);
     return { gaze: m ?? (reading ? display : onRoad(r)), openness: blinkOpenness(t), speedKmh: 60, ...(mount !== undefined ? { mountShift: mount } : {}) };

@@ -80,6 +80,26 @@ describe('S-NAV-START-SIDE (review-C9 S1-1 (d)): a display beside the road (the 
   });
 });
 
+describe('S-NAV-START-MIRRORS (review-C9 C9-1; NC-S1-3): a display, frequent mirror checks and the road: three clusters', () => {
+  // The review's probe: a display watched 60 or 70 % of every 10 s for the whole drive, one mirror (the rear at
+  // (27°, 10°) or the driver's at (−45°, 0°)) checked 0.8 s of every 4 or 5 s (16–20 %), the road for 0.5 s after
+  // each check. Before C9 round 1 no pass in 240 s in every run: the display and the mirror were the two highest
+  // peaks, and the road, the third, was never a candidate. Measured now: every pass at 60 s or 120 s, 0.1–0.8° off.
+  const cases: [number, number, number, number, 'rear' | 'driver', number][] = [];
+  for (const [every, share, y, p] of [[5, 0.6, 14, -8], [5, 0.7, 14, -8], [4, 0.7, 9, -6], [5, 0.7, 0, -15]] as const) {
+    for (const which of ['rear', 'driver'] as const) for (const seed of [1, 2, 3]) cases.push([every, share, y, p, which, seed]);
+  }
+  test.each(cases)('every %i s, %f at (%i°, %i°), the %s mirror, seed %i: on the road by 150 s, never on the screen', (every, share, y, p, which, seed) => {
+    const truth = truthOf(seed);
+    const d = navDrive({ seed, share, at: { yaw: y, pitch: p }, startS: 240, seconds: 200, frequentMirror: { every, which } });
+    const t = firstCalS(d);
+    expect(t).not.toBeNull();
+    expect(t!).toBeLessThanOrEqual(150 + EVAL_SLACK_S);
+    expect(angularDistanceDeg(d.passes[0]!.centre, truth)).toBeLessThanOrEqual(1.5);
+    expect(worstAfterCal(d, truth)).toBeLessThanOrEqual(1.5);
+  });
+});
+
 describe('S-FIRST-CAL (review-C9, the cost pin): 20 normal starts calibrate as before', () => {
   // Before T9 (measured on the parent commit with the same drive): all 20 at 60.1 s, the first evaluation.
   const BEFORE_MEDIAN_S = 60.1;

@@ -70,6 +70,28 @@ describe('chooseRoad (S1-1)', () => {
     expect(chooseRoad(clusters([[cam, 200]]), { ...NONE, camera: cam, cameraOffRoad: true }, C)).toBe('wait');
     expect(road(chooseRoad(clusters([[cam, 200]]), { ...NONE, camera: cam, cameraOffRoad: false }, C)).rule).toBe('single');
   });
+  // C9 round 1 (C9-1): up to three clusters, mirrors dropped first.
+  test('a display, a frequent mirror and the road: the mirror is dropped, the road chosen over the display', () => {
+    const D = { yaw: 11, pitch: -10 };
+    const M = { yaw: R.yaw + 27, pitch: R.pitch + 10 };
+    const ch = road(chooseRoad(clusters([[D, 110], [M, 50], [R, 40]]), NONE, C));
+    expect(ch.rule).toBe('pitch');
+    expect(near(ch.road, R)).toBe(true);
+    expect(near(ch.other!, D)).toBe(true);
+    expect(ch.excluded!.some((x) => near(x, M))).toBe(true);
+    // the driver's mirror (relative to the road and to the display) is dropped too
+    const M2 = { yaw: R.yaw - 45, pitch: R.pitch };
+    expect(near(road(chooseRoad(clusters([[D, 110], [M2, 50], [R, 40]]), NONE, C)).road, R)).toBe(true);
+  });
+  test('the confidence leaves out every non-road core, each to max(ρ, min(2ρ, half its distance to the road))', () => {
+    const R0 = { yaw: 0, pitch: 0 };
+    const D = { yaw: 16, pitch: -8 };
+    const M = { yaw: 27, pitch: 10 };
+    const dirs = clusters([[R0, 20], [D, 60], [M, 20]], 3, 0.5);
+    const ch: RoadChoice = { road: R0, other: D, rule: 'pitch', excluded: [D, M] };
+    expect(roadConfidence(dirs, ch, 15, 5)).toBeCloseTo(1, 5);
+    expect(roadConfidence(dirs, { ...ch, excluded: [D] }, 15, 5)).toBeCloseTo(0.5, 5);
+  });
   test('a second peak within 2ρ is the first cluster\'s own spread, not a cluster', () => {
     const ch = road(chooseRoad(clusters([[R, 120], [{ yaw: R.yaw + 6, pitch: R.pitch }, 80]]), NONE, C));
     expect(ch.other).toBeNull();
