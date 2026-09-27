@@ -62,6 +62,8 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { onDataChanged } from '@/data/events';
 import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import type { CameraBridge } from '@/features/camera/bridge';
+import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import type { Database } from '@/data/supabase/types';
 import {
@@ -209,6 +211,12 @@ export interface BootstrapDeps {
   reportPermissionsFromBackground?: () => void | Promise<void>;
   /** The account's cached age band, for the arming rule. Default: the device owner's cached profile. */
   readAgeBand?: () => Promise<string | null>;
+  /**
+   * Lane B, the camera beta: the bridge between the drive host and the DMS controller (presence, rows, the gate, the
+   * drive's end). Default: `createDefaultCameraBridge`, which loads nothing heavy until a driver who opted in starts a
+   * drive. `null`: none (the host runs without a camera).
+   */
+  createCamera?: ((db: Db, readAgeBand: () => Promise<string | null>) => CameraBridge) | null;
   /**
    * The client the runtime reports the drive state with (ruling T10 (4)). Default: the app's
    * Supabase client, loaded only when a drive is first reported.
@@ -474,13 +482,21 @@ async function runLaunch(
     let player: AlertPlayer;
     let alertsAvailable = true;
     try {
-      player = await (deps.createPlayer ?? defaultPlayer(onError))(playerInputs(() => host));
+      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(playerInputs(() => host));
     } catch (error) {
       // M-3: the error's kind only — nothing its message might carry (a position, a trip id).
       const kind = error instanceof Error ? error.name : typeof error;
       onError(new Error(`alert sound could not be loaded (${kind})`), 'alert ports');
       alertsAvailable = false;
       player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+    }
+    // Lane B: the camera beta's bridge, before the host that feeds it (presence and rows are late-bound to it).
+    const readAgeBand = deps.readAgeBand ?? (() => cachedAgeBand(db));
+    let camera: CameraBridge | null = null;
+    try {
+      camera = (deps.createCamera === undefined ? defaultCamera(appState, onError) : deps.createCamera)?.(db, readAgeBand) ?? null;
+    } catch (error) {
+      onError(error, 'camera');
     }
     const drive = createDriveHost({
       db,
@@ -503,14 +519,17 @@ async function runLaunch(
       readFlag: deps.readFlag ?? ((key) => readFlag(db, key, AUTO_DETECT_FLAG_FALLBACK)),
       // The account's age band from the profile the app caches (ruling T12 (1)), so a background
       // launch of an under-13 account never arms. The UI hands later changes to `setAgeBand`.
-      readAgeBand: deps.readAgeBand ?? (() => cachedAgeBand(db)),
+      readAgeBand,
       appState,
       alertsAvailable,
+      presence: camera === null ? undefined : () => camera.presence(),
+      onRow: camera === null ? undefined : (row, motion) => camera.onRow(row, motion),
       // §8.2: with nobody signed in, auto-record stays disarmed whatever the stored opt-in (I3).
       signedOut: identity.owner === 'signed-out',
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
+    const detachCamera = camera?.attach(drive) ?? (() => {});
 
     // Oldest first; only the newest can still be the drive under way. Anything older that was
     // skipped is finalized now, before the host exists as a live owner of any `recording` row.
@@ -588,6 +607,12 @@ async function runLaunch(
     // Async: a summary still being scheduled lands before the notifier lets go (final review M1),
     // so the next launch's wipe finds it in the OS and cancels it, rather than it landing after.
     const release = async (): Promise<void> => {
+      // The camera goes after the drive's end (stop() ends the drive first): its last summary is kept, then it stops.
+      detachCamera();
+      if (camera !== null) {
+        await camera.settled();
+        await camera.dispose();
+      }
       driveReports?.release();
       unmountDiagnostics();
       // Bounded like the wipe's cancel (final re-review n5): a hung notifications call must not
@@ -1184,6 +1209,18 @@ async function cachedAgeBand(db: Db): Promise<string | null> {
   return profile?.age_band ?? null;
 }
 
+/** Lane B's camera bridge. Required lazily; it loads nothing heavy until an opted-in drive starts. */
+function defaultCamera(
+  appState: AppStateLike & { currentState?: string | null },
+  onError: (error: unknown, context: string) => void
+): (db: Db, readAgeBand: () => Promise<string | null>) => CameraBridge {
+  return (db, readAgeBand) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred, like the notifier
+    const { createDefaultCameraBridge } = require('@/features/camera/defaultBridge') as typeof import('@/features/camera/defaultBridge');
+    return createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), readAgeBand, onError });
+  };
+}
+
 /** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */
 function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
@@ -1212,7 +1249,8 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
  * records without sound and says so (`alertsAvailable: false`).
  */
 function defaultPlayer(
-  onError: (error: unknown, context: string) => void
+  onError: (error: unknown, context: string) => void,
+  db: Db
 ): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
   // No launch probe (final re-review n2): `createAudioPlayer` does not load the asset on either
   // platform — a load error arrives later, asynchronously — so creating a player at launch proves
@@ -1221,9 +1259,11 @@ function defaultPlayer(
   // at its first alert, and the host marks alerts unavailable (and clears it when one sounds).
   return async (inputs) => {
     const ports = await createExpoAlertPorts();
+    // Lane C's Alerts & sounds switch (H4): read before the first alert, then live (the camera's voice lines read it too).
+    await loadVoicePref(createSettingsRepo(db));
     return createAlertPlayer({
       ...ports,
-      voiceEnabled: () => true,
+      voiceEnabled: voicePrefEnabled,
       ...inputs,
       onError: (error) => onError(error, 'alert player'),
     });

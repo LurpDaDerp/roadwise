@@ -81,6 +81,8 @@ interface HarnessOptions {
   motionEvidence?: () => MotionEvidenceSource;
   /** DMS calib T13: the driver-seat presence (the DMS controller's `presence()`) */
   presence?: () => { lastFaceT: number | null } | null;
+  /** Lane B: the camera bridge's per-row hook */
+  onRow?: (row: FeatureRow, motion: unknown) => void;
 }
 
 function harness(opts: HarnessOptions = {}) {
@@ -137,6 +139,7 @@ function harness(opts: HarnessOptions = {}) {
     readAgeBand: opts.readAgeBand,
     motionEvidence: opts.motionEvidence,
     presence: opts.presence,
+    onRow: opts.onRow,
     scheduler,
     onError: (error, ctx) => errors.push({ error, ctx }),
   });
@@ -826,6 +829,28 @@ describe('T13: a resume after a walking end needs same-car evidence (rev4 §2.13
     }
     expect(h.host.snapshot().endCause).toBe('standstill_present');
     expect((endedAt! - parked[0]!.ts) / 1000).toBeGreaterThanOrEqual(AUTO_END.STANDSTILL_END_PRESENT_S - 2);
+  });
+
+  test('Lane B: every row reaches the onRow hook with its motion evidence, before the engine; a throwing hook costs nothing', async () => {
+    const seen: { ts: number; motion: unknown }[] = [];
+    let fail = false;
+    const h = harness({
+      onRow: (r, m) => {
+        seen.push({ ts: r.ts, motion: m });
+        if (fail) throw new Error('camera');
+      },
+    });
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    const moving = drive(20);
+    await h.feed(moving.slice(0, 10));
+    fail = true;
+    await h.feed(moving.slice(10));
+    expect(seen.map((x) => x.ts)).toEqual(moving.map((r) => r.ts));
+    expect(seen.every((x) => x.motion !== null && typeof x.motion === 'object')).toBe(true);
+    expect(seen.at(-1)!.motion).toEqual(h.host.motionEvidence());
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.errors.filter((e) => e.ctx === 'row hook')).toHaveLength(10);
   });
 
   test('after a standstill (not walking) end, a resume needs no same-car evidence, as before', async () => {

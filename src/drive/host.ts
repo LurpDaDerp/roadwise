@@ -265,6 +265,11 @@ export interface DriveHostDeps {
    * open (M7 binds it); null or absent when no DMS runs. Times and booleans only, never an image.
    */
   presence?: () => DriverPresence | null;
+  /**
+   * Lane B (the camera beta; T15): told every 1 Hz row with its motion evidence, before the engine sees it, so the
+   * DMS controller gets the same row and evidence (`pushRow`). A throwing hook is reported and never costs the row.
+   */
+  onRow?: (row: FeatureRow, motion: MotionEvidence | null) => void;
 }
 
 /**
@@ -678,6 +683,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // trip's fresh stream instead of being lost to the old one.
     const before = engine.snapshot();
     lastMotion = motion.onRow(row, { mounted: before.mode === 'mounted' });
+    if (deps.onRow) {
+      try {
+        deps.onRow(row, lastMotion);
+      } catch (e) {
+        report(e, 'row hook');
+      }
+    }
     // DMS calib T13: the walk's evidence, the same-car mount run, and a resume held for same-car evidence.
     walkRows.push({ ts: row.ts, speedMps: knownSpeed(row), vehicleMotion: lastMotion.vehicleMotion });
     while (walkRows.length > 0 && (walkRows[0] as WalkEvidence).ts < row.ts - (WALK_CONFIRM_S + 10) * 1000) walkRows.shift();
