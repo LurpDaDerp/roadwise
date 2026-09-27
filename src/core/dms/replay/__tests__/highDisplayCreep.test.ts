@@ -34,7 +34,7 @@ describe('S-HIGH-DISPLAY-CREEP (review-C9 R2-C; NC-C9-C): 30 runs, the display f
 describe('S-HIGH-DISPLAY-CREEP, the review\'s runs (the display from the start, 15 min): a road pass does not creep', () => {
   // The review's own grid. With the pitch rule restored (R2-R) a 60 % display ≥ 8° above the road is often passed onto
   // or not passed at all (the KNOWN LIMIT, S-NAV-START-HIGH); those runs are outside this pin. Every run whose first pass
-  // is on the road (≤ 1.5°) stays within 2.0° for 15 min. Measured: 1.0–1.7°. The review's outlier, (0°, 7°) 60 %
+  // is on the road (≤ 1.5°) stays within 2.0° for 15 min. Measured: 14 such runs, 0.7–1.7°. The review's outlier, (0°, 7°) 60 %
   // seed 1 (a pass 1.3° off, then 2.8°: a one-cluster window whose block cluster was the DISPLAY let the blend follow
   // run), is now 1.4° (the follow holds on that window).
   test.each(cases)('(%i°, %i°) at %f, seed %i', (y, p, share, seed) => {
