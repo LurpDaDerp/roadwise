@@ -15,6 +15,8 @@ function world(opts: {
   listError?: unknown;
   deleteError?: unknown;
   authThrows?: boolean;
+  emailError?: boolean;
+  purgeError?: boolean;
 } = {}) {
   const alive = new Set((opts.objects ?? []).map((k) => `${k.bucket}\u0000${k.name}`));
   const all = [...(opts.objects ?? [])].sort((a, b) => byteOrder(a.bucket, b.bucket) || byteOrder(a.name, b.name));
@@ -38,9 +40,17 @@ function world(opts: {
       for (const n of gone) alive.delete(`${bucket}\u0000${n}`);
       return Promise.resolve(gone);
     },
+    userEmail: (userId) => {
+      calls.push(`email:${userId}`);
+      return opts.emailError ? Promise.reject(new Error('lookup failed')) : Promise.resolve('a@example.com');
+    },
     deleteUser: (userId) => {
       calls.push(`delete:${userId}`);
       return opts.deleteError ? Promise.reject(opts.deleteError) : Promise.resolve();
+    },
+    purgeAuthAudit: (userId, email) => {
+      calls.push(`purge:${userId}:${email}`);
+      return opts.purgeError ? Promise.reject(new Error('purge failed')) : Promise.resolve(5);
     },
   };
   const verifyJwt = (token: string) => {
@@ -66,7 +76,14 @@ Deno.test('the objects go first, then the auth user; the answer counts them', as
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { deleted: true, objectsRemoved: 4, objectsLeft: 0 });
   assertEquals(res.headers.get('cache-control'), 'no-store');
-  assertEquals(w.calls, [`list:${UID}:start`, 'remove:other:1', 'remove:traces:3', `delete:${UID}`]);
+  assertEquals(w.calls, [
+    `list:${UID}:start`,
+    'remove:other:1',
+    'remove:traces:3',
+    `email:${UID}`,
+    `delete:${UID}`,
+    `purge:${UID}:a@example.com`,
+  ]);
   // the other person's objects are untouched
   assertEquals([...w.alive].filter((k) => k.includes(OTHER)).length, 2);
 });
@@ -112,7 +129,7 @@ Deno.test('many objects: listed a page at a time, removed a batch at a time', as
   assertEquals(await res.json(), { deleted: true, objectsRemoved: LIST_LIMIT + 5, objectsLeft: 0 });
   assertEquals(w.calls.filter((c) => c.startsWith('list:')).length, 2);
   assertEquals(w.calls.filter((c) => c.startsWith('remove:')).length, Math.ceil(LIST_LIMIT / BATCH) + 1);
-  assertEquals(w.calls[w.calls.length - 1], `delete:${UID}`);
+  assertEquals(w.calls.slice(-2), [`delete:${UID}`, `purge:${UID}:a@example.com`]);
 });
 
 Deno.test('a refused or partial removal is counted, and the account is still deleted (the sweep collects the rest)', async () => {
@@ -120,14 +137,14 @@ Deno.test('a refused or partial removal is counted, and the account is still del
   const res = await handleAccountDelete(post('good'), w.deps);
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { deleted: true, objectsRemoved: 1, objectsLeft: 2 });
-  assertEquals(w.calls[w.calls.length - 1], `delete:${UID}`);
+  assertEquals(w.calls.includes(`delete:${UID}`), true);
 });
 
 Deno.test('a listing that fails deletes nothing and says why in a code', async () => {
   const w = world({ listError: new PgError('40001', 'serialization failure') });
   const res = await handleAccountDelete(post('good'), w.deps);
   assertEquals(res.status, 503);
-  assertEquals(w.calls.some((c) => c.startsWith('delete:')), false);
+  assertEquals(w.calls.some((c) => c.startsWith('delete:') || c.startsWith('purge:')), false);
   const drift = world({ listError: new Error('account-delete: a listing that is not an array') });
   const res2 = await handleAccountDelete(post('good'), drift.deps);
   assertEquals(res2.status, 500);
@@ -142,4 +159,21 @@ Deno.test('the auth delete failing: 503 when GoTrue is down, 500 otherwise; neve
   const refused = await handleAccountDelete(post('good'), world({ deleteError: Object.assign(new Error('x'), { status: 400 }) }).deps);
   assertEquals(refused.status, 500);
   assertEquals(await refused.json(), { code: 'internal' });
+});
+
+Deno.test('the audit log is purged only after the delete succeeded, and never undoes it', async () => {
+  const failed = world({ deleteError: Object.assign(new Error('x'), { status: 502 }) });
+  await handleAccountDelete(post('good'), failed.deps);
+  assertEquals(failed.calls.some((c) => c.startsWith('purge:')), false);
+
+  const purgeFails = world({ purgeError: true });
+  const res = await handleAccountDelete(post('good'), purgeFails.deps);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).deleted, true);
+
+  // No email to hand: the purge still runs on the id, which every audit row carries.
+  const noEmail = world({ emailError: true });
+  const ok = await handleAccountDelete(post('good'), noEmail.deps);
+  assertEquals(ok.status, 200);
+  assertEquals(noEmail.calls.slice(-2), [`delete:${UID}`, `purge:${UID}:null`]);
 });

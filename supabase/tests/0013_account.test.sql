@@ -15,7 +15,7 @@ begin
 end $$;
 
 begin;
-select plan(52);
+select plan(65);
 
 -- ---------------------------------------------------------------------------
 -- fixtures (as the migration owner, with no JWT)
@@ -78,6 +78,18 @@ insert into public.member_locations (user_id, lat, lng, accuracy_m) values
 insert into public.family_places (family_id, name, address, lat, lng) values
   ('c1300000-0000-4000-8000-0000000000f2', 'Home', '1 Main St', 47.1, -122.1);
 
+-- GoTrue's audit log, in the shapes it writes (read off the local stack for review I1): no foreign
+-- key, so nothing cascades into it
+insert into auth.audit_log_entries (id, payload, created_at) values
+  (gen_random_uuid(), json_build_object('action', 'login', 'actor_id', pg_temp.u('a'), 'actor_username', 'a13@example.com', 'log_type', 'account'), now()),
+  (gen_random_uuid(), json_build_object('action', 'user_recovery_requested', 'actor_username', 'A13@Example.com', 'log_type', 'user'), now()),
+  (gen_random_uuid(), json_build_object('action', 'user_deleted', 'actor_id', '00000000-0000-0000-0000-000000000000', 'actor_username', 'service_role',
+     'log_type', 'team', 'traits', json_build_object('user_email', 'a13@example.com', 'user_id', pg_temp.u('a'), 'user_phone', '')), now()),
+  (gen_random_uuid(), json_build_object('action', 'login', 'actor_id', pg_temp.u('c'), 'actor_username', 'c13@example.com', 'log_type', 'account'), now()),
+  -- an address that merely contains A's is someone else's
+  (gen_random_uuid(), json_build_object('action', 'login', 'actor_username', 'xa13@example.com', 'log_type', 'account'), now()),
+  (gen_random_uuid(), json_build_object('action', 'login', 'actor_id', pg_temp.u('c'), 'actor_username', 'c13@example.com', 'log_type', 'old'), now() - interval '31 days');
+
 insert into storage.buckets (id, name, public) values ('c13-other', 'c13-other', false);
 insert into storage.objects (bucket_id, name, owner_id) values
   ('traces', pg_temp.u('a')::text || '/a13-trip-1.bin.gz', pg_temp.u('a')::text),
@@ -137,12 +149,14 @@ select is((select proconfig from pg_proc where oid = 'public.export_account(uuid
 select isnt_definer('public', 'account_object_keys', array['uuid', 'integer', 'text', 'text'], 'account_object_keys is invoker');
 select is((select proconfig from pg_proc where oid = 'public.account_object_keys(uuid, int, text, text)'::regprocedure), array['search_path=public'], 'account_object_keys pins exactly search_path=public');
 select is(
-  (select count(*)::int from unnest(array['anon', 'authenticated']) r, unnest(array['public.export_account(uuid)', 'public.account_object_keys(uuid, int, text, text)']) f
+  (select count(*)::int from unnest(array['anon', 'authenticated']) r,
+     unnest(array['public.export_account(uuid)', 'public.account_object_keys(uuid, int, text, text)', 'public.purge_auth_audit(uuid, text)']) f
     where has_function_privilege(r, f, 'execute')), 0,
-  'neither anon nor authenticated can execute either function');
+  'neither anon nor authenticated can execute any of the three');
 select ok(has_function_privilege('service_role', 'public.export_account(uuid)', 'execute')
-      and has_function_privilege('service_role', 'public.account_object_keys(uuid, int, text, text)', 'execute'),
-  'service_role executes both');
+      and has_function_privilege('service_role', 'public.account_object_keys(uuid, int, text, text)', 'execute')
+      and has_function_privilege('service_role', 'public.purge_auth_audit(uuid, text)', 'execute'),
+  'service_role executes all three');
 
 -- ---------------------------------------------------------------------------
 -- the cascade, from the catalog: every reference to a person follows the delete
@@ -162,6 +176,12 @@ select is(
          where c.conrelid = a.attrelid and c.contype = 'f' and c.confdeltype = 'c' and a.attnum = any(c.conkey))),
   '{}'::text[], 'every public table with a user_id column cascades it from a delete');
 select has_trigger('public', 'private_profiles', 'private_profiles_guardian_gone', 'a guardian''s deletion ends the minor''s link');
+select has_function('public', 'purge_auth_audit', array['uuid', 'text'], 'purge_auth_audit exists');
+select is_definer('public', 'purge_auth_audit', array['uuid', 'text'], 'purge_auth_audit is security definer (it deletes in auth)');
+select function_owner_is('public', 'purge_auth_audit', array['uuid', 'text'], 'postgres', 'purge_auth_audit is owned by postgres');
+select is((select proconfig from pg_proc where oid = 'public.purge_auth_audit(uuid, text)'::regprocedure), array['search_path=public'], 'purge_auth_audit pins exactly search_path=public');
+select is((select schedule || ' ' || command from cron.job where jobname = 'purge-auth-audit'),
+  '50 4 * * * delete from auth.audit_log_entries where created_at < now() - interval ''30 days''', 'the auth audit log is kept 30 days, purged daily');
 
 -- ---------------------------------------------------------------------------
 -- guards and inputs
@@ -175,6 +195,10 @@ select set_config('request.jwt.claims', '', true);
 select throws_ok($$ select public.export_account('c1300000-0000-4000-8000-00000000000a') $$, '42501', 'export_account requires the service role', 'export_account checks the service role first');
 select throws_ok($$ select public.account_object_keys('c1300000-0000-4000-8000-00000000000a', 10, null, null) $$, '42501', 'account_object_keys requires the service role', 'account_object_keys checks the service role first');
 select throws_ok($$ select pg_temp.as_service('select public.export_account(null)') $$, '22023', 'user is required', 'export needs a user');
+select throws_ok($$ select public.purge_auth_audit('c1300000-0000-4000-8000-00000000000a', null) $$, '42501', 'purge_auth_audit requires the service role', 'purge_auth_audit checks the service role first');
+select throws_ok($$ select pg_temp.as_service('select to_jsonb(public.purge_auth_audit(null, null))') $$, '22023', 'user is required', 'the purge needs a user');
+select throws_ok($$ select pg_temp.as_service('select to_jsonb(public.purge_auth_audit(''c1300000-0000-4000-8000-00000000000a'', ''a13@example.com''))') $$,
+  '42501', 'account still exists', 'a live account''s audit trail is never purged');
 select throws_ok($$ select pg_temp.as_service('select public.export_account(''c1300000-0000-4000-8000-0000000000ee'')') $$, 'P0002', 'no such account', 'an unknown user is refused, not exported empty');
 select throws_ok($$ select pg_temp.as_service('select public.account_object_keys(null, 10, null, null)') $$, '22023', 'user is required', 'listing needs a user');
 select throws_ok($$ select pg_temp.as_service('select public.account_object_keys(''c1300000-0000-4000-8000-00000000000a'', 0, null, null)') $$, '22023', 'limit must be between 1 and 1000', 'a zero limit is refused');
@@ -239,7 +263,14 @@ delete from storage.objects o
   using jsonb_array_elements(pg_temp.as_service(format('select public.account_object_keys(%L, 1000, null, null)', pg_temp.u('a')))) k
   where o.bucket_id = k ->> 'bucket' and o.name = k ->> 'name';
 select lives_ok(format('delete from auth.users where id = %L', pg_temp.u('a')), 'the auth user is deleted');
-select is(pg_temp.tables_containing(pg_temp.u('a')::text), '{}'::text[], 'after the delete no table in public, auth or storage contains A''s id');
+select is(pg_temp.tables_containing(pg_temp.u('a')::text), array['auth.audit_log_entries'], 'review I1: after the auth delete, GoTrue''s audit log still names A');
+select is(pg_temp.as_service(format('select to_jsonb(public.purge_auth_audit(%L, %L))', pg_temp.u('a'), 'a13@example.com')), '3'::jsonb,
+  'the purge removes A''s rows: by id anywhere in the payload, and by the whole email, in any case');
+select is(pg_temp.tables_containing(pg_temp.u('a')::text), '{}'::text[], 'after the delete and the purge no table in public, auth or storage contains A''s id');
+select is((select array_agg(payload ->> 'actor_username' order by payload ->> 'actor_username') from auth.audit_log_entries where payload ->> 'actor_username' like '%13@example.com'),
+  array['c13@example.com', 'c13@example.com', 'xa13@example.com'], 'nobody else''s rows go, not even an address that contains A''s');
+select lives_ok($$ delete from auth.audit_log_entries where created_at < now() - interval '30 days' $$, 'the daily job''s statement runs');
+select is((select count(*)::int from auth.audit_log_entries where payload ->> 'log_type' = 'old'), 0, 'and removes only what is older than 30 days');
 select is((select role from public.family_members where user_id = pg_temp.u('b')), 'admin', 'the family goes on: its longest-standing member is its admin now');
 select is((select count(*)::int from public.family_members where family_id = 'c1300000-0000-4000-8000-0000000000f1'), 2, 'with its two other members');
 select is((select guardian_link_status || '/' || coalesce(guardian_user_id::text, 'none') from public.private_profiles where user_id = pg_temp.u('b')), 'none/none',

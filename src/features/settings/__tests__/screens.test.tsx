@@ -252,7 +252,7 @@ describe('DeleteAccountScreen (H13)', () => {
     expect(mockSession.signOut).toHaveBeenCalledWith({ force: true });
   });
 
-  test('a failure says nothing was deleted, and changes nothing on the phone', async () => {
+  test("a failure says the account wasn't deleted, and changes nothing on the phone", async () => {
     const remove = jest.fn(async () => ({ ok: false as const, reason: 'failed' as const }));
     const wipe = jest.fn(async () => {});
     await render(<DeleteAccountScreen deps={{ remove, wipe }} />);

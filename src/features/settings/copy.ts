@@ -108,7 +108,7 @@ export const settingsCopy = {
     action: 'Delete my account',
     actionHint: 'Deletes your account and signs you out',
     working: 'Deleting your account',
-    failed: "Couldn't delete your account. Check your connection and try again. Nothing was deleted.",
+    failed: "Couldn't delete your account. Check your connection and try again. Your account wasn't deleted.",
     offline: "You're offline. Delete your account when you're connected.",
     busy: 'Finish or end the drive in progress first.',
     /** A 401: the session no longer proves an account. Not a claim that anything was deleted. */

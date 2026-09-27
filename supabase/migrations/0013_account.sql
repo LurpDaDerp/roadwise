@@ -11,7 +11,8 @@ set lock_timeout = '5s';
 -- longest-standing member as admin, and a family left with no one is deleted with its places.
 -- Pending M5 work (reward_due, weekly_goals, user_challenges, the ledger) cascades the same way, so
 -- no settlement can run for an account that is gone. 0013's test proves all of it from the catalog:
--- after the delete no table in any schema still contains the id.
+-- after the delete, and the audit-log purge below, no table in public, auth or storage still contains
+-- the id.
 --
 -- What SQL cannot delete is object bytes (storage.protect_delete; 0002's header). The function lists
 -- them with account_object_keys and removes them through the Storage API BEFORE the auth delete. A
@@ -37,6 +38,18 @@ set lock_timeout = '5s';
 --   * public.private_profiles_guardian_gone() (non-definer trigger, BEFORE UPDATE OF
 --     guardian_user_id on private_profiles): a minor whose guardian's account is deleted is left at
 --     'none', never 'linked' with nobody (below).
+--   * public.purge_auth_audit(p_user uuid, p_email text) returns int (#5: definer, owner postgres,
+--     search_path public; service-role guard first): GoTrue's own audit log (auth.audit_log_entries)
+--     has no foreign key to auth.users, so a deleted account's sign-up, login, refresh, revoke and
+--     user_deleted rows would keep its id and email for ever (lane C review I1, verified on the
+--     local stack: five such rows survive an admin delete, the user_deleted row among them). After
+--     the auth delete, account-delete calls this to remove every row naming the id anywhere in its
+--     payload, or naming the email in the fields GoTrue writes it to (actor_username,
+--     traits.user_email), compared whole, never as a substring. Refused (42501) while the account
+--     still exists: a live account's audit trail is never purged through here. Returns the count.
+--   * cron job `purge-auth-audit` daily at 04:50 (postgres): every audit row older than 30 days,
+--     whoever it names. This is the retention for the log as a whole, and the backstop for a purge
+--     that failed after a deletion.
 --   * No table is created, so no RLS, grants or u13 minimisation change.
 
 -- ---------------------------------------------------------------------------
@@ -178,11 +191,45 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- the auth audit log: a deleted account's rows, and 30 days for everyone
+-- ---------------------------------------------------------------------------
+create or replace function public.purge_auth_audit(p_user uuid, p_email text) returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  v_email text := lower(nullif(btrim(p_email), ''));
+  v_count int;
+begin
+  perform public.require_service_role('purge_auth_audit');
+  if p_user is null then
+    raise exception 'user is required' using errcode = 'invalid_parameter_value';
+  end if;
+  if v_email is not null and char_length(v_email) > 320 then
+    raise exception 'email is too long' using errcode = 'invalid_parameter_value';
+  end if;
+  if exists (select 1 from auth.users u where u.id = p_user) then
+    raise exception 'account still exists' using errcode = 'insufficient_privilege';
+  end if;
+  delete from auth.audit_log_entries a
+  where position(p_user::text in a.payload::text) > 0
+     or (v_email is not null
+         and (lower(a.payload ->> 'actor_username') = v_email
+              or lower(a.payload -> 'traits' ->> 'user_email') = v_email));
+  get diagnostics v_count = row_count;
+  return v_count;
+end $$;
+
+select cron.schedule('purge-auth-audit', '50 4 * * *',
+  $$delete from auth.audit_log_entries where created_at < now() - interval '30 days'$$);
+
+-- ---------------------------------------------------------------------------
 -- grants: the two edge functions' service-role client only
 -- ---------------------------------------------------------------------------
 alter function public.export_account(uuid) owner to postgres;
+alter function public.purge_auth_audit(uuid, text) owner to postgres;
 revoke all on function public.private_profiles_guardian_gone() from public, anon, authenticated;
 revoke all on function public.account_object_keys(uuid, int, text, text) from public, anon, authenticated;
 revoke all on function public.export_account(uuid) from public, anon, authenticated;
+revoke all on function public.purge_auth_audit(uuid, text) from public, anon, authenticated;
 grant execute on function public.account_object_keys(uuid, int, text, text) to service_role;
 grant execute on function public.export_account(uuid) to service_role;
+grant execute on function public.purge_auth_audit(uuid, text) to service_role;
