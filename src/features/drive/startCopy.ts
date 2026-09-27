@@ -45,7 +45,7 @@ export const startCopy = {
   end: {
     saving: 'Saving your drive',
     savingBody: 'This takes a moment.',
-    short: 'Short drive saved — too short to score',
+    short: 'Short drive saved, too short to score',
     shortBody: "Drives under half a mile or two minutes aren't scored. It's in your trips.",
     /** After 10 s with no answer: no claim of failure until an `ok: false` is actually seen (m1). */
     slow: 'Still saving…',

@@ -168,7 +168,7 @@ describe('permission health (Task 9, retired interim shells: Task 19)', () => {
 
   test('location off: Home carries the one "tap to fix" banner, which opens B2', async () => {
     await renderBanners(undefined, fakeAdapter(snap({ location: 'denied', precise: null })));
-    const banner = await screen.findByRole('button', { name: 'Drive recording is off — tap to fix' });
+    const banner = await screen.findByRole('button', { name: 'Drive recording is off. Tap to fix.' });
     fireEvent.press(banner);
     expect(mockRouter.push).toHaveBeenCalledWith('/permissions');
     expect(screen.getAllByTestId('banner-permission-health')).toHaveLength(1);

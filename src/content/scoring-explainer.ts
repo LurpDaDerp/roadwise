@@ -97,7 +97,7 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'notMeasured',
     title: 'What we do not measure',
-    body: 'A phone in a mount cannot see most of what a car or a forward-facing camera could, so those things are never scored — not scored leniently, not at all. Where we have no data we say so on the trip rather than guessing.',
+    body: 'A phone cannot see everything a car’s own sensors or a road-facing camera could, so the things below are not scored at all. Where we have no data, the trip says so instead of guessing.',
     bullets: [
       'Seat belts, following distance, lane keeping, signals and stop signs',
       'Speeding on a road where the posted limit is unknown to us',
@@ -110,7 +110,7 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'caps',
     title: 'No one habit can take the whole drive',
-    body: 'Each behavior has a cap on how much it can take from a single trip, and the caps add up to 100. Deductions are also divided by how far and how long you drove, so a long drive absorbs a moment that would sink a short one. A rough drive costs at most that drive.',
+    body: 'Each behavior has a cap on how much it can take from a single trip, and the caps add up to 100. Deductions are also divided by how far and how long you drove, so one moment costs less on a long drive than on a short one.',
     bullets: categoryCaps.map((entry) => `${entry.label}: at most ${entry.cap} points a trip`),
   },
   {
@@ -121,17 +121,17 @@ export const scoringExplainer: readonly ExplainerBlock[] = [
   {
     id: 'context',
     title: 'Driving at night counts for more',
-    body: 'Something you do in the dark is harder to recover from, so phone use, speeding and focus events count for more at night. The adjustment is capped, and the trip shows you when it applied. Rain and snow are not adjusted for at all right now, because the app has no weather source yet. Nothing is ever adjusted for where you drove or who you are.',
+    body: 'Mistakes are harder to recover from in the dark, so phone use, speeding and focus events count for more at night. The adjustment is capped, and the trip shows you when it applied. Rain and snow are not adjusted for at all right now, because the app has no weather source yet. Nothing is ever adjusted for where you drove or who you are.',
   },
   {
     id: 'disputes',
     title: 'If something is wrong, say so',
-    body: 'Open the event and tap "This isn\'t right". Reports are accepted automatically up to a limit, and when one is accepted the event stops counting and your score is recalculated. Past that limit your report is still recorded, still used to improve detection, and you are told plainly that it was not applied — the limit is there so the score keeps its meaning.',
+    body: 'Open the event and tap "This isn\'t right". Reports are accepted automatically up to a limit, and when one is accepted the event stops counting and your score is recalculated. Past that limit, your report is still recorded and used to improve detection, and the app tells you it was not applied.',
   },
   {
     id: 'notAScore',
     title: 'What this score is not',
-    body: 'It is a coaching number for you, and nothing else. It describes six measurable habits on one drive, from one phone, with the limits above. It is not a judgment of you as a driver.',
+    body: 'The score describes six measurable habits on one drive, from one phone, within the limits above. It is there to show you what to work on.',
     bullets: [
       'Not a finding of legal fault in anything that happened',
       'Not an insurance rating, and not shared with an insurer',

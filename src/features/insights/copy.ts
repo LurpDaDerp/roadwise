@@ -20,7 +20,7 @@ export const insightsCopy = {
     showChart: 'Show as chart',
     /** A long chart names itself and hands the rows to the table rather than reciting them. */
     manyRows: (caption: string, rows: number) =>
-      `${caption}. ${rows} rows — open the table to read them.`,
+      `${caption}. ${rows} rows. Open the table to read them.`,
   },
 
   period: {
@@ -88,13 +88,13 @@ export const insightsCopy = {
     },
     building: {
       title: 'Your first four weeks are the baseline',
-      body: 'Once there are drives from before them, this card compares you with your earlier self — and with no one else.',
+      body: 'After that, this card compares your recent drives with your earlier ones.',
     },
     /** "Nothing is lost by the pause" was the same promise in a softer voice; this states the fact. */
     quiet:
       'No drives in the last 4 weeks to set against your baseline. The comparison picks up again with your next drive.',
     /** §10.1.4: compare with yourself first. Scoped to this screen — F5 adds opt-in crew boards. */
-    note: 'The only comparison on this screen, and it is with your own earlier drives.',
+    note: 'You are only compared with your own earlier drives.',
     spokenScore: (current: string, text: string, word: string) =>
       `Score ${current}, ${text} from your baseline, ${word}`,
     spokenCategory: (label: string, text: string, word: string) =>
@@ -161,7 +161,7 @@ export const insightsCopy = {
      * long-term score, which does follow recent driving — see `trend.sparse`.
      */
     body: (needed: number) =>
-      `Insights start after ${needed} scored drives. Drive the way you normally would — there is no hurry, and nothing here is a reward for distance or trip count.`,
+      `Insights start after ${needed} scored drives. Nothing here rewards distance or the number of drives.`,
     spokenProgress: (scored: number, needed: number) =>
       `${scored} of ${needed} scored drives`,
   },
@@ -243,7 +243,7 @@ export const insightsCopy = {
     },
     camera: {
       title: 'Focus and alertness is a camera-mode category',
-      body: 'It counts eyes off the road and signs of drowsiness, and only on drives where camera mode was on. Camera mode is off, so there is nothing to show here — and nothing is being missed.',
+      body: 'It counts eyes off the road and signs of drowsiness, only on drives with camera mode on. Camera mode is off, so there is nothing to show here.',
       privacy:
         'Camera mode is optional, runs only on your phone, stores and sends nothing, and is never needed for rewards.',
       settings: 'Camera settings',

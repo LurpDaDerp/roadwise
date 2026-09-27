@@ -103,7 +103,7 @@ describe('Practice this week (D6 → the weekly focus, §10.4)', () => {
     await screen.findByRole('header', { name: 'Leave a three-second gap' });
     await fireEvent.press(screen.getByRole('button', { name: 'Practice this week' }));
     expect(
-      await screen.findByText('This will be your focus next week — this week already has days counted.')
+      await screen.findByText('This will be your focus next week, because this week already has days counted.')
     ).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Focus set for next week' })).toBeDisabled();
     expect(screen.queryByText('This is your focus this week.')).toBeNull();
@@ -189,7 +189,7 @@ describe('Practice this week (D6 → the weekly focus, §10.4)', () => {
 test('the clean-drive card has nothing to practise: it reads, and Done goes back', async () => {
   const w = await world({ trips: [tripRow({ client_trip_id: ID, score: 100, status: 'final', sync_state: 'synced' })] });
   await w.renderScreen(<TipScreen clientTripId={ID} />);
-  expect(await screen.findByRole('header', { name: 'Keep the run going' })).toBeOnTheScreen();
+  expect(await screen.findByRole('header', { name: 'A clean drive' })).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: 'Practice this week' })).toBeNull();
   await fireEvent.press(screen.getByRole('button', { name: 'Done' }));
   expect(mockRouter.back).toHaveBeenCalled();

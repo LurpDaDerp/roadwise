@@ -50,22 +50,22 @@ const banner = (s: Partial<PermissionSnapshot>, c: Partial<HealthContext> = {}) 
 describe('the Home banner', () => {
   test('location off: drive recording is off', () => {
     expect(banner({ location: 'denied' })).toEqual({
-      message: 'Drive recording is off — tap to fix',
+      message: 'Drive recording is off. Tap to fix.',
       tone: 'danger',
     });
   });
   test('approximate location, or Always lost while auto-record is wanted: location is limited', () => {
-    expect(banner({ precise: false })?.message).toBe('Location access is limited — tap to fix');
+    expect(banner({ precise: false })?.message).toBe('Location access is limited. Tap to fix.');
     expect(banner({ location: 'foreground' }, { everGranted: { locationAlways: true } })?.message).toBe(
-      'Location access is limited — tap to fix'
+      'Location access is limited. Tap to fix.'
     );
   });
   test('motion lost: manual-mode wording for a manual driver, auto-record wording otherwise', () => {
     expect(banner({ motion: 'denied', location: 'foreground' }, { manualByChoice: true, everGranted: { motion: true } })?.message).toBe(
-      'Motion access is off, so drives may not end on their own — tap to fix'
+      'Motion access is off, so drives may not end on their own. Tap to fix.'
     );
     expect(banner({ motion: 'denied' }, { everGranted: { motion: true } })?.message).toBe(
-      'Motion access is off, so auto-record can’t start drives and drives may not end on their own — tap to fix'
+      'Motion access is off, so auto-record can’t start drives and drives may not end on their own. Tap to fix.'
     );
   });
   test('hidden for a deliberate manual mode, for iOS before the first drive, for a withdrawn flag, for a non-driver', () => {

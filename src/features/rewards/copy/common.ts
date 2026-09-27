@@ -41,7 +41,7 @@ export function goalSentence(category: 'phone' | 'speeding' | 'braking' | 'accel
 /** Where a chosen focus applied (`set_weekly_focus`'s `applied`). */
 export const FOCUS_APPLIED = {
   this_week: 'This is your focus this week.',
-  next_week: 'This will be your focus next week — this week already has days counted.',
+  next_week: 'This will be your focus next week, because this week already has days counted.',
 } as const;
 
 /** A settled day's tier (`reward_days.tier`). */
@@ -69,7 +69,7 @@ export const STREAK_RULE =
 
 /** rev1: R-A; rev2 ("phones": true with a second signed-in phone). */
 export const CONFIRM_RULE =
-  "A day is confirmed after 2 am, once your phones have uploaded that day's drives — usually the next time you open RoadWise or drive, and never more than 3 days later. After that it doesn't change.";
+  "A day is confirmed after 2 am, once your phones have uploaded that day's drives. That is usually the next time you open RoadWise or drive, and never more than 3 days later. After that it doesn't change.";
 
 /** The same words as M2's `earned.provisional`. */
 export const SETTLE_RULE = 'Confirmed when the day closes.';
@@ -109,7 +109,7 @@ export function goalActiveLine({
   failDays: number;
   withCount?: boolean;
 }): string | null {
-  const proration = 'Drive fewer days this week? Keeping it up on each day you drive still counts.';
+  const proration = 'If you drive on fewer days, the goal still counts when every day you drove met it.';
   if (pass === 0 && failDays === 0) return 'Counts from the days you drive this week.';
   const count = `${goalProgressText(pass, target)}.`;
   if (failDays === 0) return withCount ? `${count} ${proration}` : proration;
@@ -120,7 +120,7 @@ export function goalActiveLine({
 export const GOAL_PROGRESS = {
   achieved: 'Goal reached.',
   achievedProrated: 'Goal reached on every day you drove this week.',
-  noDrives: "No drives this week — that's fine. A new goal starts with the new week.",
+  noDrives: 'No drives this week. A new goal starts with the new week.',
   ended: 'Not reached this week. A new goal starts with the new week.',
 } as const;
 

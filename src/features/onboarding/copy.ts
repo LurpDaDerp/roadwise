@@ -202,7 +202,7 @@ export const onboardingCopy = {
    */
   autoRecord: {
     title: 'Record drives automatically',
-    body: 'RoadWise can start recording when it detects a drive, so you never have to remember to tap.',
+    body: 'RoadWise can start recording when it detects a drive, so you don’t have to tap Drive each time.',
     toggle: 'Record drives automatically',
     toggleOn: 'RoadWise starts recording your drives automatically.',
     toggleOff: 'Off. You start each drive yourself with Drive.',
@@ -270,8 +270,8 @@ export const onboardingCopy = {
       guardianDeclined: 'Invite declined',
       guardianExpired: 'Invite expired',
     },
-    tipArmed: "Next time you drive, just drive. We'll have a summary ready when you park.",
-    tipManual: "Tap Drive before you set off — we'll have a summary ready when you park.",
+    tipArmed: "Your drives now record on their own. You'll get a summary when you park.",
+    tipManual: "Tap Drive before you set off. You'll get a summary when you park.",
     readFailed: "Couldn't check this phone's permissions.",
     retry: 'Try again',
     home: 'Go to Home',

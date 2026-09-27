@@ -143,7 +143,7 @@ describe('reporting it', () => {
       "I wasn't the driver",
       'A passenger was using my phone',
       'The speed limit is wrong',
-      'I had to — avoiding a hazard / emergency',
+      'I was avoiding a hazard or emergency',
       'My phone fell or moved',
       'Other',
     ];
@@ -207,7 +207,7 @@ describe('reporting it', () => {
     await press(screen.getByRole('button', { name: "This isn't right" }));
     await press(screen.getByTestId('reason-wrong_limit'));
     expect(
-      screen.getByText("A posted limit you tell us is free — it doesn't use up a report.")
+      screen.getByText("Telling us the posted limit doesn't use up a report.")
     ).toBeOnTheScreen();
     await fireEvent.changeText(screen.getByTestId('stated-limit'), '45');
     await press(screen.getByTestId('dispute-submit'));
@@ -249,7 +249,7 @@ describe('reporting it', () => {
     expect(screen.getByTestId('not-driver-note')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        "If you weren't driving, the whole drive comes off your score — not just this moment."
+        "If you weren't driving, the whole drive comes off your score, not just this moment."
       )
     ).toBeOnTheScreen();
 
@@ -273,7 +273,7 @@ describe('reporting it', () => {
 describe('what the server said', () => {
   test('a report on its way says so, is not offered twice, and still shows what it costs', async () => {
     await open([speeding({ status: 'disputed', dispute_json: record({ outcome: 'queued' }) })]);
-    expect(screen.getByText('Reported — sending')).toBeOnTheScreen();
+    expect(screen.getByText('Reported, sending')).toBeOnTheScreen();
     expect(
       screen.getByText("Your report is saved. We'll send it the next time you're online.")
     ).toBeOnTheScreen();

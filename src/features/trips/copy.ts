@@ -217,7 +217,7 @@ export const tripCopy = {
     /** §9.4: below the confidence floor an event is shown and deliberately costs nothing. */
     possibleWhy: "We weren't sure enough about this one, so it didn't affect your score.",
     possibleNoReport: "We didn't count this one, so there's nothing to take off your score.",
-    reportSending: 'Reported — sending',
+    reportSending: 'Reported, sending',
     reportSendingWhy: "Your report is saved. We'll send it the next time you're online.",
     reportAccepted: 'Removed from score (your report)',
     reportAcceptedWhy: 'We took your word for it and scored the drive again without this moment.',
@@ -272,7 +272,7 @@ export const tripCopy = {
     braking: 'Hard braking usually means the gap ahead closed faster than expected.',
     accel: 'Pulling away hard leaves less room to correct if something changes.',
     cornering: 'Taking a turn fast pushes the car towards the edge of its grip.',
-    focus: 'Eyes off the road and tiredness are the two things a car cannot correct for you.',
+    focus: 'Looking away or driving tired slows how quickly you notice and react to what is ahead.',
   },
 
   // -------------------------------------------------------------------------------------------
@@ -285,13 +285,13 @@ export const tripCopy = {
       not_driver: "I wasn't the driver",
       passenger_phone: 'A passenger was using my phone',
       wrong_limit: 'The speed limit is wrong',
-      hazard: 'I had to — avoiding a hazard / emergency',
+      hazard: 'I was avoiding a hazard or emergency',
       phone_moved: 'My phone fell or moved',
       other: 'Other',
     },
     limitLabel: 'The posted limit (optional)',
     limitPlaceholder: 'mph',
-    limitHint: "A posted limit you tell us is free — it doesn't use up a report.",
+    limitHint: "Telling us the posted limit doesn't use up a report.",
     limitRange: (min: number, max: number) => `Enter a limit between ${min} and ${max} mph.`,
     noteLabel: 'What happened (optional)',
     notePlaceholder: 'A sentence is plenty',
@@ -299,7 +299,7 @@ export const tripCopy = {
     cancel: 'Cancel',
     notDriverTitle: 'That changes the whole drive',
     notDriverBody:
-      "If you weren't driving, the whole drive comes off your score — not just this moment.",
+      "If you weren't driving, the whole drive comes off your score, not just this moment.",
     notDriverGo: 'Change who was driving',
     queued: "Saved. We'll send it when you're online.",
     /** (rev1: R-A) Under an accepted report whose day is already confirmed. */
@@ -315,7 +315,7 @@ export const tripCopy = {
     loading: 'Loading your drives',
     more: 'Show older drives',
     emptyTitle: 'No drives yet',
-    emptyBody: 'Your first recorded drive lands here.',
+    emptyBody: 'Recorded drives show up here.',
     emptyFilteredTitle: 'No drives match',
     emptyFilteredBody: 'Try clearing a filter.',
     clear: 'Clear filters',
@@ -371,13 +371,13 @@ export const tripCopy = {
     deleteConsequence: [
       'The drive, its score and everything on its timeline go for good.',
       "Your safety score is worked out again without it. Deleting a drive never improves the day it was on: until that day is confirmed, the day is judged both with and without this drive and keeps the lower result, so it may no longer count as a safe day. Once a day is confirmed, its points and streak don't change, even if Insights later shows that day differently.",
-      'If you share summaries with a parent or guardian, they can see that a drive was deleted — never what was on it.',
+      'If you share summaries with a parent or guardian, they can see that a drive was deleted, but not what was on it.',
     ],
     deleteConfirm: 'Delete drive',
     deleteCancel: 'Keep it',
     deleteError: "Couldn't delete that. Try again.",
     rewarded: 'Already counted',
     rewardedBody:
-      "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak — they're final.",
+      "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak.",
   },
 } as const;

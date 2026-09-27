@@ -172,7 +172,7 @@ test('Home carries one banner and one status line, and the line never repeats th
   const banner = await screen.findByTestId('banner-permission-health');
   expect(screen.getAllByTestId('banner-permission-health')).toHaveLength(1);
   expect(screen.getAllByTestId('detection-status')).toHaveLength(1);
-  const bannerText = 'Drive recording is off — tap to fix';
+  const bannerText = 'Drive recording is off. Tap to fix.';
   expect(banner).toHaveProp('accessibilityLabel', bannerText);
   const line = screen.getByTestId('detection-status-row');
   expect(line.props.accessibilityLabel).not.toContain(bannerText);
@@ -196,7 +196,7 @@ test('m2: the banner and the line share ONE read of the phone, on mount and on e
 test('an account that has not affirmed the disclosure: the line never says "on", and the banner says why', async () => {
   await renderLine('armed', true, { withBanners: true, affirmed: false });
   expect(
-    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location — tap to review' })
+    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location. Tap to review.' })
   ).toBeOnTheScreen();
   expect(screen.getByText("Auto-record is on but isn't running")).toBeOnTheScreen();
 });

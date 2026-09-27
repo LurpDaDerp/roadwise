@@ -158,7 +158,7 @@ describe('states', () => {
   test('with no drives at all it says where the first one lands', async () => {
     await open();
     expect(screen.getByText('No drives yet')).toBeOnTheScreen();
-    expect(screen.getByText('Your first recorded drive lands here.')).toBeOnTheScreen();
+    expect(screen.getByText('Recorded drives show up here.')).toBeOnTheScreen();
   });
 });
 

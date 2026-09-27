@@ -137,7 +137,7 @@ export const settingsCopy = {
       },
       {
         q: 'Who can see my drives and location?',
-        a: "Your drives and scores are yours alone. If you join a family and turn on location sharing, the family's members see where you are now. Turn sharing off at any time, and your last location is deleted at once.",
+        a: "Only you see your drives and scores. If you join a family and turn on location sharing, family members see your latest location. You can turn sharing off at any time, and your last location is deleted straight away.",
       },
     ],
     scoring: 'How scoring works',

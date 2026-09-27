@@ -158,7 +158,7 @@ describe('deleting the drive', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'If you share summaries with a parent or guardian, they can see that a drive was deleted — never what was on it.'
+        'If you share summaries with a parent or guardian, they can see that a drive was deleted, but not what was on it.'
       )
     ).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Delete drive' })).toBeOnTheScreen();
@@ -172,7 +172,7 @@ describe('deleting the drive', () => {
     expect(await screen.findByTestId('rewarded-notice')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak — they're final."
+        "This drive is part of a day that's already confirmed. Deleting it doesn't change that day's points or streak."
       )
     ).toBeOnTheScreen();
   });
@@ -189,7 +189,7 @@ describe('deleting the drive', () => {
     expect(copy.edit.deleteConsequence[1]).toMatch(/^Your safety score is worked out again without it\./);
     expect(copy.edit.deleteConsequence[1]).toMatch(/until that day is confirmed/);
     expect(copy.edit.deleteConsequence[1]).toContain('Deleting a drive never improves the day it was on');
-    expect(copy.edit.rewardedBody).toContain("they're final");
+    expect(copy.edit.rewardedBody).toContain("doesn't change that day's points or streak");
     for (const line of [...copy.edit.deleteConsequence, copy.edit.confirmedDayNote, copy.dispute.confirmedDayResult]) {
       for (const banned of BANNED_COPY) expect(line).not.toMatch(banned);
     }

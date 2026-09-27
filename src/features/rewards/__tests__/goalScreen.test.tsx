@@ -96,7 +96,7 @@ describe('WeeklyGoalScreen', () => {
 
   test('I1: the proration promise shows while no day has failed (pass 2 / fail 0)', async () => {
     await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK, { pass_days: 2, fail_days: 0 }) }));
-    expect(screen.getByTestId('goal-line').props.children).toMatch(/Drive fewer days this week\?/);
+    expect(screen.getByTestId('goal-line').props.children).toMatch(/If you drive on fewer days,/);
   });
 
   test('I1: after a failed day, no proration promise and no line at all (pass 1 / fail 1)', async () => {
@@ -130,7 +130,7 @@ describe('WeeklyGoalScreen', () => {
       'Reached on every day you drove: Keep your phone down on 4 driving days.',
     ],
     ['ended', { state: 'ended', pass_days: 1, fail_days: 3 }, 'Not reached: Keep your phone down on 4 driving days.'],
-    ['no drives', { state: 'no_drives', pass_days: 0 }, "No drives last week — that's fine"],
+    ['no drives', { state: 'no_drives', pass_days: 0 }, 'No drives last week'],
     ['still being confirmed', { state: 'active' }, "Last week's result appears once its last days are confirmed."],
   ] as const)("last week's result: %s", async (_name, over, text) => {
     await renderGoal(snapshot({ currentGoal: goalRow(THIS_WEEK), lastGoal: goalRow(LAST_WEEK, over) }));

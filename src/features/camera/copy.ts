@@ -72,9 +72,9 @@ export const cameraCopy = {
     longestGlance: (s: number) => `Longest look away: ${s.toFixed(1)} s`,
     distractionAlerts: (n: number) => (n === 1 ? '1 distraction alert' : `${n} distraction alerts`),
     sleepAlerts: (n: number) => (n === 1 ? '1 sleep alert' : `${n} sleep alerts`),
-    clean: 'Eyes on the road the whole way. Nice.',
-    limited: 'The camera had trouble seeing you on this drive; mount the phone facing you, below the road line.',
-    tipGlances: 'Try to keep looks away under 2 seconds: at 60 km/h that is over 30 m of road unseen.',
+    clean: 'No long looks away on this drive.',
+    limited: 'The camera had trouble seeing you on this drive. Mount the phone facing you, below your line of sight to the road.',
+    tipGlances: 'Keep looks away under 2 seconds. At 40 mph, 2 seconds covers about 120 feet of road.',
     tipSleep: 'You showed signs of sleepiness. Take a break before your next drive.',
   },
 } as const;

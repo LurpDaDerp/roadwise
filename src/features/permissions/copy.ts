@@ -70,14 +70,14 @@ export const permissionsCopy = {
     cantCheck: 'We couldn’t check auto-record on this phone.',
   },
   banner: {
-    recordingOff: 'Drive recording is off — tap to fix',
-    locationLimited: 'Location access is limited — tap to fix',
+    recordingOff: 'Drive recording is off. Tap to fix.',
+    locationLimited: 'Location access is limited. Tap to fix.',
     /** Auto-record wanted and allowed, but this account hasn't affirmed the disclosure (Task 19 r1). */
-    autoRecordNeedsOk: 'Auto-record needs your OK to use background location — tap to review',
+    autoRecordNeedsOk: 'Auto-record needs your OK to use background location. Tap to review.',
     /** Motion lost while the driver starts drives themselves (Ruling T8 r1 (3)). */
-    motionManual: 'Motion access is off, so drives may not end on their own — tap to fix',
+    motionManual: 'Motion access is off, so drives may not end on their own. Tap to fix.',
     motionAuto:
-      'Motion access is off, so auto-record can’t start drives and drives may not end on their own — tap to fix',
+      'Motion access is off, so auto-record can’t start drives and drives may not end on their own. Tap to fix.',
     hint: 'Opens permission health',
   },
   disclosure: {

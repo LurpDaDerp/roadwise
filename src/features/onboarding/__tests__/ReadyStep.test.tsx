@@ -99,8 +99,8 @@ describe('the tip follows readiness().armed', () => {
   });
 
   test('the tips say the briefed words', () => {
-    expect(copy.tipArmed).toBe("Next time you drive, just drive. We'll have a summary ready when you park.");
-    expect(copy.tipManual).toBe("Tap Drive before you set off — we'll have a summary ready when you park.");
+    expect(copy.tipArmed).toBe("Your drives now record on their own. You'll get a summary when you park.");
+    expect(copy.tipManual).toBe("Tap Drive before you set off. You'll get a summary when you park.");
   });
 });
 

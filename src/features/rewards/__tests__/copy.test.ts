@@ -49,7 +49,7 @@ describe('the briefed strings, verbatim', () => {
   test('FOCUS_APPLIED', () => {
     expect(FOCUS_APPLIED).toEqual({
       this_week: 'This is your focus this week.',
-      next_week: 'This will be your focus next week — this week already has days counted.',
+      next_week: 'This will be your focus next week, because this week already has days counted.',
     });
   });
 
@@ -69,7 +69,7 @@ describe('the briefed strings, verbatim', () => {
     expect(STREAK_RULE).toMatch(/confirmed as unsafe/);
     expect(STREAK_RULE).not.toMatch(/short/i);
     expect(CONFIRM_RULE).toBe(
-      "A day is confirmed after 2 am, once your phones have uploaded that day's drives — usually the next time you open RoadWise or drive, and never more than 3 days later. After that it doesn't change."
+      "A day is confirmed after 2 am, once your phones have uploaded that day's drives. That is usually the next time you open RoadWise or drive, and never more than 3 days later. After that it doesn't change."
     );
     expect(SETTLE_RULE).toBe('Confirmed when the day closes.');
   });
@@ -150,7 +150,7 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
     });
     test('fail 0: the proration sentence alone, no count', () => {
       const line = goalActiveLine({ pass: 2, target: 4, failDays: 0, withCount: false });
-      expect(line).toBe('Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      expect(line).toBe('If you drive on fewer days, the goal still counts when every day you drove met it.');
       expect(line).not.toMatch(/of 4/);
     });
     test('fail > 0: no line at all', () => {
@@ -163,7 +163,7 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
   });
 
   describe('goalActiveLine (Task 9 review I1: proration only while no day has failed)', () => {
-    const PRORATION = /Drive fewer days this week\? Keeping it up on each day you drive still counts\./;
+    const PRORATION = /If you drive on fewer days, the goal still counts when every day you drove met it\./;
 
     test('nothing counted yet', () => {
       expect(goalActiveLine({ pass: 0, target: 4, failDays: 0 })).toBe('Counts from the days you drive this week.');
@@ -171,7 +171,7 @@ describe('BANNED_COPY (no money words, no pressure, no "!")', () => {
 
     test('pass 2, fail 0: the proration sentence is there', () => {
       const line = goalActiveLine({ pass: 2, target: 4, failDays: 0 });
-      expect(line).toBe('2 of 4 driving days. Drive fewer days this week? Keeping it up on each day you drive still counts.');
+      expect(line).toBe('2 of 4 driving days. If you drive on fewer days, the goal still counts when every day you drove met it.');
       // re-review m-b: one wording, goalProgressText's
       expect(line.startsWith(`${common.goalProgressText(2, 4)}.`)).toBe(true);
       expect(line).not.toMatch(/so far/);

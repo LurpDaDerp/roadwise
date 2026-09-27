@@ -15,7 +15,7 @@ export const familyCopy = {
   start: {
     title: 'Family',
     explainer:
-      'Keep up with each other on the road. Family members can share where they are, and save places like home or school, so everyone knows who is where.',
+      'Family members can share their location with each other and save places like home or school.',
     privacy: 'Location sharing is off until each person turns it on for themselves.',
     createTitle: 'Start a family',
     nameLabel: 'Family name',

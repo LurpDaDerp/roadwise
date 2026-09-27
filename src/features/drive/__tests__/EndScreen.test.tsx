@@ -128,7 +128,7 @@ describe('EndScreen (C8)', () => {
     expect(mockRouter.replace).toHaveBeenCalledWith(tripSummaryHref('mine'));
   });
 
-  test('a short drive: "Short drive saved — too short to score", and Done goes home', async () => {
+  test('a short drive: "Short drive saved, too short to score", and Done goes home', async () => {
     const h = stubHost(state());
     await renderEnd(h.host);
     await act(async () => h.push({ status: 'armed', clientTripId: null, lastFinalized: saved('mine', true) }));

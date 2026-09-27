@@ -104,7 +104,7 @@ export const hubCopy = {
       `${STREAK_RULE} Every ${REWARDS.SHIELD_EVERY_SAFE_DAYS}th safe day adds a shield, and you can hold ${REWARDS.SHIELD_MAX}.`,
       `Each week has one goal in one area, for ${REWARDS.WEEKLY_GOAL_TARGET_DAYS} driving days. If you drive on fewer days, it still counts when every day you drove met it.`,
       CONFIRM_RULE,
-      'Nothing is earned while you drive; everything shows up after the day is confirmed.',
+      'Points are added after the day is confirmed, not while you drive.',
     ],
   },
 } as const;

@@ -12,7 +12,7 @@ export const homeCopy = {
   empty: {
     /** §7.B B1, verbatim. */
     title: 'Your first drive will appear here',
-    body: 'Every drive you record is printed on this card.',
+    body: 'Tap Start drive to record one.',
   },
   /**
    * Said before signing out, not after (security review I-5). The next person to sign in on this

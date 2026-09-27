@@ -338,7 +338,7 @@ describe('RewardsHubScreen — how rewards work, and honest copy', () => {
     expect(screen.getByText(NOT_MONEY)).toBeTruthy();
     expect(screen.getByText(new RegExp(STREAK_RULE.replace(/[.']/g, '.')))).toBeTruthy();
     expect(
-      screen.getByText('Nothing is earned while you drive; everything shows up after the day is confirmed.')
+      screen.getByText('Points are added after the day is confirmed, not while you drive.')
     ).toBeTruthy();
   });
 

@@ -355,7 +355,7 @@ describe('a clean drive', () => {
     const stamp = await screen.findByLabelText('Clean drive');
     await waitFor(() => expect(stamp).toHaveStyle({ transform: [{ rotate: '-8deg' }] }));
     expect(screen.getByRole('image', { name: 'Score 100, Excellent' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Tip: Keep the run going' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Tip: A clean drive' })).toBeOnTheScreen();
     // Three positives, no cost row.
     expect(screen.getByLabelText('No phone use')).toBeOnTheScreen();
     expect(screen.getByLabelText('Kept to the limit')).toBeOnTheScreen();

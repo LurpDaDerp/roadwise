@@ -261,7 +261,7 @@ describe('without enough scored drives', () => {
     expect(await screen.findByText('Building your score: 2 of 3 drives')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        'Insights start after 3 scored drives. Drive the way you normally would — there is no hurry, and nothing here is a reward for distance or trip count.'
+        'Insights start after 3 scored drives. Nothing here rewards distance or the number of drives.'
       )
     ).toBeOnTheScreen();
     expect(screen.getByRole('progressbar', { name: '2 of 3 scored drives' })).toBeOnTheScreen();

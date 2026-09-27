@@ -242,7 +242,7 @@ describe('InboxScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(NOTIFICATION_SETTINGS_HREF);
   });
 
-  it('empty: "Nothing new — drive safe" with one action', async () => {
+  it('empty: "Nothing new" with one action', async () => {
     await renderInbox([]);
     expect(await screen.findByText(inboxCopy.empty.title)).toBeTruthy();
     const actions = screen.getAllByRole('button').filter((b) => b.props.accessibilityLabel === inboxCopy.empty.action);

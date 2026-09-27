@@ -96,7 +96,7 @@ describe('goalView', () => {
 
   test('active, no day failed: the proration sentence', () => {
     expect(goalView(goalRow('2026-09-21', { pass_days: 2, fail_days: 0 })).remainingText).toMatch(
-      /^2 of 4 driving days\. Drive fewer days this week\? Keeping it up on each day you drive still counts\.$/
+      /^2 of 4 driving days\. If you drive on fewer days, the goal still counts when every day you drove met it\.$/
     );
   });
 
@@ -114,7 +114,7 @@ describe('goalView', () => {
 
   test('no drives and ended: no penalty wording, no guilt', () => {
     expect(goalView(goalRow('2026-09-21', { state: 'no_drives', pass_days: 0 })).remainingText).toMatch(
-      /^No drives this week — that's fine\. A new goal starts with the new week\.$/
+      /^No drives this week\. A new goal starts with the new week\.$/
     );
     expect(goalView(goalRow('2026-09-21', { state: 'ended', pass_days: 2, fail_days: 3 })).remainingText).toMatch(
       /^Not reached this week\. A new goal starts with the new week\.$/

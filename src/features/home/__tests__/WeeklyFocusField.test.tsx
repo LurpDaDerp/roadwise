@@ -90,9 +90,9 @@ async function renderField(before?: (w: Awaited<ReturnType<typeof world>>) => Pr
 }
 
 /** The shared active line (`goalActiveLine`) with no failed day: the proration promise holds. */
-const ACTIVE_LINE = 'Drive fewer days this week? Keeping it up on each day you drive still counts.';
+const ACTIVE_LINE = 'If you drive on fewer days, the goal still counts when every day you drove met it.';
 const LABEL =
-  'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. Drive fewer days this week? Keeping it up on each day you drive still counts. Opens your weekly goal';
+  'This week. Keep your phone down on 4 driving days. 2 of 4 driving days. If you drive on fewer days, the goal still counts when every day you drove met it. Opens your weekly goal';
 
 test("this week's goal: the sentence, the day count with a bar, and a tap to the goal", async () => {
   await renderField();
@@ -123,7 +123,7 @@ test('after a day that did not pass, the proration promise is dropped and no lin
   // Nothing more to say after a failed day: no line at all, and the count printed once.
   expect(screen.queryByTestId('weekly-focus-line')).toBeNull();
   expect(screen.getAllByText(/2 of 4/)).toHaveLength(1);
-  expect(screen.queryByText(/Drive fewer days/)).toBeNull();
+  expect(screen.queryByText(/If you drive on fewer days/)).toBeNull();
 });
 
 test('a goal reached says so, and its bar is full', async () => {

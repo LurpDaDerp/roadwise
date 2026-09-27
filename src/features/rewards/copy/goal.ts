@@ -30,7 +30,7 @@ export const goalCopy = {
     achieved: (sentence: string) => `Reached: ${sentence}.`,
     achievedProrated: (sentence: string) => `Reached on every day you drove: ${sentence}.`,
     ended: (sentence: string) => `Not reached: ${sentence}.`,
-    noDrives: "No drives last week — that's fine",
+    noDrives: 'No drives last week',
     /** Its Sunday has not settled yet, so the result is not known. */
     confirming: "Last week's result appears once its last days are confirmed.",
   },

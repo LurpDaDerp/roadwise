@@ -647,7 +647,7 @@ describe('the spoken label of a chart', () => {
   test('a year of weeks is named and counted, not recited', () => {
     const rows = Array.from({ length: 52 }, (_, i) => row(`w${i}`));
     expect(describeRows('Speeding per 100 miles by week', rows)).toBe(
-      'Speeding per 100 miles by week. 52 rows — open the table to read them.'
+      'Speeding per 100 miles by week. 52 rows. Open the table to read them.'
     );
   });
 });

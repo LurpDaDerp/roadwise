@@ -45,17 +45,17 @@ async function renderBanner(adapter: FakeAdapter, seed: Seed = { trips: [drive(1
 
 const lapsedAlways = { [EVER_GRANTED_KEY]: { location: true, locationAlways: true, motion: true } };
 
-test('location off: "Drive recording is off — tap to fix", and it opens B2', async () => {
+test('location off: "Drive recording is off. Tap to fix.", and it opens B2', async () => {
   await renderBanner(fakeAdapter(snap({ location: 'denied', precise: null })));
-  const banner = await screen.findByRole('button', { name: 'Drive recording is off — tap to fix' });
+  const banner = await screen.findByRole('button', { name: 'Drive recording is off. Tap to fix.' });
   expect(banner).toHaveProp('accessibilityHint', 'Opens permission health');
   fireEvent.press(banner);
   expect(mockRouter.push).toHaveBeenCalledWith(PERMISSIONS_HREF);
 });
 
-test('Always lost while auto-record is wanted: "Location access is limited — tap to fix"', async () => {
+test('Always lost while auto-record is wanted: "Location access is limited. Tap to fix."', async () => {
   await renderBanner(fakeAdapter(snap({ location: 'foreground' })), { trips: [drive(1)], settings: lapsedAlways });
-  expect(await screen.findByRole('button', { name: 'Location access is limited — tap to fix' })).toBeOnTheScreen();
+  expect(await screen.findByRole('button', { name: 'Location access is limited. Tap to fix.' })).toBeOnTheScreen();
 });
 
 test('hidden for a driver in manual mode by choice', async () => {
@@ -89,7 +89,7 @@ test('motion lost for a manual driver: the manual-mode wording', async () => {
     { trips: [drive(1)], settings: { ...lapsedAlways, [MANUAL_BY_CHOICE_KEY]: true } }
   );
   expect(
-    await screen.findByRole('button', { name: 'Motion access is off, so drives may not end on their own — tap to fix' })
+    await screen.findByRole('button', { name: 'Motion access is off, so drives may not end on their own. Tap to fix.' })
   ).toBeOnTheScreen();
 });
 
@@ -120,6 +120,6 @@ test('a return to the front re-reads the phone: a fix made in Settings clears th
 test('Task 19 r1: auto-record wanted but not affirmed by this account: its own banner, never silence', async () => {
   await renderBanner(fakeAdapter(snap()), { trips: [drive(1)], affirmed: false });
   expect(
-    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location — tap to review' })
+    await screen.findByRole('button', { name: 'Auto-record needs your OK to use background location. Tap to review.' })
   ).toBeOnTheScreen();
 });

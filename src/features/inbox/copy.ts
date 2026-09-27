@@ -9,8 +9,8 @@ export const inboxCopy = {
   settings: 'Notification settings',
   markAllRead: 'Mark all read',
   empty: {
-    title: 'Nothing new — drive safe',
-    body: 'Drive summaries and recording problems will show up here.',
+    title: 'Nothing new',
+    body: 'Drive summaries and recording problems show up here.',
     action: 'See your drives',
   },
   offline: "You're offline. This is what was saved on this phone.",
