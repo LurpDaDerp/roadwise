@@ -176,6 +176,49 @@ describe('native-android: arming and wakes', () => {
     expect(src).not.toMatch(/"(low|medium)"/);
   });
 
+  // DMS calib T12 (rev4 §2.12.1, WK-m1/m2).
+  it('the request lists IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT), never the unsupported ON_FOOT', () => {
+    const src = code(kt('ActivityTransitionReceiver'));
+    expect(src).toMatch(/ACTIVITY_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
+    expect(src).toMatch(/ACTIVITY_TYPES\.flatMap/);
+    expect(src).not.toMatch(/ON_FOOT/);
+  });
+
+  it('maps ENTER RUNNING to running/high, and the EXITs of WALKING and RUNNING to exit: true (never stored)', () => {
+    const src = code(kt('ActivityTransitionReceiver'));
+    expect(src).toMatch(/DetectedActivity\.RUNNING\s*->\s*"running"/);
+    expect(src).toMatch(/"exit" to true/);
+    // the store keeps the ENTERs only: EXITs go to `live` alone, and an EXIT IN_VEHICLE to nothing
+    expect(src).toMatch(/else if \(type != "automotive"\) \{\s*live\.add\(/);
+    expect(src).toMatch(/TransitionStore\.append\(context, mapped\)/);
+  });
+
+  it('every capture subscribes best effort: in beginCapture, gated on motion, errors logged and swallowed', () => {
+    const svc = code(kt('CaptureService'));
+    const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(begin).toMatch(/ActivityTransitions\.subscribeForCapture\(this\)/);
+    const rx = code(kt('ActivityTransitionReceiver'));
+    const fn = /fun subscribeForCapture\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
+    expect(fn).toMatch(/try \{/);
+    expect(fn).toMatch(/catch \(e: Exception\)/);
+    expect(fn).toMatch(/motionGranted\(context\)/);
+    expect(fn).not.toMatch(/throw /);
+  });
+
+  it('a capture ends its feed only when not armed; disarm and a refused arm keep a running capture\'s feed', () => {
+    const svc = code(kt('CaptureService'));
+    const end = /private fun endCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(end).toMatch(/ActivityTransitions\.unsubscribeAfterCapture\(this\)/);
+    const rx = code(kt('ActivityTransitionReceiver'));
+    expect(rx).toMatch(/fun unsubscribeAfterCapture\([\s\S]{0,120}if \(!DriveSensePrefs\.init\(context\)\.armed\) unsubscribe\(context\)/);
+    const mod = MODULE();
+    const disarm = /AsyncFunction\("disarm"\)[\s\S]*?\n {4}\}/.exec(mod)?.[0] ?? '';
+    expect(disarm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
+    const arm = /AsyncFunction\("arm"\)[\s\S]*?\n {4}\}/.exec(mod)?.[0] ?? '';
+    expect(arm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
+    expect(mod.match(/ActivityTransitions\.unsubscribe\(/g)).toHaveLength(3);
+  });
+
   it('requestMotionPermission requests ACTIVITY_RECOGNITION at run time on API 29+', () => {
     const src = MODULE();
     expect(src).toMatch(/askForPermissions\([\s\S]{0,200}Manifest\.permission\.ACTIVITY_RECOGNITION/);

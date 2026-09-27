@@ -71,6 +71,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let exitInfo: ExitInfo | null = null;
   let ignoringBatteryOptimizations = platform === 'ios';
   let notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null = null;
+  /** DMS calib T12: the capture's own activity subscription (best effort), and a forced failure of it. */
+  let captureFeed = false;
+  let captureSubscribeFails = false;
   let queue: FeatureRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
@@ -143,6 +146,11 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       if (state.location === 'none') {
         return Promise.reject(driveSenseError('E_PERMISSION', 'startCapture needs location permission'));
       }
+      if (!state.capturing) {
+        // DMS calib T12 (WK-m1): a new capture subscribes to the activity feed when motion is granted,
+        // best effort: a failed subscription never rejects the start nor stops the capture.
+        captureFeed = state.motion === 'granted' && !captureSubscribeFails;
+      }
       state = state.capturing
         ? { ...state, mode }
         : { ...state, capturing: true, mode, rate: 'full', captureStartedAt: now() };
@@ -150,6 +158,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     stopCapture() {
       command('stopCapture');
+      // DMS calib T12: the capture's feed ends with it; an arming keeps its own.
+      captureFeed = false;
       state = { ...state, capturing: false, mode: null, rate: null, captureStartedAt: null };
       return resolve(undefined);
     },
@@ -281,6 +291,18 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     setIgnoringBatteryOptimizations(value) {
       ignoringBatteryOptimizations = value;
+    },
+    transition(a) {
+      const subscribed = state.armed || captureFeed;
+      if (!subscribed || !(state.armed || state.capturing)) return false;
+      emitRaw('activity', { ...a });
+      return true;
+    },
+    failCaptureSubscribe(fail) {
+      captureSubscribeFails = fail;
+    },
+    get activitySubscribed() {
+      return state.armed || captureFeed;
     },
     get notificationState() {
       return notificationState ? { ...notificationState } : null;

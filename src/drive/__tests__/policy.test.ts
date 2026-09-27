@@ -158,6 +158,14 @@ describe('activity events', () => {
       expect(activityEvent(act(type, 0), T)).toBeNull();
     }
   });
+
+  // DMS calib T12 (NC-W4b): an Android EXIT is the END of a walk, never a walk (T13 times the walk with it).
+  test('an EXIT of walking or running is not a walk, and does not close the automotive run in the history', () => {
+    for (const type of ['walking', 'running'] as const) {
+      expect(activityEvent({ ...act(type, 0, 'high'), exit: true }, T)).toBeNull();
+    }
+    expect(wakeStart([act('automotive', -120), { ...act('walking', -10, 'high'), exit: true }])).toBe(T - 120_000);
+  });
 });
 
 describe('post-gap self-dispatch (M1 note)', () => {

@@ -465,6 +465,25 @@ describe('ending, the gap window and after it', () => {
     expect(h.host.snapshot().status).toBe('ending');
   });
 
+  // DMS calib T12 (rev4 §2.12.1): a manual-only Android driver (auto-record off, never armed) is subscribed
+  // by the capture itself, so a walk reaches the host. (T13 adds the 20 s confirmation; until then a
+  // decisive ENTER ends the drive, as on iOS today.) An EXIT alone never ends it.
+  test('S-END-ANDROID-MANUAL: an unarmed manual drive hears the walk; an EXIT alone does not end it', async () => {
+    const h = harness({ platform: 'android' });
+    await h.host.start();
+    h.fake.setState({ motion: 'granted' });
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    await h.feed(drive(20));
+    expect((await h.fake.getState()).armed).toBe(false);
+    expect(h.fake.activitySubscribed).toBe(true);
+    expect(h.fake.transition({ type: 'walking', confidence: 'high', ts: h.now(), exit: true })).toBe(true);
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.fake.transition({ type: 'walking', confidence: 'high', ts: h.now() })).toBe(true);
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('ending');
+  });
+
   test('the notification End action is honoured only while stationary', async () => {
     const h = harness({ platform: 'android' });
     await h.host.start();

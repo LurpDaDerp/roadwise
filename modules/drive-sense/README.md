@@ -54,10 +54,10 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING enter/exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. **Requires** `location: 'always'` and `motion: 'granted'` on both platforms, else rejects `E_PERMISSION` and stays unarmed (without Always, iOS region and significant-change wakes do not relaunch the app and Android cannot start a location service from the background; without motion, iOS cannot confirm a wake as automotive and Android's transitions API throws `SecurityException`). `motion: 'unavailable'` or (Android) no Google Play services → `E_UNAVAILABLE`. iOS re-centres the region only on a location the wake itself carries, or on the manager's cached location when it is newer than the current centre (a region exit carries none); otherwise the next significant-change wake re-centres it — never by starting GPS. |
-| `disarm()` | Stop the wakes and clear the persisted armed flag. Does **not** stop a capture in progress. Idempotent. |
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: the OS refusing the location foreground service for lack of background location (started from the background with only `whenInUse`) → `E_PERMISSION`; refusing it for any other reason (background-start restrictions) → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). |
-| `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service. Idempotent. |
+| `arm()` | Start OS-delivered wakes. iOS: significant-change monitoring + one 150 m exit region re-centred on every wake's own location; live `CMMotionActivityManager` updates → `activity`. Android: `requestActivityTransitionUpdates` (IN_VEHICLE, WALKING and RUNNING, enter and exit; `PendingIntent` `FLAG_MUTABLE` on API 31+); persisted armed flag for `BootReceiver`. **No GPS.** Idempotent. **Requires** `location: 'always'` and `motion: 'granted'` on both platforms, else rejects `E_PERMISSION` and stays unarmed (without Always, iOS region and significant-change wakes do not relaunch the app and Android cannot start a location service from the background; without motion, iOS cannot confirm a wake as automotive and Android's transitions API throws `SecurityException`). `motion: 'unavailable'` or (Android) no Google Play services → `E_UNAVAILABLE`. iOS re-centres the region only on a location the wake itself carries, or on the manager's cached location when it is newer than the current centre (a region exit carries none); otherwise the next significant-change wake re-centres it — never by starting GPS. |
+| `disarm()` | Stop the wakes and clear the persisted armed flag. Does **not** stop a capture in progress, and (Android) a capture in progress keeps its activity-transition subscription until it ends. Idempotent. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of a natively started capture** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: the OS refusing the location foreground service for lack of background location (started from the background with only `whenInUse`) → `E_PERMISSION`; refusing it for any other reason (background-start restrictions) → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Android (DMS calib T12): every new capture (a JS start, a native start, a sticky restart) also subscribes to activity transitions when `motion` is `granted`, **best effort**: a failure (a `SecurityException`, no Play services) is logged and swallowed, never rejects `startCapture` and never stops the capture. So a manual-only driver, never armed, still gets `activity` while capturing (iOS already delivers live updates during every capture). |
+| `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service and removes the capture's activity-transition subscription **unless armed**. Idempotent. |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
 | `queryMotionHistory(fromTs, toTs)` | Activities with `fromTs ≤ ts ≤ toTs`, oldest first. iOS: `queryActivityStarting`. Android: the transitions buffered natively over the last 24 h (`TransitionStore`). |
@@ -116,7 +116,7 @@ cleared then too, so `BootReceiver` does not re-arm without permission.
 | Event | Payload | When |
 |---|---|---|
 | `wake` | `{ reason, ts }`, reason ∈ `significantChange` / `activityTransition` / `boot` / `geofence` | an OS wake while armed (iOS location-key launch or region exit; Android activity transition, boot, package replaced) |
-| `activity` | `MotionActivity` `{ type, confidence, ts }` | a motion-activity change while armed or capturing |
+| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change while armed or capturing (Android: subscribed by the arming or by the capture itself) |
 | `row` | a `FeatureRow` (§4) | once per second while capturing at `full`; once per fix at `low` |
 | `screen` | `{ locked, on, ts }` | lock/screen change while capturing (Android `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`; iOS on a change of the 1 Hz poll) |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
@@ -133,18 +133,26 @@ above, so these mappings decide whether walking can end a trip.
   or no flag at all). So `automotive && stationary` (a red light) is `automotive`. An update equal
   in type and confidence to the previous one is not re-emitted.
 - **Android** (Activity Recognition Transitions API, which carries no confidence): the module
-  subscribes to IN_VEHICLE and WALKING, ENTER and EXIT.
+  subscribes to IN_VEHICLE, WALKING and RUNNING, ENTER and EXIT (DMS calib T12). ON_FOOT is not
+  subscribed: the Transitions API supports IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only
+  (WALKING and RUNNING are ON_FOOT's sub-activities), and a request naming an unsupported type
+  fails whole.
 
   | Transition | Emitted |
   |---|---|
   | ENTER IN_VEHICLE | `{ type: 'automotive', confidence: 'high' }` |
   | ENTER WALKING | `{ type: 'walking', confidence: 'high' }` |
+  | ENTER RUNNING | `{ type: 'running', confidence: 'high' }` |
   | EXIT IN_VEHICLE | nothing |
-  | EXIT WALKING | nothing |
+  | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` (live only) |
+  | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` (live only) |
+
+  `exit: true` marks the END of a walk: the host never treats it as a walk (the walk confirmation,
+  DMS calib T13, times a walk from its ENTER to its EXIT or an IN_VEHICLE). iOS never sets `exit`.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). `TransitionStore` keeps the same mapped entries (ENTER
-  only) for 24 h for `queryMotionHistory`. `createFakeDriveSense` has no mapping to do: tests emit
+  only; never an `exit`) for 24 h for `queryMotionHistory`. `createFakeDriveSense` has no mapping to do: tests emit
   `MotionActivity` values directly.
 
 **Buffering.** Every event emitted while **no JS listener for that event** is attached is

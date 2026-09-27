@@ -106,9 +106,12 @@ export function captureCommands(belief: CaptureBelief, plan: CapturePlan | 'keep
 
 // --- motion ---------------------------------------------------------------------------------------
 
-/** Walking or running the host acts on: medium confidence or above (rev1: m). */
+/**
+ * Walking or running the host acts on: medium confidence or above (rev1: m). DMS calib T12: an Android
+ * EXIT (`exit: true`, the walk's end) is never a walk.
+ */
 const decisiveWalk = (a: MotionActivity): boolean =>
-  (a.type === 'walking' || a.type === 'running') && a.confidence !== 'low';
+  (a.type === 'walking' || a.type === 'running') && a.confidence !== 'low' && a.exit !== true;
 
 /**
  * A wake opens a candidate only when the motion history says the phone is in a vehicle

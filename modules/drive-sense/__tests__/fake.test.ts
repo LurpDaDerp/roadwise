@@ -93,6 +93,54 @@ describe('rows only while capturing (review I5)', () => {
   });
 });
 
+describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)', () => {
+  const walk = (ts: number, exit?: true) => ({ type: 'walking' as const, confidence: 'high' as const, ts, ...(exit ? { exit } : {}) });
+
+  test('a capture subscribes: activity reaches JS while capturing unarmed, and stops with the capture', async () => {
+    const fake = await capturing({ platform: 'android' });
+    expect((await fake.getState()).armed).toBe(false);
+    expect(fake.activitySubscribed).toBe(true);
+    const got = jest.fn();
+    fake.addListener('activity', got);
+    expect(fake.transition(walk(1))).toBe(true);
+    expect(fake.transition(walk(2, true))).toBe(true);
+    expect(got.mock.calls.map((c) => c[0])).toEqual([walk(1), walk(2, true)]);
+    await fake.stopCapture();
+    expect(fake.activitySubscribed).toBe(false);
+    expect(fake.transition(walk(3))).toBe(false);
+    expect(got).toHaveBeenCalledTimes(2);
+  });
+
+  test('a throwing subscribe still captures: the start resolves and rows flow, without the feed', async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    fake.setState({ location: 'always', motion: 'granted' });
+    fake.failCaptureSubscribe(true);
+    await expect(fake.startCapture('mounted')).resolves.toBeUndefined();
+    expect((await fake.getState()).capturing).toBe(true);
+    expect(fake.activitySubscribed).toBe(false);
+    const got = jest.fn();
+    fake.addListener('row', got);
+    fake.loadTrace(rows.slice(0, 2));
+    fake.drain();
+    expect(got).toHaveBeenCalledTimes(2);
+    expect(fake.transition(walk(1))).toBe(false);
+  });
+
+  test('without motion access a capture does not subscribe; the arming keeps its feed after a capture ends', async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    fake.setState({ location: 'always', motion: 'denied' });
+    await fake.startCapture('mounted');
+    expect(fake.activitySubscribed).toBe(false);
+    await fake.stopCapture();
+    fake.setState({ motion: 'granted' });
+    await fake.arm();
+    await fake.startCapture('mounted');
+    await fake.stopCapture();
+    expect(fake.activitySubscribed).toBe(true);
+    expect(fake.transition(walk(1))).toBe(true);
+  });
+});
+
 describe('errors and permissions (review I4, README §2 "Errors")', () => {
   const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string }) => e.code);
 

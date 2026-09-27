@@ -410,6 +410,9 @@ class CaptureService : Service() {
     watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
     handler.postDelayed(minute, MINUTE_MS)
+    // DMS calib T12 (WK-m1): the walking feed during every capture (JS start, native start, sticky
+    // restart), best effort: a failure is logged and swallowed and the capture runs on.
+    ActivityTransitions.subscribeForCapture(this)
   }
 
   private fun updateModeAndClaim(mode: String) {
@@ -466,6 +469,8 @@ class CaptureService : Service() {
     notifStartedAt = null
     notifCandidate = false
     if (clearOpen) prefs.captureOpen = false
+    // DMS calib T12: the capture's walking feed ends with it, unless the arming keeps it.
+    ActivityTransitions.unsubscribeAfterCapture(this)
     main.post {
       try {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)

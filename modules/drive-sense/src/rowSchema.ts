@@ -157,6 +157,7 @@ export const motionActivitySchema: z.ZodType<MotionActivity> = z.strictObject({
   type: z.enum(['automotive', 'walking', 'running', 'cycling', 'stationary', 'unknown']),
   confidence: z.enum(['low', 'medium', 'high']),
   ts: epochMs,
+  exit: z.literal(true).optional(),
 });
 
 export const screenStateSchema = z.strictObject({ locked: z.boolean(), on: z.boolean() });

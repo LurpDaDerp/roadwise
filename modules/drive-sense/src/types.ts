@@ -16,6 +16,12 @@ export interface MotionActivity {
   confidence: 'low' | 'medium' | 'high';
   /** epoch ms, integer */
   ts: number;
+  /**
+   * DMS calib T12 (README §3): Android only, the END of a walking or running transition (EXIT). Live
+   * `activity` events only; never in `queryMotionHistory`. An exit is never a walk: the host times a
+   * walk from its ENTER to its EXIT (or to an IN_VEHICLE).
+   */
+  exit?: true;
 }
 
 export interface DriveSenseState {
@@ -227,6 +233,17 @@ export interface FakeControls {
   setIgnoringBatteryOptimizations(value: boolean): void;
   /** The last `setNotificationState` argument, or null. */
   readonly notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null;
+  // ——— DMS calib T12: the native activity feed (README §3) ———
+  /**
+   * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is
+   * subscribed (by the arming, or by the capture itself) and while armed or capturing. Returns whether
+   * it was delivered. (`emit('activity', …)` still delivers unconditionally.)
+   */
+  transition(a: MotionActivity): boolean;
+  /** The capture's own subscription fails from now on (Android: a SecurityException). The capture still runs. */
+  failCaptureSubscribe(fail: boolean): void;
+  /** Whether the activity feed is subscribed now: by the arming, or by a capture (motion granted). */
+  readonly activitySubscribed: boolean;
 }
 
 // `ExtractedRow` (the reference's own copy of the row shape) and M1's `FeatureRow` must stay

@@ -66,7 +66,8 @@ class DriveSenseModule : Module() {
       }
       if (DriveSensePermissions.location(ctx) != "always" || !DriveSensePermissions.motionGranted(ctx)) {
         prefs.armed = false
-        ActivityTransitions.unsubscribe(ctx)
+        // DMS calib T12: a capture in progress keeps its walking feed; the capture's end removes it.
+        if (!CaptureService.isCapturing) ActivityTransitions.unsubscribe(ctx)
         promise.reject(coded("E_PERMISSION", "arm needs location 'always' and motion 'granted'"))
         return@AsyncFunction
       }
@@ -84,8 +85,9 @@ class DriveSenseModule : Module() {
 
     AsyncFunction("disarm") {
       val ctx = context
-      ActivityTransitions.unsubscribe(ctx)
       DriveSensePrefs.init(ctx).armed = false
+      // DMS calib T12: a capture in progress keeps its walking feed; the capture's end removes it.
+      if (!CaptureService.isCapturing) ActivityTransitions.unsubscribe(ctx)
     }
 
     AsyncFunction("startCapture") { mode: String, promise: Promise ->
@@ -122,7 +124,8 @@ class DriveSenseModule : Module() {
       var armed = prefs.armed
       if (armed && (location != "always" || motion != "granted")) {
         prefs.armed = false
-        ActivityTransitions.unsubscribe(ctx)
+        // DMS calib T12: a capture keeps its walking feed while motion is granted; its end removes it.
+        if (!CaptureService.isCapturing || motion != "granted") ActivityTransitions.unsubscribe(ctx)
         armed = false
       }
       val capturing = CaptureService.isCapturing

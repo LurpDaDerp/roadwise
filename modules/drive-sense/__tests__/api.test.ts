@@ -180,6 +180,8 @@ describe('bridge validation', () => {
     ['getState', { ...mockState(), extra: 1 }],
     ['queryMotionHistory', [{ type: 'flying', confidence: 'high', ts: 1 }]],
     ['queryMotionHistory', { type: 'automotive' }],
+    // DMS calib T12: `exit` is `true` or absent, never false
+    ['queryMotionHistory', [{ type: 'walking', confidence: 'high', ts: 1, exit: false }]],
     ['getScreenState', { locked: 'yes', on: true }],
     ['getThermalState', 'hot'],
     ['requestMotionPermission', 'undetermined'],

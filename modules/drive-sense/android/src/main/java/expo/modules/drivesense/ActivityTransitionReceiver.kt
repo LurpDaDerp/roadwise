@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionRequest
@@ -17,10 +18,13 @@ import com.google.android.gms.location.DetectedActivity
  * Google Play services at no app cost (README §1 "Battery"). Manifest-declared, not exported: Play
  * services reaches it through the explicit [PendingIntent] built in [ActivityTransitions].
  *
- * Mapping (README §3): ENTER IN_VEHICLE → `{ automotive, high }`, ENTER WALKING → `{ walking, high }`,
- * EXIT → nothing. An ENTER IN_VEHICLE while armed and not capturing emits `wake`
- * (`activityTransition`) and starts the capture service, which then starts the headless JS task;
- * JS must claim that capture within 60 s or the watchdog stops it (README §6).
+ * Mapping (README §3; DMS calib T12): ENTER IN_VEHICLE → `{ automotive, high }`, ENTER WALKING →
+ * `{ walking, high }`, ENTER RUNNING → `{ running, high }`; EXIT WALKING / EXIT RUNNING → the same
+ * type with `exit: true`, emitted live only (the host times a walk with it; `TransitionStore` keeps
+ * the ENTERs); EXIT IN_VEHICLE → nothing. The feed is subscribed while armed and during every capture,
+ * so a manual-only driver's drive can end on a walk too. An ENTER IN_VEHICLE while armed and not
+ * capturing emits `wake` (`activityTransition`) and starts the capture service, which then starts the
+ * headless JS task; JS must claim that capture within 60 s or the watchdog stops it (README §6).
  */
 class ActivityTransitionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
@@ -30,28 +34,37 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
 
+    // ENTERs go to the store and to JS; EXITs of the on-foot types to JS only; in arrival order.
     val mapped = ArrayList<TransitionStore.Entry>()
+    val live = ArrayList<Map<String, Any>>()
     var vehicleEnterTs: Long? = null
     var inVehicle = false
     for (event in result.transitionEvents) {
       val ts = transitionTs(event.elapsedRealTimeNanos, anchor, arrival)
       val enter = event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
-      when (event.activityType) {
+      val type = when (event.activityType) {
         DetectedActivity.IN_VEHICLE -> {
           inVehicle = enter
-          if (enter) {
-            mapped.add(TransitionStore.Entry("automotive", "high", ts))
-            vehicleEnterTs = ts
-          }
+          if (enter) vehicleEnterTs = ts
+          "automotive"
         }
-        DetectedActivity.WALKING -> if (enter) mapped.add(TransitionStore.Entry("walking", "high", ts))
+        DetectedActivity.WALKING -> "walking"
+        DetectedActivity.RUNNING -> "running"
+        else -> null
+      } ?: continue
+      if (enter) {
+        val entry = TransitionStore.Entry(type, "high", ts)
+        mapped.add(entry)
+        live.add(entry.toMap())
+      } else if (type != "automotive") {
+        live.add(linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
       }
     }
     TransitionStore.append(context, mapped)
 
     val capturing = CaptureService.isCapturing
     if (!prefs.armed && !capturing) return // a stale subscription: nothing to tell JS
-    for (m in mapped) EventBus.emit("activity", m.toMap())
+    for (m in live) EventBus.emit("activity", m)
 
     val wakeTs = vehicleEnterTs
     if (inVehicle && wakeTs != null && prefs.armed && !capturing) {
@@ -68,13 +81,25 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
   }
 }
 
-/** Subscribing to and unsubscribing from the transitions feed (`arm` / `disarm` / boot re-arm). */
+/**
+ * Subscribing to and unsubscribing from the transitions feed: `arm` / `disarm` / boot re-arm, and
+ * (DMS calib T12, WK-m1) every capture, best effort ([subscribeForCapture], [unsubscribeAfterCapture]).
+ */
 object ActivityTransitions {
   const val ACTION = "expo.modules.drivesense.ACTIVITY_TRANSITION"
   private const val REQUEST_CODE = 7301
+  private const val TAG = "DriveSense"
+
+  /**
+   * The subscribed activities, each ENTER and EXIT (README §3). ON_FOOT is not among them: the
+   * Transitions API supports IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only (ON_FOOT's
+   * sub-activities are WALKING and RUNNING), and a request with an unsupported type fails whole —
+   * the arming with it.
+   */
+  private val ACTIVITY_TYPES = listOf(DetectedActivity.IN_VEHICLE, DetectedActivity.WALKING, DetectedActivity.RUNNING)
 
   private fun request(): ActivityTransitionRequest {
-    val transitions = listOf(DetectedActivity.IN_VEHICLE, DetectedActivity.WALKING).flatMap { type ->
+    val transitions = ACTIVITY_TYPES.flatMap { type ->
       listOf(ActivityTransition.ACTIVITY_TRANSITION_ENTER, ActivityTransition.ACTIVITY_TRANSITION_EXIT).map { t ->
         ActivityTransition.Builder().setActivityType(type).setActivityTransition(t).build()
       }
@@ -100,6 +125,32 @@ object ActivityTransitions {
         .addOnFailureListener { e -> onDone(e) }
     } catch (e: Exception) {
       onDone(e)
+    }
+  }
+
+  /**
+   * A capture's subscription (DMS calib T12, WK-m1): only with motion granted and Play services
+   * present, and never an error. A failure (a SecurityException, a missing service, anything thrown)
+   * is logged and swallowed, so it can neither reject `startCapture` nor stop a capture. Idempotent
+   * with [subscribe]: the same PendingIntent replaces the same request.
+   */
+  fun subscribeForCapture(context: Context) {
+    try {
+      if (!DriveSensePermissions.motionGranted(context) || !DriveSensePermissions.playServicesAvailable(context)) return
+      subscribe(context) { e ->
+        if (e != null) Log.w(TAG, "activity transitions not subscribed for this capture: ${e.javaClass.simpleName}")
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "activity transitions not subscribed for this capture: ${e.javaClass.simpleName}")
+    }
+  }
+
+  /** A capture's end: the feed stays while armed, else it goes (DMS calib T12). */
+  fun unsubscribeAfterCapture(context: Context) {
+    try {
+      if (!DriveSensePrefs.init(context).armed) unsubscribe(context)
+    } catch (_: Exception) {
+      // never fail a capture's end over the feed
     }
   }
 
