@@ -1556,6 +1556,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      account_object_keys: {
+        Args: {
+          p_after_bucket: string
+          p_after_name: string
+          p_limit: number
+          p_user: string
+        }
+        Returns: Json
+      }
       age_band_rank: { Args: { p_band: string }; Returns: number }
       append_streak: {
         Args: { p_days: string[]; p_user: string }
@@ -1627,6 +1636,7 @@ export type Database = {
         Args: { p_after_name: string; p_limit: number }
         Returns: Json
       }
+      export_account: { Args: { p_user: string }; Returns: Json }
       family_check_eligible: { Args: { p_uid: string }; Returns: undefined }
       family_check_place: {
         Args: {
