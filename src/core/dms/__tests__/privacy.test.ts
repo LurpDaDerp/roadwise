@@ -149,10 +149,43 @@ describe('1. DMS code: no console, network, storage or telemetry', () => {
 
 describe('2. who imports the DMS lane', () => {
   const REPO = load(['src', 'app', 'packages', 'scripts', 'supabase/functions'], /\.(ts|tsx|js)$/);
-  const ALLOWED = new Set(['src/features/dev/DmsDiagnosticsPanel.tsx']);
-  test('outside src/core/dms, only the dev panel (M7 adds itself under review)', () => {
+  // Lean M7 (lane B, the camera beta), added under review: the bridge, its alert sink, the coaching numbers, the chip,
+  // the copy and the default factory. They are swept below (2a): no console, network or telemetry, and no camera focus.
+  const CAMERA = [
+    'src/features/camera/alertSink.ts',
+    'src/features/camera/bridge.ts',
+    'src/features/camera/CameraChip.tsx',
+    'src/features/camera/coaching.ts',
+    'src/features/camera/copy.ts',
+    'src/features/camera/defaultBridge.ts',
+    'src/features/camera/runtime.ts',
+  ];
+  const ALLOWED = new Set(['src/features/dev/DmsDiagnosticsPanel.tsx', ...CAMERA]);
+  test('outside src/core/dms, only the dev panel and the camera beta (M7), each under review', () => {
     const importers = REPO.filter((f) => !f.rel.startsWith('src/core/dms/') && /['"](?:@\/core\/dms|[./]*\/core\/dms)(?:\/[^'"]*)?['"]/.test(code(f.src))).map((f) => f.rel);
     expect(importers.filter((r) => !ALLOWED.has(r))).toEqual([]);
+  });
+  // 2a. The camera beta uploads nothing camera-derived (its consent: "no photos or video are ever saved or uploaded";
+  // the coaching card stays on the phone). Its DMS importers make no console, network or telemetry call (local
+  // settings are allowed: the opt-in and the coaching numbers), and no file outside the core ever passes a camera focus
+  // sample to the drive engine, so no trip event with source 'camera' and no camera_session is ever produced.
+  test('the camera beta files: no console, network or telemetry', () => {
+    const files = REPO.filter((f) => CAMERA.includes(f.rel) || f.rel.startsWith('src/features/camera/'));
+    expect(files.length).toBeGreaterThanOrEqual(CAMERA.length);
+    const broken = files
+      .map((f) => ({ f: f.rel, broken: breaks(f.src).filter((b) => b !== 'storage') }))
+      .filter((x) => x.broken.length > 0 && !(x.f === 'src/features/camera/useCameraBeta.ts' && x.broken.join() === 'network'));
+    expect(broken).toEqual([]);
+  });
+  test('the consent write is the only network call of the camera beta (the versioned consents row)', () => {
+    const net = REPO.filter((f) => f.rel.startsWith('src/features/camera/') && breaks(f.src).includes('network')).map((f) => f.rel);
+    expect(net).toEqual(['src/features/camera/useCameraBeta.ts']);
+    const src = code(REPO.find((f) => f.rel === 'src/features/camera/useCameraBeta.ts')!.src);
+    expect(specifiers(src).filter((s) => s.startsWith('@/data/supabase'))).toEqual(['@/data/supabase/profile', '@/data/supabase/session']);
+  });
+  test('no camera focus sample reaches the drive engine outside the core', () => {
+    const users = REPO.filter((f) => !f.rel.startsWith('src/core/') && /cameraFocus/.test(code(f.src))).map((f) => f.rel);
+    expect(users).toEqual([]);
   });
   test('the profile key is written only by the profile store', () => {
     const users = REPO.filter((f) => /['"]dms\.profile['"]/.test(code(f.src))).map((f) => f.rel);

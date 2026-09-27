@@ -1,6 +1,7 @@
 // The camera bridge as the app builds it (bootstrap). Everything heavy is deferred: the DMS controller (and with it
 // the native camera module), the alert ports and the battery reads load only at the first drive of a driver who opted
 // in, so a launch, a background wake or a driver without the beta pays nothing.
+import { createSettingsProfileStore } from '@/core/dms/host/profileStore';
 import type { Db } from '@/data/db/driver';
 import { readFlag } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -82,6 +83,10 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
       const b = battery.read();
       const d = new Date();
       return { batteryLevel: b.level, charging: b.charging, localMinutes: d.getHours() * 60 + d.getMinutes() };
+    },
+    async clearProfile() {
+      // The store's own module (light: no native code), so a sign-out never loads the camera.
+      await createSettingsProfileStore(settings, '').clear();
     },
     onError: report,
   });

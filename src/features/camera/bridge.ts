@@ -48,6 +48,8 @@ export interface CameraBridgeDeps {
   subscribeAppState(fn: () => void): () => void;
   /** battery for the capture policy; null fields when unknown */
   power(): DmsHostPower;
+  /** removes the stored face profile (the README: after disposing, on sign-out and account deletion) */
+  clearProfile(): Promise<void>;
   onError?(e: unknown, ctx: string): void;
 }
 
@@ -62,6 +64,11 @@ export interface CameraBridge {
   subscribeStatus(fn: (s: DmsHudStatus | null) => void): () => void;
   /** sign-out, account switch, runtime stop: stops the camera and its sounds; later calls are ignored */
   dispose(): Promise<void>;
+  /**
+   * The session ended (sign-out, or one the driver did not start): after the drive's end, the controller is disposed
+   * and the face profile removed. The bridge stays usable: the next drive of a signed-in driver builds a new one.
+   */
+  sessionEnded(): Promise<void>;
   /** resolves when the last drive end's bookkeeping is done (tests) */
   settled(): Promise<void>;
 }
@@ -276,6 +283,19 @@ export function createCameraBridge(deps: CameraBridgeDeps): CameraBridge {
       }
       await sink?.stopAll();
       publish(null);
+    },
+    sessionEnded() {
+      return enqueue(async () => {
+        trip = null;
+        followApp(false);
+        const c = controller;
+        controller = null;
+        controllerUid = null;
+        if (c !== null) await c.dispose();
+        await sink?.stopAll();
+        await deps.clearProfile();
+        publish(null);
+      });
     },
     settled: () => chain,
   };

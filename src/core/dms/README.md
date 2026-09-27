@@ -111,6 +111,34 @@ Any input that is false, missing or unknown keeps the camera off.
 
 - **A display mounted ABOVE the road line and watched heavily from the start can be calibrated as the road.** The first pass picks the road among two clusters by (a) the camera, (b) the mirrors, (c) the higher of the two when their pitches differ by ≥ 3°, (d) only for side-by-side clusters, the mirror returns. A navigation display 7–9° above the road watched 40–60 % of the time from the start is the higher cluster, so rule (c) can adopt it (measured: a 60 % display at (10°, 7°), 11–13° off; at (6°, 8°) and (0°, 9°) no pass or a road pass). The returns cannot override the pitch: a driver who goes back to a LOW display after each mirror check (far more common) gives returns of the same form onto the display (S-NAV-START-RESUME). At 20 % the display is no cluster of its own and the pass is on the road. What still holds: a phone at the camera (rule a) and a mount by the rear-view mirror (the mirror drop, rule b); and after a correct pass, a high display does not walk the centre toward it (≤ 2° over 15 min, S-HIGH-DISPLAY-CREEP: the rolling follow reads the road's side of the window's block-scale clusters). The advice for M7's setup copy: mount the phone below the road line. Device pass D-C9-1.
 
+## M7, lean (lane B, the camera beta): what is wired, and every carry's state
+
+The app side lives in `src/features/camera/` (strings in `copy.ts`). The carries above, and the calibration project's T15 list, one by one:
+
+| Carry | State |
+|---|---|
+| One controller per signed-in user; dispose on sign-out, an account switch or deletion | **Done.** `bridge.ts` builds it lazily at the first drive of a driver who opted in, for the device owner's uid, and rebuilds on a new uid. The runtime's `release` (every stop: sign-out, handover, deletion's teardown) settles the bridge, then disposes it. The profile store is keyed by uid, and the handover wipe clears it with the settings. |
+| `busy` maps to its own HUD message | **Done.** The chip says "Camera in use by diagnostics". |
+| Gate inputs: `optedIn`, `ageBand`, `cameraBeta`, `driveActive`, `mode`, `role`, `appActive`, `driverSide` | **Done.** `optedIn` is this uid's local choice of the current consent version, recorded on the server first (`consents(type='camera', 'camera-beta-1')`). `ageBand` is the cached profile's. `cameraBeta` is the stored flag, read at each drive start. `driveActive` means the engine is `recording`. `driverSide` is a settings choice. `sensitivity` is `normal` and `alerts` is `live`. Every change re-evaluates at once: an opt-out, the app leaving the front, pocket mode, a passenger. |
+| `requestPermission()` in context | **Done.** Once per trip, at the drive's start, only when the permission is the one input keeping the camera off, and never while locked out. |
+| `pushRow` every row, also while the camera is off, with the host's motion evidence | **Done.** The host's new `onRow` hook, called before the engine sees the row. |
+| Alerts: a tone and a voice key per kind | **Done** (`alertSink.ts`). Each tier plays its M3 tone, and each kind has a phrase (`cameraVoice`). Tier 3 sounds continuously and gets louder every 2 s; tier 2 repeats every 1 s. Both follow the Alerts & sounds voice switch, play tones only on a call, and are capped at 120 s as a backstop. The hold-to-mute on the HUD mutes M3's alert, not the camera's: the camera's own rules end its alerts. |
+| The HUD status | **Done.** `CameraChip` shows a few words from `status().monitoring` (stopped, heat, dark, face, eyes, learning, recalibrating and so on). No chip is shown when the beta is off for this drive. |
+| `endDrive()` at the drive's end (T15: at `ending`) | **Done.** Leaving `recording` closes the gate in the same tick, then calls `endDrive()`. A resumed trip opens a new engine drive; its card adds to the same trip's (`mergeCoaching`, T15's `mergeStretches`). |
+| The DMS during the same-car hold (T15) | **Decided: no.** The hold keeps the trip `ending`, so `driveActive` is false and the camera is off. This is the known limit above: about 10 s mounted, up to 30 s otherwise. |
+| `presence()` to the drive host (T13/T14) | **Done**, while a trip is followed; null otherwise. This closes most of C13-m3. |
+| The upload gate: `cameraFocus` only with consent | **Decided: never in the beta.** The consent text says nothing the camera sees is saved or uploaded, so the focus samples are dropped. `cameraFocus` stays null and `camera_session` false. No trip event with source 'camera' is made; the privacy sweep pins this (section 2a). A later release that uploads needs new consent words and a new version. |
+| Guardians see no camera-sourced events | **Holds by construction:** no camera event is ever uploaded. |
+| The trip summary | **Done.** An optional "Camera coaching" card on the trip summary: the share seen, looks away over 2 s, the longest one, the alerts heard, and one static tip. It is local only and keeps the newest 30 trips. |
+| The dev panel must not run with M7's drive | **Holds:** the owner slot. |
+| The endCause notification copy ("Drive ended after 30 min without movement. Sleep alerts are off.") and the "Start a drive?" prompt (U-13) | **Not done, and cut from the lean finish.** The summary notifier keeps its existing copy. A manual-only driver whose drive auto-ended starts again by hand. |
+| The same-car hold HUD copy ("Resuming your drive…") | **Not done, and cut.** The HUD shows its ordinary state during the ≤ 30 s hold. |
+| Battery | **Unchanged.** It is the existing capture policy. Battery is read once per session at the first controller, then from the OS's change events: no poll. |
+
+## Known limits: posture with a display above the road (C9 round 3 re-review, R3-H)
+
+- Posture tracking is affected by a display above the road line too. With a display 7–9° above the road watched 40–60 % of the time, the posture commits drift 5.7–10.6° toward it. As with the first calibration (above), the advice is the same: **mount the phone and any display below the road line.** The A10 consent text and the settings screen say so. Device pass D-C9-1.
+
 ## The dev diagnostics panel (`/(app)/dev/dms`)
 
 - **Where it exists:** development and preview builds only (`EXPO_PUBLIC_DIAGNOSTICS=1` or `__DEV__`), never a production-channel build, even through an OTA update published with the flag (the embedded channel is checked). Preview builds go to **adult team testers only**.

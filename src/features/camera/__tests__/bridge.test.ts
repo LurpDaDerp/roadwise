@@ -86,6 +86,7 @@ function world(opts: { optIn?: boolean; ageBand?: string | null; flag?: boolean;
     opts.optIn === false ? {} : { [CAMERA_OPT_IN_KEY]: { uid: 'u1', version: CAMERA_CONSENT_VERSION, on: true } }
   );
   const controllers: ReturnType<typeof fakeController>[] = [];
+  const cleared: string[] = [];
   let onStatus: ((s: DmsHudStatus) => void) | null = null;
   let app = true;
   const appSubs = new Set<() => void>();
@@ -112,6 +113,9 @@ function world(opts: { optIn?: boolean; ageBand?: string | null; flag?: boolean;
       return () => appSubs.delete(fn);
     },
     power: () => ({ batteryLevel: 0.8, charging: false, localMinutes: 600 }),
+    clearProfile: async () => {
+      cleared.push('profile');
+    },
   };
   const bridge = createCameraBridge(deps);
   const host = fakeHost();
@@ -121,6 +125,7 @@ function world(opts: { optIn?: boolean; ageBand?: string | null; flag?: boolean;
     host,
     settings,
     controllers,
+    cleared,
     status: (s: DmsHudStatus) => onStatus?.(s),
     setApp(on: boolean) {
       app = on;
@@ -260,6 +265,21 @@ test('the status reaches the chip store; dispose stops the controller, clears th
   expect(w.bridge.status()).toBeNull();
   w.bridge.onRow(row(9), null);
   expect(c.rows).toEqual([]);
+});
+
+test('the session ends: after the drive, the controller is disposed and the face profile removed; the next drive builds anew', async () => {
+  const w = world();
+  w.host.set({ status: 'recording', clientTripId: 't1' });
+  await w.bridge.settled();
+  w.host.set({ status: 'finalizing' });
+  await w.bridge.sessionEnded();
+  expect(w.controllers[0]!.ended).toBe(1);
+  expect(w.controllers[0]!.disposed).toBe(1);
+  expect(w.cleared).toEqual(['profile']);
+  expect(w.bridge.presence()).toBeNull();
+  w.host.set({ status: 'recording', clientTripId: 't2' });
+  await w.bridge.settled();
+  expect(w.controllers).toHaveLength(2);
 });
 
 test('mergeCoaching: counts add, the longest is the max, the seen share the lower', () => {

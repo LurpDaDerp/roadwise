@@ -28,6 +28,8 @@ import {
   StatusRing,
 } from '@/ui/drive';
 
+import { CameraChip } from '@/features/camera/CameraChip';
+
 import { AlertsUnavailableMark, useAlertsUnavailable } from './AlertsUnavailableMark';
 import { DRIVE_ROUTES, driveHref, hudCopy } from './hudCopy';
 import { StoppedPanel } from './StoppedPanel';
@@ -300,6 +302,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           />
         </View>
         {alertsUnavailable ? <AlertsUnavailableMark ink={p.inkMuted} /> : null}
+        {recording ? <CameraChip ink={p.ink} inkMuted={p.inkMuted} /> : null}
         <SpeedGauges landscape={landscape} night={night} />
         {recording ? (
           <StatusRing level={statusLevel(activeAlert?.level)} recording night={night} />

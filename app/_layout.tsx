@@ -18,6 +18,7 @@ import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
+import { cameraBridge } from '@/features/camera/runtime';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { RestoreRetryProvider } from '@/features/home/HomeBanners';
@@ -145,6 +146,8 @@ export default function RootLayout() {
         // with the session gone, a retry is only an RLS refusal at every foreground (r2 n1).
         void runtime.drive
           .sessionEnded()
+          // Lane B: the camera beta's controller goes and the face profile is removed (DMS README, sign-out).
+          .then(() => cameraBridge()?.sessionEnded())
           .then(() => runtime.driveStateAbandon())
           .catch(() => {});
         return;
