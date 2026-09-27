@@ -1,6 +1,6 @@
 import { useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
-import { Alert, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
@@ -16,6 +16,7 @@ import {
   WeeklyFocusField,
 } from '@/features/home';
 import { InboxBell } from '@/features/inbox/InboxBell';
+import { Portrait, SETTINGS_HREFS, settingsCopy } from '@/features/settings';
 import { t } from '@/i18n';
 import { Button, Screen, Text, useTheme } from '@/ui';
 
@@ -80,17 +81,30 @@ export default function Home() {
     <Screen bottomInset={false} padded={false}>
       {/* One column, so the scrolling record and the anchored action meet without a gap. */}
       <View style={{ flex: 1 }}>
-        {/* The header: the inbox bell at the trailing edge, above the scrolling record, so it is
+        {/* The header: the driver's portrait at the leading edge opens their profile and the
+          settings (H2); the inbox bell at the trailing edge, above the scrolling record, so it is
           always one tap away. It prints the unread count as a number, never as colour alone. */}
         <View
           testID="home-header"
           style={{
             flexDirection: 'row',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             paddingHorizontal: th.space.sm,
             paddingTop: th.space.xs,
           }}
         >
+          <Pressable
+            testID="home-settings"
+            accessibilityRole="button"
+            accessibilityLabel={settingsCopy.entry.label}
+            accessibilityHint={settingsCopy.entry.hint}
+            onPress={() => router.push(SETTINGS_HREFS.root)}
+            hitSlop={th.space.xs}
+            style={({ pressed }) => ({ minWidth: 44, minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}
+          >
+            <Portrait name={profile?.display_name} size={36} />
+          </Pressable>
           <InboxBell />
         </View>
         <ScrollView

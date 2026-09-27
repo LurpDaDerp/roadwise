@@ -113,3 +113,13 @@ test('the inbox bell sits in the header, outside the scrolling record, and opens
   await fireEvent.press(bell);
   expect(mockRouter.push).toHaveBeenCalledWith('/inbox');
 });
+
+test("the driver's portrait sits at the header's leading edge and opens Settings", async () => {
+  await renderHome();
+  const header = screen.getByTestId('home-header');
+  const portrait = within(header).getByRole('button', { name: 'Profile and settings' });
+  expect(portrait.props.accessibilityHint).toBe('Opens your profile and the app settings');
+  expect(within(portrait).getByText('M')).toBeTruthy();
+  await fireEvent.press(portrait);
+  expect(mockRouter.push).toHaveBeenCalledWith('/settings');
+});
