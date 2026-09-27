@@ -10,7 +10,8 @@
 import type { SettingsRepo } from '@/data/db/settings';
 
 /** Names the consent text in copy.ts. Bump it with any change to what that text says. */
-export const CAMERA_CONSENT_VERSION = 'camera-beta-1';
+// camera-beta-2 (review LB-2): the consent says that seat presence can decide a drive's (uploaded) end time.
+export const CAMERA_CONSENT_VERSION = 'camera-beta-2';
 
 export const CAMERA_OPT_IN_KEY = 'camera.optIn';
 

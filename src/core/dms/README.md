@@ -78,6 +78,7 @@ Any input that is false, missing or unknown keeps the camera off.
 ## Where the data may go (security T14 m-3)
 
 - **Events, the summary and the focus samples stay on the device** until M7 ships a disclosure and a versioned consent that covers their upload. The profile never leaves it.
+- **Seat presence moves the uploaded trip end** (lane B review LB-2; rev4 WK-m3). With the camera beta on, `presence()` (a face in the driver's seat, the exit evidence) takes part in the auto-ends: `standstill_present` at 30 min instead of 20, the empty-seat end at 10 min, the catch-all hold (C14-m1) and the same-car resume. Those decisions move the trip's uploaded `ended_at`, and with it its distance and score window. Nothing the camera saw is uploaded. The consent says so ("Whether you're in the driver's seat can help decide when a drive ends. Only that end time is uploaded, never what the camera saw."), version `camera-beta-2`; a driver who agreed to `camera-beta-1` is off until they agree again.
 - **Guardians see nothing DMS-specific** without a new disclosure version.
 - **Focus samples change the focus score**, so where DMS is on, the score's own disclosure must mention camera input.
 - **Passing `cameraFocus` to the drive engine is an upload** (security T16 I-1). M1's existing trip-event pipeline sends each focus sample to Supabase as a trip event with source 'camera', the measured `glanceS` and `focusKind` (`glance` or `drowsiness`), at the event's location rounded to 3 dp, and the trip's `camera_session` and the daily `camera_day` follow from it. `src/core/dms/__tests__/privacy.test.ts` pins exactly these fields; any new camera-derived field fails it.
@@ -119,7 +120,7 @@ The app side lives in `src/features/camera/` (strings in `copy.ts`). The carries
 |---|---|
 | One controller per signed-in user; dispose on sign-out, an account switch or deletion | **Done.** `bridge.ts` builds it lazily at the first drive of a driver who opted in, for the device owner's uid, and rebuilds on a new uid. The runtime's `release` (every stop: sign-out, handover, deletion's teardown) settles the bridge, then disposes it. The profile store is keyed by uid, and the handover wipe clears it with the settings. |
 | `busy` maps to its own HUD message | **Done.** The chip says "Camera in use by diagnostics". |
-| Gate inputs: `optedIn`, `ageBand`, `cameraBeta`, `driveActive`, `mode`, `role`, `appActive`, `driverSide` | **Done.** `optedIn` is this uid's local choice of the current consent version, recorded on the server first (`consents(type='camera', 'camera-beta-1')`). `ageBand` is the cached profile's. `cameraBeta` is the stored flag, read at each drive start. `driveActive` means the engine is `recording`. `driverSide` is a settings choice. `sensitivity` is `normal` and `alerts` is `live`. Every change re-evaluates at once: an opt-out, the app leaving the front, pocket mode, a passenger. |
+| Gate inputs: `optedIn`, `ageBand`, `cameraBeta`, `driveActive`, `mode`, `role`, `appActive`, `driverSide` | **Done.** `optedIn` is this uid's local choice of the current consent version, recorded on the server first (`consents(type='camera', 'camera-beta-2')`). `ageBand` is the cached profile's. `cameraBeta` is the stored flag, read at each drive start. `driveActive` means the engine is `recording`. `driverSide` is a settings choice. `sensitivity` is `normal` and `alerts` is `live`. Every change re-evaluates at once: an opt-out, the app leaving the front, pocket mode, a passenger. |
 | `requestPermission()` in context | **Done.** Once per trip, at the drive's start, only when the permission is the one input keeping the camera off, and never while locked out. |
 | `pushRow` every row, also while the camera is off, with the host's motion evidence | **Done.** The host's new `onRow` hook, called before the engine sees the row. |
 | Alerts: a tone and a voice key per kind | **Done** (`alertSink.ts`). Each tier plays its M3 tone, and each kind has a phrase (`cameraVoice`). Tier 3 sounds continuously and gets louder every 2 s; tier 2 repeats every 1 s. Both follow the Alerts & sounds voice switch, play tones only on a call, and are capped at 120 s as a backstop. The hold-to-mute on the HUD mutes M3's alert, not the camera's: the camera's own rules end its alerts. |
@@ -133,7 +134,15 @@ The app side lives in `src/features/camera/` (strings in `copy.ts`). The carries
 | The dev panel must not run with M7's drive | **Holds:** the owner slot. |
 | The endCause notification copy ("Drive ended after 30 min without movement. Sleep alerts are off.") and the "Start a drive?" prompt (U-13) | **Not done, and cut from the lean finish.** The summary notifier keeps its existing copy. A manual-only driver whose drive auto-ended starts again by hand. |
 | The same-car hold HUD copy ("Resuming your drive…") | **Not done, and cut.** The HUD shows its ordinary state during the ≤ 30 s hold. |
+| The battery unit (review LB-1) | **Fixed.** expo-battery's fraction is converted to the percent the policy reads (`toPercent`); an unplugged drive runs at 15 fps, capped at 8 only below 20 %. |
 | Battery | **Unchanged.** It is the existing capture policy. Battery is read once per session at the first controller, then from the OS's change events: no poll. |
+
+## Known limits: the camera beta (lane B review rulings)
+
+- **The OS camera prompt comes mid-drive only.** The controller can ask only while the permission is the one closed input, which is during a drive: the first mounted drive runs with no camera until the prompt appears (once, at the start, never while locked out), and it is an OS modal during a drive. Asking at the A10 or settings toggle, off-road, would be better.
+- **Turning the beta off is local only.** The client cannot revoke a `consents` row (insert-only). Acceptable while nothing camera-derived is uploaded. **Carry:** before any camera-derived upload, the server needs a revoke path (a `revoked_at`, or a newer consent row) so a local opt-out also withdraws the server consent.
+- **Camera and M3 alerts are not arbitrated against each other:** both can sound at once (the HUD's hold-to-mute mutes M3's only; a camera Tier 1 `once` is dropped during a repeating camera alert). Device pass L-B4 checks Tier 3 audibility.
+- **Without the cut endCause copy (WK-m6), a seated 30 min standstill end silently stops sleep alerts** (the trip is `ending`, the gate closes). The "Start a drive?" prompt and "Resuming your drive…" line are also cut.
 
 ## Known limits: posture with a display above the road (C9 round 3 re-review, R3-H)
 

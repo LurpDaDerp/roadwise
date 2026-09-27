@@ -12,7 +12,8 @@ export const cameraConsent = {
   lead: 'RoadWise can use the front camera to warn you if you look away from the road too long or start to nod off.',
   points: [
     'It looks for your face, eyes and head angle, and nothing else.',
-    'Everything stays on this phone. No photos or video are ever saved or uploaded.',
+    'Everything the camera sees stays on this phone. No photos or video are ever saved or uploaded.',
+    "Whether you're in the driver's seat can help decide when a drive ends. Only that end time is uploaded, never what the camera saw.",
     'It learns where you look on the road by itself as you drive. There is no setup.',
     'Sleep and distraction alerts need RoadWise open on screen, with the phone mounted in a holder.',
     'Mount the phone below your line of sight to the road, not above it.',

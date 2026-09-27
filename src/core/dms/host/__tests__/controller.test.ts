@@ -103,7 +103,7 @@ function harness(
 }
 
 /** Drive the controller: a row each second, frames at `fps` from `frameAt(t)` while native runs. */
-async function drive(h: H, fromS: number, toS: number, o: { fps?: number; speed?: (t: number) => number | null; frameAt?: (tMs: number) => EngineFrame | null; row?: (t: number) => Partial<FeatureRow> } = {}) {
+async function drive(h: H, fromS: number, toS: number, o: { fps?: number; speed?: (t: number) => number | null; frameAt?: (tMs: number) => EngineFrame | null; row?: (t: number) => Partial<FeatureRow>; power?: typeof POWER } = {}) {
   const fps = o.fps ?? 15;
   const step = 1000 / fps;
   const focus: unknown[] = [];
@@ -111,7 +111,7 @@ async function drive(h: H, fromS: number, toS: number, o: { fps?: number; speed?
     const tMs = i * step;
     if (tMs > h.fake.now()) h.fake.advance(tMs - h.fake.now());
     if (i % fps === 0) {
-      const f = h.ctl.pushRow(featureRow(tMs, (o.speed ?? (() => ROW_KMH))(tMs / 1000), o.row?.(tMs / 1000)), POWER);
+      const f = h.ctl.pushRow(featureRow(tMs, (o.speed ?? (() => ROW_KMH))(tMs / 1000), o.row?.(tMs / 1000)), o.power ?? POWER);
       if (f !== null) focus.push(f);
       await h.ctl.idle();
     }
@@ -173,6 +173,18 @@ describe('the lifecycle', () => {
     expect(methods(h).filter((m) => m === 'setPolicy').length).toBeGreaterThanOrEqual(24);
     expect(h.fake.calls.every((c) => (c.args[0] as { gateToken?: string } | undefined)?.gateToken === undefined || (c.args[0] as { gateToken: string }).gateToken === 'nonce-1')).toBe(true);
     expect(h.fake.nativeState()).toBe('running');
+  });
+  // Lane B review LB-1: the battery is a PERCENT here (the app's expo-battery fraction is converted in the camera bridge).
+  test('LB-1: unplugged at 80 % the camera runs FULL at 15 fps; at 15 % it is capped at 8; charging at 15 %, 15 again', async () => {
+    const at = (level: number, charging: boolean) => ({ batteryLevel: level, charging, localMinutes: 720 });
+    const h = harness();
+    h.ctl.setGate(GATE);
+    await drive(h, 0, 10, { speed: () => 60, power: at(80, false) });
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 15 });
+    await drive(h, 10, 20, { speed: () => 60, power: at(15, false) });
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 8 });
+    await drive(h, 20, 30, { speed: () => 60, power: at(15, true) });
+    expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 15 });
   });
   test('C3 (rev4 §2.1.4): a stop never pauses the camera: SLEEP_WATCH at 5 fps, then 15 fps once moving', async () => {
     const h = harness();

@@ -13,7 +13,7 @@ test.each([
   ['this uid, this version, on', { uid: 'u1', version: CAMERA_CONSENT_VERSION, on: true }, true],
   ['this uid, off', { uid: 'u1', version: CAMERA_CONSENT_VERSION, on: false }, false],
   ['another uid', { uid: 'u2', version: CAMERA_CONSENT_VERSION, on: true }, false],
-  ['an older consent version', { uid: 'u1', version: 'camera-beta-0', on: true }, false],
+  ['an older consent version (camera-beta-1, before LB-2)', { uid: 'u1', version: 'camera-beta-1', on: true }, false],
   ['malformed', 'yes', false],
 ] as const)('%s → %s', async (_, stored, want) => {
   const s = memory(stored === undefined ? {} : { [CAMERA_OPT_IN_KEY]: stored });

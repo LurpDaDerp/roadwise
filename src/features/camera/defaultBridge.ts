@@ -19,31 +19,42 @@ export interface DefaultCameraBridgeDeps {
   onError?(e: unknown, ctx: string): void;
 }
 
-/** Battery for the capture policy: read once when the first controller is made, then kept fresh by the OS's events. */
-function batteryWatch(onError: (e: unknown) => void) {
+/**
+ * Battery for the capture policy: read once when the first controller is made, then kept fresh by the OS's events.
+ * Review LB-1: expo-battery gives a FRACTION (0–1); the policy's `batteryLevel` is a PERCENT (LOW_BATTERY_PCT 20), so
+ * the level is converted here. A fraction passed on capped every unplugged drive at 8 fps.
+ */
+export function toPercent(fraction: number): number | null {
+  return fraction >= 0 && fraction <= 1 ? Math.round(fraction * 100) : null;
+}
+
+export function batteryWatch(onError: (e: unknown) => void) {
   const state = { level: null as number | null, charging: null as boolean | null };
   let started = false;
   return {
-    start() {
-      if (started) return;
+    /** starts once; the returned promise settles when the first reading is in (tests) */
+    start(): Promise<void> {
+      if (started) return Promise.resolve();
       started = true;
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
         const Battery = require('expo-battery') as typeof import('expo-battery');
-        void Battery.getPowerStateAsync()
-          .then((p) => {
-            state.level = p.batteryLevel >= 0 ? p.batteryLevel : null;
-            state.charging = p.batteryState === Battery.BatteryState.CHARGING || p.batteryState === Battery.BatteryState.FULL;
-          })
-          .catch(onError);
+        const charging = (b: number) => b === Battery.BatteryState.CHARGING || b === Battery.BatteryState.FULL;
         Battery.addBatteryLevelListener(({ batteryLevel }) => {
-          state.level = batteryLevel >= 0 ? batteryLevel : null;
+          state.level = toPercent(batteryLevel);
         });
         Battery.addBatteryStateListener(({ batteryState }) => {
-          state.charging = batteryState === Battery.BatteryState.CHARGING || batteryState === Battery.BatteryState.FULL;
+          state.charging = charging(batteryState);
         });
+        return Battery.getPowerStateAsync()
+          .then((p) => {
+            state.level = toPercent(p.batteryLevel);
+            state.charging = charging(p.batteryState);
+          })
+          .catch(onError);
       } catch (e) {
         onError(e);
+        return Promise.resolve();
       }
     },
     read: () => state,
@@ -60,7 +71,7 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
     readAgeBand: deps.readAgeBand,
     readCameraBeta: () => readFlag(deps.db, 'camera_beta', false),
     createController(handlers, uid) {
-      battery.start();
+      void battery.start();
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: loads the native camera module
       const dms = require('@/core/dms') as typeof import('@/core/dms');
       return dms.createDefaultDmsController({
