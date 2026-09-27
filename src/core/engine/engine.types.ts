@@ -64,6 +64,8 @@ export interface TripSession {
    * decided on the other evidence (at worst, asked about). Absent means not stated.
    */
   statedDriver?: boolean;
+  /** DMS calib T14: why the trip ended (local only: never in the upload payload); absent while open. */
+  endCause?: EndCause;
   /**
    * The arbiter's resumable state as of the last checkpoint: the engine copies `arbiter.state()`
    * here just before each `onCheckpoint`, and the recorder persists it (settings
@@ -146,6 +148,8 @@ export interface EngineSnapshot {
   lockedOut: boolean;
   /** recording and at 0 m/s for `STOPPED_PANEL_S` (C6); cleared once moving again. */
   stoppedPanel: boolean;
+  /** DMS calib T14: why the trip is in `ending` (local; the notifier's copy); null otherwise. */
+  endCause: EndCause | null;
 }
 
 export interface EngineDeps {
@@ -185,6 +189,39 @@ export interface EngineDeps {
 
 export type WakeReason = 'significantChange' | 'activityTransition' | 'boot' | 'geofence';
 
+/**
+ * DMS calib T14 (rev4 §2.12.4): why the trip went to `ending` (or closed). Local only, never uploaded: the summary
+ * notifier (M7, T15) words the end with it. `gap_timeout`: an `ending` with no recorded cause (an adopted trip).
+ */
+export type EndCause =
+  | 'manual'
+  | 'walking'
+  | 'pedestrian'
+  | 'standstill_empty'
+  | 'standstill_deep'
+  | 'standstill_unknown'
+  | 'standstill_present'
+  | 'no_fix_ambiguous'
+  | 'no_movement'
+  | 'gap_timeout';
+
+/** DMS calib T14: the ends after which a resume needs same-car evidence (rev4 §2.13.4). */
+export const SAME_CAR_END_CAUSES: readonly EndCause[] = ['walking', 'pedestrian', 'standstill_empty'];
+
+/** DMS calib T14: a row's evidence for the auto-ends, from the drive host. */
+export interface RowEvidence {
+  /** the shared motion evidence's stop (a GNSS stop, a latched sensor stop, a deep still), null without */
+  stop: 'gnss' | 'sensor' | 'deep' | null;
+  /** a strong vehicle row: the car itself accelerating */
+  vehicleMotion: boolean;
+  /** no fix, a continuous quiet hold, no stop */
+  ambiguousStill: boolean;
+  /** continuous seconds the gravity has been away from the mount reference */
+  mountLostS: number;
+  /** rev4 §2.13.2: a face in the seat within 60 s (true), absent with exit evidence (false), else null */
+  driverPresent: boolean | null;
+}
+
 export type EngineEvent =
   | { type: 'arm' }
   | { type: 'disarm' }
@@ -212,7 +249,15 @@ export type EngineEvent =
       /** Default `tap`. `movingStart` when the start was made while already moving. */
       evidence?: 'tap' | 'movingStart';
     }
-  | { type: 'row'; row: FeatureRow }
+  | {
+      type: 'row';
+      row: FeatureRow;
+      /**
+       * DMS calib T14: the drive host's per-row evidence for the auto-ends (the shared motion evidence and the DMS's
+       * `driverPresent`). Absent: derived from the row alone (`autoEnd.ts` `evidenceOf`).
+       */
+      evidence?: RowEvidence;
+    }
   | { type: 'setPassenger'; passenger: boolean; ts: number }
   /**
    * The driver picks mounted or pocket mid-trip. Applied in `recording` or `ending` unless the

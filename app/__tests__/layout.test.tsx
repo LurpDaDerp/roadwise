@@ -175,6 +175,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     stationarySinceTs: null,
     lockedOut: false,
     stoppedPanel: false,
+    endCause: null,
     activeAlert: null,
     mutedForDrive: false,
     gps: 'good',

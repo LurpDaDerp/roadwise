@@ -31,7 +31,7 @@ export const MPH = 0.44704;
 
 const mps = (mph: number): number => round(mph * MPH, 4);
 
-/** Every trace is one 2½ minute drive at 1 Hz, but for `garage-no-fix`, which has to outlast `NO_FIX_END_S`. */
+/** Every trace is one 2½ minute drive at 1 Hz, but for `garage-no-fix`, which has to outlast the ten-minute garage end. */
 const ROWS = 150;
 /** Pulling away and stopping take this long: 0.13 g, comfortably inside the harsh thresholds. */
 const RAMP_S = 12;
@@ -484,9 +484,9 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
 
   /**
    * Into an underground garage: the fix goes at walking pace on the ramp (row 52), the car parks,
-   * and the phone lies still with no fix for eleven minutes. No speed ever says "stopped", so the
-   * stationary auto-end never runs; the no-fix end does, ten minutes into the fix-less stillness
-   * (`traces.test.ts` replays it through the engine). The detectors see nothing at all.
+   * and the phone lies still with no fix for eleven minutes. No speed ever says "stopped". Since DMS calib T14 the
+   * fix-less stillness alone is AMBIGUOUS (30 min), so the plain rows never end the drive; with a sensor stop and the
+   * driver gone it ends ten minutes in (`traces.test.ts` replays both). The detectors see nothing at all.
    */
   'garage-no-fix': () =>
     makeTrace({

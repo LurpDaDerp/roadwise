@@ -17,13 +17,16 @@ import {
   knownSpeed,
   limitConfidence,
 } from '@/core/detectors/common';
+import { createAutoEnd, evidenceOf } from './autoEnd';
 import type {
   AdoptedTrip,
+  EndCause,
   Engine,
   EngineDeps,
   EngineEvent,
   EngineSnapshot,
   EngineStatus,
+  RowEvidence,
   StartEvidence,
   StartSource,
   TripRole,
@@ -54,14 +57,10 @@ export const PREFETCH_EVERY_M = 1000;
 /** Slack for the cumulative fast seconds, which are sums of row spacings. */
 const EPSILON_S = 1e-9;
 /**
- * A trip that has had no valid fix for this long, on a phone lying still, is parked somewhere GNSS
- * cannot reach (a garage): it goes to `ending` as a stationary one would (plan rev1 I13).
- *
- * Known limitation (E1 review M5, kept by ruling; device-pass item 6): a tunnel longer than this,
- * driven smoothly enough that a mounted phone passes the stillness test, ends the same way. If the
- * drive then resumes inside the gap window, the tunnel's rows become a gap: the events detected in
- * it stay, but its time leaves the exposure, so the per-hour rate reads slightly high. Rare, and
- * the thresholds are tuning-sensitive; revisit with device traces rather than by rule here.
+ * The legacy name (plan rev1 I13): a trip with no valid fix on a still phone for this long used to go to `ending`.
+ * DMS calib T14 (rev4 §2.13.3) replaced it: with no fix and no stop evidence (AMBIGUOUS_STILL only) the end comes
+ * after `AUTO_END.NO_FIX_AMBIGUOUS_END_S` (30 min), so a smooth tunnel never ends a drive; a parked phone with a sensor
+ * stop ends by the standstill rules. Kept for the device-pass notes that name it.
  */
 export const NO_FIX_END_S = 600;
 /** `gravityStability` at or above this, with no handling and a quiet IMU, reads as a still phone. */
@@ -104,6 +103,7 @@ function rowQuality(row: FeatureRow, limit: LimitSample): number {
 interface BufferedRow {
   row: FeatureRow;
   ctx: Omit<DetectorContext, 'mode'>;
+  evidence?: RowEvidence;
 }
 
 interface Candidate {
@@ -171,8 +171,10 @@ export function createEngine(deps: EngineDeps): Engine {
   let prefetchedAtM: number | null = null;
   /** Start of the current stretch of continuous driving, for the break suggestion (§8.7). */
   let continuousSinceTs = 0;
-  /** First row of the current run of fix-less rows on a still phone (the no-fix end). */
-  let noFixSinceTs: number | null = null;
+  /** DMS calib T14 (rev4 §2.13, rev5 §1, §4.1, R5-1): the automatic ends, fed each recording row. */
+  const autoEnd = createAutoEnd();
+  /** Why the trip went to `ending` (local; the notifier's copy). */
+  let endCause: EndCause | null = null;
   /** Set by `adopt` and a rowless resume; cleared by the first row with a known speed. */
   let awaitingSpeedAfterResume = false;
 
@@ -240,6 +242,7 @@ export function createEngine(deps: EngineDeps): Engine {
       stationarySinceTs,
       lockedOut: lockedOut(),
       stoppedPanel: status === 'recording' && stoppedPanel,
+      endCause: status === 'ending' || status === 'finalizing' ? endCause : null,
     });
   }
 
@@ -253,7 +256,8 @@ export function createEngine(deps: EngineDeps): Engine {
     pausedAt = null;
     firstOverTs = null;
     lastKnownSpeedMps = null;
-    noFixSinceTs = null;
+    autoEnd.reset();
+    endCause = null;
     awaitingSpeedAfterResume = false;
   }
 
@@ -286,7 +290,7 @@ export function createEngine(deps: EngineDeps): Engine {
   const windowClosed = (c: Candidate, ts: number): boolean =>
     ts - c.startTs >= AUTO_DETECT_WINDOW_S * 1000;
 
-  async function onCandidateRow(row: FeatureRow): Promise<void> {
+  async function onCandidateRow(row: FeatureRow, evidence?: RowEvidence): Promise<void> {
     const c = candidate as Candidate;
     if (windowClosed(c, row.ts)) {
       discardCandidate();
@@ -298,7 +302,7 @@ export function createEngine(deps: EngineDeps): Engine {
     // count what they cover, sparse ones cannot claim more than a second each. The first row has
     // nothing before it and stands for a full row-length.
     const coversS = (last === undefined ? ROW_MS : Math.min(row.ts - last.row.ts, ROW_MS)) / 1000;
-    c.rows.push({ row, ctx: deps.ctx() });
+    c.rows.push({ row, ctx: deps.ctx(), ...(evidence !== undefined ? { evidence } : {}) });
     seen = { row, limit: seen?.limit ?? UNKNOWN_LIMIT };
     touch();
     maybePrefetch(row, 0);
@@ -343,7 +347,7 @@ export function createEngine(deps: EngineDeps): Engine {
     continuousSinceTs = startedAt;
     setStatus('recording');
     for (const [i, entry] of buffered.entries()) {
-      await processRow(entry.row, entry.ctx, c.liveLast && i === buffered.length - 1);
+      await processRow(entry.row, entry.ctx, c.liveLast && i === buffered.length - 1, entry.evidence);
     }
   }
 
@@ -471,7 +475,8 @@ export function createEngine(deps: EngineDeps): Engine {
   async function processRow(
     row: FeatureRow,
     ctx: Omit<DetectorContext, 'mode'>,
-    live: boolean
+    live: boolean,
+    evidence?: RowEvidence
   ): Promise<void> {
     const s = session as TripSession;
     const trip = suite as TripSuite;
@@ -490,21 +495,10 @@ export function createEngine(deps: EngineDeps): Engine {
     const input = arbiterInput(row, limit, full, trip.detectors);
     if (live) deliver(trip.arbiter.consider(input), row.ts, trip.detectors);
     updateFlags(row);
-    noFixSinceTs = stillWithoutFix(row) ? (noFixSinceTs ?? row.ts) : null;
-    if (
-      status === 'recording' &&
-      stationarySinceTs !== null &&
-      row.ts + ROW_MS - stationarySinceTs >= AUTO_END_STATIONARY_S * 1000
-    ) {
-      await beginEnding(row.ts);
-    } else if (
-      status === 'recording' &&
-      noFixSinceTs !== null &&
-      row.ts + ROW_MS - noFixSinceTs >= NO_FIX_END_S * 1000
-    ) {
-      // Driving stopped where the fix-less stillness began, as a stationary end trims its idle run.
-      await beginEnding(row.ts, noFixSinceTs);
-    }
+    // DMS calib T14: the automatic ends (a standstill graded by presence, no fix, pedestrian, the catch-all), each
+    // trimmed to where driving stopped (rev4 §2.13.5).
+    const end = autoEnd.row(row, evidenceOf(row, evidence, stillWithoutFix), ROW_MS);
+    if (status === 'recording' && end !== null) await beginEnding(row.ts, end.stoppedAt, end.cause);
     if (s.rowsCount % CHECKPOINT_S === 0) await checkpointTail(s);
   }
 
@@ -520,10 +514,11 @@ export function createEngine(deps: EngineDeps): Engine {
    * Into the gap-merge window. The un-checkpointed tail is persisted now, because the ring evicts
    * by time and a gap can be far longer than the ring.
    */
-  async function beginEnding(ts: number, stoppedAt?: number): Promise<void> {
+  async function beginEnding(ts: number, stoppedAt?: number, cause: EndCause = 'gap_timeout'): Promise<void> {
     const s = session as TripSession;
     pausedAt = stoppedAt ?? drivingStoppedTs(s) ?? ts;
     endingSinceTs = ts;
+    endCause = cause;
     setStatus('ending');
     await checkpointTail(s);
   }
@@ -609,6 +604,8 @@ export function createEngine(deps: EngineDeps): Engine {
         failure = { err };
       }
       s.events = mergeEvents([...s.events, ...trip.detectors.flush()]);
+      // DMS calib T14: the end's cause (local; never in the upload payload).
+      s.endCause = endCause ?? 'gap_timeout';
       const closed = closeSession(s, pausedAt ?? drivingStoppedTs(s) ?? atTs);
       await deps.onFinalize(closed);
     } catch (err) {
@@ -640,15 +637,15 @@ export function createEngine(deps: EngineDeps): Engine {
 
   // --- events -----------------------------------------------------------------------------------
 
-  async function onRow(row: FeatureRow): Promise<void> {
+  async function onRow(row: FeatureRow, evidence?: RowEvidence): Promise<void> {
     switch (status) {
       case 'candidate':
-        await onCandidateRow(row);
+        await onCandidateRow(row, evidence);
         return;
       case 'recording': {
         const s = session as TripSession;
         if (s.lastRowTs !== null && row.ts <= s.lastRowTs) return;
-        await processRow(row, deps.ctx(), true);
+        await processRow(row, deps.ctx(), true, evidence);
         return;
       }
       case 'ending': {
@@ -660,9 +657,10 @@ export function createEngine(deps: EngineDeps): Engine {
         touch();
         if (!withinGap(row.ts)) {
           await finalizeThen(row.ts);
-        } else if ((knownSpeed(row) ?? 0) > LOCKOUT_SPEED_MPS) {
+        } else if ((knownSpeed(row) ?? 0) > LOCKOUT_SPEED_MPS || evidence?.vehicleMotion === true) {
+          // DMS calib T14 (rev4 §2.13.4): a strong vehicle row resumes too (driving out of a garage with no fix).
           resume(row.ts, undefined, knownSpeed(row) ?? undefined);
-          await processRow(row, deps.ctx(), true);
+          await processRow(row, deps.ctx(), true, evidence);
         }
         return;
       }
@@ -673,11 +671,13 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function onActivity(e: Extract<EngineEvent, { type: 'activity' }>): Promise<void> {
     if (e.walking) {
-      if (status === 'recording') await beginEnding(e.ts);
+      // DMS calib T14 (rev4 §2.13.5): trimmed to the walk's start (or just past the last vehicle movement).
+      if (status === 'recording') await beginEnding(e.ts, autoEnd.walkStoppedAt(e.walkStartTs), 'walking');
       else if (status === 'candidate') discardCandidate();
       return;
     }
     if (!e.automotive) return;
+    if (status === 'recording') autoEnd.automotive(e.ts); // the pedestrian end's clause 2
     if (status === 'armed') {
       openCandidate(e.ts, e.candidateStartTs);
     } else if (status === 'ending') {
@@ -749,7 +749,11 @@ export function createEngine(deps: EngineDeps): Engine {
         discardCandidate();
         return;
       case 'recording':
+        endCause = 'manual';
+        await finalizeThen(ts);
+        return;
       case 'ending':
+        // An automatic end the driver then confirms keeps its cause (the notifier words the automatic end).
         await finalizeThen(ts);
         return;
       default:
@@ -786,7 +790,7 @@ export function createEngine(deps: EngineDeps): Engine {
         await onManualStart(e);
         return;
       case 'row':
-        await onRow(e.row);
+        await onRow(e.row, e.evidence);
         return;
       case 'setPassenger':
         onSetPassenger(e.passenger);

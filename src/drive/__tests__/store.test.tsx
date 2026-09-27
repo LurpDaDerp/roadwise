@@ -25,6 +25,7 @@ function state(over: Partial<DriveState> = {}): DriveState {
     stationarySinceTs: null,
     lockedOut: true,
     stoppedPanel: false,
+    endCause: null,
     activeAlert: null,
     mutedForDrive: false,
     gps: 'good',

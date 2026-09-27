@@ -2,8 +2,9 @@
 import { createArbiter } from '@/core/alerts/arbiter';
 import { createDetectors } from '@/core/detectors';
 import { T0, counterIds, mph, row } from '@/core/detectors/__fixtures__/rows';
-import type { TripSession } from '@/core/engine/engine.types';
-import { NO_FIX_END_S, createEngine } from '@/core/engine/machine';
+import type { RowEvidence, TripSession } from '@/core/engine/engine.types';
+import { createEngine } from '@/core/engine/machine';
+import { AUTO_END } from '@/core/engine/autoEnd';
 import { runTrace } from '@/core/replay/runTrace';
 import {
   GARAGE_ROW,
@@ -133,7 +134,9 @@ describe('M3 traces', () => {
     ]);
   });
 
-  test('garage-no-fix: replayed through the engine, the trip goes to ending ten minutes into the fix-less stillness', async () => {
+  // DMS calib T14 (rev4 §2.13.3): with no fix and no stop evidence the stillness is AMBIGUOUS (30 min, so a smooth
+  // tunnel never ends a drive); a parked phone with a sensor stop ends by the standstill rules, graded by presence.
+  async function replayGarage(evidenceAt: (i: number) => RowEvidence | undefined) {
     const trace = load('garage-no-fix');
     const finalized: Readonly<TripSession>[] = [];
     const engine = createEngine({
@@ -152,17 +155,32 @@ describe('M3 traces', () => {
     const first = trace.rows[0]!;
     await engine.dispatch({ type: 'manualStart', mode: trace.mode, passenger: false, ts: first.ts });
     const statuses: string[] = [];
-    for (const r of trace.rows) {
-      await engine.dispatch({ type: 'row', row: r });
+    for (const [i, r] of trace.rows.entries()) {
+      const evidence = evidenceAt(i);
+      await engine.dispatch({ type: 'row', row: r, ...(evidence !== undefined ? { evidence } : {}) });
       statuses.push(engine.snapshot().status);
     }
-    const endsOn = GARAGE_ROW + NO_FIX_END_S - 1;
+    await engine.dispatch({ type: 'end', ts: trace.rows[trace.rows.length - 1]!.ts + 1000 });
+    return { trace, statuses, finalized };
+  }
+
+  test('garage-no-fix, plain rows (no stop evidence): AMBIGUOUS_STILL, so eleven minutes never end the drive', async () => {
+    const { statuses, finalized } = await replayGarage(() => undefined);
+    expect(statuses).not.toContain('ending');
+    expect(finalized).toHaveLength(1);
+    expect(finalized[0]!.events).toEqual([]);
+    expect(finalized[0]!.endCause).toBe('manual');
+  });
+
+  test('S-END-GARAGE: a sensor stop in the garage and the driver gone (absent, exit evidence): ending 10 min in, trimmed', async () => {
+    const empty: RowEvidence = { stop: 'sensor', vehicleMotion: false, ambiguousStill: false, mountLostS: 0, driverPresent: false };
+    const { trace, statuses, finalized } = await replayGarage((i) => (i >= GARAGE_ROW ? empty : undefined));
+    const endsOn = GARAGE_ROW + AUTO_END.STANDSTILL_END_EMPTY_S - 1;
     expect(statuses.lastIndexOf('recording')).toBe(endsOn - 1);
     expect(statuses[endsOn]).toBe('ending');
-    await engine.dispatch({ type: 'end', ts: trace.rows[trace.rows.length - 1]!.ts + 1000 });
     expect(finalized).toHaveLength(1);
-    // Driving stopped where the fix went, not at the end of the eleven minutes.
-    expect(finalized[0]).toMatchObject({ endedAt: trace.rows[GARAGE_ROW]!.ts, durationS: GARAGE_ROW });
+    // Driving stopped where the stop began (the fix went), not at the end of the eleven minutes.
+    expect(finalized[0]).toMatchObject({ endedAt: trace.rows[GARAGE_ROW]!.ts, durationS: GARAGE_ROW, endCause: 'standstill_empty' });
     expect(finalized[0]!.events).toEqual([]);
   });
 });

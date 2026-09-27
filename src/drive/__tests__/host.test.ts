@@ -8,6 +8,7 @@ import { drive, sha256, TZ } from '@/core/engine/__fixtures__/drives';
 import * as finalizeModule from '@/core/engine/finalize';
 import { ROLE_PRIOR_KEY, ROLE_ROUTES_KEY, routeKey } from '@/core/engine/rolePrior';
 import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
+import { AUTO_END } from '@/core/engine/autoEnd';
 import type { FeatureRow, LimitSample } from '@/core/engine/types';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import {
@@ -26,7 +27,7 @@ import { AUTO_DETECT_SETTING_KEY, WALK_CONFIRM_S } from '@/drive/policy';
 import type { Scheduler } from '@/drive/ticks';
 import { geohash5 } from '@/lib/geo';
 
-const { AUTO_END_STATIONARY_S, GAP_MERGE_S, LOCKOUT_SPEED_MPS } = scoring.CONSTANTS;
+const { GAP_MERGE_S, LOCKOUT_SPEED_MPS } = scoring.CONSTANTS;
 
 let db: Db;
 const OWNER = 'owner-1';
@@ -383,7 +384,8 @@ async function recordingThenStill(h: ReturnType<typeof harness>) {
   await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
   const moving = drive(150);
   await h.feed(moving);
-  const stopped = still(AUTO_END_STATIONARY_S + 2, last(moving));
+  // T14: no presence information (no DMS): the standstill ends after STANDSTILL_END_UNKNOWN_S (20 min)
+  const stopped = still(AUTO_END.STANDSTILL_END_UNKNOWN_S + 2, last(moving));
   await h.feed(stopped);
   expect(h.host.snapshot().status).toBe('ending');
   return last(stopped);
@@ -769,6 +771,61 @@ describe('T13: a resume after a walking end needs same-car evidence (rev4 §2.13
     expect(s.lastFinalized).toMatchObject({ clientTripId: first });
     // the held automotive update, replayed after the end, opens a candidate (auto-detect is on)
     expect(s.status).toBe('candidate');
+  });
+
+  // DMS calib T14 (rev4 §2.13.4): the same-car hook covers the pedestrian and empty-seat ends too.
+  test('T14: an empty-seat end (absent with exit evidence: driverPresent false, 10 min) holds a resume for the same car', async () => {
+    let face: number | null = null;
+    const presence = () => ({ lastFaceT: face, absent: face === null, exitEvidence: face === null });
+    const off = harness({ presence, motionEvidence: stubEvidence(() => ({ mountMatch: false })) });
+    await armed(off);
+    await off.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    const moving = drive(60);
+    for (const r of moving) {
+      face = r.ts;
+      await off.feed([r]);
+    }
+    face = null; // the driver got out through the door
+    const parked = still(AUTO_END.STANDSTILL_END_EMPTY_S + 2, last(moving));
+    await off.feed(parked);
+    expect(off.host.snapshot()).toMatchObject({ status: 'ending', endCause: 'standstill_empty' });
+    const first = off.host.snapshot().clientTripId;
+    // another car (no mount match, no face): the old trip ends, the new movement is a new trip
+    await off.feed(drive(60, { t0: last(parked).ts + 120_000, speed: 12 }));
+    expect(off.host.snapshot().lastFinalized).toMatchObject({ clientTripId: first });
+    expect(off.host.snapshot().clientTripId).not.toBe(first);
+
+    // the same car (the mount matched and quiet once driving): one trip
+    face = null;
+    const same = harness({ presence, motionEvidence: stubEvidence((r) => ({ mountMatch: r.speed > 5, mountQuiet: r.speed > 5 })) });
+    await armed(same);
+    await same.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    const moving2 = drive(60);
+    await same.feed(moving2);
+    const parked2 = still(AUTO_END.STANDSTILL_END_EMPTY_S + 2, last(moving2));
+    await same.feed(parked2);
+    expect(same.host.snapshot().endCause).toBe('standstill_empty');
+    const first2 = same.host.snapshot().clientTripId;
+    await same.feed(drive(40, { t0: last(parked2).ts + 120_000, speed: 12 }));
+    expect(same.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: first2, lastFinalized: null });
+  });
+
+  test('T14: the host passes driverPresent: a face within 60 s keeps a standstill to 30 min (standstill_present)', async () => {
+    let face: number | null = null;
+    const h = harness({ presence: () => ({ lastFaceT: face, absent: false, exitEvidence: false }) });
+    await h.host.start();
+    await h.host.manualStart({ mode: 'mounted', passenger: false, evidence: 'tap' });
+    const moving = drive(60);
+    await h.feed(moving);
+    const parked = still(AUTO_END.STANDSTILL_END_PRESENT_S + 2, last(moving));
+    let endedAt: number | null = null;
+    for (const r of parked) {
+      face = r.ts;
+      await h.feed([r]);
+      if (endedAt === null && h.host.snapshot().status === 'ending') endedAt = r.ts;
+    }
+    expect(h.host.snapshot().endCause).toBe('standstill_present');
+    expect((endedAt! - parked[0]!.ts) / 1000).toBeGreaterThanOrEqual(AUTO_END.STANDSTILL_END_PRESENT_S - 2);
   });
 
   test('after a standstill (not walking) end, a resume needs no same-car evidence, as before', async () => {

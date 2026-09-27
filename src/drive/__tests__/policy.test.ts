@@ -52,6 +52,7 @@ function snap(over: Partial<EngineSnapshot> = {}): EngineSnapshot {
     stationarySinceTs: null,
     lockedOut: true,
     stoppedPanel: false,
+    endCause: null,
     ...over,
   };
 }

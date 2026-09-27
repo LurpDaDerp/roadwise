@@ -13,6 +13,7 @@ import type {
 
 import type { AlertLevel } from '@/core/alerts/types';
 import { gnssPoor, knownSpeed } from '@/core/detectors/common';
+import { AUTO_END } from '@/core/engine/autoEnd';
 import type { EngineEvent, EngineSnapshot, EngineStatus } from '@/core/engine/engine.types';
 import { nightAt } from '@/core/engine/finalize';
 import type { DetectorContext, DriveMode, FeatureRow } from '@/core/engine/types';
@@ -150,8 +151,8 @@ export function activityEvent(
 
 // --- walking away: the confirmation and the same car (DMS calib T13; rev4 §2.12.2, §2.13.4; rev5 §4.2) ---------
 
-/** rev4 §2.12.2: a walk is held this long before it ends a recording drive */
-export const WALK_CONFIRM_S = 20;
+/** rev4 §2.12.2: a walk is held this long before it ends a recording drive (M3's constant: the pedestrian window validates against it) */
+export const WALK_CONFIRM_S = AUTO_END.WALK_CONFIRM_S;
 /** rev4 §2.12.2: a known speed above this in the confirmation window vetoes it (a passenger walking in a bus) */
 export const WALK_MAX_SPEED_MPS = 3.0;
 /** rev4 §2.12.2: a face in the driver's seat this recently (the DMS frame clock) vetoes it */

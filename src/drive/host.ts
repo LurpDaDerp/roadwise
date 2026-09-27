@@ -38,7 +38,7 @@ import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision, AlertVoiceKey } from '@/core/alerts/types';
 import { createDetectors } from '@/core/detectors';
 import { knownSpeed } from '@/core/detectors/common';
-import type { EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
+import { SAME_CAR_END_CAUSES, type EngineSnapshot, type EngineStatus, type RowEvidence, type TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
@@ -273,7 +273,14 @@ export interface DriveHostDeps {
  */
 export interface DriverPresence {
   lastFaceT: number | null;
+  /** DMS calib T14: the `absent` pause is in force (its probes included) */
+  absent?: boolean;
+  /** DMS calib T14: the last face box before the loss was at the door-side edge */
+  exitEvidence?: boolean;
 }
+
+/** DMS calib T14 (rev4 §2.13.2): a face this recent (the frame clock) is a driver in the seat. */
+export const DRIVER_PRESENT_FACE_S = 60;
 
 /** Scored driver trips: the learning period's count (rev1: m). */
 export const TRIP_INDEX_SQL =
@@ -392,7 +399,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let walk: WalkCandidate | null = null;
   const walkRows: WalkEvidence[] = [];
   let walkTimer: unknown = null;
-  /** the trip whose `ending` was a confirmed walk: a resume of it needs same-car evidence */
+  /** the trip whose `ending` was a confirmed walk: its exit evidence for `driverPresent` (T14) */
   let walkEndedTrip: string | null = null;
   /** the continuous run of same-car mount rows (rev5 §4.2), from the row that began it */
   let mountRunSince: number | null = null;
@@ -402,7 +409,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * A resume held for same-car evidence: the first moving row's time and what arrived since (rows and activities),
    * released to the engine with the evidence, or after an `end` without it (a new trip opens by the usual path).
    */
-  let hold: { firstMovingTs: number; items: ({ kind: 'row'; row: FeatureRow } | { kind: 'activity'; a: MotionActivity })[] } | null = null;
+  let hold: { firstMovingTs: number; items: ({ kind: 'row'; row: FeatureRow; evidence: RowEvidence } | { kind: 'activity'; a: MotionActivity })[] } | null = null;
   let holdTimer: unknown = null;
   const walkScheduler = deps.scheduler ?? realScheduler;
 
@@ -676,29 +683,50 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     while (walkRows.length > 0 && (walkRows[0] as WalkEvidence).ts < row.ts - (WALK_CONFIRM_S + 10) * 1000) walkRows.shift();
     mountRunSince = mountSameCarRow(lastMotion, row) ? (mountRunSince ?? row.ts) : null;
     lastRowTs = row.ts;
-    if (holdsResume(before) && (hold !== null || resumeTrigger(row))) {
+    // DMS calib T14: the row's evidence for M3's auto-ends (the motion evidence and the driver's presence).
+    const evidence: RowEvidence = {
+      stop: lastMotion.stop,
+      vehicleMotion: lastMotion.vehicleMotion,
+      ambiguousStill: lastMotion.ambiguousStill,
+      mountLostS: lastMotion.mountLostS,
+      driverPresent: driverPresent(row.ts, before.clientTripId),
+    };
+    if (holdsResume(before) && (hold !== null || resumeTrigger(row, evidence))) {
       hold ??= openHold(row.ts);
-      hold.items.push({ kind: 'row', row });
+      hold.items.push({ kind: 'row', row, evidence });
       await decideHold(row.ts);
       return;
     }
-    await rowToEngine(row);
+    await rowToEngine(row, evidence);
     await checkWalk();
   }
 
+  /**
+   * rev4 §2.13.2: true with a face in the seat within DRIVER_PRESENT_FACE_S; false with the `absent` pause AND exit
+   * evidence (a door-side exit, or this trip's confirmed walk); null otherwise (no DMS, a reclined nap out of view).
+   */
+  function driverPresent(atTs: number, tripId: string | null): boolean | null {
+    const pr = presenceNow();
+    if (pr === null) return null;
+    if (pr.lastFaceT !== null && atTs - pr.lastFaceT <= DRIVER_PRESENT_FACE_S * 1000) return true;
+    const walked = tripId !== null && walkEndedTrip === tripId;
+    if (pr.absent === true && (pr.exitEvidence === true || walked)) return false;
+    return null;
+  }
+
   /** The row into the engine: the recording state's inputs, the self-dispatch, the motion stream per trip. */
-  async function rowToEngine(row: FeatureRow): Promise<void> {
+  async function rowToEngine(row: FeatureRow, evidence?: RowEvidence): Promise<void> {
     currentRow = row;
     recent.push(row);
     if (recent.length > RECENT_ROWS) recent.shift();
     screenLocked = row.locked;
     if (activeAlert !== null && row.ts >= activeAlert.until) activeAlert = null;
     if (startTripPending && row.gnssValid) startTripNow(row);
-    await engine.dispatch({ type: 'row', row });
+    await engine.dispatch({ type: 'row', row, ...(evidence !== undefined ? { evidence } : {}) });
     if (shouldSelfDispatch(engine.snapshot().status, row)) {
       // M1 post-gap note: the engine went back to armed on this very row; it opens the next drive.
       await engine.dispatch({ type: 'activity', automotive: true, walking: false, ts: row.ts });
-      await engine.dispatch({ type: 'row', row });
+      await engine.dispatch({ type: 'row', row, ...(evidence !== undefined ? { evidence } : {}) });
     }
     const after = engine.snapshot();
     if (after.clientTripId !== motionTripId) {
@@ -773,15 +801,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /** In a walking end's gap window: a resume there needs same-car evidence (rev4 §2.13.4). */
+  /**
+   * The same-car hook (rev4 §2.13.4; DMS calib T14): in the gap window of a walking, pedestrian or empty-seat end, a
+   * resume needs same-car evidence. After any other end (the car never left) it resumes as before.
+   */
   function holdsResume(s: EngineSnapshot): boolean {
-    if (walkEndedTrip === null) return false;
-    if (s.status === 'ending' && s.clientTripId === walkEndedTrip) return true;
-    walkEndedTrip = null; // resumed, finalized or replaced: the walk's end is over
-    return false;
+    return s.status === 'ending' && s.endCause !== null && SAME_CAR_END_CAUSES.includes(s.endCause);
   }
 
-  const resumeTrigger = resumesTrip;
+  /** A row that would resume the trip: the machine's own tests (a known speed above the lockout, a strong row). */
+  const resumeTrigger = (row: FeatureRow, ev: RowEvidence): boolean => resumesTrip(row) || ev.vehicleMotion;
 
   function openHold(firstMovingTs: number): NonNullable<typeof hold> {
     if (holdTimer !== null) walkScheduler.clearTimeout(holdTimer);
@@ -801,7 +830,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const h = hold;
     if (h === null) return;
     const s = engine.snapshot();
-    const still = s.status === 'ending' && s.clientTripId === walkEndedTrip;
+    const still = holdsResume(s);
     const mountRunS = mountRunSince === null ? 0 : (lastRowTs - mountRunSince) / 1000;
     const evidence = still ? sameCarEvidence({ firstMovingTs: h.firstMovingTs, lastFaceT: presenceNow()?.lastFaceT ?? null, mountRunS, manual }) : null;
     const expired = at - h.firstMovingTs >= SAME_CAR_HOLD_S * 1000;
@@ -809,11 +838,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     hold = null;
     if (holdTimer !== null) walkScheduler.clearTimeout(holdTimer);
     holdTimer = null;
-    walkEndedTrip = null;
     if (still && evidence === null) await engine.dispatch({ type: 'end', ts: now() });
     for (const it of h.items) {
       if (it.kind === 'row') {
-        await rowToEngine(it.row);
+        await rowToEngine(it.row, it.evidence);
       } else {
         const e = activityEvent(it.a, now());
         if (e) await engine.dispatch(e);

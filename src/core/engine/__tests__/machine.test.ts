@@ -6,13 +6,13 @@ import { T0, counterIds, limit, mph, row } from '@/core/detectors/__fixtures__/r
 import { ROW_MS } from '@/core/detectors/common';
 import type { AdoptedTrip, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
 import {
-  NO_FIX_END_S,
   PREFETCH_EVERY_M,
   STATIONARY_SPEED_MPS,
   STILL_GRAVITY_MIN,
   createEngine,
 } from '@/core/engine/machine';
 import { appendRow, createSession } from '@/core/engine/session';
+import { AUTO_END } from '@/core/engine/autoEnd';
 import type { CameraFocusSample, FeatureRow, LimitSample } from '@/core/engine/types';
 
 const {
@@ -25,6 +25,8 @@ const {
   LOCKOUT_SPEED_MPS,
   STOPPED_PANEL_S,
 } = CONSTANTS;
+/** DMS calib T14: a standstill with no presence information (a row with no host evidence) ends after this */
+const UNKNOWN_END_S = AUTO_END.STANDSTILL_END_UNKNOWN_S;
 
 const L35 = limit(mph(35));
 const UNKNOWN: LimitSample = { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false };
@@ -958,24 +960,25 @@ describe('ending', () => {
     expect(h.engine.snapshot().limit).toMatchObject({ source: 'unknown', limitMps: null });
   });
 
-  test('stationary for AUTO_END_STATIONARY_S ends the trip on that row and trims the idle tail', async () => {
+  test('T14: a standstill with no presence information ends after STANDSTILL_END_UNKNOWN_S on that row and trims the idle tail', async () => {
     const h = await recording();
     let s = await h.drive(0, 10, FAST);
-    s = await h.drive(s, AUTO_END_STATIONARY_S - 1, STILL);
+    s = await h.drive(s, UNKNOWN_END_S - 1, STILL);
     expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stationarySinceTs: at(10) });
     s = await h.drive(s, 1, STILL);
-    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stationarySinceTs: at(10) });
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stationarySinceTs: at(10), endCause: 'standstill_unknown' });
     expect(h.onFinalize).not.toHaveBeenCalled();
     // The ending row persisted what the cadence had not reached.
     const last = h.checkpoints[h.checkpoints.length - 1]!;
-    expect(rowsSince(last)).toEqual(range(300, 310));
+    expect(rowsSince(last)).toEqual(range(1200, 1210));
     await h.engine.dispatch({ type: 'tick', ts: at(s + GAP_MERGE_S) });
-    // Driving stopped at second 10; the five idle minutes are recorded but not counted.
+    // Driving stopped at second 10; the twenty idle minutes are recorded but not counted.
     expect(only(h.finalized)).toMatchObject({
-      rowsCount: 10 + AUTO_END_STATIONARY_S,
+      rowsCount: 10 + UNKNOWN_END_S,
       endedAt: at(10),
       durationS: 10,
       gaps: [],
+      endCause: 'standstill_unknown',
     });
   });
 
@@ -996,11 +999,11 @@ describe('ending', () => {
     expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stationarySinceTs: null });
   });
 
-  test('a stationary run that started before a dropout keeps counting and auto-ends at its first still row', async () => {
+  test('a stationary run that started before a dropout keeps counting and auto-ends through it', async () => {
     const h = await recording();
     let s = await h.drive(0, 3, STILL);
     expect(h.engine.snapshot().stationarySinceTs).toBe(at(0));
-    s = await h.drive(s, AUTO_END_STATIONARY_S, { speed: -1 });
+    s = await h.drive(s, UNKNOWN_END_S, { speed: -1 });
     expect(h.engine.snapshot()).toMatchObject({ status: 'ending', stationarySinceTs: at(0) });
     await endNow(h, s);
     expect(only(h.finalized)).toMatchObject({ endedAt: at(0), durationS: 0 });
@@ -1095,16 +1098,17 @@ describe('gap-merge', () => {
   test('a stationary ending puts the idle tail inside the gap', async () => {
     const h = await recording();
     const s = await h.drive(0, 10, FAST);
-    await h.drive(s, AUTO_END_STATIONARY_S, STILL);
+    await h.drive(s, UNKNOWN_END_S, STILL);
     expect(h.status()).toBe('ending');
-    await h.drive(400, 5, FAST);
+    await h.drive(1300, 5, FAST);
     expect(h.status()).toBe('recording');
-    await endNow(h, 405);
+    await endNow(h, 1305);
     expect(only(h.finalized)).toMatchObject({
-      gaps: [{ fromTs: at(10), toTs: at(400) }],
-      rowsCount: 10 + AUTO_END_STATIONARY_S + 5,
-      endedAt: at(405),
+      gaps: [{ fromTs: at(10), toTs: at(1300) }],
+      rowsCount: 10 + UNKNOWN_END_S + 5,
+      endedAt: at(1305),
       durationS: 15,
+      endCause: 'manual',
     });
   });
 
@@ -1255,6 +1259,7 @@ describe('finalizing', () => {
       stationarySinceTs: null,
       lockedOut: false,
       stoppedPanel: false,
+      endCause: null,
     });
     await h.engine.dispatch({ type: 'manualStart', mode: 'mounted', passenger: false, ts: at(10) });
     expect(h.engine.snapshot().clientTripId).toBe('trip-2');
@@ -1824,17 +1829,25 @@ describe('M3: adopt after a relaunch', () => {
   });
 });
 
-describe('M3: the no-fix end (I13)', () => {
-  test(`${NO_FIX_END_S} s without a fix on a still phone goes to ending, driving stopped where it began`, async () => {
+describe('M3: the no-fix end (I13), T14: AMBIGUOUS_STILL only after NO_FIX_AMBIGUOUS_END_S (30 min)', () => {
+  const NOFIX_END_S = AUTO_END.NO_FIX_AMBIGUOUS_END_S;
+  test(`${NOFIX_END_S} s without a fix on a still phone goes to ending, driving stopped where it began`, async () => {
     const h = await recording();
     await h.drive(0, 5, FAST);
-    const last = 5 + NO_FIX_END_S - 1;
-    await h.drive(5, NO_FIX_END_S - 1, NO_FIX);
+    const last = 5 + NOFIX_END_S - 1;
+    await h.drive(5, NOFIX_END_S - 1, NO_FIX);
     expect(h.status()).toBe('recording');
     await h.drive(last, 1, NO_FIX);
-    expect(h.status()).toBe('ending');
+    expect(h.engine.snapshot()).toMatchObject({ status: 'ending', endCause: 'no_fix_ambiguous' });
     await endNow(h, last + 1);
     expect(only(h.finalized)).toMatchObject({ endedAt: at(5), durationS: 5 });
+  });
+
+  test('NC-S2 pin: the old 600 s no-fix end is gone (S-END-TUNNEL: a smooth 25 min no-fix tunnel never ends)', async () => {
+    const h = await recording();
+    await h.drive(0, 5, FAST);
+    await h.drive(5, 25 * 60, NO_FIX);
+    expect(h.status()).toBe('recording');
   });
 
   test('a moving phone breaks the run: a handled second, a shaken gravity, a jolt', async () => {
@@ -1848,9 +1861,9 @@ describe('M3: the no-fix end (I13)', () => {
       await h.drive(0, 5, FAST);
       await h.drive(5, 300, NO_FIX);
       await h.drive(305, 1, { ...NO_FIX, ...jolt });
-      await h.drive(306, NO_FIX_END_S - 1, NO_FIX);
+      await h.drive(306, NOFIX_END_S - 1, NO_FIX);
       expect(h.status()).toBe('recording');
-      await h.drive(306 + NO_FIX_END_S - 1, 1, NO_FIX);
+      await h.drive(306 + NOFIX_END_S - 1, 1, NO_FIX);
       expect(h.status()).toBe('ending');
     }
   });
@@ -1860,7 +1873,7 @@ describe('M3: the no-fix end (I13)', () => {
     await h.drive(0, 5, FAST);
     await h.drive(5, 300, NO_FIX);
     await h.drive(305, 1, CREEP);
-    await h.drive(306, NO_FIX_END_S - 1, NO_FIX);
+    await h.drive(306, NOFIX_END_S - 1, NO_FIX);
     expect(h.status()).toBe('recording');
   });
 });
