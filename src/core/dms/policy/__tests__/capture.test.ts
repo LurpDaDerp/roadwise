@@ -362,7 +362,7 @@ describe('the preview (Privacy 6): only in SETUP while stationary (a known < 5 k
 
 describe('the native policy (the wrapper validates it: capturePolicySchema)', () => {
   test('run and pause map to a valid CapturePolicy with the token; OFF maps to null (the host stops native)', () => {
-    const g = createGate(() => 'tok').gateOpen({ optedIn: true, cameraBeta: true, ageBand: '18_plus', driveActive: true, mode: 'mounted', role: 'driver', appActive: true }, 'granted');
+    const g = createGate(() => 'tok').gateOpen({ enabled: true, driveActive: true, appActive: true }, 'granted');
     if (!g.open) throw new Error('closed');
     const tok = g.token;
     const run = nativePolicy(last(sim([{ s: 5, gazeNetEvery: 2 }])), tok);

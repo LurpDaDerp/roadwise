@@ -19,7 +19,7 @@ import { onRoad, synthDrive, type DriverFn } from '../../replay/synth';
 import { featuresFromFrame } from '../__fixtures__/records';
 import { engineFrame } from '../frames';
 
-const GATE: DmsGate = { optedIn: true, cameraBeta: true, ageBand: '18_plus', driveActive: true, mode: 'mounted', role: 'driver', appActive: true };
+const GATE: DmsGate = { enabled: true, driveActive: true, appActive: true };
 const r = createGate(() => 'cross-seam').gateOpen(GATE, 'granted');
 if (!r.open) throw new Error('the gate must open');
 const TOKEN = r.token;

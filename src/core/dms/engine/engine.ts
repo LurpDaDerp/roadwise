@@ -28,7 +28,7 @@
 import { rollCorrect, toDriverFrame } from './angles';
 import { createAlertManager, LOG_CAP, type AlertLogEntry, type AlertRequest, type CameraOffCause, type DmsAlertCommand } from './alerts';
 import { createAttention, distractionGates, type AttentionEvent } from './attention';
-import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
+import { createCalibrator, seedFromFrames, type CalibrationEvent, type CalibrationSeed, type CalibrationState, type Calibrator, type SeedResult } from './calibration';
 import { createConditioner, type GazeUse, type Perceived } from './conditioning';
 import { validateDmsConfig, type DmsConfig, type StopEventsFeed, type ZoneId } from './config';
 import { createContextTracker, type FeatureRowLike, type RowExtras, type SpeedState } from './context';
@@ -52,6 +52,18 @@ export interface DmsEngineInit {
   alerts: 'live' | 'shadow';
   /** a stored profile (the controller loads it uid-bound); the calibrator warm-starts on a mount match */
   profile?: DmsProfileV1 | null;
+  /**
+   * The setup session's seed (v3 "20-second mount and gaze calibration"): the road-centre gaze and head
+   * directions, applied at the drive's start (state `seeded`, verified against fresh evidence, widened until
+   * then). A matching profile's warm start still wins when it comes.
+   */
+  seed?: CalibrationSeed | null;
+  /**
+   * The setup session's mirror zones (v3: "calibrate those gaze zones during DMS setup"): the zone learner's
+   * prior from the first frame, so mirror glances are classified as safe at once. A profile's warm start
+   * replaces the prior with the profile's (which has these merged in from earlier drives).
+   */
+  learnedZones?: readonly LearnedZone[];
   /** the capture policy's gazeNetEvery (1 or 2; T6 r1 carry) */
   gazeNetEvery?: 1 | 2;
 }
@@ -245,7 +257,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
   }
 
   function newDrive() {
-    const cal: Calibrator = createCalibrator(cfg, { driverSide: init.driverSide, profile });
+    const cal: Calibrator = createCalibrator(cfg, { driverSide: init.driverSide, profile, seed: init.seed ?? null });
     return {
       cal,
       cond: createConditioner(cfg),
@@ -255,7 +267,7 @@ export function createDmsEngine(cfg: DmsConfig, init: DmsEngineInit): DmsEngine 
       zones: createZoneClassifier(cfg),
       /** Task C4: the dual state's second classifier (c₁) */
       zones1: createZoneClassifier(cfg),
-      learner: createZoneLearner(cfg, []),
+      learner: createZoneLearner(cfg, init.learnedZones ?? []),
       attention: createAttention(cfg, init.sensitivity),
       fast: createFastRules(cfg),
       health: createHealthMonitor(cfg),

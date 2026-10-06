@@ -1,80 +1,53 @@
-// The fail-closed privacy gate (plan Global Constraints "Privacy (hard)", Task 13, rev1 S-M1/S-M4): the
-// camera may run only while all eight inputs hold; the remote flag is read at drive start only; user and
-// OS inputs apply at once; the token is minted only here, from an injected random source.
+// The fail-closed privacy gate (v3): the camera may run only while all four inputs hold; every input
+// applies at once; the token is minted only here, from an injected random source.
 import { createGate, gateClosedReason, type DmsGate, type GateToken, type PermissionStatus } from '../gate';
 
-const OPEN: DmsGate = { optedIn: true, cameraBeta: true, ageBand: '18_plus', driveActive: true, mode: 'mounted', role: 'driver', appActive: true };
+const OPEN: DmsGate = { enabled: true, driveActive: true, appActive: true };
 const counter = () => {
   let n = 0;
   return () => `nonce-${++n}`;
 };
 
-describe('every combination of the eight inputs (open iff all hold; unknown age closes)', () => {
+describe('every combination of the four inputs (open iff all hold)', () => {
   const bools = [true, false] as const;
-  const ages = ['18_plus', 'other', 'unknown'] as const;
-  const modes = ['mounted', 'pocket', 'auto'] as const;
-  const roles = ['driver', 'passenger', 'unknown'] as const;
   const perms = ['granted', 'denied', 'undetermined'] as const;
-  test('1296 combinations (4 booleans × 4 three-way inputs)', () => {
+  test('24 combinations (3 booleans × the permission)', () => {
     let opened = 0;
     let n = 0;
-    for (const optedIn of bools)
-      for (const cameraBeta of bools)
-        for (const ageBand of ages)
-          for (const driveActive of bools)
-            for (const mode of modes)
-              for (const role of roles)
-                for (const appActive of bools)
-                  for (const permission of perms) {
-                    n++;
-                    const g: DmsGate = { optedIn, cameraBeta, ageBand, driveActive, mode, role, appActive };
-                    const want = optedIn && cameraBeta && ageBand === '18_plus' && driveActive && mode === 'mounted' && role === 'driver' && appActive && permission === 'granted';
-                    const r = createGate(counter()).gateOpen(g, permission);
-                    expect({ g, permission, open: r.open }).toEqual({ g, permission, open: want });
-                    expect(gateClosedReason(g, permission) === null).toBe(want);
-                    if (r.open) opened++;
-                  }
-    expect(n).toBe(1296);
+    for (const enabled of bools)
+      for (const driveActive of bools)
+        for (const appActive of bools)
+          for (const permission of perms) {
+            n++;
+            const g: DmsGate = { enabled, driveActive, appActive };
+            const want = enabled && driveActive && appActive && permission === 'granted';
+            const r = createGate(counter()).gateOpen(g, permission);
+            expect({ g, permission, open: r.open }).toEqual({ g, permission, open: want });
+            expect(gateClosedReason(g, permission) === null).toBe(want);
+            if (r.open) opened++;
+          }
+    expect(n).toBe(24);
     expect(opened).toBe(1);
   });
-  test('each closed input names itself', () => {
+  test('each closed input names itself, in the fixed order', () => {
     const p: PermissionStatus = 'granted';
-    expect(gateClosedReason({ ...OPEN, optedIn: false }, p)).toBe('not_opted_in');
-    expect(gateClosedReason({ ...OPEN, cameraBeta: false }, p)).toBe('flag_off');
-    expect(gateClosedReason({ ...OPEN, ageBand: 'unknown' }, p)).toBe('age');
-    expect(gateClosedReason({ ...OPEN, ageBand: 'other' }, p)).toBe('age');
+    expect(gateClosedReason({ ...OPEN, enabled: false }, p)).toBe('disabled');
     expect(gateClosedReason({ ...OPEN, driveActive: false }, p)).toBe('no_drive');
-    expect(gateClosedReason({ ...OPEN, mode: 'auto' }, p)).toBe('mode');
-    expect(gateClosedReason({ ...OPEN, role: 'unknown' }, p)).toBe('role');
     expect(gateClosedReason({ ...OPEN, appActive: false }, p)).toBe('app_inactive');
     expect(gateClosedReason(OPEN, 'undetermined')).toBe('permission');
+    expect(gateClosedReason(OPEN, 'denied')).toBe('permission');
+    expect(gateClosedReason({ enabled: false, driveActive: false, appActive: false }, 'denied')).toBe('disabled');
+  });
+  test('an unknown value is closed (nothing but literal true opens)', () => {
+    expect(gateClosedReason({ ...OPEN, enabled: undefined as unknown as boolean }, 'granted')).toBe('disabled');
+    expect(gateClosedReason({ ...OPEN, appActive: 1 as unknown as boolean }, 'granted')).toBe('app_inactive');
   });
 });
 
-describe('the remote flag is read at drive start only (standing rule)', () => {
-  test('a flag withdrawn mid-drive keeps the drive running, with the same token; the next drive is closed', () => {
-    const gate = createGate(counter());
-    const a = gate.gateOpen(OPEN, 'granted');
-    const b = gate.gateOpen({ ...OPEN, cameraBeta: false }, 'granted');
-    expect(a).toEqual({ open: true, token: 'nonce-1' });
-    expect(b).toEqual(a);
-    gate.gateOpen({ ...OPEN, cameraBeta: false, driveActive: false }, 'granted');
-    expect(gate.gateOpen({ ...OPEN, cameraBeta: false }, 'granted')).toEqual({ open: false, reason: 'flag_off' });
-  });
-  test('a flag turned on mid-drive waits for the next drive too', () => {
-    const gate = createGate(counter());
-    expect(gate.gateOpen({ ...OPEN, cameraBeta: false }, 'granted')).toEqual({ open: false, reason: 'flag_off' });
-    expect(gate.gateOpen(OPEN, 'granted')).toEqual({ open: false, reason: 'flag_off' });
-    gate.gateOpen({ ...OPEN, driveActive: false }, 'granted');
-    expect(gate.gateOpen(OPEN, 'granted').open).toBe(true);
-  });
-});
-
-describe('user and OS inputs apply at once (rev1 S-M4)', () => {
+describe('user and OS inputs apply at once', () => {
   test.each([
-    ['opt-out', { optedIn: false }, 'granted'],
-    ['a passenger', { role: 'passenger' }, 'granted'],
-    ['pocket mode', { mode: 'pocket' }, 'granted'],
+    ['DMS turned off', { enabled: false }, 'granted'],
+    ['the drive ended', { driveActive: false }, 'granted'],
     ['the app backgrounded', { appActive: false }, 'granted'],
     ['the permission revoked', {}, 'denied'],
   ] as const)('%s closes the open gate on the next evaluation', (_n, change, permission) => {
@@ -84,7 +57,7 @@ describe('user and OS inputs apply at once (rev1 S-M4)', () => {
   });
 });
 
-describe('the gate token (rev1 S-M1)', () => {
+describe('the gate token', () => {
   test('minted on each closed → open edge from the injected source, kept while open', () => {
     const gate = createGate(counter());
     const t1 = gate.gateOpen(OPEN, 'granted');
@@ -107,16 +80,15 @@ describe('the gate token (rev1 S-M1)', () => {
   });
 });
 
-describe('check(): the latch without a mint (the host’s pre-check before any native call, Task 14)', () => {
-  test('it reports the closing input with the latched flag, mints nothing, and observes the drive edges', () => {
+describe('check(): the pre-check without a mint (the host, before any native call)', () => {
+  test('it reports the closing input and mints nothing; a close forgets the token', () => {
     let minted = 0;
     const gate = createGate(() => `nonce-${++minted}`);
-    expect(gate.check(OPEN, 'granted')).toBeNull(); // the drive-start edge latches the flag
+    expect(gate.check(OPEN, 'granted')).toBeNull();
     expect(minted).toBe(0);
-    expect(gate.check({ ...OPEN, cameraBeta: false }, 'granted')).toBeNull(); // withdrawn mid-drive: still latched
     expect(gate.check({ ...OPEN, appActive: false }, 'granted')).toBe('app_inactive');
-    gate.check({ ...OPEN, driveActive: false }, 'granted');
-    expect(gate.check({ ...OPEN, cameraBeta: false }, 'granted')).toBe('flag_off');
-    expect(minted).toBe(0);
+    expect(gate.gateOpen(OPEN, 'granted')).toEqual({ open: true, token: 'nonce-1' });
+    expect(gate.check({ ...OPEN, driveActive: false }, 'granted')).toBe('no_drive');
+    expect(gate.gateOpen(OPEN, 'granted')).toEqual({ open: true, token: 'nonce-2' });
   });
 });

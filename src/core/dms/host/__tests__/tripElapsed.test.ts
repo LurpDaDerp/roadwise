@@ -23,7 +23,7 @@ jest.mock('../../engine/engine', () => {
   };
 });
 
-const GATE: DmsGateInputs = { optedIn: true, cameraBeta: true, ageBand: '18_plus', driveActive: true, mode: 'mounted', role: 'driver', appActive: true, driverSide: 'left', sensitivity: 'normal', alerts: 'live' };
+const GATE: DmsGateInputs = { enabled: true, driveActive: true, appActive: true, driverSide: 'left', sensitivity: 'normal', alerts: 'live' };
 const POWER = { batteryLevel: 80, charging: false, localMinutes: 720 };
 const row = (ts: number): FeatureRow => ({
   ts,

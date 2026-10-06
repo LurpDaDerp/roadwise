@@ -31,6 +31,7 @@ import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/syn
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import { createDefaultCameraBridge } from '@/features/camera/defaultBridge';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
 import { safeMilesEarlierToday } from '@/core/engine/finalize';
@@ -101,6 +102,8 @@ export interface BootstrapDeps {
 /** What the launch needs of the camera bridge. */
 export interface CameraLike {
   presence(): { lastFaceT: number | null } | null;
+  /** The DMS's eyes-off / drowsiness detector for a drive (joins `createDetectors(newId, extra)`). */
+  detectors(): import('@/core/engine/types').Detector[];
   onRow(row: import('@/core/engine/types').FeatureRow, motion: import('@/core/engine/motionEvidence').MotionEvidence | null): void;
   attach(host: DriveHost): () => void;
   dispose(): Promise<void>;
@@ -298,7 +301,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     }
     let camera: CameraLike | null = null;
     try {
-      camera = deps.createCamera === undefined ? null : deps.createCamera?.(db, () => host) ?? null;
+      camera = deps.createCamera === undefined ? createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), onError }) : (deps.createCamera?.(db, () => host) ?? null);
     } catch (error) {
       onError(error, 'camera');
     }
@@ -318,6 +321,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       context: summaryContext,
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       presence: camera === null ? undefined : () => camera.presence(),
+      extraDetectors: camera === null ? undefined : () => camera.detectors(),
       onRow: camera === null ? undefined : (row, motion) => camera.onRow(row, motion),
       appState,
       alertsAvailable,

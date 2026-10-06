@@ -2,7 +2,8 @@
 // mismatch never loads and removes the key; the handover wipe clears it by construction.
 import { DEVICE_TABLES } from '@/boot/device';
 import type { DmsProfileV1 } from '../../engine/profile';
-import { createSettingsProfileStore, DMS_PROFILE_KEY } from '../profileStore';
+import type { DmsSetupRecord } from '../../engine/setupRecord';
+import { createSettingsProfileStore, createSettingsSetupStore, DMS_PROFILE_KEY, DMS_SETUP_KEY } from '../profileStore';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/profile', () => ({ updateOwnProfile: jest.fn(), recordConsent: jest.fn() }));
@@ -65,4 +66,32 @@ test('clear removes it', async () => {
 
 test('wiped by construction: DEVICE_TABLES includes settings', () => {
   expect(DEVICE_TABLES).toContain('settings');
+});
+
+describe('the setup store (v3): the same shape, the key dms.setup, uid-bound', () => {
+  const RECORD: DmsSetupRecord = {
+    v: 1,
+    seed: { gazeCentres: { geometric: { yaw: 2, pitch: -3 }, net: null }, headCentre: { yaw: 1, pitch: -1 }, rollOffsetDeg: 0, mount: PROFILE.mount, orientation: 90, openEyeEar: { r: 0.3, l: 0.3 } },
+    mirrors: [{ id: 'driver_mirror', yawDeg: -42, pitchDeg: 0, halfYawDeg: 4, halfPitchDeg: 4, drives: 3 }],
+    savedAtMs: 1_760_000_000_000,
+  };
+  test('save stores { uid, setup }; load returns it for the same uid and removes it for another', async () => {
+    const s = memorySettings();
+    const store = createSettingsSetupStore(s, 'uid-a');
+    await store.save(RECORD);
+    expect(DMS_SETUP_KEY).toBe('dms.setup');
+    expect(s.map.get(DMS_SETUP_KEY)).toEqual({ uid: 'uid-a', setup: RECORD });
+    await expect(store.load()).resolves.toEqual(RECORD);
+    await expect(createSettingsSetupStore(s, 'uid-b').load()).resolves.toBeNull();
+    expect(s.map.has(DMS_SETUP_KEY)).toBe(false);
+  });
+  test('a malformed record is removed on load; clear removes it', async () => {
+    const s = memorySettings({ [DMS_SETUP_KEY]: { uid: 'uid-a', setup: { v: 1 } } });
+    const store = createSettingsSetupStore(s, 'uid-a');
+    await expect(store.load()).resolves.toBeNull();
+    expect(s.map.has(DMS_SETUP_KEY)).toBe(false);
+    await store.save(RECORD);
+    await store.clear();
+    expect(s.map.has(DMS_SETUP_KEY)).toBe(false);
+  });
 });

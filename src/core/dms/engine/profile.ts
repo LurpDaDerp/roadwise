@@ -234,3 +234,6 @@ export function parseProfile(x: unknown, cfg: ZoneCfg = DEFAULT_DMS_CONFIG as Dm
     ...(x.earNoiseCorrected === true ? { earNoiseCorrected: true as const } : {}),
   };
 }
+
+/** The field parsers, for the setup record (setupRecord.ts): each returns null for anything off. */
+export { angle as parseAngle, signature as parseSignature, learnedZone as parseLearnedZone };

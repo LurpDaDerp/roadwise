@@ -206,6 +206,7 @@ function createDetectorsSession(): TripSession {
     endCause: null,
     dmsOn: false,
     dmsFaceSeen: false,
+    dmsFaceRows: 0,
     lastRowTs: null,
     rowsCount: 0,
     validGnssRows: 0,

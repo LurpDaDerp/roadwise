@@ -39,6 +39,11 @@ export interface TripSession {
   dmsOn: boolean;
   /** The DMS saw a face in the driver's seat at some point of the drive. */
   dmsFaceSeen: boolean;
+  /**
+   * Moving rows (≥ 5 mph) on which the DMS tracked a face in the driver's seat. With `movingRows` it gives the
+   * payload's `dmsOn` (≥ 80 % of the moving time) and `dmsFaceSeen` (≥ 50 %): `@/core/dms` `dmsPayloadFlags`.
+   */
+  dmsFaceRows: number;
   lastRowTs: number | null;
   rowsCount: number;
   validGnssRows: number;

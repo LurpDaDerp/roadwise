@@ -51,20 +51,22 @@
 //   no good frame in 1 s is `limited` / `low_light` when the engine says the LOST frames are dark, else
 //   `face_lost`.
 import { randomUUID } from 'expo-crypto';
-import type { FeatureRow, CameraFocusSample } from '@/core/engine/types';
+import type { FeatureRow } from '@/core/engine/types';
 import type { ThermalName } from '../../../../modules/dms-vision/src/constants';
 import type { NativeState, DmsVisionApi, StateReason, Subscription } from '../../../../modules/dms-vision/src/types';
 import { decodeFrameBatch, parseStateEvent, parseStatus } from '../../../../modules/dms-vision/src/wire';
-import { createFocusQueue } from '../adapters/focus';
+import { createFocusQueue, type DmsFocusSample } from '../adapters/focus';
 import type { DmsAlertCommand } from '../engine/alerts';
-import type { CalibrationState } from '../engine/calibration';
+import type { CalibrationSeed, CalibrationState } from '../engine/calibration';
+import { parseSetupRecord } from '../engine/setupRecord';
+import { sd } from '../engine/stats';
 import { resolveDmsConfig, type DmsConfig, type DmsConfigOverrides } from '../engine/config';
 import { createDmsEngine, feedsDrowsinessScore, type DmsEngine, type DmsEvent } from '../engine/engine';
 import type { FatigueLevel } from '../engine/fatigue';
 import { parseProfile } from '../engine/profile';
 import type { Quality } from '../engine/quality';
 import type { DmsTripSummary } from '../engine/summary';
-import type { EngineFrame, Sensitivity, DriverSide } from '../engine/types';
+import type { AnglePair, DriverSide, EngineFrame, Sensitivity } from '../engine/types';
 import { RingBuffer } from '../engine/windows';
 import { createCapturePolicy, nativePolicy, type PolicyOutput } from '../policy/capture';
 import { createGate, type DmsGate, type GateClosedReason, type GateToken, type PermissionStatus } from '../policy/gate';
@@ -121,10 +123,18 @@ export interface DmsSetupCheck {
   bothEyesTracked: boolean | 'unknown';
   lightingOk: boolean | 'unknown';
   angleOk: boolean | 'unknown';
+  /** the framing is stable: the face box has not drifted over the last 2 s (and the rows' IMU, where real, is steady) */
   phoneSteady: boolean | 'unknown';
 }
 
-export type DmsSeedResult = { ok: true; warmStart: false } | { ok: false; reason: string };
+/** The seed the setup produced (the host stores it in the setup record), or why it could not. */
+export type DmsSeedResult = { ok: true; seed: CalibrationSeed } | { ok: false; reason: string };
+
+/** The setup's live gaze reading: the last frame's gaze relative to the (seeded) road centre, and whether the eyes are tracked now. */
+export interface DmsSetupGaze {
+  rel: AnglePair | null;
+  tracking: boolean;
+}
 
 export type DmsHostSummary = DmsTripSummary & {
   camera: { starts: number; retries: number; gaveUp: boolean };
@@ -137,10 +147,10 @@ export type DmsHostSummary = DmsTripSummary & {
    */
   policy: { stoppedS: number; sleepWatchS: number; absentS: number };
   /**
-   * The focus samples not yet handed out by pushRow when the drive ended (T14 r1 I2): M7 gives them to the
-   * ending trip's scoring (drowsiness samples are never dropped). Empty on summary() mid-drive.
+   * The focus samples not yet handed out when the drive ended (T14 r1 I2): the bridge gives them to the ending
+   * drive's focus detector (drowsiness samples are never dropped). Empty on summary() mid-drive.
    */
-  pendingFocus: CameraFocusSample[];
+  pendingFocus: DmsFocusSample[];
 };
 
 /** Native's own report, as the dev panel shows it: rates and states only. */
@@ -177,6 +187,12 @@ export interface DmsControllerDeps {
   onEvent?(e: DmsEvent): void;
   /** createSettingsProfileStore(settings, uid) for the signed-in uid (rev1 S-M2) */
   profileStore: Pick<DmsProfileStore, 'save' | 'clear'> & { load(): Promise<unknown> };
+  /**
+   * createSettingsSetupStore(settings, uid): the setup session's record (the seed and the mirror zones), read
+   * at each drive's engine creation and applied as the engine's seed and zone prior. Optional: without one, a
+   * drive calibrates from scratch (tests, the diagnostics simulation).
+   */
+  setupStore?: { load(): Promise<unknown> };
   config?: DmsConfigOverrides;
   /** the gate's nonce source; default expo-crypto randomUUID (security M-3) */
   random?: () => string;
@@ -200,10 +216,14 @@ export interface DmsController {
    * One 1 Hz row. `motion`: the row's shared motion evidence, computed once per row by the drive host (M7
    * passes it; Task C1). Without it (the dev panel, tests) the controller computes its own, per drive.
    */
-  pushRow(row: FeatureRow, power: DmsHostPower, motion?: MotionEvidence): CameraFocusSample | null;
+  pushRow(row: FeatureRow, power: DmsHostPower, motion?: MotionEvidence): DmsFocusSample | null;
+  /** The next focus sample waiting after `pushRow`'s, oldest first, or null (frames between rows can close several). */
+  takeFocus(): DmsFocusSample | null;
   beginSetup(): void;
   endSetup(): void;
   setupCheck(): DmsSetupCheck;
+  /** The setup's live gaze relative to the seeded road centre (the mirror prompts sample it). */
+  setupGaze(): DmsSetupGaze;
   seedFromSetup(): DmsSeedResult;
   tagLastAlert(tag: 'wrong'): void;
   status(): DmsHudStatus;
@@ -214,10 +234,13 @@ export interface DmsController {
   endDrive(): Promise<DmsHostSummary | null>;
   dispose(): Promise<void>;
   /**
-   * Shows the OS camera prompt, only when the permission is the one input closing the gate (every other
-   * input holds); otherwise null and no native call. The gate is evaluated again after the answer.
+   * Shows the OS camera prompt (v3: when the user turns DMS on, or at the setup's start). Allowed only while
+   * DMS is enabled for the session and the app is in front; otherwise null and no native call. The gate is
+   * evaluated again after the answer.
    */
   requestPermission(): Promise<PermissionStatus | null>;
+  /** Reads the camera permission (the settings screen's note), under the same rule as `requestPermission`. */
+  permissionStatus(): Promise<PermissionStatus | null>;
   /** Resolves once the queued native calls have settled (tests and the dev panel). */
   idle(): Promise<void>;
   diagnostics(): DmsHostDiagnostics;
@@ -244,6 +267,10 @@ const REPLAY_ROWS = 10;
  * D-C3-5 logs the last box centre at real exits to tune it (0.2 is the likely value).
  */
 const EXIT_EDGE = 0.1;
+/** The setup's framing check: the face box centres of the last FRAMING_WINDOW_MS, at least FRAMING_MIN_FRAMES of them, within FRAMING_MAX_SD (normalised frame units). */
+const FRAMING_WINDOW_MS = 2_000;
+const FRAMING_MIN_FRAMES = 8;
+const FRAMING_MAX_SD = 0.02;
 
 /**
  * C2 round 1 (review-C2 F2): the GNSS stop threshold has one value: the motion evidence's STOP_KMH (the
@@ -321,6 +348,8 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   /** Task C3: the centre-x of the last face box of a TRACKING or HEAD_ONLY frame (presence) */
   let lastBoxCx: number | null = null;
   const qualities = new RingBuffer<{ t: number; tracking: boolean }>(60 * 30);
+  /** the face box centres of the last frames (the setup's framing check) */
+  const boxes = new RingBuffer<{ t: number; cx: number; cy: number }>(2 * 30);
   const recent = new RingBuffer<{ row: FeatureRow; power: DmsHostPower; motion: MotionEvidence | undefined }>(REPLAY_ROWS);
   /** Task C1: the controller's own evidence when the caller passes none; one per drive. */
   const ownMotion = createMotionEvidence();
@@ -350,7 +379,6 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
   // Stats, focus, status.
   const stats = { droppedBatches: 0, droppedRecords: 0, frames: 0, droppedEvents: 0 };
   let focus = createFocusQueue(cfg);
-  let lastAlertStartT: number | null = null;
   let lastStatusJson = '';
 
   /** Every per-drive field back to its initial value (T14 r1 I2). */
@@ -364,7 +392,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     lastBoxCx = null;
     lastFrame = null;
     qualities.clear();
-    lastAlertStartT = null;
+    boxes.clear();
     lastTMs = null;
     sessionOffset = null;
   }
@@ -383,7 +411,6 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     if (engine === null) return;
     const out = engine.drain();
     for (const c of out.commands) {
-      if (c.action === 'start') lastAlertStartT = c.tMs;
       try {
         deps.onAlert(c);
       } catch {
@@ -406,19 +433,24 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
             if (q.tracking) tracked++;
           }
         });
-        focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibrated: engine.snapshot().calibration === 'calibrated', lastAlertStartT });
+        focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibration: engine.snapshot().calibration });
       } else if (e.kind === 'microsleep_nod') {
         // A nod-off is its own drowsiness episode, with no closure episode (T14 r2 R1-m2). Task C2 (U-14): a
         // stop-time one feeds the score per fatigue.stopEventsFeed.
-        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)));
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)), e.tMs, inLowLight());
       } else if (e.kind === 'episode_end') {
         // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2). Task C2
         // (U-14, rev5 §4.4): a stop-time episode (every F event of it stop-time) per fatigue.stopEventsFeed.
-        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000));
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000), e.tMs, inLowLight());
       } else if (e.kind === 'fatigue_minute' && 'level' in e && (e.level === 'drowsy' || e.level === 'severe')) {
-        focus.drowsiness(60);
+        focus.drowsiness(60, e.tMs, inLowLight());
       }
     }
+  }
+
+  /** The camera is in the dark (spec: drowsiness detection is off in low light): the engine's LOST-dark frames, or the policy's dark pause. */
+  function inLowLight(): boolean {
+    return engine?.snapshot().lostLowLight === true || (lastOut?.action === 'pause' && lastOut.reason === 'low_light') || lastOut?.cameraOff === 'dark';
   }
 
   function computeStatus(): DmsHudStatus {
@@ -540,6 +572,13 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       } catch {
         stored = null;
       }
+      // The setup session's seed and mirror zones (v3): a malformed or missing record means from scratch.
+      let setupRecord: ReturnType<typeof parseSetupRecord> = null;
+      try {
+        setupRecord = deps.setupStore === undefined ? null : parseSetupRecord(await deps.setupStore.load());
+      } catch {
+        setupRecord = null;
+      }
       let source: 'geometric' | 'net' = 'geometric';
       if (cfg.gazeSource === 'net') {
         try {
@@ -548,7 +587,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
           source = 'geometric';
         }
       }
-      const e = createDmsEngine({ ...cfg, gazeSource: source }, { driverSide: g.driverSide, sensitivity: g.sensitivity, alerts: g.alerts, profile: parseProfile(stored) });
+      const e = createDmsEngine(
+        { ...cfg, gazeSource: source },
+        { driverSide: g.driverSide, sensitivity: g.sensitivity, alerts: g.alerts, profile: parseProfile(stored), seed: setupRecord?.seed ?? null, learnedZones: setupRecord?.mirrors ?? [] }
+      );
       resetDrive();
       // The drive's last rows, so the engine starts with the last known speed, the straight flag and the
       // course rate (T14 r1 m1). Rows only: no frame came before the engine. The trip clock is the drive's
@@ -654,6 +696,15 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     });
   }
 
+  /**
+   * The OS camera prompt (and the permission read) may be shown only while DMS is enabled for the session and
+   * the app is in front: the user is turning DMS on, or the setup is starting. Never mid-drive out of the blue,
+   * never while disposed.
+   */
+  function mayAskPermission(): boolean {
+    return !disposed && !closing && inputs !== null && inputs.enabled === true && inputs.appActive === true;
+  }
+
   /** The synchronous gate check: no native call unless every input but the permission holds. */
   function evaluate(): boolean {
     if (disposed || closing || inputs === null) return false;
@@ -709,7 +760,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     if (engine !== null) {
       const r = engine.endDrive(now());
       dispatch(); // the stops, and the sample of an F episode still open
-      const pendingFocus: CameraFocusSample[] = [];
+      const pendingFocus: DmsFocusSample[] = [];
       for (let f = focus.take(); f !== null; f = focus.take()) pendingFocus.push(f);
       // Task C8 (rev2 §2.7): the engine decides what is saveable (calibrated or seed-verified, health and the fatigue gate).
       if (r.profile !== null) profile = r.profile;
@@ -778,7 +829,10 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         }
         if (q === 'tracking' || q === 'head_only') {
           lastGoodT = ef.tMs;
-          if (ef.box !== null) lastBoxCx = ef.box.cx;
+          if (ef.box !== null) {
+            lastBoxCx = ef.box.cx;
+            boxes.push({ t: ef.tMs, cx: ef.box.cx, cy: ef.box.cy });
+          }
         }
         if (q === 'tracking') {
           lastTrackingT = ef.tMs;
@@ -907,7 +961,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         callerMotion = true;
         if (motion.ts === row.ts) ev = motion;
         else motionMismatches++;
-      } else if (!callerMotion) ev = ownMotion.onRow(row, { mounted: inputs?.mode === 'mounted' });
+      } else if (!callerMotion) ev = ownMotion.onRow(row, { mounted: true }); // v3: every drive is a mounted driver's
       lastMotion = ev ?? null;
       recent.push({ row, power, motion: ev });
       if (driveStartPending) {
@@ -1028,22 +1082,42 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
 
     setupCheck() {
       const u = 'unknown' as const;
-      if (lastFrame === null) return { faceVisible: u, bothEyesTracked: u, lightingOk: u, angleOk: u, phoneSteady: lastRow === null ? u : lastRow.gravityStability >= 0.95 && lastRow.handlingScore < 0.6 };
+      const rowSteady = lastRow === null ? u : lastRow.gravityStability >= 0.95 && lastRow.handlingScore < 0.6;
+      if (lastFrame === null) return { faceVisible: u, bothEyesTracked: u, lightingOk: u, angleOk: u, phoneSteady: rowSteady };
       const f = lastFrame;
+      // The framing: the face box has not drifted over the last FRAMING_WINDOW_MS (a phone sliding in its mount,
+      // or held in a hand, moves the whole box; a driver settling moves it little). Unknown until enough frames.
+      const recent: { cx: number; cy: number }[] = [];
+      boxes.forEach((b) => {
+        if (b.t >= f.tMs - FRAMING_WINDOW_MS) recent.push(b);
+      });
+      const framing: boolean | 'unknown' = recent.length < FRAMING_MIN_FRAMES ? u : sd(recent.map((b) => b.cx)) <= FRAMING_MAX_SD && sd(recent.map((b) => b.cy)) <= FRAMING_MAX_SD;
+      const phoneSteady: boolean | 'unknown' = framing === u || rowSteady === u ? (framing === false || rowSteady === false ? false : u) : framing && rowSteady;
       return {
         faceVisible: f.face,
         bothEyesTracked: quality === 'tracking' && f.eyeR !== null && f.eyeL !== null && f.eyeR.irisIn && f.eyeL.irisIn,
         lightingOk: f.faceLuma !== null && f.faceLuma >= cfg.quality.headOnlyMinFaceLuma,
         angleOk: f.head !== null && Math.abs(f.head.yaw) <= 25 && Math.abs(f.head.pitch) <= 25,
-        phoneSteady: lastRow === null ? u : lastRow.gravityStability >= 0.95 && lastRow.handlingScore < 0.6,
+        phoneSteady,
       };
+    },
+
+    setupGaze() {
+      const snap = engine?.snapshot() ?? null;
+      const t = now();
+      return { rel: snap?.gazeRel ?? null, tracking: snap !== null && quality === 'tracking' && t - lastTrackingT <= ACTIVE_WITHIN_MS };
     },
 
     seedFromSetup() {
       if (engine === null) return { ok: false, reason: 'no_tracking' };
       const r = engine.seedFromSetup();
       dispatch();
-      return r.ok ? { ok: true, warmStart: false } : { ok: false, reason: r.reason };
+      return r.ok ? { ok: true, seed: r.seed } : { ok: false, reason: r.reason };
+    },
+
+    takeFocus() {
+      if (disposed || closing) return null;
+      return focus.take();
     },
 
     tagLastAlert(tag) {
@@ -1089,7 +1163,7 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
     },
 
     async requestPermission() {
-      if (disposed || closing || closedReason !== 'permission') return null;
+      if (!mayAskPermission()) return null;
       let status: PermissionStatus;
       try {
         status = (await deps.native.requestPermission()).status;
@@ -1098,6 +1172,15 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
       }
       if (evaluate()) openAndApply();
       return status;
+    },
+
+    async permissionStatus() {
+      if (!mayAskPermission()) return null;
+      try {
+        return (await deps.native.getPermission()).status;
+      } catch {
+        return null;
+      }
     },
 
     async idle() {

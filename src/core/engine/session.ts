@@ -28,6 +28,7 @@ export function createSession(start: SessionStart): TripSession {
     endCause: null,
     dmsOn: start.dmsOn,
     dmsFaceSeen: false,
+    dmsFaceRows: 0,
     lastRowTs: null,
     rowsCount: 0,
     validGnssRows: 0,
@@ -70,6 +71,7 @@ export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean
     if (speed >= PHONE_MIN_MPH * MPS_PER_MPH) {
       session.movingRows += 1;
       if (imuActive(row)) session.imuActiveRows += 1;
+      if (faceSeen) session.dmsFaceRows += 1;
     }
   }
   if (!row.gnssValid || !Number.isFinite(row.lat) || !Number.isFinite(row.lng)) return;

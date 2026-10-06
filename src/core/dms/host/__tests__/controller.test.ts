@@ -19,12 +19,8 @@ import { STOP_KMH as POLICY_STOP_KMH } from '../../policy/constants';
 import * as engineModule from '../../engine/engine';
 
 const GATE: DmsGateInputs = {
-  optedIn: true,
-  cameraBeta: true,
-  ageBand: '18_plus',
+  enabled: true,
   driveActive: true,
-  mode: 'mounted',
-  role: 'driver',
   appActive: true,
   driverSide: 'left',
   sensitivity: 'normal',
@@ -131,14 +127,8 @@ const methods = (h: H) => h.fake.calls.map((c) => c.method);
 
 describe('fail closed (plan Privacy 5)', () => {
   test.each([
-    ['not opted in', { optedIn: false }],
-    ['the flag off', { cameraBeta: false }],
-    ['not 18_plus', { ageBand: 'other' as const }],
-    ['an unknown age', { ageBand: 'unknown' as const }],
+    ['DMS off for the drive', { enabled: false }],
     ['no drive', { driveActive: false }],
-    ['pocket mode', { mode: 'pocket' as const }],
-    ['auto mode', { mode: 'auto' as const }],
-    ['a passenger', { role: 'passenger' as const }],
     ['the app inactive', { appActive: false }],
   ])('%s: zero native calls, getPermission included', async (_n, change) => {
     const h = harness();
@@ -198,9 +188,7 @@ describe('the lifecycle', () => {
     expect(lastPolicy(h)).toMatchObject({ capture: 'run', fps: 15 });
   });
   test.each([
-    ['opt-out', { optedIn: false }],
-    ['a passenger', { role: 'passenger' as const }],
-    ['pocket mode', { mode: 'pocket' as const }],
+    ['DMS turned off', { enabled: false }],
     ['the app backgrounded', { appActive: false }],
   ])('%s stops native at once (rev1 S-M4)', async (_n, change) => {
     const h = harness();
@@ -356,14 +344,13 @@ describe('scoring, the profile and the gaze source', () => {
 });
 
 describe('the gate’s lifetime (security M-2, M-4)', () => {
-  test('two drives with the flag withdrawn between: the second stays closed', async () => {
+  test('two drives with DMS turned off between: the second stays closed', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 3);
-    // No setGate({ driveActive: false }) in between: endDrive itself closes the gate and observes the latch
-    // edge (security T14 I-1).
+    // No setGate({ driveActive: false }) in between: endDrive itself closes the gate (security T14 I-1).
     await h.ctl.endDrive();
-    h.ctl.setGate({ ...GATE, cameraBeta: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     await drive(h, 3, 6);
     expect(methods(h).filter((m) => m === 'start')).toHaveLength(1);
     expect(h.fake.nativeState()).toBe('stopped');
@@ -464,16 +451,16 @@ describe('T14 r1 seat I1: every open → closed gate transition stops the sound'
     await drive(h, 0, 104, { frameAt: eyesShut(100, 200, 104) });
     expect(critStarted(h)).toBe(true);
     const n = h.alerts.length;
-    h.ctl.setGate({ ...GATE, optedIn: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     expect(h.alerts.slice(n).map((c) => `${c.action}:${c.tier}`)).toEqual(['stop:3']);
   });
-  movingTest('a distraction, then the role → passenger: stop', async () => {
+  movingTest('a distraction, then DMS turned off: stop', async () => {
     const h = harness();
     h.ctl.setGate(GATE);
     const stack: DriverFn = (t, r) => ({ gaze: t >= 100 ? rel(30, -20) : onRoad(r), speedKmh: 60 });
     await drive(h, 0, 104, { frameAt: synthFrames(stack, 106, 15) });
     expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction']);
-    h.ctl.setGate({ ...GATE, role: 'passenger' });
+    h.ctl.setGate({ ...GATE, enabled: false });
     expect(h.alerts.map((c) => `${c.action}:${c.kind}`)).toEqual(['start:distraction', 'stop:distraction']);
   });
   test('a Critical, then the permission revoked (read on the next row): stop', async () => {
@@ -491,7 +478,7 @@ describe('T14 r1 seat I1: every open → closed gate transition stops the sound'
     const h = harness();
     h.ctl.setGate(GATE);
     await drive(h, 0, 10);
-    h.ctl.setGate({ ...GATE, optedIn: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     await h.ctl.idle();
     expect(h.alerts).toEqual([]);
   });
@@ -607,7 +594,7 @@ describe('T14 r1 security m-2: a stop never queues', () => {
     await drive(h, 0, 3);
     hang = true;
     h.ctl.pushRow(featureRow(3000, 60), POWER); // its permission read hangs, and the queue with it
-    h.ctl.setGate({ ...GATE, optedIn: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     expect(methods(h).at(-1)).toBe('stop');
     expect(h.fake.nativeState()).toBe('stopped');
   });
@@ -635,7 +622,7 @@ describe('T14 r1 security m-2: a stop never queues', () => {
     h.ctl.setGate(GATE); // one queued open, and no row: nothing else is queued that could stop it later
     for (let i = 0; i < 50 && release === null; i++) await Promise.resolve();
     expect(release).not.toBeNull();
-    h.ctl.setGate({ ...GATE, optedIn: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     (release as unknown as () => void)();
     await h.ctl.idle();
     expect(h.fake.nativeState()).toBe('stopped');
@@ -645,7 +632,7 @@ describe('T14 r1 security m-2: a stop never queues', () => {
 describe('T14 r1: the permission prompt and the diagnostics the dev panel reads', () => {
   test('requestPermission asks native only when the permission is the one input closing the gate', async () => {
     const h = harness();
-    h.ctl.setGate({ ...GATE, optedIn: false });
+    h.ctl.setGate({ ...GATE, enabled: false });
     expect(await h.ctl.requestPermission()).toBeNull();
     expect(methods(h)).not.toContain('requestPermission');
     const u = harness();
@@ -825,7 +812,7 @@ describe('final review I-2: no frame reaches the engine after the gate closes', 
     const frames = synthFrames(phone, 110, 15);
     await drive(h, 0, 103, { frameAt: frames, speed: () => 70 });
     expect(h.alerts.some((c) => c.action === 'start')).toBe(true);
-    h.ctl.setGate({ ...GATE, role: 'passenger' });
+    h.ctl.setGate({ ...GATE, enabled: false });
     const n = h.alerts.length;
     const framesBefore = h.ctl.diagnostics().frames;
     // native's teardown flushes what it held: 4 s of the same head-down frames

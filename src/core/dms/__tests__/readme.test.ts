@@ -33,12 +33,8 @@ function listed(label: string): string[] {
 const keys = (r: Record<string, true>) => Object.keys(r).sort();
 
 const GATE_INPUTS = {
-  optedIn: true,
-  cameraBeta: true,
-  ageBand: true,
+  enabled: true,
   driveActive: true,
-  mode: true,
-  role: true,
   appActive: true,
   driverSide: true,
   sensitivity: true,
@@ -46,12 +42,8 @@ const GATE_INPUTS = {
 } satisfies Record<keyof DmsGateInputs, true>;
 const CAMERA = { off: true, starting: true, active: true, limited: true, paused: true } satisfies Record<DmsHudStatus['camera'], true>;
 const REASONS = {
-  not_opted_in: true,
-  flag_off: true,
-  age: true,
+  disabled: true,
   no_drive: true,
-  mode: true,
-  role: true,
   app_inactive: true,
   permission: true,
   error: true,
@@ -142,7 +134,7 @@ test('the gate inputs are exactly DmsGateInputs', () => {
   const s = section('Gate inputs');
   const named = [...s.matchAll(/^- \*\*([^*]+)\*\*/gm)].flatMap((m) => [...m[1]!.matchAll(/`(\w+)`/g)].map((n) => n[1]!));
   expect(named.filter((n) => n in GATE_INPUTS).sort()).toEqual(keys(GATE_INPUTS));
-  expect(named.filter((n) => !(n in GATE_INPUTS) && !['mounted', 'driver', 'live', 'shadow'].includes(n))).toEqual([]);
+  expect(named.filter((n) => !(n in GATE_INPUTS))).toEqual([]);
 });
 
 test('the status: camera values and reasons', () => {
@@ -169,19 +161,20 @@ test('the event kinds are exactly DmsEvent’s', () => {
   expect(listed('- **Event kinds:**')).toEqual(keys(EVENTS));
 });
 
-test('M7 is told to use the host-owned binding, never the wrapper', () => {
+test('the bridge is told to use the host-owned binding, never the wrapper', () => {
   expect(README).toMatch(/createDefaultDmsController\(/);
   expect(README).not.toMatch(/native: DmsVision/);
 });
 
-test('T16 r3 (security I-1): the README says what passing cameraFocus uploads, and the M7 carries that gate it', () => {
+test('v3: the README says what the upload carries (two booleans and the two event types) and that nothing camera-specific exists in the contract', () => {
   const s = section('Where the data may go');
-  expect(s).toMatch(/`cameraFocus`[^\n]*\bis an upload\b/);
-  for (const field of ["source 'camera'", '`glanceS`', '`focusKind`', '3 dp', '`camera_session`', '`camera_day`']) expect(s).toContain(field);
-  expect(s).toMatch(/per trip[^\n]*A10 disclosure[^\n]*versioned camera consent|A10 disclosure[^\n]*versioned camera consent[^\n]*per trip/);
-  expect(s).toMatch(/guardian[^\n]*camera-sourced events/i);
+  for (const word of ['`dmsOn`', '`dmsFaceSeen`', '`eyes_off`', '`drowsy`', 'privacy.test.ts']) expect(s).toContain(word);
+  expect(s).toMatch(/No camera-specific field exists in the v3 contract/);
+  expect(s).toMatch(/stay on the device/);
+  expect(s).not.toMatch(/camera_session|cameraFocus|focusKind/);
 });
 
-test('T16 r3 (seat T14 Round 2): M7 maps busy to "camera in use by diagnostics"', () => {
-  expect(README).toMatch(/`busy`[^\n]*camera in use by diagnostics/);
+test('the Calls table names takeFocus, setupGaze and permissionStatus (the v3 additions)', () => {
+  const calls = section('Calls');
+  for (const m of ['takeFocus()', 'setupGaze()', 'permissionStatus()']) expect(calls).toContain(`\`${m}\``);
 });

@@ -6,7 +6,7 @@ import { createCapturePolicy, nativePolicy } from '../../policy/capture';
 import { createGate, type GateToken } from '../../policy/gate';
 import { gatedNative } from '../native';
 
-const OPEN = { optedIn: true, cameraBeta: true, ageBand: '18_plus' as const, driveActive: true, mode: 'mounted' as const, role: 'driver' as const, appActive: true };
+const OPEN = { enabled: true, driveActive: true, appActive: true };
 
 function realToken(): GateToken {
   const r = createGate(() => 'nonce-1').gateOpen(OPEN, 'granted');
