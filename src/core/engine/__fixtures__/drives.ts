@@ -1,89 +1,80 @@
-// Synthetic drives and finalize deps shared by the recorder and recovery suites. Lives outside
-// `__tests__/` because Jest's default `testMatch` treats every file in there as a suite.
-import * as scoring from '@scoring';
-import { T0, row } from '@/core/detectors/__fixtures__/rows';
-import type { FinalizeDeps } from '@/core/engine/finalize';
-import type { FeatureRow } from '@/core/engine/types';
-import type { Db } from '@/data/db';
+// Synthetic closed sessions for the finalize, recovery and sync suites. Lives outside `__tests__/`
+// because Jest's default `testMatch` treats every file in there as a suite.
+import { createDetectors } from '@/core/detectors';
+import { row, T0 } from '@/core/detectors/__fixtures__/rows';
+import type { TripSession } from '@/core/engine/engine.types';
+import { appendRow, closeSession, createSession } from '@/core/engine/session';
+import type { DetectedEvent, FeatureRow } from '@/core/engine/types';
 
 export const TZ = 'America/Los_Angeles';
-/** Standard gravity, m/s²: the GNSS Δspeed a brake must show for the harsh detector to agree. */
-export const G = 9.80665;
-/** m/s the drive cruises at: 10 m/s east from San Francisco, ten metres per row. */
-export const SPEED = 10;
-
-const SF = { lat: 37.7749, lng: -122.4194 };
-const M_PER_DEG_LAT = 111_194.93;
-const M_PER_DEG_LNG = M_PER_DEG_LAT * Math.cos((SF.lat * Math.PI) / 180);
+/** Seattle, heading east. */
+export const START = { lat: 47.6062, lng: -122.3321 };
+const M_PER_DEG_LNG = 111_194.93 * Math.cos((START.lat * Math.PI) / 180);
 
 export interface DriveOptions {
-  /** Row index of a 0.35 g brake the GNSS agrees with: that row is 0.25 g slower than the one before, held for three rows. */
-  brakeAt?: number;
-  /** Cruise speed, m/s. */
-  speed?: number;
-  /** epoch ms of row 0. */
+  /** m/s; default 15 (≈ 34 mph): 15 m per row. */
+  speedMps?: number;
   t0?: number;
+  /** Every `mockEvery`th row is a mock fix. */
+  mockEvery?: number;
+  over?: (i: number) => Partial<FeatureRow>;
 }
 
-/**
- * `n` rows at 1 Hz driving east at `speed`, the position integrated from it, with a little IMU
- * noise (so the IMU counts as present) and every 50th fix lost (still grade A). Long enough
- * (≥ 120 rows) the drive clears both `MIN_SCORED_*` thresholds and scores.
- */
-export function drive(n: number, opts: DriveOptions = {}): FeatureRow[] {
+/** `n` 1 Hz rows driving east, the position integrated from the speed. */
+export function rows(n: number, opts: DriveOptions = {}): FeatureRow[] {
   const t0 = opts.t0 ?? T0;
-  const cruise = opts.speed ?? SPEED;
-  const brake = opts.brakeAt ?? -1;
-  const slow = cruise - 0.25 * G;
-  const rows: FeatureRow[] = [];
-  let lng = SF.lng;
+  const speed = opts.speedMps ?? 15;
+  const out: FeatureRow[] = [];
+  let lng = START.lng;
   for (let i = 0; i < n; i += 1) {
-    const braking = brake >= 0 && i >= brake && i < brake + 3;
-    const speed = braking ? slow : cruise;
-    rows.push(
+    out.push(
       row({
         ts: t0 + i * 1000,
-        lat: SF.lat,
+        lat: START.lat,
         lng,
         speed,
-        gnssValid: i % 50 !== 25,
-        aLonMax: 0.02,
-        aLonMin: i === brake ? -0.35 : -0.02,
+        aLonMax: 0.05,
+        aLonMin: -0.05,
+        ...(opts.mockEvery !== undefined && i % opts.mockEvery === 0 ? { mock: true } : {}),
+        ...(opts.over?.(i) ?? {}),
       })
     );
     lng += speed / M_PER_DEG_LNG;
   }
-  return rows;
+  return out;
 }
 
-const hex = (buf: ArrayBuffer): string =>
-  Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-
-/** Lowercase hex SHA-256 over UTF-8, what `src/lib/hash` does with expo-crypto on device. */
-export const sha256 = async (text: string): Promise<string> =>
-  hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
-
-/** The finalizer's deps over `db`, with the trace files kept in memory. */
-export function finalizeDeps(
-  db: Db,
-  now: () => number
-): { deps: FinalizeDeps; files: Map<string, Uint8Array> } {
-  const files = new Map<string, Uint8Array>();
-  return {
-    files,
-    deps: {
-      db,
-      scoring,
-      tz: TZ,
-      fs: {
-        writeGzip: async (path, bytes) => {
-          files.set(path, bytes);
-        },
-      },
-      hash: { sha256 },
-      now,
-    },
-  };
+/** A closed session of `n` rows with the given events, as the engine would hand it to the finalizer. */
+export function closedSession(n: number, events: DetectedEvent[] = [], opts: DriveOptions & { clientTripId?: string; dmsOn?: boolean; unsafeRows?: (i: number) => boolean } = {}): Readonly<TripSession> {
+  const t0 = opts.t0 ?? T0;
+  const session = createSession({ clientTripId: opts.clientTripId ?? '11111111-1111-4111-8111-111111111111', startedAt: t0, dmsOn: opts.dmsOn ?? false });
+  const list = rows(n, opts);
+  const det = createDetectors(() => 'x');
+  list.forEach((r, i) => {
+    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { tripStartedAt: t0, callActive: false, lockReliable: true, lockLagged: false });
+    appendRow(session, r, opts.unsafeRows?.(i) ?? false, false);
+  });
+  session.events.push(...events);
+  session.pending = [];
+  return closeSession(session, t0 + n * 1000, 'manual');
 }
+
+export const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+export const speedingEvent = (startedAt: number, durationS = 20): DetectedEvent => ({
+  id: uuid(1),
+  type: 'speeding',
+  tier: 'minor',
+  startedAt,
+  durationS,
+  measured: { speedMph: 41, limitMph: 35 },
+});
+
+export const brakeEvent = (startedAt: number): DetectedEvent => ({
+  id: uuid(2),
+  type: 'hard_brake',
+  tier: 'minor',
+  startedAt,
+  durationS: 1,
+  measured: { peakG: 0.45, speedMph: 25 },
+});

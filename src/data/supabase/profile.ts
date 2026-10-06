@@ -1,3 +1,5 @@
+import { callRpc } from '@/data/server/rpc';
+
 import { supabase } from './client';
 import type { Database } from './types';
 
@@ -6,61 +8,51 @@ type Tables = Database['public']['Tables'];
 export type Profile = Tables['profiles']['Row'];
 export type Consent = Tables['consents']['Row'];
 
-// The generated `Update`/`Insert` types describe every column; the column grants in
-// 0001_foundation.sql let a client write only these. Postgres rejects the whole statement (42501)
-// when any other key is present, so the lists below are the single source of truth for the payload
-// shape and the wrappers send nothing outside them. See README.md beside this file.
-const PROFILE_PATCH_COLUMNS = [
-  'display_name',
-  'avatar_path',
-  'driving_stage',
-  'units',
-  'locale',
-  'profile_visibility',
-  'flags',
-] as const;
-const CONSENT_INSERT_COLUMNS = ['type', 'version'] as const;
+export type LicenseStage = 'permit' | 'intermediate' | 'full';
+export type HeatmapVisibility = 'only_me' | 'clan' | 'friends';
 
-export type ProfilePatch = Pick<Tables['profiles']['Update'], (typeof PROFILE_PATCH_COLUMNS)[number]>;
-export type ConsentInsert = Pick<Tables['consents']['Insert'], (typeof CONSENT_INSERT_COLUMNS)[number]>;
-
-/**
- * Copies only `columns` out of `value`. A key that is missing and a key set to `undefined` both
- * mean "leave the column alone" (undefined is not a JSON value), so neither is sent; `null` is a
- * real value (clear the column) and goes through.
- */
-function pickColumns<T extends object, K extends keyof T>(value: T, columns: readonly K[]): Pick<T, K> {
-  const out = {} as Pick<T, K>;
-  for (const column of columns) {
-    if (value[column] !== undefined) out[column] = value[column];
-  }
-  return out;
+/** What `update_profile` accepts (backend-interface §5). A `null` state clears it. */
+export interface ProfilePatch {
+  license_stage?: LicenseStage | null;
+  units?: 'mi' | 'km';
+  state?: string | null;
+  heatmap_visibility?: HeatmapVisibility;
 }
 
+export interface ConsentInsert {
+  /** `terms_13_plus`; the server records the kind, the client only names the version. */
+  kind?: string;
+  type?: string;
+  version: string;
+}
+
+/** The owner's own row (RLS: owner-read). */
 export async function fetchProfile(userId: string): Promise<Profile> {
   const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
   if (error) throw error;
   return data;
 }
 
-/** The only write path for `profiles`: sends the client-writable columns of `patch`, nothing else. */
+/** The only write path for `profiles`: the `update_profile` RPC, then the row read back. */
 export async function updateOwnProfile(userId: string, patch: ProfilePatch): Promise<Profile> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .update(pickColumns(patch, PROFILE_PATCH_COLUMNS))
-    .eq('id', userId)
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data;
+  const args: Record<string, unknown> = {};
+  if (patch.license_stage !== undefined) args.p_license_stage = patch.license_stage;
+  if (patch.units !== undefined) args.p_units = patch.units;
+  if (patch.state !== undefined) args.p_state = patch.state ?? '';
+  if (patch.heatmap_visibility !== undefined) args.p_heatmap_visibility = patch.heatmap_visibility;
+  await callRpc<unknown>('update_profile', args);
+  return fetchProfile(userId);
 }
 
-/** The only write path for `consents`: `user_id`, `type` and `version`; the server stamps the rest. */
+/** The only write path for `consents`: `accept_terms(p_version)`, then the latest row read back. */
 export async function recordConsent(userId: string, consent: ConsentInsert): Promise<Consent> {
+  await callRpc<unknown>('accept_terms', { p_version: consent.version });
   const { data, error } = await supabase
     .from('consents')
-    .insert({ user_id: userId, ...pickColumns(consent, CONSENT_INSERT_COLUMNS) })
     .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
     .single();
   if (error) throw error;
   return data;

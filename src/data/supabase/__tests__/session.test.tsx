@@ -52,14 +52,14 @@ jest.mock('@/data/supabase/profile', () => ({
   })),
 }));
 
-const ava = { id: 'u1', display_name: 'Ava', age_band: '18_plus' };
+const ava = { id: 'u1', username: 'ava' };
 const sessionFor = (id: string) => ({ user: { id } });
 
 function Probe() {
   const s = useSession();
   return (
     <View>
-      <Text>{s.status}:{s.profile?.display_name ?? '-'}</Text>
+      <Text>{s.status}:{s.profile?.username ?? '-'}</Text>
       <Text>source:{s.profileSource ?? '-'}</Text>
       <Text onPress={() => { s.signOut().catch(() => {}); }}>sign out</Text>
       <Text onPress={() => { s.refreshProfile().catch(() => {}); }}>refresh</Text>

@@ -1,115 +1,102 @@
-// Speeding episodes (§9.3): speed above limit + tolerance for at least SPEEDING_MIN_S rows, on a
-// valid fix with a known limit. Confidence comes from the limit source and the GNSS quality (§9.5).
-import { CONSTANTS } from '@scoring';
-import type { DetectedEvent, Detector } from '../engine/types';
-import {
-  GNSS_CAP_Q,
-  ROW_MS,
-  alertableFor,
-  contextOf,
-  gnssPoor,
-  limitConfidence,
-  statusFor,
-} from './common';
+// Speeding episodes (product spec v3 "Speeding threshold"): speed beyond L + T(L) on a usable fix
+// with an actionable limit. One continuous episode is one incident, tiered by its peak; it counts
+// after 5 s above the threshold (3 s once severe) and ends after 5 s back under L + T − 2 mph.
+import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_MIN_S, type Tier } from '@scoring';
 
-interface OpenEpisode {
+import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
+import { knownSpeedMph, limitMphFor, round1, rowEligible } from './common';
+
+const RANK: Record<Tier, number> = { minor: 0, moderate: 1, severe: 2 };
+const worse = (a: Tier, b: Tier): Tier => (RANK[a] >= RANK[b] ? a : b);
+
+interface Episode {
   id: string;
   startedAt: number;
-  lastTs: number;
-  rows: number;
-  maxOver: number;
-  limitAtMax: number;
-  speedAtMax: number;
-  limitQ: number;
-  gnssCapped: boolean;
-  alertedAt: number | null;
-  context: DetectedEvent['context'];
+  /** Rows beyond the threshold so far — the event's `durationS`. */
+  overRows: number;
+  /** Consecutive rows back under L + T − 2 (or without a usable limit). */
+  belowRows: number;
+  peak: Tier;
+  peakSpeedMph: number;
+  limitAtPeak: number;
+  /** The current row is beyond the threshold, at this tier. */
+  current: Tier | null;
+  confirmed: boolean;
 }
 
 export interface SpeedingDetector extends Detector {
-  /** The alert layer told the driver about episode `id` at `ts`; sets up the correction credit. */
-  markAlerted(id: string, ts: number): void;
-  /** Id of the open episode once it is long enough to become an event, else null. */
-  openEpisodeId(): string | null;
+  /** The episode in progress while the current row is beyond the threshold, else null. */
+  open(): OpenEpisode | null;
+  /** An episode is open (its end window included): the row's distance is not safe miles. */
+  active(): boolean;
 }
 
 export function createSpeedingDetector(newId: () => string): SpeedingDetector {
-  let open: OpenEpisode | null = null;
+  let ep: Episode | null = null;
 
   const close = (): DetectedEvent[] => {
-    const ep = open;
-    open = null;
-    if (!ep || ep.rows < CONSTANTS.SPEEDING_MIN_S) return [];
-    const endedAt = ep.lastTs + ROW_MS;
-    const q = ep.gnssCapped ? Math.min(ep.limitQ, GNSS_CAP_Q) : ep.limitQ;
-    const status = statusFor(q);
-    const corrected =
-      ep.alertedAt !== null &&
-      endedAt >= ep.alertedAt &&
-      endedAt - ep.alertedAt <= CONSTANTS.SPEEDING_GRACE_S * 1000;
+    const e = ep;
+    ep = null;
+    if (e === null || !e.confirmed) return [];
     return [
       {
-        id: ep.id,
-        category: 'speeding',
-        startedAt: ep.startedAt,
-        durationS: ep.rows,
-        q,
-        corrected,
-        status,
-        measured: { speedMps: ep.speedAtMax, limitMps: ep.limitAtMax, overMps: ep.maxOver },
-        context: ep.context,
-        // With a good fix throughout, q ≥ Q_FULL_AT exactly when `limitActionable(limit)` held on
-        // every row of the episode: the line the HUD's limit sign is drawn on (common.ts, Ruling U1-I1).
-        alertable: alertableFor(status, q),
-        source: 'gnss',
+        id: e.id,
+        type: 'speeding',
+        tier: e.peak,
+        startedAt: e.startedAt,
+        durationS: e.overRows,
+        measured: { speedMph: round1(e.peakSpeedMph), limitMph: e.limitAtPeak },
       },
     ];
   };
 
   return {
     push(row, limit, ctx) {
-      const limitQ = limitConfidence(limit);
-      const limitMps = limit.limitMps;
-      const usable = limitQ !== null && limitMps !== null && row.gnssValid && row.speed >= 0;
-      // The trigger is measured from the tolerance line; the recorded over-limit is measured from
-      // the limit itself, which is what the §9.3 severity bands are written against.
-      const beyondTolerance = usable ? row.speed - (limitMps + CONSTANTS.SPEEDING_TOLERANCE_MPS) : 0;
-      if (limitQ === null || limitMps === null || beyondTolerance <= 0) return close();
-      const over = row.speed - limitMps;
+      const limitMph = limitMphFor(row, limit);
+      const speedMph = knownSpeedMph(row);
+      const usable = limitMph !== null && speedMph !== null && rowEligible(row, ctx);
+      const tier = usable ? speedTier(speedMph, limitMph) : null;
 
-      if (!open) {
-        open = {
-          id: newId(),
-          startedAt: row.ts,
-          lastTs: row.ts,
-          rows: 0,
-          maxOver: -Infinity,
-          limitAtMax: limitMps,
-          speedAtMax: row.speed,
-          limitQ,
-          gnssCapped: false,
-          alertedAt: null,
-          context: contextOf(ctx),
-        };
+      if (tier !== null && usable) {
+        if (ep === null) {
+          ep = {
+            id: newId(),
+            startedAt: row.ts,
+            overRows: 0,
+            belowRows: 0,
+            peak: tier,
+            peakSpeedMph: speedMph,
+            limitAtPeak: limitMph,
+            current: tier,
+            confirmed: false,
+          };
+        }
+        ep.overRows += 1;
+        ep.belowRows = 0;
+        ep.current = tier;
+        if (RANK[tier] > RANK[ep.peak] || (tier === ep.peak && speedMph > ep.peakSpeedMph)) {
+          ep.peak = worse(tier, ep.peak);
+          ep.peakSpeedMph = speedMph;
+          ep.limitAtPeak = limitMph;
+        }
+        const minRows = ep.peak === 'severe' ? SPEEDING_MIN_S.severe : SPEEDING_MIN_S.default;
+        if (ep.overRows >= minRows) ep.confirmed = true;
+        return [];
       }
-      open.rows += 1;
-      open.lastTs = row.ts;
-      if (over > open.maxOver) {
-        open.maxOver = over;
-        open.limitAtMax = limitMps;
-        open.speedAtMax = row.speed;
-      }
-      open.limitQ = Math.min(open.limitQ, limitQ);
-      if (gnssPoor(row)) open.gnssCapped = true;
-      return [];
+
+      if (ep === null) return [];
+      ep.current = null;
+      // Hovering between L + T − 2 and L + T neither extends the episode nor ends it; a row with no
+      // usable limit cannot vouch for the speed, so it counts toward the end.
+      const under = !usable || speedMph < limitMph + speedTolerance(limitMph) - SPEEDING_END_BUFFER_MPH;
+      ep.belowRows = under ? ep.belowRows + 1 : 0;
+      return ep.belowRows >= SPEEDING_END_S ? close() : [];
     },
     flush: close,
-    markAlerted(id, ts) {
-      // The latest alert is the one the grace window is measured from.
-      if (open && open.id === id) open.alertedAt = ts;
+    open() {
+      if (ep === null || ep.current === null) return null;
+      return { id: ep.id, type: 'speeding', tier: ep.current, startedAt: ep.startedAt, confirmed: ep.confirmed };
     },
-    openEpisodeId() {
-      return open && open.rows >= CONSTANTS.SPEEDING_MIN_S ? open.id : null;
-    },
+    active: () => ep !== null,
   };
 }

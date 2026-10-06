@@ -1,418 +1,74 @@
-// The finalize pipeline (design §3.1 "finalizing", §4.4 finalize-trip).
+// The finalize pipeline (plan §3, §5): the closed session the engine hands over becomes a stored
+// drive with a local estimate, a privacy-trimmed route, from/to labels, and one queued upload.
 //
-// Turns the closed session the engine hands over into a stored trip, a provisional score, a
-// polyline and one idempotent upload. Pure TypeScript over the `Db`; the platform comes in
-// through `FinalizeDeps` (the trace writer, the hash), so the whole pipeline runs under Jest.
-//
-// Order of work:
-//   1. the trip row exists, and the ring's un-checkpointed tail is in `samples`;
-//   2. the trip's rows are read back from `samples` — the durable record, not the ring — and
-//      become the trace text, its digest, and the metrics the score is built on;
-//   3. the trip and its events are scored, located and capped for the upload; the payload is
-//      validated; the trace file is written. A *discarded* trip (§9.4: a train, a plane) is the
-//      exception — nobody wants it uploaded, so no trace is written, nothing is queued, and its
-//      row goes straight to `sync_state = 'synced'`;
-//   4. ONE transaction replaces the events, updates the trip row (marked `queued`, or `synced`
-//      when discarded), queues the upload under `trip:<clientTripId>` and purges the samples.
-//      It commits or it does not.
-// Steps 1–3 leave nothing behind that the next call cannot redo (a `recording` row, durable
-// samples, a trace file that is rewritten). A re-run is an in-process retry of the same session
-// — the events, alerts and gaps live only in memory — so a failure is reported to the engine
-// (which re-arms) and the host may call again with the same closed session. A call that finds
-// the trip already finalized returns what is stored; one that finds it synced or final and no
-// longer queued (a discarded trip included) refuses, since re-running would overwrite what was
-// settled.
-import type { ScorableEvent, ScoredTrip, TripMetrics } from '@scoring';
-import { mergeEvents } from '@/core/detectors';
-import { inferRole, type RoleInference } from '@/core/detectors/role';
-import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
+//   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
+//   2. the v3 payload is built and validated against the upload contract;
+//   3. the drive is scored locally with `scoreDrive` and the cached context — an estimate until
+//      the server answers;
+//   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
+//      and purges the samples. It commits or it does not.
+// A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
+import { scoreDrive, type DriveBreakdown, type DriveContext, type DriveEvent } from '@scoring';
+
+import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
+import { countEvents } from '@/data/queries/rows';
 import {
-  createEventsRepo,
-  createSamplesRepo,
-  createSettingsRepo,
-  createTripsRepo,
-  MissingTripError,
-  type Db,
-  type EventRow,
-  type NewEvent,
-  type TripRow,
-  type TripStatus,
-} from '@/data/db';
-import {
-  FinalizeTripPayloadSchema,
+  FinalizeTripPayloadV3Schema,
   MAX_EVENTS,
   MAX_POLYLINE_BYTES,
   TZ_NAME_PATTERN,
-  type FinalizeTripPayload,
-  type PayloadEvent,
+  type FinalizeTripPayloadV3,
+  type PayloadEventV3,
 } from '@/data/sync/payload';
-import { enqueueFinalize, findFinalize } from '@/data/sync/queue';
-import { geohash5, haversineMeters, roundCoord, type LatLng } from '@/lib/geo';
-import { encodePolyline, simplify } from '@/lib/polyline';
-import { isNight } from '@/lib/time';
-import type { Fix, TripSession } from './engine.types';
-import { arbiterStateKey } from './recorder';
-import { longestHandlingRunMinutes } from './rolePrior';
-import { appendRow, createSession, GNSS_JUMP_MPS, roleSourceFor } from './session';
-import { MOTION_ROW_FIELDS, type DetectedEvent, type FeatureRow } from './types';
+import { enqueueFinalize } from '@/data/sync/queue';
+import { metersToMiles, mpsToMph } from '@/lib/units';
+import { dayKey } from '@/lib/time';
 
-/**
- * Rows within this distance of the trip's first and last fix stay out of the polyline and off the
- * events' coordinates, so a stored trip never pins the driveway. Scoring sees every row.
- */
-export const TRIM_ENDPOINTS_M = 200;
-/** Douglas–Peucker tolerance for the stored polyline; doubled until the polyline fits the cap. */
-export const POLYLINE_EPSILON_M = 10;
-/** Douglas–Peucker runs per chunk of this many points (O(n·k) on a long smooth track otherwise). */
-export const SIMPLIFY_CHUNK = 1000;
-
-/** The trace's name, relative to the traces directory; the sync runner prefixes `<uid>/` in storage. */
-export const tracePathFor = (clientTripId: string): string => `${clientTripId}.bin.gz`;
-
-const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+import type { TripSession } from './engine.types';
+import { expoGeocoder, labelFor, type Geocoder } from './labels';
+import { parseZones, PRIVACY_ZONES_KEY, trimRoute, type PrivacyZone } from './privacy';
+import { durationSOf } from './session';
+import type { DetectedEvent } from './types';
 
 export interface FinalizeDeps {
   db: Db;
-  /** The scoring package, injected so the finalizer scores with exactly what the host loaded. */
-  scoring: typeof import('@scoring');
-  /** IANA zone of the device at finalize: stored on the trip and used for the night rule. */
+  /** IANA zone of the device at finalize: stored on the trip and used for the local day. */
   tz: string;
-  fs: {
-    /** Write `bytes` gzip-compressed at `path` (relative to the traces directory), replacing any file there. */
-    writeGzip(path: string, bytes: Uint8Array): Promise<void>;
-  };
-  hash: {
-    /** Lowercase hex SHA-256 of a UTF-8 string (`sha256Hex` in `src/lib/hash` on device). */
-    sha256(text: string): Promise<string>;
-  };
-  /** Wall clock for the row stamps; defaults to `Date.now`. */
   now?: () => number;
-  /** Whether the camera pipeline ran for this trip. M1 has no camera, so it defaults to false. */
-  cameraSession?: boolean;
-  /**
-   * The session was rebuilt by crash recovery from the last checkpoint (`recovery.ts`), not
-   * closed by the engine that recorded it: stored on the row and sent in the payload as
-   * `incomplete`. Such a session has no gaps and no alerts, so its `durationS` is the wall span
-   * from the first row to the close. Defaults to false — the engine's own finalize never sets it.
-   */
-  incomplete?: boolean;
-  /**
-   * P(driver) before this trip's evidence: `readRolePrior(db)`, read by the host before the call.
-   * Only an auto or moving start reads it; absent, it is 0.5 — neutral, never "driver".
-   */
-  rolePrior?: number;
-  /**
-   * The trip's start/end cells are a route this user has confirmed driving
-   * (`isHabitualDriverRoute` over the session's first and last fixes' geohash-5, computed by the
-   * host). Only an auto or moving start reads it; absent, false.
-   */
-  habitualRoute?: boolean;
-}
-
-/** What the finalizer decided about who drove (§9.7): what the row and the payload carry. */
-export interface TripRoleDecision {
-  role: 'driver' | 'passenger' | 'unknown';
-  /** P(driver), 0..1. */
-  roleConfidence: number;
-}
-
-/**
- * Who drove (§9.7, R11, rev1 C1).
- *
- * A **manual start** (`tap`) is a declared drive: the stated role stands — driver at 0.95, or
- * passenger — and the trip's phone handling is never evidence against it, so using the phone
- * costs a driver points, never the score itself. The prior and the route are not read.
- *
- * An **auto or moving start** is inferred. High evidence (a habitual route, or a prior at or
- * above 0.8) sets the handling evidence aside; otherwise the longest single handling run is the
- * evidence. What `inferRole` cannot settle is `unknown` — asked (C10), unscored as
- * `role_unknown` meanwhile — and such an upload always carries `roleSource` `auto` or
- * `moving_start`, the only sources finalize-trip accepts `unknown` from (B4). `other` (transit)
- * becomes passenger: M3 has no transit classifier, so it cannot arise, but it must not score.
- *
- * Scope of the phone rule (E2 review M3): phone use never unscores a *manual* drive. On an
- * inferred drive with thin evidence it is evidence — one continuous run of three minutes or more
- * halves P(driver), which can make the drive `unknown` (unscored until the driver answers) or,
- * on a prior of 0.4 or less, `passenger` (§9.7). It never removes a score from a drive the
- * evidence already calls a driver's: a high prior or a habitual route sets it aside.
- */
-export function decideRole(
-  session: Pick<TripSession, 'role' | 'startEvidence' | 'statedDriver'>,
-  rows: readonly FeatureRow[],
-  events: readonly DetectedEvent[],
-  evidence: { rolePrior?: number; habitualRoute?: boolean }
-): TripRoleDecision {
-  const statedPassenger = session.role === 'passenger';
-  let inferred: RoleInference;
-  // A Start tap, or "I'm driving now" said during the drive (M4): the driver's own statement is
-  // the strongest evidence, so it is decided exactly as a manual start is.
-  const statedDriver = session.statedDriver === true && !statedPassenger;
-  if (session.startEvidence === 'tap' || statedDriver) {
-    inferred = inferRole(
-      {
-        manualStart: true,
-        statedPassenger,
-        continuousHandlingMinutes: 0,
-        habitualDriverRoute: false,
-        transitPattern: false,
-        cameraFaceDriverSeat: false,
-      },
-      0.5
-    );
-  } else {
-    const prior = evidence.rolePrior ?? 0.5;
-    const habitualRoute = evidence.habitualRoute === true;
-    const highEvidence = habitualRoute || prior >= 0.8;
-    inferred = inferRole(
-      {
-        manualStart: false,
-        statedPassenger,
-        continuousHandlingMinutes: highEvidence ? 0 : longestHandlingRunMinutes(rows, events),
-        habitualDriverRoute: habitualRoute,
-        transitPattern: false,
-        cameraFaceDriverSeat: false,
-      },
-      prior
-    );
-  }
-  const role = inferred.role === 'other' ? 'passenger' : inferred.role;
-  return { role, roleConfidence: clamp(finite(inferred.pDriver, 0.5), 0, 1) };
+  appVersion: string;
+  /** The privacy zones; default: the settings repo's `privacy.zones`. */
+  zones?: () => Promise<PrivacyZone[]>;
+  /** Reverse geocoder for the labels; default expo-location. `null`: no geocode (zone names only). */
+  geocode?: Geocoder | null;
+  /** The cached summary context for the estimate (streak); null when nothing is cached. */
+  context?: () => Promise<{ streak: number } | null>;
 }
 
 export interface FinalizeResult {
-  /**
-   * The stored row: `sync_state` is `queued` — or `synced` when `scored.status` is `discarded`,
-   * since a discarded trip is kept locally but never uploaded.
-   */
   trip: TripRow;
-  /** Every event stored locally — the upload in `payload.events` may be capped below this. */
   events: EventRow[];
-  scored: ScoredTrip;
-  /**
-   * The validated upload. For a discarded trip it was built and validated but never queued, and
-   * its `tracePath` is null: no trace file exists for it.
-   */
-  payload: FinalizeTripPayload;
+  /** The queued upload, or null when the contract refused the drive (stored as `failed`). */
+  payload: FinalizeTripPayloadV3 | null;
+  /** The local estimate. */
+  breakdown: DriveBreakdown;
 }
 
+export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
+/** The contract's ceiling on `integrity.maxSpeedMph`. */
+const MAX_SPEED = 300;
 
-/** JSON with every object's keys sorted, so the digest is the same whatever order the rows were stored in. */
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) => {
-    if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
-    const record = v as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .sort()
-        .map((k) => [k, record[k]])
-    );
-  });
-}
-
-/** A row without the DMS-only motion fields (`MOTION_ROW_FIELDS`), for the trace and its digest. */
-export function traceRow(row: FeatureRow): FeatureRow {
-  if (!MOTION_ROW_FIELDS.some((k) => k in row)) return row;
-  const out: Record<string, unknown> = { ...row };
-  for (const k of MOTION_ROW_FIELDS) delete out[k];
-  return out as unknown as FeatureRow;
-}
-
-/** The engine's own accumulators, re-run over the durable rows: distance, GNSS share, sustained speed. */
-function replay(session: Readonly<TripSession>, rows: FeatureRow[]): TripSession {
-  const check = createSession({
-    clientTripId: session.clientTripId,
-    mode: session.mode,
-    role: session.role,
-    startEvidence: session.startEvidence,
-    startedAt: session.startedAt,
-  });
-  for (const row of rows) appendRow(check, row, UNKNOWN_LIMIT);
-  return check;
-}
-
-/** The IMU counts as present when any row carries a non-zero reading in the six extremes. */
-const imuPresent = (rows: FeatureRow[]): boolean =>
-  rows.some(
-    (r) =>
-      r.aLonMax !== 0 ||
-      r.aLonMin !== 0 ||
-      r.aLatMax !== 0 ||
-      r.aLatMin !== 0 ||
-      r.yawRateMax !== 0 ||
-      r.jerkMax !== 0
-  );
-
-/**
- * Valid, finite fixes in order, minus any that would take more than `GNSS_JUMP_MPS` to reach —
- * the distance rule.
- */
-function cleanTrack(rows: FeatureRow[]): Fix[] {
-  const track: Fix[] = [];
-  for (const r of rows) {
-    if (!r.gnssValid || !Number.isFinite(r.lat) || !Number.isFinite(r.lng) || !Number.isFinite(r.ts)) {
-      continue;
-    }
-    const prev = track[track.length - 1];
-    if (prev && haversineMeters(prev, r) > GNSS_JUMP_MPS * Math.max(1, (r.ts - prev.ts) / 1000)) {
-      continue;
-    }
-    track.push({ lat: r.lat, lng: r.lng, ts: r.ts });
-  }
-  return track;
-}
-
-/** Indices `[from, to)` of the track beyond `metres` of both the first and the last fix. */
-function trimmedRange(track: Fix[], metres: number): [from: number, to: number] {
-  const first = track[0];
-  const last = track[track.length - 1];
-  if (!first || !last) return [0, 0];
-  let from = 0;
-  while (from < track.length && haversineMeters(track[from] as Fix, first) < metres) from += 1;
-  let to = track.length;
-  while (to > from && haversineMeters(track[to - 1] as Fix, last) < metres) to -= 1;
-  return [from, to];
-}
-
-/** Index of the last fix at or before `ts`, else the first fix; -1 on an empty track. */
-function fixIndexAt(track: Fix[], ts: number): number {
-  let lo = 0;
-  let hi = track.length - 1;
-  let found = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if ((track[mid] as Fix).ts <= ts) {
-      found = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  if (found >= 0) return found;
-  return track.length > 0 ? 0 : -1;
-}
-
-/**
- * Douglas–Peucker over chunks of at most `SIMPLIFY_CHUNK` points that share their boundary
- * points, so a three-hour track costs a few chunks' worth rather than O(n·k) in one go. The
- * boundary points are kept, which costs a handful of extra vertices per trip.
- */
-export function simplifyTrack(points: readonly LatLng[], epsilonM: number): LatLng[] {
-  const out: LatLng[] = [];
-  for (let start = 0; start < points.length; start += SIMPLIFY_CHUNK - 1) {
-    const chunk = simplify(points.slice(start, start + SIMPLIFY_CHUNK), epsilonM);
-    out.push(...(start === 0 ? chunk : chunk.slice(1)));
-    if (start + SIMPLIFY_CHUNK >= points.length) break;
-  }
-  return out;
-}
-
-/** Simplify at `epsilonM`, doubling the tolerance until the encoding fits in `maxBytes`. */
-function fitPolyline(points: readonly LatLng[], epsilonM: number, maxBytes: number): string {
-  for (let eps = epsilonM; ; eps *= 2) {
-    const encoded = encodePolyline(simplifyTrack(points, eps));
-    if (encoded.length <= maxBytes) return encoded;
-    // Wider than the planet and still too long cannot happen; the guard keeps the loop finite.
-    if (eps > 1e8) return '';
-  }
-}
-
-/**
- * Keep at most `max` events for the upload: removed events go first, then possible ones (both
- * score-neutral), then scored events from the cheapest up; among equals the latest goes first.
- */
-export function capEvents(events: PayloadEvent[], max: number): PayloadEvent[] {
-  if (events.length <= max) return events;
-  const rank = (e: PayloadEvent): number =>
-    e.status === 'removed' ? 0 : e.status === 'possible' ? 1 : 2;
-  const dropOrder = [...events].sort(
-    (a, b) =>
-      rank(a) - rank(b) || (a.deduction ?? 0) - (b.deduction ?? 0) || b.startedAt - a.startedAt
-  );
-  const dropped = new Set(dropOrder.slice(0, events.length - max).map((e) => e.id));
-  return events.filter((e) => !dropped.has(e.id));
-}
-
-/** Hour of day in `tz`; NaN when Intl does not know the zone. */
-function hourIn(ts: number, tz: string): number {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      hour: 'numeric',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(ts));
-    return Number(parts.find((p) => p.type === 'hour')?.value);
-  } catch {
-    return NaN;
-  }
-}
-
-/**
- * The night condition (§9.4): the clock rule in `tz` — at or past `NIGHT_START_H`, or before
- * `NIGHT_END_H` — falling back to the device-local rule when Intl does not know the zone. The
- * sun's position belongs to the HUD's night mode, not to scoring.
- */
-export function nightAt(
-  ts: number,
-  tz: string,
-  constants: { NIGHT_START_H: number; NIGHT_END_H: number }
-): boolean {
-  const hour = hourIn(ts, tz);
-  if (Number.isNaN(hour)) return isNight(new Date(ts));
-  return hour >= constants.NIGHT_START_H || hour < constants.NIGHT_END_H;
-}
-
-/** A copy of the event with every number finite, so the payload contract holds whatever a detector emitted. */
-function sanitizeEvent(e: DetectedEvent, tripStartedAt: number): DetectedEvent {
-  const measured: ScorableEvent['measured'] = {};
-  for (const [key, value] of Object.entries(e.measured)) {
-    if (typeof value !== 'number' || Number.isFinite(value)) {
-      (measured as Record<string, unknown>)[key] = value;
-    }
-  }
-  return {
-    ...e,
-    startedAt: Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt,
-    durationS: Math.max(0, finite(e.durationS)),
-    q: clamp(finite(e.q), 0, 1),
-    measured,
-  };
-}
-
-const tripStatus = (status: ScoredTrip['status']): TripStatus =>
-  status === 'final' ? 'provisional' : status;
-
-const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
-  id: e.id,
-  client_trip_id: clientTripId,
-  category: e.category,
-  started_at: e.startedAt,
-  duration_s: e.durationS,
-  lat: e.lat,
-  lng: e.lng,
-  measured_json: JSON.stringify(e.measured),
-  severity: String(e.severity),
-  confidence: e.q,
-  context_json: JSON.stringify(e.context),
-  deduction: e.deduction,
-  alert_shown: e.alertShown ? 1 : 0,
-  corrected: e.corrected ? 1 : 0,
-  status: e.status,
-  source: e.source,
-});
+const round3 = (v: number): number => Math.round(v * 1000) / 1000;
+const round4 = (v: number): number => Math.round(v * 1e4) / 1e4;
+const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
+const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 /** A whole-hour `GMT+5`, `UTC-3`, `GMT+05:00` or `UTC+0500`, the offset forms a phone can report. */
 const HOUR_OFFSET_ZONE = /^(?:GMT|UTC)([+-])(\d{1,2})(?::?(\d{2}))?$/;
 
 /**
- * The zone a trip can carry: the device's id when it is a zone NAME the wire contract accepts
- * (`TZ_NAME_PATTERN`) and Intl knows. Otherwise:
- * - a whole-hour `GMT±H` / `UTC±H` becomes `Etc/GMT∓H`. The sign is INVERTED in Etc names (POSIX):
- *   `GMT+5` (five hours ahead of UTC) is `Etc/GMT-5`. Etc covers UTC+14 to UTC−12.
- * - anything else (`GMT+05:30`, `EST5EDT`, an id this build's Intl does not know, an empty value)
- *   becomes `UTC`.
- * The drive is then always stored, at worst with its night rule and local day read in UTC, and
- * never refused by the device's own contract (M4 T1 r2 re-review I1).
+ * The zone a drive can carry: the device's id when it is a zone NAME the contract accepts and Intl
+ * knows; a whole-hour offset becomes `Etc/GMT∓H` (the sign is inverted in Etc names); anything
+ * else becomes `UTC`. The drive is then always stored, never refused by its own contract.
  */
 export function normaliseZone(raw: string | null | undefined): string {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 64) return 'UTC';
@@ -435,292 +91,211 @@ export function normaliseZone(raw: string | null | undefined): string {
   }
 }
 
-/** `trips.sync_error` for a drive this build could not put into the upload contract. */
-export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
+/** A copy of the event with every number finite and rounded, so the contract holds whatever a detector emitted. */
+export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEndedAt: number): DetectedEvent {
+  const startedAt = clamp(Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt, tripStartedAt, tripEndedAt);
+  const maxDuration = Math.max(0, (tripEndedAt - startedAt) / 1000 + 2);
+  const measured: DetectedEvent['measured'] = {};
+  if (typeof e.measured.speedMph === 'number' && Number.isFinite(e.measured.speedMph)) measured.speedMph = clamp(round3(e.measured.speedMph), 0, 250);
+  if (typeof e.measured.limitMph === 'number' && Number.isFinite(e.measured.limitMph)) measured.limitMph = clamp(Math.round(e.measured.limitMph), 0, 120);
+  if (typeof e.measured.peakG === 'number' && Number.isFinite(e.measured.peakG)) measured.peakG = clamp(round3(e.measured.peakG), 0, 10);
+  if (typeof e.measured.mounted === 'boolean') measured.mounted = e.measured.mounted;
+  const out: DetectedEvent = {
+    id: e.id,
+    type: e.type,
+    tier: e.tier,
+    startedAt,
+    durationS: clamp(round3(finite(e.durationS)), 0, maxDuration),
+    measured,
+  };
+  if (e.type === 'phone_handling') out.units = clamp(Math.floor(finite(e.units ?? 1, 1)), 1, 1440);
+  if (e.type === 'phone_pickup' && e.stoppedInTraffic === true) out.stoppedInTraffic = true;
+  return out;
+}
 
-/**
- * Thrown after a drive whose payload failed the contract has been ENDED locally: stored with its
- * measurements, `sync_state: 'failed'` and `sync_error: 'invalid_payload'`, so it is never left
- * `recording` for a recovery that would only fail the same way, and history shows why it will not
- * upload. Its samples are kept for a later build to finalize again; nothing is queued. The caller
- * reports it like any finalize failure.
- */
-export class FinalizePayloadRefusedError extends Error {
-  // Plain fields, not constructor parameter properties: Node's strip-types mode (the backend e2e
-  // script) refuses that syntax.
-  readonly clientTripId: string;
-  readonly paths: string[];
+/** Safe miles already credited today before this drive, from the device's own rows. */
+export async function safeMilesEarlierToday(db: Db, localDay: string, startedAt: number): Promise<number> {
+  const { rows } = await db.execute(
+    `SELECT COALESCE(SUM(safe_miles), 0) AS n FROM trips
+      WHERE local_day = ? AND started_at < ? AND status IN ('scored', 'pending')`,
+    [localDay, startedAt]
+  );
+  const n = rows[0]?.n;
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0;
+}
 
-  constructor(clientTripId: string, paths: string[]) {
-    super(`trip ${clientTripId} does not fit the upload contract (${paths.join(', ') || 'root'}); stored as failed`);
-    this.name = 'FinalizePayloadRefusedError';
-    this.clientTripId = clientTripId;
-    this.paths = paths;
+const toNewEvent = (e: PayloadEventV3, clientTripId: string, penalty: number | null): NewEvent => ({
+  id: e.id,
+  client_trip_id: clientTripId,
+  type: e.type,
+  tier: e.tier,
+  started_at: e.startedAt,
+  duration_s: e.durationS,
+  units: e.units ?? null,
+  stopped_in_traffic: e.stoppedInTraffic === true ? 1 : 0,
+  lat: e.lat,
+  lng: e.lng,
+  measured_json: JSON.stringify(e.measured),
+  penalty,
+  status: 'active',
+  dispute_status: 'none',
+});
+
+async function readZones(db: Db): Promise<PrivacyZone[]> {
+  try {
+    return parseZones(await createSettingsRepo(db).get<unknown>(PRIVACY_ZONES_KEY));
+  } catch {
+    return [];
   }
 }
 
-export async function finalizeTrip(
-  session: Readonly<TripSession>,
-  deps: FinalizeDeps
-): Promise<FinalizeResult> {
-  const { db, scoring } = deps;
-  // The one zone this drive is stamped, judged and uploaded in; see normaliseZone.
-  const tz = normaliseZone(deps.tz);
+export async function finalizeTrip(session: Readonly<TripSession>, deps: FinalizeDeps): Promise<FinalizeResult> {
+  const { db } = deps;
   const now = deps.now ?? Date.now;
+  const tz = normaliseZone(deps.tz);
   const trips = createTripsRepo(db);
   const events = createEventsRepo(db);
   const samples = createSamplesRepo(db);
   const id = session.clientTripId;
-  // The contract carries whole milliseconds; a fractional native clock must not fail the trip.
   const startedAt = Math.round(session.startedAt);
+  const endedAt = Math.round(session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + 1000 : startedAt + 1000));
+  const localDay = dayKey(new Date(startedAt), tz);
 
-  // Already done: hand back what the first run stored. A trip the server has confirmed, or that
-  // is final, is never re-run — that would replace the confirmed result with a provisional one.
+  // Already finalized (a retried call): hand back what is stored, never re-run.
   const existing = await trips.get(id);
-  if (existing) {
-    const settled = existing.status === 'final' || existing.sync_state === 'synced';
-    const stored =
-      settled || existing.status !== 'recording' ? await findFinalize(db, id) : null;
-    if (stored) {
-      await samples.purgeByTrip(id);
-      return {
-        trip: existing,
-        events: await events.listByTrip(id),
-        scored: stored.provisional,
-        payload: stored,
-      };
-    }
-    if (settled) {
-      throw new Error(
-        `trip ${id} is already ${existing.status}/${existing.sync_state} and no longer queued; it cannot be finalized again`
-      );
-    }
-  } else {
-    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, status: 'recording' }, now());
+  if (existing !== null && existing.status !== 'recording') {
+    return {
+      trip: existing,
+      events: await events.listByTrip(id),
+      payload: null,
+      breakdown: existing.breakdown_json ? (JSON.parse(existing.breakdown_json) as DriveBreakdown) : scoreDrive({ miles: 0, safeMiles: 0, events: [], dmsOn: false }, { streak: 0, safeMilesEarlierToday: 0 }),
+    };
+  }
+  if (existing === null) {
+    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording', dms_on: session.dmsOn ? 1 : 0 }, now());
   }
 
-  // 1. Whatever the recorder did not checkpoint is still in the ring; make it durable first.
-  const latest = await samples.latest(id);
-  const tail = session.rows.filter((r) => r.ts > (latest?.ts ?? Number.NEGATIVE_INFINITY));
-  if (tail.length > 0) await samples.appendMany(id, tail.map((row) => ({ ts: row.ts, row })));
+  // 1. The route and the events on it.
+  const zones = await (deps.zones ?? (() => readZones(db)))();
+  const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES);
+  const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
+  const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
-  // 2. The durable rows become the trace text, the digest and the metrics.
-  // C14 round 1 (review-C14 I1; rev4 §2.13.5 "recorded but never counted"): only the rows before the trip's end.
-  // An automatic end trims `endedAt` back to where driving stopped, and the rows after it (a walk to the door, an hour
-  // carried around town, a long standstill's jitter) stay in the session; nothing derived from them is counted or
-  // uploaded: not the distance, the GNSS share, the sustained speed, the IMU flag, the role, the polyline, the event
-  // coordinates, the trace or its digest. A session with no end (a recovery) keeps every row.
-  const endCut = session.endedAt ?? Number.POSITIVE_INFINITY;
-  const rows = (await samples.range(id, 0, Number.MAX_SAFE_INTEGER))
-    .map((s) => JSON.parse(s.row_json) as FeatureRow)
-    .filter((r) => r.ts < endCut);
-  // The DMS-only motion fields (Task C0) never reach the trace or its digest: M1's consumers and the
-  // server see exactly the rows they saw before the fields existed.
-  const traceJson = canonicalJson(rows.map(traceRow));
-  const recheck = replay(session, rows);
-
-  // 3. Score over what was measured; anything non-finite takes the scorer's grade C path and is
-  //    written out as 0 so the trip is kept rather than refused by the contract.
-  // C14 round 1 (I1): an event from at or after the end is dropped with its rows (none is expected below the lockout
-  // speed; pinned).
-  const merged = mergeEvents(session.events.filter((e) => e.startedAt < endCut).map((e) => sanitizeEvent(e, startedAt)));
-  // Who drove decides whether there is a score at all: `unknown` is unscored as role_unknown.
-  const decided = decideRole(session, rows, merged, deps);
-  const measured: TripMetrics = {
-    distanceM: recheck.distanceM,
-    durationS: session.durationS,
-    validGnssPct: recheck.validGnssPct,
-    imuPresent: imuPresent(rows),
-    role: decided.role,
-    maxSustainedSpeedMps: recheck.maxSustainedSpeedMps,
-  };
-  const scored = scoring.scoreTrip(measured, merged);
-  const metrics = {
-    distanceM: Math.max(0, finite(measured.distanceM)),
-    durationS: Math.max(0, finite(measured.durationS)),
-    validGnssPct: clamp(finite(measured.validGnssPct), 0, 100),
-    maxSustainedSpeedMps: Math.max(0, finite(measured.maxSustainedSpeedMps)),
-  };
-
-  // A discarded trip is settled locally and never uploaded: the server would only reject it
-  // (§4.4), so it gets no trace file and no queue item. The digest still describes its rows.
-  const discarded = scored.status === 'discarded';
-  const tracePath = discarded ? null : tracePathFor(id);
-  if (tracePath !== null) await deps.fs.writeGzip(tracePath, new TextEncoder().encode(traceJson));
-  const sha256 = await deps.hash.sha256(traceJson);
-  const rowsDigest: FinalizeTripPayload['rowsDigest'] = {
-    count: rows.length,
-    validGnssPct: metrics.validGnssPct,
-    imuPresent: measured.imuPresent,
-    maxSustainedSpeedMps: metrics.maxSustainedSpeedMps,
-    sha256,
-  };
-
-  // Geometry: the polyline and the events' coordinates share one trimmed track.
-  const track = cleanTrack(rows);
-  const [from, to] = trimmedRange(track, TRIM_ENDPOINTS_M);
-  const polyline = fitPolyline(track.slice(from, to), POLYLINE_EPSILON_M, MAX_POLYLINE_BYTES);
-  const locate = (ts: number): LatLng | null => {
-    const i = fixIndexAt(track, ts);
-    if (i < from || i >= to) return null;
-    const fix = track[i] as Fix;
-    return { lat: roundCoord(fix.lat), lng: roundCoord(fix.lng) };
-  };
-  const first = track[0] ?? null;
-  const last = track[track.length - 1] ?? null;
-
-  // Conditions and the safe-day flag (§9.9). Night is the clock rule in the trip's zone (§9.4).
-  const { CONSTANTS } = scoring;
-  const night = nightAt(startedAt, tz, CONSTANTS);
-  const hadSevereEvent =
-    merged.some(
-      (e) =>
-        e.category === 'speeding' &&
-        e.status === 'scored' &&
-        (e.measured.overMps ?? 0) >= CONSTANTS.SEVERE_SPEEDING_OVER_MPS
-    ) || session.alerts.some((a) => a.level === 3);
-  const conditions = { night, precipitation: false, hadSevereEvent };
-
-  const alerted = new Set(session.alerts.flatMap((a) => (a.eventId ? [a.eventId] : [])));
-  const alertShown = (e: DetectedEvent): boolean =>
-    alerted.has(e.id) || (e.absorbedIds ?? []).some((absorbed) => alerted.has(absorbed));
-  const allEvents: PayloadEvent[] = merged.map((e) => {
-    const at = locate(e.startedAt);
-    return {
+  const cleaned = session.events
+    .filter((e) => e.startedAt < endedAt + 2000)
+    .map((e) => sanitizeEvent(e, startedAt, endedAt))
+    .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
+    .slice(0, MAX_EVENTS);
+  const payloadEvents: PayloadEventV3[] = cleaned.map((e) => {
+    const at = route.locate(e.startedAt);
+    const out: PayloadEventV3 = {
       id: e.id,
-      category: e.category,
+      type: e.type,
+      tier: e.tier,
       startedAt: e.startedAt,
       durationS: e.durationS,
-      durationMs: Math.round(e.durationS * 1000),
-      q: e.q,
-      corrected: e.corrected,
-      status: e.status,
-      measured: { ...e.measured },
-      context: { night: e.context.night, precipitation: e.context.precipitation },
-      contextMultiplier: scoring.contextMultiplier(e),
-      severity: Math.max(0, finite(scoring.severity(e))),
-      deduction: scored.status === 'final' ? Math.max(0, finite(scored.eventDeductions[e.id] ?? 0)) : null,
       lat: at?.lat ?? null,
       lng: at?.lng ?? null,
-      alertShown: alertShown(e),
-      source: e.source,
+      measured: e.measured,
     };
+    if (e.units !== undefined) out.units = e.units;
+    if (e.stoppedInTraffic === true) out.stoppedInTraffic = true;
+    return out;
   });
 
-  const endedAt = Math.round(
-    session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + ROW_MS : startedAt)
-  );
-  const checkpointTs = session.lastRowTs === null ? null : Math.round(session.lastRowTs);
-  const incomplete = deps.incomplete === true;
-  const limitCoveragePct =
-    session.rowsCount > 0 ? (session.limitKnownRows * 100) / session.rowsCount : 0;
+  // 2. The metrics and the payload.
+  const miles = round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
+  const safeMiles = round3(clamp(metersToMiles(finite(session.safeDistanceM)), 0, miles));
+  const nightMiles = round3(clamp(metersToMiles(finite(session.nightDistanceM)), 0, miles));
+  const durationS = round3(durationSOf({ startedAt, endedAt }));
+  const maxSpeedMph = round3(clamp(mpsToMph(finite(session.maxSpeedMps)), 0, MAX_SPEED));
+  const validGnssPct = session.rowsCount > 0 ? round3(clamp((session.validGnssRows * 100) / session.rowsCount, 0, 100)) : 0;
+  const integrity = {
+    mockLocation: session.mockRows > 0,
+    motionMismatch: session.movingRows >= 60 && session.imuActiveRows < 0.05 * session.movingRows,
+    validGnssPct,
+    maxSpeedMph,
+  };
+  const point = (f: { lat: number; lng: number } | null) => (f === null ? null : { lat: round4(f.lat), lng: round4(f.lng) });
   const candidate = {
+    v: 3 as const,
     clientTripId: id,
     startedAt,
     endedAt,
     tz,
-    distanceM: metrics.distanceM,
-    durationS: metrics.durationS,
-    role: decided.role,
-    roleConfidence: decided.roleConfidence,
-    roleSource: roleSourceFor(session.startEvidence),
-    mode: session.mode,
-    cameraSession: deps.cameraSession ?? false,
-    provisional: scored,
-    events: capEvents(allEvents, MAX_EVENTS),
-    rowsDigest,
-    startGeohash5: first ? geohash5(first.lat, first.lng) : null,
-    endGeohash5: last ? geohash5(last.lat, last.lng) : null,
-    limitCoveragePct,
-    polyline,
-    tracePath,
-    hadSevereEvent,
-    incomplete,
-  } satisfies FinalizeTripPayload;
-  const parsed = FinalizeTripPayloadSchema.safeParse(candidate);
+    localDay,
+    miles,
+    safeMiles,
+    nightMiles,
+    durationS,
+    dmsOn: session.dmsOn,
+    dmsFaceSeen: session.dmsFaceSeen,
+    start: point(session.firstFix),
+    end: point(session.lastFix),
+    polyline: route.polyline,
+    integrity,
+    events: payloadEvents,
+    appVersion: deps.appVersion.slice(0, 32) || 'unknown',
+  };
+  const parsed = FinalizeTripPayloadV3Schema.safeParse(candidate);
 
-  // 4. One transaction: the events, the trip row, the queue item and the purge commit together,
-  //    so no state exists in which the trip says `queued` and nothing is queued.
-  const tripPatch = {
+  // 3. The local estimate.
+  const streak = (await deps.context?.().catch(() => null))?.streak ?? 0;
+  const ctx: DriveContext = { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, localDay, startedAt) };
+  const driveEvents: DriveEvent[] = cleaned.map(({ measured: _m, ...e }) => e);
+  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dmsOn: session.dmsOn }, ctx);
+  const penaltyOf = new Map(breakdown.events.map((e) => [e.id, e.penalty]));
+  const counts = countEvents(cleaned);
+
+  const patch = {
     started_at: startedAt,
     ended_at: endedAt,
     tz,
-    distance_m: metrics.distanceM,
-    duration_s: metrics.durationS,
-    role: decided.role,
-    role_confidence: decided.roleConfidence,
-    role_source: roleSourceFor(session.startEvidence),
-    mode: session.mode,
-    camera_session: candidate.cameraSession ? 1 : 0,
-    score: scored.score,
-    scoring_version: String(scored.scoringVersion),
-    category_deductions_json: JSON.stringify(scored.categoryDeductions),
-    exposure: scored.exposure,
-    data_quality: scored.dataQuality,
-    conditions_json: JSON.stringify(conditions),
-    limit_coverage_pct: limitCoveragePct,
-    start_geohash5: candidate.startGeohash5,
-    end_geohash5: candidate.endGeohash5,
-    polyline: polyline === '' ? null : polyline,
-    status: tripStatus(scored.status),
-    checkpoint_ts: checkpointTs,
-    incomplete: incomplete ? 1 : 0,
+    local_day: localDay,
+    miles,
+    safe_miles: safeMiles,
+    night_miles: nightMiles,
+    duration_s: durationS,
+    dms_on: session.dmsOn ? 1 : 0,
+    dms_face_seen: session.dmsFaceSeen ? 1 : 0,
+    start_lat: candidate.start?.lat ?? null,
+    start_lng: candidate.start?.lng ?? null,
+    end_lat: candidate.end?.lat ?? null,
+    end_lng: candidate.end?.lng ?? null,
+    polyline: route.polyline === '' ? null : route.polyline,
+    from_label: fromLabel,
+    to_label: toLabel,
+    max_speed_mph: maxSpeedMph,
+    integrity_json: JSON.stringify(integrity),
+    points_net: breakdown.scored ? breakdown.net : null,
+    estimate: 1 as const,
+    breakdown_json: JSON.stringify(breakdown),
+    clean: breakdown.scored ? (breakdown.activeEventCount === 0 ? 1 : 0) : null,
+    counts_json: JSON.stringify(counts),
+    reason: breakdown.scored ? null : (breakdown.reason ?? null),
+    checkpoint_ts: null,
   } as const;
 
-  if (!parsed.success) {
-    // Defence in depth: the drive is ended, never left `recording` (a recovery would fail the same
-    // way forever) and never silent. Stored whole when the events store; when even that fails,
-    // the trip row alone is ended. Either way the samples are KEPT (ruling T1 r4 n1, no data loss):
-    // the drive is the driver's, a later build that fixes the contract can finalize it again from
-    // them, and the driver's own delete still purges them.
-    const paths = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))].slice(0, 8);
-    const failed = { sync_state: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR } as const;
-    try {
-      await db.transaction(async (tx) => {
-        await events.removeByTrip(id, tx);
-        await events.insertMany(allEvents.map((e) => toNewEvent(e, id)), tx);
-        const trip = await trips.update(id, { ...tripPatch, ...failed }, now(), tx);
-        if (!trip) throw new MissingTripError(id);
-        await createSettingsRepo(tx).remove(arbiterStateKey(id));
-      });
-    } catch (error) {
-      if (error instanceof MissingTripError) throw error;
-      const trip = await trips.update(
-        id,
-        { status: tripStatus(scored.status), ended_at: endedAt, ...failed },
-        now()
-      );
-      if (!trip) throw new MissingTripError(id);
-    }
-    throw new FinalizePayloadRefusedError(id, paths);
-  }
-  const payload = parsed.data;
-
+  // 4. One transaction.
   const written = await db.transaction(async (tx) => {
     await events.removeByTrip(id, tx);
     const eventRows = await events.insertMany(
-      allEvents.map((e) => toNewEvent(e, id)),
+      payloadEvents.map((e) => toNewEvent(e, id, penaltyOf.get(e.id) ?? null)),
       tx
     );
     const trip = await trips.update(
       id,
-      {
-        ...tripPatch,
-        // Nothing to sync for a discarded trip: it is settled the moment it is stored.
-        sync_state: discarded ? 'synced' : 'queued',
-        // A drive an earlier build refused (`invalid_payload`) is no longer failed once it queues.
-        sync_error: null,
-      },
+      parsed.success
+        ? { ...patch, status: 'pending', sync_error: null }
+        : { ...patch, status: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR },
       now(),
       tx
     );
-    if (!trip) throw new MissingTripError(id);
-    if (!discarded) await enqueueFinalize(db, payload, now(), tx);
+    if (!trip) throw new Error(`trip ${id} vanished before finalize`);
+    if (parsed.success) await enqueueFinalize(db, parsed.data, now(), tx);
     await samples.purgeByTrip(id, tx);
-    // The recording's arbiter state has nothing left to resume (N-m4): gone with the samples.
-    await createSettingsRepo(tx).remove(arbiterStateKey(id));
     return { trip, eventRows };
   });
 
-  return { trip: written.trip, events: written.eventRows, scored, payload };
+  return { trip: written.trip, events: written.eventRows, payload: parsed.success ? parsed.data : null, breakdown };
 }

@@ -69,10 +69,8 @@ export interface PermissionsAdapterDeps {
 }
 
 export interface Readiness {
-  /** drive-sense reports what arming needs: Always location and granted motion. */
+  /** drive-sense reports what a drive needs: While-Using (or Always) location and granted motion. */
   allowed: boolean;
-  /** drive-sense's own `armed`; null when it could not be checked. */
-  armed: boolean | null;
 }
 
 export interface PermissionsAdapter {
@@ -287,12 +285,12 @@ export function createPermissionsAdapter(
 
     async readiness() {
       const port = await deps.driveSense();
-      if (!port) return { allowed: false, armed: null };
+      if (!port) return { allowed: false };
       try {
         const s = await port.getState();
-        return { allowed: s.location === 'always' && s.motion === 'granted', armed: s.armed };
+        return { allowed: s.location !== 'none' && s.motion === 'granted' };
       } catch {
-        return { allowed: false, armed: null };
+        return { allowed: false };
       }
     },
   };

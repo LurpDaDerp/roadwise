@@ -2,7 +2,7 @@
  * The app's only notification response listener (rev1: C1 — one plumbing for local and pushed
  * notifications).
  *
- * On mount: the channels and the "Were you driving?" category (`ensureNotificationSetup`), the one
+ * On mount: the Android channels (`ensureNotificationSetup`), the one
  * foreground handler, the response listener, the tap that launched the app (read once with the
  * SDK 57 `getLastNotificationResponse`, then cleared so a remount does not act on it again). A tap
  * is acted on by `handleResponse`; one
@@ -15,12 +15,11 @@
  * Renders nothing. Mounted by the root layout inside `DataProvider` and the query client (Task 18),
  * which also removes M3's interim `useSummaryNotificationRouting`, so one tap navigates once.
  */
-import { useQueryClient } from '@tanstack/react-query';
 import * as Notifications from 'expo-notifications';
 import { router, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
-import { invalidateTrip, useDataSource } from '@/data/queries';
+import { useDataSource } from '@/data/queries';
 
 import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
@@ -47,14 +46,13 @@ const responseKey = (r: Notifications.NotificationResponse) =>
 
 export function NotificationsHost(props: NotificationsHostProps): null {
   const { db, now } = useDataSource();
-  const queryClient = useQueryClient();
   const ready = props.ready ?? true;
 
   // Latest props, read by listeners that are attached once per mount.
-  const latest = useRef({ props, ready, db, now, queryClient });
+  const latest = useRef({ props, ready, db, now });
   // Declared first, so every effect below reads this render's values.
   useLayoutEffect(() => {
-    latest.current = { props, ready, db, now, queryClient };
+    latest.current = { props, ready, db, now };
   });
   /** Something may be held in settings: true at mount (a tap from an earlier process), and after a deferral. */
   const mayHavePending = useRef(true);
@@ -72,9 +70,6 @@ export function NotificationsHost(props: NotificationsHostProps): null {
         now: l.now,
         navigate: l.props.navigate ?? defaultNavigate,
         isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
-        onTripChanged: (id) => invalidateTrip(l.queryClient, id),
-        dismiss: (identifier) => Notifications.dismissNotificationAsync(identifier),
-        // A tapped push's row was just marked read: the bell and the list refresh (T6 carry).
         onError: report,
       };
     };

@@ -10,15 +10,7 @@ import {
   insertStatement,
   updateStatement,
 } from '@/data/db/row';
-import {
-  TRIP_STATUSES,
-  TRIP_SYNC_STATES,
-  type NewTrip,
-  type TripPatch,
-  type TripRow,
-  type TripStatus,
-  type TripSyncState,
-} from '@/data/db/types';
+import { TRIP_STATUSES, type Flag, type NewTrip, type TripPatch, type TripRow, type TripStatus } from '@/data/db/types';
 
 /** The writable columns, in schema order. Nothing outside this list can reach the SQL. */
 const COLUMNS = [
@@ -26,40 +18,45 @@ const COLUMNS = [
   'started_at',
   'ended_at',
   'tz',
-  'distance_m',
+  'local_day',
+  'miles',
+  'safe_miles',
+  'night_miles',
   'duration_s',
-  'role',
-  'role_confidence',
-  'role_source',
-  'mode',
-  'camera_session',
-  'score',
-  'scoring_version',
-  'category_deductions_json',
-  'exposure',
-  'data_quality',
-  'conditions_json',
-  'limit_coverage_pct',
-  'start_label',
-  'end_label',
-  'start_geohash5',
-  'end_geohash5',
+  'dms_on',
+  'dms_face_seen',
+  'start_lat',
+  'start_lng',
+  'end_lat',
+  'end_lng',
   'polyline',
+  'from_label',
+  'to_label',
+  'max_speed_mph',
+  'integrity_json',
   'status',
-  'sync_state',
-  'checkpoint_ts',
-  'incomplete',
+  'points_net',
+  'estimate',
+  'breakdown_json',
+  'clean',
+  'counts_json',
+  'reason',
+  'merged_into',
+  'result_json',
   'server_id',
   'sync_error',
-  'deleted_at',
+  'checkpoint_ts',
   'created_at',
   'updated_at',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
-const PATCHABLE = COLUMNS.filter(
-  (column) => column !== 'client_trip_id' && column !== 'created_at'
-);
+const PATCHABLE = COLUMNS.filter((column) => column !== 'client_trip_id' && column !== 'created_at');
+
+const asFlagOrNull = (row: Record<string, unknown>, key: string): Flag | null => {
+  const v = asNumberOrNull(row, key);
+  return v === null ? null : v === 0 ? 0 : 1;
+};
 
 export function toTripRow(row: Record<string, unknown>): TripRow {
   return {
@@ -67,32 +64,34 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     started_at: asNumber(row, 'started_at'),
     ended_at: asNumberOrNull(row, 'ended_at'),
     tz: asText(row, 'tz'),
-    distance_m: asNumber(row, 'distance_m'),
+    local_day: asTextOrNull(row, 'local_day'),
+    miles: asNumber(row, 'miles'),
+    safe_miles: asNumber(row, 'safe_miles'),
+    night_miles: asNumber(row, 'night_miles'),
     duration_s: asNumber(row, 'duration_s'),
-    role: asTextOrNull(row, 'role'),
-    role_confidence: asNumberOrNull(row, 'role_confidence'),
-    role_source: asTextOrNull(row, 'role_source'),
-    mode: asTextOrNull(row, 'mode'),
-    camera_session: asFlag(row, 'camera_session'),
-    score: asNumberOrNull(row, 'score'),
-    scoring_version: asTextOrNull(row, 'scoring_version'),
-    category_deductions_json: asTextOrNull(row, 'category_deductions_json'),
-    exposure: asNumberOrNull(row, 'exposure'),
-    data_quality: asTextOrNull(row, 'data_quality'),
-    conditions_json: asTextOrNull(row, 'conditions_json'),
-    limit_coverage_pct: asNumberOrNull(row, 'limit_coverage_pct'),
-    start_label: asTextOrNull(row, 'start_label'),
-    end_label: asTextOrNull(row, 'end_label'),
-    start_geohash5: asTextOrNull(row, 'start_geohash5'),
-    end_geohash5: asTextOrNull(row, 'end_geohash5'),
+    dms_on: asFlag(row, 'dms_on'),
+    dms_face_seen: asFlag(row, 'dms_face_seen'),
+    start_lat: asNumberOrNull(row, 'start_lat'),
+    start_lng: asNumberOrNull(row, 'start_lng'),
+    end_lat: asNumberOrNull(row, 'end_lat'),
+    end_lng: asNumberOrNull(row, 'end_lng'),
     polyline: asTextOrNull(row, 'polyline'),
+    from_label: asTextOrNull(row, 'from_label'),
+    to_label: asTextOrNull(row, 'to_label'),
+    max_speed_mph: asNumber(row, 'max_speed_mph'),
+    integrity_json: asTextOrNull(row, 'integrity_json'),
     status: asEnum(row, 'status', TRIP_STATUSES),
-    sync_state: asEnum(row, 'sync_state', TRIP_SYNC_STATES),
-    checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
-    incomplete: asFlag(row, 'incomplete'),
+    points_net: asNumberOrNull(row, 'points_net'),
+    estimate: asFlag(row, 'estimate'),
+    breakdown_json: asTextOrNull(row, 'breakdown_json'),
+    clean: asFlagOrNull(row, 'clean'),
+    counts_json: asTextOrNull(row, 'counts_json'),
+    reason: asTextOrNull(row, 'reason'),
+    merged_into: asTextOrNull(row, 'merged_into'),
+    result_json: asTextOrNull(row, 'result_json'),
     server_id: asTextOrNull(row, 'server_id'),
     sync_error: asTextOrNull(row, 'sync_error'),
-    deleted_at: asNumberOrNull(row, 'deleted_at'),
+    checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
   };
@@ -106,46 +105,24 @@ export interface TripListOptions {
 
 /**
  * Throw unless `clientTripId` names a trip, using the handle it is given so the check sees the
- * same transaction as the write that follows it.
- *
- * The repositories that write child rows call this instead of relying on the foreign key: inside
- * a transaction on device, foreign keys may not be enforced (see `createExpoDb`). Outside a
- * transaction the foreign key is still there as a second line of defence.
+ * same transaction as the write that follows it (foreign keys may be off inside a device
+ * transaction, see `createExpoDb`).
  */
 export async function assertTripExists(on: Db, clientTripId: string): Promise<void> {
-  const { rows } = await on.execute('SELECT 1 FROM trips WHERE client_trip_id = ?', [
-    clientTripId,
-  ]);
+  const { rows } = await on.execute('SELECT 1 FROM trips WHERE client_trip_id = ?', [clientTripId]);
   if (rows.length === 0) throw new MissingTripError(clientTripId);
 }
 
 export function createTripsRepo(db: Db) {
   async function get(clientTripId: string, on: Db = db): Promise<TripRow | null> {
-    const { rows } = await on.execute('SELECT * FROM trips WHERE client_trip_id = ?', [
-      clientTripId,
-    ]);
+    const { rows } = await on.execute('SELECT * FROM trips WHERE client_trip_id = ?', [clientTripId]);
     const row = rows[0];
     return row ? toTripRow(row) : null;
   }
 
-  /**
-   * Applies the named columns and always moves `updated_at`. Null when there is no such trip.
-   * Runs on `on` when given, so it can share a caller's transaction.
-   */
-  async function update(
-    clientTripId: string,
-    patch: TripPatch,
-    now: number = Date.now(),
-    on: Db = db
-  ): Promise<TripRow | null> {
-    const statement = updateStatement(
-      'trips',
-      PATCHABLE,
-      { ...patch, updated_at: now },
-      'client_trip_id = ?',
-      [clientTripId]
-    );
-    // `updated_at` is always set, so `updateStatement` never returns null here.
+  /** Applies the named columns and always moves `updated_at`. Null when there is no such trip. */
+  async function update(clientTripId: string, patch: TripPatch, now: number = Date.now(), on: Db = db): Promise<TripRow | null> {
+    const statement = updateStatement('trips', PATCHABLE, { ...patch, updated_at: now }, 'client_trip_id = ?', [clientTripId]);
     if (!statement) return null;
     const { changes } = await on.execute(statement.sql, statement.params);
     return changes === 0 ? null : get(clientTripId, on);
@@ -155,21 +132,15 @@ export function createTripsRepo(db: Db) {
     get,
     update,
 
-    /** Runs on `on` when given, so the recorder can insert the trip with its first samples. */
     async insert(trip: NewTrip, now: number = Date.now(), on: Db = db): Promise<TripRow> {
-      const { sql, params } = insertStatement('trips', COLUMNS, {
-        ...trip,
-        created_at: now,
-        updated_at: now,
-      });
+      const { sql, params } = insertStatement('trips', COLUMNS, { ...trip, created_at: now, updated_at: now });
       await on.execute(sql, params);
       const inserted = await get(trip.client_trip_id, on);
-      // The INSERT succeeded, so the row is there; the read-back exists to pick up the defaults.
       if (!inserted) throw new Error(`trip ${trip.client_trip_id} vanished after insert`);
       return inserted;
     },
 
-    /** Newest first — the order the history list renders in. */
+    /** Newest first. */
     async list(options: TripListOptions = {}): Promise<TripRow[]> {
       const { limit = -1, offset = 0, status } = options;
       const where = status ? 'WHERE status = ?' : '';
@@ -181,40 +152,34 @@ export function createTripsRepo(db: Db) {
       return rows.map(toTripRow);
     },
 
-    /** The trip the engine is currently writing to, if any. */
-    async findRecording(): Promise<TripRow | null> {
+    /** Every trip still `recording` (crash recovery), oldest first. */
+    async listRecording(): Promise<TripRow[]> {
+      const { rows } = await db.execute("SELECT * FROM trips WHERE status = 'recording' ORDER BY started_at ASC");
+      return rows.map(toTripRow);
+    },
+
+    async count(): Promise<number> {
+      const { rows } = await db.execute('SELECT count(*) AS n FROM trips');
+      return asNumber(rows[0] ?? {}, 'n');
+    },
+
+    /** The latest drive that is not merged away or still recording (the "Wasn't driving" target). */
+    async latestFinished(): Promise<TripRow | null> {
       const { rows } = await db.execute(
-        "SELECT * FROM trips WHERE status = 'recording' ORDER BY started_at DESC LIMIT 1"
+        "SELECT * FROM trips WHERE status NOT IN ('recording', 'merged') ORDER BY started_at DESC LIMIT 1"
       );
       const row = rows[0];
       return row ? toTripRow(row) : null;
     },
 
-    setStatus: (clientTripId: string, status: TripStatus, now: number = Date.now()) =>
-      update(clientTripId, { status }, now),
-
-    setSyncState: (clientTripId: string, syncState: TripSyncState, now: number = Date.now()) =>
-      update(clientTripId, { sync_state: syncState }, now),
-
-    /**
-     * Record how far the recorder has durably written, so a relaunch resumes from here. Runs on
-     * `on` when given, so the mark commits together with the samples it vouches for.
-     */
     checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now(), on?: Db) =>
       update(clientTripId, { checkpoint_ts: checkpointTs }, now, on),
 
-    /**
-     * Takes the trip's events and samples with it. The child rows are deleted explicitly rather
-     * than left to `ON DELETE CASCADE`: inside a transaction on device, foreign keys may not be
-     * enforced (see `createExpoDb`), and a delete that left a drive's events behind is exactly
-     * the residue this call exists to remove. Runs on `on` when given.
-     */
+    /** Takes the trip's events and samples with it (explicitly: foreign keys may be off in a device transaction). */
     async remove(clientTripId: string, on: Db = db): Promise<boolean> {
       await on.execute('DELETE FROM samples WHERE client_trip_id = ?', [clientTripId]);
       await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
-      const { changes } = await on.execute('DELETE FROM trips WHERE client_trip_id = ?', [
-        clientTripId,
-      ]);
+      const { changes } = await on.execute('DELETE FROM trips WHERE client_trip_id = ?', [clientTripId]);
       return changes > 0;
     },
   };

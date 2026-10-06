@@ -1,5 +1,6 @@
-// Contract between the feature extractor, the detectors and the scorer (spec §9.3, §9.5, §9.7).
-import type { FocusKind, ScorableEvent } from '@scoring';
+// Contract between the native feature extractor, the detectors and the engine (product spec v3
+// "Event detection", plan §2, §6).
+import type { DriveEvent, EventType, Tier } from '@scoring';
 
 /**
  * One second of fused sensing at 1 Hz: the GNSS fix, the IMU extremes over that second and the
@@ -8,7 +9,7 @@ import type { FocusKind, ScorableEvent } from '@scoring';
 export interface FeatureRow {
   /**
    * epoch ms, as an integer: the native module rounds its clock before emitting the row, since
-   * the upload contract (`FinalizeTripPayloadSchema`) accepts only whole milliseconds.
+   * the upload contract accepts only whole milliseconds.
    */
   ts: number;
   lat: number;
@@ -40,10 +41,15 @@ export interface FeatureRow {
   locked: boolean;
   screenOn: boolean;
   appForeground: boolean;
-  // ——— DMS motion evidence (DMS calibration and stops, Task C0; design rev4 §2.1.1) ———
-  // Optional: rows persisted before the drive-sense update, and rows from an older native build under
-  // an OTA update, lack them, and every consumer treats an absent field as "no evidence". They are
-  // DMS-only: `finalize.ts` strips them before the trace and its digest (`MOTION_ROW_FIELDS`).
+  /**
+   * The fix came from a mock provider (Android `Location.isMock()`, iOS 15+
+   * `sourceInformation.isSimulatedBySoftware`). Optional: rows from a native build that predates
+   * the key lack it, and absent reads as "not mock" (plan §6; WP7 adds it natively).
+   */
+  mock?: boolean;
+  // ——— DMS motion evidence (design rev4 §2.1.1) ———
+  // Optional: rows from an older native build lack them, and every consumer treats an absent field
+  // as "no evidence". They never leave the device.
   /** the forward frame was aligned this second (absent: false) */
   frameAligned?: boolean;
   /** the mean of the second's smoothed longitudinal acceleration, g; 0 when unaligned (absent: 0) */
@@ -56,13 +62,10 @@ export interface FeatureRow {
   gravZ?: number | null;
 }
 
-/**
- * The DMS-only row fields (Task C0). Stripped from the trace in `finalize.ts`, so the uploaded
- * digest and the trace file are exactly what they were before the fields existed.
- */
+/** The DMS-only row fields. Never uploaded (nothing is: v3 uploads no rows at all). */
 export const MOTION_ROW_FIELDS = ['frameAligned', 'aLonMean', 'accRms', 'gravX', 'gravY', 'gravZ'] as const satisfies readonly (keyof FeatureRow)[];
 
-/** The speed limit the map layer believes applies to a row (§9.5 speed-limit source). */
+/** The speed limit the map layer believes applies to a row. */
 export interface LimitSample {
   limitMps: number | null;
   source: 'posted' | 'statutory' | 'cached' | 'unknown';
@@ -71,51 +74,42 @@ export interface LimitSample {
   parallelRoads: boolean;
 }
 
-export type DriveMode = 'mounted' | 'pocket' | 'auto';
-
-/** A camera focus episode, delivered on the row it ended (§9.3 focus & alertness). */
+/** A camera focus episode, delivered on the row it ended (the DMS's seam; WP8 owns its detector). */
 export interface CameraFocusSample {
   /** seconds the eyes were off the forward zone, or the length of the drowsiness episode */
   glanceS: number;
-  kind: FocusKind;
-  /** camera confidence, 0..1 (§9.5) */
+  kind: 'glance' | 'drowsiness';
+  /** camera confidence, 0..1 */
   q: number;
-  /** the glance ended inside `GLANCE_GRACE_S` of an alert, as judged by the camera pipeline */
   correctedWithinGrace?: boolean;
 }
 
 export interface DetectorContext {
-  mode: DriveMode;
-  night: boolean;
-  precipitation: boolean;
-  cameraFocus?: CameraFocusSample | null;
+  /** epoch ms the drive started: no events in its first `NO_EVENTS_FIRST_S` (spec). */
+  tripStartedAt: number;
+  /** A hands-free call is active (where the native signal exists): phone events are suppressed. */
+  callActive: boolean;
   /**
-   * The row's `locked` / `screenOn` can be believed. The host sets it from drive-sense's
-   * `lockSignal !== 'unreliable'` (an iPhone without a passcode never reports locked); recovery
-   * and the adopt rebuild use false. When false, an unlocked screen is not unlock evidence and a
-   * backgrounded RoadWise on a mount is not app-switch evidence (§9.5, plan rev1 I11).
+   * The row's `locked` / `screenOn` can be believed (drive-sense `lockSignal !== 'unreliable'`): an
+   * iPhone without a passcode never reports locked, so an unlocked screen is no unlock evidence there.
    */
   lockReliable: boolean;
-  /**
-   * The lock signal arrives late (drive-sense `lockSignal === 'lagged'`: iOS with a passcode,
-   * about ten seconds). A mounted app switch then needs `APP_SWITCH_CONFIRM_S` backgrounded,
-   * unlocked rows before it counts, and is dropped if a locked row turns up first — a press of
-   * the side button must not read as an app switch. False on Android and in recovery.
-   */
+  /** The lock signal arrives late (iOS with a passcode, ~10 s): unlock evidence is held back. */
   lockLagged: boolean;
+  cameraFocus?: CameraFocusSample | null;
 }
 
-export type EventSource = 'gnss' | 'imu' | 'both' | 'os' | 'camera';
+/** What the detector measured; shown on the summary and sent with the event (plan §3). */
+export interface EventMeasured {
+  speedMph?: number;
+  limitMph?: number;
+  peakG?: number;
+  mounted?: boolean;
+}
 
-/** A scorable event plus what the alert layer needs to know about it. */
-export interface DetectedEvent extends ScorableEvent {
-  alertable: boolean;
-  source: EventSource;
-  /**
-   * Ids of the events `mergeEvents` folded into this one, in absorption order, so an alert or a
-   * dispute that referenced them can still be traced. Absent when nothing was absorbed.
-   */
-  absorbedIds?: string[];
+/** A scorable v3 event as a detector closes it. Coordinates are added at finalize from the track. */
+export interface DetectedEvent extends DriveEvent {
+  measured: EventMeasured;
 }
 
 export interface Detector {
@@ -125,10 +119,23 @@ export interface Detector {
   flush(): DetectedEvent[];
 }
 
-/** Every detector behind one `push`/`flush`, plus the alert layer's hooks (`createDetectors`). */
+/** An episode in progress, for the HUD's glow and the alert layer. */
+export interface OpenEpisode {
+  id: string;
+  type: EventType;
+  /** The tier so far (speeding: the current row's; phone: severe). */
+  tier: Tier;
+  startedAt: number;
+  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s). */
+  confirmed: boolean;
+}
+
+/** Every detector behind one `push`/`flush`, plus what the engine reads per row. */
 export interface DetectorSuite extends Detector {
-  /** Record that the driver was alerted about the open episode `id` at `ts` (epoch ms). */
-  markAlerted(id: string, ts: number): void;
-  /** Id of the speeding episode that is currently open and long enough to be an event, if any. */
-  openSpeedingEpisodeId(): string | null;
+  /** The speeding episode in progress on the latest row, if any. */
+  openSpeeding(): OpenEpisode | null;
+  /** The phone episode in progress on the latest row, if any. */
+  openPhone(): OpenEpisode | null;
+  /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */
+  unsafe(): boolean;
 }

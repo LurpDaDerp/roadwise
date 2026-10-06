@@ -1,58 +1,49 @@
+import { EVENT_TYPES_V3, TIERS_V3 } from '@/data/sync/payload';
 import type { Db } from '@/data/db/driver';
-import {
-  asFlag,
-  asNumber,
-  asNumberOrNull,
-  asText,
-  asTextOrNull,
-  insertStatement,
-  updateStatement,
-} from '@/data/db/row';
+import { asEnum, asFlag, asNumber, asNumberOrNull, asText, asTextOrNull, insertStatement, updateStatement } from '@/data/db/row';
 import { assertTripExists } from '@/data/db/trips';
-import type { EventPatch, EventRow, NewEvent } from '@/data/db/types';
+import { DISPUTE_STATUSES, type EventPatch, type EventRow, type NewEvent } from '@/data/db/types';
 
 const COLUMNS = [
   'id',
   'client_trip_id',
-  'category',
+  'type',
+  'tier',
   'started_at',
   'duration_s',
+  'units',
+  'stopped_in_traffic',
   'lat',
   'lng',
   'measured_json',
-  'severity',
-  'confidence',
-  'context_json',
-  'deduction',
-  'alert_shown',
-  'corrected',
+  'penalty',
   'status',
-  'source',
-  'dispute_json',
+  'dispute_status',
+  'dispute_reason',
+  'dispute_message',
 ] as const;
 
-/** An event never changes which trip it belongs to, and its id is its identity. */
+/** An event's id is its identity; `client_trip_id` moves only through `reparent`. */
 const PATCHABLE = COLUMNS.filter((column) => column !== 'id' && column !== 'client_trip_id');
 
 export function toEventRow(row: Record<string, unknown>): EventRow {
   return {
     id: asText(row, 'id'),
     client_trip_id: asText(row, 'client_trip_id'),
-    category: asText(row, 'category'),
+    type: asEnum(row, 'type', EVENT_TYPES_V3),
+    tier: asEnum(row, 'tier', TIERS_V3),
     started_at: asNumber(row, 'started_at'),
     duration_s: asNumber(row, 'duration_s'),
+    units: asNumberOrNull(row, 'units'),
+    stopped_in_traffic: asFlag(row, 'stopped_in_traffic'),
     lat: asNumberOrNull(row, 'lat'),
     lng: asNumberOrNull(row, 'lng'),
     measured_json: asTextOrNull(row, 'measured_json'),
-    severity: asTextOrNull(row, 'severity'),
-    confidence: asNumberOrNull(row, 'confidence'),
-    context_json: asTextOrNull(row, 'context_json'),
-    deduction: asNumberOrNull(row, 'deduction'),
-    alert_shown: asFlag(row, 'alert_shown'),
-    corrected: asFlag(row, 'corrected'),
-    status: asTextOrNull(row, 'status'),
-    source: asTextOrNull(row, 'source'),
-    dispute_json: asTextOrNull(row, 'dispute_json'),
+    penalty: asNumberOrNull(row, 'penalty'),
+    status: asEnum(row, 'status', ['active', 'removed'] as const),
+    dispute_status: asEnum(row, 'dispute_status', DISPUTE_STATUSES),
+    dispute_reason: asTextOrNull(row, 'dispute_reason'),
+    dispute_message: asTextOrNull(row, 'dispute_message'),
   };
 }
 
@@ -79,14 +70,7 @@ export function createEventsRepo(db: Db) {
       return insertOn(event, db);
     },
 
-    /**
-     * All or nothing: a batch naming a trip that is not there writes none of it, and throws
-     * `MissingTripError` — checked explicitly inside the transaction rather than left to the
-     * foreign key, which may not be enforced there on device.
-     *
-     * Given a transaction handle `on`, the batch joins that transaction instead of opening its
-     * own; atomicity is then the caller's transaction.
-     */
+    /** All or nothing. Given a transaction handle `on`, the batch joins that transaction. */
     insertMany(events: readonly NewEvent[], on?: Db): Promise<EventRow[]> {
       const run = async (tx: Db): Promise<EventRow[]> => {
         for (const clientTripId of new Set(events.map((event) => event.client_trip_id))) {
@@ -99,27 +83,15 @@ export function createEventsRepo(db: Db) {
       return on ? run(on) : db.transaction(run);
     },
 
-    /** Oldest first — the order the trip detail screen lists them in. */
-    async listByTrip(clientTripId: string): Promise<EventRow[]> {
-      const { rows } = await db.execute(
+    /** Oldest first — the order the summary lists them in. */
+    async listByTrip(clientTripId: string, on: Db = db): Promise<EventRow[]> {
+      const { rows } = await on.execute(
         'SELECT * FROM trip_events WHERE client_trip_id = ? ORDER BY started_at ASC, id ASC',
         [clientTripId]
       );
       return rows.map(toEventRow);
     },
 
-    async countByTrip(clientTripId: string): Promise<number> {
-      const { rows } = await db.execute(
-        'SELECT count(*) AS n FROM trip_events WHERE client_trip_id = ?',
-        [clientTripId]
-      );
-      return asNumber(rows[0] ?? {}, 'n');
-    },
-
-    /**
-     * Used when a dispute is settled: mark corrected, zero the deduction, record the report.
-     * Runs on `on` when given, so the event, its trip and the day cache move together.
-     */
     async update(id: string, patch: EventPatch, on: Db = db): Promise<EventRow | null> {
       const statement = updateStatement('trip_events', PATCHABLE, patch, 'id = ?', [id]);
       if (!statement) return get(id, on);
@@ -127,11 +99,15 @@ export function createEventsRepo(db: Db) {
       return changes === 0 ? null : get(id, on);
     },
 
-    /** Runs on `on` when given, so it can share a caller's transaction. */
+    /** Move every event of `from` under `to` (a merged drive's events belong to the drive it merged into). */
+    async reparent(from: string, to: string, on: Db = db): Promise<number> {
+      await assertTripExists(on, to);
+      const { changes } = await on.execute('UPDATE trip_events SET client_trip_id = ? WHERE client_trip_id = ?', [to, from]);
+      return changes;
+    },
+
     async removeByTrip(clientTripId: string, on: Db = db): Promise<number> {
-      const { changes } = await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [
-        clientTripId,
-      ]);
+      const { changes } = await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
       return changes;
     },
   };

@@ -1,5 +1,5 @@
 import type { Db } from '@/data/db/driver';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 interface Migration {
   readonly version: number;
@@ -13,16 +13,15 @@ interface Migration {
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, statements: SCHEMA_V1 },
   { version: 2, statements: SCHEMA_V2 },
+  { version: 3, statements: SCHEMA_V3 },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 
 /**
- * Bring `db` up to `CURRENT_SCHEMA_VERSION` and return the version reached.
- *
- * Idempotent: a second call reads the recorded version, finds nothing newer and writes nothing.
- * The whole thing runs in one transaction — SQLite makes DDL transactional, so a crash mid-way
- * leaves the database at the version it started from rather than half-migrated.
+ * Bring `db` up to `CURRENT_SCHEMA_VERSION` and return the version reached. Idempotent, and one
+ * transaction: SQLite makes DDL transactional, so a crash mid-way leaves the database at the
+ * version it started from.
  */
 export async function migrate(db: Db): Promise<number> {
   return db.transaction(async (tx) => {
@@ -40,10 +39,7 @@ export async function migrate(db: Db): Promise<number> {
     }
 
     if (version !== from) {
-      const sql =
-        from === 0
-          ? 'INSERT INTO schema_version (version) VALUES (?)'
-          : 'UPDATE schema_version SET version = ?';
+      const sql = from === 0 ? 'INSERT INTO schema_version (version) VALUES (?)' : 'UPDATE schema_version SET version = ?';
       await tx.execute(sql, [version]);
     }
 

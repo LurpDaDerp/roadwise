@@ -118,7 +118,7 @@ function decision(
   return {
     id: `d${level}`,
     level,
-    kind: level === 1 ? "speeding" : level === 2 ? "phone" : "drowsy",
+    kind: level === 1 ? "speeding" : level === 2 ? "phone_pickup" : "drowsy",
     ts: 1_700_000_000_000,
     voice:
       level === 1

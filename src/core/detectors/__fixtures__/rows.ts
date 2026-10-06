@@ -1,12 +1,6 @@
 // Row builders shared by the detector tests. Lives outside `__tests__/` because Jest's default
 // `testMatch` treats every file in there as a suite.
-import type {
-  DetectedEvent,
-  Detector,
-  DetectorContext,
-  FeatureRow,
-  LimitSample,
-} from '@/core/engine/types';
+import type { DetectedEvent, Detector, DetectorContext, FeatureRow, LimitSample } from '@/core/engine/types';
 
 /** Epoch ms of row 0; row `i` sits at `T0 + i * 1000` (1 Hz). */
 export const T0 = 1_700_000_000_000;
@@ -43,10 +37,7 @@ export function row(overrides: Partial<FeatureRow> = {}, i = 0): FeatureRow {
   };
 }
 
-/**
- * Consecutive 1 Hz rows from segments of `[count, overrides]`; a function override receives the
- * absolute row index.
- */
+/** Consecutive 1 Hz rows from segments of `[count, overrides]`; a function override receives the absolute row index. */
 export function seq(...segments: readonly (readonly [number, Overrides])[]): FeatureRow[] {
   const out: FeatureRow[] = [];
   for (const [count, overrides] of segments) {
@@ -58,25 +49,15 @@ export function seq(...segments: readonly (readonly [number, Overrides])[]): Fea
   return out;
 }
 
-export function limit(
-  limitMps: number | null,
-  source: LimitSample['source'] = 'posted',
-  extra: Partial<LimitSample> = {}
-): LimitSample {
+export function limit(limitMps: number | null, source: LimitSample['source'] = 'posted', extra: Partial<LimitSample> = {}): LimitSample {
   return { limitMps, source, matchConfidence: 1, parallelRoads: false, ...extra };
 }
 
 export const NO_LIMIT: LimitSample = limit(null, 'unknown', { matchConfidence: 0 });
 
+/** A context whose warm-up is long over (the drive started an hour before row 0). */
 export function ctx(overrides: Partial<DetectorContext> = {}): DetectorContext {
-  return {
-    mode: 'mounted',
-    night: false,
-    precipitation: false,
-    lockReliable: true,
-    lockLagged: false,
-    ...overrides,
-  };
+  return { tripStartedAt: T0 - 3_600_000, callActive: false, lockReliable: true, lockLagged: false, ...overrides };
 }
 
 /** Deterministic ids: e1, e2, ... */
@@ -86,8 +67,7 @@ export function counterIds(): () => string {
 }
 
 type PerRow<T> = T | ((r: FeatureRow, i: number) => T);
-const at = <T>(v: PerRow<T>, r: FeatureRow, i: number): T =>
-  typeof v === 'function' ? (v as (r: FeatureRow, i: number) => T)(r, i) : v;
+const at = <T>(v: PerRow<T>, r: FeatureRow, i: number): T => (typeof v === 'function' ? (v as (r: FeatureRow, i: number) => T)(r, i) : v);
 
 /** Push every row, keeping what each push returned, then flush. */
 export function drive(

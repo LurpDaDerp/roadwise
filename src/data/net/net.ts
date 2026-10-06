@@ -15,7 +15,10 @@
  *   link the OS will not name, Bluetooth tethering and anything unknown are `false` — the safe
  *   answer for a driver's data plan.
  */
-import type { NetStatus } from '@/data/sync/runner';
+/** What the launch reads of the network: whether the device is on an unmetered link. */
+export interface NetStatus {
+  isWifi(): boolean;
+}
 
 /** What a network change delivers to a subscriber. */
 export interface NetState {

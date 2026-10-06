@@ -3,12 +3,11 @@ import { asEnum, asNumber, asNumberOrNull, asText, asTextOrNull } from '@/data/d
 import { QUEUE_STATUSES, type QueueItem, type QueueStatus } from '@/data/db/types';
 
 /**
- * The outbox. Work the app owes the server — a finalized trip, a role correction, a dispute —
- * is written here first and drained later, so a drive that ends in a tunnel still uploads.
+ * The outbox. Work the app owes the server — a finished drive, a dispute, "wasn't driving" — is
+ * written here first and drained later, so a drive that ends in a tunnel still uploads.
  *
- * Retries back off from 30 s, doubling to a one-hour ceiling, and give up after 20 attempts.
- * The server dedupes on `idempotency_key`, so a retry that actually succeeded the first time is
- * harmless.
+ * Retries back off from 30 s, doubling to a one-hour ceiling, and give up after 20 attempts. The
+ * server is idempotent on the item's key, so a retry that actually succeeded is harmless.
  *
  * An item moves `pending → inflight` when `nextDue` claims it and back out when `markAttempt`
  * closes the attempt. A process killed mid-upload leaves the claim open, so `nextDue` first
@@ -22,147 +21,18 @@ export const MAX_ATTEMPTS = 20;
 /** How long a claim may stand before `nextDue` assumes the uploader died holding it. */
 export const RECLAIM_AFTER_S = 300;
 
-/**
- * Seconds to wait before the next try, given how many attempts have already failed:
- * 30, 60, 120, 240, 480, 960, 1920, then one hour forever.
- */
+/** Seconds to wait before the next try: 30, 60, 120, 240, 480, 960, 1920, then one hour forever. */
 export function backoffSeconds(attempts: number): number {
   return Math.min(MAX_DELAY_S, FIRST_DELAY_S * 2 ** Math.max(0, attempts));
 }
 
-/**
- * `next_attempt_at` of an item the server refused for good: never. A failed item's retry time is
- * otherwise meaningless, so this is the one mark that separates a refusal from an exhausted
- * ladder without a schema change.
- */
+/** `next_attempt_at` of an item the server refused for good: never. */
 export const REFUSED_NEVER = Number.MAX_SAFE_INTEGER;
 
-/**
- * The reason the sync runner records on a trip or a report whose item ran out of retries. Kept
- * equal to `RETRIES_EXHAUSTED` in `src/data/sync/actions.ts` (a test pins it); declared here so the
- * database layer does not import the sync layer.
- */
-const RETRIES_EXHAUSTED = 'retries_exhausted';
-
-/**
- * `last_error` of an attempt that never reached a server (`classifyInvokeError` /
- * `classifyStorageError` with no HTTP status). Such an item is reopened on every reconnect; one
- * that ran out on server answers (5xx, 429, an unreadable reply) waits `SERVER_REOPEN_AFTER_MS`
- * after it gave up, so a payload the server keeps choking on is not re-sent in full after every
- * tunnel (review D2 m1).
- */
-const TRANSPORT_FAILURE = 'network';
+/** `last_error` of an attempt that never reached a server; such an item is reopened on every reconnect. */
+export const TRANSPORT_FAILURE = 'network';
+/** An item that ran out on server answers is reopened only this long after it gave up. */
 export const SERVER_REOPEN_AFTER_MS = 24 * 60 * 60 * 1000;
-
-/** Queue kinds whose body names a trip, and whose give-up marks that trip failed. */
-const TRIP_KINDS = new Set(['finalize-trip', 'set-role', 'delete-trip']);
-
-function parseBody(json: string): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(json);
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Drop every queued report on one of the trip's events and every role answer about the trip, in
- * any status (security review D2 I-1, R1-M1). Their bodies hold the driver's own words about a drive
- * that is being destroyed — by a local delete (`deleteTrip`) or because it was deleted elsewhere
- * (hydrate's reconcile removal). Run inside that transaction, **before** the events are removed,
- * while they still name the reports.
- */
-export async function dropQueuedAbout(tx: Db, clientTripId: string): Promise<void> {
-  const { rows: events } = await tx.execute('SELECT id FROM trip_events WHERE client_trip_id = ?', [
-    clientTripId,
-  ]);
-  for (const event of events) {
-    if (typeof event.id === 'string') {
-      await tx.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [`dispute:${event.id}`]);
-    }
-  }
-  // A role answer's key carries a stamp, so it is found by its body.
-  const { rows: answers } = await tx.execute(
-    "SELECT id, payload_json FROM sync_queue WHERE kind = 'set-role'"
-  );
-  for (const answer of answers) {
-    if (parseBody(String(answer.payload_json))?.clientTripId === clientTripId) {
-      await tx.execute('DELETE FROM sync_queue WHERE id = ?', [answer.id]);
-    }
-  }
-}
-
-/**
- * Whether the thing a queued item is about has gone from the device (security review D2 I-1): a
- * trip deleted, discarded or removed, or a report's event removed with its drive. Such an item is
- * never reopened — its body can hold the driver's own words about a drive they asked to destroy.
- * A `delete-trip` item is always live: its husk may be gone, and the server still has to hear it.
- * A body this build cannot read names nothing, so it is not "gone" (the runner fails it unsent).
- */
-async function subjectGone(tx: Db, item: QueueItem): Promise<boolean> {
-  if (item.kind === 'delete-trip') return false;
-  const body = parseBody(item.payload_json);
-  if (body === null) return false;
-  if (item.kind === 'dispute') {
-    if (typeof body.clientEventId !== 'string') return false;
-    const { rows } = await tx.execute('SELECT 1 FROM trip_events WHERE id = ?', [body.clientEventId]);
-    return rows.length === 0;
-  }
-  if (typeof body.clientTripId !== 'string') return false;
-  const { rows } = await tx.execute(
-    'SELECT status, deleted_at FROM trips WHERE client_trip_id = ?',
-    [body.clientTripId]
-  );
-  const row = rows[0];
-  return !row || row.status === 'discarded' || (row.deleted_at !== null && row.deleted_at !== undefined);
-}
-
-/** Take back what a reopened item's give-up recorded for the driver (see `reopenRetryable`). */
-async function undoGiveUp(tx: Db, item: QueueItem, now: number): Promise<void> {
-  const body = parseBody(item.payload_json);
-  if (body === null) return;
-
-  if (TRIP_KINDS.has(item.kind) && typeof body.clientTripId === 'string') {
-    // A role answer's or a delete's give-up wrote `retries_exhausted` over whatever the trip said
-    // before. If its upload was refused for good, "queued" would promise a drive the server has
-    // turned down (review D2 m2): leave the trip as it is.
-    if (item.kind !== 'finalize-trip') {
-      const { rows } = await tx.execute(
-        "SELECT 1 FROM sync_queue WHERE idempotency_key = ? AND status = 'failed' AND next_attempt_at = ?",
-        [`trip:${body.clientTripId}`, REFUSED_NEVER]
-      );
-      if (rows.length > 0) return;
-    }
-    await tx.execute(
-      `UPDATE trips SET sync_state = 'queued', sync_error = NULL, updated_at = ?
-        WHERE client_trip_id = ? AND sync_state = 'failed' AND sync_error = ?`,
-      [now, body.clientTripId, RETRIES_EXHAUSTED]
-    );
-    return;
-  }
-
-  if (item.kind === 'dispute' && typeof body.clientEventId === 'string') {
-    const { rows } = await tx.execute('SELECT status, dispute_json FROM trip_events WHERE id = ?', [
-      body.clientEventId,
-    ]);
-    const row = rows[0];
-    const record = typeof row?.dispute_json === 'string' ? parseBody(row.dispute_json) : null;
-    if (!row || record === null) return;
-    if (record.outcome !== 'refused' || record.code !== RETRIES_EXHAUSTED) return;
-    const sending = { ...record, outcome: 'queued', code: null, decidedAt: null };
-    // Only a `scored` event is ever marked `disputed` while a report travels (a `possible` one
-    // cost nothing and stays as it is), and the give-up put it back to `scored`.
-    const status = row.status === 'scored' ? 'disputed' : row.status;
-    await tx.execute('UPDATE trip_events SET status = ?, dispute_json = ? WHERE id = ?', [
-      status,
-      JSON.stringify(sending),
-      body.clientEventId,
-    ]);
-  }
-}
 
 function toQueueItem(row: Record<string, unknown>): QueueItem {
   return {
@@ -174,7 +44,6 @@ function toQueueItem(row: Record<string, unknown>): QueueItem {
     attempts: asNumber(row, 'attempts'),
     next_attempt_at: asNumber(row, 'next_attempt_at'),
     claimed_at: asNumberOrNull(row, 'claimed_at'),
-    trace_uploaded_at: asNumberOrNull(row, 'trace_uploaded_at'),
     owner_uid: asTextOrNull(row, 'owner_uid'),
     last_error: asTextOrNull(row, 'last_error'),
     created_at: asNumber(row, 'created_at'),
@@ -189,29 +58,32 @@ export function createQueueRepo(db: Db) {
   }
 
   async function byKey(idempotencyKey: string, on: Db): Promise<QueueItem | null> {
-    const { rows } = await on.execute('SELECT * FROM sync_queue WHERE idempotency_key = ?', [
-      idempotencyKey,
-    ]);
+    const { rows } = await on.execute('SELECT * FROM sync_queue WHERE idempotency_key = ?', [idempotencyKey]);
     const row = rows[0];
     return row ? toQueueItem(row) : null;
   }
 
-  /**
-   * Hand back claims nobody closed out. Attempts are left untouched — the upload may well have
-   * reached the server, and the idempotency key is what stops a duplicate.
-   */
-  async function reclaimInflight(
-    olderThanS: number = RECLAIM_AFTER_S,
-    now: number = Date.now(),
-    on: Db = db
-  ): Promise<number> {
+  async function reclaimInflight(olderThanS: number, now: number, on: Db): Promise<number> {
     const { changes } = await on.execute(
-      `UPDATE sync_queue
-          SET status = 'pending', next_attempt_at = ?, claimed_at = NULL
+      `UPDATE sync_queue SET status = 'pending', next_attempt_at = ?, claimed_at = NULL
         WHERE status = 'inflight' AND (claimed_at IS NULL OR claimed_at <= ?)`,
       [now, now - olderThanS * 1000]
     );
     return changes;
+  }
+
+  async function claim(tx: Db, where: string, params: unknown[], now: number, limit: number): Promise<QueueItem[]> {
+    const { rows } = await tx.execute(
+      `SELECT * FROM sync_queue WHERE ${where} ORDER BY next_attempt_at ASC, id ASC LIMIT ?`,
+      [...params, limit]
+    );
+    const claimed: QueueItem[] = [];
+    for (const row of rows) {
+      const item = toQueueItem(row);
+      await tx.execute("UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?", [now, item.id]);
+      claimed.push({ ...item, status: 'inflight', claimed_at: now });
+    }
+    return claimed;
   }
 
   return {
@@ -220,29 +92,17 @@ export function createQueueRepo(db: Db) {
     /** The item under an idempotency key, whatever state it has reached, or null. */
     byKey: (idempotencyKey: string) => byKey(idempotencyKey, db),
 
-    reclaimInflight: (olderThanS: number = RECLAIM_AFTER_S, now: number = Date.now()) =>
-      reclaimInflight(olderThanS, now),
+    reclaimInflight: (olderThanS: number = RECLAIM_AFTER_S, now: number = Date.now()) => reclaimInflight(olderThanS, now, db),
 
     /**
-     * Idempotent: enqueueing a key already in the queue keeps the item that is there, whatever
-     * state it has reached, rather than queueing the same work twice.
-     *
-     * Given a transaction handle `on`, the insert joins that transaction instead of opening its
-     * own, so a caller can commit the queue item together with the rows it describes.
+     * Idempotent: enqueueing a key already in the queue keeps the item that is there. Given a
+     * transaction handle `on`, the insert joins that transaction.
      */
-    enqueue(
-      kind: string,
-      payload: unknown,
-      idempotencyKey: string,
-      now: number = Date.now(),
-      on?: Db,
-      ownerUid: string | null = null
-    ): Promise<QueueItem> {
+    enqueue(kind: string, payload: unknown, idempotencyKey: string, now: number = Date.now(), on?: Db, ownerUid: string | null = null): Promise<QueueItem> {
       const run = async (tx: Db): Promise<QueueItem> => {
         await tx.execute(
           `INSERT OR IGNORE INTO sync_queue
-             (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, owner_uid,
-              created_at)
+             (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, owner_uid, created_at)
            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`,
           [kind, JSON.stringify(payload), idempotencyKey, now, ownerUid, now]
         );
@@ -253,168 +113,59 @@ export function createQueueRepo(db: Db) {
       return on ? run(on) : db.transaction(run);
     },
 
-    /**
-     * Claim up to `limit` items whose retry time has arrived, marking them `inflight` in the
-     * same transaction so two drain passes cannot pick up the same work. Stale claims are
-     * reclaimed first, inside that transaction, so a crashed upload is retried rather than lost.
-     */
-    nextDue(
-      now: number = Date.now(),
-      limit = 10,
-      reclaimAfterS: number = RECLAIM_AFTER_S
-    ): Promise<QueueItem[]> {
+    /** Claim up to `limit` due items, marking them `inflight` in the same transaction. */
+    nextDue(now: number = Date.now(), limit = 10, reclaimAfterS: number = RECLAIM_AFTER_S): Promise<QueueItem[]> {
       return db.transaction(async (tx) => {
         await reclaimInflight(reclaimAfterS, now, tx);
-
-        const { rows } = await tx.execute(
-          `SELECT * FROM sync_queue
-            WHERE status = 'pending' AND next_attempt_at <= ?
-            ORDER BY next_attempt_at ASC, id ASC
-            LIMIT ?`,
-          [now, limit]
-        );
-        const claimed: QueueItem[] = [];
-        for (const row of rows) {
-          const item = toQueueItem(row);
-          await tx.execute(
-            "UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?",
-            [now, item.id]
-          );
-          claimed.push({ ...item, status: 'inflight', claimed_at: now });
-        }
-        return claimed;
+        return claim(tx, "status = 'pending' AND next_attempt_at <= ?", [now], now, limit);
       });
     },
 
     /**
-     * Claim every pending item of one `kind`, whatever its retry time — the last chance to send
-     * it (sign-out flushes the deletes still owed while the outgoing session can still send
-     * them). Same claim transaction and reclaim as `nextDue`.
+     * Close out one attempt. Success marks the item `done`; failure records the error and schedules
+     * the next try, or gives up at `MAX_ATTEMPTS`. Guarded by `status = 'inflight'`: closing the
+     * same claim twice is a no-op. Null when nothing changed.
      */
-    nextDueOfKind(
-      kind: string,
-      now: number = Date.now(),
-      limit = 10,
-      reclaimAfterS: number = RECLAIM_AFTER_S
-    ): Promise<QueueItem[]> {
+    markAttempt(id: number, ok: boolean, error: string | null = null, now: number = Date.now()): Promise<QueueItem | null> {
       return db.transaction(async (tx) => {
-        await reclaimInflight(reclaimAfterS, now, tx);
-        const { rows } = await tx.execute(
-          `SELECT * FROM sync_queue
-            WHERE status = 'pending' AND kind = ?
-            ORDER BY next_attempt_at ASC, id ASC
-            LIMIT ?`,
-          [kind, limit]
-        );
-        const claimed: QueueItem[] = [];
-        for (const row of rows) {
-          const item = toQueueItem(row);
-          await tx.execute(
-            "UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?",
-            [now, item.id]
-          );
-          claimed.push({ ...item, status: 'inflight', claimed_at: now });
-        }
-        return claimed;
-      });
-    },
-
-    /**
-     * Close out one attempt. Success marks the item `done` and clears the error; failure records
-     * it and schedules the next try, or gives up at `MAX_ATTEMPTS`.
-     *
-     * Guarded by `status = 'inflight'` and run in one transaction, so closing the same claim
-     * twice — a retried callback, two drain passes racing — is a no-op rather than a double
-     * increment. Returns the item as it now stands, or `null` when nothing changed (no such
-     * item, or no claim open on it).
-     */
-    markAttempt(
-      id: number,
-      ok: boolean,
-      error: string | null = null,
-      now: number = Date.now()
-    ): Promise<QueueItem | null> {
-      return db.transaction(async (tx) => {
-        const { rows } = await tx.execute(
-          "SELECT * FROM sync_queue WHERE id = ? AND status = 'inflight'",
-          [id]
-        );
+        const { rows } = await tx.execute("SELECT * FROM sync_queue WHERE id = ? AND status = 'inflight'", [id]);
         const row = rows[0];
         if (!row) return null;
         const current = toQueueItem(row);
-
         if (ok) {
-          await tx.execute(
-            `UPDATE sync_queue SET status = 'done', last_error = NULL, claimed_at = NULL
-              WHERE id = ? AND status = 'inflight'`,
-            [id]
-          );
+          await tx.execute("UPDATE sync_queue SET status = 'done', last_error = NULL, claimed_at = NULL WHERE id = ? AND status = 'inflight'", [id]);
           return get(id, tx);
         }
-
         const attempts = current.attempts + 1;
         const givingUp = attempts >= MAX_ATTEMPTS;
         await tx.execute(
-          `UPDATE sync_queue
-              SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, claimed_at = NULL
+          `UPDATE sync_queue SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, claimed_at = NULL
             WHERE id = ? AND status = 'inflight'`,
-          [
-            givingUp ? 'failed' : 'pending',
-            attempts,
-            givingUp ? current.next_attempt_at : now + backoffSeconds(current.attempts) * 1000,
-            error,
-            id,
-          ]
+          [givingUp ? 'failed' : 'pending', attempts, givingUp ? current.next_attempt_at : now + backoffSeconds(current.attempts) * 1000, error, id]
         );
         return get(id, tx);
       });
     },
 
-    /**
-     * Give a claim back without counting an attempt, so the item is due again at
-     * `nextAttemptAt`. For work that was not *tried* — no session yet, the trace is waiting for
-     * Wi-Fi, the pass stopped on a locked database — where counting a failure would walk the
-     * item towards `MAX_ATTEMPTS` for no fault of its own.
-     *
-     * Guarded by `status = 'inflight'`: null when the claim this caller held is already closed.
-     */
-    async release(
-      id: number,
-      nextAttemptAt: number = Date.now(),
-      on: Db = db
-    ): Promise<QueueItem | null> {
+    /** Give a claim back without counting an attempt (no session yet, a locked database). */
+    async release(id: number, nextAttemptAt: number = Date.now(), on: Db = db): Promise<QueueItem | null> {
       const { changes } = await on.execute(
-        `UPDATE sync_queue SET status = 'pending', claimed_at = NULL, next_attempt_at = ?
-          WHERE id = ? AND status = 'inflight'`,
+        "UPDATE sync_queue SET status = 'pending', claimed_at = NULL, next_attempt_at = ? WHERE id = ? AND status = 'inflight'",
         [nextAttemptAt, id]
       );
       return changes === 0 ? null : get(id, on);
     },
 
-    /**
-     * Push an item's next try out to `at`, never in. The server's `Retry-After` outranks the
-     * backoff ladder when it asks for longer; a shorter one is ignored, since the ladder exists
-     * to protect a struggling server from the whole fleet at once.
-     */
+    /** Push an item's next try out to `at`, never in (the server's `Retry-After`). */
     async deferUntil(id: number, at: number, on: Db = db): Promise<QueueItem | null> {
-      const { changes } = await on.execute(
-        'UPDATE sync_queue SET next_attempt_at = ? WHERE id = ? AND next_attempt_at < ?',
-        [at, id, at]
-      );
+      const { changes } = await on.execute('UPDATE sync_queue SET next_attempt_at = ? WHERE id = ? AND next_attempt_at < ?', [at, id, at]);
       return changes === 0 ? null : get(id, on);
     },
 
-    /**
-     * Give up on an item for good — the server refused it with an error retrying cannot fix.
-     * Called after `markAttempt(id, false, …)` has closed the claim, so the guard allows only
-     * the states that attempt can have left behind: a fresh claim by another pass is not stomped.
-     */
+    /** Give up for good — the server refused it with an error retrying cannot fix. */
     async markFailed(id: number, error: string, on: Db = db): Promise<QueueItem | null> {
-      // `next_attempt_at = REFUSED_NEVER` is what tells this refusal apart from a ladder that ran
-      // out (`reopenRetryable`): a refusal on the twentieth attempt has the same count and status.
       const { changes } = await on.execute(
-        `UPDATE sync_queue SET status = 'failed', last_error = ?, claimed_at = NULL,
-                next_attempt_at = ?
+        `UPDATE sync_queue SET status = 'failed', last_error = ?, claimed_at = NULL, next_attempt_at = ?
           WHERE id = ? AND status IN ('pending', 'failed')`,
         [error, REFUSED_NEVER, id]
       );
@@ -422,160 +173,49 @@ export function createQueueRepo(db: Db) {
     },
 
     /**
-     * Put back every item that gave up only because its retries ran out — the device was offline,
-     * or the server kept answering 5xx or 429 — for when the network comes back (plan D2). Each
-     * gets a clean ladder, due at `now`. An item the server **refused** (a 4xx other than 401,
-     * 408, 409, 425, 429 — `markFailed`) stays failed: retrying would send the same bytes to the
-     * same answer.
-     *
-     * What the give-up left for the driver to read is taken back in the same transaction, so a
-     * screen does not keep saying "this will never upload" about work that is on its way again:
-     * the trip of a reopened upload, role answer or delete goes back to `queued` — only while
-     * `retries_exhausted` is still its recorded reason, so a trip refused for another reason keeps
-     * it — and a reopened report goes back to "sending" on its event.
-     *
-     * An item whose trip or event has gone from the device is left failed (security review D2
-     * I-1; see `subjectGone`). One that ran out on server answers rather than on the transport is
-     * reopened only `SERVER_REOPEN_AFTER_MS` after it gave up (review D2 m1).
-     *
-     * Returns how many items were reopened.
+     * Put back every item that gave up only because its retries ran out, with a clean ladder, due
+     * now. An item the server refused stays failed. One that ran out on server answers is reopened
+     * only `SERVER_REOPEN_AFTER_MS` after it gave up. Returns how many were reopened.
      */
     reopenRetryable(now: number = Date.now()): Promise<number> {
       return db.transaction(async (tx) => {
         const { rows } = await tx.execute(
-          `SELECT * FROM sync_queue
-            WHERE status = 'failed' AND attempts >= ? AND next_attempt_at <> ?`,
+          'SELECT * FROM sync_queue WHERE status = \'failed\' AND attempts >= ? AND next_attempt_at <> ?',
           [MAX_ATTEMPTS, REFUSED_NEVER]
         );
         let reopened = 0;
         for (const item of rows.map(toQueueItem)) {
-          if (await subjectGone(tx, item)) continue;
           const serverSide = item.last_error !== TRANSPORT_FAILURE;
           if (serverSide && now - item.next_attempt_at < SERVER_REOPEN_AFTER_MS) continue;
           reopened += 1;
           await tx.execute(
-            `UPDATE sync_queue
-                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
-                    claimed_at = NULL
-              WHERE id = ? AND status = 'failed'`,
+            "UPDATE sync_queue SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL, claimed_at = NULL WHERE id = ? AND status = 'failed'",
             [now, item.id]
           );
-          await undoGiveUp(tx, item, now);
         }
         return reopened;
       });
     },
 
-    /**
-     * Drop every report and role answer whose trip or event is no longer on the device (security
-     * review D2 R1-M1): left behind by a delete made before this build, or by a drive removed while
-     * such an item sat `failed`. They are never sent and never reopened, but the driver's notes must
-     * not linger. Run once per runner lifetime, at its first drain. Returns how many were dropped.
-     */
-    sweepOrphanedReports(): Promise<number> {
-      return db.transaction(async (tx) => {
-        const { rows } = await tx.execute(
-          "SELECT * FROM sync_queue WHERE kind IN ('dispute', 'set-role') AND status <> 'inflight'"
-        );
-        let dropped = 0;
-        for (const item of rows.map(toQueueItem)) {
-          if (!(await subjectGone(tx, item))) continue;
-          await tx.execute('DELETE FROM sync_queue WHERE id = ?', [item.id]);
-          dropped += 1;
-        }
-        return dropped;
-      });
-    },
-
-    /**
-     * Record that this item's large object is in Storage. Written the moment the upload returns,
-     * outside any claim guard: the object is there whoever holds the claim now, and the point of
-     * the mark is that the next attempt — this process or the next one — skips the upload.
-     */
-    async markTraceUploaded(
-      id: number,
-      at: number = Date.now(),
-      on: Db = db
-    ): Promise<QueueItem | null> {
-      await on.execute(
-        'UPDATE sync_queue SET trace_uploaded_at = ? WHERE id = ? AND trace_uploaded_at IS NULL',
-        [at, id]
-      );
-      return get(id, on);
-    },
-
     async countByStatus(status: QueueStatus): Promise<number> {
-      const { rows } = await db.execute('SELECT count(*) AS n FROM sync_queue WHERE status = ?', [
-        status,
-      ]);
+      const { rows } = await db.execute('SELECT count(*) AS n FROM sync_queue WHERE status = ?', [status]);
       return asNumber(rows[0] ?? {}, 'n');
     },
 
-    /** Housekeeping: finished items older than the cutoff are of no further use. */
-    /**
-     * Remove one item outright, whatever state it is in. Used when the work itself has become
-     * pointless -- a trace waiting for Wi-Fi on a drive the driver has just deleted. An item
-     * another pass is holding `inflight` is dropped too; that pass's `markAttempt` then answers
-     * null and it abandons the claim untouched, which is the behaviour it already has.
-     */
     async dropByKey(idempotencyKey: string, on: Db = db): Promise<boolean> {
-      const { changes } = await on.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [
-        idempotencyKey,
-      ]);
+      const { changes } = await on.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [idempotencyKey]);
       return changes > 0;
     },
 
-    /**
-     * Put a `failed` item back in the queue with a clean ladder, for a driver who asked to try
-     * again. Anything but `failed` is left alone: re-opening work that is pending or in flight
-     * would reset a backoff that is doing its job.
-     *
-     * `payload` replaces the stored body. A second answer to the same question — a report re-sent
-     * with a different reason — must travel as the answer the driver just gave, not as the one
-     * the first attempt carried; the idempotency key is the same work, not the same words.
-     */
-    async reopen(
-      idempotencyKey: string,
-      now: number = Date.now(),
-      on: Db = db,
-      payload?: unknown
-    ): Promise<QueueItem | null> {
-      const sql =
-        payload === undefined
-          ? `UPDATE sync_queue
-                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
-                    claimed_at = NULL
-              WHERE idempotency_key = ? AND status = 'failed'`
-          : `UPDATE sync_queue
-                SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
-                    claimed_at = NULL, payload_json = ?
-              WHERE idempotency_key = ? AND status = 'failed'`;
-      const params =
-        payload === undefined
-          ? [now, idempotencyKey]
-          : [now, JSON.stringify(payload), idempotencyKey];
-      const { changes } = await on.execute(sql, params);
-      return changes === 0 ? null : byKey(idempotencyKey, on);
-    },
-
-    /**
-     * Every item of one kind the queue has given up on. This is what "the server was never told"
-     * actually means — a `failed` item — rather than any trip row that happens to carry a
-     * `sync_error`, which an unrelated upload refusal also sets.
-     */
+    /** Every item of one kind the queue has given up on. */
     async listFailed(kind: string, on: Db = db): Promise<QueueItem[]> {
-      const { rows } = await on.execute(
-        "SELECT * FROM sync_queue WHERE kind = ? AND status = 'failed' ORDER BY id ASC",
-        [kind]
-      );
+      const { rows } = await on.execute("SELECT * FROM sync_queue WHERE kind = ? AND status = 'failed' ORDER BY id ASC", [kind]);
       return rows.map(toQueueItem);
     },
 
+    /** Housekeeping: finished items older than the cutoff are of no further use. */
     async purgeDone(createdBefore: number): Promise<number> {
-      const { changes } = await db.execute(
-        "DELETE FROM sync_queue WHERE status = 'done' AND created_at < ?",
-        [createdBefore]
-      );
+      const { changes } = await db.execute("DELETE FROM sync_queue WHERE status = 'done' AND created_at < ?", [createdBefore]);
       return changes;
     },
   };

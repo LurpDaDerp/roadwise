@@ -1,78 +1,54 @@
 /**
- * Keeps this install's server-side presence current: the `devices` row, the permission report and
- * the push token. Renders nothing; mounted once by the root layout (Task 18). The drive state is
- * not reported here: the runtime reports it (bootstrap, ruling T10 (4)), so a headless drive is
- * covered and nothing is written twice.
+ * Keeps this install registered with the server (`register_device`): on sign-in, on every foreground
+ * (throttled), and when the OS issues a new push token. Renders nothing; mounted once by the root
+ * layout. Runs only while signed in and while this account is the device owner with no handover
+ * pending, so nothing is ever registered for one driver from another's phone.
  *
- * Runs only while signed in, and only while this account is the device owner with no handover
- * pending (M3 H2's owner fence), so nothing is ever written for one driver from another's phone
- * state. Never for an under-13 account, nor before the profile is known.
- * - **Still in setup:** the device row and the push token only (security M-1: the phone stops
- *   receiving the previous owner's pushes as soon as the new owner signs in). No permission
- *   report, no `onForeground`.
- * - **Onboarded:** everything below.
- *
- * - **On mount and on every `AppState → active`:** the throttled upsert, a permission snapshot →
- *   `reportPermissions`, `syncPushToken` (forced on the first successful sync of the launch: T2
- *   security M-3), then `onForeground?.(userId)`.
- *   A mount in a background launch (an iOS location wake renders the tree) waits for `active`.
- * - **`requestDeviceSync()`** → `syncPushToken`; **a new OS token** → a forced `syncPushToken`.
- *
- * Battery (§3.5): no timer and no polling. The only triggers are the OS saying the app came
- * forward, a screen asking and a new token; each foreground is
- * local reads plus at most the writes something actually changed.
+ * Battery: no timer and no polling. The only triggers are the OS saying the app came forward, a
+ * screen asking (`requestDeviceSync`) and a new token.
  */
-import { QueryClientContext } from '@tanstack/react-query';
-import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
-import { AppState } from 'react-native';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import { AppState, Platform } from 'react-native';
 
-import { createPermissionsAdapter, type PermissionsAdapter } from '@/core/permissions';
 import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { useDataSource } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
-import { profileGate } from '@/features/auth/authGuard';
-import { sharedPermissionSnapshot, takeSettingsReturnAck } from '@/features/permissions/usePermissionHealth';
 
 import { onDeviceSyncRequested } from './events';
 import { getInstallId } from './installId';
-import { readAlwaysExcused, readReportedPermissions, reportPermissions } from './permissionsReport';
-import { createExpoPushPort, easProjectId, syncPushToken, type PushPort, type SyncPushResult } from './pushToken';
-import { readDeviceInfo, upsertDevice, type BaseDeviceInfo, type DevicesClient } from './register';
+import { createExpoPushPort, easProjectId, readPushToken, type PushPort } from './pushToken';
+import { registerDevice, type Rpc } from './register';
 
 export interface DeviceHostDeps {
-  supabase: DevicesClient;
-  adapter: Pick<PermissionsAdapter, 'snapshot'>;
+  rpc: Rpc;
   push: PushPort;
-  appState: AppStateLike;
-  deviceInfo: () => BaseDeviceInfo | null;
+  appState: AppStateLike & { currentState?: string | null };
+  platform: 'ios' | 'android' | null;
   projectId: string | null;
   newId?: () => string;
 }
 
 export interface DeviceHostProps {
-  /** Default true. The host also requires a signed-in, onboarded account. */
+  /** Default true. The host also requires a signed-in account. */
   enabled?: boolean;
-  /** Runs last on every foreground sync (Task 7's `syncNotificationPrefs`). */
+  /** Runs last on every foreground sync. */
   onForeground?: (userId: string) => unknown;
   onError?: (error: unknown, context: string) => void;
   /** Test seams; every one defaults to the device's own. */
   deps?: Partial<DeviceHostDeps>;
 }
 
-let sharedAdapter: PermissionsAdapter | null = null;
-
 function resolveDeps(p: Partial<DeviceHostDeps> = {}): DeviceHostDeps {
   return {
-    supabase:
-      p.supabase ??
+    rpc:
+      p.rpc ??
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only when mounted for real
-      (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase,
-    adapter: p.adapter ?? (sharedAdapter ??= createPermissionsAdapter()),
+      ((require('@/data/server/rpc') as typeof import('@/data/server/rpc')).callRpc as Rpc),
     push: p.push ?? createExpoPushPort(),
     appState: p.appState ?? AppState,
-    deviceInfo: p.deviceInfo ?? readDeviceInfo,
+    platform: p.platform !== undefined ? p.platform : Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : null,
     projectId: p.projectId !== undefined ? p.projectId : easProjectId(),
     newId: p.newId,
   };
@@ -80,33 +56,19 @@ function resolveDeps(p: Partial<DeviceHostDeps> = {}): DeviceHostDeps {
 
 export function DeviceHost(props: DeviceHostProps): null {
   const { db, now } = useDataSource();
-  const { status, session, profile } = useSession();
+  const { status, session } = useSession();
   const userId = status === 'signedIn' ? (session?.user.id ?? null) : null;
-  const gate = profileGate(profile);
-  // Security M-1: the token is taken as soon as the account is known and not under 13, so a
-  // previous owner's pushes stop reaching this phone before the new owner finishes setup.
-  const mode: 'off' | 'token' | 'full' =
-    !(props.enabled ?? true) || userId === null
-      ? 'off'
-      : gate === 'ready'
-        ? 'full'
-        : gate === 'onboarding'
-          ? 'token'
-          : 'off';
+  const enabled = (props.enabled ?? true) && userId !== null;
 
-  // The app's query client, when there is one: the permission read is shared with B2 and Home
-  // (final review m4), so a foreground reads the phone once.
-  const queryClient = useContext(QueryClientContext) ?? null;
   const latest = useRef(props);
   useLayoutEffect(() => {
     latest.current = props;
   });
-  /** The account whose token this launch has already force-registered (T2 M-3: once per launch). */
-  const tokenForcedFor = useRef<string | null>(null);
+  /** The account whose registration this launch has already forced (once per launch). */
+  const forcedFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (mode === 'off' || userId === null) return;
-    const full = mode === 'full';
+    if (!enabled || userId === null) return;
     let live = true;
     const cleanups: (() => void)[] = [];
     const d = resolveDeps(latest.current.deps);
@@ -114,17 +76,6 @@ export function DeviceHost(props: DeviceHostProps): null {
     const report = (error: unknown, context: string) => {
       if (live) latest.current.onError?.(error, context);
     };
-    const step = async (context: string, work: () => Promise<unknown>) => {
-      try {
-        await work();
-      } catch (error) {
-        report(error, context);
-      }
-    };
-
-    let deviceId: string | null = null;
-    let running = false;
-    let again = false;
 
     const ownerHolds = async (): Promise<boolean> => {
       const owner = await settings.get<string>(LAST_USER_KEY);
@@ -132,92 +83,33 @@ export function DeviceHost(props: DeviceHostProps): null {
       return owner === userId && (pending === null || pending === userId);
     };
 
-    const syncToken = async (force: boolean): Promise<SyncPushResult | null> => {
-      if (!live || deviceId === null) return null;
-      return syncPushToken({
-        userId,
-        deviceId,
-        settings,
-        supabase: d.supabase,
-        port: d.push,
-        projectId: d.projectId,
-        now,
-        force,
-        onError: report,
-      });
-    };
+    let deviceId: string | null = null;
+    let running = false;
+    let again = false;
 
-    /**
-     * Once the owner fence holds: the install id and the listeners. Tried again on every run until
-     * it does (a handover's rebuild settles the owner after this host mounted).
-     */
-    const init = async (): Promise<boolean> => {
-      if (deviceId !== null) return true;
-      if (!(await ownerHolds())) return false;
-      const id = await getInstallId(settings, d.newId);
-      if (!live) return false;
-      deviceId = id;
-      // Attached synchronously after the last await, so an unmount in between leaves nothing.
-      cleanups.push(
-        onDeviceSyncRequested(() => {
-          void step('devices push token', () => syncToken(false));
-        })
-      );
-      const tokenSub = d.push.addPushTokenListener(() => {
-        void step('devices push token', () => syncToken(true));
-      });
-      cleanups.push(() => tokenSub.remove());
-      return true;
+    const register = async (force: boolean): Promise<void> => {
+      if (!live || d.platform === null) return;
+      if (!(await ownerHolds())) return;
+      deviceId ??= await getInstallId(settings, d.newId);
+      if (!live) return;
+      const pushToken = await readPushToken(d.push, d.projectId, (e) => report(e, 'devices push token'));
+      if (!live) return;
+      const result = await registerDevice({ rpc: d.rpc, settings, userId, deviceId, platform: d.platform, pushToken, now, force, onError: report });
+      if (result !== 'error') forcedFor.current = userId;
     };
 
     const foreground = async (): Promise<void> => {
-      if (!live || !(await init()) || !live) return;
-      if (d.appState.currentState !== 'active' || deviceId === null) return;
-      if (!(await ownerHolds())) return;
-      const id = deviceId;
-      const deps = { supabase: d.supabase, settings, now, onError: report };
-
-      let snapshot = null;
-      if (full) {
-        snapshot = await sharedPermissionSnapshot(queryClient, userId, d.adapter, settings);
-        // a failed read reports nothing, never a made-up state (T8)
-        if (snapshot === null) report(new Error('permission snapshot unreadable'), 'devices permissions snapshot');
-        if (!live) return;
-      }
-
-      // The row register_push_token needs, in both modes.
-      await step('devices upsert', async () => {
-        const info = d.deviceInfo();
-        if (!info) return;
-        const permissions = await readReportedPermissions(settings, userId, id);
-        await upsertDevice(userId, { ...info, permissions }, { ...deps, deviceId: id });
-      });
+      if (d.appState.currentState !== 'active') return;
+      await register(forcedFor.current !== userId);
       if (!live) return;
-
-      if (snapshot) {
-        const taken = snapshot;
-        await step('devices permissions report', async () => {
-          const alwaysExcused = await readAlwaysExcused(db, taken);
-          const result = await reportPermissions(
-            { userId, deviceId: id, snapshot: taken, reportedFrom: 'foreground', ack: 'settingsReturn', alwaysExcused },
-            deps
-          );
-          // Back in the app with nothing changed: that Settings trip is over.
-          if (result === 'unchanged') await takeSettingsReturnAck(settings, now());
-        });
+      try {
+        await latest.current.onForeground?.(userId);
+      } catch (error) {
+        report(error, 'devices onForeground');
       }
-      if (!live) return;
-
-      await step('devices push token', async () => {
-        const result = await syncToken(tokenForcedFor.current !== userId);
-        if (result !== null && result !== 'error') tokenForcedFor.current = userId;
-      });
-      if (!live || !full) return;
-
-      await step('devices onForeground', async () => latest.current.onForeground?.(userId));
     };
 
-    const run = async (): Promise<void> => {
+    const run = async (work: () => Promise<void>): Promise<void> => {
       if (running) {
         again = true;
         return;
@@ -226,24 +118,29 @@ export function DeviceHost(props: DeviceHostProps): null {
       try {
         do {
           again = false;
-          await foreground();
+          await work();
         } while (again && live);
+      } catch (error) {
+        report(error, 'devices host');
       } finally {
         running = false;
       }
     };
 
+    cleanups.push(onDeviceSyncRequested(() => void run(() => register(true))));
+    const tokenSub = d.push.addPushTokenListener(() => void run(() => register(true)));
+    cleanups.push(() => tokenSub.remove());
     const appSub = d.appState.addEventListener('change', (next) => {
-      if (next === 'active') void run();
+      if (next === 'active') void run(foreground);
     });
     cleanups.push(() => appSub.remove());
-    void run().catch((error: unknown) => report(error, 'devices host'));
+    void run(foreground);
 
     return () => {
       live = false;
       for (const cleanup of cleanups.splice(0)) cleanup();
     };
-  }, [mode, userId, db, now, queryClient]);
+  }, [enabled, userId, db, now]);
 
   return null;
 }

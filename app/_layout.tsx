@@ -8,12 +8,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
-import { hasDriverData, readDeviceOwner } from '@/boot/device';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
-import { createSettingsRepo } from '@/data/db/settings';
 import { DeviceHost } from '@/data/devices/DeviceHost';
-import { unregisterPushToken } from '@/data/devices/pushToken';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider } from '@/data/supabase/session';
@@ -107,83 +104,26 @@ export default function RootLayout() {
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover });
   }, [runtime, handover]);
 
-  // §8.2 (final review I3; final-fix security I-1): only a sign-in by this device's owner — a
-  // `SIGNED_IN` whose uid is the recorded owner (or a device nobody owns yet), or the owner's
-  // `INITIAL_SESSION` at a slow launch — lets auto-record follow the opt-in again. A token refresh
-  // or any other event never does, and the host ignores these while its sign-out is in progress.
-  // A different driver is a handover: the rebuild's new host decides from its own launch.
+  // A session end — the driver's sign-out, or one they did not start (a revoked or expired
+  // token) — stops recording: an open drive is finalized under the owner first. Nothing arms or
+  // starts anything on a sign-in: a drive begins only from the Start Drive tap (plan §1 decision 4).
   useEffect(() => {
     if (runtime === null) return;
-    let live = true;
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        // The driver's sign-out, or one they did not start (a revoked or expired session): either
-        // way recording stops, an open drive finalized under the owner first (security r2-M2).
-        // Then, once the drive-state attempts already started have run, nothing more is retried:
-        // with the session gone, a retry is only an RLS refusal at every foreground (r2 n1).
-        void runtime.drive
-          .sessionEnded()
-          // Lane B: the camera beta's controller goes and the face profile is removed (DMS README, sign-out).
-          .then(() => cameraBridge()?.sessionEnded())
-          .then(() => runtime.driveStateAbandon())
-          .catch(() => {});
-        return;
-      }
-      if (!session) return;
-      const uid = session.user.id;
-      if (event === 'SIGNED_IN') {
-        void (async () => {
-          const owner = await readDeviceOwner(runtime.db);
-          if (!live) return;
-          if (owner === uid) return runtime.drive.signedInAgain();
-          // No owner recorded: arm only on a device holding no drive data. One that holds some is
-          // a pre-owner device with somebody's drives, and the handover decides (security r2-M1).
-          if (owner === null && !(await hasDriverData(runtime.db)) && live) {
-            return runtime.drive.signedInAgain();
-          }
-        })().catch(() => {});
-        return;
-      }
-      // A cold launch whose session arrived only now (a slow keychain): the device owner's own
-      // restored session re-arms, or a long-lived process would silently miss drives for days.
-      // The host refuses it during a sign-out and after one completed (ruling on H2 concern 2).
-      if (event === 'INITIAL_SESSION') {
-        void readDeviceOwner(runtime.db)
-          .then((owner) => {
-            if (live && owner === uid) return runtime.drive.signedInAgain({ initial: true });
-          })
-          .catch(() => {});
-      }
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event !== 'SIGNED_OUT') return;
+      void runtime.drive
+        .sessionEnded()
+        .then(() => cameraBridge()?.sessionEnded())
+        .catch(() => {});
     });
-    return () => {
-      live = false;
-      data.subscription.unsubscribe();
-    };
+    return () => data.subscription.unsubscribe();
   }, [runtime]);
 
   const fontsReady = shouldRender({ loaded, error, timedOut });
   const ready =
     fontsReady && (runtime !== null || state.error !== null || state.status === 'switching');
 
-  // The push-token release (T10), once per runtime: a rebuild's cleanup unregisters it before the
-  // next runtime registers its own. It runs inside the sign-out's 2 s budget, reads the token and
-  // the uid it was registered for at its start, and sends nothing unless the session is still that
-  // uid, so it can never release under the next driver's JWT (T17 security).
-  useEffect(() => {
-    if (runtime === null) return;
-    const settings = createSettingsRepo(runtime.db);
-    return registerBeforeSignOut(() => unregisterPushToken({ settings }));
-  }, [runtime]);
-
-  // The sync watermark's release (M5 R-A), once per runtime beside the token's: with nothing left
-  // to upload, this phone stops holding its owner's reward days (`devices.signed_out_at`). With a
-  // drive still owed it writes nothing (rev2 m1a). Bounded to 2 s; it never holds the sign-out.
-  useEffect(() => {
-    if (runtime === null) return;
-    return registerBeforeSignOut(() => runtime.syncWatermarkBeforeSignOut());
-  }, [runtime]);
-
-  // Sign-out sends the deletes this device still owes while the session can (D1 security M-1).
+  // Sign-out drains what this device still owes while the session can.
   const flush = useCallback(
     () =>
       runtime === null
@@ -192,19 +132,14 @@ export default function RootLayout() {
         : flushBeforeSignOut(runtime),
     [runtime]
   );
-  // Sign-out ends and finalizes an open drive under this driver, then stops auto-record (I3).
+  // Sign-out ends and finalizes an open drive under this driver.
   const recording = useMemo(
     () =>
       runtime === null
         ? undefined
         : {
-            // Recording stops (the open drive finalized), then the drive state's `idle` is written
-            // while this driver's session is still valid (T10 security): the server must not keep
-            // a stale "driving" that holds pushes after the sign-out.
-            stop: async () => {
-              await runtime.drive.suspendForSignOut();
-              await runtime.driveStateSettled();
-            },
+            // Recording stops: the open drive is finalized under this driver first.
+            stop: () => runtime.drive.suspendForSignOut(),
             resume: () => runtime.drive.resumeAfterSignIn(),
           },
     [runtime]

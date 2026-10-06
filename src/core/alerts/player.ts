@@ -45,8 +45,6 @@
 // the remaining steps still run, and the session is still released. Each step is bounded by
 // `STEP_TIMEOUT_MS`, so a port that never settles cannot wedge the queue. No timer exists while
 // nothing is playing.
-import { t } from "@/i18n";
-
 import type {
   AlertDecision,
   AlertLevel,
@@ -377,7 +375,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           !onCall &&
           read(() => deps.voiceEnabled(), true)
         ) {
-          await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
+          await step(run, () => voice.speak(key, { volume: VOICE_GAIN }));
         }
       } finally {
         await releaseSession();
@@ -437,7 +435,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         if (style() === "vibration") return;
         try {
           await step(run, () => audio.activate(sessionForL1()));
-          await step(run, () => voice.speak(t(key), { volume: VOICE_GAIN }));
+          await step(run, () => voice.speak(key, { volume: VOICE_GAIN }));
         } finally {
           await releaseSession();
         }

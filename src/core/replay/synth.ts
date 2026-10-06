@@ -1,538 +1,288 @@
-// The synthetic traces: one deterministic builder per fixture in `src/core/__fixtures__/traces`.
+// Synthetic v3 drives for the replay suite (product spec v3 "Event detection", "Rules against false
+// positives"). Each builder returns a trace whose expectations encode one rule. `npm run traces:make`
+// writes them to `src/core/__fixtures__/traces`; the suite asserts the committed JSON is exactly a
+// fresh generation.
 //
-// `scripts/make-traces.js` writes what these builders return, and `__tests__/traces.test.ts`
-// asserts the files on disk are byte-for-byte what they return today — so a fixture can never
-// drift from the code that claims to generate it, and nobody has to trust a hand-edited JSON blob.
-//
-// Two rules keep that honest:
-//  1. Nothing random. Every number here is written down or derived from one that is.
-//  2. Nothing imported at run time — only types, which are erased. That is what lets
-//     `node --experimental-strip-types scripts/make-traces.js` require this module directly
-//     (an `@scoring` or `@/` specifier would not resolve under plain Node), and it is why the
-//     constants below are spelled out instead of read from `CONSTANTS`.
-import type { EventCategory } from '@scoring';
-import type { DriveMode, FeatureRow } from '../engine/types';
-import type { Expectation, LimitEntry, Trace } from './trace';
+// Node reads this module directly with `--experimental-strip-types`, so it imports nothing at run
+// time: no `@scoring`, no `@/` alias. The few numbers it needs are written out.
+import type { FeatureRow } from '../engine/types';
+import type { Trace } from './trace';
 
-/** Epoch ms of row 0, the same second the detector fixtures start at. */
+/** epoch ms of row 0 (2023-11-14T22:13:20Z: a dark evening in Seattle, so the night rule has work). */
 export const T0 = 1_700_000_000_000;
-
-/** Standard gravity, m/s²: turns the speed profile into the longitudinal g the IMU would report. */
-const G = 9.80665;
-
-/** Fixed-point rounding, so the JSON never carries 0.30000000000000004 — and never a -0. */
-const round = (value: number, digits: number): number => {
-  const rounded = Number(value.toFixed(digits));
-  return rounded === 0 ? 0 : rounded;
-};
-
-/** m/s per mph. Spelled out here for the same reason as `G`; `traces.test.ts` pins it. */
 export const MPH = 0.44704;
+export const G = 9.80665;
 
-const mps = (mph: number): number => round(mph * MPH, 4);
+/** The straight line east out of Seattle every trace drives. */
+const START = { lat: 47.6062, lng: -122.3321 };
+const M_PER_DEG_LAT = 111_194.93;
+const M_PER_DEG_LNG = M_PER_DEG_LAT * Math.cos((START.lat * Math.PI) / 180);
 
-/** Every trace is one 2½ minute drive at 1 Hz, but for `garage-no-fix`, which has to outlast the ten-minute garage end. */
-const ROWS = 150;
-/** Pulling away and stopping take this long: 0.13 g, comfortably inside the harsh thresholds. */
-const RAMP_S = 12;
-/** m/s — 33.6 mph, under a 35 mph limit with room for the tolerance. */
-const CRUISE = 15.01;
-/** m/s — 35.0 mph exactly, for the traces that want the phone signals at 35. */
-const CRUISE_35 = 15.65;
-const LIMIT_35 = mps(35);
-const LIMIT_40 = mps(40);
-
-/** Downtown Seattle; every trace drives due east from here along a single line of latitude. */
-const START_LAT = 47.6062;
-const START_LNG = -122.3321;
-/**
- * Metres per degree of longitude at 47.6062°N (111 320 m × cos 47.6062° ≈ 75 054), written out
- * rather than computed: `Math.cos` is not specified to the last bit, and these files have to
- * regenerate byte-for-byte on any engine.
- */
-const M_PER_DEG_LNG = 75_054;
-
-/**
- * The quiet-second defaults of `src/core/detectors/__fixtures__/rows.ts`. A trace is only a
- * regression suite if an uneventful second here looks exactly like an uneventful second there,
- * which `traces.test.ts` pins.
- */
-export const ROW_DEFAULTS = {
+export const ROW_DEFAULTS: Omit<FeatureRow, 'ts' | 'lat' | 'lng' | 'speed'> = {
   hAcc: 5,
   speedAcc: 0.5,
   course: 90,
-  alt: 10,
+  alt: 50,
   gnssValid: true,
-  aLatMax: 0,
-  aLatMin: 0,
-  yawRateMax: 0,
-  jerkMax: 0,
-  gravityStability: 1,
-  orientationDelta: 0,
+  aLonMax: 0.02,
+  aLonMin: -0.02,
+  aLatMax: 0.02,
+  aLatMin: -0.02,
+  yawRateMax: 0.01,
+  jerkMax: 0.02,
+  gravityStability: 0.99,
+  orientationDelta: 0.01,
   handlingScore: 0,
   locked: true,
   screenOn: false,
   appForeground: true,
-} as const satisfies Partial<FeatureRow>;
+};
 
-const tsOf = (i: number): number => T0 + i * 1000;
-
-/** `count` rows at `speed`. */
-const hold = (count: number, speed: number): number[] => new Array<number>(count).fill(speed);
-
-/** `count` rows ramping linearly from `from` (exclusive) to `to` (inclusive). */
-const ramp = (from: number, to: number, count: number): number[] =>
-  Array.from({ length: count }, (_, k) => round(from + ((to - from) * (k + 1)) / count, 2));
-
-type Window = readonly [fromRow: number, toRow: number, patch: Partial<FeatureRow>];
-
-/** Per-row overrides: every half-open `[fromRow, toRow)` window covering the row, applied in order. */
-const windows =
-  (...list: readonly Window[]) =>
-  (i: number): Partial<FeatureRow> =>
-    list.reduce<Partial<FeatureRow>>(
-      (patch, [from, to, over]) => (i >= from && i < to ? { ...patch, ...over } : patch),
-      {}
-    );
-
-const NO_OVERRIDES = (): Partial<FeatureRow> => ({});
+type Shape = (i: number) => Partial<FeatureRow> & { speedMph?: number };
 
 /**
- * One row of the drive. The longitudinal g is the speed profile's own acceleration, so the IMU and
- * the GNSS agree unless a window deliberately makes them disagree.
+ * `n` rows at 1 Hz. `shape(i)` returns the row's overrides; `speedMph` (default 35) drives the
+ * position, which is integrated from the speed so the GNSS agrees with itself.
  */
-function makeRow(
-  i: number,
-  speed: number,
-  lng: number,
-  aLon: number,
-  over: Partial<FeatureRow>
-): FeatureRow {
-  const base: FeatureRow = {
-    ts: tsOf(i),
-    lat: START_LAT,
-    lng,
-    hAcc: ROW_DEFAULTS.hAcc,
-    speed,
-    speedAcc: ROW_DEFAULTS.speedAcc,
-    course: ROW_DEFAULTS.course,
-    alt: ROW_DEFAULTS.alt,
-    gnssValid: ROW_DEFAULTS.gnssValid,
-    aLonMax: Math.max(aLon, 0),
-    aLonMin: Math.min(aLon, 0),
-    aLatMax: ROW_DEFAULTS.aLatMax,
-    aLatMin: ROW_DEFAULTS.aLatMin,
-    yawRateMax: ROW_DEFAULTS.yawRateMax,
-    jerkMax: ROW_DEFAULTS.jerkMax,
-    gravityStability: ROW_DEFAULTS.gravityStability,
-    orientationDelta: ROW_DEFAULTS.orientationDelta,
-    handlingScore: ROW_DEFAULTS.handlingScore,
-    locked: ROW_DEFAULTS.locked,
-    screenOn: ROW_DEFAULTS.screenOn,
-    appForeground: ROW_DEFAULTS.appForeground,
-  };
-  // Spreading an override of an existing key keeps the key order, which keeps the JSON stable.
-  return { ...base, ...over };
-}
-
-/** Turn a speed profile into rows, integrating the position eastward one second at a time. */
-function rowsFrom(
-  speeds: readonly number[],
-  over: (i: number) => Partial<FeatureRow> = NO_OVERRIDES
-): FeatureRow[] {
+export function drive(n: number, shape: Shape = () => ({})): FeatureRow[] {
   const rows: FeatureRow[] = [];
-  let lng = START_LNG;
-  let previous = 0; // every trace starts at rest
-  for (const [i, speed] of speeds.entries()) {
-    rows.push(makeRow(i, speed, round(lng, 7), round((speed - previous) / G, 4), over(i)));
+  let lng = START.lng;
+  for (let i = 0; i < n; i += 1) {
+    const { speedMph, ...over } = shape(i);
+    const mph = speedMph ?? 35;
+    const speed = mph * MPH;
+    rows.push({ ...ROW_DEFAULTS, ts: T0 + i * 1000, lat: START.lat, lng, speed, ...over });
     lng += speed / M_PER_DEG_LNG;
-    previous = speed;
   }
   return rows;
 }
 
-const posted = (limitMps: number): LimitEntry => ({
-  fromTs: T0,
-  limitMps,
-  source: 'posted',
-  matchConfidence: 1,
-  parallelRoads: false,
-});
+const posted = (limitMph: number, fromTs = T0) => ({ fromTs, limitMps: limitMph * MPH, source: 'posted' as const, matchConfidence: 0.95, parallelRoads: false });
+const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown' as const, matchConfidence: 0, parallelRoads: false });
 
-const CATEGORIES: readonly EventCategory[] = [
-  'phone',
-  'speeding',
-  'braking',
-  'accel',
-  'cornering',
-  'focus',
-];
-
-/**
- * "Nothing else scored": an `absent` expectation for every category the trace is not about. This
- * is what turns a trace from "the event I wanted turned up" into a regression test.
- */
-const absentExcept = (...scored: readonly EventCategory[]): Expectation[] =>
-  CATEGORIES.filter((category) => !scored.includes(category)).map((category) => ({
-    category,
-    startsNear: tsOf(ROWS / 2),
-    absent: true,
-  }));
-
-interface TraceParts {
-  name: string;
-  mode: DriveMode;
-  speeds: readonly number[];
-  over?: (i: number) => Partial<FeatureRow>;
-  limits: LimitEntry[];
-  expected: Expectation[];
-  noEvents?: true;
-  night?: boolean;
-  precipitation?: boolean;
-  lockSignal?: 'reliable' | 'lagged' | 'unreliable';
-}
-
-const makeTrace = (parts: TraceParts): Trace => ({
-  name: parts.name,
-  mode: parts.mode,
-  night: parts.night ?? false,
-  precipitation: parts.precipitation ?? false,
-  // Omitted rather than written as `reliable`, so the M1 fixtures stay byte-for-byte as they were.
-  ...(parts.lockSignal ? { lockSignal: parts.lockSignal } : {}),
-  // Omitted rather than written as `false`: the schema takes the flag or nothing.
-  ...(parts.noEvents ? { noEvents: parts.noEvents } : {}),
-  limits: parts.limits,
-  expected: parts.expected,
-  rows: rowsFrom(parts.speeds, parts.over),
-});
-
-/** Pull away, cruise, stop: the drive every trace that does not need its own profile rides on. */
-const COMMUTE = [
-  ...ramp(0, CRUISE, RAMP_S),
-  ...hold(ROWS - 2 * RAMP_S, CRUISE),
-  ...ramp(CRUISE, 0, RAMP_S),
-];
-
-/** The row each trace's interesting stretch starts on, so the expectation reads next to the cause. */
-const EVENT_ROW = 60;
-/** `garage-no-fix`: the first row without a fix, and how many follow (eleven minutes). */
-export const GARAGE_ROW = 52;
-const GARAGE_ROWS = 660;
+const at = (i: number): number => T0 + i * 1000;
+const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
-  /**
-   * A drive with nothing in it. `noEvents` is the real assertion — not one event of any status,
-   * so a new false positive that only ever reaches `possible` fails here too. The `absent`
-   * expectations stay as the per-category reading of the same fact.
-   */
-  'clean-commute': () =>
-    makeTrace({
-      name: 'clean-commute',
-      mode: 'mounted',
-      speeds: COMMUTE,
-      limits: [posted(LIMIT_35)],
-      noEvents: true,
-      expected: absentExcept(),
-    }),
+  /** A clean commute at the limit: nothing fires. */
+  'clean-commute': () => ({
+    name: 'clean-commute',
+    rows: drive(300, (i) => ({ speedMph: 33 + (i % 3) })),
+    limits: [posted(35)],
+    expected: [
+      { type: 'speeding', startsNear: T0, absent: true },
+      { type: 'hard_brake', startsNear: T0, absent: true },
+      { type: 'phone_pickup', startsNear: T0, absent: true },
+    ],
+    noEvents: true,
+  }),
 
-  /**
-   * 12 mph over a 35 for 45 s, then back under. Rows 34-78 are above limit + tolerance: the two
-   * rows of the pull-away that cross it, 41 seconds at 21.01 m/s, and the two of the pull-back.
-   */
-  'speeding-corrected': () =>
-    makeTrace({
-      name: 'speeding-corrected',
-      mode: 'mounted',
-      speeds: [
-        ...ramp(0, CRUISE, RAMP_S), // 0-11
-        ...hold(20, CRUISE), // 12-31
-        ...ramp(CRUISE, 21.01, 5), // 32-36, over from row 34
-        ...hold(40, 21.01), // 37-76
-        ...ramp(21.01, CRUISE, 5), // 77-81, back under at row 79
-        ...hold(56, CRUISE), // 82-137
-        ...ramp(CRUISE, 0, RAMP_S), // 138-149
-      ],
-      limits: [posted(LIMIT_35)],
-      expected: [
-        {
-          category: 'speeding',
-          startsNear: tsOf(34),
-          qMin: 0.8,
-          durationMin: 43,
-          durationMax: 47,
-          status: 'scored',
-        },
-        ...absentExcept('speeding'),
-      ],
-    }),
+  /** 20 s at 41 mph on a 35 (T = 5: minor above 40): one minor episode of 20 s. */
+  'speeding-minor': () => ({
+    name: 'speeding-minor',
+    rows: drive(240, (i) => ({ speedMph: between(i, 60, 80) ? 41 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 19, durationMax: 21 }],
+  }),
 
-  /**
-   * One 0.42 g brake the GNSS confirms: the second before it the car is doing 13 m/s and the
-   * braking second 8.88 — a 4.12 m/s drop, which is that same 0.42 g. Mounted and steady, so q is
-   * the full 0.95, and the rows either side stay inside the 0.30 g threshold.
-   */
-  'hard-brake-agreeing': () =>
-    makeTrace({
-      name: 'hard-brake-agreeing',
-      mode: 'mounted',
-      speeds: [
-        ...ramp(0, CRUISE, RAMP_S), // 0-11
-        ...hold(48, CRUISE), // 12-59
-        13.0, // 60: -0.21 g, easing off
-        8.88, // 61: -0.42 g, the brake
-        7.0, // 62: -0.19 g
-        6.0, // 63: -0.10 g
-        ...hold(4, 6.0), // 64-67
-        ...ramp(6.0, CRUISE, RAMP_S), // 68-79
-        ...hold(58, CRUISE), // 80-137
-        ...ramp(CRUISE, 0, RAMP_S), // 138-149
-      ],
-      over: windows([61, 62, { aLonMin: -0.42 }]),
-      limits: [posted(LIMIT_35)],
-      expected: [
-        {
-          category: 'braking',
-          startsNear: tsOf(61),
-          qMin: 0.85,
-          durationMin: 1,
-          durationMax: 1,
-          status: 'scored',
-        },
-        ...absentExcept('braking'),
-      ],
-    }),
+  /** 4 s at 52 mph on a 35 (severe above 50): counts after 3 s; peak tier severe. */
+  'speeding-severe-brief': () => ({
+    name: 'speeding-severe-brief',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 64) ? 52 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'severe', durationMin: 3, durationMax: 5 }],
+  }),
 
-  /**
-   * The phone slides off the seat: a 0.5 g reading with an orientation spike and no deceleration
-   * in the GNSS at all. The detector still logs it, but at q 0.3 — possible, never scored.
-   */
-  'phone-slide-false-positive': () =>
-    makeTrace({
-      name: 'phone-slide-false-positive',
-      mode: 'pocket',
-      speeds: COMMUTE,
-      over: windows(
-        [
-          EVENT_ROW,
-          EVENT_ROW + 1,
-          {
-            aLonMin: -0.5,
-            aLatMax: 0.2,
-            orientationDelta: 1.2,
-            gravityStability: 0.35,
-            handlingScore: 0.3,
-          },
-        ],
-        [EVENT_ROW + 1, EVENT_ROW + 3, { orientationDelta: 0.8, gravityStability: 0.5 }]
-      ),
-      limits: [posted(LIMIT_35)],
-      expected: [
-        { category: 'braking', startsNear: tsOf(EVENT_ROW), qMax: 0.3, status: 'possible' },
-        ...absentExcept(),
-      ],
-    }),
+  /** 4 s at 42 mph: under the 5-s minimum, no incident. */
+  'speeding-blip': () => ({
+    name: 'speeding-blip',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 64) ? 42 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
 
-  /** The phone is picked up and unlocked for eight seconds at 35 mph: q 0.9, and alertable. */
-  'phone-pickup': () =>
-    makeTrace({
-      name: 'phone-pickup',
-      mode: 'mounted',
-      speeds: [
-        ...ramp(0, CRUISE_35, RAMP_S),
-        ...hold(ROWS - 2 * RAMP_S, CRUISE_35),
-        ...ramp(CRUISE_35, 0, RAMP_S),
-      ],
-      over: windows(
-        [
-          EVENT_ROW,
-          EVENT_ROW + 8,
-          {
-            handlingScore: 0.85,
-            locked: false,
-            screenOn: true,
-            orientationDelta: 0.5,
-            gravityStability: 0.55,
-          },
-        ],
-        // Put down, screen still lit: two quiet seconds close the episode without extending it.
-        [EVENT_ROW + 8, EVENT_ROW + 15, { locked: false, screenOn: true }]
-      ),
-      limits: [posted(LIMIT_40)],
-      expected: [
-        {
-          category: 'phone',
-          startsNear: tsOf(EVENT_ROW),
-          qMin: 0.9,
-          durationMin: 8,
-          durationMax: 8,
-          status: 'scored',
-        },
-        ...absentExcept('phone'),
-      ],
-    }),
+  /** Hovering at 39 mph (between L+T−2 and L+T) after 8 s over keeps the episode open: one incident. */
+  'speeding-hover': () => ({
+    name: 'speeding-hover',
+    rows: drive(240, (i) => ({ speedMph: between(i, 60, 68) ? 42 : between(i, 68, 90) ? 39 : between(i, 90, 98) ? 42 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 15, durationMax: 17 }],
+  }),
 
-  /**
-   * The same handling, unlocked, at a red light. Below the lockout speed it is logged as possible
-   * at speed 0 and never scored — the whole point of the stopped phase.
-   */
-  'stopped-phone-use': () =>
-    makeTrace({
-      name: 'stopped-phone-use',
-      mode: 'mounted',
-      speeds: [
-        ...ramp(0, CRUISE, RAMP_S), // 0-11
-        ...hold(36, CRUISE), // 12-47
-        ...ramp(CRUISE, 0, RAMP_S), // 48-59, stopped from row 59
-        ...hold(30, 0), // 60-89
-        ...ramp(0, CRUISE, RAMP_S), // 90-101
-        ...hold(36, CRUISE), // 102-137
-        ...ramp(CRUISE, 0, RAMP_S), // 138-149
-      ],
-      over: windows([
-        62,
-        75,
-        {
-          handlingScore: 0.85,
-          locked: false,
-          screenOn: true,
-          orientationDelta: 0.45,
-          gravityStability: 0.5,
-        },
-      ]),
-      limits: [posted(LIMIT_35)],
-      expected: [
-        // Logged for the summary, at the confidence of unlocked handling — but never scored.
-        {
-          category: 'phone',
-          startsNear: tsOf(62),
-          qMax: 0.9,
-          durationMin: 13,
-          durationMax: 13,
-          status: 'possible',
-        },
-        ...absentExcept(),
-      ],
-    }),
+  /** Speeding with a poor fix (hAcc 40 m): no speeding event. */
+  'speeding-poor-gps': () => ({
+    name: 'speeding-poor-gps',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 90) ? 50 : 34, hAcc: between(i, 55, 95) ? 40 : 5 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
 
-  /** RoadWise pushed to the background for 20 s on a mount, while moving: a phone event at 0.9. */
-  'mounted-app-switch': () =>
-    makeTrace({
-      name: 'mounted-app-switch',
-      mode: 'mounted',
-      speeds: COMMUTE,
-      over: windows([
-        EVENT_ROW,
-        EVENT_ROW + 20,
-        { appForeground: false, locked: false, screenOn: true },
-      ]),
-      limits: [posted(LIMIT_35)],
-      expected: [
-        {
-          category: 'phone',
-          startsNear: tsOf(EVENT_ROW),
-          qMin: 0.9,
-          durationMin: 20,
-          durationMax: 20,
-          status: 'scored',
-        },
-        ...absentExcept('phone'),
-      ],
-    }),
+  /** Speeding in the first 30 s only: the warm-up swallows it. */
+  'speeding-warmup': () => ({
+    name: 'speeding-warmup',
+    rows: drive(200, (i) => ({ speedMph: i < 25 ? 55 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: T0, absent: true }],
+    noEvents: true,
+  }),
 
-  /**
-   * SR8: a pocket drive, the phone locked in a pocket, and at 33.6 mph RoadWise is opened on an
-   * unlocked screen for six seconds. Opening it is the phone use — one second of it, at the
-   * app-switch confidence 0.9 from the OS — and nothing else happens. Mounted, the same rows are
-   * a driver glancing at the HUD they chose to mount, and are nothing (`traces.test.ts`).
-   */
-  'pocket-open-moving': () =>
-    makeTrace({
-      name: 'pocket-open-moving',
-      mode: 'pocket',
-      speeds: COMMUTE,
-      over: windows([EVENT_ROW, EVENT_ROW + 6, { locked: false, screenOn: true }]),
-      limits: [posted(LIMIT_35)],
-      expected: [
-        {
-          category: 'phone',
-          startsNear: tsOf(EVENT_ROW),
-          toleranceS: 0,
-          qMin: 0.9,
-          durationMin: 1,
-          durationMax: 1,
-          status: 'scored',
-        },
-        ...absentExcept('phone'),
-      ],
-    }),
+  /** A 0.45 g brake the GNSS confirms (35 → 25 mph in a second): one minor hard brake. */
+  'hard-brake-confirmed': () => ({
+    name: 'hard-brake-confirmed',
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.45 : -0.02 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_brake', startsNear: at(100), tier: 'minor' }],
+  }),
 
-  /**
-   * A mounted drive where the phone is locked for a minute at speed: RoadWise is backgrounded
-   * because the phone is locked, not because another app is open. A locked phone is never phone
-   * use (plan rev1 I11) — not one event of any status.
-   */
-  'mounted-locked': () =>
-    makeTrace({
-      name: 'mounted-locked',
-      mode: 'mounted',
-      speeds: COMMUTE,
-      over: windows([40, 100, { appForeground: false, locked: true, screenOn: false }]),
-      limits: [posted(LIMIT_35)],
-      noEvents: true,
-      expected: absentExcept(),
-    }),
+  /** A 0.60 g brake the GNSS confirms (45 → 30 mph): severe. */
+  'hard-brake-severe': () => ({
+    name: 'hard-brake-severe',
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 45, aLonMin: i === 100 ? -0.6 : -0.02 })),
+    limits: [posted(45)],
+    expected: [{ type: 'hard_brake', startsNear: at(100), tier: 'severe' }],
+  }),
 
-  /**
-   * Into an underground garage: the fix goes at walking pace on the ramp (row 52), the car parks,
-   * and the phone lies still with no fix for eleven minutes. No speed ever says "stopped". Since DMS calib T14 the
-   * fix-less stillness alone is AMBIGUOUS (30 min), so the plain rows never end the drive; with a sensor stop and the
-   * driver gone it ends ten minutes in (`traces.test.ts` replays both). The detectors see nothing at all.
-   */
-  'garage-no-fix': () =>
-    makeTrace({
-      name: 'garage-no-fix',
-      mode: 'mounted',
-      speeds: [
-        ...ramp(0, CRUISE, RAMP_S), // 0-11
-        ...hold(30, CRUISE), // 12-41
-        ...ramp(CRUISE, 3, 10), // 42-51, down the ramp
-        ...hold(GARAGE_ROWS, 0), // 52-711: no fix; 0 only keeps the position where it was lost
-      ],
-      over: windows([
-        GARAGE_ROW,
-        GARAGE_ROW + GARAGE_ROWS,
-        { speed: -1, gnssValid: false, aLonMax: 0, aLonMin: 0 },
-      ]),
-      limits: [posted(LIMIT_35)],
-      noEvents: true,
-      expected: absentExcept(),
-    }),
+  /** A 0.45 g IMU spike with the GNSS speed unchanged: a jolt, not a brake. */
+  'hard-brake-unconfirmed': () => ({
+    name: 'hard-brake-unconfirmed',
+    rows: drive(200, (i) => ({ aLonMin: i === 100 ? -0.45 : -0.02 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_brake', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** A 0.40 g acceleration the GNSS confirms (20 → 30 mph): one minor hard accel. */
+  'hard-accel-confirmed': () => ({
+    name: 'hard-accel-confirmed',
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 20, aLonMax: i === 100 ? 0.4 : 0.02 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_accel', startsNear: at(100), tier: 'minor' }],
+  }),
+
+  /** A 0.45 g lateral peak with the course swinging 45° in a second at 30 mph: plausible, one corner. */
+  'hard-corner-plausible': () => ({
+    name: 'hard-corner-plausible',
+    rows: drive(200, (i) => ({ speedMph: 30, course: i >= 100 ? 135 : 90, aLatMax: i === 100 ? 0.45 : 0.02 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_corner', startsNear: at(100), tier: 'minor' }],
+  }),
+
+  /** The same lateral peak on a dead-straight course: the phone, not the car. */
+  'hard-corner-straight': () => ({
+    name: 'hard-corner-straight',
+    rows: drive(200, (i) => ({ speedMph: 30, aLatMax: i === 100 ? 0.45 : 0.02 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_corner', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** The phone slides off the seat during a brake: an orientation spike within 2 s vetoes it. */
+  'phone-slide-false-positive': () => ({
+    name: 'phone-slide-false-positive',
+    rows: drive(200, (i) => ({
+      speedMph: i >= 100 ? 25 : 35,
+      aLonMin: i === 100 ? -0.5 : -0.02,
+      orientationDelta: i === 101 ? 0.8 : 0.01,
+      gravityStability: i === 101 ? 0.3 : 0.99,
+    })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_brake', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Handling for 8 s at 35 mph: one pickup of 8 s, no handling event. */
+  'phone-pickup': () => ({
+    name: 'phone-pickup',
+    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 108) ? 0.9 : 0, gravityStability: between(i, 100, 108) ? 0.6 : 0.99, locked: !between(i, 100, 108) })),
+    limits: [posted(35)],
+    expected: [
+      { type: 'phone_pickup', startsNear: at(100), durationMin: 7, durationMax: 9, stoppedInTraffic: false },
+      { type: 'phone_handling', startsNear: at(100), absent: true },
+    ],
+  }),
+
+  /** Handling for 40 s: a pickup and a severe handling event of 25 s (2 units). */
+  'phone-handling-long': () => ({
+    name: 'phone-handling-long',
+    rows: drive(240, (i) => ({ handlingScore: between(i, 100, 140) ? 0.9 : 0, gravityStability: between(i, 100, 140) ? 0.6 : 0.99 })),
+    limits: [posted(35)],
+    expected: [
+      { type: 'phone_pickup', startsNear: at(100), durationMin: 39, durationMax: 41 },
+      { type: 'phone_handling', startsNear: at(115), tier: 'severe', durationMin: 24, durationMax: 26 },
+    ],
+  }),
+
+  /** A 2-s tap on a mounted, stable phone: not a pickup. */
+  'phone-tap-mounted': () => ({
+    name: 'phone-tap-mounted',
+    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 102) ? 0.8 : 0 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Handling for 10 s while stopped at a light mid-drive: a pickup, stopped in traffic. */
+  'phone-stopped-in-traffic': () => ({
+    name: 'phone-stopped-in-traffic',
+    rows: drive(240, (i) => ({ speedMph: between(i, 90, 130) ? 0 : 35, handlingScore: between(i, 100, 110) ? 0.9 : 0, gravityStability: between(i, 100, 110) ? 0.6 : 0.99 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), stoppedInTraffic: true }],
+  }),
+
+  /** Handling before the car has ever moved (parked at the start): nothing. */
+  'phone-parked-start': () => ({
+    name: 'phone-parked-start',
+    rows: drive(200, (i) => ({ speedMph: i < 80 ? 0 : 35, handlingScore: between(i, 40, 60) ? 0.9 : 0, gravityStability: between(i, 40, 60) ? 0.6 : 0.99 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Handling during a hands-free call: suppressed. */
+  'phone-hands-free-call': () => ({
+    name: 'phone-hands-free-call',
+    callActive: true,
+    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 110) ? 0.9 : 0, gravityStability: between(i, 100, 110) ? 0.6 : 0.99 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Unlocked with the screen on in another app, phone still in its mount, lock signal reliable: a pickup. */
+  'phone-unlocked-other-app': () => ({
+    name: 'phone-unlocked-other-app',
+    lockSignal: 'reliable',
+    rows: drive(200, (i) => ({ locked: !between(i, 100, 110), screenOn: between(i, 100, 110), appForeground: !between(i, 100, 110) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 9, durationMax: 11 }],
+  }),
+
+  /** The same rows with a lagged lock signal (iOS): an unlock alone is not believed. */
+  'phone-unlocked-lagged-lock': () => ({
+    name: 'phone-unlocked-lagged-lock',
+    lockSignal: 'lagged',
+    rows: drive(200, (i) => ({ locked: !between(i, 100, 110), screenOn: between(i, 100, 110), appForeground: !between(i, 100, 110) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** The limit is unknown for a stretch: speed there is not judged. */
+  'speeding-unknown-limit': () => ({
+    name: 'speeding-unknown-limit',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 90) ? 55 : 34 })),
+    limits: [posted(35), unknown(at(50)), posted(35, at(100))],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
 };
 
-/**
- * The exact bytes of a fixture: one row per line, so a 150-second drive stays readable and a diff
- * shows the seconds that changed. `JSON.stringify` preserves insertion order, and every builder
- * writes its keys in the same order, so this is stable across runs.
- */
+/** Stable JSON: one row per line, so a diff reads as rows. */
 export function serializeTrace(trace: Trace): string {
-  const block = (key: string, items: readonly unknown[]): string =>
-    items.length === 0
-      ? `  "${key}": []`
-      : [
-          `  "${key}": [`,
-          items.map((item) => `    ${JSON.stringify(item)}`).join(',\n'),
-          '  ]',
-        ].join('\n');
-  const members = [
-    `  "name": ${JSON.stringify(trace.name)}`,
-    `  "mode": ${JSON.stringify(trace.mode)}`,
-    `  "night": ${JSON.stringify(trace.night)}`,
-    `  "precipitation": ${JSON.stringify(trace.precipitation)}`,
-    ...(trace.lockSignal ? [`  "lockSignal": ${JSON.stringify(trace.lockSignal)}`] : []),
-    ...(trace.noEvents ? ['  "noEvents": true'] : []),
-    block('limits', trace.limits),
-    block('expected', trace.expected),
-    block('rows', trace.rows),
-  ];
-  return `{\n${members.join(',\n')}\n}\n`;
+  const { rows, ...rest } = trace;
+  const head = JSON.stringify(rest, null, 2);
+  const body = rows.map((r) => `    ${JSON.stringify(r)}`).join(',\n');
+  return `${head.slice(0, -2)},\n  "rows": [\n${body}\n  ]\n}\n`;
 }

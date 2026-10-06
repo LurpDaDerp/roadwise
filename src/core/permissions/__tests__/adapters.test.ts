@@ -330,23 +330,23 @@ describe('settings links', () => {
 });
 
 describe('readiness', () => {
-  it('armed only when drive-sense says armed; allowed from its location and motion', async () => {
+  it('allowed from the drive-sense location (While Using is enough) and motion', async () => {
     const ds = createFakeDriveSense({ platform: 'android' });
-    ds.setState({ location: 'always', motion: 'granted', armed: true });
+    ds.setState({ location: 'whenInUse', motion: 'granted' });
     const { deps } = makeDeps('android', { driveSense: withBattery(ds) });
-    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: true, armed: true });
-    ds.setState({ armed: false, motion: 'denied' });
-    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: false, armed: false });
+    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: true });
+    ds.setState({ motion: 'denied' });
+    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: false });
   });
 
-  it('armed is null when it could not be checked', async () => {
+  it('not allowed when it could not be checked', async () => {
     const { deps } = makeDeps('ios', { driveSense: null });
-    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: false, armed: null });
+    expect(await createPermissionsAdapter(deps).readiness()).toEqual({ allowed: false });
     const failing: DriveSensePort = {
       getState: () => Promise.reject(new Error('x')),
       requestMotionPermission: () => Promise.resolve('denied'),
     };
     const f = makeDeps('ios', { driveSense: failing });
-    expect(await createPermissionsAdapter(f.deps).readiness()).toEqual({ allowed: false, armed: null });
+    expect(await createPermissionsAdapter(f.deps).readiness()).toEqual({ allowed: false });
   });
 });

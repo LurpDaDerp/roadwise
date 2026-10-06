@@ -2,13 +2,6 @@ export * from './types';
 export * from './keys';
 export { assessHealth, isAlwaysExcused, nextEverGranted } from './health';
 export {
-  affirmationCovers,
-  affirmationFor,
-  ARMING_DISCLOSURE_MIN_VERSION,
-  disclosureVersionAtLeast,
-  type DisclosureAffirmation,
-} from './disclosure';
-export {
   canPrompt,
   offerPrompt,
   PROMPT_INTERVAL_MS,

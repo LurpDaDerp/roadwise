@@ -4,272 +4,81 @@ import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
 import { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
-const TABLES = [
-  'schema_version',
-  'trips',
-  'trip_events',
-  'samples',
-  'sync_queue',
-  'speed_limit_tiles',
-  'settings',
-  'score_daily_cache',
-  'inbox_cache',
-];
-
-// `samples` is deliberately absent: its primary key (client_trip_id, ts) already covers the
-// range reads, and a second index on the 1 Hz table would cost every insert.
-const INDEXES = ['idx_trips_started_at', 'idx_trip_events_client_trip_id', 'idx_sync_queue_due'];
+const TABLES = ['schema_version', 'trips', 'trip_events', 'samples', 'sync_queue', 'speed_limit_tiles', 'settings'];
+const INDEXES = ['idx_trips_started_at', 'idx_trips_local_day', 'idx_trip_events_client_trip_id', 'idx_sync_queue_due'];
 
 async function names(db: Db, type: 'table' | 'index'): Promise<string[]> {
-  const { rows } = await db.execute(
-    "SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%' ORDER BY name",
-    [type]
-  );
+  const { rows } = await db.execute("SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%' ORDER BY name", [type]);
   return rows.map((row) => String(row.name));
 }
+
+const columns = async (db: Db, table: string): Promise<string[]> =>
+  (await db.execute(`PRAGMA table_info(${table})`)).rows.map((r) => String(r.name));
 
 let db: Db;
 beforeEach(async () => {
   db = await createSqlJsDb();
 });
 
-test('creates every schema v1 table', async () => {
+test('creates every v3 table and index, and nothing of v2', async () => {
   await migrate(db);
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
-});
-
-test('creates the query indexes the app reads through', async () => {
-  await migrate(db);
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached', async () => {
+test('records the schema version it reached (3)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
+  expect(CURRENT_SCHEMA_VERSION).toBe(3);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: CURRENT_SCHEMA_VERSION }]);
+  expect(rows).toEqual([{ version: 3 }]);
 });
 
-test('is idempotent: running twice leaves one version row and the same tables', async () => {
+test('is idempotent', async () => {
   await migrate(db);
-  const tablesAfterFirst = await names(db, 'table');
-
+  const tables = await names(db, 'table');
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-
-  expect(await names(db, 'table')).toEqual(tablesAfterFirst);
+  expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: CURRENT_SCHEMA_VERSION }]);
+  expect(rows).toEqual([{ version: 3 }]);
 });
 
-test('a database left at v1 is brought up, and its queued work is left unattributable', async () => {
-  // Exactly what the two development builds hold: v1 as it shipped, with work already queued.
+test('the v3 trips table carries the v3 columns', async () => {
+  await migrate(db);
+  const cols = await columns(db, 'trips');
+  for (const c of ['miles', 'safe_miles', 'night_miles', 'polyline', 'from_label', 'to_label', 'points_net', 'estimate', 'counts_json', 'result_json', 'merged_into', 'integrity_json']) {
+    expect(cols).toContain(c);
+  }
+  expect(cols).not.toContain('role');
+  expect(cols).not.toContain('score');
+  const events = await columns(db, 'trip_events');
+  for (const c of ['type', 'tier', 'units', 'stopped_in_traffic', 'penalty', 'dispute_status']) expect(events).toContain(c);
+});
+
+test('a v2 development database steps up to v3: the trip tables are replaced, settings and tiles survive', async () => {
   for (const statement of SCHEMA_V1) await db.execute(statement);
   await db.execute(SCHEMA_VERSION_TABLE);
   await db.execute('INSERT INTO schema_version (version) VALUES (1)');
-  await db.execute(
-    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
-      ' VALUES (?, ?, ?, ?, ?)',
-    ['finalize-trip', '{}', 'trip:old', 1, 1]
-  );
+  await db.execute("INSERT INTO settings (key, value_json) VALUES ('units', '\"mi\"')");
+  await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('old', 1, 'UTC', 'recording', 1, 1)");
 
-  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
+  await expect(migrate(db)).resolves.toBe(3);
 
-  // The columns are there — a read of one would have thrown before.
-  const { rows: trips } = await db.execute('PRAGMA table_info(trips)');
-  expect(trips.map((row) => row.name)).toContain('deleted_at');
-  const { rows: events } = await db.execute('PRAGMA table_info(trip_events)');
-  expect(events.map((row) => row.name)).toContain('dispute_json');
-
-  // And the work that predates the guard has no owner, which is what makes it refusable rather
-  // than sendable under whoever happens to be signed in.
-  const { rows: queued } = await db.execute('SELECT idempotency_key, owner_uid FROM sync_queue');
-  expect(queued).toEqual([{ idempotency_key: 'trip:old', owner_uid: null }]);
+  expect((await db.execute('SELECT * FROM trips')).rows).toEqual([]);
+  expect((await db.execute("SELECT value_json FROM settings WHERE key = 'units'")).rows).toEqual([{ value_json: '"mi"' }]);
+  expect(await columns(db, 'trips')).toContain('points_net');
 });
-
-test('keeps data written between runs', async () => {
-  await migrate(db);
-  await db.execute('INSERT INTO settings (key, value_json) VALUES (?, ?)', ['units', '"mph"']);
-
-  await migrate(db);
-
-  const { rows } = await db.execute('SELECT value_json FROM settings WHERE key = ?', ['units']);
-  expect(rows).toEqual([{ value_json: '"mph"' }]);
-});
-
-const insertTrip = (db: Db, status: string, syncState: string) =>
-  db.execute(
-    'INSERT INTO trips (client_trip_id, started_at, tz, status, sync_state, created_at, updated_at)' +
-      ' VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ['t1', 1, 'UTC', status, syncState, 1, 1]
-  );
 
 test('rejects a trip status outside the allowed set', async () => {
   await migrate(db);
-  await expect(insertTrip(db, 'bogus', 'local')).rejects.toThrow();
+  await expect(
+    db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('t1', 1, 'UTC', 'bogus', 1, 1)")
+  ).rejects.toThrow();
 });
 
-test('rejects a trip sync_state outside the allowed set', async () => {
+test('an event goes with its trip (cascade), outside a transaction', async () => {
   await migrate(db);
-  await expect(insertTrip(db, 'final', 'bogus')).rejects.toThrow();
-  // The allowed ones all go in.
-  for (const state of ['local', 'queued', 'uploading', 'synced', 'failed']) {
-    await db.execute('DELETE FROM trips');
-    await expect(insertTrip(db, 'final', state)).resolves.toBeDefined();
-  }
-});
-
-test('trips carries the incomplete flag, NOT NULL and off by default', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(trips)');
-  const column = rows.find((row) => row.name === 'incomplete');
-  expect(column).toMatchObject({ type: 'INTEGER', notnull: 1, dflt_value: '0' });
-
-  await insertTrip(db, 'recording', 'local');
-  const { rows: stored } = await db.execute('SELECT incomplete FROM trips');
-  expect(stored).toEqual([{ incomplete: 0 }]);
-});
-
-test('rejects a sync_queue status outside the allowed set', async () => {
-  await migrate(db);
-  const insert = (status: string) =>
-    db.execute(
-      'INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at)' +
-        ' VALUES (?, ?, ?, ?, ?, ?)',
-      ['finalize-trip', '{}', `k-${status}`, status, 1, 1]
-    );
-
-  await expect(insert('bogus')).rejects.toThrow();
-  for (const status of ['pending', 'inflight', 'done', 'failed']) {
-    await expect(insert(status)).resolves.toBeDefined();
-  }
-});
-
-test('deleting a trip cascades to its events and samples', async () => {
-  await migrate(db);
-  await db.execute(
-    'INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at)' +
-      ' VALUES (?, ?, ?, ?, ?, ?)',
-    ['t1', 1, 'UTC', 'recording', 1, 1]
-  );
-  await db.execute(
-    'INSERT INTO trip_events (id, client_trip_id, category, started_at) VALUES (?, ?, ?, ?)',
-    ['e1', 't1', 'hard_brake', 2]
-  );
-  await db.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [
-    't1',
-    2,
-    '{}',
-  ]);
-
-  await db.execute('DELETE FROM trips WHERE client_trip_id = ?', ['t1']);
-
-  const events = await db.execute('SELECT count(*) AS n FROM trip_events');
-  const samples = await db.execute('SELECT count(*) AS n FROM samples');
-  expect(events.rows).toEqual([{ n: 0 }]);
-  expect(samples.rows).toEqual([{ n: 0 }]);
-});
-
-test('trips carries sync_error, so a refused upload can say why', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(trips)');
-  expect(rows.find((row) => row.name === 'sync_error')).toMatchObject({
-    type: 'TEXT',
-    notnull: 0,
-  });
-
-  await insertTrip(db, 'final', 'failed');
-  await db.execute('UPDATE trips SET sync_error = ?', ['implausible_speed']);
-  const { rows: stored } = await db.execute('SELECT sync_error FROM trips');
-  expect(stored).toEqual([{ sync_error: 'implausible_speed' }]);
-});
-
-test('trips carries deleted_at, so a deleted drive can be hidden before the server hears', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(trips)');
-  expect(rows.find((row) => row.name === 'deleted_at')).toMatchObject({
-    type: 'INTEGER',
-    notnull: 0,
-    dflt_value: null,
-  });
-
-  await insertTrip(db, 'final', 'synced');
-  const { rows: fresh } = await db.execute('SELECT deleted_at FROM trips');
-  expect(fresh).toEqual([{ deleted_at: null }]);
-
-  await db.execute('UPDATE trips SET deleted_at = ?', [1234]);
-  const { rows: stored } = await db.execute('SELECT deleted_at FROM trips');
-  expect(stored).toEqual([{ deleted_at: 1234 }]);
-});
-
-test('trip_events carries dispute_json, so a report and its outcome outlive the queue item', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(trip_events)');
-  expect(rows.find((row) => row.name === 'dispute_json')).toMatchObject({
-    type: 'TEXT',
-    notnull: 0,
-  });
-
-  await insertTrip(db, 'final', 'synced');
-  await db.execute(
-    'INSERT INTO trip_events (id, client_trip_id, category, started_at) VALUES (?, ?, ?, ?)',
-    ['e1', 't1', 'speeding', 2]
-  );
-  const { rows: fresh } = await db.execute('SELECT dispute_json FROM trip_events');
-  expect(fresh).toEqual([{ dispute_json: null }]);
-
-  await db.execute('UPDATE trip_events SET dispute_json = ?', ['{"outcome":"queued"}']);
-  const { rows: stored } = await db.execute('SELECT dispute_json FROM trip_events');
-  expect(stored).toEqual([{ dispute_json: '{"outcome":"queued"}' }]);
-});
-
-test('sync_queue carries trace_uploaded_at, null until the object is in Storage', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(sync_queue)');
-  expect(rows.find((row) => row.name === 'trace_uploaded_at')).toMatchObject({
-    type: 'INTEGER',
-    notnull: 0,
-  });
-
-  await db.execute(
-    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
-      ' VALUES (?, ?, ?, ?, ?)',
-    ['finalize-trip', '{}', 'trip:t1', 1, 1]
-  );
-  const { rows: stored } = await db.execute('SELECT trace_uploaded_at FROM sync_queue');
-  expect(stored).toEqual([{ trace_uploaded_at: null }]);
-});
-
-test('sync_queue carries owner_uid, so work is never posted under another account', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(sync_queue)');
-  expect(rows.find((row) => row.name === 'owner_uid')).toMatchObject({
-    type: 'TEXT',
-    notnull: 0,
-  });
-
-  await db.execute(
-    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, owner_uid, created_at)' +
-      ' VALUES (?, ?, ?, ?, ?, ?)',
-    ['dispute', '{}', 'dispute:e1', 1, 'user-a', 1]
-  );
-  // Work queued before any session was seen is unowned, which is not the same as owned by nobody.
-  await db.execute(
-    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, next_attempt_at, created_at)' +
-      ' VALUES (?, ?, ?, ?, ?)',
-    ['finalize-trip', '{}', 'trip:t1', 1, 1]
-  );
-  const { rows: stored } = await db.execute(
-    'SELECT idempotency_key, owner_uid FROM sync_queue ORDER BY idempotency_key'
-  );
-  expect(stored).toEqual([
-    { idempotency_key: 'dispute:e1', owner_uid: 'user-a' },
-    { idempotency_key: 'trip:t1', owner_uid: null },
-  ]);
-});
-
-test('score_daily_cache is keyed by the local date and stamped when written', async () => {
-  await migrate(db);
-  const { rows } = await db.execute('PRAGMA table_info(score_daily_cache)');
-  expect(rows.map((row) => row.name)).toEqual(['day', 'payload_json', 'updated_at']);
-  expect(rows.find((row) => row.name === 'day')).toMatchObject({ pk: 1, notnull: 1 });
-  expect(rows.find((row) => row.name === 'payload_json')).toMatchObject({ notnull: 1 });
+  await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('t1', 1, 'UTC', 'scored', 1, 1)");
+  await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at) VALUES ('e1', 't1', 'speeding', 'minor', 1)");
+  await db.execute("DELETE FROM trips WHERE client_trip_id = 't1'");
+  expect((await db.execute('SELECT * FROM trip_events')).rows).toEqual([]);
 });

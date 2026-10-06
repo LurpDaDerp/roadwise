@@ -4,7 +4,6 @@ import { AppState, Text } from 'react-native';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { Db } from '@/data/db';
 import { createTestDb, seedTrips } from '@/data/queries/__fixtures__/harness';
-import { tripRow } from '@/data/queries/__fixtures__/rows';
 import { DataProvider } from '@/data/queries/context';
 import { DriveProvider } from '@/drive/DriveProvider';
 import type { DriveHost, DriveState } from '@/drive/host';
@@ -26,7 +25,7 @@ let db: Db;
 beforeEach(async () => {
   db = await createTestDb();
   // A driver with history and a stored tile: the simulation must leave both exactly as found.
-  await seedTrips(db, [tripRow({ client_trip_id: 'real-1' })]);
+  await seedTrips(db, [{ client_trip_id: 'real-1', started_at: 1_700_000_000_000, tz: 'UTC', status: 'scored' }]);
   await db.execute(
     "INSERT INTO speed_limit_tiles (tile_key, expires_at, segments_json) VALUES ('14/1/1', 9999999999999, '[]')"
   );
@@ -60,7 +59,7 @@ async function runToEnd<T>(p: Promise<T>): Promise<T> {
 }
 
 describe('fakeLimits', () => {
-  const trace = loadSimTrace('speeding-corrected');
+  const trace = loadSimTrace('speeding-minor');
 
   test('answers the corridor limit at a trace position after the tile delay, and "—" before it', () => {
     const limits = createFakeLimits(corridorOf(trace));
@@ -95,7 +94,7 @@ describe('fakeLimits', () => {
 });
 
 describe('createSimulation (a dry-run host over a fixture trace)', () => {
-  test.each(['speeding-corrected', 'phone-pickup'] as const)(
+  test.each(['speeding-minor', 'phone-pickup'] as const)(
     '%s at 5x: rows flow through the real host, alerts reach the player, and nothing is stored',
     async (name) => {
       const before = await countTables(db);
@@ -107,7 +106,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
       jest.useRealTimers();
 
       expect(outcome.cancelled).toBe(false);
-      expect(outcome.rowsPlayed).toBe(150);
+      expect(outcome.rowsPlayed).toBe(loadSimTrace(name).rows.length);
       expect(player.deliver).toHaveBeenCalled();
       expect(sim.host.snapshot().lastFinalized).toBeNull();
       // The sql.js assert the brief names: no trip, no sample, no tile — and nothing else either.
@@ -153,7 +152,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
   ])('%s', async (_name, realDrive, released) => {
     const player = fakePlayer();
     jest.useFakeTimers();
-    const sim = createSimulation({ db, trace: loadSimTrace('speeding-corrected'), speed: 1, player: () => player });
+    const sim = createSimulation({ db, trace: loadSimTrace('speeding-minor'), speed: 1, player: () => player });
     const run = sim.run();
     await jest.advanceTimersByTimeAsync(10_000);
     player.stopCurrent.mockClear();
@@ -189,7 +188,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
   test('cancel stops the replay, ends the drive and still stores nothing', async () => {
     const before = await countTables(db);
     jest.useFakeTimers();
-    const sim = createSimulation({ db, trace: loadSimTrace('speeding-corrected'), speed: 1, player: fakePlayer });
+    const sim = createSimulation({ db, trace: loadSimTrace('speeding-minor'), speed: 1, player: fakePlayer });
     const run = sim.run();
     await jest.advanceTimersByTimeAsync(20_000);
     expect(sim.host.snapshot().status).toBe('recording');
@@ -225,7 +224,7 @@ describe('SimulationPanel', () => {
 
   /** The app's real host, reduced to what the provider and the panel read. */
   function realHostStub(initial: Partial<DriveState>) {
-    let current = { status: 'off', lockedOut: false, ...initial } as DriveState;
+    let current = { status: 'idle', lockedOut: false, ...initial } as DriveState;
     const listeners = new Set<(s: DriveState) => void>();
     const host = {
       snapshot: () => current,
@@ -233,7 +232,7 @@ describe('SimulationPanel', () => {
         listeners.add(fn);
         return () => listeners.delete(fn);
       },
-      isBusy: () => ['candidate', 'recording', 'ending', 'finalizing'].includes(current.status),
+      isBusy: () => ['recording', 'finalizing'].includes(current.status),
     } as unknown as DriveHost;
     return {
       host,
@@ -285,7 +284,7 @@ describe('SimulationPanel', () => {
       (AppState as { currentState: string }).currentState = realState;
     });
 
-    test.each(['candidate', 'recording', 'ending'] as const)(
+    test.each(['recording', 'finalizing'] as const)(
       'cannot start while a real drive is %s',
       async (status) => {
         const real = realHostStub({ status });
@@ -300,7 +299,7 @@ describe('SimulationPanel', () => {
     );
 
     test('a real lockout closes the simulation modal at once and ends the simulation', async () => {
-      const real = realHostStub({ status: 'armed' });
+      const real = realHostStub({ status: 'idle' });
       const player = await renderPanelUnder(real.host);
       jest.useFakeTimers();
       await fireEvent.press(screen.getByRole('button', { name: 'Simulate a drive' }));

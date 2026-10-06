@@ -1,44 +1,26 @@
 import type { Detector, DetectorSuite } from '../engine/types';
-import { createFocusDetector } from './focus';
 import { createHarshDetector } from './harsh';
-import { mergeEvents } from './merge';
-import { createPhoneUseDetector, type OpenPhoneEpisode } from './phoneUse';
+import { createPhoneUseDetector } from './phoneUse';
 import { createSpeedingDetector } from './speeding';
 
-export { createFocusDetector } from './focus';
 export { createHarshDetector } from './harsh';
-export { mergeEvents } from './merge';
-export { createPhoneUseDetector } from './phoneUse';
-export type { OpenPhoneEpisode, PhoneUseDetector } from './phoneUse';
-export { inferRole } from './role';
-export type { Role, RoleEvidence, RoleInference } from './role';
-export { createSpeedingDetector } from './speeding';
-export type { SpeedingDetector } from './speeding';
-
-/** `DetectorSuite` plus the phone-use hook the engine builds the arbiter's `phoneEpisode` from. */
-export interface TripDetectors extends DetectorSuite {
-  /** The confirmed open phone-use episode (handling or app switch), if any. */
-  openPhoneEpisode(): OpenPhoneEpisode | null;
-}
+export { createPhoneUseDetector, type PhoneUseDetector } from './phoneUse';
+export { createSpeedingDetector, type SpeedingDetector } from './speeding';
 
 /**
- * Every detector behind one `push`/`flush`. `push` returns the events that closed on that row,
- * de-duplicated across detectors; `flush` closes whatever is still open at trip end.
+ * Every detector behind one `push`/`flush`. `push` returns the events that closed on that row;
+ * `flush` closes whatever is still open at trip end. The DMS's eyes-off and drowsiness detector
+ * (WP8) joins through `extra`.
  */
-export function createDetectors(newId: () => string): TripDetectors {
+export function createDetectors(newId: () => string, extra: readonly Detector[] = []): DetectorSuite {
   const speeding = createSpeedingDetector(newId);
   const phone = createPhoneUseDetector(newId);
-  const detectors: Detector[] = [
-    speeding,
-    createHarshDetector(newId),
-    phone,
-    createFocusDetector(newId),
-  ];
+  const detectors: Detector[] = [speeding, createHarshDetector(newId), phone, ...extra];
   return {
-    push: (row, limit, ctx) => mergeEvents(detectors.flatMap((d) => d.push(row, limit, ctx))),
-    flush: () => mergeEvents(detectors.flatMap((d) => d.flush())),
-    markAlerted: (id, ts) => speeding.markAlerted(id, ts),
-    openSpeedingEpisodeId: () => speeding.openEpisodeId(),
-    openPhoneEpisode: () => phone.openEpisode(),
+    push: (row, limit, ctx) => detectors.flatMap((d) => d.push(row, limit, ctx)),
+    flush: () => detectors.flatMap((d) => d.flush()),
+    openSpeeding: () => speeding.open(),
+    openPhone: () => phone.open(),
+    unsafe: () => speeding.active() || phone.active(),
   };
 }

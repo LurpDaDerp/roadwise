@@ -1,194 +1,182 @@
-// Hard braking, rapid acceleration and sharp cornering (§9.3) from the per-second IMU extremes,
-// cross-checked against the GNSS Δspeed and gated on phone movement (§9.5, §19.1).
-//
-// Each kind runs as an episode of consecutive signal rows. A closed episode is held for the two
-// seconds after it so an orientation spike in that window can still downgrade it, then released.
-import { CONSTANTS } from '@scoring';
-import type {
-  DetectedEvent,
-  Detector,
-  DetectorContext,
-  EventSource,
-  FeatureRow,
-} from '../engine/types';
-import { G_MPS2, alertableFor, contextOf, knownSpeed, statusFor } from './common';
+// Hard braking, hard acceleration and hard cornering (product spec v3 event table, "Rules against
+// false positives") from the per-second IMU extremes:
+// - braking ≥ 0.40 g (severe ≥ 0.55) and acceleration ≥ 0.35 g (severe ≥ 0.50) count only when
+//   the GNSS speed changed to match (a drop, or a rise, of at least `GNSS_CONFIRM_G` over a second
+//   inside or right after the episode);
+// - cornering ≥ 0.40 g (severe ≥ 0.55) counts only when the GNSS course rate × speed makes that
+//   much lateral acceleration plausible;
+// - a phone sliding or dropping — an orientation spike or a lost gravity reference within two
+//   seconds — is ignored, whatever the IMU says.
+// Each kind runs as an episode of consecutive signal rows; a closed episode is held for two seconds
+// so the row after it can still confirm or veto it, then released as at most one event.
+import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, PHONE_MIN_MPH, type Tier } from '@scoring';
 
-type HarshKind = 'braking' | 'accel' | 'cornering';
-const KINDS: readonly HarshKind[] = ['braking', 'accel', 'cornering'];
+import type { DetectedEvent, Detector, FeatureRow } from '../engine/types';
+import { G_MPS2, knownSpeed, knownSpeedMph, round1, round2, rowEligible } from './common';
 
-/** Harsh-event confidence (§9.5); `agreedStableMount` is `agreed` + 0.1, which never reaches the cap of 1. */
-const Q = { agreed: 0.85, agreedStableMount: 0.95, disagreed: 0.4, orientation: 0.3 } as const;
-/** The GNSS Δspeed between consecutive fixes must show at least this much for the IMU extreme to count as confirmed. */
-const GNSS_AGREE_G = 0.2;
-/** Consecutive fixes farther apart than this are not "the same second" and cannot vouch for it. */
+type Kind = 'hard_brake' | 'hard_accel' | 'hard_corner';
+const KINDS: readonly Kind[] = ['hard_brake', 'hard_accel', 'hard_corner'];
+
+/** The GNSS Δspeed over a second that confirms an IMU extreme (1 Hz averaging halves a peak). */
+export const GNSS_CONFIRM_G = 0.15;
+/** The course-rate estimate must reach this share of the IMU's lateral peak. */
+export const CORNER_PLAUSIBLE_SHARE = 0.4;
+/** Cornering is judged only at or above this speed; below it the course is noise. */
+export const CORNER_MIN_MPH = 10;
+/** Consecutive fixes farther apart than this cannot vouch for the same second. */
 const MAX_FIX_GAP_MS = 1500;
-const GRAVITY_STABLE_MIN = 0.9;
-/** An orientation change this large within ±`ORIENTATION_WINDOW_MS` reads as the phone sliding or falling. */
-const ORIENTATION_SPIKE_RAD = 0.35;
-const ORIENTATION_WINDOW_MS = 2000;
-
-interface Signal {
-  peakG: number;
-  /**
-   * Whether GNSS vouches for the row: the Δspeed cross-check for braking and accel; for cornering
-   * (no cross-check) null once the speed gate was confirmed, false when the speed was unknown so
-   * the event can only be possible.
-   */
-  agreed: boolean | null;
-}
+/** An orientation change this large (rad) or a gravity reference this unsteady reads as the phone moving. */
+export const SPIKE_ORIENTATION_RAD = 0.35;
+export const SPIKE_GRAVITY_MAX = 0.5;
+const SPIKE_WINDOW_MS = 2000;
 
 interface Episode {
   id: string;
-  kind: HarshKind;
+  kind: Kind;
   startedAt: number;
   lastTs: number;
   rows: number;
   peakG: number;
-  speedAtPeak: number | null;
-  agreed: boolean | null;
-  stableMount: boolean;
-  orientationSpike: boolean;
-  context: DetectedEvent['context'];
+  speedAtPeakMph: number | null;
+  maxSpeedMph: number;
+  /** The GNSS vouched for it: a matching Δspeed (brake/accel) or a plausible course rate (corner). */
+  confirmed: boolean;
+  spike: boolean;
 }
 
-function signalFor(
-  kind: HarshKind,
-  row: FeatureRow,
-  speed: number | null,
-  gnssDeltaG: number | null
-): Signal | null {
-  // Never scored below the lockout speed; an unknown speed cannot prove we were above it, but the
-  // IMU evidence is still logged (its GNSS disagreement keeps it unscored).
-  const belowLockout = speed !== null && speed < CONSTANTS.LOCKOUT_SPEED_MPS;
+const THRESHOLDS: Record<Kind, { minor: number; severe: number }> = {
+  hard_brake: HARD_BRAKE_G,
+  hard_accel: HARD_ACCEL_G,
+  hard_corner: HARD_CORNER_G,
+};
+
+function peakOf(kind: Kind, row: FeatureRow): number | null {
   switch (kind) {
-    case 'braking':
-      if (belowLockout || row.aLonMin > -CONSTANTS.HARSH_BRAKE_G) return null;
-      return { peakG: -row.aLonMin, agreed: gnssDeltaG !== null && -gnssDeltaG >= GNSS_AGREE_G };
-    case 'accel':
-      if (belowLockout || row.aLonMax < CONSTANTS.HARSH_ACCEL_G) return null;
-      return { peakG: row.aLonMax, agreed: gnssDeltaG !== null && gnssDeltaG >= GNSS_AGREE_G };
-    case 'cornering': {
+    case 'hard_brake':
+      return -row.aLonMin >= HARD_BRAKE_G.minor ? -row.aLonMin : null;
+    case 'hard_accel':
+      return row.aLonMax >= HARD_ACCEL_G.minor ? row.aLonMax : null;
+    case 'hard_corner': {
       const lateral = Math.max(Math.abs(row.aLatMax), Math.abs(row.aLatMin));
-      if (lateral < CONSTANTS.HARSH_CORNER_G) return null;
-      if (speed === null) return { peakG: lateral, agreed: false };
-      if (speed < CONSTANTS.CORNER_MIN_SPEED_MPS) return null;
-      return { peakG: lateral, agreed: null };
+      return lateral >= HARD_CORNER_G.minor ? lateral : null;
     }
   }
 }
 
-const stableMount = (row: FeatureRow, ctx: DetectorContext): boolean =>
-  ctx.mode === 'mounted' && row.gravityStability >= GRAVITY_STABLE_MIN;
-
-function toEvent(ep: Episode): DetectedEvent {
-  let q: number;
-  let source: EventSource;
-  if (ep.orientationSpike) {
-    q = Q.orientation;
-    source = ep.agreed ? 'both' : 'imu';
-  } else if (ep.agreed === false) {
-    q = Q.disagreed;
-    source = 'imu';
-  } else {
-    q = ep.stableMount ? Q.agreedStableMount : Q.agreed;
-    source = ep.agreed ? 'both' : 'imu';
-  }
-  const status = statusFor(q);
-  const measured: DetectedEvent['measured'] =
-    ep.kind === 'cornering' ? { lateralG: ep.peakG } : { peakG: ep.peakG };
-  if (ep.speedAtPeak !== null) measured.speedMps = ep.speedAtPeak;
-  return {
-    id: ep.id,
-    category: ep.kind,
-    startedAt: ep.startedAt,
-    durationS: ep.rows,
-    q,
-    corrected: false,
-    status,
-    measured,
-    context: ep.context,
-    alertable: alertableFor(status, q),
-    source,
-  };
-}
+/** Signed difference of two headings, degrees in (-180, 180]. */
+const courseDelta = (a: number, b: number): number => {
+  let d = b - a;
+  while (d > 180) d -= 360;
+  while (d <= -180) d += 360;
+  return d;
+};
 
 export function createHarshDetector(newId: () => string): Detector {
   let prev: FeatureRow | null = null;
-  const open: Record<HarshKind, Episode | null> = { braking: null, accel: null, cornering: null };
+  const open: Record<Kind, Episode | null> = { hard_brake: null, hard_accel: null, hard_corner: null };
   let pending: Episode[] = [];
-  /** Timestamps of recent orientation spikes, kept for the window before an episode opens. */
-  let recentSpikes: number[] = [];
+  let lastSpikeTs: number | null = null;
 
-  /** GNSS acceleration between the previous fix and this one, in g (positive = speeding up). */
-  const gnssDeltaG = (row: FeatureRow): number | null => {
-    if (!prev) return null;
-    const before = knownSpeed(prev);
-    const after = knownSpeed(row);
+  /** Evidence this row carries about the second it covers (needs the previous valid fix). */
+  function evidence(row: FeatureRow): { deltaG: number | null; lateralG: number | null } {
+    const speed = knownSpeed(row);
+    const before = prev === null ? null : knownSpeed(prev);
+    if (prev === null || speed === null || before === null) return { deltaG: null, lateralG: null };
     const dtMs = row.ts - prev.ts;
-    if (before === null || after === null || dtMs <= 0 || dtMs > MAX_FIX_GAP_MS) return null;
-    return (after - before) / (dtMs / 1000) / G_MPS2;
-  };
+    if (dtMs <= 0 || dtMs > MAX_FIX_GAP_MS) return { deltaG: null, lateralG: null };
+    const dtS = dtMs / 1000;
+    const deltaG = (speed - before) / dtS / G_MPS2;
+    // Lateral acceleration from the turn: v × ω, with ω the course rate.
+    const omega = (Math.abs(courseDelta(prev.course, row.course)) * Math.PI) / 180 / dtS;
+    const lateralG = ((speed + before) / 2) * omega / G_MPS2;
+    return { deltaG, lateralG };
+  }
+
+  function confirms(ep: Episode, ev: { deltaG: number | null; lateralG: number | null }): boolean {
+    switch (ep.kind) {
+      case 'hard_brake':
+        return ev.deltaG !== null && -ev.deltaG >= GNSS_CONFIRM_G;
+      case 'hard_accel':
+        return ev.deltaG !== null && ev.deltaG >= GNSS_CONFIRM_G;
+      case 'hard_corner':
+        return ev.lateralG !== null && ev.lateralG >= CORNER_PLAUSIBLE_SHARE * ep.peakG;
+    }
+  }
+
+  function toEvent(ep: Episode): DetectedEvent {
+    const tier: Tier = ep.peakG >= THRESHOLDS[ep.kind].severe ? 'severe' : 'minor';
+    const measured: DetectedEvent['measured'] = { peakG: round2(ep.peakG) };
+    if (ep.speedAtPeakMph !== null) measured.speedMph = round1(ep.speedAtPeakMph);
+    return { id: ep.id, type: ep.kind, tier, startedAt: ep.startedAt, durationS: ep.rows, measured };
+  }
 
   return {
     push(row, _limit, ctx) {
-      const speed = knownSpeed(row);
-      const deltaG = gnssDeltaG(row);
-      const spike = row.orientationDelta > ORIENTATION_SPIKE_RAD;
-      if (spike) recentSpikes.push(row.ts);
+      const spike = row.orientationDelta > SPIKE_ORIENTATION_RAD || row.gravityStability < SPIKE_GRAVITY_MAX;
+      if (spike) lastSpikeTs = row.ts;
+      const ev = evidence(row);
+      const speedMph = knownSpeedMph(row);
+      const eligible = rowEligible(row, ctx);
 
       for (const kind of KINDS) {
-        const signal = signalFor(kind, row, speed, deltaG);
+        const peak = eligible ? peakOf(kind, row) : null;
+        const cornerTooSlow = kind === 'hard_corner' && (speedMph === null || speedMph < CORNER_MIN_MPH);
+        const signal = peak !== null && !cornerTooSlow;
         const ep = open[kind];
-        if (signal && ep) {
+        if (signal && ep !== null) {
           ep.rows += 1;
           ep.lastTs = row.ts;
-          if (signal.peakG > ep.peakG) {
-            ep.peakG = signal.peakG;
-            ep.speedAtPeak = speed;
+          if (peak > ep.peakG) {
+            ep.peakG = peak;
+            ep.speedAtPeakMph = speedMph;
           }
-          if (ep.agreed !== null) ep.agreed = ep.agreed || signal.agreed === true;
-          ep.stableMount = ep.stableMount && stableMount(row, ctx);
-          ep.orientationSpike = ep.orientationSpike || spike;
+          ep.maxSpeedMph = Math.max(ep.maxSpeedMph, speedMph ?? 0);
+          ep.confirmed = ep.confirmed || confirms(ep, ev);
+          ep.spike = ep.spike || spike;
         } else if (signal) {
-          open[kind] = {
+          const fresh: Episode = {
             id: newId(),
             kind,
             startedAt: row.ts,
             lastTs: row.ts,
             rows: 1,
-            peakG: signal.peakG,
-            speedAtPeak: speed,
-            agreed: signal.agreed,
-            stableMount: stableMount(row, ctx),
-            orientationSpike: recentSpikes.some((t) => t >= row.ts - ORIENTATION_WINDOW_MS),
-            context: contextOf(ctx),
+            peakG: peak,
+            speedAtPeakMph: speedMph,
+            maxSpeedMph: Math.max(speedMph ?? 0, prev === null ? 0 : (knownSpeedMph(prev) ?? 0)),
+            confirmed: false,
+            spike: spike || (lastSpikeTs !== null && row.ts - lastSpikeTs <= SPIKE_WINDOW_MS),
           };
-        } else if (ep) {
+          fresh.confirmed = confirms(fresh, ev);
+          open[kind] = fresh;
+        } else if (ep !== null) {
           pending.push(ep);
           open[kind] = null;
         }
       }
 
-      if (spike) {
-        for (const ep of pending) {
-          if (row.ts <= ep.lastTs + ORIENTATION_WINDOW_MS) ep.orientationSpike = true;
+      // The row after an episode still speaks for it: the GNSS lags the IMU by up to a second, and
+      // a phone that falls a moment later vetoes it.
+      for (const ep of pending) {
+        if (row.ts <= ep.lastTs + MAX_FIX_GAP_MS) {
+          ep.confirmed = ep.confirmed || confirms(ep, ev);
+          ep.maxSpeedMph = Math.max(ep.maxSpeedMph, speedMph ?? 0);
         }
+        if (spike && row.ts <= ep.lastTs + SPIKE_WINDOW_MS) ep.spike = true;
       }
-      const released = pending.filter((ep) => row.ts >= ep.lastTs + ORIENTATION_WINDOW_MS);
-      pending = pending.filter((ep) => row.ts < ep.lastTs + ORIENTATION_WINDOW_MS);
-      recentSpikes = recentSpikes.filter((t) => t >= row.ts - ORIENTATION_WINDOW_MS);
+      const released = pending.filter((ep) => row.ts > ep.lastTs + SPIKE_WINDOW_MS);
+      pending = pending.filter((ep) => row.ts <= ep.lastTs + SPIKE_WINDOW_MS);
       prev = row;
-      return released.map(toEvent);
+      return released.filter((ep) => ep.confirmed && !ep.spike && ep.maxSpeedMph >= PHONE_MIN_MPH).map(toEvent);
     },
     flush() {
       const closing = [...pending];
       pending = [];
       for (const kind of KINDS) {
         const ep = open[kind];
-        if (ep) closing.push(ep);
+        if (ep !== null) closing.push(ep);
         open[kind] = null;
       }
-      return closing.map(toEvent);
+      return closing.filter((ep) => ep.confirmed && !ep.spike && ep.maxSpeedMph >= PHONE_MIN_MPH).map(toEvent);
     },
   };
 }

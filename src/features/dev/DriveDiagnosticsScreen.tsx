@@ -41,8 +41,6 @@ export const diagCopy = {
   rows: 'Last 10 stored rows',
   battery: 'Battery',
   unavailable: (message: string) => `Drive sensing could not be read: ${message}`,
-  armed: 'Armed',
-  notArmed: 'Not armed',
   capture: 'Capture',
   notCapturing: 'Not capturing',
   capturing: (mode: string | null, rate: string | null) => `${mode ?? 'unknown mode'} · ${rate ?? 'unknown rate'}`,
@@ -321,7 +319,6 @@ function SensingLines({ s }: { s: DriveSenseState }) {
   return (
     <>
       <Line label={diagCopy.platform} value={s.platform} first />
-      <Line label="Arming" value={s.armed ? diagCopy.armed : diagCopy.notArmed} />
       <Line label={diagCopy.capture} value={s.capturing ? diagCopy.capturing(s.mode, s.rate) : diagCopy.notCapturing} />
       <Line label={diagCopy.captureStarted} value={when(s.captureStartedAt)} />
       <Line label={diagCopy.lastRow} value={when(s.lastRowTs)} />

@@ -19,7 +19,6 @@
 //   busy or locks out: an RN Modal renders above the lockout overlay (review m2, rev1: I12).
 //
 // Timers exist only while a simulation runs, which the developer starts on this screen (§3.5).
-import * as scoring from '@scoring';
 import { createFakeDriveSense } from '@drive-sense';
 import { useKeepAwake } from 'expo-keep-awake';
 import {
@@ -73,20 +72,20 @@ export const simCopy = {
   failed: (message: string) => `The simulation could not start: ${message}`,
 } as const;
 
-export type SimTraceName = 'speeding-corrected' | 'phone-pickup';
+export type SimTraceName = 'speeding-minor' | 'phone-pickup';
 export type SimSpeed = 1 | 5;
 export const SIM_SPEEDS: readonly SimSpeed[] = [1, 5];
 
 export const SIM_TRACES: readonly { name: SimTraceName; label: string; detail: string }[] = [
   {
-    name: 'speeding-corrected',
+    name: 'speeding-minor',
     label: 'Speeding, then slowing down',
-    detail: 'About 45 s at 47 mph on a 35 mph road, then back under the limit. 2½ minutes.',
+    detail: '20 s at 41 mph on a 35 mph road, then back under the limit. 4 minutes.',
   },
   {
     name: 'phone-pickup',
     label: 'Phone picked up',
-    detail: 'The phone is handled for 8 s at 35 mph. 2½ minutes.',
+    detail: 'The phone is handled for 8 s at 35 mph. 3⅓ minutes.',
   },
 ];
 
@@ -96,8 +95,8 @@ export function loadSimTrace(name: SimTraceName): Trace {
   // requires: the fixtures never ship where the screen cannot open (review m3).
   if (__DEV__ || process.env.EXPO_PUBLIC_DIAGNOSTICS === '1') {
     switch (name) {
-      case 'speeding-corrected':
-        return parseTrace(require('../../core/__fixtures__/traces/speeding-corrected.json'));
+      case 'speeding-minor':
+        return parseTrace(require('../../core/__fixtures__/traces/speeding-minor.json'));
       case 'phone-pickup':
         return parseTrace(require('../../core/__fixtures__/traces/phone-pickup.json'));
     }
@@ -217,10 +216,9 @@ export function createSimulation(opts: SimulationOptions): Simulation {
     source: fake,
     limits: createFakeLimits(corridorOf(trace)),
     player,
-    scoring,
-    traceWriter: { writeGzip: async () => refuse('writes a trace') },
-    hash: { sha256: async () => refuse('hashes a trace') },
     now: vnow,
+    appVersion: 'simulation',
+    speedProbe: async () => 0,
     tz: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     newId: () => `simulated-${(ids += 1)}`,
     persistence: 'none',
@@ -260,13 +258,10 @@ export function createSimulation(opts: SimulationOptions): Simulation {
       wall0 = Date.now();
       const first = trace.rows[0]?.ts ?? 0;
       fake.loadTrace(trace.rows.map((r) => ({ ...r, ts: wall0 + ROW_MS + (r.ts - first) })));
-      await created.start();
-      await created.manualStart({
-        mode: trace.mode === 'pocket' ? 'pocket' : 'mounted',
-        passenger: false,
-        evidence: 'tap',
-      });
-      void created.announce('alert.recording');
+      await created.boot();
+      const started = await created.start({ dmsOn: false });
+      if (!started.ok) refuse(`starts: ${started.reason}`);
+      void player.announce('Recording');
       await created.settled();
       while (!cancelled) {
         await wait(ROW_MS / speed);
@@ -345,7 +340,7 @@ export function SimulationPanel({
 }) {
   const th = useTheme();
   const db = useDb();
-  const [traceName, setTraceName] = useState<SimTraceName>('speeding-corrected');
+  const [traceName, setTraceName] = useState<SimTraceName>('speeding-minor');
   const [speed, setSpeed] = useState<SimSpeed>(1);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const live = useRef(true);
@@ -486,7 +481,7 @@ function SimulatedDrive({ Hud, onStop }: { Hud: ComponentType; onStop: () => voi
   const insets = useSafeAreaInsets();
   const th = useTheme();
   const s = useDrive((d) => ({ status: d.status, lockedOut: d.lockedOut }));
-  const open = s.status === 'candidate' || s.status === 'recording' || s.status === 'ending';
+  const open = s.status === 'recording';
   return (
     <View style={styles.hudGround}>
       {open ? <Hud /> : null}

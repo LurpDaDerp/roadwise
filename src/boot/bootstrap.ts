@@ -1,344 +1,135 @@
-/**
- * What has to be true before the first screen reads anything (M2 ruling; M3 adds the engine).
- *
- * In order, because each step needs the one before:
- *   1. open SQLite — WAL, foreign keys, the busy timeout (`createExpoDb`) — and exclude its
- *      directory from iOS backups (plan R4, D2; not awaited, and a failure is only reported);
- *   2. `migrate` to the current schema;
- *   3. whose device this is — a sign-in by a different user empties it, rows and traces alike,
- *      before any of the last owner's data can be read, recovered or uploaded (`./device.ts`);
- *      The session read is bounded (`SESSION_TIMEOUT_MS`): a background launch with no network
- *      must not wait on a token refresh before the engine starts (plan rev1: I3). On a timeout the
- *      persisted owner stands (`same`) — never a wipe on a guess;
- *   4. `recoverRecordingTrips` — a drive the last process died in is finalized from its last
- *      checkpoint, before any engine exists to own a `recording` row. A drive that looks to be
- *      still going on (`adoptable`: checkpointed inside the gap window while capture is running,
- *      was open, or the motion history since says automotive) is **skipped**, left for step 5
- *      (rev1: I2). Recovery reads the tiles already stored on the device (`lookupStored`), the
- *      same source an adopted drive's rebuild uses — never the network; a road with no stored
- *      tile is judged against an unknown limit: no speeding there, everything else;
- *   5. `engine` — the drive host (H1) is built and started. It adopts the newest skipped drive
- *      *before* it subscribes to native events or arms, so a buffered wake cannot open a second
- *      trip for the same drive; anything skipped that it did not adopt is recovered at once (E1
- *      adopt protocol). Nothing here awaits the network;
- *   6. the query client, wired to the one change event so a sync pass, a restore or a finalize
- *      refreshes what is on screen;
- *   7. the sync runner, started. It stays off the database while a drive is recording or
- *      finalizing (`isRecording: drive.isBusy`), and drains only in the foreground or from the
- *      Android headless task (`drainPolicy`, §3.5);
- *   8. the hydrator, built but **not** started: restoring history from the server is network
- *      work, and a background launch (an iOS location wake, the Android headless task) must not
- *      do it (R13). The controller calls `startForegroundJobs(runtime)` once the app is active,
- *      which runs it only while it stays active and at most every `HYDRATE_INTERVAL_MS`.
- *
- * Everything platform-shaped is injectable, so the whole sequence runs under Jest against
- * sql.js; the defaults are the device adapters, imported lazily where they carry a native module.
- */
-import * as scoring from '@scoring';
-import type { SupabaseClient } from '@supabase/supabase-js';
+// The launch (plan §5): open and migrate SQLite, settle whose device this is, recover a drive the
+// previous process was recording (continue it if the capture still runs, else finalize it), boot
+// the drive host, start the sync runner. Everything platform-shaped is injected, so the whole
+// launch runs under Jest against sql.js and the fake drive-sense.
+//
+// Nothing here starts a drive: a background launch (an iOS relaunch mid-drive, the Android
+// headless task) only keeps alive a drive the user already started.
 import type { QueryClient } from '@tanstack/react-query';
-import { AppState } from 'react-native';
-
-import type { DriveSenseEvent, DriveSenseEvents, DriveSenseState, Subscription } from '@drive-sense';
+import { AppState, Platform } from 'react-native';
 
 import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
-import { deviceZone } from '@/lib/deviceZone';
-import {
-  recoverRecordingTrips,
-  type RecoveryDeps,
-  type RecoveryResult,
-} from '@/core/engine/recovery';
-import {
-  createSupabaseSpeedLimitApi,
-  type SpeedLimitApi,
-  type SpeedLimitsSupabase,
-} from '@/core/speedLimits/api';
+import type { AdoptedTrip, TripSession } from '@/core/engine/engine.types';
+import { finalizeTrip } from '@/core/engine/finalize';
+import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
+import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
 import { readFlag, refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
-import { createExpoDb, createTripsRepo, migrate, type Db, type TripRow } from '@/data/db';
-import { createSettingsRepo } from '@/data/db/settings';
+import { createExpoDb, createSettingsRepo, createTripsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { onDataChanged } from '@/data/events';
-import { createExpoNet, getSharedOnline } from '@/data/net/net';
-import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
-import type { CameraBridge } from '@/features/camera/bridge';
-import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
-import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
-import { nativeDriveSource, type DriveSource } from '@/drive/source';
-import type { Database } from '@/data/supabase/types';
-import {
-  foregroundStampKey,
-  runWhenForeground,
-  type AppStateLike as ForegroundAppState,
-} from '@/data/foreground';
-import {
-  createHydrator,
-  HYDRATE_INTERVAL_MS,
-  HYDRATE_RESTORED_AT_KEY,
-  hydrateSeam,
-  type Hydrator,
-  type HydrateSupabase,
-} from '@/data/hydrate/hydrate';
-import { getHydrationStatus, setHydrationStatus } from '@/data/hydrate/status';
-import { createQueryClient, subscribeInvalidation } from '@/data/queries';
-import {
-  createSyncRunner,
-  type AppStateLike,
-  type FlushResult,
-  type NetStatus,
-  type NetSubscribable,
-  type SyncRunner,
-  type SyncSupabase,
-  type TraceFs,
-} from '@/data/sync/runner';
+import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
+import { restoreDrives } from '@/data/hydrate/restore';
+import { getSharedOnline } from '@/data/net/net';
+import { createQueryClient } from '@/data/queries/client';
+import { subscribeInvalidation } from '@/data/queries/invalidate';
+import { invalidateServer, type MySummary } from '@/data/server/summary';
+import { serverKey } from '@/data/server/useServerQuery';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
-import { createExpoTraceFs } from '@/data/sync/traceFs';
+import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/sync/runner';
+import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
+import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import { nativeDriveSource, type DriveSource } from '@/drive/source';
+import { deviceZone } from '@/lib/deviceZone';
+import { safeMilesEarlierToday } from '@/core/engine/finalize';
+import { dayKey } from '@/lib/time';
 
-import {
-  CANCEL_SUMMARIES_TIMEOUT_MS,
-  ensureDeviceOwner,
-  PENDING_OWNER_KEY,
-  readDeviceOwner,
-  type DeviceOwnerOutcome,
-} from './device';
-
+import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
-import { createExpoTraceWriter, type TraceWriter } from './traceWriter';
 
-/** The one database file on the device. */
 export const DB_NAME = 'roadwise.db';
-
-/**
- * How long the whole launch may take before the driver is told it failed. Generous: a first
- * migration on a slow device is seconds, not milliseconds, and a false alarm costs a retry.
- */
 export const BOOTSTRAP_TIMEOUT_MS = 20_000;
-
-/**
- * How long the identity stage waits for `getSession()` (plan H2). It can hang on a token refresh
- * with no network; past this the persisted owner stands, so the engine starts within seconds of a
- * background wake rather than when the radio comes back.
- */
 export const SESSION_TIMEOUT_MS = 1_500;
-
-/** How long a read of the device's time zone is trusted (final review M2). */
 export const ZONE_REREAD_MS = 60_000;
-
-/** How often the public config (feature flags) is fetched, in the foreground only (plan D2). */
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
-
-/**
- * The `auto_detect` flag's answer before any config was ever fetched: available. The flag only
- * makes the feature available; the driver's own opt-in (default off) is what arms it.
- */
-const AUTO_DETECT_FLAG_FALLBACK = true;
+/** A capture whose last row is older than this is not continued: the drive is finalized as it stood. */
+export const ADOPT_MAX_GAP_MS = 5 * 60_000;
 
 export type BootstrapStage = 'open' | 'migrate' | 'identity' | 'recover' | 'engine' | 'sync';
 
-/** Which step failed, with the underlying error kept for the log. */
 export class BootstrapError extends Error {
   readonly stage: BootstrapStage;
   readonly reason: unknown;
 
   constructor(stage: BootstrapStage, reason: unknown) {
-    const detail = reason instanceof Error ? reason.message : String(reason);
-    super(`bootstrap failed at ${stage}: ${detail}`);
+    super(`bootstrap failed at ${stage}: ${reason instanceof Error ? reason.message : String(reason)}`);
     this.name = 'BootstrapError';
     this.stage = stage;
     this.reason = reason;
   }
 }
 
+/** The Supabase client as the launch uses it: the runner's slice plus `rpc`. */
+export type BootSupabase = SyncSupabase & { rpc(fn: string, args?: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> };
+
 export interface BootstrapDeps {
-  /** Opens the database. Default: `createExpoDb(DB_NAME)`. */
   openDb?: () => Promise<Db>;
-  /** Default: the app's Supabase client. The runner and the hydrator each use their own slice. */
-  supabase?: SyncSupabase & HydrateSupabase;
-  /** The traces directory as the runner reads it. Default: `createExpoTraceFs()`. */
-  traceFs?: TraceFs;
-  /** The traces directory as the finalizer writes it. Default: `createExpoTraceWriter()`. */
-  traceWriter?: TraceWriter;
-  /** Default: `sha256Hex` over expo-crypto. */
-  hash?: { sha256(text: string): Promise<string> };
-  /** Event ids for recovered drives. Default: a random UUID. */
+  supabase?: BootSupabase;
   newId?: () => string;
-  /**
-   * Default: React Native's `AppState`. `currentState` is read for the launch profile and the
-   * drain policy; the runner and the drive host each listen for transitions.
-   */
-  appState?: AppStateLike & { currentState?: string | null };
-  /**
-   * The network the runner reads. Default: `createNet()`; if that fails (a build without
-   * `expo-network`), never on Wi-Fi — the safe answer: traces wait, summaries go up.
-   */
-  net?: NetStatus | NetSubscribable;
-  /** Default: `createExpoNet` — one adapter per process, shared with the screens (plan D2). */
-  createNet?: () => Promise<NetStatus | NetSubscribable>;
-  /**
-   * The background drain policy, handed to the runner (plan D2, review I3). Default:
-   * `drainPolicy` — only while the app is active, or on Android while the headless task runs.
-   */
+  appState?: ForegroundAppState & { currentState?: string | null };
   mayDrain?: () => boolean;
-  /** Why this process started. Default: `launchProfile(appState)`, read once, now. */
   profile?: LaunchProfile;
-  /** drive-sense, as the host uses it. Default: the native module. */
   source?: DriveSource;
-  /**
-   * The speed-limit client. Default: the S2 client over the app's Supabase client — built here,
-   * but it makes no request until a drive asks for tiles.
-   */
   limits?: SpeedLimitClient;
-  /** The `speed-limits` edge function seam for the default client. Default: the app client. */
   speedLimitsSupabase?: SpeedLimitsSupabase;
-  /** The `app_config` seam for the foreground config fetch. Default: the app client. */
   appConfig?: AppConfigSupabase;
-  /**
-   * The alert player, given its live inputs (late-bound to the host). Default: P2's player over
-   * the expo-audio/speech/haptics ports.
-   */
   createPlayer?: (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer>;
-  /**
-   * The remote `auto_detect` flag (D2). It only makes auto-detect *available*: the host arms only
-   * when the driver's own opt-in (`drive.autoDetect`, default false) is also on (D2 security M-2).
-   * Default: the stored config, available when nothing was fetched yet.
-   */
-  readFlag?: (key: 'auto_detect') => Promise<boolean>;
-  /**
-   * M4's seam: told on every native wake that arrives while the app is not in front, so a
-   * permission that lapsed in the background reaches the driver. Default: nothing (M4 fills it).
-   */
-  reportPermissionsFromBackground?: () => void | Promise<void>;
-  /** The account's cached age band, for the arming rule. Default: the device owner's cached profile. */
-  readAgeBand?: () => Promise<string | null>;
-  /**
-   * Lane B, the camera beta: the bridge between the drive host and the DMS controller (presence, rows, the gate, the
-   * drive's end). Default: `createDefaultCameraBridge`, which loads nothing heavy until a driver who opted in starts a
-   * drive. `null`: none (the host runs without a camera).
-   */
-  createCamera?: ((db: Db, readAgeBand: () => Promise<string | null>) => CameraBridge) | null;
-  /**
-   * The client the runtime reports the drive state with (ruling T10 (4)). Default: the app's
-   * Supabase client, loaded only when a drive is first reported.
-   */
-  devicesClient?: import('@/data/devices/register').DevicesClient;
-  /** The identity stage's bound on `getSession()`. Default: `SESSION_TIMEOUT_MS`. */
+  display?: DriveDisplay | null;
+  /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions`. */
+  permissions?: () => Promise<{ location: 'granted' | 'denied' }>;
+  /** One speed read on the Start tap. Default: `currentSpeedMps` (expo-location). */
+  speedProbe?: () => Promise<number | null>;
+  voiceEnabled?: () => boolean;
+  /** The DMS bridge (WP8): presence and the per-row hook. `null`: none. */
+  createCamera?: ((db: Db, host: () => DriveHost | undefined) => CameraLike) | null;
+  attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
   sessionTimeoutMs?: number;
-  /**
-   * The driver a handover already knows (the owner watch saw them sign in). The identity stage
-   * decides on this uid with no session read and no timeout, so a handover always wipes (security
-   * review H2 I-1 a).
-   */
+  /** The driver a handover already knows: the identity stage decides on this uid with no session read. */
   expectedUid?: string;
-  /**
-   * U5's battery recorder, mounted on the started host in every launch profile; returns its
-   * unsubscribe, called at `stop()`. Default: in a diagnostics build only (`diagnosticsEnabled()`),
-   * `createDriveBatteryRecorder` — two one-shot readings per real drive, never a poll. `null`:
-   * none.
-   */
-  mountDiagnostics?:
-    | ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void)
-    | null;
-  /**
-   * U3's drive-summary notifier, attached to the started host in every launch profile — so a drive
-   * finalized with no layout mounted (the Android headless task, an iOS background launch) still
-   * schedules its summary. Attaching twice is safe (the headless task attaches too). It is given
-   * the launch's database, which its delivery plan reads (M4 Task 19: H6 and the daily cap).
-   * Default: `attachSummaryNotifier`. `null`: none.
-   */
-  attachSummaryNotifier?:
-    | ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> })
-    | null;
-  /** iOS backup exclusion (plan R4). Default: drive-sense's `excludeFromBackup`. */
-  excludeFromBackup?: (uri: string) => Promise<void>;
-  /** The directory the database lives in. Default: expo-sqlite's `defaultDatabaseDirectory`. */
-  databaseDirectory?: string;
   queryClient?: QueryClient;
-  /** The launch deadline. Default: `BOOTSTRAP_TIMEOUT_MS`. */
   timeoutMs?: number;
   now?: () => number;
-  /** IANA zone. Default: the device's. */
   tz?: string;
-  /** Told about failures that did not change the outcome. Default: a development warning. */
+  appVersion?: string;
   onError?: (error: unknown, context: string) => void;
+}
+
+/** What the launch needs of the camera bridge. */
+export interface CameraLike {
+  presence(): { lastFaceT: number | null } | null;
+  onRow(row: import('@/core/engine/types').FeatureRow, motion: import('@/core/engine/motionEvidence').MotionEvidence | null): void;
+  attach(host: DriveHost): () => void;
+  dispose(): Promise<void>;
+  settled?(): Promise<void>;
 }
 
 export interface AppRuntime {
   db: Db;
   queryClient: QueryClient;
   runner: SyncRunner;
-  /** Restores the driver's history from the server. Idle until `startForegroundJobs`. */
-  hydrator: Hydrator;
-  /** The drive host (H1), started: it adopted what it could, subscribed, and armed if allowed. */
   drive: DriveHost;
-  /** The speed-limit client the host uses; the foreground jobs purge its expired tiles. */
   limits: SpeedLimitClient;
-  /** Why this process started (read once, at boot). */
   profile: LaunchProfile;
   /** The interrupted drive the host continued, or null. */
   adopted: string | null;
-  /**
-   * Every orphan handled at this launch: `recovered`/`discarded`/`failed` across both recovery
-   * passes; `skipped` holds the one the host adopted (at most one) — everything else was handled.
-   */
   recovery: RecoveryResult;
-  /** What the owner check found. `wiped` means this launch emptied a previous driver's device. */
   owner: DeviceOwnerOutcome;
   schemaVersion: number;
-  /** The clock the launch was built with; the foreground jobs throttle by it. */
   now: () => number;
-  /** Fetch the public config (feature flags) once; rejects on failure. For the foreground job. */
+  /** Fetch the public config (feature flags) once; rejects on failure. */
   refreshConfig(): Promise<void>;
-  /**
-   * The drive state reported so far has been written (and a failed `idle` retried), while the
-   * owner's session is still valid (T10 security). The sign-out awaits it before the session ends,
-   * so the server never keeps a stale "driving" that holds pushes.
-   */
-  driveStateSettled(): Promise<void>;
-  /**
-   * The session ended: drop any drive-state write still outstanding and stop retrying it at each
-   * foreground (review r2 n1). Called after the sign-out's settle has made its attempt.
-   */
-  driveStateAbandon(): Promise<void>;
-  /**
-   * The before-sign-out half of the sync watermark (M5 R-A, rev2 m1a): with nothing left to upload
-   * and no drive open, `devices.signed_out_at` is written for the stored owner, so a signed-out
-   * phone never holds its former owner's reward days. With a drive still owed it writes nothing (the
-   * server's 72 h cap bounds the hold). Never throws; bounded to 2 s. The root layout registers it.
-   */
-  syncWatermarkBeforeSignOut(): Promise<void>;
-  /**
-   * Stops the runner and the hydrator, then the drive host, detaches the cache from the change
-   * event and empties it. For teardown; never mid-session. The cache is emptied rather than left to
-   * its gc timers because one reason to tear a runtime down is that the device changed hands, and
-   * the last driver's rows must not sit in memory for five more minutes.
-   *
-   * `endOpenTrip` (default true) ends and finalizes a drive that is still open — a handover's
-   * rebuild: that drive is queued under the previous owner, and the next launch's wipe removes it
-   * (M2 open decision 2, the known trade — not a rescue). False leaves it `recording` for the next
-   * launch to adopt: a launch abandoned at its deadline, whose retry should continue the drive.
-   * The runner is stopped first, so the finalize's enqueue wakes no drain.
-   */
+  /** Restore the user's drives from the server when the device holds none. */
+  restore(): Promise<void>;
+  /** Stops the runner, then the drive host (ending an open drive unless told not to), and empties the cache. */
   stop(opts?: { endOpenTrip?: boolean }): Promise<void>;
 }
-
-// Normalised at the source (M4 T1 r2 re-review I1): an id outside the upload contract's zone
-// names (`GMT+05:30`, `EST5EDT`) would otherwise stamp and judge every drive in a zone the
-// device's own finalize refuses. Whole-hour offsets become `Etc/GMT∓H`, anything else `UTC`.
 
 function warn(error: unknown, context: string): void {
   if (__DEV__) console.warn(`[bootstrap] ${context}:`, error);
 }
 
-/**
- * The whole launch, with the deadline (`M-4`) around it.
- *
- * A *failure* at any step is already answered; a *hang* — a stuck `openDb`, a migration grinding
- * through a large database — is not, and it holds the splash forever with no words and no exit.
- * Past the deadline the launch is reported as a failure at whichever step it had reached, and a
- * sequence that comes back later is nobody's: it is shut down rather than left with a started
- * runner and a live subscriber behind it.
- */
+/** The whole launch, with a deadline around it: a hang is reported as a failure at the stage reached. */
 export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime> {
   const limitMs = deps.timeoutMs ?? BOOTSTRAP_TIMEOUT_MS;
   let reached: BootstrapStage = 'open';
@@ -349,10 +140,8 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   });
   sequence.then(
     (runtime) => {
-      // An open drive is left `recording`: the retry's launch adopts it rather than ending it.
       if (abandoned) void runtime.stop({ endOpenTrip: false });
     },
-    // The deadline already reported it; a second rejection here would be unhandled.
     () => {}
   );
 
@@ -363,7 +152,6 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
       reject(new BootstrapError(reached, new Error(`timed out after ${limitMs} ms`)));
     }, limitMs);
   });
-
   try {
     return await Promise.race([sequence, deadline]);
   } finally {
@@ -379,377 +167,8 @@ async function stage<T>(name: BootstrapStage, run: () => Promise<T>): Promise<T>
   }
 }
 
-async function runLaunch(
-  deps: BootstrapDeps,
-  enter: (name: BootstrapStage) => void
-): Promise<AppRuntime> {
-  const now = deps.now ?? Date.now;
-  const onError = deps.onError ?? warn;
-  const appState = deps.appState ?? AppState;
-  const profile = deps.profile ?? launchProfile(appState);
-  // The device zone, re-read at most once a minute (final review M2): a process that lives across
-  // a zone change (an Android capture service, a long-lived iOS process) judges night and stamps
-  // trips in the zone the phone is in now. Read only when something asks — nothing while armed
-  // and idle — and at most one Intl lookup a minute on the 1 Hz path.
-  let zone = deps.tz ?? deviceZone();
-  let zoneReadAt = now();
-  const currentZone = (): string => {
-    if (deps.tz !== undefined) return deps.tz;
-    const at = now();
-    if (at - zoneReadAt >= ZONE_REREAD_MS || at < zoneReadAt) {
-      zone = deviceZone();
-      zoneReadAt = at;
-    }
-    return zone;
-  };
-
-  enter('open');
-  const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
-  // The directory exists now. Not awaited: an attribute on a folder must not hold the splash, and
-  // a refusal (drive-sense E_NOT_FOUND/E_IO, or no native module) only costs a backup copy.
-  void excludeDatabaseFromBackup(deps).catch((error: unknown) =>
-    onError(error, 'exclude database from backup')
-  );
-  enter('migrate');
-  const schemaVersion = await stage('migrate', () => migrate(db));
-
-  // Before anything reads a row: a device that changed hands is emptied here, so recovery cannot
-  // finalize the last driver's interrupted drive into this one's account (`src/boot/device.ts`).
-  enter('identity');
-  const identity = await stage('identity', async () => {
-    const { supabase, hydrateSupabase } = deps.supabase
-      ? { supabase: deps.supabase, hydrateSupabase: deps.supabase }
-      : appSeams((await import('@/data/supabase/client')).supabase);
-    const traceWriter =
-      deps.traceWriter ?? (await createExpoTraceWriter(undefined, undefined, undefined, onError));
-    const decide = (uid: string | null) =>
-      ensureDeviceOwner(db, uid, { traces: traceWriter, onError });
-    if (deps.expectedUid !== undefined) {
-      // A handover's rebuild: the new driver is known. No network, no timeout — it always wipes.
-      return { supabase, hydrateSupabase, traceWriter, owner: await decide(deps.expectedUid) };
-    }
-    const sessionMs = deps.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
-    const reading = supabase.auth.getSession();
-    const session = await withinMs(reading, sessionMs);
-    let owner: DeviceOwnerOutcome;
-    if (session !== TIMED_OUT) {
-      owner = await decide(session.data.session?.user.id ?? null);
-    } else if (await ownerMayHaveChanged(db)) {
-      // A timeout is `same` only when nothing says the owner changed (H2 I-1 b). Here something
-      // does — a runner has seen a different signed-in user — so nothing is mounted, recovered or
-      // started until the session answers; the launch deadline bounds the wait, and a launch
-      // that fails here fails closed, with its retry.
-      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
-      owner = await decide((await reading).data.session?.user.id ?? null);
-    } else {
-      // No answer (a token refresh with no network, typically on a background wake) and no sign
-      // of another driver. The engine must not wait for the radio, and a guess never wipes: the
-      // device stays whoever's it was. The live owner watch and the next launch settle it.
-      owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
-      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
-    }
-    return { supabase, hydrateSupabase, traceWriter, owner };
-  });
-
-  const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
-  const hash = deps.hash ?? { sha256: (await import('@/lib/hash')).sha256Hex };
-  const source = deps.source ?? nativeDriveSource;
-  // Built before recovery (H2 r1): a crash-recovered drive is judged against the stored tiles
-  // exactly as an adopted one is. Building it makes no request; only a drive's `startTrip` does.
-  const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
-  const recoveryDeps: Omit<RecoveryDeps, 'skip'> = {
-    scoring,
-    tz: zone,
-    fs: identity.traceWriter,
-    hash,
-    now,
-    createDetectors: () => createDetectors(newId),
-    // SQLite only, never the network: `lookupStored` reads what the device already holds.
-    limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
-  };
-
-  enter('recover');
-  const recovery = await stage('recover', async () => {
-    const adoptable = createAdoptableCheck(source, now, onError);
-    return recoverRecordingTrips(db, { ...recoveryDeps, skip: adoptable });
-  });
-
-  enter('engine');
-  const engine = await stage('engine', async () => {
-    let host: DriveHost | undefined;
-    // Sound that will not load must not cost the drive, and must not be silent to the driver
-    // either: the host publishes `alertsAvailable: false` and the HUD says so (H2 r1).
-    let player: AlertPlayer;
-    let alertsAvailable = true;
-    try {
-      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(playerInputs(() => host));
-    } catch (error) {
-      // M-3: the error's kind only — nothing its message might carry (a position, a trip id).
-      const kind = error instanceof Error ? error.name : typeof error;
-      onError(new Error(`alert sound could not be loaded (${kind})`), 'alert ports');
-      alertsAvailable = false;
-      player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
-    }
-    // Lane B: the camera beta's bridge, before the host that feeds it (presence and rows are late-bound to it).
-    const readAgeBand = deps.readAgeBand ?? (() => cachedAgeBand(db));
-    let camera: CameraBridge | null = null;
-    try {
-      camera = (deps.createCamera === undefined ? defaultCamera(appState, onError) : deps.createCamera)?.(db, readAgeBand) ?? null;
-    } catch (error) {
-      onError(error, 'camera');
-    }
-    const drive = createDriveHost({
-      db,
-      source: withBackgroundWakeReport(
-        source,
-        appState,
-        // M4's permission report on every background wake (ruling T10 (4)): T10's reporter, which
-        // reads only local state unless the permissions changed. Required on the first wake.
-        deps.reportPermissionsFromBackground ?? defaultBackgroundPermissionReport(db, onError),
-        onError
-      ),
-      limits,
-      player,
-      scoring,
-      traceWriter: identity.traceWriter,
-      hash,
-      now,
-      tz: currentZone,
-      newId,
-      readFlag: deps.readFlag ?? ((key) => readFlag(db, key, AUTO_DETECT_FLAG_FALLBACK)),
-      // The account's age band from the profile the app caches (ruling T12 (1)), so a background
-      // launch of an under-13 account never arms. The UI hands later changes to `setAgeBand`.
-      readAgeBand,
-      appState,
-      alertsAvailable,
-      presence: camera === null ? undefined : () => camera.presence(),
-      onRow: camera === null ? undefined : (row, motion) => camera.onRow(row, motion),
-      // §8.2: with nobody signed in, auto-record stays disarmed whatever the stored opt-in (I3).
-      signedOut: identity.owner === 'signed-out',
-      onError: (error, context) => onError(error, `drive ${context}`),
-    });
-    host = drive;
-    const detachCamera = camera?.attach(drive) ?? (() => {});
-
-    // Oldest first; only the newest can still be the drive under way. Anything older that was
-    // skipped is finalized now, before the host exists as a live owner of any `recording` row.
-    const skipped = recovery.skipped;
-    const newest = skipped.length > 0 ? (skipped[skipped.length - 1] as string) : null;
-    const older = new Set(skipped.slice(0, -1));
-    const passes: RecoveryResult[] = [];
-    if (older.size > 0) {
-      passes.push(
-        await recoverRecordingTrips(db, {
-          ...recoveryDeps,
-          skip: (trip) => !older.has(trip.client_trip_id),
-        })
-      );
-    }
-
-    const adoptRow: TripRow | null = newest === null ? null : await createTripsRepo(db).get(newest);
-    const { adopted } = await drive.start({ adopt: adoptRow });
-    try {
-      if (newest !== null && !adopted) {
-        // E1 protocol: not adopted (no samples, or the engine was not idle) → finalized without
-        // `skip`, now. Only that trip: a drive the host has opened since is its own.
-        passes.push(
-          await recoverRecordingTrips(db, {
-            ...recoveryDeps,
-            skip: (trip) => trip.client_trip_id !== newest,
-          })
-        );
-      }
-    } catch (error) {
-      // A started host must not outlive a launch that failed: its listeners go, and an adopted
-      // drive stays `recording` for the retry to adopt again.
-      void drive.stop({ endOpenTrip: false });
-      throw error;
-    }
-    // Recovery and adopt decoded tiles through the shared cache; an armed process holds none
-    // (final review M7). A drive the host is running keeps them.
-    if (!drive.isBusy()) limits.resetTrip();
-
-    // Neither can fail the launch: a failure is reported and the drive runs without it.
-    const attach =
-      deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
-    let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
-    if (attach) {
-      try {
-        notifier = attach(drive, db);
-      } catch (error) {
-        onError(error, 'summary notifier');
-      }
-    }
-    // The drive state the server holds pushes on (ruling T10 (4)): reported by the runtime, so a
-    // drive the Android headless task records with no screen says `recording`, then `idle`.
-    // Attached for every launch, signed out included (M4 final review I1): a fresh install launches
-    // signed out and signs in without a rebuild, and its first drive must still be reported. The
-    // reporter's local fence (the stored session is the owner, no handover pending) runs on every
-    // attempt, so a process nobody is signed in to writes nothing.
-    const driveReports = attachDriveStateReporting({
-      db,
-      drive,
-      appState,
-      client: deps.devicesClient,
-      now,
-      onError,
-    });
-    // After start, so an adopted drive already recording is not taken for a new one's start.
-    let unmountDiagnostics: () => void = () => {};
-    const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
-    if (mount) {
-      try {
-        unmountDiagnostics = mount(drive, db, (error) => onError(error, 'diagnostics battery'));
-      } catch (error) {
-        onError(error, 'diagnostics battery');
-      }
-    }
-    // Async: a summary still being scheduled lands before the notifier lets go (final review M1),
-    // so the next launch's wipe finds it in the OS and cancels it, rather than it landing after.
-    const release = async (): Promise<void> => {
-      // The camera goes after the drive's end (stop() ends the drive first): its last summary is kept, then it stops.
-      detachCamera();
-      if (camera !== null) {
-        await camera.settled();
-        await camera.dispose();
-      }
-      driveReports?.release();
-      unmountDiagnostics();
-      // Bounded like the wipe's cancel (final re-review n5): a hung notifications call must not
-      // hold a handover's teardown, and with it the "Switching accounts" screen.
-      const settling = notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
-      if (settling) await withinMs(settling, CANCEL_SUMMARIES_TIMEOUT_MS);
-      notifier?.detach();
-    };
-    return { drive, limits, adopted: adopted ? newest : null, passes, release, driveReports };
-  });
-
-  const outcome: RecoveryResult = {
-    recovered: [...recovery.recovered, ...engine.passes.flatMap((p) => p.recovered)],
-    discarded: [...recovery.discarded, ...engine.passes.flatMap((p) => p.discarded)],
-    failed: [...recovery.failed, ...engine.passes.flatMap((p) => p.failed)],
-    skipped: engine.adopted === null ? [] : [engine.adopted],
-  };
-  for (const failure of outcome.failed) onError(failure.error, `recover ${failure.clientTripId}`);
-
-  const queryClient = deps.queryClient ?? createQueryClient();
-  const detach = subscribeInvalidation(queryClient);
-  // Recording *or finalizing*: `finalizeTrip` enqueues inside its transaction, and a drain woken
-  // by that enqueue must wait for the finalize change that follows (H1 report).
-  const isBusy = () => engine.drive.isBusy();
-
-  enter('sync');
-  // The sync watermark (M5 R-A): written after a drain the runner already makes, never on its own.
-  const watermark = createRuntimeWatermark({
-    db,
-    drive: engine.drive,
-    client: deps.devicesClient,
-    now,
-    tz: currentZone,
-    onError,
-  });
-  let runner: SyncRunner | null = null;
-  let traceFs: TraceFs | null = null;
-  try {
-    const created = await stage('sync', async () => {
-      traceFs = deps.traceFs ?? (await createExpoTraceFs());
-      const net = deps.net ?? (await networkOrNeverWifi(deps.createNet ?? createExpoNet, onError));
-      return createSyncRunner({
-        db,
-        supabase: identity.supabase,
-        fs: traceFs,
-        net,
-        mayDrain: deps.mayDrain ?? drainPolicy({ appState }),
-        isRecording: isBusy,
-        appState,
-        now,
-        onError,
-        onCleanDrain: watermark.onCleanDrain,
-      });
-    });
-    runner = created;
-    // Inside the stage as well: a `start()` that throws is a launch that failed at `sync`, not
-    // an untagged error escaping the sequence.
-    await stage('sync', async () => created.start());
-  } catch (reason) {
-    // Nothing this step attached may outlive it. The layout offers a retry that re-runs the
-    // whole sequence, and a subscriber left behind would fire `invalidateAfterSync` into a
-    // `QueryClient` nobody will ever render — once per press, forever. The host lets go of its
-    // native listeners too; a drive it adopted stays `recording` for the retry to adopt.
-    void runner?.stop();
-    void engine.release();
-    void engine.drive.stop({ endOpenTrip: false });
-    detach();
-    throw reason;
-  }
-
-  // Built here so it shares the launch's identity, clock and busy signal; started by nobody here.
-  const hydrator = createHydrator({
-    db,
-    supabase: identity.hydrateSupabase,
-    now,
-    isBusy,
-    onError,
-    // Reconciliation removes a drive deleted elsewhere, trace file included.
-    fs: traceFs ?? undefined,
-  });
-
-  return {
-    db,
-    queryClient,
-    runner,
-    hydrator,
-    drive: engine.drive,
-    limits: engine.limits,
-    profile,
-    adopted: engine.adopted,
-    recovery: outcome,
-    owner: identity.owner,
-    schemaVersion,
-    now,
-    driveStateSettled: () => engine.driveReports?.settled() ?? Promise.resolve(),
-    driveStateAbandon: () => engine.driveReports?.abandon() ?? Promise.resolve(),
-    syncWatermarkBeforeSignOut: () => watermark.onSignOut(),
-    async refreshConfig() {
-      const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
-      const flag = () => readFlag(db, 'auto_detect', AUTO_DETECT_FLAG_FALLBACK);
-      const before = await flag();
-      await refreshAppConfig(seam, db, now);
-      // A changed flag re-applies the host's arming, so Home and the host never disagree: a
-      // withdrawn flag disarms; a restored one re-arms only a driver who opted in. The driver's
-      // own choice is re-stated unchanged, never altered by the server.
-      if ((await flag()) !== before) await engine.drive.setAutoDetect(engine.drive.autoDetectEnabled());
-    },
-    async stop(opts = {}) {
-      await Promise.all([runner.stop(), hydrator.stop()]);
-      // The drive a handover ends is finalized first; the notifier then finishes whatever it was
-      // scheduling before it lets go, so the next launch's wipe can cancel it (U3 m2, M1).
-      await engine.drive.stop({ endOpenTrip: opts.endOpenTrip ?? true });
-      await engine.release();
-      detach();
-      queryClient.clear();
-    },
-  };
-}
-
 const TIMED_OUT = Symbol('timed out');
 
-/**
- * Whether anything on the device says its owner may have changed — the signals that make a
- * session timeout unsafe to read as `same` (H2 I-1 b, R1-M1):
- *   - a runner recorded a signed-in user (`session.uid`) other than the recorded owner, or
- *   - the owner watch marked a handover that no launch has settled (`PENDING_OWNER_KEY`), which
- *     covers a process killed between the sign-in and its rebuild, before any runner read B.
- */
-async function ownerMayHaveChanged(db: Db): Promise<boolean> {
-  const settings = createSettingsRepo(db);
-  const owner = await readDeviceOwner(db);
-  const seen = await settings.get<string>(SESSION_UID_KEY);
-  const pending = await settings.get<string>(PENDING_OWNER_KEY);
-  return (seen !== null && seen !== owner) || (pending !== null && pending !== owner);
-}
-
-/** `promise`, or `TIMED_OUT` after `ms`; the timer is cleared either way (no timer outlives it). */
 async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -762,96 +181,244 @@ async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | typeof 
   }
 }
 
-/**
- * Recovery's `skip` (plan H2, rev1: I2): leave a trip for the host to adopt when it was
- * checkpointed inside the gap window AND the drive looks to be going on — native is capturing,
- * a capture was open when the process ended, or the motion history since the checkpoint contains
- * automotive (an iOS relaunch on a wake, before capture restarted).
- *
- * Native is asked once per launch (`getState`), and only when there is an orphan to judge; the
- * motion history only when the state alone does not settle it. A native read that fails counts as
- * "no sign of a drive": the trip is finalized, which loses nothing but the continuation.
- */
-function createAdoptableCheck(
-  source: Pick<DriveSource, 'getState' | 'queryMotionHistory'>,
-  now: () => number,
-  onError: (error: unknown, context: string) => void
-): (trip: TripRow) => Promise<boolean> {
-  let state: Promise<DriveSenseState | null> | null = null;
-  const readState = () =>
-    (state ??= source.getState().catch((error: unknown) => {
-      onError(error, 'recover: drive-sense state');
-      return null;
-    }));
-  return async (trip) => {
-    const checkpoint = trip.checkpoint_ts;
-    const at = now();
-    if (checkpoint === null || at - checkpoint > scoring.CONSTANTS.GAP_MERGE_S * 1000) return false;
-    const native = await readState();
-    if (native?.capturing || native?.captureWasOpen) return true;
-    try {
-      const history = await source.queryMotionHistory(checkpoint, at);
-      return history.some((a) => a.type === 'automotive');
-    } catch (error) {
-      onError(error, 'recover: motion history');
-      return false;
-    }
-  };
+async function ownerMayHaveChanged(db: Db): Promise<boolean> {
+  const settings = createSettingsRepo(db);
+  const owner = await readDeviceOwner(db);
+  const seen = await settings.get<string>(SESSION_UID_KEY);
+  const pending = await settings.get<string>(PENDING_OWNER_KEY);
+  return (seen !== null && seen !== owner) || (pending !== null && pending !== owner);
 }
 
-/**
- * drive-sense as the host sees it, with M4's seam on the wake: a wake that arrives while the app
- * is not in front also tells `report` (without delaying the host's own handling of it). Every
- * method is delegated explicitly: the native module is a host object whose methods do not spread.
- */
-function withBackgroundWakeReport(
-  source: DriveSource,
-  appState: { currentState?: string | null },
-  report: (() => void | Promise<void>) | undefined,
-  onError: (error: unknown, context: string) => void
-): DriveSource {
-  if (!report) return source;
-  const tell = () => {
-    if (appState.currentState === 'active') return;
-    Promise.resolve()
-      .then(report)
-      .catch((error: unknown) => onError(error, 'report permissions from background'));
+async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => void): Promise<AppRuntime> {
+  const now = deps.now ?? Date.now;
+  const onError = deps.onError ?? warn;
+  const appState = deps.appState ?? AppState;
+  const profile = deps.profile ?? launchProfile(appState);
+  let zone = deps.tz ?? deviceZone();
+  let zoneReadAt = now();
+  const currentZone = (): string => {
+    if (deps.tz !== undefined) return deps.tz;
+    const at = now();
+    if (at - zoneReadAt >= ZONE_REREAD_MS || at < zoneReadAt) {
+      zone = deviceZone();
+      zoneReadAt = at;
+    }
+    return zone;
   };
-  return {
-    arm: () => source.arm(),
-    disarm: () => source.disarm(),
-    startCapture: (mode) => source.startCapture(mode),
-    stopCapture: () => source.stopCapture(),
-    setCaptureRate: (rate) => source.setCaptureRate(rate),
-    getState: () => source.getState(),
-    queryMotionHistory: (from, to) => source.queryMotionHistory(from, to),
-    setNotificationState: (state) => source.setNotificationState(state),
-    addListener<E extends DriveSenseEvent>(
-      event: E,
-      fn: (payload: DriveSenseEvents[E]) => void
-    ): Subscription {
-      if (event !== 'wake') return source.addListener(event, fn);
-      return source.addListener(event, (payload) => {
-        tell();
-        fn(payload);
+  const appVersion = deps.appVersion ?? readAppVersion();
+
+  enter('open');
+  const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
+  enter('migrate');
+  const schemaVersion = await stage('migrate', () => migrate(db));
+
+  enter('identity');
+  const identity = await stage('identity', async () => {
+    const supabase: BootSupabase = deps.supabase ?? ((await import('@/data/supabase/client')).supabase as unknown as BootSupabase);
+    const decide = (uid: string | null) => ensureDeviceOwner(db, uid, { onError });
+    if (deps.expectedUid !== undefined) return { supabase, owner: await decide(deps.expectedUid) };
+    const sessionMs = deps.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
+    const reading = supabase.auth.getSession();
+    const session = await withinMs(reading, sessionMs);
+    let owner: DeviceOwnerOutcome;
+    if (session !== TIMED_OUT) {
+      owner = await decide(session.data.session?.user.id ?? null);
+    } else if (await ownerMayHaveChanged(db)) {
+      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
+      owner = await decide((await reading).data.session?.user.id ?? null);
+    } else {
+      owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
+      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
+    }
+    return { supabase, owner };
+  });
+  const rpc = async (fn: string, args?: Record<string, unknown>): Promise<unknown> => {
+    const { data, error } = await identity.supabase.rpc(fn, args ?? {});
+    if (error) throw error instanceof Error ? error : new Error(`${fn} failed`);
+    return data;
+  };
+
+  const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
+  const source = deps.source ?? nativeDriveSource;
+  const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
+  const queryClient = deps.queryClient ?? createQueryClient();
+
+  /** The cached summary (if any screen fetched it) for the local estimate. */
+  const summaryContext = async (): Promise<{ streak: number; safeMilesEarlierToday: number } | null> => {
+    const owner = await readDeviceOwner(db);
+    if (owner === null) return null;
+    const cached = queryClient.getQueryData<MySummary>(serverKey(owner, 'summary'));
+    const streak = cached?.progress.streak ?? 0;
+    const today = dayKey(new Date(now()), currentZone());
+    return { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, today, now()) };
+  };
+  const finalizeDeps = (session: Readonly<TripSession>) =>
+    finalizeTrip(session, { db, tz: currentZone(), now, appVersion, context: async () => (await summaryContext()) ?? null });
+
+  enter('recover');
+  const recovery = await stage('recover', () =>
+    recoverRecordingTrips(db, {
+      createDetectors: () => createDetectors(newId),
+      limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
+      now,
+      async adoptable(_trip: TripRow, lastRowTs: number | null) {
+        try {
+          const state = await source.getState();
+          return state.capturing && lastRowTs !== null && now() - lastRowTs <= ADOPT_MAX_GAP_MS;
+        } catch {
+          return false;
+        }
+      },
+      finalize: (session) => finalizeDeps(session).then(() => undefined),
+    })
+  );
+  for (const failure of recovery.failed) onError(failure.error, `recover ${failure.clientTripId}`);
+
+  enter('engine');
+  const engine = await stage('engine', async () => {
+    let host: DriveHost | undefined;
+    let player: AlertPlayer;
+    let alertsAvailable = true;
+    try {
+      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(playerInputs(() => host));
+    } catch (error) {
+      onError(new Error(`alert sound could not be loaded (${error instanceof Error ? error.name : typeof error})`), 'alert ports');
+      alertsAvailable = false;
+      player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+    }
+    let camera: CameraLike | null = null;
+    try {
+      camera = deps.createCamera === undefined ? null : deps.createCamera?.(db, () => host) ?? null;
+    } catch (error) {
+      onError(error, 'camera');
+    }
+    const display = deps.display === undefined ? createDriveDisplay(nativeDisplaySinks(), { now, platform: Platform.OS, onError: (e) => onError(e, 'display') }) : deps.display;
+    const drive = createDriveHost({
+      db,
+      source,
+      limits,
+      player,
+      display: display ?? undefined,
+      now,
+      tz: currentZone,
+      newId,
+      appVersion,
+      permissions: deps.permissions ?? defaultPermissions(db),
+      speedProbe: deps.speedProbe ?? defaultSpeedProbe,
+      context: summaryContext,
+      voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
+      presence: camera === null ? undefined : () => camera.presence(),
+      onRow: camera === null ? undefined : (row, motion) => camera.onRow(row, motion),
+      appState,
+      alertsAvailable,
+      signedOut: identity.owner === 'signed-out',
+      onError: (error, context) => onError(error, `drive ${context}`),
+    });
+    host = drive;
+    const detachCamera = camera?.attach(drive) ?? (() => {});
+    const adopt: AdoptedTrip | null = recovery.adopt;
+    await drive.boot({ adopt });
+    if (!drive.isBusy()) limits.resetTrip();
+
+    const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
+    let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
+    if (attach) {
+      try {
+        notifier = attach(drive, db);
+      } catch (error) {
+        onError(error, 'summary notifier');
+      }
+    }
+    const release = async (): Promise<void> => {
+      detachCamera();
+      if (camera !== null) {
+        await camera.settled?.();
+        await camera.dispose();
+      }
+      await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
+      notifier?.detach();
+    };
+    return { drive, adopted: adopt?.session.clientTripId ?? null, release };
+  });
+
+  const detach = subscribeInvalidation(queryClient);
+  // A settled upload or action moved the server's numbers too: the summary header refetches.
+  const offServer = onDataChanged((change) => {
+    if (change.source === 'sync') void invalidateServer(queryClient);
+  });
+  const isBusy = () => engine.drive.isBusy();
+
+  enter('sync');
+  let runner: SyncRunner | null = null;
+  try {
+    runner = await stage('sync', async () => {
+      const created = createSyncRunner({
+        db,
+        supabase: identity.supabase,
+        mayDrain: deps.mayDrain ?? drainPolicy({ appState }),
+        isRecording: isBusy,
+        appState,
+        now,
+        onError,
       });
+      await created.start();
+      return created;
+    });
+  } catch (reason) {
+    void engine.release();
+    void engine.drive.stop({ endOpenTrip: false });
+    detach();
+    offServer();
+    throw reason;
+  }
+  const started = runner;
+
+  return {
+    db,
+    queryClient,
+    runner: started,
+    drive: engine.drive,
+    limits,
+    profile,
+    adopted: engine.adopted,
+    recovery,
+    owner: identity.owner,
+    schemaVersion,
+    now,
+    async refreshConfig() {
+      const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
+      await refreshAppConfig(seam, db, now);
+    },
+    async restore() {
+      if ((await readDeviceOwner(db)) === null) return;
+      await restoreDrives({ db, rpc, now });
+    },
+    async stop(opts = {}) {
+      await started.stop();
+      await engine.drive.stop({ endOpenTrip: opts.endOpenTrip ?? true });
+      await engine.release();
+      detach();
+      offServer();
+      queryClient.clear();
     },
   };
 }
 
-/** The S2 client over the edge function. The function client is imported on the first request. */
-function defaultLimits(
-  db: Db,
-  deps: BootstrapDeps,
-  now: () => number,
-  onError: (error: unknown, context: string) => void
-): SpeedLimitClient {
+function readAppVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- loaded on first use
+    const Constants = (require('expo-constants') as typeof import('expo-constants')).default;
+    return Constants.expoConfig?.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** The speed-limit client over the edge function. The function client is imported on the first request. */
+function defaultLimits(db: Db, deps: BootstrapDeps, now: () => number, onError: (error: unknown, context: string) => void): SpeedLimitClient {
   let api: Promise<SpeedLimitApi> | null = null;
   const load = () =>
-    (api ??= (async () =>
-      createSupabaseSpeedLimitApi(
-        deps.speedLimitsSupabase ?? (await import('@/data/supabase/client')).supabase
-      ))());
+    (api ??= (async () => createSupabaseSpeedLimitApi(deps.speedLimitsSupabase ?? (await import('@/data/supabase/client')).supabase))());
   return createSpeedLimitClient({
     db,
     api: {
@@ -864,403 +431,42 @@ function defaultLimits(
   });
 }
 
-/**
- * T10's background permission report, loaded on the first wake that needs it (its module reads the
- * device's permission adapters, which no launch should load up front).
- */
-function defaultBackgroundPermissionReport(
-  db: Db,
-  onError: (error: unknown, context: string) => void
-): () => Promise<void> {
-  let report: (() => Promise<void>) | null = null;
-  return () => {
-    if (report === null) {
-      /* eslint-disable @typescript-eslint/no-require-imports -- deferred: loaded on the first wake */
-      const { createBackgroundPermissionReporter } =
-        require('@/data/devices/permissionsReport') as typeof import('@/data/devices/permissionsReport');
-      /* eslint-enable @typescript-eslint/no-require-imports */
-      report = createBackgroundPermissionReporter({
-        db,
-        onError: (error) => onError(error, 'report permissions from background'),
-      });
-    }
-    return report();
+function defaultPermissions(db: Db): () => Promise<{ location: 'granted' | 'denied' }> {
+  return async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the permission adapters
+    const { ensureDrivePermissions } = require('@/features/drive/permissions') as typeof import('@/features/drive/permissions');
+    const result = await ensureDrivePermissions({ settings: createSettingsRepo(db) });
+    return { location: result.location };
   };
 }
 
-/** A failed drive-state report is sent again after these gaps (T10 review I1), then every 5 min. */
-export const DRIVE_STATE_RETRY_MS: readonly number[] = [30_000, 120_000, 300_000];
-
-type Reported = 'idle' | 'recording';
-
-/**
- * What the server should be told for an engine status: a trip open (`recording`, or `ending` in its
- * gap window) is `recording`; `finalizing` and idle are `idle`; a candidate changes nothing
- * (review m2 for the seed; T10's reporter rules for the transitions).
- */
-function desiredFor(status: string): Reported | null {
-  if (status === 'recording' || status === 'ending') return 'recording';
-  if (status === 'finalizing' || status === 'armed' || status === 'off') return 'idle';
-  return null;
+async function defaultSpeedProbe(): Promise<number | null> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-location
+  const { currentSpeedMps } = require('@/features/drive/movingCheck') as typeof import('@/features/drive/movingCheck');
+  return currentSpeedMps();
 }
 
-/**
- * The runtime's drive-state reporting (ruling T10 (4); T10 review I1 and the r1 review): the host
- * is subscribed for the process's life, and the server is kept told `recording` while a trip is
- * open and `idle` otherwise, through T10's reporter.
- *
- * - **Desired versus confirmed.** Each status maps to a desired state; a write that reached the row
- *   confirms it. Whatever is outstanding — a failed write, a create that could not happen yet
- *   (offline, no local identity), a fenced-out change — is kept and sent later, so neither a
- *   `recording` nor an `idle` is ever lost (r1 I1).
- * - **Retries** ride the host's own publishes (about 1 Hz while recording) with a wall-clock
- *   backoff of 30 s, 2 min, then every 5 min, and the next foreground — never a timer. A new
- *   status change is tried at once.
- * - **The owner fence is local** (r1 I1): the stored session user id (`session.uid`) must be the
- *   recorded device owner, with no other owner's handover pending. No network read: a session
- *   refresh offline would read as signed out and lose the report.
- * - **Seeded** at attach with the current status: a drive adopted at launch is `recording` at
- *   once, and one relaunched mid-finalize is told `idle` (r1 m2).
- *
- * Battery (§3.5): an armed, idle phone publishes nothing and has nothing outstanding, so it costs
- * nothing; the foreground listener exists only while something is outstanding.
- */
-export function attachDriveStateReporting(opts: {
-  db: Db;
-  drive: DriveHost;
-  appState: { addEventListener(type: 'change', fn: (s: string) => void): { remove(): void } };
-  client?: import('@/data/devices/register').DevicesClient;
-  now: () => number;
-  onError: (error: unknown, context: string) => void;
-}): { release(): void; settled(): Promise<void>; abandon(): Promise<void> } {
-  /* eslint-disable @typescript-eslint/no-require-imports -- data modules, loaded with the runtime */
-  const { createDriveStateReporter } =
-    require('@/data/devices/driveState') as typeof import('@/data/devices/driveState');
-  const { registerDriveStateSource } =
-    require('@/data/devices/driveStateStore') as typeof import('@/data/devices/driveStateStore');
-  const { readInstallId } = require('@/data/devices/installId') as typeof import('@/data/devices/installId');
-  /* eslint-enable @typescript-eslint/no-require-imports */
-  type Reporter = ReturnType<typeof createDriveStateReporter>;
-  type Client = import('@/data/devices/register').DevicesClient;
-  const settings = createSettingsRepo(opts.db);
-
-  let live = true;
-  let chain: Promise<void> = Promise.resolve();
-  let lastStatus: string | null = null;
-  /** What the server should hold, and what it is known to hold (null: unknown). */
-  let desired: Reported | null = null;
-  let confirmed: Reported | null = null;
-  /** The reporter, its target, and what the reporter itself believes it last sent. */
-  let reporter: Reporter | null = null;
-  let believes: Reported = 'idle';
-  let target: { owner: string; deviceId: string; client: Client } | null = null;
-  /** The backoff after a failed attempt: when, and how many retries have been spent. */
-  let backoff: { at: number; retries: number } | null = null;
-  let offForeground: (() => void) | null = null;
-  /**
-   * Whether this process could have left `recording` on the server (M4 final review I2): it asked
-   * for `recording`, or it started with a trip open or finalizing. Only then is an `idle` news; an
-   * idle-to-idle change otherwise (a discarded candidate, auto-record turned on or off, a sign-out
-   * with no drive) writes nothing — an armed, idle phone costs nothing.
-   */
-  let mayHoldRecording = false;
-  /** The host's signed-in state at the last publish (re-review R1). */
-  let lastSignedIn = opts.drive.signedIn();
-
-  /** A write's outcome, from T10's reporter (`onWrite`, round 2): retries included. */
-  function onOutcome(state: Reported, ok: boolean): void {
-    if (ok) {
-      confirmed = state;
-      if (confirmed === desired) backoff = null;
-    } else {
-      backoff = { at: opts.now(), retries: backoff ? backoff.retries : 0 };
-    }
-  }
-
-  function freshReporter(): Reporter {
-    const t = target as NonNullable<typeof target>;
-    believes = 'idle';
-    return createDriveStateReporter({
-      supabase: t.client,
-      onWrite: onOutcome,
-      userId: t.owner,
-      deviceId: t.deviceId,
-      onError: opts.onError,
-    });
-  }
-
-  /** The owner fence, local only: the stored session is the recorded owner, no handover pending. */
-  const fence = (): Promise<string | null> => readFencedOwner(opts.db);
-
-  /** One attempt to bring the server to `desired`. A failure to even try arms the backoff. */
-  async function attempt(): Promise<void> {
-    if (!live || desired === null || desired === confirmed) return;
-    const want = desired;
-    // No live signed-in session (client re-review R1): `session.uid` is never cleared at sign-out,
-    // so it alone would let a signed-out process retry under the anon key forever. Nothing is owed
-    // to a server nobody can write to: drop it, as `abandon()` does. A later sign-in re-evaluates.
-    if (!opts.drive.signedIn()) {
-      dropOutstanding();
-      return;
-    }
-    const owner = await fence();
-    if (owner === null || (target !== null && target.owner !== owner)) {
-      backoff = { at: opts.now(), retries: backoff ? backoff.retries : 0 };
-      return;
-    }
-    if (target === null) {
-      const deviceId = await readInstallId(settings);
-      if (deviceId === null) return; // not registered: nothing to report to, and nothing to retry
-      const client = opts.client ?? (await import('@/data/supabase/client')).supabase;
-      if (!live) return;
-      target = { owner, deviceId, client };
-    }
-    if (want === 'recording') {
-      // T10's reporter sends `recording` once per instance: a failed one needs a fresh reporter.
-      if (reporter === null || believes === 'recording') reporter = freshReporter();
-      reporter.onDriveState({ status: 'recording' });
-      believes = 'recording';
-    } else if (reporter !== null && believes === 'recording') {
-      reporter.onDriveState({ status: 'armed' });
-      believes = 'idle';
-    } else if (reporter !== null) {
-      // A failed idle: the reporter keeps it and sends it again.
-      await reporter.retryPending();
-    } else {
-      // Nothing sent in this process, and the server may hold a `recording` from before (a
-      // relaunch mid-finalize, r1 m2): the reporter only sends `idle` after `recording`.
-      reporter = freshReporter();
-      reporter.onDriveState({ status: 'recording' });
-      reporter.onDriveState({ status: 'armed' });
-      believes = 'idle';
-    }
-    await reporter.settled();
-  }
-
-  function schedule(): void {
-    chain = chain.then(attempt).catch((error: unknown) => opts.onError(error, 'devices drive state'));
-    void chain.then(watchForeground);
-  }
-
-  /** While something is outstanding, the next foreground tries again (no timer). */
-  function watchForeground(): void {
-    const outstanding = live && desired !== null && desired !== confirmed && backoff !== null;
-    if (outstanding && offForeground === null) {
-      const sub = opts.appState.addEventListener('change', (next) => {
-        if (next === 'active') schedule();
-      });
-      offForeground = () => sub.remove();
-    } else if (!outstanding && offForeground !== null) {
-      offForeground();
-      offForeground = null;
-    }
-  }
-
-  /** Forget what is outstanding and stop retrying it (a session gone, r2 n1 / re-review R1). */
-  function dropOutstanding(): void {
-    desired = confirmed;
-    backoff = null;
-    reporter = null;
-    offForeground?.();
-    offForeground = null;
-  }
-
-  function onPublish(status: string): void {
-    // A driver signed in since the last publish: the current status is looked at afresh, so a
-    // trip that was open while signed out is reported once someone can write for it (R1).
-    const signedNow = opts.drive.signedIn();
-    if (signedNow && !lastSignedIn) lastStatus = null;
-    lastSignedIn = signedNow;
-    if (status !== lastStatus) {
-      lastStatus = status;
-      const next = desiredFor(status);
-      if (next === 'recording') mayHoldRecording = true;
-      if (next === 'idle' && !mayHoldRecording) return;
-      if (next !== null && next !== desired) {
-        desired = next;
-        backoff = null;
-        schedule();
-        return;
-      }
-    }
-    // The same state again (about 1 Hz while recording): something outstanding rides it, on the
-    // backoff.
-    if (backoff === null || desired === null || desired === confirmed) return;
-    const gap = DRIVE_STATE_RETRY_MS[Math.min(backoff.retries, DRIVE_STATE_RETRY_MS.length - 1)] as number;
-    if (opts.now() - backoff.at < gap) return;
-    backoff = { at: opts.now(), retries: backoff.retries + 1 };
-    schedule();
-  }
-
-  const releaseSource = registerDriveStateSource();
-  const unsubscribe = opts.drive.subscribe((s) => onPublish(s.status));
-  // Seeded: `subscribe` does not replay the current status. An idle seed is not sent: launching
-  // tells the server nothing unless a trip is open or was left open (a finalizing relaunch).
-  const seed = opts.drive.snapshot().status;
-  if (seed === 'armed' || seed === 'off') lastStatus = seed;
-  else {
-    // A trip open or finalizing at launch: the server may hold `recording` from before (r1 m2).
-    if (seed !== 'candidate') mayHoldRecording = true;
-    onPublish(seed);
-  }
-  return {
-    release() {
-      live = false;
-      unsubscribe();
-      offForeground?.();
-      offForeground = null;
-      releaseSource();
-    },
-    /**
-     * Everything handed over so far has been attempted once more and settled, while the owner's
-     * session is still valid (T10 security: the sign-out awaits this so the server never keeps a
-     * stale "driving" that holds pushes).
-     */
-    async settled() {
-      await chain;
-      if (desired !== null && desired !== confirmed) {
-        await attempt().catch((error: unknown) => opts.onError(error, 'devices drive state'));
-      }
-    },
-    /**
-     * The session has ended (review r2 n1): once the attempts already started have run, whatever is
-     * still outstanding is dropped and the foreground retry detached. Retried under the anon key it
-     * would be refused by RLS on every foreground, forever. The server's stale `recording` is
-     * bounded by `drive_state_at` pinning and clamping. A later drive, signed in again, starts
-     * afresh.
-     */
-    async abandon() {
-      await chain;
-      dropOutstanding();
-    },
-  };
+function defaultVoiceEnabled(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the settings cache (WP9)
+  const { voicePrefEnabled } = require('@/features/settings/alerts/voicePref') as typeof import('@/features/settings/alerts/voicePref');
+  return voicePrefEnabled();
 }
 
-/**
- * The runtime's owner fence, local only (H2 r1 I1): the recorded device owner, when the stored
- * session user id (`session.uid`) is that owner and no other owner's handover is pending; else
- * null. It never calls `auth.getSession()`, so an offline token refresh cannot read as "nobody",
- * and a handover in progress can never be written for under the next driver's session.
- */
-export async function readFencedOwner(db: Db): Promise<string | null> {
-  const settings = createSettingsRepo(db);
-  const owner = await readDeviceOwner(db);
-  if (owner === null) return null;
-  const pending = await settings.get<string>(PENDING_OWNER_KEY);
-  if (pending !== null && pending !== owner) return null;
-  if ((await settings.get<string>(SESSION_UID_KEY)) !== owner) return null;
-  return owner;
-}
-
-/**
- * The sync watermark's writer (`src/data/devices/syncWatermark.ts`, M5 R-A) with the runtime's
- * identity: the fenced stored owner, this install's id, the device's zone for the 02:00 boundary,
- * and the app client loaded only when a write is actually due (nothing on an armed, idle phone).
- *
- * - `onCleanDrain` also needs a live signed-in host: `session.uid` is never cleared at sign-out,
- *   so the fence alone would let a signed-out phone PATCH under the anon key after every drain.
- * - `onSignOut` runs inside the sign-out, after the host has already marked itself signed out
- *   (`suspendForSignOut`) and while the session is still valid, so it uses the fence alone.
- */
-function createRuntimeWatermark(opts: {
-  db: Db;
-  drive: Pick<DriveHost, 'signedIn'>;
-  client?: import('@/data/devices/register').DevicesClient;
-  now: () => number;
-  tz: () => string;
-  onError: (error: unknown, context: string) => void;
-}): { onCleanDrain(drainStartedAt: number): Promise<void>; onSignOut(): Promise<void> } {
-  /* eslint-disable @typescript-eslint/no-require-imports -- data modules, loaded with the runtime */
-  const { createWatermarkWriter, watermarkClientFor } =
-    require('@/data/devices/syncWatermark') as typeof import('@/data/devices/syncWatermark');
-  const { readInstallId } = require('@/data/devices/installId') as typeof import('@/data/devices/installId');
-  /* eslint-enable @typescript-eslint/no-require-imports */
-  type Seam = import('@/data/devices/syncWatermark').WatermarkClient;
-  const settings = createSettingsRepo(opts.db);
-  let seam: Seam | null = null;
-  const client: Seam = {
-    async updateDevice(args) {
-      seam ??= watermarkClientFor(opts.client ?? (await import('@/data/supabase/client')).supabase);
-      return seam.updateDevice(args);
-    },
-  };
-  const base = {
-    db: opts.db,
-    supabase: client,
-    settings,
-    deviceId: () => readInstallId(settings),
-    now: opts.now,
-    tz: opts.tz,
-    onError: opts.onError,
-  };
-  const drains = createWatermarkWriter({
-    ...base,
-    readOwner: async () => (opts.drive.signedIn() ? readFencedOwner(opts.db) : null),
-  });
-  const signOut = createWatermarkWriter({ ...base, readOwner: () => readFencedOwner(opts.db) });
-  return { onCleanDrain: drains.onCleanDrain, onSignOut: signOut.onSignOut };
-}
-
-/**
- * The device owner's age band. v3 stores no age anywhere (13+ is an attestation at sign-in), so
- * this is always unknown; WP6/WP8 remove the age gates that still read it.
- */
-async function cachedAgeBand(_db: Db): Promise<string | null> {
-  return null;
-}
-
-/** Lane B's camera bridge. Required lazily; it loads nothing heavy until an opted-in drive starts. */
-function defaultCamera(
-  appState: AppStateLike & { currentState?: string | null },
-  onError: (error: unknown, context: string) => void
-): (db: Db, readAgeBand: () => Promise<string | null>) => CameraBridge {
-  return (db, readAgeBand) => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred, like the notifier
-    const { createDefaultCameraBridge } = require('@/features/camera/defaultBridge') as typeof import('@/features/camera/defaultBridge');
-    return createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), readAgeBand, onError });
-  };
-}
-
-/** U3's notifier. Required lazily: expo-notifications is loaded only by a launch that needs it. */
 function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
+  void db;
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host, { db });
+  return attachSummaryNotifier(host);
 }
 
-/**
- * U5's battery recorder, only in a diagnostics build. `diagnosticsEnabled()` comes from the small
- * `@/features/dev/flags` module (H2 ruling 5), never the screen, so no launch loads expo-router
- * for it; the recorder module is required only when diagnostics are on.
- */
-function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) => void): () => void {
-  /* eslint-disable @typescript-eslint/no-require-imports -- deferred: the dev screens' modules */
-  const { diagnosticsEnabled } =
-    require('@/features/dev/flags') as typeof import('@/features/dev/flags');
-  if (!diagnosticsEnabled()) return () => {};
-  const { createDriveBatteryRecorder } =
-    require('@/features/dev/battery') as typeof import('@/features/dev/battery');
-  /* eslint-enable @typescript-eslint/no-require-imports */
-  return createDriveBatteryRecorder({ host, settings: createSettingsRepo(db), onError });
-}
-
-/**
- * P2's player over the device ports. A port that will not load rejects; the engine stage then
- * records without sound and says so (`alertsAvailable: false`).
- */
-function defaultPlayer(
-  onError: (error: unknown, context: string) => void,
-  db: Db
-): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
-  // No launch probe (final re-review n2): `createAudioPlayer` does not load the asset on either
-  // platform — a load error arrives later, asynchronously — so creating a player at launch proves
-  // nothing, and really loading one would hold every launch (background wakes included) on audio.
-  // The check lives where it means something: a tone that never reports loading or playing fails
-  // at its first alert, and the host marks alerts unavailable (and clears it when one sounds).
+/** The alert player over the device ports. A port that will not load rejects; the drive then records without sound. */
+function defaultPlayer(onError: (error: unknown, context: string) => void, db: Db): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
   return async (inputs) => {
     const ports = await createExpoAlertPorts();
-    // Lane C's Alerts & sounds settings (H4): the voice switch and the alert style, read before the
-    // first alert, then live (the camera's alert sink reads both too).
+    /* eslint-disable @typescript-eslint/no-require-imports -- the settings caches (WP9) */
+    const { loadVoicePref, voicePrefEnabled } = require('@/features/settings/alerts/voicePref') as typeof import('@/features/settings/alerts/voicePref');
+    const { loadAlertStylePref, alertStylePref } = require('@/features/settings/alerts/stylePref') as typeof import('@/features/settings/alerts/stylePref');
+    /* eslint-enable @typescript-eslint/no-require-imports */
     const settings = createSettingsRepo(db);
     await Promise.all([loadVoicePref(settings), loadAlertStylePref(settings)]);
     return createAlertPlayer({
@@ -1273,124 +479,41 @@ function defaultPlayer(
   };
 }
 
-/** iOS: keep the database — the driver's whole local history — out of iCloud and Finder backups. */
-async function excludeDatabaseFromBackup(deps: BootstrapDeps): Promise<void> {
-  const directory =
-    deps.databaseDirectory ?? ((await import('expo-sqlite')).defaultDatabaseDirectory as string);
-  const exclude =
-    deps.excludeFromBackup ??
-    (async (uri: string) => (await import('@drive-sense')).default.excludeFromBackup(uri));
-  await exclude(directory);
-}
-
-/** The network adapter, or — when it cannot be made — a network that is never on Wi-Fi. */
-async function networkOrNeverWifi(
-  create: () => Promise<NetStatus | NetSubscribable>,
-  onError: (error: unknown, context: string) => void
-): Promise<NetStatus | NetSubscribable> {
-  try {
-    return await create();
-  } catch (error) {
-    onError(error, 'network adapter');
-    return { isWifi: () => false };
-  }
-}
-
-/**
- * The app client as the two seams the launch hands out. The runner's is a plain structural
- * assignment (its test proves the client fits). The hydrator's goes through `hydrateSeam`, the one
- * place the generated client's schema-resolved builder is narrowed to the restore's six calls.
- */
-function appSeams(client: SupabaseClient<Database>): {
-  supabase: SyncSupabase;
-  hydrateSupabase: HydrateSupabase;
-} {
-  return { supabase: client, hydrateSupabase: hydrateSeam(client) };
-}
-
 export interface ForegroundJobsDeps {
-  /** Default: React Native's `AppState`. */
   appState?: ForegroundAppState;
   onError?: (error: unknown, context: string) => void;
 }
 
-/**
- * The work that runs only while the driver has the app open (R10, R13; review I3). The controller
- * (`./controller.ts`) calls this once the app is active — never from a background wake or the
- * headless task — and awaits the returned `stop()` when the runtime is torn down.
- *
- * Three jobs, each on a transition to `active` and throttled by a settings stamp:
- *   - **hydration**, every `HYDRATE_INTERVAL_MS`, then `limits.purgeExpired()` once the restore
- *     completed (rev1: m — tiles expire, and the purge is SQLite work best done while in front);
- *   - **the public config** (`refreshAppConfig`), every `APP_CONFIG_INTERVAL_MS` — not while a
- *     drive is under way, so a drive never costs a request it does not need.
- *
- * Hydration is an incremental top-up from the stored cursor. A **full** restore is owed once — the throttle
- * bypassed — when this launch found a new owner (`first`, `wiped`) or the device has never
- * completed a restore (an M2 install, or one whose restores were all cut short); it stays owed until a full run completes, so a restore cut short by a
- * tunnel or a drive is resumed at the next foreground rather than six hours later. While it is
- * owed, the score slot says "Restoring…" rather than "Building your score" (R9).
- */
-/** What `startForegroundJobs` hands the host. */
 export interface ForegroundJobs {
-  /** Detach every job from AppState; await it at teardown. A run in flight stamps nothing after. */
   stop(): Promise<void>;
-  /**
-   * Run the restore now, throttle bypassed — U4's "Couldn't restore your drives — Retry" (review
-   * D1 M4). Joins a run already in flight. Resolves true when the run reached the end; never
-   * rejects (a failure is reported and the status store says `failed`).
-   */
+  /** Run the restore now; resolves true when it completed. */
   runNow(): Promise<boolean>;
 }
 
-export async function startForegroundJobs(
-  runtime: AppRuntime,
-  deps: ForegroundJobsDeps = {}
-): Promise<ForegroundJobs> {
-  const settings = createSettingsRepo(runtime.db);
-  const neverRestored = (await settings.get<unknown>(HYDRATE_RESTORED_AT_KEY)) === null;
-  let fullOwed = runtime.owner === 'first' || runtime.owner === 'wiped' || neverRestored;
-  if (fullOwed) {
-    // Bypass the throttle once: a stamp left by an earlier install or owner is not this restore's.
-    await settings.remove(foregroundStampKey('hydrate'));
-    if (getHydrationStatus().state === 'idle') setHydrationStatus({ state: 'restoring', restored: 0 });
-  }
-
+/**
+ * The work that runs only while the driver has the app open, each on a transition to `active`:
+ * the restore (once per launch while the device holds no drives), the public config (daily) and
+ * the expired-tile purge.
+ */
+export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
   const onError = deps.onError ?? warn;
-  const job = async (): Promise<void> => {
-    const result = await runtime.hydrator.run({ full: fullOwed });
-    // An incomplete run stamps nothing, so the next foreground tries again.
-    if (!result.complete) throw new Error('hydration did not complete');
-    fullOwed = false;
-    // A failed purge is only tiles kept a little longer; the restore itself is done.
+  const foreground = { appState: deps.appState ?? AppState, now: runtime.now, db: runtime.db, onError };
+  let restoredThisLaunch = false;
+  const restore = async (): Promise<void> => {
+    if (restoredThisLaunch) return;
+    if ((await createTripsRepo(runtime.db).count()) > 0) {
+      restoredThisLaunch = true;
+      return;
+    }
+    await runtime.restore();
+    restoredThisLaunch = true;
     await runtime.limits.purgeExpired().catch((error: unknown) => onError(error, 'purge expired tiles'));
   };
-  const foreground = {
-    appState: deps.appState ?? AppState,
-    now: runtime.now,
-    db: runtime.db,
-    onError,
-  };
-  const stopHydrate = runWhenForeground('hydrate', HYDRATE_INTERVAL_MS, job, foreground);
-  // A restore a drive paused (it halts while the engine is busy) resumes when that drive is
-  // finalized, if the app is in front — rather than leaving Home saying "Restoring…" with nothing
-  // running until the next foreground (final re-review n4). Only while a full restore is owed.
-  let resuming = false;
-  const offFinalize = onDataChanged((change) => {
-    if (change.source !== 'finalize' || !fullOwed || resuming) return;
-    if (foreground.appState.currentState !== 'active') return;
-    resuming = true;
-    void job()
-      .catch((error: unknown) => onError(error, 'foreground job hydrate (after the drive)'))
-      .finally(() => {
-        resuming = false;
-      });
-  });
+  const stopRestore = runWhenForeground('restore', 60_000, restore, foreground);
   const stopConfig = runWhenForeground(
     'config',
     APP_CONFIG_INTERVAL_MS,
     async () => {
-      // Thrown, not skipped: a throw stamps nothing, so the next foreground after the drive runs it.
       if (runtime.drive.isBusy()) throw new Error('a drive is under way');
       await runtime.refreshConfig();
     },
@@ -1398,29 +521,26 @@ export async function startForegroundJobs(
   );
   return {
     async stop() {
-      stopHydrate();
+      stopRestore();
       stopConfig();
-      offFinalize();
     },
     async runNow() {
       try {
-        await job();
+        restoredThisLaunch = false;
+        await restore();
         return true;
       } catch (error) {
-        onError(error, 'foreground job hydrate (run now)');
+        onError(error, 'restore (run now)');
         return false;
       }
     },
   };
 }
 
-/**
- * Before the session ends at sign-out, while it can still send them: every delete this device
- * owes the server (security review D1 M-1). A different driver's sign-in later wipes the device,
- * and with it any delete still queued — which the next restore would then undo. The host calls
- * this from the sign-out action before `supabase.auth.signOut()`; `left` is what the sign-out
- * warning must name (deletes that could not be sent: offline, or given up).
- */
-export function flushBeforeSignOut(runtime: AppRuntime): Promise<FlushResult> {
-  return runtime.runner.flushDeletes();
+/** Before the session ends at sign-out: one drain while the session can still send. */
+export async function flushBeforeSignOut(runtime: AppRuntime): Promise<{ sent: number; left: number }> {
+  const result = await runtime.runner.drainOnce();
+  return { sent: result.done, left: await runtime.runner.owed() };
 }
+
+export { readFlag };

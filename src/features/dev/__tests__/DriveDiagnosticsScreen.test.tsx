@@ -4,7 +4,6 @@ import { Text } from 'react-native';
 
 import { createSamplesRepo, createSettingsRepo, type Db } from '@/data/db';
 import { createTestDb, seedTrips } from '@/data/queries/__fixtures__/harness';
-import { tripRow } from '@/data/queries/__fixtures__/rows';
 import { DataProvider } from '@/data/queries/context';
 import type { DriveHost, DriveState } from '@/drive/host';
 import { ThemeProvider } from '@/ui';
@@ -98,10 +97,10 @@ describe('route guard: __DEV__ || env.diagnostics', () => {
 describe('the drive-sense readout', () => {
   test('state, lock signal, permissions, last exit and the stored rows', async () => {
     const fake = createFakeDriveSense({ platform: 'android' });
-    fake.setState({ location: 'always', motion: 'granted', armed: true, lockSignal: 'reliable' });
+    fake.setState({ location: 'always', motion: 'granted', lockSignal: 'reliable' });
     fake.setLastExitInfo({ ts: T, reason: 'watchdog', whileCapturing: true });
     fake.setIgnoringBatteryOptimizations(false);
-    await seedTrips(db, [tripRow({ client_trip_id: 'open-1', status: 'recording' })]);
+    await seedTrips(db, [{ client_trip_id: 'open-1', started_at: T, tz: 'UTC', status: 'recording' }]);
     const samples = createSamplesRepo(db);
     for (let i = 0; i < 12; i += 1) {
       await samples.append('open-1', T + i * 1000, {
@@ -147,7 +146,7 @@ describe('the drive-sense readout', () => {
 
 describe('battery (diag.battery)', () => {
   function hostStub(initial: Partial<DriveState>) {
-    let s = { status: 'off', clientTripId: null, dryRun: false, ...initial } as DriveState;
+    let s = { status: 'idle', clientTripId: null, dryRun: false, ...initial } as DriveState;
     const listeners = new Set<(s: DriveState) => void>();
     const host = {
       snapshot: () => s,
@@ -171,15 +170,13 @@ describe('battery (diag.battery)', () => {
     const { host, set, listeners } = hostStub({});
     const stop = createDriveBatteryRecorder({ host, settings, read });
 
-    set({ status: 'candidate' });
-    expect(read).not.toHaveBeenCalled(); // a candidate may yet be discarded
     set({ status: 'recording', clientTripId: 't1' });
     set({ status: 'recording', clientTripId: 't1' }); // the 1 Hz rows read nothing
     set({ status: 'recording', clientTripId: 't1' });
     level = 0.82;
     clock = T + 3_600_000;
-    set({ status: 'ending', clientTripId: 't1' });
-    set({ status: 'armed', clientTripId: null });
+    set({ status: 'finalizing', clientTripId: 't1' });
+    set({ status: 'idle', clientTripId: null });
     await waitFor(async () =>
       expect(await readDriveBattery(settings)).toEqual<DriveBatteryRecord>({
         clientTripId: 't1',
@@ -198,7 +195,7 @@ describe('battery (diag.battery)', () => {
     const { host, set } = hostStub({ dryRun: true });
     createDriveBatteryRecorder({ host, settings, read });
     set({ status: 'recording', clientTripId: 'sim' });
-    set({ status: 'off', clientTripId: null });
+    set({ status: 'idle', clientTripId: null });
     await new Promise((r) => setTimeout(r, 0));
     expect(read).not.toHaveBeenCalled();
     expect(await settings.get(DIAG_BATTERY_KEY)).toBeNull();

@@ -1,213 +1,139 @@
-// Phone use (§9.3): sustained handling, RoadWise pushed to the background in mounted mode, or
-// RoadWise opened at speed on a trip that is not mounted (SR8), while the car is moving.
-// Confidence follows the unlock / app-switch evidence (§9.5).
+// Phone pickup and phone handling (product spec v3 event table, "Rules against false positives").
 //
-// One episode covers every signal: it is confirmed by PHONE_HANDLING_MIN_S consecutive handling
-// rows or by a single app-switch (or SR8 open) row, continues while a signal persists, and ends
-// after CLOSE_AFTER_QUIET_ROWS rows without one. Stopped and moving stretches are separate episodes
-// so the stopped one can be logged as `possible` (speed 0, severity 0) without diluting the other.
-//
-// A locked phone is never phone use (plan rev1 I11). The mounted app-switch row needs RoadWise in
-// the background on an unlocked, lit screen, and how far that can be believed depends on the lock
-// signal the platform gives (`DetectorContext.lockReliable` / `lockLagged`):
-//   - reliable (Android): one such row is app-switch evidence, as before;
-//   - lagged (iOS with a passcode, ~10 s late): the side button backgrounds the app at once but
-//     reports `locked` seconds later, so the rows are held back — the episode is confirmed only on
-//     the APP_SWITCH_CONFIRM_S-th consecutive backgrounded, unlocked row (and then covers them
-//     all), and is dropped if a locked row turns up first;
-//   - unreliable (an iPhone without a passcode never reports locked): a backgrounded app cannot be
-//     told from a locked phone, so it is not evidence on its own, and a lit screen is not unlock
-//     evidence — only real handling makes an episode, at handling confidence (0.6).
-import { CONSTANTS } from '@scoring';
-import type { DetectedEvent, Detector, DetectorContext, EventSource, FeatureRow } from '../engine/types';
-import { alertableFor, contextOf, knownSpeed, statusFor } from './common';
+// A use row is the phone being handled (`handlingScore` ≥ 0.6) or, where the lock signal can be
+// believed and is not lagged, unlocked with the screen on and RoadWise in the background. Three
+// consecutive use rows make a pickup — so a tap of under 3 s on a mounted, stable phone never
+// counts — when the car is moving above 5 mph, or stopped mid-drive after having moved
+// (`stoppedInTraffic`, half the penalty). A pickup before the car has ever moved is parking-lot
+// phone use, not a pickup. The episode continues while use rows persist and closes after two quiet
+// rows; handling past 15 s adds one `phone_handling` event (moderate ≤ 30 s, severe beyond).
+// A hands-free call suppresses everything (CarPlay / Android Auto are not detectable; documented).
+import { PHONE_MIN_MPH, type Tier } from '@scoring';
 
-/** The confirmed open episode, as the alert layer sees it. */
-export interface OpenPhoneEpisode {
-  id: string;
-  /** Rows through the last signal row — what the closed event's `durationS` will be so far. */
-  durationS: number;
-}
+import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
+import { knownSpeedMph, mountedStable, round1, rowEligible } from './common';
 
-export interface PhoneUseDetector extends Detector {
-  /** The confirmed open episode, or null before confirmation and between episodes. */
-  openEpisode(): OpenPhoneEpisode | null;
-}
-
-/** Phone-use confidence (§9.5): handling alone 0.6; with unlock or app-switch evidence 0.9. */
-const Q = { handling: 0.6, evidenced: 0.9 } as const;
 /** `handlingScore` at or above this reads as the phone being handled. */
-const HANDLING_MIN_SCORE = 0.6;
-const CLOSE_AFTER_QUIET_ROWS = 2;
-/**
- * With a lagged lock signal, a mounted app switch counts only on this many consecutive
- * backgrounded, unlocked rows — longer than the platform's lock lag, so a side-button press has
- * reported `locked` (and dropped the episode) before it could be charged. Tuning-sensitive.
- */
-export const APP_SWITCH_CONFIRM_S = 12;
-
-type Phase = 'stopped' | 'moving';
+export const HANDLING_MIN_SCORE = 0.6;
+/** Consecutive use rows before a pickup counts (the "< 3 s tap" rule). */
+export const PICKUP_MIN_ROWS = 3;
+/** Quiet rows that close an episode. */
+export const CLOSE_AFTER_QUIET_ROWS = 2;
+/** Handling beyond this many seconds after the pickup is a `phone_handling` event, in 15-s units. */
+export const HANDLING_FREE_S = 15;
+export const HANDLING_UNIT_S = 15;
+export const HANDLING_SEVERE_S = 30;
 
 interface Episode {
   id: string;
-  phase: Phase;
   startedAt: number;
-  /** rows since the episode opened, quiet and held-back ones included */
-  rows: number;
-  /** `rows` as of the last signal row: trailing quiet rows never count */
-  durationRows: number;
-  speedSum: number;
-  speedN: number;
-  /** the speed sums as of the last signal row */
-  speedSumAtSignal: number;
-  speedNAtSignal: number;
+  lastUseTs: number;
+  run: number;
   quiet: number;
   confirmed: boolean;
-  handling: boolean;
-  unlock: boolean;
-  appSwitch: boolean;
-  context: DetectedEvent['context'];
+  /** Parking-lot use: never a pickup; closes silently. */
+  ignored: boolean;
+  mounted: boolean;
+  speedAtPickupMph: number | null;
+  stoppedInTraffic: boolean;
+}
+
+export interface PhoneUseDetector extends Detector {
+  open(): OpenEpisode | null;
+  /** A confirmed episode is open: the row's distance is not safe miles. */
+  active(): boolean;
 }
 
 export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
-  let open: Episode | null = null;
-  let handlingRun = 0;
-  /** Consecutive backgrounded, unlocked rows in mounted mode (the lagged-lock confirmation). */
-  let switchRun = 0;
-  /** Whether the previous row showed RoadWise open on an unlocked screen; null before the first. */
-  let prevInApp: boolean | null = null;
-  /** Whether RoadWise was in the foreground on the previous row; null before the first. */
-  let prevForeground: boolean | null = null;
-
-  const newEpisode = (row: FeatureRow, phase: Phase, ctx: DetectorContext): Episode => ({
-    id: newId(),
-    phase,
-    startedAt: row.ts,
-    rows: 0,
-    durationRows: 0,
-    speedSum: 0,
-    speedN: 0,
-    speedSumAtSignal: 0,
-    speedNAtSignal: 0,
-    quiet: 0,
-    confirmed: false,
-    handling: false,
-    unlock: false,
-    appSwitch: false,
-    context: contextOf(ctx),
-  });
+  let ep: Episode | null = null;
+  /** The car has moved above 5 mph at some point of the drive. */
+  let moved = false;
 
   const close = (): DetectedEvent[] => {
-    const ep = open;
-    open = null;
-    if (!ep || !ep.confirmed) return [];
-    const evidenced = ep.unlock || ep.appSwitch;
-    const q = evidenced ? Q.evidenced : Q.handling;
-    const stopped = ep.phase === 'stopped';
-    const status = stopped ? 'possible' : statusFor(q);
-    const speedMps = stopped ? 0 : ep.speedSumAtSignal / ep.speedNAtSignal;
-    const source: EventSource = ep.handling && evidenced ? 'both' : evidenced ? 'os' : 'imu';
-    return [
-      {
-        id: ep.id,
-        category: 'phone',
-        startedAt: ep.startedAt,
-        durationS: ep.durationRows,
-        q,
-        corrected: false,
-        status,
-        measured: { speedMps },
-        context: ep.context,
-        alertable: alertableFor(status, q),
-        source,
-      },
-    ];
+    const e = ep;
+    ep = null;
+    if (e === null || !e.confirmed || e.ignored) return [];
+    const durationS = (e.lastUseTs - e.startedAt) / 1000 + 1;
+    const measured: DetectedEvent['measured'] = { mounted: e.mounted };
+    if (e.speedAtPickupMph !== null) measured.speedMph = round1(e.speedAtPickupMph);
+    const pickup: DetectedEvent = {
+      id: e.id,
+      type: 'phone_pickup',
+      tier: 'severe',
+      startedAt: e.startedAt,
+      durationS,
+      measured,
+    };
+    if (e.stoppedInTraffic) pickup.stoppedInTraffic = true;
+    if (durationS <= HANDLING_FREE_S) return [pickup];
+    const extra = durationS - HANDLING_FREE_S;
+    const tier: Tier = durationS <= HANDLING_SEVERE_S ? 'moderate' : 'severe';
+    const handling: DetectedEvent = {
+      id: newId(),
+      type: 'phone_handling',
+      tier,
+      startedAt: e.startedAt + HANDLING_FREE_S * 1000,
+      durationS: extra,
+      units: Math.max(1, Math.ceil(extra / HANDLING_UNIT_S)),
+      measured: { mounted: e.mounted },
+    };
+    return [pickup, handling];
   };
 
   return {
     push(row, _limit, ctx) {
-      const speed = knownSpeed(row);
-      const handlingRow = speed !== null && row.handlingScore >= HANDLING_MIN_SCORE;
-      handlingRun = handlingRow ? handlingRun + 1 : 0;
-      const unlockedScreen = !row.locked && row.screenOn;
+      const speedMph = knownSpeedMph(row);
+      if (speedMph !== null && speedMph > PHONE_MIN_MPH) moved = true;
+      const unlockedElsewhere = ctx.lockReliable && !ctx.lockLagged && !row.locked && row.screenOn && !row.appForeground;
+      const useRow =
+        rowEligible(row, ctx) && !ctx.callActive && speedMph !== null && (row.handlingScore >= HANDLING_MIN_SCORE || unlockedElsewhere);
 
-      // Mounted app switch: RoadWise in the background on an unlocked, lit screen (I11).
-      const backgroundedUnlocked =
-        speed !== null && ctx.mode === 'mounted' && !row.appForeground && unlockedScreen;
-      let appSwitchRow = false;
-      /** Held back: taken into the episode only if the lagged confirmation completes. */
-      let pendingRow = false;
-      if (!ctx.lockReliable) {
-        switchRun = 0;
-      } else if (!ctx.lockLagged) {
-        switchRun = 0;
-        appSwitchRow = backgroundedUnlocked;
-      } else {
-        switchRun = backgroundedUnlocked ? switchRun + 1 : 0;
-        appSwitchRow = backgroundedUnlocked && switchRun >= APP_SWITCH_CONFIRM_S;
-        pendingRow = backgroundedUnlocked && !appSwitchRow;
+      if (useRow) {
+        if (ep === null) {
+          ep = {
+            id: newId(),
+            startedAt: row.ts,
+            lastUseTs: row.ts,
+            run: 0,
+            quiet: 0,
+            confirmed: false,
+            ignored: false,
+            mounted: true,
+            speedAtPickupMph: null,
+            stoppedInTraffic: false,
+          };
+        }
+        ep.run += 1;
+        ep.lastUseTs = row.ts;
+        ep.quiet = 0;
+        ep.mounted = ep.mounted && mountedStable(row);
+        if (!ep.confirmed && !ep.ignored && ep.run >= PICKUP_MIN_ROWS) {
+          const movingNow = speedMph > PHONE_MIN_MPH;
+          if (movingNow || moved) {
+            ep.confirmed = true;
+            ep.speedAtPickupMph = speedMph;
+            ep.stoppedInTraffic = !movingNow;
+          } else {
+            ep.ignored = true;
+          }
+        }
+        return [];
       }
 
-      // SR8: RoadWise brought to the front at speed on a trip that is not mounted. The row that
-      // opens it is the evidence — the transition, not the state, so a screen left lit afterwards
-      // does not keep charging; handling while it is open extends the episode as usual.
-      // Without a lock signal to believe (E1 review M2), only RoadWise itself coming to the front
-      // is an opening: a screen that lights over it (a notification on a phone with no keyguard)
-      // says nothing about anyone unlocking it.
-      const inApp = row.appForeground && unlockedScreen;
-      const opened = ctx.lockReliable ? prevInApp === false : prevForeground === false;
-      const openedRow =
-        ctx.mode !== 'mounted' &&
-        speed !== null &&
-        speed >= CONSTANTS.LOCKOUT_SPEED_MPS &&
-        inApp &&
-        opened;
-      prevInApp = inApp;
-      prevForeground = row.appForeground;
-
-      const evidenceRow = appSwitchRow || openedRow;
-      // Without a lock signal to believe, a lit screen says nothing about an unlock.
-      const unlockRow = ctx.lockReliable && unlockedScreen;
-      const out: DetectedEvent[] = [];
-
-      if (speed !== null && (handlingRow || evidenceRow || pendingRow)) {
-        const phase: Phase = speed < CONSTANTS.LOCKOUT_SPEED_MPS ? 'stopped' : 'moving';
-        if (open && open.phase !== phase) out.push(...close());
-        if (!open) open = newEpisode(row, phase, ctx);
-        open.rows += 1;
-        open.speedSum += speed;
-        open.speedN += 1;
-        if (pendingRow && !handlingRow) {
-          // Inside the episode's span but not yet its duration: the confirmation takes it in, a
-          // locked row drops it. Meanwhile it neither closes the episode nor extends it.
-          return out;
-        }
-        open.quiet = 0;
-        open.durationRows = open.rows;
-        open.speedSumAtSignal = open.speedSum;
-        open.speedNAtSignal = open.speedN;
-        open.handling = open.handling || handlingRow;
-        open.appSwitch = open.appSwitch || evidenceRow;
-        open.unlock = open.unlock || unlockRow;
-        if (evidenceRow || handlingRun >= CONSTANTS.PHONE_HANDLING_MIN_S) open.confirmed = true;
-      } else if (open && !open.confirmed) {
-        // The handling run broke (or a held-back app switch locked) before it meant anything.
-        open = null;
-      } else if (open) {
-        open.rows += 1;
-        open.quiet += 1;
-        if (speed !== null) {
-          open.speedSum += speed;
-          open.speedN += 1;
-        }
-        open.unlock = open.unlock || unlockRow;
-        if (open.quiet >= CLOSE_AFTER_QUIET_ROWS) out.push(...close());
+      if (ep === null) return [];
+      ep.quiet += 1;
+      if (ep.quiet < CLOSE_AFTER_QUIET_ROWS) return [];
+      if (!ep.confirmed) {
+        ep = null;
+        return [];
       }
-      return out;
+      return close();
     },
     flush: close,
-    openEpisode() {
-      return open !== null && open.confirmed ? { id: open.id, durationS: open.durationRows } : null;
+    open() {
+      if (ep === null || ep.ignored) return null;
+      return { id: ep.id, type: 'phone_pickup', tier: 'severe', startedAt: ep.startedAt, confirmed: ep.confirmed };
     },
+    active: () => ep !== null && ep.confirmed && !ep.ignored,
   };
 }

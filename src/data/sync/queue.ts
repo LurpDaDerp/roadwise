@@ -3,80 +3,41 @@ import { z } from 'zod';
 import type { Db } from '@/data/db/driver';
 import { createQueueRepo } from '@/data/db/queue';
 import { createSettingsRepo } from '@/data/db/settings';
-import { emitDataChanged } from '@/data/events';
 import type { QueueItem } from '@/data/db/types';
-import { type SyncKind } from '@/data/sync/kinds';
-import { FinalizeTripPayloadSchema, type FinalizeTripPayload } from '@/data/sync/payload';
+import { emitDataChanged } from '@/data/events';
+import type { SyncKind } from '@/data/sync/kinds';
+import { FinalizeTripPayloadV3Schema, type FinalizeTripPayloadV3 } from '@/data/sync/payload';
 
-/** The queue `kind` the sync runner maps to `POST /functions/v1/finalize-trip`. */
 export const FINALIZE_KIND: SyncKind = 'finalize-trip';
+export const ACTIONS_KIND: SyncKind = 'trip-actions';
 
-/** The queue `kind` for a trace the device owes Storage after the summary has already gone up. */
-export const TRACE_UPLOAD_KIND: SyncKind = 'trace-upload';
-
-/**
- * Deterministic per trip — not a fresh uuid — so a finalize retried after a failure cannot queue
- * the same trip twice, and the server dedupes the upload on the same key.
- */
+/** Deterministic per trip, so a finalize retried after a failure cannot queue the same trip twice. */
 export const finalizeIdempotencyKey = (clientTripId: string): string => `trip:${clientTripId}`;
-
-/**
- * The trace's own key, distinct from the trip's so both items can be in the queue at once: on
- * cellular the summary goes up under `trip:<id>` while the file waits under `trace:<id>`.
- */
-export const traceIdempotencyKey = (clientTripId: string): string => `trace:${clientTripId}`;
+export const disputeIdempotencyKey = (eventId: string): string => `dispute:${eventId}`;
+export const notDrivingIdempotencyKey = (clientTripId: string): string => `not_driving:${clientTripId}`;
 
 /**
  * Where the last signed-in user's id is kept, so work queued between drains can be stamped with
- * its owner. The sync runner writes it whenever it reads a session; nothing else does.
- *
- * It is a *record of who queued this*, never an authorisation: every request still travels under
- * the live session's own token, and the server scopes every lookup to that token's user. What the
- * stamp buys is the refusal — an item queued by one user is never posted under another's session
- * (one device, one database, and `signOut` clears neither).
+ * its owner. A *record of who queued this*, never an authorisation: every request still travels
+ * under the live session's own token, and an item queued by one user is never posted under another's.
  */
 export const SESSION_UID_KEY = 'session.uid';
-
-/**
- * The bootstrap's record of whose device this is (`src/boot/device.ts`), read here as a fallback.
- *
- * It is written on the identity stage of every launch and every handover, which is *before* any
- * drive can be recorded; `SESSION_UID_KEY` is written by the runner's first pass, which may come
- * after. Without the fallback, work queued between a sign-in and the next drain would be
- * unowned — and unowned work is refused, so it would be lost rather than merely unattributed.
- */
+/** The bootstrap's record of whose device this is (`src/boot/device.ts`), the first choice. */
 export const DEVICE_OWNER_KEY = 'device.lastUserId';
 
-/**
- * The owner to stamp on work queued now, or null when this device has never had a user.
- *
- * The device owner first (security review H2 I-1 c): it changes only where the owner legitimately
- * changes (`rememberDeviceOwner`, which writes both keys), whereas `session.uid` is rewritten by
- * whichever runner last read a session — during a handover's teardown, the next driver's. Work
- * queued then (the open drive the teardown finalizes) must carry the previous driver's uid. The
- * session uid is only a fallback for a device that has never recorded an owner at all.
- */
+/** The owner to stamp on work queued now, or null when this device has never had a user. */
 export async function currentOwnerUid(db: Db): Promise<string | null> {
   const settings = createSettingsRepo(db);
-  return (
-    (await settings.get<string>(DEVICE_OWNER_KEY)) ??
-    (await settings.get<string>(SESSION_UID_KEY))
-  );
+  return (await settings.get<string>(DEVICE_OWNER_KEY)) ?? (await settings.get<string>(SESSION_UID_KEY));
 }
 
 /**
- * Whether the device's recorded owner is `uid`, read on `on` — a transaction handle, so the check
- * and the write that follows it see the same database.
- *
- * The fence every writer that crossed a network round trip uses before it commits (M2 I-3): a
- * handover wipes the database and records the new owner, so a reply that arrives for the previous
- * owner finds a different uid here (or none, mid-wipe) and writes nothing. Stronger than the
- * session alone, because the session can change hands before the host has rebuilt anything.
+ * Whether the device's recorded owner is `uid`, read on `on` (a transaction handle). The fence
+ * every writer that crossed a network round trip uses before it commits: a reply that arrives for
+ * the previous owner finds a different uid here and writes nothing.
  */
 export async function deviceOwnerIs(on: Db, uid: string): Promise<boolean> {
-  const { rows } = await on.execute('SELECT value_json FROM settings WHERE key = ?', [
-    DEVICE_OWNER_KEY,
-  ]);
+  const { rows } = await on.execute('SELECT value_json FROM settings WHERE key = ?', [DEVICE_OWNER_KEY]);
   const raw = rows[0]?.value_json;
   if (typeof raw !== 'string') return false;
   try {
@@ -86,99 +47,52 @@ export async function deviceOwnerIs(on: Db, uid: string): Promise<boolean> {
   }
 }
 
-/**
- * The characters a `client_trip_id` may contain — the server's own rule, enforced here too.
- *
- * Defence in depth: the id is embedded in a Storage object key and in a local file path, and while
- * the bucket policy confines a write to `<uid>/` and the function refuses anything else, neither
- * protects the device's own filesystem from a `../` that somehow reached the queue.
- */
-export const CLIENT_TRIP_ID = /^[A-Za-z0-9_-]{1,64}$/;
-
-/**
- * What a deferred trace upload needs, and nothing more: the object key is derived from the
- * signed-in user and the trip id at upload time, never from anything stored here (§4.7).
- */
-export const TraceUploadPayloadSchema = z
+/** The `trip-actions` request bodies (mirrors `supabase/functions/trip-actions/schema.ts`). */
+export const DisputeActionSchema = z
   .object({
-    clientTripId: z.string().regex(CLIENT_TRIP_ID),
-    /** The local file, relative to the traces directory: `<clientTripId>.bin.gz`. */
-    tracePath: z.string().min(1).max(256),
+    action: z.literal('dispute'),
+    clientTripId: z.uuid(),
+    eventId: z.uuid(),
+    reason: z.enum(['hazard', 'wrong_limit', 'mounted']),
   })
-  .strict()
-  .refine((p) => p.tracePath === `${p.clientTripId}.bin.gz`, {
-    error: 'tracePath must be <clientTripId>.bin.gz',
-    path: ['tracePath'],
-  });
-
-export type TraceUploadPayload = z.infer<typeof TraceUploadPayloadSchema>;
+  .strict();
+export const NotDrivingActionSchema = z
+  .object({
+    action: z.literal('not_driving'),
+    clientTripId: z.uuid(),
+    /** The local status to restore when the server refuses. Device-only; stripped before the post. */
+    previousStatus: z.string().optional(),
+  })
+  .strict();
+export const TripActionSchema = z.discriminatedUnion('action', [DisputeActionSchema, NotDrivingActionSchema]);
+export type TripAction = z.infer<typeof TripActionSchema>;
 
 /**
- * Validate the payload against the contract, then queue it. Idempotent: a trip already in the
- * queue keeps its first item, whatever state it has reached. Given a transaction handle `on`,
- * the queue item joins that transaction.
+ * Validate the payload against the contract, then queue it. Idempotent on the trip. Given a
+ * transaction handle `on`, the queue item joins that transaction.
  */
-export async function enqueueFinalize(
-  db: Db,
-  payload: FinalizeTripPayload,
-  now: number = Date.now(),
-  on?: Db
-): Promise<QueueItem> {
-  const valid = FinalizeTripPayloadSchema.parse(payload);
+export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV3, now: number = Date.now(), on?: Db): Promise<QueueItem> {
+  const valid = FinalizeTripPayloadV3Schema.parse(payload);
   const owner = await currentOwnerUid(db);
-  const item = await createQueueRepo(db).enqueue(
-    FINALIZE_KIND,
-    valid,
-    finalizeIdempotencyKey(valid.clientTripId),
-    now,
-    on,
-    owner
-  );
+  const item = await createQueueRepo(db).enqueue(FINALIZE_KIND, valid, finalizeIdempotencyKey(valid.clientTripId), now, on, owner);
   // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
   emitDataChanged({ source: 'enqueue' });
   return item;
 }
 
-/**
- * Queue a trace the runner chose not to upload with its trip — cellular, with
- * `sync.wifiOnlyTraces` on. Idempotent on `trace:<clientTripId>`, so a finalize item retried
- * before the trace goes up does not queue a second one.
- *
- * `owner`, when given, is stamped instead of the settings record: the runner passes the finalize
- * item's own owner, so a handover landing between its owner check and this write cannot stamp the
- * previous driver's trace with the next driver's uid (security review D1 M-3).
- */
-export async function enqueueTraceUpload(
-  db: Db,
-  payload: TraceUploadPayload,
-  now: number = Date.now(),
-  on?: Db,
-  owner?: string
-): Promise<QueueItem> {
-  const valid = TraceUploadPayloadSchema.parse(payload);
-  const stamp = owner ?? (await currentOwnerUid(db));
-  const item = await createQueueRepo(db).enqueue(
-    TRACE_UPLOAD_KIND,
-    valid,
-    traceIdempotencyKey(valid.clientTripId),
-    now,
-    on,
-    stamp
-  );
-  // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
+export async function enqueueAction(db: Db, action: TripAction, now: number = Date.now(), on?: Db): Promise<QueueItem> {
+  const valid = TripActionSchema.parse(action);
+  const key = valid.action === 'dispute' ? disputeIdempotencyKey(valid.eventId) : notDrivingIdempotencyKey(valid.clientTripId);
+  const owner = await currentOwnerUid(db);
+  const item = await createQueueRepo(db).enqueue(ACTIONS_KIND, valid, key, now, on, owner);
   emitDataChanged({ source: 'enqueue' });
   return item;
 }
 
-/**
- * The payload queued for a trip, in whatever state the item has reached, or null when the trip
- * was never queued (or its finished item has been purged). This is how a re-run finalize returns
- * what the first run produced.
- */
-export async function findFinalize(
-  db: Db,
-  clientTripId: string
-): Promise<FinalizeTripPayload | null> {
+/** The payload queued for a trip, in whatever state the item has reached, or null. */
+export async function findFinalize(db: Db, clientTripId: string): Promise<FinalizeTripPayloadV3 | null> {
   const item = await createQueueRepo(db).byKey(finalizeIdempotencyKey(clientTripId));
-  return item ? FinalizeTripPayloadSchema.parse(JSON.parse(item.payload_json)) : null;
+  if (!item) return null;
+  const parsed = FinalizeTripPayloadV3Schema.safeParse(JSON.parse(item.payload_json));
+  return parsed.success ? parsed.data : null;
 }
