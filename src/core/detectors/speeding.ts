@@ -1,6 +1,9 @@
 // Speeding episodes (product spec v3 "Speeding threshold"): speed beyond L + T(L) on a usable fix
-// with an actionable limit. One continuous episode is one incident, tiered by its peak; it counts
-// after 5 s above the threshold (3 s once severe) and ends after 5 s back under L + T − 2 mph.
+// with an actionable limit, continuously for 5 s (3 s once severe) before it counts as an incident.
+// Before that confirmation any row back under L + T drops the episode — five scattered blips are
+// not an incident. Once confirmed, one continuous episode is one incident, tiered by its peak; it
+// ends after 5 s back under L + T − 2 mph (hovering in that 2-mph buffer neither extends nor ends
+// it). Only a confirmed episode takes miles out of the safe miles.
 import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_MIN_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
@@ -14,7 +17,7 @@ interface Episode {
   startedAt: number;
   /** Rows beyond the threshold so far — the event's `durationS`. */
   overRows: number;
-  /** Consecutive rows back under L + T − 2 (or without a usable limit). */
+  /** Consecutive rows back under L + T − 2 (or without a usable limit), after confirmation. */
   belowRows: number;
   peak: Tier;
   peakSpeedMph: number;
@@ -27,7 +30,7 @@ interface Episode {
 export interface SpeedingDetector extends Detector {
   /** The episode in progress while the current row is beyond the threshold, else null. */
   open(): OpenEpisode | null;
-  /** An episode is open (its end window included): the row's distance is not safe miles. */
+  /** A confirmed episode is open (its end window included): the row's distance is not safe miles. */
   active(): boolean;
 }
 
@@ -85,6 +88,11 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       }
 
       if (ep === null) return [];
+      // Not continuously over: an unconfirmed episode is dropped on the spot.
+      if (!ep.confirmed) {
+        ep = null;
+        return [];
+      }
       ep.current = null;
       // Hovering between L + T − 2 and L + T neither extends the episode nor ends it; a row with no
       // usable limit cannot vouch for the speed, so it counts toward the end.
@@ -97,6 +105,6 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       if (ep === null || ep.current === null) return null;
       return { id: ep.id, type: 'speeding', tier: ep.current, startedAt: ep.startedAt, confirmed: ep.confirmed };
     },
-    active: () => ep !== null,
+    active: () => ep !== null && ep.confirmed,
   };
 }

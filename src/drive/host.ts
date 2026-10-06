@@ -27,9 +27,10 @@ import { createRecorder } from '@/core/engine/recorder';
 import type { Detector, FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import type { Db, TripStatus } from '@/data/db';
+import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
-import { metersToMiles, mpsToMph } from '@/lib/units';
+import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
 import { detectorContext, isBusyStatus, isMoving, walkingReported } from './policy';
@@ -141,6 +142,14 @@ export interface DriveHostDeps {
 
 const noop = (): void => {};
 
+/** The local mirror of `profiles.units` (plan §10): 'km' shows km/h on the background display. */
+export const UNITS_KEY = 'units';
+export type DisplayUnit = 'mph' | 'km/h';
+
+/** A whole speed or limit in the display's unit; null stays null. */
+export const inDisplayUnit = (mph: number | null, unit: DisplayUnit): number | null =>
+  mph === null ? null : Math.round(unit === 'km/h' ? mph * KMH_PER_MPH : mph);
+
 export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const { db, source, limits, player, now, tz, newId } = deps;
   const persist = (deps.persistence ?? 'full') === 'full';
@@ -165,6 +174,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let signingOut = false;
   let dmsActive = false;
   let points: DrivePoints | null = null;
+  /** The driver's units, read as the drive starts; every display call of the drive uses it. */
+  let displayUnit: DisplayUnit = 'mph';
   let pointsCtx: DriveContext = { streak: 0, safeMilesEarlierToday: 0 };
   let lastStopTotal = 0;
   let wasStopped = false;
@@ -284,7 +295,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       const total = estimateNow();
       points = { total, sinceLastStop: total - lastStopTotal };
       lastStopTotal = total;
-    } else if (!s.stopped && s.speedKnown) {
+    } else if (!s.stopped) {
+      // Not a confirmed stop (a known speed ≤ 5 mph): no points, whether moving or without a fix —
+      // a fix lost while pulling away must not leave the stopped estimate on the screen.
       points = null;
     }
     wasStopped = s.stopped;
@@ -293,9 +306,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   function display(s: EngineSnapshot): void {
     if (!deps.display || s.status !== 'recording') return;
     deps.display.update({
-      speed: s.speedKnown ? Math.round(mpsToMph(s.speedMps)) : null,
-      limit: s.limitMph,
-      unit: 'mph',
+      speed: s.speedKnown ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
+      limit: inDisplayUnit(s.limitMph, displayUnit),
+      unit: displayUnit,
       points: points?.total ?? null,
       pointsDelta: points?.sinceLastStop ?? null,
       stopped: s.stopped,
@@ -316,7 +329,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       lastStopTotal = 0;
       wasStopped = false;
       startTripPending = true;
-      deps.display?.start({ speed: null, limit: null, unit: 'mph', points: null, pointsDelta: null, stopped: true });
+      deps.display?.start({ speed: null, limit: null, unit: displayUnit, points: null, pointsDelta: null, stopped: true });
     }
     updatePoints(s);
     display(s);
@@ -507,6 +520,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         } catch (e) {
           report(e, 'context');
           pointsCtx = { streak: 0, safeMilesEarlierToday: 0 };
+        }
+        try {
+          displayUnit = (await createSettingsRepo(db).get<unknown>(UNITS_KEY)) === 'km' ? 'km/h' : 'mph';
+        } catch (e) {
+          report(e, 'units');
+          displayUnit = 'mph';
         }
         dmsActive = dmsOn;
         await engine.dispatch({ type: 'start', ts: now(), dmsOn });

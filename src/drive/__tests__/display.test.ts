@@ -2,6 +2,14 @@ import { createDriveDisplay, DISPLAY_MIN_INTERVAL_MS, type DriveDisplayState } f
 
 const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({ speed: 30, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: false, ...over });
 
+test('an Android end right after the start keeps the start call\'s unit', () => {
+  const sent: DriveDisplayState[] = [];
+  const d = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => 0, platform: 'android' });
+  d.start(state({ speed: null, limit: null, unit: 'km/h', stopped: true }));
+  d.end();
+  expect(sent.at(-1)).toMatchObject({ unit: 'km/h', ended: true, speed: null, points: null });
+});
+
 function sinks() {
   const set = jest.fn(async () => {});
   const live = { start: jest.fn(async () => true), end: jest.fn(async () => {}) };

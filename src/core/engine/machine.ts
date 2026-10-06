@@ -23,8 +23,12 @@ export const CHECKPOINT_ROWS = 30;
 export const AUTO_END_STOPPED_MPS = 2 * MPS_PER_MPH;
 /** At or below this (known) the points may show; above it the UI is locked out. */
 export const STOPPED_MPS = PHONE_MIN_MPH * MPS_PER_MPH;
-/** A walking report ends the drive only while the car was last known at or below this. */
+/** A walking report ends the drive only while the car was last known at or below this… */
 export const WALK_MAX_SPEED_MPS = 3 * MPS_PER_MPH;
+/** …or when the last valid fix is older than this (the car parked where there is no sky). */
+export const WALK_STALE_FIX_MS = 60_000;
+/** This long still with no fix (`stillWithoutFix`) starts the stop clock as a known stop would. */
+export const NO_FIX_STILL_S = 30;
 /** The phone-handling alert, this long after the pickup. */
 export const HANDLING_ALERT_MS = 15_000;
 
@@ -62,7 +66,11 @@ export function createEngine(deps: EngineDeps): Engine {
   let seen: Seen | null = null;
   /** The last speed a valid fix reported this drive; the lockout holds on it through a dropout. */
   let lastKnownSpeedMps: number | null = null;
+  /** `ts` of the last row with a known speed (a valid fix). */
+  let lastKnownSpeedTs: number | null = null;
   let stoppedSinceTs: number | null = null;
+  /** The first row of the current run of still, fix-less rows. */
+  let stillNoFixSinceTs: number | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** Episodes already alerted: one chime per speeding episode, one pickup and one handling alert per phone episode. */
@@ -129,7 +137,9 @@ export function createEngine(deps: EngineDeps): Engine {
     suite = null;
     seen = null;
     lastKnownSpeedMps = null;
+    lastKnownSpeedTs = null;
     stoppedSinceTs = null;
+    stillNoFixSinceTs = null;
     prefetchedAtM = null;
     lastAlert = null;
     chimed = null;
@@ -209,8 +219,17 @@ export function createEngine(deps: EngineDeps): Engine {
     const speed = knownSpeed(row);
     if (speed !== null) {
       lastKnownSpeedMps = speed;
+      lastKnownSpeedTs = row.ts;
+      stillNoFixSinceTs = null;
       if (speed <= AUTO_END_STOPPED_MPS) stoppedSinceTs ??= row.ts;
       else stoppedSinceTs = null;
+    } else if (stillWithoutFix(row)) {
+      // No sky and a phone that is not moving (a garage, a covered car park): after NO_FIX_STILL_S
+      // the stop clock runs as it would on a known stop, from where the stillness began.
+      stillNoFixSinceTs ??= row.ts;
+      if (row.ts + ROW_MS - stillNoFixSinceTs >= NO_FIX_STILL_S * 1000) stoppedSinceTs ??= stillNoFixSinceTs;
+    } else {
+      stillNoFixSinceTs = null;
     }
     if (stoppedSinceTs !== null && row.ts + ROW_MS - stoppedSinceTs >= AUTO_END_STOPPED_S * 1000) {
       await finalize('stopped', stoppedSinceTs);
@@ -255,12 +274,19 @@ export function createEngine(deps: EngineDeps): Engine {
 
   // --- events -----------------------------------------------------------------------------------
 
-  function start(ts: number, dmsOn: boolean): void {
+  async function start(ts: number, dmsOn: boolean): Promise<void> {
     if (status !== 'idle') return;
     const made = deps.createDetectors();
     session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts), dmsOn });
     suite = made;
     setStatus('recording');
+    // The trip row exists from the first second: a process death before the first checkpoint
+    // (30 rows) still leaves a drive to continue or finalize.
+    try {
+      await deps.onCheckpoint(snapshotSession(session));
+    } catch (err) {
+      report(err);
+    }
   }
 
   function adopt(trip: AdoptedTrip): void {
@@ -278,7 +304,7 @@ export function createEngine(deps: EngineDeps): Engine {
   async function reduce(e: EngineEvent): Promise<void> {
     switch (e.type) {
       case 'start':
-        start(e.ts, e.dmsOn);
+        await start(e.ts, e.dmsOn);
         return;
       case 'adopt':
         adopt(e.trip);
@@ -290,10 +316,13 @@ export function createEngine(deps: EngineDeps): Engine {
         await processRow(e.row);
         return;
       }
-      case 'walking':
+      case 'walking': {
         if (status !== 'recording') return;
-        if ((lastKnownSpeedMps ?? 0) <= WALK_MAX_SPEED_MPS) await finalize('walking', stoppedSinceTs ?? e.ts);
+        const slow = (lastKnownSpeedMps ?? 0) <= WALK_MAX_SPEED_MPS;
+        const staleFix = lastKnownSpeedTs === null || e.ts - lastKnownSpeedTs > WALK_STALE_FIX_MS;
+        if (slow || staleFix) await finalize('walking', stoppedSinceTs ?? e.ts);
         return;
+      }
       case 'end':
         if (status === 'recording') await finalize('manual', e.ts);
         return;

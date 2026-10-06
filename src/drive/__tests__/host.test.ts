@@ -49,7 +49,7 @@ function fakeDisplay(): DriveDisplay & { log: string[] } {
   return {
     log,
     start: (s: DriveDisplayState) => log.push(`start ${s.speed}`),
-    update: (s: DriveDisplayState) => log.push(`update ${s.speed}/${s.limit}/${s.points}`),
+    update: (s: DriveDisplayState) => log.push(`update ${s.speed}/${s.limit}/${s.points}${s.unit === 'km/h' ? ' km/h' : ''}`),
     end: () => log.push('end'),
   };
 }
@@ -176,6 +176,42 @@ test('a drive: rows publish at most once each, the display updates on change, po
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   expect(h.errors).toEqual([]);
   await h.host.stop({ endOpenTrip: false });
+});
+
+test('points clear the moment the stop is no longer confirmed, even with the fix lost while pulling away', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start({ dmsOn: false });
+  await feed(h, rows(60, { speedMps: 15 }));
+  await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
+  expect(h.host.snapshot().points).not.toBeNull();
+  expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+$/);
+  // Pulling away under a bridge: no fix, so no known speed — and no points on any surface.
+  await feed(h, rows(3, { speedMps: 15, t0: T0 + 63_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
+  const snap = h.host.snapshot();
+  expect(snap).toMatchObject({ speedKnown: false, stopped: false, points: null });
+  expect(h.display.log.at(-1)).toBe('update null/null/null'); // no fix: no speed, no limit, no points
+  await h.host.stop({ endOpenTrip: true });
+});
+
+test('the background display follows the driver\'s units: km/h with speed and limit converted, read as the drive starts', async () => {
+  await createSettingsRepo(db).set('units', 'km');
+  const h = build();
+  await h.host.boot();
+  await h.host.start({ dmsOn: false });
+  expect(h.display.log[0]).toBe('start null');
+  await feed(h, rows(5, { speedMps: 15 }));
+  // 15 m/s = 33.6 mph = 54 km/h; the 35 mph limit reads 56 km/h.
+  expect(h.display.log.at(-1)).toBe('update 54/56/null km/h');
+  await h.host.stop({ endOpenTrip: true });
+  // Switching to miles applies to the next drive, not the one under way.
+  await createSettingsRepo(db).set('units', 'mi');
+  const m = build();
+  await m.host.boot();
+  await m.host.start({ dmsOn: false });
+  await feed(m, rows(5, { speedMps: 15, t0: T0 + 100_000 }));
+  expect(m.display.log.at(-1)).toBe('update 34/35/null');
+  await m.host.stop({ endOpenTrip: true });
 });
 
 test('auto-end: 300 s stopped ends the drive where it stopped (the one timer covers a lost fix); walking ends a slow drive', async () => {

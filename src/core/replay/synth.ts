@@ -110,6 +110,24 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 15, durationMax: 17 }],
   }),
 
+  /** Five scattered 1-s blips over L+T, hovering at L+T−1 between them: no incident (not continuous). */
+  'speeding-blip-hover': () => ({
+    name: 'speeding-blip-hover',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 100) && i % 8 === 0 ? 41 : between(i, 60, 100) ? 39 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
+
+  /** 4 s over, one row under L+T, 4 s over: neither run reaches 5 s, so no incident. */
+  'speeding-split': () => ({
+    name: 'speeding-split',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 64) || between(i, 65, 69) ? 42 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
+
   /** Speeding with a poor fix (hAcc 40 m): no speeding event. */
   'speeding-poor-gps': () => ({
     name: 'speeding-poor-gps',

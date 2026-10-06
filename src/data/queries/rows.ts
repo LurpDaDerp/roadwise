@@ -49,6 +49,8 @@ export interface LocalDrive {
   clean: boolean | null;
   counts: DriveCounts;
   dmsOn: boolean;
+  /** The DMS saw a face in the driver's seat: "Wasn't driving" is refused for this drive. */
+  dmsFaceSeen: boolean;
   result: FinalizeTripResponseV3 | null;
   reason: string | null;
   mergedInto: string | null;
@@ -160,6 +162,7 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     clean: row.clean === null ? null : row.clean === 1,
     counts: parseCounts(row.counts_json),
     dmsOn: row.dms_on === 1,
+    dmsFaceSeen: row.dms_face_seen === 1,
     result: parseResult(row.result_json),
     reason: row.reason,
     mergedInto: row.merged_into,

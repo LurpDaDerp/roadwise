@@ -53,6 +53,8 @@ export function createDriveDisplay(
   const live = sinks.liveDrive && typeof sinks.liveDrive.start === 'function' && typeof sinks.liveDrive.end === 'function' ? sinks.liveDrive : null;
   let last: DriveDisplayState | null = null;
   let lastAt = Number.NEGATIVE_INFINITY;
+  /** The drive's unit, from its start call, for an end before any update went out. */
+  let unit: DriveDisplayState['unit'] = 'mph';
 
   function send(state: DriveDisplayState, force: boolean): void {
     const now = deps.now();
@@ -65,6 +67,7 @@ export function createDriveDisplay(
   return {
     start(state) {
       last = null;
+      unit = state.unit;
       // iOS: the activity is started by the drive start and nothing else; false (unsupported, off) is fine.
       if (ios) call(live === null ? null : () => live.start(toLive(state)), deps.onError);
       send(state, true);
@@ -79,7 +82,7 @@ export function createDriveDisplay(
       if (ios && live !== null) {
         call(() => live.end(), deps.onError);
       } else {
-        const ended: DriveDisplayState = { ...(last ?? { speed: null, limit: null, unit: 'mph', points: null, pointsDelta: null, stopped: true }), ended: true };
+        const ended: DriveDisplayState = { ...(last ?? { speed: null, limit: null, unit, points: null, pointsDelta: null, stopped: true }), ended: true };
         call(set === null ? null : () => set(ended), deps.onError);
       }
       last = null;

@@ -53,6 +53,27 @@ describe('speeding (spec "Speeding threshold")', () => {
     expect(drive(createSpeedingDetector(counterIds()), seq([40, { speed: mph(55) }]), limit(mph(35), 'posted', { parallelRoads: true })).all).toEqual([]);
   });
 
+  test('an unconfirmed episode is dropped by any row under L + T: scattered blips are no incident and cost no safe miles', () => {
+    const det = createSpeedingDetector(counterIds());
+    // Five 1-s blips to 41 with 39 (inside the buffer) between them.
+    const rows = seq([40, (i) => ({ speed: mph(i % 8 === 0 ? 41 : 39) })], [10, { speed: mph(30) }]);
+    const actives: boolean[] = [];
+    for (const r of rows) {
+      det.push(r, L35, ctx());
+      actives.push(det.active());
+    }
+    expect(det.flush()).toEqual([]);
+    expect(actives.every((a) => !a)).toBe(true);
+    // 4 s over, one row under, 4 s over: two unconfirmed runs, no incident.
+    const split = seq([4, { speed: mph(42) }], [1, { speed: mph(39) }], [4, { speed: mph(42) }], [10, { speed: mph(30) }]);
+    expect(drive(createSpeedingDetector(counterIds()), split, L35).all).toEqual([]);
+    // Once confirmed, hovering in the buffer keeps it (and its safe-mile exclusion) going.
+    const confirmed = createSpeedingDetector(counterIds());
+    for (const r of seq([5, { speed: mph(42) }], [3, { speed: mph(39) }])) confirmed.push(r, L35, ctx());
+    expect(confirmed.active()).toBe(true);
+    expect(confirmed.flush()).toHaveLength(1);
+  });
+
   test('open() reports the live tier and confirmation for the glow and the one chime; active() covers the end window', () => {
     const det = createSpeedingDetector(counterIds());
     const rows = seq([3, { speed: mph(42) }], [3, { speed: mph(47) }], [3, { speed: mph(30) }]);
@@ -66,7 +87,7 @@ describe('speeding (spec "Speeding threshold")', () => {
     }
     expect(seen).toEqual(['minor', 'minor', 'minor', 'moderate', 'moderate', 'moderate', null, null, null]);
     expect(confirmed).toEqual([false, false, false, false, true, true, false, false, false]);
-    expect(det.active()).toBe(true);
+    expect(det.active()).toBe(true); // confirmed, in its end window
     det.push(rows[0]!, L35, ctx());
     expect(det.flush()).toHaveLength(1);
     expect(det.active()).toBe(false);

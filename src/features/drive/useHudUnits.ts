@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { KMH_PER_MPH } from '@/lib/units';
 
 /** The local mirror of `profiles.units` (plan §10; WP9 writes it with `writeUnits`). */
 const UNITS_KEY = 'units';
-const KMH_PER_MPH = 1.609344;
 
 export type HudUnits = 'mi' | 'km';
 

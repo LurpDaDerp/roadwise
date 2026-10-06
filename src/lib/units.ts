@@ -4,3 +4,4 @@ export const mpsToMph = (mps: number) => mps * MPH_PER_MPS;
 export const mphToMps = (mph: number) => mph / MPH_PER_MPS;
 export const metersToMiles = (m: number) => m / METERS_PER_MILE;
 export const kmhToMph = (kmh: number) => kmh * 0.621371192237334;
+export const KMH_PER_MPH = 1.609344;
