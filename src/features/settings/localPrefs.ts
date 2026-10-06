@@ -1,15 +1,14 @@
 /**
  * The device-local settings this area writes (plan §10): the units mirror (`units`, for offline
  * display) and the forgot-to-start reminder (`reminder.forgotToStart`, off by default), which is
- * also handed to the native module when this build has it.
+ * also handed to the native module (`applyForgotToStartSetting`).
  */
-import DriveSense from '@drive-sense';
-
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import type { SettingsRepo } from '@/data/db/settings';
+import { applyForgotToStartSetting, FORGOT_TO_START_KEY } from '@/drive/forgottenDrive';
 
 export const UNITS_KEY = 'units';
-export const REMINDER_KEY = 'reminder.forgotToStart';
+export const REMINDER_KEY = FORGOT_TO_START_KEY;
 
 export type Units = 'mi' | 'km';
 
@@ -26,23 +25,6 @@ export async function readReminder(settings: Pick<SettingsRepo, 'get'>): Promise
 }
 
 type NativeReminder = (enabled: boolean) => Promise<unknown> | unknown;
-
-/**
- * The native setter: WP6's `applyForgotToStartSetting` (src/drive/forgottenDrive) when this build
- * has it, else drive-sense's own `setForgotToStartReminder`. Looked up at call time and guarded, so
- * a build without either simply stores the choice.
- */
-function nativeReminder(): NativeReminder | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- optional sibling module
-    const mod = require('@/drive/forgottenDrive') as { applyForgotToStartSetting?: unknown };
-    if (typeof mod.applyForgotToStartSetting === 'function') return mod.applyForgotToStartSetting as NativeReminder;
-  } catch {
-    // Not in this build.
-  }
-  const fn = (DriveSense as unknown as Record<string, unknown>).setForgotToStartReminder;
-  return typeof fn === 'function' ? (fn.bind(DriveSense) as NativeReminder) : null;
-}
 
 /** What the reminder needs from the phone: motion everywhere, notifications on Android. */
 export type ReminderNeed = 'motion' | 'notifications';
@@ -79,10 +61,9 @@ export async function ensureReminderPermissions(adapter: Pick<PermissionsAdapter
 export async function writeReminder(
   settings: Pick<SettingsRepo, 'set'>,
   enabled: boolean,
-  native: NativeReminder | null = nativeReminder()
+  native: NativeReminder = applyForgotToStartSetting
 ): Promise<void> {
   await settings.set(REMINDER_KEY, enabled);
-  if (!native) return;
   try {
     await native(enabled);
   } catch {

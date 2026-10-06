@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, TextInput, View } from 'react-native';
 
+import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, Text, useFontScale, useTheme } from '@/ui';
@@ -28,14 +29,16 @@ const copy = settingsCopy.zones;
 
 export type LocateResult = { ok: true; lat: number; lng: number } | { ok: false; reason: 'denied' | 'failed' };
 
-/** One fix from the phone, asking for While Using location only if it isn't granted yet. */
+/**
+ * One fix from the phone. While Using location is asked for through the one permission adapter
+ * (the OS shows a prompt only while it still can).
+ */
 export async function locateOnce(): Promise<LocateResult> {
   try {
+    const access = await createPermissionsAdapter().requestLocationForeground();
+    if (access !== 'foreground' && access !== 'always') return { ok: false, reason: 'denied' };
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
     const Location = require('expo-location') as typeof import('expo-location');
-    let perm = await Location.getForegroundPermissionsAsync();
-    if (!perm.granted && perm.canAskAgain) perm = await Location.requestForegroundPermissionsAsync();
-    if (!perm.granted) return { ok: false, reason: 'denied' };
     const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     return { ok: true, lat: fix.coords.latitude, lng: fix.coords.longitude };
   } catch {

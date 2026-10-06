@@ -32,7 +32,7 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
-    dms: { title: 'Driver monitoring', subtitle: 'Camera coaching (beta)' },
+    dms: { title: 'Driver monitoring', subtitle: 'Driver monitoring (DMS)' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     reminder: {
       title: 'Forgot-to-start reminder',
