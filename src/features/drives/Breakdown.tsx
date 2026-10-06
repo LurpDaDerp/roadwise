@@ -6,7 +6,7 @@ import { Card, Divider, Text, useTheme } from '@/ui';
 
 import { EVENT_ICON, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
-import { canReport, disputeText, type BreakdownLine, type LineTone } from './summary';
+import { canReport, disputeText, isRemoved, type BreakdownLine, type LineTone } from './summary';
 
 /** The "Breakdown ▾" control under the points. The list it opens renders right below. */
 export function BreakdownToggle({ open, onPress }: { open: boolean; onPress: () => void }) {
@@ -81,7 +81,7 @@ function EventLine({
   const sig = t.colors.signal[TIER_SIGNAL[e.tier]];
   const color = useToneColor(line.tone);
   const status = disputeText(e);
-  const removed = e.disputeStatus === 'accepted';
+  const removed = isRemoved(e);
   return (
     <View
       style={{

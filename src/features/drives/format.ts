@@ -171,3 +171,9 @@ export function groupByWeek(drives: readonly LocalDrive[], now: number): WeekGro
 }
 
 export { DAY_MS };
+
+/** A window start `days` back, rounded to the hour so a query key built from it stays put. */
+export function sinceDays(now: number, days: number): number {
+  const hour = 3_600_000;
+  return Math.floor(now / hour) * hour - days * DAY_MS;
+}

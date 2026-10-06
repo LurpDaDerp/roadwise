@@ -80,9 +80,12 @@ export function multiplierText(streakMult: number, dmsMult: number, mult: number
   return `${parts.join(' · ')} → ${formatMultiplier(mult)}${capped ? ' (cap)' : ''}`;
 }
 
+/** An accepted report took this event off: it no longer counts anywhere. */
+export const isRemoved = (e: LocalDriveEvent): boolean => e.removed || e.disputeStatus === 'accepted';
+
 /** What an event currently costs: its own penalty, else the server breakdown's, else unknown. */
 function penaltyOf(e: LocalDriveEvent, d: LocalDrive): number | null {
-  if (e.disputeStatus === 'accepted') return 0;
+  if (isRemoved(e)) return 0;
   return e.penalty ?? d.result?.breakdown.events.find((x) => x.id === e.id)?.penalty ?? null;
 }
 
@@ -126,8 +129,8 @@ export function breakdownLines(
       key: `event-${e.id}`,
       label: eventName(e.type, e.tier),
       time: formatClock(e.startedAt),
-      value: e.disputeStatus === 'accepted' ? 'Removed' : p === null ? '—' : signedPoints(-p),
-      tone: e.disputeStatus === 'accepted' || p === 0 ? 'neutral' : 'loss',
+      value: isRemoved(e) ? 'Removed' : p === null ? '—' : signedPoints(-p),
+      tone: isRemoved(e) || p === 0 ? 'neutral' : 'loss',
       event: e,
     });
   }

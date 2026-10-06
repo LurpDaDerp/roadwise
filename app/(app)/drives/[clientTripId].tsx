@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { DriveSummaryScreen } from '@/features/drives/screens';
 
-export default function DrivesummaryRoute() {
-  return <PlaceholderScreen title="Drive summary" />;
+export default function DriveSummaryRoute() {
+  return <DriveSummaryScreen />;
 }

@@ -127,3 +127,11 @@ test('the header says so when progress cannot load', async () => {
   await press(screen.getByText('Try again'));
   expect(p.onRetrySummary).toHaveBeenCalled();
 });
+
+test('a forgotten drive shows one quiet, dismissible line', async () => {
+  const dismiss = jest.fn();
+  await draw(<HomeView {...props({ forgottenDrive: { dismiss } })} />);
+  expect(screen.getByTestId('forgotten-drive')).toHaveTextContent(/Looks like you drove without recording\. Tap Start before your next drive\./);
+  await press(screen.getByText('Dismiss'));
+  expect(dismiss).toHaveBeenCalled();
+});

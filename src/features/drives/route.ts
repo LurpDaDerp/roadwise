@@ -95,7 +95,7 @@ const located = (e: LocalDriveEvent): LatLng | null =>
   e.lat === null || e.lng === null ? null : { lat: e.lat, lng: e.lng };
 
 /** Disputes that were accepted no longer count anywhere, the map included. */
-const counts = (e: LocalDriveEvent) => e.disputeStatus !== 'accepted';
+const counts = (e: LocalDriveEvent) => !e.removed && e.disputeStatus !== 'accepted';
 
 /**
  * The route split into runs of one colour: each lasting event (speeding, phone handling,

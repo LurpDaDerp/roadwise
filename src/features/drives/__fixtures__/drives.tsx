@@ -85,6 +85,9 @@ export function event(over: Partial<LocalDriveEvent> = {}): LocalDriveEvent {
     penalty: 10,
     disputeStatus: 'none',
     disputeMessage: null,
+    removed: false,
+    measured: {},
+    stoppedInTraffic: false,
     ...over,
   };
 }

@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { AllStatsScreen } from '@/features/drives/screens';
 
-export default function AllstatsRoute() {
-  return <PlaceholderScreen title="All stats" />;
+export default function AllStatsRoute() {
+  return <AllStatsScreen />;
 }

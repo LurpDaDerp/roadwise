@@ -4,7 +4,7 @@ import { RefreshControl, ScrollView, View } from 'react-native';
 import type { MySummary } from '@/data/server/summary';
 import type { LocalDrive } from '@/features/drives/model';
 import { homeStats } from '@/features/drives/stats';
-import { Text, useTheme } from '@/ui';
+import { Banner, Text, useTheme } from '@/ui';
 
 import { HomeHeader } from './HomeHeader';
 import { ChallengesStrip, FirstRunCard, RecentDrives, StatsCard } from './HomeSections';
@@ -36,7 +36,11 @@ export type HomeViewProps = {
   onLeagues: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /** iOS forgot-to-start check found an unrecorded car trip: a quiet, dismissible line. */
+  forgottenDrive?: { dismiss: () => void } | null;
 };
+
+export const FORGOTTEN_DRIVE_COPY = 'Looks like you drove without recording. Tap Start before your next drive.';
 
 /**
  * Home: the header answers "how am I doing?", Start drive sits at the bottom within thumb reach,
@@ -60,6 +64,9 @@ export function HomeView(p: HomeViewProps) {
         <Text variant="title1" accessibilityRole="header">
           {name ? `Hey, ${name}` : 'Home'}
         </Text>
+        {p.forgottenDrive ? (
+          <Banner tone="info" message={FORGOTTEN_DRIVE_COPY} action={{ label: 'Dismiss', onPress: p.forgottenDrive.dismiss }} testID="forgotten-drive" />
+        ) : null}
         <HomeHeader summary={p.summary} loading={p.summaryLoading} error={p.summaryError} onLeagues={p.onLeagues} onRetry={p.onRetrySummary} />
 
         {firstRun ? (

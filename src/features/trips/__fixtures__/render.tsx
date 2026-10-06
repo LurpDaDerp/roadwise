@@ -9,15 +9,13 @@ import { fireEvent, render, type RenderResult } from '@testing-library/react-nat
 import type { ReactElement } from 'react';
 
 import type { Db, DbResult, EventRow, TripRow } from '@/data/db';
-import { createTestDb, seedDay, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
+import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { createQueryClient } from '@/data/queries/client';
 import { ThemeProvider } from '@/ui/theme';
 
 export interface Seed {
   trips?: readonly TripRow[];
   events?: readonly EventRow[];
-  /** `[day, payload]` pairs for `score_daily_cache`. */
-  days?: readonly [string, unknown][];
 }
 
 export interface ScreenWorld {
@@ -41,7 +39,6 @@ export async function world(seed: Seed = {}, now: () => number = Date.now): Prom
   const db = await createTestDb();
   await seedTrips(db, seed.trips ?? []);
   if (seed.events?.length) await seedEvents(db, seed.events);
-  for (const [day, payload] of seed.days ?? []) await seedDay(db, day, payload, now());
 
   return {
     db,

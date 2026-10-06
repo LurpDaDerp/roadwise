@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { HomeScreen } from '@/features/home/HomeScreen';
 
 export default function HomeRoute() {
-  return <PlaceholderScreen title="Home" inTabs />;
+  return <HomeScreen />;
 }

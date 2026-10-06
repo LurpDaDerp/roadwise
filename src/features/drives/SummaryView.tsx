@@ -16,6 +16,7 @@ import {
   breakdownLines,
   canMarkNotDriving,
   celebrations,
+  isRemoved,
   notDrivingLabel,
   pointsState,
   streakLine,
@@ -64,7 +65,11 @@ function PointsBlock({ state, drive, fresh, onOpenDrive }: { state: PointsState;
             <Text variant="label" tone="muted">
               {state.value < 0 ? 'Points this drive' : 'Points earned'}
             </Text>
-            {state.estimate ? <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" /> : null}
+            {state.estimate ? (
+              <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" />
+            ) : drive.clean ? (
+              <Pill label="Clean drive" tone="clean" icon="checkmark-circle" emphasis="solid" testID="clean-badge" />
+            ) : null}
           </View>
           <PointsCounter
             value={state.value}
@@ -120,7 +125,7 @@ type Counter = { key: string; label: string; n: number; tier: Tier | null; icon:
 
 function counters(drive: LocalDrive, events: readonly LocalDriveEvent[]): Counter[] {
   const worst = (types: EventType[]) =>
-    events.filter((e) => types.includes(e.type) && e.disputeStatus !== 'accepted').reduce<Tier | null>((w, e) => worseTier(w, e.tier), null);
+    events.filter((e) => types.includes(e.type) && !isRemoved(e)).reduce<Tier | null>((w, e) => worseTier(w, e.tier), null);
   const c = drive.counts;
   const list: Counter[] = [
     { key: 'pickups', label: 'Phone pickups', n: c.pickups, tier: worst(['phone_pickup', 'phone_handling']), icon: EVENT_ICON.phone_pickup },
