@@ -1,8 +1,7 @@
 // In-memory drive-sense for tests and the diagnostics simulation. It follows README.md's native
 // contract so host tests exercise what a device does:
 // - rows flow only while capturing (`step` refuses otherwise — review I5);
-// - `arm`/`startCapture` reject with the README's `CodedError` codes (review I4), and `armed` in
-//   `getState` is the effective arming;
+// - `startCapture` rejects with the README's `CodedError` code (review I4);
 // - events nobody listens for are buffered (bounded, oldest row dropped first) and delivered
 //   asynchronously when the first listener attaches;
 // - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
@@ -12,14 +11,16 @@ import { parseVectors } from './selfTest';
 import type {
   CaptureMode,
   CaptureRate,
+  DriveDisplayState,
   DriveSenseApi,
   DriveSenseErrorCode,
   DriveSenseEvent,
   DriveSenseEvents,
+  DriveSenseRow,
   DriveSenseState,
   ExitInfo,
   FakeControls,
-  FeatureRow,
+  ForgottenDrive,
   MotionActivity,
   Subscription,
   ThermalLevel,
@@ -53,7 +54,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   const now = opts.now ?? Date.now;
   const asyncDelivery = opts.asyncDelivery ?? false;
   let state: DriveSenseState = {
-    armed: false,
     capturing: false,
     rate: null,
     mode: null,
@@ -70,11 +70,13 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let history: MotionActivity[] = [];
   let exitInfo: ExitInfo | null = null;
   let ignoringBatteryOptimizations = platform === 'ios';
-  let notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null = null;
+  let driveDisplay: DriveDisplayState | null = null;
+  let forgotToStartReminder = false;
+  let forgottenDrive: ForgottenDrive | null = null;
   /** DMS calib T12: the capture's own activity subscription (best effort), and a forced failure of it. */
   let captureFeed = false;
   let captureSubscribeFails = false;
-  let queue: FeatureRow[] = [];
+  let queue: DriveSenseRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
   const calls: string[] = [];
@@ -83,9 +85,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   const command = (name: string, arg?: string) =>
     calls.push(arg === undefined ? name : `${name}:${arg}`);
   const query = (name: string) => queries.push(name);
-
-  /** The README's arming requirement: effective only with Always location and granted motion. */
-  const armPermitted = () => state.location === 'always' && state.motion === 'granted';
 
   function observe(event: DriveSenseEvent, payload: unknown) {
     if (event === 'screen') {
@@ -122,25 +121,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
 
   const api: DriveSenseApi & FakeControls = {
     // ——— DriveSenseApi ———
-    arm() {
-      command('arm');
-      if (state.motion === 'unavailable') {
-        return Promise.reject(driveSenseError('E_UNAVAILABLE', 'motion activity is unavailable'));
-      }
-      if (!armPermitted()) {
-        state = { ...state, armed: false };
-        return Promise.reject(
-          driveSenseError('E_PERMISSION', `arm needs location 'always' and motion 'granted' (have ${state.location}, ${state.motion})`)
-        );
-      }
-      state = { ...state, armed: true };
-      return resolve(undefined);
-    },
-    disarm() {
-      command('disarm');
-      state = { ...state, armed: false };
-      return resolve(undefined);
-    },
     startCapture(mode: CaptureMode) {
       command('startCapture', mode);
       if (state.location === 'none') {
@@ -158,8 +138,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     stopCapture() {
       command('stopCapture');
-      // DMS calib T12: the capture's feed ends with it; an arming keeps its own.
+      // DMS calib T12: the capture's feed ends with it; the notification goes with the service.
       captureFeed = false;
+      driveDisplay = null;
       state = { ...state, capturing: false, mode: null, rate: null, captureStartedAt: null };
       return resolve(undefined);
     },
@@ -170,8 +151,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     getState() {
       query('getState');
-      // `armed` is the effective arming: a revoked permission disarms (README §2 "Errors").
-      if (state.armed && !armPermitted()) state = { ...state, armed: false };
       return resolve({ ...state });
     },
     queryMotionHistory(fromTs: number, toTs: number) {
@@ -197,14 +176,22 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       command('excludeFromBackup', uri);
       return resolve(undefined);
     },
-    setNotificationState(s) {
-      command('setNotificationState');
-      notificationState = {
-        stationary: s.stationary,
-        startedAt: s.startedAt,
-        ...(s.candidate === undefined ? {} : { candidate: s.candidate }),
-      };
+    setDriveDisplay(s) {
+      command('setDriveDisplay');
+      // Android: the notification exists only while the capture does; iOS: only a running Live
+      // Activity (which a drive start opens) can show it. Ignored otherwise, like native.
+      if (state.capturing) driveDisplay = { ...s };
       return resolve(undefined);
+    },
+    setForgotToStartReminder(enabled) {
+      command('setForgotToStartReminder', String(enabled));
+      forgotToStartReminder = enabled;
+      return resolve(undefined);
+    },
+    checkForgottenDrive(sinceMs) {
+      query('checkForgottenDrive');
+      if (platform !== 'ios' || state.motion !== 'granted' || !forgottenDrive) return resolve(null);
+      return resolve(forgottenDrive.endedAt >= sinceMs ? { ...forgottenDrive } : null);
     },
     getLastExitInfo() {
       query('getLastExitInfo');
@@ -292,11 +279,19 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     setIgnoringBatteryOptimizations(value) {
       ignoringBatteryOptimizations = value;
     },
+    get driveDisplay() {
+      return driveDisplay ? { ...driveDisplay } : null;
+    },
+    get forgotToStartReminder() {
+      return forgotToStartReminder;
+    },
+    setForgottenDrive(d) {
+      forgottenDrive = d ? { ...d } : null;
+    },
     transition(a) {
-      const subscribed = state.armed || captureFeed;
-      if (!subscribed) return false;
-      // C12 round 1 (review-C12 m1): neither armed nor capturing, a stale registration heals itself.
-      if (!state.armed && !state.capturing) {
+      if (!captureFeed) return false;
+      // C12 round 1 (review-C12 m1): not capturing, a stale registration heals itself.
+      if (!state.capturing) {
         captureFeed = false;
         return false;
       }
@@ -310,10 +305,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       captureSubscribeFails = fail;
     },
     get activitySubscribed() {
-      return state.armed || captureFeed;
-    },
-    get notificationState() {
-      return notificationState ? { ...notificationState } : null;
+      return captureFeed;
     },
   };
   return api;

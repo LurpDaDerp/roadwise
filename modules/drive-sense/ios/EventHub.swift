@@ -2,9 +2,8 @@
 //
 // Everything is emitted on the main queue. An event nobody listens for is buffered (at most
 // EVENT_BUFFER_MAX across all events; when full the oldest `row` goes first, else the oldest
-// event) and delivered in order when the first listener for it attaches — which is how the `wake`
-// that relaunched the app reaches JS after the bundle loads. The hub outlives module instances:
-// the capture controller and the app-delegate subscriber exist before the module does.
+// event) and delivered in order when the first listener for it attaches. The hub outlives module
+// instances: the capture controller lives for the process.
 import Foundation
 
 /// Where events go once a module exists (the `DriveSenseModule`).

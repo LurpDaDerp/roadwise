@@ -1,18 +1,22 @@
-// DriveSense — the RoadWise background drive-capture module (iOS). README.md is the binding
-// contract; `src/types.ts` the typed half of it.
+// DriveSense — the RoadWise drive-capture module (iOS). README.md is the binding contract;
+// `src/types.ts` the typed half of it.
 //
-// The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist
-// for the whole process — the app-delegate subscriber creates them at launch, before any module
-// does — and every method below runs on the main queue, where they live. Rejections carry only
-// the contract's `CodedError` codes.
+// v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
+// foreground) and runs in the background on While Using through the `location` background mode.
+// No arming, no OS wakes, no location relaunch, no Always.
+//
+// The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist for
+// the whole process, and every method below runs on the main queue, where they live. Rejections
+// carry only the contract's `CodedError` codes.
 import ExpoModulesCore
+import Foundation
 
 public final class DriveSenseModule: Module, DriveSenseEventSink {
   public func definition() -> ModuleDefinition {
     Name("DriveSense")
 
     // Keep this list identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.kt.
-    Events("wake", "activity", "row", "screen", "thermal", "notificationAction", "call")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call")
 
     OnCreate {
       EventHub.shared.attach(self)
@@ -23,8 +27,6 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     }
 
     // Buffering (README §3) and the row watchdog (§6) both key on which events have a JS listener.
-    OnStartObserving("wake") { EventHub.shared.startObserving("wake") }
-    OnStopObserving("wake") { EventHub.shared.stopObserving("wake") }
     OnStartObserving("activity") { EventHub.shared.startObserving("activity") }
     OnStopObserving("activity") { EventHub.shared.stopObserving("activity") }
     OnStartObserving("row") { EventHub.shared.startObserving("row") }
@@ -37,24 +39,6 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     OnStopObserving("notificationAction") { EventHub.shared.stopObserving("notificationAction") }
     OnStartObserving("call") { EventHub.shared.startObserving("call") }
     OnStopObserving("call") { EventHub.shared.stopObserving("call") }
-
-    AsyncFunction("arm") { (promise: Promise) in
-      do {
-        try CaptureController.shared.arm()
-        promise.resolve(nil)
-      } catch CaptureController.ArmFailure.unavailable {
-        promise.reject("E_UNAVAILABLE", "motion activity is not available on this device")
-      } catch CaptureController.ArmFailure.permission(let message) {
-        promise.reject("E_PERMISSION", message)
-      } catch {
-        promise.reject("E_PERMISSION", "arm failed: \(error.localizedDescription)")
-      }
-    }.runOnQueue(.main)
-
-    AsyncFunction("disarm") { (promise: Promise) in
-      CaptureController.shared.disarm()
-      promise.resolve(nil)
-    }.runOnQueue(.main)
 
     AsyncFunction("startCapture") { (mode: String, promise: Promise) in
       if CaptureController.shared.startCapture(mode: mode) {
@@ -93,7 +77,6 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
 
     AsyncFunction("requestMotionPermission") { (promise: Promise) in
       ActivitySource.requestPermission { result in
-        CaptureController.shared.enforceArmingPermissions()
         promise.resolve(result)
       }
     }.runOnQueue(.main)
@@ -111,10 +94,22 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       }
     }
 
-    // Android S3's notification; iOS has none.
-    AsyncFunction("setNotificationState") { (_: NotificationStateRecord, promise: Promise) in
+    // The background surface (plan §6): forwarded to the Live Activity (`modules/live-drive`) when
+    // one is running, through a process-local notification so the two pods stay independent.
+    AsyncFunction("setDriveDisplay") { (state: DriveDisplayRecord, promise: Promise) in
+      DriveDisplayBridge.post(state)
       promise.resolve(nil)
-    }
+    }.runOnQueue(.main)
+
+    // iOS keeps only the setting; the app asks `checkForgottenDrive` on foreground.
+    AsyncFunction("setForgotToStartReminder") { (enabled: Bool, promise: Promise) in
+      UserDefaults.standard.set(enabled, forKey: "drivesense.forgotToStartReminder")
+      promise.resolve(nil)
+    }.runOnQueue(.main)
+
+    AsyncFunction("checkForgottenDrive") { (sinceMs: Double, promise: Promise) in
+      ActivitySource.forgottenDrive(sinceMs: sinceMs) { promise.resolve($0) }
+    }.runOnQueue(.main)
 
     // Android's ApplicationExitInfo has no iOS equivalent.
     AsyncFunction("getLastExitInfo") { (promise: Promise) in
@@ -145,9 +140,29 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
   }
 }
 
-/// `setNotificationState`'s argument (ignored on iOS; declared so the bridge accepts it).
-struct NotificationStateRecord: Record {
-  @Field var stationary: Bool = false
-  @Field var startedAt: Double?
-  @Field var candidate: Bool = false
+/// `setDriveDisplay`'s argument (`DriveDisplayState` in src/types.ts).
+struct DriveDisplayRecord: Record {
+  @Field var speed: Double?
+  @Field var limit: Double?
+  @Field var unit: String = "mph"
+  @Field var points: Double?
+  @Field var pointsDelta: Double?
+  @Field var stopped: Bool = false
+  @Field var ended: Bool = false
+}
+
+/// The hand-off to the Live Activity module. `modules/live-drive` observes `name` on main and
+/// updates its activity if one is running; with no observer (Android, or no activity) the post is
+/// a no-op. Keys mirror `DriveDisplayState`; a nil number is left out of `userInfo`.
+enum DriveDisplayBridge {
+  static let name = Notification.Name("roadwise.driveDisplay")
+
+  static func post(_ s: DriveDisplayRecord) {
+    var info: [String: Any] = ["unit": s.unit, "stopped": s.stopped, "ended": s.ended]
+    if let v = s.speed { info["speed"] = v }
+    if let v = s.limit { info["limit"] = v }
+    if let v = s.points { info["points"] = v }
+    if let v = s.pointsDelta { info["pointsDelta"] = v }
+    NotificationCenter.default.post(name: name, object: nil, userInfo: info)
+  }
 }

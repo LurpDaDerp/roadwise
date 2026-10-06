@@ -1,26 +1,25 @@
 /** @jest-environment node */
 // The in-memory drive-sense the rest of the app tests against. It must behave like the native
 // contract in README.md, or every host test built on it proves the wrong thing.
-import trace from '../../../src/core/__fixtures__/traces/speeding-corrected.json';
-import { parseTrace } from '../../../src/core/replay/trace';
 import { createFakeDriveSense, driveSenseError } from '../src/fake';
 import { parseRow } from '../src/rowSchema';
 import { VECTOR_BUILDERS } from '../scripts/scenarios';
 import type { ExtractVector } from '../src/extract/vectors';
 import { DRIVE_SENSE_METHODS, isDriveSenseError, type FeatureRow } from '../src/types';
+import { sampleRows } from '../scripts/sampleRows';
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
-const rows = parseTrace(trace).rows;
+const rows = sampleRows(160);
 
 /** A fake with the permissions a drive needs, already capturing. */
 async function capturing(opts: Parameters<typeof createFakeDriveSense>[0] = {}) {
   const fake = createFakeDriveSense(opts);
-  fake.setState({ location: 'always', motion: 'granted' });
+  fake.setState({ location: 'whenInUse', motion: 'granted' });
   await fake.startCapture('mounted');
   return fake;
 }
 
-test('replays speeding-corrected.json row for row through a row listener', async () => {
+test('replays a trace row for row through a row listener', async () => {
   const fake = await capturing();
   const got: FeatureRow[] = [];
   fake.addListener('row', (raw) => {
@@ -96,9 +95,8 @@ describe('rows only while capturing (review I5)', () => {
 describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)', () => {
   const walk = (ts: number, exit?: true) => ({ type: 'walking' as const, confidence: 'high' as const, ts, ...(exit ? { exit } : {}) });
 
-  test('a capture subscribes: activity reaches JS while capturing unarmed, and stops with the capture', async () => {
+  test('a capture subscribes: activity reaches JS while capturing, and stops with the capture', async () => {
     const fake = await capturing({ platform: 'android' });
-    expect((await fake.getState()).armed).toBe(false);
     expect(fake.activitySubscribed).toBe(true);
     const got = jest.fn();
     fake.addListener('activity', got);
@@ -113,7 +111,7 @@ describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)',
 
   test('a throwing subscribe still captures: the start resolves and rows flow, without the feed', async () => {
     const fake = createFakeDriveSense({ platform: 'android' });
-    fake.setState({ location: 'always', motion: 'granted' });
+    fake.setState({ location: 'whenInUse', motion: 'granted' });
     fake.failCaptureSubscribe(true);
     await expect(fake.startCapture('mounted')).resolves.toBeUndefined();
     expect((await fake.getState()).capturing).toBe(true);
@@ -126,23 +124,23 @@ describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)',
     expect(fake.transition(walk(1))).toBe(false);
   });
 
-  test('without motion access a capture does not subscribe; the arming keeps its feed after a capture ends', async () => {
+  test('without motion access a capture does not subscribe; nothing is subscribed between captures', async () => {
     const fake = createFakeDriveSense({ platform: 'android' });
-    fake.setState({ location: 'always', motion: 'denied' });
+    fake.setState({ location: 'whenInUse', motion: 'denied' });
     await fake.startCapture('mounted');
     expect(fake.activitySubscribed).toBe(false);
     await fake.stopCapture();
     fake.setState({ motion: 'granted' });
-    await fake.arm();
     await fake.startCapture('mounted');
-    await fake.stopCapture();
     expect(fake.activitySubscribed).toBe(true);
-    expect(fake.transition(walk(1))).toBe(true);
+    await fake.stopCapture();
+    expect(fake.activitySubscribed).toBe(false);
+    expect(fake.transition(walk(1))).toBe(false);
   });
 });
 
 describe('a stale registration heals itself (C12 round 1, review-C12 m1; NC-C12-1)', () => {
-  test('left behind by an abnormal end: its first transition, unarmed and not capturing, removes it and delivers nothing', async () => {
+  test('left behind by an abnormal end: its first transition, not capturing, removes it and delivers nothing', async () => {
     const fake = await capturing({ platform: 'android' });
     await fake.stopCapture();
     fake.strandSubscription();
@@ -158,38 +156,11 @@ describe('a stale registration heals itself (C12 round 1, review-C12 m1; NC-C12-
 describe('errors and permissions (review I4, README §2 "Errors")', () => {
   const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string }) => e.code);
 
-  test.each([
-    ['none', 'granted'],
-    ['whenInUse', 'granted'],
-    ['always', 'undetermined'],
-    ['always', 'denied'],
-  ] as const)('arm with location %s and motion %s rejects E_PERMISSION and stays unarmed', async (location, motion) => {
-    const fake = createFakeDriveSense();
-    fake.setState({ location, motion });
-    await expect(codeOf(fake.arm())).resolves.toBe('E_PERMISSION');
-    expect((await fake.getState()).armed).toBe(false);
-    expect(fake.calls).toEqual(['arm']);
-  });
-
-  test('arm with motion unavailable rejects E_UNAVAILABLE', async () => {
-    const fake = createFakeDriveSense({ platform: 'android' });
-    fake.setState({ location: 'always', motion: 'unavailable' });
-    await expect(codeOf(fake.arm())).resolves.toBe('E_UNAVAILABLE');
-  });
-
-  test('arm succeeds with always + granted; a later revocation disarms (effective arming)', async () => {
-    const fake = createFakeDriveSense();
-    fake.setState({ location: 'always', motion: 'granted' });
-    await fake.arm();
-    expect((await fake.getState()).armed).toBe(true);
-    fake.setState({ location: 'whenInUse' });
-    expect((await fake.getState()).armed).toBe(false);
-  });
-
-  test('startCapture needs some location permission, not motion', async () => {
+  test('startCapture needs some location permission (While Using is enough), not motion', async () => {
     const fake = createFakeDriveSense();
     await expect(codeOf(fake.startCapture('mounted'))).resolves.toBe('E_PERMISSION');
     expect((await fake.getState()).capturing).toBe(false);
+    expect(fake.calls).toEqual(['startCapture:mounted']);
     fake.setState({ location: 'whenInUse', motion: 'denied' });
     await expect(fake.startCapture('mounted')).resolves.toBeUndefined();
     expect((await fake.getState()).capturing).toBe(true);
@@ -197,10 +168,10 @@ describe('errors and permissions (review I4, README §2 "Errors")', () => {
 
   test('isDriveSenseError recognises the codes', async () => {
     const fake = createFakeDriveSense();
-    const e = await fake.arm().catch((x: unknown) => x);
+    const e = await fake.startCapture('mounted').catch((x: unknown) => x);
     expect(isDriveSenseError(e)).toBe(true);
     expect(isDriveSenseError(e, 'E_PERMISSION')).toBe(true);
-    expect(isDriveSenseError(e, 'E_UNAVAILABLE')).toBe(false);
+    expect(isDriveSenseError(e, 'E_FGS_REFUSED')).toBe(false);
     expect(isDriveSenseError(new Error('x'))).toBe(false);
     expect(isDriveSenseError(driveSenseError('E_NOT_FOUND', 'x'), 'E_NOT_FOUND')).toBe(true);
   });
@@ -220,12 +191,10 @@ describe('errors and permissions (review I4, README §2 "Errors")', () => {
 test('capture lifecycle and the calls log', async () => {
   let now = 1_700_000_000_000;
   const fake = createFakeDriveSense({ platform: 'android', now: () => now });
-  fake.setState({ location: 'always', motion: 'granted' });
-  await fake.arm();
+  fake.setState({ location: 'whenInUse', motion: 'granted' });
   await fake.startCapture('mounted');
   let s = await fake.getState();
   expect(s).toMatchObject({
-    armed: true,
     capturing: true,
     mode: 'mounted',
     rate: 'full',
@@ -242,21 +211,17 @@ test('capture lifecycle and the calls log', async () => {
   await fake.setCaptureRate('full'); // ignored while not capturing
   s = await fake.getState();
   expect(s).toMatchObject({ capturing: false, mode: null, rate: null, captureStartedAt: null });
-  await fake.disarm();
-  expect((await fake.getState()).armed).toBe(false);
   await fake.excludeFromBackup('file:///x');
   // commands and queries are logged apart (review M6), so hosts can assert command order
   expect(fake.calls).toEqual([
-    'arm',
     'startCapture:mounted',
     'startCapture:pocket',
     'setCaptureRate:low',
     'stopCapture',
     'setCaptureRate:full',
-    'disarm',
     'excludeFromBackup:file:///x',
   ]);
-  expect(fake.queries).toEqual(['getState', 'getState', 'getState', 'getState']);
+  expect(fake.queries).toEqual(['getState', 'getState', 'getState']);
 });
 
 test('every bridged method is implemented and logged', async () => {
@@ -268,8 +233,10 @@ test('every bridged method is implemented and logged', async () => {
   await fake.getLastExitInfo();
   await fake.isIgnoringBatteryOptimizations();
   await fake.queryMotionHistory(0, 1);
+  await fake.checkForgottenDrive(0);
   await fake.requestMotionPermission();
-  await fake.setNotificationState({ stationary: false, startedAt: null });
+  await fake.setDriveDisplay({ speed: null, limit: null, unit: 'mph', points: null, pointsDelta: null, stopped: true });
+  await fake.setForgotToStartReminder(true);
   await fake.selfTest('[]');
   expect(fake.queries).toEqual([
     'getState',
@@ -278,8 +245,9 @@ test('every bridged method is implemented and logged', async () => {
     'getLastExitInfo',
     'isIgnoringBatteryOptimizations',
     'queryMotionHistory',
+    'checkForgottenDrive',
   ]);
-  expect(fake.calls).toEqual(['requestMotionPermission', 'setNotificationState', 'selfTest']);
+  expect(fake.calls).toEqual(['requestMotionPermission', 'setDriveDisplay', 'setForgotToStartReminder:true', 'selfTest']);
 });
 
 test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
@@ -296,11 +264,11 @@ test('platform defaults: iOS lagged lock signal and battery-optimisation true; A
 
 test('setState overrides, getState returns a copy', async () => {
   const fake = createFakeDriveSense();
-  fake.setState({ location: 'always', motion: 'granted', captureWasOpen: true });
+  fake.setState({ location: 'whenInUse', motion: 'granted', captureWasOpen: true });
   const s = await fake.getState();
-  expect(s).toMatchObject({ location: 'always', motion: 'granted', captureWasOpen: true });
-  s.armed = true;
-  expect((await fake.getState()).armed).toBe(false);
+  expect(s).toMatchObject({ location: 'whenInUse', motion: 'granted', captureWasOpen: true });
+  s.capturing = true;
+  expect((await fake.getState()).capturing).toBe(false);
 });
 
 test('motion history is filtered to [from, to]', async () => {
@@ -337,65 +305,96 @@ test('screen and thermal events update what the getters report', async () => {
   await expect(fake.getThermalState()).resolves.toBe('serious');
 });
 
-test('exit info and notification state are settable and observable', async () => {
+test('exit info is settable and observable', async () => {
   const fake = createFakeDriveSense({ platform: 'android' });
   await expect(fake.getLastExitInfo()).resolves.toBeNull();
   fake.setLastExitInfo({ ts: 5, reason: 'watchdog', whileCapturing: true });
   await expect(fake.getLastExitInfo()).resolves.toEqual({ ts: 5, reason: 'watchdog', whileCapturing: true });
-  expect(fake.notificationState).toBeNull();
-  await fake.setNotificationState({ stationary: true, startedAt: 10 });
-  expect(fake.notificationState).toEqual({ stationary: true, startedAt: 10 });
+});
+
+describe('the background surface (plan §6)', () => {
+  const display = { speed: 34, limit: 35, unit: 'mph', points: 1240, pointsDelta: 18, stopped: true } as const;
+
+  test('setDriveDisplay is kept only while capturing and goes with the capture, like the notification', async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    expect(fake.driveDisplay).toBeNull();
+    await fake.setDriveDisplay(display); // nothing to show on: ignored, resolves
+    expect(fake.driveDisplay).toBeNull();
+    fake.setState({ location: 'whenInUse' });
+    await fake.startCapture('mounted');
+    await fake.setDriveDisplay(display);
+    expect(fake.driveDisplay).toEqual(display);
+    await fake.stopCapture();
+    expect(fake.driveDisplay).toBeNull();
+  });
+
+  test('the forgot-to-start setting persists; checkForgottenDrive answers on iOS with motion only', async () => {
+    const ios = createFakeDriveSense();
+    expect(ios.forgotToStartReminder).toBe(false);
+    await ios.setForgotToStartReminder(true);
+    expect(ios.forgotToStartReminder).toBe(true);
+    const stretch = { startedAt: 1_000, endedAt: 400_000 };
+    ios.setForgottenDrive(stretch);
+    await expect(ios.checkForgottenDrive(0)).resolves.toBeNull(); // motion not granted
+    ios.setState({ motion: 'granted' });
+    await expect(ios.checkForgottenDrive(0)).resolves.toEqual(stretch);
+    await expect(ios.checkForgottenDrive(500_000)).resolves.toBeNull(); // ended before `since`
+    const android = createFakeDriveSense({ platform: 'android' });
+    android.setState({ motion: 'granted' });
+    android.setForgottenDrive(stretch);
+    await expect(android.checkForgottenDrive(0)).resolves.toBeNull();
+  });
 });
 
 describe('listeners and buffering (README §Buffering)', () => {
   test('listeners get their own event only, and remove() detaches', () => {
     const fake = createFakeDriveSense();
-    const wakes = jest.fn();
+    const calls = jest.fn();
     const acts = jest.fn();
-    const sub = fake.addListener('wake', wakes);
+    const sub = fake.addListener('call', calls);
     fake.addListener('activity', acts);
-    expect(fake.listenerCount('wake')).toBe(1);
-    fake.emit('wake', { reason: 'significantChange', ts: 1 });
-    expect(wakes).toHaveBeenCalledWith({ reason: 'significantChange', ts: 1 });
+    expect(fake.listenerCount('call')).toBe(1);
+    fake.emit('call', { active: true, ts: 1 });
+    expect(calls).toHaveBeenCalledWith({ active: true, ts: 1 });
     expect(acts).not.toHaveBeenCalled();
     sub.remove();
     sub.remove(); // idempotent
-    expect(fake.listenerCount('wake')).toBe(0);
+    expect(fake.listenerCount('call')).toBe(0);
   });
 
   test('an event with no listener is buffered and delivered, in order, on a microtask after the first listener attaches', async () => {
     const fake = createFakeDriveSense();
-    fake.emit('wake', { reason: 'activityTransition', ts: 1 });
-    fake.emit('wake', { reason: 'boot', ts: 2 });
+    fake.emit('call', { active: true, ts: 1 });
+    fake.emit('call', { active: false, ts: 2 });
     const got: unknown[] = [];
-    fake.addListener('wake', (p) => got.push(p));
+    fake.addListener('call', (p) => got.push(p));
     expect(got).toEqual([]); // not synchronously inside addListener
     await flush();
     expect(got).toEqual([
-      { reason: 'activityTransition', ts: 1 },
-      { reason: 'boot', ts: 2 },
+      { active: true, ts: 1 },
+      { active: false, ts: 2 },
     ]);
     // delivered once only
-    fake.addListener('wake', (p) => got.push(p));
+    fake.addListener('call', (p) => got.push(p));
     await flush();
     expect(got).toHaveLength(2);
   });
 
   test('the buffer holds 300 events and drops the oldest row first', async () => {
     const fake = await capturing();
-    fake.emit('wake', { reason: 'boot', ts: 0 });
+    fake.emit('call', { active: true, ts: 0 });
     fake.loadTrace(rows.slice(0, 150));
     fake.drain(); // 150 rows buffered (no row listener)
     for (let i = 0; i < 150; i++) fake.emit('activity', { type: 'automotive', confidence: 'high', ts: i });
     // 301 buffered: the oldest row goes
-    const wakes: unknown[] = [];
+    const calls: unknown[] = [];
     const got: unknown[] = [];
     const acts: unknown[] = [];
-    fake.addListener('wake', (p) => wakes.push(p));
+    fake.addListener('call', (p) => calls.push(p));
     fake.addListener('row', (p) => got.push(p));
     fake.addListener('activity', (p) => acts.push(p));
     await flush();
-    expect(wakes).toHaveLength(1);
+    expect(calls).toHaveLength(1);
     expect(acts).toHaveLength(150);
     expect(got).toHaveLength(149);
     expect((got[0] as FeatureRow).ts).toBe(rows[1]!.ts);
@@ -415,13 +414,13 @@ describe('listeners and buffering (README §Buffering)', () => {
     const fake = await capturing({ asyncDelivery: true });
     const order: string[] = [];
     fake.addListener('row', () => order.push('row'));
-    fake.addListener('wake', () => order.push('wake'));
+    fake.addListener('call', () => order.push('call'));
     fake.loadTrace(rows.slice(0, 1));
     fake.step();
-    fake.emit('wake', { reason: 'boot', ts: 1 });
+    fake.emit('call', { active: true, ts: 1 });
     order.push('returned');
     await flush();
-    expect(order).toEqual(['returned', 'row', 'wake']);
+    expect(order).toEqual(['returned', 'row', 'call']);
     // lastRowTs is updated at emission, as native updates it when it emits
     expect((await fake.getState()).lastRowTs).toBe(rows[0]!.ts);
   });

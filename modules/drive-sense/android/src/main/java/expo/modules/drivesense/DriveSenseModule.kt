@@ -14,17 +14,19 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 /**
- * drive-sense on Android (task N3). README.md in the module root is the binding contract and
- * `src/types.ts` its machine-checked half; `__tests__/native-android.test.ts` holds this file to
- * both (the event list, one `AsyncFunction` per `DRIVE_SENSE_METHODS` entry, the error codes).
+ * drive-sense on Android. README.md in the module root is the binding contract and `src/types.ts`
+ * its machine-checked half; `__tests__/native-android.test.ts` holds this file to both (the event
+ * list, one `AsyncFunction` per `DRIVE_SENSE_METHODS` entry, the error codes).
  *
- * Rejections are `CodedException`s with the contract codes only (README §2 "Errors"); every other
- * method never rejects.
+ * v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
+ * foreground). There is no arming, no boot receiver, no activity-transition auto-start and no
+ * background location permission. Rejections are `CodedException`s with the contract codes only
+ * (README §2 "Errors"); every other method never rejects.
  */
 class DriveSenseModule : Module() {
   companion object {
     /** Every event, for the per-event buffer flush (README §3). Same names as `Events(...)` below. */
-    private val OBSERVED_EVENTS = listOf("wake", "activity", "row", "screen", "thermal", "notificationAction", "call")
+    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call")
     private val MODES = setOf("mounted", "pocket", "auto")
   }
 
@@ -39,14 +41,15 @@ class DriveSenseModule : Module() {
     Name("DriveSense")
 
     // Keep this list byte-identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.swift.
-    Events("wake", "activity", "row", "screen", "thermal", "notificationAction", "call")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call")
 
     OnCreate {
-      val prefs = DriveSensePrefs.init(context)
+      DriveSensePrefs.init(context)
       EventBus.attach(emitter)
-      // C12 round 1 (review-C12 m1): at launch, neither armed nor capturing, no registration may survive
-      // (a capture that ended abnormally in an earlier process). Idempotent.
-      if (!prefs.armed && !CaptureService.isCapturing) ActivityTransitions.unsubscribe(context)
+      // The transitions feed is subscribed exactly while something needs it: a capture (walking
+      // auto-end) or the forgot-to-start reminder. At launch, re-register for the reminder if it is
+      // on; otherwise, not capturing, remove any registration an earlier process left behind.
+      ActivityTransitions.sync(context)
     }
 
     OnDestroy {
@@ -59,53 +62,17 @@ class DriveSenseModule : Module() {
       OnStopObserving(name) { EventBus.stopObserving(name) }
     }
 
-    AsyncFunction("arm") { promise: Promise ->
-      val ctx = context
-      val prefs = DriveSensePrefs.init(ctx)
-      if (!DriveSensePermissions.playServicesAvailable(ctx)) {
-        prefs.armed = false
-        promise.reject(coded("E_UNAVAILABLE", "Google Play services (activity recognition) is not available"))
-        return@AsyncFunction
-      }
-      if (DriveSensePermissions.location(ctx) != "always" || !DriveSensePermissions.motionGranted(ctx)) {
-        prefs.armed = false
-        // DMS calib T12: a capture in progress keeps its walking feed; the capture's end removes it.
-        if (!CaptureService.isCapturing) ActivityTransitions.unsubscribe(ctx)
-        promise.reject(coded("E_PERMISSION", "arm needs location 'always' and motion 'granted'"))
-        return@AsyncFunction
-      }
-      ActivityTransitions.subscribe(ctx) { error ->
-        if (error == null) {
-          prefs.armed = true
-          promise.resolve(null)
-        } else {
-          prefs.armed = false
-          val code = if (error is SecurityException) "E_PERMISSION" else "E_UNAVAILABLE"
-          promise.reject(coded(code, "activity transitions could not be requested: ${error.message}"))
-        }
-      }
-    }
-
-    AsyncFunction("disarm") {
-      val ctx = context
-      DriveSensePrefs.init(ctx).armed = false
-      // DMS calib T12: a capture in progress keeps its walking feed; the capture's end removes it.
-      if (!CaptureService.isCapturing) ActivityTransitions.unsubscribe(ctx)
-    }
-
     AsyncFunction("startCapture") { mode: String, promise: Promise ->
       val ctx = context
       if (DriveSensePermissions.location(ctx) == "none") {
         promise.reject(coded("E_PERMISSION", "startCapture needs location permission"))
         return@AsyncFunction
       }
-      CaptureService.startFromJs(ctx, if (mode in MODES) mode else "auto") { code ->
+      CaptureService.startFromJs(ctx, if (mode in MODES) mode else "mounted") { code ->
         if (code == null) {
           promise.resolve(null)
         } else {
-          // From the background with only While-in-use, the refusal is the missing Always (README §2).
-          val reason = if (code == "E_FGS_REFUSED" && DriveSensePermissions.location(ctx) == "whenInUse") "E_PERMISSION" else code
-          promise.reject(coded(reason, "the location foreground service was refused"))
+          promise.reject(coded(code, "the location foreground service was refused"))
         }
       }
     }
@@ -121,25 +88,14 @@ class DriveSenseModule : Module() {
     AsyncFunction("getState") {
       val ctx = context
       val prefs = DriveSensePrefs.init(ctx)
-      val location = DriveSensePermissions.location(ctx)
-      val motion = DriveSensePermissions.motion(ctx)
-      // `armed` is the effective arming: a revoked permission un-arms (README §2).
-      var armed = prefs.armed
-      if (armed && (location != "always" || motion != "granted")) {
-        prefs.armed = false
-        // DMS calib T12: a capture keeps its walking feed while motion is granted; its end removes it.
-        if (!CaptureService.isCapturing || motion != "granted") ActivityTransitions.unsubscribe(ctx)
-        armed = false
-      }
       val capturing = CaptureService.isCapturing
       linkedMapOf<String, Any?>(
-        "armed" to armed,
         "capturing" to capturing,
         "rate" to (if (capturing) CaptureService.currentRate ?: "full" else null),
         "mode" to (if (capturing) CaptureService.currentMode ?: prefs.mode else null),
         "platform" to "android",
-        "location" to location,
-        "motion" to motion,
+        "location" to DriveSensePermissions.location(ctx),
+        "motion" to DriveSensePermissions.motion(ctx),
         "lockSignal" to "reliable",
         "captureWasOpen" to DriveSensePrefs.captureWasOpenAtProcessStart,
         "captureStartedAt" to (if (capturing) CaptureService.captureStartedAt else null),
@@ -193,6 +149,7 @@ class DriveSenseModule : Module() {
       prefs.motionRequested = true
       val listener = PermissionsResponseListener { result ->
         val status = result[Manifest.permission.ACTIVITY_RECOGNITION]?.status
+        if (status == PermissionsStatus.GRANTED) ActivityTransitions.sync(ctx)
         promise.resolve(if (status == PermissionsStatus.GRANTED) "granted" else "denied")
       }
       try {
@@ -207,11 +164,22 @@ class DriveSenseModule : Module() {
       Unit
     }
 
-    AsyncFunction("setNotificationState") { state: Map<String, Any?> ->
-      val stationary = state["stationary"] as? Boolean ?: false
-      val startedAt = (state["startedAt"] as? Number)?.toLong()
-      val candidate = state["candidate"] as? Boolean ?: false
-      CaptureService.setNotificationState(stationary, startedAt, candidate)
+    // The background surface (plan §6): the capture's foreground notification. Ignored while not capturing.
+    AsyncFunction("setDriveDisplay") { state: Map<String, Any?> ->
+      CaptureService.setDriveDisplay(DriveDisplay.from(state))
+    }
+
+    // The optional forgot-to-start reminder (spec "Starting and ending a drive"): persisted, and the
+    // transitions feed registered while it is on. Never starts a capture.
+    AsyncFunction("setForgotToStartReminder") { enabled: Boolean ->
+      val ctx = context
+      DriveSensePrefs.init(ctx).reminderEnabled = enabled
+      ActivityTransitions.sync(ctx)
+    }
+
+    // iOS answers from the motion history; Android's reminder is the notification above.
+    AsyncFunction("checkForgottenDrive") { _: Double ->
+      null as Any?
     }
 
     AsyncFunction("getLastExitInfo") {

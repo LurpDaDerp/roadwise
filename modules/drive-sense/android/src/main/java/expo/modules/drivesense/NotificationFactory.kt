@@ -8,19 +8,24 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import java.text.NumberFormat
+import java.util.Locale
 
 /**
- * The foreground-service notification, product S3: a low-importance channel with no sound, "Recording
- * your drive", then "Recording drive · N min" once JS gives the start time (updated once a minute),
- * no action while moving, and an **End drive** action only after
- * `setNotificationState({ stationary: true })`. It says only what is true: it exists exactly while
- * the capture it describes runs, and the watchdog stops a capture nobody records (README §6).
+ * The foreground-service notification — the Android half of the background surface (spec
+ * "Driving screen · Background"; plan §6). A low-importance channel with no sound; title
+ * "Driving"; text "34 mph · limit 35" ("—" for an unknown speed or limit); a points line
+ * "1,240 pts (+18)" only when JS sends points (it does so only while stopped); the **End drive**
+ * action only while stopped — the only control while moving is on the screen; tapping opens the
+ * app. It exists exactly while the capture it describes runs, and the watchdog stops a capture
+ * nobody records (README §6).
  */
 object NotificationFactory {
   const val CHANNEL_ID = "drive_recording"
   const val NOTIFICATION_ID = 7302
   private const val REQUEST_OPEN = 7303
   private const val REQUEST_END = 7304
+  const val TITLE = "Driving"
 
   fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -35,23 +40,29 @@ object NotificationFactory {
     nm.createNotificationChannel(channel)
   }
 
-  /**
-   * "Checking for a drive" while a candidate may still be discarded (final review M5: never claim a
-   * recording that may not exist); then "Recording drive · N min" when the start is known, else
-   * "Recording your drive".
-   */
-  fun title(startedAt: Long?, now: Long, candidate: Boolean = false): String {
-    if (candidate) return "Checking for a drive"
-    if (startedAt == null || startedAt <= 0 || now < startedAt) return "Recording your drive"
-    val minutes = (now - startedAt) / 60_000L
-    return "Recording drive · $minutes min"
+  /** "34 mph · limit 35"; "—" where unknown. */
+  fun text(d: DriveDisplay): String {
+    val speed = d.speed?.let { "${Math.round(it)} ${d.unit}" } ?: "— ${d.unit}"
+    val limit = d.limit?.let { "${Math.round(it)}" } ?: "—"
+    return "$speed · limit $limit"
   }
 
-  fun build(context: Context, startedAt: Long?, stationary: Boolean, candidate: Boolean = false): Notification {
+  /** "1,240 pts (+18)" — only when points are known; the delta only when non-zero and known. */
+  fun pointsLine(d: DriveDisplay): String? {
+    val points = d.points ?: return null
+    val n = NumberFormat.getIntegerInstance(Locale.US)
+    val delta = d.pointsDelta?.let { Math.round(it) }?.takeIf { it != 0L }
+    val deltaText = delta?.let { " (${if (it > 0) "+" else "−"}${n.format(Math.abs(it))})" } ?: ""
+    return "${n.format(Math.round(points))} pts$deltaText"
+  }
+
+  fun build(context: Context, display: DriveDisplay?): Notification {
     ensureChannel(context)
+    val d = display ?: DriveDisplay.EMPTY
     val builder = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_drive_notification)
-      .setContentTitle(title(startedAt, System.currentTimeMillis(), candidate))
+      .setContentTitle(TITLE)
+      .setContentText(text(d))
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setSilent(true)
@@ -59,8 +70,9 @@ object NotificationFactory {
       .setCategory(NotificationCompat.CATEGORY_SERVICE)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+    pointsLine(d)?.let { builder.setSubText(it) }
     openAppIntent(context)?.let { builder.setContentIntent(it) }
-    if (stationary) {
+    if (d.stopped && !d.ended) {
       val end = Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_END_DRIVE)
       val pi = PendingIntent.getService(
         context,

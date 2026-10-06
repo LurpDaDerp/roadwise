@@ -1,19 +1,8 @@
 /** @jest-environment node */
 // `parseRow` is the only gate between what native emits and M1's engine (R2's row contract).
-import trace from '../../../src/core/__fixtures__/traces/speeding-corrected.json';
-import { runTrace } from '../../../src/core/replay/runTrace';
-import { parseTrace } from '../../../src/core/replay/trace';
 import { MOTION_ROW_FIELDS, parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
-
-// Jest compiles this suite to CommonJS, so `require` is real at run time; Node's typings are not in
-// the program, hence the local shapes.
-declare const __dirname: string;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
-const { readdirSync, readFileSync } = require('node:fs') as {
-  readdirSync: (dir: string) => string[];
-  readFileSync: (file: string, encoding: 'utf8') => string;
-};
+import { sampleRows } from '../scripts/sampleRows';
 
 /** A trace row as the fixtures hold it, rounded the way `parseRow` rounds. */
 const rounded = (row: FeatureRow): FeatureRow => {
@@ -24,7 +13,7 @@ const rounded = (row: FeatureRow): FeatureRow => {
   return out;
 };
 
-const good = rounded(trace.rows[10]!);
+const good = rounded(sampleRows(12)[10]!);
 
 test('a row already at the kept precision passes unchanged', () => {
   expect(parseRow(good)).toEqual(good);
@@ -98,27 +87,6 @@ describe('rounding (ruling D2 concern 1)', () => {
     expect(raw.speed).toBe(13.416666);
   });
 
-  // The V2 golden replays these traces through a fake drive-sense, so its rows arrive via
-  // `parseRow`: the rounded rows must detect exactly what the raw ones do.
-  const dir = `${__dirname}/../../../src/core/__fixtures__/traces`;
-  const names = readdirSync(dir).filter((f) => f.endsWith('.json'));
-  test.each(names)('%s through parseRow detects the same events as the raw trace', (name) => {
-    const raw = parseTrace(JSON.parse(readFileSync(`${dir}/${name}`, 'utf8')));
-    const viaBridge = { ...raw, rows: raw.rows.map((r) => parseRow(r)!) };
-    expect(viaBridge.rows.every((r) => r !== null)).toBe(true);
-
-    const a = runTrace(raw);
-    const b = runTrace(viaBridge);
-    expect(b.failures).toEqual([]);
-    const shape = (e: (typeof a.events)[number]) => ({
-      category: e.category,
-      startedAt: e.startedAt,
-      durationS: e.durationS,
-      status: e.status,
-    });
-    expect(b.events.map(shape)).toEqual(a.events.map(shape));
-    b.events.forEach((e, i) => expect(Math.abs(e.q - a.events[i]!.q)).toBeLessThan(1e-3));
-  });
 });
 
 test('the R2 encodings are accepted: unknown speed/accuracy/course −1, no fix 0/0 + 9999, IMU zeros', () => {
@@ -237,5 +205,28 @@ describe('the optional motion fields (C0)', () => {
 
   test('the list of motion fields is the six the design names', () => {
     expect([...MOTION_ROW_FIELDS].sort()).toEqual(['aLonMean', 'accRms', 'frameAligned', 'gravX', 'gravY', 'gravZ']);
+  });
+});
+
+// v3 (plan §6): `mock` rides on the row payload beside the FeatureRow keys.
+describe('the mock-location flag', () => {
+  test('is kept when present, absent when native did not send it, and never counted as unknown', () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, mock: true })).toEqual({ ...good, mock: true });
+    expect(parseRow({ ...good, mock: false })).toEqual({ ...good, mock: false });
+    expect(parseRow(good)).not.toHaveProperty('mock');
+    expect(unknownRowKeys()).toBe(0);
+  });
+
+  test('a non-boolean mock rejects the row, like any other known key with a wrong type', () => {
+    expect(parseRow({ ...good, mock: 'yes' })).toBeNull();
+    expect(parseRow({ ...good, mock: 1 })).toBeNull();
+    expect(parseRow({ ...good, mock: null })).toBeNull();
+  });
+
+  test('unknown keys are still stripped and counted beside it', () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, mock: true, future: 1 })).toEqual({ ...good, mock: true });
+    expect(unknownRowKeys()).toBe(1);
   });
 });

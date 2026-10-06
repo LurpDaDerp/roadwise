@@ -18,8 +18,9 @@ final class RowPipeline {
   static let FIX_BUFFER_MAX: Int = 30
 
   let queue = DispatchQueue(label: "drivesense.capture", qos: .userInitiated)
-  /// Called on `queue` with each row and the capture generation it belongs to.
-  var onRow: ((ExtractedRow, Int) -> Void)?
+  /// Called on `queue` with each row, whether its fix was simulated (`mock`), and the capture
+  /// generation it belongs to.
+  var onRow: ((ExtractedRow, Bool, Int) -> Void)?
 
   private var generation = 0
   private var extractor = FeatureExtractor()
@@ -98,7 +99,7 @@ final class RowPipeline {
     guard ts > (prevRowTs ?? -Double.infinity) else { return }
     prevRowTs = ts
     fixes.removeAll()
-    deliver(extractor.extractSecond(imu: [], fix: fix, phone: phone, tsMs: ts))
+    deliver(extractor.extractSecond(imu: [], fix: fix, phone: phone, tsMs: ts), mock: fix.mock)
   }
 
   private func check() {
@@ -123,14 +124,14 @@ final class RowPipeline {
     droppedFixes += fixes.filter { $0.t <= start }.count
     fixes = fixes.filter { $0.t > p.ts }
     prevRowTs = p.ts
-    deliver(extractor.extractSecond(imu: w.inWindow, fix: fix, phone: p.phone, tsMs: p.ts))
+    deliver(extractor.extractSecond(imu: w.inWindow, fix: fix, phone: p.phone, tsMs: p.ts), mock: fix?.mock ?? false)
   }
 
-  private func deliver(_ row: ExtractedRow) {
+  private func deliver(_ row: ExtractedRow, mock: Bool) {
     guard row.firstNonFiniteField == nil else {
       droppedRows += 1
       return
     }
-    onRow?(row, generation)
+    onRow?(row, mock, generation)
   }
 }

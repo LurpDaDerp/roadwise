@@ -1,4 +1,4 @@
-// The typed JS face of the native drive-sense module (M3 N1). README.md is the full contract.
+// The typed JS face of the native drive-sense module. README.md is the full contract.
 //
 // Arguments are checked before they cross the bridge and results are validated after, so a native
 // bug surfaces as a rejected promise naming the method rather than as a malformed value deep in
@@ -13,10 +13,11 @@ import { z } from 'zod';
 import {
   captureModeSchema,
   captureRateSchema,
+  driveDisplaySchema,
   exitInfoSchema,
+  forgottenDriveSchema,
   motionActivitySchema,
   motionPermissionSchema,
-  notificationStateSchema,
   screenStateSchema,
   stateSchema,
   thermalLevelSchema,
@@ -24,7 +25,7 @@ import {
 import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } from './types';
 
 export * from './types';
-export { parseRow, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
+export { MOCK_ROW_KEY, parseRow, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
 export { createFakeDriveSense, driveSenseError } from './fake';
 export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';
@@ -94,8 +95,6 @@ const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).s
 const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 
 const DriveSense: DriveSenseApi = {
-  arm: () => call('arm', [], true, voidResult),
-  disarm: () => call('disarm', [], true, voidResult),
   startCapture: (mode) => call('startCapture', [mode], ok(captureModeSchema, mode), voidResult),
   stopCapture: () => call('stopCapture', [], true, voidResult),
   setCaptureRate: (rate) =>
@@ -113,8 +112,12 @@ const DriveSense: DriveSenseApi = {
   requestMotionPermission: () => call('requestMotionPermission', [], true, motionPermissionSchema),
   excludeFromBackup: (uri) =>
     call('excludeFromBackup', [uri], typeof uri === 'string' && uri.length > 0, voidResult),
-  setNotificationState: (state) =>
-    call('setNotificationState', [state], ok(notificationStateSchema, state), voidResult),
+  setDriveDisplay: (state) =>
+    call('setDriveDisplay', [state], ok(driveDisplaySchema, state), voidResult),
+  setForgotToStartReminder: (enabled) =>
+    call('setForgotToStartReminder', [enabled], typeof enabled === 'boolean', voidResult),
+  checkForgottenDrive: (sinceMs) =>
+    call('checkForgottenDrive', [sinceMs], finite(sinceMs) && sinceMs >= 0, forgottenDriveSchema.nullable()),
   getLastExitInfo: () => call('getLastExitInfo', [], true, exitInfoSchema.nullable()),
   isIgnoringBatteryOptimizations: () =>
     call('isIgnoringBatteryOptimizations', [], true, z.boolean()),

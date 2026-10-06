@@ -18,7 +18,6 @@ import DriveSense, {
 jest.mock('expo-modules-core', () => {
   const actual = jest.requireActual('expo-modules-core');
   const state = () => ({
-    armed: true,
     capturing: false,
     rate: null,
     mode: null,
@@ -32,8 +31,6 @@ jest.mock('expo-modules-core', () => {
   });
   const remove = jest.fn();
   const native = {
-    arm: jest.fn(async () => undefined),
-    disarm: jest.fn(async () => undefined),
     startCapture: jest.fn(async () => undefined),
     stopCapture: jest.fn(async () => undefined),
     setCaptureRate: jest.fn(async () => undefined),
@@ -45,7 +42,9 @@ jest.mock('expo-modules-core', () => {
     getThermalState: jest.fn(async () => 'fair'),
     requestMotionPermission: jest.fn(async () => 'granted'),
     excludeFromBackup: jest.fn(async () => undefined),
-    setNotificationState: jest.fn(async () => undefined),
+    setDriveDisplay: jest.fn(async () => undefined),
+    setForgotToStartReminder: jest.fn(async () => undefined),
+    checkForgottenDrive: jest.fn(async () => ({ startedAt: 1_700_000_000_000, endedAt: 1_700_000_600_000 })),
     getLastExitInfo: jest.fn(async () => ({
       ts: 1_700_000_000_000,
       reason: 'watchdog',
@@ -81,9 +80,8 @@ const mockState = control.state;
 
 beforeEach(() => jest.clearAllMocks());
 
-test('the seven event names are fixed, in order', () => {
+test('the six event names are fixed, in order', () => {
   expect(DRIVE_SENSE_EVENTS).toEqual([
-    'wake',
     'activity',
     'row',
     'screen',
@@ -103,29 +101,29 @@ test('the method list names every bridged method of the API', () => {
 
 describe('every method goes to native with its arguments', () => {
   test('void methods', async () => {
-    await DriveSense.arm();
-    await DriveSense.disarm();
     await DriveSense.startCapture('pocket');
     await DriveSense.stopCapture();
     await DriveSense.setCaptureRate('low');
     await DriveSense.excludeFromBackup('file:///data/traces/');
-    await DriveSense.setNotificationState({ stationary: true, startedAt: 1_700_000_000_000 });
-    expect(mockNative.arm).toHaveBeenCalledTimes(1);
-    expect(mockNative.disarm).toHaveBeenCalledTimes(1);
+    const display = { speed: 34, limit: 35, unit: 'mph', points: 1240, pointsDelta: 18, stopped: true } as const;
+    await DriveSense.setDriveDisplay(display);
+    await DriveSense.setForgotToStartReminder(true);
     expect(mockNative.startCapture).toHaveBeenCalledWith('pocket');
     expect(mockNative.stopCapture).toHaveBeenCalledTimes(1);
     expect(mockNative.setCaptureRate).toHaveBeenCalledWith('low');
     expect(mockNative.excludeFromBackup).toHaveBeenCalledWith('file:///data/traces/');
-    expect(mockNative.setNotificationState).toHaveBeenCalledWith({
-      stationary: true,
-      startedAt: 1_700_000_000_000,
-    });
-    // A candidate (final review M5): the notice says it is checking, not recording.
-    await DriveSense.setNotificationState({ stationary: false, startedAt: null, candidate: true });
-    expect(mockNative.setNotificationState).toHaveBeenLastCalledWith({
-      stationary: false,
-      startedAt: null,
-      candidate: true,
+    expect(mockNative.setDriveDisplay).toHaveBeenCalledWith(display);
+    expect(mockNative.setForgotToStartReminder).toHaveBeenCalledWith(true);
+    // Unknown speed and limit, no points while moving, the drive's end: all valid states.
+    await DriveSense.setDriveDisplay({ speed: null, limit: null, unit: 'km/h', points: null, pointsDelta: null, stopped: false, ended: true });
+    expect(mockNative.setDriveDisplay).toHaveBeenLastCalledWith({
+      speed: null,
+      limit: null,
+      unit: 'km/h',
+      points: null,
+      pointsDelta: null,
+      stopped: false,
+      ended: true,
     });
   });
 
@@ -144,13 +142,20 @@ describe('every method goes to native with its arguments', () => {
       whileCapturing: true,
     });
     await expect(DriveSense.isIgnoringBatteryOptimizations()).resolves.toBe(false);
+    await expect(DriveSense.checkForgottenDrive(1_700_000_000_000)).resolves.toEqual({
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_600_000,
+    });
+    expect(mockNative.checkForgottenDrive).toHaveBeenCalledWith(1_700_000_000_000);
     await expect(DriveSense.selfTest('[]')).resolves.toBe('{"version":1}');
     expect(mockNative.selfTest).toHaveBeenCalledWith('[]');
   });
 
-  test('a null exit info is passed through', async () => {
+  test('a null exit info and a null forgotten drive are passed through', async () => {
     mockNative.getLastExitInfo!.mockResolvedValueOnce(null);
     await expect(DriveSense.getLastExitInfo()).resolves.toBeNull();
+    mockNative.checkForgottenDrive!.mockResolvedValueOnce(null);
+    await expect(DriveSense.checkForgottenDrive(0)).resolves.toBeNull();
   });
 });
 
@@ -166,9 +171,9 @@ test.each(DRIVE_SENSE_EVENTS)('addListener(%s) subscribes natively and removes',
 });
 
 test('a native CodedError passes through with its code (README §2 "Errors")', async () => {
-  const coded = Object.assign(new Error('arm needs Always'), { code: 'E_PERMISSION' });
-  mockNative.arm!.mockRejectedValueOnce(coded);
-  const e = await DriveSense.arm().catch((x: unknown) => x);
+  const coded = Object.assign(new Error('startCapture needs location permission'), { code: 'E_PERMISSION' });
+  mockNative.startCapture!.mockRejectedValueOnce(coded);
+  const e = await DriveSense.startCapture('mounted').catch((x: unknown) => x);
   expect(e).toBe(coded);
   expect(isDriveSenseError(e, 'E_PERMISSION')).toBe(true);
 });
@@ -187,10 +192,13 @@ describe('bridge validation', () => {
     ['requestMotionPermission', 'undetermined'],
     ['getLastExitInfo', { ts: 1, reason: 'bored', whileCapturing: true }],
     ['isIgnoringBatteryOptimizations', 'true'],
+    ['checkForgottenDrive', { startedAt: 1 }],
+    ['checkForgottenDrive', { startedAt: 1.5, endedAt: 2 }],
     ['selfTest', 42],
   ] as const)('a malformed %s result rejects', async (method, bad) => {
     mockNative[method]!.mockResolvedValueOnce(bad);
-    const args = method === 'queryMotionHistory' ? [0, 1] : method === 'selfTest' ? ['[]'] : [];
+    const args =
+      method === 'queryMotionHistory' ? [0, 1] : method === 'selfTest' ? ['[]'] : method === 'checkForgottenDrive' ? [0] : [];
     const call = (DriveSense[method] as (...a: unknown[]) => Promise<unknown>)(...args);
     await expect(call).rejects.toThrow(`DriveSense.${method}: invalid result`);
     expect(mockNative[method]).toHaveBeenCalledTimes(1);
@@ -202,9 +210,13 @@ describe('bridge validation', () => {
     ['queryMotionHistory', [Number.NaN, 1]],
     ['queryMotionHistory', [2, 1]],
     ['excludeFromBackup', ['']],
-    ['setNotificationState', [{ stationary: 'yes', startedAt: null }]],
-    ['setNotificationState', [{ stationary: true, startedAt: 1.5 }]],
-    ['setNotificationState', [{ stationary: false, startedAt: null, candidate: 'yes' }]],
+    ['setDriveDisplay', [{ speed: '34', limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'knots', points: null, pointsDelta: null, stopped: true }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, extra: 1 }]],
+    ['setForgotToStartReminder', ['yes']],
+    ['checkForgottenDrive', [-1]],
+    ['checkForgottenDrive', [Number.NaN]],
     ['selfTest', [{}]],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;

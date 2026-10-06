@@ -104,7 +104,13 @@ class LocationSource(
       speed = if (l.hasSpeed()) l.speed.toDouble() else UNKNOWN.toDouble(),
       speedAcc = speedAcc,
       course = if (l.hasBearing()) l.bearing.toDouble() else UNKNOWN.toDouble(),
-      alt = alt
+      alt = alt,
+      mock = isMock(l)
     )
   }
+
+  /** Mock-location detection (spec "Integrity · GPS spoofing"): `isMock` on API 31+, the deprecated flag before. */
+  @Suppress("DEPRECATION")
+  private fun isMock(l: Location): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) l.isMock else l.isFromMockProvider
 }

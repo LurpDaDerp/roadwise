@@ -8,9 +8,12 @@ import { z } from 'zod';
 import { MOTION_ROW_FIELDS } from '../../../src/core/engine/types';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
+  DriveDisplayState,
+  DriveSenseRow,
   DriveSenseState,
   ExitInfo,
   FeatureRow,
+  ForgottenDrive,
   MotionActivity,
   ThermalLevel,
 } from './types';
@@ -84,13 +87,20 @@ export function roundTo(x: number, decimals: number): number {
   return r === 0 ? 0 : r;
 }
 
-/** Every key a `FeatureRow` may carry: the 21 of the contract and the optional motion fields (C0). */
+/** Every `FeatureRow` key: the 21 of the contract and the optional motion fields (C0). */
 const ROW_KEYS: ReadonlySet<string> = new Set<string>([
   'ts', 'lat', 'lng', 'hAcc', 'speed', 'speedAcc', 'course', 'alt', 'gnssValid',
   'aLonMax', 'aLonMin', 'aLatMax', 'aLatMin', 'yawRateMax', 'jerkMax',
   'gravityStability', 'orientationDelta', 'handlingScore', 'locked', 'screenOn', 'appForeground',
   ...MOTION_ROW_FIELDS,
 ]);
+
+/**
+ * The bridge-only key (v3, plan §6): `mock` rides on the `row` payload beside the `FeatureRow`
+ * keys. It is not a `FeatureRow` field (the extractor, the trace digest and the golden vectors
+ * never see it), so it is split off before the strict row schema runs and re-attached after.
+ */
+export const MOCK_ROW_KEY = 'mock';
 
 let unknownKeys = 0;
 /** Unknown row keys stripped since the last reset (diagnostics; C0 round 1, C0-m1). */
@@ -108,18 +118,27 @@ export function resetUnknownRowKeys(): void {
  * bundle a drive's rows. A known key with a wrong type still rejects the row. The exact key contract
  * is pinned by the native text tests and the golden vectors.
  */
-export function parseRow(raw: unknown): FeatureRow | null {
+export function parseRow(raw: unknown): DriveSenseRow | null {
   let input = raw;
+  let mock: boolean | undefined;
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-    const extra = Object.keys(raw).filter((k) => !ROW_KEYS.has(k));
-    if (extra.length > 0) {
-      unknownKeys += extra.length;
-      input = Object.fromEntries(Object.entries(raw).filter(([k]) => ROW_KEYS.has(k)));
+    const entries = Object.entries(raw);
+    const m = (raw as Record<string, unknown>)[MOCK_ROW_KEY];
+    if (MOCK_ROW_KEY in raw) {
+      // A known key with a wrong type rejects the row, like any other.
+      if (typeof m !== 'boolean') return null;
+      mock = m;
+    }
+    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY);
+    if (extra.length > 0) unknownKeys += extra.length;
+    if (extra.length > 0 || mock !== undefined) {
+      input = Object.fromEntries(entries.filter(([k]) => ROW_KEYS.has(k)));
     }
   }
   const parsed = rowWireSchema.safeParse(input);
   if (!parsed.success) return null;
-  const row = parsed.data;
+  const row: DriveSenseRow = parsed.data;
+  if (mock !== undefined) row.mock = mock;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
   }
@@ -140,7 +159,6 @@ export const thermalLevelSchema: z.ZodType<ThermalLevel> = z.enum([
 ]);
 
 export const stateSchema: z.ZodType<DriveSenseState> = z.strictObject({
-  armed: z.boolean(),
   capturing: z.boolean(),
   rate: captureRateSchema.nullable(),
   mode: captureModeSchema.nullable(),
@@ -170,8 +188,17 @@ export const exitInfoSchema: z.ZodType<ExitInfo> = z.strictObject({
   whileCapturing: z.boolean(),
 });
 
-export const notificationStateSchema = z.strictObject({
-  stationary: z.boolean(),
-  startedAt: epochMs.nullable(),
-  candidate: z.boolean().optional(),
+export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
+  speed: z.number().nullable(),
+  limit: z.number().nullable(),
+  unit: z.enum(['mph', 'km/h']),
+  points: z.number().nullable(),
+  pointsDelta: z.number().nullable(),
+  stopped: z.boolean(),
+  ended: z.boolean().optional(),
+});
+
+export const forgottenDriveSchema: z.ZodType<ForgottenDrive> = z.strictObject({
+  startedAt: epochMs,
+  endedAt: epochMs,
 });

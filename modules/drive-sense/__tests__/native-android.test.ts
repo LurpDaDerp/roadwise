@@ -1,9 +1,9 @@
 /** @jest-environment node */
-// Task N3: the Android half of drive-sense cannot be compiled or run in Jest, so this suite holds
-// the Kotlin sources and the module manifest to the binding contract by reading them as text
-// (README §1, §2, §6, §7). Each check names the contract rule it guards; a failure here means the
-// Android build would ship something the JS side, the watchdog ruling (rev1: C2) or the battery
-// rules (design §3.5) do not allow.
+// The Android half of drive-sense cannot be compiled or run in Jest, so this suite holds the Kotlin
+// sources and the module manifest to the binding contract by reading them as text (README §1, §2,
+// §6, §7). Each check names the contract rule it guards; a failure here means the Android build
+// would ship something the JS side, the watchdog ruling (rev1: C2), the battery rules (design
+// §3.5) or plan §1 decision 4 (manual start only, no Always) do not allow.
 import * as CONSTANTS from '../src/extract/constants';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
@@ -39,13 +39,13 @@ const code = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').repla
 const MODULE = () => code(kt('DriveSenseModule'));
 const MANIFEST = () => read(join(MAIN, 'AndroidManifest.xml'));
 
-describe('native-android: files the brief names exist', () => {
+describe('native-android: files the contract names exist, and the auto-detect ones are gone', () => {
   const files = [
     'DriveSenseModule',
     'CaptureService',
     'Watchdog',
     'ActivityTransitionReceiver',
-    'BootReceiver',
+    'ForgotToStartReminder',
     'DriveSenseHeadlessService',
     'LocationSource',
     'SensorSource',
@@ -63,6 +63,10 @@ describe('native-android: files the brief names exist', () => {
   });
   it('the notification icon drawable', () => {
     expect(existsSync(join(MAIN, 'res', 'drawable', 'ic_drive_notification.xml'))).toBe(true);
+  });
+  // plan §1 decision 4
+  it('no BootReceiver', () => {
+    expect(existsSync(join(KT_DIR, 'BootReceiver.kt'))).toBe(false);
   });
 });
 
@@ -99,7 +103,7 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(used.size).toBeGreaterThan(0);
     for (const c of used) expect(DRIVE_SENSE_ERROR_CODES as readonly string[]).toContain(c);
     // The codes Android can raise (README §2 "Errors"); the excludeFromBackup codes are iOS-only.
-    for (const c of ['E_PERMISSION', 'E_UNAVAILABLE', 'E_FGS_REFUSED', 'E_INVALID_INPUT']) {
+    for (const c of ['E_PERMISSION', 'E_FGS_REFUSED', 'E_INVALID_INPUT']) {
       expect(DRIVE_SENSE_ERROR_CODES as readonly string[]).toContain(c);
       expect(used).toContain(c);
     }
@@ -110,20 +114,22 @@ describe('native-android: the bridge surface (README §1)', () => {
   });
 });
 
-describe('native-android: manifest (brief Interfaces, rev1: I15)', () => {
+describe('native-android: manifest (plan §1 decision 4: While Using only, no boot, no auto-start)', () => {
   it.each([
     'android.permission.ACCESS_FINE_LOCATION',
     'android.permission.ACCESS_COARSE_LOCATION',
-    'android.permission.ACCESS_BACKGROUND_LOCATION',
     'android.permission.ACTIVITY_RECOGNITION',
     'com.google.android.gms.permission.ACTIVITY_RECOGNITION',
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_LOCATION',
     'android.permission.POST_NOTIFICATIONS',
-    'android.permission.RECEIVE_BOOT_COMPLETED',
     'android.permission.WAKE_LOCK',
   ])('uses-permission %s', (p) => {
     expect(MANIFEST()).toContain(`<uses-permission android:name="${p}"`);
+  });
+
+  it('never asks for background location or boot', () => {
+    expect(allKotlin() + MANIFEST()).not.toMatch(/ACCESS_BACKGROUND_LOCATION|RECEIVE_BOOT_COMPLETED|BOOT_COMPLETED|MY_PACKAGE_REPLACED|BootReceiver/);
   });
 
   it('CaptureService is a location foreground service, not exported', () => {
@@ -139,107 +145,105 @@ describe('native-android: manifest (brief Interfaces, rev1: I15)', () => {
     expect(m![0]).toContain('android:exported="false"');
   });
 
-  it('ActivityTransitionReceiver is not exported', () => {
-    const m = /<receiver[^>]*android:name="\.ActivityTransitionReceiver"[^>]*>/.exec(MANIFEST());
-    expect(m).not.toBeNull();
-    expect(m![0]).toContain('android:exported="false"');
-  });
-
-  it('BootReceiver listens for BOOT_COMPLETED and MY_PACKAGE_REPLACED', () => {
-    const m = /<receiver[^>]*android:name="\.BootReceiver"[\s\S]*?<\/receiver>/.exec(MANIFEST());
-    expect(m).not.toBeNull();
-    expect(m![0]).toContain('android.intent.action.BOOT_COMPLETED');
-    expect(m![0]).toContain('android.intent.action.MY_PACKAGE_REPLACED');
+  it('ActivityTransitionReceiver is not exported, and is the only receiver', () => {
+    const receivers = [...MANIFEST().matchAll(/<receiver[^>]*android:name="([^"]+)"[^>]*>/g)];
+    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver']);
+    expect(receivers[0]![0]).toContain('android:exported="false"');
   });
 });
 
-describe('native-android: arming and wakes', () => {
+describe('native-android: a capture starts only from JS (plan §1 decision 4)', () => {
+  it('the transition receiver never starts the capture service or emits a wake', () => {
+    const rx = code(kt('ActivityTransitionReceiver'));
+    expect(rx).not.toMatch(/startForegroundService|startNative|CaptureService\.start|"wake"/);
+    expect(code(allKotlin())).not.toMatch(/ACTION_START_NATIVE|fun startNative|"wake"|\barmed\b/);
+  });
+
+  it('CaptureService starts from JS or as the sticky restart of a capture JS had opened', () => {
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/ACTION_START_JS/);
+    expect(svc).toMatch(/START_STICKY/);
+    expect(svc).toMatch(/intent\s*==\s*null/);
+    expect(svc).toMatch(/if \(!prefs\.captureOpen\) \{\s*stopSelf\(startId\)/);
+    expect(svc).toMatch(/nativeStart = true/); // the sticky restart still needs the JS claim (watchdog)
+  });
+
+  it('the FGS refusal codes pass through unchanged (no Always to blame)', () => {
+    const start = /AsyncFunction\("startCapture"\)[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(start).toMatch(/promise\.reject\(coded\(code,/);
+    expect(start).not.toMatch(/"always"/);
+  });
+
+  it('location is whenInUse or none: Android never reports always', () => {
+    const src = code(kt('DriveSensePermissions'));
+    expect(src).toMatch(/fun location\(context: Context\): String = if \(hasForegroundLocation\(context\)\) "whenInUse" else "none"/);
+    expect(src).not.toMatch(/"always"/);
+  });
+});
+
+describe('native-android: the activity feed (walking auto-end, DMS calib T12) and its one rule', () => {
   it('the transitions PendingIntent is FLAG_MUTABLE on API 31+', () => {
     const src = code(allKotlin());
     expect(src).toMatch(/PendingIntent\.FLAG_MUTABLE/);
     expect(src).toMatch(/requestActivityTransitionUpdates\(/);
   });
 
-  it('subscribes to IN_VEHICLE and WALKING, enter and exit', () => {
-    const src = code(kt('ActivityTransitionReceiver'));
-    expect(src).toMatch(/DetectedActivity\.IN_VEHICLE/);
-    expect(src).toMatch(/DetectedActivity\.WALKING/);
-    expect(src).toMatch(/ACTIVITY_TRANSITION_ENTER/);
-    expect(src).toMatch(/ACTIVITY_TRANSITION_EXIT/);
-  });
-
-  it('maps ENTER to automotive/high and walking/high (README §3)', () => {
-    const src = code(kt('ActivityTransitionReceiver'));
-    expect(src).toMatch(/"automotive"/);
-    expect(src).toMatch(/"walking"/);
-    expect(src).toMatch(/"high"/);
-    expect(src).not.toMatch(/"(low|medium)"/);
-  });
-
-  // DMS calib T12 (rev4 §2.12.1, WK-m1/m2).
   it('the request lists IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT), never the unsupported ON_FOOT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/ACTIVITY_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
     expect(src).toMatch(/ACTIVITY_TYPES\.flatMap/);
     expect(src).not.toMatch(/ON_FOOT/);
+    expect(src).toMatch(/ACTIVITY_TRANSITION_ENTER/);
+    expect(src).toMatch(/ACTIVITY_TRANSITION_EXIT/);
   });
 
-  it('maps ENTER RUNNING to running/high, and the EXITs of WALKING and RUNNING to exit: true (never stored)', () => {
+  it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, never stores an EXIT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
+    expect(src).toMatch(/DetectedActivity\.IN_VEHICLE\s*->\s*"automotive"/);
+    expect(src).toMatch(/DetectedActivity\.WALKING\s*->\s*"walking"/);
     expect(src).toMatch(/DetectedActivity\.RUNNING\s*->\s*"running"/);
     expect(src).toMatch(/"exit" to true/);
-    // the store keeps the ENTERs only: EXITs go to `live` alone, and an EXIT IN_VEHICLE to nothing
+    expect(src).not.toMatch(/"(low|medium)"/);
     expect(src).toMatch(/else if \(type != "automotive"\) \{\s*live\.add\(/);
     expect(src).toMatch(/TransitionStore\.append\(context, mapped\)/);
   });
 
-  it('every capture subscribes best effort: in beginCapture, gated on motion, errors logged and swallowed', () => {
+  it('live activity reaches JS only while capturing', () => {
+    expect(code(kt('ActivityTransitionReceiver'))).toMatch(/if \(CaptureService\.isCapturing\) for \(m in live\) EventBus\.emit\("activity", m\)/);
+  });
+
+  it('subscribed exactly while wanted: capturing or the reminder, with motion and Play services; synced at every entry point, best effort', () => {
+    const rx = code(kt('ActivityTransitionReceiver'));
+    expect(rx).toMatch(/fun wanted\(context: Context\): Boolean =\s*\(CaptureService\.isCapturing \|\| DriveSensePrefs\.init\(context\)\.reminderEnabled\) &&\s*DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)/);
+    const sync = /fun sync\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
+    expect(sync).toMatch(/try \{/);
+    expect(sync).toMatch(/catch \(e: Exception\)/);
+    expect(sync).not.toMatch(/throw /);
+    expect(sync).toMatch(/if \(wanted\(context\)\)/);
+    expect(sync).toMatch(/else \{\s*unsubscribe\(context\)/);
     const svc = code(kt('CaptureService'));
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
-    expect(begin).toMatch(/ActivityTransitions\.subscribeForCapture\(this\)/);
-    const rx = code(kt('ActivityTransitionReceiver'));
-    const fn = /fun subscribeForCapture\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
-    expect(fn).toMatch(/try \{/);
-    expect(fn).toMatch(/catch \(e: Exception\)/);
-    expect(fn).toMatch(/motionGranted\(context\)/);
-    expect(fn).not.toMatch(/throw /);
-  });
-
-  it('a capture ends its feed only when not armed; disarm and a refused arm keep a running capture\'s feed', () => {
-    const svc = code(kt('CaptureService'));
+    expect(begin).toMatch(/ActivityTransitions\.sync\(this\)/);
     const end = /private fun endCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
-    expect(end).toMatch(/ActivityTransitions\.unsubscribeAfterCapture\(this\)/);
-    const rx = code(kt('ActivityTransitionReceiver'));
-    expect(rx).toMatch(/fun unsubscribeAfterCapture\([\s\S]{0,120}if \(!DriveSensePrefs\.init\(context\)\.armed\) unsubscribe\(context\)/);
-    const mod = MODULE();
-    const disarm = /AsyncFunction\("disarm"\)[\s\S]*?\n {4}\}/.exec(mod)?.[0] ?? '';
-    expect(disarm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
-    const arm = /AsyncFunction\("arm"\)[\s\S]*?\n {4}\}/.exec(mod)?.[0] ?? '';
-    expect(arm).toMatch(/if \(!CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(ctx\)/);
-    // disarm, a refused arm, getState's revoke, and (C12 round 1) the launch clean-up
-    expect(mod.match(/ActivityTransitions\.unsubscribe\(/g)).toHaveLength(4);
+    expect(end).toMatch(/ActivityTransitions\.sync\(this\)/);
+    const destroy = /override fun onDestroy\(\)[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(destroy).toMatch(/ActivityTransitions\.sync\(this\)/);
+    const create = /OnCreate \{[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(create).toMatch(/ActivityTransitions\.sync\(context\)/);
+    const setting = /AsyncFunction\("setForgotToStartReminder"\)[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(setting).toMatch(/reminderEnabled = enabled/);
+    expect(setting).toMatch(/ActivityTransitions\.sync\(ctx\)/);
   });
 
-  // C12 round 1 (review-C12 m1; NC-C12-1): no stale registration survives an abnormal end.
-  it('the receiver checks "not armed and not capturing" FIRST: it unsubscribes and stores nothing', () => {
+  // C12 round 1 (review-C12 m1): no stale registration survives an abnormal end.
+  it('the receiver checks "not reminding and not capturing" FIRST: it unsubscribes and stores nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    const stale = on.indexOf('if (!prefs.armed && !CaptureService.isCapturing) {');
+    const stale = on.indexOf('if (!prefs.reminderEnabled && !CaptureService.isCapturing) {');
     expect(stale).toBeGreaterThan(-1);
     expect(on.slice(stale, stale + 200)).toMatch(/ActivityTransitions\.unsubscribe\(context\)\s*return/);
     expect(stale).toBeLessThan(on.indexOf('ActivityTransitionResult.extractResult'));
     expect(stale).toBeLessThan(on.indexOf('TransitionStore.append'));
-  });
-
-  it('onDestroy, the launch and a late subscribe clean up too', () => {
-    const svc = code(kt('CaptureService'));
-    const destroy = /override fun onDestroy\(\)[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
-    expect(destroy).toMatch(/ActivityTransitions\.unsubscribeAfterCapture\(this\)/);
-    const create = /OnCreate \{[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
-    expect(create).toMatch(/if \(!prefs\.armed && !CaptureService\.isCapturing\) ActivityTransitions\.unsubscribe\(context\)/);
-    const rx = code(kt('ActivityTransitionReceiver'));
-    const fn = /fun subscribeForCapture\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
-    expect(fn).toMatch(/else if \(!CaptureService\.isCapturing\) \{\s*unsubscribeAfterCapture\(context\)/);
   });
 
   it('requestMotionPermission requests ACTIVITY_RECOGNITION at run time on API 29+', () => {
@@ -258,13 +262,91 @@ describe('native-android: arming and wakes', () => {
   });
 });
 
-describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
-  it('CaptureService is START_STICKY and resumes on a null intent', () => {
-    const src = code(kt('CaptureService'));
-    expect(src).toMatch(/START_STICKY/);
-    expect(src).toMatch(/intent\s*==\s*null/);
+describe('native-android: the forgot-to-start reminder (spec "Starting and ending a drive"; plan §6)', () => {
+  const R = () => code(kt('ForgotToStartReminder'));
+
+  it('the copy, the quiet channel, and that it opens the app', () => {
+    const src = R();
+    expect(src).toContain('"Forgot to record? Tap Start before your next drive."');
+    expect(src).toMatch(/IMPORTANCE_LOW/);
+    expect(src).toMatch(/setSilent\(true\)/);
+    expect(src).toMatch(/getLaunchIntentForPackage/);
   });
 
+  it('fires only on an IN_VEHICLE exit, after ≥ 5 min in the vehicle with no capture, at most once per 6 h, only while enabled', () => {
+    const src = R();
+    expect(src).toMatch(/MIN_VEHICLE_MS = 5 \* 60_000L/);
+    expect(src).toMatch(/MIN_INTERVAL_MS = 6 \* 60 \* 60_000L/);
+    const exit = /fun onVehicleExit\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(exit).toMatch(/val recorded = prefs\.captureRanInVehicle \|\| CaptureService\.isCapturing/);
+    expect(exit).toMatch(/if \(!prefs\.reminderEnabled \|\| enteredAt <= 0 \|\| recorded\) return/);
+    expect(exit).toMatch(/if \(ts - enteredAt < MIN_VEHICLE_MS\) return/);
+    expect(exit).toMatch(/if \(now - prefs\.lastReminderAt < MIN_INTERVAL_MS\) return/);
+    expect(exit).toMatch(/if \(post\(context\)\) prefs\.lastReminderAt = now/);
+    // the ENTER path only records state; posting lives in the EXIT path alone
+    const enter = /fun onVehicleEnter\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(enter).not.toMatch(/post\(/);
+    expect(src.match(/post\(context\)/g)).toHaveLength(1);
+  });
+
+  it('never starts a capture, and a capture start marks the vehicle period as recorded', () => {
+    expect(R()).not.toMatch(/CaptureService\.start|startForegroundService/);
+    const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(code(kt('CaptureService')))?.[0] ?? '';
+    expect(begin).toMatch(/ForgotToStartReminder\.onCaptureStarted\(this\)/);
+    const rx = code(kt('ActivityTransitionReceiver'));
+    expect(rx).toMatch(/if \(enter\) ForgotToStartReminder\.onVehicleEnter\(context, ts\) else ForgotToStartReminder\.onVehicleExit\(context, ts\)/);
+  });
+
+  it('its state is persisted (survives the process)', () => {
+    const prefs = code(kt('DriveSensePrefs'));
+    for (const k of ['reminderEnabled', 'vehicleEnteredAt', 'captureRanInVehicle', 'lastReminderAt']) {
+      expect(prefs).toMatch(new RegExp(`var ${k}:`));
+    }
+  });
+
+  it('Android answers checkForgottenDrive with null (the notification is its path)', () => {
+    expect(MODULE()).toMatch(/AsyncFunction\("checkForgottenDrive"\) \{ _: Double ->\s*null as Any\?/);
+  });
+});
+
+describe('native-android: the background surface (plan §6) — the foreground notification', () => {
+  it('title "Driving", "34 mph · limit 35" with "—" for unknowns, points line only with points', () => {
+    const src = code(kt('NotificationFactory'));
+    expect(src).toMatch(/const val TITLE = "Driving"/);
+    expect(src).toMatch(/setContentTitle\(TITLE\)/);
+    expect(src).toMatch(/"\$speed · limit \$limit"/);
+    expect(src).toMatch(/\?: "— \$\{d\.unit\}"/);
+    expect(src).toMatch(/\?: "—"/);
+    expect(src).toMatch(/val points = d\.points \?: return null/);
+    expect(src).toMatch(/pointsLine\(d\)\?\.let \{ builder\.setSubText\(it\) \}/);
+    expect(src).toMatch(/"\$\{n\.format\(Math\.round\(points\)\)\} pts\$deltaText"/);
+  });
+
+  it('the End drive action only while stopped (and not ended); tapping opens the app', () => {
+    const src = code(kt('NotificationFactory'));
+    expect(src).toMatch(/if \(d\.stopped && !d\.ended\) \{[\s\S]{0,400}addAction\(0, "End drive", pi\)/);
+    expect(src).toMatch(/getLaunchIntentForPackage/);
+  });
+
+  it('setDriveDisplay reaches the running capture only, and the display resets with each capture', () => {
+    expect(MODULE()).toMatch(/AsyncFunction\("setDriveDisplay"\) \{ state: Map<String, Any\?> ->\s*CaptureService\.setDriveDisplay\(DriveDisplay\.from\(state\)\)/);
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/fun setDriveDisplay\(display: DriveDisplay\) \{\s*val inst = instance \?: return/);
+    expect(svc).toMatch(/NotificationFactory\.build\(this, display\)/);
+    const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(begin).toMatch(/display = null/);
+    expect(code(kt('Types'))).toMatch(/data class DriveDisplay\(/);
+  });
+
+  it('the notification channel is drive_recording at low importance', () => {
+    const src = code(kt('NotificationFactory'));
+    expect(src).toMatch(/"drive_recording"/);
+    expect(src).toMatch(/IMPORTANCE_LOW/);
+    expect(src).not.toMatch(/Recording your drive|Checking for a drive/);
+  });
+});
+
+describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
   it('starts foreground with the location type', () => {
     expect(code(kt('CaptureService'))).toMatch(/FOREGROUND_SERVICE_TYPE_LOCATION/);
   });
@@ -319,22 +401,6 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
     expect(code(kt('EventBus'))).toMatch(new RegExp(`MAX_BUFFERED\\s*=\\s*${EVENT_BUFFER_MAX}\\b`));
   });
 
-  it('the notification channel is drive_recording at low importance', () => {
-    const src = code(kt('NotificationFactory'));
-    expect(src).toMatch(/"drive_recording"/);
-    expect(src).toMatch(/IMPORTANCE_LOW/);
-    expect(src).toMatch(/Recording your drive/);
-    // A candidate that may be discarded is "Checking for a drive" (final review M5), and a
-    // capture native starts in 'auto' mode opens as one until JS says otherwise.
-    expect(src).toMatch(/Checking for a drive/);
-    expect(src).toMatch(/if \(candidate\) return "Checking for a drive"/);
-    const svc = code(kt('CaptureService'));
-    expect(svc).toMatch(/notifCandidate = mode == "auto"/);
-    expect(svc).toMatch(/NotificationFactory\.build\(this, notifStartedAt, notifStationary, notifCandidate\)/);
-    expect(code(kt('DriveSenseModule'))).toMatch(/state\["candidate"\] as\? Boolean \?: false/);
-    expect(src).toMatch(/Recording drive · /);
-  });
-
   it('no WorkManager (design §3.5)', () => {
     expect(allKotlin()).not.toMatch(/WorkManager|androidx\.work/);
     expect(read(join(ANDROID, 'build.gradle'))).not.toMatch(/androidx\.work/);
@@ -377,6 +443,19 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(src).toMatch(/hasAccuracy\(\)/);
     expect(src).toMatch(/hasAltitude\(\)/);
     expect(src).toMatch(/elapsedRealtimeNanos/);
+  });
+
+  // v3 (plan §6; spec "Integrity · GPS spoofing")
+  it('flags a mock-provider fix (isMock on API 31+, isFromMockProvider before) and emits it as the row key `mock`, outside the FeatureRow map', () => {
+    const loc = code(kt('LocationSource'));
+    expect(loc).toMatch(/if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S\) l\.isMock else l\.isFromMockProvider/);
+    expect(loc).toMatch(/mock = isMock\(l\)/);
+    expect(code(kt('Types'))).toMatch(/val mock: Boolean = false/);
+    expect(code(kt('Types'))).not.toMatch(/"mock"/); // never in FeatureRow.toMap: the self-test rows stay the contract's keys
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/body\["mock"\] = mock/);
+    expect(svc).toMatch(/emitRow\(out\.row, fix\.mock\)/);
+    expect(svc).toMatch(/emitRow\(out\.row, fix\?\.mock \?: false\)/);
   });
 });
 

@@ -11,7 +11,11 @@ data class RawImuSample(val t: Double, val a: Vec3, val w: Vec3)
 /** The gravity filter's carry-over between batches (`mags`: |a| of the last ≤ GRAVITY_GATE_SAMPLES − 1 samples, oldest first). */
 data class GravityState(val g: Vec3?, val t: Double?, val mags: List<Double>)
 
-/** One GNSS fix as delivered (unknowns as negative numbers), `t` in epoch ms. */
+/**
+ * One GNSS fix as delivered (unknowns as negative numbers), `t` in epoch ms. `mock` (v3, plan §6):
+ * the fix came from a mock location provider — it rides on the `row` payload beside the
+ * FeatureRow keys and never enters the extractor.
+ */
 data class FixSample(
   val t: Double,
   val lat: Double,
@@ -20,10 +24,39 @@ data class FixSample(
   val speed: Double,
   val speedAcc: Double,
   val course: Double,
-  val alt: Double
+  val alt: Double,
+  val mock: Boolean = false
 )
 
 data class PhoneSample(val locked: Boolean, val screenOn: Boolean, val appForeground: Boolean)
+
+/** `setDriveDisplay`'s argument (plan §6): what the foreground notification shows. */
+data class DriveDisplay(
+  val speed: Double?,
+  val limit: Double?,
+  val unit: String,
+  val points: Double?,
+  val pointsDelta: Double?,
+  val stopped: Boolean,
+  val ended: Boolean
+) {
+  companion object {
+    /** Before JS has sent anything: "— mph · limit —", no points, no action. */
+    val EMPTY = DriveDisplay(null, null, "mph", null, null, stopped = false, ended = false)
+
+    private fun num(v: Any?): Double? = (v as? Number)?.toDouble()?.takeIf { it.isFinite() }
+
+    fun from(m: Map<String, Any?>): DriveDisplay = DriveDisplay(
+      speed = num(m["speed"]),
+      limit = num(m["limit"]),
+      unit = if (m["unit"] == "km/h") "km/h" else "mph",
+      points = num(m["points"]),
+      pointsDelta = num(m["pointsDelta"]),
+      stopped = m["stopped"] as? Boolean ?: false,
+      ended = m["ended"] as? Boolean ?: false
+    )
+  }
+}
 
 /** M1's `FeatureRow`, exactly its 27 keys (README §4); the six DMS motion fields last (Task C0). */
 data class FeatureRow(

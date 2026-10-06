@@ -1,11 +1,11 @@
-// The iOS drive-sense core: arming and wakes, capture and its rate, the persisted flags, and
-// `getState`. One instance for the process, created on the main thread by the app-delegate
-// subscriber at launch (before any module exists) and used on the main thread only; row work
-// happens on `RowPipeline.queue`.
+// The iOS drive-sense core: capture and its rate, the persisted flags, and `getState`. One
+// instance for the process, created lazily on the main thread by the first module call and used
+// on the main thread only; row work happens on `RowPipeline.queue`.
 //
-// Battery (design §3.5, README §1): armed = OS-delivered wakes plus the motion-activity feed —
-// no GPS, no IMU, no timers. GPS 1 Hz and IMU 25 Hz only while capturing at `full`; at `low` the
-// IMU and the 1 s tick stop and a row is emitted per coarse fix.
+// v3 (plan §1 decision 4): nothing runs between captures — no wakes, no motion feed, no timers.
+// GPS 1 Hz and IMU 25 Hz only while capturing at `full`; at `low` the IMU and the 1 s tick stop
+// and a row is emitted per coarse fix. A capture started in the foreground keeps running in the
+// background on While Using through the `location` background mode (app.config.ts).
 import CoreLocation
 import Foundation
 
@@ -13,25 +13,23 @@ final class CaptureController {
   static let shared = CaptureController()
 
   private enum Key {
-    static let armed = "drivesense.armed"
     static let captureOpen = "drivesense.captureOpen"
     static let captureMode = "drivesense.captureMode"
   }
 
   private let defaults = UserDefaults.standard
-  private let wakes = WakeLocation()
   private let location = CaptureLocation()
   private let pipeline = RowPipeline()
   private lazy var motion = MotionSource(workQueue: pipeline.queue)
   private let phone = PhoneStateMonitor()
   private let calls = CallObserver()
   private let watchdog = Watchdog()
-  private let wakeTask = WakeTask()
   private var rowTimer: DispatchSourceTimer?
 
-  /// The persisted capture-open flag as this process found it (rev1: I2).
+  /// The persisted capture-open flag as this process found it (rev1: I2). iOS never restarts a
+  /// capture on its own (no location relaunch without Always), so this only tells JS that the
+  /// previous process died mid-drive; the flag is cleared here so it reports once.
   let captureWasOpen: Bool
-  private(set) var armed: Bool
   private(set) var capturing = false
   private(set) var rate: String?
   private(set) var mode: String?
@@ -43,12 +41,10 @@ final class CaptureController {
   private init() {
     dispatchPrecondition(condition: .onQueue(.main))
     captureWasOpen = defaults.bool(forKey: Key.captureOpen)
-    armed = defaults.bool(forKey: Key.armed)
-    wakes.onWake = { [weak self] reason, loc in self?.handleWake(reason: reason, location: loc) }
-    wakes.onAuthorizationChange = { [weak self] in self?.enforceArmingPermissions() }
+    if captureWasOpen { defaults.set(false, forKey: Key.captureOpen) }
     location.onFix = { [weak self] fix in self?.handleFix(fix) }
-    pipeline.onRow = { [weak self] row, gen in
-      DispatchQueue.main.async { self?.emitRow(row, generation: gen) }
+    pipeline.onRow = { [weak self] row, mock, gen in
+      DispatchQueue.main.async { self?.emitRow(row, mock: mock, generation: gen) }
     }
     watchdog.onExpire = { [weak self] in self?.stopCapture() }
     EventHub.shared.onListeningChanged = { [weak self] event, listening in
@@ -59,96 +55,23 @@ final class CaptureController {
 
   // MARK: - Permissions
 
-  var locationAuthorization: String { wakes.authorization }
-
-  private var armPermitted: Bool {
-    locationAuthorization == "always" && ActivitySource.status() == "granted"
-  }
-
-  /// `armed` is the effective arming: a revoked permission disarms and clears the flag.
-  func enforceArmingPermissions() {
-    if armed && !armPermitted { disarmNow() }
-  }
-
-  // MARK: - Launch (DriveSenseAppDelegateSubscriber)
-
-  /// Re-attaches the OS wakes after a launch. On a location-key relaunch with a capture open,
-  /// restarts full capture at once, under the watchdog's 60 s claim (design §2.4).
-  func launched(forLocation: Bool) {
-    enforceArmingPermissions()
-    if armed {
-      wakes.startWakes()
-      ActivitySource.startLive()
-    }
-    // A relaunch in the background can start GPS only with Always (which a location relaunch implies).
-    if forLocation && defaults.bool(forKey: Key.captureOpen) && !capturing && locationAuthorization == "always" {
-      let m = defaults.string(forKey: Key.captureMode) ?? "auto"
-      beginCapture(mode: m, nativeStarted: true)
-    }
-  }
-
-  // MARK: - Arming
-
-  enum ArmFailure: Error {
-    case unavailable
-    case permission(String)
-  }
-
-  func arm() throws {
-    wakeTask.end()
-    let motionStatus = ActivitySource.status()
-    if motionStatus == "unavailable" { throw ArmFailure.unavailable }
-    guard armPermitted else {
-      disarmNow()
-      throw ArmFailure.permission("arm needs location 'always' and motion 'granted' (have \(locationAuthorization), \(motionStatus))")
-    }
-    if !armed {
-      armed = true
-      defaults.set(true, forKey: Key.armed)
-    }
-    wakes.startWakes()
-    ActivitySource.startLive()
-  }
-
-  func disarm() {
-    wakeTask.end()
-    disarmNow()
-  }
-
-  private func disarmNow() {
-    armed = false
-    defaults.set(false, forKey: Key.armed)
-    wakes.stopWakes()
-    if !capturing { ActivitySource.stopLive() }
-  }
-
-  /// An OS wake: re-centre the exit region on the wake's own location, hold a background task
-  /// over the JS boot, and tell JS. While a claimed capture runs there is nothing to wake.
-  private func handleWake(reason: String, location loc: CLLocation?) {
-    guard armed else { return }
-    if let l = loc { wakes.recentre(on: l) }
-    if capturing && !watchdog.awaitingClaim { return }
-    wakeTask.begin()
-    EventHub.shared.emit("wake", ["reason": reason, "ts": TimeBase.nowTs()])
-  }
+  var locationAuthorization: String { location.authorization }
 
   // MARK: - Capture
 
-  /// JS `startCapture`: starts a capture, or claims and re-modes the running one.
+  /// JS `startCapture`: starts a capture, or re-modes the running one. Needs While Using at least.
   func startCapture(mode newMode: String) -> Bool {
     guard locationAuthorization != "none" else { return false }
     if capturing {
       mode = newMode
       defaults.set(newMode, forKey: Key.captureMode)
-      watchdog.claimed()
     } else {
-      beginCapture(mode: newMode, nativeStarted: false)
+      beginCapture(mode: newMode)
     }
-    wakeTask.end()
     return true
   }
 
-  private func beginCapture(mode newMode: String, nativeStarted: Bool) {
+  private func beginCapture(mode newMode: String) {
     generation += 1
     let gen = generation
     capturing = true
@@ -161,10 +84,11 @@ final class CaptureController {
     pipeline.queue.async { self.pipeline.reset(generation: gen) }
     phone.start()
     calls.start()
+    // The motion-activity feed runs only during a capture (walking auto-end).
     ActivitySource.startLive()
     location.start(low: false)
     startFullRateSensors()
-    watchdog.captureStarted(nativeStarted: nativeStarted, rowListening: EventHub.shared.isListening("row"))
+    watchdog.captureStarted(rowListening: EventHub.shared.isListening("row"))
   }
 
   func stopCapture() {
@@ -182,7 +106,7 @@ final class CaptureController {
     pipeline.queue.async { self.pipeline.reset(generation: gen) }
     phone.stop()
     calls.stop()
-    if !armed { ActivitySource.stopLive() }
+    ActivitySource.stopLive()
   }
 
   func setCaptureRate(_ newRate: String) {
@@ -245,19 +169,20 @@ final class CaptureController {
     }
   }
 
-  private func emitRow(_ row: ExtractedRow, generation gen: Int) {
+  /// The `row` payload: the FeatureRow keys plus `mock` (v3, plan §6) — the window's fix was simulated.
+  private func emitRow(_ row: ExtractedRow, mock: Bool, generation gen: Int) {
     watchdog.check()
     guard capturing, gen == generation else { return }
     lastRowTs = row.ts
-    EventHub.shared.emit("row", row.payload)
+    var body = row.payload
+    body["mock"] = mock
+    EventHub.shared.emit("row", body)
   }
 
   // MARK: - State
 
   func state() -> [String: Any] {
-    enforceArmingPermissions()
     return [
-      "armed": armed,
       "capturing": capturing,
       "rate": rate.map { $0 as Any } ?? NSNull(),
       "mode": mode.map { $0 as Any } ?? NSNull(),

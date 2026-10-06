@@ -1,9 +1,8 @@
-// The iOS module (N2) read as text. Swift cannot be compiled or run under Jest, so this suite pins
-// what can be checked statically against the JS contract: the event list, one AsyncFunction per
-// contract method, the port's constants, the location and motion configuration the battery rules
-// depend on, the app-delegate subscriber registration, and the rule that `selfTest` runs the
-// production extractor rather than a copy. Behaviour is proven by the V1 compile and the device
-// pass (see the N2 report).
+// The iOS module read as text. Swift cannot be compiled or run under Jest, so this suite pins what
+// can be checked statically against the JS contract: the event list, one AsyncFunction per contract
+// method, the port's constants, the location and motion configuration, the manual-start-only rule
+// (plan §1 decision 4), and the rule that `selfTest` runs the production extractor rather than a
+// copy. Behaviour is proven by the device build.
 import * as CONSTANTS from '../src/extract/constants';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
@@ -15,6 +14,7 @@ import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- see above: `import` would need @types/node
 const fs = require('node:fs') as {
+  existsSync: (file: string) => boolean;
   readdirSync: (dir: string) => string[];
   readFileSync: (file: string, encoding: 'utf8') => string;
 };
@@ -39,7 +39,7 @@ const allCode = () => swiftFiles.map(code).join('\n');
 const moduleCode = () => code('DriveSenseModule.swift');
 
 describe('iOS drive-sense module (text)', () => {
-  it('has the files the task names', () => {
+  it('has the files the contract names, and not the relaunch subscriber', () => {
     for (const f of [
       'DriveSenseModule.swift',
       'CaptureController.swift',
@@ -51,11 +51,14 @@ describe('iOS drive-sense module (text)', () => {
       'PhoneState.swift',
       'CallObserver.swift',
       'Watchdog.swift',
-      'DriveSenseAppDelegateSubscriber.swift',
       'Backup.swift',
     ]) {
       expect(swiftFiles).toContain(f);
     }
+    expect(swiftFiles).not.toContain('DriveSenseAppDelegateSubscriber.swift');
+    const config = JSON.parse(fs.readFileSync(path.join(MODULE_DIR, 'expo-module.config.json'), 'utf8'));
+    expect(config.apple.modules).toEqual(['DriveSenseModule']);
+    expect(config.apple.appDelegateSubscribers).toBeUndefined();
   });
 
   it('keeps every Swift file under 300 lines', () => {
@@ -131,7 +134,7 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/distanceFilter = 50\b/);
   });
 
-  it('starts standard location updates only from the capture source (no GPS on arm)', () => {
+  it('starts standard location updates only from the capture source', () => {
     for (const f of swiftFiles) {
       const src = code(f);
       if (f === 'LocationSource.swift') continue;
@@ -139,13 +142,17 @@ describe('iOS drive-sense module (text)', () => {
     }
   });
 
-  it('arms with significant-change monitoring and one re-centred 150 m exit region', () => {
+  // plan §1 decision 4
+  it('no arming, no OS wakes, no relaunch, no Always: nothing runs between captures', () => {
     const src = allCode();
-    expect(src).toContain('startMonitoringSignificantLocationChanges');
-    expect(src).toContain('CLCircularRegion');
-    expect(src).toMatch(/EXIT_REGION_RADIUS_M\s*(?::\s*\w+)?\s*=\s*150\b/);
-    expect(src).toContain('notifyOnEntry = false');
-    expect(src).toContain('notifyOnExit = true');
+    expect(src).not.toMatch(/startMonitoringSignificantLocationChanges|CLCircularRegion|startMonitoring\(for|requestAlwaysAuthorization|beginBackgroundTask|launchOptions|\.location\]/);
+    expect(src).not.toMatch(/\barmed\b|func arm\(|disarm|"wake"|WakeLocation|WakeTask|nativeStarted: true/);
+    const ctrl = code('CaptureController.swift');
+    expect(ctrl).toMatch(/func startCapture\(mode newMode: String\) -> Bool \{\s*guard locationAuthorization != "none" else \{ return false \}/);
+    // the motion feed runs only inside a capture
+    expect(ctrl).toMatch(/private func beginCapture\([\s\S]*?ActivitySource\.startLive\(\)/);
+    expect(ctrl).toMatch(/func stopCapture\(\)[\s\S]*?ActivitySource\.stopLive\(\)/);
+    expect(ctrl.match(/ActivitySource\.startLive\(\)/g)).toHaveLength(1);
   });
 
   it('uses device motion in xArbitraryZVertical at 25 Hz and never the magnetometer', () => {
@@ -156,28 +163,20 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('MotionSource.swift')).toMatch(/1\.0 \/ ExtractConstants\.IMU_RATE_HZ/);
   });
 
-  it('holds a background task over every wake', () => {
-    expect(allCode()).toContain('beginBackgroundTask');
-    expect(allCode()).toContain('endBackgroundTask');
-    expect(allCode()).toMatch(/WAKE_TASK_S\s*(?::\s*\w+)?\s*=\s*25\b/);
-  });
-
-  it('runs the watchdog with the contract limits', () => {
+  it('runs the row-listener watchdog with the contract limit', () => {
     const src = code('Watchdog.swift');
-    expect(src).toMatch(/CLAIM_TIMEOUT_S\s*(?::\s*\w+)?\s*=\s*60\b/);
     expect(src).toMatch(/NO_LISTENER_TIMEOUT_S\s*(?::\s*\w+)?\s*=\s*300\b/);
+    expect(src).not.toMatch(/CLAIM_TIMEOUT/);
   });
 
   it('keeps watchdog deadlines on a clock that runs in sleep, checked on rows and fixes (N2N3 M1)', () => {
-    // the Watchdog class only (WakeTask's 25 s runs under a background-task assertion: no sleep)
-    const all = code('Watchdog.swift');
-    const src = all.slice(all.indexOf('final class Watchdog'), all.indexOf('final class WakeTask'));
+    const src = code('Watchdog.swift');
     expect(src).toContain('asyncAfter(wallDeadline:');
     expect(src).not.toMatch(/asyncAfter\(deadline:/);
     expect(src).toContain('CLOCK_MONOTONIC');
     const ctrl = code('CaptureController.swift');
     expect(ctrl).toMatch(/func handleFix[\s\S]{0,80}watchdog\.check\(\)/);
-    expect(ctrl).toMatch(/func emitRow[\s\S]{0,80}watchdog\.check\(\)/);
+    expect(ctrl).toMatch(/func emitRow[\s\S]{0,120}watchdog\.check\(\)/);
   });
 
   it('tells the watchdog the old listeners are gone when a new module attaches (N2N3 M2)', () => {
@@ -193,6 +192,46 @@ describe('iOS drive-sense module (text)', () => {
     );
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  // plan §6: forgot-to-start on iOS
+  it('checkForgottenDrive: a confident automotive stretch ≥ 5 min that ended after `since`, the most recent one, never one still open', () => {
+    const src = code('ActivitySource.swift');
+    expect(src).toMatch(/FORGOTTEN_MIN_S: Double = 5 \* 60/);
+    const fn = /static func forgottenDrive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(fn).toMatch(/guard status\(\) == "granted"/);
+    expect(fn).toMatch(/guard a\.confidence != \.low else \{ continue \}/);
+    expect(fn).toMatch(/if a\.automotive \{\s*if openStart == nil \{ openStart = a\.startDate \}/);
+    expect(fn).toMatch(/end\.timeIntervalSince\(start\) >= FORGOTTEN_MIN_S && endMs >= sinceMs/);
+    expect(fn).toMatch(/best = \["startedAt": NSNumber\(value: TimeBase\.ts\(start\)\), "endedAt": NSNumber\(value: TimeBase\.ts\(end\)\)\]/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("checkForgottenDrive"\) \{ \(sinceMs: Double, promise: Promise\) in\s*ActivitySource\.forgottenDrive\(sinceMs: sinceMs\)/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("setForgotToStartReminder"\)[\s\S]{0,200}UserDefaults\.standard\.set\(enabled, forKey: "drivesense\.forgotToStartReminder"\)/);
+  });
+
+  // plan §6: the background surface
+  it('setDriveDisplay forwards to the Live Activity through the roadwise.driveDisplay notification', () => {
+    const src = moduleCode();
+    expect(src).toMatch(/AsyncFunction\("setDriveDisplay"\) \{ \(state: DriveDisplayRecord, promise: Promise\) in\s*DriveDisplayBridge\.post\(state\)/);
+    expect(src).toMatch(/static let name = Notification\.Name\("roadwise\.driveDisplay"\)/);
+    expect(src).toMatch(/NotificationCenter\.default\.post\(name: name, object: nil, userInfo: info\)/);
+    for (const k of ['unit', 'stopped', 'ended', 'speed', 'limit', 'points', 'pointsDelta']) expect(src).toContain(`"${k}"`);
+    expect(src).toMatch(/struct DriveDisplayRecord: Record/);
+  });
+
+  // plan §6; spec "Integrity · GPS spoofing"
+  it('flags a simulated fix (iOS 15+ sourceInformation) and emits it as the row key `mock`, outside the FeatureRow payload', () => {
+    const loc = code('LocationSource.swift');
+    expect(loc).toMatch(/sourceInformation\?\.isSimulatedBySoftware \?\? false/);
+    expect(loc).toMatch(/#available\(iOS 15\.0, \*\)/);
+    expect(loc).toMatch(/mock: Self\.isSimulated\(l\)/);
+    expect(code('ExtractMath.swift')).toMatch(/var mock: Bool = false/);
+    expect(code('ExtractMath.swift')).not.toMatch(/"mock"/); // never in `payload`: the self-test rows stay the contract's keys
+    const ctrl = code('CaptureController.swift');
+    expect(ctrl).toMatch(/var body = row\.payload\s*body\["mock"\] = mock\s*EventHub\.shared\.emit\("row", body\)/);
+    const pipe = code('RowPipeline.swift');
+    expect(pipe).toMatch(/var onRow: \(\(ExtractedRow, Bool, Int\) -> Void\)\?/);
+    expect(pipe).toMatch(/mock: fix\.mock\)/);
+    expect(pipe).toMatch(/mock: fix\?\.mock \?\? false\)/);
   });
 
   it('polls protected data for the lock state and reports the lock signal', () => {
@@ -229,16 +268,6 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('SelfTest.swift')).toMatch(/"skipped"/);
     expect(code('SelfTest.swift')).toContain('"gravityFilter"');
     expect(code('SelfTest.swift')).toContain('"androidRaw"');
-  });
-
-  it('registers the app-delegate subscriber that restarts capture on a location launch', () => {
-    const config = JSON.parse(fs.readFileSync(path.join(MODULE_DIR, 'expo-module.config.json'), 'utf8'));
-    expect(config.apple.modules).toEqual(['DriveSenseModule']);
-    expect(config.apple.appDelegateSubscribers).toEqual(['DriveSenseAppDelegateSubscriber']);
-    const src = code('DriveSenseAppDelegateSubscriber.swift');
-    expect(src).toMatch(/class DriveSenseAppDelegateSubscriber:\s*ExpoAppDelegateSubscriber/);
-    expect(src).toContain('didFinishLaunchingWithOptions');
-    expect(src).toContain('.location');
   });
 
   it('links the frameworks it uses', () => {

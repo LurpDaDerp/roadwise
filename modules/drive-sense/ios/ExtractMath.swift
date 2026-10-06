@@ -127,6 +127,7 @@ struct ImuSample {
 }
 
 /// One fix as the platform delivered it; unknowns stay negative (the extractor maps them).
+/// `mock` (v3, plan §6): simulated by software — rides on the `row` payload, never enters the extractor.
 struct FixSample {
   var t: Double
   var lat: Double
@@ -136,6 +137,7 @@ struct FixSample {
   var speedAcc: Double
   var course: Double
   var alt: Double
+  var mock: Bool = false
 }
 
 struct PhoneSample: Equatable {

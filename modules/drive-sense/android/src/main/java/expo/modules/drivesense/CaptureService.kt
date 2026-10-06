@@ -22,13 +22,14 @@ import com.facebook.react.HeadlessJsTaskService
  * While it captures at `full` rate: 1 Hz fused location, 25 Hz accelerometer + gyroscope batched
  * in the sensor hub, and one [FeatureRow] per second computed natively by [FeatureExtractor] and
  * emitted as `row` — raw samples never cross the bridge. At `low` rate (rev1: I5): 10 s balanced
- * location, no IMU, a row per fix. Nothing of this runs unless a capture is open: armed-and-idle
+ * location, no IMU, a row per fix. Nothing of this runs unless a capture is open: idle
  * costs nothing (design §3.5).
  *
- * Starts: from JS (`startCapture`), from [ActivityTransitionReceiver] on IN_VEHICLE ENTER, and as a
+ * Starts: from JS (`startCapture`, a user's tap in the foreground — plan §1 decision 4), and as a
  * `START_STICKY` restart with a null intent after the process was killed mid-capture (rev1: I2),
- * which resumes from the persisted state and starts the headless JS task again. A native start
- * must be claimed by JS within 60 s and a JS `row` listener must exist, or [Watchdog] stops it.
+ * which resumes the capture the user had started from the persisted state and starts the headless
+ * JS task again. That restart must be claimed by JS within 60 s and a JS `row` listener must exist,
+ * or [Watchdog] stops it. Nothing else ever starts a capture.
  *
  * Threading: all capture state lives on one [HandlerThread]; the companion's `@Volatile` fields are
  * the read-only view the module's `getState` uses.
@@ -36,7 +37,6 @@ import com.facebook.react.HeadlessJsTaskService
 class CaptureService : Service() {
   companion object {
     const val ACTION_START_JS = "expo.modules.drivesense.START_JS"
-    const val ACTION_START_NATIVE = "expo.modules.drivesense.START_NATIVE"
     const val ACTION_END_DRIVE = "expo.modules.drivesense.END_DRIVE"
     const val EXTRA_MODE = "mode"
 
@@ -162,16 +162,6 @@ class CaptureService : Service() {
       main.postDelayed({ resolveStart(pending, "E_FGS_REFUSED") }, START_RESULT_TIMEOUT_MS)
     }
 
-    /** The activity-transition receiver's start. A refusal is silent (SR9) and recorded. */
-    fun startNative(context: Context) {
-      val intent = Intent(context, CaptureService::class.java).setAction(ACTION_START_NATIVE)
-      try {
-        ContextCompat.startForegroundService(context, intent)
-      } catch (_: Exception) {
-        DriveSensePrefs.init(context).recordExit("other", whileCapturing = false)
-      }
-    }
-
     /** `stopCapture()`: idempotent; clears the capture-open flag even with no service running. */
     fun stopFromJs(context: Context, done: () -> Unit) {
       val inst = instance
@@ -199,13 +189,11 @@ class CaptureService : Service() {
       }
     }
 
-    /** `setNotificationState(...)`: remembered for the capture's notification. */
-    fun setNotificationState(stationary: Boolean, startedAt: Long?, candidate: Boolean = false) {
+    /** `setDriveDisplay(...)` (plan §6): what the capture's notification shows. Ignored while not capturing. */
+    fun setDriveDisplay(display: DriveDisplay) {
       val inst = instance ?: return
       inst.handler.post {
-        inst.notifStationary = stationary
-        inst.notifStartedAt = startedAt
-        inst.notifCandidate = candidate
+        inst.display = display
         inst.refreshNotification()
       }
     }
@@ -232,10 +220,8 @@ class CaptureService : Service() {
   private var imuRunning = false
   private var nextTickAt = 0L
   private var droppedSamples = 0
-  private var notifStationary = false
-  private var notifStartedAt: Long? = null
-  /** A candidate, not yet a drive (final review M5): "Checking for a drive". */
-  private var notifCandidate = false
+  /** The last `setDriveDisplay` of this capture (null before any: "— mph · limit —"). */
+  private var display: DriveDisplay? = null
 
   /** The latest start command delivered (main thread). */
   private var lastStartId = 0
@@ -281,7 +267,7 @@ class CaptureService : Service() {
 
     when (intent.action) {
       ACTION_START_JS -> {
-        val mode = intent.getStringExtra(EXTRA_MODE) ?: "auto"
+        val mode = intent.getStringExtra(EXTRA_MODE) ?: "mounted"
         val refused = goForeground()
         if (refused != null) {
           resolveStarts(refused)
@@ -295,21 +281,6 @@ class CaptureService : Service() {
           handler.post { beginCapture(mode, "full", System.currentTimeMillis(), nativeStart = false) }
         }
         resolveStarts(null)
-      }
-      ACTION_START_NATIVE -> {
-        val refused = goForeground()
-        if (refused != null) {
-          // Silent (SR9): no notification, no sound. Recorded for getLastExitInfo.
-          if (!isCapturing) {
-            prefs.recordExit("other", whileCapturing = false)
-            stopSelf(startId)
-            return START_NOT_STICKY
-          }
-        } else if (!isCapturing) {
-          isCapturing = true
-          handler.post { beginCapture("auto", "full", System.currentTimeMillis(), nativeStart = true) }
-          startHeadless()
-        }
       }
       ACTION_END_DRIVE -> {
         if (!isCapturing) {
@@ -332,8 +303,8 @@ class CaptureService : Service() {
     handler.post { stopSources() }
     isCapturing = false
     // C12 round 1 (review-C12 m1): a capture that ends here (the system, a kill, a refused sticky restart)
-    // never ran endCapture: its walking feed goes too, unless armed.
-    ActivityTransitions.unsubscribeAfterCapture(this)
+    // never ran endCapture: its walking feed goes too, unless the reminder keeps it.
+    ActivityTransitions.sync(this)
     currentRate = null
     currentMode = null
     captureStartedAt = null
@@ -347,13 +318,13 @@ class CaptureService : Service() {
 
   /** @return null when the service is in the foreground, else the contract code for the refusal. */
   private fun goForeground(): String? {
-    val notification = NotificationFactory.build(this, notifStartedAt, notifStationary, notifCandidate)
+    val notification = NotificationFactory.build(this, display)
     return try {
       val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
       ServiceCompat.startForeground(this, NotificationFactory.NOTIFICATION_ID, notification, type)
       null
     } catch (_: SecurityException) {
-      // Android 14+: a location service needs location permission, and from the background, Always.
+      // Android 14+: a location service needs location permission.
       "E_PERMISSION"
     } catch (_: Exception) {
       "E_FGS_REFUSED"
@@ -364,7 +335,7 @@ class CaptureService : Service() {
     if (!isCapturing) return
     try {
       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?
-      nm?.notify(NotificationFactory.NOTIFICATION_ID, NotificationFactory.build(this, notifStartedAt, notifStationary, notifCandidate))
+      nm?.notify(NotificationFactory.NOTIFICATION_ID, NotificationFactory.build(this, display))
     } catch (_: Exception) {
       // Notifications blocked: the service keeps running (SR9).
     }
@@ -399,8 +370,7 @@ class CaptureService : Service() {
     currentMode = mode
     currentRate = rate
     captureStartedAt = startedAt
-    // An auto capture opens as a candidate until JS confirms it; a manual start is a drive.
-    notifCandidate = mode == "auto"
+    display = null
     prefs.mode = mode
     prefs.rate = rate
     prefs.captureStartedAt = startedAt
@@ -413,9 +383,11 @@ class CaptureService : Service() {
     watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
     handler.postDelayed(minute, MINUTE_MS)
-    // DMS calib T12 (WK-m1): the walking feed during every capture (JS start, native start, sticky
-    // restart), best effort: a failure is logged and swallowed and the capture runs on.
-    ActivityTransitions.subscribeForCapture(this)
+    // DMS calib T12 (WK-m1): the walking feed during every capture (JS start, sticky restart), best
+    // effort: a failure is logged and swallowed and the capture runs on.
+    ActivityTransitions.sync(this)
+    // The forgot-to-start reminder: this vehicle period is being recorded.
+    ForgotToStartReminder.onCaptureStarted(this)
   }
 
   private fun updateModeAndClaim(mode: String) {
@@ -468,12 +440,10 @@ class CaptureService : Service() {
     currentRate = null
     currentMode = null
     captureStartedAt = null
-    notifStationary = false
-    notifStartedAt = null
-    notifCandidate = false
+    display = null
     if (clearOpen) prefs.captureOpen = false
-    // DMS calib T12: the capture's walking feed ends with it, unless the arming keeps it.
-    ActivityTransitions.unsubscribeAfterCapture(this)
+    // DMS calib T12: the capture's walking feed ends with it, unless the reminder keeps it.
+    ActivityTransitions.sync(this)
     main.post {
       try {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -511,7 +481,6 @@ class CaptureService : Service() {
 
   private fun onMinute() {
     if (!isCapturing) return
-    refreshNotification()
     if (currentRate == "full") acquireWakeLock()
     reportFallbacks()
     handler.postDelayed(minute, MINUTE_MS)
@@ -591,7 +560,7 @@ class CaptureService : Service() {
         val out = FeatureExtractor.extractSecond(emptyList(), fix, phone.snapshot(), ts.toDouble(), extractState)
         extractState = out.state
         prevRowTs = ts
-        emitRow(out.row)
+        emitRow(out.row, fix.mock)
       }
     } else {
       fixes.add(fix)
@@ -634,12 +603,15 @@ class CaptureService : Service() {
     val out = FeatureExtractor.extractSecond(window.inWindow, fix, phone.snapshot(), ts.toDouble(), extractState)
     extractState = out.state
     prevRowTs = ts
-    emitRow(out.row)
+    emitRow(out.row, fix?.mock ?: false)
   }
 
-  private fun emitRow(row: FeatureRow) {
+  /** The `row` payload: the FeatureRow keys plus `mock` (v3, plan §6) — the window's fix was mocked. */
+  private fun emitRow(row: FeatureRow, mock: Boolean) {
     if (!row.isFinite()) return // never hand JS a NaN (README §1); parseRow would drop it anyway
     lastRowTs = row.ts
-    EventBus.emit("row", row.toMap())
+    val body = LinkedHashMap<String, Any?>(row.toMap())
+    body["mock"] = mock
+    EventBus.emit("row", body)
   }
 }

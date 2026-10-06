@@ -1,5 +1,10 @@
-// The drive-sense contract: what the Swift (N2) and Kotlin (N3) modules implement and what the
-// drive host (H1/H2) consumes. README.md is the prose version; this file is the binding one.
+// The drive-sense contract: what the Swift and Kotlin modules implement and what the drive host
+// consumes. README.md is the prose version; this file is the binding one.
+//
+// v3 (plan §1 decision 4, §6): drives start only from a tap in the app. There is no arming, no
+// OS wake, no auto-start, no "Always" location anywhere in this module. Native captures only
+// between a JS `startCapture` and `stopCapture` (plus the Android sticky restart of a capture the
+// user already started, under the watchdog).
 import type { FeatureRow } from '../../../src/core/engine/types';
 import type { ExtractedRow } from './extract/types';
 
@@ -9,7 +14,17 @@ export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
 export type CaptureRate = 'full' | 'low';
 export type ThermalLevel = 'nominal' | 'fair' | 'serious' | 'critical';
-export type WakeReason = 'significantChange' | 'activityTransition' | 'boot' | 'geofence';
+
+/**
+ * A `row` as the bridge hands it to JS: M1's `FeatureRow` plus `mock` — whether the fix behind the
+ * row came from a mock location provider (Android `Location.isMock()` / `isFromMockProvider()`;
+ * iOS 15+ `sourceInformation?.isSimulatedBySoftware`). Optional: rows persisted before v3 and rows
+ * from an older native build parse without it, and a consumer reads absent as "not known to be
+ * mocked". Integrity (spec "GPS spoofing") reads it; the extractor never does.
+ */
+export interface DriveSenseRow extends FeatureRow {
+  mock?: boolean;
+}
 
 export interface MotionActivity {
   type: 'automotive' | 'walking' | 'running' | 'cycling' | 'stationary' | 'unknown';
@@ -25,13 +40,16 @@ export interface MotionActivity {
 }
 
 export interface DriveSenseState {
-  armed: boolean;
   capturing: boolean;
   /** null while not capturing */
   rate: CaptureRate | null;
   /** null while not capturing */
   mode: CaptureMode | null;
   platform: 'ios' | 'android';
+  /**
+   * The OS location authorisation. The app never asks for Always (plan §1 decision 4); `always`
+   * is reported only when the user granted it in Settings on their own, and nothing here needs it.
+   */
   location: 'none' | 'whenInUse' | 'always';
   motion: 'granted' | 'denied' | 'undetermined' | 'unavailable';
   /**
@@ -54,10 +72,35 @@ export interface ExitInfo {
   whileCapturing: boolean;
 }
 
+/**
+ * What the background surface shows (plan §6): the Android foreground notification and, on iOS,
+ * the Live Activity (forwarded natively when one is running). Callers throttle to ≤ 1 update per
+ * 3 s and only on change. `null` speed or limit shows "—". `points` is shown only when non-null
+ * (the host passes it only while stopped).
+ */
+export interface DriveDisplayState {
+  speed: number | null;
+  limit: number | null;
+  unit: 'mph' | 'km/h';
+  points: number | null;
+  pointsDelta: number | null;
+  /** ≤ 5 mph: the Android notification offers its End drive action only while stopped. */
+  stopped: boolean;
+  /** The drive is over: the surface shows its final state (the Live Activity dismisses soon). */
+  ended?: boolean;
+}
+
+/** iOS `checkForgottenDrive`: a confident automotive stretch of at least 5 minutes. */
+export interface ForgottenDrive {
+  /** epoch ms, integer */
+  startedAt: number;
+  /** epoch ms, integer */
+  endedAt: number;
+}
+
 export type DriveSenseEvents = {
-  wake: { reason: WakeReason; ts: number };
   activity: MotionActivity;
-  /** a `FeatureRow` as native emitted it — validate with `parseRow` before use */
+  /** a `DriveSenseRow` as native emitted it — validate with `parseRow` before use */
   row: unknown;
   screen: { locked: boolean; on: boolean; ts: number };
   thermal: { level: ThermalLevel; ts: number };
@@ -70,11 +113,10 @@ export type DriveSenseEvent = keyof DriveSenseEvents;
 
 /**
  * The event names both native modules declare. Keep this list byte-identical to the `Events(...)`
- * lists in `ios/DriveSenseModule.swift` and `android/.../DriveSenseModule.kt` (N2's and N3's text
+ * lists in `ios/DriveSenseModule.swift` and `android/.../DriveSenseModule.kt` (the native text
  * tests compare them).
  */
 export const DRIVE_SENSE_EVENTS = [
-  'wake',
   'activity',
   'row',
   'screen',
@@ -85,12 +127,10 @@ export const DRIVE_SENSE_EVENTS = [
 
 /**
  * Every `DriveSenseApi` method that crosses the bridge, in declaration order (`addListener` is the
- * Expo event emitter's, not an `AsyncFunction`). N2's and N3's text tests assert each appears as
- * `AsyncFunction("<name>")` in the native module.
+ * Expo event emitter's, not an `AsyncFunction`). The native text tests assert each appears as
+ * `AsyncFunction("<name>")` in both native modules.
  */
 export const DRIVE_SENSE_METHODS = [
-  'arm',
-  'disarm',
   'startCapture',
   'stopCapture',
   'setCaptureRate',
@@ -100,7 +140,9 @@ export const DRIVE_SENSE_METHODS = [
   'getThermalState',
   'requestMotionPermission',
   'excludeFromBackup',
-  'setNotificationState',
+  'setDriveDisplay',
+  'setForgotToStartReminder',
+  'checkForgottenDrive',
   'getLastExitInfo',
   'isIgnoringBatteryOptimizations',
   'selfTest',
@@ -113,11 +155,9 @@ export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
  * native method throws is a bug. The wrapper passes these through with their `code`.
  */
 export const DRIVE_SENSE_ERROR_CODES = [
-  /** `arm()`: location is not 'always' or motion is not 'granted'. `startCapture()`: no location
-   * permission at all, or (Android) the OS refused a location foreground service for lack of it. */
+  /** `startCapture()`: no location permission at all, or (Android) the OS refused the location
+   * foreground service for lack of it. */
   'E_PERMISSION',
-  /** The hardware or service is missing: no motion-activity support, no Google Play services. */
-  'E_UNAVAILABLE',
   /** Android `startCapture()`: the OS refused to start the foreground service for another reason
    * (background-start restrictions). */
   'E_FGS_REFUSED',
@@ -146,13 +186,11 @@ export interface Subscription {
 }
 
 export interface DriveSenseApi {
-  /** Start OS-delivered wakes only (significant change + exit region on iOS; activity transitions on Android). No GPS. */
-  arm(): Promise<void>;
-  disarm(): Promise<void>;
   /**
-   * Start (or keep) full-rate capture in `mode`. Also the JS *claim* of a natively started
-   * capture (rev1: C2): the watchdog stops an unclaimed capture after 60 s. Idempotent: while
-   * already capturing it only updates the mode and claims.
+   * Start (or keep) full-rate capture in `mode`. Also the JS *claim* of a capture native restarted
+   * on its own (the Android sticky restart; rev1: C2): the watchdog stops an unclaimed one after
+   * 60 s. Idempotent: while already capturing it only updates the mode and claims. Only ever
+   * called from a user's tap in the foreground (plan §1 decision 4).
    */
   startCapture(mode: CaptureMode): Promise<void>;
   /** Idempotent; clears the persisted capture-open flag. */
@@ -168,23 +206,35 @@ export interface DriveSenseApi {
   requestMotionPermission(): Promise<'granted' | 'denied' | 'unavailable'>;
   /** iOS: sets isExcludedFromBackup on the file or directory; Android: resolves (rev1: R4). */
   excludeFromBackup(uri: string): Promise<void>;
-  /** Android S3 notification (End drive action only while stationary); iOS no-op. */
-  setNotificationState(state: {
-    stationary: boolean;
-    startedAt: number | null;
-    /**
-     * A candidate that may still be discarded (final review M5): Android titles the notice
-     * "Checking for a drive" rather than claiming a recording. Absent means false.
-     */
-    candidate?: boolean;
-  }): Promise<void>;
+  /**
+   * The background surface (plan §6). Android: updates the capture's foreground notification
+   * (title "Driving"; "34 mph · limit 35"; a points line only when `points` is non-null; the End
+   * drive action only while `stopped`); ignored while not capturing. iOS: forwarded to the Live
+   * Activity when one is running, else a no-op. Never rejects.
+   */
+  setDriveDisplay(state: DriveDisplayState): Promise<void>;
+  /**
+   * The optional forgot-to-start reminder (spec "Starting and ending a drive"; off by default).
+   * Android: registers (or removes) a lightweight activity-transition listener — ACTIVITY_RECOGNITION
+   * only, no location — that posts a quiet local notification after an IN_VEHICLE exit when no
+   * capture ran during that vehicle period (never while in a vehicle, at most once per 6 h, never
+   * starts anything). The setting is persisted natively and re-registered on app start while
+   * enabled. iOS: persisted only; the app checks `checkForgottenDrive` on foreground instead. Never rejects.
+   */
+  setForgotToStartReminder(enabled: boolean): Promise<void>;
+  /**
+   * iOS: the most recent confident automotive stretch of ≥ 5 min in the motion history since
+   * `sinceMs`, or null (also null without motion permission). JS decides whether it overlaps a
+   * recorded drive and shows the in-app notice. Android: always null (the notification path above
+   * covers it). Never rejects.
+   */
+  checkForgottenDrive(sinceMs: number): Promise<ForgottenDrive | null>;
   /** Android ApplicationExitInfo (+ 'watchdog' from the persisted record); iOS null. */
   getLastExitInfo(): Promise<ExitInfo | null>;
   /**
    * Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether the app is
-   * exempt from battery optimisation, which decides whether background drive detection survives
-   * Doze (M4 permission health). iOS: always resolves `true` — iOS has no equivalent per-app
-   * restriction to report, so there is nothing for the user to fix.
+   * exempt from battery optimisation (permission health). iOS: always resolves `true` — iOS has no
+   * equivalent per-app restriction to report, so there is nothing for the user to fix.
    */
   isIgnoringBatteryOptimizations(): Promise<boolean>;
   /** Runs the native extractor over golden vectors; returns a `SelfTestOutput` as JSON (README §Self-test). */
@@ -203,7 +253,7 @@ export interface FakeControls {
    */
   emit<E extends DriveSenseEvent>(event: E, payload: DriveSenseEvents[E]): void;
   /** Queue rows for `step`/`drain` (replaces any rows still queued). */
-  loadTrace(rows: readonly FeatureRow[]): void;
+  loadTrace(rows: readonly DriveSenseRow[]): void;
   /**
    * Emit the next queued row as a `row` event. Like native, only while capturing: returns false
    * (emitting nothing) when not capturing or when the queue is empty. `{ force: true }` emits
@@ -215,38 +265,42 @@ export interface FakeControls {
   /** Rows still queued (e.g. to see that a host stopped capture early). */
   pendingRows(): number;
   /**
-   * Commands, in order: arm, disarm, startCapture, stopCapture, setCaptureRate,
-   * requestMotionPermission, excludeFromBackup, setNotificationState, selfTest — the method name,
-   * plus `:<arg>` for startCapture, setCaptureRate and excludeFromBackup. Rejected calls are logged too.
+   * Commands, in order: startCapture, stopCapture, setCaptureRate, requestMotionPermission,
+   * excludeFromBackup, setDriveDisplay, setForgotToStartReminder, selfTest — the method name, plus
+   * `:<arg>` for startCapture, setCaptureRate, excludeFromBackup and setForgotToStartReminder.
+   * Rejected calls are logged too.
    */
   calls: string[];
-  /** Read-only calls, in order: getState, queryMotionHistory, getScreenState, getThermalState, getLastExitInfo, isIgnoringBatteryOptimizations. */
+  /** Read-only calls, in order: getState, queryMotionHistory, getScreenState, getThermalState, checkForgottenDrive, getLastExitInfo, isIgnoringBatteryOptimizations. */
   queries: string[];
   setMotionHistory(a: MotionActivity[]): void;
   setState(s: Partial<DriveSenseState>): void;
-  // ——— additions beyond the brief (see the N1 report) ———
   /** JS listeners currently attached for `event` — the watchdog's liveness signal for `row`. */
   listenerCount(event: DriveSenseEvent): number;
   /** What `getLastExitInfo` resolves to (null by default). */
   setLastExitInfo(info: ExitInfo | null): void;
   /** What `isIgnoringBatteryOptimizations` resolves to (default: true on iOS, false on Android). */
   setIgnoringBatteryOptimizations(value: boolean): void;
-  /** The last `setNotificationState` argument, or null. */
-  readonly notificationState: { stationary: boolean; startedAt: number | null; candidate?: boolean } | null;
+  /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
+  readonly driveDisplay: DriveDisplayState | null;
+  /** The persisted forgot-to-start setting (default false). */
+  readonly forgotToStartReminder: boolean;
+  /** What `checkForgottenDrive` resolves to while motion is granted (null by default). */
+  setForgottenDrive(d: ForgottenDrive | null): void;
   // ——— DMS calib T12: the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is
-   * subscribed (by the arming, or by the capture itself) and while armed or capturing. Returns whether
-   * it was delivered. (`emit('activity', …)` still delivers unconditionally.)
+   * subscribed by a capture and the capture runs. Returns whether it was delivered.
+   * (`emit('activity', …)` still delivers unconditionally.)
    */
   transition(a: MotionActivity): boolean;
   /** The capture's own subscription fails from now on (Android: a SecurityException). The capture still runs. */
   failCaptureSubscribe(fail: boolean): void;
-  /** Whether the activity feed is subscribed now: by the arming, or by a capture (motion granted). */
+  /** Whether the activity feed is subscribed now (by a capture, motion granted). */
   readonly activitySubscribed: boolean;
   /**
    * C12 round 1: the capture's registration survives its end (an abnormal end: a kill, a refused restart, a late
-   * subscribe). Its first transition, neither armed nor capturing, removes it and delivers nothing (self-heal).
+   * subscribe). Its first transition, not capturing, removes it and delivers nothing (self-heal).
    */
   strandSubscription(): void;
 }

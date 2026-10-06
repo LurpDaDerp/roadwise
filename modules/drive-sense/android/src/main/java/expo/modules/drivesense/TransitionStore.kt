@@ -7,7 +7,7 @@ import org.json.JSONObject
 /**
  * The mapped activity transitions of the last 24 h (ENTER only, README §3), persisted so
  * `queryMotionHistory` answers across process deaths. Written only when a transition arrives —
- * nothing runs while armed and idle.
+ * nothing runs while idle.
  */
 object TransitionStore {
   private const val FILE = "expo.modules.drivesense.transitions"
