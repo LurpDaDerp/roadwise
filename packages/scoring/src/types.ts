@@ -1,9 +1,11 @@
 import type { EventCategory } from './constants';
 
 /** Which camera signal produced a focus event (§9.3). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type FocusKind = 'glance' | 'drowsiness';
 
 /** One detected event, as scored by §9.3–§9.5. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface ScorableEvent {
   id: string;
   category: EventCategory;
@@ -28,6 +30,7 @@ export interface ScorableEvent {
 }
 
 /** Trip-level facts the scorer needs to decide exposure and scorability (§9.4, §9.7, §9.8). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface TripMetrics {
   distanceM: number;
   durationS: number;
@@ -38,6 +41,7 @@ export interface TripMetrics {
 }
 
 /** The result of scoring one trip (§9.4). `score` is a number only when `status` is `'final'`. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface ScoredTrip {
   score: number | null;
   status: 'final' | 'unscored' | 'discarded';

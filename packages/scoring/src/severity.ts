@@ -81,6 +81,7 @@ function focusSeverity(measured: ScorableEvent['measured']): number {
  * Event severity `s` (§9.3). A measured value that is missing or outside every band scores 0, so an
  * event we cannot characterise costs the driver nothing.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function severity(e: ScorableEvent): number {
   switch (e.category) {
     case 'phone':
@@ -106,6 +107,7 @@ const SPEEDING_DURATION = { perSeconds: 30, min: 0.5, max: 4 } as const;
  * for the instantaneous categories. Correction credit floors `t` at the clamp's minimum for the two
  * sustained categories; the others have no duration to shorten, so they stay at 1.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function durationFactor(e: ScorableEvent): number {
   let band: typeof PHONE_DURATION | typeof SPEEDING_DURATION;
   if (e.category === 'phone') band = PHONE_DURATION;
@@ -117,6 +119,7 @@ export function durationFactor(e: ScorableEvent): number {
 }
 
 /** Base weight `B` (§9.3); drowsiness carries a heavier base than the rest of the focus category. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function baseWeight(e: ScorableEvent): number {
   if (e.category === 'focus' && e.measured.focusKind === 'drowsiness') return DROWSINESS_BASE;
   return CATEGORY[e.category].base;

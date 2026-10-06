@@ -14,6 +14,7 @@ const PRECIPITATION_CATEGORIES: readonly EventCategory[] = [
 ];
 
 /** Context multiplier `x` (§9.4): the product of the applicable factors, capped at 1.5. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function contextMultiplier(e: ScorableEvent): number {
   let x = 1;
   if (e.context.night && NIGHT_CATEGORIES.includes(e.category)) x *= CONSTANTS.CONTEXT_NIGHT;

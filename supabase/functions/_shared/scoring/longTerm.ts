@@ -3,9 +3,11 @@ import { CONSTANTS } from './constants';
 const DAY_MS = 86_400_000;
 
 /** The four score bands shown in the app (§9.6): 90+, 80–89, 65–79, below 65. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type ScoreBand = 'excellent' | 'good' | 'getting_there' | 'needs_focus';
 
 /** One scored trip, as the long-term score needs it. `durationS` feeds the 60-minute minimum. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface TripForLongTerm {
   /** epoch ms */
   endedAt: number;
@@ -14,6 +16,7 @@ export interface TripForLongTerm {
   durationS: number;
 }
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface LongTermScore {
   score: number | null;
   band: ScoreBand | null;
@@ -22,6 +25,7 @@ export interface LongTermScore {
   tripsUsed: number;
 }
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export function band(score: number): ScoreBand {
   if (score >= CONSTANTS.BAND_EXCELLENT) return 'excellent';
   if (score >= CONSTANTS.BAND_GOOD) return 'good';
@@ -38,6 +42,7 @@ export function band(score: number): ScoreBand {
  * fade. Below three trips or an hour of driving the number is withheld entirely rather than shown
  * as a near-prior 80 the driver would read as a judgement.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function longTermScore(trips: TripForLongTerm[], nowMs: number): LongTermScore {
   // Clamped at 0: a trip dated in the future (a skewed device clock, a daylight-saving jump) would
   // otherwise get a recency weight above 1 and outvote every trip the driver actually just made.

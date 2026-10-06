@@ -5,6 +5,7 @@ import { CONSTANTS } from './constants';
  * harsh-manoeuvre categories are measured in g and are meaningless without it; grade B tolerates one
  * or the other being thin; grade C is too thin to score at all, so the trip is kept but unscored.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function dataQualityGrade(validGnssPct: number, imuPresent: boolean): 'A' | 'B' | 'C' {
   // A share that is not a number is no evidence of GNSS coverage at all.
   if (!Number.isFinite(validGnssPct)) return 'C';

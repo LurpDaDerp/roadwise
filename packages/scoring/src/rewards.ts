@@ -14,24 +14,30 @@
 import { CONSTANTS } from './constants';
 
 /** The five event categories a weekly goal or a challenge can be about (focus is not one). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type GoalCategory = 'phone' | 'speeding' | 'braking' | 'accel' | 'cornering';
 
 /**
  * Goal categories in tie order: when two categories cost the driver the same over the previous
  * 28 days, the earlier one here becomes the weekly goal (§R5).
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const GOAL_CATEGORIES: readonly GoalCategory[] = ['phone', 'speeding', 'braking', 'cornering', 'accel'];
 
 /**
  * A day predicate a challenge counts (§R2): a category, `smooth` (braking, accel and cornering
  * together) or `safe` (the day's streak outcome).
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type ChallengePredicate = GoalCategory | 'smooth' | 'safe';
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export type LevelName = 'Learner' | 'Steady' | 'Smooth' | 'Focused' | 'Road-wise' | 'Mentor';
+/** @deprecated v2 — removed by WP6/WP5 */
 export type LevelNumber = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Classes by lifetime XP (§R1). `progress.level` is the `level` here; classes unlock nothing in P0. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const LEVELS: readonly { level: LevelNumber; name: LevelName; xp: number }[] = [
   { level: 1, name: 'Learner', xp: 0 },
   { level: 2, name: 'Steady', xp: 1500 },
@@ -42,10 +48,14 @@ export const LEVELS: readonly { level: LevelNumber; name: LevelName; xp: number 
 ];
 
 /** What a badge counts; each is a `progress` counter that settlement maintains (§R7). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type BadgeMetric = 'safe_days' | 'phone_free_days' | 'smooth_days' | 'weekly_goals' | 'challenges' | 'referrals';
+/** @deprecated v2 — removed by WP6/WP5 */
 export type BadgeTier = 'bronze' | 'silver' | 'gold';
 /** A badge family is named by its metric; only the highest tier per family is announced (§R9). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export type BadgeFamily = BadgeMetric;
+/** @deprecated v2 — removed by WP6/WP5 */
 export type BadgeId =
   | 'safe_days_7'
   | 'safe_days_30'
@@ -64,6 +74,7 @@ export type BadgeId =
   | 'challenges_10'
   | 'referrals_1';
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface BadgeDef {
   id: BadgeId;
   family: BadgeFamily;
@@ -79,6 +90,7 @@ export interface BadgeDef {
  * The 16 badges (§R7). None is based on distance or trip count (§10.1, E3); night-safe, rain-safe,
  * improvement and hours badges are deliberately absent.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const BADGES: readonly BadgeDef[] = [
   { id: 'safe_days_7', family: 'safe_days', tier: 'bronze', metric: 'safe_days', threshold: 7, sort: 1 },
   { id: 'safe_days_30', family: 'safe_days', tier: 'silver', metric: 'safe_days', threshold: 30, sort: 2 },
@@ -98,8 +110,10 @@ export const BADGES: readonly BadgeDef[] = [
   { id: 'referrals_1', family: 'referrals', tier: 'bronze', metric: 'referrals', threshold: 1, sort: 16 },
 ];
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export type ChallengeId = 'phone_down' | 'within_limit' | 'smooth_ride' | 'safe_run';
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface ChallengeDef {
   id: ChallengeId;
   predicate: ChallengePredicate;
@@ -117,6 +131,7 @@ export interface ChallengeDef {
  * The four personal challenges (§R6), measured in driving days (days whose predicate is pass or
  * fail), so not driving pauses them. Counting starts the day after joining.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const CHALLENGES: readonly ChallengeDef[] = [
   { id: 'phone_down', predicate: 'phone', targetDays: 10, windowDays: 14, points: 200, sort: 1 },
   { id: 'within_limit', predicate: 'speeding', targetDays: 10, windowDays: 14, points: 200, sort: 2 },
@@ -128,6 +143,7 @@ export const CHALLENGES: readonly ChallengeDef[] = [
  * The rewards constants (§R1–§R10). `POINTS`, the safe-day floor and the shield rules are taken
  * from `CONSTANTS` so the per-day evaluation (`day.ts`) and the rewards rules share one value.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const REWARDS = {
   /** Per-day and per-week credits (§R1). Challenge points live on each `CHALLENGES` def. */
   POINTS: CONSTANTS.POINTS,
@@ -174,6 +190,7 @@ export const REWARDS = {
 } as const;
 
 /** A referral code after `normaliseReferralCode`: 8 characters of `REWARDS.REFERRAL.CODE_ALPHABET`. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const REFERRAL_CODE_PATTERN = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/;
 
 /**
@@ -181,10 +198,12 @@ export const REFERRAL_CODE_PATTERN = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/;
  * (`' abcd-2345 '` → `'ABCD2345'`). The server's `redeem_referral_code` applies the same rule
  * before matching `REFERRAL_CODE_PATTERN`.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function normaliseReferralCode(input: string): string {
   return input.replace(/[\s-]/g, '').toUpperCase();
 }
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface LevelProgress {
   level: LevelNumber;
   name: LevelName;
@@ -195,6 +214,7 @@ export interface LevelProgress {
 }
 
 /** The class for a lifetime XP (§R1). Negative or non-finite XP reads as Learner with fraction 0. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function levelFor(xp: number): LevelProgress {
   const valid = Number.isFinite(xp) && xp >= 0;
   let index = 0;
@@ -214,6 +234,7 @@ export function levelFor(xp: number): LevelProgress {
  * as `badge_defs` / `challenge_defs` rows, which have their own parity with `BADGES` / `CHALLENGES`.
  * Returns a fresh plain object each call.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function rewardRulesJson(): Record<string, unknown> {
   return JSON.parse(
     JSON.stringify({

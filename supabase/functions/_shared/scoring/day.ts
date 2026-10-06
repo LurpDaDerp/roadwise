@@ -2,6 +2,7 @@ import { CONSTANTS } from './constants';
 import type { ScoredTrip } from './types';
 
 /** One of the day's trips, as the day evaluation needs it. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface DayTrip {
   score: number | null;
   status: ScoredTrip['status'];
@@ -11,10 +12,12 @@ export interface DayTrip {
   cameraGood: boolean;
 }
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface DayInputs {
   trips: DayTrip[];
 }
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export interface DayResult {
   safeDay: boolean;
   goodDay: boolean;
@@ -33,6 +36,7 @@ export interface DayResult {
  * which keeps a single flawless trip round the block from being a day's achievement; a phone-free
  * day has no such minimum, because leaving the phone alone on a short drive is the same discipline.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function evaluateDay(d: DayInputs): DayResult {
   const scored = d.trips.filter(
     (t): t is DayTrip & { score: number } => t.status === 'final' && t.score !== null

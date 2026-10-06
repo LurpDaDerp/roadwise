@@ -6,6 +6,7 @@ import { CONSTANTS } from './constants';
  * City driving has low miles but high exposure and highway driving the opposite, so both terms
  * matter; the floor stops one event on a very short trip from dominating the score.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function exposure(distanceM: number, durationS: number): number {
   const miles = distanceM / CONSTANTS.MILE;
   const minutes = durationS / 60;

@@ -8,9 +8,11 @@
 const MPH = 0.44704;
 const MILE = 1609.344;
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export type EventCategory = 'phone' | 'speeding' | 'braking' | 'accel' | 'cornering' | 'focus';
 
 /** Base weight `B` and per-trip deduction cap per category (§9.3). Caps sum to 100. */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const CATEGORY = {
   phone: { base: 8, cap: 30 },
   speeding: { base: 2, cap: 25 },
@@ -21,8 +23,10 @@ export const CATEGORY = {
 } as const satisfies Record<EventCategory, { base: number; cap: number }>;
 
 /** Drowsiness episodes carry a heavier base than the rest of the focus category (§9.3). */
+/** @deprecated v2 — removed by WP6/WP5 */
 export const DROWSINESS_BASE = 6;
 
+/** @deprecated v2 — removed by WP6/WP5 */
 export const CONSTANTS = {
   MPH,
   MILE,

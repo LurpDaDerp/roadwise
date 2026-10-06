@@ -17,6 +17,7 @@ const zero = () => Object.fromEntries(CATEGORIES.map((c) => [c, 0])) as Record<E
  * category can take the whole score. Events the driver disputed, the detector only called
  * "possible", or that fall below the confidence floor cost nothing at all.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function scoreTrip(m: TripMetrics, events: ScorableEvent[]): ScoredTrip {
   // One NaN or Infinity anywhere in the trip's measurements propagates through exposure into every
   // deduction and out as a NaN score, which would then be stored and shown. A trip we cannot even

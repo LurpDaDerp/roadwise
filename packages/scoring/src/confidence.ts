@@ -9,6 +9,7 @@ import { CONSTANTS } from './constants';
  * comparison against NaN is false, so without the guard an unmeasurable event would fall through
  * the bands and be charged at full weight.
  */
+/** @deprecated v2 — removed by WP6/WP5 */
 export function effectiveConfidence(q: number): number {
   if (!Number.isFinite(q) || q < CONSTANTS.Q_UNSCORED_BELOW) return 0;
   if (q >= CONSTANTS.Q_FULL_AT) return 1;

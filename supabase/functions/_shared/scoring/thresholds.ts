@@ -1,0 +1,62 @@
+// v3 detection thresholds and game constants (product spec v3, plan §2). Shared by the device's
+// detectors, the server's re-validation and the screens, so every number lives here once.
+
+/** Hard braking, in g: minor from 0.40, severe from 0.55 (confirmed by a GPS speed drop). */
+export const HARD_BRAKE_G = { minor: 0.4, severe: 0.55 } as const;
+/** Hard acceleration, in g. */
+export const HARD_ACCEL_G = { minor: 0.35, severe: 0.5 } as const;
+/** Hard cornering (sideways force), in g. */
+export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
+/** Gaze off road this long (s) above `EYES_OFF_MIN_MPH` is an eyes-off event. */
+export const EYES_OFF_S = { minor: 2, severe: 4 } as const;
+export const EYES_OFF_MIN_MPH = 10;
+/** Sustained eye-closure signs for this long (s) is a drowsiness event. */
+export const DROWSY_S = 60;
+/** Phone pickups count only while moving above this speed. */
+export const PHONE_MIN_MPH = 5;
+/** Continuous time above the threshold before speeding is an incident (3 s when severe). */
+export const SPEEDING_MIN_S = { default: 5, severe: 3 } as const;
+/** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
+export const SPEEDING_END_S = 5;
+export const SPEEDING_END_BUFFER_MPH = 2;
+/** No events in the first 30 s of a drive. */
+export const NO_EVENTS_FIRST_S = 30;
+/** GPS accuracy worse than this (m) records no speeding and shows "—". */
+export const MAX_H_ACC_M = 20;
+/** Start Drive works only below this speed. */
+export const START_MAX_MPH = 3;
+/** A forgotten drive ends on its own after this long stopped. */
+export const AUTO_END_STOPPED_S = 300;
+/** Ending then restarting within this gap and distance merges into one drive. */
+export const MERGE_GAP_S = 300;
+export const MERGE_DIST_M = 402;
+/** Drives shorter than this are not scored. */
+export const MIN_SCORED_MILES = 0.5;
+/** "Wasn't driving" uses per month. */
+export const NOT_DRIVING_PER_MONTH = 2;
+/** "Braked for a hazard" / "wrong speed limit" disputes auto-accepted per week. */
+export const DISPUTE_AUTO_PER_WEEK = 3;
+/** Freezes held at most. */
+export const MAX_FREEZES = 3;
+/** DMS flags only at this model confidence or higher. */
+export const DMS_MIN_CONFIDENCE = 0.85;
+
+/** Weekly league tiers, lowest first. */
+export const LEAGUE_TIERS = ['bronze', 'silver', 'gold', 'platinum', 'diamond'] as const;
+export type LeagueTier = (typeof LEAGUE_TIERS)[number];
+
+export type AchievementId = 'first_drive' | 'clean_100' | 'perfect_week' | 'phone_free_25' | 'streak_10';
+export interface Achievement {
+  id: AchievementId;
+  title: string;
+  description: string;
+}
+
+/** The launch set of 5 achievements. */
+export const ACHIEVEMENTS: readonly Achievement[] = [
+  { id: 'first_drive', title: 'First Drive', description: 'Complete a scored drive.' },
+  { id: 'clean_100', title: 'Clean 100', description: 'Drive 100 clean miles.' },
+  { id: 'perfect_week', title: 'Perfect Week', description: 'Take 3 or more drives in a week, all with zero events.' },
+  { id: 'phone_free_25', title: 'Phone-Free 25', description: 'Take 25 drives in a row with no phone pickups.' },
+  { id: 'streak_10', title: 'Streak 10', description: 'Reach a 10-drive streak.' },
+];
