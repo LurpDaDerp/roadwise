@@ -18,10 +18,9 @@ const mockWorld: {
   session: unknown;
   profile: 'fail' | Record<string, unknown>;
   driveStatus: string;
-  driveMode: string;
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
-} = { session: null, profile: 'fail', driveStatus: 'off', driveMode: 'mounted', hostBusy: false, update: 'ok' };
+} = { session: null, profile: 'fail', driveStatus: 'idle', hostBusy: false, update: 'ok' };
 const mockProfileCalls: string[] = [];
 
 jest.mock('expo-router', () => {
@@ -46,8 +45,7 @@ jest.mock('@/data/supabase/profile', () => ({
   }),
 }));
 jest.mock('@/drive/useDrive', () => ({
-  useDrive: (select: (s: { status: string; mode: string }) => unknown) =>
-    select({ status: mockWorld.driveStatus, mode: mockWorld.driveMode }),
+  useDrive: (select: (s: { status: string }) => unknown) => select({ status: mockWorld.driveStatus }),
   useDriveHost: () => ({ isBusy: () => mockWorld.hostBusy }),
 }));
 jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => mockWorld.update }));
@@ -63,8 +61,7 @@ beforeEach(async () => {
   Object.assign(mockWorld, {
     session: { user: { id: 'u1' } },
     profile: ONBOARDED,
-    driveStatus: 'off',
-    driveMode: 'mounted',
+    driveStatus: 'idle',
     hostBusy: false,
     update: 'ok',
   });
@@ -85,15 +82,21 @@ async function launch() {
 
 const landed = () => screen.queryByText(/^redirect:/)?.props.children as string | undefined;
 
-describe('an active trip (rev1: I2, N-m3)', () => {
-  test.each([['recording'], ['ending']])('%s → the driving screen, before any other rule', async (status) => {
-    Object.assign(mockWorld, { driveStatus: status, hostBusy: true, update: 'required', session: null });
+describe('an open trip on a cold start (rev1: I2, N-m3)', () => {
+  test('recording → the driving screen, before any other rule (signed out, update required)', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', hostBusy: true, update: 'required', session: null });
     await launch();
     expect(landed()).toBe('redirect:/drive');
   });
 
-  test.each([['finalizing']])('%s is not a trip to go back to', async (status) => {
-    Object.assign(mockWorld, { driveStatus: status, driveMode: 'mounted', hostBusy: true });
+  test('recording with the config not read yet still goes straight to the drive', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', hostBusy: true, update: null });
+    await launch();
+    expect(landed()).toBe('redirect:/drive');
+  });
+
+  test('finalizing is not a trip to go back to', async () => {
+    Object.assign(mockWorld, { driveStatus: 'finalizing', hostBusy: true });
     await launch();
     expect(landed()).toBe('redirect:/(tabs)/home');
   });

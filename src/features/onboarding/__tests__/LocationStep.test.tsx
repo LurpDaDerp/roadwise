@@ -56,7 +56,7 @@ test('the primer says why in plain words, and nothing is asked before the tap', 
 });
 
 test.each(['ios', 'android'] as const)(
-  '%s: one While Using request on the tap, then on — never an Always request',
+  '%s: one While Using request on the tap, then on — never a background (Always) request',
   async (platform) => {
     const adapter = fakeAdapter(snap({ platform, location: 'undetermined', precise: null }), {
       foreground: 'foreground',
@@ -65,7 +65,8 @@ test.each(['ios', 'android'] as const)(
     await press(await screen.findByTestId('location-allow'));
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
     expect(requests(adapter)).toEqual(['requestLocationForeground']);
-    expect(adapter.requestLocationAlways).not.toHaveBeenCalled();
+    // While Using only (plan §1 decision 4): nothing that asks for background location, ever.
+    expect(adapter.log.some((c) => /always|background/i.test(c))).toBe(false);
     // The driver's own tap: stamped so the app's own offers wait.
     expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
   }

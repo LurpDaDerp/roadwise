@@ -109,7 +109,7 @@ jest.mock('@/data/supabase/client', () => ({
   },
 }));
 
-const mockProfile: { current: { age_band: string } | null } = { current: null };
+const mockProfile: { current: Record<string, unknown> | null } = { current: null };
 const mockSession: {
   flush: (() => Promise<unknown>) | null;
   recording: { stop(): Promise<void>; resume(): Promise<void> } | null;
@@ -140,6 +140,10 @@ jest.mock('@/data/queries', () => ({
 jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
+// The camera bridge the runtime set, if any: a session end tells it after the drive host.
+const mockCamera: { bridge: { sessionEnded: jest.Mock } | null } = { bridge: null };
+jest.mock('@/features/camera/runtime', () => ({ cameraBridge: () => mockCamera.bridge }));
+
 // eslint-disable-next-line import/first -- after the mocks it depends on
 import RootLayout from '../_layout';
 
@@ -153,30 +157,30 @@ const T = 1_790_000_000_000;
 
 function driveState(over: Partial<DriveState> = {}): DriveState {
   return {
-    status: 'armed',
-    mode: 'mounted',
-    role: 'driver',
+    status: 'idle',
     clientTripId: null,
     startedAt: null,
     lastRowTs: null,
     speedMps: 0,
     speedKnown: false,
-    awaitingSpeedAfterResume: false,
     limit: UNKNOWN_LIMIT,
+    limitMph: null,
+    speedingTier: null,
+    stopped: false,
+    stoppedSinceTs: null,
     distanceM: 0,
-    stationarySinceTs: null,
     lockedOut: false,
-    stoppedPanel: false,
-    endCause: null,
-    activeAlert: null,
-    mutedForDrive: false,
-    gps: 'good',
-    thermal: 'nominal',
+    dmsOn: false,
+    lastAlert: null,
     callActive: false,
     screenLocked: false,
     lastFinalized: null,
-    tripIndex: 5,
+    alertsAvailable: true,
+    dmsActive: false,
+    points: null,
     dryRun: false,
+    mode: 'mounted',
+    role: 'driver',
     ...over,
   };
 }
@@ -187,38 +191,23 @@ function fakeRuntime(drive: Partial<DriveState>) {
     snapshot: () => current,
     subscribe: () => () => {},
     isBusy: () => false,
-    end: jest.fn(async () => {}),
-    setPassenger: jest.fn(async () => {}),
-    setMode: jest.fn(async () => {}),
-    muteCurrentAlert: jest.fn(async () => {}),
-    muteForDrive: jest.fn(async () => {}),
-    detectorContext: () => ({ night: false, precipitation: false, lockReliable: true, lockLagged: false }),
+    end: jest.fn(async () => null),
     suspendForSignOut: jest.fn(async () => {}),
     resumeAfterSignIn: jest.fn(async () => {}),
-    signedInAgain: jest.fn(async () => {}),
-    setAgeBand: jest.fn(async () => {}),
+    signedInAgain: jest.fn(async (_opts?: { initial?: boolean }) => {}),
     signOutCompleted: jest.fn(() => {}),
     sessionEnded: jest.fn(async () => {}),
   };
   const queryClient = new QueryClient();
-  const flushDeletes = jest.fn(async () => ({ sent: 1, left: 0 }));
-  const log: string[] = [];
-  const driveStateSettled = jest.fn(async () => {
-    log.push('driveStateSettled');
-  });
-  const driveStateAbandon = jest.fn(async () => {
-    log.push('driveStateAbandon');
-  });
-  host.suspendForSignOut.mockImplementation(async () => {
-    log.push('suspendForSignOut');
-  });
+  // One drain sends what it can; the owed count is read after it.
+  const runner = {
+    drainOnce: jest.fn(async () => ({ done: 2 })),
+    owed: jest.fn(async () => 1),
+  };
   return {
-    runtime: { db: {}, queryClient, drive: host, runner: { flushDeletes }, driveStateSettled, driveStateAbandon } as unknown as NonNullable<
-      RuntimeState['runtime']
-    >,
+    runtime: { db: {}, queryClient, drive: host, runner } as unknown as NonNullable<RuntimeState['runtime']>,
     host,
-    log,
-    flushDeletes,
+    runner,
     queryClient,
   };
 }
@@ -233,6 +222,9 @@ beforeEach(() => {
   mockStack.screenOptions = undefined;
   mockController.listeners.clear();
   mockController.state = { status: 'booting', runtime: null, error: null, generation: 0 };
+  mockOwner.uid = null;
+  mockOwner.hasData = false;
+  mockCamera.bridge = null;
 });
 
 async function renderReady(drive: Partial<DriveState> = {}) {
@@ -282,10 +274,11 @@ describe('the root layout', () => {
     expect(handlerCalls).toHaveLength(0);
   });
 
-  test('wires sign-out to flush the deletes owed', async () => {
-    const { flushDeletes } = await renderReady();
-    await expect(mockSession.flush?.()).resolves.toEqual({ sent: 1, left: 0 });
-    expect(flushDeletes).toHaveBeenCalledTimes(1);
+  test('wires sign-out to one drain of the queue, reporting what is sent and what is still owed', async () => {
+    const { runner } = await renderReady();
+    await expect(mockSession.flush?.()).resolves.toEqual({ sent: 2, left: 1 });
+    expect(runner.drainOnce).toHaveBeenCalledTimes(1);
+    expect(runner.owed).toHaveBeenCalledTimes(1);
   });
 
   test('a handover rebuilds through the controller, showing "switching" meanwhile', async () => {
@@ -312,16 +305,16 @@ describe('the root layout', () => {
 describe('sign-out and sign-in reach the drive host (final review I3; final-fix security I-1)', () => {
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  test('sign-out stops recording, then settles the drive state (idle written first); backing out resumes', async () => {
-    const { host, log } = await renderReady();
+  test('sign-out stops recording through the host (an open drive is finalized first); backing out resumes', async () => {
+    const { host } = await renderReady();
     await mockSession.recording?.stop();
-    expect(log).toEqual(['suspendForSignOut', 'driveStateSettled']);
     expect(host.suspendForSignOut).toHaveBeenCalledTimes(1);
+    expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
     await mockSession.recording?.resume();
     expect(host.resumeAfterSignIn).toHaveBeenCalledTimes(1);
   });
 
-  test('SIGNED_IN by the device owner re-arms; a token refresh never does', async () => {
+  test('SIGNED_IN by the device owner lets Start Drive work again; a token refresh never does', async () => {
     mockOwner.uid = 'u1';
     const { host } = await renderReady();
     await act(async () => {
@@ -336,10 +329,14 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
       mockAuth.listener?.('SIGNED_IN', { user: { id: 'u1' } });
       await settle();
     });
-    expect(host.signedInAgain).toHaveBeenCalledWith();
+    expect(host.signedInAgain).toHaveBeenCalledTimes(1);
+    expect(host.signedInAgain).toHaveBeenCalledWith({ initial: false });
+    // Nothing here starts a drive: it begins only from the Start Drive tap (plan section 1, decision 4).
+    expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
+    expect(host.sessionEnded).not.toHaveBeenCalled();
   });
 
-  test("a slow keychain: the owner's INITIAL_SESSION re-arms, marked initial so the host refuses it around a sign-out", async () => {
+  test("a slow keychain: the owner's INITIAL_SESSION counts, marked initial so the host refuses it around a sign-out", async () => {
     mockOwner.uid = 'u1';
     const { host } = await renderReady();
     await act(async () => {
@@ -355,7 +352,7 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     expect(host.signedInAgain).toHaveBeenCalledWith({ initial: true });
   });
 
-  test("a different driver's SIGNED_IN never re-arms the old host (a handover rebuilds instead)", async () => {
+  test("a different driver's SIGNED_IN never reaches the old host (a handover rebuilds instead)", async () => {
     mockOwner.uid = 'u1';
     const { host } = await renderReady();
     await act(async () => {
@@ -366,18 +363,36 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
   });
 
-  test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends recording through the host (r2-M2)', async () => {
-    const { host, log } = await renderReady();
+  test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends the session through the host, then the camera', async () => {
+    const { host } = await renderReady();
+    const log: string[] = [];
     host.sessionEnded.mockImplementation(async () => {
-      log.push('sessionEnded');
+      log.push('host');
     });
-    await act(async () => mockAuth.listener?.('SIGNED_OUT', null));
+    mockCamera.bridge = {
+      sessionEnded: jest.fn(async () => {
+        log.push('camera');
+      }),
+    };
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_OUT', null);
+      await settle();
+    });
     expect(host.sessionEnded).toHaveBeenCalledTimes(1);
-    // Then the drive state's outstanding write is dropped (r2 n1).
-    expect(log).toEqual(['sessionEnded', 'driveStateAbandon']);
+    expect(log).toEqual(['host', 'camera']);
+    expect(host.signedInAgain).not.toHaveBeenCalled();
   });
 
-  test('no owner recorded: a SIGNED_IN arms only on a device with no drive data (r2-M1)', async () => {
+  test('SIGNED_OUT with no camera running still ends the session through the host', async () => {
+    const { host } = await renderReady();
+    await act(async () => {
+      mockAuth.listener?.('SIGNED_OUT', null);
+      await settle();
+    });
+    expect(host.sessionEnded).toHaveBeenCalledTimes(1);
+  });
+
+  test('no owner recorded: a SIGNED_IN counts only on a device with no drive data (r2-M1)', async () => {
     mockOwner.uid = null;
     mockOwner.hasData = true;
     const { host } = await renderReady();

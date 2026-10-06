@@ -1,7 +1,7 @@
 /**
  * Task 18: what the root layout mounts around M3's drive wiring — the notification host (the app's
- * one response listener), the device host, the post-drive permission offers, the push-token release
- * before sign-out, and the two M4 routes. The notification host is the real one, over a scripted
+ * one response listener), the device host, the device release and local wipe before sign-out, and
+ * the two M4 routes. The notification host is the real one, over a scripted
  * expo-notifications; the device and prompt hosts are stand-ins that record their props (each is
  * tested in its own suite). A real SQLite (sql.js) stands behind the runtime's db.
  */
@@ -12,7 +12,8 @@ import { AppState } from 'react-native';
 
 import type { RuntimeState } from '@/boot/controller';
 import { createSettingsRepo, type Db } from '@/data/db';
-import { PUSH_REGISTRATION_KEY } from '@/data/devices/pushToken';
+import { INSTALL_ID_KEY } from '@/data/devices/installId';
+import { LAST_REGISTER_KEY } from '@/data/devices/register';
 import { registerDriveStateSource, useDriveStateReported } from '@/data/devices/driveStateStore';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import type { DriveState } from '@/drive/host';
@@ -99,9 +100,11 @@ jest.mock('@/features/auth/AuthGate', () => ({
 jest.mock('@/features/drive/LockoutGate', () => ({
   LockoutGate: ({ children }: { children: ReactNode }) => children,
 }));
+const mockWipeForSignOut = jest.fn(async (_db: unknown) => {});
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => null,
   hasDriverData: async () => false,
+  wipeForSignOut: (db: unknown) => mockWipeForSignOut(db),
 }));
 jest.mock('@/boot/ownerWatch', () => ({ watchDeviceOwner: () => () => {} }));
 
@@ -115,7 +118,7 @@ jest.mock('@/drive/DriveProvider', () => {
   };
 });
 
-// ——— the app client: the session the push-token release checks, and the RPC it sends ———
+// ——— the app client: the RPC the device release sends ———
 const mockSupabase = { sessionUid: 'u1' as string | null, rpc: jest.fn() };
 jest.mock('@/data/supabase/client', () => ({
   supabase: {
@@ -127,9 +130,9 @@ jest.mock('@/data/supabase/client', () => ({
         },
       }),
     },
-    rpc: (name: string, args: unknown) => {
+    rpc: async (name: string, args: unknown) => {
       mockSupabase.rpc(name, args);
-      return { abortSignal: async () => ({ data: null, error: null }) };
+      return { data: null, error: null };
     },
   },
 }));
@@ -199,20 +202,18 @@ function driveState(status: DriveState['status']): DriveState {
   return { status } as DriveState;
 }
 
-function fakeHost(initial: DriveState['status'] = 'armed') {
+function fakeHost(initial: DriveState['status'] = 'idle') {
   let current = driveState(initial);
   const listeners = new Set<(s: DriveState) => void>();
-  const busyStatuses = new Set(['candidate', 'recording', 'ending', 'finalizing']);
   return {
     snapshot: () => current,
-    isBusy: () => busyStatuses.has(current.status),
+    isBusy: () => current.status !== 'idle',
     subscribe: jest.fn((fn: (s: DriveState) => void) => {
       listeners.add(fn);
       return () => {
         listeners.delete(fn);
       };
     }),
-    setAgeBand: jest.fn(async () => {}),
     listenerCount: () => listeners.size,
     publish(status: DriveState['status']) {
       current = driveState(status);
@@ -221,16 +222,14 @@ function fakeHost(initial: DriveState['status'] = 'armed') {
   };
 }
 
-async function fakeRuntime(status: DriveState['status'] = 'armed') {
+async function fakeRuntime({ status = 'idle', owed = 1 }: { status?: DriveState['status']; owed?: number } = {}) {
   const db = await createTestDb();
   const host = fakeHost(status);
   const runtime = {
     db,
     queryClient: new QueryClient(),
     drive: host,
-    driveStateSettled: jest.fn(async () => {}),
-    driveStateAbandon: jest.fn(async () => {}),
-    syncWatermarkBeforeSignOut: jest.fn(async () => {}),
+    runner: { owed: jest.fn(async () => owed) },
   } as unknown as NonNullable<RuntimeState['runtime']>;
   return { runtime, host, db };
 }
@@ -308,14 +307,14 @@ describe('one notification response listener (rev1: C1)', () => {
       handleNotification: () => Promise<{ shouldShowBanner: boolean; shouldShowList: boolean }>;
     };
     expect((await handler.handleNotification()).shouldShowBanner).toBe(true);
-    for (const status of ['candidate', 'recording', 'ending', 'finalizing'] as const) {
+    for (const status of ['recording', 'finalizing'] as const) {
       await act(async () => host.publish(status));
       expect(await handler.handleNotification()).toMatchObject({
         shouldShowBanner: false,
         shouldShowList: false,
       });
     }
-    await act(async () => host.publish('armed'));
+    await act(async () => host.publish('idle'));
     expect((await handler.handleNotification()).shouldShowBanner).toBe(true);
   });
 
@@ -343,20 +342,20 @@ describe('the device host (T10 r2: no subscribeDrive)', () => {
   });
 });
 
-describe('the push token is released before sign-out (T10, T17)', () => {
-  const REGISTRATION = {
-    token: 'ExponentPushToken[abcdefgh1234]',
-    userId: 'u1',
-    deviceId: 'install-1',
-    at: 1,
-  };
+describe('before sign-out: the device is released, then the local data wiped (plan section 4)', () => {
+  const INSTALL_ID = 'install-1';
 
-  async function seed(db: Db) {
-    await createSettingsRepo(db).set(PUSH_REGISTRATION_KEY, REGISTRATION);
+  async function seedRegistered(db: Db) {
+    const settings = createSettingsRepo(db);
+    await settings.set(INSTALL_ID_KEY, INSTALL_ID);
+    await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: INSTALL_ID, at: 1, token: 'ExponentPushToken[abc]' });
   }
 
-  // Two tasks per runtime: this one first, then M5's sync watermark release (its own suite below).
-  test('one task per runtime: re-renders add none, the switch removes it, the next runtime adds its own', async () => {
+  const runAll = async () => {
+    for (const task of [...mockSessionStore.tasks]) await task();
+  };
+
+  test('two tasks per runtime: re-renders add none, the switch removes them, the next runtime adds its own', async () => {
     const first = await fakeRuntime();
     await renderWith(first.runtime);
     expect(mockSessionStore.tasks.size).toBe(2);
@@ -372,52 +371,52 @@ describe('the push token is released before sign-out (T10, T17)', () => {
     const second = await fakeRuntime();
     await act(async () => mockController.set({ status: 'ready', runtime: second.runtime }));
     expect(mockSessionStore.tasks.size).toBe(2);
-    expect([...mockSessionStore.tasks][0]).not.toBe(tasks[0]);
+    for (const task of mockSessionStore.tasks) expect(tasks).not.toContain(task);
   });
 
-  test("runs under the uid the token was registered for: the token is released on the server", async () => {
+  test("a registered install: release_device clears this install's push token on the server, and the local stamp goes", async () => {
     const { runtime, db } = await fakeRuntime();
-    await seed(db);
+    await seedRegistered(db);
     await renderWith(runtime);
-    await [...mockSessionStore.tasks][0]?.();
-    expect(mockSupabase.rpc).toHaveBeenCalledWith('unregister_push_token', {
-      p_token: REGISTRATION.token,
-    });
-    expect(await createSettingsRepo(db).get(PUSH_REGISTRATION_KEY)).toBeNull();
+    await runAll();
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('release_device', { p_device_id: INSTALL_ID });
+    expect(await createSettingsRepo(db).get(LAST_REGISTER_KEY)).toBeNull();
   });
 
-  test("under another account's session nothing is sent: never under the next driver's JWT", async () => {
-    const { runtime, db } = await fakeRuntime();
-    await seed(db);
+  test('a device never registered sends nothing', async () => {
+    const { runtime } = await fakeRuntime();
     await renderWith(runtime);
-    mockSupabase.sessionUid = 'u2';
-    await [...mockSessionStore.tasks][0]?.();
+    await runAll();
     expect(mockSupabase.rpc).not.toHaveBeenCalled();
   });
-});
 
-describe('the sync watermark is released before sign-out (M5 R-A, rev2 m1a)', () => {
-  test("one task per runtime, beside the push token's: it runs that runtime's release", async () => {
-    const first = await fakeRuntime();
+  test('nothing left to upload: the drives and privacy zones leave the phone (the local wipe)', async () => {
+    const { runtime, db } = await fakeRuntime({ owed: 0 });
+    await renderWith(runtime);
+    await runAll();
+    expect(mockWipeForSignOut).toHaveBeenCalledTimes(1);
+    expect(mockWipeForSignOut).toHaveBeenCalledWith(db);
+  });
+
+  test('work still owed to the server: nothing is wiped, so it can upload after the next sign-in', async () => {
+    const { runtime } = await fakeRuntime({ owed: 3 });
+    await renderWith(runtime);
+    await runAll();
+    expect(mockWipeForSignOut).not.toHaveBeenCalled();
+  });
+
+  test("after a rebuild the tasks are bound to the new runtime: its db is the one wiped, its install the one released", async () => {
+    const first = await fakeRuntime({ owed: 0 });
     await renderWith(first.runtime);
-    const watermarkTask = [...mockSessionStore.tasks][1];
-    expect(watermarkTask).toBeDefined();
-    await watermarkTask?.();
-    expect(first.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
-
-    // Re-renders add none.
-    await act(async () => mockSessionStore.set('u1'));
-    expect([...mockSessionStore.tasks][1]).toBe(watermarkTask);
-
-    // A rebuild's cleanup removes it; the next runtime registers its own, bound to itself.
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
-    const second = await fakeRuntime();
+    const second = await fakeRuntime({ owed: 0 });
+    await seedRegistered(second.db);
     await act(async () => mockController.set({ status: 'ready', runtime: second.runtime }));
-    const next = [...mockSessionStore.tasks][1];
-    expect(next).not.toBe(watermarkTask);
-    await next?.();
-    expect(second.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
-    expect(first.runtime.syncWatermarkBeforeSignOut).toHaveBeenCalledTimes(1);
+    await runAll();
+    expect(mockWipeForSignOut).toHaveBeenCalledTimes(1);
+    expect(mockWipeForSignOut).toHaveBeenCalledWith(second.db);
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('release_device', { p_device_id: INSTALL_ID });
   });
 });
 
