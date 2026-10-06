@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, useColorScheme } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 
 import { tokens, type ColorSet, type Elevation, type HudSet, type TypeScale } from './tokens';
 
@@ -31,7 +32,10 @@ export function ThemeProvider({
 }) {
   const system = useColorScheme();
   const scheme = forced ?? (system === 'dark' ? 'dark' : 'light');
-  const [osStill, setReduceMotion] = useState(false);
+  // Reanimated reads the setting synchronously, so the first frame after launch already knows;
+  // the AccessibilityInfo subscription below keeps it current.
+  const initialStill = useReducedMotion();
+  const [osStill, setReduceMotion] = useState(initialStill);
   const reduceMotion = forcedStill ?? osStill;
 
   useEffect(() => {

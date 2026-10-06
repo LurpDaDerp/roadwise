@@ -248,3 +248,14 @@ test('Sheet shows its title and closes from the close button', async () => {
   await fireEvent.press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
   expect(onClose).toHaveBeenCalled();
 });
+
+test('a pill or trend inside an element that speaks it is not a second TalkBack stop', async () => {
+  await wrap(
+    <>
+      <StreakFlame count={4} multiplier={1.08} />
+      <StatTile label="Speeding" value="0.8" health="green" trend="down" />
+    </>
+  );
+  expect(screen.queryByLabelText('×1.08')).toBeNull();
+  expect(screen.queryByLabelText('Down, better')).toBeNull();
+});

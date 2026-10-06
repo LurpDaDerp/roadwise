@@ -59,7 +59,7 @@ export {
   formatMultiplier,
   StreakFlame,
   type StreakFlameProps,
-  type StreakState,
+  type StreakFlameState,
 } from './primitives/StreakFlame';
 export { Text, useFontScale, type AppTextProps, type TextTone } from './primitives/Text';
 export { TIER_LABEL, TIER_ORDER, TierBadge, type TierBadgeProps } from './primitives/TierBadge';

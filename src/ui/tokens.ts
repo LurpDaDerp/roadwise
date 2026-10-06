@@ -112,6 +112,8 @@ export type TypeStyle = {
   letterSpacing?: number;
   fontVariant?: TextStyle['fontVariant'];
   textTransform?: TextStyle['textTransform'];
+  /** Dynamic Type cap for this style (default 2×). Big numerals stop earlier so they fit a phone. */
+  maxScale?: number;
 };
 
 export type TypeVariant =
@@ -263,6 +265,7 @@ const type: TypeScale = {
     lineHeight: 68,
     letterSpacing: -1,
     fontVariant: TAB,
+    maxScale: 1.3,
   },
   display: {
     fontFamily: fontFamilies.display,
@@ -270,8 +273,15 @@ const type: TypeScale = {
     lineHeight: 48,
     letterSpacing: -0.5,
     fontVariant: TAB,
+    maxScale: 1.3,
   },
-  stat: { fontFamily: fontFamilies.display, fontSize: 28, lineHeight: 32, fontVariant: TAB },
+  stat: {
+    fontFamily: fontFamilies.display,
+    fontSize: 28,
+    lineHeight: 32,
+    fontVariant: TAB,
+    maxScale: 1.5,
+  },
   title1: { fontFamily: fontFamilies.headline, fontSize: 30, lineHeight: 34 },
   title2: { fontFamily: fontFamilies.headline, fontSize: 24, lineHeight: 28 },
   title3: { fontFamily: fontFamilies.headline, fontSize: 20, lineHeight: 24 },

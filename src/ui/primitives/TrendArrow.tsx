@@ -13,6 +13,8 @@ export type TrendArrowProps = {
   size?: number;
   /** Default "Up, better" / "Down, worse" / "No change". */
   accessibilityLabel?: string;
+  /** False when a parent element already speaks the trend (avoids a second TalkBack stop). */
+  accessible?: boolean;
   testID?: string;
 };
 
@@ -30,15 +32,16 @@ export function describeTrend(direction: TrendDirection, better: 'up' | 'down'):
 }
 
 /** An arrow on a tinted disc: green when the move is good, red when it is not, grey when flat. */
-export function TrendArrow({ direction, better = 'up', size = 20, accessibilityLabel, testID }: TrendArrowProps) {
+export function TrendArrow({ direction, better = 'up', size = 20, accessibilityLabel, accessible = true, testID }: TrendArrowProps) {
   const t = useTheme();
   const good = trendIsBetter(direction, better);
   const s = good === null ? null : t.colors.signal[good ? 'clean' : 'severe'];
   return (
     <View
       testID={testID}
-      accessible
-      accessibilityLabel={accessibilityLabel ?? describeTrend(direction, better)}
+      accessible={accessible}
+      accessibilityLabel={accessible ? (accessibilityLabel ?? describeTrend(direction, better)) : undefined}
+      importantForAccessibility={accessible ? 'auto' : 'no-hide-descendants'}
       style={{
         width: size,
         height: size,

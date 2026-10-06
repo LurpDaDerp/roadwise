@@ -13,7 +13,7 @@ import { useTheme } from '../theme';
 import { Pill } from './Pill';
 import { Text } from './Text';
 
-export type StreakState = 'active' | 'atRisk' | 'frozen';
+export type StreakFlameState = 'active' | 'atRisk' | 'frozen';
 
 export type StreakFlameProps = {
   /** Streak length in drives. */
@@ -24,7 +24,7 @@ export type StreakFlameProps = {
    * `atRisk` after a net-negative drive with no freeze; `frozen` when a freeze just held it.
    * Default `active`.
    */
-  state?: StreakState;
+  state?: StreakFlameState;
   /** `md` for the Home header row, `lg` for the summary. Default `md`. */
   size?: 'md' | 'lg';
   testID?: string;
@@ -117,11 +117,11 @@ export function StreakFlame({
       </Animated.View>
       <Text variant={size === 'lg' ? 'display' : 'stat'}>{count}</Text>
       {state === 'atRisk' ? (
-        <Pill label="At risk" tone="moderate" icon="alert-circle" />
+        <Pill label="At risk" tone="moderate" icon="alert-circle" accessible={false} />
       ) : state === 'frozen' ? (
-        <Pill label="Freeze used" tone="info" icon="snow" />
+        <Pill label="Freeze used" tone="info" icon="snow" accessible={false} />
       ) : multiplier !== undefined ? (
-        <Pill label={formatMultiplier(multiplier)} tone="gold" />
+        <Pill label={formatMultiplier(multiplier)} tone="gold" accessible={false} />
       ) : null}
     </View>
   );

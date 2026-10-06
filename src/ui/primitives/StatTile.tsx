@@ -93,7 +93,7 @@ export function StatTile({
         </Text>
         {trend ? (
           <View style={{ paddingBottom: 6 }}>
-            <TrendArrow direction={trend} better={better} size={18} />
+            <TrendArrow direction={trend} better={better} size={18} accessible={false} />
           </View>
         ) : null}
       </View>

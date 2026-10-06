@@ -16,12 +16,14 @@ export type PillProps = {
   icon?: IconName;
   /** `solid` uses the fill colour (loud: "CLEAN DRIVE"); `soft` (default) a faint wash. */
   emphasis?: 'soft' | 'solid';
+  /** False when a parent element already speaks the pill (avoids a second TalkBack stop). */
+  accessible?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 };
 
 /** A static label in a capsule: event tier, "Clean", "Promotion zone", "×1.25". Not tappable. */
-export function Pill({ label, tone = 'neutral', icon, emphasis = 'soft', style, testID }: PillProps) {
+export function Pill({ label, tone = 'neutral', icon, emphasis = 'soft', accessible = true, style, testID }: PillProps) {
   const t = useTheme();
   const c = t.colors;
   let bg: string;
@@ -47,8 +49,9 @@ export function Pill({ label, tone = 'neutral', icon, emphasis = 'soft', style, 
   return (
     <View
       testID={testID}
-      accessible
-      accessibilityLabel={label}
+      accessible={accessible}
+      accessibilityLabel={accessible ? label : undefined}
+      importantForAccessibility={accessible ? 'auto' : 'no-hide-descendants'}
       style={[
         {
           flexDirection: 'row',

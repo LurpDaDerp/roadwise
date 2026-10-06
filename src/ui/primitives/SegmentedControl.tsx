@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
@@ -38,10 +38,15 @@ export function SegmentedControl<V extends string>({
   const pad = 3;
   const segW = width > 0 ? (width - pad * 2) / segments.length : 0;
   const x = useSharedValue(index * segW);
+  const lastW = useRef(segW);
 
   useEffect(() => {
     const target = index * segW;
-    x.value = t.reduceMotion ? target : withSpring(target, t.motion.spring.snappy);
+    // Only a change of selection slides. The first layout and a rotation (width changed) snap,
+    // so the thumb never springs in from the left edge on mount.
+    const relayout = lastW.current !== segW;
+    lastW.current = segW;
+    x.set(t.reduceMotion || relayout ? target : withSpring(target, t.motion.spring.snappy));
   }, [index, segW, t.reduceMotion, t.motion.spring.snappy, x]);
 
   const thumb = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
