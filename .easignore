@@ -52,3 +52,6 @@ npm-debug.log*
 
 # user-provided DMS design spec (local reference, never committed or uploaded)
 /Driver Monitoring System (DMS) Design Spec.md
+
+# Gradle caches inside local Expo modules (machine-specific)
+.gradle/

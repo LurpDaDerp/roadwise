@@ -80,7 +80,14 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     allowBackup: false,
     // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
     // tile and nothing crashes. iOS uses Apple Maps and needs no key.
-    config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } },
+    // Left out when unset or empty, so a local `.env` with a blank key and an EAS build with no key
+    // produce the same config — and the same fingerprint runtime version.
+    ...optional(
+      'config',
+      process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY
+        ? { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } }
+        : undefined
+    ),
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
     // Left out when there is no FCM credential: see `googleServicesFile` above.
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
