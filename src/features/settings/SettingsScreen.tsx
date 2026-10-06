@@ -3,13 +3,16 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
+import type { PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility, type LicenseStage } from '@/data/server/summary';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 
 import { LICENSE_SHORT, settingsCopy, VISIBILITY_SEGMENTS } from './copy';
-import { readReminder, readUnits, writeReminder, writeUnits, type Units } from './localPrefs';
+import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
+
+import { ensureReminderPermissions, readReminder, readUnits, writeReminder, writeUnits, type ReminderNeed, type Units } from './localPrefs';
 import { LinkRow, RowIcon, Section, TopBar } from './parts';
 import { readZones } from './privacyZones';
 import { SETTINGS_HREFS } from './routes';
@@ -57,7 +60,7 @@ function SegmentRow<V extends string>({
  * `/settings`: everything a driver tunes, grouped by what it touches — the drive, privacy, the
  * public profile, notifications. Every control saves as it changes; there is no Save button.
  */
-export function SettingsScreen() {
+export function SettingsScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter } }) {
   const router = useRouter();
   const th = useTheme();
   const db = useDb();
@@ -71,6 +74,7 @@ export function SettingsScreen() {
   const [zoneCount, setZoneCount] = useState(0);
   const [stateSheet, setStateSheet] = useState(false);
   const [localError, setLocalError] = useState(false);
+  const [needs, setNeeds] = useState<ReminderNeed[]>([]);
 
   // Read on every focus, so a zone added a screen deeper shows in the count on the way back.
   useFocusEffect(
@@ -90,14 +94,26 @@ export function SettingsScreen() {
     }, [settings])
   );
 
-  const onReminder = (next: boolean) => {
-    setReminder(next);
+  // On: ask for what the reminder needs first (motion; notifications on Android). Without them it
+  // would silently do nothing, so it stays off and says what is missing.
+  const onReminder = async (next: boolean) => {
     setLocalError(false);
+    setNeeds([]);
+    if (next) {
+      const missing = await ensureReminderPermissions(deps.adapter ?? defaultPermissionsAdapter());
+      if (missing.length > 0) {
+        setNeeds(missing);
+        return;
+      }
+    }
+    setReminder(next);
     writeReminder(settings, next).catch(() => {
       setReminder(!next);
       setLocalError(true);
     });
   };
+  const needsLine =
+    needs.length === 2 ? copy.reminder.needs.both : needs[0] ? copy.reminder.needs[needs[0]] : null;
 
   const onUnits = async (next: Units) => {
     setUnits(next);
@@ -113,10 +129,21 @@ export function SettingsScreen() {
       <TopBar title={settingsCopy.title} />
       {edit.error || localError ? <Banner tone="danger" message={copy.saveError} testID="settings-save-error" /> : null}
 
+      {needsLine ? (
+        <Banner
+          tone="warning"
+          message={needsLine}
+          action={{
+            label: copy.reminder.openSettings,
+            onPress: () => void (deps.adapter ?? defaultPermissionsAdapter()).openAppSettings().catch(() => {}),
+          }}
+          testID="settings-reminder-needs"
+        />
+      ) : null}
       <Section title={copy.driving}>
         <LinkRow icon="eye-outline" title={copy.dms.title} subtitle={copy.dms.subtitle} onPress={() => router.push(SETTINGS_HREFS.dms)} testID="settings-dms" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
-        <ToggleRow title={copy.reminder.title} subtitle={copy.reminder.subtitle} value={reminder} onValueChange={onReminder} testID="settings-reminder" />
+        <ToggleRow title={copy.reminder.title} subtitle={copy.reminder.subtitle} value={reminder} onValueChange={(v) => void onReminder(v)} testID="settings-reminder" />
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />
       </Section>
 

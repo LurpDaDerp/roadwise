@@ -5,6 +5,7 @@
  */
 import DriveSense from '@drive-sense';
 
+import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import type { SettingsRepo } from '@/data/db/settings';
 
 export const UNITS_KEY = 'units';
@@ -26,10 +27,49 @@ export async function readReminder(settings: Pick<SettingsRepo, 'get'>): Promise
 
 type NativeReminder = (enabled: boolean) => Promise<unknown> | unknown;
 
-/** The native setter, when this build's drive-sense module has one (WP7 adds it). */
+/**
+ * The native setter: WP6's `applyForgotToStartSetting` (src/drive/forgottenDrive) when this build
+ * has it, else drive-sense's own `setForgotToStartReminder`. Looked up at call time and guarded, so
+ * a build without either simply stores the choice.
+ */
 function nativeReminder(): NativeReminder | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- optional sibling module
+    const mod = require('@/drive/forgottenDrive') as { applyForgotToStartSetting?: unknown };
+    if (typeof mod.applyForgotToStartSetting === 'function') return mod.applyForgotToStartSetting as NativeReminder;
+  } catch {
+    // Not in this build.
+  }
   const fn = (DriveSense as unknown as Record<string, unknown>).setForgotToStartReminder;
   return typeof fn === 'function' ? (fn.bind(DriveSense) as NativeReminder) : null;
+}
+
+/** What the reminder needs from the phone: motion everywhere, notifications on Android. */
+export type ReminderNeed = 'motion' | 'notifications';
+
+/**
+ * Before turning the reminder on: ask for what it needs (each an OS prompt on the driver's tap, only
+ * when the phone can still ask) and say what is still missing. An empty list means it can work.
+ */
+export async function ensureReminderPermissions(adapter: Pick<PermissionsAdapter, 'snapshot' | 'requestMotion' | 'requestNotifications'>): Promise<ReminderNeed[]> {
+  const missing: ReminderNeed[] = [];
+  let snap: PermissionSnapshot;
+  try {
+    snap = await adapter.snapshot();
+  } catch {
+    return ['motion'];
+  }
+  if (snap.motion !== 'granted') {
+    const answer = snap.motion === 'undetermined' ? await adapter.requestMotion().catch(() => null) : snap.motion;
+    if (answer !== 'granted') missing.push('motion');
+  }
+  if (snap.platform === 'android') {
+    const allowed = (a: string) => a === 'granted' || a === 'provisional';
+    let n: string = snap.notifications;
+    if (!allowed(n) && snap.notificationsCanAskAgain) n = await adapter.requestNotifications().catch(() => 'denied');
+    if (!allowed(n)) missing.push('notifications');
+  }
+  return missing;
 }
 
 /**

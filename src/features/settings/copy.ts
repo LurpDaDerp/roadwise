@@ -37,6 +37,12 @@ export const settingsCopy = {
     reminder: {
       title: 'Forgot-to-start reminder',
       subtitle: 'A quiet nudge if your phone noticed a car trip you didn’t record. Off by default.',
+      needs: {
+        motion: 'The reminder needs motion access to notice a car trip. Turn it on in Settings, then try again.',
+        notifications: 'The reminder needs notifications to reach you. Turn them on in Settings, then try again.',
+        both: 'The reminder needs motion access and notifications. Turn them on in Settings, then try again.',
+      },
+      openSettings: 'Open Settings',
     },
     permissions: { title: 'Permissions', subtitle: 'Location, motion and notifications' },
     privacy: 'Privacy',
