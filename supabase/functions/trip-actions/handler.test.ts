@@ -45,6 +45,7 @@ const disputeResult = (e: ApplyDisputeEnvelope) => ({
   eventId: e.eventId,
   status: e.status,
   rejectReason: e.rejectReason ?? null,
+  quotaLeft: e.status === 'accepted' ? 2 : 0,
   net: e.net ?? 167,
   delta: (e.net ?? 167) - 167,
   progress: { points: 177, lifetime: 177, level: 1, levelUp: false, safetyRating: 92, ranked: false },
@@ -82,7 +83,7 @@ Deno.test('dispute accepted: the stored input is re-scored with the event remove
   const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h.deps);
   assertEquals(res.status, 200);
   const body = await res.json();
-  assertEquals([body.action, body.status, body.quotaLeft, body.clientTripId], ['dispute', 'accepted', 3, TRIP]);
+  assertEquals([body.action, body.status, body.quotaLeft, body.clientTripId], ['dispute', 'accepted', 2, TRIP]);
   const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
   assertEquals([e.user, e.tripId, e.eventId, e.reason, e.status], [USER, TRIP_ID, EVENT, 'hazard', 'accepted']);
   // one minor hard brake left of two: 177 − 10

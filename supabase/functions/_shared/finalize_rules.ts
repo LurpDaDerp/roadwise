@@ -5,6 +5,7 @@
 import type { FinalizeTripPayloadV3 } from './payload.ts';
 import type { DriveBreakdown } from './scoring/index';
 import { MERGE_DIST_M } from './scoring/index';
+import { decodeLine } from './speedLimits/geometry.ts';
 
 /** Faster than this, sustained over a whole drive, is not a car on a road. */
 export const MAX_AVG_MPH = 120;
@@ -15,7 +16,35 @@ export const MIN_VALID_GNSS_PCT = 30;
 /** A loop drive is under this many miles. */
 export const LOOP_MAX_MILES = 5;
 
+/** The route may be up to this much longer than its drawn polyline (GPS noise, simplification)… */
+export const POLYLINE_SLACK_FACTOR = 1.25;
+/** …plus this many miles hidden by the 0.25 mi end trims and up to three 800 m privacy zones. */
+export const POLYLINE_SLACK_MILES = 4;
+const M_PER_MILE = 1609.344;
+
 export type IntegrityReason = 'spoofed' | 'implausible';
+
+/** A stored drive with one of these reasons is never a merge target. */
+export const isRefusedReason = (reason: string | null | undefined): boolean => reason === 'spoofed' || reason === 'implausible';
+
+/** The length of the uploaded polyline in miles; 0 for an empty or undecodable one. */
+export function polylineMiles(polyline: string): number {
+  if (polyline === '') return 0;
+  let line: Float64Array;
+  try {
+    line = decodeLine(polyline);
+  } catch {
+    return 0;
+  }
+  let m = 0;
+  for (let i = 2; i < line.length; i += 2) {
+    m += distanceM({ lat: line[i - 2], lng: line[i - 1] }, { lat: line[i], lng: line[i + 1] });
+  }
+  return m / M_PER_MILE;
+}
+
+/** Miles far beyond what the route shows cannot be true: `miles > polyline × 1.25 + 4`. */
+export const milesExceedRoute = (miles: number, polyline: string): boolean => miles > polylineMiles(polyline) * POLYLINE_SLACK_FACTOR + POLYLINE_SLACK_MILES;
 
 /** Why a drive is stored unscored, or null when it may be scored. */
 export function integrityReason(p: FinalizeTripPayloadV3): IntegrityReason | null {
@@ -25,6 +54,7 @@ export function integrityReason(p: FinalizeTripPayloadV3): IntegrityReason | nul
   const hours = p.durationS / 3600;
   if (hours > 0 && p.miles / hours > MAX_AVG_MPH) return 'implausible';
   if (p.miles >= 1 && p.integrity.validGnssPct < MIN_VALID_GNSS_PCT) return 'implausible';
+  if (milesExceedRoute(p.miles, p.polyline)) return 'implausible';
   return null;
 }
 

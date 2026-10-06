@@ -43,6 +43,8 @@ export const StreakStateSchema = z.object({
 export const MergeTargetSchema = z.object({
   tripId: Uuid,
   clientTripId: Uuid,
+  /** A refused (spoofed / implausible) drive is never merged into, whatever the SQL answered. */
+  reason: z.enum(['too_short', 'spoofed', 'implausible']).nullable(),
   startedAt: Num,
   endedAt: Num,
   tz: z.string(),

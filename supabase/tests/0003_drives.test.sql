@@ -4,7 +4,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(83);
+select plan(85);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -152,7 +152,7 @@ select is((select row(status, penalty)::text from public.trip_events where clien
 delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
 select is((private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
   'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 3}'::jsonb, 'net', 100))) - 'progress' - 'tripId',
-  '{"net": 10, "delta": 0, "status": "rejected", "eventId": "a1a1a1a1-0000-4000-8000-000000000003", "rejectReason": "quota"}'::jsonb,
+  '{"net": 10, "delta": 0, "status": "rejected", "eventId": "a1a1a1a1-0000-4000-8000-000000000003", "quotaLeft": 0, "rejectReason": "quota"}'::jsonb,
   'an accepted decision past the quota is re-counted under the lock and stored rejected');
 delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
 select throws_ok($$ select private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
@@ -228,6 +228,12 @@ select is((private.drive_context('00000000-0000-0000-0000-000000000001', '8c8c8c
   'a merge whose union would exceed 12 hours is refused: scored as a separate drive');
 select isnt((private.drive_context('00000000-0000-0000-0000-000000000001', '8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', pg_temp.t0() + interval '332 minutes', (pg_temp.t0() at time zone 'America/New_York')::date, 47.61, -122.31, pg_temp.t0() + interval '6 hours')) -> 'merge', 'null'::jsonb,
   'within 12 hours it merges');
+update public.trips set scored = false, reason = 'spoofed' where client_trip_id = '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a';
+select is((private.drive_context('00000000-0000-0000-0000-000000000001', '8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', pg_temp.t0() + interval '332 minutes', (pg_temp.t0() at time zone 'America/New_York')::date, 47.61, -122.31, pg_temp.t0() + interval '6 hours')) -> 'merge', 'null'::jsonb,
+  'a spoofed latest drive is never a merge target');
+select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', pg_temp.t0() + interval '332 minutes', 10, 2, 20, '[]', (select id from public.trips where client_trip_id = '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a')) $$,
+  'P0002', 'merge target not found', 'and apply_drive refuses it as a target too');
+update public.trips set scored = true, reason = null where client_trip_id = '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a';
 
 -- ---------------------------------------------------------------------------
 -- rating and stats

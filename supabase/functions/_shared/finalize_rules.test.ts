@@ -1,8 +1,8 @@
 import { assertEquals } from '@std/assert';
-import { distanceM, integrityReason, isLoopDrive, unscoredBreakdown } from './finalize_rules.ts';
+import { distanceM, integrityReason, isLoopDrive, milesExceedRoute, polylineMiles, unscoredBreakdown } from './finalize_rules.ts';
 import { localDayOf, isKnownTz } from './local_day.ts';
 import { scoreDrive } from './scoring/index';
-import { payload } from './testing/v3_fixtures.ts';
+import { lineOfMiles, payload } from './testing/v3_fixtures.ts';
 
 Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 150 mph average or bad GNSS is implausible', () => {
   const ok = payload();
@@ -13,6 +13,20 @@ Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 
   assertEquals(integrityReason(payload({ miles: 75, safeMiles: 75 })), 'implausible'); // 75 mi in 30 min
   assertEquals(integrityReason(payload({ integrity: { ...ok.integrity, validGnssPct: 10 } })), 'implausible');
   assertEquals(integrityReason(payload({ miles: 0.6, safeMiles: 0.6, integrity: { ...ok.integrity, validGnssPct: 10 } })), null);
+});
+
+Deno.test('miles cross-check: miles above polyline × 1.25 + 4 are implausible; an empty or broken polyline allows 4', () => {
+  const eight = lineOfMiles(8);
+  assertEquals(Math.abs(polylineMiles(eight) - 8) < 0.02, true);
+  assertEquals(milesExceedRoute(14, eight), false);
+  assertEquals(milesExceedRoute(14.05, eight), true);
+  assertEquals(milesExceedRoute(4, ''), false);
+  assertEquals(milesExceedRoute(4.01, ''), true);
+  assertEquals(polylineMiles('abc_def'), 0); // decodes to no usable line: treated as empty
+  assertEquals(milesExceedRoute(5, 'abc_def'), true);
+  assertEquals(integrityReason(payload({ miles: 20, safeMiles: 20, polyline: eight })), 'implausible');
+  assertEquals(integrityReason(payload({ miles: 14, safeMiles: 14, polyline: eight })), null);
+  assertEquals(integrityReason(payload({ miles: 3.9, safeMiles: 3.9, polyline: '' })), null);
 });
 
 Deno.test('loop: 402 m and 5 miles are the bounds; a missing end point is never a loop', () => {

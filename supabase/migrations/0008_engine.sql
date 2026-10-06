@@ -126,13 +126,14 @@ begin
   select * into t from public.trips x
     where x.user_id = p_user and x.merged_into is null
     order by x.started_at desc limit 1;
-  if found and not t.not_driving and t.ended_at <= p_started_at and p_started_at - t.ended_at <= interval '300 seconds'
+  if found and not t.not_driving and t.reason is distinct from 'spoofed' and t.reason is distinct from 'implausible'
+     and t.ended_at <= p_started_at and p_started_at - t.ended_at <= interval '300 seconds'
      and g.last_end_at = t.ended_at and g.last_end_lat is not null and p_start_lat is not null
      and private.distance_m(g.last_end_lat, g.last_end_lng, p_start_lat, p_start_lng) <= 402
      -- the union stays within the 12-hour drive bound; otherwise this is a separate drive
      and (p_ended_at is null or p_ended_at - t.started_at <= interval '12 hours') then
     v_merge := jsonb_build_object(
-      'tripId', t.id, 'clientTripId', t.client_trip_id,
+      'tripId', t.id, 'clientTripId', t.client_trip_id, 'reason', t.reason,
       'startedAt', floor(extract(epoch from t.started_at) * 1000)::bigint,
       'endedAt', floor(extract(epoch from t.ended_at) * 1000)::bigint,
       'tz', t.tz, 'localDay', t.local_day,
@@ -258,7 +259,7 @@ begin
   -- merge: revert the target, then write the union into its row
   if v_merge is not null then
     select * into tgt from public.trips x where x.id = v_merge and x.user_id = v_user for update;
-    if not found or tgt.merged_into is not null or tgt.not_driving then
+    if not found or tgt.merged_into is not null or tgt.not_driving or tgt.reason in ('spoofed', 'implausible') then
       raise exception 'merge target not found' using errcode = 'no_data_found';
     end if;
     perform private.revert_trip(v_user, tgt.id);
@@ -556,6 +557,7 @@ declare
   v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_eo int; v_dr int;
   v_why text := p ->> 'rejectReason';
   v_used int;
+  v_left int;
 begin
   if v_user is null or v_trip is null or v_event is null or v_reason not in ('hazard', 'wrong_limit', 'mounted')
      or v_status not in ('accepted', 'rejected') or (bd is not null and jsonb_typeof(bd) <> 'object') or pg_column_size(p) > 262144 then
@@ -583,8 +585,11 @@ begin
     end if;
   end if;
   insert into public.event_disputes (trip_id, client_event_id, user_id, reason, status) values (v_trip, v_event, v_user, v_reason, v_status);
+  -- the quota left after this dispute, counted under the lock
+  select greatest(0, 3 - count(*))::int into v_left from public.event_disputes d
+    where d.user_id = v_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
   if v_status = 'rejected' then
-    return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', v_why,
+    return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', v_why, 'quotaLeft', v_left,
       'net', t.points_net, 'delta', 0, 'progress', private.progress_json(v_user, false));
   end if;
   update public.trip_events set status = 'removed' where trip_id = v_trip and client_event_id = v_event;
@@ -629,7 +634,7 @@ begin
   else
     v_net := t.points_net;
   end if;
-  return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'accepted', 'rejectReason', null,
+  return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'accepted', 'rejectReason', null, 'quotaLeft', v_left,
     'net', v_net, 'delta', v_delta, 'progress', private.progress_json(v_user, false));
 end $$;
 

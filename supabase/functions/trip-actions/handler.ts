@@ -115,7 +115,7 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
       }
       const r = DisputeResultSchema.safeParse(await tx.applyDispute(envelope));
       if (!r.success) throw new EngineContractError('private.apply_dispute');
-      return { kind: 'dispute' as const, body: { action: 'dispute', clientTripId: a.clientTripId, quotaLeft: d.quotaLeft, ...r.data } };
+      return { kind: 'dispute' as const, body: { action: 'dispute', clientTripId: a.clientTripId, ...r.data } };
     });
   try {
     let result: Awaited<ReturnType<typeof attempt>>;

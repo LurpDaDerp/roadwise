@@ -9,7 +9,7 @@
 import { assert, assertEquals } from '@std/assert';
 import postgres from 'postgres';
 import { createEngine } from '../_shared/engine.ts';
-import { EVENT, payload, STARTED_AT, TRIP, TRIP_2 } from '../_shared/testing/v3_fixtures.ts';
+import { EVENT, lineOfMiles, payload, STARTED_AT, TRIP, TRIP_2 } from '../_shared/testing/v3_fixtures.ts';
 import { handleTripAction } from '../trip-actions/handler.ts';
 import { handleFinalizeTrip } from './handler.ts';
 
@@ -80,6 +80,7 @@ Deno.test({
         dmsFaceSeen: false,
         start: { lat: 40.7311, lng: -73.9358 },
         end: { lat: 40.75, lng: -73.95 },
+        polyline: lineOfMiles(3, 40.7311, -73.9358),
         events: [{ id: EVENT_B, type: 'hard_brake', tier: 'minor', startedAt: base.endedAt + 5 * 60_000, durationS: 2, lat: null, lng: null, measured: {} }],
       });
       const merged = await handleFinalizeTrip(post('finalize-trip', second), deps);
@@ -97,7 +98,7 @@ Deno.test({
       const dispute = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals(dispute.status, 200);
       const d = await dispute.json();
-      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 175, 13, 175, 3]);
+      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 175, 13, 175, 2]);
       const twice = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals([twice.status, (await twice.json()).code], [409, 'already_disputed']);
       const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);

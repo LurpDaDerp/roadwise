@@ -38,6 +38,8 @@ export const DisputeResultSchema = z.object({
   eventId: z.uuid(),
   status: z.enum(['accepted', 'rejected']),
   rejectReason: z.enum(['quota', 'not_mounted']).nullable(),
+  /** Hazard / wrong-limit auto-accepts left this week, counted under the lock after this dispute. */
+  quotaLeft: z.number().int().min(0),
   net: z.number().int(),
   delta: z.number().int(),
   progress: z.object({

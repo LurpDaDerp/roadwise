@@ -3,7 +3,7 @@ import type { ApplyDriveEnvelope } from '../_shared/engine.ts';
 import { PgError } from '../_shared/pg.ts';
 import { fakeEngine, type FakeEngineScript } from '../_shared/testing/fake_engine.ts';
 import { EVENT, EVENT_2, mergeTarget, payload, response, STARTED_AT, TRIP, TRIP_2, USER } from '../_shared/testing/v3_fixtures.ts';
-import { handleFinalizeTrip, MAX_UPLOADS_PER_DAY, UPLOAD_LIMIT_KEY } from './handler.ts';
+import { handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
 
 const quiet = { warn: () => {}, error: () => {} };
 const freshContext = {
@@ -96,6 +96,26 @@ Deno.test('integrity: a mock location is stored unscored as spoofed, never merge
   assertEquals(envelopeOf(h2).reason, 'implausible');
 });
 
+Deno.test('a refused merge target (spoofed / implausible) is never merged into: the drive is scored on its own', async () => {
+  for (const reason of ['spoofed', 'implausible'] as const) {
+    const h = harness({ context: { ...freshContext, merge: mergeTarget({ reason }) } });
+    const res = await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h.deps);
+    assertEquals(res.status, 200);
+    const e = envelopeOf(h);
+    assertEquals([e.mergeInto, e.events.length, e.streak.before, e.breakdown.safeMiles], [null, 1, { streak: 10 }, 11.8], reason);
+  }
+  // a too_short target still merges
+  const h = harness({ context: { ...freshContext, merge: mergeTarget({ reason: 'too_short' }) } });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h.deps);
+  assertEquals(envelopeOf(h).mergeInto, '99999999-9999-4999-8999-999999999999');
+});
+
+Deno.test('miles far beyond the drawn route are stored implausible', async () => {
+  const h = harness();
+  await handleFinalizeTrip(post(payload({ miles: 40, safeMiles: 40, durationS: 1800, integrity: { mockLocation: false, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 90 } })), h.deps);
+  assertEquals([envelopeOf(h).scored, envelopeOf(h).reason], [false, 'implausible']);
+});
+
 Deno.test('loop: start and end within 402 m under 5 miles is a loop; the third of the day scores at half and has no clean bonus', async () => {
   const loop = payload({ miles: 2.5, safeMiles: 2.5, end: { lat: 40.7135, lng: -74.0055 }, events: [] });
   const h1 = harness({ context: { ...freshContext, loopDrivesToday: 1 } });
@@ -155,6 +175,8 @@ Deno.test('engine failures map to codes only: retryable 503, 22023 400, P0002 50
   assertEquals([retry.status, retry.headers.get('retry-after')], [503, '2']);
   const envelope = await handleFinalizeTrip(post(payload()), harness({ apply: new PgError('22023', 'payload metrics are out of range') }).deps);
   assertEquals([envelope.status, (await envelope.json()).code], [400, 'invalid_envelope']);
+  const skew = await handleFinalizeTrip(post(payload()), harness({ apply: new PgError('22023', TZ_REFUSAL) }).deps);
+  assertEquals([skew.status, (await skew.json()).issues], [400, [{ path: 'tz', message: 'unknown time zone' }]]);
   const missing = await handleFinalizeTrip(post(payload()), harness({ context: new PgError('P0002', 'no progress for user') }).deps);
   assertEquals([missing.status, (await missing.json()).code], [500, 'internal']);
   const drift = await handleFinalizeTrip(post(payload()), harness({ apply: { tripId: 'nope' } }).deps);

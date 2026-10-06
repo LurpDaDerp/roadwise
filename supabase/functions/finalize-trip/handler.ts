@@ -12,7 +12,7 @@
 // codes — never a position, a name or a database message.
 import type { ApplyDriveEnvelope, Engine, MergeTarget, StoredEvent } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
-import { integrityReason, isLoopDrive, unscoredBreakdown } from '../_shared/finalize_rules.ts';
+import { integrityReason, isLoopDrive, isRefusedReason, unscoredBreakdown } from '../_shared/finalize_rules.ts';
 import {
   bearerToken,
   invalidPayload,
@@ -25,6 +25,7 @@ import {
   type Logger,
 } from '../_shared/http.ts';
 import { isKnownTz, localDayOf } from '../_shared/local_day.ts';
+import { isPgError } from '../_shared/pg.ts';
 import {
   FinalizeTripPayloadV3Schema,
   FinalizeTripResponseV3Schema,
@@ -37,6 +38,8 @@ import { applyStreak, scoreDrive, SCORING_VERSION, type DriveContext, type Drive
 /** Uploads a user may make per rolling day; above it the queue is told to wait. */
 export const MAX_UPLOADS_PER_DAY = 300;
 export const UPLOAD_LIMIT_KEY = 'finalize_trip';
+/** apply_drive's fixed refusal of a zone pg_timezone_names lacks (0008). */
+export const TZ_REFUSAL = 'payload needs clientTripId, a known tz, localDay and a valid reason';
 
 export interface FinalizeDeps {
   /** The user id the token proves, or null when it proves nothing; throws when Auth is unreachable. */
@@ -87,7 +90,8 @@ export function buildScoringInput(
   streakNow: StreakState,
   safeMilesEarlierToday: number
 ): { input: DriveInput; ctx: DriveContext; streak: StreakState; events: EnvelopeEvent[]; isLoop: boolean; loopRepeat: boolean } {
-  if (merge) {
+  // a refused target never merges, even if a stale engine offered it
+  if (merge && !isRefusedReason(merge.reason)) {
     const events = [...merge.events.map(fromStored), ...p.events.map(fromPayload)];
     return {
       input: {
@@ -162,7 +166,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
       // An integrity-refused drive is stored alone and unscored: it never merges into a good one.
       const refused = integrityReason(p);
-      const merge = refused ? null : context.merge;
+      const merge = refused || isRefusedReason(context.merge?.reason ?? null) ? null : context.merge;
       const s = buildScoringInput(p, merge, context.loopDrivesToday, context.streak, context.safeMilesEarlierToday);
 
       let breakdown = scoreDrive(s.input, s.ctx);
@@ -227,6 +231,10 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
     if (err instanceof EngineContractError) {
       log.error('finalize-trip engine contract', { ...ctxLog, message: err.message });
       return reply(json(500, { code: 'internal' }));
+    }
+    // tzdata skew: a zone Intl knows and Postgres does not is the device's problem to fix, named
+    if (isPgError(err) && err.code === '22023' && err.message === TZ_REFUSAL) {
+      return reply(json(400, { code: 'invalid_payload', issues: [{ path: 'tz', message: 'unknown time zone' }] }));
     }
     return reply(pgFailure(err, log, ctxLog, 'finalize-trip'));
   }

@@ -10,6 +10,34 @@ export const EVENT_2 = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 /** 2026-10-05 18:00:00 UTC = 14:00 New York. */
 export const STARTED_AT = Date.UTC(2026, 9, 5, 18, 0, 0);
 
+/** Google polyline encoding at precision 5 (the inverse of `decodeLine`). */
+export function encodePolyline(points: [number, number][]): string {
+  let out = '';
+  let prevLat = 0;
+  let prevLng = 0;
+  const enc = (v: number) => {
+    let n = v < 0 ? ~(v << 1) : v << 1;
+    while (n >= 0x20) {
+      out += String.fromCharCode((0x20 | (n & 0x1f)) + 63);
+      n >>= 5;
+    }
+    out += String.fromCharCode(n + 63);
+  };
+  for (const [lat, lng] of points) {
+    const la = Math.round(lat * 1e5);
+    const ln = Math.round(lng * 1e5);
+    enc(la - prevLat);
+    enc(ln - prevLng);
+    prevLat = la;
+    prevLng = ln;
+  }
+  return out;
+}
+
+/** A straight line due north from `lat`, `lng`, roughly `miles` long (1° of latitude ≈ 69.09 mi). */
+export const lineOfMiles = (miles: number, lat = 40.7128, lng = -74.006): string =>
+  encodePolyline(Array.from({ length: 11 }, (_, i) => [lat + (miles / 69.09) * (i / 10), lng] as [number, number]));
+
 /** 12 miles in 30 minutes, one minor hard brake (the spec's first example). */
 export function payload(over: Partial<FinalizeTripPayloadV3> = {}): FinalizeTripPayloadV3 {
   return {
@@ -27,7 +55,7 @@ export function payload(over: Partial<FinalizeTripPayloadV3> = {}): FinalizeTrip
     dmsFaceSeen: true,
     start: { lat: 40.7128, lng: -74.006 },
     end: { lat: 40.7306, lng: -73.9352 },
-    polyline: 'abc_def',
+    polyline: lineOfMiles(12.4),
     integrity: { mockLocation: false, motionMismatch: false, validGnssPct: 98, maxSpeedMph: 62 },
     events: [
       {
@@ -84,6 +112,7 @@ export function mergeTarget(over: Partial<MergeTarget> = {}): MergeTarget {
   return {
     tripId: '99999999-9999-4999-8999-999999999999',
     clientTripId: TRIP,
+    reason: null,
     startedAt: STARTED_AT - 40 * 60_000,
     endedAt: STARTED_AT - 2 * 60_000,
     tz: 'America/New_York',
@@ -94,7 +123,7 @@ export function mergeTarget(over: Partial<MergeTarget> = {}): MergeTarget {
     durationS: 2280,
     dmsOn: false,
     dmsFaceSeen: false,
-    polyline: 'xyz',
+    polyline: lineOfMiles(3),
     events: [
       {
         id: EVENT_2,
