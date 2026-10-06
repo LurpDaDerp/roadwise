@@ -562,7 +562,6 @@ end $$;
 -- config rows (an operator's value is never overwritten)
 -- ---------------------------------------------------------------------------
 insert into public.app_config (key, value, is_public) values
-  ('feature_flags', '{}'::jsonb, true),
   ('min_app_version', '"3.0.0"'::jsonb, true)
 on conflict (key) do nothing;
 

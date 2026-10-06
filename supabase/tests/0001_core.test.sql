@@ -111,7 +111,7 @@ select throws_ok($$ select count(*) from public.devices $$, '42501', null, 'A ca
 select throws_ok($$ select count(*) from public.rate_limits $$, '42501', null, 'A cannot read rate_limits');
 select throws_ok($$ select private.is_clean_name('x') $$, '42501', null, 'A cannot call into private');
 select throws_ok($$ select public.take_rate_limit('00000000-0000-0000-0000-000000000001', 'k', '1 minute', 1) $$, '42501', null, 'A cannot call the service-role rate limiter');
-select is((select count(*)::int from public.app_config where key in ('feature_flags', 'min_app_version')), 2, 'the public config rows are readable');
+select is((select count(*)::int from public.app_config where key = 'min_app_version'), 1, 'the public config row is readable');
 
 -- username
 select is(public.check_username('Ava_1'), '{"available": true, "reason": null}'::jsonb, 'a clean free username is available');
@@ -187,7 +187,7 @@ set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
 select throws_ok($$ select count(*) from public.profiles $$, '42501', null, 'anon cannot read profiles');
 select throws_ok($$ select public.check_username('x') $$, '42501', null, 'anon cannot call check_username');
-select is((select count(*)::int from public.app_config), 2, 'anon reads the public config rows');
+select is((select count(*)::int from public.app_config), 1, 'anon reads the public config row');
 reset role;
 
 -- ---------------------------------------------------------------------------

@@ -14,7 +14,6 @@ import {
   CONFIG_KEYS,
   createAppConfigRefresher,
   readConfig,
-  readFlag,
   refreshAppConfig,
   useAppConfig,
   type AppConfigSupabase,
@@ -28,7 +27,6 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Database } from '@/data/supabase/types';
-
 
 const NOW = 1_790_000_000_000;
 
@@ -55,83 +53,31 @@ function fakeSupabase(reply: { data: unknown; error: unknown }) {
   return { supabase, calls };
 }
 
-/** What `supabase/seed.sql` holds, as PostgREST returns it. */
-const SEEDED = [
-  {
-    key: 'feature_flags',
-    value: { camera_beta: true, auto_detect: true, referral: false },
-  },
-  { key: 'min_app_version', value: '2.0.0' },
-];
+/** The public row `0001_core.sql` seeds, as PostgREST returns it. */
+const SEEDED = [{ key: 'min_app_version', value: '3.0.0' }];
 
 test('the app Supabase client satisfies the seam', () => {
   const asSeam = (client: SupabaseClient<Database>): AppConfigSupabase => client;
   expect(typeof asSeam).toBe('function');
 });
 
-test('with nothing fetched yet, every flag is its fallback', async () => {
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(false);
-  await expect(readFlag(db, 'auto_detect', true)).resolves.toBe(true);
-  await expect(readFlag(db, 'camera_beta', false)).resolves.toBe(false);
-  await expect(readFlag(db, 'referral', true)).resolves.toBe(true);
-});
-
-test('a refresh reads the public config once and the flags follow it', async () => {
-  const { supabase, calls } = fakeSupabase({ data: SEEDED, error: null });
+test('a refresh reads the public config once and stores the rows it knows', async () => {
+  // A row this build does not read (an older server's `feature_flags`) is ignored.
+  const { supabase, calls } = fakeSupabase({ data: [...SEEDED, { key: 'feature_flags', value: { auto_detect: true } }], error: null });
 
   await refreshAppConfig(supabase, db, () => NOW);
 
   expect(calls).toEqual([{ table: APP_CONFIG_TABLE, columns: 'key,value' }]);
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(true);
-  await expect(readFlag(db, 'camera_beta', false)).resolves.toBe(true);
-  await expect(readFlag(db, 'referral', true)).resolves.toBe(false);
   expect(await createSettingsRepo(db).get(APP_CONFIG_KEY)).toEqual({
     fetchedAt: NOW,
-    flags: { camera_beta: true, auto_detect: true, referral: false },
-    // Task 16: the other public rows ride in the same stored value, validated.
-    values: { min_app_version: '2.0.0' },
+    values: { min_app_version: '3.0.0' },
   });
 });
 
-test('a flag the server does not send, or sends as something other than a boolean, falls back', async () => {
-  const { supabase } = fakeSupabase({
-    data: [
-      {
-        key: 'feature_flags',
-        value: { auto_detect: 'yes', camera_beta: 1, unknown_flag: true },
-      },
-    ],
-    error: null,
-  });
-  await refreshAppConfig(supabase, db, () => NOW);
-
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(false);
-  await expect(readFlag(db, 'camera_beta', true)).resolves.toBe(true);
-  await expect(readFlag(db, 'referral', false)).resolves.toBe(false);
-  expect(await createSettingsRepo(db).get(APP_CONFIG_KEY)).toEqual({
-    fetchedAt: NOW,
-    flags: {},
-    values: {},
-  });
-});
-
-test('a flag switched off on the server is switched off here at the next refresh', async () => {
-  await refreshAppConfig(fakeSupabase({ data: SEEDED, error: null }).supabase, db, () => NOW);
-  await refreshAppConfig(
-    fakeSupabase({
-      data: [{ key: 'feature_flags', value: { auto_detect: false } }],
-      error: null,
-    }).supabase,
-    db,
-    () => NOW + 1
-  );
-  await expect(readFlag(db, 'auto_detect', true)).resolves.toBe(false);
-  // Gone from the server's row: back to the caller's fallback, not the old value.
-  await expect(readFlag(db, 'camera_beta', false)).resolves.toBe(false);
-});
+const NEWER = [{ key: 'min_app_version', value: '3.1.0' }];
 
 test('a failed request rejects and keeps what was stored', async () => {
-  await refreshAppConfig(fakeSupabase({ data: SEEDED, error: null }).supabase, db, () => NOW);
+  await refreshAppConfig(fakeSupabase({ data: NEWER, error: null }).supabase, db, () => NOW);
 
   await expect(
     refreshAppConfig(
@@ -141,11 +87,11 @@ test('a failed request rejects and keeps what was stored', async () => {
     )
   ).rejects.toThrow('app config');
 
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(true);
+  expect((await readConfig(db)).min_app_version).toBe('3.1.0');
 });
 
 test('an answer that is not a list of rows rejects and keeps what was stored', async () => {
-  await refreshAppConfig(fakeSupabase({ data: SEEDED, error: null }).supabase, db, () => NOW);
+  await refreshAppConfig(fakeSupabase({ data: NEWER, error: null }).supabase, db, () => NOW);
   await expect(
     refreshAppConfig(
       fakeSupabase({ data: { oops: true }, error: null }).supabase,
@@ -153,87 +99,35 @@ test('an answer that is not a list of rows rejects and keeps what was stored', a
       () => NOW + 1
     )
   ).rejects.toThrow('app config');
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(true);
-});
-
-test('a stored value this build cannot read falls back rather than throwing', async () => {
-  await db.execute('INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)', [
-    APP_CONFIG_KEY,
-    '{not json',
-  ]);
-  await expect(readFlag(db, 'auto_detect', true)).resolves.toBe(true);
-  await createSettingsRepo(db).set(APP_CONFIG_KEY, { flags: 'nope' });
-  await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(false);
+  expect((await readConfig(db)).min_app_version).toBe('3.1.0');
 });
 
 // ---------------------------------------------------------------------------------------------
-// Task 16: the typed onboarding config on the same `config.app` cache.
+// The typed rows on the `config.app` cache.
 // ---------------------------------------------------------------------------------------------
 
-/** Every public row as the migrations leave them (0005's flags, then 0006's and 0007's rows). */
+/** Every row this build reads, at its default (the seed itself sets `min_app_version` only). */
 const MIGRATED = [
-  {
-    key: 'feature_flags',
-    value: {
-      camera_beta: false,
-      auto_detect: true,
-      referral: false,
-      guardian_invites: false,
-    },
-  },
-  { key: 'min_app_version', value: '3.0.0' },
-  { key: 'minor_consent_mode', value: 'guardian_link_optional' },
+  ...SEEDED,
   {
     key: 'onboarding',
     value: { tos_version: '2026-09-21', privacy_version: '2026-09-21' },
   },
   { key: 'legal_urls', value: {} },
   { key: 'store_urls', value: {} },
-  { key: 'oem_battery_guides', value: CONFIG_DEFAULTS.oem_battery_guides },
-  {
-    key: 'notification_defaults',
-    value: {
-      quiet_enabled: true,
-      quiet_start: '22:00',
-      quiet_end: '07:00',
-      tz: 'America/Los_Angeles',
-    },
-  },
 ];
 
 const refreshWith = (rows: unknown[], at = NOW) =>
   refreshAppConfig(fakeSupabase({ data: rows, error: null }).supabase, db, () => at);
 
 describe('the compiled defaults', () => {
-  test('equal the values the migrations write', () => {
-    // A flag must not advertise an unbuilt feature (Ruling T16 (2)).
-    expect(CONFIG_DEFAULTS.flags).toEqual({
-      auto_detect: true,
-      camera_beta: false,
-      referral: false,
-      guardian_invites: false,
+  test('match the seed', () => {
+    expect(CONFIG_DEFAULTS).toEqual({
+      min_app_version: '3.0.0',
+      onboarding: { tos_version: '2026-09-21', privacy_version: '2026-09-21' },
+      legal_urls: {},
+      store_urls: {},
     });
-    expect(CONFIG_DEFAULTS.min_app_version).toBe('3.0.0');
-    expect(CONFIG_DEFAULTS.minor_consent_mode).toBe('guardian_link_optional');
-    expect(CONFIG_DEFAULTS.onboarding).toEqual({
-      tos_version: '2026-09-21',
-      privacy_version: '2026-09-21',
-    });
-    expect(CONFIG_DEFAULTS.legal_urls).toEqual({});
-    expect(CONFIG_DEFAULTS.store_urls).toEqual({});
-    expect(CONFIG_DEFAULTS.notification_defaults).toEqual({
-      quiet_enabled: true,
-      quiet_start: '22:00',
-      quiet_end: '07:00',
-      tz: 'America/Los_Angeles',
-    });
-    expect(Object.keys(CONFIG_DEFAULTS.oem_battery_guides).sort()).toEqual([
-      'default',
-      'google',
-      'oneplus',
-      'samsung',
-      'xiaomi',
-    ]);
   });
 
   test('pass their own schemas, so a server echoing them reads back unchanged', () => {
@@ -242,36 +136,8 @@ describe('the compiled defaults', () => {
     }
   });
 
-  test('every battery guide has a title and one to eight steps', () => {
-    for (const guide of Object.values(CONFIG_DEFAULTS.oem_battery_guides)) {
-      expect(guide?.title.length).toBeGreaterThan(0);
-      expect(guide?.steps.length).toBeGreaterThanOrEqual(1);
-      expect(guide?.steps.length).toBeLessThanOrEqual(8);
-    }
-  });
-
   test('leave the Terms and Privacy Policy unpublished (ruling I7)', () => {
     expect(legalState(CONFIG_DEFAULTS).published).toBe(false);
-  });
-});
-
-describe('guardian_invites', () => {
-  test('defaults to false, with or without a stored config', async () => {
-    await expect(readFlag(db, 'guardian_invites')).resolves.toBe(false);
-    await refreshWith([{ key: 'feature_flags', value: { auto_detect: true } }]);
-    await expect(readFlag(db, 'guardian_invites')).resolves.toBe(false);
-    expect((await readConfig(db)).flags.guardian_invites).toBe(false);
-  });
-
-  test('follows the server once it says true', async () => {
-    await refreshWith([{ key: 'feature_flags', value: { guardian_invites: true } }]);
-    await expect(readFlag(db, 'guardian_invites')).resolves.toBe(true);
-    expect((await readConfig(db)).flags.guardian_invites).toBe(true);
-  });
-
-  test("a caller's explicit fallback still wins over the compiled default", async () => {
-    await expect(readFlag(db, 'guardian_invites', true)).resolves.toBe(true);
-    await expect(readFlag(db, 'auto_detect', false)).resolves.toBe(false);
   });
 });
 
@@ -283,7 +149,7 @@ describe('readConfig', () => {
     });
   });
 
-  test('reads back every migrated row after a refresh', async () => {
+  test('reads back every row after a refresh', async () => {
     await refreshWith(MIGRATED);
     expect(await readConfig(db)).toEqual({
       fetchedAt: NOW,
@@ -317,7 +183,6 @@ describe('readConfig', () => {
   test('an invalid row falls back to its compiled default and nothing invalid is kept', async () => {
     await refreshWith([
       { key: 'min_app_version', value: 'two' },
-      { key: 'minor_consent_mode', value: 'anything_goes' },
       {
         key: 'onboarding',
         value: { tos_version: '', privacy_version: '2026-10-01' },
@@ -327,19 +192,6 @@ describe('readConfig', () => {
         value: { terms: 'javascript:alert(1)', privacy: 'https://x.test/p' },
       },
       { key: 'store_urls', value: { ios: 42 } },
-      {
-        key: 'oem_battery_guides',
-        value: { samsung: { title: 'Samsung', steps: ['One'] } },
-      },
-      {
-        key: 'notification_defaults',
-        value: {
-          quiet_enabled: true,
-          quiet_start: '25:00',
-          quiet_end: '07:00',
-          tz: 'UTC',
-        },
-      },
       {
         key: 'store_urls_typo',
         value: { ios: 'https://apps.apple.com/app/id1' },
@@ -351,88 +203,42 @@ describe('readConfig', () => {
     });
     expect(await createSettingsRepo(db).get(APP_CONFIG_KEY)).toEqual({
       fetchedAt: NOW,
-      flags: {},
       values: {},
     });
   });
 
   test('valid rows are kept, with unknown keys inside them dropped', async () => {
     await refreshWith([
-      { key: 'min_app_version', value: '2.3.0' },
-      { key: 'minor_consent_mode', value: 'guardian_consent_required' },
+      { key: 'min_app_version', value: '3.3.0' },
       {
         key: 'store_urls',
         value: { ios: 'https://apps.apple.com/app/id1', web: 'https://x.test' },
       },
-      {
-        key: 'oem_battery_guides',
-        value: {
-          default: {
-            title: 'Let RoadWise run',
-            steps: ['Open Settings'],
-            icon: 'battery',
-          },
-          nokia: { title: 'Nokia', steps: ['One'] },
-        },
-      },
-      {
-        key: 'notification_defaults',
-        value: {
-          quiet_enabled: false,
-          quiet_start: '21:30',
-          quiet_end: '06:45',
-          tz: 'Europe/London',
-          extra: 1,
-        },
-      },
     ]);
     const config = await readConfig(db);
-    expect(config.min_app_version).toBe('2.3.0');
-    expect(config.minor_consent_mode).toBe('guardian_consent_required');
+    expect(config.min_app_version).toBe('3.3.0');
     expect(config.store_urls).toEqual({
       ios: 'https://apps.apple.com/app/id1',
     });
-    expect(config.oem_battery_guides).toEqual({
-      default: { title: 'Let RoadWise run', steps: ['Open Settings'] },
-    });
-    expect(config.notification_defaults).toEqual({
-      quiet_enabled: false,
-      quiet_start: '21:30',
-      quiet_end: '06:45',
-      tz: 'Europe/London',
-    });
-  });
-
-  test('a battery guide with more than eight steps is refused as a whole', async () => {
-    const steps = Array.from({ length: 9 }, (_, i) => `Step ${i + 1}`);
-    await refreshWith([
-      {
-        key: 'oem_battery_guides',
-        value: { default: { title: 'Too long', steps } },
-      },
-    ]);
-    expect((await readConfig(db)).oem_battery_guides).toEqual(CONFIG_DEFAULTS.oem_battery_guides);
   });
 
   test('a row the server stops sending goes back to its default at the next refresh', async () => {
-    await refreshWith([{ key: 'min_app_version', value: '2.3.0' }]);
+    await refreshWith([{ key: 'min_app_version', value: '3.3.0' }]);
     await refreshWith([], NOW + 1);
     expect((await readConfig(db)).min_app_version).toBe('3.0.0');
   });
 
   test('a stored value from an older build, or tampered with, is re-checked on read', async () => {
-    // D2's shape, with no `values` at all.
+    // An older build's shape: flags, and no `values` at all.
     await createSettingsRepo(db).set(APP_CONFIG_KEY, {
       fetchedAt: NOW,
       flags: { auto_detect: false },
     });
     let config = await readConfig(db);
-    expect(config.flags.auto_detect).toBe(false);
-    expect(config.min_app_version).toBe('3.0.0');
+    expect(config).toEqual({ fetchedAt: NOW, ...CONFIG_DEFAULTS });
 
     await createSettingsRepo(db).set(APP_CONFIG_KEY, {
       fetchedAt: 'yesterday',
-      flags: { auto_detect: 'no' },
       values: {
         min_app_version: 7,
         legal_urls: { terms: 'file:///etc/passwd' },
