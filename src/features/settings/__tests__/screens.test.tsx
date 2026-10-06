@@ -116,6 +116,14 @@ describe('Settings', () => {
   });
 
   it('units save to the server and to the phone’s mirror', async () => {
+    let units = 'mi';
+    answerRpc(mockRpc, {
+      get_my_summary: () => ({ ...SUMMARY, profile: { ...SUMMARY.profile, units } }),
+      update_profile: (args) => {
+        units = String(args?.p_units ?? units);
+        return null;
+      },
+    });
     const w = await appWorld();
     await w.render(<SettingsScreen />);
     await screen.findByTestId('settings-units');
@@ -123,7 +131,26 @@ describe('Settings', () => {
       fireEvent.press(screen.getByRole('tab', { name: 'Kilometers' }));
     });
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_units: 'km' }));
-    expect(await w.settings.get(UNITS_KEY)).toBe('km');
+    await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
+  });
+
+  it('a failed units change leaves the phone’s mirror alone', async () => {
+    answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: new Error('offline') });
+    const w = await appWorld({ settings: { [UNITS_KEY]: 'mi' } });
+    await w.render(<SettingsScreen />);
+    await screen.findByTestId('settings-units');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('tab', { name: 'Kilometers' }));
+    });
+    expect(await screen.findByTestId('settings-save-error')).toBeOnTheScreen();
+    expect(await w.settings.get(UNITS_KEY)).toBe('mi');
+  });
+
+  it('the mirror follows units changed on another device', async () => {
+    answerRpc(mockRpc, { get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, units: 'km' } } });
+    const w = await appWorld({ settings: { [UNITS_KEY]: 'mi' } });
+    await w.render(<SettingsScreen />);
+    await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
   });
 
   it('license stage and state go through update_profile', async () => {

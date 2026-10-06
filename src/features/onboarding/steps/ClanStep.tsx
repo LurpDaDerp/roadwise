@@ -7,6 +7,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { callRpc } from '@/data/server/rpc';
 import { useSession } from '@/data/supabase/session';
+import { isValidCode, normalizeCode } from '@/features/clan/model';
 import { friendlyError } from '@/features/social/errors';
 import { Card, Text, useFontScale, useTheme } from '@/ui';
 
@@ -18,13 +19,6 @@ import type { StepProps } from '../stepRegistry';
 import { StepFrame } from '../StepFrame';
 
 const copy = onboardingCopy.clan;
-
-/** Only the invite alphabet (no 0/O, 1/I), upper-cased, at most 8. */
-export const normaliseCode = (text: string) =>
-  text
-    .toUpperCase()
-    .replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '')
-    .slice(0, 8);
 
 interface ClanPreview {
   name: string;
@@ -104,7 +98,7 @@ export function ClanStep({ onBack }: StepProps) {
       primary={
         canJoin
           ? { label: copy.join(preview.name), onPress: () => void join(), loading: busy === 'join', testID: 'clan-join' }
-          : { label: copy.find, onPress: () => void find(), disabled: code.length !== 8, loading: busy === 'find', testID: 'clan-find' }
+          : { label: copy.find, onPress: () => void find(), disabled: !isValidCode(code), loading: busy === 'find', testID: 'clan-find' }
       }
       secondary={{ label: copy.skip, onPress: () => void skip(), loading: busy === 'skip', disabled: busy !== null && busy !== 'skip', testID: 'clan-skip' }}
       testID="clan-step"
@@ -117,7 +111,7 @@ export function ClanStep({ onBack }: StepProps) {
           onChangeText={(t) => {
             setError(null);
             setPreview(null);
-            setCode(normaliseCode(t));
+            setCode(normalizeCode(t).slice(0, 8));
           }}
           placeholder={copy.placeholder}
           placeholderTextColor={th.colors.textSubtle}
@@ -125,7 +119,8 @@ export function ClanStep({ onBack }: StepProps) {
           autoCorrect={false}
           autoComplete="off"
           spellCheck={false}
-          maxLength={12}
+          maxLength={64}
+          allowFontScaling={false}
           style={{
             minHeight: 56 * scale,
             borderWidth: 2,

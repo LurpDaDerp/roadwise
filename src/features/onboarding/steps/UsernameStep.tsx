@@ -139,6 +139,7 @@ export function UsernameStep({ onNext, debounceMs = USERNAME_DEBOUNCE_MS }: Step
               autoComplete="off"
               spellCheck={false}
               maxLength={24}
+              allowFontScaling={false}
               returnKeyType="done"
               onSubmitEditing={() => void claim()}
               style={{ flex: 1, color: th.colors.text, fontSize: 20 * scale, fontWeight: '600', paddingVertical: th.space.sm }}

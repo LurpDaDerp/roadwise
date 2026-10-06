@@ -253,6 +253,7 @@ function ZoneEditor({
           placeholder={copy.namePlaceholder}
           placeholderTextColor={th.colors.textSubtle}
           maxLength={ZONE_NAME_MAX}
+          allowFontScaling={false}
           autoCorrect={false}
           style={{
             minHeight: 48 * scale,

@@ -11,7 +11,7 @@ import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissi
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
 import { ONBOARDING_LICENSE_KEY, readLicense } from '../state';
-import { ClanStep, normaliseCode } from '../steps/ClanStep';
+import { ClanStep } from '../steps/ClanStep';
 import { HowStep } from '../steps/HowStep';
 import { LicenseStep } from '../steps/LicenseStep';
 import { localCheck, normaliseUsername, UsernameStep } from '../steps/UsernameStep';
@@ -162,11 +162,6 @@ describe('how it works', () => {
 });
 
 describe('clan (optional, last)', () => {
-  it('normalises a typed code to the invite alphabet', () => {
-    expect(normaliseCode('abcd-2345')).toBe('ABCD2345');
-    expect(normaliseCode('O0I1abcdefgh')).toBe('ABCDEFGH');
-  });
-
   it('Skip finishes with the saved license stage', async () => {
     const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'permit' } });
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
@@ -185,7 +180,7 @@ describe('clan (optional, last)', () => {
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
     expect(await screen.findByTestId('clan-find')).toBeDisabled();
     await act(async () => {
-      fireEvent.changeText(screen.getByTestId('clan-code'), 'abcd2345');
+      fireEvent.changeText(screen.getByTestId('clan-code'), 'roadwise://clan/abcd2345');
     });
     await tap('clan-find');
     expect(mockRpc).toHaveBeenCalledWith('preview_clan', { p_code: 'ABCD2345' });

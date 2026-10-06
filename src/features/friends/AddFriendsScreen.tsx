@@ -73,6 +73,7 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
             autoComplete="off"
             spellCheck={false}
             maxLength={20}
+            allowFontScaling={false}
             returnKeyType="search"
             style={{ flex: 1, color: th.colors.text, fontSize: 17 * scale, paddingVertical: th.space.sm }}
           />

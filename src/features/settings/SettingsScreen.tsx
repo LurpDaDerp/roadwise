@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
@@ -115,11 +115,21 @@ export function SettingsScreen({ deps = {} }: { deps?: { adapter?: PermissionsAd
   const needsLine =
     needs.length === 2 ? copy.reminder.needs.both : needs[0] ? copy.reminder.needs[needs[0]] : null;
 
+  // The local mirror follows the server: written only once `update_profile` has taken the change.
   const onUnits = async (next: Units) => {
+    if (!(await edit.save('units', next))) return;
     setUnits(next);
     await writeUnits(settings, next).catch(() => {});
-    await edit.save('units', next);
   };
+
+  // Another device changed units: bring this phone's mirror (offline display) in line.
+  const serverUnits = profile?.units;
+  useEffect(() => {
+    if (!serverUnits || units === null || serverUnits === units) return;
+    void writeUnits(settings, serverUnits)
+      .then(() => setUnits(serverUnits))
+      .catch(() => {});
+  }, [serverUnits, units, settings]);
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
   const shownState = edit.value('state', profile?.state ?? '');
