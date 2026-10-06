@@ -82,12 +82,6 @@ export interface DriverPresence {
  * shown as `dmsActive`.
  */
 export const FACE_RECENT_MS = 3_000;
-/**
- * Battery: after this long in a confirmed stop (and this long since the screen last changed) the
- * capture drops to the native `low` rate — coarse GPS, no IMU. Motion, or the screen being
- * unlocked or turned on (a possible pickup), brings `full` back.
- */
-export const LOW_RATE_AFTER_STOP_MS = 60_000;
 
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
@@ -176,8 +170,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- host-owned state ---------------------------------------------------------------------------
   let booted = false;
   let captureOn = false;
-  let captureRate: 'full' | 'low' = 'full';
-  let lastScreenTs = Number.NEGATIVE_INFINITY;
   let lockSignal: 'reliable' | 'lagged' | 'unreliable' = 'unreliable';
   let callActive = false;
   let screenLocked = false;
@@ -403,7 +395,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!booted) return;
     const s = engine.snapshot();
     await reconcileCapture(s.status);
-    await reconcileRate(s);
     ticker.update(s.status === 'recording' ? s.stoppedSinceTs : null);
   }
 
@@ -414,29 +405,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (want) await source.startCapture('mounted');
       else await source.stopCapture();
       captureOn = want;
-      captureRate = 'full'; // a new capture starts at full rate natively
     } catch (e) {
       report(e, want ? 'startCapture' : 'stopCapture');
-    }
-  }
-
-  async function reconcileRate(s: EngineSnapshot): Promise<void> {
-    if (!captureOn) return;
-    const t = now();
-    const longStop =
-      s.status === 'recording' &&
-      s.stopped &&
-      s.stoppedSinceTs !== null &&
-      t - s.stoppedSinceTs >= LOW_RATE_AFTER_STOP_MS &&
-      t - lastScreenTs >= LOW_RATE_AFTER_STOP_MS;
-    const want = longStop ? 'low' : 'full';
-    if (want === captureRate) return;
-    // Recorded before the call: a module that rejects (Expo Go) is reported once per change, not per row.
-    captureRate = want;
-    try {
-      await source.setCaptureRate(want);
-    } catch (e) {
-      report(e, 'setCaptureRate');
     }
   }
 
@@ -483,11 +453,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       remover(
         source.addListener('screen', (p) => {
           screenLocked = p.locked;
-          // An unlock or a screen turning on may be a pickup: full rate, so the rows see it.
-          if (!p.locked || p.on) {
-            lastScreenTs = now();
-            if (captureRate === 'low') void run(noop, 'screen');
-          }
         })
       ),
       remover(
