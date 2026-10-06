@@ -55,3 +55,8 @@ export function useDataSource(): DataSource {
 export function useDb(): Db {
   return useDataSource().db;
 }
+
+/** The database when a provider is mounted, else null (display-only hooks that can fall back). */
+export function useOptionalDb(): Db | null {
+  return useContext(DataContext)?.db ?? null;
+}

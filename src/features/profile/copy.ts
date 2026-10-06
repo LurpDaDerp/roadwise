@@ -6,7 +6,7 @@ export const profileCopy = {
   maxLevel: 'Top level reached',
   rating: 'Safety Rating',
   unranked: 'Unranked',
-  unrankedMiles: (mi: number) => `${Math.min(25, Math.floor(mi))}/25 mi to rank`,
+  unrankedMiles: (progress: string) => `${progress} to rank`,
   streak: 'Streak',
   league: 'League',
   points: 'Points',
@@ -77,6 +77,7 @@ export const profileCopy = {
     statsEmpty: 'No drives in the last 30 days.',
     heatmap: 'Heat map',
     clan: (name: string) => `Clan ${name}`,
+    reportClan: (name: string) => `Report clan ${name}`,
     reportTitle: (u: string) => `Report ${u}`,
     reportIntro: 'What’s wrong? Reports are private. They never learn who sent one.',
     reportReasons: {

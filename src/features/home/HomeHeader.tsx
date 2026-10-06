@@ -1,6 +1,9 @@
 import { Pressable, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import type { MySummary } from '@/data/server/summary';
+import { formatRating } from '@/lib/rating';
+import { distanceWord, formatDistanceProgress } from '@/lib/units';
 import {
   Button,
   Card,
@@ -35,23 +38,24 @@ export function levelProgress(p: Pick<MySummary['progress'], 'lifetime' | 'level
 
 function Rating({ progress }: { progress: MySummary['progress'] }) {
   const t = useTheme();
+  const units = useUnits();
   const trend = ratingTrend(progress.rating_trend);
   if (!progress.ranked || progress.safety_rating === null) {
-    const miles = Math.min(RANKED_MIN_MILES, Math.floor(progress.miles_30d));
+    const toRank = formatDistanceProgress(progress.miles_30d, RANKED_MIN_MILES, units);
     return (
-      <View style={{ gap: t.space.xs }} testID="rating-unranked" accessible accessibilityLabel={`Safety Rating: unranked. ${miles} of ${RANKED_MIN_MILES} miles in the last 30 days to get ranked`}>
+      <View style={{ gap: t.space.xs }} testID="rating-unranked" accessible accessibilityLabel={`Safety Rating: unranked. ${toRank.done} of ${toRank.target} ${distanceWord(units)} in the last 30 days to get ranked`}>
         <Text variant="label" tone="muted">
           Safety Rating
         </Text>
         <Text variant="display">Unranked</Text>
         <Text variant="subhead" tone="muted">
-          {miles}/{RANKED_MIN_MILES} mi to get ranked
+          {toRank.text} to get ranked
         </Text>
-        <ProgressBar value={miles / RANKED_MIN_MILES} accessibilityLabel="Miles toward a Safety Rating" height={6} style={{ maxWidth: 200 }} />
+        <ProgressBar value={toRank.done / toRank.target} accessibilityLabel="Distance toward a Safety Rating" height={6} style={{ maxWidth: 200 }} />
       </View>
     );
   }
-  const rating = Math.round(progress.safety_rating);
+  const rating = formatRating(progress.safety_rating, true);
   const delta = progress.rating_trend ?? 0;
   const trendWords = trend === null ? '' : trend === 'flat' ? ', no change this week' : `, ${trend} ${Math.abs(delta).toFixed(1)} this week`;
   return (

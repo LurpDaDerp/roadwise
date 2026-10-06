@@ -1,3 +1,10 @@
+import { RANKED_MIN_MILES } from '@scoring';
+
+import { distanceIn, formatDistance, type Units } from '@/lib/units';
+
+/** Drivers need this many miles in 30 days for the global board (`get_global_board`). */
+const GLOBAL_MIN_MILES = 100;
+
 /** Every string on the Leagues tab. Plain, short, second person, no guilt. */
 export const leaguesCopy = {
   title: 'Leagues',
@@ -18,13 +25,13 @@ export const leaguesCopy = {
     emptyTitle: 'Bring your crew',
     emptyBody: 'Add friends or join a clan to see how you stack up against them.',
     emptyAction: 'Add friends',
-    unrankedNote: 'Unranked drivers need 25 mi in 30 days to get a Safety Rating.',
+    unrankedNote: (u: Units) => `Unranked drivers need ${formatDistance(RANKED_MIN_MILES, u, { digits: 0 })} in 30 days to get a Safety Rating.`,
   },
   league: {
     leagueName: (tier: string) => `${tier} league`,
     ofSize: (size: number) => `of ${size}`,
     minDrives: (n: number) => `${n} drives to move up`,
-    drivesLeft: (n: number) => `Drive ${n} more ${n === 1 ? 'time' : 'times'} this week to move up.`,
+    drivesLeft: (n: number, min: number) => `Moving up needs ${min} drives this week (${n} to go).`,
     weekPoints: 'Points this week',
     movesUp: 'Moves up',
     movesDown: 'Moves down',
@@ -39,13 +46,14 @@ export const leaguesCopy = {
     allStates: 'All states',
     filterLabel: 'Filter by state',
     sheetTitle: 'Pick a state',
-    notEligibleTitle: 'Drive 100 mi in 30 days to join',
-    notEligibleBody: 'The global board ranks Safety Rating among drivers with 100+ miles in the last 30 days.',
+    notEligibleTitle: (u: Units) => `Drive ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0 })} in 30 days to join`,
+    notEligibleBody: (u: Units) =>
+      `The global board ranks Safety Rating among drivers with ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0, spoken: true })} or more in the last 30 days.`,
     notInState: 'You’re not on this state’s board.',
     rank: 'Your rank',
     rating: 'Your Safety Rating',
-    cleanMiles: (n: number) => `${Math.round(n).toLocaleString('en-US')} clean mi`,
+    cleanMiles: (n: number, u: Units) => `${Math.round(distanceIn(n, u)).toLocaleString('en-US')} clean ${u}`,
     emptyTitle: 'No one here yet',
-    emptyBody: 'Nobody in this state has driven 100 mi in the last 30 days. Try all states.',
+    emptyBody: (u: Units) => `Nobody in this state has driven ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0 })} in the last 30 days. Try all states.`,
   },
 } as const;

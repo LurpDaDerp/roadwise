@@ -1,5 +1,6 @@
 import { screen, within } from '@testing-library/react-native';
 
+import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { tokens } from '@/ui/tokens';
 
 import { DAY, draw, drive, event, NOW, press, result } from '../__fixtures__/drives';
@@ -198,4 +199,47 @@ test('Share previews the card without any speed and shares the image', async () 
   expect(within(card).getByTestId('share-points')).toHaveStyle({ fontSize: 28 });
   await press(screen.getByTestId('share-image'));
   expect(sharing.shareAsync).toHaveBeenCalledWith('file:///card.png', expect.objectContaining({ mimeType: 'image/png' }));
+});
+
+describe('final-review fixes', () => {
+  afterEach(() => resetUnitsForTests());
+
+  test("a refused \"Wasn't driving\" says why and is not offered again", async () => {
+    await draw(<SummaryView {...props({ drive: drive({ syncError: 'too_old' }) })} />);
+    expect(screen.getByTestId('not-driving-refused')).toHaveTextContent(/more than 24 hours old/);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
+    await draw(<SummaryView {...props({ drive: drive({ syncError: 'no_uses_left' }) })} />);
+    expect(screen.getByTestId('not-driving-refused')).toHaveTextContent(/both “Wasn’t driving” marks this month/);
+  });
+
+  test('an upload error is not mistaken for a refusal', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ syncError: 'invalid_payload' }) })} />);
+    expect(screen.queryByTestId('not-driving-refused')).toBeNull();
+    expect(screen.getByTestId('not-driving')).toBeOnTheScreen();
+  });
+
+  test('a pending drive the phone knows is too short says so straight away', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, reason: 'too_short', result: null }) })} />);
+    expect(screen.getByTestId('state-too-short')).toBeOnTheScreen();
+  });
+
+  test('the share card shows a whole-number rating, or "Unranked"', async () => {
+    await draw(<SummaryView {...props()} />);
+    await press(screen.getByTestId('share'));
+    expect(screen.getByTestId('share-rating')).toHaveTextContent('92');
+    const unranked = drive({ result: result({ progress: { points: 10, lifetime: 10, level: 1, levelUp: false, safetyRating: 88.2, ranked: false } }) });
+    await draw(<SummaryView {...props({ drive: unranked })} />);
+    await press(screen.getByTestId('share'));
+    expect(screen.getByTestId('share-rating')).toHaveTextContent('Unranked');
+  });
+
+  test('km: the distance, the share card and the too-short note convert', async () => {
+    publishUnits('km');
+    await draw(<SummaryView {...props()} />);
+    expect(screen.getByText('19.3 km')).toBeOnTheScreen();
+    await press(screen.getByTestId('share'));
+    expect(within(screen.getByTestId('share-card')).getByText('19.3 km')).toBeOnTheScreen();
+    await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: null, result: null }) })} />);
+    expect(screen.getByText(/Drives under 0.8 km/)).toBeOnTheScreen();
+  });
 });

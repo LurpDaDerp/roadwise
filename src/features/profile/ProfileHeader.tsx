@@ -1,6 +1,11 @@
 import { View } from 'react-native';
 
+import { RANKED_MIN_MILES } from '@scoring';
+
+import { useUnits } from '@/data/queries/units';
 import type { LeagueTier } from '@/data/server/summary';
+import { formatRating } from '@/lib/rating';
+import { formatDistanceProgress } from '@/lib/units';
 import { Avatar, Card, Divider, ProgressBar, StreakFlame, Text, TIER_LABEL, TierBadge, useFontScale, useTheme } from '@/ui';
 
 import { profileCopy as copy } from './copy';
@@ -34,7 +39,9 @@ export function ProfileHeader({ username, level, safetyRating, ranked, tier, str
   const th = useTheme();
   const scale = useFontScale();
   const stack = scale > 1.35;
+  const units = useUnits();
   const rated = ranked && safetyRating !== null;
+  const ratingText = formatRating(safetyRating, ranked);
   const span = own && own.levelNext !== null ? own.levelNext - own.levelFloor : 0;
   const levelProgress = own && span > 0 ? Math.min(1, Math.max(0, (own.lifetime - own.levelFloor) / span)) : 1;
 
@@ -72,16 +79,16 @@ export function ProfileHeader({ username, level, safetyRating, ranked, tier, str
         <View
           style={{ flex: stack ? undefined : 1.2, gap: 2 }}
           accessible
-          accessibilityLabel={rated ? `${copy.rating} ${safetyRating?.toFixed(1)}` : `${copy.rating}: ${copy.unranked}`}
+          accessibilityLabel={rated ? `${copy.rating} ${ratingText}` : `${copy.rating}: ${copy.unranked}`}
           testID="profile-rating"
         >
           {rated ? (
-            <Text variant="display">{(safetyRating as number).toFixed(1)}</Text>
+            <Text variant="display">{ratingText}</Text>
           ) : (
             <Text variant="title2">{copy.unranked}</Text>
           )}
           <Text variant="label" tone="muted">
-            {rated || !own ? copy.rating : copy.unrankedMiles(own.miles30d)}
+            {rated || !own ? copy.rating : copy.unrankedMiles(formatDistanceProgress(own.miles30d, RANKED_MIN_MILES, units).text)}
           </Text>
         </View>
         <View style={{ flex: stack ? undefined : 1, gap: th.space.xs }} accessible accessibilityLabel={`${copy.streak} ${streak}`}>

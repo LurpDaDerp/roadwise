@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { EventType, Tier } from '@scoring';
+import { MIN_SCORED_MILES, type EventType, type Tier } from '@scoring';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
+import { formatDistance, type Units } from '@/lib/units';
 import { Button, Card, IconButton, Pill, PointsCounter, StreakFlame, Text, useTheme } from '@/ui';
 
 import { BreakdownList, BreakdownToggle } from './Breakdown';
-import { EVENT_ICON, formatDay, formatDuration, formatMiles, formatTimeSpan, routeLine, spokenDuration, spokenRoute, TIER_SIGNAL, worseTier } from './format';
+import { EVENT_ICON, formatDay, formatDuration, formatTimeSpan, routeLine, spokenDuration, spokenRoute, TIER_SIGNAL, worseTier } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
 import { NotDrivingSheet, ReportSheet } from './ReportSheet';
 import { decodeRoute } from './route';
@@ -18,6 +20,7 @@ import {
   celebrations,
   isRemoved,
   notDrivingLabel,
+  notDrivingRefusal,
   pointsState,
   streakLine,
   type PointsState,
@@ -33,6 +36,8 @@ export type SummaryViewProps = {
   notDrivingLeft: number | null;
   /** For the share card: the server's latest Safety Rating. */
   safetyRating: number | null;
+  /** Whether that rating counts (25+ mi in 30 days); an unranked share card says "Unranked". */
+  ranked?: boolean;
   /** The newest drive on this phone; "Wasn't driving" is offered only there. Null while unknown. */
   latestClientTripId: string | null;
   now: number;
@@ -58,7 +63,7 @@ function StateBlock({ title, body, testID }: { title: string; body: string; test
   );
 }
 
-function PointsBlock({ state, drive, fresh, onOpenDrive }: { state: PointsState; drive: LocalDrive; fresh: boolean; onOpenDrive: (id: string) => void }) {
+function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: PointsState; drive: LocalDrive; fresh: boolean; units: Units; onOpenDrive: (id: string) => void }) {
   const t = useTheme();
   switch (state.kind) {
     case 'points':
@@ -91,7 +96,7 @@ function PointsBlock({ state, drive, fresh, onOpenDrive }: { state: PointsState;
         </View>
       );
     case 'too_short':
-      return <StateBlock testID="state-too-short" title="Too short to score" body="Drives under 0.5 mi don't earn or lose points." />;
+      return <StateBlock testID="state-too-short" title="Too short to score" body={`Drives under ${formatDistance(MIN_SCORED_MILES, units)} don't earn or lose points.`} />;
     case 'not_scored':
       return (
         <StateBlock
@@ -134,7 +139,7 @@ function counters(drive: LocalDrive, events: readonly LocalDriveEvent[]): Counte
     { key: 'pickups', label: 'Phone pickups', n: c.pickups, tier: worst(['phone_pickup', 'phone_handling']), icon: EVENT_ICON.phone_pickup },
     { key: 'speeding', label: 'Speeding', n: c.speeding, tier: worst(['speeding']), icon: EVENT_ICON.speeding },
     { key: 'hardBrake', label: 'Hard braking', n: c.hardBrake, tier: worst(['hard_brake']), icon: EVENT_ICON.hard_brake },
-    { key: 'hardAccel', label: 'Hard accel', n: c.hardAccel, tier: worst(['hard_accel']), icon: EVENT_ICON.hard_accel },
+    { key: 'hardAccel', label: 'Hard acceleration', n: c.hardAccel, tier: worst(['hard_accel']), icon: EVENT_ICON.hard_accel },
     { key: 'hardCorner', label: 'Cornering', n: c.hardCorner, tier: worst(['hard_corner']), icon: EVENT_ICON.hard_corner },
   ];
   if (drive.dmsOn) {
@@ -168,8 +173,9 @@ function CounterTile({ counter }: { counter: Counter }) {
 }
 
 /** The drive summary: the spec's seven blocks, top to bottom, with a fixed footer. */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
+export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, ranked = false, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
+  const units = useUnits();
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reporting, setReporting] = useState<string | null>(null);
@@ -177,7 +183,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const [sharing, setSharing] = useState(false);
 
   const state = pointsState(drive);
-  const { lines, note } = useMemo(() => breakdownLines(drive, events), [drive, events]);
+  const { lines, note } = useMemo(() => breakdownLines(drive, events, units), [drive, events, units]);
   const streak = streakLine(drive);
   const party = celebrations(drive);
   const points = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
@@ -186,6 +192,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const net = state.kind === 'points' ? state.value : null;
   const showBreakdown = state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending';
   const notDrivingOk = canMarkNotDriving(drive, latestClientTripId, now);
+  const refusal = notDrivingRefusal(drive);
 
   return (
     <View style={{ flex: 1 }}>
@@ -203,7 +210,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
 
         {/* 2. Points, 3. Breakdown */}
         <Card variant="hero">
-          <PointsBlock state={state} drive={drive} fresh={fresh} onOpenDrive={onOpenDrive} />
+          <PointsBlock state={state} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
           {showBreakdown && (lines.length > 0 || note) ? <BreakdownToggle open={open} onPress={() => setOpen((v) => !v)} /> : null}
         </Card>
         {open ? (
@@ -236,11 +243,11 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
         {/* 5. Stats row */}
         <View style={{ gap: t.space.sm }}>
           <View style={{ flexDirection: 'row', gap: t.space.xl }}>
-            <View accessible accessibilityLabel={`Distance ${formatMiles(drive.miles).replace(' mi', ' miles')}`}>
+            <View accessible accessibilityLabel={`Distance ${formatDistance(drive.miles, units, { spoken: true })}`}>
               <Text variant="label" tone="muted">
                 Distance
               </Text>
-              <Text variant="stat">{formatMiles(drive.miles)}</Text>
+              <Text variant="stat">{formatDistance(drive.miles, units)}</Text>
             </View>
             <View accessible accessibilityLabel={`Time ${spokenDuration(drive.durationS)}`}>
               <Text variant="label" tone="muted">
@@ -284,6 +291,10 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
               testID="not-driving"
               style={{ alignSelf: 'flex-start' }}
             />
+          ) : refusal ? (
+            <Text variant="footnote" tone="muted" testID="not-driving-refused">
+              {refusal}
+            </Text>
           ) : null}
         </View>
         <Button label="Share" icon="share-outline" onPress={() => setSharing(true)} testID="share" />
@@ -316,7 +327,9 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
           durationS: drive.durationS,
           net,
           safetyRating: drive.result?.progress.safetyRating ?? safetyRating,
+          ranked: drive.result?.progress.ranked ?? ranked,
           clean: drive.clean === true,
+          units,
         }}
       />
     </View>

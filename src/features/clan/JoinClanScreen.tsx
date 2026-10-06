@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
+import { ReportSheet } from '@/features/social/ReportSheet';
 import { Banner, Button, Screen, Skeleton, useTheme } from '@/ui';
 
 import { useClanPreview, useServerAction } from './api';
@@ -21,6 +22,7 @@ export function JoinClanScreen() {
   const [input, setInput] = useState(initial);
   const [lookup, setLookup] = useState<string | null>(isValidCode(initial) ? initial : null);
   const [tried, setTried] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const preview = useClanPreview(lookup);
   const join = useServerAction<{ p_code: string }>('join_clan');
 
@@ -103,6 +105,12 @@ export function JoinClanScreen() {
               setLookup(null);
             }}
           />
+          {clan.id ? (
+            <>
+              <Button label={copy.report} variant="ghost" size="sm" icon="flag-outline" onPress={() => setReporting(true)} style={{ alignSelf: 'center' }} testID="clan-preview-report" />
+              <ReportSheet visible={reporting} onClose={() => setReporting(false)} kind="clan" targetId={clan.id} name={clan.name} />
+            </>
+          ) : null}
         </View>
       ) : (
         <View style={{ gap: t.space.md }} accessible accessibilityLabel="Loading clan">

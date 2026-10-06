@@ -75,6 +75,7 @@ export const clanCopy = {
     full: 'This clan is full. Clans max out at 30 members.',
     members: (n: number) => `${n} / 30 members`,
     differentCode: 'Use a different code',
+    report: 'Report this clan',
   },
   manage: {
     title: 'Manage clan',

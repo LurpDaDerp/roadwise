@@ -55,7 +55,6 @@ const SUMMARY = {
     state: null,
     heatmap_visibility: 'only_me',
     league_eligible: true,
-    flagged: false,
     onboarded_at: '2026-10-01T00:00:00Z',
   },
   progress: {},

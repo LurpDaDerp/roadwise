@@ -3,6 +3,8 @@ import { statsFrom, type Stat, type StatSums } from '@scoring';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
+import { per100Label, type Units } from '@/lib/units';
 import { Banner, Card, Divider, EmptyState, HEALTH_LABEL, HEALTH_SIGNAL, SegmentedControl, Skeleton, Text, useTheme, type StatHealth } from '@/ui';
 
 import { BackHeader } from './BackHeader';
@@ -13,9 +15,9 @@ export type StatsWindow = '30d' | 'all';
 
 const GLYPH: Record<StatHealth, 'checkmark' | 'remove' | 'alert'> = { green: 'checkmark', yellow: 'remove', red: 'alert' };
 
-function StatRow({ stat, sums, mode }: { stat: Stat; sums: StatSums; mode: StatsMode }) {
+function StatRow({ stat, sums, mode, units }: { stat: Stat; sums: StatSums; mode: StatsMode; units: Units }) {
   const t = useTheme();
-  const shown = mode === 'rate' ? formatRate(stat) : formatTotal(stat, sums);
+  const shown = mode === 'rate' ? formatRate(stat, units) : formatTotal(stat, sums, units);
   const health = mode === 'rate' ? stat.color : null;
   const sig = health ? t.colors.signal[HEALTH_SIGNAL[health]] : null;
   const hint = STAT_HINT[stat.id];
@@ -59,7 +61,7 @@ function StatRow({ stat, sums, mode }: { stat: Stat; sums: StatSums; mode: Stats
   );
 }
 
-/** All stats: the full table, per 100 mi or totals, over 30 days or all time. */
+/** All stats: the full table, per 100 mi (or km) or totals, over 30 days or all time. */
 export function StatsView({
   month,
   all,
@@ -74,6 +76,7 @@ export function StatsView({
   onBack: () => void;
 }) {
   const t = useTheme();
+  const units = useUnits();
   const [mode, setMode] = useState<StatsMode>('rate');
   const [window, setWindow] = useState<StatsWindow>('30d');
   const sums = window === '30d' ? month : all;
@@ -85,7 +88,7 @@ export function StatsView({
       <SegmentedControl
         accessibilityLabel="Show stats as"
         segments={[
-          { value: 'rate', label: 'Per 100 mi' },
+          { value: 'rate', label: `P${per100Label(units).slice(1)}` },
           { value: 'total', label: 'Totals' },
         ]}
         value={mode}
@@ -130,7 +133,7 @@ export function StatsView({
                   return (
                     <View key={id}>
                       {i > 0 ? <Divider inset={16} /> : null}
-                      <StatRow stat={stat} sums={sums} mode={mode} />
+                      <StatRow stat={stat} sums={sums} mode={mode} units={units} />
                     </View>
                   );
                 })}

@@ -45,6 +45,8 @@ export interface MyClan {
 }
 
 export interface ClanPreview {
+  /** For Report; older servers don't send it, so Report stays hidden until they do. */
+  id?: string;
   name: string;
   banner: ClanBanner;
   member_count: number;

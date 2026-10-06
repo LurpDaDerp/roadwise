@@ -6,9 +6,11 @@ import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
 import type { LatLng } from '@/lib/geo';
+import { formatRating } from '@/lib/rating';
+import { formatDistance, type Units } from '@/lib/units';
 import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme, type TypeVariant } from '@/ui';
 
-import { formatDay, formatDuration, formatMiles, signedPoints } from './format';
+import { formatDay, formatDuration, signedPoints } from './format';
 import { RouteSketch } from './RouteSketch';
 
 export type ShareCardData = {
@@ -19,7 +21,11 @@ export type ShareCardData = {
   /** Net points; null when the drive has no score. */
   net: number | null;
   safetyRating: number | null;
+  /** Under 25 mi in 30 days: the card says "Unranked", never a number. */
+  ranked: boolean;
   clean: boolean;
+  /** The driver's distance units. */
+  units: Units;
 };
 
 const GOLD = tokens.color.dark.primary;
@@ -107,10 +113,10 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
           ) : null}
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          <Fact label="Distance" value={formatMiles(data.miles)} />
+          <Fact label="Distance" value={formatDistance(data.miles, data.units)} />
           <Fact label="Time" value={formatDuration(data.durationS)} />
           <Fact label="Points" value={data.net === null ? '—' : signedPoints(data.net)} testID="share-points" />
-          <Fact label="Safety Rating" value={data.safetyRating === null ? '—' : String(Math.round(data.safetyRating))} />
+          <Fact label="Safety Rating" value={formatRating(data.safetyRating, data.ranked)} testID="share-rating" />
         </View>
       </View>
     </ThemeProvider>

@@ -58,8 +58,9 @@ test('memberStat shows the sorted number and never a rating for an unranked driv
   expect(memberStat(rookie, 'rating').value).toBe('Unranked');
   expect(memberStat(rookie, 'clean')).toMatchObject({ value: '–', spoken: 'No drives in 30 days' });
   expect(memberStat(clanMember('a', { points: -1234 }), 'points')).toMatchObject({ value: '−1,234', unit: 'pts' });
-  expect(memberStat(clanMember('a', { miles_30d: 1234.6 }), 'miles')).toMatchObject({ value: '1,235', unit: 'mi' });
-  expect(memberStat(clanMember('a', { safety_rating: 88.04 }), 'rating').value).toBe('88.0');
+  expect(memberStat(clanMember('a', { miles_30d: 1234.6 }), 'miles')).toMatchObject({ value: '1,234', unit: 'mi' });
+  expect(memberStat(clanMember('a', { miles_30d: 100 }), 'miles', 'km')).toMatchObject({ value: '160', unit: 'km', spoken: '160 kilometers in 30 days' });
+  expect(memberStat(clanMember('a', { safety_rating: 88.04 }), 'rating').value).toBe('88');
 });
 
 test('goalProgress', () => {

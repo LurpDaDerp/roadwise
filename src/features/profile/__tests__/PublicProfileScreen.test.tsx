@@ -171,6 +171,22 @@ describe('moderation', () => {
     expect(await screen.findByTestId('report-sent')).toBeOnTheScreen();
   });
 
+  it('their clan can be reported too', async () => {
+    await show(profile({ clan: { id: 'c-owls', name: 'Night Owls' } }));
+    await tap('profile-more');
+    await tap('profile-report-clan');
+    await tap('report-harassment');
+    await waitFor(() =>
+      expect(mockRpc).toHaveBeenCalledWith('report_target', { p_kind: 'clan', p_target_id: 'c-owls', p_reason: 'harassment', p_note: '' })
+    );
+  });
+
+  it('no clan, no clan report', async () => {
+    await show(profile());
+    await tap('profile-more');
+    expect(screen.queryByTestId('profile-report-clan')).toBeNull();
+  });
+
   it('not found (or blocked) is one friendly empty state', async () => {
     await show(new RpcError('profile not found', 'P0002'));
     expect(await screen.findByTestId('public-profile-not-found', {}, { timeout: 4000 })).toBeOnTheScreen();

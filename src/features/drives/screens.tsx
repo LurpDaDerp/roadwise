@@ -94,6 +94,7 @@ export function DriveSummaryScreen() {
         fresh={isFresh}
         notDrivingLeft={summary.data?.not_driving_left ?? null}
         safetyRating={summary.data?.progress.safety_rating ?? null}
+        ranked={summary.data?.progress.ranked ?? false}
         latestClientTripId={latest.data?.[0]?.clientTripId ?? null}
         now={now()}
         onBack={back}

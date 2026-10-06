@@ -61,7 +61,8 @@ export interface DriveLive {
 const selectLive = (s: DriveState) => ({
   status: s.status,
   clientTripId: s.clientTripId,
-  speedMph: s.speedKnown ? Math.round(mpsToMph(s.speedMps)) : null,
+  // Tenths, not whole mph: the HUD rounds once in the driver's unit (km/h would round twice).
+  speedMph: s.speedKnown ? Math.round(mpsToMph(s.speedMps) * 10) / 10 : null,
   limitMph: s.limitMph,
   speedingTier: s.speedingTier,
   stopped: s.stopped,

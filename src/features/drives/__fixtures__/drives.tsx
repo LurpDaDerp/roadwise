@@ -71,6 +71,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     result: result(),
     reason: null,
     mergedInto: null,
+    syncError: null,
     ...over,
   } as LocalDrive;
 }
@@ -123,7 +124,6 @@ export function summary(over: { progress?: Partial<MySummary['progress']>; leagu
       state: null,
       heatmap_visibility: 'only_me',
       league_eligible: true,
-      flagged: false,
       onboarded_at: '2026-09-01T00:00:00Z',
     },
     progress: {

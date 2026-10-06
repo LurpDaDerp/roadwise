@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { ScrollView, View } from 'react-native';
 
 import { HOW_IT_WORKS, PENALTIES, RULES, type RuleSection } from '@/content/howPoints';
+import { useUnits } from '@/data/queries/units';
 import { BackHeader } from '@/features/drives/BackHeader';
 import { HOME_HREF } from '@/features/drives/routes';
 import { Card, Divider, Screen, Text, useTheme } from '@/ui';
@@ -67,6 +68,7 @@ function Section({ section }: { section: RuleSection }) {
 /** How points work: the explainer from onboarding, then every rule in plain words. */
 export function HowPointsView({ onBack }: { onBack: () => void }) {
   const t = useTheme();
+  const units = useUnits();
   const [first, ...rest] = RULES;
   return (
     <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.xl }} testID="how-points-work">
@@ -82,6 +84,11 @@ export function HowPointsView({ onBack }: { onBack: () => void }) {
             − penalties
           </Text>
         </View>
+        {units === 'km' ? (
+          <Text variant="footnote" tone="muted" testID="how-points-miles-note">
+            Points are counted per mile, so the rules below use miles (1 mi = 1.6 km).
+          </Text>
+        ) : null}
       </Card>
 
       <HowItWorksList />

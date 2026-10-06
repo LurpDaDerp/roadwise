@@ -58,7 +58,7 @@ describe('Friends & clan (default)', () => {
     const rookie = within(screen.getByTestId('friend-row-rookie'));
     expect(rookie.getByText('Unranked')).toBeOnTheScreen();
     expect(rookie.getByText('–')).toBeOnTheScreen();
-    expect(within(screen.getByTestId('friend-row-amy')).getByText('96.4')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('friend-row-amy')).getByText('96')).toBeOnTheScreen();
   });
 
   test('switching metric keeps the old board, read with its own metric, until the new one lands', async () => {
@@ -74,7 +74,7 @@ describe('Friends & clan (default)', () => {
     expect(screen.queryByTestId('list-skeleton')).toBeNull();
     expect(within(screen.getByTestId('friend-row-amy')).getByText('420')).toBeOnTheScreen();
     release(friendsRating);
-    expect(await screen.findByText('96.4')).toBeOnTheScreen();
+    expect(await screen.findByText('96')).toBeOnTheScreen();
   });
 
   test('just you: an invite to add friends', async () => {
@@ -109,7 +109,7 @@ describe('League', () => {
     expect(screen.getByText('Ends in 2d 4h', { includeHiddenElements: true })).toBeOnTheScreen();
     expect(screen.getByLabelText('League week ends in 2 days 4 hours')).toBeOnTheScreen();
     expect(screen.getByTestId('league-rules')).toHaveTextContent('Top 7 move up · Bottom 5 move down · 3 drives to move up');
-    expect(screen.getByTestId('league-drives-left')).toHaveTextContent('Drive 1 more time this week to move up.');
+    expect(screen.getByTestId('league-drives-left')).toHaveTextContent('Moving up needs 3 drives this week (1 to go).');
     expect(screen.getByText('#4')).toBeOnTheScreen();
     expect(screen.getByTestId('zone-up')).toHaveTextContent(/Moves up/);
     expect(screen.getByLabelText(/^Number 7, driver7, .*moves up$/)).toBeOnTheScreen();
@@ -161,8 +161,8 @@ describe('Global', () => {
     wire();
     await open();
     expect(await screen.findByText("You're in the top 8%")).toBeOnTheScreen();
-    expect(screen.getByLabelText(/^Number 2, maya, You, 220 clean mi, 97.1$/)).toBeOnTheScreen();
-    expect(within(screen.getByTestId('global-row-1')).getByText('99.4')).toBeOnTheScreen();
+    expect(screen.getByLabelText(/^Number 2, maya, You, 220 clean mi, 97$/)).toBeOnTheScreen();
+    expect(within(screen.getByTestId('global-row-1')).getByText('99')).toBeOnTheScreen();
     expect(screen.getByText('410 clean mi')).toBeOnTheScreen();
   });
 

@@ -78,6 +78,23 @@ describe('join', () => {
     expect(callsTo('join_clan')).toEqual([{ p_code: 'ABCD2345' }]);
   });
 
+  test('the preview can be reported once the server sends the clan id', async () => {
+    searchParams.current = { code: 'ABCD2345' };
+    respond({ preview_clan: { id: 'c-owls', name: 'Night Owls', banner: 'ocean', member_count: 12, full: false }, report_target: null });
+    await renderScreen(<JoinClanScreen />);
+    await fireEvent.press(await screen.findByTestId('clan-preview-report'));
+    await fireEvent.press(screen.getByTestId('report-harassment'));
+    await waitFor(() => expect(callsTo('report_target')).toEqual([{ p_kind: 'clan', p_target_id: 'c-owls', p_reason: 'harassment', p_note: '' }]));
+  });
+
+  test('no clan id from the server: no Report', async () => {
+    searchParams.current = { code: 'ABCD2345' };
+    respond({ preview_clan: { name: 'Night Owls', banner: 'ocean', member_count: 12, full: false } });
+    await renderScreen(<JoinClanScreen />);
+    expect(await screen.findByText('Night Owls')).toBeOnTheScreen();
+    expect(screen.queryByTestId('clan-preview-report')).toBeNull();
+  });
+
   test('a full clan cannot be joined', async () => {
     searchParams.current = { code: 'ABCD2345' };
     respond({ preview_clan: { name: 'Packed', banner: 'gold', member_count: 30, full: true } });

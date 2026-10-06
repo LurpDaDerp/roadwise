@@ -38,7 +38,7 @@ describe('in a clan as the leader', () => {
     expect(screen.getByLabelText('Invite code A B C D 2 3 4 5')).toBeOnTheScreen();
     expect(memberOrder()).toEqual(['me', 'copilot', 'rookie']);
     expect(screen.getByLabelText(/^Not placed, rookie, Level 4, Safety Rating Unranked$/)).toBeOnTheScreen();
-    expect(screen.getByLabelText(/^Number 2, copilot, Co-leader, Level 4, Safety Rating 88.0$/)).toBeOnTheScreen();
+    expect(screen.getByLabelText(/^Number 2, copilot, Co-leader, Level 4, Safety Rating 88$/)).toBeOnTheScreen();
   });
 
   test('share the invite and make a new code', async () => {

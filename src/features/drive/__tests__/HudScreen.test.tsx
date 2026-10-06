@@ -22,7 +22,7 @@ const mockDb = {
     rows: params[0] === 'units' && mockUnits !== null ? [{ value_json: JSON.stringify(mockUnits) }] : [],
   })),
 };
-jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb }));
+jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb, useOptionalDb: () => mockDb }));
 
 const T = 1_790_000_000_000;
 let mockLive: DriveLive;

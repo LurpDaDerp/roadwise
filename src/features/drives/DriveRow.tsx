@@ -3,9 +3,11 @@ import type { EventType } from '@scoring';
 import { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
+import { formatDistance } from '@/lib/units';
 import { Text, useTheme } from '@/ui';
 
-import { EVENT_ICON, EVENT_LABEL, formatDuration, formatMiles, formatWhen, routeLine, signedPoints, spokenRoute } from './format';
+import { EVENT_ICON, EVENT_LABEL, formatDuration, formatWhen, routeLine, signedPoints, spokenRoute } from './format';
 import type { DriveCounts, LocalDrive } from './model';
 import { decodeRoute } from './route';
 import { RouteSketch } from './RouteSketch';
@@ -35,6 +37,7 @@ function spokenPoints(n: number): string {
 /** One drive in a list: when, where, a route sketch, distance, net points and its events. */
 export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPress: () => void; testID?: string }) {
   const t = useTheme();
+  const units = useUnits();
   const points = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const state = pointsState(drive);
   const word = pointsWord(state);
@@ -46,7 +49,7 @@ export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPres
   const spoken = [
     formatWhen(drive.startedAt),
     spokenRoute(drive),
-    `${formatMiles(drive.miles).replace(' mi', ' miles')}`,
+    formatDistance(drive.miles, units, { spoken: true }),
     value !== null ? spokenPoints(value) + (state.kind === 'points' && state.estimate ? ', estimate' : '') : word,
     clean ? 'clean drive' : tally.map((x) => `${x.n} ${EVENT_LABEL[x.type].toLowerCase()}`).join(', ') || null,
   ]
@@ -80,7 +83,7 @@ export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPres
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: t.space.sm, rowGap: 2 }}>
           <Text variant="footnote" tone="subtle">
-            {formatMiles(drive.miles)} · {formatDuration(drive.durationS)}
+            {formatDistance(drive.miles, units)} · {formatDuration(drive.durationS)}
           </Text>
           {clean ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>

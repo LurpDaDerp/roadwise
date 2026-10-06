@@ -21,7 +21,6 @@ export interface MySummary {
     state: string | null;
     heatmap_visibility: HeatmapVisibility;
     league_eligible: boolean;
-    flagged: boolean;
     onboarded_at: string | null;
   };
   progress: {

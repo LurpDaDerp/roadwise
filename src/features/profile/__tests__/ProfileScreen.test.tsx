@@ -55,7 +55,7 @@ it('shows the public card, the achievements and a badge for friend requests', as
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
-  expect(screen.getByLabelText('Safety Rating 92.4')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Safety Rating 92')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-first_drive-unlocked')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-streak_10-unlocked')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-clean_100-locked')).toBeOnTheScreen();
@@ -72,7 +72,7 @@ it('unranked says how far there is to go', async () => {
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   expect(await screen.findByLabelText(`Safety Rating: ${profileCopy.unranked}`)).toBeOnTheScreen();
-  expect(screen.getByText(profileCopy.unrankedMiles(14.6))).toBeOnTheScreen();
+  expect(screen.getByText(profileCopy.unrankedMiles('14/25 mi'))).toBeOnTheScreen();
 });
 
 it('achievement hints say how close you are', () => {

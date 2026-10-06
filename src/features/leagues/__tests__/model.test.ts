@@ -116,8 +116,8 @@ describe('countdown', () => {
 });
 
 test('ratingText never shows a number for an unranked driver', () => {
-  expect(ratingText(91.73, true)).toBe('91.7');
-  expect(ratingText(100, true)).toBe('100.0');
+  expect(ratingText(91.73, true)).toBe('92');
+  expect(ratingText(100, true)).toBe('100');
   expect(ratingText(98, false)).toBe('Unranked');
   expect(ratingText(null, true)).toBe('Unranked');
 });

@@ -1,11 +1,13 @@
 import { useMemo } from 'react';
 import { RefreshControl, SectionList, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
+import { formatDistance } from '@/lib/units';
 import { Banner, Chip, Divider, EmptyState, Skeleton, Text, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
 import { DriveRow } from './DriveRow';
-import { formatMiles, groupByWeek, signedPoints, type WeekGroup } from './format';
+import { groupByWeek, signedPoints, type WeekGroup } from './format';
 import type { HistoryFilter, LocalDrive } from './model';
 
 const FILTERS: { value: Exclude<HistoryFilter, 'all'>; label: string; icon: 'checkmark-circle-outline' | 'trending-down' | 'person-outline' }[] = [
@@ -38,8 +40,9 @@ export type HistoryViewProps = {
 
 function WeekHeader({ group }: { group: WeekGroup }) {
   const t = useTheme();
+  const units = useUnits();
   const n = group.data.length;
-  const summary = `${n} ${n === 1 ? 'drive' : 'drives'} · ${formatMiles(group.miles)} · ${signedPoints(group.points)} pts`;
+  const summary = `${n} ${n === 1 ? 'drive' : 'drives'} · ${formatDistance(group.miles, units)} · ${signedPoints(group.points)} pts`;
   return (
     <View
       testID={group.key}

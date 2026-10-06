@@ -33,9 +33,6 @@ export function formatTimeSpan(start: number, end: number | null): string {
   return `${period(from) === period(to) ? from.slice(0, -3) : from} – ${to}`;
 }
 
-/** "12.3 mi". */
-export const formatMiles = (mi: number): string => `${(Math.round(mi * 10) / 10).toFixed(1)} mi`;
-
 /** "24 min", "1 h 05 min", "<1 min". */
 export function formatDuration(seconds: number): string {
   const min = Math.round(Math.max(0, seconds) / 60);
@@ -165,7 +162,8 @@ export function groupByWeek(drives: readonly LocalDrive[], now: number): WeekGro
     }
     g.data.push(d);
     g.miles += d.miles;
-    if (d.status === 'scored' || d.status === 'pending') g.points += d.pointsNet ?? 0;
+    // The same number each row shows: the stored net, else the server's.
+    if (d.status === 'scored' || d.status === 'pending') g.points += d.pointsNet ?? d.result?.net ?? 0;
   }
   return groups;
 }

@@ -5,12 +5,14 @@
  */
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import type { SettingsRepo } from '@/data/db/settings';
+import { publishUnits } from '@/data/queries/units';
 import { applyForgotToStartSetting, FORGOT_TO_START_KEY } from '@/drive/forgottenDrive';
+import type { Units } from '@/lib/units';
 
 export const UNITS_KEY = 'units';
 export const REMINDER_KEY = FORGOT_TO_START_KEY;
 
-export type Units = 'mi' | 'km';
+export type { Units };
 
 export async function readUnits(settings: Pick<SettingsRepo, 'get'>): Promise<Units> {
   return (await settings.get<unknown>(UNITS_KEY)) === 'km' ? 'km' : 'mi';
@@ -18,6 +20,7 @@ export async function readUnits(settings: Pick<SettingsRepo, 'get'>): Promise<Un
 
 export async function writeUnits(settings: Pick<SettingsRepo, 'set'>, units: Units): Promise<void> {
   await settings.set(UNITS_KEY, units);
+  publishUnits(units);
 }
 
 export async function readReminder(settings: Pick<SettingsRepo, 'get'>): Promise<boolean> {

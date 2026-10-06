@@ -6,6 +6,8 @@ import { ACHIEVEMENTS, MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
+import { formatDistance, type Units } from '@/lib/units';
+
 import { eventName, formatClock, signedPoints } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
 
@@ -34,6 +36,8 @@ export function pointsState(d: LocalDrive): PointsState {
     case 'failed':
       return { kind: 'failed', value: d.pointsNet };
     case 'pending':
+      // The phone already knows a sub-0.5 mi drive won't score: say so now, not "Scoring…".
+      if (d.reason === 'too_short') return { kind: 'too_short' };
       return d.pointsNet === null ? { kind: 'pending' } : { kind: 'points', value: d.pointsNet, estimate: true };
     case 'scored':
       return { kind: 'points', value: d.pointsNet ?? d.result?.net ?? 0, estimate: d.estimate };
@@ -96,16 +100,19 @@ function penaltyOf(e: LocalDriveEvent, d: LocalDrive): number | null {
  */
 export function breakdownLines(
   d: LocalDrive,
-  events: readonly LocalDriveEvent[]
+  events: readonly LocalDriveEvent[],
+  units: Units = 'mi'
 ): { lines: BreakdownLine[]; note: string | null } {
   const lines: BreakdownLine[] = [];
   const b = d.result?.breakdown ?? null;
   if (b && b.scored) {
     const capNote = b.creditedMiles + 1e-9 < b.safeMiles ? ' (daily cap)' : '';
+    // Points are counted per mile, so the formula stays in miles; km drivers see the km too.
+    const kmNote = units === 'km' ? ` (${formatDistance(b.creditedMiles, 'km')})` : '';
     lines.push({
       kind: 'miles',
       key: 'miles',
-      label: `Safe miles: ${round1(b.creditedMiles)} mi × 10${capNote}`,
+      label: `Safe miles: ${round1(b.creditedMiles)} mi${kmNote} × 10${capNote}`,
       value: signedPoints(Math.round(b.milePoints)),
       tone: 'gain',
     });
@@ -244,7 +251,25 @@ export function canMarkNotDriving(d: LocalDrive, latestClientTripId: string | nu
   const open = d.status === 'scored' || d.status === 'pending' || d.status === 'unscored' || d.status === 'failed';
   if (!open || latestClientTripId !== d.clientTripId) return false;
   if (now - (d.endedAt ?? d.startedAt) > NOT_DRIVING_WINDOW_MS) return false;
-  return (d as { dmsFaceSeen?: boolean }).dmsFaceSeen !== true;
+  if (notDrivingRefusal(d) !== null) return false;
+  return d.dmsFaceSeen !== true;
+}
+
+/**
+ * The server's refusal of a "Wasn't driving" (stored on the trip as `sync_error`), in words.
+ * Null for anything else, including upload errors.
+ */
+export const NOT_DRIVING_REFUSALS: Readonly<Record<string, string>> = {
+  not_latest: 'Only your newest drive can be marked as not driving.',
+  too_old: 'This drive is more than 24 hours old, so it can’t be marked.',
+  face_seen: 'The camera saw a driver on this drive, so it stays on your record.',
+  no_uses_left: 'You’ve used both “Wasn’t driving” marks this month.',
+  already_marked: 'This drive was already marked as not driving.',
+};
+
+export function notDrivingRefusal(d: Pick<LocalDrive, 'status' | 'syncError'>): string | null {
+  if (d.status === 'not_driving' || d.syncError === null) return null;
+  return NOT_DRIVING_REFUSALS[d.syncError] ?? null;
 }
 
 /** "Wasn't driving (2 left this month)". */

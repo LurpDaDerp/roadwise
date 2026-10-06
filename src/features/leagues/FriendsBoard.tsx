@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import { Chip, EmptyState, formatPointsValue, Text, useTheme } from '@/ui';
 
 import { useFriendsBoard, type FriendsMetric } from './api';
@@ -23,6 +24,7 @@ const copy = leaguesCopy;
 export function FriendsBoard() {
   const t = useTheme();
   const router = useRouter();
+  const units = useUnits();
   const [metric, setMetric] = useState<FriendsMetric>('week');
   const q = useFriendsBoard(metric);
   const pull = usePullRefresh(q.refetch);
@@ -93,7 +95,7 @@ export function FriendsBoard() {
         <View style={{ gap: t.space.lg, paddingTop: t.space.lg }}>
           {anyUnranked ? (
             <Text variant="footnote" tone="muted">
-              {copy.friends.unrankedNote}
+              {copy.friends.unrankedNote(units)}
             </Text>
           ) : null}
           {rows.length <= 1 ? (

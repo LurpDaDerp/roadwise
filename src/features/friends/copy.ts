@@ -1,3 +1,5 @@
+import { formatRating, UNRANKED } from '@/lib/rating';
+
 export const friendsCopy = {
   title: 'Friends',
   add: 'Add friends',
@@ -11,7 +13,7 @@ export const friendsCopy = {
   cancelHint: (u: string) => `Cancels your request to ${u}`,
   acceptHint: (u: string) => `Adds ${u} as a friend`,
   level: (n: number) => `Level ${n}`,
-  rating: (r: number | null) => (r === null ? 'Unranked' : `Safety Rating ${r.toFixed(1)}`),
+  rating: (r: number | null) => (r === null ? UNRANKED : `Safety Rating ${formatRating(r, true)}`),
   empty: 'No friends yet',
   emptyBody: 'Add friends by username or with your QR code, then race them on the friends board.',
   loadError: "Couldn't load your friends.",

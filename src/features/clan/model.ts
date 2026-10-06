@@ -3,6 +3,7 @@
  * what, who leads after the leader leaves, and friendly error copy. No React.
  */
 import type { RpcError } from '@/data/server/rpc';
+import { distanceIn, distanceWord, type Units } from '@/lib/units';
 import { formatPointsValue } from '@/ui';
 
 import { ratingText } from '../leagues/model';
@@ -19,7 +20,7 @@ export const MEMBER_SORTS: readonly { key: MemberSort; label: string }[] = [
   { key: 'rating', label: 'Safety Rating' },
   { key: 'points', label: 'Points' },
   { key: 'week', label: 'This week' },
-  { key: 'miles', label: 'Miles' },
+  { key: 'miles', label: 'Distance' },
   { key: 'clean', label: 'Clean %' },
   { key: 'streak', label: 'Streak' },
 ];
@@ -55,7 +56,7 @@ export function sortMembers(members: readonly ClanMember[], key: MemberSort): Cl
 }
 
 /** What a member row shows on the right for the chosen sort. */
-export function memberStat(m: ClanMember, key: MemberSort): { value: string; unit?: string; spoken: string } {
+export function memberStat(m: ClanMember, key: MemberSort, units: Units = 'mi'): { value: string; unit?: string; spoken: string } {
   switch (key) {
     case 'rating': {
       const v = ratingText(m.safety_rating, m.ranked);
@@ -70,8 +71,9 @@ export function memberStat(m: ClanMember, key: MemberSort): { value: string; uni
         spoken: `${formatPointsValue(m.week_points)} points this week`,
       };
     case 'miles': {
-      const v = Math.round(m.miles_30d).toLocaleString('en-US');
-      return { value: v, unit: 'mi', spoken: `${v} miles in 30 days` };
+      // Floored like every other whole distance (Home, Profile, the goal).
+      const v = Math.floor(distanceIn(m.miles_30d, units)).toLocaleString('en-US');
+      return { value: v, unit: units, spoken: `${v} ${distanceWord(units)} in 30 days` };
     }
     case 'clean':
       return m.clean_pct === null
@@ -86,12 +88,15 @@ export function memberStat(m: ClanMember, key: MemberSort): { value: string; uni
 // the weekly goal
 // ---------------------------------------------------------------------------
 
-export function goalProgress(goal: MyClan['goal']): { fraction: number; text: string; done: boolean } {
+export function goalProgress(goal: MyClan['goal'], units: Units = 'mi'): { fraction: number; text: string; done: boolean } {
   const miles = Math.max(0, Math.floor(goal.clean_miles));
   const target = Math.max(1, goal.target_clean_miles);
+  const shown = Math.floor(distanceIn(miles, units));
+  const shownTarget = Math.round(distanceIn(target, units));
+  const word = units === 'km' ? 'clean km' : 'clean miles';
   return {
     fraction: Math.min(1, miles / target),
-    text: `${miles.toLocaleString('en-US')} / ${target.toLocaleString('en-US')} clean miles this week`,
+    text: `${shown.toLocaleString('en-US')} / ${shownTarget.toLocaleString('en-US')} ${word} this week`,
     done: miles >= target,
   };
 }

@@ -2,7 +2,9 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, View } from 'react-native';
 
-import { statsFrom, type StatId, type StatSums } from '@scoring';
+import { statsFrom, type StatSums } from '@scoring';
+import { useUnits } from '@/data/queries/units';
+import { formatRate, STAT_LABEL } from '@/features/drives/stats';
 import { TopBar } from '@/features/settings/parts';
 import { useHeatmap, useMemberStats, useProfile, useServerAction, type PublicProfile, type Relationship } from '@/features/social/api';
 import { isNotFound } from '@/features/social/errors';
@@ -45,13 +47,6 @@ const RPC: Record<RelationAction, { fn: string; args: (id: string) => Record<str
   remove: { fn: 'remove_friend', args: (id) => ({ p_user_id: id }) },
 };
 
-const STAT_LABELS: Partial<Record<StatId, { label: string; unit: string }>> = {
-  speeding: { label: 'Speeding', unit: 'per 100 mi' },
-  pickups: { label: 'Phone pickups', unit: 'per 100 mi' },
-  harsh: { label: 'Harsh driving', unit: 'per 100 mi' },
-  clean: { label: 'Clean drives', unit: '%' },
-};
-
 function confirm(title: string, body: string | undefined, yes: string, no: string): Promise<boolean> {
   return new Promise((resolve) => {
     Alert.alert(title, body, [
@@ -72,7 +67,7 @@ export function PublicProfileScreen({ username }: { username: string }) {
   const profile = useProfile(username);
   const action = useServerAction();
   const [menu, setMenu] = useState(false);
-  const [reporting, setReporting] = useState(false);
+  const [reporting, setReporting] = useState<'user' | 'clan' | null>(null);
   const p = profile.data;
 
   const relate = async (a: RelationAction) => {
@@ -135,10 +130,16 @@ export function PublicProfileScreen({ username }: { username: string }) {
       {p.can_view_heatmap && others ? <MemberHeatmap userId={p.user_id} /> : null}
 
       <Sheet visible={menu} onClose={() => setMenu(false)} title={p.username} testID="profile-menu">
-        <Button label={copy.report} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting(true); }} testID="profile-report" />
+        <Button label={copy.report} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting('user'); }} testID="profile-report" />
+        {p.clan ? (
+          <Button label={copy.reportClan(p.clan.name)} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting('clan'); }} testID="profile-report-clan" />
+        ) : null}
         <Button label={copy.block} icon="ban-outline" variant="destructive" onPress={() => void block()} testID="profile-block" />
       </Sheet>
-      <ReportSheet visible={reporting} onClose={() => setReporting(false)} kind="user" targetId={p.user_id} name={p.username} />
+      <ReportSheet visible={reporting === 'user'} onClose={() => setReporting(null)} kind="user" targetId={p.user_id} name={p.username} />
+      {p.clan ? (
+        <ReportSheet visible={reporting === 'clan'} onClose={() => setReporting(null)} kind="clan" targetId={p.clan.id} name={copy.clan(p.clan.name)} />
+      ) : null}
     </Screen>
   );
 }
@@ -167,6 +168,7 @@ export function RelationshipButtons({ rel, pending, onPress }: { rel: Relationsh
 
 function MemberStats({ profile }: { profile: PublicProfile }) {
   const th = useTheme();
+  const units = useUnits();
   const stats = useMemberStats(profile.user_id, true);
   const sums: StatSums | undefined = stats.data;
   const home = sums ? statsFrom(sums).filter((s) => s.home) : [];
@@ -182,13 +184,14 @@ function MemberStats({ profile }: { profile: PublicProfile }) {
       ) : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: th.space.lg }}>
           {home.map((s) => {
-            const meta = STAT_LABELS[s.id];
+            // The same rounding and units as Home's stats card.
+            const shown = formatRate(s, units);
             return (
               <View key={s.id} style={{ width: '50%' }}>
                 <StatTile
-                  label={meta?.label ?? s.id}
-                  value={s.value === null ? '—' : s.unit === 'pct' ? String(Math.round(s.value)) : s.value.toFixed(1)}
-                  unit={meta?.unit}
+                  label={STAT_LABEL[s.id]}
+                  value={shown.value}
+                  unit={shown.unit}
                   health={s.color}
                   higherIsBetter={s.id === 'clean'}
                 />

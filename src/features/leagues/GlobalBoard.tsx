@@ -3,7 +3,9 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, RefreshControl, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import { useSession } from '@/data/supabase/session';
+import { formatRating } from '@/lib/rating';
 import { Card, Chip, Divider, EmptyState, ListRow, Sheet, Text, useTheme } from '@/ui';
 
 import { useGlobalBoard, type GlobalBoard as Board } from './api';
@@ -24,14 +26,15 @@ const copy = leaguesCopy.global;
 
 function MeCard({ me }: { me: Board['me'] }) {
   const t = useTheme();
+  const units = useUnits();
   if (!me.eligible) {
     return (
       <Card variant="outline" testID="global-not-eligible">
         <Text variant="title3" accessibilityRole="header">
-          {copy.notEligibleTitle}
+          {copy.notEligibleTitle(units)}
         </Text>
         <Text variant="callout" tone="muted">
-          {copy.notEligibleBody}
+          {copy.notEligibleBody(units)}
         </Text>
       </Card>
     );
@@ -56,8 +59,8 @@ function MeCard({ me }: { me: Board['me'] }) {
           </Text>
         </View>
         {me.safety_rating !== null ? (
-          <View accessible accessibilityLabel={`${copy.rating}: ${me.safety_rating.toFixed(1)}`}>
-            <Text variant="stat">{me.safety_rating.toFixed(1)}</Text>
+          <View accessible accessibilityLabel={`${copy.rating}: ${formatRating(me.safety_rating, true)}`}>
+            <Text variant="stat">{formatRating(me.safety_rating, true)}</Text>
             <Text variant="label" tone="muted">
               {copy.rating}
             </Text>
@@ -74,6 +77,7 @@ export function GlobalBoard() {
   const router = useRouter();
   const { session } = useSession();
   const myId = session?.user.id ?? null;
+  const units = useUnits();
   const [state, setState] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const q = useGlobalBoard(state);
@@ -148,15 +152,15 @@ export function GlobalBoard() {
           </View>
         }
         ListEmptyComponent={
-          <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody} testID="global-empty" />
+          <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
         }
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
         renderItem={({ item }) => (
           <BoardRow
             rank={item.rank}
             username={item.username}
-            subtitle={copy.cleanMiles(item.clean_miles)}
-            value={item.safety_rating.toFixed(1)}
+            subtitle={copy.cleanMiles(item.clean_miles, units)}
+            value={formatRating(item.safety_rating, true)}
             me={item.user_id === myId}
             onPress={() => router.push(profileHref(item.username))}
             testID={`global-row-${item.rank}`}

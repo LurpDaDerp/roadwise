@@ -1,6 +1,7 @@
 import { screen, within } from '@testing-library/react-native';
 
 import { draw, drive, NOW, press, summary, sums } from '@/features/drives/__fixtures__/drives';
+import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { tokens } from '@/ui/tokens';
 
 import { HomeView, type HomeViewProps } from '../HomeView';
@@ -131,7 +132,31 @@ test('the header says so when progress cannot load', async () => {
 test('a forgotten drive shows one quiet, dismissible line', async () => {
   const dismiss = jest.fn();
   await draw(<HomeView {...props({ forgottenDrive: { dismiss } })} />);
-  expect(screen.getByTestId('forgotten-drive')).toHaveTextContent(/Looks like you drove without recording\. Tap Start before your next drive\./);
+  expect(screen.getByTestId('forgotten-drive')).toHaveTextContent(/Forgot to record\? Tap Start before your next drive\./);
   await press(screen.getByText('Dismiss'));
   expect(dismiss).toHaveBeenCalled();
+});
+
+describe('final-review fixes', () => {
+  afterEach(() => resetUnitsForTests());
+
+  test('the challenges strip shows progress toward a Freeze', async () => {
+    const s = summary();
+    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, freeze_progress: 2 } } })} />);
+    expect(screen.getByTestId('challenges-freeze')).toHaveTextContent(/2\/3 toward a Freeze/);
+  });
+
+  test('km: the stats card reads per 100 km and the unranked line converts', async () => {
+    publishUnits('km');
+    const s = summary();
+    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 12 } } })} />);
+    expect(screen.getAllByText('per 100 km').length).toBeGreaterThan(0);
+    expect(screen.getByText('19/40 km to get ranked')).toBeOnTheScreen();
+  });
+
+  test('the rating is a whole number', async () => {
+    const s = summary();
+    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, safety_rating: 91.7, ranked: true } } })} />);
+    expect(screen.getByTestId('rating-value')).toHaveTextContent('92');
+  });
 });

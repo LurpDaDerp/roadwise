@@ -101,7 +101,7 @@ function LeagueHeader({ league }: { league: MyLeague }) {
       </Text>
       {short > 0 ? (
         <Text variant="callout" testID="league-drives-left">
-          {copy.drivesLeft(short)}
+          {copy.drivesLeft(short, league.min_drives_to_promote)}
         </Text>
       ) : null}
     </Card>

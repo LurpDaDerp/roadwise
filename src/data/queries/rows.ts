@@ -54,6 +54,8 @@ export interface LocalDrive {
   result: FinalizeTripResponseV3 | null;
   reason: string | null;
   mergedInto: string | null;
+  /** Why the server last refused an action on this drive (e.g. a "Wasn't driving": `too_old`). */
+  syncError: string | null;
 }
 
 export interface LocalDriveEvent {
@@ -166,6 +168,7 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     result: parseResult(row.result_json),
     reason: row.reason,
     mergedInto: row.merged_into,
+    syncError: row.sync_error,
   };
 }
 

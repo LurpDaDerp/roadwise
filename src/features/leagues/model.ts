@@ -124,13 +124,12 @@ export function msToNextMinute(nowMs: number): number {
 // numbers and words
 // ---------------------------------------------------------------------------
 
-export const UNRANKED = 'Unranked';
+import { formatRating } from '@/lib/rating';
 
-/** A Safety Rating, never shown for an unranked driver (under 25 mi in 30 days). */
-export function ratingText(rating: number | null, ranked: boolean): string {
-  if (!ranked || rating === null) return UNRANKED;
-  return rating.toFixed(1);
-}
+export { UNRANKED } from '@/lib/rating';
+
+/** A Safety Rating, never shown for an unranked driver (under 25 mi in 30 days): the shared rule. */
+export const ratingText = (rating: number | null, ranked: boolean): string => formatRating(rating, ranked);
 
 export function percentileText(percentile: number): string {
   return `You're in the top ${percentile}%`;

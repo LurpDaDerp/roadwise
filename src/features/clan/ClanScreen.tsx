@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, ScrollView, Share, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import { useSession } from '@/data/supabase/session';
 import { Button, Card, Chip, IconButton, ProgressRing, Screen, SectionHeader, Text, useTheme } from '@/ui';
 
@@ -98,7 +99,8 @@ function NoClan() {
 
 function GoalCard({ goal }: { goal: MyClan['goal'] }) {
   const t = useTheme();
-  const g = goalProgress(goal);
+  const units = useUnits();
+  const g = goalProgress(goal, units);
   return (
     <Card testID="clan-goal">
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }}>
@@ -195,6 +197,7 @@ function InClan({ clan, refetch, refreshFailed }: { clan: MyClan; refetch: () =>
   const { session } = useSession();
   const myId = session?.user.id ?? '';
   const [sort, setSort] = useState<MemberSort>('rating');
+  const units = useUnits();
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const pull = usePullRefresh(refetch);
   const members = useMemo(() => sortMembers(clan.members, sort), [clan.members, sort]);
@@ -241,7 +244,7 @@ function InClan({ clan, refetch, refreshFailed }: { clan: MyClan; refetch: () =>
         ListHeaderComponent={header}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
         renderItem={({ item, index }) => {
-          const stat = memberStat(item, sort);
+          const stat = memberStat(item, sort, units);
           const me = item.user_id === myId;
           return (
             <BoardRow

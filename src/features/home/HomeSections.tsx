@@ -97,12 +97,27 @@ export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly Lo
 type Challenge = MySummary['challenges'][number];
 
 /** This week's three challenges as a sideways strip. */
-export function ChallengesStrip({ challenges }: { challenges: readonly Challenge[] }) {
+/** Completed challenges per Freeze (server: `freeze_progress` 0..2, the third grants one). */
+export const CHALLENGES_PER_FREEZE = 3;
+
+export function ChallengesStrip({ challenges, freezeProgress }: { challenges: readonly Challenge[]; freezeProgress?: number }) {
   const t = useTheme();
   if (challenges.length === 0) return null;
+  const toFreeze = Math.max(0, Math.min(CHALLENGES_PER_FREEZE - 1, Math.floor(freezeProgress ?? 0)));
   return (
     <View style={{ gap: t.space.sm }} testID="challenges">
       <SectionHeader title="Weekly challenges" />
+      <View
+        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}
+        accessible
+        accessibilityLabel={`Each challenge is worth 100 points. ${toFreeze} of ${CHALLENGES_PER_FREEZE} toward a Freeze.`}
+        testID="challenges-freeze"
+      >
+        <Ionicons name="snow" size={t.size.iconSm} color={t.colors.freeze} />
+        <Text variant="footnote" tone="muted">
+          +100 pts each · {toFreeze}/{CHALLENGES_PER_FREEZE} toward a Freeze
+        </Text>
+      </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: t.space.md, paddingRight: t.space.lg }} style={{ marginHorizontal: -t.space.lg }}>
         <View style={{ width: t.space.lg - t.space.md }} />
         {[...challenges]
