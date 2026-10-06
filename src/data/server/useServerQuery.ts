@@ -4,11 +4,13 @@
  * Keys are scoped by the signed-in user so a different account never paints the last one's
  * cache. The app's QueryClient never refetches on focus (its local-SQLite queries don't need it),
  * so this refetches stale data when the screen gains focus and, if `pollMs` is set, polls only
- * while the screen stays focused — a backgrounded tab costs no requests.
+ * while the screen stays focused and the app is active — a backgrounded tab or app costs no
+ * requests. `keepPrevious` keeps the last data on screen while a changed key (filter) loads.
  */
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
 
@@ -25,26 +27,38 @@ export function useServerQuery<T>(
   key: unknown[],
   fn: string,
   args?: Record<string, unknown>,
-  opts: { pollMs?: number; enabled?: boolean } = {}
+  opts: { pollMs?: number; enabled?: boolean; keepPrevious?: boolean } = {}
 ): UseQueryResult<T> {
   const { session } = useSession();
   const uid = session?.user.id ?? null;
   const [focused, setFocused] = useState(true);
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
+    return () => sub.remove();
+  }, []);
   const query = useQuery<T>({
     queryKey: serverKey(uid, ...key),
     queryFn: () => callRpc<T>(fn, args),
     enabled: uid !== null && (opts.enabled ?? true),
     staleTime: SERVER_STALE_MS,
     retry: 1,
-    refetchInterval: focused && opts.pollMs ? opts.pollMs : false,
+    placeholderData: opts.keepPrevious ? keepPreviousData : undefined,
+    // A backgrounded app or an unfocused screen never polls.
+    refetchInterval: focused && appActive && opts.pollMs ? opts.pollMs : false,
   });
-  const { refetch, isStale } = query;
+  // Read through a ref so the focus callback runs on focus only — not again each time the data
+  // turns stale while the screen is showing, which would quietly poll every query.
+  const latest = useRef(query);
+  useEffect(() => {
+    latest.current = query;
+  });
   useFocusEffect(
     useCallback(() => {
       setFocused(true);
-      if (isStale) void refetch();
+      if (latest.current.isStale) void latest.current.refetch();
       return () => setFocused(false);
-    }, [isStale, refetch])
+    }, [])
   );
   return query;
 }
