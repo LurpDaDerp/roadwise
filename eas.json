@@ -9,8 +9,7 @@
     },
     "preview": {
       "distribution": "internal",
-      "channel": "preview",
-      "env": { "EXPO_PUBLIC_DIAGNOSTICS": "1" }
+      "channel": "preview"
     },
     "production": { "autoIncrement": true, "channel": "production" }
   },
