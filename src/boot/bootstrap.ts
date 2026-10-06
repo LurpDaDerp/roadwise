@@ -16,7 +16,7 @@ import { finalizeTrip, safeMilesEarlierToday } from '@/core/engine/finalize';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
-import { readFlag, refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
+import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
 import { createExpoDb, createSettingsRepo, createTripsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
 import { onDataChanged } from '@/data/events';
@@ -32,6 +32,8 @@ import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/dri
 import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { createDefaultCameraBridge } from '@/features/camera/defaultBridge';
+import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
+import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
 import { dayKey } from '@/lib/time';
@@ -122,7 +124,7 @@ export interface AppRuntime {
   owner: DeviceOwnerOutcome;
   schemaVersion: number;
   now: () => number;
-  /** Fetch the public config (feature flags) once; rejects on failure. */
+  /** Fetch the public config once; rejects on failure. */
   refreshConfig(): Promise<void>;
   /** Restore the user's drives from the server when the device holds none. */
   restore(): Promise<void>;
@@ -479,8 +481,6 @@ async function defaultSpeedProbe(): Promise<number | null> {
 }
 
 function defaultVoiceEnabled(): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the settings cache (WP9)
-  const { voicePrefEnabled } = require('@/features/settings/alerts/voicePref') as typeof import('@/features/settings/alerts/voicePref');
   return voicePrefEnabled();
 }
 
@@ -505,10 +505,6 @@ function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; sett
 function defaultPlayer(onError: (error: unknown, context: string) => void, db: Db): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
   return async (inputs) => {
     const ports = await createExpoAlertPorts();
-    /* eslint-disable @typescript-eslint/no-require-imports -- the settings caches (WP9) */
-    const { loadVoicePref, voicePrefEnabled } = require('@/features/settings/alerts/voicePref') as typeof import('@/features/settings/alerts/voicePref');
-    const { loadAlertStylePref, alertStylePref } = require('@/features/settings/alerts/stylePref') as typeof import('@/features/settings/alerts/stylePref');
-    /* eslint-enable @typescript-eslint/no-require-imports */
     const settings = createSettingsRepo(db);
     await Promise.all([loadVoicePref(settings), loadAlertStylePref(settings)]);
     return createAlertPlayer({
@@ -584,5 +580,3 @@ export async function flushBeforeSignOut(runtime: AppRuntime): Promise<{ sent: n
   const result = await runtime.runner.drainOnce();
   return { sent: result.done, left: await runtime.runner.owed() };
 }
-
-export { readFlag };

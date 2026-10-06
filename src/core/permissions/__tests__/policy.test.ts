@@ -46,11 +46,11 @@ describe('canPrompt', () => {
 describe('recordPrompt / readPromptHistory', () => {
   it('stores the prompt time per permission under PROMPTS_KEY, keeping the others', async () => {
     const s = memorySettings({ [PROMPTS_KEY]: { motion: T0 - DAY } });
-    const h = await recordPrompt(s, 'locationAlways', T0);
-    expect(h).toEqual({ motion: T0 - DAY, locationAlways: T0 });
-    expect(s.data[PROMPTS_KEY]).toEqual({ motion: T0 - DAY, locationAlways: T0 });
+    const h = await recordPrompt(s, 'location', T0);
+    expect(h).toEqual({ motion: T0 - DAY, location: T0 });
+    expect(s.data[PROMPTS_KEY]).toEqual({ motion: T0 - DAY, location: T0 });
     expect(await readPromptHistory(s)).toEqual(h);
-    expect(canPrompt('locationAlways', await readPromptHistory(s), T0 + DAY)).toBe(false);
+    expect(canPrompt('location', await readPromptHistory(s), T0 + DAY)).toBe(false);
   });
 
   it('reads an absent or malformed history as empty', async () => {
@@ -66,9 +66,9 @@ describe('offerPrompt (app-initiated prompts)', () => {
   it('asks and records when the window is open', async () => {
     const s = memorySettings();
     const request = jest.fn(async () => 'granted' as const);
-    expect(await offerPrompt(s, 'locationAlways', T0, request)).toBe('granted');
+    expect(await offerPrompt(s, 'location', T0, request)).toBe('granted');
     expect(request).toHaveBeenCalledTimes(1);
-    expect(s.data[PROMPTS_KEY]).toEqual({ locationAlways: T0 });
+    expect(s.data[PROMPTS_KEY]).toEqual({ location: T0 });
   });
 
   it('skips without calling the OS inside 14 days, and asks again at 14 days', async () => {

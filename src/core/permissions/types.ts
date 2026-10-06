@@ -1,6 +1,6 @@
-// The permission-health vocabulary (M4 Task 8, product B2, design §5.3). Pure types: no module
-// here touches the OS. `adapters.ts` turns the phone's answers into a `PermissionSnapshot`;
-// `health.ts` turns a snapshot plus the driver's own choices into a `HealthReport`.
+// The permission vocabulary. Pure types: no module here touches the OS. `adapters.ts` turns the
+// phone's answers into a `PermissionSnapshot`; `src/features/permissions/health.ts` turns a snapshot
+// into the rows the permission screens show.
 
 export type PermissionPlatform = 'ios' | 'android';
 
@@ -40,85 +40,8 @@ export interface PermissionSnapshot {
   checkedAt: number;
 }
 
-export type HealthRowId =
-  | 'location'
-  | 'precise'
-  | 'locationAlways'
-  | 'autoRecord'
-  | 'motion'
-  | 'notifications'
-  | 'battery'
-  | 'lowPower';
-
-/**
- * `ok` granted / working; `off` explicitly turned off; `attention` degraded or not yet asked;
- * `info` nothing to fix (a choice, not available yet, cannot be checked, informational).
- */
-export type HealthStatus = 'ok' | 'attention' | 'off' | 'info';
-
-export type FixAction = 'request' | 'openSettings' | 'openBatterySettings' | 'none';
-
-/**
- * `choice`: the driver chose manual (A9 Skip, Always declined, or auto-record turned off);
- * `notAvailable`: the server has withdrawn auto-record (the `auto_detect` flag) — nothing to fix;
- * `afterFirstDrive`: iOS Always is offered only after the first completed drive;
- * `lapsed`: previously granted, now lost; `cantCheck`: the state could not be read.
- */
-export type HealthReason =
-  | 'choice'
-  | 'notAvailable'
-  | 'afterFirstDrive'
-  | 'lapsed'
-  | 'cantCheck'
-  /**
-   * Auto-record is wanted and the phone allows it, but this account has not affirmed the
-   * background-location disclosure (Task 19 r1): the host will not arm. Fixable — never a choice.
-   */
-  | 'notAffirmed';
-
-export interface HealthRow {
-  id: HealthRowId;
-  status: HealthStatus;
-  fix: FixAction;
-  reason?: HealthReason;
-}
-
-export type RecordingMode = 'automatic' | 'manual' | 'unavailable';
-
-export interface HealthReport {
-  overall: 'ok' | 'attention' | 'broken';
-  rows: HealthRow[];
-  recordingMode: RecordingMode;
-  showBanner: boolean;
-}
-
-/** Permissions whose loss from a granted state is a lapse (settings `permissions.everGranted`). */
-export type EverGrantedKey = 'location' | 'locationAlways' | 'motion';
-export type EverGranted = Partial<Record<EverGrantedKey, boolean>>;
-
-export interface HealthContext {
-  /** A driver (not a non-driver account). Non-drivers get no driving rows at all. */
-  drives: boolean;
-  /** The driver's own auto-record choice: `host.autoDetectEnabled()`, never `status === 'off'`. */
-  autoDetectOn: boolean;
-  /**
-   * Whether the server makes auto-record available (the `auto_detect` flag). Optional, default
-   * true: with the flag withdrawn, recording is never reported as automatic.
-   */
-  autoDetectAvailable?: boolean;
-  firstDriveDone: boolean;
-  /** A9 Skip, or Always declined in the disclosure or the OS (settings `permissions.manualByChoice`). */
-  manualByChoice: boolean;
-  everGranted: EverGranted;
-  /**
-   * This account has affirmed the background-location disclosure (at or above the arming minimum).
-   * The host arms only then (Task 19 r1). Optional, default true: only the app's hook knows it.
-   */
-  disclosureAffirmed?: boolean;
-}
-
 /** The permissions the 14-day prompt policy tracks. */
-export type PromptPermission = 'location' | 'locationAlways' | 'motion' | 'notifications';
+export type PromptPermission = 'location' | 'motion' | 'notifications';
 
 /** Last OS prompt per permission, epoch ms (settings `permissions.prompts`). */
 export type PromptHistory = Partial<Record<PromptPermission, number>>;
@@ -127,29 +50,4 @@ export type PromptHistory = Partial<Record<PromptPermission, number>>;
 export interface SettingsStore {
   get<T>(key: string): Promise<T | null>;
   set(key: string, value: unknown): Promise<void>;
-}
-
-export type ReportedFrom = 'foreground' | 'background';
-
-/** What the phone reports in `devices.permissions` (the lapse trigger reads it). */
-export interface ServerPermissions {
-  v: 1;
-  location: LocationAccess;
-  precise: boolean | null;
-  /** Absent when motion could not be checked (the lapse trigger reads a missing key as unknown). */
-  motion?: Grant;
-  notifications: NotificationAccess;
-  batteryOptimization: BatteryOptimization;
-  reportedFrom: ReportedFrom;
-  /** True when the change was observed on return from B2's own Open Settings (no lapse item). */
-  ack: boolean;
-  /**
-   * Losing Always is excused now: auto-record off by the driver's choice (manual mode), or withdrawn
-   * by the server (`auto_detect` off) — `isAlwaysExcused`, the health model's own excuse (final
-   * review I4). 0007's lapse trigger raises no `location_always` lapse while it is true. Absent in a
-   * report written before it existed: read as false.
-   */
-  alwaysExcused?: boolean;
-  /** ISO 8601 */
-  checkedAt: string;
 }

@@ -18,7 +18,6 @@ export const PROMPT_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
 
 const PROMPT_PERMISSIONS: readonly PromptPermission[] = [
   'location',
-  'locationAlways',
   'motion',
   'notifications',
 ];
