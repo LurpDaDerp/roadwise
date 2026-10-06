@@ -7,7 +7,7 @@ import type { HudPalette } from '@/ui/drive';
 
 import { hudCopy } from './hudCopy';
 
-/** One line, only while an active weather alert covers the area ("Icy rain", "Dense fog"). */
+/** One line, only while an active weather alert covers the area ("Ice warning", "Dense fog"), from the National Weather Service. */
 function WeatherBannerView({ label, palette: p }: { label: string; palette: HudPalette }) {
   return (
     <View
