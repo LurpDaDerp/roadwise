@@ -1,8 +1,14 @@
 /** @jest-environment node */
-import { BANNED_COPY } from '@/notifications/catalog';
-
 import { onboardingCopy } from '../copy';
 import { STEP_IDS } from '../flow';
+
+/** Promises the app never makes: score guarantees, streak pressure, points as money, shouting. */
+const BANNED_COPY: readonly RegExp[] = [
+  /never lowers|can(no|')t go down|never decays/i,
+  /lose your streak|about to lose|hurry|last chance/i,
+  /\$|\bcash\b|money|dollars?|gift ?cards?|redeem|prizes?|insurance|discounts?/i,
+  /!/,
+];
 
 function strings(value: unknown): string[] {
   if (typeof value === 'string') return [value];

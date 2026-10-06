@@ -6,7 +6,7 @@
  * tested in its own suite). A real SQLite (sql.js) stands behind the runtime's db.
  */
 import { QueryClient } from '@tanstack/react-query';
-import { act, render, renderHook, screen, within } from '@testing-library/react-native';
+import { act, render, screen, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import { AppState } from 'react-native';
 
@@ -14,7 +14,6 @@ import type { RuntimeState } from '@/boot/controller';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { INSTALL_ID_KEY } from '@/data/devices/installId';
 import { LAST_REGISTER_KEY } from '@/data/devices/register';
-import { registerDriveStateSource, useDriveStateReported } from '@/data/devices/driveStateStore';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 import type { DriveState } from '@/drive/host';
 
@@ -417,20 +416,5 @@ describe('before sign-out: the device is released, then the local data wiped (pl
     expect(mockWipeForSignOut).toHaveBeenCalledTimes(1);
     expect(mockWipeForSignOut).toHaveBeenCalledWith(second.db);
     expect(mockSupabase.rpc).toHaveBeenCalledWith('release_device', { p_device_id: INSTALL_ID });
-  });
-});
-
-describe("A8's claim reads the runtime's reporter (controller ruling on T10 r2)", () => {
-  test('the layout registers no drive-state source itself; the runtime\'s registration makes it true', async () => {
-    const { runtime } = await fakeRuntime();
-    await renderWith(runtime);
-    const probe = renderHook(() => useDriveStateReported());
-    expect((await probe).result.current).toBe(false);
-    let release: () => void = () => {};
-    await act(async () => {
-      release = registerDriveStateSource(); // what bootstrap does for a signed-in launch
-    });
-    expect((await probe).result.current).toBe(true);
-    await act(async () => release());
   });
 });

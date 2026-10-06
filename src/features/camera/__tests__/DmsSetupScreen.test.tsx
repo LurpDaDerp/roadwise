@@ -4,7 +4,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import type { DmsSetupSession, DmsSetupView, SetupResult } from '@/core/dms';
 import { initialSetup } from '@/core/dms';
 import { createSettingsRepo } from '@/data/db/settings';
-import { clearQueryClients, routerDouble, world } from '@/features/trips/__fixtures__/render';
+import { clearQueryClients, routerDouble, world } from '@/data/queries/__fixtures__/screen';
 
 import { dmsCopy } from '../copy';
 import { DMS_CALIBRATED_KEY, DMS_ENABLED_KEY } from '../dmsSettings';

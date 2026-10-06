@@ -3,7 +3,6 @@
  * gone, and every settings href resolves to a route file.
  */
 import { SETTINGS_HREFS } from '@/features/settings/routes';
-import { HOME_HREF, HOW_POINTS_WORK_HREF, TRIP_HISTORY_HREF } from '@/features/trips/routes';
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
@@ -83,8 +82,3 @@ test('every settings href has its route file', () => {
   for (const href of Object.values(SETTINGS_HREFS)) expect([href, exists(toFile(String(href)))]).toEqual([href, true]);
 });
 
-test('the drive hrefs name the v3 routes', () => {
-  expect(HOME_HREF).toBe('/(tabs)/home');
-  expect(TRIP_HISTORY_HREF).toBe('/(app)/drives');
-  expect(HOW_POINTS_WORK_HREF).toBe('/(app)/how-points-work');
-});

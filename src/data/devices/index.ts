@@ -16,5 +16,4 @@ export {
 } from './register';
 export { createExpoPushPort, easProjectId, PUSH_TOKEN_KEY, readPushToken, TOKEN_PATTERN, type PushPort } from './pushToken';
 export { onDeviceSyncRequested, requestDeviceSync } from './events';
-export { isDriveStateReported, registerDriveStateSource, useDriveStateReported } from './driveStateStore';
 export { DeviceHost, type DeviceHostDeps, type DeviceHostProps } from './DeviceHost';

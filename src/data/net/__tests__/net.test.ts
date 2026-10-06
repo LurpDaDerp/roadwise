@@ -1,15 +1,11 @@
-import { act, renderHook } from '@testing-library/react-native';
-
 import {
   createExpoNet,
   createNetAdapter,
-  getSharedOnline,
   resetNetForTests,
   toNetState,
   type ExpoNetworkLike,
   type NetworkStateLike,
 } from '@/data/net/net';
-import { useOnline } from '@/data/net/useOnline';
 
 /** A stand-in for `expo-network`: one listener slot, and a way to push a change through it. */
 function fakeNetwork(initial: NetworkStateLike) {
@@ -143,28 +139,4 @@ test('a first read that never answers rejects after the timeout instead of holdi
     addNetworkStateListener: () => ({ remove() {} }),
   };
   await expect(createExpoNet(async () => hung, 10)).rejects.toThrow('not read within 10 ms');
-});
-
-describe('useOnline', () => {
-  test('before any adapter exists it does not claim offline', async () => {
-    const { result } = await renderHook(() => useOnline());
-    expect(result.current).toBe(true);
-    expect(getSharedOnline()).toBe(true);
-  });
-
-  test('follows the shared adapter, including one created after the screen mounted', async () => {
-    const net = fakeNetwork(NONE);
-    const { result } = await renderHook(() => useOnline());
-    expect(result.current).toBe(true);
-
-    await act(async () => {
-      await createExpoNet(async () => net.module);
-    });
-    expect(result.current).toBe(false);
-
-    await act(async () => net.change(CELL));
-    expect(result.current).toBe(true);
-    await act(async () => net.change(NONE));
-    expect(result.current).toBe(false);
-  });
 });
