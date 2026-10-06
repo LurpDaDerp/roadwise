@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TextInput, View } from 'react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { callRpc } from '@/data/server/rpc';
 import { useSession } from '@/data/supabase/session';
+import { heldClanCode, readPendingHref } from '@/features/auth/authGuard';
 import { isValidCode, normalizeCode } from '@/features/clan/model';
 import { friendlyError } from '@/features/social/errors';
 import { Card, Text, useFontScale, useTheme } from '@/ui';
@@ -43,6 +44,20 @@ export function ClanStep({ onBack }: StepProps) {
   const [preview, setPreview] = useState<ClanPreview | null>(null);
   const [busy, setBusy] = useState<'find' | 'join' | 'skip' | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // An invite link tapped before setup was held by the gate: fill its code in, one tap to preview.
+  const uid = session?.user.id ?? null;
+  useEffect(() => {
+    if (uid === null) return;
+    let live = true;
+    void readPendingHref(settings, uid).then((href) => {
+      const held = heldClanCode(href);
+      if (live && held !== null && isValidCode(held)) setCode((c) => (c === '' ? held : c));
+    });
+    return () => {
+      live = false;
+    };
+  }, [settings, uid]);
 
   const finish = async (): Promise<void> => {
     const saved = await readLicense(settings).catch(() => null);

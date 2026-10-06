@@ -44,7 +44,7 @@ export type HomeViewProps = {
    */
   recording?: boolean;
   inProgress?: ReactNode;
-  /** iOS forgot-to-start check found an unrecorded car trip: a quiet, dismissible line. */
+  /** iOS forgot-to-start check found an unrecorded drive: a quiet, dismissible line. */
   forgottenDrive?: { dismiss: () => void } | null;
 };
 

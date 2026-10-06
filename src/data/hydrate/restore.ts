@@ -29,6 +29,8 @@ const ServerEvent = z.object({
   measured: z.unknown().optional(),
   penalty: z.number().nullable().optional(),
   status: z.enum(['active', 'removed']).nullable().optional(),
+  /** A settled report on this event, when the server sends it. */
+  disputeStatus: z.enum(['accepted', 'rejected']).nullable().optional(),
 });
 
 export const ServerDriveSchema = z.object({
@@ -112,7 +114,8 @@ export function toEventRows(d: ServerDrive): NewEvent[] {
     measured_json: e.measured === undefined ? null : JSON.stringify(e.measured),
     penalty: e.penalty ?? null,
     status: e.status ?? 'active',
-    dispute_status: 'none',
+    // A removed event was taken off by an accepted report: never offer Report on it again.
+    dispute_status: e.disputeStatus ?? (e.status === 'removed' ? 'accepted' : 'none'),
   }));
 }
 

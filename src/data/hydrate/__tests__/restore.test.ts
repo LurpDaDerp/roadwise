@@ -2,7 +2,7 @@
 import { uuid } from '@/core/engine/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { restoreDrives } from '@/data/hydrate/restore';
+import { restoreDrives, toEventRows } from '@/data/hydrate/restore';
 import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
@@ -65,4 +65,11 @@ test('a device that holds drives is left alone; a malformed row is skipped', asy
   expect(await restoreDrives({ db, rpc: async () => [serverDrive(1)] })).toMatchObject({ skipped: true, restored: 0 });
   await db.execute('DELETE FROM trips');
   expect(await restoreDrives({ db, rpc: async () => [{ bogus: true }, serverDrive(1)] })).toMatchObject({ restored: 1 });
+});
+
+test('a restored removed event keeps its accepted report, so Report is not offered again', () => {
+  const e = { id: uuid(900), type: 'speeding' as const, tier: 'minor' as const, startedAt: T0, durationS: 8, penalty: 0 };
+  const d = { clientTripId: uuid(901), events: [{ ...e, status: 'removed' as const }, { ...e, id: uuid(902), status: 'active' as const }, { ...e, id: uuid(903), status: 'active' as const, disputeStatus: 'rejected' as const }] };
+  const rows = toEventRows(d as unknown as Parameters<typeof toEventRows>[0]);
+  expect(rows.map((r) => r.dispute_status)).toEqual(['accepted', 'none', 'rejected']);
 });

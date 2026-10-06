@@ -54,6 +54,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   useSegments: () => mockWorld.segments,
   usePathname: () => mockWorld.pathname,
+  useGlobalSearchParams: () => ({}),
 }));
 jest.mock('@/drive/useDrive', () => ({
   useDrive: (select: (s: { status: string }) => unknown) =>

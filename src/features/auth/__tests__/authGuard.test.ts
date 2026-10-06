@@ -1,6 +1,8 @@
 import {
   driveFacts,
   pendingHrefFor,
+  heldClanCode,
+  exitHref,
   profileGate,
   resolveGate,
   resolveStart,
@@ -174,7 +176,25 @@ describe('pendingHrefFor (the deep links a gate may hold)', () => {
     ['/drive', null],
     ['/inbox', null],
     ['/update-required', null],
+    // A friend's profile and a clan invite, normalised to one form each.
+    ['/u/maya_16', '/u/maya_16'],
+    ['/add/Maya_16', '/u/maya_16'],
+    ['/clan/abcd2345', '/clan/join?code=ABCD2345'],
+    ['/clan/join?code=abcd2345', '/clan/join?code=ABCD2345'],
+    ['/clan/join', null],
+    ['/clan/manage', null],
+    ['/u/a', null],
+    ['/u/maya?x=1', null],
+    ['/clan/join?code=ABCD2345&x=1', null],
   ])('%s → %s', (pathname, expected) => expect(pendingHrefFor(pathname)).toBe(expected));
+
+  test('a held clan invite prefills the clan step and is not reopened after setup', () => {
+    expect(heldClanCode('/clan/join?code=ABCD2345')).toBe('ABCD2345');
+    expect(heldClanCode('/u/maya')).toBeNull();
+    expect(exitHref('/clan/join?code=ABCD2345')).toBeNull();
+    expect(exitHref('/u/maya')).toBe('/u/maya');
+    expect(exitHref(null)).toBeNull();
+  });
 
   test('a non-string is nothing', () => expect(pendingHrefFor(undefined)).toBeNull());
 });

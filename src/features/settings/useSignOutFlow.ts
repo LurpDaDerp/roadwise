@@ -7,15 +7,15 @@ export const signOutCheckCopy = {
   title: 'Sign out?',
   unsentDeletes: (n: number) =>
     n === 1
-      ? "1 deleted drive hasn't reached the server yet. If you sign out now, it may come back. Sign out anyway?"
-      : `${n} deleted drives haven't reached the server yet. If you sign out now, they may come back. Sign out anyway?`,
+      ? "1 drive or report hasn't uploaded yet. Sign out now and it'll upload the next time you sign in on this phone."
+      : `${n} drives or reports haven't uploaded yet. Sign out now and they'll upload the next time you sign in on this phone.`,
   unknown:
-    "We couldn't check whether your deleted drives reached the server. If any didn't, they may come back. Sign out anyway?",
+    "We couldn't check whether everything uploaded. Anything left will upload the next time you sign in on this phone.",
   cancel: 'Cancel',
   confirm: 'Sign out',
 } as const;
 
-/** Asks before a sign-out acts, only when the flush left deletes unsent. */
+/** Asks before a sign-out acts, only when the flush left drive uploads or reports unsent. */
 export function confirmUnsentSignOut(message: string): Promise<boolean> {
   const c = signOutCheckCopy;
   return new Promise((resolve) => {

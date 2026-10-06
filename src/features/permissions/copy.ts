@@ -25,11 +25,6 @@ export const permissionsCopy = {
     requestNotifications: 'Allow notifications',
     openSettings: 'Open Settings',
   } satisfies Record<Fix, string>,
-  banner: {
-    locationOff: "Location is off, so drives can't be recorded. Tap to fix.",
-    approximate: 'Precise location is off, so speed and miles are rough. Tap to fix.',
-    hint: 'Opens permissions',
-  },
 };
 
 const TITLES: Record<RowId, string | Record<PermissionPlatform, string>> = {

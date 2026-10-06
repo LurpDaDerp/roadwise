@@ -10,7 +10,7 @@ import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissi
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
-import { ONBOARDING_LICENSE_KEY, readLicense } from '../state';
+import { ONBOARDING_LICENSE_KEY, ONBOARDING_PENDING_HREF_KEY, readLicense } from '../state';
 import { ClanStep } from '../steps/ClanStep';
 import { HowStep } from '../steps/HowStep';
 import { LicenseStep } from '../steps/LicenseStep';
@@ -169,6 +169,12 @@ describe('clan (optional, last)', () => {
     await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
     expect(mockFinish.mock.calls[0]?.[1]).toBe('permit');
     expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('an invite link tapped before setup fills in its code', async () => {
+    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'full', [ONBOARDING_PENDING_HREF_KEY]: { uid: 'u1', href: '/clan/join?code=ABCD2345' } } });
+    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('clan-code')).toHaveProp('value', 'ABCD2345'));
   });
 
   it('a code is previewed, then joined, then onboarding finishes', async () => {

@@ -6,7 +6,7 @@ import type { Href } from 'expo-router';
 
 import type { SettingsRepo } from '@/data/db/settings';
 import { supabase } from '@/data/supabase/client';
-import { HOME, readPendingHref } from '@/features/auth/authGuard';
+import { exitHref, HOME, readPendingHref } from '@/features/auth/authGuard';
 import { TERMS_VERSION } from '@/features/auth/legal';
 
 import { clearOnboardingState } from './state';
@@ -58,7 +58,7 @@ export async function finishOnboarding(deps: FinishDeps, licenseStage: LicenseSt
   if (userId === null) throw new Error('finishOnboarding needs a signed-in account');
 
   await (deps.complete ?? completeOnboardingRpc)(licenseStage, TERMS_VERSION);
-  const target = (await readPendingHref(settings, userId)) ?? HOME;
+  const target = exitHref(await readPendingHref(settings, userId)) ?? HOME;
 
   await deps.refreshProfile();
   router.replace(target as Href);

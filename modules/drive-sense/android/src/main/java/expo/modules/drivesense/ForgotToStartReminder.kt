@@ -55,7 +55,7 @@ object ForgotToStartReminder {
       val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager? ?: return false
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm.getNotificationChannel(CHANNEL_ID) == null) {
         val channel = NotificationChannel(CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_LOW).apply {
-          description = "A quiet note after a car trip that was not recorded"
+          description = "A quiet note after a drive that was not recorded"
           setSound(null, null)
           enableVibration(false)
         }

@@ -19,7 +19,7 @@ export const signInCopy = {
   title: 'Welcome to RoadWise',
   body: 'Drive safely, earn points and climb the leagues with your friends.',
   attest: "I'm 13 or older and agree to the Terms and Privacy Policy",
-  needsTick: 'Tick the box above first.',
+  needsTick: 'Check the box above first.',
   saveFailed: "Couldn't save that. Try again.",
   rateLimited: 'Too many sign-in emails. Try again in a minute.',
 } as const;

@@ -1,7 +1,6 @@
 export { permissionsCopy, rowDetail, rowTitle } from './copy';
 export { healthRows, overall, type Fix, type HealthRowModel, type RowId, type RowStatus } from './health';
 export { HealthRow } from './HealthRow';
-export { bannerMessage, PERMISSIONS_HREF, PermissionHealthBanner } from './PermissionHealthBanner';
 export { PermissionsScreen } from './PermissionsScreen';
 export {
   defaultPermissionsAdapter,

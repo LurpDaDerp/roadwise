@@ -32,13 +32,13 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
-    dms: { title: 'Driver monitoring', subtitle: 'Driver monitoring (DMS)' },
+    dms: { title: 'Driver monitoring', subtitle: 'Camera alerts for eyes off the road and drowsiness' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     reminder: {
       title: 'Forgot-to-start reminder',
-      subtitle: 'A quiet nudge if your phone noticed a car trip you didn’t record. Off by default.',
+      subtitle: 'A quiet nudge if your phone noticed a drive you didn’t record. Off by default.',
       needs: {
-        motion: 'The reminder needs motion access to notice a car trip. Turn it on in Settings, then try again.',
+        motion: 'The reminder needs motion access to notice a drive. Turn it on in Settings, then try again.',
         notifications: 'The reminder needs notifications to reach you. Turn them on in Settings, then try again.',
         both: 'The reminder needs motion access and notifications. Turn them on in Settings, then try again.',
       },

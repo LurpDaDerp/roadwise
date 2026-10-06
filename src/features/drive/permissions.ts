@@ -11,7 +11,7 @@
  *   from here (§7.0 "Never re-prompt in a loop"). The caller shows the blocking
  *   explainer with Open Settings, and re-reads with `readLocationPermission` on the way back.
  * - Motion is asked once when undetermined and never blocks: a manual drive records without it.
- * - Background location ("Always") is never asked here: only `BackgroundDisclosure` asks for it.
+ * - Background location ("Always") is never asked for, anywhere.
  */
 import {
   createPermissionsAdapter,

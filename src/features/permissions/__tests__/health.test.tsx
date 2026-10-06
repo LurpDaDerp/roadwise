@@ -6,7 +6,6 @@ import { screen, waitFor } from '@testing-library/react-native';
 
 import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, T0, tap } from '../__fixtures__/harness';
 import { healthRows, overall } from '../health';
-import { bannerMessage } from '../PermissionHealthBanner';
 import { PermissionsScreen } from '../PermissionsScreen';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -49,13 +48,6 @@ describe('healthRows', () => {
   it('a phone without motion sensing has no motion row', () => {
     expect(healthRows(snap({ motion: 'unavailable' })).some((r) => r.id === 'motion')).toBe(false);
     expect(healthRows(snap({ motion: null })).some((r) => r.id === 'motion')).toBe(false);
-  });
-
-  it('the Home banner only for what stops or spoils a drive', () => {
-    expect(bannerMessage(snap())).toBeNull();
-    expect(bannerMessage(snap({ location: 'denied', precise: null }))?.tone).toBe('danger');
-    expect(bannerMessage(snap({ precise: false }))?.tone).toBe('warning');
-    expect(bannerMessage(snap({ motion: 'denied' }))).toBeNull();
   });
 });
 
