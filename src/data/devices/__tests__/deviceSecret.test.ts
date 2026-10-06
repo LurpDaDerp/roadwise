@@ -1,15 +1,29 @@
-import { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, resetDeviceSecretForTests, type SecretStore } from '@/data/devices/deviceSecret';
+import { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, preloadDeviceSecret, resetDeviceSecretForTests, type SecretStore, type SecretStoreOptions } from '@/data/devices/deviceSecret';
 import { trimPlan } from '@/core/engine/privacy';
 import { hmacSha256Hex, sha256Hex } from '@/lib/sha256';
 
-function memoryStore(): SecretStore & { items: Map<string, string> } {
+function memoryStore(): SecretStore & { items: Map<string, string>; options: (SecretStoreOptions | undefined)[]; locked: boolean } {
   const items = new Map<string, string>();
-  return {
+  const store = {
     items,
-    getItemAsync: async (k) => items.get(k) ?? null,
-    setItemAsync: async (k, v) => void items.set(k, v),
-    deleteItemAsync: async (k) => void items.delete(k),
+    options: [] as (SecretStoreOptions | undefined)[],
+    locked: false,
+    AFTER_FIRST_UNLOCK: 'afterFirstUnlock',
+    getItemAsync: async (k: string, o?: SecretStoreOptions) => {
+      if (store.locked) throw new Error('keychain locked');
+      store.options.push(o);
+      return items.get(k) ?? null;
+    },
+    setItemAsync: async (k: string, v: string, o?: SecretStoreOptions) => {
+      store.options.push(o);
+      items.set(k, v);
+    },
+    deleteItemAsync: async (k: string, o?: SecretStoreOptions) => {
+      store.options.push(o);
+      items.delete(k);
+    },
   };
+  return store;
 }
 
 beforeEach(() => resetDeviceSecretForTests());
@@ -33,6 +47,33 @@ test('the device secret is 32 random bytes, minted once, kept in the store, and 
   expect(store.items.has(DEVICE_SECRET_KEY)).toBe(false);
   const b = await getDeviceSecret(store);
   expect(b).not.toBe(a);
+});
+
+test('the secret is stored and read with AFTER_FIRST_UNLOCK; a store without the constant gets no options', async () => {
+  const store = memoryStore();
+  await getDeviceSecret(store);
+  await clearDeviceSecret(store);
+  expect(store.options).toEqual([{ keychainAccessible: 'afterFirstUnlock' }, { keychainAccessible: 'afterFirstUnlock' }, { keychainAccessible: 'afterFirstUnlock' }]);
+  resetDeviceSecretForTests();
+  const plain = memoryStore();
+  delete (plain as { AFTER_FIRST_UNLOCK?: unknown }).AFTER_FIRST_UNLOCK;
+  await getDeviceSecret(plain);
+  expect(plain.options).toEqual([undefined, undefined]);
+});
+
+test('preloaded at bootstrap, the secret serves a finalize from memory while the keychain is unreadable', async () => {
+  const store = memoryStore();
+  await preloadDeviceSecret(store);
+  const secret = store.items.get(DEVICE_SECRET_KEY)!;
+  store.locked = true; // the phone locked itself before an auto-end
+  const unlocked: SecretStore = { ...store, getItemAsync: async () => secret };
+  expect(await deviceTrimSeed('trip-1', store)).toBe(await deviceTrimSeed('trip-1', unlocked));
+  // Without the preload the same locked store fails — the cache is what carries the finalize.
+  resetDeviceSecretForTests();
+  await expect(deviceTrimSeed('trip-1', store)).rejects.toThrow('keychain locked');
+  const errors: unknown[] = [];
+  await preloadDeviceSecret(store, (e) => errors.push(e));
+  expect(errors).toHaveLength(1); // never throws, reports
 });
 
 test('the trim seed is deterministic on one device and differs between devices for the same clientTripId', async () => {

@@ -92,6 +92,8 @@ export async function wipeForSignOut(db: Db): Promise<void> {
   await db.transaction(async (tx) => {
     for (const table of SIGN_OUT_TABLES) await tx.execute(`DELETE FROM ${table}`);
     for (const key of SIGN_OUT_SETTINGS) await tx.execute('DELETE FROM settings WHERE key = ?', [key]);
+    // Finished queue items still carry the drives' payloads; what is still owed stays for the next sign-in.
+    await tx.execute("DELETE FROM sync_queue WHERE status IN ('done', 'failed')");
   });
 }
 

@@ -6,21 +6,41 @@
  */
 import { hmacSha256Hex, toHex } from '@/lib/sha256';
 
+// The device has no `crypto.getRandomValues` of its own (Hermes): this file loads the polyfill
+// itself rather than relying on whoever imported the Supabase client first. Node and Jest have it.
+if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- a side-effect polyfill
+  require('react-native-get-random-values');
+}
+
 export const DEVICE_SECRET_KEY = 'roadwise.deviceSecret';
 export const DEVICE_SECRET_BYTES = 32;
 
+export interface SecretStoreOptions {
+  keychainAccessible?: unknown;
+}
+
 /** The slice of expo-secure-store this uses (or a test's stand-in). */
 export interface SecretStore {
-  getItemAsync(key: string): Promise<string | null>;
-  setItemAsync(key: string, value: string): Promise<void>;
-  deleteItemAsync(key: string): Promise<void>;
+  getItemAsync(key: string, options?: SecretStoreOptions): Promise<string | null>;
+  setItemAsync(key: string, value: string, options?: SecretStoreOptions): Promise<void>;
+  deleteItemAsync(key: string, options?: SecretStoreOptions): Promise<void>;
+  /** expo-secure-store's keychain constant; a stand-in without it gets no options. */
+  AFTER_FIRST_UNLOCK?: unknown;
 }
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 
+/**
+ * The keychain class for the secret: readable after the first unlock since boot, so a locked-phone
+ * auto-end or a background recovery can still finalize (the default, WHEN_UNLOCKED, cannot be read
+ * while the screen is locked). Backed by the in-process cache, preloaded at bootstrap.
+ */
+const options = (store: SecretStore): SecretStoreOptions | undefined =>
+  store.AFTER_FIRST_UNLOCK === undefined ? undefined : { keychainAccessible: store.AFTER_FIRST_UNLOCK };
+
 function randomHex(bytes: number): string {
   const out = new Uint8Array(bytes);
-  // `react-native-get-random-values` polyfills this on the device; Node and Jest have it natively.
   globalThis.crypto.getRandomValues(out);
   return toHex(out);
 }
@@ -39,13 +59,13 @@ let cached: string | null = null;
 export function getDeviceSecret(store: SecretStore = defaultStore()): Promise<string> {
   const run = lock.then(async () => {
     if (cached !== null) return cached;
-    const stored = await store.getItemAsync(DEVICE_SECRET_KEY);
+    const stored = await store.getItemAsync(DEVICE_SECRET_KEY, options(store));
     if (typeof stored === 'string' && HEX_64.test(stored)) {
       cached = stored;
       return stored;
     }
     const fresh = randomHex(DEVICE_SECRET_BYTES);
-    await store.setItemAsync(DEVICE_SECRET_KEY, fresh);
+    await store.setItemAsync(DEVICE_SECRET_KEY, fresh, options(store));
     cached = fresh;
     return fresh;
   });
@@ -53,11 +73,23 @@ export function getDeviceSecret(store: SecretStore = defaultStore()): Promise<st
   return run;
 }
 
+/**
+ * Bootstrap: read (or mint) the secret while the phone is in hand, so a later finalize — a
+ * locked-phone auto-end, a background recovery — takes it from memory. Never throws.
+ */
+export async function preloadDeviceSecret(store?: SecretStore, onError?: (e: unknown) => void): Promise<void> {
+  try {
+    await getDeviceSecret(store);
+  } catch (e) {
+    onError?.(e);
+  }
+}
+
 /** Account deletion / handover: the secret goes with everything else. Never throws. */
 export async function clearDeviceSecret(store: SecretStore = defaultStore()): Promise<void> {
   cached = null;
   try {
-    await store.deleteItemAsync(DEVICE_SECRET_KEY);
+    await store.deleteItemAsync(DEVICE_SECRET_KEY, options(store));
   } catch {
     // Nothing stored, or no store (Jest): nothing to clear.
   }

@@ -1,5 +1,5 @@
 export { getInstallId, INSTALL_ID_KEY, readInstallId } from './installId';
-export { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, type SecretStore } from './deviceSecret';
+export { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, preloadDeviceSecret, type SecretStore } from './deviceSecret';
 export {
   asError,
   LAST_REGISTER_KEY,

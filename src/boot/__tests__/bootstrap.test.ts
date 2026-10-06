@@ -168,8 +168,18 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored', from_label: 'Home' }, T0);
   await createSettingsRepo(db).set('privacy.zones', [{ id: 'h', name: 'Home', lat: 1, lng: 1, radiusM: 300 }]);
   await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
+  for (const [status, key] of [['done', 'a'], ['failed', 'b'], ['pending', 'c']] as const) {
+    await db.execute(
+      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at) VALUES ('trip.finalize', '{}', ?, ?, 0, 0)",
+      [key, status]
+    );
+  }
   await wipeForSignOut(db);
   expect(await createTripsRepo(db).count()).toBe(0);
+  // Finished and failed queue rows (they hold the payloads) go; the one still owed stays.
+  expect(await createQueueRepo(db).countByStatus('done')).toBe(0);
+  expect(await createQueueRepo(db).countByStatus('failed')).toBe(0);
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(await readInstallId(createSettingsRepo(db))).toBe('install-keeps-1234');
