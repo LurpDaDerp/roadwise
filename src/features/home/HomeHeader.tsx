@@ -99,7 +99,7 @@ export function HomeHeader({
           </View>
         ) : (
           <View style={{ gap: t.space.md }} testID="home-header-error">
-            <Text variant="headline">Couldn't load your progress</Text>
+            <Text variant="headline">{"Couldn't load your progress"}</Text>
             <Text variant="subhead" tone="muted">
               Your drives still record. Check your connection and try again.
             </Text>

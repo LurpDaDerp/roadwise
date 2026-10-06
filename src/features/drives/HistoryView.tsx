@@ -145,7 +145,7 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
       ListFooterComponent={
         sections.length > 0 ? (
           <Text variant="footnote" tone="subtle" style={{ textAlign: 'center', paddingTop: t.space.xl }}>
-            Recorded drives can't be deleted.
+            {"Recorded drives can't be deleted."}
           </Text>
         ) : null
       }

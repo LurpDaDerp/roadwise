@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { Banner, Button, Sheet, Text, useTheme } from '@/ui';
@@ -37,10 +37,13 @@ export function ReportSheet({
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
 
-  useEffect(() => {
+  // A different event starts a fresh report (state adjusted during render, not in an effect).
+  const [shownFor, setShownFor] = useState(event?.id);
+  if (shownFor !== event?.id) {
+    setShownFor(event?.id);
     setReason(null);
     setState('idle');
-  }, [event?.id]);
+  }
 
   const reasons = event ? reportReasons(event.type).filter((r) => r !== 'not_driving' || allowNotDriving) : [];
 
@@ -148,9 +151,12 @@ export function NotDrivingSheet({
   const t = useTheme();
   const [state, setState] = useState<'idle' | 'sending' | 'error'>('idle');
 
-  useEffect(() => {
+  // Opening the sheet again starts fresh.
+  const [wasVisible, setWasVisible] = useState(visible);
+  if (wasVisible !== visible) {
+    setWasVisible(visible);
     if (visible) setState('idle');
-  }, [visible]);
+  }
 
   const confirm = async () => {
     setState('sending');

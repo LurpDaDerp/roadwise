@@ -1,48 +1,36 @@
-// The alert player: turns the arbiter's delivered decisions into sound, speech and haptics
-// (product spec §8.8 "Receiving a warning", §13.4 alert policy).
+// The alert player: turns delivered alert decisions (`policy.ts`, product spec v3 "Driving
+// screen") into sound, speech and haptics.
 //
 // What it decides:
-// - Level mapping: L1 is a tone; L2 is tone and voice (when enabled); L3 is tone and voice. Every
-//   level vibrates, at a strength the decision carries (speeding: how far over the limit) or the
-//   level implies (`HAPTIC_INTENSITY_FOR_LEVEL`). Audio first, haptic last (§8.8 step 4 — the
-//   visual is the HUD's, drawn by the host from the same decision).
+// - Level mapping: each event type maps to a tone level (`ALERT_LEVEL` in policy.ts). Level 1 is
+//   the soft chime; levels 2 and 3 add the short voice line when voice is on. Every level vibrates,
+//   at a strength the decision carries or the level implies (`HAPTIC_INTENSITY_FOR_LEVEL`). Audio
+//   first, haptic last (the visual is the HUD's, drawn from the same decision).
 // - Alert style (`alertStyle`, the Alerts and sounds setting): `vibration` plays no tone and no
 //   voice and never activates or ducks the audio session; `sound` never vibrates; `both` (the
 //   default) does both. The voice switch still governs speech under `both` and `sound`.
-// - Feedback (`feedback`): a harsh-driving event is not an arbiter decision — the host sends one
-//   short nudge, the L1 tone and a vibration at the strength it names, on the same rules
-//   (style, passenger, call) and never a voice.
-// - Audio session per level (R14, as amended by ruling P2-I1): L1 honours the silent switch only
-//   when the host says the trip is mounted AND RoadWise is frontmost (`AppState.currentState ===
-//   'active'`). iOS silences silent-switch-respecting categories whenever the app is not frontmost —
-//   on screen lock, and also with the screen on behind a navigation app — so any other L1 (the only
-//   level in the learning period) plays on the playback session instead. L2 and L3 always play on
-//   the playback session.
-// - Ducking ends with the alert (rev1: I9): the session is deactivated after each decision's last
-//   sound, so music returns to full volume instead of staying ducked for the drive.
-// - Loudness: the tone files are rendered near full scale (peak 0.9, P1). Every per-level loudness,
+// - Feedback (`feedback`): a one-off nudge that is not a decision — the level-1 tone and a
+//   vibration at the strength it names, on the same rules (style, call) and never a voice.
+// - Audio session: level 1 honours the silent switch only when `l1RespectsSilentSwitch()` says so;
+//   the drive host always answers false, so every alert plays on the playback session and carries
+//   over music and road noise. Levels 2 and 3 always play on the playback session.
+// - Ducking ends with the alert: the session is deactivated after each decision's last sound, so
+//   music returns to full volume instead of staying ducked for the drive.
+// - Loudness: the tone files are rendered near full scale (peak 0.9). Every per-level loudness,
 //   including the drop during a phone call, is a named gain below — never baked into the files.
-//   L1 is soft by shape (one tone, gentle ramps), not by level: it must carry over music and road
-//   noise from a pocket (§13.4, C5).
 // - No overlap: a decision arriving while another plays waits for it.
-// - Navigation prompts: §13.4 asks for a ≤ 2 s delay "where detectable". Another app's voice
-//   guidance is not observable from here on either platform, so no delay is attempted.
 //
-// What it does not decide: whether to alert, or who is driving. It plays only what it is handed;
-// the arbiter marks every passenger, muted or over-budget decision `suppressed` (product §8.15: a
-// passenger hears no alerts) and this player ignores suppressed decisions outright, touching no
-// port — so a passenger drive cannot sound even if its decisions reach the player. A decision
-// already queued when the driver switches to passenger is dropped too: `deliverable()` is re-read
-// as each queued item starts (review P2-M4).
+// What it does not decide: whether to alert. It plays only what it is handed and ignores
+// suppressed decisions outright, touching no port. `deliverable()` is re-read as each queued item
+// starts, so a host can drop what is already queued.
 //
-// Releasing at drive end (review P2-M2): every alert releases the session, but a release can fail
-// (iOS "session busy"), and expo-audio re-activates the session by itself when an interruption such
-// as a phone call ends. The host therefore calls `stopCurrent()` at drive close (H1 does, in
-// `afterClose`) and may call it when a phone call ends while no alert plays: while idle it releases
-// the session once more, through the queue, so it cannot race a decision delivered a moment later.
+// Releasing at drive end: every alert releases the session, but a release can fail (iOS "session
+// busy"), and expo-audio re-activates the session by itself when an interruption such as a phone
+// call ends. The host therefore calls `stopCurrent()` at drive end: while idle it releases the
+// session once more, through the queue, so it cannot race a decision delivered a moment later.
 //
-// Failure is silent (SR9): no method rejects. A failing port is reported once through `onError`,
-// the remaining steps still run, and the session is still released. Each step is bounded by
+// Failure is silent: no method rejects. A failing port is reported once through `onError`, the
+// remaining steps still run, and the session is still released. Each step is bounded by
 // `STEP_TIMEOUT_MS`, so a port that never settles cannot wedge the queue. No timer exists while
 // nothing is playing.
 import type {
@@ -61,7 +49,7 @@ export interface AudioPort {
   /** Resolves when the tone finishes. */
   play(level: AlertLevel, opts: { volume: number }): Promise<void>;
   stop(): Promise<void>;
-  /** Deactivate so ducked audio returns to full volume (rev1: I9). */
+  /** Deactivate so ducked audio returns to full volume. */
   deactivate(): Promise<void>;
 }
 
@@ -76,7 +64,7 @@ export interface HapticsPort {
   pattern(intensity: HapticIntensity): Promise<void>;
 }
 
-/** A short nudge that is not an arbiter decision: the host's harsh-driving feedback. */
+/** A short nudge that is not an alert decision. */
 export interface AlertFeedback {
   id: string;
   /** epoch ms, row clock */
@@ -88,54 +76,49 @@ export interface AlertPlayerDeps {
   audio: AudioPort;
   voice: VoicePort;
   haptics: HapticsPort;
-  /** Default true; H4 in M4 exposes the setting. */
+  /** The voice setting, read live per alert. */
   voiceEnabled(): boolean;
   /** The Alerts and sounds style, read live per alert. Omitted (or throwing) means `both`. */
   alertStyle?(): AlertStyle;
   /** iOS only (drive-sense `call`): tones at `TONE_GAIN_IN_CALL`, no voice. */
   callActive(): boolean;
-  /**
-   * R14 as amended (P2-I1): true only when the trip is mounted AND `AppState.currentState ===
-   * 'active'` (RoadWise frontmost, so the screen is on and unlocked and the HUD visible). Read live,
-   * once per decision. Otherwise L1 plays on the playback session.
-   */
+  /** Read live, once per decision: true lets level 1 honour the silent switch; false plays it on the playback session. */
   l1RespectsSilentSwitch(): boolean;
   /**
    * Re-read as each queued decision or announcement starts; false drops it without touching a port.
-   * H1 wires it to "not a passenger" so a decision queued at the moment of a role switch stays
-   * silent (§8.15). Omitted means always deliverable; a throwing read falls back to deliverable.
+   * Omitted means always deliverable; a throwing read falls back to deliverable.
    */
   deliverable?(): boolean;
   onError?(err: unknown): void;
   /**
    * An alert could not sound: its session would not activate, or its tone would not play (or never
    * finished). Called in addition to `onError`, so the host can mark the drive's alerts unavailable
-   * and the HUD can say so (final review I2) — a visual only, so SR9 still holds. A mode refused
+   * and the HUD can say so — a visual only, so the player still never rejects. A mode refused
    * but recovered on the playback session (`fellBack`) is not a failure: the alert still sounded.
    */
   onUnavailable?(): void;
   /**
    * An alert activated and played: sound works again, so a mark left by an earlier, transient
-   * failure is cleared (final re-review n2 — the mark is not sticky for the whole drive).
+   * failure is cleared (the mark is not sticky for the whole drive).
    */
   onAvailable?(): void;
 }
 
 export interface AlertPlayer {
-  /** Audio first, then haptic (§8.8); never rejects (SR9); deactivates after the last sound. */
+  /** Audio first, then haptic; never rejects; deactivates after the last sound. */
   deliver(decision: AlertDecision): Promise<void>;
   /**
    * Long-press mute: silences the alert sounding now. One already waiting behind it still plays.
-   * While idle it releases the audio session once more, through the queue (P2-M1) — the host's
-   * drive-end release (P2-M2). When an item is queued but not started, that item releases instead,
-   * and pays the release on exit even if it plays nothing (P2-N1).
+   * While idle it releases the audio session once more, through the queue — the host's drive-end
+   * release. When an item is queued but not started, that item releases instead, and pays the
+   * release on exit even if it plays nothing.
    */
   stopCurrent(): Promise<void>;
-  /** "Recording" at start (§8.4). Spoken on L1's session rule; silent with voice off, on a call, or vibration-only. */
+  /** A spoken announcement. Spoken on level 1's session rule; silent with voice off, on a call, or vibration-only. */
   announce(key: AlertVoiceKey): Promise<void>;
   /**
-   * One short nudge — the L1 tone and a vibration at `intensity`, no voice — for a harsh-driving
-   * event. Same queue, style, passenger and call rules as `deliver`. Optional so silent stand-ins
+   * One short nudge — the level-1 tone and a vibration at `intensity`, no voice. Same queue, style
+   * and call rules as `deliver`. Optional so silent stand-ins
    * and test doubles need not implement it; the host calls it only when present.
    */
   feedback?(feedback: AlertFeedback): Promise<void>;
@@ -151,7 +134,7 @@ export const TONE_GAIN: Readonly<Record<AlertLevel, number>> = {
   3: 1.0,
 };
 
-/** Tone gain per level during a phone call (§13.4 "tones only, reduced volume"). */
+/** Tone gain per level during a phone call (tones only, reduced volume). */
 export const TONE_GAIN_IN_CALL: Readonly<Record<AlertLevel, number>> = {
   1: 0.5,
   2: 0.5,
@@ -216,7 +199,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   /** Items enqueued whose task has not yet finished. */
   let pending = 0;
   /**
-   * An idle `stopCurrent` deferred its release to a queued item (P2-N1). Cleared by any release;
+   * An idle `stopCurrent` deferred its release to a queued item. Cleared by any release;
    * an item that exits without releasing (dropped, or an announcement it skipped) pays it on exit.
    */
   let releaseOwed = false;
@@ -364,8 +347,8 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         const activated = await step(run, () => audio.activate(kind));
         const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
         const played = await step(run, () => audio.play(level, { volume }));
-        // Silent for the driver, and they must be able to see that (I2); a sound that worked
-        // clears an earlier mark (n2).
+        // Silent for the driver, and they must be able to see that; a sound that worked
+        // clears an earlier mark.
         if (!activated || !played) unavailable();
         else if (!run.stopped) available();
         const key = item.voice;
@@ -417,11 +400,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         run.wake();
         await run.done;
       } else if (pending === 0) {
-        // Through the queue, so it cannot race a decision delivered a moment later (P2-M1).
+        // Through the queue, so it cannot race a decision delivered a moment later.
         await releaseViaQueue();
       } else {
         // An item is queued but not yet started. It releases on its way out — and if it exits
-        // without playing (dropped, or a skipped announcement), it pays the owed release (P2-N1).
+        // without playing (dropped, or a skipped announcement), it pays the owed release.
         releaseOwed = true;
       }
     },

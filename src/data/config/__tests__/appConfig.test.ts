@@ -29,16 +29,6 @@ import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Database } from '@/data/supabase/types';
 
-// Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time; the root
-// tsconfig's `types` is ["jest"], hence local shapes (the drive golden's pattern).
-declare const __dirname: string;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- see above: `import` would need @types/node
-const { readFileSync } = require('node:fs') as {
-  readFileSync: (file: string, encoding: 'utf8') => string;
-};
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
-const { join } = require('node:path') as { join: (...parts: string[]) => string };
-
 
 const NOW = 1_790_000_000_000;
 

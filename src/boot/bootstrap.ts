@@ -12,7 +12,7 @@ import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import type { AdoptedTrip, TripSession } from '@/core/engine/engine.types';
-import { finalizeTrip } from '@/core/engine/finalize';
+import { finalizeTrip, safeMilesEarlierToday } from '@/core/engine/finalize';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
@@ -34,7 +34,6 @@ import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { createDefaultCameraBridge } from '@/features/camera/defaultBridge';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
-import { safeMilesEarlierToday } from '@/core/engine/finalize';
 import { dayKey } from '@/lib/time';
 
 import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
