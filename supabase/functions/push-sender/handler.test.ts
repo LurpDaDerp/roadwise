@@ -26,7 +26,7 @@ const verify = (sig: string | null, key: string, nowMs: number) =>
 const KEY = 'rw-test-vector-key-0123456789abcdef';
 const TS = 1790000000;
 const VECTOR = '1790000000.c1ba00cabb1bd464447aaa98eb43cd7fffaaee9cf3809292c15c696632ca752f';
-/** 07:13:20 in Los Angeles: outside the default quiet hours. */
+/** 2026-09-21 07:13:20 in Los Angeles: outside the default quiet hours. */
 const NOW = TS * 1000;
 const MIN = 60_000;
 const TOKEN_A = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
@@ -119,9 +119,8 @@ const SECRETS = [
   TOKEN_A,
   TOKEN_B,
   'aaaaaaaaaaaaaaaaaaaaaa',
-  'phone-a',
-  'Automatic recording is off',
-  "RoadWise can't start drives",
+  'League results are in',
+  'moved up to Silver',
   'expo-access',
 ];
 
@@ -209,7 +208,7 @@ Deno.test('every response carries a fresh x-request-id', async () => {
 
 Deno.test('happy path: every token gets the rendered message, outcomes record the tickets, the response is counts only', async () => {
   const a = item({}, { tokens: [TOKEN_A] });
-  const b = item({ userId: USER_2, payload: { permission: 'motion', platform: 'android', deviceId: 'phone-b' } }, { tokens: [TOKEN_B] });
+  const b = item({ userId: USER_2, kind: 'friend_request', payload: { from_user_id: USER_2 } }, { tokens: [TOKEN_B] });
   const h = harness({ items: [a, b] });
   const res = await h.handle(sweep(VECTOR));
   assertEquals(res.status, 200);
@@ -221,21 +220,21 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
   assertEquals(h.expoCalls[0].body, [
     {
       to: TOKEN_A,
-      title: 'Automatic recording is off',
-      body: "RoadWise can't start drives on its own right now. Tap to fix it.",
-      data: { inboxId: a.inboxId, url: '/permissions' },
+      title: 'League results are in',
+      body: 'You finished #3 in Bronze and moved up to Silver.',
+      data: { inboxId: a.inboxId, url: '/leagues' },
       sound: 'default',
       priority: 'default',
-      channelId: 'recording_problems',
+      channelId: 'updates',
     },
     {
       to: TOKEN_B,
-      title: 'Drive detection needs attention',
-      body: 'Motion access is off, so drives are harder to detect. Tap to fix it.',
-      data: { inboxId: b.inboxId, url: '/permissions' },
+      title: 'New friend request',
+      body: 'Someone wants to add you as a friend.',
+      data: { inboxId: b.inboxId, url: '/friends' },
       sound: 'default',
       priority: 'default',
-      channelId: 'recording_problems',
+      channelId: 'updates',
     },
   ]);
   assertEquals(h.fake.outcomes, [
@@ -243,57 +242,43 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
     { inbox_id: b.inboxId, state: 'sent', reason: 'ok', deliveries: [{ token: TOKEN_B, ticket_id: 'ticket-1-bbb' }] },
   ]);
   assertEquals(h.fake.calls.map((c) => c.fn), ['claim', 'recordOutcomes', 'receiptsDue']);
-  // The log names the inbox ids and reason codes, never a token, title, body or payload.
+  // The log names the inbox ids and reason codes, never a token, title, body, payload or user id.
   const text = JSON.stringify(h.logs);
   assert(text.includes(a.inboxId) && text.includes('"ok"'));
-  assertCleanLogs(h.logs, [...SECRETS, 'phone-b', 'Motion access']);
+  assertCleanLogs(h.logs, [...SECRETS, USER_2, 'friend']);
 });
 
 Deno.test('a deferral is recorded with push_after (never deliver_after) and nothing is sent', async () => {
-  const driving = item({}, { drivingSince: NOW - 5 * 3_600_000 });
-  const h = harness({ items: [driving] });
-  const res = await h.handle(sweep(VECTOR));
+  // 23:13 Los Angeles: quiet hours until 07:00 PDT (14:00Z)
+  const late = NOW + 16 * 3_600_000;
+  const quietItem = item({ createdAt: late - 10 * MIN });
+  const h = harness({ items: [quietItem], now: late });
+  const res = await h.handle(sweep(await sign(Math.floor(late / 1000))));
   assertEquals(await res.json(), { claimed: 1, sent: 0, deferred: 1, skipped: 0, failed: 0, receipts: 0 });
-  assertEquals(h.fake.outcomes, [{ inbox_id: driving.inboxId, state: 'deferred', reason: 'driving', push_after: iso(NOW + 5 * MIN) }]);
+  assertEquals(h.fake.outcomes, [{ inbox_id: quietItem.inboxId, state: 'deferred', reason: 'quiet_hours', push_after: '2026-09-22T14:00:00.000Z' }]);
   assert(!JSON.stringify(h.fake.calls).includes('deliver_after'));
   assertEquals(h.expoCalls, []);
 });
 
-Deno.test('skips are recorded with their reason: a local trip summary, a read item, a lapse that was fixed', async () => {
-  const local = item({ type: 'trip_summary', payload: {} });
-  const read = item({ read: true });
-  const fixed = item({ subjectGone: true });
-  const h = harness({ items: [local, read, fixed] });
-  assertEquals(await (await h.handle(sweep(VECTOR))).json(), {
-    claimed: 3,
-    sent: 0,
-    deferred: 0,
-    skipped: 3,
-    failed: 0,
-    receipts: 0,
-  });
+Deno.test('skips and failures are recorded with their reason: unknown kind, preference off, no device, stale, bad payload', async () => {
+  const unknown = item({ kind: 'trip_summary', payload: {} });
+  const off = item({}, { enabled: false });
+  const noDevice = item({}, { tokens: [] });
+  const stale = item({ createdAt: NOW - 4 * 86_400_000 });
+  const bad = item({ payload: { week: 1 } });
+  const h = harness({ items: [unknown, off, noDevice, stale, bad] });
+  assertEquals(await (await h.handle(sweep(VECTOR))).json(), { claimed: 5, sent: 0, deferred: 0, skipped: 4, failed: 1, receipts: 0 });
   assertEquals(
     h.fake.outcomes.map((o) => [o.inbox_id, o.state, o.reason]),
     [
-      [local.inboxId, 'skipped', 'local'],
-      [read.inboxId, 'skipped', 'already_read'],
-      [fixed.inboxId, 'skipped', 'subject_gone'],
+      [unknown.inboxId, 'skipped', 'unknown_type'],
+      [off.inboxId, 'skipped', 'category_off'],
+      [noDevice.inboxId, 'skipped', 'no_device'],
+      [stale.inboxId, 'skipped', 'stale'],
+      [bad.inboxId, 'failed', 'bad_payload'],
     ]
   );
-});
-
-Deno.test('the daily cap defers a lapse to the next local day, across the batch', async () => {
-  const first = item({ payload: { permission: 'location', platform: 'ios', deviceId: 'phone-a' } }, { localSentToday: 1 });
-  const second = item({ payload: { permission: 'motion', platform: 'ios', deviceId: 'phone-a' } }, { localSentToday: 1 });
-  const h = harness({ items: [first, second] });
-  assertEquals((await (await h.handle(sweep(VECTOR))).json()).sent, 1);
-  // Midnight Sep 22 is in quiet hours: the first slot is 07:00 PDT, 14:00Z.
-  assertEquals(h.fake.outcomes[1], {
-    inbox_id: second.inboxId,
-    state: 'deferred',
-    reason: 'capped',
-    push_after: '2026-09-22T14:00:00.000Z',
-  });
+  assertEquals(h.expoCalls, []);
 });
 
 Deno.test('DeviceNotRegistered is recorded per token; the item is sent while one token took it', async () => {
@@ -358,7 +343,7 @@ Deno.test('every token errored → failed/expo_error, with each error recorded',
 
 Deno.test('Expo 503 → every would-be send is deferred 2 minutes as expo_unavailable; other outcomes stand', async () => {
   const would = item();
-  const skipped = item({ dismissed: true });
+  const skipped = item({}, { enabled: false });
   const h = harness({ items: [would, skipped], expo: () => new Response('unavailable', { status: 503 }) });
   const res = await h.handle(sweep(VECTOR));
   assertEquals(res.status, 200);
@@ -366,7 +351,7 @@ Deno.test('Expo 503 → every would-be send is deferred 2 minutes as expo_unavai
   assertEquals(EXPO_RETRY_MS, 2 * MIN);
   assertEquals(h.fake.outcomes, [
     { inbox_id: would.inboxId, state: 'deferred', reason: 'expo_unavailable', push_after: iso(NOW + 2 * MIN) },
-    { inbox_id: skipped.inboxId, state: 'skipped', reason: 'dismissed' },
+    { inbox_id: skipped.inboxId, state: 'skipped', reason: 'category_off' },
   ]);
 });
 

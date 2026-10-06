@@ -25,6 +25,7 @@
     "@std/assert": "jsr:@std/assert@^1.0.0",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.116.0",
     "aws4fetch": "npm:aws4fetch@1.0.20",
-    "zod": "npm:zod@4.6.5"
+    "zod": "npm:zod@4.6.5",
+    "postgres": "npm:postgres@3.4.9"
   }
 }

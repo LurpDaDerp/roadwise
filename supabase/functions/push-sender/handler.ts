@@ -1,14 +1,14 @@
-// push-sender: one sweep of the server-originated notifications (design §8, product spec §11.1).
-// pg_cron's `dispatch_push` (0007) calls it about once a minute when something is due; it claims
-// the due inbox items, decides each one (`push_policy.ts`), sends what may go now through Expo in
-// one pass, records every outcome, then reads the receipts that are due.
+// push-sender: one sweep of the server-originated notifications (plan §4 "Push/outbox": weekly
+// recap, league result, friend request). pg_cron's `private.dispatch_push` (0005) calls it about
+// once a minute when something is due; it claims the due inbox items, decides each one
+// (`push_policy.ts`), sends what may go now through Expo in one pass, records every outcome, then
+// reads the receipts that are due.
 //
 // Authentication (ruling T2 concern 1, condition 4; task-2-report "fix round 1"). The ONLY
 // credential is `X-Sweep-Signature: <ts>.<sig>`: `sig` is the lower-case hex HMAC-SHA256, keyed by
 // the UTF-8 bytes of `PUSH_SENDER_HMAC_KEY` (the Vault secret `push_sender_hmac_key`, ≥ 32 bytes,
 // never the service-role key or the JWT secret), over `'push-sender-sweep:' || ts`, with `ts` in
-// unix seconds within ±120 s. It is checked by `_shared/sweep_auth.ts` (the one implementation of
-// the contract, shared with purge-trace-objects) in constant time before anything else — before the
+// unix seconds within ±120 s. It is checked by `_shared/sweep_auth.ts` in constant time before anything else — before the
 // method, before any database call — and a missing, malformed, stale or wrong header is a 401
 // `{ code: 'unauthorized' }`. The header is never logged. The gateway's JWT check is off for this
 // function (`verify_jwt = false`) because its caller is not a user.
@@ -35,7 +35,6 @@
 //
 // Logs carry the request id, the counts, inbox ids and reason codes — never a push token, a
 // title, a body, a payload or the signature.
-import { CATALOG, type Catalog } from '../_shared/catalog.ts';
 import {
   type ExpoDeps,
   type ExpoMessage,
@@ -59,7 +58,7 @@ export const LEASE_SECONDS = 300;
 export const RECEIPT_LIMIT = 300;
 /** How long an item waits when Expo is unavailable. */
 export const EXPO_RETRY_MS = 2 * 60_000;
-/** The signed message's purpose: `'push-sender-sweep:' || ts` (0007's `push_sweep_signature`). */
+/** The signed message's purpose: `'push-sender-sweep:' || ts` (0005's `private.push_sweep_signature`). */
 export const SWEEP_PURPOSE = 'push-sender-sweep';
 /** The whole sweep's budget, under pg_net's 10 s client timeout. */
 export const SWEEP_BUDGET_MS = 8_000;
@@ -81,7 +80,6 @@ export interface SenderDeps {
   expo: ExpoDeps;
   now?: () => number;
   log?: PushLogger;
-  catalog?: Catalog;
   /** The sweep's budget in ms (default `SWEEP_BUDGET_MS`); tests shrink it. */
   budgetMs?: number;
   /** A monotonic ms clock for the budget (default `performance.now`). */
@@ -129,7 +127,6 @@ const summary = (outcomes: Outcome[]) => outcomes.map((o) => ({ inboxId: o.inbox
 export function createPushSender(deps: SenderDeps): (req: Request) => Promise<Response> {
   const log: PushLogger = deps.log ?? console;
   const now = deps.now ?? Date.now;
-  const catalog = deps.catalog ?? CATALOG;
   const budgetMs = deps.budgetMs ?? SWEEP_BUDGET_MS;
   const clock = deps.clock ?? (() => performance.now());
   let running = false;
@@ -154,7 +151,7 @@ export function createPushSender(deps: SenderDeps): (req: Request) => Promise<Re
         });
       }
       const t = now();
-      const decisions = decideBatch(items, t, catalog);
+      const decisions = decideBatch(items, t);
 
       // One Expo pass: a message per token of every send, remembering whose it is.
       const messages: ExpoMessage[] = [];
@@ -188,6 +185,7 @@ export function createPushSender(deps: SenderDeps): (req: Request) => Promise<Re
       const outcomes: Outcome[] = items.map((it, i) => {
         const d = decisions[i];
         if (d.kind === 'skip') return { inbox_id: it.inboxId, state: 'skipped', reason: d.reason };
+        if (d.kind === 'fail') return { inbox_id: it.inboxId, state: 'failed', reason: d.reason };
         if (d.kind === 'defer') return { inbox_id: it.inboxId, state: 'deferred', reason: d.reason, push_after: iso(d.until) };
         const span = spans.get(i)!;
         const mine = span.tokens.map((_, k) => tickets[span.from + k] ?? null);

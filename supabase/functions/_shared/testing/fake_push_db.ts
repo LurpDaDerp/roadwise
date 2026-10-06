@@ -1,6 +1,6 @@
 // An in-memory stand-in for push-sender's database port (`push_db.ts`). It holds the claimable
 // items, hands them out once (a second claim gets `[]`, as the lease does), and checks every
-// outcome the way 0007's `record_push_outcomes` does — the same states, reasons, 7-day `push_after`
+// outcome the way 0005's `record_push_outcomes` does — the same states, reasons, 7-day `push_after`
 // bound and fixed 22023 messages, one bad outcome refusing the whole call — so a handler that sends
 // `deliver_after`, an unknown reason or an outcome for an unclaimed item fails here as it would on
 // the stack. Every call is logged in order, so a test can prove no call happened (auth first).
@@ -11,26 +11,8 @@ import type { ClaimResult, DueReceipt, Outcome, PushDb, ReceiptReport } from '..
 import type { PushItem } from '../push_policy.ts';
 
 const STATES = new Set(['sent', 'deferred', 'skipped', 'failed']);
-const REASONS = new Set([
-  'ok',
-  'driving',
-  'quiet_hours',
-  'window',
-  'expo_unavailable',
-  'local',
-  'inbox_only',
-  'category_off',
-  'capped',
-  'weekly_limit',
-  'no_device',
-  'stale',
-  'already_read',
-  'dismissed',
-  'subject_gone',
-  'unknown_type',
-  'bad_payload',
-  'expo_error',
-]);
+/** 0005's `record_push_outcomes` accepts any `^[a-z_]{1,32}$` reason; the fake pins our own list. */
+const REASONS = new Set(['ok', 'quiet_hours', 'expo_unavailable', 'category_off', 'no_device', 'stale', 'unknown_type', 'bad_payload', 'expo_error']);
 const WEEK_MS = 7 * 86_400_000;
 
 export interface FakePushDbCall {
@@ -167,24 +149,18 @@ export function fakePushDb(opts: FakePushDbOptions = {}): FakePushDb {
   return { db, calls, outcomes, receipts };
 }
 
-/** A claimable permission-lapse item with an all-defaults ctx; override what a test is about. */
+/** A claimable league-result item with an all-defaults ctx; override what a test is about. */
 export function pushItem(overrides: Partial<PushItem> = {}, ctx: Partial<PushItem['ctx']> = {}): PushItem {
   const base: PushItem = {
     inboxId: crypto.randomUUID(),
     userId: '11111111-1111-4111-8111-111111111111',
-    type: 'permission_lapsed',
-    payload: { permission: 'location_always', platform: 'ios', deviceId: 'phone-a' },
+    kind: 'league_result',
+    payload: { week: '2026-W40', result: 'promoted', final_rank: 3, tier: 'bronze', new_tier: 'silver', week_points: 410 },
     createdAt: 0,
-    read: false,
-    dismissed: false,
-    subjectGone: false,
     ctx: {
       tz: 'America/Los_Angeles',
       quiet: { enabled: true, start: '22:00', end: '07:00' },
-      categories: {},
-      drivingSince: null,
-      recent: [],
-      localSentToday: 0,
+      enabled: true,
       tokens: ['ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]'],
     },
   };

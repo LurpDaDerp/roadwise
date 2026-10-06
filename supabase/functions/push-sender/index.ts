@@ -1,5 +1,5 @@
 // Entry point: wires the sweep handler to the runtime. The service client never leaves this
-// process and calls only 0007's four push writers (`push_db.ts`). The gateway's JWT check is off
+// process and calls only 0005's push writers (`push_db.ts`). The gateway's JWT check is off
 // for this function (`[functions.push-sender] verify_jwt = false`; deploy with `--no-verify-jwt`):
 // the caller is pg_cron, authenticated by the signed sweep header alone. See handler.ts.
 import { createClient } from '@supabase/supabase-js';

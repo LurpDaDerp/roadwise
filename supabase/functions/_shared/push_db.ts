@@ -1,13 +1,13 @@
-// The database port push-sender talks to: 0007's four service-role writers, called by name, and
-// nothing else — no table is read directly, so every rule about which rows are due, what a lease
-// is and which token belongs to whom stays in SQL (task-2-report §2).
+// The database port push-sender talks to: 0005's service-role writers, called by name through the
+// Data API, and nothing else — no table is read directly, so every rule about which rows are due,
+// what a lease is and which token belongs to whom stays in SQL.
 //
-// Every answer is zod-parsed against that contract. The claim is parsed ROW BY ROW (ruling T3
-// round 1 m2): the claim has already moved every row to `sending`, so one malformed row must not
-// cost the others their push — it comes back in `malformed` (to be recorded `failed/bad_payload`)
-// and the rest are decided normally. An answer that is not an array at all, or any other writer's
-// answer outside its contract, is a `PushDbContractError` (server-side drift, answered 500). A
-// writer's refusal is a `PgError` with its SQLSTATE and fixed message, which `pgFailure` maps.
+// Every answer is zod-parsed against that contract. The claim is parsed ROW BY ROW: the claim has
+// already moved every row to `sending`, so one malformed row must not cost the others their push —
+// it comes back in `malformed` (to be recorded `failed/bad_payload`) and the rest are decided
+// normally. An answer that is not an array at all, or any other writer's answer outside its
+// contract, is a `PushDbContractError` (server-side drift, answered 500). A writer's refusal is a
+// `PgError` with its SQLSTATE and fixed message, which `pgFailure` maps.
 //
 // Every call takes the sweep's abort signal, so a slow database cannot hold a sweep past its budget.
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -15,23 +15,14 @@ import { z } from 'zod';
 import { asPgError } from './pg.ts';
 import type { PushItem } from './push_policy.ts';
 
-/** `record_push_outcomes`' reason list (0007), in one place. */
+/** `record_push_outcomes`' reasons (`^[a-z_]{1,32}$`), in one place. */
 export type OutcomeReason =
   | 'ok'
-  | 'driving'
   | 'quiet_hours'
-  | 'window'
   | 'expo_unavailable'
-  | 'local'
-  | 'inbox_only'
   | 'category_off'
-  | 'capped'
-  | 'weekly_limit'
   | 'no_device'
   | 'stale'
-  | 'already_read'
-  | 'dismissed'
-  | 'subject_gone'
   | 'unknown_type'
   | 'bad_payload'
   | 'expo_error';
@@ -42,7 +33,7 @@ export interface Delivery {
   error?: string;
 }
 
-/** One `record_push_outcomes` outcome. A `deferred` one carries `push_after` (never `deliver_after`). */
+/** One `record_push_outcomes` outcome. A `deferred` one carries `push_after`. */
 export interface Outcome {
   inbox_id: string;
   state: 'sent' | 'deferred' | 'skipped' | 'failed';
@@ -98,20 +89,13 @@ const ClaimRow = z
   .object({
     inbox_id: Uuid,
     user_id: Uuid,
-    type: z.string().min(1).max(64),
+    kind: z.string().min(1).max(64),
     payload: z.unknown(),
     created_at: Instant,
-    read: z.boolean(),
-    dismissed: z.boolean(),
-    subject_gone: z.boolean(),
     ctx: z.object({
       tz: z.string().min(1).max(64),
       quiet: z.object({ enabled: z.boolean(), start: HhMm, end: HhMm }),
-      categories: z.record(z.string(), z.boolean()),
-      driving_since: Instant.nullable(),
-      // `lapse_key` (0007 round 3) only on permission_lapsed entries; zod would strip it unlisted.
-      recent: z.array(z.object({ type: z.string(), pushed_at: Instant, lapse_key: z.string().optional() })),
-      local_sent_today: z.number().int().min(0),
+      enabled: z.boolean(),
       tokens: z.array(z.string().min(1).max(256)).max(10),
     }),
   })
@@ -119,25 +103,10 @@ const ClaimRow = z
     (r): PushItem => ({
       inboxId: r.inbox_id,
       userId: r.user_id,
-      type: r.type,
+      kind: r.kind,
       payload: r.payload,
       createdAt: r.created_at,
-      read: r.read,
-      dismissed: r.dismissed,
-      subjectGone: r.subject_gone,
-      ctx: {
-        tz: r.ctx.tz,
-        quiet: r.ctx.quiet,
-        categories: r.ctx.categories,
-        drivingSince: r.ctx.driving_since,
-        recent: r.ctx.recent.map((x) =>
-          x.lapse_key === undefined
-            ? { type: x.type, pushedAt: x.pushed_at }
-            : { type: x.type, pushedAt: x.pushed_at, lapseKey: x.lapse_key }
-        ),
-        localSentToday: r.ctx.local_sent_today,
-        tokens: r.ctx.tokens,
-      },
+      ctx: { tz: r.ctx.tz, quiet: r.ctx.quiet, enabled: r.ctx.enabled, tokens: r.ctx.tokens },
     })
   );
 
@@ -149,12 +118,7 @@ const DueAnswer = z.array(
 const Count = z.number().int().min(0);
 
 export function createPushDb(client: SupabaseClient): PushDb {
-  const rpc = async <T>(
-    fn: string,
-    args: Record<string, unknown>,
-    shape: z.ZodType<T>,
-    signal: AbortSignal | undefined
-  ): Promise<T> => {
+  const rpc = async <T>(fn: string, args: Record<string, unknown>, shape: z.ZodType<T>, signal: AbortSignal | undefined): Promise<T> => {
     const call = client.rpc(fn, args);
     const { data, error } = await (signal ? call.abortSignal(signal) : call);
     if (error) throw asPgError(error);

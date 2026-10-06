@@ -1,5 +1,5 @@
-// The signed-sweep contract a pg_cron job uses to wake an edge function (0007's push-sender sweep,
-// 0008's purge-trace-objects): no key travels, only a timestamped HMAC.
+// The signed-sweep contract a pg_cron job uses to wake an edge function (0005's push-sender
+// sweep): no key travels, only a timestamped HMAC.
 //
 //   X-Sweep-Signature: <ts>.<sig>
 //   <ts>  unix time in whole seconds, decimal, no sign, no padding (1 to 12 digits)
