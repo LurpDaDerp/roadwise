@@ -191,16 +191,16 @@ select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666', pg_temp.t0() + interval '100 minutes', 10, 2, 20, '[]');
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$,
   '42501', 'no uses left this month', 'the third use in a month is refused');
-update public.trips set ended_at = ended_at - interval '26 hours', started_at = started_at - interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
-update public.progress set last_end_at = last_end_at - interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.trips set ended_at = ended_at - interval '50 hours', started_at = started_at - interval '50 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.progress set last_end_at = last_end_at - interval '50 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 update public.trips set not_driving_at = now() - interval '40 days' where client_trip_id in ('44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555');
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$,
   '42501', 'the drive is older than 24 hours', 'and a drive older than 24 h cannot be marked');
 select is((select flagged from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'not flagged: only one of the two uses had events');
 -- flagging: 3 of the last 4 uses on drives with events
 update public.trips set n_events = 2 where client_trip_id = '55555555-5555-4555-8555-555555555555';
-update public.trips set ended_at = ended_at + interval '26 hours', started_at = started_at + interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
-update public.progress set last_end_at = last_end_at + interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.trips set ended_at = ended_at + interval '50 hours', started_at = started_at + interval '50 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.progress set last_end_at = last_end_at + interval '50 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 update public.trips set n_events = 1 where client_trip_id = '66666666-6666-4666-8666-666666666666';
 select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$, 'a third use (new month)');
 select is((select flagged from public.profiles where id = '00000000-0000-0000-0000-000000000001'), true, 'three of the last uses were on drives with events: flagged');
