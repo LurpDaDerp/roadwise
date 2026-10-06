@@ -1,11 +1,11 @@
--- 0004_speed_limits: road data for speed limits, the AWS fallback's cache, and the SQL the
+-- 0002_speed_limits (carried over from the v2 0004 migration): road data for speed limits, the AWS fallback's cache, and the SQL the
 -- `speed-limits` edge function calls (design §4.2, §4.4; plan task B1).
 --
 --   * osm.ways and hpms.sections hold open road data (Washington first, loaded by the
 --     supabase/data pipeline as postgres). They live in their own schemas, which the Data API does
 --     not expose, and only service_role may read them (convention 14). limits_cache holds answers
 --     from AWS Location for roads the open data could not answer; it is service-role only too.
---   * the four functions are SECURITY INVOKER: they run with the edge function's service-role
+--   * the functions are SECURITY INVOKER (take_rate_limit lives in 0001_core): they run with the edge function's service-role
 --     privileges and can never exceed them. Execute is granted to service_role alone.
 --   * segment keys. The device's matcher breaks exact distance ties on the candidate key, so the
 --     tile segment `id` the device sees and the `segment_key` speed_limit_candidates returns are
@@ -459,46 +459,6 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- take_rate_limit: one take from a per-user budget of p_max per window; false when it is spent
--- ---------------------------------------------------------------------------
-create or replace function public.take_rate_limit(p_user uuid, p_key text, p_window interval, p_max int) returns boolean
-language plpgsql volatile security invoker set search_path = public, extensions as $$
-declare
-  v_start timestamptz;
-  v_count int;
-begin
-  perform public.require_service_role('take_rate_limit');
-  if p_user is null then
-    raise exception 'user is required' using errcode = 'invalid_parameter_value';
-  end if;
-  -- `dispute_7d` is record_dispute's mutex row (0002), never a budget
-  if p_key is null or p_key !~ '^[a-z][a-z0-9_]{0,63}$' or p_key = 'dispute_7d' then
-    raise exception 'key must be a rate-limit key' using errcode = 'invalid_parameter_value';
-  end if;
-  if p_window is null or p_window < interval '1 second' or p_window > interval '31 days' then
-    raise exception 'window must be between 1 second and 31 days' using errcode = 'invalid_parameter_value';
-  end if;
-  if p_max is null or p_max < 1 or p_max > 100000 then
-    raise exception 'max must be between 1 and 100000' using errcode = 'invalid_parameter_value';
-  end if;
-
-  insert into public.rate_limits (user_id, key, window_start, count) values (p_user, p_key, now(), 0)
-    on conflict (user_id, key) do nothing;
-  select window_start, count into v_start, v_count
-    from public.rate_limits where user_id = p_user and key = p_key for update;
-  if v_start + p_window <= now() then
-    v_start := now();
-    v_count := 0;
-  end if;
-  if v_count >= p_max then
-    update public.rate_limits set window_start = v_start, count = v_count where user_id = p_user and key = p_key;
-    return false;
-  end if;
-  update public.rate_limits set window_start = v_start, count = v_count + 1 where user_id = p_user and key = p_key;
-  return true;
-end $$;
-
--- ---------------------------------------------------------------------------
 -- take_global_rate_limit: take_rate_limit's semantics over an app-wide budget (ruling B2 F1)
 -- ---------------------------------------------------------------------------
 create or replace function public.take_global_rate_limit(p_key text, p_window interval, p_max int) returns boolean
@@ -540,12 +500,10 @@ end $$;
 revoke all on function public.speed_limit_candidates(double precision, double precision, int) from public, anon, authenticated;
 revoke all on function public.speed_limit_tiles(text[]) from public, anon, authenticated;
 revoke all on function public.put_limits_cache(text, jsonb, int, numeric, int) from public, anon, authenticated;
-revoke all on function public.take_rate_limit(uuid, text, interval, int) from public, anon, authenticated;
 revoke all on function public.limits_cache_normalize() from public, anon, authenticated;
 grant execute on function public.speed_limit_candidates(double precision, double precision, int) to service_role;
 grant execute on function public.speed_limit_tiles(text[]) to service_role;
 grant execute on function public.put_limits_cache(text, jsonb, int, numeric, int) to service_role;
-grant execute on function public.take_rate_limit(uuid, text, interval, int) to service_role;
 revoke all on function public.take_global_rate_limit(text, interval, int) from public, anon, authenticated;
 grant execute on function public.take_global_rate_limit(text, interval, int) to service_role;
 

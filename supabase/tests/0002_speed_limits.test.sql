@@ -1,5 +1,6 @@
--- 0004_speed_limits: PostGIS, the osm/hpms road schemas, limits_cache, and the four service-role
--- SQL functions (candidates, tile batches, the AWS cache writer, the rate limiter).
+-- 0002_speed_limits (carried over from the v2 0004 test): PostGIS, the osm/hpms road schemas,
+-- limits_cache, and the service-role SQL functions (candidates, tile batches, the AWS cache writer,
+-- the rate limiters; take_rate_limit is 0001_core's definer wrapper).
 --
 -- Runs against seed.sql's synthetic fixture (R6): the corridor way 9000000001 (primary, 35 mph) on
 -- lat 47.6062 from lng -122.3330 to -122.2990, the parallel 9000000002 (residential, 25 mph) 20 m
@@ -8,12 +9,10 @@
 -- The speeding-corrected trace crosses z15 columns 5249..5251 of row 11443; the corridor lies 4.1 m
 -- north of the row 11443/11444 edge, so the 30 m tile buffer puts it in row 11444 as well.
 --
--- pgTAP is installed by 0001's test file outside its transaction; repeating the statement keeps
--- this file runnable on its own.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(197);
+select plan(196);
 
 -- ---------------------------------------------------------------------------
 -- helpers (run as the migration owner)
@@ -113,10 +112,9 @@ select table_privs_are('public', 'global_rate_limits', 'authenticated', '{}'::na
 select table_privs_are('public', 'global_rate_limits', 'service_role', array['INSERT', 'SELECT', 'UPDATE']::name[], 'service_role has exactly select/insert/update on global_rate_limits');
 select is((select count(*)::int from pg_proc where oid in (
     'public.speed_limit_candidates(double precision, double precision, integer)'::regprocedure,
-    'public.put_limits_cache(text, jsonb, integer, numeric, integer)'::regprocedure,
-    'public.take_rate_limit(uuid, text, interval, integer)'::regprocedure)
-    and not prosecdef and proconfig = array['search_path=public, extensions']), 3,
-  'candidates, put_limits_cache and take_rate_limit are security invoker and pin exactly search_path = public, extensions');
+    'public.put_limits_cache(text, jsonb, integer, numeric, integer)'::regprocedure)
+    and not prosecdef and proconfig = array['search_path=public, extensions']), 2,
+  'candidates and put_limits_cache are security invoker and pin exactly search_path = public, extensions');
 select is((select row(prosecdef, proconfig)::text from pg_proc where oid = 'public.speed_limit_tiles(text[])'::regprocedure),
   row(false, array['search_path=public, extensions', 'statement_timeout=5s'])::text,
   'speed_limit_tiles is security invoker with exactly search_path and a 5 s statement_timeout');
@@ -440,7 +438,6 @@ select is((select row(count, window_start = now())::text from public.rate_limits
   'the new window starts now with one take');
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '1 day', 0) $$, '22023', 'max must be between 1 and 100000', 'a zero budget is refused');
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '0 seconds', 2) $$, '22023', 'window must be between 1 second and 31 days', 'an empty window is refused');
-select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'dispute_7d', '1 day', 2) $$, '22023', 'key must be a rate-limit key', 'the dispute mutex row is not a rate-limit key');
 select throws_ok($$ select public.take_rate_limit(null, 'aws_limits', '1 day', 2) $$, '22023', 'user is required', 'a missing user is refused');
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
 select throws_ok($$ select public.take_rate_limit('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4', 'aws_limits', '1 day', 2) $$, '42501', 'take_rate_limit requires the service role',

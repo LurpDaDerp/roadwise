@@ -55,181 +55,171 @@ export type Database = {
         }
         Relationships: []
       }
-      badge_defs: {
+      blocks: {
         Row: {
+          blocked_id: string
+          blocker_id: string
           created_at: string
-          family: string
-          id: string
-          metric: string
-          sort: number
-          threshold: number
-          tier: string
-          updated_at: string
         }
         Insert: {
+          blocked_id: string
+          blocker_id: string
           created_at?: string
-          family: string
-          id: string
-          metric: string
-          sort: number
-          threshold: number
-          tier: string
-          updated_at?: string
         }
         Update: {
+          blocked_id?: string
+          blocker_id?: string
           created_at?: string
-          family?: string
-          id?: string
-          metric?: string
-          sort?: number
-          threshold?: number
-          tier?: string
-          updated_at?: string
         }
         Relationships: []
       }
-      baselines: {
+      challenge_templates: {
         Row: {
-          computed_at: string
-          created_at: string
-          medians: Json
-          updated_at: string
+          description: string
+          id: string
+          sort_order: number
+          target: number
+          title: string
+        }
+        Insert: {
+          description: string
+          id: string
+          sort_order: number
+          target: number
+          title: string
+        }
+        Update: {
+          description?: string
+          id?: string
+          sort_order?: number
+          target?: number
+          title?: string
+        }
+        Relationships: []
+      }
+      clan_members: {
+        Row: {
+          clan_id: string
+          joined_at: string
+          role: string
           user_id: string
         }
         Insert: {
-          computed_at?: string
-          created_at?: string
-          medians?: Json
-          updated_at?: string
+          clan_id: string
+          joined_at?: string
+          role?: string
           user_id: string
         }
         Update: {
-          computed_at?: string
-          created_at?: string
-          medians?: Json
-          updated_at?: string
+          clan_id?: string
+          joined_at?: string
+          role?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "clan_members_clan_id_fkey"
+            columns: ["clan_id"]
+            isOneToOne: false
+            referencedRelation: "clans"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-      challenge_defs: {
+      clans: {
         Row: {
-          active: boolean
+          banner: string
           created_at: string
           id: string
-          points: number
-          predicate: string
-          sort: number
-          target_days: number
+          invite_code: string
+          name: string
           updated_at: string
-          window_days: number
         }
         Insert: {
-          active?: boolean
-          created_at?: string
-          id: string
-          points: number
-          predicate: string
-          sort: number
-          target_days: number
-          updated_at?: string
-          window_days: number
-        }
-        Update: {
-          active?: boolean
+          banner: string
           created_at?: string
           id?: string
-          points?: number
-          predicate?: string
-          sort?: number
-          target_days?: number
+          invite_code: string
+          name: string
           updated_at?: string
-          window_days?: number
+        }
+        Update: {
+          banner?: string
+          created_at?: string
+          id?: string
+          invite_code?: string
+          name?: string
+          updated_at?: string
         }
         Relationships: []
       }
       consents: {
         Row: {
-          actor: string
-          granted_at: string
+          created_at: string
           id: string
-          revoked_at: string | null
-          type: string
+          kind: string
           user_id: string
           version: string
         }
         Insert: {
-          actor?: string
-          granted_at?: string
+          created_at?: string
           id?: string
-          revoked_at?: string | null
-          type: string
+          kind: string
           user_id: string
           version: string
         }
         Update: {
-          actor?: string
-          granted_at?: string
+          created_at?: string
           id?: string
-          revoked_at?: string | null
-          type?: string
+          kind?: string
           user_id?: string
           version?: string
         }
         Relationships: []
       }
+      device_league_claims: {
+        Row: {
+          created_at: string
+          device_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          device_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       devices: {
         Row: {
-          app_version: string | null
-          capability_tier: string
           created_at: string
-          drive_state: string
-          drive_state_at: string | null
-          id: string
+          device_id: string
           last_seen_at: string
-          model: string | null
-          os_version: string | null
-          permissions: Json
           platform: string
           push_token: string | null
-          signed_out_at: string | null
-          synced_through: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
-          app_version?: string | null
-          capability_tier?: string
           created_at?: string
-          drive_state?: string
-          drive_state_at?: string | null
-          id: string
+          device_id: string
           last_seen_at?: string
-          model?: string | null
-          os_version?: string | null
-          permissions?: Json
           platform: string
           push_token?: string | null
-          signed_out_at?: string | null
-          synced_through?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
-          app_version?: string | null
-          capability_tier?: string
           created_at?: string
-          drive_state?: string
-          drive_state_at?: string | null
-          id?: string
+          device_id?: string
           last_seen_at?: string
-          model?: string | null
-          os_version?: string | null
-          permissions?: Json
           platform?: string
           push_token?: string | null
-          signed_out_at?: string | null
-          synced_through?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -237,165 +227,74 @@ export type Database = {
       }
       event_disputes: {
         Row: {
-          auto_accepted: boolean
-          consumed_allowance: boolean
+          client_event_id: string
           created_at: string
-          decided_at: string
-          denied_reason: string | null
-          event_id: string
-          id: string
-          note: string | null
           reason: string
-          segment_key: string | null
-          stated_limit_mph: number | null
-          updated_at: string
+          status: string
+          trip_id: string
           user_id: string
         }
         Insert: {
-          auto_accepted?: boolean
-          consumed_allowance?: boolean
+          client_event_id: string
           created_at?: string
-          decided_at?: string
-          denied_reason?: string | null
-          event_id: string
-          id?: string
-          note?: string | null
           reason: string
-          segment_key?: string | null
-          stated_limit_mph?: number | null
-          updated_at?: string
+          status: string
+          trip_id: string
           user_id: string
         }
         Update: {
-          auto_accepted?: boolean
-          consumed_allowance?: boolean
+          client_event_id?: string
           created_at?: string
-          decided_at?: string
-          denied_reason?: string | null
-          event_id?: string
-          id?: string
-          note?: string | null
           reason?: string
-          segment_key?: string | null
-          stated_limit_mph?: number | null
-          updated_at?: string
+          status?: string
+          trip_id?: string
           user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "event_disputes_event_id_fkey"
-            columns: ["event_id"]
+            foreignKeyName: "event_disputes_event_fkey"
+            columns: ["trip_id", "client_event_id"]
             isOneToOne: true
             referencedRelation: "trip_events"
-            referencedColumns: ["id"]
+            referencedColumns: ["trip_id", "client_event_id"]
           },
         ]
       }
-      families: {
+      friend_requests: {
         Row: {
-          code: string
-          code_expires_at: string
           created_at: string
-          id: string
-          name: string
-          updated_at: string
+          from_id: string
+          to_id: string
         }
         Insert: {
-          code: string
-          code_expires_at: string
           created_at?: string
-          id?: string
-          name: string
-          updated_at?: string
+          from_id: string
+          to_id: string
         }
         Update: {
-          code?: string
-          code_expires_at?: string
           created_at?: string
-          id?: string
-          name?: string
-          updated_at?: string
+          from_id?: string
+          to_id?: string
         }
         Relationships: []
       }
-      family_members: {
+      friendships: {
         Row: {
           created_at: string
-          family_id: string
-          role: string
-          sharing_location: boolean
-          updated_at: string
-          user_id: string
+          user_a: string
+          user_b: string
         }
         Insert: {
           created_at?: string
-          family_id: string
-          role: string
-          sharing_location?: boolean
-          updated_at?: string
-          user_id: string
+          user_a: string
+          user_b: string
         }
         Update: {
           created_at?: string
-          family_id?: string
-          role?: string
-          sharing_location?: boolean
-          updated_at?: string
-          user_id?: string
+          user_a?: string
+          user_b?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "family_members_family_id_fkey"
-            columns: ["family_id"]
-            isOneToOne: false
-            referencedRelation: "families"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      family_places: {
-        Row: {
-          address: string
-          created_at: string
-          family_id: string
-          id: string
-          lat: number
-          lng: number
-          name: string
-          radius_m: number
-          updated_at: string
-        }
-        Insert: {
-          address?: string
-          created_at?: string
-          family_id: string
-          id?: string
-          lat: number
-          lng: number
-          name: string
-          radius_m?: number
-          updated_at?: string
-        }
-        Update: {
-          address?: string
-          created_at?: string
-          family_id?: string
-          id?: string
-          lat?: number
-          lng?: number
-          name?: string
-          radius_m?: number
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "family_places_family_id_fkey"
-            columns: ["family_id"]
-            isOneToOne: false
-            referencedRelation: "families"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       global_rate_limits: {
         Row: {
@@ -425,9 +324,8 @@ export type Database = {
         Row: {
           created_at: string
           dedupe_key: string
-          deliver_after: string
-          dismissed_at: string | null
           id: string
+          kind: string
           payload: Json
           push_after: string
           push_attempts: number
@@ -435,37 +333,14 @@ export type Database = {
           push_reason: string | null
           push_state: string
           pushed_at: string | null
-          read_at: string | null
-          ref_id: string | null
-          type: string
           updated_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
           dedupe_key: string
-          deliver_after?: string
-          dismissed_at?: string | null
           id?: string
-          payload: Json
-          push_after?: string
-          push_attempts?: number
-          push_claimed_at?: string | null
-          push_reason?: string | null
-          push_state?: string
-          pushed_at?: string | null
-          read_at?: string | null
-          ref_id?: string | null
-          type: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          dedupe_key?: string
-          deliver_after?: string
-          dismissed_at?: string | null
-          id?: string
+          kind: string
           payload?: Json
           push_after?: string
           push_attempts?: number
@@ -473,82 +348,111 @@ export type Database = {
           push_reason?: string | null
           push_state?: string
           pushed_at?: string | null
-          read_at?: string | null
-          ref_id?: string | null
-          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dedupe_key?: string
+          id?: string
+          kind?: string
+          payload?: Json
+          push_after?: string
+          push_attempts?: number
+          push_claimed_at?: string | null
+          push_reason?: string | null
+          push_state?: string
+          pushed_at?: string | null
           updated_at?: string
           user_id?: string
         }
         Relationships: []
       }
-      invites: {
+      job_leases: {
         Row: {
-          code_hash: string
-          created_at: string
           expires_at: string
-          family_id: string | null
-          id: string
-          issuer_id: string
-          max_uses: number
-          revoked: boolean
-          role: string | null
-          type: string
+          holder: string
+          name: string
           updated_at: string
-          uses: number
         }
         Insert: {
-          code_hash: string
-          created_at?: string
           expires_at: string
-          family_id?: string | null
-          id?: string
-          issuer_id: string
-          max_uses?: number
-          revoked?: boolean
-          role?: string | null
-          type: string
+          holder: string
+          name: string
           updated_at?: string
-          uses?: number
         }
         Update: {
-          code_hash?: string
-          created_at?: string
           expires_at?: string
-          family_id?: string | null
-          id?: string
-          issuer_id?: string
-          max_uses?: number
-          revoked?: boolean
-          role?: string | null
-          type?: string
+          holder?: string
+          name?: string
           updated_at?: string
-          uses?: number
         }
         Relationships: []
       }
-      job_leases: {
+      league_groups: {
         Row: {
+          closed_at: string | null
           created_at: string
-          expires_at: string
-          holder: string
-          job: string
-          updated_at: string
+          id: string
+          member_count: number
+          tier: string
+          week: string
         }
         Insert: {
+          closed_at?: string | null
           created_at?: string
-          expires_at: string
-          holder: string
-          job: string
-          updated_at?: string
+          id?: string
+          member_count?: number
+          tier: string
+          week: string
         }
         Update: {
+          closed_at?: string | null
           created_at?: string
-          expires_at?: string
-          holder?: string
-          job?: string
-          updated_at?: string
+          id?: string
+          member_count?: number
+          tier?: string
+          week?: string
         }
         Relationships: []
+      }
+      league_members: {
+        Row: {
+          final_rank: number | null
+          group_id: string
+          joined_at: string
+          result: string | null
+          tier: string
+          user_id: string
+          week: string
+        }
+        Insert: {
+          final_rank?: number | null
+          group_id: string
+          joined_at?: string
+          result?: string | null
+          tier: string
+          user_id: string
+          week: string
+        }
+        Update: {
+          final_rank?: number | null
+          group_id?: string
+          joined_at?: string
+          result?: string | null
+          tier?: string
+          user_id?: string
+          week?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "league_members_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "league_groups"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       limits_cache: {
         Row: {
@@ -586,264 +490,227 @@ export type Database = {
       map_feedback: {
         Row: {
           created_at: string
-          reports: number
-          segment_key: string
-          stated_limits_mph: number[]
-          status: string
-          updated_at: string
+          id: string
+          lat: number
+          limit_mph: number | null
+          lng: number
+          speed_mph: number | null
         }
         Insert: {
           created_at?: string
-          reports?: number
-          segment_key: string
-          stated_limits_mph?: number[]
-          status?: string
-          updated_at?: string
+          id?: string
+          lat: number
+          limit_mph?: number | null
+          lng: number
+          speed_mph?: number | null
         }
         Update: {
           created_at?: string
-          reports?: number
-          segment_key?: string
-          stated_limits_mph?: number[]
-          status?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      member_locations: {
-        Row: {
-          accuracy_m: number
-          driving: boolean
-          lat: number
-          lng: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          accuracy_m: number
-          driving?: boolean
-          lat: number
-          lng: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          accuracy_m?: number
-          driving?: boolean
+          id?: string
           lat?: number
+          limit_mph?: number | null
           lng?: number
-          updated_at?: string
-          user_id?: string
+          speed_mph?: number | null
         }
         Relationships: []
       }
       notification_prefs: {
         Row: {
-          categories: Json
           created_at: string
-          local_sent_count: number
-          local_sent_day: string | null
-          quiet_enabled: boolean | null
-          quiet_end: string | null
-          quiet_start: string | null
+          leagues: boolean
+          quiet_enabled: boolean
+          quiet_end: string
+          quiet_start: string
+          social: boolean
           tz: string | null
           updated_at: string
           user_id: string
+          weekly_recap: boolean
         }
         Insert: {
-          categories?: Json
           created_at?: string
-          local_sent_count?: number
-          local_sent_day?: string | null
-          quiet_enabled?: boolean | null
-          quiet_end?: string | null
-          quiet_start?: string | null
+          leagues?: boolean
+          quiet_enabled?: boolean
+          quiet_end?: string
+          quiet_start?: string
+          social?: boolean
           tz?: string | null
           updated_at?: string
           user_id: string
+          weekly_recap?: boolean
         }
         Update: {
-          categories?: Json
           created_at?: string
-          local_sent_count?: number
-          local_sent_day?: string | null
-          quiet_enabled?: boolean | null
-          quiet_end?: string | null
-          quiet_start?: string | null
+          leagues?: boolean
+          quiet_enabled?: boolean
+          quiet_end?: string
+          quiet_start?: string
+          social?: boolean
           tz?: string | null
           updated_at?: string
           user_id?: string
+          weekly_recap?: boolean
         }
         Relationships: []
       }
       points_ledger: {
         Row: {
           amount: number
-          balance_after: number
           created_at: string
           id: string
-          idempotency_key: string
-          ref_key: string
-          type: string
+          key: string
+          kind: string
+          league_week: string | null
+          trip_id: string | null
           user_id: string
         }
         Insert: {
           amount: number
-          balance_after: number
           created_at?: string
           id?: string
-          idempotency_key: string
-          ref_key: string
-          type: string
+          key: string
+          kind: string
+          league_week?: string | null
+          trip_id?: string | null
           user_id: string
         }
         Update: {
           amount?: number
-          balance_after?: number
           created_at?: string
           id?: string
-          idempotency_key?: string
-          ref_key?: string
-          type?: string
+          key?: string
+          kind?: string
+          league_week?: string | null
+          trip_id?: string | null
           user_id?: string
         }
-        Relationships: []
-      }
-      private_profiles: {
-        Row: {
-          birth_date: string | null
-          created_at: string
-          guardian_link_status: string
-          guardian_user_id: string | null
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          birth_date?: string | null
-          created_at?: string
-          guardian_link_status?: string
-          guardian_user_id?: string | null
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          birth_date?: string | null
-          created_at?: string
-          guardian_link_status?: string
-          guardian_user_id?: string | null
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "points_ledger_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
-          age_band: string
-          avatar_path: string | null
           created_at: string
-          display_name: string
-          driving_stage: string
-          flags: Json
+          flagged: boolean
+          heatmap_visibility: string
           id: string
-          level: number
-          locale: string
-          profile_visibility: string
+          league_eligible: boolean
+          license_stage: string | null
+          onboarded_at: string | null
+          state: string | null
           units: string
           updated_at: string
+          username: string | null
         }
         Insert: {
-          age_band?: string
-          avatar_path?: string | null
           created_at?: string
-          display_name?: string
-          driving_stage?: string
-          flags?: Json
+          flagged?: boolean
+          heatmap_visibility?: string
           id: string
-          level?: number
-          locale?: string
-          profile_visibility?: string
+          league_eligible?: boolean
+          license_stage?: string | null
+          onboarded_at?: string | null
+          state?: string | null
           units?: string
           updated_at?: string
+          username?: string | null
         }
         Update: {
-          age_band?: string
-          avatar_path?: string | null
           created_at?: string
-          display_name?: string
-          driving_stage?: string
-          flags?: Json
+          flagged?: boolean
+          heatmap_visibility?: string
           id?: string
-          level?: number
-          locale?: string
-          profile_visibility?: string
+          league_eligible?: boolean
+          license_stage?: string | null
+          onboarded_at?: string | null
+          state?: string | null
           units?: string
           updated_at?: string
+          username?: string | null
         }
         Relationships: []
       }
       progress: {
         Row: {
-          best_streak: number
-          challenges_completed: number
+          at_risk: boolean
+          clean_miles_30d: number
+          clean_run: number
           created_at: string
-          goals_achieved: number
+          freeze_progress: number
+          freezes: number
+          freezes_granted_at: string
+          last_end_at: string | null
+          last_end_lat: number | null
+          last_end_lng: number | null
+          league_tier: string
           level: number
-          next_focus: string | null
-          phone_free_days: number
+          lifetime: number
+          miles_30d: number
+          phone_free_run: number
           points: number
-          referrals_rewarded: number
-          rewards_start: string | null
-          safe_days: number
-          settled_through: string | null
-          shields: number
-          smooth_days: number
-          streak_days: number
-          streak_started: string | null
+          ranked: boolean
+          rating_penalty_30d: number
+          rating_updated_at: string | null
+          safety_rating: number | null
+          streak: number
           updated_at: string
           user_id: string
-          xp: number
         }
         Insert: {
-          best_streak?: number
-          challenges_completed?: number
+          at_risk?: boolean
+          clean_miles_30d?: number
+          clean_run?: number
           created_at?: string
-          goals_achieved?: number
+          freeze_progress?: number
+          freezes?: number
+          freezes_granted_at?: string
+          last_end_at?: string | null
+          last_end_lat?: number | null
+          last_end_lng?: number | null
+          league_tier?: string
           level?: number
-          next_focus?: string | null
-          phone_free_days?: number
+          lifetime?: number
+          miles_30d?: number
+          phone_free_run?: number
           points?: number
-          referrals_rewarded?: number
-          rewards_start?: string | null
-          safe_days?: number
-          settled_through?: string | null
-          shields?: number
-          smooth_days?: number
-          streak_days?: number
-          streak_started?: string | null
+          ranked?: boolean
+          rating_penalty_30d?: number
+          rating_updated_at?: string | null
+          safety_rating?: number | null
+          streak?: number
           updated_at?: string
           user_id: string
-          xp?: number
         }
         Update: {
-          best_streak?: number
-          challenges_completed?: number
+          at_risk?: boolean
+          clean_miles_30d?: number
+          clean_run?: number
           created_at?: string
-          goals_achieved?: number
+          freeze_progress?: number
+          freezes?: number
+          freezes_granted_at?: string
+          last_end_at?: string | null
+          last_end_lat?: number | null
+          last_end_lng?: number | null
+          league_tier?: string
           level?: number
-          next_focus?: string | null
-          phone_free_days?: number
+          lifetime?: number
+          miles_30d?: number
+          phone_free_run?: number
           points?: number
-          referrals_rewarded?: number
-          rewards_start?: string | null
-          safe_days?: number
-          settled_through?: string | null
-          shields?: number
-          smooth_days?: number
-          streak_days?: number
-          streak_started?: string | null
+          ranked?: boolean
+          rating_penalty_30d?: number
+          rating_updated_at?: string | null
+          safety_rating?: number | null
+          streak?: number
           updated_at?: string
           user_id?: string
-          xp?: number
         }
         Relationships: []
       }
@@ -895,70 +762,7 @@ export type Database = {
             referencedRelation: "inbox"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "push_deliveries_token_fkey"
-            columns: ["token"]
-            isOneToOne: false
-            referencedRelation: "push_registrations"
-            referencedColumns: ["token"]
-          },
         ]
-      }
-      push_registrations: {
-        Row: {
-          created_at: string
-          device_id: string
-          last_registered_at: string
-          platform: string
-          token: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          device_id: string
-          last_registered_at?: string
-          platform: string
-          token: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          device_id?: string
-          last_registered_at?: string
-          platform?: string
-          token?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "push_registrations_device_fkey"
-            columns: ["user_id", "device_id"]
-            isOneToOne: false
-            referencedRelation: "devices"
-            referencedColumns: ["user_id", "id"]
-          },
-        ]
-      }
-      push_token_seen: {
-        Row: {
-          first_seen_at: string
-          token_sha256: string
-          user_id: string
-        }
-        Insert: {
-          first_seen_at?: string
-          token_sha256: string
-          user_id: string
-        }
-        Update: {
-          first_seen_at?: string
-          token_sha256?: string
-          user_id?: string
-        }
-        Relationships: []
       }
       rate_limits: {
         Row: {
@@ -987,309 +791,93 @@ export type Database = {
         }
         Relationships: []
       }
-      referral_codes: {
-        Row: {
-          code: string
-          created_at: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          code: string
-          created_at?: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          code?: string
-          created_at?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      referrals: {
+      reports: {
         Row: {
           created_at: string
           id: string
-          invitee_id: string
-          invitee_rewarded: boolean
-          qualified_at: string | null
-          redeemed_at: string
-          referrer_cap: boolean
-          referrer_id: string
-          referrer_rewarded: boolean | null
-          reject_reason: string | null
-          status: string
-          updated_at: string
+          note: string
+          reason: string
+          reporter_id: string
+          target_id: string
+          target_kind: string
         }
         Insert: {
           created_at?: string
           id?: string
-          invitee_id: string
-          invitee_rewarded?: boolean
-          qualified_at?: string | null
-          redeemed_at: string
-          referrer_cap?: boolean
-          referrer_id: string
-          referrer_rewarded?: boolean | null
-          reject_reason?: string | null
-          status?: string
-          updated_at?: string
+          note?: string
+          reason: string
+          reporter_id: string
+          target_id: string
+          target_kind: string
         }
         Update: {
           created_at?: string
           id?: string
-          invitee_id?: string
-          invitee_rewarded?: boolean
-          qualified_at?: string | null
-          redeemed_at?: string
-          referrer_cap?: boolean
-          referrer_id?: string
-          referrer_rewarded?: boolean | null
-          reject_reason?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      reward_contradictions: {
-        Row: {
-          created_at: string
-          day: string | null
-          dedupe_key: string
-          detail: Json
-          id: string
-          kind: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          day?: string | null
-          dedupe_key: string
-          detail: Json
-          id?: string
-          kind: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          day?: string | null
-          dedupe_key?: string
-          detail?: Json
-          id?: string
-          kind?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      reward_days: {
-        Row: {
-          camera: boolean
-          checked_through: string
-          created_at: string
-          day: string
-          outcome: string
-          outcome_reason: string
-          phone_free: boolean
-          points: number
-          predicates: Json
-          settled_at: string
-          source_updated_at: string
-          streak_after: number | null
-          tier: string
-          updated_at: string
-          user_id: string
-          wall_close: string
-        }
-        Insert: {
-          camera: boolean
-          checked_through: string
-          created_at?: string
-          day: string
-          outcome: string
-          outcome_reason: string
-          phone_free: boolean
-          points: number
-          predicates: Json
-          settled_at: string
-          source_updated_at: string
-          streak_after?: number | null
-          tier: string
-          updated_at?: string
-          user_id: string
-          wall_close: string
-        }
-        Update: {
-          camera?: boolean
-          checked_through?: string
-          created_at?: string
-          day?: string
-          outcome?: string
-          outcome_reason?: string
-          phone_free?: boolean
-          points?: number
-          predicates?: Json
-          settled_at?: string
-          source_updated_at?: string
-          streak_after?: number | null
-          tier?: string
-          updated_at?: string
-          user_id?: string
-          wall_close?: string
-        }
-        Relationships: []
-      }
-      reward_due: {
-        Row: {
-          created_at: string
-          due_at: string
-          failures: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          due_at: string
-          failures?: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          due_at?: string
-          failures?: number
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      score_daily: {
-        Row: {
-          band: string | null
-          camera_day: boolean
-          created_at: string
-          day: string
-          driving_s: number
-          exposure: number
-          good_day: boolean
-          long_term_score: number | null
-          phone_free_day: boolean
-          provisional: boolean
-          safe_day: boolean
-          severe_events: number
-          trips_all: number
-          trips_scored: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          band?: string | null
-          camera_day?: boolean
-          created_at?: string
-          day: string
-          driving_s?: number
-          exposure?: number
-          good_day?: boolean
-          long_term_score?: number | null
-          phone_free_day?: boolean
-          provisional?: boolean
-          safe_day?: boolean
-          severe_events?: number
-          trips_all?: number
-          trips_scored?: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          band?: string | null
-          camera_day?: boolean
-          created_at?: string
-          day?: string
-          driving_s?: number
-          exposure?: number
-          good_day?: boolean
-          long_term_score?: number | null
-          phone_free_day?: boolean
-          provisional?: boolean
-          safe_day?: boolean
-          severe_events?: number
-          trips_all?: number
-          trips_scored?: number
-          updated_at?: string
-          user_id?: string
+          note?: string
+          reason?: string
+          reporter_id?: string
+          target_id?: string
+          target_kind?: string
         }
         Relationships: []
       }
       trip_events: {
         Row: {
-          alert_shown: boolean
-          category: string
           client_event_id: string
-          confidence: number
-          context: Json
-          context_multiplier: number
-          corrected: boolean
           created_at: string
-          deduction: number | null
-          duration_ms: number
-          id: string
+          duration_s: number
           lat: number | null
           lng: number | null
           measured: Json
-          severity: number
-          source: string
+          penalty: number
           started_at: string
           status: string
+          stopped_in_traffic: boolean | null
+          tier: string
           trip_id: string
+          type: string
+          units: number | null
           updated_at: string
           user_id: string
+          zone: string | null
         }
         Insert: {
-          alert_shown?: boolean
-          category: string
           client_event_id: string
-          confidence: number
-          context?: Json
-          context_multiplier: number
-          corrected?: boolean
           created_at?: string
-          deduction?: number | null
-          duration_ms: number
-          id?: string
+          duration_s: number
           lat?: number | null
           lng?: number | null
           measured?: Json
-          severity: number
-          source: string
+          penalty?: number
           started_at: string
-          status: string
+          status?: string
+          stopped_in_traffic?: boolean | null
+          tier: string
           trip_id: string
+          type: string
+          units?: number | null
           updated_at?: string
           user_id: string
+          zone?: string | null
         }
         Update: {
-          alert_shown?: boolean
-          category?: string
           client_event_id?: string
-          confidence?: number
-          context?: Json
-          context_multiplier?: number
-          corrected?: boolean
           created_at?: string
-          deduction?: number | null
-          duration_ms?: number
-          id?: string
+          duration_s?: number
           lat?: number | null
           lng?: number | null
           measured?: Json
-          severity?: number
-          source?: string
+          penalty?: number
           started_at?: string
           status?: string
+          stopped_in_traffic?: boolean | null
+          tier?: string
           trip_id?: string
+          type?: string
+          units?: number | null
           updated_at?: string
           user_id?: string
+          zone?: string | null
         }
         Relationships: [
           {
@@ -1303,396 +891,264 @@ export type Database = {
       }
       trips: {
         Row: {
-          camera_session: boolean
-          category_deductions: Json
+          app_version: string | null
+          breakdown: Json
+          clean: boolean
           client_trip_id: string
-          conditions: Json
           created_at: string
-          data_quality: string
-          deleted_at: string | null
-          distance_m: number
+          dms_face_seen: boolean
+          dms_on: boolean
           duration_s: number
-          end_geohash5: string | null
-          end_label: string | null
           ended_at: string
-          exposure: number
-          had_severe_event: boolean
+          handling_s: number
           id: string
-          incomplete: boolean
-          limit_coverage_pct: number | null
+          is_loop: boolean
+          league_week: string
           local_day: string
-          mode: string
-          notes: string | null
+          loop_repeat: boolean
+          merged_into: string | null
+          miles: number
+          n_drowsy: number
+          n_events: number
+          n_eyes_off: number
+          n_hard_accel: number
+          n_hard_brake: number
+          n_hard_corner: number
+          n_pickup: number
+          n_speeding: number
+          night_miles: number
+          not_driving: boolean
+          not_driving_at: string | null
+          points_net: number
           polyline: string
-          role: string
-          role_confidence: number | null
-          role_source: string | null
-          rows_digest: Json
-          score: number | null
-          scored_without_trace: boolean
+          progress_before: Json
+          rating_penalty: number
+          reason: string | null
+          result: Json | null
+          rev: number
+          safe_miles: number
+          safe_miles_earlier_today: number
+          scored: boolean
           scoring_version: number
-          start_geohash5: string | null
-          start_label: string | null
           started_at: string
-          status: string
-          trace_path: string | null
+          streak_before: number
           tz: string
-          unscored_reason: string | null
           updated_at: string
           user_id: string
-          vehicle_id: string | null
         }
         Insert: {
-          camera_session?: boolean
-          category_deductions?: Json
+          app_version?: string | null
+          breakdown?: Json
+          clean?: boolean
           client_trip_id: string
-          conditions?: Json
           created_at?: string
-          data_quality: string
-          deleted_at?: string | null
-          distance_m: number
+          dms_face_seen?: boolean
+          dms_on?: boolean
           duration_s: number
-          end_geohash5?: string | null
-          end_label?: string | null
           ended_at: string
-          exposure: number
-          had_severe_event?: boolean
+          handling_s?: number
           id?: string
-          incomplete?: boolean
-          limit_coverage_pct?: number | null
+          is_loop?: boolean
+          league_week: string
           local_day: string
-          mode: string
-          notes?: string | null
+          loop_repeat?: boolean
+          merged_into?: string | null
+          miles: number
+          n_drowsy?: number
+          n_events?: number
+          n_eyes_off?: number
+          n_hard_accel?: number
+          n_hard_brake?: number
+          n_hard_corner?: number
+          n_pickup?: number
+          n_speeding?: number
+          night_miles: number
+          not_driving?: boolean
+          not_driving_at?: string | null
+          points_net?: number
           polyline?: string
-          role: string
-          role_confidence?: number | null
-          role_source?: string | null
-          rows_digest?: Json
-          score?: number | null
-          scored_without_trace?: boolean
+          progress_before?: Json
+          rating_penalty?: number
+          reason?: string | null
+          result?: Json | null
+          rev?: number
+          safe_miles: number
+          safe_miles_earlier_today?: number
+          scored?: boolean
           scoring_version?: number
-          start_geohash5?: string | null
-          start_label?: string | null
           started_at: string
-          status: string
-          trace_path?: string | null
+          streak_before?: number
           tz: string
-          unscored_reason?: string | null
           updated_at?: string
           user_id: string
-          vehicle_id?: string | null
         }
         Update: {
-          camera_session?: boolean
-          category_deductions?: Json
+          app_version?: string | null
+          breakdown?: Json
+          clean?: boolean
           client_trip_id?: string
-          conditions?: Json
           created_at?: string
-          data_quality?: string
-          deleted_at?: string | null
-          distance_m?: number
+          dms_face_seen?: boolean
+          dms_on?: boolean
           duration_s?: number
-          end_geohash5?: string | null
-          end_label?: string | null
           ended_at?: string
-          exposure?: number
-          had_severe_event?: boolean
+          handling_s?: number
           id?: string
-          incomplete?: boolean
-          limit_coverage_pct?: number | null
+          is_loop?: boolean
+          league_week?: string
           local_day?: string
-          mode?: string
-          notes?: string | null
+          loop_repeat?: boolean
+          merged_into?: string | null
+          miles?: number
+          n_drowsy?: number
+          n_events?: number
+          n_eyes_off?: number
+          n_hard_accel?: number
+          n_hard_brake?: number
+          n_hard_corner?: number
+          n_pickup?: number
+          n_speeding?: number
+          night_miles?: number
+          not_driving?: boolean
+          not_driving_at?: string | null
+          points_net?: number
           polyline?: string
-          role?: string
-          role_confidence?: number | null
-          role_source?: string | null
-          rows_digest?: Json
-          score?: number | null
-          scored_without_trace?: boolean
+          progress_before?: Json
+          rating_penalty?: number
+          reason?: string | null
+          result?: Json | null
+          rev?: number
+          safe_miles?: number
+          safe_miles_earlier_today?: number
+          scored?: boolean
           scoring_version?: number
-          start_geohash5?: string | null
-          start_label?: string | null
           started_at?: string
-          status?: string
-          trace_path?: string | null
+          streak_before?: number
           tz?: string
-          unscored_reason?: string | null
           updated_at?: string
-          user_id?: string
-          vehicle_id?: string | null
-        }
-        Relationships: []
-      }
-      user_badges: {
-        Row: {
-          badge_id: string
-          created_at: string
-          earned_at: string
-          user_id: string
-        }
-        Insert: {
-          badge_id: string
-          created_at?: string
-          earned_at: string
-          user_id: string
-        }
-        Update: {
-          badge_id?: string
-          created_at?: string
-          earned_at?: string
           user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "user_badges_badge_id_fkey"
-            columns: ["badge_id"]
+            foreignKeyName: "trips_merged_into_fkey"
+            columns: ["merged_into"]
             isOneToOne: false
-            referencedRelation: "badge_defs"
+            referencedRelation: "trips"
             referencedColumns: ["id"]
           },
         ]
       }
-      user_challenges: {
+      user_achievements: {
+        Row: {
+          achievement_id: string
+          unlocked_at: string
+          user_id: string
+        }
+        Insert: {
+          achievement_id: string
+          unlocked_at?: string
+          user_id: string
+        }
+        Update: {
+          achievement_id?: string
+          unlocked_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      weekly_challenges: {
         Row: {
           completed_at: string | null
+          completed_by_trip: string | null
           created_at: string
-          def_id: string
-          ended_at: string | null
-          fail_days: number
-          id: string
-          pass_days: number
-          start_day: string
-          state: string
-          updated_at: string
+          league_week: string
+          slot: number
+          template_id: string
           user_id: string
         }
         Insert: {
           completed_at?: string | null
+          completed_by_trip?: string | null
           created_at?: string
-          def_id: string
-          ended_at?: string | null
-          fail_days?: number
-          id?: string
-          pass_days?: number
-          start_day: string
-          state?: string
-          updated_at?: string
+          league_week: string
+          slot: number
+          template_id: string
           user_id: string
         }
         Update: {
           completed_at?: string | null
+          completed_by_trip?: string | null
           created_at?: string
-          def_id?: string
-          ended_at?: string | null
-          fail_days?: number
-          id?: string
-          pass_days?: number
-          start_day?: string
-          state?: string
-          updated_at?: string
+          league_week?: string
+          slot?: number
+          template_id?: string
           user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "user_challenges_def_id_fkey"
-            columns: ["def_id"]
+            foreignKeyName: "weekly_challenges_completed_by_trip_fkey"
+            columns: ["completed_by_trip"]
             isOneToOne: false
-            referencedRelation: "challenge_defs"
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "weekly_challenges_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "challenge_templates"
             referencedColumns: ["id"]
           },
         ]
-      }
-      weekly_goals: {
-        Row: {
-          category: string
-          closed_at: string | null
-          created_at: string
-          fail_days: number
-          pass_days: number
-          prorated: boolean
-          source: string
-          state: string
-          target_days: number
-          tz: string
-          updated_at: string
-          user_id: string
-          week_start: string
-        }
-        Insert: {
-          category: string
-          closed_at?: string | null
-          created_at?: string
-          fail_days?: number
-          pass_days?: number
-          prorated?: boolean
-          source: string
-          state?: string
-          target_days?: number
-          tz: string
-          updated_at?: string
-          user_id: string
-          week_start: string
-        }
-        Update: {
-          category?: string
-          closed_at?: string | null
-          created_at?: string
-          fail_days?: number
-          pass_days?: number
-          prorated?: boolean
-          source?: string
-          state?: string
-          target_days?: number
-          tz?: string
-          updated_at?: string
-          user_id?: string
-          week_start?: string
-        }
-        Relationships: []
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      account_object_keys: {
-        Args: {
-          p_after_bucket: string
-          p_after_name: string
-          p_limit: number
-          p_user: string
-        }
-        Returns: Json
+      accept_terms: { Args: { p_version: string }; Returns: undefined }
+      acquire_job_lease: {
+        Args: { p_holder: string; p_name: string; p_seconds: number }
+        Returns: boolean
       }
-      age_band_rank: { Args: { p_band: string }; Returns: number }
-      append_streak: {
-        Args: { p_days: string[]; p_user: string }
-        Returns: Json
-      }
-      apply_recompute: {
-        Args: {
-          p_baselines: Json
-          p_day: Json
-          p_events: Json
-          p_scored: Json
-          p_trip_id: string
-          p_user: string
-        }
-        Returns: Json
-      }
-      apply_trip: { Args: { p: Json }; Returns: Json }
+      block_user: { Args: { p_user_id: string }; Returns: undefined }
+      cancel_friend_request: { Args: { p_user_id: string }; Returns: undefined }
+      check_username: { Args: { p: string }; Returns: Json }
       claim_push_batch: {
         Args: { p_lease_seconds: number; p_limit: number }
         Returns: Json
       }
-      clear_trace_paths: { Args: { p_keys: string[] }; Returns: number }
-      count_dispute_allowance: { Args: { p_user: string }; Returns: Json }
-      create_family: { Args: { p_name: string }; Returns: Json }
-      create_guardian_invite: { Args: never; Returns: Json }
-      delete_family_place: { Args: { p_id: string }; Returns: undefined }
-      derive_age_band: { Args: { birth_date: string }; Returns: string }
-      derive_age_band_on: {
-        Args: { p_as_of: string; p_birth_date: string }
-        Returns: string
-      }
-      dismiss_inbox: { Args: { p_ids: string[] }; Returns: number }
-      dispatch_purge_traces: { Args: never; Returns: string }
-      dispatch_push: { Args: never; Returns: string }
-      emit_reward_events: {
-        Args: { p_events: Json; p_now: string; p_tz: string; p_user: string }
-        Returns: number
-      }
-      ensure_week_goal: {
-        Args: {
-          p_now: string
-          p_tz: string
-          p_user: string
-          p_week_start: string
-        }
-        Returns: {
-          category: string
-          closed_at: string | null
-          created_at: string
-          fail_days: number
-          pass_days: number
-          prorated: boolean
-          source: string
-          state: string
-          target_days: number
-          tz: string
-          updated_at: string
-          user_id: string
-          week_start: string
-        }
-        SetofOptions: {
-          from: "*"
-          to: "weekly_goals"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
-      expired_trace_object_keys: {
-        Args: { p_after_name: string; p_limit: number }
-        Returns: Json
-      }
-      export_account: { Args: { p_user: string }; Returns: Json }
-      family_check_eligible: { Args: { p_uid: string }; Returns: undefined }
-      family_check_place: {
-        Args: {
-          p_address: string
-          p_lat: number
-          p_lng: number
-          p_name: string
-          p_radius_m: number
-        }
+      claim_username: { Args: { p: string }; Returns: undefined }
+      complete_onboarding: {
+        Args: { p_license_stage: string; p_terms_version: string }
         Returns: undefined
       }
-      family_new_code: { Args: never; Returns: string }
-      family_of: { Args: { p_uid: string }; Returns: string }
-      family_snapshot: { Args: never; Returns: Json }
-      get_my_referral_code: { Args: never; Returns: Json }
-      guardian_link_state: { Args: never; Returns: Json }
-      inbox_subject_gone: {
-        Args: { p_payload: Json; p_ref: string; p_type: string; p_user: string }
-        Returns: boolean
-      }
-      is_known_tz: { Args: { p_tz: string }; Returns: boolean }
-      is_short_drive: {
-        Args: { p_distance_m: number; p_duration_s: number }
-        Returns: boolean
-      }
-      is_underage: { Args: { p_user: string }; Returns: boolean }
-      join_challenge: { Args: { p_def_id: string }; Returns: Json }
-      join_family: { Args: { p_code: string }; Returns: Json }
-      leave_challenge: { Args: { p_id: string }; Returns: undefined }
-      leave_family: { Args: never; Returns: undefined }
-      mark_inbox_read: { Args: { p_ids: string[] }; Returns: number }
-      merge_own_profile_flags: { Args: { patch: Json }; Returns: Json }
-      my_referrals: { Args: never; Returns: Json }
-      normalise_referral_code: { Args: { p_input: string }; Returns: string }
-      notification_defaults: { Args: never; Returns: Json }
-      open_my_week: { Args: never; Returns: Json }
-      post_my_location: {
-        Args: {
-          p_accuracy_m: number
-          p_driving: boolean
-          p_lat: number
-          p_lng: number
-        }
+      create_clan: { Args: { p_banner: string; p_name: string }; Returns: Json }
+      export_account: { Args: { p_user: string }; Returns: Json }
+      get_friends_board: { Args: { p_metric: string }; Returns: Json }
+      get_global_board: { Args: { p_state?: string }; Returns: Json }
+      get_heatmap: { Args: { p_user_id: string }; Returns: Json }
+      get_member_stats: { Args: { p_user_id: string }; Returns: Json }
+      get_my_clan: { Args: never; Returns: Json }
+      get_my_league: { Args: never; Returns: Json }
+      get_my_stat_sums: { Args: { p_since?: string }; Returns: Json }
+      get_my_summary: { Args: never; Returns: Json }
+      get_notification_prefs: { Args: never; Returns: Json }
+      get_profile: { Args: { p_username: string }; Returns: Json }
+      join_clan: { Args: { p_code: string }; Returns: Json }
+      leave_clan: { Args: never; Returns: undefined }
+      list_blocked: { Args: never; Returns: Json }
+      list_friends: { Args: never; Returns: Json }
+      list_my_drives: {
+        Args: { p_before?: string; p_limit?: number }
         Returns: Json
       }
-      purge_member_locations: { Args: never; Returns: number }
-      purge_reward_audit: { Args: never; Returns: number }
-      purge_traces_signature: {
-        Args: { p_key: string; p_ts: number }
-        Returns: string
+      preview_clan: { Args: { p_code: string }; Returns: Json }
+      purge_auth_audit: {
+        Args: { p_email: string; p_user: string }
+        Returns: number
       }
       push_receipts_due: { Args: { p_limit: number }; Returns: Json }
-      push_sweep_signature: {
-        Args: { p_key: string; p_ts: number }
-        Returns: string
-      }
       put_limits_cache: {
         Args: {
           p_heading: number
@@ -1703,177 +1159,49 @@ export type Database = {
         }
         Returns: string
       }
-      record_dispute: {
-        Args: {
-          p_event_id: string
-          p_note: string
-          p_reason: string
-          p_stated_limit_mph: number
-          p_user: string
-        }
-        Returns: Json
-      }
       record_push_outcomes: { Args: { p: Json }; Returns: number }
       record_push_receipts: { Args: { p: Json }; Returns: number }
-      redeem_referral_code: { Args: { p_code: string }; Returns: Json }
-      rederive_age_bands: { Args: never; Returns: number }
-      referral_final_at: { Args: { p_redeemed_at: string }; Returns: string }
-      referral_refusal: {
-        Args: { p_message: string; p_sqlstate: string }
+      regenerate_clan_code: { Args: never; Returns: Json }
+      register_device: {
+        Args: { p_device_id: string; p_platform: string; p_push_token?: string }
         Returns: Json
-      }
-      referrals_available: { Args: never; Returns: boolean }
-      refresh_progress: { Args: { p_user: string }; Returns: Json }
-      register_push_token: {
-        Args: { p_device_id: string; p_token: string }
-        Returns: undefined
       }
       release_job_lease: {
-        Args: { p_holder: string; p_job: string }
-        Returns: boolean
-      }
-      remove_family_member: { Args: { p_user: string }; Returns: undefined }
-      require_baselines: {
-        Args: { p_baselines: Json; p_fn: string }
+        Args: { p_holder: string; p_name: string }
         Returns: undefined
       }
-      require_keys: {
-        Args: { p_fn: string; p_keys: string[]; p_obj: Json; p_prefix: string }
+      remove_friend: { Args: { p_user_id: string }; Returns: undefined }
+      remove_member: { Args: { p_user_id: string }; Returns: undefined }
+      report_target: {
+        Args: {
+          p_kind: string
+          p_note?: string
+          p_reason: string
+          p_target_id: string
+        }
         Returns: undefined
-      }
-      require_score_days: {
-        Args: { p_days: Json; p_fn: string }
-        Returns: undefined
-      }
-      require_scored_trip: {
-        Args: { p_fn: string; p_scored: Json }
-        Returns: Record<string, unknown>
       }
       require_service_role: { Args: { p_fn: string }; Returns: undefined }
-      require_type: {
-        Args: { p_fn: string; p_name: string; p_type: string; p_value: Json }
+      respond_friend_request: {
+        Args: { p_accept: boolean; p_user_id: string }
         Returns: undefined
       }
-      reward_credit: {
-        Args: {
-          p_amount: number
-          p_key: string
-          p_ref: string
-          p_type: string
-          p_user: string
-        }
-        Returns: boolean
-      }
-      reward_day_facts: {
-        Args: { p_from: string; p_to: string; p_tz: string; p_user: string }
-        Returns: Database["public"]["CompositeTypes"]["reward_fact"][]
-        SetofOptions: {
-          from: "*"
-          to: "reward_fact"
-          isOneToOne: false
-          isSetofReturn: true
-        }
-      }
-      reward_day_ready: {
-        Args: { p_now: string; p_user: string; p_wall_close: string }
-        Returns: boolean
-      }
-      reward_fact_summary: {
-        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
-        Returns: Json
-      }
-      reward_goal_counts: {
-        Args: { p_category: string; p_user: string; p_week_start: string }
-        Returns: Record<string, unknown>
-      }
-      reward_outcome: {
-        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
-        Returns: Record<string, unknown>
-      }
-      reward_predicates: {
-        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
-        Returns: Json
-      }
-      reward_retry_at: {
-        Args: { p_close: string; p_now: string }
-        Returns: string
-      }
-      reward_rules: { Args: never; Returns: Json }
-      reward_settle_failed: {
-        Args: { p_lease: string; p_now: string; p_user: string }
+      search_users: { Args: { p_query: string }; Returns: Json }
+      send_friend_request: { Args: { p_user_id: string }; Returns: Json }
+      set_member_role: {
+        Args: { p_role: string; p_user_id: string }
         Returns: undefined
       }
-      reward_tier: {
-        Args: { f: Database["public"]["CompositeTypes"]["reward_fact"] }
-        Returns: string
-      }
-      reward_wall_close: {
-        Args: { p_day: string; p_zones: string[] }
-        Returns: string
-      }
-      reward_week_closed: {
+      set_notification_prefs: {
         Args: {
-          p_now: string
-          p_tz: string
-          p_user: string
-          p_week_start: string
+          p_leagues?: boolean
+          p_quiet_enabled?: boolean
+          p_quiet_end?: string
+          p_quiet_start?: string
+          p_social?: boolean
+          p_tz?: string
+          p_weekly_recap?: boolean
         }
-        Returns: boolean
-      }
-      reward_zone_hop: {
-        Args: { p_user: string; p_wall_close: string }
-        Returns: boolean
-      }
-      rotate_family_code: { Args: never; Returns: Json }
-      save_family_place: {
-        Args: {
-          p_address: string
-          p_id: string
-          p_lat: number
-          p_lng: number
-          p_name: string
-          p_radius_m: number
-        }
-        Returns: Json
-      }
-      schedule_next_settle: {
-        Args: { p_lease: string; p_now: string; p_tz: string; p_user: string }
-        Returns: string
-      }
-      set_birth_date: { Args: { p_birth_date: string }; Returns: undefined }
-      set_location_sharing: { Args: { p_on: boolean }; Returns: undefined }
-      set_trip_role_row: {
-        Args: { p_role: string; p_trip_id: string; p_user: string }
-        Returns: Json
-      }
-      set_weekly_focus: { Args: { p_category: string }; Returns: Json }
-      settle_badges: { Args: { p_user: string }; Returns: Json }
-      settle_challenges: {
-        Args: { p_now: string; p_user: string }
-        Returns: Json
-      }
-      settle_days: {
-        Args: { p_now: string; p_tz: string; p_user: string }
-        Returns: string[]
-      }
-      settle_due_rewards_at: {
-        Args: { p_limit: number; p_now: string }
-        Returns: number
-      }
-      settle_goals: {
-        Args: { p_days: string[]; p_now: string; p_tz: string; p_user: string }
-        Returns: Json
-      }
-      settle_referrals: {
-        Args: { p_now: string; p_user: string }
-        Returns: Json
-      }
-      settle_rewards: {
-        Args: { p_lease?: string; p_now: string; p_user: string }
-        Returns: Json
-      }
-      soft_delete_trip: {
-        Args: { p_trip_id: string; p_user: string }
         Returns: Json
       }
       speed_limit_candidates: {
@@ -1889,68 +1217,35 @@ export type Database = {
         }[]
       }
       speed_limit_tiles: { Args: { p_keys: string[] }; Returns: Json }
-      start_rewards_for_existing_users: { Args: never; Returns: number }
       take_global_rate_limit: {
         Args: { p_key: string; p_max: number; p_window: string }
-        Returns: boolean
-      }
-      take_job_lease: {
-        Args: { p_holder: string; p_job: string; p_seconds: number }
         Returns: boolean
       }
       take_rate_limit: {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
-      underage_identity_keys: { Args: { p_data: Json }; Returns: Json }
-      underage_object_keys: { Args: { p_limit: number }; Returns: Json }
-      underage_object_keys_after: {
-        Args: { p_after_bucket: string; p_after_name: string; p_limit: number }
-        Returns: Json
-      }
-      unregister_push_token: { Args: { p_token: string }; Returns: boolean }
-      upsert_baselines: {
-        Args: { p_baselines: Json; p_user: string }
+      transfer_leadership: { Args: { p_user_id: string }; Returns: undefined }
+      unblock_user: { Args: { p_user_id: string }; Returns: undefined }
+      update_clan: {
+        Args: { p_banner?: string; p_name?: string }
         Returns: undefined
       }
-      upsert_score_day: {
-        Args: { p_days: Json; p_user: string }
+      update_profile: {
+        Args: {
+          p_heatmap_visibility?: string
+          p_license_stage?: string
+          p_state?: string
+          p_units?: string
+        }
         Returns: undefined
-      }
-      user_local_date: {
-        Args: { p_at?: string; p_user: string }
-        Returns: string
-      }
-      user_tz: { Args: { p_user: string }; Returns: string }
-      valid_reward_predicates: { Args: { p: Json }; Returns: boolean }
-      weakest_goal_category: {
-        Args: { p_user: string; p_week_start: string }
-        Returns: string
       }
     }
     Enums: {
       [_ in never]: never
     }
     CompositeTypes: {
-      reward_fact: {
-        day: string | null
-        safe_day: boolean | null
-        good_day: boolean | null
-        phone_free_day: boolean | null
-        camera_day: boolean | null
-        driving_s: number | null
-        provisional: boolean | null
-        scored_all: number | null
-        avg_all: number | null
-        severe_all: number | null
-        phone: number | null
-        speeding: number | null
-        braking: number | null
-        accel: number | null
-        cornering: number | null
-        wall_close: string | null
-        source_updated_at: string | null
-      }
+      [_ in never]: never
     }
   }
 }
