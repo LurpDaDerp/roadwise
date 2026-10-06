@@ -5,7 +5,7 @@ import { AppState, Pressable, View } from 'react-native';
 
 import type { NotificationAccess, PermissionsAdapter } from '@/core/permissions';
 import type { AppStateLike } from '@/data/foreground';
-import { serverKey, useServerQuery } from '@/data/server/useServerQuery';
+import { SERVER_SLOW_STALE_MS, serverKey, useServerQuery } from '@/data/server/useServerQuery';
 import { useSession } from '@/data/supabase/session';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Banner, Card, Divider, Screen, Skeleton, Text, ToggleRow, useTheme } from '@/ui';
@@ -80,7 +80,9 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
   const th = useTheme();
   const qc = useQueryClient();
   const uid = useSession().session?.user.id ?? null;
-  const query = useServerQuery<NotificationPrefs>([...PREFS_KEY], 'get_notification_prefs');
+  const query = useServerQuery<NotificationPrefs>([...PREFS_KEY], 'get_notification_prefs', undefined, {
+    staleMs: SERVER_SLOW_STALE_MS,
+  });
   const [pending, setPending] = useState<PrefsPatch | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
   const [os] = useState(() => deps.os ?? adapterPort(defaultPermissionsAdapter()));

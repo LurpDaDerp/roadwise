@@ -18,6 +18,8 @@ import { callRpc } from './rpc';
 
 /** Server data is served from cache for this long before a focus refetches it. */
 export const SERVER_STALE_MS = 60_000;
+/** For data that changes rarely or only through this phone's own writes (which invalidate it). */
+export const SERVER_SLOW_STALE_MS = 10 * 60_000;
 
 export function serverKey(uid: string | null, ...parts: unknown[]): unknown[] {
   return ['server', uid, ...parts];
@@ -27,7 +29,7 @@ export function useServerQuery<T>(
   key: unknown[],
   fn: string,
   args?: Record<string, unknown>,
-  opts: { pollMs?: number; enabled?: boolean; keepPrevious?: boolean } = {}
+  opts: { pollMs?: number; enabled?: boolean; keepPrevious?: boolean; staleMs?: number } = {}
 ): UseQueryResult<T> {
   const { session } = useSession();
   const uid = session?.user.id ?? null;
@@ -41,7 +43,7 @@ export function useServerQuery<T>(
     queryKey: serverKey(uid, ...key),
     queryFn: () => callRpc<T>(fn, args),
     enabled: uid !== null && (opts.enabled ?? true),
-    staleTime: SERVER_STALE_MS,
+    staleTime: opts.staleMs ?? SERVER_STALE_MS,
     retry: 1,
     placeholderData: opts.keepPrevious ? keepPreviousData : undefined,
     // A backgrounded app or an unfocused screen never polls.
@@ -56,7 +58,9 @@ export function useServerQuery<T>(
   useFocusEffect(
     useCallback(() => {
       setFocused(true);
-      if (latest.current.isStale) void latest.current.refetch();
+      // `cancelRefetch: false` joins a fetch already in flight (the mount fetch) instead of
+      // aborting and restarting it — `callRpc` can't abort, so a restart sent a second request.
+      if (latest.current.isStale) void latest.current.refetch({ cancelRefetch: false });
       return () => setFocused(false);
     }, [])
   );

@@ -12,13 +12,12 @@ import { enqueueAction } from '@/data/sync/queue';
 
 export interface DriveActionDeps {
   db: Db;
-  /** Invalidated after the local write (drive queries + server summary); optional in tests. */
+  /** Drive queries are invalidated after the local write; optional in tests. The server summary
+   *  refetches when the runner settles the action (`sync` change), not here: the server doesn't
+   *  know anything yet. */
   queryClient?: QueryClient;
   now?: () => number;
 }
-
-/** The server summary's cache root (`src/data/server/useServerQuery.ts`), without importing the client. */
-const invalidateServer = (qc: QueryClient): Promise<void> => qc.invalidateQueries({ queryKey: ['server'] });
 
 export type ReportOutcome = 'queued' | 'already' | 'missing';
 
@@ -35,10 +34,7 @@ export async function reportEvent(clientTripId: string, eventId: string, reason:
     await enqueueAction(db, { action: 'dispute', clientTripId, eventId, reason }, now(), tx);
   });
   emitDataChanged({ source: 'enqueue' });
-  if (deps.queryClient) {
-    await invalidateDrive(deps.queryClient, clientTripId);
-    void invalidateServer(deps.queryClient);
-  }
+  if (deps.queryClient) await invalidateDrive(deps.queryClient, clientTripId);
   return 'queued';
 }
 
@@ -57,9 +53,6 @@ export async function markNotDriving(clientTripId: string, deps: DriveActionDeps
     await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status }, now(), tx);
   });
   emitDataChanged({ source: 'enqueue' });
-  if (deps.queryClient) {
-    await invalidateDrive(deps.queryClient, clientTripId);
-    void invalidateServer(deps.queryClient);
-  }
+  if (deps.queryClient) await invalidateDrive(deps.queryClient, clientTripId);
   return 'queued';
 }

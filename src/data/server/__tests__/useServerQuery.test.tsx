@@ -37,6 +37,19 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+it('sends one request when a screen with stale cached data mounts and gains focus', async () => {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc.setQueryData(['server', 'u1', 'summary'], { ok: false }, { updatedAt: Date.now() - 5 * 60_000 });
+  const { unmount } = await renderHook(() => useServerQuery(['summary'], 'get_my_summary'), {
+    wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>,
+  });
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(0);
+  });
+  expect(mockCallRpc).toHaveBeenCalledTimes(1);
+  await unmount();
+});
+
 it('polls while active and stops once the app goes to the background', async () => {
   renderHook(() => useServerQuery(['league'], 'get_my_league', undefined, { pollMs: 60_000 }), {
     wrapper,

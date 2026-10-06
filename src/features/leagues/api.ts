@@ -6,7 +6,7 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 
 import type { LeagueTier } from '@/data/server/summary';
-import { useServerQuery } from '@/data/server/useServerQuery';
+import { SERVER_SLOW_STALE_MS, useServerQuery } from '@/data/server/useServerQuery';
 
 export type { LeagueTier };
 
@@ -91,5 +91,6 @@ export function useFriendsBoard(metric: FriendsMetric): UseQueryResult<FriendsBo
 export function useGlobalBoard(state: string | null): UseQueryResult<GlobalBoard> {
   return useServerQuery<GlobalBoard>(['global-board', state], 'get_global_board', { p_state: state }, {
     keepPrevious: true,
+    staleMs: SERVER_SLOW_STALE_MS,
   });
 }

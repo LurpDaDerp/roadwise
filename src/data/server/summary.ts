@@ -1,10 +1,10 @@
 /**
  * `get_my_summary`: the signed-in driver's profile, progress, league placement, weekly
  * challenges and achievements — the Home header, Profile card and Leagues badge all read it.
- * Invalidate it (`invalidateServer`) after anything that changes progress: a finalized drive,
- * a dispute, "Wasn't driving", or a profile edit.
+ * It refetches when a drive upload or drive action settles and after a profile edit
+ * (`./invalidate.ts`).
  */
-import { type QueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { type UseQueryResult } from '@tanstack/react-query';
 
 import { useServerQuery } from './useServerQuery';
 
@@ -69,9 +69,4 @@ export interface MySummary {
 
 export function useMySummary(opts: { enabled?: boolean } = {}): UseQueryResult<MySummary> {
   return useServerQuery<MySummary>(['summary'], 'get_my_summary', undefined, opts);
-}
-
-/** Marks every server query stale and refetches the ones on screen. */
-export function invalidateServer(qc: QueryClient): Promise<void> {
-  return qc.invalidateQueries({ queryKey: ['server'] });
 }

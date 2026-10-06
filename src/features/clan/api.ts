@@ -1,13 +1,13 @@
 /**
  * Clan reads and writes (`.agent/v3/backend-interface.md` §5, `supabase/migrations/0006_social.sql`).
- * Every write invalidates all server data afterwards: a clan change moves the friends board, the
- * summary and the clan itself.
+ * Every write invalidates the server queries it moves afterwards (`invalidateAfterWrite`): a clan
+ * change moves the clan, its preview, the friends board and members' profiles.
  */
 import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
 import { callRpc } from '@/data/server/rpc';
-import { invalidateServer } from '@/data/server/summary';
-import { useServerQuery } from '@/data/server/useServerQuery';
+import { invalidateAfterWrite } from '@/data/server/invalidate';
+import { SERVER_SLOW_STALE_MS, useServerQuery } from '@/data/server/useServerQuery';
 
 import type { ClanBanner, ClanRole } from './types';
 
@@ -53,20 +53,20 @@ export interface ClanPreview {
 
 /** `null` when you're not in a clan. */
 export function useMyClan(): UseQueryResult<MyClan | null> {
-  return useServerQuery<MyClan | null>(['clan'], 'get_my_clan');
+  return useServerQuery<MyClan | null>(['clan'], 'get_my_clan', undefined, { staleMs: SERVER_SLOW_STALE_MS });
 }
 
 export function useClanPreview(code: string | null): UseQueryResult<ClanPreview> {
   return useServerQuery<ClanPreview>(['clan-preview', code], 'preview_clan', { p_code: code }, { enabled: code !== null });
 }
 
-/** A server write that refreshes every server query once it lands. */
+/** A server write that refreshes the server queries it moves once it lands. */
 export function useServerAction<A extends Record<string, unknown> | void, R = unknown>(
   fn: string
 ): UseMutationResult<R, Error, A> {
   const qc = useQueryClient();
   return useMutation<R, Error, A>({
     mutationFn: (args: A) => callRpc<R>(fn, (args ?? {}) as Record<string, unknown>),
-    onSuccess: () => invalidateServer(qc),
+    onSuccess: () => invalidateAfterWrite(qc, fn),
   });
 }

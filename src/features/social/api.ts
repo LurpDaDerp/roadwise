@@ -1,14 +1,15 @@
 /**
  * Friends, profiles, blocks and reports over the v3 RPCs (`.agent/v3/backend-interface.md` §5,
  * `supabase/migrations/0006_social.sql`). Reads are focus-aware server queries; every write goes
- * through `useServerAction`, which invalidates the server cache after it lands.
+ * through `useServerAction`, which invalidates the server queries that write moves after it lands.
  */
 import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
 
 import { callRpc } from '@/data/server/rpc';
-import { invalidateServer, type LeagueTier } from '@/data/server/summary';
-import { useServerQuery } from '@/data/server/useServerQuery';
+import { invalidateAfterWrite } from '@/data/server/invalidate';
+import type { LeagueTier } from '@/data/server/summary';
+import { SERVER_SLOW_STALE_MS, useServerQuery } from '@/data/server/useServerQuery';
 import type { StatSums } from '@scoring';
 
 import { friendlyError } from './errors';
@@ -66,6 +67,7 @@ export function useProfile(username: string): UseQueryResult<PublicProfile> {
   const name = username.toLowerCase();
   return useServerQuery<PublicProfile>(['profile', name], 'get_profile', { p_username: name }, {
     enabled: USERNAME_RE.test(name),
+    staleMs: SERVER_SLOW_STALE_MS,
   });
 }
 
@@ -74,7 +76,7 @@ export function useFriends(opts: { enabled?: boolean } = {}): UseQueryResult<Fri
 }
 
 export function useBlocked(): UseQueryResult<BlockedUser[]> {
-  return useServerQuery<BlockedUser[]>(['blocked'], 'list_blocked');
+  return useServerQuery<BlockedUser[]>(['blocked'], 'list_blocked', undefined, { staleMs: SERVER_SLOW_STALE_MS });
 }
 
 /** Normalised search text, or null when it is too short or has characters no username has. */
@@ -92,12 +94,14 @@ export function useSearchUsers(query: string | null): UseQueryResult<SearchResul
 export function useMemberStats(userId: string | null, enabled: boolean): UseQueryResult<StatSums> {
   return useServerQuery<StatSums>(['memberStats', userId], 'get_member_stats', { p_user_id: userId }, {
     enabled: enabled && userId !== null,
+    staleMs: SERVER_SLOW_STALE_MS,
   });
 }
 
 export function useHeatmap(userId: string | null, enabled: boolean): UseQueryResult<{ polyline: string }[]> {
   return useServerQuery<{ polyline: string }[]>(['heatmap', userId], 'get_heatmap', { p_user_id: userId }, {
     enabled: enabled && userId !== null,
+    staleMs: SERVER_SLOW_STALE_MS,
   });
 }
 
@@ -128,7 +132,7 @@ export function useServerAction(): ServerAction {
       setError(null);
       try {
         await callRpc<unknown>(fn, args);
-        await invalidateServer(qc);
+        await invalidateAfterWrite(qc, fn);
         return true;
       } catch (e) {
         setError(friendlyError(e));

@@ -25,6 +25,7 @@ import { restoreDrives } from '@/data/hydrate/restore';
 import { getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
+import { invalidateAfterDrive } from '@/data/server/invalidate';
 import type { MySummary } from '@/data/server/summary';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/sync/runner';
@@ -372,9 +373,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   });
 
   const detach = subscribeInvalidation(queryClient);
-  // A settled upload or action moved the server's numbers too: the summary header refetches.
+  // A settled upload or action moved the server's numbers too: the summary header refetches and
+  // the boards are marked stale (they refetch when their screen next gains focus).
   const offServer = onDataChanged((change) => {
-    if (change.source === 'sync') void queryClient.invalidateQueries({ queryKey: ['server'] });
+    if (change.source === 'sync') void invalidateAfterDrive(queryClient);
   });
   const isBusy = () => engine.drive.isBusy();
 
