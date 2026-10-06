@@ -57,7 +57,7 @@ export interface DriveState extends EngineSnapshot {
   lastFinalized: LastFinalized;
   /** False when a sound failed during this drive; the drive still records, silently. */
   alertsAvailable: boolean;
-  /** DMS is on for this drive AND the camera is tracking the driver's face right now (the driving screen's indicator). */
+  /** The DMS is running for this drive. */
   dmsActive: boolean;
   /** The local estimate, non-null only while stopped (≤ 5 mph). */
   points: DrivePoints | null;
@@ -75,12 +75,8 @@ export interface DriverPresence {
   lastFaceT: number | null;
 }
 
-/**
- * A face this recent (ms) is a driver in the seat on this row: the DMS tracks at 5–15 fps, so a tracked face is
- * never older than a second or two. Counted per moving row for the payload's `dmsOn` / `dmsFaceSeen` shares, and
- * shown as `dmsActive`.
- */
-export const FACE_RECENT_MS = 3_000;
+/** A face this recent (ms) is a driver in the seat. */
+export const FACE_RECENT_MS = 60_000;
 
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
@@ -256,7 +252,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       screenLocked,
       lastFinalized,
       alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
-      dmsActive: dmsActive && faceSeen(),
+      dmsActive,
       points,
       dryRun: !persist,
       mode: 'mounted' as const,

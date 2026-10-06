@@ -140,8 +140,7 @@ test('start: refuses while moving, without location, before boot, or while busy;
   const started = await ok.host.start({ dmsOn: true });
   expect(started).toEqual({ ok: true, clientTripId: uuid(1) });
   expect(ok.source.calls).toEqual(['startCapture:mounted']);
-  // dmsActive needs a face tracked by the DMS (no camera bridge here): DMS requested, not yet active.
-  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', dmsOn: true, dmsActive: false, lockedOut: false, points: null, dryRun: false });
+  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', dmsOn: true, dmsActive: true, lockedOut: false, points: null, dryRun: false });
   expect(ok.display.log[0]).toBe('start null');
   expect(await ok.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'busy' });
   await ok.host.stop({ endOpenTrip: true });
