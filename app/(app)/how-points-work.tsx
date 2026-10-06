@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { HowPointsScreen } from '@/features/howPoints/HowPointsScreen';
 
-export default function HowpointsworkRoute() {
-  return <PlaceholderScreen title="How points work" />;
+export default function HowPointsWorkRoute() {
+  return <HowPointsScreen />;
 }

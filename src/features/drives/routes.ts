@@ -1,0 +1,20 @@
+/**
+ * Where the drive screens live. Every `Href` names a route file, so the compiler checks each one
+ * against Expo Router's generated union.
+ */
+import type { Href } from 'expo-router';
+
+export const HOME_HREF: Href = '/(tabs)/home';
+export const LEAGUES_HREF: Href = '/(tabs)/leagues';
+export const DRIVE_HREF: Href = '/drive';
+export const DRIVE_HISTORY_HREF: Href = '/(app)/drives';
+export const ALL_STATS_HREF: Href = '/(app)/stats';
+export const HOW_POINTS_WORK_HREF: Href = '/(app)/how-points-work';
+export const DMS_SETUP_HREF: Href = '/(app)/settings/dms-setup';
+export const PERMISSIONS_HREF: Href = '/(app)/settings/permissions';
+
+/** A drive's summary; `fresh` right after the drive ends plays the reveal. */
+export const driveSummaryHref = (clientTripId: string, fresh = false): Href => ({
+  pathname: '/(app)/drives/[clientTripId]',
+  params: fresh ? { clientTripId, fresh: '1' } : { clientTripId },
+});
