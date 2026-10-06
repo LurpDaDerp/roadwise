@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(83);
+select plan(85);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -90,6 +90,7 @@ select public.send_friend_request('00000000-0000-0000-0000-000000000003');
 select pg_temp.as_user(3);
 select public.respond_friend_request('00000000-0000-0000-0000-000000000001', true);
 select pg_temp.as_user(1);
+select throws_ok($$ select public.block_user('00000000-0000-0000-0000-00000000dead') $$, 'P0002', 'profile not found', 'blocking an unknown id is the usual refusal, not an FK error');
 select lives_ok($$ select public.block_user('00000000-0000-0000-0000-000000000003') $$, 'A blocks cat');
 select throws_ok($$ select public.get_profile('cat') $$, 'P0002', 'profile not found', 'a blocked user is not found');
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('cat')) x), null, 'nor searchable');
@@ -106,6 +107,7 @@ select is(public.get_profile('cat') ->> 'relationship', 'none', 'cat is visible 
 -- reports: 10 a day, never self
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000001', 'other', '') $$, '22023', 'kind must be user or clan with a target id', 'self report refused');
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'rude', '') $$, '22023', 'unknown report reason', 'unknown reason refused');
+select throws_ok($$ select public.report_target('clan', '00000000-0000-0000-0000-00000000dead', 'other', '') $$, 'P0002', 'clan not found', 'an unknown target is the usual refusal');
 select is((select count(*)::int from generate_series(1, 10) i, lateral (select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', 'note ' || i)) r), 10, 'ten reports go through');
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', '') $$, '42501', 'too many requests', 'the eleventh in a day is refused');
 

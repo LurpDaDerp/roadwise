@@ -154,7 +154,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
   try {
     const result = await deps.engine.transaction(async (tx) => {
-      const context = await tx.driveContext({ userId, clientTripId: p.clientTripId, startedAt: p.startedAt, localDay, start: p.start });
+      const context = await tx.driveContext({ userId, clientTripId: p.clientTripId, startedAt: p.startedAt, endedAt: p.endedAt, localDay, start: p.start });
       if (context.existing) return { kind: 'replay' as const, response: context.existing };
       if (!(await tx.takeRateLimit(userId, UPLOAD_LIMIT_KEY, '1 day', MAX_UPLOADS_PER_DAY))) {
         return { kind: 'limited' as const };

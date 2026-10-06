@@ -29,14 +29,6 @@ create table public.league_members (
 create index league_members_group_idx on public.league_members (group_id);
 create index league_members_user_idx on public.league_members (user_id, week desc);
 
--- the Monday 00:00 New York that ends a week key ('IYYY-Www'): Jan 4 is always in ISO week 1
-create or replace function private.week_key_end(p_week text) returns timestamptz
-language sql immutable set search_path = public as $$
-  select ((make_date(substr(p_week, 1, 4)::int, 1, 4)
-           - (extract(isodow from make_date(substr(p_week, 1, 4)::int, 1, 4))::int - 1)
-           + 7 * (substr(p_week, 7, 2)::int - 1) + 7)::timestamp at time zone 'America/New_York')
-$$;
-
 -- ---------------------------------------------------------------------------
 -- placement (called inside apply_drive for a league-eligible user's first scored drive of the week)
 -- ---------------------------------------------------------------------------
@@ -52,7 +44,8 @@ begin
   if exists (select 1 from public.league_members m where m.week = p_week and m.user_id = p_user) then
     return jsonb_build_object('tier', v_tier, 'placed', true);
   end if;
-  if not coalesce(v_eligible, false) then
+  -- ineligible, or a week that has already closed (a late upload scores but is not placed)
+  if not coalesce(v_eligible, false) or private.week_key_end(p_week) <= now() then
     return jsonb_build_object('tier', v_tier, 'placed', false);
   end if;
   select g.id into v_group from public.league_groups g
@@ -192,7 +185,8 @@ begin
       select (row_number() over (order by y.value desc nulls last, y.username))::int as rank, y.*
       from (
         select p.id as user_id, p.username, g.level, g.ranked,
-          case when p_metric = 'week' then private.week_points(p.id, v_week)::numeric else g.safety_rating end as value
+          -- rating: only a ranked driver (25+ mi in 30 days) has a value; the rest sort after, value null
+          case when p_metric = 'week' then private.week_points(p.id, v_week)::numeric when g.ranked then g.safety_rating else null end as value
         from (
           select v_uid as id
           union

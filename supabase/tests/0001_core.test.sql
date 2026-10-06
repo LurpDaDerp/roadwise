@@ -3,17 +3,18 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(93);
+select plan(107);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
-  ('00000000-0000-0000-0000-000000000002', 'b@example.com');
+  ('00000000-0000-0000-0000-000000000002', 'b@example.com'),
+  ('00000000-0000-0000-0000-000000000003', 'c@example.com');
 
 -- ---------------------------------------------------------------------------
 -- posture
 -- ---------------------------------------------------------------------------
-select is((select count(*)::int from public.profiles), 2, 'signup creates a profile per user');
-select is((select count(*)::int from public.progress), 2, 'signup creates a progress row per user');
+select is((select count(*)::int from public.profiles), 3, 'signup creates a profile per user');
+select is((select count(*)::int from public.progress), 3, 'signup creates a progress row per user');
 select is((select row(points, lifetime, level, streak, freezes, league_tier)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
   row(0, 0, 1, 0, 2, 'bronze')::text, 'progress starts at zero with 2 freezes in bronze');
 
@@ -43,8 +44,11 @@ select is((select count(*)::int from information_schema.role_table_grants g wher
   'anon has no table grant beyond app_config');
 select is((select array_agg(distinct g.table_name::text order by g.table_name::text) from information_schema.role_table_grants g
     where g.grantee = 'authenticated' and g.table_schema = 'public'),
-  array['app_config', 'consents', 'notification_prefs', 'profiles', 'user_achievements'],
-  'authenticated has table-level grants only on the five owner-read tables (progress is per column)');
+  array['app_config', 'consents', 'notification_prefs', 'user_achievements'],
+  'authenticated has table-level grants only on the four owner-read tables (profiles and progress are per column)');
+select is((select array_agg(c.column_name::text order by c.column_name::text) from information_schema.column_privileges c
+    where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'profiles' and c.column_name = 'flagged'), null,
+  'profiles.flagged is moderation state: not readable by the owner');
 select is((select count(*)::int from information_schema.column_privileges c where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'progress' and c.privilege_type = 'SELECT'), 19,
   'progress grants select on its 19 client columns');
 select is((select array_agg(distinct g.privilege_type::text) from information_schema.role_table_grants g where g.grantee = 'authenticated' and g.table_schema = 'public'),
@@ -62,6 +66,8 @@ select is((select count(*)::int from pg_policy p join pg_class c on c.oid = p.po
     where n.nspname = 'public' and p.polcmd <> 'r'), 0, 'no policy in public allows a client write');
 select has_index('public', 'progress', 'progress_global_board_idx', 'the global board index exists');
 select has_index('public', 'device_league_claims', 'device_league_claims_user_idx', 'device claims indexed by user (cascade)');
+select has_index('public', 'profiles', 'profiles_username_text_idx', 'the username prefix search has its text_pattern_ops index');
+select has_index('public', 'trips', 'trips_started_brin', 'trips has a time-leading BRIN index');
 
 -- default privileges: anything postgres creates from now on is default-deny
 create table public.zz_probe (id int);
@@ -99,6 +105,7 @@ select is((select count(*)::int from public.profiles), 1, 'A sees only own profi
 select is((select count(*)::int from public.progress), 1, 'A sees only own progress');
 select throws_ok($$ select last_end_lat from public.progress $$, '42501', null, 'A cannot read progress.last_end_lat');
 select throws_ok($$ update public.profiles set units = 'km' where id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write profiles directly');
+select throws_ok($$ select flagged from public.profiles $$, '42501', null, 'A cannot read own flagged');
 select throws_ok($$ update public.progress set points = 999 where user_id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write progress directly');
 select throws_ok($$ select count(*) from public.devices $$, '42501', null, 'A cannot read devices');
 select throws_ok($$ select count(*) from public.rate_limits $$, '42501', null, 'A cannot read rate_limits');
@@ -143,10 +150,34 @@ select is(public.register_device('device-aaaaaaaa', 'ios', 'ExponentPushToken[ab
 select is(public.register_device('device-bbbbbbbb', 'android'), '{"league_eligible": true}'::jsonb, 'but its own device makes it eligible');
 select is((select count(*)::int from public.profiles where username = 'ava_1'), 0, 'B cannot see A profile');
 select is(public.check_username('ava_1'), '{"available": false, "reason": "taken"}'::jsonb, 'A username is taken for B');
+select is(public.check_username('AVA_1'), '{"available": false, "reason": "taken"}'::jsonb, 'in any case');
 select throws_ok($$ select public.claim_username('ava_1') $$, '23505', 'username is taken', 'B cannot claim it');
 
+-- device hardening: 10 new ids a day, 10 rows kept, 3 claims, a moved token earns no claim, a stale claim is released
+select is((select bool_and((public.register_device('device-new-' || lpad(i::text, 6, '0'), 'ios') ->> 'league_eligible')::boolean) from generate_series(1, 8) i), true,
+  'B registers eight more new device ids');
+select throws_ok($$ select public.register_device('device-new-000009', 'ios') $$, '42501', 'too many requests', 'the 11th new id in a day is refused');
+select lives_ok($$ select public.register_device('device-bbbbbbbb', 'android', 'ExponentPushToken[bbbbtoken0001]') $$, 'a known id is not a new id (and takes a token)');
+reset role;
+select is((select count(*)::int from public.devices where user_id = '00000000-0000-0000-0000-000000000002'), 10, 'at most 10 device rows per account (the oldest seen went)');
+select is((select count(*)::int from public.device_league_claims where user_id = '00000000-0000-0000-0000-000000000002'), 3, 'at most 3 claims per account');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+select is(public.register_device('device-cccccccc', 'android', 'ExponentPushToken[bbbbtoken0001]'), '{"league_eligible": false}'::jsonb,
+  'C arrives with B''s push token: the install is claimed, so a new id string earns no claim');
+select is(public.register_device('device-dddddddd', 'android'), '{"league_eligible": true}'::jsonb, 'an unclaimed install still does');
+reset role;
+update public.devices set last_seen_at = now() - interval '91 days' where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa';
+delete from public.device_league_claims where user_id = '00000000-0000-0000-0000-000000000003';
+set local role authenticated;
+select is(public.register_device('device-aaaaaaaa', 'ios'), '{"league_eligible": true}'::jsonb, 'A''s claim on a device unseen for 90 days is released to the next account');
+reset role;
+select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'and A, with no claim left, is no longer eligible');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
+
 -- rate limit: check_username 30/min
-select is((select bool_and(public.check_username('free_name_' || i) is not null) from generate_series(1, 29) i), true, 'B spends the username budget (30 checks with the one above)');
+select is((select bool_and(public.check_username('free_name_' || i) is not null) from generate_series(1, 28) i), true, 'B spends the username budget (30 checks with the two above)');
 select throws_ok($$ select public.check_username('one_more') $$, '42501', 'too many requests', 'the 31st check in a minute is refused');
 
 -- a JWT without sub, then anon
@@ -165,7 +196,7 @@ reset role;
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa'), null,
   'a token registered by B is taken from A');
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and device_id = 'device-aaaaaaaa'), 'ExponentPushToken[abcdefgh12345]', 'and held by B');
-select is((select array_agg(user_id order by device_id) from public.device_league_claims), array['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002']::uuid[], 'one claim per device, first come');
+select is((select array_agg(user_id order by device_id) from public.device_league_claims where device_id like 'device-_bbbbbbb' or device_id = 'device-aaaaaaaa'), array['00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002']::uuid[], 'one claim per device, first come (A''s was released above)');
 
 update public.progress set freezes = 0, freezes_granted_at = now() - interval '29 days' where user_id = '00000000-0000-0000-0000-000000000001';
 select private.apply_freeze_grant('00000000-0000-0000-0000-000000000001');

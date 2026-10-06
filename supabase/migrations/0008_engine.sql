@@ -90,7 +90,7 @@ $$;
 -- drive_context
 -- ---------------------------------------------------------------------------
 create or replace function private.drive_context(p_user uuid, p_client_trip_id uuid, p_started_at timestamptz, p_local_day date,
-  p_start_lat double precision, p_start_lng double precision) returns jsonb
+  p_start_lat double precision, p_start_lng double precision, p_ended_at timestamptz default null) returns jsonb
 language plpgsql volatile set search_path = public as $$
 declare
   g public.progress%rowtype;
@@ -128,7 +128,9 @@ begin
     order by x.started_at desc limit 1;
   if found and not t.not_driving and t.ended_at <= p_started_at and p_started_at - t.ended_at <= interval '300 seconds'
      and g.last_end_at = t.ended_at and g.last_end_lat is not null and p_start_lat is not null
-     and private.distance_m(g.last_end_lat, g.last_end_lng, p_start_lat, p_start_lng) <= 402 then
+     and private.distance_m(g.last_end_lat, g.last_end_lng, p_start_lat, p_start_lng) <= 402
+     -- the union stays within the 12-hour drive bound; otherwise this is a separate drive
+     and (p_ended_at is null or p_ended_at - t.started_at <= interval '12 hours') then
     v_merge := jsonb_build_object(
       'tripId', t.id, 'clientTripId', t.client_trip_id,
       'startedAt', floor(extract(epoch from t.started_at) * 1000)::bigint,
@@ -230,6 +232,12 @@ begin
      or v_dur not between 0 and 43200 or char_length(v_poly) > 16384 or v_ended <= v_started or v_ended - v_started > interval '12 hours' then
     raise exception 'payload metrics are out of range' using errcode = 'invalid_parameter_value';
   end if;
+  if pg_column_size(bd) > 65536 then
+    raise exception 'breakdown is too large' using errcode = 'invalid_parameter_value';
+  end if;
+  if v_net not between -20000 and 20000 or coalesce((bd ->> 'ratingPenalty')::numeric, 0) not between 0 and 20000 then
+    raise exception 'net or ratingPenalty is out of range' using errcode = 'invalid_parameter_value';
+  end if;
   if jsonb_typeof(pl -> 'end') = 'object' then
     v_end_lat := (pl -> 'end' ->> 'lat')::double precision;
     v_end_lng := (pl -> 'end' ->> 'lng')::double precision;
@@ -262,21 +270,17 @@ begin
     v_dur := tgt.duration_s + v_dur; v_dms := tgt.dms_on or v_dms; v_face := tgt.dms_face_seen or v_face;
     v_poly := left(tgt.polyline || v_poly, 65536);
     v_trip := tgt.id;
+    if v_ended - v_started > interval '12 hours' then
+      raise exception 'merged drive would exceed 12 hours' using errcode = 'invalid_parameter_value';
+    end if;
   end if;
   v_week := private.league_week(v_started);
   v_snap := private.progress_snapshot(v_user);
   v_level_before := (v_snap ->> 'level')::int;
 
-  -- counts from the active events
-  select count(*), count(*) filter (where x ->> 'type' = 'speeding'), count(*) filter (where x ->> 'type' = 'phone_pickup'),
-         coalesce(sum((x ->> 'durationS')::numeric) filter (where x ->> 'type' = 'phone_handling'), 0)::int,
-         count(*) filter (where x ->> 'type' = 'hard_brake'), count(*) filter (where x ->> 'type' = 'hard_accel'),
-         count(*) filter (where x ->> 'type' = 'hard_corner'), count(*) filter (where x ->> 'type' = 'eyes_off'),
-         count(*) filter (where x ->> 'type' = 'drowsy')
-    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr
-    from jsonb_array_elements(ev) x where coalesce(x ->> 'status', 'active') = 'active';
-  v_clean := v_scored and v_n = 0;
-
+  -- the trip row first (counts follow once the events are stored)
+  v_n := 0; v_sp := 0; v_pk := 0; v_hs := 0; v_hb := 0; v_ha := 0; v_hc := 0; v_eo := 0; v_dr := 0;
+  v_clean := false;
   if v_merge is null then
     insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s,
         dms_on, dms_face_seen, polyline, scored, reason, is_loop, loop_repeat, safe_miles_earlier_today, points_net, breakdown, rating_penalty,
@@ -299,12 +303,19 @@ begin
       where id = v_trip;
   end if;
 
-  -- events: penalties from the breakdown by id; a replayed id keeps its row (status follows the input)
+  -- events: penalties from the breakdown by id. A new row is always active; an existing row keeps
+  -- `removed` only if it already was (removal happens in apply_dispute alone), whatever the input says.
   for e in select x from jsonb_array_elements(ev) x loop
     if (e ->> 'id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
        or e ->> 'type' not in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy')
        or e ->> 'tier' not in ('minor', 'moderate', 'severe') or (e ->> 'startedAt')::numeric is null or (e ->> 'durationS')::numeric is null then
       raise exception 'event needs id, type, tier, startedAt and durationS' using errcode = 'invalid_parameter_value';
+    end if;
+    if (e ->> 'startedAt')::numeric not between extract(epoch from v_started) * 1000 - 60000 and extract(epoch from v_ended) * 1000 + 60000 then
+      raise exception 'event starts outside the drive' using errcode = 'invalid_parameter_value';
+    end if;
+    if jsonb_typeof(e -> 'measured') = 'object' and pg_column_size(e -> 'measured') > 1024 then
+      raise exception 'event measured is too large' using errcode = 'invalid_parameter_value';
     end if;
     insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, units, stopped_in_traffic, zone, lat, lng, measured, penalty, status)
       values (v_trip, (e ->> 'id')::uuid, v_user, e ->> 'type', e ->> 'tier', to_timestamp((e ->> 'startedAt')::numeric / 1000.0),
@@ -313,10 +324,26 @@ begin
         (e ->> 'lat')::double precision, (e ->> 'lng')::double precision,
         case when jsonb_typeof(e -> 'measured') = 'object' then e -> 'measured' else '{}'::jsonb end,
         coalesce((select (b ->> 'penalty')::int from jsonb_array_elements(bd -> 'events') b where b ->> 'id' = e ->> 'id'), 0),
-        case when e ->> 'status' = 'removed' then 'removed' else 'active' end)
+        'active')
     on conflict (trip_id, client_event_id) do update
-      set penalty = excluded.penalty, status = excluded.status;
+      set penalty = excluded.penalty,
+          status = case when public.trip_events.status = 'removed' then 'removed' else 'active' end;
   end loop;
+
+  -- counts from the stored rows (the input's status is never trusted); the breakdown must agree
+  select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
+         least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
+         count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
+         count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type = 'eyes_off'), count(*) filter (where x.type = 'drowsy')
+    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr
+    from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
+  if v_scored and coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
+    raise exception 'events do not match the breakdown' using errcode = 'invalid_parameter_value';
+  end if;
+  v_clean := v_scored and v_n = 0;
+  update public.trips set n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha,
+      n_hard_corner = v_hc, n_eyes_off = v_eo, n_drowsy = v_dr, clean = v_clean
+    where id = v_trip;
 
   -- the merged-away payload keeps its own row (unscored, pointing at the target)
   if v_merge is not null then
@@ -334,6 +361,10 @@ begin
   if v_scored then
     if jsonb_typeof(v_after) <> 'object' then
       raise exception 'a scored drive needs streak.after' using errcode = 'invalid_parameter_value';
+    end if;
+    if (v_after ->> 'streak')::int not in (0, coalesce((st -> 'before' ->> 'streak')::int, 0), coalesce((st -> 'before' ->> 'streak')::int, 0) + 1)
+       or coalesce((v_after ->> 'freezes')::int, 0) not between 0 and 3 or coalesce((v_after ->> 'cleanRun')::int, 0) not between 0 and 1000 then
+      raise exception 'streak.after is not a streak transition' using errcode = 'invalid_parameter_value';
     end if;
     update public.progress set
       points = points + v_net,
@@ -404,7 +435,9 @@ begin
   if t.not_driving then
     raise exception 'already marked as not driving' using errcode = 'insufficient_privilege';
   end if;
-  if exists (select 1 from public.trips x where x.user_id = p_user and x.merged_into is null and x.started_at > t.started_at) then
+  -- the latest drive is the one applied last: its end is the end progress still holds (a late
+  -- upload of an older drive makes the newer one's snapshot stale, so it can no longer be reverted)
+  if (select g.last_end_at from public.progress g where g.user_id = p_user) is distinct from t.ended_at then
     raise exception 'only your latest drive can be marked' using errcode = 'insufficient_privilege';
   end if;
   if t.ended_at < now() - interval '24 hours' then
@@ -435,10 +468,11 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- disputes
 -- ---------------------------------------------------------------------------
--- dispute_context: validates and decides; writes nothing. Returns what the function needs to
--- re-score (the stored input and context with the event marked removed).
+-- dispute_context: locks the user's progress row (so two disputes in flight queue and the second
+-- reads the first's result), validates and decides; writes nothing. Returns what the function
+-- needs to re-score (the stored input and context with the event marked removed).
 create or replace function private.dispute_context(p_user uuid, p_client_trip_id uuid, p_event_id uuid, p_reason text) returns jsonb
-language plpgsql stable set search_path = public as $$
+language plpgsql volatile set search_path = public as $$
 declare
   t public.trips%rowtype;
   e public.trip_events%rowtype;
@@ -451,6 +485,10 @@ begin
   end if;
   if p_reason is null or p_reason not in ('hazard', 'wrong_limit', 'mounted') then
     raise exception 'reason must be hazard, wrong_limit or mounted' using errcode = 'invalid_parameter_value';
+  end if;
+  perform 1 from public.progress where user_id = p_user for update;
+  if not found then
+    raise exception 'no progress for user' using errcode = 'no_data_found';
   end if;
   select * into t from public.trips x where x.user_id = p_user and x.client_trip_id = p_client_trip_id;
   if not found or t.merged_into is not null or t.not_driving then
@@ -516,6 +554,8 @@ declare
   t public.trips%rowtype;
   e public.trip_events%rowtype;
   v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_eo int; v_dr int;
+  v_why text := p ->> 'rejectReason';
+  v_used int;
 begin
   if v_user is null or v_trip is null or v_event is null or v_reason not in ('hazard', 'wrong_limit', 'mounted')
      or v_status not in ('accepted', 'rejected') or (bd is not null and jsonb_typeof(bd) <> 'object') or pg_column_size(p) > 262144 then
@@ -533,9 +573,18 @@ begin
   if e.status <> 'active' or exists (select 1 from public.event_disputes d where d.trip_id = v_trip and d.client_event_id = v_event) then
     raise exception 'already disputed' using errcode = 'insufficient_privilege';
   end if;
+  -- the weekly quota, re-counted under the lock: the decision in dispute_context may be stale
+  if v_status = 'accepted' and v_reason in ('hazard', 'wrong_limit') then
+    select count(*) into v_used from public.event_disputes d
+      where d.user_id = v_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
+    if v_used >= 3 then
+      v_status := 'rejected';
+      v_why := 'quota';
+    end if;
+  end if;
   insert into public.event_disputes (trip_id, client_event_id, user_id, reason, status) values (v_trip, v_event, v_user, v_reason, v_status);
   if v_status = 'rejected' then
-    return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', p ->> 'rejectReason',
+    return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', v_why,
       'net', t.points_net, 'delta', 0, 'progress', private.progress_json(v_user, false));
   end if;
   update public.trip_events set status = 'removed' where trip_id = v_trip and client_event_id = v_event;
@@ -546,13 +595,20 @@ begin
   if t.scored and bd is not null then
     v_old := t.points_net;
     v_net := coalesce((p ->> 'net')::int, (bd ->> 'net')::int, v_old);
+    if v_net not between -20000 and 20000 or coalesce((bd ->> 'ratingPenalty')::numeric, 0) not between 0 and 20000 or pg_column_size(bd) > 65536 then
+      raise exception 'net or ratingPenalty is out of range' using errcode = 'invalid_parameter_value';
+    end if;
     v_delta := v_net - v_old;
     select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
-           coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0)::int,
+           least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
            count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
            count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type = 'eyes_off'), count(*) filter (where x.type = 'drowsy')
       into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr
       from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
+    -- a breakdown scored over a different set of active events (another dispute landed in between): retry
+    if coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
+      raise exception 'stale breakdown' using errcode = 'serialization_failure';
+    end if;
     update public.trip_events x set penalty = coalesce((select (b ->> 'penalty')::int from jsonb_array_elements(bd -> 'events') b where b ->> 'id' = x.client_event_id::text), 0)
       where x.trip_id = v_trip;
     update public.trips set points_net = v_net, breakdown = bd, rating_penalty = coalesce((bd ->> 'ratingPenalty')::int, rating_penalty),
@@ -602,7 +658,7 @@ begin
   select m.group_id into v_group from public.league_members m where m.week = v_week and m.user_id = v_uid;
   return jsonb_build_object(
     'profile', (select jsonb_build_object('user_id', p.id, 'username', p.username, 'license_stage', p.license_stage, 'units', p.units,
-        'state', p.state, 'heatmap_visibility', p.heatmap_visibility, 'league_eligible', p.league_eligible, 'flagged', p.flagged,
+        'state', p.state, 'heatmap_visibility', p.heatmap_visibility, 'league_eligible', p.league_eligible,
         'onboarded_at', p.onboarded_at) from public.profiles p where p.id = v_uid),
     'progress', jsonb_build_object('points', g.points, 'lifetime', g.lifetime, 'level', g.level,
         'level_floor', private.level_floor(g.level), 'level_next', case when g.level >= 50 then null else private.level_floor(g.level + 1) end,

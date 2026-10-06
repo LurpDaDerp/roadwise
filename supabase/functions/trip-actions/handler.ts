@@ -77,8 +77,10 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
   const a = parsed.data;
   const ctx = { requestId: id, action: a.action, clientTripId: a.clientTripId };
 
-  try {
-    const result = await deps.engine.transaction(async (tx) => {
+  // One transaction; a 40001 (another dispute landed between context and apply, so the re-score
+  // was over a different set of events) is retried once from the context.
+  const attempt = () =>
+    deps.engine.transaction(async (tx) => {
       if (!(await tx.takeRateLimit(userId, ACTION_LIMIT_KEY, '1 hour', MAX_ACTIONS_PER_HOUR))) return { kind: 'limited' as const };
 
       if (a.action === 'not_driving' || a.reason === 'not_driving') {
@@ -115,6 +117,15 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
       if (!r.success) throw new EngineContractError('private.apply_dispute');
       return { kind: 'dispute' as const, body: { action: 'dispute', clientTripId: a.clientTripId, quotaLeft: d.quotaLeft, ...r.data } };
     });
+  try {
+    let result: Awaited<ReturnType<typeof attempt>>;
+    try {
+      result = await attempt();
+    } catch (err) {
+      if (!(isPgError(err) && err.code === '40001')) throw err;
+      log.warn('trip-actions retried once after a serialization failure', ctx);
+      result = await attempt();
+    }
     if (result.kind === 'limited') return reply(json(429, { code: 'too_many_requests' }, { 'retry-after': '600' }));
     return reply(json(200, result.body));
   } catch (err) {

@@ -29,7 +29,7 @@ begin
     'about', jsonb_build_object('excluded', jsonb_build_array(
       'device push tokens and push delivery receipts', 'rate-limit counters', 'the merge-check end point of your latest drive')),
     'account', v_account,
-    'profile', (select to_jsonb(p) from public.profiles p where p.id = p_user),
+    'profile', (select to_jsonb(p) - 'flagged' from public.profiles p where p.id = p_user),
     'consents', coalesce((select jsonb_agg(to_jsonb(c) order by c.created_at) from public.consents c where c.user_id = p_user), '[]'::jsonb),
     'devices', coalesce((select jsonb_agg(jsonb_build_object('device_id', d.device_id, 'platform', d.platform, 'last_seen_at', d.last_seen_at, 'created_at', d.created_at) order by d.created_at)
       from public.devices d where d.user_id = p_user), '[]'::jsonb),

@@ -59,6 +59,8 @@ create index trips_user_started_idx on public.trips (user_id, started_at desc);
 create index trips_user_week_idx on public.trips (user_id, league_week);
 create index trips_user_day_idx on public.trips (user_id, local_day);
 create index trips_merged_into_idx on public.trips (merged_into) where merged_into is not null;
+-- time-leading scans (inserts arrive roughly in time order, so BRIN is enough)
+create index trips_started_brin on public.trips using brin (started_at);
 create trigger trips_touch before update on public.trips for each row execute function public.touch_updated_at();
 
 -- one row per device-detected event; client_event_id is the id the breakdown refers to
@@ -257,7 +259,8 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- cron: the rating decays as drives age out of the 30-day window
+-- cron: the rating decays as drives age out of the 30-day window. Driven from progress, so a user
+-- whose drives have all aged out is still refreshed (and un-ranked) and a missed run self-heals.
 -- ---------------------------------------------------------------------------
 create or replace function private.refresh_ratings_daily() returns int
 language plpgsql volatile set search_path = public as $$
@@ -266,7 +269,9 @@ declare
   v_n int := 0;
 begin
   for v_user in
-    select distinct t.user_id from public.trips t where t.started_at > now() - interval '31 days'
+    select g.user_id from public.progress g
+    where (g.miles_30d > 0 or g.safety_rating is not null)
+      and (g.rating_updated_at is null or g.rating_updated_at < now() - interval '20 hours')
   loop
     perform private.refresh_rating(v_user);
     v_n := v_n + 1;

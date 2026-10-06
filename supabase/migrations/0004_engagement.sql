@@ -65,6 +65,10 @@ declare
   v_miles numeric;
   v_drives int;
 begin
+  -- a week that has ended gets no challenges (a late upload still scores, but counts for nothing weekly)
+  if private.week_key_end(p_week) <= now() then
+    return;
+  end if;
   if exists (select 1 from public.weekly_challenges w where w.user_id = p_user and w.league_week = p_week) then
     return;
   end if;
@@ -118,6 +122,9 @@ declare
   v_done jsonb := '[]'::jsonb;
   v_fp int;
 begin
+  if private.week_key_end(p_week) <= now() then
+    return v_done;
+  end if;
   for r in
     select w.slot, w.template_id, c.title, c.target
     from public.weekly_challenges w join public.challenge_templates c on c.id = w.template_id

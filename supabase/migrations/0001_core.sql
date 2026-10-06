@@ -88,6 +88,14 @@ language sql immutable set search_path = public as $$
           at time zone 'America/New_York')
 $$;
 
+-- the Monday 00:00 New York that ends a week key ('IYYY-Www'): Jan 4 is always in ISO week 1
+create or replace function private.week_key_end(p_week text) returns timestamptz
+language sql immutable set search_path = public as $$
+  select ((make_date(substr(p_week, 1, 4)::int, 1, 4)
+           - (extract(isodow from make_date(substr(p_week, 1, 4)::int, 1, 4))::int - 1)
+           + 7 * (substr(p_week, 7, 2)::int - 1) + 7)::timestamp at time zone 'America/New_York')
+$$;
+
 -- level n is reached at 250 * n(n-1)/2 lifetime points, capped at 50 (plan §2 levelFor)
 create or replace function private.level_for(p_lifetime int) returns int
 language sql immutable set search_path = public as $$
@@ -166,6 +174,8 @@ create table public.profiles (
 );
 -- the global board's optional state filter
 create index profiles_state_idx on public.profiles (state) where state is not null;
+-- search_users' prefix match (`username::text like 'abc%'`)
+create index profiles_username_text_idx on public.profiles ((username::text) text_pattern_ops);
 
 create table public.consents (
   id uuid primary key default gen_random_uuid(),
@@ -354,7 +364,7 @@ begin
   if not private.is_clean_name(v) then
     return 'not_allowed';
   end if;
-  if exists (select 1 from public.profiles where lower(username::text) = v) then
+  if exists (select 1 from public.profiles where username operator(extensions.=) v::extensions.citext) then
     return 'taken';
   end if;
   return null;
@@ -482,11 +492,18 @@ end $$;
 -- register_device(p_device_id, p_platform, p_push_token) -> { league_eligible }
 -- The first account to register a device claims it for leagues (one league-eligible account per
 -- device). A later account on the same device still registers (for push) but earns no claim.
+-- The id is client-supplied, so this is a speed bump, bounded three ways: at most 10 new ids a
+-- day and 10 device rows per account (the oldest seen go), at most 3 claims per account, a claim is
+-- released once its claimant has not been seen on that device for 90 days, and an account whose
+-- push token just moved from an account that holds a claim on that install earns no claim.
 create or replace function public.register_device(p_device_id text, p_platform text, p_push_token text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid();
   v_eligible boolean;
+  v_known boolean;
+  v_token_claimed boolean := false;
+  v_released uuid;
 begin
   if v_uid is null then
     raise exception 'register_device requires an authenticated user' using errcode = 'insufficient_privilege';
@@ -501,6 +518,16 @@ begin
     raise exception 'invalid push token' using errcode = 'invalid_parameter_value';
   end if;
   perform private.require_rate_limit(v_uid, 'register_device', interval '1 hour', 60);
+  v_known := exists (select 1 from public.devices d where d.user_id = v_uid and d.device_id = p_device_id);
+  if not v_known then
+    perform private.require_rate_limit(v_uid, 'register_device_new', interval '1 day', 10);
+  end if;
+  -- the token's previous holder owns a claim on that install: this account gets none for it
+  if p_push_token is not null then
+    v_token_claimed := exists (
+      select 1 from public.devices d join public.device_league_claims c on c.user_id = d.user_id and c.device_id = d.device_id
+      where d.push_token = p_push_token and d.user_id <> v_uid);
+  end if;
   insert into public.devices (user_id, device_id, platform, push_token, last_seen_at)
     values (v_uid, p_device_id, p_platform, p_push_token, now())
   on conflict (user_id, device_id) do update
@@ -511,8 +538,21 @@ begin
   if p_push_token is not null then
     update public.devices set push_token = null where push_token = p_push_token and user_id <> v_uid;
   end if;
-  insert into public.device_league_claims (device_id, user_id) values (p_device_id, v_uid)
-    on conflict (device_id) do nothing;
+  -- at most 10 device rows per account: the least recently seen go
+  delete from public.devices d where d.user_id = v_uid and d.device_id in (
+    select x.device_id from public.devices x where x.user_id = v_uid order by x.last_seen_at desc, x.device_id offset 10);
+  -- a claim whose holder has not been seen on the device for 90 days is released
+  delete from public.device_league_claims c
+    where c.device_id = p_device_id and c.user_id <> v_uid
+      and not exists (select 1 from public.devices d where d.user_id = c.user_id and d.device_id = c.device_id and d.last_seen_at > now() - interval '90 days')
+    returning c.user_id into v_released;
+  if v_released is not null then
+    update public.profiles set league_eligible = exists (select 1 from public.device_league_claims c where c.user_id = v_released) where id = v_released;
+  end if;
+  if not v_token_claimed and (select count(*) from public.device_league_claims c where c.user_id = v_uid) < 3 then
+    insert into public.device_league_claims (device_id, user_id) values (p_device_id, v_uid)
+      on conflict (device_id) do nothing;
+  end if;
   v_eligible := exists (select 1 from public.device_league_claims c where c.user_id = v_uid);
   update public.profiles set league_eligible = v_eligible where id = v_uid and league_eligible is distinct from v_eligible;
   return jsonb_build_object('league_eligible', v_eligible);
@@ -547,7 +587,9 @@ create policy app_config_public on public.app_config for select to anon, authent
 -- ---------------------------------------------------------------------------
 revoke all on public.profiles, public.consents, public.devices, public.device_league_claims, public.progress,
   public.rate_limits, public.app_config from anon, authenticated;
-grant select on public.profiles to authenticated;
+-- flagged is moderation state: never shown to its owner
+grant select (id, username, license_stage, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at)
+  on public.profiles to authenticated;
 grant select on public.consents to authenticated;
 grant select (user_id, points, lifetime, level, streak, at_risk, freezes, freezes_granted_at, clean_run, freeze_progress,
   phone_free_run, safety_rating, ranked, miles_30d, clean_miles_30d, rating_updated_at, league_tier, created_at, updated_at)

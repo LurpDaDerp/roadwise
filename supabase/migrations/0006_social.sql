@@ -187,7 +187,7 @@ begin
   end if;
   perform private.require_rate_limit(v_uid, 'get_profile', interval '1 minute', 60);
   select p.id, p.heatmap_visibility into v_other, v_vis from public.profiles p
-    where lower(p.username::text) = lower(p_username) and p.onboarded_at is not null;
+    where p.username operator(extensions.=) p_username::extensions.citext and p.onboarded_at is not null;
   if v_other is null or private.blocked_either(v_uid, v_other) then
     raise exception 'profile not found' using errcode = 'no_data_found';
   end if;
@@ -408,6 +408,9 @@ begin
   if (select count(*) from public.blocks b where b.blocker_id = v_uid) >= 500 then
     raise exception 'you have reached the block limit' using errcode = 'insufficient_privilege';
   end if;
+  if not exists (select 1 from public.profiles p where p.id = p_user_id) then
+    raise exception 'profile not found' using errcode = 'no_data_found';
+  end if;
   insert into public.blocks (blocker_id, blocked_id) values (v_uid, p_user_id) on conflict do nothing;
   delete from public.friendships where user_a = least(v_uid, p_user_id) and user_b = greatest(v_uid, p_user_id);
   delete from public.friend_requests where (from_id = v_uid and to_id = p_user_id) or (from_id = p_user_id and to_id = v_uid);
@@ -443,7 +446,8 @@ begin
     from public.blocks b join public.profiles p on p.id = b.blocked_id where b.blocker_id = v_uid), '[]'::jsonb);
 end $$;
 
--- report_target(p_kind, p_target_id, p_reason, p_note): 10/day; never confirms the target exists
+-- report_target(p_kind, p_target_id, p_reason, p_note): 10/day; an unknown target is the same fixed
+-- refusal as everywhere else (the budget is taken first, so the answer costs a report)
 create or replace function public.report_target(p_kind text, p_target_id uuid, p_reason text, p_note text default '') returns void
 language plpgsql security definer set search_path = public as $$
 declare
@@ -465,6 +469,12 @@ begin
     raise exception 'kind must be user or clan with a target id' using errcode = 'invalid_parameter_value';
   end if;
   perform private.require_rate_limit(v_uid, 'report_target', interval '1 day', 10);
+  if p_kind = 'user' and not exists (select 1 from public.profiles p where p.id = p_target_id) then
+    raise exception 'profile not found' using errcode = 'no_data_found';
+  end if;
+  if p_kind = 'clan' and not exists (select 1 from public.clans c where c.id = p_target_id) then
+    raise exception 'clan not found' using errcode = 'no_data_found';
+  end if;
   insert into public.reports (reporter_id, target_kind, target_id, reason, note)
     values (v_uid, p_kind, p_target_id, p_reason, regexp_replace(p_note, '[[:cntrl:]]', '', 'g'));
 end $$;
@@ -486,7 +496,7 @@ begin
   if not private.is_clean_name(v) then
     return 'not_allowed';
   end if;
-  if exists (select 1 from public.clans c where lower(c.name::text) = lower(v)) then
+  if exists (select 1 from public.clans c where c.name operator(extensions.=) v::extensions.citext) then
     return 'taken';
   end if;
   return null;
@@ -774,7 +784,7 @@ begin
   if v_clan is null then
     raise exception 'only the leader can do that' using errcode = 'insufficient_privilege';
   end if;
-  if p_name is not null and not exists (select 1 from public.clans c where c.id = v_clan and lower(c.name::text) = lower(v_name)) then
+  if p_name is not null and not exists (select 1 from public.clans c where c.id = v_clan and c.name operator(extensions.=) v_name::extensions.citext) then
     perform private.require_rate_limit(v_uid, 'update_clan', interval '1 day', 5);
     v_problem := private.clan_name_problem(v_name);
     if v_problem = 'taken' then

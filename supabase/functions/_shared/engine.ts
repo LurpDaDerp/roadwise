@@ -108,6 +108,7 @@ export interface DriveContextArgs {
   clientTripId: string;
   /** epoch ms */
   startedAt: number;
+  endedAt: number;
   /** YYYY-MM-DD, the server's own derivation */
   localDay: string;
   start: { lat: number; lng: number } | null;
@@ -226,7 +227,8 @@ function txPort(tx: Tx): EngineTx {
     async driveContext(a) {
       const r = await call<unknown>('private.drive_context', () =>
         tx<{ r: unknown }[]>`select private.drive_context(${a.userId}::uuid, ${a.clientTripId}::uuid, to_timestamp(${a.startedAt}::double precision / 1000.0),
-          ${a.localDay}::date, ${a.start?.lat ?? null}::double precision, ${a.start?.lng ?? null}::double precision) as r`
+          ${a.localDay}::date, ${a.start?.lat ?? null}::double precision, ${a.start?.lng ?? null}::double precision,
+          to_timestamp(${a.endedAt}::double precision / 1000.0)) as r`
       );
       const parsed = DriveContextSchema.safeParse(r);
       if (!parsed.success) throw new EngineContractError('private.drive_context');

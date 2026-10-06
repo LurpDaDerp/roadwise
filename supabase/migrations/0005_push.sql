@@ -409,7 +409,14 @@ declare
   v_tz text;
   v_local timestamp;
   v_week text;
+  v_utc timestamp := now() at time zone 'UTC';
 begin
+  -- Sunday 18:xx somewhere on Earth lies between Saturday 04:00 and Monday 08:00 UTC; outside that
+  -- window nothing can be due and the fact table is not scanned
+  if not ((extract(isodow from v_utc) = 6 and extract(hour from v_utc) >= 4) or extract(isodow from v_utc) = 7
+          or (extract(isodow from v_utc) = 1 and extract(hour from v_utc) < 8)) then
+    return 0;
+  end if;
   for r in
     select distinct t.user_id from public.trips t where t.started_at > now() - interval '7 days' and t.merged_into is null
   loop

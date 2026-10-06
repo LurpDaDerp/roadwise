@@ -121,6 +121,24 @@ Deno.test("the writers' fixed refusals become codes; everything else maps as usu
   }
 });
 
+Deno.test('a 40001 from apply_dispute (a stale breakdown) is retried once from the context, then surfaces as 503', async () => {
+  let calls = 0;
+  const flaky = harness({
+    applyDispute: (e: ApplyDisputeEnvelope) => {
+      calls++;
+      if (calls === 1) throw new PgError('40001', 'stale breakdown');
+      return disputeResult(e);
+    },
+  });
+  const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), flaky.deps);
+  assertEquals(res.status, 200);
+  assertEquals(flaky.fake.transactions, { opened: 2, failed: 1 });
+  assertEquals(flaky.fake.calls.map((c) => c.fn), ['takeRateLimit', 'disputeContext', 'applyDispute', 'takeRateLimit', 'disputeContext', 'applyDispute']);
+  const always = harness({ applyDispute: new PgError('40001', 'stale breakdown') });
+  const res2 = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), always.deps);
+  assertEquals([res2.status, (await res2.json()).code, always.fake.transactions.opened], [503, 'retry', 2]);
+});
+
 Deno.test('refusals before the engine: method, token, contract, size; the budget answers 429', async () => {
   const h = harness();
   assertEquals((await handleTripAction(new Request('http://local/x', { method: 'GET' }), h.deps)).status, 405);

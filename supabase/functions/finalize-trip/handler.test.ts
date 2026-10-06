@@ -43,7 +43,7 @@ Deno.test('happy path: the spec example scores 177 − 10 = 167 inside one trans
   assertEquals([body.net, body.scored, body.clientTripId], [167, true, TRIP]);
   assertEquals(h.fake.transactions, { opened: 1, failed: 0 });
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'applyDrive']);
-  assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
+  assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
   assertEquals(h.fake.calls[1].args, { userId: USER, key: UPLOAD_LIMIT_KEY, window: '1 day', max: MAX_UPLOADS_PER_DAY });
   const e = envelopeOf(h);
   assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 167]);

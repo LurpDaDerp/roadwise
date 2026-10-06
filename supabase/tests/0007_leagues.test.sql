@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(33);
+select plan(36);
 
 -- 40 users: u01..u40, all onboarded and eligible
 insert into auth.users (id, email) select ('b0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid, 'u' || i || '@example.com' from generate_series(1, 40) i;
@@ -35,6 +35,8 @@ select is(private.place_in_league(pg_temp.u(1), private.league_week(now())), '{"
 update public.profiles set league_eligible = false where id = pg_temp.u(40);
 select is(private.place_in_league(pg_temp.u(40), private.league_week(now())), '{"tier": "bronze", "placed": false}'::jsonb, 'an ineligible user is not placed');
 select is((select count(*)::int from public.league_members where week = private.league_week(now())), 31, 'still 31 members');
+select is(private.place_in_league(pg_temp.u(32), private.league_week(now() - interval '7 days')), '{"tier": "bronze", "placed": false}'::jsonb, 'a late upload for a closed week scores but is not placed');
+select is((select count(*)::int from public.league_groups where week = private.league_week(now() - interval '7 days')), 0, 'and opens no group');
 
 -- ---------------------------------------------------------------------------
 -- close: a silver group of 12 last week
@@ -97,6 +99,7 @@ select is((select l -> 'members' -> 0 from ml), jsonb_build_object('rank', 1, 'u
 select is((select l -> 'members' -> 1 ->> 'is_me' from ml), 'true', 'the caller is marked');
 select is((select array_agg(x ->> 'username' order by (x ->> 'rank')::int) from jsonb_array_elements(public.get_friends_board('week')) x), array['user2', 'user1'], 'friends board: self and friends, the blocked friend omitted');
 select is((select x -> 'value' from jsonb_array_elements(public.get_friends_board('rating')) x where x ->> 'username' = 'user2'), '95.0'::jsonb, 'the rating metric');
+select is((select array_agg(coalesce(x ->> 'value', 'null') order by (x ->> 'rank')::int) from jsonb_array_elements(public.get_friends_board('rating')) x), array['95.0', 'null'], 'an unranked driver has no rating value and sorts last');
 select throws_ok($$ select public.get_friends_board('points') $$, '22023', 'metric must be week or rating', 'an unknown metric is refused');
 create temporary table gb as select public.get_global_board(null) as g;
 select is((select array_agg(x ->> 'username' order by (x ->> 'rank')::int) from gb, jsonb_array_elements(g -> 'top') x), array['user2', 'user4', 'user5'], 'the global top: 100+ miles only, ties by clean miles');

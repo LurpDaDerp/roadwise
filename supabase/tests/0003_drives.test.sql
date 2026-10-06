@@ -4,7 +4,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(72);
+select plan(83);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -149,6 +149,15 @@ select is((select private.dispute_context('00000000-0000-0000-0000-000000000001'
 select private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
   'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'rejected', 'rejectReason', 'quota'));
 select is((select row(status, penalty)::text from public.trip_events where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003'), row('active', 10)::text, 'a rejected dispute leaves the event active');
+delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
+select is((private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
+  'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 3}'::jsonb, 'net', 100))) - 'progress' - 'tripId',
+  '{"net": 10, "delta": 0, "status": "rejected", "eventId": "a1a1a1a1-0000-4000-8000-000000000003", "rejectReason": "quota"}'::jsonb,
+  'an accepted decision past the quota is re-counted under the lock and stored rejected');
+delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
+select throws_ok($$ select private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
+  'eventId', 'a1a1a1a1-0000-4000-8000-000000000005', 'reason', 'mounted', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 1}'::jsonb, 'net', 100)) $$,
+  '40001', 'stale breakdown', 'a breakdown scored over a different set of active events is a retry');
 select is((select private.dispute_context('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444', 'a1a1a1a1-0000-4000-8000-000000000004', 'mounted')) ->> 'rejectReason', 'not_mounted',
   'mounted: a 20 s pickup is rejected even when mounted');
 select is((select private.dispute_context('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444', 'a1a1a1a1-0000-4000-8000-000000000005', 'mounted')) ->> 'status', 'accepted',
@@ -183,6 +192,7 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '66666666-6666-4666
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$,
   '42501', 'no uses left this month', 'the third use in a month is refused');
 update public.trips set ended_at = ended_at - interval '26 hours', started_at = started_at - interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.progress set last_end_at = last_end_at - interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 update public.trips set not_driving_at = now() - interval '40 days' where client_trip_id in ('44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555');
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$,
   '42501', 'the drive is older than 24 hours', 'and a drive older than 24 h cannot be marked');
@@ -190,9 +200,34 @@ select is((select flagged from public.profiles where id = '00000000-0000-0000-00
 -- flagging: 3 of the last 4 uses on drives with events
 update public.trips set n_events = 2 where client_trip_id = '55555555-5555-4555-8555-555555555555';
 update public.trips set ended_at = ended_at + interval '26 hours', started_at = started_at + interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+update public.progress set last_end_at = last_end_at + interval '26 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 update public.trips set n_events = 1 where client_trip_id = '66666666-6666-4666-8666-666666666666';
 select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$, 'a third use (new month)');
 select is((select flagged from public.profiles where id = '00000000-0000-0000-0000-000000000001'), true, 'three of the last uses were on drives with events: flagged');
+
+-- an older drive applied after a newer one makes the newer one's snapshot stale: it can no longer be reverted
+select pg_temp.drive('00000000-0000-0000-0000-000000000001', '88888888-8888-4888-8888-888888888888', pg_temp.t0() + interval '300 minutes', 10, 2, 20, '[]');
+select pg_temp.drive('00000000-0000-0000-0000-000000000001', '89898989-8989-4989-8989-898989898989', pg_temp.t0() + interval '200 minutes', 10, 2, 20, '[]');
+select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '88888888-8888-4888-8888-888888888888') $$,
+  '42501', 'only your latest drive can be marked', 'the newer-started drive is not the last applied: refused');
+reset role;
+update public.trips set not_driving_at = now() - interval '40 days' where not_driving;
+select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '89898989-8989-4989-8989-898989898989') $$, 'the last applied one can be');
+
+-- envelope invariants: a fresh event is stored active whatever it says; bounds are fixed 22023s
+select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a', pg_temp.t0() + interval '320 minutes', 10, 2, 20,
+  '[{"id":"c1c1c1c1-0000-4000-8000-000000000001","type":"hard_brake","status":"removed"}]');
+select is((select status from public.trip_events where client_event_id = 'c1c1c1c1-0000-4000-8000-000000000001'), 'active',
+  'an uploaded event marked removed is stored active (only apply_dispute removes)');
+select is((select row(n_events, clean)::text from public.trips where client_trip_id = '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a'), row(1, false)::text, 'and counted');
+select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', pg_temp.t0() + interval '340 minutes', 10, 2, 50000, '[]') $$,
+  '22023', 'net or ratingPenalty is out of range', 'a net outside ±20000 is refused');
+select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', pg_temp.t0() + interval '340 minutes', 10, 2, 20, '[]', null, '{"streak": {"before": {"streak": 3}, "after": {"streak": 9, "atRisk": false, "freezes": 2, "cleanRun": 0}, "outcome": "grew", "freezeEarned": false}}') $$,
+  '22023', 'streak.after is not a streak transition', 'a streak jump is refused');
+select is((private.drive_context('00000000-0000-0000-0000-000000000001', '8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', pg_temp.t0() + interval '332 minutes', (pg_temp.t0() at time zone 'America/New_York')::date, 47.61, -122.31, pg_temp.t0() + interval '17 hours 21 minutes')) -> 'merge', 'null'::jsonb,
+  'a merge whose union would exceed 12 hours is refused: scored as a separate drive');
+select isnt((private.drive_context('00000000-0000-0000-0000-000000000001', '8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', pg_temp.t0() + interval '332 minutes', (pg_temp.t0() at time zone 'America/New_York')::date, 47.61, -122.31, pg_temp.t0() + interval '6 hours')) -> 'merge', 'null'::jsonb,
+  'within 12 hours it merges');
 
 -- ---------------------------------------------------------------------------
 -- rating and stats
@@ -200,12 +235,13 @@ select is((select flagged from public.profiles where id = '00000000-0000-0000-00
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '77777777-7777-4777-8777-777777777777', pg_temp.t0() + interval '120 minutes', 10, 10, 50,
   '[{"id":"b1b1b1b1-0000-4000-8000-000000000001","type":"phone_pickup","tier":"severe","penalty":40}]', null, '{"ratingPenalty": 40}');
 select is((select row(miles_30d, clean_miles_30d, rating_penalty_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
-  row(25.00, 15.00, 40.00, 84.0, true)::text, '25 miles: ranked; R = 40/25*100 = 160 -> 84.0; clean miles exclude the pickup drive');
-select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 25.00, "drives": 2, "drowsy": 0, "eyesOff": 0, "pickups": 1, "durationS": 3480, "hardAccel": 0, "hardBrake": 0, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 1}'::jsonb,
+  row(29.00, 17.00, 40.00, 86.2, true)::text, '29 miles: ranked; R = 40/29*100 = 138 -> 86.2; clean miles exclude the drives with events');
+select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "drowsy": 0, "eyesOff": 0, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2}'::jsonb,
   'stat sums cover the kept scored drives only');
 update public.trips set started_at = started_at - interval '32 days', ended_at = ended_at - interval '32 days' where client_trip_id = '77777777-7777-4777-8777-777777777777';
-select private.refresh_ratings_daily();
-select is((select row(miles_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(15.00, 100.0, false)::text, 'the daily refresh ages drives out of the window');
+update public.progress set rating_updated_at = now() - interval '21 hours' where user_id = '00000000-0000-0000-0000-000000000001';
+select is(private.refresh_ratings_daily(), 1, 'the daily refresh picks the user whose rating is 20 h old');
+select is((select row(miles_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(19.00, 100.0, false)::text, 'the daily refresh (driven from progress) ages drives out of the window');
 select is((select round(private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '30 days'), 1)), 60.0, 'rating_as_of sees only the drive inside its window (one pickup per 10 mi)');
 
 -- ---------------------------------------------------------------------------
@@ -213,12 +249,12 @@ select is((select round(private.rating_as_of('00000000-0000-0000-0000-0000000000
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
-select is((select jsonb_array_length(public.list_my_drives(null, 10))), 5, 'A lists the five kept drives (the merged-away payload is not a drive)');
+select is((select jsonb_array_length(public.list_my_drives(null, 10))), 8, 'A lists the eight drives (the merged-away payload is not a drive)');
 select is((select array_agg(d ->> 'clientTripId' order by (d ->> 'startedAt')::bigint desc) from jsonb_array_elements(public.list_my_drives(pg_temp.t0() + interval '10 minutes', 2)) d), array['11111111-1111-4111-8111-111111111111', '77777777-7777-4777-8777-777777777777'], 'the cursor and limit apply');
 select is((select d -> 'events' #>> '{0,status}' from jsonb_array_elements(public.list_my_drives(null, 10)) d where d ->> 'clientTripId' = '11111111-1111-4111-8111-111111111111'), 'removed', 'events carry their status');
 select is((select d ? 'progress_before' from jsonb_array_elements(public.list_my_drives(null, 10)) d limit 1), false, 'progress_before is never sent');
 select throws_ok($$ select public.list_my_drives(null, 51) $$, '22023', 'limit must be between 1 and 50', 'the limit is bounded');
-select is(public.get_my_stat_sums(now() - interval '20 days') ->> 'drives', '1', 'stat sums since a moment');
+select is(public.get_my_stat_sums(now() - interval '20 days') ->> 'drives', '3', 'stat sums since a moment');
 select throws_ok($$ select count(*) from public.trips $$, '42501', null, 'trips are not readable directly');
 select throws_ok($$ select count(*) from public.trip_events $$, '42501', null, 'nor trip_events');
 select throws_ok($$ select count(*) from public.points_ledger $$, '42501', null, 'nor the ledger');
