@@ -7,8 +7,8 @@ import { fontFamilies } from '../fonts';
 import { type HudPalette, SIGN_DIAMETER_PT, SIGN_NUMERAL_PT, SIGN_RING_PT } from './hudTokens';
 
 export type SpeedSignProps = {
-  /** The limit from `useDriveLive`; null (unknown, low-confidence or a poor fix) prints "—". */
-  limitMph: number | null;
+  /** The limit in the driver's units, whole; null (unknown, low-confidence or a poor fix) prints "—". */
+  limit: number | null;
   palette: HudPalette;
 };
 
@@ -17,8 +17,8 @@ export type SpeedSignProps = {
  * keeps the sign and prints "—": a wrong limit shown confidently is worse than none. A sign graphic,
  * so its numeral holds its size under Dynamic Type like a real sign would.
  */
-function SpeedSignView({ limitMph, palette: p }: SpeedSignProps) {
-  const label = limitMph === null ? 'Speed limit unknown' : `Speed limit ${limitMph}`;
+function SpeedSignView({ limit, palette: p }: SpeedSignProps) {
+  const label = limit === null ? 'Speed limit unknown' : `Speed limit ${limit}`;
   return (
     <View
       testID="hud-limit"
@@ -33,7 +33,7 @@ function SpeedSignView({ limitMph, palette: p }: SpeedSignProps) {
         numberOfLines={1}
         style={[styles.value, { color: p.signInk }]}
       >
-        {limitMph === null ? t('common.unknown') : String(limitMph)}
+        {limit === null ? t('common.unknown') : String(limit)}
       </Text>
     </View>
   );

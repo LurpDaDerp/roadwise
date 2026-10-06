@@ -7,8 +7,10 @@ import { fontFamilies } from '../fonts';
 import { hudLabelScale } from './hudTokens';
 
 export type SpeedReadoutProps = {
-  /** Whole mph from `useDriveLive`, or null for "—". */
-  mph: number | null;
+  /** The whole-number speed in `unit`, or null for "—". */
+  speed: number | null;
+  /** Default mph. */
+  unit?: 'mph' | 'km/h';
   /** The numerals' colour: the ink, or the speeding tier's colour. */
   color: string;
   unitColor: string;
@@ -25,10 +27,11 @@ const UNIT_PT = 20;
  * limit the numerals take the tier's colour; nothing flashes. Silent to screen readers apart from
  * its label: no live region, since continuous speech is itself a distraction.
  */
-function SpeedReadoutView({ mph, color, unitColor, size, speeding = false }: SpeedReadoutProps) {
+function SpeedReadoutView({ speed, unit = 'mph', color, unitColor, size, speeding = false }: SpeedReadoutProps) {
   const { fontScale } = useWindowDimensions();
+  const spokenUnit = unit === 'km/h' ? 'kilometers per hour' : 'miles per hour';
   const label =
-    mph === null ? 'Speed unknown' : `Speed ${mph} miles per hour${speeding ? ', over the limit' : ''}`;
+    speed === null ? 'Speed unknown' : `Speed ${speed} ${spokenUnit}${speeding ? ', over the limit' : ''}`;
   return (
     <View testID="hud-speed" accessible accessibilityRole="text" accessibilityLabel={label}>
       <Text
@@ -38,13 +41,13 @@ function SpeedReadoutView({ mph, color, unitColor, size, speeding = false }: Spe
         adjustsFontSizeToFit
         style={[styles.numeral, { color, fontSize: size, lineHeight: Math.round(size * 1.05) }]}
       >
-        {mph === null ? t('common.unknown') : String(mph)}
+        {speed === null ? t('common.unknown') : String(speed)}
       </Text>
       <Text
         allowFontScaling={false}
         style={[styles.unit, { color: unitColor, fontSize: UNIT_PT * hudLabelScale(fontScale) }]}
       >
-        mph
+        {unit}
       </Text>
     </View>
   );

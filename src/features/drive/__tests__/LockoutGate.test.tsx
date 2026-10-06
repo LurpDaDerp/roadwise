@@ -21,7 +21,8 @@ jest.mock('@/drive/useDrive', () => ({
   useDrive: <T,>(sel: (s: Pick<DriveState, 'status' | 'lockedOut'>) => T) => sel(mockState),
 }));
 
-let backHandlers: (() => boolean | null | undefined)[] = [];
+type BackListener = Parameters<typeof BackHandler.addEventListener>[1];
+let backHandlers: BackListener[] = [];
 beforeEach(() => {
   jest.clearAllMocks();
   backHandlers = [];
@@ -35,7 +36,7 @@ beforeEach(() => {
   });
 });
 
-const back = (): boolean => backHandlers.some((h) => h() === true);
+const back = (): boolean => backHandlers.some((h) => h({} as never) === true);
 
 async function renderGate(state: Pick<DriveState, 'status' | 'lockedOut'>, path: string) {
   mockState = state;

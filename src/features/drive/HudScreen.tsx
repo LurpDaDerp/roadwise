@@ -24,6 +24,7 @@ import {
 import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudCopy } from './hudCopy';
 import { StoppedPoints } from './StoppedPoints';
+import { inUnits, unitLabel, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
 
 /** How often the HUD re-reads the sun (the night palette follows sunset within a few minutes). */
@@ -123,6 +124,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const { width, height } = useWindowDimensions();
   const night = useHudNight();
   const p = hudPalette(night);
+  const units = useHudUnits();
 
   const alert = useAlertFlash(live.lastAlert);
   const { dimmed, wake } = useDimmer(alert !== null);
@@ -190,8 +192,15 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
         <View style={styles.centre}>
           <View style={styles.gauges}>
-            <SpeedReadout mph={live.speedMph} color={speedColor} unitColor={p.inkMuted} size={numeral} speeding={speeding} />
-            <SpeedSign limitMph={live.limitMph} palette={p} />
+            <SpeedReadout
+              speed={inUnits(live.speedMph, units)}
+              unit={unitLabel(units)}
+              color={speedColor}
+              unitColor={p.inkMuted}
+              size={numeral}
+              speeding={speeding}
+            />
+            <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} />
           </View>
           {live.points !== null ? (
             <StoppedPoints total={live.points.total} change={live.points.sinceLastStop} palette={p} />

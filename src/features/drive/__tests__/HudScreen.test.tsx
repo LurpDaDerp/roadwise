@@ -15,6 +15,15 @@ jest.mock('expo-haptics', () => ({
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
 }));
 
+// The local settings mirror: `units` as WP9 writes it.
+let mockUnits: 'mi' | 'km' | null = null;
+const mockDb = {
+  execute: jest.fn(async (_sql: string, params: unknown[]) => ({
+    rows: params[0] === 'units' && mockUnits !== null ? [{ value_json: JSON.stringify(mockUnits) }] : [],
+  })),
+};
+jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb }));
+
 const T = 1_790_000_000_000;
 let mockLive: DriveLive;
 const mockEnd = jest.fn<Promise<{ clientTripId: string } | null>, []>();
@@ -47,6 +56,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
 async function renderHud(over: Partial<DriveLive> = {}) {
   mockLive = live(over);
   const r = await render(<HudScreen />);
+  await act(async () => {}); // the units read
   return {
     async update(next: Partial<DriveLive>) {
       mockLive = { ...mockLive, ...next };
@@ -58,6 +68,7 @@ async function renderHud(over: Partial<DriveLive> = {}) {
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
+  mockUnits = null;
   mockEnd.mockResolvedValue({ clientTripId: 't1' });
 });
 afterEach(() => jest.useRealTimers());
@@ -67,6 +78,27 @@ describe('speed and limit', () => {
     await renderHud();
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('34');
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
+  });
+
+  test('miles by default and when the mirror says mi', async () => {
+    mockUnits = 'mi';
+    await renderHud();
+    expect(screen.getByText('mph')).toBeTruthy();
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
+  });
+
+  test('km: the speed and the limit sign are converted to whole km/h', async () => {
+    mockUnits = 'km';
+    await renderHud({ speedMph: 34, limitMph: 35 });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('55');
+    expect(screen.getByText('km/h')).toBeTruthy();
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('56');
+  });
+
+  test('km: an unknown limit is still "—"', async () => {
+    mockUnits = 'km';
+    await renderHud({ limitMph: null });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
   });
 
   test('an unknown speed or limit is "—"', async () => {
