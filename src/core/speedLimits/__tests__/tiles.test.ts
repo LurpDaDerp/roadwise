@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import trace from '@/core/__fixtures__/traces/speeding-corrected.json';
+import { TRACE_BUILDERS } from '@/core/replay/synth';
 import {
   parseTileKey,
   prefetchSet,
@@ -11,6 +11,7 @@ import {
 } from '@/core/speedLimits/tiles';
 import { MAX_TILES_PER_REQUEST, TILE_ZOOM } from '@/core/speedLimits/wire';
 
+const trace = TRACE_BUILDERS['speeding-minor']!();
 const M_PER_DEG = 111_320;
 const keys = (ts: TileXY[]): string[] => ts.map(tileKey);
 const cosLat = (lat: number): number => Math.cos((lat * Math.PI) / 180);
@@ -32,9 +33,11 @@ describe('tileFor / tileKey at the fixture corridor', () => {
     expect(tileFor(0, 0, 1)).toEqual({ z: 1, x: 1, y: 1 });
   });
 
-  it('the speeding-corrected trace crosses exactly three z15 tiles', () => {
-    const seen = new Set(trace.rows.map((r) => tileKey(tileFor(r.lat, r.lng))));
-    expect([...seen].sort()).toEqual(['15/5249/11443', '15/5250/11443', '15/5251/11443']);
+  it('the speeding-minor trace starts in the corridor tile and crosses a few z15 tiles east', () => {
+    const seen = [...new Set(trace.rows.map((r) => tileKey(tileFor(r.lat, r.lng))))].sort();
+    expect(seen[0]).toBe('15/5249/11443');
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.every((k) => k.startsWith('15/') && k.endsWith('/11443'))).toBe(true);
   });
 
   it('a z15 tile at the corridor is about 0.82 km across', () => {

@@ -8,6 +8,7 @@ import {
   type ProfileGate,
   type SessionStatus,
 } from '@/features/auth/authGuard';
+import type { EngineStatus } from '@/core/engine/engine.types';
 import type { UpdateStatus } from '@/features/auth/version';
 
 const IDLE: DriveFacts = { busy: false, tripOpen: false };
@@ -30,16 +31,15 @@ describe('profileGate (v3: onboarded_at and a username)', () => {
 
 describe('driveFacts', () => {
   test.each<[string, boolean, DriveFacts]>([
-    ['off', false, { busy: false, tripOpen: false }],
+    ['idle', false, { busy: false, tripOpen: false }],
     ['recording', true, { busy: true, tripOpen: true }],
-    ['ending', true, { busy: true, tripOpen: true }],
     ['finalizing', true, { busy: true, tripOpen: false }],
   ])('%s', (status, hostBusy, expected) =>
-    expect(driveFacts({ status: status as never }, hostBusy)).toEqual(expected)
+    expect(driveFacts({ status: status as EngineStatus }, hostBusy)).toEqual(expected)
   );
 
   test('the host saying busy is enough, whatever the snapshot says', () =>
-    expect(driveFacts({ status: 'off' as never }, true).busy).toBe(true));
+    expect(driveFacts({ status: 'idle' }, true).busy).toBe(true));
 });
 
 describe('resolveStart', () => {
@@ -157,13 +157,15 @@ describe('resolveGate', () => {
 
 describe('pendingHrefFor (the deep links a gate may hold)', () => {
   test.each<[string, string | null]>([
-    ['/drives/abc_123-X', '/drives/abc_123-X'],
+    ['/drives/0f8fad5b-d9cb-469f-a165-70867728950e', '/drives/0f8fad5b-d9cb-469f-a165-70867728950e'],
+    ['/drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1', '/drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1'],
     ['/drives', '/drives'],
     ['/home', '/home'],
     ['/leagues', '/leagues'],
     ['/friends', '/friends'],
-    ['/settings/permissions', '/settings/permissions'],
     // Not allowlisted: nothing is held.
+    ['/settings/permissions', null],
+    ['/drives/abc_123', null],
     ['/', null],
     ['/drives/../settings', null],
     ['/drives/abc?x=1', null],

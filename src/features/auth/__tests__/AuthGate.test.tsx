@@ -24,7 +24,6 @@ const mockWorld: {
   segments: string[];
   pathname: string;
   driveStatus: string;
-  driveMode: string;
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
   db: Db | null;
@@ -35,8 +34,7 @@ const mockWorld: {
   profileSource: null,
   segments: [],
   pathname: '/',
-  driveStatus: 'off',
-  driveMode: 'mounted',
+  driveStatus: 'idle',
   hostBusy: false,
   update: 'ok',
   db: null,
@@ -58,8 +56,8 @@ jest.mock('expo-router', () => ({
   usePathname: () => mockWorld.pathname,
 }));
 jest.mock('@/drive/useDrive', () => ({
-  useDrive: (select: (s: { status: string; mode: string }) => unknown) =>
-    select({ status: mockWorld.driveStatus, mode: mockWorld.driveMode }),
+  useDrive: (select: (s: { status: string }) => unknown) =>
+    select({ status: mockWorld.driveStatus }),
   useDriveHost: () => ({ isBusy: () => mockWorld.hostBusy }),
 }));
 jest.mock('@/features/auth/version', () => ({
@@ -96,8 +94,7 @@ beforeEach(async () => {
     profileSource: null,
     segments: [],
     pathname: '/',
-    driveStatus: 'off',
-    driveMode: 'mounted',
+    driveStatus: 'idle',
     hostBusy: false,
     update: 'ok',
     db,
@@ -177,7 +174,7 @@ describe('a drive under way (rev1: I10)', () => {
     await view.rerender(gate());
     expect(mockReplace).not.toHaveBeenCalled();
 
-    mockWorld.driveStatus = 'off';
+    mockWorld.driveStatus = 'idle';
     mockWorld.hostBusy = false;
     await view.rerender(gate());
     expect(mockReplace).toHaveBeenCalledWith('/update-required');
@@ -200,7 +197,7 @@ describe('a drive under way (rev1: I10)', () => {
       profile: OWED,
       profileSource: 'network',
       segments: ['(tabs)', 'home'],
-      driveStatus: 'off',
+      driveStatus: 'idle',
       hostBusy: true,
     });
     expect(mockReplace).not.toHaveBeenCalled();
@@ -231,11 +228,11 @@ describe('a deep link blocked by onboarding', () => {
       profile: OWED,
       profileSource: 'network',
       segments: ['(app)', 'drives', '[clientTripId]'],
-      pathname: '/drives/t_123',
+      pathname: '/drives/t-123',
     });
     expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
     await waitFor(async () =>
-      expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: '/drives/t_123' })
+      expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: '/drives/t-123' })
     );
   });
 
@@ -303,13 +300,13 @@ describe('the sign-in attestation (accept_terms)', () => {
 describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
   const SEGMENTS: Record<string, string[]> = {
     '/drives': ['(app)', 'drives'],
-    '/drives/t_1': ['(app)', 'drives', '[clientTripId]'],
+    '/drives/t-1': ['(app)', 'drives', '[clientTripId]'],
     '/(tabs)/home': ['(tabs)', 'home'],
     '/(onboarding)/start': ['(onboarding)', 'start'],
   };
   const PATHS: Record<string, string> = {
     '/drives': '/drives',
-    '/drives/t_1': '/drives/t_1',
+    '/drives/t-1': '/drives/t-1',
     '/(tabs)/home': '/home',
     '/(onboarding)/start': '/start',
   };
@@ -411,13 +408,13 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
   });
 
   test('a profile that turns ready inside onboarding opens the held link once, then clears it', async () => {
-    const view = await atReady('/drives/t_1');
+    const view = await atReady('/drives/t-1');
     mockWorld.profile = READY;
     await view.rerender(gate());
     await act(async () => {});
     await view.rerender(gate());
     await act(async () => {});
-    expect(replaced()).toEqual(['/drives/t_1']);
+    expect(replaced()).toEqual(['/drives/t-1']);
     expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
   });
 
