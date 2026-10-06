@@ -15,7 +15,7 @@ import { profileHref } from '../leagues/routes';
 import { useServerAction, type ClanRole, type ReportReason } from './api';
 import { bannerArt } from './banners';
 import { clanCopy } from './copy';
-import { friendlyError, ROLE_LABEL } from './model';
+import { friendlyError, ROLE_LABEL, type ErrorContext } from './model';
 
 // ---------------------------------------------------------------------------
 // banner art
@@ -184,8 +184,8 @@ export function confirm(opts: { title: string; body: string; confirmLabel: strin
   });
 }
 
-export function showError(err: unknown): void {
-  Alert.alert(friendlyError(err));
+export function showError(err: unknown, context?: ErrorContext): void {
+  Alert.alert(friendlyError(err, context));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ export function TargetMenu({ target, onClose }: { target: MenuTarget | null; onC
       close();
       Alert.alert(clanCopy.menu.reported);
     } catch (err) {
-      showError(err);
+      showError(err, 'report');
     }
   };
 

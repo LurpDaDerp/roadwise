@@ -141,4 +141,8 @@ test('friendlyError maps server messages and hides everything else', () => {
     GENERIC_ERROR
   );
   expect(friendlyError(new TypeError('Network request failed'))).toBe(GENERIC_ERROR);
+  // a report on a clan that's gone is not a bad invite code
+  expect(friendlyError(new RpcError('clan not found', 'P0002'), 'report')).toBe("That clan doesn't exist anymore.");
+  expect(friendlyError(new RpcError('too many requests', '42501'), 'report')).toMatch(/Wait a bit/);
+  expect(friendlyError(new RpcError('clan not found', 'P0002'))).toMatch(/with that code/);
 });

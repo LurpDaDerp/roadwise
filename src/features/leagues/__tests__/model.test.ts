@@ -8,6 +8,7 @@ import {
   leagueBoardItems,
   leagueZone,
   msToNextMinute,
+  needsDrivesText,
   percentileText,
   previousWeekKey,
   rankFriendsBoard,
@@ -65,6 +66,19 @@ describe('leagueBoardItems', () => {
     const after = items[idxDown + 1];
     expect(after?.kind === 'row' && after.member.rank).toBe(27);
   });
+});
+
+test('a top spot short of the drive minimum is not shown as moving up; the line stays at rank 7', () => {
+  const members = league().members.map((m) => (m.rank === 2 ? { ...m, drives: 1 } : m));
+  const items = leagueBoardItems(league({ members }));
+  const second = items.find((i) => i.kind === 'row' && i.member.rank === 2);
+  expect(second).toMatchObject({ zone: 'stay', needs: 2 });
+  const first = items.find((i) => i.kind === 'row' && i.member.rank === 1);
+  expect(first).toMatchObject({ zone: 'up', needs: 0 });
+  const kinds = items.map((i) => (i.kind === 'divider' ? `--${i.zone}` : i.member.rank));
+  expect(kinds.slice(6, 9)).toEqual([7, '--up', 8]);
+  expect(needsDrivesText(2)).toBe('needs 2 more drives');
+  expect(needsDrivesText(1)).toBe('needs 1 more drive');
 });
 
 test('drivesToMoveUp', () => {

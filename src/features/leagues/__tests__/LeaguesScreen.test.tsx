@@ -61,6 +61,22 @@ describe('Friends & clan (default)', () => {
     expect(within(screen.getByTestId('friend-row-amy')).getByText('96.4')).toBeOnTheScreen();
   });
 
+  test('switching metric keeps the old board, read with its own metric, until the new one lands', async () => {
+    let release: (rows: unknown) => void = () => {};
+    wire({
+      get_friends_board: (a: Record<string, unknown>) =>
+        a.p_metric === 'rating' ? new Promise((r) => (release = r)) : friends,
+    });
+    await renderScreen(<LeaguesScreen />);
+    await screen.findByTestId('friend-row-amy');
+    await fireEvent.press(screen.getByTestId('metric-rating'));
+    await waitFor(() => expect(callsTo('get_friends_board')).toContainEqual({ p_metric: 'rating' }));
+    expect(screen.queryByTestId('list-skeleton')).toBeNull();
+    expect(within(screen.getByTestId('friend-row-amy')).getByText('420')).toBeOnTheScreen();
+    release(friendsRating);
+    expect(await screen.findByText('96.4')).toBeOnTheScreen();
+  });
+
   test('just you: an invite to add friends', async () => {
     wire({ get_friends_board: [friendRow('maya', { is_me: true })] });
     await renderScreen(<LeaguesScreen />);
@@ -97,7 +113,8 @@ describe('League', () => {
     expect(screen.getByText('#4')).toBeOnTheScreen();
     expect(screen.getByTestId('zone-up')).toHaveTextContent(/Moves up/);
     expect(screen.getByLabelText(/^Number 7, driver7, .*moves up$/)).toBeOnTheScreen();
-    expect(screen.getByLabelText(/^Number 4, maya, You, .*moves up$/)).toBeOnTheScreen();
+    // a top spot short of the drive minimum is not marked as moving up
+    expect(screen.getByLabelText(/^Number 4, maya, You, Level 3 · 2 drives · needs 1 more drive, 960 points$/)).toBeOnTheScreen();
     expect(screen.getByLabelText(/^Number 8, driver8, Level 3 · 4 drives, 920 points$/)).toBeOnTheScreen();
   });
 
@@ -154,6 +171,23 @@ describe('Global', () => {
     await open();
     expect(await screen.findByText('Drive 100 mi in 30 days to join')).toBeOnTheScreen();
     expect(screen.queryByText(/top \d+%/)).toBeNull();
+  });
+
+  test('a new state filter keeps the last board on screen until its own lands', async () => {
+    let release: (b: unknown) => void = () => {};
+    wire({
+      get_global_board: (a: Record<string, unknown>) =>
+        a.p_state === 'TX' ? new Promise((r) => (release = r)) : globalBoard(),
+    });
+    await open();
+    await screen.findByText("You're in the top 8%");
+    await fireEvent.press(screen.getByTestId('state-filter'));
+    await fireEvent.press(await screen.findByTestId('state-TX'));
+    await waitFor(() => expect(callsTo('get_global_board')).toContainEqual({ p_state: 'TX' }));
+    expect(screen.getByTestId('global-row-1')).toBeOnTheScreen();
+    expect(screen.queryByTestId('list-skeleton')).toBeNull();
+    release(globalBoard({ top: [], me: { rank: null, percentile: null, eligible: true, safety_rating: 97 } }));
+    expect(await screen.findByTestId('global-empty')).toBeOnTheScreen();
   });
 
   test('the state filter asks for that state only', async () => {

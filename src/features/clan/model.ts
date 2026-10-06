@@ -211,8 +211,17 @@ function isRpcError(err: unknown): err is RpcError {
   return err instanceof Error && err.name === 'RpcError';
 }
 
+/** Where the call came from, when the same server message means different things. */
+export type ErrorContext = 'clan' | 'report';
+
+const REPORT_MESSAGES: Record<string, string> = {
+  'clan not found': "That clan doesn't exist anymore.",
+  'profile not found': "That player isn't around anymore.",
+};
+
 /** Friendly copy for a failed clan, block or report call. Never shows a raw server message. */
-export function friendlyError(err: unknown): string {
+export function friendlyError(err: unknown, context: ErrorContext = 'clan'): string {
   if (!isRpcError(err)) return GENERIC_ERROR;
-  return SERVER_MESSAGES[err.message] ?? GENERIC_ERROR;
+  const own = context === 'report' ? REPORT_MESSAGES[err.message] : undefined;
+  return own ?? SERVER_MESSAGES[err.message] ?? GENERIC_ERROR;
 }

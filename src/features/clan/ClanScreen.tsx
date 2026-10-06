@@ -6,7 +6,14 @@ import { FlatList, RefreshControl, ScrollView, Share, View } from 'react-native'
 import { useSession } from '@/data/supabase/session';
 import { Button, Card, Chip, IconButton, ProgressRing, Screen, SectionHeader, Text, useTheme } from '@/ui';
 
-import { BoardRow, ListSkeleton, LoadFailed, RefreshFailedNote, usePullRefresh } from '../leagues/components';
+import {
+  BoardRow,
+  ListSkeleton,
+  LoadFailed,
+  RefreshFailedNote,
+  RowSeparator,
+  usePullRefresh,
+} from '../leagues/components';
 import { profileHref } from '../leagues/routes';
 
 import { useMyClan, useServerAction, type ClanMember, type MyClan } from './api';
@@ -230,7 +237,7 @@ function InClan({ clan, refetch, refreshFailed }: { clan: MyClan; refetch: () =>
         data={members}
         keyExtractor={(m) => m.user_id}
         contentContainerStyle={{ padding: t.space.lg }}
-        ItemSeparatorComponent={() => <View style={{ height: t.space.xs }} />}
+        ItemSeparatorComponent={RowSeparator}
         ListHeaderComponent={header}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
         renderItem={({ item, index }) => {

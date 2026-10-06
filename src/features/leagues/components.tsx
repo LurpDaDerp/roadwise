@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, View, type ViewStyle } from 'react-native';
 
-import { Avatar, Button, EmptyState, Pill, Skeleton, Text, useTheme } from '@/ui';
+import { Avatar, Button, EmptyState, Pill, Skeleton, Text, tokens, useTheme } from '@/ui';
 
 import { leaguesCopy } from './copy';
 import { endsInLabel, formatEndsIn, msToNextMinute, type Zone } from './model';
@@ -65,6 +65,11 @@ export function usePullRefresh(refetch: () => Promise<unknown>): { refreshing: b
 // ---------------------------------------------------------------------------
 // states
 // ---------------------------------------------------------------------------
+
+/** The gap between leaderboard tiles; a module-level component so a refetch never remounts it. */
+export function RowSeparator() {
+  return <View style={{ height: tokens.space.xs }} />;
+}
 
 export function LoadFailed({ onRetry, title, body }: { onRetry: () => void; title?: string; body?: string }) {
   return (

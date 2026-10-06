@@ -5,7 +5,14 @@ import { FlatList, RefreshControl, View } from 'react-native';
 import { Chip, EmptyState, formatPointsValue, Text, useTheme } from '@/ui';
 
 import { useFriendsBoard, type FriendsMetric } from './api';
-import { BoardRow, ListSkeleton, LoadFailed, RefreshFailedNote, usePullRefresh } from './components';
+import {
+  BoardRow,
+  ListSkeleton,
+  LoadFailed,
+  RefreshFailedNote,
+  RowSeparator,
+  usePullRefresh,
+} from './components';
 import { leaguesCopy } from './copy';
 import { rankFriendsBoard, ratingText, type RankedFriendRow } from './model';
 import { FRIENDS_ADD_HREF, profileHref } from './routes';
@@ -19,8 +26,12 @@ export function FriendsBoard() {
   const [metric, setMetric] = useState<FriendsMetric>('week');
   const q = useFriendsBoard(metric);
   const pull = usePullRefresh(q.refetch);
-  const rows = useMemo(() => (q.data ? rankFriendsBoard(q.data, metric) : []), [q.data, metric]);
-  const anyUnranked = metric === 'rating' && rows.some((r) => r.rank === null);
+  // switching the metric keeps the last board on screen until the new one lands; with two metrics,
+  // a held (placeholder) board is always the other one, so read it with that metric
+  const stale = q.isPlaceholderData;
+  const shownMetric: FriendsMetric = stale ? (metric === 'week' ? 'rating' : 'week') : metric;
+  const rows = useMemo(() => (q.data ? rankFriendsBoard(q.data, shownMetric) : []), [q.data, shownMetric]);
+  const anyUnranked = shownMetric === 'rating' && rows.some((r) => r.rank === null);
 
   const header = (
     <View style={{ gap: t.space.md, paddingBottom: t.space.md }}>
@@ -54,15 +65,16 @@ export function FriendsBoard() {
   }
 
   const value = (r: RankedFriendRow) =>
-    metric === 'week' ? formatPointsValue(r.value ?? 0) : ratingText(r.value, r.ranked);
+    shownMetric === 'week' ? formatPointsValue(r.value ?? 0) : ratingText(r.value, r.ranked);
 
   return (
     <FlatList
       testID="friends-board"
+      style={{ opacity: stale ? 0.6 : 1 }}
       data={rows}
       keyExtractor={(r) => r.user_id}
       contentContainerStyle={{ padding: t.space.lg }}
-      ItemSeparatorComponent={() => <View style={{ height: t.space.xs }} />}
+      ItemSeparatorComponent={RowSeparator}
       ListHeaderComponent={header}
       refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
       renderItem={({ item }) => (
@@ -71,7 +83,7 @@ export function FriendsBoard() {
           username={item.username}
           subtitle={`Level ${item.level}`}
           value={value(item)}
-          unit={metric === 'week' ? copy.pts : undefined}
+          unit={shownMetric === 'week' ? copy.pts : undefined}
           me={item.is_me}
           onPress={() => router.push(profileHref(item.username))}
           testID={`friend-row-${item.username}`}

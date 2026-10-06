@@ -83,9 +83,13 @@ export function useMyLeague(): UseQueryResult<MyLeague> {
 }
 
 export function useFriendsBoard(metric: FriendsMetric): UseQueryResult<FriendsBoardRow[]> {
-  return useServerQuery<FriendsBoardRow[]>(['friends-board', metric], 'get_friends_board', { p_metric: metric });
+  return useServerQuery<FriendsBoardRow[]>(['friends-board', metric], 'get_friends_board', { p_metric: metric }, {
+    keepPrevious: true,
+  });
 }
 
 export function useGlobalBoard(state: string | null): UseQueryResult<GlobalBoard> {
-  return useServerQuery<GlobalBoard>(['global-board', state], 'get_global_board', { p_state: state });
+  return useServerQuery<GlobalBoard>(['global-board', state], 'get_global_board', { p_state: state }, {
+    keepPrevious: true,
+  });
 }

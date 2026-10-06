@@ -11,6 +11,7 @@ import {
   ListSkeleton,
   LoadFailed,
   RefreshFailedNote,
+  RowSeparator,
   usePullRefresh,
   ZoneDivider,
 } from './components';
@@ -20,6 +21,7 @@ import {
   lastResultText,
   leagueBoardItems,
   leagueZone,
+  needsDrivesText,
   nextTier,
   previousTier,
   rankText,
@@ -155,7 +157,7 @@ export function LeagueBoard() {
       initialNumToRender={32}
       keyExtractor={(item) => (item.kind === 'row' ? item.member.user_id : `divider-${item.zone}`)}
       contentContainerStyle={{ padding: t.space.lg }}
-      ItemSeparatorComponent={() => <View style={{ height: t.space.xs }} />}
+      ItemSeparatorComponent={RowSeparator}
       ListHeaderComponent={header}
       ListFooterComponent={
         league.placed ? (
@@ -172,7 +174,13 @@ export function LeagueBoard() {
           <BoardRow
             rank={item.member.rank}
             username={item.member.username}
-            subtitle={`Level ${item.member.level} · ${item.member.drives} ${item.member.drives === 1 ? 'drive' : 'drives'}`}
+            subtitle={[
+              `Level ${item.member.level}`,
+              `${item.member.drives} ${item.member.drives === 1 ? 'drive' : 'drives'}`,
+              item.needs > 0 ? needsDrivesText(item.needs) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
             value={formatPointsValue(item.member.week_points)}
             unit={leaguesCopy.pts}
             me={item.member.is_me}

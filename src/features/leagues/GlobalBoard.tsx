@@ -7,7 +7,14 @@ import { useSession } from '@/data/supabase/session';
 import { Card, Chip, Divider, EmptyState, ListRow, Sheet, Text, useTheme } from '@/ui';
 
 import { useGlobalBoard, type GlobalBoard as Board } from './api';
-import { BoardRow, ListSkeleton, LoadFailed, RefreshFailedNote, usePullRefresh } from './components';
+import {
+  BoardRow,
+  ListSkeleton,
+  LoadFailed,
+  RefreshFailedNote,
+  RowSeparator,
+  usePullRefresh,
+} from './components';
 import { leaguesCopy } from './copy';
 import { percentileText, rankText } from './model';
 import { profileHref } from './routes';
@@ -112,6 +119,7 @@ export function GlobalBoard() {
     </Sheet>
   );
 
+  // a new state filter keeps the last board on screen (dimmed) until its own lands
   const board = q.data;
   if (board === undefined) {
     return (
@@ -127,10 +135,11 @@ export function GlobalBoard() {
     <>
       <FlatList
         testID="global-board"
+        style={{ opacity: q.isPlaceholderData ? 0.6 : 1 }}
         data={board.top}
         keyExtractor={(r) => r.user_id}
         contentContainerStyle={{ padding: t.space.lg }}
-        ItemSeparatorComponent={() => <View style={{ height: t.space.xs }} />}
+        ItemSeparatorComponent={RowSeparator}
         ListHeaderComponent={
           <View style={{ gap: t.space.md, paddingBottom: t.space.md }}>
             {filter}

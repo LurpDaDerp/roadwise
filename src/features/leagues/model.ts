@@ -28,24 +28,43 @@ export function leagueZone(
 }
 
 export type BoardItem =
-  | { kind: 'row'; member: LeagueMember; zone: Zone }
+  | {
+      kind: 'row';
+      member: LeagueMember;
+      /** What the row shows: a top spot short of the drive minimum is not marked "moves up". */
+      zone: Zone;
+      /** Drives still needed for a top spot to count (0 otherwise). */
+      needs: number;
+    }
   | { kind: 'divider'; zone: 'up' | 'down' };
 
 /**
- * The league standings with the two zone lines: "Moves up" under the last promoted row and
- * "Moves down" above the first demoted row. A line only appears with rows on both sides of it.
+ * The league standings with the two zone lines: "Moves up" under the top spots and "Moves down"
+ * above the first demoted row. The lines follow rank alone; a row only shows "moves up" when it
+ * also has the week's minimum drives, as the Monday close requires. A line only appears with rows
+ * on both sides of it.
  */
 export function leagueBoardItems(league: MyLeague): BoardItem[] {
-  const rows = league.members.map((member) => ({ kind: 'row' as const, member, zone: leagueZone(member.rank, league) }));
+  const rows = league.members.map((member) => {
+    const place = leagueZone(member.rank, league);
+    const needs = place === 'up' ? drivesToMoveUp(member.drives, league.min_drives_to_promote) : 0;
+    const zone: Zone = needs > 0 ? 'stay' : place;
+    return { member, place, zone, needs };
+  });
   const items: BoardItem[] = [];
-  rows.forEach((row, i) => {
+  rows.forEach(({ member, place, zone, needs }, i) => {
     const prev = rows[i - 1];
-    if (row.zone === 'down' && prev && prev.zone !== 'down') items.push({ kind: 'divider', zone: 'down' });
-    items.push(row);
+    if (place === 'down' && prev && prev.place !== 'down') items.push({ kind: 'divider', zone: 'down' });
+    items.push({ kind: 'row', member, zone, needs });
     const next = rows[i + 1];
-    if (row.zone === 'up' && next && next.zone !== 'up') items.push({ kind: 'divider', zone: 'up' });
+    if (place === 'up' && next && next.place !== 'up') items.push({ kind: 'divider', zone: 'up' });
   });
   return items;
+}
+
+/** "needs 2 more drives" under a top spot that doesn't count yet. */
+export function needsDrivesText(needs: number): string {
+  return `needs ${needs} more ${needs === 1 ? 'drive' : 'drives'}`;
 }
 
 /** Drives still needed this week before a top spot counts as moving up. */
