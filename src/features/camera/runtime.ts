@@ -1,5 +1,6 @@
-// The launch's camera bridge, for the screens that show its state (the HUD chip). One per runtime: bootstrap sets it
-// when it builds the drive host and clears it when the runtime stops (a handover rebuild sets the new one).
+// The launch's camera bridge, for the screens that need it (the DMS settings switch asks it for the camera permission,
+// the setup screen for a setup session). One per runtime: bootstrap sets it when it builds the drive host and clears
+// it when the runtime stops (a handover rebuild sets the new one).
 import { useSyncExternalStore } from 'react';
 
 import type { DmsHudStatus } from '@/core/dms';
@@ -33,7 +34,7 @@ const subscribe = (l: () => void) => {
   };
 };
 
-/** The camera's HUD status, or null when no camera runs (not opted in, no drive, or the beta off for it). */
+/** The camera's status, or null when no camera runs (DMS off, no drive). */
 export function useCameraStatus(): DmsHudStatus | null {
   return useSyncExternalStore(subscribe, () => current?.status() ?? null, () => null);
 }

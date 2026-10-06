@@ -1,5 +1,6 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { DmsSetupScreen } from '@/features/camera/DmsSetupScreen';
 
-export default function SetupDMSRoute() {
-  return <PlaceholderScreen title="Set up DMS" />;
+/** `/settings/dms-setup`: the parked 20-second mount and gaze calibration (plan §7). */
+export default function DmsSetupRoute() {
+  return <DmsSetupScreen />;
 }

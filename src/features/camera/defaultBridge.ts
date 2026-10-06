@@ -1,12 +1,12 @@
 // The camera bridge as the app builds it (bootstrap). Everything heavy is deferred: the DMS controller (and with it
-// the native camera module), the alert ports and the battery reads load only at the first drive of a driver who opted
-// in, so a launch, a background wake or a driver without the beta pays nothing.
-import { createSettingsProfileStore } from '@/core/dms/host/profileStore';
+// the native camera module) and the battery reads load only at the first drive with DMS on, or the first visit
+// to the DMS settings or setup screen, so a launch, a background wake or a driver without DMS pays nothing.
+import { randomUUID } from 'expo-crypto';
+
+import { createSettingsProfileStore, createSettingsSetupStore } from '@/core/dms/host/profileStore';
 import type { Db } from '@/data/db/driver';
-import { readFlag } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
-import { voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 
 import { createCameraBridge, type CameraBridge } from './bridge';
 import { setCameraBridge } from './runtime';
@@ -15,14 +15,13 @@ export interface DefaultCameraBridgeDeps {
   db: Db;
   appState: AppStateLike & { currentState?: string | null };
   readUid(): Promise<string | null>;
-  readAgeBand(): Promise<string | null>;
   onError?(e: unknown, ctx: string): void;
 }
 
 /**
  * Battery for the capture policy: read once when the first controller is made, then kept fresh by the OS's events.
- * Review LB-1: expo-battery gives a FRACTION (0–1); the policy's `batteryLevel` is a PERCENT (LOW_BATTERY_PCT 20), so
- * the level is converted here. A fraction passed on capped every unplugged drive at 8 fps.
+ * expo-battery gives a FRACTION (0–1); the policy's `batteryLevel` is a PERCENT (LOW_BATTERY_PCT 20), so the level
+ * is converted here. A fraction passed on would cap every unplugged drive at 8 fps.
  */
 export function toPercent(fraction: number): number | null {
   return fraction >= 0 && fraction <= 1 ? Math.round(fraction * 100) : null;
@@ -66,10 +65,7 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
   const report = (e: unknown, ctx: string) => deps.onError?.(e, ctx);
   const battery = batteryWatch((e) => report(e, 'camera battery'));
   const bridge = createCameraBridge({
-    settings,
     readUid: deps.readUid,
-    readAgeBand: deps.readAgeBand,
-    readCameraBeta: () => readFlag(deps.db, 'camera_beta', false),
     createController(handlers, uid) {
       void battery.start();
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: loads the native camera module
@@ -77,14 +73,11 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
       return dms.createDefaultDmsController({
         ...handlers,
         profileStore: dms.createSettingsProfileStore(settings, uid),
+        setupStore: dms.createSettingsSetupStore(settings, uid),
         config: { gazeSource: 'geometric' },
       });
     },
-    async createPorts() {
-      const { createExpoAlertPorts } = await import('@/core/alerts/adapters');
-      return createExpoAlertPorts();
-    },
-    voiceEnabled: voicePrefEnabled,
+    setupStore: (uid) => createSettingsSetupStore(settings, uid),
     appActive: () => (deps.appState.currentState ?? 'active') === 'active',
     subscribeAppState(fn) {
       const sub = deps.appState.addEventListener('change', () => fn());
@@ -95,9 +88,11 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
       const d = new Date();
       return { batteryLevel: b.level, charging: b.charging, localMinutes: d.getHours() * 60 + d.getMinutes() };
     },
-    async clearProfile() {
-      // The store's own module (light: no native code), so a sign-out never loads the camera.
+    newId: () => randomUUID(),
+    async clearStores() {
+      // The stores' own module (light: no native code), so a sign-out never loads the camera.
       await createSettingsProfileStore(settings, '').clear();
+      await createSettingsSetupStore(settings, '').clear();
     },
     onError: report,
   });

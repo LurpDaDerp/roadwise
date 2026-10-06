@@ -1,5 +1,6 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { DmsSettingsScreen } from '@/features/camera/DmsSettingsScreen';
 
-export default function DrivermonitoringRoute() {
-  return <PlaceholderScreen title="Driver monitoring" />;
+/** `/settings/dms`: driver monitoring on/off, the calibration, the privacy note (plan §7). */
+export default function DmsRoute() {
+  return <DmsSettingsScreen />;
 }
