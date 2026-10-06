@@ -22,6 +22,14 @@ export function googleServicesFile(
   return exists(local) ? './google-services.json' : undefined;
 }
 
+/** The permission strings, in plain words. Location is only ever "While Using": no Always. */
+export const PERMISSION_COPY = {
+  location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
+  motion: "RoadWise uses motion to detect hard braking and when you've stopped driving.",
+  camera:
+    'RoadWise uses the camera for optional driver monitoring (DMS) and scanning friend QR codes — video never leaves your phone.',
+} as const;
+
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
   return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
@@ -49,26 +57,19 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     supportsTablet: false,
     usesAppleSignIn: true,
     config: { usesNonExemptEncryption: false },
+    // A drive started in the app keeps recording in the background on "While Using" (the
+    // `location` background mode, from expo-location below); alerts play with the screen locked
+    // (`audio`, from expo-audio). The usage strings are set by the plugins below.
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
-      NSLocationWhenInUseUsageDescription:
-        'RoadWise uses your location during a drive to measure speed and distance and to look up speed limits.',
-      NSLocationAlwaysAndWhenInUseUsageDescription:
-        'RoadWise uses your location in the background to detect and record drives automatically, even when the app is closed. If you turn on family location sharing, it also shares your latest location with your family.',
-      NSMotionUsageDescription:
-        'Motion data tells RoadWise when a drive starts and ends, and helps spot hard braking or phone handling.',
-      NSCameraUsageDescription:
-        'Optional camera coaching checks for looking away from the road and signs of drowsiness. Frames are processed on your phone and never saved or uploaded.',
-      UIBackgroundModes: ['location'],
     },
   },
   android: {
     package: 'com.lurp.safedrive',
     // A driver's whole local record — `roadwise.db` and the raw second-by-second traces beside it
     // — lives in the app's files directory, which Android auto-backup and `adb backup` would
-    // otherwise copy off the device (security review I-4). On a family phone that backup is often
-    // keyed to the parent's account, and it survives the uninstall and the in-app delete that are
-    // supposed to be final. Nothing this app stores locally is worth restoring: every synced drive
+    // otherwise copy off the device (security review I-4), and it survives the uninstall and the
+    // in-app delete that are supposed to be final. Nothing this app stores locally is worth restoring: every synced drive
     // comes back from the server on the next sign-in.
     allowBackup: false,
     // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
@@ -77,7 +78,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
     // Left out when there is no FCM credential: see `googleServicesFile` above.
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
-    permissions: ['android.permission.CAMERA', 'android.permission.POST_NOTIFICATIONS', 'android.permission.RECEIVE_BOOT_COMPLETED', 'android.permission.VIBRATE'],
+    permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
+    // Every drive starts in the app, so background ("all the time") location is never asked for,
+    // whatever a library's manifest declares. The camera never records sound.
+    blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'],
   },
   extra: { eas: { projectId: EAS_PROJECT_ID } },
   plugins: [
@@ -97,11 +101,23 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     [
       'expo-location',
       {
+        locationWhenInUsePermission: PERMISSION_COPY.location,
+        // "While Using" only: no Always strings at all.
+        locationAlwaysAndWhenInUsePermission: false,
+        locationAlwaysPermission: false,
+        motionUsagePermission: PERMISSION_COPY.motion,
+        // A drive started in the app continues in the background on iOS with While Using.
         isIosBackgroundLocationEnabled: true,
-        isAndroidBackgroundLocationEnabled: true,
+        isAndroidBackgroundLocationEnabled: false,
+        // Android keeps a started drive running through its location foreground service.
         isAndroidForegroundServiceEnabled: true,
         isAndroidMotionActivityEnabled: true,
       },
+    ],
+    // DMS and friend QR codes. No microphone, on either platform.
+    [
+      'expo-camera',
+      { cameraPermission: PERMISSION_COPY.camera, microphonePermission: false, recordAudioAndroid: false },
     ],
     ['expo-splash-screen', { image: './assets/splash.png', imageWidth: 160, resizeMode: 'contain', backgroundColor: '#000814' }],
   ],

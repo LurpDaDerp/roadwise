@@ -14,67 +14,55 @@ import type { UpdateStatus } from './version';
  */
 export type SessionStatus = 'loading' | 'signedOut' | 'signedIn';
 
-/** What the profile allows: not known yet, an under-13 account, setup still owed, or the app. */
-export type ProfileGate = 'unknown' | 'blocked' | 'onboarding' | 'ready';
+/** What the profile allows: not known yet, setup still owed, or the app. */
+export type ProfileGate = 'unknown' | 'onboarding' | 'ready';
 
 /**
  * The drive, as the gates need it.
- * - `busy`: the host is busy (candidate, recording, ending or finalizing). No gate moves anyone
- *   then (rev1: I10): a setup or update screen must never replace a drive (SR1, SR7).
+ * - `busy`: the host is busy (recording, ending or finalizing). No gate moves anyone then (rev1:
+ *   I10): a setup or update screen must never replace a drive.
  * - `tripOpen`: a confirmed trip is open (recording or ending). Only then does a relaunch go back
- *   to the drive screen (N-m3): a candidate may be a bus ride, and finalizing is already over.
- * - `mode`: which drive screen that is — mounted is the HUD, anything else the pocket screen.
+ *   to the driving screen.
  */
 export interface DriveFacts {
   busy: boolean;
-  mode: 'mounted' | 'pocket' | 'auto' | null;
   tripOpen: boolean;
 }
 
-export function driveFacts(
-  snapshot: { status: EngineStatus; mode: 'mounted' | 'pocket' | 'auto' },
-  hostBusy: boolean
-): DriveFacts {
+export function driveFacts(snapshot: { status: EngineStatus }, hostBusy: boolean): DriveFacts {
   return {
     busy: hostBusy || isBusyStatus(snapshot.status),
-    mode: snapshot.mode,
     tripOpen: tripRecords(snapshot.status),
   };
 }
 
-/** The slice of a profile row the gate reads. */
-export interface GateProfile {
-  age_band?: string | null;
-  flags?: unknown;
-}
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
 
-export function profileGate(profile: GateProfile | null | undefined): ProfileGate {
-  if (!profile) return 'unknown';
-  // Checked before `onboarded`: an account that is (or has become) under 13 is blocked whatever
-  // its flags say.
-  if (profile.age_band === 'u13') return 'blocked';
-  const flags = profile.flags;
-  const onboarded =
-    typeof flags === 'object' && flags !== null && (flags as { onboarded?: unknown }).onboarded === true;
-  return onboarded ? 'ready' : 'onboarding';
+const filled = (v: unknown): boolean => typeof v === 'string' && v.trim().length > 0;
+
+/**
+ * Setup is done once the account has a username and the server has stamped `onboarded_at`. Read
+ * loosely: the profile row's generated type is being rebuilt, and a row without either column
+ * simply reads as setup still owed.
+ */
+export function profileGate(profile: unknown): ProfileGate {
+  if (!isRecord(profile)) return 'unknown';
+  return filled(profile.onboarded_at) && filled(profile.username) ? 'ready' : 'onboarding';
 }
 
 export const ONBOARDING_START = '/(onboarding)/start';
-export const NOT_ELIGIBLE = '/(onboarding)/not-eligible';
 export const HOME = '/(tabs)/home';
-export const WELCOME = '/(auth)/welcome';
+export const SIGN_IN = '/(auth)/sign-in';
 export const UPDATE_REQUIRED = '/update-required';
-export const DRIVE_HUD = '/drive/hud';
-export const DRIVE_POCKET = '/drive/pocket';
+export const DRIVE = '/drive';
 
 export type StartRoute =
-  | typeof WELCOME
+  | typeof SIGN_IN
   | typeof ONBOARDING_START
-  | typeof NOT_ELIGIBLE
   | typeof HOME
   | typeof UPDATE_REQUIRED
-  | typeof DRIVE_HUD
-  | typeof DRIVE_POCKET;
+  | typeof DRIVE;
 
 /**
  * A1. Null means "hold the frame": the session is still being read, the config cache has not been
@@ -87,15 +75,15 @@ export function resolveStart(
   update: UpdateStatus | null,
   drive: DriveFacts
 ): StartRoute | null {
-  // A relaunch into an open trip goes straight back to it, before any other rule (rev1: I2,
-  // C3/C4). Nothing else may stand between a driver and the drive under way.
-  if (drive.tripOpen) return drive.mode === 'mounted' ? DRIVE_HUD : DRIVE_POCKET;
+  // A relaunch into an open trip goes straight back to it, before any other rule. Nothing else may
+  // stand between a driver and the drive under way.
+  if (drive.tripOpen) return DRIVE;
   if (update === null) return null;
   if (update === 'required') return UPDATE_REQUIRED;
   // While the stored session is still being read nobody may be sent anywhere, or a warm start
   // flashes the sign-in screen at a signed-in driver.
   if (status === 'loading') return null;
-  if (status === 'signedOut') return WELCOME;
+  if (status === 'signedOut') return SIGN_IN;
   return gateRoute(gate);
 }
 
@@ -103,8 +91,6 @@ function gateRoute(gate: ProfileGate): StartRoute | null {
   switch (gate) {
     case 'unknown':
       return null;
-    case 'blocked':
-      return NOT_ELIGIBLE;
     case 'onboarding':
       return ONBOARDING_START;
     case 'ready':
@@ -114,9 +100,8 @@ function gateRoute(gate: ProfileGate): StartRoute | null {
 
 export type GateRoute =
   | '/'
-  | typeof WELCOME
+  | typeof SIGN_IN
   | typeof ONBOARDING_START
-  | typeof NOT_ELIGIBLE
   | typeof HOME
   | typeof UPDATE_REQUIRED;
 
@@ -127,7 +112,7 @@ export function resolveGate(
   segments: readonly string[],
   drive: DriveFacts
 ): GateRoute | null {
-  // rev1: I10 — no redirect of any kind while a drive is under way or a drive screen is showing.
+  // rev1: I10 — no redirect of any kind while a drive is under way or the driving screen is showing.
   // The effect re-runs when the host goes idle, and the gate answers then.
   if (drive.busy || segments[0] === 'drive') return null;
   // `/` is the launch router's own screen and `resolveStart` is already deciding it. Answering as
@@ -140,30 +125,25 @@ export function resolveGate(
   // launch router decides afresh.
   if (onUpdateScreen) return '/';
 
-  // Nothing is known yet. Moving now would throw a signed-in driver at Welcome on every warm start.
+  // Nothing is known yet. Moving now would throw a signed-in driver at sign-in on every warm start.
   if (status === 'loading') return null;
 
   const inAuthGroup = segments[0] === '(auth)';
-  // `app/auth/callback.tsx` sits outside the group: it is a deep-link landing pad, not a screen
-  // anyone should be left on once the session it was carrying has arrived.
+  // `app/auth/callback.tsx` sits outside the group: it is a deep-link landing pad (diagnostics
+  // builds' magic link), not a screen anyone should be left on once its session has arrived.
   const onCallback = segments[0] === 'auth' && segments[1] === 'callback';
   const inOnboarding = segments[0] === '(onboarding)';
 
   // Every magic-link landing starts signed out, and the exchange is a network round trip away.
-  // Moving now would unmount the callback mid-flight — and an expired link would never get to
-  // show its retry. The screen speaks for itself: it either flips to signedIn or says why not.
-  if (status === 'signedOut') return inAuthGroup || onCallback ? null : WELCOME;
+  if (status === 'signedOut') return inAuthGroup || onCallback ? null : SIGN_IN;
 
   switch (gate) {
     // The profile is not known yet (a first launch whose read failed). Stay put, but not on a
     // sign-in screen: the launch router holds the frame and offers the retry.
     case 'unknown':
       return inAuthGroup || onCallback ? '/' : null;
-    // The stepper routes within onboarding itself: an under-13 flow is only `not-eligible`.
-    case 'blocked':
-      return inOnboarding ? null : NOT_ELIGIBLE;
-    // From anywhere outside onboarding — the tabs, the app stack, a sign-in screen and the
-    // callback alike (closes M0 M-13: the callback can no longer skip setup).
+    // From anywhere outside onboarding — the tabs, the app stack, the sign-in screen and the
+    // callback alike.
     case 'onboarding':
       return inOnboarding ? null : ONBOARDING_START;
     case 'ready':

@@ -21,19 +21,19 @@ export const PROFILE_WAIT_MS = 10_000;
 
 /**
  * A1: the launch router. It draws a held frame, never a screen, and then hands off:
- * - an open trip (recording or ending) goes straight back to its drive screen, before any other
- *   rule (rev1: I2, N-m3; a candidate may be a bus ride, and finalizing is already over);
- * - then `resolveStart`: a required update, Welcome, not-eligible, onboarding, or Home.
+ * - an open trip (recording or ending) goes straight back to the driving screen, before any other
+ *   rule;
+ * - then `resolveStart`: a required update, sign-in, onboarding, or Home.
  * A signed-in driver whose profile cannot be read and is not cached (a first launch offline) gets
  * the retry after 10 s; a cached profile lands them as usual (rev1: I11).
  */
 export default function Launch() {
   const { status, profile, refreshProfile } = useSession();
   const host = useDriveHost();
-  const snapshot = useDrive((s) => ({ status: s.status, mode: s.mode }));
+  const driveStatus = useDrive((s) => s.status);
   const update = useUpdateStatus();
   const gate = profileGate(profile);
-  const to = resolveStart(status, gate, update, driveFacts(snapshot, host.isBusy()));
+  const to = resolveStart(status, gate, update, driveFacts({ status: driveStatus }, host.isBusy()));
 
   const [waited, setWaited] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -82,8 +82,6 @@ export default function Launch() {
     );
   }
 
-  // A skeleton field, not a spinner: the shape of the licence is already on screen when the first
-  // real screen arrives.
   return (
     <Screen>
       <View accessible accessibilityLabel={launchCopy.loading}>

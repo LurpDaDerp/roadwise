@@ -10,7 +10,6 @@ import type { StepProps } from '../stepRegistry';
 import { StepFrame, type StepAction } from '../StepFrame';
 import {
   StatusLine,
-  useGrantConsent,
   usePhone,
   useStepDeps,
   type PermissionStepDeps,
@@ -21,14 +20,12 @@ const copy = onboardingCopy.motion;
 /**
  * A7 · Motion & Fitness (iOS) / Physical activity (Android). One OS prompt on the driver's tap,
  * through the drive-sense port on both platforms (`requestMotion`, M3's `requestMotionPermission`).
- * A grant records the `motion` consent and moves on; any other answer says what it means and the
- * step still moves on (D12). `unavailable` makes no claim about when the phone will ask.
+ * A grant moves on; any other answer says what it means and the step still moves on (D12). `unavailable` makes no claim about when the phone will ask.
  */
 export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: PermissionStepDeps }) {
   const th = useTheme();
   const { settings, adapter, appState, now } = useStepDeps(deps);
   const phone = usePhone(adapter, appState);
-  const grantConsent = useGrantConsent(settings);
 
   /** The answer to this screen's request; undefined until the driver asks. */
   const [answer, setAnswer] = useState<Grant | null | undefined>(undefined);
@@ -39,10 +36,9 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
   const current = answer !== undefined ? answer : phone.status === 'ready' ? phone.snapshot.motion : undefined;
   const isGranted = current === 'granted';
 
-  const leave = async (grantedNow: boolean) => {
+  const leave = () => {
     if (leaving.current) return;
     leaving.current = true;
-    if (grantedNow) await grantConsent('motion');
     onNext();
   };
 
@@ -54,7 +50,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
       const result = await adapter.requestMotion();
       await recordPrompt(settings, 'motion', now()).catch(() => {});
       setAnswer(result);
-      if (result === 'granted') await leave(true);
+      if (result === 'granted') leave();
     } catch {
       setFailed(true);
     } finally {
@@ -74,7 +70,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
     }
   };
 
-  const cont: StepAction = { label: copy.continue, onPress: () => void leave(isGranted), testID: 'motion-continue' };
+  const cont: StepAction = { label: copy.continue, onPress: () => leave(), testID: 'motion-continue' };
   const settingsAction: StepAction = {
     label: copy.openSettings,
     onPress: () => void openSettings(),
@@ -96,7 +92,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
       disabled: phone.status === 'loading',
       testID: 'motion-allow',
     };
-    secondary = { label: copy.notNow, onPress: () => void leave(false), disabled: busy, testID: 'motion-not-now' };
+    secondary = { label: copy.notNow, onPress: () => leave(), disabled: busy, testID: 'motion-not-now' };
   } else if (answer === 'denied' || answer === 'undetermined') {
     primary = cont;
     secondary = settingsAction;

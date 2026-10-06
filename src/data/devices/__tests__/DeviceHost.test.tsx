@@ -18,7 +18,7 @@ import { PUSH_REGISTRATION_KEY, type PushPort } from '../pushToken';
 type MockSession = {
   status: 'loading' | 'signedOut' | 'signedIn';
   session: { user: { id: string } } | null;
-  profile: { age_band: string | null; flags: unknown } | null;
+  profile: { username: string | null; onboarded_at: string | null } | null;
 };
 let mockSession: MockSession;
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
@@ -99,7 +99,7 @@ beforeEach(async () => {
   mockSession = {
     status: 'signedIn',
     session: { user: { id: 'user-a' } },
-    profile: { age_band: 'adult', flags: { onboarded: true } },
+    profile: { username: 'swift_fox', onboarded_at: '2026-10-05T00:00:00Z' },
   };
 });
 
@@ -182,7 +182,6 @@ describe('DeviceHost', () => {
 
   it.each<[string, () => void]>([
     ['signed out', () => (mockSession = { status: 'signedOut', session: null, profile: null })],
-    ['under 13', () => (mockSession.profile = { age_band: 'u13', flags: { onboarded: true } })],
     ['no profile yet', () => (mockSession.profile = null)],
   ])('%s: nothing runs', async (_name, arrange) => {
     arrange();
@@ -202,7 +201,7 @@ describe('DeviceHost', () => {
       });
 
     it('not onboarded yet: the device row and the token only, no report and no onForeground', async () => {
-      mockSession.profile = { age_band: 'adult', flags: {} };
+      mockSession.profile = { username: 'swift_fox', onboarded_at: null };
       const onForeground = jest.fn();
       await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
       await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
@@ -214,7 +213,7 @@ describe('DeviceHost', () => {
 
     it('a handover: the new owner takes the token before onboarding, once the rebuild has settled the owner', async () => {
       // B signed in on A's phone; the owner watch marked the handover, the rebuild has not run yet
-      mockSession = { status: 'signedIn', session: { user: { id: 'user-b' } }, profile: { age_band: 'adult', flags: {} } };
+      mockSession = { status: 'signedIn', session: { user: { id: 'user-b' } }, profile: { username: 'swift_fox', onboarded_at: null } };
       fake.sessionUid = 'user-b';
       await createSettingsRepo(db).set(PENDING_OWNER_KEY, 'user-b');
       await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
@@ -232,22 +231,15 @@ describe('DeviceHost', () => {
     });
 
     it('finishing onboarding adds the rest without registering the token a second time', async () => {
-      mockSession.profile = { age_band: 'adult', flags: {} };
+      mockSession.profile = { username: 'swift_fox', onboarded_at: null };
       const onForeground = jest.fn();
       const view = await render(<DeviceHost deps={deps()} onForeground={onForeground} />, { wrapper: Wrapper });
       await waitFor(() => expect(fake.to('register_push_token')).toHaveLength(1));
-      mockSession = { ...mockSession, profile: { age_band: 'adult', flags: { onboarded: true } } };
+      mockSession = { ...mockSession, profile: { username: 'swift_fox', onboarded_at: '2026-10-05T00:00:00Z' } };
       await view.rerender(<DeviceHost deps={deps()} onForeground={onForeground} />);
       await waitFor(() => expect(onForeground).toHaveBeenCalledWith('user-a'));
       expect(fake.to('register_push_token')).toHaveLength(1);
       expect(fake.to('devices').filter((c) => c.op === 'update')).toHaveLength(1);
-    });
-
-    it('under 13: never registered, onboarded or not', async () => {
-      mockSession.profile = { age_band: 'u13', flags: {} };
-      await render(<DeviceHost deps={deps()} />, { wrapper: Wrapper });
-      await settle();
-      expect(fake.calls).toHaveLength(0);
     });
   });
 

@@ -9,26 +9,8 @@ import type { FlowContext, StepId } from '../flow';
 import { readSavedPlan, readSavedStep, savePlan, saveStep } from '../state';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
 
-// Task 12's real Terms, profile and block steps read the session, the config and the server; this
-// suite is about the stepper's mechanics, so those three render the placeholder frame instead.
-jest.mock('../steps/TermsStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { TermsStep: (p: object) => <PlaceholderStep {...p} step="terms" /> };
-});
-jest.mock('../steps/ProfileStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { ProfileStep: (p: object) => <PlaceholderStep {...p} step="profile" /> };
-});
-jest.mock('../steps/NotEligibleStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { NotEligibleStep: (p: object) => <PlaceholderStep {...p} step="not-eligible" /> };
-});
-// Task 13's guardian step reads the server too; the same stand-in.
-jest.mock('../steps/GuardianStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { GuardianStep: (p: object) => <PlaceholderStep {...p} step="guardian" /> };
-});
-// Task 14's steps read the phone and the server; the same stand-ins.
+// The permission steps read the phone; this suite is about the stepper's mechanics, so they render
+// the placeholder frame instead.
 jest.mock('../steps/LocationStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { LocationStep: (p: object) => <PlaceholderStep {...p} step="location" /> };
@@ -40,22 +22,6 @@ jest.mock('../steps/MotionStep', () => {
 jest.mock('../steps/NotificationsStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { NotificationsStep: (p: object) => <PlaceholderStep {...p} step="notifications" /> };
-});
-jest.mock('../steps/AutoDetectStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { AutoDetectStep: (p: object) => <PlaceholderStep {...p} step="auto-detect" /> };
-});
-jest.mock('../steps/ReadyStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { ReadyStep: (p: object) => <PlaceholderStep {...p} step="ready" /> };
-});
-jest.mock('@/features/camera/CameraStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { CameraStep: (p: object) => <PlaceholderStep {...p} step="camera" /> };
-});
-jest.mock('@/features/family/FamilyStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { FamilyStep: (p: object) => <PlaceholderStep {...p} step="family" /> };
 });
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
@@ -71,16 +37,7 @@ jest.mock('expo-router', () => {
 });
 
 function ctx(over: Partial<FlowContext> = {}): FlowContext {
-  return {
-    platform: 'android',
-    ageBand: '18_plus',
-    drivingStage: 'new',
-    termsCurrent: true,
-    termsPublished: true,
-    minorConsentMode: 'guardian_link_optional',
-    features: { autoDetect: true, guardianInvites: false },
-    ...over,
-  };
+  return { platform: 'android', hasUsername: true, ...over };
 }
 
 let settings: SettingsRepo;
@@ -100,7 +57,7 @@ function renderStepper(step: string | undefined, c: FlowContext | null) {
 }
 
 describe('OnboardingStepper', () => {
-  it.each(['bogus', 'Terms', '', undefined])(
+  it.each(['bogus', 'Terms', 'ready', '', undefined])(
     'sends an unknown step (%p) to start',
     async (step) => {
       await renderStepper(step, ctx());
@@ -109,15 +66,9 @@ describe('OnboardingStepper', () => {
   );
 
   it('sends a known step that is not in this flow to the step it resumes at', async () => {
-    await renderStepper('camera', ctx());
-    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/family');
-    await renderStepper('location', ctx({ ageBand: 'u13' }));
-    expect(screen.getAllByTestId('redirect').at(-1)).toHaveTextContent(
-      '/(onboarding)/not-eligible'
-    );
-    // Terms just accepted: the context no longer lists the step, so it moves on to what comes next.
-    await renderStepper('terms', ctx());
-    expect(screen.getAllByTestId('redirect').at(-1)).toHaveTextContent('/(onboarding)/location');
+    // The username was just claimed: the context no longer lists the step, so it moves on.
+    await renderStepper('username', ctx());
+    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/license');
   });
 
   it('holds a skeleton while the context is loading, without redirecting', async () => {
@@ -134,15 +85,10 @@ describe('OnboardingStepper', () => {
     );
   });
 
-  it('resumes from start with nothing saved at the first step', async () => {
-    await renderStepper('start', ctx({ termsCurrent: false }));
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/terms'));
-  });
-
-  it('clamps a saved step the flow no longer has', async () => {
-    await saveStep(settings, 'auto-detect');
-    await renderStepper('start', ctx({ features: { autoDetect: false, guardianInvites: false } }));
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/family'));
+  it('resumes from start at the username while it is owed, whatever was saved', async () => {
+    await saveStep(settings, 'notifications');
+    await renderStepper('start', ctx({ hasUsername: false }));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/username'));
   });
 
   it('waits for the context before resuming from start', async () => {
@@ -151,32 +97,30 @@ describe('OnboardingStepper', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
     await view.rerender(
       <ThemeProvider>
-        <OnboardingStepper step="start" ctx={ctx({ ageBand: 'u13' })} settings={settings} />
+        <OnboardingStepper step="start" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    await waitFor(() =>
-      expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/not-eligible')
-    );
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/license'));
   });
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 2 of 6')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 6')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
 
   it('moves forward with Continue and back with Back', async () => {
-    await renderStepper('motion', ctx());
+    await renderStepper('location', ctx());
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
     expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/notifications');
     await fireEvent.press(screen.getByRole('button', { name: 'Back' }));
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/location');
+    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/motion');
     await act(async () => {});
   });
 
   it('offers no Back on the first step', async () => {
-    await renderStepper('location', ctx());
+    await renderStepper('license', ctx());
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
     await act(async () => {});
   });
@@ -192,13 +136,13 @@ describe('OnboardingStepper', () => {
         };
       });
 
-    const view = await renderStepper('motion', ctx());
+    const view = await renderStepper('how', ctx());
     expect(listeners.at(-1)?.()).toBe(true);
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/location');
+    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/license');
 
     await view.rerender(
       <ThemeProvider>
-        <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
+        <OnboardingStepper step="license" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
     mockRouter.replace.mockClear();
@@ -208,38 +152,24 @@ describe('OnboardingStepper', () => {
     await act(async () => {});
   });
 
-  it('keeps the count steady as Terms and the profile drop out of the flow', async () => {
-    const view = await renderStepper(
-      'terms',
-      ctx({ termsCurrent: false, drivingStage: 'unknown' })
-    );
-    expect(screen.getByText('Step 1 of 8')).toBeOnTheScreen();
+  it('keeps the count steady as the username drops out of the flow', async () => {
+    const view = await renderStepper('username', ctx({ hasUsername: false }));
+    expect(screen.getByText('Step 1 of 7')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
           <OnboardingStepper step={step} ctx={c} settings={settings} />
         </ThemeProvider>
       );
-    await at('profile', ctx({ drivingStage: 'unknown' }));
-    expect(screen.getByText('Step 2 of 8')).toBeOnTheScreen();
-    await at('location', ctx());
-    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
+    await at('license', ctx());
+    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // Killed at "Step 3 of 8": Terms and the profile were passed, and have since left the flow.
+    const PLAN: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'];
     await saveStep(settings, 'location');
-    await savePlan(settings, [
-      'terms',
-      'profile',
-      'location',
-      'motion',
-      'notifications',
-      'auto-detect',
-      'family',
-      'ready',
-    ]);
+    await savePlan(settings, PLAN);
     const view = await renderStepper('start', ctx());
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/location'));
     await view.rerender(
@@ -247,65 +177,12 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
-    await waitFor(async () =>
-      expect(await readSavedPlan(settings)).toEqual([
-        'terms',
-        'profile',
-        'location',
-        'motion',
-        'notifications',
-        'auto-detect',
-        'family',
-        'ready',
-      ])
-    );
+    expect(screen.getByText('Step 5 of 7')).toBeOnTheScreen();
+    await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(PLAN));
   });
 
-  it('starts the count afresh through start when nothing is saved', async () => {
-    const view = await renderStepper('terms', ctx({ termsCurrent: false }));
-    const fresh = createSettingsRepo(await createTestDb());
-    await view.rerender(
-      <ThemeProvider>
-        <OnboardingStepper step="start" ctx={ctx()} settings={fresh} />
-      </ThemeProvider>
-    );
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
-    await view.rerender(
-      <ThemeProvider>
-        <OnboardingStepper step="location" ctx={ctx()} settings={fresh} />
-      </ThemeProvider>
-    );
-    expect(screen.getByText('Step 1 of 6')).toBeOnTheScreen();
-    await act(async () => {});
-  });
-
-  it('reads the forward target from the newest context, not the one the step rendered with', async () => {
-    // The profile step refreshes the profile before it calls onNext: the band it learns decides.
-    const view = await renderStepper(
-      'profile',
-      ctx({ ageBand: 'unknown', drivingStage: 'unknown' })
-    );
-    await view.rerender(
-      <ThemeProvider>
-        <OnboardingStepper
-          step="profile"
-          ctx={ctx({
-            ageBand: '13_17',
-            drivingStage: 'unknown',
-            features: { autoDetect: true, guardianInvites: true },
-          })}
-          settings={settings}
-        />
-      </ThemeProvider>
-    );
-    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/guardian');
-    await act(async () => {});
-  });
-
-  it('leaves the flow for Home after the last step (until Task 14 finishes onboarding properly)', async () => {
-    await renderStepper('ready', ctx());
+  it('leaves the flow for Home after the last step', async () => {
+    await renderStepper('clan', ctx());
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
     expect(mockRouter.replace).toHaveBeenLastCalledWith('/(tabs)/home');
     await act(async () => {});

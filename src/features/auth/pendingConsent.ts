@@ -1,260 +1,136 @@
 /**
- * Consent given before there is an account to record it on.
+ * The sign-in attestation: "I'm 13 or older and agree to the Terms and Privacy Policy".
  *
- * The sign-in screen (A3) asks for the disclaimer — and, once they are published, the Terms and
- * Privacy Policy — before the account exists, so the acceptance waits in device settings and is
- * written to `consents` after sign-in. The rules (ruling I7):
- *   - nothing about the Terms or Privacy Policy is stored or recorded while either is unpublished;
- *   - a stored acceptance is recorded only for the exact versions published now, and only for a
- *     type the account does not already hold at that version, so flushing twice records nothing new;
- *   - an acceptance lives at most `PENDING_TERMS_TTL_MS` (the sign-in it was given for), and the
- *     sign-in screen's untick and sign-out clear it (`clearTermsAccepted`), so it is never recorded
- *     for a later account on this phone;
- *   - the disclaimer is not a `consents` type in 0001. Its acknowledgement is a preference, kept
- *     here and, by the Terms step, in `profiles.flags.disclaimerAcknowledged`.
+ * The box is ticked before the account exists, so the tick waits in device settings and is sent
+ * after sign-in with `accept_terms(p_version)`. The rules:
+ *   - every visit to the sign-in screen starts unticked and drops any tick left unbound
+ *     (`startSignInVisit`), so a tick is only ever the person signing in now;
+ *   - a tick lives at most `PENDING_TERMS_TTL_MS`, and an untick or a sign-out clears it;
+ *   - the sign-in binds it to the account it brings (`bindPendingTerms`); from then on it is sent
+ *     for that account only, and one bound to another account is dropped;
+ *   - a send that fails keeps the tick, and the next signed-in launch tries again. Once the server
+ *     has it, the tick is marked sent and nothing more is sent for it.
+ * No age or birth date is stored anywhere: the tick is the attestation.
  */
-import type { Db } from '@/data/db/driver';
-import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
+import type { SettingsRepo } from '@/data/db/settings';
 import { supabase } from '@/data/supabase/client';
-import { recordConsent } from '@/data/supabase/profile';
 
-import { DISCLAIMER_VERSION, type LegalState } from './legal';
+import { TERMS_VERSION } from './legal';
+
+/** Settings key: `{ version, at, uid?, sent? }`, the attestation made on this phone. */
+export const PENDING_TERMS_KEY = 'auth.pendingTerms';
+/** How long a tick stays good for: one sign-in, a slow one included. */
+export const PENDING_TERMS_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface PendingTerms {
+  version: string;
+  at: number;
+  /** The account the sign-in brought; absent while the tick waits for its sign-in. */
+  uid?: string;
+  /** The server has recorded it. */
+  sent?: boolean;
+}
+
+/** `accept_terms(p_version)`. Injectable so the rules are tested without a network. */
+export type AcceptTerms = (version: string) => Promise<void>;
 
 /**
- * Settings key: `{ tos, privacy, at, uid? }`, the versions accepted on this phone and not yet
- * recorded. `uid` is absent while the tick waits for its sign-in, and is bound to the account that
- * sign-in brings (`bindPendingTerms`); from then on it is recorded for that account only (T17
- * security M-1).
+ * The backend's `accept_terms`. Typed loosely on purpose: the database (and its generated types) is
+ * being rebuilt, so the call goes through an untyped `rpc`.
  */
-export const PENDING_TERMS_KEY = 'auth.pendingTerms';
-/** How long a stored acceptance stays good for: one sign-in, a magic link opened later that day included. */
-export const PENDING_TERMS_TTL_MS = 24 * 60 * 60 * 1000;
-/** Settings key: the `DISCLAIMER_VERSION` last acknowledged on this phone. */
-export const DISCLAIMER_ACK_KEY = 'auth.disclaimerAcknowledged';
-
-export type TermsType = 'tos' | 'privacy';
-const TERMS_TYPES: readonly TermsType[] = ['tos', 'privacy'];
-
-export interface TermsConsent {
-  type: TermsType;
-  version: string;
-}
-
-/** The columns of a `consents` row this reads. */
-export interface ConsentRow {
-  type: string;
-  version: string;
-  revoked_at?: string | null;
-}
-
-/** The server calls a flush makes; injectable so the rules are tested without a network. */
-export interface ConsentApi {
-  fetchConsents(userId: string): Promise<ConsentRow[]>;
-  recordConsent(userId: string, consent: TermsConsent): Promise<unknown>;
-}
-
-/** The accepted versions, and when (epoch ms) they were accepted. */
-type PendingTerms = Record<TermsType, string> & { at: number; uid?: string; visit?: string };
-
-// ---------------------------------------------------------------------------------------------
-// The sign-in visit (T17 round 2, consent integrity). A tick is honoured only by the visit to the
-// sign-in screen that made it, so a different person can never inherit an unused one.
-//
-// - Each time the sign-in screen mounts it starts a visit: a fresh random token held IN MEMORY
-//   (`startSignInVisit`). The box starts unticked, and a tick is stored with that token.
-// - The flush honours a stored tick only when its token is the current in-memory visit. A new
-//   visit replaces the token, so every earlier tick is dead; so does a new process, which has none.
-// - The magic-link path: the link may reopen the app after the process was killed, which loses the
-//   in-memory token. So "Email me a link" hands the visit to that link (`handVisitToLink`): the
-//   token is written to `auth.linkVisit`, and a stored tick whose token matches it is honoured too.
-//   Only the one most recent link's visit is kept; a new visit to the sign-in screen, an untick and
-//   every sign-out remove it. The link itself can only complete on this device and only for the
-//   inbox it was sent to (PKCE: the code verifier never leaves the phone), so a stored link visit
-//   can only be consumed by the flow that created it.
-// ---------------------------------------------------------------------------------------------
-
-/** Settings key: the sign-in visit a magic link was sent from (a token, or absent). */
-export const LINK_VISIT_KEY = 'auth.linkVisit';
-
-let currentVisit: string | null = null;
-
-const newVisitToken = (): string =>
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
-
-/** The sign-in screen mounted: a new visit, and every earlier tick is no longer honoured. */
-export function startSignInVisit(): string {
-  currentVisit = newVisitToken();
-  return currentVisit;
-}
-
-/** The visit in progress in this process, or null (none, or the process was restarted). */
-export function currentSignInVisit(): string | null {
-  return currentVisit;
-}
-
-/** A new visit forgets the link an earlier visit was waiting on. Never rejects. */
-export async function forgetLinkVisit(settings: SettingsRepo): Promise<void> {
-  await settings.remove(LINK_VISIT_KEY).catch(() => false);
-}
-
-/** "Email me a link": the link that reopens the app belongs to this visit's flow. */
-export async function handVisitToLink(settings: SettingsRepo, visit: string): Promise<void> {
-  await settings.set(LINK_VISIT_KEY, visit);
-}
-
-async function honouredVisit(settings: SettingsRepo, visit: unknown): Promise<boolean> {
-  if (typeof visit !== 'string' || visit.length === 0) return false;
-  if (visit === currentVisit) return true;
-  return (await settings.get<unknown>(LINK_VISIT_KEY)) === visit;
-}
-
-const defaultApi: ConsentApi = {
-  async fetchConsents(userId) {
-    const { data, error } = await supabase
-      .from('consents')
-      .select('type,version,revoked_at')
-      .eq('user_id', userId)
-      .in('type', [...TERMS_TYPES]);
-    if (error) throw error;
-    return data ?? [];
-  },
-  recordConsent: (userId, consent) => recordConsent(userId, consent),
+export const acceptTermsRpc: AcceptTerms = async (version) => {
+  const rpc = supabase.rpc as unknown as (
+    fn: string,
+    args: Record<string, unknown>
+  ) => PromiseLike<{ error: unknown }>;
+  const { error } = await rpc.call(supabase, 'accept_terms', { p_version: version });
+  if (error) throw error instanceof Error ? error : new Error('accept_terms failed');
 };
 
-const isPendingTerms = (v: unknown): v is PendingTerms =>
-  typeof v === 'object' &&
-  v !== null &&
-  typeof (v as Record<string, unknown>).tos === 'string' &&
-  typeof (v as Record<string, unknown>).privacy === 'string' &&
-  typeof (v as Record<string, unknown>).at === 'number' &&
-  ((v as Record<string, unknown>).uid === undefined ||
-    typeof (v as Record<string, unknown>).uid === 'string') &&
-  ((v as Record<string, unknown>).visit === undefined ||
-    typeof (v as Record<string, unknown>).visit === 'string');
+const isPendingTerms = (v: unknown): v is PendingTerms => {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.version === 'string' &&
+    typeof r.at === 'number' &&
+    (r.uid === undefined || typeof r.uid === 'string') &&
+    (r.sent === undefined || typeof r.sent === 'boolean')
+  );
+};
+
+async function readPending(settings: SettingsRepo): Promise<PendingTerms | null> {
+  const raw = await settings.get<unknown>(PENDING_TERMS_KEY);
+  if (raw === null) return null;
+  if (isPendingTerms(raw)) return raw;
+  await settings.remove(PENDING_TERMS_KEY);
+  return null;
+}
 
 /**
- * A driver signed in: a tick still waiting for its sign-in becomes this account's. A tick already
- * bound to a different account is someone else's and is dropped, never recorded here. Never rejects.
+ * The sign-in screen mounted: a tick still waiting for a sign-in is from an earlier visit (maybe
+ * someone else's) and is dropped. A tick already bound to an account is that account's and stays
+ * until it is sent. Never rejects.
+ */
+export async function startSignInVisit(settings: SettingsRepo): Promise<void> {
+  try {
+    const pending = await readPending(settings);
+    if (pending !== null && pending.uid === undefined) await settings.remove(PENDING_TERMS_KEY);
+  } catch {
+    // Unreadable: the send's own checks still hold.
+  }
+}
+
+/** The box was ticked. */
+export async function markTermsAccepted(
+  settings: SettingsRepo,
+  now: () => number = Date.now
+): Promise<void> {
+  await settings.set(PENDING_TERMS_KEY, { version: TERMS_VERSION, at: now() } satisfies PendingTerms);
+}
+
+/** The box was unticked, or the driver signed out: forget the tick. */
+export async function clearTermsAccepted(settings: SettingsRepo): Promise<void> {
+  await settings.remove(PENDING_TERMS_KEY);
+}
+
+/**
+ * A driver signed in: a tick still waiting for its sign-in becomes this account's. A tick bound to
+ * a different account is someone else's and is dropped. Never rejects.
  */
 export async function bindPendingTerms(settings: SettingsRepo, uid: string): Promise<void> {
   try {
-    const pending = await settings.get<unknown>(PENDING_TERMS_KEY);
-    if (pending === null) return;
-    if (!isPendingTerms(pending)) {
-      await settings.remove(PENDING_TERMS_KEY);
-      return;
-    }
-    if (pending.uid === uid) return;
+    const pending = await readPending(settings);
+    if (pending === null || pending.uid === uid) return;
     if (pending.uid === undefined) await settings.set(PENDING_TERMS_KEY, { ...pending, uid });
     else await settings.remove(PENDING_TERMS_KEY);
   } catch {
-    // Unreadable: the flush's own checks still hold.
+    // Unreadable: the send's own checks still hold.
   }
 }
 
-/** A live consent of `type` at exactly `version`. */
-const holds = (consents: readonly ConsentRow[], type: TermsType, version: string): boolean =>
-  consents.some((c) => c.type === type && c.version === version && !c.revoked_at);
-
 /**
- * The driver ticked the box on the sign-in screen. Published: remember the Terms and Privacy
- * versions they saw, and the disclaimer. Unpublished: the disclaimer only — and any acceptance
- * left from an earlier showing is dropped, because this showing did not ask for it.
+ * Sends this account's tick with `accept_terms`, once. Nothing stored, already sent, another
+ * account's, or stale (older than the TTL, or stamped in the future, before it was sent): nothing
+ * is sent. Rejects when the call fails, keeping the tick for the next launch.
  */
-export async function markTermsAccepted(
+export async function flushTermsAcceptance(
   settings: SettingsRepo,
-  legal: LegalState,
-  now: () => number = Date.now,
-  visit: string | null = currentVisit
-): Promise<void> {
-  if (legal.published && legal.tos && legal.privacy) {
-    // With no visit (not made on the sign-in screen) the tick is stored but never honoured.
-    const pending: PendingTerms = {
-      tos: legal.tos.version,
-      privacy: legal.privacy.version,
-      at: now(),
-      ...(visit ? { visit } : {}),
-    };
-    await settings.set(PENDING_TERMS_KEY, pending);
-  } else {
-    await settings.remove(PENDING_TERMS_KEY);
-  }
-  await settings.set(DISCLAIMER_ACK_KEY, DISCLAIMER_VERSION);
-}
-
-/**
- * The box was unticked, or the driver signed out: forget the Terms and Privacy acceptance. The
- * disclaimer acknowledgement stays, because it is a device preference, not a consent record.
- */
-export async function clearTermsAccepted(settings: SettingsRepo): Promise<void> {
-  await settings.remove(PENDING_TERMS_KEY);
-  await settings.remove(LINK_VISIT_KEY);
-}
-
-/**
- * Record the stored acceptance on the signed-in account. Unpublished, or nothing stored: no network
- * call and nothing recorded. The acceptance is cleared once every type is on the account, or when
- * it names versions other than the ones published now (it is not consent to those), or when it is
- * older than `PENDING_TERMS_TTL_MS` or stamped in the future (a clock moved back). A failed read
- * or write rejects and keeps it, and the next flush skips whatever already landed.
- */
-export async function flushPendingConsents(
-  db: Db,
-  userId: string,
-  legal: LegalState,
-  api: ConsentApi = defaultApi,
+  uid: string,
+  accept: AcceptTerms = acceptTermsRpc,
   now: () => number = Date.now
-): Promise<{ recorded: TermsType[] }> {
-  if (!legal.published || !legal.tos || !legal.privacy) return { recorded: [] };
-
-  const settings = createSettingsRepo(db);
-  const pending = await settings.get<unknown>(PENDING_TERMS_KEY);
-  if (pending === null) return { recorded: [] };
-
-  const current: Record<TermsType, string> = { tos: legal.tos.version, privacy: legal.privacy.version };
-  const age = isPendingTerms(pending) ? now() - pending.at : NaN;
-  const usable =
-    isPendingTerms(pending) &&
-    age >= 0 &&
-    age <= PENDING_TERMS_TTL_MS &&
-    // Bound to another account: never this account's consent. Unbound: this is the sign-in it
-    // was ticked for.
-    (pending.uid === undefined || pending.uid === userId) &&
-    // Made in this visit to the sign-in screen, or in the visit a magic link was sent from.
-    (await honouredVisit(settings, pending.visit)) &&
-    TERMS_TYPES.every((type) => pending[type] === current[type]);
-  if (!usable) {
+): Promise<{ sent: boolean }> {
+  const pending = await readPending(settings);
+  if (pending === null || pending.sent === true) return { sent: false };
+  if (pending.uid !== undefined && pending.uid !== uid) {
     await settings.remove(PENDING_TERMS_KEY);
-    return { recorded: [] };
+    return { sent: false };
   }
-
-  const existing = await api.fetchConsents(userId);
-  const recorded: TermsType[] = [];
-  for (const type of TERMS_TYPES) {
-    if (holds(existing, type, current[type])) continue;
-    await api.recordConsent(userId, { type, version: current[type] });
-    recorded.push(type);
+  const age = now() - pending.at;
+  if (pending.uid === undefined && (age < 0 || age > PENDING_TERMS_TTL_MS)) {
+    await settings.remove(PENDING_TERMS_KEY);
+    return { sent: false };
   }
-  await settings.remove(PENDING_TERMS_KEY);
-  await settings.remove(LINK_VISIT_KEY);
-  return { recorded };
-}
-
-/**
- * Whether the account has agreed to what there is to agree to now. The disclaimer is tracked at its
- * own version and is always required: the current `DISCLAIMER_VERSION` acknowledged in `flags`, so
- * a new disclaimer asks again even when the Terms have not changed (ruling T15). Published, the
- * account also needs live `tos` and `privacy` consents at the current versions; the disclaimer
- * alone is never acceptance of the Terms.
- */
-export function hasCurrentTerms(
-  consents: readonly ConsentRow[],
-  flags: { disclaimerAcknowledged?: unknown } | null | undefined,
-  legal: LegalState
-): boolean {
-  if (flags?.disclaimerAcknowledged !== DISCLAIMER_VERSION) return false;
-  if (legal.published && legal.tos && legal.privacy) {
-    return holds(consents, 'tos', legal.tos.version) && holds(consents, 'privacy', legal.privacy.version);
-  }
-  return true;
+  await accept(pending.version);
+  await settings.set(PENDING_TERMS_KEY, { ...pending, uid, sent: true } satisfies PendingTerms);
+  return { sent: true };
 }

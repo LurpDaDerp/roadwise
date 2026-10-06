@@ -1,13 +1,12 @@
 /**
- * The route file itself: the `step` param reaches the stepper, and the context (`useFlowContext`,
- * Task 12) comes from the signed-in profile and the cached app config.
+ * The route file itself: the `step` param reaches the stepper, and the context (`useFlowContext`)
+ * comes from the signed-in profile.
  */
 import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react-native';
 
 import { createQueryClient, DataProvider } from '@/data/queries';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
-import { DISCLAIMER_VERSION } from '@/features/auth/legal';
 import { ThemeProvider } from '@/ui/theme';
 
 import OnboardingStepRoute from '../../../../app/(onboarding)/[step]';
@@ -15,8 +14,7 @@ import { resetSessionPlan } from '../Stepper';
 
 const mockRouter = { replace: jest.fn() };
 let mockParams: Record<string, string | string[] | undefined> = {};
-let mockProfile: { id: string; age_band: string; driving_stage: string; flags?: unknown } | null =
-  null;
+let mockProfile: { id: string; username: string | null } | null = null;
 
 jest.mock('expo-router', () => {
   const { Text: MockText } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -64,11 +62,11 @@ async function renderRoute() {
 beforeEach(() => {
   mockRouter.replace.mockClear();
   resetSessionPlan();
-  mockProfile = { id: 'user-1', age_band: '18_plus', driving_stage: 'new', flags: {} };
+  mockProfile = { id: 'user-1', username: null };
 });
 
 describe('app/(onboarding)/[step]', () => {
-  it.each([{ step: 'nope' }, { step: ['terms', 'extra'] }, {}])(
+  it.each([{ step: 'nope' }, { step: ['username', 'extra'] }, {}])(
     'sends %p to start',
     async (params) => {
       mockParams = params;
@@ -77,13 +75,10 @@ describe('app/(onboarding)/[step]', () => {
     }
   );
 
-  it('resolves start from the profile: an under-13 account goes to the block', async () => {
+  it('resolves start from the profile: no username yet goes to the username step', async () => {
     mockParams = { step: 'start' };
-    mockProfile = { id: 'user-1', age_band: 'u13', driving_stage: 'unknown', flags: {} };
     await renderRoute();
-    await waitFor(() =>
-      expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/not-eligible')
-    );
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/username'));
   });
 
   it('holds the skeleton until the profile has loaded', async () => {
@@ -94,21 +89,16 @@ describe('app/(onboarding)/[step]', () => {
     expect(screen.queryByTestId('redirect')).toBeNull();
   });
 
-  it('renders the requested step when it is in the flow (Terms owed: nothing acknowledged yet)', async () => {
-    mockParams = { step: 'terms' };
+  it('renders the requested step when it is in the flow', async () => {
+    mockParams = { step: 'username' };
     await renderRoute();
-    expect(screen.getByRole('header', { name: 'Before you start' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Pick a username' })).toBeOnTheScreen();
   });
 
-  it('with the disclaimer acknowledged and nothing published, Terms are current: terms moves on', async () => {
-    mockParams = { step: 'terms' };
-    mockProfile = {
-      id: 'user-1',
-      age_band: '18_plus',
-      driving_stage: 'new',
-      flags: { disclaimerAcknowledged: DISCLAIMER_VERSION },
-    };
+  it('with a username claimed, the username step moves on', async () => {
+    mockParams = { step: 'username' };
+    mockProfile = { id: 'user-1', username: 'swift_fox' };
     await renderRoute();
-    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/location');
+    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/license');
   });
 });

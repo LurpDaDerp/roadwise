@@ -1,18 +1,15 @@
 /**
- * What the driver is asked to agree to, and whether there is anything to agree to yet.
- *
- * The safety disclaimer ships with the app, so it can always be acknowledged. The Terms and the
- * Privacy Policy exist only once the server publishes a URL for each (`app_config.legal_urls`),
- * and a consent is recorded against a version (`app_config.onboarding`). Until both documents can
- * be opened, nobody is asked to accept them and no `tos`/`privacy` consent is recorded (ruling I7):
- * a consent to a document nobody can read is not one.
+ * What the driver agrees to at sign-in: "I'm 13 or older and agree to the Terms and Privacy
+ * Policy". The attestation is recorded on the account against `TERMS_VERSION` (`accept_terms`).
+ * The documents' links come from the server (`app_config.legal_urls`); a document with no URL gets
+ * no link.
  */
 
-/** Product spec §7.A A3, word for word. Wording flagged for counsel before any store-bound build. */
-export const SAFETY_DISCLAIMER = 'RoadWise is a coaching aid and may miss or misreport events';
+/** The Terms and Privacy Policy version the sign-in checkbox agrees to. Bump when either changes. */
+export const TERMS_VERSION = '2026-10-05';
 
-/** Bump when `SAFETY_DISCLAIMER` changes, so everyone acknowledges the new wording. */
-export const DISCLAIMER_VERSION = '2026-09-21';
+/** A short safety line for the how-it-works copy. */
+export const SAFETY_DISCLAIMER = 'RoadWise is a coaching aid and may miss or misreport events';
 
 /** The slice of the app config this reads. Anything else, or anything of the wrong type, is ignored. */
 export interface LegalConfig {

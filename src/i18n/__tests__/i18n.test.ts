@@ -10,7 +10,7 @@ test('every string is non-empty', () => {
     .map(([key]) => key);
   expect(empty).toEqual([]);
 });
-test('carries the M3 drive keys', () => {
-  expect(t('tabs.drive')).toBe('Drive');
+test('carries the v3 tab and drive keys', () => {
+  expect(t('tabs.leagues')).toBe('Leagues');
   expect(t('alert.recording')).toBe('Recording');
 });

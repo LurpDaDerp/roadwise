@@ -2,21 +2,11 @@ import { usePathname, useRouter, useSegments, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
-import { useAppConfig } from '@/data/config/appConfig';
-import type { Db } from '@/data/db/driver';
-import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
+import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries';
-import { supabase } from '@/data/supabase/client';
-import { recordConsent } from '@/data/supabase/profile';
 import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
-import {
-  ONBOARDING_PENDING_HREF_KEY,
-  PERMISSION_CONSENT_VERSION,
-  readPendingPermissionConsents,
-  savePendingPermissionConsents,
-  type PermissionConsentType,
-} from '@/features/onboarding/state';
+import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
 
 import {
   HOME,
@@ -28,111 +18,8 @@ import {
   resolveGate,
   savePendingHref,
 } from './authGuard';
-import { DISCLAIMER_VERSION, legalState, type LegalState } from './legal';
-import {
-  DISCLAIMER_ACK_KEY,
-  flushPendingConsents,
-  type ConsentApi,
-  type TermsType,
-} from './pendingConsent';
+import { flushTermsAcceptance } from './pendingConsent';
 import { useUpdateStatus } from './version';
-
-export interface SignedInConsentDeps {
-  db: Db;
-  settings: SettingsRepo;
-  userId: string;
-  legal: LegalState;
-  /** The flags of the profile row just read from the server (never a cached row). */
-  flags: unknown;
-  consentApi?: ConsentApi;
-  /** Merges `patch` into the caller's own `profiles.flags` on the server (Task 2's RPC). */
-  mergeFlags?: (patch: { disclaimerAcknowledged: string }) => Promise<unknown>;
-  /** Records one A6–A8 permission consent (default: M0's `recordConsent`). */
-  recordPermissionConsent?: (
-    userId: string,
-    consent: { type: PermissionConsentType; version: string }
-  ) => Promise<unknown>;
-}
-
-/**
- * `merge_own_profile_flags` (Task 2, 0007): a server-side merge into the caller's own row, so a
- * concurrent flags write elsewhere is never overwritten (T17 review m2). The server accepts only
- * the allowlisted keys and derives the row from the caller's JWT.
- */
-export async function mergeOwnProfileFlags(patch: { disclaimerAcknowledged: string }): Promise<unknown> {
-  const { data, error } = await supabase.rpc('merge_own_profile_flags', { patch });
-  if (error) throw error;
-  return data;
-}
-
-/**
- * What the device holds from before sign-in, recorded on the account (once per signed-in session):
- * - a pending Terms and Privacy acceptance (Task 15's `flushPendingConsents`: only when published);
- * - the disclaimer acknowledged at sign-in (A3), merged into `profiles.flags` server-side
- *   (`merge_own_profile_flags`, never a read-modify-write) so the Terms step
- *   does not ask a second time (ruling T15). Only the current `DISCLAIMER_VERSION` is copied, and
- *   only when the account does not already hold it, so an older tick never downgrades the row.
- * - the A6–A8 permission consents a step could not send (offline) and `finishOnboarding` could not
- *   either (T14 review m2): only those held for THIS account, each sent once; what is sent is
- *   dropped from the owed record, what fails stays for the next session. A failure here is
- *   returned as `failure`, never thrown, so it cannot hold back the refresh a merged disclaimer
- *   needs (T14 r1 review n1).
- * All are attempted whatever happens to the others. A failed Terms or disclaimer write rejects,
- * after all ran.
- */
-export async function flushSignedInConsents(
-  deps: SignedInConsentDeps
-): Promise<{ recorded: TermsType[]; disclaimerMerged: boolean; failure: unknown }> {
-  const { db, settings, userId, legal, consentApi, mergeFlags = mergeOwnProfileFlags } = deps;
-  let failure: unknown = null;
-  /** A permission consent that could not be sent: reported, never thrown (T14 r1 review n1). */
-  let consentFailure: unknown = null;
-
-  let recorded: TermsType[] = [];
-  try {
-    ({ recorded } = await flushPendingConsents(db, userId, legal, consentApi));
-  } catch (error) {
-    failure = error;
-  }
-
-  let disclaimerMerged = false;
-  try {
-    const ack = await settings.get<unknown>(DISCLAIMER_ACK_KEY);
-    const flags =
-      typeof deps.flags === 'object' && deps.flags !== null && !Array.isArray(deps.flags)
-        ? (deps.flags as Record<string, unknown>)
-        : {};
-    if (ack === DISCLAIMER_VERSION && flags.disclaimerAcknowledged !== DISCLAIMER_VERSION) {
-      // Only the one key goes up: the server merges it into whatever the row holds now.
-      await mergeFlags({ disclaimerAcknowledged: DISCLAIMER_VERSION });
-      disclaimerMerged = true;
-    }
-  } catch (error) {
-    failure ??= error;
-  }
-
-  try {
-    const owed = await readPendingPermissionConsents(settings, userId);
-    if (owed.length > 0) {
-      const record = deps.recordPermissionConsent ?? recordConsent;
-      const left: PermissionConsentType[] = [];
-      for (const type of owed) {
-        try {
-          await record(userId, { type, version: PERMISSION_CONSENT_VERSION });
-        } catch (error) {
-          left.push(type);
-          consentFailure ??= error;
-        }
-      }
-      await savePendingPermissionConsents(settings, userId, left);
-    }
-  } catch (error) {
-    consentFailure ??= error;
-  }
-
-  if (failure !== null) throw failure;
-  return { recorded, disclaimerMerged, failure: consentFailure };
-}
 
 /**
  * The route guard. `app/index.tsx` decides where a cold start lands; this watches the session,
@@ -140,9 +27,10 @@ export async function flushSignedInConsents(
  * who is on the wrong screen (`resolveGate`). It never moves anyone while a drive is under way or
  * a drive screen is showing (rev1: I10); it answers once the drive goes idle.
  *
- * Also, once per signed-in session, it records what the device holds from before sign-in
- * (`flushSignedInConsents`), and after an offline start it re-reads the profile whenever the app
- * comes back to the front, so the cached row is replaced by the server's.
+ * Also, once per signed-in session, it sends the sign-in attestation (`accept_terms`; a failure is
+ * retried on the next change of profile or the next launch), and after an offline start it
+ * re-reads the profile whenever the app comes back to the front, so the cached row is replaced by
+ * the server's.
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const { status, session, profile, profileSource, refreshProfile } = useSession();
@@ -150,10 +38,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const host = useDriveHost();
-  const snapshot = useDrive((s) => ({ status: s.status, mode: s.mode }));
-  const { busy, mode, tripOpen } = driveFacts(snapshot, host.isBusy());
+  const driveStatus = useDrive((s) => s.status);
+  const { busy, tripOpen } = driveFacts({ status: driveStatus }, host.isBusy());
   const update = useUpdateStatus() ?? 'unknown';
-  const { config, ready: configReady } = useAppConfig();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const gate = profileGate(profile);
@@ -200,7 +87,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [gate, settings, userId]);
 
   useEffect(() => {
-    const to = resolveGate(status, gate, update, segments, { busy, mode, tripOpen });
+    const to = resolveGate(status, gate, update, segments, { busy, tripOpen });
     if (!to) return;
     // A deep link that arrived while setup is owed is held (allowlisted) and opened when
     // onboarding finishes, instead of Home.
@@ -222,33 +109,20 @@ export function AuthGate({ children }: { children: ReactNode }) {
     }
     router.replace(to as Href);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `holdFor` reads `userId`, listed here
-  }, [status, gate, update, segments, busy, mode, tripOpen, router, pathname, settings, inOnboarding, userId]);
+  }, [status, gate, update, segments, busy, tripOpen, router, pathname, settings, inOnboarding, userId]);
 
-  // Once per signed-in session, against the server's row (a cached row may be stale).
+  // The sign-in attestation, once per signed-in session. A failure (offline, or the server is not
+  // ready) is retried on the next change of profile, and on the next launch.
   const flushedFor = useRef<string | null>(null);
   useEffect(() => {
     if (status === 'signedOut') flushedFor.current = null;
-    if (status !== 'signedIn' || userId === null || !configReady) return;
-    if (profileSource !== 'network' || profile === null) return;
-    // The row must be this account's own, or nothing is written (T17 security M-2).
-    if (profile.id !== userId) return;
-    // The server refuses consent writes for an under-13 account, and there is nothing to record.
-    if (gate === 'blocked') return;
+    if (status !== 'signedIn' || userId === null || profile === null) return;
     if (flushedFor.current === userId) return;
     flushedFor.current = userId;
-    const legal = legalState(config);
-    void flushSignedInConsents({ db, settings, userId, legal, flags: profile.flags })
-      .then(({ disclaimerMerged, failure }) => {
-        // Owed permission consents that still fail are kept; the next change of profile (or the
-        // next session) tries them again. They never hold back the refresh below.
-        if (failure !== null && flushedFor.current === userId) flushedFor.current = null;
-        return disclaimerMerged ? refreshProfile() : undefined;
-      })
-      .catch(() => {
-        // Offline, or the server refused: the next change of profile tries again.
-        if (flushedFor.current === userId) flushedFor.current = null;
-      });
-  }, [status, userId, configReady, config, profileSource, profile, gate, db, settings, refreshProfile]);
+    void flushTermsAcceptance(settings, userId).catch(() => {
+      if (flushedFor.current === userId) flushedFor.current = null;
+    });
+  }, [status, userId, profile, settings]);
 
   // A profile served from the cache (offline start) is re-read on each return to the front, and
   // only then: no timer, nothing in the background.

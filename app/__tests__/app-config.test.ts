@@ -5,7 +5,7 @@
  */
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import appConfig, { googleServicesFile } from '../../app.config';
+import appConfig, { googleServicesFile, PERMISSION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -87,5 +87,57 @@ describe('the runtime version (release gate, C0-I1)', () => {
 
   test('EAS Update is configured (the policy is only meaningful with an update URL)', () => {
     expect(build().updates?.url).toMatch(/^https:\/\/u\.expo\.dev\//);
+  });
+});
+
+// v3: every drive starts in the app. "While Using" location only, never Always; a started drive keeps
+// running in the background (iOS location mode, Android foreground service); no microphone.
+describe('permissions (v3)', () => {
+  const plugin = (name: string) => {
+    const entry = build().plugins?.find((p) => Array.isArray(p) && p[0] === name);
+    return Array.isArray(entry) ? (entry[1] as Record<string, unknown>) : undefined;
+  };
+
+  test('location is While Using only, and the Always strings are removed', () => {
+    const location = plugin('expo-location');
+    expect(location).toMatchObject({
+      locationWhenInUsePermission: PERMISSION_COPY.location,
+      locationAlwaysAndWhenInUsePermission: false,
+      locationAlwaysPermission: false,
+      isIosBackgroundLocationEnabled: true,
+      isAndroidBackgroundLocationEnabled: false,
+      isAndroidForegroundServiceEnabled: true,
+      isAndroidMotionActivityEnabled: true,
+      motionUsagePermission: PERMISSION_COPY.motion,
+    });
+    const plist = build().ios?.infoPlist ?? {};
+    expect(plist).not.toHaveProperty('NSLocationAlwaysAndWhenInUseUsageDescription');
+    expect(plist).not.toHaveProperty('NSLocationAlwaysUsageDescription');
+  });
+
+  test('Android never gets background location or audio recording', () => {
+    expect(build().android?.blockedPermissions).toEqual(
+      expect.arrayContaining(['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'])
+    );
+    expect(build().android?.permissions).not.toContain('android.permission.RECEIVE_BOOT_COMPLETED');
+  });
+
+  test('the camera is for DMS and QR codes, with no microphone', () => {
+    expect(plugin('expo-camera')).toEqual({
+      cameraPermission: PERMISSION_COPY.camera,
+      microphonePermission: false,
+      recordAudioAndroid: false,
+    });
+  });
+
+  test('the strings are plain and mention nothing v3 removed', () => {
+    const words = Object.values(PERMISSION_COPY).join(' ').toLowerCase();
+    for (const word of ['family', 'automatically', 'always', 'background', 'closed']) {
+      expect(words).not.toContain(word);
+    }
+  });
+
+  test('the deep link scheme stays roadwise', () => {
+    expect(build().scheme).toBe('roadwise');
   });
 });

@@ -99,9 +99,6 @@ jest.mock('@/features/auth/AuthGate', () => ({
 jest.mock('@/features/drive/LockoutGate', () => ({
   LockoutGate: ({ children }: { children: ReactNode }) => children,
 }));
-jest.mock('@/features/home/HomeBanners', () => ({
-  RestoreRetryProvider: ({ children }: { children: ReactNode }) => children,
-}));
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => null,
   hasDriverData: async () => false,
@@ -175,9 +172,6 @@ jest.mock('@/data/supabase/session', () => {
 // ——— the device and prompt hosts record what they were given ———
 const mockHosts = {
   device: [] as Record<string, unknown>[],
-  prompts: [] as Record<string, unknown>[],
-  promptMounts: 0,
-  promptUnmounts: 0,
 };
 jest.mock('@/data/devices/DeviceHost', () => {
   const { View: RNView } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -185,22 +179,6 @@ jest.mock('@/data/devices/DeviceHost', () => {
     DeviceHost: (props: Record<string, unknown>) => {
       mockHosts.device.push(props);
       return <RNView testID="device-host" />;
-    },
-  };
-});
-jest.mock('@/features/permissions/PermissionPromptsHost', () => {
-  const { View: RNView } = jest.requireActual<typeof import('react-native')>('react-native');
-  const { useEffect: useMountEffect } = jest.requireActual<typeof import('react')>('react');
-  return {
-    PermissionPromptsHost: (props: Record<string, unknown>) => {
-      mockHosts.prompts.push(props);
-      useMountEffect(() => {
-        mockHosts.promptMounts += 1;
-        return () => {
-          mockHosts.promptUnmounts += 1;
-        };
-      }, []);
-      return <RNView testID="permission-prompts-host" />;
     },
   };
 });
@@ -277,9 +255,6 @@ beforeEach(() => {
   mockSessionStore.tasks.clear();
   mockSupabase.sessionUid = 'u1';
   mockHosts.device = [];
-  mockHosts.prompts = [];
-  mockHosts.promptMounts = 0;
-  mockHosts.promptUnmounts = 0;
 });
 
 describe('the hosts mount inside the drive provider, only when a runtime exists', () => {
@@ -291,17 +266,16 @@ describe('the hosts mount inside the drive provider, only when a runtime exists'
     mockController.state = { ...state, generation: 0 } as RuntimeState;
     await render(<RootLayout />);
     expect(screen.queryByTestId('device-host')).toBeNull();
-    expect(screen.queryByTestId('permission-prompts-host')).toBeNull();
     expect(Notifications.addNotificationResponseReceivedListener).not.toHaveBeenCalled();
     expect(mockSessionStore.tasks.size).toBe(0);
   });
 
-  test('with a runtime: all three are inside the drive provider', async () => {
+  test('with a runtime: both are inside the drive provider, and no post-drive Always offers', async () => {
     const { runtime } = await fakeRuntime();
     await renderWith(runtime);
     const provider = screen.getByTestId('drive-provider');
     expect(within(provider).getByTestId('device-host')).toBeTruthy();
-    expect(within(provider).getByTestId('permission-prompts-host')).toBeTruthy();
+    expect(screen.queryByTestId('permission-prompts-host')).toBeNull();
     expect(mockNotifications.responseListeners.size).toBe(1);
   });
 
@@ -320,7 +294,7 @@ describe('one notification response listener (rev1: C1)', () => {
     await renderWith(runtime);
     expect(Notifications.addNotificationResponseReceivedListener).toHaveBeenCalledTimes(1);
     expect(mockNotifications.responseListeners.size).toBe(1);
-    expect(mockNotifications.receivedListeners.size).toBe(1);
+    expect(mockNotifications.receivedListeners.size).toBe(0);
     // The one foreground handler is the host's, installed at its mount; none at module load.
     expect(handlerCallsAtLoad).toBe(0);
     expect(Notifications.setNotificationHandler).toHaveBeenCalledTimes(1);
@@ -366,26 +340,6 @@ describe('the device host (T10 r2: no subscribeDrive)', () => {
     expect(Object.keys(props)).toEqual(['onForeground']);
     await (props.onForeground as (uid: string) => Promise<unknown>)('u1');
     expect(mockSync).toHaveBeenCalledWith('u1', expect.objectContaining({ db }));
-  });
-});
-
-describe('the post-drive permission offers (T9)', () => {
-  test("read the drive host's busy signal", async () => {
-    const { runtime, host } = await fakeRuntime('recording');
-    await renderWith(runtime);
-    const isBusy = mockHosts.prompts.at(-1)?.isBusy as () => boolean;
-    expect(isBusy()).toBe(true);
-    await act(async () => host.publish('armed'));
-    expect(isBusy()).toBe(false);
-  });
-
-  test('remount on a handover, so one owner\'s "finished" never holds back the next owner\'s offers', async () => {
-    const { runtime } = await fakeRuntime();
-    await renderWith(runtime);
-    expect(mockHosts.promptMounts).toBe(1);
-    await act(async () => mockSessionStore.set('u2'));
-    expect(mockHosts.promptUnmounts).toBe(1);
-    expect(mockHosts.promptMounts).toBe(2);
   });
 });
 

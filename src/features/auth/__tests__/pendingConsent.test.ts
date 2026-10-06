@@ -1,29 +1,20 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
-import { DISCLAIMER_VERSION, legalState, type LegalState } from '@/features/auth/legal';
+import { TERMS_VERSION } from '@/features/auth/legal';
 import {
-  DISCLAIMER_ACK_KEY,
   PENDING_TERMS_KEY,
-  LINK_VISIT_KEY,
   PENDING_TERMS_TTL_MS,
   bindPendingTerms,
-  currentSignInVisit,
-  forgetLinkVisit,
-  handVisitToLink,
-  startSignInVisit,
   clearTermsAccepted,
-  flushPendingConsents,
-  hasCurrentTerms,
+  flushTermsAcceptance,
   markTermsAccepted,
-  type ConsentApi,
-  type ConsentRow,
-  type TermsConsent,
+  startSignInVisit,
+  type PendingTerms,
 } from '@/features/auth/pendingConsent';
 
-// The default API reaches for the app's Supabase client; nothing here may touch it.
+// The default RPC reaches for the app's Supabase client; nothing here may touch it.
 jest.mock('@/data/supabase/client', () => ({
   supabase: new Proxy(
     {},
@@ -35,370 +26,93 @@ jest.mock('@/data/supabase/client', () => ({
   ),
 }));
 
-const published: LegalState = legalState({
-  onboarding: { tos_version: 't-2', privacy_version: 'p-3' },
-  legal_urls: { terms: 'https://roadwise.example/terms', privacy: 'https://roadwise.example/privacy' },
-});
-const unpublished: LegalState = legalState({
-  onboarding: { tos_version: 't-2', privacy_version: 'p-3' },
-  legal_urls: { terms: 'https://roadwise.example/terms' },
-});
-
-/** A server that remembers what was recorded, so a second flush sees the first one's rows. */
-function fakeServer(initial: ConsentRow[] = []) {
-  const rows: ConsentRow[] = [...initial];
-  const fetchConsents = jest.fn(async (_userId: string) => rows.map((r) => ({ ...r })));
-  const recordConsent = jest.fn(async (_userId: string, c: TermsConsent) => {
-    rows.push({ type: c.type, version: c.version, revoked_at: null });
-  });
-  const api: ConsentApi = { fetchConsents, recordConsent };
-  return { rows, api, fetchConsents, recordConsent };
-}
-
-let db: Db;
+const T0 = 1_760_000_000_000;
 let settings: SettingsRepo;
+let accept: jest.Mock<Promise<void>, [string]>;
 
 beforeEach(async () => {
-  db = await createSqlJsDb();
+  const db = await createSqlJsDb();
   await migrate(db);
   settings = createSettingsRepo(db);
-  // Every tick below is made on a sign-in screen visit, as the app makes them (T17 round 2).
-  startSignInVisit();
+  accept = jest.fn(async (_version: string) => {});
 });
 
-describe('markTermsAccepted', () => {
-  test('published: keeps the accepted versions for the account, and the disclaimer acknowledgement', async () => {
-    await markTermsAccepted(settings, published);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
-    await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
-  });
+const stored = () => settings.get<PendingTerms>(PENDING_TERMS_KEY);
 
-  test('unpublished: stores the disclaimer acknowledgement only, no Terms or Privacy acceptance', async () => {
-    await markTermsAccepted(settings, unpublished);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-    await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
-  });
-
-  test('unpublished: drops an acceptance stored while the documents were still published', async () => {
-    await markTermsAccepted(settings, published);
-    await markTermsAccepted(settings, unpublished);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
+test('a tick stores the current terms version and when, and nothing about age', async () => {
+  await markTermsAccepted(settings, () => T0);
+  expect(await stored()).toEqual({ version: TERMS_VERSION, at: T0 });
 });
 
-describe('flushPendingConsents', () => {
-  test('unpublished: records nothing and asks the server nothing, even with an old acceptance stored', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: Date.now() });
-    const { api, fetchConsents, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', unpublished, api)).resolves.toEqual({ recorded: [] });
-    expect(fetchConsents).not.toHaveBeenCalled();
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
+test('the signed-in account gets it once: accept_terms with the version, then marked sent', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await bindPendingTerms(settings, 'u1');
+  expect(await flushTermsAcceptance(settings, 'u1', accept, () => T0 + 1000)).toEqual({ sent: true });
+  expect(accept).toHaveBeenCalledWith(TERMS_VERSION);
+  expect(await stored()).toEqual({ version: TERMS_VERSION, at: T0, uid: 'u1', sent: true });
 
-  test('published but never accepted on this phone: records nothing and asks nothing', async () => {
-    const { api, fetchConsents, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(fetchConsents).not.toHaveBeenCalled();
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
-
-  test('published and accepted: records both, clears the acceptance, and flushing again is a no-op', async () => {
-    await markTermsAccepted(settings, published);
-    const { rows, api, fetchConsents, recordConsent } = fakeServer();
-
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
-      recorded: ['tos', 'privacy'],
-    });
-    expect(fetchConsents).toHaveBeenCalledWith('u1');
-    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'tos', version: 't-2' });
-    expect(recordConsent).toHaveBeenCalledWith('u1', { type: 'privacy', version: 'p-3' });
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    // Even with the acceptance stored again (ticked on a later sign-in), nothing is duplicated.
-    await markTermsAccepted(settings, published);
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(rows).toHaveLength(2);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('skips a consent already on the account at the current version, records the other', async () => {
-    await markTermsAccepted(settings, published);
-    const { api, recordConsent } = fakeServer([{ type: 'tos', version: 't-2', revoked_at: null }]);
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['privacy'] });
-    expect(recordConsent).toHaveBeenCalledTimes(1);
-  });
-
-  test('an older or revoked consent on the account does not count', async () => {
-    await markTermsAccepted(settings, published);
-    const { api } = fakeServer([
-      { type: 'tos', version: 't-1', revoked_at: null },
-      { type: 'privacy', version: 'p-3', revoked_at: '2026-09-10T00:00:00Z' },
-    ]);
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
-      recorded: ['tos', 'privacy'],
-    });
-  });
-
-  test('an acceptance of a version other than the one now published records nothing and is dropped', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-1', privacy: 'p-3', at: Date.now() });
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('a failed write keeps the acceptance for the next flush, which does not repeat what landed', async () => {
-    await markTermsAccepted(settings, published);
-    const { rows, api, recordConsent } = fakeServer();
-    recordConsent
-      .mockImplementationOnce(async (_u: string, c: TermsConsent) => {
-        rows.push({ type: c.type, version: c.version, revoked_at: null });
-      })
-      .mockImplementationOnce(async () => {
-        throw new Error('offline');
-      });
-
-    await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
-
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['privacy'] });
-    expect(rows.map((r) => r.type)).toEqual(['tos', 'privacy']);
-  });
-
-  test('a failed read records nothing and keeps the acceptance', async () => {
-    await markTermsAccepted(settings, published);
-    const { api, fetchConsents, recordConsent } = fakeServer();
-    fetchConsents.mockRejectedValueOnce(new Error('offline'));
-    await expect(flushPendingConsents(db, 'u1', published, api)).rejects.toThrow('offline');
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: expect.any(Number), visit: expect.any(String) });
-  });
-
-  test('an acceptance older than its lifetime records nothing and is dropped', async () => {
-    const ticked = Date.parse('2026-09-22T10:00:00Z');
-    await markTermsAccepted(settings, published, () => ticked);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toEqual({ tos: 't-2', privacy: 'p-3', at: ticked, visit: expect.any(String) });
-    const { api, fetchConsents, recordConsent } = fakeServer();
-
-    const late = () => ticked + PENDING_TERMS_TTL_MS + 1;
-    await expect(flushPendingConsents(db, 'u1', published, api, late)).resolves.toEqual({ recorded: [] });
-    expect(fetchConsents).not.toHaveBeenCalled();
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('an acceptance within its lifetime is recorded', async () => {
-    const ticked = Date.parse('2026-09-22T10:00:00Z');
-    await markTermsAccepted(settings, published, () => ticked);
-    const { api } = fakeServer();
-    const inTime = () => ticked + PENDING_TERMS_TTL_MS;
-    await expect(flushPendingConsents(db, 'u1', published, api, inTime)).resolves.toEqual({
-      recorded: ['tos', 'privacy'],
-    });
-  });
-
-  test('an acceptance stamped in the future (clock moved back) is not trusted', async () => {
-    const now = Date.parse('2026-09-22T10:00:00Z');
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: now + 60 * 60 * 1000 });
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api, () => now)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
-
-  test('an acceptance with no timestamp (an older shape) is dropped', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3' });
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('clearTermsAccepted (untick, sign-out) removes the acceptance, so nothing is recorded', async () => {
-    await markTermsAccepted(settings, published);
-    await clearTermsAccepted(settings);
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
-
-  test('clearTermsAccepted keeps the disclaimer acknowledgement, which is not a consent record', async () => {
-    await markTermsAccepted(settings, published);
-    await clearTermsAccepted(settings);
-    await expect(settings.get(DISCLAIMER_ACK_KEY)).resolves.toBe(DISCLAIMER_VERSION);
-  });
-
-  test('a stored value of the wrong shape is ignored and dropped', async () => {
-    await settings.set(PENDING_TERMS_KEY, 'yes');
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
+  expect(await flushTermsAcceptance(settings, 'u1', accept, () => T0 + 2000)).toEqual({ sent: false });
+  expect(accept).toHaveBeenCalledTimes(1);
 });
 
-describe('hasCurrentTerms', () => {
-  const tos: ConsentRow = { type: 'tos', version: 't-2', revoked_at: null };
-  const privacy: ConsentRow = { type: 'privacy', version: 'p-3', revoked_at: null };
+test('a failed send keeps the tick for the next launch, even past the TTL once bound', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await bindPendingTerms(settings, 'u1');
+  accept.mockRejectedValueOnce(new Error('offline'));
+  await expect(flushTermsAcceptance(settings, 'u1', accept, () => T0)).rejects.toThrow('offline');
+  expect((await stored())?.sent).toBeUndefined();
 
-  const ack = { disclaimerAcknowledged: DISCLAIMER_VERSION };
-
-  test('published: both consents at the current versions, not revoked, and the current disclaimer', () => {
-    expect(hasCurrentTerms([tos, privacy], ack, published)).toBe(true);
-    expect(hasCurrentTerms([tos], ack, published)).toBe(false);
-    expect(hasCurrentTerms([tos, { ...privacy, version: 'p-2' }], ack, published)).toBe(false);
-    expect(hasCurrentTerms([tos, { ...privacy, revoked_at: '2026-09-10T00:00:00Z' }], ack, published)).toBe(
-      false
-    );
-    // An older revoked row beside a current live one still counts as current.
-    expect(
-      hasCurrentTerms([{ ...tos, revoked_at: '2026-09-10T00:00:00Z' }, tos, privacy], ack, published)
-    ).toBe(true);
-  });
-
-  test('published: current Terms and Privacy without the disclaimer acknowledgement are not enough', () => {
-    expect(hasCurrentTerms([tos, privacy], {}, published)).toBe(false);
-    expect(hasCurrentTerms([tos, privacy], null, published)).toBe(false);
-  });
-
-  test('a disclaimer bump asks again even though the Terms and Privacy are unchanged', () => {
-    // The account acknowledged an earlier disclaimer and holds the current Terms and Privacy.
-    const earlier = { disclaimerAcknowledged: '2026-01-01' };
-    expect(hasCurrentTerms([tos, privacy], earlier, published)).toBe(false);
-    expect(hasCurrentTerms([tos, privacy], earlier, unpublished)).toBe(false);
-  });
-
-  test('published: the disclaimer acknowledgement alone is not acceptance of the Terms', () => {
-    expect(hasCurrentTerms([], { disclaimerAcknowledged: DISCLAIMER_VERSION }, published)).toBe(false);
-  });
-
-  test('unpublished: the current disclaimer acknowledgement, and nothing else, is enough', () => {
-    expect(hasCurrentTerms([], { disclaimerAcknowledged: DISCLAIMER_VERSION }, unpublished)).toBe(true);
-    expect(hasCurrentTerms([tos, privacy], {}, unpublished)).toBe(false);
-    expect(hasCurrentTerms([], { disclaimerAcknowledged: '2026-01-01' }, unpublished)).toBe(false);
-    expect(hasCurrentTerms([], null, unpublished)).toBe(false);
-    expect(hasCurrentTerms([], undefined, unpublished)).toBe(false);
-  });
+  const later = T0 + 3 * PENDING_TERMS_TTL_MS;
+  expect(await flushTermsAcceptance(settings, 'u1', accept, () => later)).toEqual({ sent: true });
 });
 
-describe('a tick is bound to the account it was given for (T17 security M-1)', () => {
-  test('a waiting tick binds to the first account that signs in, and is recorded for it', async () => {
-    await markTermsAccepted(settings, published);
-    await bindPendingTerms(settings, 'u1');
-    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ tos: 't-2', privacy: 'p-3', uid: 'u1' });
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: ['tos', 'privacy'] });
-    expect(recordConsent).toHaveBeenCalledTimes(2);
-  });
-
-  test('binding again for the same account changes nothing', async () => {
-    await markTermsAccepted(settings, published);
-    await bindPendingTerms(settings, 'u1');
-    await bindPendingTerms(settings, 'u1');
-    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ uid: 'u1' });
-  });
-
-  test('a tick bound to one account is never recorded for another', async () => {
-    await markTermsAccepted(settings, published);
-    await bindPendingTerms(settings, 'u1');
-    const { api, fetchConsents, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u2', published, api)).resolves.toEqual({ recorded: [] });
-    expect(fetchConsents).not.toHaveBeenCalled();
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('another account signing in drops a tick bound to the first', async () => {
-    await markTermsAccepted(settings, published);
-    await bindPendingTerms(settings, 'u1');
-    await bindPendingTerms(settings, 'u2');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
-
-  test('binding with nothing pending, or a malformed value, stores nothing', async () => {
-    await bindPendingTerms(settings, 'u1');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-    await settings.set(PENDING_TERMS_KEY, { tos: 1 });
-    await bindPendingTerms(settings, 'u1');
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
+test('a tick bound to another account is never sent for this one, and is dropped', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await bindPendingTerms(settings, 'u1');
+  expect(await flushTermsAcceptance(settings, 'u2', accept, () => T0)).toEqual({ sent: false });
+  expect(accept).not.toHaveBeenCalled();
+  expect(await stored()).toBeNull();
 });
 
-describe('a tick is honoured only by the visit that made it (T17 round 2)', () => {
-  test('the tick carries the current visit', async () => {
-    await markTermsAccepted(settings, published);
-    expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ visit: currentSignInVisit() });
-  });
+test('binding: an unbound tick becomes this account’s; one bound elsewhere is dropped', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await bindPendingTerms(settings, 'u1');
+  expect((await stored())?.uid).toBe('u1');
+  await bindPendingTerms(settings, 'u2');
+  expect(await stored()).toBeNull();
+});
 
-  test('a tick from an earlier visit is never recorded', async () => {
-    await markTermsAccepted(settings, published);
-    startSignInVisit(); // someone opens the sign-in screen again
-    const { api, fetchConsents, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(fetchConsents).not.toHaveBeenCalled();
-    expect(recordConsent).not.toHaveBeenCalled();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
+test('an unbound tick older than the TTL, or from the future, is dropped unsent', async () => {
+  await markTermsAccepted(settings, () => T0);
+  expect(await flushTermsAcceptance(settings, 'u1', accept, () => T0 + PENDING_TERMS_TTL_MS + 1)).toEqual({
+    sent: false,
   });
+  await markTermsAccepted(settings, () => T0);
+  expect(await flushTermsAcceptance(settings, 'u1', accept, () => T0 - 1)).toEqual({ sent: false });
+  expect(accept).not.toHaveBeenCalled();
+});
 
-  test('a tick with no visit (an older build, or not made on the screen) is never recorded', async () => {
-    await settings.set(PENDING_TERMS_KEY, { tos: 't-2', privacy: 'p-3', at: Date.now() });
-    const { api, recordConsent } = fakeServer();
-    await expect(flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({ recorded: [] });
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
+test('nothing stored sends nothing; a malformed value is removed', async () => {
+  expect(await flushTermsAcceptance(settings, 'u1', accept)).toEqual({ sent: false });
+  await settings.set(PENDING_TERMS_KEY, { version: 3 });
+  expect(await flushTermsAcceptance(settings, 'u1', accept)).toEqual({ sent: false });
+  expect(await stored()).toBeNull();
+  expect(accept).not.toHaveBeenCalled();
+});
 
-  /** The same module loaded afresh: what a magic link reopening a killed app sees (no visit in memory). */
-  function freshProcess(): typeof import('@/features/auth/pendingConsent') {
-    let fresh: typeof import('@/features/auth/pendingConsent') | undefined;
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- a second copy of the module
-      fresh = require('@/features/auth/pendingConsent') as typeof import('@/features/auth/pendingConsent');
-    });
-    if (!fresh) throw new Error('module not loaded');
-    return fresh;
-  }
+test('a new sign-in visit drops an unbound tick, but keeps one already bound to an account', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await startSignInVisit(settings);
+  expect(await stored()).toBeNull();
 
-  test('the magic-link path: a tick handed to the link is recorded after the app is reopened by it', async () => {
-    await markTermsAccepted(settings, published);
-    await handVisitToLink(settings, currentSignInVisit() as string);
-    const reopened = freshProcess();
-    expect(reopened.currentSignInVisit()).toBeNull();
-    const { api, recordConsent } = fakeServer();
-    await expect(reopened.flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
-      recorded: ['tos', 'privacy'],
-    });
-    expect(recordConsent).toHaveBeenCalledTimes(2);
-    // Used once: the link visit goes with the tick.
-    await expect(settings.get(LINK_VISIT_KEY)).resolves.toBeNull();
-  });
+  await markTermsAccepted(settings, () => T0);
+  await bindPendingTerms(settings, 'u1');
+  await startSignInVisit(settings);
+  expect((await stored())?.uid).toBe('u1');
+});
 
-  test('without the hand-off, a reopened app honours no tick', async () => {
-    await markTermsAccepted(settings, published);
-    const { api, recordConsent } = fakeServer();
-    await expect(freshProcess().flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
-      recorded: [],
-    });
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
-
-  test('a new visit forgets the link an earlier visit was waiting on', async () => {
-    await markTermsAccepted(settings, published);
-    await handVisitToLink(settings, currentSignInVisit() as string);
-    startSignInVisit();
-    await forgetLinkVisit(settings);
-    const { api, recordConsent } = fakeServer();
-    await expect(freshProcess().flushPendingConsents(db, 'u1', published, api)).resolves.toEqual({
-      recorded: [],
-    });
-    expect(recordConsent).not.toHaveBeenCalled();
-  });
-
-  test('an untick or sign-out clears the link visit with the tick', async () => {
-    await markTermsAccepted(settings, published);
-    await handVisitToLink(settings, currentSignInVisit() as string);
-    await clearTermsAccepted(settings);
-    await expect(settings.get(LINK_VISIT_KEY)).resolves.toBeNull();
-    await expect(settings.get(PENDING_TERMS_KEY)).resolves.toBeNull();
-  });
+test('an untick or a sign-out clears it', async () => {
+  await markTermsAccepted(settings, () => T0);
+  await clearTermsAccepted(settings);
+  expect(await stored()).toBeNull();
 });

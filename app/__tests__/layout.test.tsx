@@ -135,18 +135,9 @@ jest.mock('@/data/queries', () => ({
   DataProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
-const mockRestore: { retry: (() => Promise<unknown>) | null } = { retry: null };
-jest.mock('@/features/home/HomeBanners', () => ({
-  RestoreRetryProvider: ({ children, retry }: { children: ReactNode; retry: () => Promise<unknown> }) => {
-    mockRestore.retry = retry;
-    return children;
-  },
-}));
-
 // Task 18's hosts are stand-ins here; their wiring is `layout-wiring.test.tsx`'s subject.
 jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
-jest.mock('@/features/permissions/PermissionPromptsHost', () => ({ PermissionPromptsHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
 import RootLayout from '../_layout';
@@ -291,12 +282,10 @@ describe('the root layout', () => {
     expect(handlerCalls).toHaveLength(0);
   });
 
-  test('wires sign-out to flush the deletes owed, and Home’s Retry to the restore', async () => {
+  test('wires sign-out to flush the deletes owed', async () => {
     const { flushDeletes } = await renderReady();
     await expect(mockSession.flush?.()).resolves.toEqual({ sent: 1, left: 0 });
     expect(flushDeletes).toHaveBeenCalledTimes(1);
-    await expect(mockRestore.retry?.()).resolves.toBe(true);
-    expect(mockController.runNow).toHaveBeenCalledTimes(1);
   });
 
   test('a handover rebuilds through the controller, showing "switching" meanwhile', async () => {
@@ -405,22 +394,5 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
       await settle();
     });
     expect(host.signedInAgain).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("the account's age band reaches the host (ruling T12 (1))", () => {
-  afterEach(() => {
-    mockProfile.current = null;
-  });
-
-  test('the signed-in profile band is handed to the host, and a change follows', async () => {
-    mockProfile.current = { age_band: '13_17' };
-    const { host } = await renderReady();
-    expect(host.setAgeBand).toHaveBeenLastCalledWith('13_17');
-  });
-
-  test('no profile yet: nothing is handed over (the cached band the launch read stands)', async () => {
-    const { host } = await renderReady();
-    expect(host.setAgeBand).not.toHaveBeenCalled();
   });
 });

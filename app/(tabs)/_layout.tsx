@@ -1,73 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs, useRouter, type Href } from 'expo-router';
-import {
-  Pressable,
-  StyleSheet,
-  View,
-  type ColorValue,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
+import { Tabs } from 'expo-router';
+import type { ComponentProps } from 'react';
+import { StyleSheet, type ColorValue } from 'react-native';
 
 import { t } from '@/i18n';
-import { Text, useTheme } from '@/ui';
+import { useTheme } from '@/ui';
 
-type IconProps = { color: ColorValue; size: number };
+type IconName = ComponentProps<typeof Ionicons>['name'];
 
-/** The pre-drive sheet (C1, U3). Cast: typed routes are generated at `expo start`. */
-export const DRIVE_START_HREF = '/drive/start' as Href;
-
-const DRIVE_TAB_LABEL = t('tabs.drive');
-const DRIVE_TAB_HINT = 'Opens the pre-drive sheet';
-
-/**
- * The centre Drive action (§7 navigation: Home · Insights · Drive · Family · Rewards). It never
- * becomes the selected tab: a press opens the pre-drive sheet over the tabs, mirroring Home's
- * bottom-anchored Start drive. If a drive is already running, `/drive/start` itself sends the
- * driver back to Home's in-progress banner (U3).
- */
-export function DriveTabButton({
-  style,
-  testID,
-}: {
-  style?: StyleProp<ViewStyle>;
-  testID?: string;
-}) {
-  const th = useTheme();
-  const router = useRouter();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={DRIVE_TAB_LABEL}
-      accessibilityHint={DRIVE_TAB_HINT}
-      onPress={() => router.push(DRIVE_START_HREF)}
-      testID={testID ?? 'drive-tab'}
-      style={[style, { alignItems: 'center', justifyContent: 'center' }]}
-    >
-      {({ pressed }) => (
-        <View style={{ alignItems: 'center', gap: 2, opacity: pressed ? 0.85 : 1 }}>
-          <View
-            style={{
-              width: 44,
-              height: 32,
-              borderRadius: th.radius.pill,
-              backgroundColor: th.colors.accent,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="car-sport" size={20} color={th.colors.accentText} />
-          </View>
-          <Text variant="caption" tone="accent">
-            {DRIVE_TAB_LABEL}
-          </Text>
-        </View>
-      )}
-    </Pressable>
-  );
+function tabIcon(name: IconName) {
+  return function TabIcon({ color, size }: { color: ColorValue; size: number }) {
+    return <Ionicons name={name} size={size} color={color} />;
+  };
 }
 
-/** The signed-in shell: four tabs around the centre Drive action. */
+/** The signed-in shell: Home · Leagues · Clan · Profile. Driving is a full-screen flow outside it. */
 export default function TabsLayout() {
   const th = useTheme();
 
@@ -84,48 +31,12 @@ export default function TabsLayout() {
         },
       }}
     >
+      <Tabs.Screen name="home" options={{ title: t('tabs.home'), tabBarIcon: tabIcon('home-outline') }} />
+      <Tabs.Screen name="leagues" options={{ title: t('tabs.leagues'), tabBarIcon: tabIcon('trophy-outline') }} />
+      <Tabs.Screen name="clan" options={{ title: t('tabs.clan'), tabBarIcon: tabIcon('people-outline') }} />
       <Tabs.Screen
-        name="home"
-        options={{
-          title: t('tabs.home'),
-          tabBarIcon: ({ color, size }: IconProps) => (
-            <Ionicons name="card-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="insights"
-        options={{
-          title: t('tabs.insights'),
-          tabBarIcon: ({ color, size }: IconProps) => (
-            <Ionicons name="stats-chart-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="drive"
-        options={{
-          title: DRIVE_TAB_LABEL,
-          tabBarButton: ({ style, testID }) => <DriveTabButton style={style} testID={testID} />,
-        }}
-      />
-      <Tabs.Screen
-        name="family"
-        options={{
-          title: t('tabs.family'),
-          tabBarIcon: ({ color, size }: IconProps) => (
-            <Ionicons name="people-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="rewards"
-        options={{
-          title: t('tabs.rewards'),
-          tabBarIcon: ({ color, size }: IconProps) => (
-            <Ionicons name="ribbon-outline" size={size} color={color} />
-          ),
-        }}
+        name="profile"
+        options={{ title: t('tabs.profile'), tabBarIcon: tabIcon('person-circle-outline') }}
       />
     </Tabs>
   );

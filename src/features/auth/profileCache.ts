@@ -3,7 +3,7 @@ import type { Profile } from '@/data/supabase/profile';
 
 /**
  * The last profile row this device read, so a signed-in cold start with no network (a garage, a
- * plane) still knows the driver's age band and whether they finished onboarding, and lands on
+ * plane) still knows whether the driver finished onboarding, and lands on
  * Home rather than on a retry card (rev1: I11). It lives in `settings`, which a handover wipes with
  * the rest of the previous driver's local state, so it is per owner; the user id is stored beside
  * it and checked on every read as well, so a cache can never be served to anyone else.

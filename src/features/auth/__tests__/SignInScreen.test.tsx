@@ -1,12 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { useState } from 'react';
 
 import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { DataProvider } from '@/data/queries/context';
-import { SAFETY_DISCLAIMER } from '@/features/auth/legal';
-import { LINK_VISIT_KEY, PENDING_TERMS_KEY, currentSignInVisit } from '@/features/auth/pendingConsent';
-import { SignInScreen } from '@/features/auth/SignInScreen';
+import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
+import { SignInScreen, signInCopy } from '@/features/auth/SignInScreen';
 import { ThemeProvider } from '@/ui/theme';
 
 // Everything below is read from inside a mock factory, so each name is `mock`-prefixed and every
@@ -88,14 +87,14 @@ beforeEach(() => {
   executed.length = 0;
 });
 
-const tree = () => (
+const tree = (showMagicLink = false) => (
   <ThemeProvider>
     <DataProvider db={fakeDb}>
-      <SignInScreen />
+      <SignInScreen showMagicLink={showMagicLink} />
     </DataProvider>
   </ThemeProvider>
 );
-const mount = () => render(tree());
+const mount = (showMagicLink = false) => render(tree(showMagicLink));
 
 const tick = async () => {
   await fireEvent.press(screen.getByRole('checkbox'));
@@ -106,22 +105,76 @@ const APPLE = { name: 'Continue with Apple' };
 const GOOGLE = { name: 'Continue with Google' };
 const EMAIL = { name: 'Email me a sign-in link' };
 
-test('shows Apple, Google and email options and sends a magic link', async () => {
+test('shows Apple and Google, and no email sign-in outside diagnostics builds', async () => {
   await mount();
   expect(screen.getByRole('button', APPLE)).toBeTruthy();
   expect(screen.getByRole('button', GOOGLE)).toBeTruthy();
-  await tick();
-  await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-  await fireEvent.press(screen.getByRole('button', EMAIL));
-  expect(mockSend).toHaveBeenCalledWith('ava@example.com');
+  expect(screen.queryByRole('button', EMAIL)).toBeNull();
+  expect(screen.queryByLabelText('Email')).toBeNull();
 });
 
-test('confirms in place once the link is on its way', async () => {
+test('nothing on the screen asks for an age or a birth date', async () => {
+  await mount(true);
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(/birth|date of birth|how old/i);
+});
+
+test('the 13+ checkbox: its words, a 44 pt target, and links to both documents when published', async () => {
+  mockConfig.config = PUBLISHED;
+  await mount();
+  const box = screen.getByRole('checkbox');
+  expect(box.props.accessibilityLabel).toBe("I'm 13 or older and agree to the Terms and Privacy Policy");
+  expect(signInCopy.attest).toBe("I'm 13 or older and agree to the Terms and Privacy Policy");
+  const style = [box.props.style].flat(Infinity).reduce((a, b) => ({ ...a, ...b }), {});
+  expect(style.minHeight).toBeGreaterThanOrEqual(44);
+  expect(screen.getByRole('link', { name: 'Terms' })).toBeOnTheScreen();
+  expect(screen.getByRole('link', { name: 'Privacy Policy' })).toBeOnTheScreen();
+});
+
+test('starts unticked, and every way in is disabled until it is ticked', async () => {
+  await mount(true);
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+  for (const name of [APPLE, GOOGLE, EMAIL]) {
+    expect(screen.getByRole('button', name)).toBeDisabled();
+    await fireEvent.press(screen.getByRole('button', name));
+  }
+  expect(mockAppleSignIn).not.toHaveBeenCalled();
+  expect(mockGoogleSignIn).not.toHaveBeenCalled();
+  expect(mockSend).not.toHaveBeenCalled();
+
+  await tick();
+  for (const name of [APPLE, GOOGLE, EMAIL]) expect(screen.getByRole('button', name)).toBeEnabled();
+  expect(mockMarkTermsAccepted).toHaveBeenCalledTimes(1);
+});
+
+test('ticked, Apple and Google sign in', async () => {
   await mount();
   await tick();
-  await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-  await fireEvent.press(screen.getByRole('button', EMAIL));
-  expect(await screen.findByText('Check your email for a sign-in link.')).toBeOnTheScreen();
+  await fireEvent.press(screen.getByRole('button', APPLE));
+  await fireEvent.press(screen.getByRole('button', GOOGLE));
+  expect(mockAppleSignIn).toHaveBeenCalledTimes(1);
+  expect(mockGoogleSignIn).toHaveBeenCalledTimes(1);
+});
+
+test('unticking clears the tick and disables the buttons again', async () => {
+  await mount();
+  await tick();
+  executed.length = 0;
+  await fireEvent.press(screen.getByRole('checkbox'));
+  await waitFor(() => expect(screen.getByRole('checkbox')).not.toBeChecked());
+  expect(screen.getByRole('button', APPLE)).toBeDisabled();
+  const removed = executed.filter((e) => e.sql.startsWith('DELETE')).map((e) => e.params[0]);
+  expect(removed).toEqual([PENDING_TERMS_KEY]);
+});
+
+test('a save that fails leaves it unticked and says so', async () => {
+  mockMarkTermsAccepted.mockRejectedValueOnce(new Error('disk full'));
+  await mount();
+  await fireEvent.press(screen.getByRole('checkbox'));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent("Couldn't save that. Try again.");
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  expect(screen.getByRole('button', APPLE)).toBeDisabled();
 });
 
 test('answers a rejected sign-in in place, in a live region', async () => {
@@ -129,10 +182,8 @@ test('answers a rejected sign-in in place, in a live region', async () => {
   await mount();
   await tick();
   await fireEvent.press(screen.getByRole('button', APPLE));
-
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
-  // Announced without stealing focus: the driver is still in the middle of the form.
   expect(alert.props.accessibilityLiveRegion).toBe('polite');
 });
 
@@ -141,193 +192,26 @@ test('leaves Google unarmed until its client id is configured', async () => {
   await mount();
   await tick();
   expect(screen.getByRole('button', GOOGLE)).toBeDisabled();
-  await fireEvent.press(screen.getByRole('button', GOOGLE));
-  expect(mockGoogleSignIn).not.toHaveBeenCalled();
 });
 
-describe('A3: the disclaimer and terms tick', () => {
-  test('starts unticked, and every way in is disabled until it is ticked', async () => {
-    await mount();
-    const box = screen.getByRole('checkbox');
-    expect(box).not.toBeChecked();
-    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-    for (const name of [APPLE, GOOGLE, EMAIL]) {
-      expect(screen.getByRole('button', name)).toBeDisabled();
-      await fireEvent.press(screen.getByRole('button', name));
-    }
-    // The keyboard's Send is no way around it either.
-    await fireEvent(screen.getByLabelText('Email'), 'submitEditing');
-    expect(mockAppleSignIn).not.toHaveBeenCalled();
-    expect(mockGoogleSignIn).not.toHaveBeenCalled();
-    expect(mockSend).not.toHaveBeenCalled();
-
-    await tick();
-    for (const name of [APPLE, GOOGLE, EMAIL]) {
-      expect(screen.getByRole('button', name)).toBeEnabled();
-    }
-  });
-
-  test('the checkbox is a 44 pt target with the checkbox role', async () => {
-    await mount();
-    const box = screen.getByRole('checkbox');
-    const style = [box.props.style].flat(Infinity).reduce((a, b) => ({ ...a, ...b }), {});
-    expect(style.minHeight).toBeGreaterThanOrEqual(44);
-  });
-
-  test('unpublished: acknowledges the disclaimer only, with no Terms or Privacy words anywhere', async () => {
-    await mount();
-    const box = screen.getByRole('checkbox');
-    expect(box.props.accessibilityLabel).toBe(`I understand that ${SAFETY_DISCLAIMER}.`);
-    expect(screen.getByText(`I understand that ${SAFETY_DISCLAIMER}.`)).toBeOnTheScreen();
-    expect(JSON.stringify(screen.toJSON())).not.toMatch(/terms|privacy/i);
-    expect(screen.queryAllByRole('link')).toHaveLength(0);
-  });
-
-  test('published: names the disclaimer, agrees to both documents, and links both', async () => {
-    mockConfig.config = PUBLISHED;
-    await mount();
-    const box = screen.getByRole('checkbox');
-    // The tick is recorded as acknowledging the disclaimer too, so the label names it.
-    expect(box.props.accessibilityLabel).toBe(
-      `I understand that ${SAFETY_DISCLAIMER}. I agree to the Terms and Privacy Policy.`
-    );
-    expect(screen.getByText('I agree to the Terms and Privacy Policy.')).toBeOnTheScreen();
-    expect(screen.getByRole('link', { name: 'Terms' })).toBeOnTheScreen();
-    expect(screen.getByRole('link', { name: 'Privacy Policy' })).toBeOnTheScreen();
-  });
-
-  test('ticking records the acceptance for exactly what was shown', async () => {
-    mockConfig.config = PUBLISHED;
-    await mount();
-    await tick();
-    expect(mockMarkTermsAccepted).toHaveBeenCalledTimes(1);
-    expect(mockMarkTermsAccepted.mock.calls[0]?.[1]).toEqual({
-      published: true,
-      tos: { version: '2026-09-21', url: TERMS },
-      privacy: { version: '2026-09-21', url: PRIVACY },
-    });
-  });
-
-  test('unpublished ticking records the disclaimer state, not a Terms acceptance', async () => {
-    await mount();
-    await tick();
-    expect(mockMarkTermsAccepted.mock.calls[0]?.[1]).toEqual({
-      published: false,
-      tos: null,
-      privacy: null,
-    });
-  });
-
-  test('unticking clears the Terms acceptance and disables the buttons again', async () => {
-    await mount();
-    await tick();
-    executed.length = 0; // the visit's own start-up clear is not the untick's
-    await fireEvent.press(screen.getByRole('checkbox'));
-    await waitFor(() => expect(screen.getByRole('checkbox')).not.toBeChecked());
-    expect(screen.getByRole('button', APPLE)).toBeDisabled();
-    // clearTermsAccepted: the Terms acceptance goes, with any link it was handed to; the
-    // disclaimer acknowledgement is a device preference and stays.
-    const removed = executed.filter((e) => e.sql.startsWith('DELETE')).map((e) => e.params[0]);
-    expect(removed).toEqual([PENDING_TERMS_KEY, LINK_VISIT_KEY]);
-  });
-
-  test('a save that fails leaves it unticked and says so', async () => {
-    mockMarkTermsAccepted.mockRejectedValueOnce(new Error('disk full'));
-    await mount();
-    await fireEvent.press(screen.getByRole('checkbox'));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent("Couldn't save that. Try again.");
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(screen.getByRole('button', APPLE)).toBeDisabled();
-  });
-
-  test('cannot be ticked before the config has been read', async () => {
-    mockConfig.ready = false;
-    await mount();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
-    await fireEvent.press(screen.getByRole('checkbox'));
-    expect(mockMarkTermsAccepted).not.toHaveBeenCalled();
-  });
-
-  test('a tick given to the disclaimer alone does not carry over once documents are published', async () => {
-    const view = await mount();
-    await tick();
-    mockConfig.config = PUBLISHED;
-    await act(async () => view.rerender(tree()));
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(screen.getByRole('button', APPLE)).toBeDisabled();
-  });
-});
-
-describe('magic-link rate limit', () => {
+describe('the magic link (diagnostics builds only)', () => {
   const sendEmail = async () => {
-    await mount();
+    await mount(true);
     await tick();
     await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
     await fireEvent.press(screen.getByRole('button', EMAIL));
   };
 
-  test('a refused burst says to wait, in the alert region', async () => {
+  test('sends and confirms in place', async () => {
+    await sendEmail();
+    expect(mockSend).toHaveBeenCalledWith('ava@example.com');
+    expect(await screen.findByText('Check your email for a sign-in link.')).toBeOnTheScreen();
+  });
+
+  test('a refused burst says to wait', async () => {
     mockSend.mockResolvedValueOnce('rate_limited');
     await sendEmail();
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Too many sign-in emails. Try again in a minute.');
-    expect(screen.queryByText('Sign-in did not work. Try again.')).toBeNull();
-  });
-
-  test('any other failure keeps the generic line', async () => {
-    mockSend.mockResolvedValueOnce('error');
-    await sendEmail();
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
-    expect(screen.queryByText(/Too many sign-in emails/)).toBeNull();
-  });
-});
-
-describe('each visit is its own (T17 round 2)', () => {
-  test('a new visit starts unticked, with a new visit token', async () => {
-    mockConfig.config = PUBLISHED;
-    const first = await mount();
-    const firstVisit = currentSignInVisit();
-    expect(firstVisit).not.toBeNull();
-    await tick();
-    await first.unmount();
-
-    executed.length = 0;
-    await mount();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(currentSignInVisit()).not.toBe(firstVisit);
-    // The link an earlier visit was waiting on is forgotten.
-    await waitFor(() =>
-      expect(
-        executed.some((e) => /DELETE FROM settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY)
-      ).toBe(true)
-    );
-  });
-
-  test('sending a magic link hands this visit to the link, before the email is sent', async () => {
-    const order: string[] = [];
-    mockSend.mockImplementation(async () => {
-      order.push(
-        executed.some((e) => /INSERT OR REPLACE INTO settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY)
-          ? 'send after hand-off'
-          : 'send before hand-off'
-      );
-      return 'sent';
-    });
-    await mount();
-    await tick();
-    const visit = currentSignInVisit();
-    executed.length = 0;
-    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-    await act(async () => {
-      fireEvent.press(screen.getByRole('button', EMAIL));
-    });
-    await waitFor(() => expect(mockSend).toHaveBeenCalled());
-    expect(order).toEqual(['send after hand-off']);
-    const handOff = executed.find(
-      (e) => /INSERT OR REPLACE INTO settings/.test(e.sql) && e.params[0] === LINK_VISIT_KEY
-    );
-    expect(handOff?.params[1]).toBe(JSON.stringify(visit));
   });
 });

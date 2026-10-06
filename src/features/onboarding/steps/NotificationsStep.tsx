@@ -11,10 +11,9 @@ import { Card, Text, useTheme } from '@/ui';
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
 import { StepFrame, type StepAction } from '../StepFrame';
-import { FieldLabel } from './BirthDateField';
 import {
+  FieldLabel,
   StatusLine,
-  useGrantConsent,
   usePhone,
   useStepDeps,
   type PermissionStepDeps,
@@ -63,15 +62,13 @@ const allowed = (a: NotificationAccess | undefined) => a === 'granted' || a === 
  * A8 · Notifications. The examples come from the catalog; the promise "We hold them while you're
  * driving." is printed only while this phone reports its drive state to the server (rev1: C1).
  * On Android the channels are created before the prompt, so the system names them from the first
- * moment (rev1: m). One request on the driver's tap; a grant records the `notifications` consent
- * and asks the device host to register the push token. A denial says updates wait in the inbox,
- * and the step still moves on (D12).
+ * moment (rev1: m). One request on the driver's tap; a grant asks the device host to register the
+ * push token. A denial still moves on (D12).
  */
 export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: NotificationsStepDeps }) {
   const th = useTheme();
   const { settings, adapter, appState, now } = useStepDeps(deps);
   const phone = usePhone(adapter, appState);
-  const grantConsent = useGrantConsent(settings);
   const reported = useDriveStateReported();
   const previews = previewNotifications(ctx.platform);
 
@@ -84,10 +81,9 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
   const current = answer ?? snapshot?.notifications;
   const deniedForGood = answer === 'denied' || (snapshot?.notifications === 'denied' && !snapshot.notificationsCanAskAgain);
 
-  const leave = async (grantedNow: boolean) => {
+  const leave = () => {
     if (leaving.current) return;
     leaving.current = true;
-    if (grantedNow) await grantConsent('notifications');
     onNext();
   };
 
@@ -104,9 +100,8 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
       await recordPrompt(settings, 'notifications', now()).catch(() => {});
       setAnswer(result);
       if (allowed(result)) {
-        await grantConsent('notifications');
         (deps.requestDeviceSync ?? requestDeviceSync)();
-        await leave(true);
+        leave();
       }
     } catch {
       setFailed(true);
@@ -128,7 +123,7 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
 
   const cont: StepAction = {
     label: copy.continue,
-    onPress: () => void leave(allowed(current)),
+    onPress: () => leave(),
     testID: 'notifications-continue',
   };
 
@@ -152,7 +147,7 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
     };
     secondary = {
       label: copy.notNow,
-      onPress: () => void leave(false),
+      onPress: () => leave(),
       disabled: busy,
       testID: 'notifications-not-now',
     };

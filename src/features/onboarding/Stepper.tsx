@@ -23,8 +23,8 @@ import { STEP_REGISTRY } from './stepRegistry';
 import { StepPositionProvider } from './StepFrame';
 
 /**
- * Where the stepper leaves the flow after the last step. Task 14 replaces this with
- * `finishOnboarding` from the ready step, which marks the profile onboarded and honours a pending
+ * Where the stepper leaves the flow after the last step. The last step calls `finishOnboarding`
+ * itself (WP9), which marks the profile onboarded and honours a pending
  * deep link.
  */
 const AFTER_LAST_STEP = '/(tabs)/home' as Href;
@@ -48,12 +48,12 @@ export function resetSessionPlan(): void {
  * - `start` resolves to `resumeStep(ctx, saved)` once the context is known, and never renders.
  * - Any other value that is not a step id redirects to `start`.
  * - A step id this driver's flow does not have redirects to the step the flow resumes at, taking
- *   the requested step as the saved one — so a step that has just done its job (Terms accepted,
- *   the profile saved) moves on, and a stray link to a held-back step lands inside the flow.
+ *   the requested step as the saved one — so a step that has just done its job (the username
+ *   claimed) moves on, and a stray link to a held-back step lands inside the flow.
  * - Otherwise the registered step renders, and is saved as the place to resume.
  *
  * Forward and Back both `replace`: the stack holds one onboarding screen, so neither a swipe nor
- * the Android back button can walk back into Terms or across a confirmed birth date. The Android
+ * the Android back button can walk back into the claimed username step. The Android
  * back button is mapped onto Back and left to the system where there is no Back.
  *
  * Nothing here reroutes out of onboarding on its own; leaving the flow (and never doing so while a

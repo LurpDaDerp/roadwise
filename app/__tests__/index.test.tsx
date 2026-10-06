@@ -52,7 +52,7 @@ jest.mock('@/drive/useDrive', () => ({
 }));
 jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => mockWorld.update }));
 
-const ONBOARDED = { id: 'u1', display_name: 'Ava', age_band: '18_plus', flags: { onboarded: true } };
+const ONBOARDED = { id: 'u1', username: 'swift_fox', onboarded_at: '2026-10-05T00:00:00Z' };
 
 let db: Db;
 
@@ -86,40 +86,29 @@ async function launch() {
 const landed = () => screen.queryByText(/^redirect:/)?.props.children as string | undefined;
 
 describe('an active trip (rev1: I2, N-m3)', () => {
-  test.each([
-    ['recording', 'mounted', '/drive/hud'],
-    ['ending', 'mounted', '/drive/hud'],
-    ['recording', 'pocket', '/drive/pocket'],
-    ['recording', 'auto', '/drive/pocket'],
-  ])('%s in %s → %s, before any other rule', async (status, mode, href) => {
-    Object.assign(mockWorld, { driveStatus: status, driveMode: mode, hostBusy: true, update: 'required', session: null });
+  test.each([['recording'], ['ending']])('%s → the driving screen, before any other rule', async (status) => {
+    Object.assign(mockWorld, { driveStatus: status, hostBusy: true, update: 'required', session: null });
     await launch();
-    expect(landed()).toBe(`redirect:${href}`);
+    expect(landed()).toBe('redirect:/drive');
   });
 
-  test.each([['candidate'], ['finalizing']])('%s is not a trip to go back to', async (status) => {
+  test.each([['finalizing']])('%s is not a trip to go back to', async (status) => {
     Object.assign(mockWorld, { driveStatus: status, driveMode: 'mounted', hostBusy: true });
     await launch();
     expect(landed()).toBe('redirect:/(tabs)/home');
   });
 });
 
-test('signed out → Welcome', async () => {
+test('signed out → sign-in', async () => {
   mockWorld.session = null;
   await launch();
-  expect(landed()).toBe('redirect:/(auth)/welcome');
+  expect(landed()).toBe('redirect:/(auth)/sign-in');
 });
 
-test('onboarding owed → the onboarding entry, not Home (T11)', async () => {
-  mockWorld.profile = { ...ONBOARDED, flags: {} };
+test('onboarding owed (no onboarded_at, or no username) → the onboarding entry, not Home', async () => {
+  mockWorld.profile = { ...ONBOARDED, onboarded_at: null };
   await launch();
   expect(landed()).toBe('redirect:/(onboarding)/start');
-});
-
-test('an under-13 account → not-eligible', async () => {
-  mockWorld.profile = { ...ONBOARDED, age_band: 'u13' };
-  await launch();
-  expect(landed()).toBe('redirect:/(onboarding)/not-eligible');
 });
 
 test('onboarded → Home', async () => {

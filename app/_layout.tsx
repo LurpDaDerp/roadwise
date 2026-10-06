@@ -16,14 +16,12 @@ import { DeviceHost } from '@/data/devices/DeviceHost';
 import { unregisterPushToken } from '@/data/devices/pushToken';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
-import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
+import { registerBeforeSignOut, SessionProvider } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { cameraBridge } from '@/features/camera/runtime';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
-import { RestoreRetryProvider } from '@/features/home/HomeBanners';
 import { NotificationsHost } from '@/features/notifications';
-import { PermissionPromptsHost } from '@/features/permissions/PermissionPromptsHost';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
 import { FONT_WAIT_MS, shouldRender, useAppFonts } from '@/ui/fonts';
@@ -37,22 +35,6 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
 const controller = runtimeController;
 
 /**
- * Hands the signed-in account's age band to the drive host whenever the profile changes (ruling
- * T12 (1)): an under-13 account never arms, so the block screen needs no disarm call of its own.
- * Inside `SessionProvider`, where the profile lives; nothing is handed over until a profile exists,
- * so the cached band the launch read stands meanwhile.
- */
-function AgeBandSync({ host }: { host: { setAgeBand(band: string | null): Promise<void> } }) {
-  const { profile } = useSession();
-  const band = profile?.age_band ?? null;
-  const known = profile !== null && profile !== undefined;
-  useEffect(() => {
-    if (known) void host.setAgeBand(band).catch(() => {});
-  }, [host, band, known]);
-  return null;
-}
-
-/**
  * M4's runtime-bound hosts (Task 18), inside the data, query, drive and session providers:
  * - `DeviceHost`: the device row, the permission report and the push token; on each foreground it
  *   syncs the notification preferences (T7). No `subscribeDrive`: the runtime is the one drive-state
@@ -60,13 +42,9 @@ function AgeBandSync({ host }: { host: { setAgeBand(band: string | null): Promis
  * - `NotificationsHost`: the app's only notification handler and response listener (rev1: C1).
  *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here.
- * - `PermissionPromptsHost`: the post-drive background-location offers (T9), keyed by the signed-in
- *   account so a handover remounts it and its "finished" ref never holds back the next owner.
  */
 function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
   const host = runtime.drive;
-  const { session } = useSession();
-  const uid = session?.user.id ?? null;
   const isBusy = useCallback(() => host.isBusy(), [host]);
   const subscribeBusy = useCallback((listener: () => void) => host.subscribe(() => listener()), [host]);
   const onForeground = useCallback(
@@ -82,7 +60,6 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
         subscribeBusy={subscribeBusy}
         ready={ready}
       />
-      <PermissionPromptsHost key={uid ?? 'signed-out'} isBusy={isBusy} />
     </>
   );
 }
@@ -232,12 +209,6 @@ export default function RootLayout() {
           },
     [runtime]
   );
-  // Home's "Couldn't restore your drives — Retry": the restore now, throttle bypassed.
-  const retryRestore = useCallback(
-    () => controller.foregroundJobs()?.runNow() ?? Promise.resolve(false),
-    []
-  );
-
   useEffect(() => {
     if (ready) void SplashScreen.hideAsync().catch(() => {});
   }, [ready]);
@@ -279,30 +250,27 @@ export default function RootLayout() {
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
                 <SessionProvider flushBeforeSignOut={flush} recording={recording}>
-                  <AgeBandSync host={runtime.drive} />
-                  <RestoreRetryProvider retry={retryRestore}>
-                    <AuthGate>
-                      {/* A lockout covers every route, native modals included (U2, rev1: I12). */}
-                      <LockoutGate>
-                        {/* Portrait everywhere; only the HUD route turns (rev1: I17, U2's layout). */}
-                        <Stack screenOptions={{ headerShown: false, orientation: 'portrait' }}>
-                          <Stack.Screen name="index" />
-                          <Stack.Screen name="(auth)" />
-                          <Stack.Screen name="(onboarding)" />
-                          <Stack.Screen name="update-required" />
-                          <Stack.Screen name="(tabs)" />
-                          <Stack.Screen name="(app)" />
-                          <Stack.Screen name="auth/callback" />
-                          {/* No swipe-back out of a drive: it is left through its own controls. */}
-                          <Stack.Screen
-                            name="drive"
-                            options={{ gestureEnabled: false, presentation: 'fullScreenModal' }}
-                          />
-                        </Stack>
-                      </LockoutGate>
-                    </AuthGate>
-                    <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
-                  </RestoreRetryProvider>
+                  <AuthGate>
+                    {/* A lockout covers every route, native modals included (U2, rev1: I12). */}
+                    <LockoutGate>
+                      {/* Portrait everywhere; only the HUD route turns (rev1: I17, U2's layout). */}
+                      <Stack screenOptions={{ headerShown: false, orientation: 'portrait' }}>
+                        <Stack.Screen name="index" />
+                        <Stack.Screen name="(auth)" />
+                        <Stack.Screen name="(onboarding)" />
+                        <Stack.Screen name="update-required" />
+                        <Stack.Screen name="(tabs)" />
+                        <Stack.Screen name="(app)" />
+                        <Stack.Screen name="auth/callback" />
+                        {/* No swipe-back out of a drive: it is left through its own controls. */}
+                        <Stack.Screen
+                          name="drive"
+                          options={{ gestureEnabled: false, presentation: 'fullScreenModal' }}
+                        />
+                      </Stack>
+                    </LockoutGate>
+                  </AuthGate>
+                  <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
                 </SessionProvider>
               </DriveProvider>
             </DataProvider>

@@ -2,7 +2,7 @@
 // EXPO_PUBLIC_DIAGNOSTICS can be inlined from that shell into a production update. The embedded update
 // channel is fixed in the native binary and no update can change it, so diagnostics are also off whenever
 // the build's channel is 'production'. That covers all three diagnostics surfaces: /dev/dms, /dev/drive (and
-// Home's link to them) and the drive battery recorder, which all ask diagnosticsEnabled().
+// any link to them) and the drive battery recorder, which all ask diagnosticsEnabled().
 import { render, screen } from '@testing-library/react-native';
 import type { ComponentType } from 'react';
 
@@ -91,11 +91,9 @@ describe('the surfaces', () => {
     await render(<DriveDiagnosticsRoute Hud={() => null} />);
     expect(screen.getByTestId('redirect').props.children).toBe('/');
   });
-  test('the battery recorder and Home’s link are gated by diagnosticsEnabled() alone', () => {
+  test('the battery recorder is gated by diagnosticsEnabled() alone', () => {
     const root = path.join(__dirname, '..', '..', '..', '..');
     const boot = fs.readFileSync(path.join(root, 'src', 'boot', 'bootstrap.ts'), 'utf8');
     expect(boot).toMatch(/if \(!diagnosticsEnabled\(\)\) return \(\) => \{\};\s*const \{ createDriveBatteryRecorder \}/);
-    const home = fs.readFileSync(path.join(root, 'app', '(tabs)', 'home.tsx'), 'utf8');
-    expect(home).toMatch(/\{diagnosticsEnabled\(\) \?/);
   });
 });

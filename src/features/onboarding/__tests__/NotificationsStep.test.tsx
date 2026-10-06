@@ -16,27 +16,15 @@ import { LIVE_TYPES, renderLocal, renderPush } from '@/notifications/catalog';
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
-import { PERMISSION_CONSENT_VERSION } from '../state';
 import { NotificationsStep, previewNotifications } from '../steps/NotificationsStep';
 
 const mockSession = { session: { user: { id: 'u1' } }, profile: { driving_stage: 'new' } };
-const mockRecordConsent = jest.fn(async (_uid: string, _c: { type: string; version: string }) => ({}));
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
-jest.mock('@/data/supabase/profile', () => ({
-  recordConsent: (uid: string, c: { type: string; version: string }) => mockRecordConsent(uid, c),
-}));
 
 const copy = onboardingCopy.notifications;
 
-const ctx = (platform: 'ios' | 'android'): FlowContext => ({
-  platform,
-  ageBand: '18_plus',
-  drivingStage: 'new',
-  termsCurrent: true,
-  termsPublished: false,
-  minorConsentMode: 'guardian_link_optional',
-  features: { autoDetect: true, guardianInvites: false },
-});
+const ctx = (platform: 'ios' | 'android'): FlowContext => ({ platform, hasUsername: true });
 
 const press = (el: Parameters<typeof fireEvent.press>[0]) =>
   act(async () => {
@@ -46,7 +34,6 @@ const press = (el: Parameters<typeof fireEvent.press>[0]) =>
 let release: (() => void) | null = null;
 afterEach(() => {
   clearQueryClients();
-  mockRecordConsent.mockClear();
   release?.();
   release = null;
 });
@@ -117,10 +104,6 @@ test('Android: the channels exist before the one request; grant → consent → 
   await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
   const order = adapter.log.filter((c) => c !== 'snapshot');
   expect(order).toEqual(['ensureChannels', 'requestNotifications', 'requestDeviceSync']);
-  expect(mockRecordConsent).toHaveBeenCalledWith('u1', {
-    type: 'notifications',
-    version: PERMISSION_CONSENT_VERSION,
-  });
   expect(await settings.get(PROMPTS_KEY)).toEqual({ notifications: T0 });
 });
 
@@ -158,7 +141,7 @@ test('a channel failure does not hold the request back', async () => {
   expect(adapter.requestNotifications).toHaveBeenCalledTimes(1);
 });
 
-test('denied: no consent, no sync, the inbox line, and Continue moves on (D12)', async () => {
+test('denied: no sync, said plainly, and Continue moves on (D12)', async () => {
   const adapter = fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' }));
   adapter.requestNotifications = jest.fn(async () => {
     adapter.log.push('requestNotifications');
@@ -167,7 +150,6 @@ test('denied: no consent, no sync, the inbox line, and Continue moves on (D12)',
   const { onNext, requestDeviceSync } = await renderStep('ios', adapter);
   await press(await screen.findByTestId('notifications-allow'));
   expect(await screen.findByText(copy.denied)).toBeOnTheScreen();
-  expect(mockRecordConsent).not.toHaveBeenCalled();
   expect(requestDeviceSync).not.toHaveBeenCalled();
   await press(screen.getByTestId('notifications-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
@@ -180,5 +162,4 @@ test('Not now asks nothing', async () => {
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(adapter.requestNotifications).not.toHaveBeenCalled();
   expect(ensureChannels).not.toHaveBeenCalled();
-  expect(mockRecordConsent).not.toHaveBeenCalled();
 });

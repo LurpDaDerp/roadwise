@@ -1,9 +1,6 @@
 export { onboardingCopy } from './copy';
 export {
-  STEP_AVAILABLE,
   STEP_IDS,
-  asAgeBand,
-  asDrivingStage,
   isInFlow,
   isStepId,
   nextStep,
@@ -13,10 +10,7 @@ export {
   sessionPlan,
   stepPosition,
   stepsFor,
-  type AgeBand,
-  type DrivingStage,
   type FlowContext,
-  type MinorConsentMode,
   type Platform,
   type StepId,
   type StepParam,

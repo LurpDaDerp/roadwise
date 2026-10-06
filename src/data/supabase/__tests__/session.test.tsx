@@ -7,7 +7,7 @@ import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
 import { SessionProvider, registerBeforeSignOut, useSession } from '@/data/supabase/session';
-import { DISCLAIMER_ACK_KEY, PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
+import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 
 type AuthListener = (event: string, session: unknown) => void;
@@ -375,22 +375,20 @@ describe('the profile cache (rev1: I11)', () => {
 });
 
 describe('sign-out clears a pending Terms acceptance (T15 r2)', () => {
-  test('the pending acceptance goes; the disclaimer acknowledgement stays', async () => {
+  test('the pending acceptance goes', async () => {
     const settings = createSettingsRepo(db);
-    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
-    await settings.set(DISCLAIMER_ACK_KEY, '2026-09-21');
+    await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now() });
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
     await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('sign out')); });
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());
-    expect(await settings.get(DISCLAIMER_ACK_KEY)).toBe('2026-09-21');
   });
 
   test('a sign-out the driver backs out of keeps it', async () => {
     const settings = createSettingsRepo(db);
-    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
+    await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now() });
     await render(
       <DataProvider db={db}>
         <SessionProvider flushBeforeSignOut={async () => ({ sent: 0, left: 1 })}>
@@ -514,16 +512,14 @@ describe('fix round 1', () => {
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
     await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
-    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now(), uid: 'u1' });
-    await settings.set(DISCLAIMER_ACK_KEY, '2026-09-21');
+    await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now(), uid: 'u1' });
     await act(async () => { emit('SIGNED_OUT', null); });
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());
-    expect(await settings.get(DISCLAIMER_ACK_KEY)).toBe('2026-09-21');
   });
 
   test('a launch that simply starts signed out keeps a tick waiting for its sign-in', async () => {
     const settings = createSettingsRepo(db);
-    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
+    await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now() });
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
     await act(async () => { emit('INITIAL_SESSION', null); });
@@ -533,7 +529,7 @@ describe('fix round 1', () => {
 
   test('a sign-in binds a waiting tick to that account (M-1)', async () => {
     const settings = createSettingsRepo(db);
-    await settings.set(PENDING_TERMS_KEY, { tos: '1', privacy: '1', at: Date.now() });
+    await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now() });
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
     await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });

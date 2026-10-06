@@ -8,8 +8,7 @@ import { useFlowContext } from '@/features/onboarding/context';
 
 /**
  * The one onboarding route: `/(onboarding)/<step>`, plus the pseudo-step `start`. The context
- * comes from the session's profile, the cached app config and (published Terms only) the
- * account's consents, and is null while any of those local reads is still out.
+ * comes from the session's profile, and is null while it is still being read.
  */
 export default function OnboardingStepRoute() {
   const params = useLocalSearchParams<{ step?: string | string[] }>();

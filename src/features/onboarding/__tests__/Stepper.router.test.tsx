@@ -1,8 +1,8 @@
 /**
  * The stepper under the real expo-router, with a screen pushed over it (review T11 I1).
  *
- * A screen presented over an onboarding step — Task 9's background disclosure, or a drive screen
- * when a drive starts mid-onboarding — owns the Android back button. The step's back listener and
+ * A screen presented over an onboarding step — the OS settings return, or the driving screen when
+ * a drive starts mid-onboarding — owns the Android back button. The step's back listener and
  * its `start` resume must not act while covered: either would `router.replace` a route onboarding
  * is not showing, and on a drive route that is a reroute during a recording (I10).
  *
@@ -22,26 +22,8 @@ import { ThemeProvider } from '@/ui/theme';
 import type { FlowContext } from '../flow';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
 
-// Task 12's real Terms, profile and block steps read the session, the config and the server; this
-// suite is about the stepper's mechanics, so those three render the placeholder frame instead.
-jest.mock('../steps/TermsStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { TermsStep: (p: object) => <PlaceholderStep {...p} step="terms" /> };
-});
-jest.mock('../steps/ProfileStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { ProfileStep: (p: object) => <PlaceholderStep {...p} step="profile" /> };
-});
-jest.mock('../steps/NotEligibleStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { NotEligibleStep: (p: object) => <PlaceholderStep {...p} step="not-eligible" /> };
-});
-// Task 13's guardian step reads the server too; the same stand-in.
-jest.mock('../steps/GuardianStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { GuardianStep: (p: object) => <PlaceholderStep {...p} step="guardian" /> };
-});
-// Task 14's steps read the phone and the server; the same stand-ins.
+// The permission steps read the phone; this suite is about the stepper's mechanics, so they render
+// the placeholder frame instead.
 jest.mock('../steps/LocationStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { LocationStep: (p: object) => <PlaceholderStep {...p} step="location" /> };
@@ -54,32 +36,8 @@ jest.mock('../steps/NotificationsStep', () => {
   const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
   return { NotificationsStep: (p: object) => <PlaceholderStep {...p} step="notifications" /> };
 });
-jest.mock('../steps/AutoDetectStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { AutoDetectStep: (p: object) => <PlaceholderStep {...p} step="auto-detect" /> };
-});
-jest.mock('../steps/ReadyStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { ReadyStep: (p: object) => <PlaceholderStep {...p} step="ready" /> };
-});
-jest.mock('@/features/camera/CameraStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { CameraStep: (p: object) => <PlaceholderStep {...p} step="camera" /> };
-});
-jest.mock('@/features/family/FamilyStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { FamilyStep: (p: object) => <PlaceholderStep {...p} step="family" /> };
-});
 
-const ADULT: FlowContext = {
-  platform: 'android',
-  ageBand: '18_plus',
-  drivingStage: 'new',
-  termsCurrent: true,
-  termsPublished: true,
-  minorConsentMode: 'guardian_link_optional',
-  features: { autoDetect: true, guardianInvites: false },
-};
+const ADULT: FlowContext = { platform: 'android', hasUsername: true };
 
 /** The flow context as an external store, so a test can change it while a screen covers the step. */
 let currentCtx: FlowContext | null = ADULT;
@@ -172,7 +130,7 @@ describe('the stepper under a covering screen', () => {
 
     await pressBack();
 
-    expect(app.getPathname()).toBe('/location');
+    expect(app.getPathname()).toBe('/how');
   });
 
   test('with a screen pushed over the step, Android back pops that screen and nothing else', async () => {
@@ -183,35 +141,9 @@ describe('the stepper under a covering screen', () => {
 
     await pressBack();
 
-    // The navigator popped the cover; the step did not replace anything to reach `location`.
+    // The navigator popped the cover; the step did not replace anything to reach `how`.
     expect(app.getPathname()).toBe('/motion');
     expect(screen.getByRole('header', { name: 'Motion' })).toBeTruthy();
-  });
-
-  test('a context change under the cover does not bring the step’s listener back to life', async () => {
-    const app = renderRouter(routes, { initialUrl: '/family' });
-    await app;
-    await push('/cover');
-    // A profile or config refresh while covered changes where Back goes (auto-detect leaves the
-    // flow, so Back from family becomes notifications): a plain effect would re-subscribe here and
-    // become the newest listener, ahead of the navigator's.
-    await setCtx({ ...ADULT, features: { autoDetect: false, guardianInvites: false } });
-
-    await pressBack();
-
-    expect(app.getPathname()).toBe('/family');
-  });
-
-  test('control: after that change, with the step focused again, Back follows the new flow', async () => {
-    const app = renderRouter(routes, { initialUrl: '/family' });
-    await app;
-    await push('/cover');
-    await setCtx({ ...ADULT, features: { autoDetect: false, guardianInvites: false } });
-    await back();
-
-    await pressBack();
-
-    expect(app.getPathname()).toBe('/notifications');
   });
 
   test('control: start resumes at once while it is focused', async () => {
@@ -219,7 +151,7 @@ describe('the stepper under a covering screen', () => {
     await app;
     await act(async () => {});
 
-    expect(app.getPathname()).toBe('/location');
+    expect(app.getPathname()).toBe('/license');
   });
 
   test('start does not resume under a covering screen, and resumes once it is focused again', async () => {
@@ -234,6 +166,6 @@ describe('the stepper under a covering screen', () => {
 
     await back();
     await act(async () => {});
-    expect(app.getPathname()).toBe('/location');
+    expect(app.getPathname()).toBe('/license');
   });
 });

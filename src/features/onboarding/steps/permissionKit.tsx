@@ -1,32 +1,22 @@
 /**
- * What the A6–A9 and A12 steps share: reading the phone, recording a permission consent on a
- * grant, and one status line with a drawn glyph.
+ * What the permission steps share: reading the phone, and one status line with a drawn glyph.
  *
  * Every OS request these steps make is the driver's own tap on the step's primary button, so it
  * goes to the adapter directly, unthrottled, and stamps the 14-day history so the app's own later
- * offers wait (Ruling T8 r1). None of them asks for background location: that request lives only
- * in `BackgroundDisclosure` (T9 security review).
+ * offers wait. None of them asks for background ("Always") location: v3 never needs it.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, useWindowDimensions, View } from 'react-native';
 
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
-import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
+import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries';
-import { recordConsent } from '@/data/supabase/profile';
-import { useSession } from '@/data/supabase/session';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Text, useTheme } from '@/ui';
 
-import {
-  PERMISSION_CONSENT_VERSION,
-  addPendingPermissionConsent,
-  type PermissionConsentType,
-} from '../state';
-
-/** What a test (or Task 19's screen) can hand a step in place of the phone. */
+/** What a test can hand a step in place of the phone. */
 export interface PermissionStepDeps {
   adapter?: PermissionsAdapter;
   appState?: AppStateLike;
@@ -104,30 +94,6 @@ export function usePhone(adapter: PermissionsAdapter, appState: AppStateLike): P
   return { status: 'ready', snapshot, reload };
 }
 
-/**
- * Records `type` at `PERMISSION_CONSENT_VERSION` for the signed-in account, once per mount. Only
- * ever called on a grant. Identity comes from the verified session (T12 security M-2); with no
- * session nothing is recorded. A write that fails (offline) is kept, bound to the account, and
- * `finishOnboarding` sends it.
- */
-export function useGrantConsent(settings: SettingsRepo) {
-  const { session } = useSession();
-  const userId = session?.user.id ?? null;
-  const done = useRef(new Set<PermissionConsentType>());
-  return useCallback(
-    async (type: PermissionConsentType): Promise<void> => {
-      if (userId === null || done.current.has(type)) return;
-      done.current.add(type);
-      try {
-        await recordConsent(userId, { type, version: PERMISSION_CONSENT_VERSION });
-      } catch {
-        await addPendingPermissionConsent(settings, userId, type).catch(() => {});
-      }
-    },
-    [userId, settings]
-  );
-}
-
 export type LineTone = 'ok' | 'attention' | 'off' | 'info';
 
 const GLYPH: Record<LineTone, keyof typeof Ionicons.glyphMap> = {
@@ -164,5 +130,14 @@ export function StatusLine({ tone, children, testID }: { tone: LineTone; childre
         {children}
       </Text>
     </View>
+  );
+}
+
+/** A small uppercase label above a group of rows. */
+export function FieldLabel({ children }: { children: string }) {
+  return (
+    <Text variant="caption" tone="muted" style={{ textTransform: 'uppercase', letterSpacing: 1.2 }}>
+      {children}
+    </Text>
   );
 }

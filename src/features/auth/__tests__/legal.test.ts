@@ -1,12 +1,12 @@
-import { DISCLAIMER_VERSION, SAFETY_DISCLAIMER, legalState, type LegalConfig } from '@/features/auth/legal';
+import { SAFETY_DISCLAIMER, TERMS_VERSION, legalState, type LegalConfig } from '@/features/auth/legal';
 
 const versions = { tos_version: '2026-09-01', privacy_version: '2026-09-02' };
 const TERMS = 'https://roadwise.example/terms';
 const PRIVACY = 'https://roadwise.example/privacy';
 
-test('the disclaimer is the product spec A3 sentence, word for word, at its dated version', () => {
+test('the disclaimer line and the terms version the sign-in checkbox agrees to', () => {
   expect(SAFETY_DISCLAIMER).toBe('RoadWise is a coaching aid and may miss or misreport events');
-  expect(DISCLAIMER_VERSION).toBe('2026-09-21');
+  expect(TERMS_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 });
 
 const cases: [string, LegalConfig, ReturnType<typeof legalState>][] = [
