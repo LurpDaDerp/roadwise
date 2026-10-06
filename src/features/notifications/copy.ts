@@ -5,6 +5,6 @@
 export const notificationCopy = {
   channels: {
     trips: 'Drive summaries',
-    recording_problems: 'Recording problems',
+    updates: 'Updates',
   },
 } as const;
