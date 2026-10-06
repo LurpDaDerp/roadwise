@@ -1,4 +1,5 @@
 import type { StatSums } from '@scoring';
+import type { ReactNode } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
 
 import type { MySummary } from '@/data/server/summary';
@@ -36,6 +37,12 @@ export type HomeViewProps = {
   onLeagues: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /**
+   * A drive is recording (the driver backed out to Home): the "drive in progress" strip takes
+   * Start's place at the top, one tap back to the driving screen.
+   */
+  recording?: boolean;
+  inProgress?: ReactNode;
   /** iOS forgot-to-start check found an unrecorded car trip: a quiet, dismissible line. */
   forgottenDrive?: { dismiss: () => void } | null;
 };
@@ -64,6 +71,7 @@ export function HomeView(p: HomeViewProps) {
         <Text variant="title1" accessibilityRole="header">
           {name ? `Hey, ${name}` : 'Home'}
         </Text>
+        {p.recording ? p.inProgress : null}
         {p.forgottenDrive ? (
           <Banner tone="info" message={FORGOTTEN_DRIVE_COPY} action={{ label: 'Dismiss', onPress: p.forgottenDrive.dismiss }} testID="forgotten-drive" />
         ) : null}
@@ -84,14 +92,16 @@ export function HomeView(p: HomeViewProps) {
           </>
         ) : null}
       </ScrollView>
-      <StartDriveBar
-        dmsOn={p.dmsOn}
-        onToggleDms={p.onToggleDms}
-        onStart={p.onStart}
-        starting={p.starting}
-        refusal={p.refusal}
-        onRefusalAction={p.onRefusalAction}
-      />
+      {p.recording ? null : (
+        <StartDriveBar
+          dmsOn={p.dmsOn}
+          onToggleDms={p.onToggleDms}
+          onStart={p.onStart}
+          starting={p.starting}
+          refusal={p.refusal}
+          onRefusalAction={p.onRefusalAction}
+        />
+      )}
     </View>
   );
 }

@@ -33,6 +33,9 @@ export type SummaryViewProps = {
   notDrivingLeft: number | null;
   /** For the share card: the server's latest Safety Rating. */
   safetyRating: number | null;
+  /** The newest drive on this phone; "Wasn't driving" is offered only there. Null while unknown. */
+  latestClientTripId: string | null;
+  now: number;
   onBack: () => void;
   onOpenDrive: (clientTripId: string) => void;
   onReport: (eventId: string, reason: Exclude<ReportReason, 'not_driving'>) => Promise<void>;
@@ -165,7 +168,7 @@ function CounterTile({ counter }: { counter: Counter }) {
 }
 
 /** The drive summary: the spec's seven blocks, top to bottom, with a fixed footer. */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
+export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -182,7 +185,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const net = state.kind === 'points' ? state.value : null;
   const showBreakdown = state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending';
-  const notDrivingOk = canMarkNotDriving(drive);
+  const notDrivingOk = canMarkNotDriving(drive, latestClientTripId, now);
 
   return (
     <View style={{ flex: 1 }}>
@@ -288,6 +291,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
 
       <ReportSheet
         event={reportEvent}
+        allowNotDriving={notDrivingOk && notDrivingLeft !== 0}
         onClose={() => setReporting(null)}
         onSend={onReport}
         onNotDriving={() => {

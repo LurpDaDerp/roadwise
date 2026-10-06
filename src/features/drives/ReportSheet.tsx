@@ -21,11 +21,14 @@ const REASON_HELP: Record<ReportReason, string> = {
  */
 export function ReportSheet({
   event,
+  allowNotDriving,
   onClose,
   onSend,
   onNotDriving,
 }: {
   event: LocalDriveEvent | null;
+  /** "I wasn't driving" only where the whole-drive action is allowed. */
+  allowNotDriving: boolean;
   onClose: () => void;
   onSend: (eventId: string, reason: Exclude<ReportReason, 'not_driving'>) => Promise<void>;
   onNotDriving: () => void;
@@ -39,7 +42,7 @@ export function ReportSheet({
     setState('idle');
   }, [event?.id]);
 
-  const reasons = event ? reportReasons(event.type) : [];
+  const reasons = event ? reportReasons(event.type).filter((r) => r !== 'not_driving' || allowNotDriving) : [];
 
   const send = async () => {
     if (!event || !reason) return;

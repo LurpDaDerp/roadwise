@@ -9,7 +9,8 @@ import { useState } from 'react';
 import { useDataSource, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { useForgottenDriveNotice } from '@/drive/forgottenDrive';
-import { useDriveControls } from '@/drive/useDrive';
+import { useDrive, useDriveControls } from '@/drive/useDrive';
+import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
 import {
   ALL_STATS_HREF,
@@ -38,6 +39,8 @@ export function HomeScreen() {
   const dms = useDmsSetting();
   const { start } = useDriveControls();
   const forgotten = useForgottenDriveNotice();
+  // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick.
+  const recording = useDrive((d) => d.status === 'recording');
   const [starting, setStarting] = useState(false);
   const [refusal, setRefusal] = useState<StartRefusal | null>(null);
 
@@ -89,6 +92,8 @@ export function HomeScreen() {
         onHowPoints={() => router.push(HOW_POINTS_WORK_HREF)}
         onLeagues={() => router.navigate(LEAGUES_HREF)}
         forgottenDrive={forgotten}
+        recording={recording}
+        inProgress={<DriveInProgressBanner />}
         refreshing={refreshing}
         onRefresh={() => {
           void summary.refetch();

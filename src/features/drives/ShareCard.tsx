@@ -2,11 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
 import { forwardRef, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
 import type { LatLng } from '@/lib/geo';
-import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme } from '@/ui';
+import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme, type TypeVariant } from '@/ui';
 
 import { formatDay, formatDuration, formatMiles, signedPoints } from './format';
 import { RouteSketch } from './RouteSketch';
@@ -27,15 +27,39 @@ const NAVY = ['#003566', '#001D3D'] as const;
 const W = 320;
 const H = 400;
 
+/**
+ * Text on the captured card. The card is a fixed-size image, so its type never follows Dynamic
+ * Type (the shared PNG would clip); everything else on screen still does.
+ */
+function CardText({ variant, tone = 'default', style, children, testID }: { variant: TypeVariant; tone?: 'default' | 'muted'; style?: TextStyle; children: React.ReactNode; testID?: string }) {
+  const t = useTheme();
+  const s = t.type[variant];
+  const base: TextStyle = {
+    fontFamily: s.fontFamily,
+    fontSize: s.fontSize,
+    lineHeight: s.lineHeight,
+    color: tone === 'muted' ? t.colors.textMuted : t.colors.text,
+    ...(s.fontWeight ? { fontWeight: s.fontWeight } : null),
+    ...(s.letterSpacing !== undefined ? { letterSpacing: s.letterSpacing } : null),
+    ...(s.fontVariant ? { fontVariant: s.fontVariant } : null),
+    ...(s.textTransform ? { textTransform: s.textTransform } : null),
+  };
+  return (
+    <RNText allowFontScaling={false} maxFontSizeMultiplier={1} style={[base, style]} testID={testID}>
+      {children}
+    </RNText>
+  );
+}
+
 function Fact({ label, value, testID }: { label: string; value: string; testID?: string }) {
   return (
     <View style={{ flexBasis: '50%', paddingVertical: 8 }}>
-      <Text variant="label" tone="muted">
+      <CardText variant="label" tone="muted">
         {label}
-      </Text>
-      <Text variant="stat" testID={testID} style={{ fontVariant: ['tabular-nums'] }}>
+      </CardText>
+      <CardText variant="stat" testID={testID}>
         {value}
-      </Text>
+      </CardText>
     </View>
   );
 }
@@ -50,12 +74,12 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
       <View ref={ref} collapsable={false} testID="share-card" style={{ width: W, height: H, borderRadius: 24, overflow: 'hidden', padding: 20 }}>
         <LinearGradient colors={NAVY} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text variant="title3" style={{ color: GOLD, fontStyle: 'italic' }}>
+          <CardText variant="title3" style={{ color: GOLD, fontStyle: 'italic' }}>
             RoadWise
-          </Text>
-          <Text variant="footnote" tone="muted">
+          </CardText>
+          <CardText variant="footnote" tone="muted">
             {formatDay(data.startedAt)}
-          </Text>
+          </CardText>
         </View>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <RouteSketch points={data.points} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />
@@ -76,9 +100,9 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
               }}
             >
               <Ionicons name="checkmark-circle" size={14} color={tokens.color.dark.onPrimary} />
-              <Text variant="label" style={{ color: tokens.color.dark.onPrimary }}>
+              <CardText variant="label" style={{ color: tokens.color.dark.onPrimary }}>
                 Clean drive
-              </Text>
+              </CardText>
             </View>
           ) : null}
         </View>

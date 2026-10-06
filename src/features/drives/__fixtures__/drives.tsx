@@ -50,7 +50,9 @@ export function result(over: Partial<FinalizeTripResponseV3> = {}): FinalizeTrip
 }
 
 export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
+  // `dmsFaceSeen` is being added to LocalDrive by WP6; the assertion keeps this compiling either side.
   return {
+    dmsFaceSeen: false,
     clientTripId: 'a1',
     startedAt: NOW - 2 * HOUR,
     endedAt: NOW - 2 * HOUR + 24 * 60_000,
@@ -70,7 +72,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     reason: null,
     mergedInto: null,
     ...over,
-  };
+  } as LocalDrive;
 }
 
 export function event(over: Partial<LocalDriveEvent> = {}): LocalDriveEvent {

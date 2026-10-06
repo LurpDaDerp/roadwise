@@ -232,9 +232,20 @@ export function disputeText(e: LocalDriveEvent): string | null {
   }
 }
 
-/** Whether "Wasn't driving" applies at all to this drive. */
-export const canMarkNotDriving = (d: LocalDrive): boolean =>
-  d.status === 'scored' || d.status === 'pending' || d.status === 'unscored' || d.status === 'failed';
+/** "Wasn't driving" works only within this long after the drive ended (plan §4). */
+export const NOT_DRIVING_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * Whether to offer "Wasn't driving" on this drive. The server allows it only on the latest drive,
+ * within 24 h of its end, and never when DMS saw a face in the driver's seat; offering it anywhere
+ * else would only bounce back.
+ */
+export function canMarkNotDriving(d: LocalDrive, latestClientTripId: string | null, now: number): boolean {
+  const open = d.status === 'scored' || d.status === 'pending' || d.status === 'unscored' || d.status === 'failed';
+  if (!open || latestClientTripId !== d.clientTripId) return false;
+  if (now - (d.endedAt ?? d.startedAt) > NOT_DRIVING_WINDOW_MS) return false;
+  return (d as { dmsFaceSeen?: boolean }).dmsFaceSeen !== true;
+}
 
 /** "Wasn't driving (2 left this month)". */
 export function notDrivingLabel(left: number | null): string {

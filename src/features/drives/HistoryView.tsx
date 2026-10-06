@@ -32,6 +32,7 @@ export type HistoryViewProps = {
   onHome: () => void;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** Rounded (to the hour) by the caller, so the week grouping is memoised across renders. */
   now: number;
 };
 
@@ -113,6 +114,10 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
       sections={sections}
       keyExtractor={(d) => d.clientTripId}
       stickySectionHeadersEnabled={false}
+      initialNumToRender={10}
+      maxToRenderPerBatch={10}
+      windowSize={7}
+      removeClippedSubviews
       ListHeaderComponent={header}
       ListEmptyComponent={empty}
       renderSectionHeader={({ section }) => <WeekHeader group={section} />}

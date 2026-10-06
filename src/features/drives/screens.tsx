@@ -7,7 +7,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
-import { useDataSource, useDb, useDriveDetail, useDriveHistory, useStatSums } from '@/data/queries';
+import { useDataSource, useDb, useDriveDetail, useDriveHistory, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
@@ -44,7 +44,7 @@ export function DriveHistoryScreen() {
         onHome={() => router.replace(HOME_HREF)}
         onRefresh={() => void q.refetch()}
         refreshing={q.isRefetching}
-        now={now()}
+        now={Math.floor(now() / 3_600_000) * 3_600_000}
       />
     </Screen>
   );
@@ -59,6 +59,8 @@ export function DriveSummaryScreen() {
   const { clientTripId, fresh } = useLocalSearchParams<{ clientTripId: string; fresh?: string }>();
   const detail = useDriveDetail(clientTripId ?? '');
   const summary = useMySummary();
+  const latest = useRecentDrives(1);
+  const { now } = useDataSource();
   // Animate only on the first render after a drive ends, not when coming back to it.
   const [isFresh] = useState(fresh === '1');
 
@@ -92,6 +94,8 @@ export function DriveSummaryScreen() {
         fresh={isFresh}
         notDrivingLeft={summary.data?.not_driving_left ?? null}
         safetyRating={summary.data?.progress.safety_rating ?? null}
+        latestClientTripId={latest.data?.[0]?.clientTripId ?? null}
+        now={now()}
         onBack={back}
         onOpenDrive={(id) => router.replace(driveSummaryHref(id))}
         onReport={async (eventId, reason) => {

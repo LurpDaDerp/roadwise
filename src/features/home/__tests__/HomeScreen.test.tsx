@@ -19,13 +19,22 @@ jest.mock('@/data/queries', () => ({
   useStatSums: () => mockOk(mockSums()),
 }));
 jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary()) }));
-jest.mock('@/drive/useDrive', () => ({ useDriveControls: () => ({ start: mockStart, end: jest.fn() }) }));
+let mockRecording = false;
+jest.mock('@/drive/useDrive', () => ({
+  useDriveControls: () => ({ start: mockStart, end: jest.fn() }),
+  useDrive: (sel: (d: { status: string }) => unknown) => sel({ status: mockRecording ? 'recording' : 'idle' }),
+}));
+jest.mock('@/features/drive/DriveInProgressBanner', () => {
+  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+  return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
+});
 jest.mock('@/drive/forgottenDrive', () => ({ useForgottenDriveNotice: () => null }));
 jest.mock('../useDmsSetting', () => ({ useDmsSetting: () => ({ setting: mockDms, setEnabled: mockSetEnabled }) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockDms = { enabled: false, calibrated: true };
+  mockRecording = false;
 });
 
 test('a successful start opens the driving screen with the DMS choice', async () => {
@@ -54,4 +63,12 @@ test('the DMS chip toggles the setting once calibrated, and opens setup before t
   await draw(<HomeScreen />);
   await press(screen.getAllByTestId('dms-chip').at(-1)!);
   expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/dms-setup');
+});
+
+test('while a drive is recording, the in-progress strip replaces Start', async () => {
+  mockRecording = true;
+  await draw(<HomeScreen />);
+  expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
+  expect(screen.queryByTestId('start-drive')).toBeNull();
+  expect(screen.queryByTestId('dms-chip')).toBeNull();
 });

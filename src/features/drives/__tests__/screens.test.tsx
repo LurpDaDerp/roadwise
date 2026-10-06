@@ -7,16 +7,18 @@ const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), b
 let mockParams: Record<string, string> = { clientTripId: 'a1' };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useLocalSearchParams: () => mockParams }));
 
+const mockNow = new Date(2026, 9, 5, 15, 0, 0).getTime();
 const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRefetching: false, refetch: jest.fn() });
 let mockDetail: unknown = { drive: mockDrive(), events: [mockEvent()] };
 const mockReport = jest.fn(async () => 'queued');
 const mockNotDriving = jest.fn(async () => 'queued');
 
 jest.mock('@/data/queries', () => ({
-  useDataSource: () => ({ now: () => Date.now() }),
+  useDataSource: () => ({ now: () => mockNow }),
   useDb: () => 'db',
   useDriveDetail: () => (mockDetail === undefined ? { data: undefined, isLoading: true, isError: false } : mockOk(mockDetail)),
   useDriveHistory: () => mockOk([]),
+  useRecentDrives: () => mockOk([mockDrive()]),
   useStatSums: () => mockOk(undefined),
 }));
 jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary({ not_driving_left: 1 })) }));

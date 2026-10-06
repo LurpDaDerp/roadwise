@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react-native';
 
 import { tokens } from '@/ui/tokens';
 
-import { draw, drive, event, press, result } from '../__fixtures__/drives';
+import { DAY, draw, drive, event, NOW, press, result } from '../__fixtures__/drives';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -14,6 +14,8 @@ const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   fresh: false,
   notDrivingLeft: 2,
   safetyRating: 92,
+  latestClientTripId: 'a1',
+  now: NOW,
   onBack: jest.fn(),
   onOpenDrive: jest.fn(),
   onReport: jest.fn(async () => undefined),
@@ -159,6 +161,23 @@ describe("Wasn't driving", () => {
     expect(screen.getByTestId('not-driving')).toBeDisabled();
   });
 
+  test('offered only on the latest drive, within 24 h, and never when DMS saw a face', async () => {
+    await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
+    await draw(<SummaryView {...props({ now: NOW + DAY })} />);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
+    await draw(<SummaryView {...props({ drive: { ...drive(), dmsFaceSeen: true } as ReturnType<typeof drive> })} />);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
+  });
+
+  test("where it is not offered, Report leaves out \"I wasn't driving\"", async () => {
+    await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
+    await press(screen.getByTestId('breakdown-toggle'));
+    await press(screen.getByTestId('report-e1'));
+    expect(screen.getByTestId('reason-hazard')).toBeOnTheScreen();
+    expect(screen.queryByTestId('reason-not_driving')).toBeNull();
+  });
+
   test('a drive already marked has no footer option', async () => {
     await draw(<SummaryView {...props({ drive: drive({ status: 'not_driving', pointsNet: 0 }) })} />);
     expect(screen.getByText('Marked as not driving')).toBeOnTheScreen();
@@ -174,6 +193,9 @@ test('Share previews the card without any speed and shares the image', async () 
   const card = screen.getByTestId('share-card');
   expect(within(card).getByTestId('share-points')).toHaveTextContent('+167');
   expect(within(card).queryByText(/mph/)).toBeNull();
+  // A fixed-size image: its text never follows Dynamic Type.
+  expect(within(card).getByTestId('share-points')).toHaveProp('allowFontScaling', false);
+  expect(within(card).getByTestId('share-points')).toHaveStyle({ fontSize: 28 });
   await press(screen.getByTestId('share-image'));
   expect(sharing.shareAsync).toHaveBeenCalledWith('file:///card.png', expect.objectContaining({ mimeType: 'image/png' }));
 });
