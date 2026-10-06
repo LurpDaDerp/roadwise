@@ -2,6 +2,7 @@
  * Pure view logic for the Leagues tab: zones, the countdown, rating text, the friends board order
  * and last week's result. No React, no clock: callers pass `now`.
  */
+import { formatRating } from '@/lib/rating';
 import { TIER_LABEL, TIER_ORDER } from '@/ui';
 
 import type { FriendsBoardRow, FriendsMetric, LeagueMember, LeagueTier, MyLeague } from './api';
@@ -123,8 +124,6 @@ export function msToNextMinute(nowMs: number): number {
 // ---------------------------------------------------------------------------
 // numbers and words
 // ---------------------------------------------------------------------------
-
-import { formatRating } from '@/lib/rating';
 
 export { UNRANKED } from '@/lib/rating';
 
