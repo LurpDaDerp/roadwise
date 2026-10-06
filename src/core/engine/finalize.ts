@@ -11,6 +11,7 @@
 import { scoreDrive, type DriveBreakdown, type DriveContext, type DriveEvent } from '@scoring';
 
 import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
+import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
   FinalizeTripPayloadV3Schema,
@@ -42,6 +43,8 @@ export interface FinalizeDeps {
   geocode?: Geocoder | null;
   /** The cached summary context for the estimate (streak); null when nothing is cached. */
   context?: () => Promise<{ streak: number } | null>;
+  /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
+  trimSeed?: (clientTripId: string) => Promise<string>;
 }
 
 export interface FinalizeResult {
@@ -177,7 +180,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
 
   // 1. The route and the events on it.
   const zones = await (deps.zones ?? (() => readZones(db)))();
-  const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES);
+  const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES, await (deps.trimSeed ?? deviceTrimSeed)(id));
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
   const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 

@@ -58,6 +58,49 @@ export function asError(error: unknown, message: string): Error {
   return new Error(code ? `${message} (${code})` : message);
 }
 
+/** The sign-out's own budget for the release (the session's before-sign-out tasks share 2 s). */
+export const RELEASE_BUDGET_MS = 2_000;
+
+export interface ReleaseDeps {
+  rpc: Rpc;
+  settings: Pick<SettingsRepo, 'get' | 'set' | 'remove'>;
+  /** This install's id, read at task start; null when the device was never registered. */
+  deviceId: string | null;
+  budgetMs?: number;
+  onError?: (error: unknown, context: string) => void;
+}
+
+/**
+ * Before the session ends at sign-out: `release_device(p_device_id)` clears this install's push
+ * token on the server, so the next holder of the phone never sees this driver's pushes (security
+ * audit, Important 1). Bounded, failure tolerated (Expo's `DeviceNotRegistered` and the next
+ * account's `register_device` are the backstops); the local registration stamp is cleared so a
+ * return registers afresh.
+ */
+export async function releaseDevice(deps: ReleaseDeps): Promise<'released' | 'skipped' | 'failed'> {
+  const { deviceId } = deps;
+  if (deviceId === null) return 'skipped';
+  await deps.settings.remove(LAST_REGISTER_KEY).catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<'failed'>((resolve) => {
+    timer = setTimeout(() => resolve('failed'), deps.budgetMs ?? RELEASE_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([
+      deps.rpc('release_device', { p_device_id: deviceId }).then(
+        () => 'released' as const,
+        (error: unknown) => {
+          deps.onError?.(asError(error, 'release_device failed'), 'release device');
+          return 'failed' as const;
+        }
+      ),
+      budget,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult> {
   const { settings, userId, deviceId } = deps;
   const now = deps.now();

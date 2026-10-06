@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate } from '@/data/db';
 import { readPushToken, type PushPort } from '@/data/devices/pushToken';
-import { LEAGUE_ELIGIBLE_KEY, readLeagueEligible, REGISTER_INTERVAL_MS, registerDevice } from '@/data/devices/register';
+import { LAST_REGISTER_KEY, LEAGUE_ELIGIBLE_KEY, readLeagueEligible, REGISTER_INTERVAL_MS, registerDevice, releaseDevice } from '@/data/devices/register';
 
 const T0 = 1_700_000_000_000;
 
@@ -30,6 +30,27 @@ test('register_device is called with the install id, platform and token; league_
   expect(await registerDevice({ ...failing, now: () => T0 + 2 * REGISTER_INTERVAL_MS })).toBe('error');
   expect(failing.onError).toHaveBeenCalled();
   expect(await settings.get(LEAGUE_ELIGIBLE_KEY)).toEqual({ userId: 'u1', eligible: true });
+});
+
+test('releaseDevice calls release_device within its budget, clears the local stamp, and tolerates failure', async () => {
+  const db = await createSqlJsDb();
+  await migrate(db);
+  const settings = createSettingsRepo(db);
+  await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: 'install-1234', at: T0, token: null });
+  const calls: unknown[] = [];
+  expect(await releaseDevice({ rpc: async (fn, args) => void calls.push([fn, args]), settings, deviceId: 'install-1234' })).toBe('released');
+  expect(calls).toEqual([['release_device', { p_device_id: 'install-1234' }]]);
+  expect(await settings.get(LAST_REGISTER_KEY)).toBeNull();
+  expect(await releaseDevice({ rpc: async () => Promise.reject(new Error('offline')), settings, deviceId: 'install-1234' })).toBe('failed');
+  expect(await releaseDevice({ rpc: async () => null, settings, deviceId: null })).toBe('skipped');
+  jest.useFakeTimers();
+  try {
+    const hung = releaseDevice({ rpc: () => new Promise(() => {}), settings, deviceId: 'install-1234', budgetMs: 100 });
+    await jest.advanceTimersByTimeAsync(150);
+    expect(await hung).toBe('failed');
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('readPushToken: only on a device with permission, and only a real Expo token', async () => {

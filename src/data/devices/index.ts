@@ -1,4 +1,5 @@
 export { getInstallId, INSTALL_ID_KEY, readInstallId } from './installId';
+export { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, type SecretStore } from './deviceSecret';
 export {
   asError,
   LAST_REGISTER_KEY,
@@ -6,6 +7,9 @@ export {
   readLeagueEligible,
   REGISTER_INTERVAL_MS,
   registerDevice,
+  RELEASE_BUDGET_MS,
+  releaseDevice,
+  type ReleaseDeps,
   type RegisterDeps,
   type RegisterResult,
   type Rpc,

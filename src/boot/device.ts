@@ -10,6 +10,7 @@
  *     else in the launch touches a row.
  */
 import { createSettingsRepo, type Db } from '@/data/db';
+import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
@@ -23,6 +24,18 @@ export const PENDING_OWNER_KEY = 'device.pendingOwner';
 
 /** Every table the wipe empties, children before parents. `schema_version` is the app's, not the driver's. */
 export const DEVICE_TABLES: readonly string[] = ['trip_events', 'samples', 'sync_queue', 'settings', 'speed_limit_tiles', 'trips'];
+
+/**
+ * The one setting the handover wipe keeps: this install's device id (`src/data/devices/installId.ts`).
+ * A random id that identifies nothing outside the app; keeping it is what ties every account on one
+ * phone to one `device_id`, so "one league-eligible account per device" holds across a sign-out and
+ * sign-in (security audit, Important 3).
+ */
+export const WIPE_KEEPS_SETTINGS: readonly string[] = ['device.installId'];
+
+/** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
+export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'trips'];
+export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', 'reminder.forgottenCheckedAt'];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
@@ -55,8 +68,30 @@ export interface DeviceOwnerDeps {
 /** Empty the device: every table in `DEVICE_TABLES` in one transaction. */
 export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<void> {
   await cancelSummariesBounded();
+  // The privacy trim secret goes with the account (a new one is minted on the next drive).
+  await clearDeviceSecret();
   await db.transaction(async (tx) => {
-    for (const table of DEVICE_TABLES) await tx.execute(`DELETE FROM ${table}`);
+    for (const table of DEVICE_TABLES) {
+      if (table === 'settings') {
+        const keep = WIPE_KEEPS_SETTINGS.map(() => '?').join(', ');
+        await tx.execute(`DELETE FROM settings WHERE key NOT IN (${keep})`, [...WIPE_KEEPS_SETTINGS]);
+      } else {
+        await tx.execute(`DELETE FROM ${table}`);
+      }
+    }
+  });
+}
+
+/**
+ * A plain sign-out with nothing left to upload: the driver's drives (rows, events, samples, their
+ * from/to labels and routes) and privacy zones leave the phone now rather than at the next sign-in.
+ * The owner record, install id and other settings stay.
+ */
+export async function wipeForSignOut(db: Db): Promise<void> {
+  await cancelSummariesBounded();
+  await db.transaction(async (tx) => {
+    for (const table of SIGN_OUT_TABLES) await tx.execute(`DELETE FROM ${table}`);
+    for (const key of SIGN_OUT_SETTINGS) await tx.execute('DELETE FROM settings WHERE key = ?', [key]);
   });
 }
 

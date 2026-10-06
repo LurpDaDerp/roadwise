@@ -7,7 +7,9 @@ import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo,
 import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
-import { createSyncRunner, joinPolylines } from '@/data/sync/runner';
+import { emitDataChanged } from '@/data/events';
+import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS } from '@/data/sync/runner';
+import { decodePolyline, encodePolyline } from '@/lib/polyline';
 
 let db: Db;
 beforeEach(async () => {
@@ -229,9 +231,85 @@ test('the runner wakes on the enqueue change event and on foreground', async () 
   }
 });
 
-test('joinPolylines concatenates two routes', () => {
+test('joinPolylines keeps the longer route rather than drawing across the hidden gap', () => {
   expect(joinPolylines(null, null)).toBeNull();
-  const a = joinPolylines('_p~iF~ps|U', null);
-  expect(a).toBe('_p~iF~ps|U');
-  expect(joinPolylines('_p~iF~ps|U', '_p~iF~ps|U')).not.toBeNull();
+  const one = encodePolyline([{ lat: 47.6, lng: -122.3 }, { lat: 47.61, lng: -122.3 }]);
+  const three = encodePolyline([{ lat: 48.6, lng: -122.3 }, { lat: 48.61, lng: -122.3 }, { lat: 48.62, lng: -122.3 }]);
+  expect(joinPolylines(one, null)).toBe(one);
+  expect(joinPolylines(null, three)).toBe(three);
+  expect(decodePolyline(joinPolylines(one, three)!)).toHaveLength(3);
+  expect(decodePolyline(joinPolylines(three, one)!)).toHaveLength(3);
+});
+
+test('a reply that lands after the device changed hands writes nothing and releases the item', async () => {
+  await finalized(uuid(10));
+  const supabase = createFakeSupabase({
+    invoke: async ({ body }) => {
+      // The phone changes hands while the request is in flight.
+      await createSettingsRepo(db).set('device.lastUserId', 'user-2');
+      return invokeOk(response((body as { clientTripId: string }).clientTripId));
+    },
+  });
+  const r = runner(supabase);
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ done: 0, deferred: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', estimate: 1, result_json: null });
+  const item = (await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!;
+  expect(item).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 + FOREIGN_OWNER_RETRY_MS });
+  await r.stop();
+});
+
+test('no session and a foreign owner release the item for their own retry times; the refusal write is fenced too', async () => {
+  await finalized(uuid(10));
+  const noSession = createFakeSupabase({ uid: null });
+  const r = runner(noSession);
+  await r.start();
+  await r.drainOnce();
+  expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!.next_attempt_at).toBe(T0 + 2_000_000 + NO_SESSION_RETRY_MS);
+  await r.stop();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  const other = createFakeSupabase({ uid: 'user-2', invoke: () => invokeOk({}) });
+  const r2 = runner(other);
+  await r2.start();
+  await r2.drainOnce();
+  expect(other.invokes).toHaveLength(0);
+  expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!.next_attempt_at).toBe(T0 + 2_000_000 + FOREIGN_OWNER_RETRY_MS);
+  await r2.stop();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  const refusing = createFakeSupabase({
+    invoke: async () => {
+      await createSettingsRepo(db).set('device.lastUserId', 'user-2');
+      return functionsHttpError(400, { code: 'spoofed_payload' });
+    },
+  });
+  const r3 = runner(refusing);
+  await r3.start();
+  await r3.drainOnce();
+  expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!.status).toBe('failed');
+  expect((await createTripsRepo(db).get(uuid(10)))!.status).toBe('pending'); // the fence held the local write
+  await r3.stop();
+});
+
+test('no polling during a drive: a wake while recording arms no further timer; the finalize change event wakes it', async () => {
+  jest.useFakeTimers();
+  try {
+    let recording = true;
+    const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
+    const r = runner(supabase, { isRecording: () => recording });
+    await r.start();
+    await jest.advanceTimersByTimeAsync(10);
+    expect(jest.getTimerCount()).toBe(0);
+    await finalized(uuid(10));
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(supabase.invokes).toHaveLength(0);
+    recording = false;
+    emitDataChanged({ source: 'finalize' });
+    await jest.advanceTimersByTimeAsync(10);
+    await r.idle();
+    expect(supabase.invokes).toHaveLength(1);
+    await r.stop();
+  } finally {
+    jest.useRealTimers();
+  }
 });

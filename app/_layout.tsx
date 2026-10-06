@@ -6,11 +6,16 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
+import { hasDriverData, readDeviceOwner, wipeForSignOut } from '@/boot/device';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
+import { createSettingsRepo } from '@/data/db/settings';
 import { DeviceHost } from '@/data/devices/DeviceHost';
+import { readInstallId } from '@/data/devices/installId';
+import { releaseDevice } from '@/data/devices/register';
+import { callRpc } from '@/data/server/rpc';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider } from '@/data/supabase/session';
@@ -105,18 +110,55 @@ export default function RootLayout() {
   }, [runtime, handover]);
 
   // A session end — the driver's sign-out, or one they did not start (a revoked or expired
-  // token) — stops recording: an open drive is finalized under the owner first. Nothing arms or
-  // starts anything on a sign-in: a drive begins only from the Start Drive tap (plan §1 decision 4).
+  // token) — stops recording: an open drive is finalized under the owner first. A sign-in by this
+  // device's owner (or the first sign-in on an empty phone) lets Start Drive work again in this
+  // process: a host launched signed out refuses `start()` until told. Nothing here arms or starts
+  // a drive — a drive begins only from the Start Drive tap (plan §1 decision 4). A different
+  // driver is a handover: `watchDeviceOwner` rebuilds, and the new launch decides for itself.
   useEffect(() => {
     if (runtime === null) return;
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event !== 'SIGNED_OUT') return;
-      void runtime.drive
-        .sessionEnded()
-        .then(() => cameraBridge()?.sessionEnded())
-        .catch(() => {});
+    let live = true;
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        void runtime.drive
+          .sessionEnded()
+          .then(() => cameraBridge()?.sessionEnded())
+          .catch(() => {});
+        return;
+      }
+      if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
+      const uid = session.user.id;
+      void (async () => {
+        const owner = await readDeviceOwner(runtime.db);
+        if (!live) return;
+        if (owner === uid || (owner === null && !(await hasDriverData(runtime.db)))) {
+          await runtime.drive.signedInAgain({ initial: event === 'INITIAL_SESSION' });
+        }
+      })().catch(() => {});
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      live = false;
+      data.subscription.unsubscribe();
+    };
+  }, [runtime]);
+
+  // Before the session ends at sign-out (inside the sign-out's 2 s budget): the server forgets this
+  // install's push token, and — with nothing left to upload — the driver's drives and privacy zones
+  // leave the phone. Both read what they need at task start and never hold the sign-out.
+  useEffect(() => {
+    if (runtime === null) return;
+    const settings = createSettingsRepo(runtime.db);
+    const offRelease = registerBeforeSignOut(async () => {
+      const deviceId = await readInstallId(settings);
+      await releaseDevice({ rpc: callRpc, settings, deviceId });
+    });
+    const offWipe = registerBeforeSignOut(async () => {
+      if ((await runtime.runner.owed()) === 0) await wipeForSignOut(runtime.db);
+    });
+    return () => {
+      offRelease();
+      offWipe();
+    };
   }, [runtime]);
 
   const fontsReady = shouldRender({ loaded, error, timedOut });

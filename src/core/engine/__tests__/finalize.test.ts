@@ -22,6 +22,7 @@ const deps = (over: Partial<Parameters<typeof finalizeTrip>[1]> = {}) => ({
   now: () => T0 + 1_000_000,
   appVersion: '3.0.0',
   geocode: null,
+  trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
   ...over,
 });
 
@@ -57,6 +58,8 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
   const shown = decodePolyline(payload.polyline);
   expect(shown.length).toBeGreaterThan(2);
   expect(Math.min(...shown.map((p) => p.lng))).toBeGreaterThan(-122.3321 + 402 / 75_000);
+  // The trim plan never leaves the phone.
+  expect(JSON.stringify(payload)).not.toMatch(/startM|zoneRadiiM|plan/);
   expect(await findFinalize(db, session.clientTripId)).toEqual(payload);
   expect(await createSamplesRepo(db).count(session.clientTripId)).toBe(0);
   const item = await createQueueRepo(db).byKey(`trip:${session.clientTripId}`);

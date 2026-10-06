@@ -11,7 +11,8 @@ import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { bootstrapApp, flushBeforeSignOut, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
-import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner } from '@/boot/device';
+import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, wipeForSignOut } from '@/boot/device';
+import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 
 jest.mock('expo-notifications', () => ({}));
 
@@ -134,13 +135,45 @@ test('device ownership: a different user wipes every table but the schema’s; a
   await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored' }, T0);
   expect(await hasDriverData(db)).toBe(true);
   expect(await ensureDeviceOwner(db, 'user-1')).toBe('same');
+  await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
+  await createSettingsRepo(db).set('privacy.zones', []);
   expect(await ensureDeviceOwner(db, 'user-2')).toBe('wiped');
   expect(await createTripsRepo(db).count()).toBe(0);
   expect(await readDeviceOwner(db)).toBe('user-2');
+  // The install id is the one setting the wipe keeps: one phone, one device id, whoever signs in.
+  expect(await readInstallId(createSettingsRepo(db))).toBe('install-keeps-1234');
+  expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
   expect(DEVICE_TABLES).toEqual(['trip_events', 'samples', 'sync_queue', 'settings', 'speed_limit_tiles', 'trips']);
   expect(await ensureDeviceOwner(db, null)).toBe('signed-out');
   await createSettingsRepo(db).remove('device.lastUserId');
   expect(await ensureDeviceOwner(db, 'user-3')).toBe('first');
+});
+
+test('a launch signed out, then the owner signs in: Start Drive works without a relaunch', async () => {
+  const d = deps({ newId: () => uuid(7) });
+  d.supabase.setUid(null);
+  const rt = await bootstrapApp(d.deps);
+  expect(rt.owner).toBe('signed-out');
+  expect(await rt.drive.start({ dmsOn: false })).toEqual({ ok: false, reason: 'error' });
+  // What the root layout does on SIGNED_IN for the device owner (or an empty device).
+  await rt.drive.signedInAgain();
+  const started = await rt.drive.start({ dmsOn: false });
+  expect(started).toEqual({ ok: true, clientTripId: uuid(7) });
+  await rt.stop({ endOpenTrip: true });
+});
+
+test('a plain sign-out with nothing owed wipes the drives and zones but keeps the owner and the install id', async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored', from_label: 'Home' }, T0);
+  await createSettingsRepo(db).set('privacy.zones', [{ id: 'h', name: 'Home', lat: 1, lng: 1, radiusM: 300 }]);
+  await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
+  await wipeForSignOut(db);
+  expect(await createTripsRepo(db).count()).toBe(0);
+  expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
+  expect(await readDeviceOwner(db)).toBe('user-1');
+  expect(await readInstallId(createSettingsRepo(db))).toBe('install-keeps-1234');
+  await rt.stop();
 });
 
 test('flushBeforeSignOut drains once and reports what is still owed', async () => {

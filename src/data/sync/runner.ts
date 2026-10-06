@@ -111,12 +111,16 @@ function parseJson(text: string): unknown {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
-/** Two trimmed polylines joined into one (a merged drive's route). */
+/**
+ * The route of a merged drive: the longer of the two trimmed polylines. Joining them would draw a
+ * straight line across the hidden gap (the trimmed 0.25 mi + the stop + 0.25 mi), an intermediate
+ * destination the trimming exists to hide.
+ */
 export function joinPolylines(a: string | null, b: string | null): string | null {
   const pa = a ? decodePolyline(a) : [];
   const pb = b ? decodePolyline(b) : [];
-  const all = [...pa, ...pb];
-  return all.length === 0 ? null : encodePolyline(all);
+  if (pa.length === 0 && pb.length === 0) return null;
+  return pb.length > pa.length ? encodePolyline(pb) : encodePolyline(pa);
 }
 
 const cleanOf = (bd: DriveBreakdown, scored: boolean): 0 | 1 | null => (scored ? (bd.activeEventCount === 0 ? 1 : 0) : null);
@@ -332,7 +336,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     return { kind: 'retry', error: failure.status === null ? TRANSPORT_FAILURE : failure.code, ...(untilMs !== undefined ? { untilMs } : {}) };
   }
 
-  async function settle(item: QueueItem, outcome: Outcome): Promise<'done' | 'failed' | 'deferred'> {
+  async function settle(item: QueueItem, outcome: Outcome, uid: string): Promise<'done' | 'failed' | 'deferred'> {
     switch (outcome.kind) {
       case 'done':
         await queue.markAttempt(item.id, true, null, now());
@@ -349,7 +353,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           if (item.kind === 'finalize-trip') {
             const body = parseJson(item.payload_json);
             const id = isRecord(body) && typeof body.clientTripId === 'string' ? body.clientTripId : null;
-            if (id !== null) await trips.update(id, { status: 'failed', sync_error: outcome.error }, now()).catch(noop);
+            if (id !== null) {
+              await fenced(uid, async (tx) => {
+                await trips.update(id, { status: 'failed', sync_error: outcome.error }, now(), tx);
+              }).catch(noop);
+            }
           }
         }
         return 'failed';
@@ -407,7 +415,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           outcome = { kind: 'retry', error: 'exception' };
         }
         try {
-          result[await settle(item, outcome)] += 1;
+          result[await settle(item, outcome, uid)] += 1;
         } catch (error) {
           report(error, 'sync settle');
         }
@@ -436,10 +444,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     if (!started || wakeTimer !== null) return;
     wakeTimer = setTimeout(() => {
       wakeTimer = null;
-      if (deps.isRecording()) {
-        wake(RECORDING_RETRY_MS);
-        return;
-      }
+      // A drive under way: no polling. The host's `finalize` change event wakes the runner when
+      // the drive closes (and the next foreground does too).
+      if (deps.isRecording()) return;
       void drainOnce();
     }, delayMs);
   }
