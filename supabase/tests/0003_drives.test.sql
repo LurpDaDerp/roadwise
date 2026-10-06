@@ -44,7 +44,7 @@ begin
       'endedAt', floor(extract(epoch from p_started + make_interval(mins => p_minutes)) * 1000)::bigint, 'tz', 'America/New_York',
       'localDay', to_char(p_started at time zone 'America/New_York', 'YYYY-MM-DD'), 'miles', p_miles, 'safeMiles', p_miles, 'nightMiles', 0,
       'durationS', p_minutes * 60, 'dmsOn', false, 'dmsFaceSeen', coalesce((p_extra ->> 'face')::boolean, false),
-      'end', jsonb_build_object('lat', 47.61, 'lng', -122.31), 'polyline', 'poly', 'appVersion', '3.0.0'),
+      'end', jsonb_build_object('lat', 47.61, 'lng', -122.31), 'polyline', coalesce(p_extra ->> 'polyline', 'poly'), 'appVersion', '3.0.0'),
     'scored', coalesce((p_extra ->> 'scored')::boolean, true), 'reason', p_extra ->> 'reason', 'net', p_net,
     'breakdown', jsonb_build_object('scored', true, 'net', p_net, 'ratingPenalty', coalesce((p_extra ->> 'ratingPenalty')::int, 0), 'events', v_bd),
     'events', v_ev,
@@ -102,11 +102,11 @@ select is((private.drive_context('00000000-0000-0000-0000-000000000001', '333333
 
 create temporary table r2 as select pg_temp.drive('00000000-0000-0000-0000-000000000001', '33333333-3333-4333-8333-333333333333', pg_temp.t0() + interval '32 minutes', 18, 3, 200,
   '[{"id":"22222222-2222-4222-8222-222222222222","type":"hard_brake","penalty":10}]',
-  (select (c -> 'merge' ->> 'tripId')::uuid from c2), '{"ratingPenalty": 10}') as r;
+  (select (c -> 'merge' ->> 'tripId')::uuid from c2), '{"ratingPenalty": 10, "polyline": "longer_route"}') as r;
 select is((select array[r ->> 'mergedInto', r ->> 'tripId'] from r2), array['11111111-1111-4111-8111-111111111111', (select id::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111')],
   'the response says which drive it merged into');
 select is((select row(miles, safe_miles, duration_s, points_net, rev, polyline, scored)::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'),
-  row(15.00, 15.00, 2880, 200, 2, 'polypoly', true)::text, 'the target row now holds the union');
+  row(15.00, 15.00, 2880, 200, 2, 'longer_route', true)::text, 'the target row now holds the union, with the longer of the two route segments (never a concatenation)');
 select is((select row(merged_into = (select id from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'), scored, points_net, miles)::text from public.trips where client_trip_id = '33333333-3333-4333-8333-333333333333'),
   row(true, false, 0, 3.00)::text, 'the merged-away payload keeps an unscored row pointing at the target');
 select is((select row(points, lifetime, streak, miles_30d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(200, 200, 1, 15.00)::text,

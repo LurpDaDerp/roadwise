@@ -269,7 +269,9 @@ begin
     v_tz := tgt.tz;
     v_miles := tgt.miles + v_miles; v_safe := tgt.safe_miles + v_safe; v_night := tgt.night_miles + v_night;
     v_dur := tgt.duration_s + v_dur; v_dms := tgt.dms_on or v_dms; v_face := tgt.dms_face_seen or v_face;
-    v_poly := left(tgt.polyline || v_poly, 65536);
+    -- two delta-encoded polylines cannot be concatenated (the join decodes to garbage) and a
+    -- proper join would draw a chord across the stop: the union keeps the longer segment
+    v_poly := case when char_length(v_poly) > char_length(coalesce(tgt.polyline, '')) then v_poly else coalesce(tgt.polyline, '') end;
     v_trip := tgt.id;
     if v_ended - v_started > interval '12 hours' then
       raise exception 'merged drive would exceed 12 hours' using errcode = 'invalid_parameter_value';
