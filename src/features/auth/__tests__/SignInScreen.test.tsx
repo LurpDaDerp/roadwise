@@ -5,7 +5,7 @@ import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { DataProvider } from '@/data/queries/context';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
-import { SignInScreen, signInCopy } from '@/features/auth/SignInScreen';
+import { magicLinkEnabled, SignInScreen, signInCopy } from '@/features/auth/SignInScreen';
 import { ThemeProvider } from '@/ui/theme';
 
 // Everything below is read from inside a mock factory, so each name is `mock`-prefixed and every
@@ -214,4 +214,14 @@ describe('the magic link (diagnostics builds only)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Too many sign-in emails. Try again in a minute.');
   });
+});
+
+it('the email sign-in is off when diagnostics are unset', () => {
+  const before = process.env.EXPO_PUBLIC_DIAGNOSTICS;
+  delete process.env.EXPO_PUBLIC_DIAGNOSTICS;
+  try {
+    expect(magicLinkEnabled()).toBe(false);
+  } finally {
+    if (before !== undefined) process.env.EXPO_PUBLIC_DIAGNOSTICS = before;
+  }
 });
