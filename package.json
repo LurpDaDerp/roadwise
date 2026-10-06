@@ -96,5 +96,10 @@
     "sql.js": "1.14.2",
     "supabase": "2.117.0",
     "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "@bacons/apple-targets": {
+      "@expo/require-utils": "~57.0.5"
+    }
   }
 }
