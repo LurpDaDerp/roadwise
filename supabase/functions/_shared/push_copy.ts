@@ -71,9 +71,9 @@ export function renderPush(kind: PushKind, payload: unknown): PushCopy | null {
     const ratingPart =
       rating === null
         ? 'Not ranked yet.'
-        : rating_delta === null || Math.abs(rating_delta) < 0.05
-          ? `Safety Rating ${rating.toFixed(1)}.`
-          : `Safety Rating ${rating.toFixed(1)} (${rating_delta > 0 ? 'up' : 'down'} ${Math.abs(rating_delta).toFixed(1)}).`;
+        : rating_delta === null || Math.round(Math.abs(rating_delta)) === 0
+          ? `Safety Rating ${Math.round(rating)}.`
+          : `Safety Rating ${Math.round(rating)} (${rating_delta > 0 ? 'up' : 'down'} ${Math.round(Math.abs(rating_delta))}).`;
     const bestPart = best_drive_net === null || best_drive_net === undefined ? '' : ` Best drive ${best_drive_net >= 0 ? '+' : ''}${best_drive_net}.`;
     const leaguePart = league
       ? ` #${league.rank} in ${cap(league.tier)}.`

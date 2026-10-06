@@ -15,15 +15,15 @@ Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 
   assertEquals(integrityReason(payload({ miles: 0.6, safeMiles: 0.6, integrity: { ...ok.integrity, validGnssPct: 10 } })), null);
 });
 
-Deno.test('miles cross-check: miles above polyline × 1.25 + 4 are implausible; an empty or broken polyline allows 4', () => {
+Deno.test('miles cross-check: miles above polyline × 1.25 + 6 are implausible (two 0.25–0.5 mi end trims plus up to three zones crossed edge to edge stay under it); an empty or broken polyline allows 6', () => {
   const eight = lineOfMiles(8);
   assertEquals(Math.abs(polylineMiles(eight) - 8) < 0.02, true);
-  assertEquals(milesExceedRoute(14, eight), false);
-  assertEquals(milesExceedRoute(14.05, eight), true);
-  assertEquals(milesExceedRoute(4, ''), false);
-  assertEquals(milesExceedRoute(4.01, ''), true);
+  assertEquals(milesExceedRoute(16, eight), false);
+  assertEquals(milesExceedRoute(16.05, eight), true);
+  assertEquals(milesExceedRoute(6, ''), false);
+  assertEquals(milesExceedRoute(6.01, ''), true);
   assertEquals(polylineMiles('abc_def'), 0); // decodes to no usable line: treated as empty
-  assertEquals(milesExceedRoute(5, 'abc_def'), true);
+  assertEquals(milesExceedRoute(7, 'abc_def'), true);
   assertEquals(integrityReason(payload({ miles: 20, safeMiles: 20, polyline: eight })), 'implausible');
   assertEquals(integrityReason(payload({ miles: 14, safeMiles: 14, polyline: eight })), null);
   assertEquals(integrityReason(payload({ miles: 3.9, safeMiles: 3.9, polyline: '' })), null);
@@ -34,8 +34,9 @@ Deno.test('miles cross-check sums every visible run: a 10 mi drive through a mid
   assertEquals(Math.abs(polylineMiles(twoRuns) - 9) < 0.03, true);
   assertEquals(milesExceedRoute(10, twoRuns), false);
   assertEquals(integrityReason(payload({ miles: 10, safeMiles: 10, polyline: twoRuns })), null);
-  // Only the longer half would have refused it: 10 > 4.5 x 1.25 + 4.
-  assertEquals(milesExceedRoute(10, lineOfMiles(4.5)), true);
+  // Only the longer half would refuse a 12 mi drive the two runs allow: 12 > 4.5 x 1.25 + 6.
+  assertEquals(milesExceedRoute(12, twoRuns), false);
+  assertEquals(milesExceedRoute(12, lineOfMiles(4.5)), true);
   // Three runs; a run that does not decode counts nothing, the others still count.
   assertEquals(Math.abs(polylineMiles(`${lineOfMiles(2)} abc_def ${lineOfMiles(3, 41, -74)}`) - 5) < 0.03, true);
   assertEquals(polylineMiles(' '), 0);

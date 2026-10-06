@@ -19,7 +19,7 @@ export const LOOP_MAX_MILES = 5;
 /** The route may be up to this much longer than its drawn polyline (GPS noise, simplification)… */
 export const POLYLINE_SLACK_FACTOR = 1.25;
 /** …plus this many miles hidden by the 0.25 mi end trims and up to three 800 m privacy zones. */
-export const POLYLINE_SLACK_MILES = 4;
+export const POLYLINE_SLACK_MILES = 6;
 const M_PER_MILE = 1609.344;
 
 export type IntegrityReason = 'spoofed' | 'implausible';
@@ -52,7 +52,7 @@ export function polylineMiles(polyline: string): number {
   return m / M_PER_MILE;
 }
 
-/** Miles far beyond what the route shows cannot be true: `miles > polyline × 1.25 + 4`. */
+/** Miles far beyond what the route shows cannot be true: `miles > polyline × 1.25 + 6`. */
 export const milesExceedRoute = (miles: number, polyline: string): boolean => miles > polylineMiles(polyline) * POLYLINE_SLACK_FACTOR + POLYLINE_SLACK_MILES;
 
 /** Why a drive is stored unscored, or null when it may be scored. */
