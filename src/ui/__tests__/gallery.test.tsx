@@ -1,0 +1,37 @@
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import { UiGallery } from '@/ui/gallery/UiGallery';
+
+// The count-up runs on requestAnimationFrame; drive it with fake timers inside act() so no frame
+// lands after a test has finished.
+beforeEach(() => jest.useFakeTimers());
+afterEach(async () => {
+  await act(async () => {
+    jest.runOnlyPendingTimers();
+  });
+  jest.useRealTimers();
+});
+
+test.each(['light', 'dark'] as const)('the gallery renders every primitive in %s', async (scheme) => {
+  await render(
+    <SafeAreaProvider>
+      <UiGallery initialScheme={scheme} />
+    </SafeAreaProvider>
+  );
+  expect(screen.getByRole('header', { name: 'Design system' })).toBeOnTheScreen();
+  expect(screen.getAllByLabelText('Diamond league').length).toBeGreaterThan(0);
+  expect(screen.getByText('Take your first drive')).toBeOnTheScreen();
+});
+
+test('the gallery switches theme and reduce motion', async () => {
+  await render(
+    <SafeAreaProvider>
+      <UiGallery />
+    </SafeAreaProvider>
+  );
+  await fireEvent.press(screen.getByRole('tab', { name: 'Dark' }));
+  expect(screen.getByRole('tab', { name: 'Dark' })).toBeSelected();
+  await fireEvent.press(screen.getByRole('switch', { name: 'Reduce motion' }));
+  expect(screen.getByRole('switch', { name: 'Reduce motion' })).toBeChecked();
+});

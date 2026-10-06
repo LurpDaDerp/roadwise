@@ -12,13 +12,30 @@ import { tokens } from '@/ui/tokens';
 
 const wrap = (ui: ReactElement) => render(<ThemeProvider>{ui}</ThemeProvider>);
 
-test('a licence card face still renders its children over the laminate sheen', async () => {
+test('a hero card renders its children over the navy gradient, and the legacy license alias still works', async () => {
   await wrap(
-    <Card variant="license">
-      <Text>CLASS 1</Text>
-    </Card>
+    <>
+      <Card variant="hero">
+        <Text>Safety Rating</Text>
+      </Card>
+      <Card variant="license">
+        <Text>Legacy</Text>
+      </Card>
+    </>
   );
-  expect(screen.getByText('CLASS 1')).toBeOnTheScreen();
+  expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
+  expect(screen.getByText('Legacy')).toBeOnTheScreen();
+});
+
+test('children of a hero card draw with the dark palette even in light mode', async () => {
+  await render(
+    <ThemeProvider scheme="light">
+      <Card variant="hero">
+        <Text>On navy</Text>
+      </Card>
+    </ThemeProvider>
+  );
+  expect(screen.getByText('On navy')).toHaveStyle({ color: tokens.color.dark.text });
 });
 
 test('a banner exposes its message as text, not colour alone', async () => {
@@ -26,7 +43,7 @@ test('a banner exposes its message as text, not colour alone', async () => {
   expect(screen.getByText('Location permission is off')).toBeOnTheScreen();
 });
 
-test('a skeleton field mounts its pulse and stays out of the accessibility tree', async () => {
+test('a skeleton placeholder mounts its pulse and stays out of the accessibility tree', async () => {
   await wrap(<Skeleton width={120} height={16} testID="field" />);
   expect(screen.queryByTestId('field')).toBeNull();
   expect(screen.getByTestId('field', { includeHiddenElements: true })).toBeOnTheScreen();

@@ -5,7 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../theme';
 
 /**
- * The desk the licence card sits on. Every screen starts here.
+ * The page every screen starts from: the scheme background, safe-area top, 16 pt gutters.
  *
  * Top, left and right come from the native `SafeAreaView`, which measures its own overlap with the
  * status bar and notch, so a screen under a navigation header is not padded twice. The bottom inset

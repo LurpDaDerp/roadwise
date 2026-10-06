@@ -5,11 +5,11 @@ import { Pressable, View, type ViewStyle } from 'react-native';
 import { useTheme } from '../theme';
 import { Text } from './Text';
 
-type Props = {
+export type ListRowProps = {
   title: string;
   subtitle?: string;
   /**
-   * A third line under the subtitle, inside the row — printed splits, a chip. Drawn rather than
+   * A third line under the subtitle, inside the row: event icons, a pill. Drawn rather than
    * written, so it takes a node; it is inside the press target and under the pressed wash, and
    * the row's own label speaks for it, so give the row an `accessibilityLabel` that includes it.
    */
@@ -29,7 +29,9 @@ type Props = {
 };
 
 /**
- * A ruled row on the licence record. Built from `Pressable` rather than `@expo/ui`'s `ListItem`:
+ * A row: optional leading node (Avatar, icon, TierBadge), title and subtitle, optional trailing
+ * node (points, a Pill) or a chevron when it navigates. Group rows in one Card with Divider
+ * between them. Built from `Pressable` rather than `@expo/ui`'s `ListItem`:
  * that one is a SwiftUI/Compose host view, so under Jest nothing it renders is queryable or
  * pressable, and its prop shape has no `accessory` or plain `subtitle` to map onto.
  */
@@ -44,7 +46,7 @@ export function ListRow({
   accessibilityLabel,
   accessibilityHint,
   testID,
-}: Props) {
+}: ListRowProps) {
   const t = useTheme();
   const showChevron = accessory === 'chevron' && !!onPress && !trailing;
 

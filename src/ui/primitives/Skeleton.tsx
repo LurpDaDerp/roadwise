@@ -18,7 +18,7 @@ type Props = {
 
 const DIM = 0.45;
 
-/** A field on the card that has not been printed yet. Holds still when reduce motion is on. */
+/** A placeholder block while data loads. Pulses gently; holds still when reduce motion is on. */
 export function Skeleton({ width, height, radius, testID }: Props) {
   const t = useTheme();
   const opacity = useSharedValue(1);

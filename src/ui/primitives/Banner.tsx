@@ -7,14 +7,15 @@ import { Text } from './Text';
 
 export type BannerTone = 'info' | 'success' | 'warning' | 'danger';
 
-type Props = {
+export type BannerProps = {
   tone: BannerTone;
   message: string;
   action?: { label: string; onPress: () => void };
   testID?: string;
 };
 
-/** Each tone carries a drawn glyph as well as its ink, so the meaning never rides on colour. */
+/**
+ * A one-line notice on a tinted wash: permissions off, offline, weather. Each tone carries a drawn glyph as well as its ink, so the meaning never rides on colour. */
 const GLYPH: Record<BannerTone, keyof typeof Ionicons.glyphMap> = {
   info: 'information-circle',
   success: 'checkmark-circle',
@@ -22,7 +23,7 @@ const GLYPH: Record<BannerTone, keyof typeof Ionicons.glyphMap> = {
   danger: 'close-circle',
 };
 
-export function Banner({ tone, message, action, testID }: Props) {
+export function Banner({ tone, message, action, testID }: BannerProps) {
   const t = useTheme();
   const ink = {
     info: t.colors.info,
@@ -43,9 +44,8 @@ export function Banner({ tone, message, action, testID }: Props) {
       accessibilityRole="alert"
       style={{
         backgroundColor: wash,
-        borderRadius: t.radius.md,
-        borderWidth: 1,
-        borderColor: ink,
+        borderRadius: t.radius.lg,
+        borderCurve: 'continuous',
         padding: t.space.md,
         flexDirection: 'row',
         alignItems: 'center',
@@ -57,7 +57,7 @@ export function Banner({ tone, message, action, testID }: Props) {
         {message}
       </Text>
       {action ? (
-        <Button label={action.label} onPress={action.onPress} variant="ghost" size="md" />
+        <Button label={action.label} onPress={action.onPress} variant="ghost" size="sm" />
       ) : null}
     </View>
   );

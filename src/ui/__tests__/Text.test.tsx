@@ -21,7 +21,7 @@ test('renders a variant with its font size', async () => {
       <Text variant="title1">Hello</Text>
     </ThemeProvider>
   );
-  expect(styleOf('Hello').fontSize).toBeGreaterThanOrEqual(28);
+  expect(styleOf('Hello').fontSize).toBe(30);
 });
 
 test('follows Dynamic Type but caps the scale at 2.0', async () => {
@@ -32,7 +32,7 @@ test('follows Dynamic Type but caps the scale at 2.0', async () => {
     </ThemeProvider>
   );
   const flat = styleOf('Hello');
-  expect(flat.fontSize).toBe(56);
+  expect(flat.fontSize).toBe(60);
   expect(flat.lineHeight).toBe(68);
 });
 
