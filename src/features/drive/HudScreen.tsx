@@ -2,12 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useDriveControls, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { sunIsDown } from '@/lib/time';
+import { fontFamilies } from '@/ui/fonts';
 import {
   DIM_AFTER_MS,
   DIM_SCRIM_OPACITY,
@@ -145,14 +146,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   );
 
   const [ending, setEnding] = useState(false);
+  // A failed end says so (one line at the top) until the next hold.
+  const [endFailed, setEndFailed] = useState(false);
   const onEnd = useCallback(async () => {
     if (ending) return;
     setEnding(true);
+    setEndFailed(false);
     try {
       const done = await controls.end();
       leave(done?.clientTripId ?? lastTripId.current);
     } catch {
       setEnding(false);
+      setEndFailed(true);
     }
   }, [ending, controls, leave]);
 
@@ -185,6 +190,16 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <View style={styles.top}>
           {alert !== null ? (
             <EventBanner alert={alert} palette={p} />
+          ) : endFailed ? (
+            <Text
+              testID="hud-end-failed"
+              accessibilityRole="alert"
+              accessibilityLabel={hudCopy.endFailedLabel}
+              allowFontScaling={false}
+              style={[styles.note, { color: p.ink }]}
+            >
+              {hudCopy.endFailed}
+            </Text>
           ) : live.weatherAlert !== null ? (
             <WeatherBanner label={live.weatherAlert} palette={p} />
           ) : null}
@@ -202,7 +217,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             />
             <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} />
           </View>
-          {live.points !== null ? (
+          {/* Twice guarded: the pipeline publishes points only while stopped, and the screen shows
+              them only while the car is known to be stopped (a lost fix is not "stopped"). */}
+          {live.stopped && live.points !== null ? (
             <StoppedPoints total={live.points.total} change={live.points.sinceLastStop} palette={p} />
           ) : null}
         </View>
@@ -246,4 +263,5 @@ const styles = StyleSheet.create({
   gauges: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
   bottom: { alignItems: 'center', justifyContent: 'center' },
   dms: { position: 'absolute', padding: 8 },
+  note: { fontFamily: fontFamilies.fieldBold, fontSize: 26, lineHeight: 32 },
 });

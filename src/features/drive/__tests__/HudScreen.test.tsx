@@ -195,6 +195,14 @@ describe('points', () => {
     expect(screen.getByTestId('hud-points-change')).toHaveStyle({ color: p.severe });
   });
 
+  test('pulling away from a stop with the speed unknown hides the points', async () => {
+    const h = await renderHud({ stopped: true, speedMph: 0, points: { total: 10, sinceLastStop: 1 } });
+    expect(screen.getByTestId('hud-points')).toBeTruthy();
+    // The fix drops as the car pulls away: not stopped, speed "—", stale points still published.
+    await h.update({ stopped: false, speedMph: null });
+    expect(screen.queryByTestId('hud-points')).toBeNull();
+  });
+
   test('gone again as the car moves off', async () => {
     const h = await renderHud({ stopped: true, points: { total: 10, sinceLastStop: 1 } });
     await h.update({ stopped: false, points: null });
@@ -242,6 +250,24 @@ describe('hold to end', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+  });
+
+  test('a failed end says "Hold again" and lets the driver hold again', async () => {
+    mockEnd.mockRejectedValueOnce(new Error('busy'));
+    await renderHud();
+    const end = screen.getByRole('button', { name: hudCopy.endLabel });
+    await fireEvent(end, 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
+    expect(hudCopy.endFailed.split(/\s+/).length).toBeLessThanOrEqual(3);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(end).not.toBeDisabled();
+
+    await fireEvent(end, 'pressOut');
+    await fireEvent(end, 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    expect(screen.queryByTestId('hud-end-failed')).toBeNull();
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
   });
 

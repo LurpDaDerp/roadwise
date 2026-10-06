@@ -11,6 +11,9 @@ export const hudCopy = {
   ending: 'Saving',
   endLabel: 'End drive',
   endHint: 'Touch and hold to end the drive.',
+  /** After End failed: two words while moving; the full sentence is spoken. */
+  endFailed: 'Hold again',
+  endFailedLabel: "Couldn't end the drive. Hold End again.",
   /** The alert chip at the top, one per event type. */
   alert: {
     speeding: 'Speeding',

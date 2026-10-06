@@ -4,7 +4,7 @@ import { useCallback, useContext, useMemo } from 'react';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useWeatherHazard, weatherLabel } from '@/features/drive/weather';
+import { useWeatherHazard, WEATHER_REFETCH_DISTANCE_M, weatherLabel } from '@/features/drive/weather';
 import { mpsToMph } from '@/lib/units';
 
 import { DriveContext, type DriveContextValue } from './DriveProvider';
@@ -69,19 +69,21 @@ const selectLive = (s: DriveState) => ({
   points: s.points,
   startedAt: s.startedAt,
   dmsActive: s.dmsActive,
-  distanceM: s.distanceM,
 });
+
+/** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */
+const selectWeatherLeg = (s: DriveState) => Math.floor(s.distanceM / WEATHER_REFETCH_DISTANCE_M);
 
 /** Everything the driving screen shows; published at most once per row (1 Hz). */
 export function useDriveLive(): DriveLive {
   const live = useDrive(selectLive);
-  const hazard = useWeatherHazard(live.status === 'recording', live.distanceM);
+  const leg = useDrive(selectWeatherLeg);
+  const hazard = useWeatherHazard(live.status === 'recording', leg * WEATHER_REFETCH_DISTANCE_M);
   const lastAlert = useMemo(
     () => (live.lastAlert === null ? null : { type: live.lastAlert.type, tier: live.lastAlert.tier, at: live.lastAlert.at }),
     [live.lastAlert]
   );
-  const { distanceM: _d, ...rest } = live;
-  return { ...rest, lastAlert, weatherAlert: hazard === null ? null : weatherLabel(hazard) };
+  return { ...live, lastAlert, weatherAlert: hazard === null ? null : weatherLabel(hazard) };
 }
 
 /** A stable callback to start a drive, for Home's button. */
