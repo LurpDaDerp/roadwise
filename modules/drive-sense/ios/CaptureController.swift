@@ -107,6 +107,7 @@ final class CaptureController {
     phone.stop()
     calls.stop()
     ActivitySource.stopLive()
+    DriveDisplayBridge.postEnded()
   }
 
   func setCaptureRate(_ newRate: String) {

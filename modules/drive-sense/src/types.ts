@@ -86,7 +86,7 @@ export interface DriveDisplayState {
   pointsDelta: number | null;
   /** ≤ 5 mph: the Android notification offers its End drive action only while stopped. */
   stopped: boolean;
-  /** The drive is over: the surface shows its final state (the Live Activity dismisses soon). */
+  /** The drive is over: Android shows the final notification state; the iOS Live Activity ends at once. */
   ended?: boolean;
 }
 

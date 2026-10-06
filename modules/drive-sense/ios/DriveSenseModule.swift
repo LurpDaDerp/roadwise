@@ -101,9 +101,8 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(nil)
     }.runOnQueue(.main)
 
-    // iOS keeps only the setting; the app asks `checkForgottenDrive` on foreground.
-    AsyncFunction("setForgotToStartReminder") { (enabled: Bool, promise: Promise) in
-      UserDefaults.standard.set(enabled, forKey: "drivesense.forgotToStartReminder")
+    // iOS has nothing to register: JS owns the setting and asks `checkForgottenDrive` on foreground.
+    AsyncFunction("setForgotToStartReminder") { (_: Bool, promise: Promise) in
       promise.resolve(nil)
     }.runOnQueue(.main)
 
@@ -164,5 +163,10 @@ enum DriveDisplayBridge {
     if let v = s.points { info["points"] = v }
     if let v = s.pointsDelta { info["pointsDelta"] = v }
     NotificationCenter.default.post(name: name, object: nil, userInfo: info)
+  }
+
+  /// The capture ended natively (watchdog, or any `stopCapture`): the Live Activity must not outlive it.
+  static func postEnded() {
+    NotificationCenter.default.post(name: name, object: nil, userInfo: ["unit": "mph", "stopped": true, "ended": true])
   }
 }

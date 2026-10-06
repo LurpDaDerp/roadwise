@@ -205,7 +205,9 @@ describe('iOS drive-sense module (text)', () => {
     expect(fn).toMatch(/end\.timeIntervalSince\(start\) >= FORGOTTEN_MIN_S && endMs >= sinceMs/);
     expect(fn).toMatch(/best = \["startedAt": NSNumber\(value: TimeBase\.ts\(start\)\), "endedAt": NSNumber\(value: TimeBase\.ts\(end\)\)\]/);
     expect(moduleCode()).toMatch(/AsyncFunction\("checkForgottenDrive"\) \{ \(sinceMs: Double, promise: Promise\) in\s*ActivitySource\.forgottenDrive\(sinceMs: sinceMs\)/);
-    expect(moduleCode()).toMatch(/AsyncFunction\("setForgotToStartReminder"\)[\s\S]{0,200}UserDefaults\.standard\.set\(enabled, forKey: "drivesense\.forgotToStartReminder"\)/);
+    // iOS keeps no state for the setting (JS owns it)
+    expect(moduleCode()).toMatch(/AsyncFunction\("setForgotToStartReminder"\) \{ \(_: Bool, promise: Promise\) in\s*promise\.resolve\(nil\)/);
+    expect(allCode()).not.toMatch(/forgotToStartReminder/);
   });
 
   // plan §6: the background surface
@@ -216,6 +218,10 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/NotificationCenter\.default\.post\(name: name, object: nil, userInfo: info\)/);
     for (const k of ['unit', 'stopped', 'ended', 'speed', 'limit', 'points', 'pointsDelta']) expect(src).toContain(`"${k}"`);
     expect(src).toMatch(/struct DriveDisplayRecord: Record/);
+    // review I1: a native stop (JS or the watchdog) ends the Live Activity too
+    expect(src).toMatch(/static func postEnded\(\)[\s\S]{0,200}"ended": true/);
+    const stop = /func stopCapture\(\) \{[\s\S]*?\n {2}\}/.exec(code('CaptureController.swift'))?.[0] ?? '';
+    expect(stop).toContain('DriveDisplayBridge.postEnded()');
   });
 
   // plan §6; spec "Integrity · GPS spoofing"

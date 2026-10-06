@@ -14,7 +14,5 @@ module.exports = {
     // The repo's navy/gold palette (src/ui/tokens.ts).
     $widgetBackground: '#001D3D',
     $accent: '#FFC300',
-    navy: '#001D3D',
-    gold: '#FFC300',
   },
 };

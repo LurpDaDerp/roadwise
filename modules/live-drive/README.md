@@ -27,7 +27,10 @@ targets/live-drive-widget/       the widget extension (@bacons/apple-targets): e
 The module also **ends every stale activity at creation** (`OnCreate`): nothing from an earlier
 process may linger. `DriveSense.setDriveDisplay(state)` reaches the activity too — drive-sense
 posts the process-local `roadwise.driveDisplay` notification, which the controller maps to a
-content state (`ended: true` ends it) — so the host needs one call per update, not two.
+content state (`ended: true` ends it) — so the host needs one call per update, not two. Every
+content carries a `staleDate` 120 s out: with no update for that long (the app was killed) the
+widget blanks the speed and points (`context.isStale`), and a native `stopCapture` (JS, or the
+watchdog) posts `ended` so the activity never outlives its capture.
 
 A bad `state` rejects (`LiveDrive.<method>: invalid state …`) on every platform: the caller has a
 bug whatever the device. Nothing else rejects.

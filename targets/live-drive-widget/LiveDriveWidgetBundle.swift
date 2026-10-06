@@ -116,39 +116,51 @@ struct LockScreenView: View {
   }
 }
 
+/// Past `staleDate` (no update for 2 min: the app is gone) nothing here is live: speed unknown, no points.
+func displayState(_ context: ActivityViewContext<LiveDriveAttributes>) -> LiveDriveAttributes.ContentState {
+  guard context.isStale else { return context.state }
+  var s = context.state
+  s.speed = nil
+  s.points = nil
+  s.pointsDelta = nil
+  s.stopped = false
+  return s
+}
+
 struct LiveDriveActivityWidget: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: LiveDriveAttributes.self) { context in
-      LockScreenView(state: context.state)
+      LockScreenView(state: displayState(context))
         .activityBackgroundTint(Palette.navy)
         .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
-      DynamicIsland {
+      let state = displayState(context)
+      return DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          SpeedBlock(speed: context.state.speed, unit: context.state.unit, size: 40)
+          SpeedBlock(speed: state.speed, unit: state.unit, size: 40)
             .padding(.leading, 6)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          LimitSign(limit: context.state.limit, size: 44)
+          LimitSign(limit: state.limit, size: 44)
             .padding(.trailing, 6)
         }
         DynamicIslandExpandedRegion(.bottom) {
-          if context.state.stopped, context.state.points != nil {
-            PointsLine(state: context.state)
+          if state.stopped, state.points != nil {
+            PointsLine(state: state)
               .frame(maxWidth: .infinity, alignment: .center)
               .padding(.bottom, 4)
           }
         }
       } compactLeading: {
-        Text(Format.speed(context.state.speed))
+        Text(Format.speed(state.speed))
           .font(.system(size: 15, weight: .bold, design: .rounded))
           .monospacedDigit()
           .foregroundColor(.white)
           .padding(.leading, 2)
       } compactTrailing: {
-        LimitSign(limit: context.state.limit, size: 20)
+        LimitSign(limit: state.limit, size: 20)
       } minimal: {
-        Text(Format.speed(context.state.speed))
+        Text(Format.speed(state.speed))
           .font(.system(size: 13, weight: .bold, design: .rounded))
           .monospacedDigit()
           .foregroundColor(.white)

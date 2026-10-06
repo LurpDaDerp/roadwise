@@ -53,6 +53,18 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(ctrl).toMatch(/dismissalPolicy: \.immediate/);
   });
 
+  it('every content carries a stale date, and the widget blanks a stale state (review I1)', () => {
+    const ctrl = code(IOS_DIR, 'LiveDriveController.swift');
+    expect(ctrl).toMatch(/STALE_AFTER_S: TimeInterval = 120/);
+    expect(ctrl).toContain('staleDate: Date().addingTimeInterval(STALE_AFTER_S)');
+    expect(ctrl).not.toMatch(/staleDate: nil/);
+    expect(ctrl.match(/Self\.content\(state\)/g)).toHaveLength(2);
+    const widget = code(WIDGET_DIR, 'LiveDriveWidgetBundle.swift');
+    expect(widget).toContain('context.isStale');
+    expect(widget).toMatch(/func displayState\(_ context: ActivityViewContext<LiveDriveAttributes>\)/);
+    expect(widget).not.toMatch(/context\.state\.(speed|limit|points|stopped|unit)/);
+  });
+
   it('an activity is started only by `start`, which ends any running one first; update and end are no-ops without one', () => {
     const ctrl = code(IOS_DIR, 'LiveDriveController.swift');
     expect(ctrl.match(/Activity\.request\(/g)).toHaveLength(1);
@@ -67,6 +79,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     const bridge = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveSenseModule.swift');
     expect(bridge).toMatch(/Notification\.Name\("roadwise\.driveDisplay"\)/);
     expect(ctrl).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
+    expect(bridge).toMatch(/static func postEnded\(\)[\s\S]{0,160}"ended": true/);
     for (const k of ['speed', 'limit', 'unit', 'points', 'pointsDelta', 'stopped']) expect(ctrl).toContain(`"${k}"`);
   });
 
@@ -110,7 +123,7 @@ describe('live-drive: the widget extension target', () => {
     expect(src).toMatch(/minimal: \{/);
     // points only when present (lock screen) and only when stopped (expanded island)
     expect(src).toMatch(/if let p = state\.points \{/);
-    expect(src).toMatch(/if context\.state\.stopped, context\.state\.points != nil \{/);
+    expect(src).toMatch(/if state\.stopped, state\.points != nil \{/);
     // "—" for an unknown speed or limit
     expect(src).toMatch(/guard let v = v, v\.isFinite else \{ return "—" \}/);
     // the palette

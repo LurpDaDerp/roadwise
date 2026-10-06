@@ -47,15 +47,21 @@ final class LiveDriveController {
     )
   }
 
+  /// No update for this long means the app is gone: the widget then shows "—" (`context.isStale`).
+  static let STALE_AFTER_S: TimeInterval = 120
+
+  private static func content(_ state: LiveDriveAttributes.ContentState) -> ActivityContent<LiveDriveAttributes.ContentState> {
+    ActivityContent(state: state, staleDate: Date().addingTimeInterval(STALE_AFTER_S))
+  }
+
   /// Starts a fresh activity (ending any still running). Returns whether one is now running.
   func start(_ state: LiveDriveAttributes.ContentState) -> Bool {
     endAll()
     guard Self.isSupported else { return false }
     do {
-      let content = ActivityContent(state: state, staleDate: nil)
       activity = try Activity.request(
         attributes: LiveDriveAttributes(startedAt: Date()),
-        content: content,
+        content: Self.content(state),
         pushType: nil
       )
       return true
@@ -67,7 +73,7 @@ final class LiveDriveController {
 
   func update(_ state: LiveDriveAttributes.ContentState) {
     guard let a = activity else { return }
-    let content = ActivityContent(state: state, staleDate: nil)
+    let content = Self.content(state)
     Task { await a.update(content) }
   }
 
