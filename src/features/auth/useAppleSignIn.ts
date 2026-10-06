@@ -25,10 +25,8 @@ export function useAppleSignIn(): { signIn: () => Promise<void>; available: bool
     let credential: AppleAuthentication.AppleAuthenticationCredential;
     try {
       credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [
-          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-          AppleAuthentication.AppleAuthenticationScope.EMAIL,
-        ],
+        // Email only: drivers go by usernames, so the real name is never asked for or stored.
+        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.EMAIL],
       });
     } catch (e) {
       // Backing out of the Apple sheet must leave the screen exactly as it was, with no error.
@@ -42,21 +40,6 @@ export function useAppleSignIn(): { signIn: () => Promise<void>; available: bool
       token: credential.identityToken,
     });
     if (error) throw error;
-
-    // Apple hands over the name once, on the very first authorisation, and never again — so write
-    // it through immediately rather than waiting for onboarding to ask for it. The driver is
-    // already signed in by this point, so a failed write is a missing nicety, never a failed
-    // sign-in: the profile trigger has a name from the token metadata where Apple supplied one.
-    const name = [credential.fullName?.givenName, credential.fullName?.familyName]
-      .filter(Boolean)
-      .join(' ');
-    if (name) {
-      try {
-        await supabase.auth.updateUser({ data: { display_name: name } });
-      } catch {
-        // Onboarding asks for a name anyway.
-      }
-    }
   }
 
   return { signIn, available };
