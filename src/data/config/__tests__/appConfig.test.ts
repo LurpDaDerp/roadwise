@@ -181,7 +181,7 @@ const MIGRATED = [
       guardian_invites: false,
     },
   },
-  { key: 'min_app_version', value: '2.0.0' },
+  { key: 'min_app_version', value: '3.0.0' },
   { key: 'minor_consent_mode', value: 'guardian_link_optional' },
   {
     key: 'onboarding',
@@ -213,7 +213,7 @@ describe('the compiled defaults', () => {
       referral: false,
       guardian_invites: false,
     });
-    expect(CONFIG_DEFAULTS.min_app_version).toBe('2.0.0');
+    expect(CONFIG_DEFAULTS.min_app_version).toBe('3.0.0');
     expect(CONFIG_DEFAULTS.minor_consent_mode).toBe('guardian_link_optional');
     expect(CONFIG_DEFAULTS.onboarding).toEqual({
       tos_version: '2026-09-21',
@@ -417,7 +417,7 @@ describe('readConfig', () => {
   test('a row the server stops sending goes back to its default at the next refresh', async () => {
     await refreshWith([{ key: 'min_app_version', value: '2.3.0' }]);
     await refreshWith([], NOW + 1);
-    expect((await readConfig(db)).min_app_version).toBe('2.0.0');
+    expect((await readConfig(db)).min_app_version).toBe('3.0.0');
   });
 
   test('a stored value from an older build, or tampered with, is re-checked on read', async () => {
@@ -428,7 +428,7 @@ describe('readConfig', () => {
     });
     let config = await readConfig(db);
     expect(config.flags.auto_detect).toBe(false);
-    expect(config.min_app_version).toBe('2.0.0');
+    expect(config.min_app_version).toBe('3.0.0');
 
     await createSettingsRepo(db).set(APP_CONFIG_KEY, {
       fetchedAt: 'yesterday',

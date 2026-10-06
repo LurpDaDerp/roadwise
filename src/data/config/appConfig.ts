@@ -130,7 +130,7 @@ export const CONFIG_DEFAULTS: Omit<AppConfig, 'fetchedAt'> = {
     referral: false,
     guardian_invites: false,
   },
-  min_app_version: '2.0.0',
+  min_app_version: '3.0.0',
   minor_consent_mode: 'guardian_link_optional',
   onboarding: { tos_version: '2026-09-21', privacy_version: '2026-09-21' },
   legal_urls: {},
