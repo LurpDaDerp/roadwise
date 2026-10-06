@@ -157,7 +157,8 @@ begin
   end if;
   perform private.require_rate_limit(v_uid, 'search_users', interval '1 minute', 30);
   return coalesce((
-    select jsonb_agg(jsonb_build_object('user_id', p.id, 'username', p.username, 'level', g.level, 'safety_rating', g.safety_rating) order by p.username)
+    select jsonb_agg(jsonb_build_object('user_id', p.id, 'username', p.username, 'level', g.level,
+        'safety_rating', case when g.ranked then g.safety_rating end, 'ranked', g.ranked) order by p.username)
     from (
       select p.id, p.username from public.profiles p
       where p.username::text like replace(v_q, '_', '\_') || '%' and p.id <> v_uid and p.onboarded_at is not null
@@ -385,10 +386,12 @@ begin
       from (select case when f.user_a = v_uid then f.user_b else f.user_a end as other, f.created_at from public.friendships f
             where f.user_a = v_uid or f.user_b = v_uid) x
       where not private.blocked_either(v_uid, x.other)), '[]'::jsonb),
-    'incoming', coalesce((select jsonb_agg(private.public_card(r.from_id) order by r.created_at desc) from public.friend_requests r
-      where r.to_id = v_uid and not private.blocked_either(v_uid, r.from_id)), '[]'::jsonb),
-    'outgoing', coalesce((select jsonb_agg(private.public_card(r.to_id) order by r.created_at desc) from public.friend_requests r
-      where r.from_id = v_uid and not private.blocked_either(v_uid, r.to_id)), '[]'::jsonb));
+    'incoming', coalesce((select jsonb_agg(private.public_card(r.from_id) order by r.created_at desc) from (
+      select q.from_id, q.created_at from public.friend_requests q where q.to_id = v_uid and not private.blocked_either(v_uid, q.from_id)
+      order by q.created_at desc limit 200) r), '[]'::jsonb),
+    'outgoing', coalesce((select jsonb_agg(private.public_card(r.to_id) order by r.created_at desc) from (
+      select q.to_id, q.created_at from public.friend_requests q where q.from_id = v_uid and not private.blocked_either(v_uid, q.to_id)
+      order by q.created_at desc limit 200) r), '[]'::jsonb));
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -555,7 +558,7 @@ begin
     raise exception 'code must be 8 characters' using errcode = 'invalid_parameter_value';
   end if;
   perform private.require_rate_limit(v_uid, 'preview_clan', interval '1 minute', 20);
-  select jsonb_build_object('name', c.name, 'banner', c.banner,
+  select jsonb_build_object('id', c.id, 'name', c.name, 'banner', c.banner,
       'member_count', (select count(*) from public.clan_members m where m.clan_id = c.id),
       'full', (select count(*) from public.clan_members m where m.clan_id = c.id) >= 30)
     into v_out

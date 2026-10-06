@@ -31,8 +31,10 @@ insert into public.league_groups (id, week, tier, member_count) values ('c000000
 insert into public.league_members (week, user_id, group_id, tier) values (private.league_week(now()), '00000000-0000-0000-0000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'bronze'),
   (private.league_week(now()), '00000000-0000-0000-0000-000000000002', 'c0000000-0000-4000-8000-000000000001', 'bronze');
 insert into public.notification_prefs (user_id) values ('00000000-0000-0000-0000-000000000001');
-insert into public.inbox (user_id, kind, payload, dedupe_key) values ('00000000-0000-0000-0000-000000000001', 'friend_request', '{"from_user_id":"00000000-0000-0000-0000-000000000002"}', 'friend_request:b');
-insert into public.push_deliveries (inbox_id, user_id, token) values ((select id from public.inbox), '00000000-0000-0000-0000-000000000001', 'ExponentPushToken[aaaaaaaaaaaa]');
+insert into public.inbox (user_id, kind, payload, dedupe_key) values ('00000000-0000-0000-0000-000000000001', 'friend_request', '{"from_user_id":"00000000-0000-0000-0000-000000000002"}', 'friend_request:b'),
+  -- the deleted user on the referenced side: B's inbox names A as the sender
+  ('00000000-0000-0000-0000-000000000002', 'friend_request', '{"from_user_id":"00000000-0000-0000-0000-000000000001"}', 'friend_request:00000000-0000-0000-0000-000000000001');
+insert into public.push_deliveries (inbox_id, user_id, token) values ((select id from public.inbox where user_id = '00000000-0000-0000-0000-000000000001'), '00000000-0000-0000-0000-000000000001', 'ExponentPushToken[aaaaaaaaaaaa]');
 insert into public.rate_limits (user_id, key) values ('00000000-0000-0000-0000-000000000001', 'probe');
 update public.progress set last_end_lat = 47.6, last_end_lng = -122.3, last_end_at = now() where user_id = '00000000-0000-0000-0000-000000000001';
 
@@ -79,7 +81,7 @@ reset role;
 -- ---------------------------------------------------------------------------
 -- delete
 -- ---------------------------------------------------------------------------
-select is(pg_temp.tables_holding('00000000-0000-0000-0000-000000000001') @> array['trips', 'clan_members', 'league_members', 'rate_limits'], true, 'before: the id is all over public');
+select is(pg_temp.tables_holding('00000000-0000-0000-0000-000000000001') @> array['trips', 'clan_members', 'league_members', 'rate_limits', 'inbox'], true, 'before: the id is all over public, including another user''s inbox');
 delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
 select is(pg_temp.tables_holding('00000000-0000-0000-0000-000000000001'), '{}'::text[], 'after: no table in public holds the id');
 select is((select row(user_id, role)::text from public.clan_members), row('00000000-0000-0000-0000-000000000002'::uuid, 'leader')::text, 'the clanmate is the new leader');

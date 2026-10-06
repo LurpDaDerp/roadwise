@@ -44,10 +44,12 @@ Deno.test('quiet hours defer to their end in the user zone, across midnight and 
 });
 
 Deno.test('copy: the recap and friend request never name anyone or a speed', () => {
-  const recap = renderPush('weekly_recap', { week: '2026-W40', rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167 });
-  assertEquals(recap?.body, '5 drives, +420 points. Safety Rating 91.7 (up 1.2). Streak 4.');
+  const recap = renderPush('weekly_recap', { week: '2026-W40', rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167, league: { rank: 3, tier: 'silver', size: 30 } });
+  assertEquals(recap?.body, '5 drives, +420 points. Best drive +167. Safety Rating 91.7 (up 1.2). Streak 4. #3 in Silver.');
+  const closed = renderPush('weekly_recap', { week: '2026-W40', rating: 80, rating_delta: 0, streak: 2, drives: 2, week_points: 50, best_drive_net: 30, league: null, last_result: { week: '2026-W39', result: 'promoted', final_rank: 2, tier: 'bronze' } });
+  assertEquals(closed?.body, '2 drives, +50 points. Best drive +30. Safety Rating 80.0. Streak 2. Last week: promoted from Bronze.');
   const unranked = renderPush('weekly_recap', { week: '2026-W40', rating: null, rating_delta: null, streak: 0, drives: 1, week_points: -12, best_drive_net: -12 });
-  assertEquals(unranked?.body, '1 drive, -12 points. Not ranked yet. Streak 0.');
+  assertEquals(unranked?.body, '1 drive, -12 points. Best drive -12. Not ranked yet. Streak 0.');
   const fr = renderPush('friend_request', { from_user_id: '22222222-2222-4222-8222-222222222222' });
   assertEquals(fr, { title: 'New friend request', body: 'Someone wants to add you as a friend.', url: '/friends' });
   assertEquals(renderPush('league_result', { week: '2026-W40', result: 'demoted', final_rank: 11, tier: 'silver', new_tier: 'bronze', week_points: 3 })?.body,

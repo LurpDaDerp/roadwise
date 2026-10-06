@@ -592,7 +592,7 @@ begin
     where d.user_id = v_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
   if v_status = 'rejected' then
     return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', v_why, 'quotaLeft', v_left,
-      'net', t.points_net, 'delta', 0, 'progress', private.progress_json(v_user, false));
+      'net', t.points_net, 'delta', 0, 'breakdown', case when t.scored then t.breakdown else null end, 'progress', private.progress_json(v_user, false));
   end if;
   update public.trip_events set status = 'removed' where trip_id = v_trip and client_event_id = v_event;
   if v_reason = 'wrong_limit' and e.lat is not null and e.lng is not null then
@@ -636,8 +636,9 @@ begin
   else
     v_net := t.points_net;
   end if;
+  -- the breakdown as now stored (re-scored, with every remaining event's penalty), so the client's itemised list sums to the net
   return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'accepted', 'rejectReason', null, 'quotaLeft', v_left,
-    'net', v_net, 'delta', v_delta, 'progress', private.progress_json(v_user, false));
+    'net', v_net, 'delta', v_delta, 'breakdown', case when t.scored then coalesce(bd, t.breakdown) else null end, 'progress', private.progress_json(v_user, false));
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -655,13 +656,20 @@ begin
   if v_uid is null then
     raise exception 'get_my_summary requires an authenticated user' using errcode = 'insufficient_privilege';
   end if;
-  perform 1 from public.progress where user_id = v_uid for update;
+  -- a read on every Home focus: lock and write only when a freeze grant or this week's challenge
+  -- assignment is actually due (both are rare), so a concurrent finalize is never held up
+  select * into g from public.progress where user_id = v_uid;
   if not found then
     raise exception 'no progress for user' using errcode = 'no_data_found';
   end if;
-  perform private.apply_freeze_grant(v_uid);
-  perform private.ensure_challenges(v_uid, v_week);
-  select * into g from public.progress where user_id = v_uid;
+  if g.freezes_granted_at <= now() - interval '30 days' then
+    perform 1 from public.progress where user_id = v_uid for update;
+    perform private.apply_freeze_grant(v_uid);
+    select * into g from public.progress where user_id = v_uid;
+  end if;
+  if not exists (select 1 from public.weekly_challenges w where w.user_id = v_uid and w.league_week = v_week) then
+    perform private.ensure_challenges(v_uid, v_week);
+  end if;
   select m.group_id into v_group from public.league_members m where m.week = v_week and m.user_id = v_uid;
   return jsonb_build_object(
     'profile', (select jsonb_build_object('user_id', p.id, 'username', p.username, 'license_stage', p.license_stage, 'units', p.units,
@@ -675,7 +683,8 @@ begin
         'rating_trend', case when g.safety_rating is null then null else g.safety_rating - private.rating_as_of(v_uid, now() - interval '7 days') end,
         'league_tier', g.league_tier),
     'league', jsonb_build_object('week', v_week, 'tier', g.league_tier, 'group_id', v_group,
-        'rank', case when v_group is null then null else (select s.rank from private.league_standings(v_group) s where s.user_id = v_uid) end,
+        'rank', case when v_group is null then null else 1 + (select count(*) from public.league_members m where m.group_id = v_group and m.user_id <> v_uid
+                  and private.week_points(m.user_id, v_week) > private.week_points(v_uid, v_week)) end,
         'size', coalesce((select l.member_count from public.league_groups l where l.id = v_group), 0),
         'ends_at', private.week_end(now())),
     'not_driving_left', private.not_driving_left(v_uid),

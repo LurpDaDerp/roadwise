@@ -99,6 +99,9 @@ Deno.test({
       assertEquals(dispute.status, 200);
       const d = await dispute.json();
       assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 175, 13, 175, 2]);
+      // the itemised list the device shows now sums to the net: one hard brake left at its first-of-type penalty
+      assertEquals(d.breakdown.events, [{ id: EVENT_B, penalty: 10 }]);
+      assertEquals([d.breakdown.net, d.breakdown.penalties], [175, 10]);
       const twice = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals([twice.status, (await twice.json()).code], [409, 'already_disputed']);
       const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);

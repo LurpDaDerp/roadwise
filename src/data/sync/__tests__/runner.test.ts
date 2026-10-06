@@ -160,15 +160,28 @@ test('drive actions: a report goes pending, the server’s acceptance removes th
     invoke: ({ name, body }) => {
       expect(name).toBe('trip-actions');
       expect(body).toEqual({ action: 'dispute', clientTripId: uuid(10), eventId: uuid(1), reason: 'wrong_limit' });
-      return invokeOk({ tripId: uuid(77), eventId: uuid(1), status: 'accepted', rejectReason: null, net: 121, delta: 15, progress: { points: 1, lifetime: 1, level: 1, levelUp: false, safetyRating: null, ranked: false } });
+      return invokeOk({
+        tripId: uuid(77),
+        eventId: uuid(1),
+        status: 'accepted',
+        rejectReason: null,
+        net: 121,
+        delta: 15,
+        quotaLeft: 2,
+        breakdown: { ...response(uuid(10)).breakdown, events: [], penalties: 0, net: 121, ratingPenalty: 0, activeEventCount: 0 },
+        progress: { points: 1, lifetime: 1, level: 1, levelUp: false, safetyRating: null, ranked: false },
+      });
     },
   });
   const r = runner(supabase);
   await r.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   expect(await r.drainOnce()).toMatchObject({ done: 1 });
-  expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed' });
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ points_net: 121, estimate: 0 });
+  expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed', penalty: 0 });
+  const disputed = await createTripsRepo(db).get(uuid(10));
+  expect(disputed).toMatchObject({ points_net: 121, estimate: 0 });
+  // the stored breakdown is the server's re-score, so the itemised list sums to the net
+  expect(JSON.parse(disputed!.breakdown_json!)).toMatchObject({ net: 121, penalties: 0, events: [] });
   await r.stop();
 
   await finalized(uuid(11), T0 + 5_000_000, uuid(2));

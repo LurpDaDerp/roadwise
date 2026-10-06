@@ -46,6 +46,7 @@ const disputeResult = (e: ApplyDisputeEnvelope) => ({
   status: e.status,
   rejectReason: e.rejectReason ?? null,
   quotaLeft: e.status === 'accepted' ? 2 : 0,
+  breakdown: e.breakdown ?? null,
   net: e.net ?? 167,
   delta: (e.net ?? 167) - 167,
   progress: { points: 177, lifetime: 177, level: 1, levelUp: false, safetyRating: 92, ranked: false },
@@ -90,6 +91,8 @@ Deno.test('dispute accepted: the stored input is re-scored with the event remove
   assertEquals(e.net, 167);
   assertEquals(e.breakdown?.events, [{ id: EVENT_2, penalty: 10 }]);
   assertEquals(e.breakdown?.streakMult, 1.2);
+  assertEquals(body.breakdown.events, [{ id: EVENT_2, penalty: 10 }]);
+  assertEquals(body.breakdown.net, 167);
 });
 
 Deno.test('dispute rejected: recorded without a re-score; the reason comes back', async () => {

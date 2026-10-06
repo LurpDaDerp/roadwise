@@ -430,13 +430,21 @@ begin
     select r.user_id, 'weekly_recap',
       jsonb_build_object(
         'week', v_week,
-        'rating', g.safety_rating,
-        'rating_delta', case when g.safety_rating is null then null else g.safety_rating - private.rating_as_of(r.user_id, now() - interval '7 days') end,
+        -- an unranked driver (under 25 mi in 30 days) is told nothing about a rating
+        'rating', case when g.ranked then g.safety_rating end,
+        'rating_delta', case when g.ranked and g.safety_rating is not null then g.safety_rating - private.rating_as_of(r.user_id, now() - interval '7 days') end,
         'streak', g.streak,
         'drives', private.week_drives(r.user_id, v_week),
         'week_points', private.week_points(r.user_id, v_week),
         'best_drive_net', (select max(t.points_net) from public.trips t
-                           where t.user_id = r.user_id and t.league_week = v_week and t.scored and not t.not_driving and t.merged_into is null)),
+                           where t.user_id = r.user_id and t.league_week = v_week and t.scored and not t.not_driving and t.merged_into is null),
+        -- this week's league standing (one rank lookup) and the last closed result
+        'league', (select jsonb_build_object('rank', s.rank, 'tier', m.tier, 'size', l.member_count)
+                   from public.league_members m join public.league_groups l on l.id = m.group_id
+                   join private.league_standings(m.group_id) s on s.user_id = m.user_id
+                   where m.week = v_week and m.user_id = r.user_id),
+        'last_result', (select jsonb_build_object('week', m.week, 'result', m.result, 'final_rank', m.final_rank, 'tier', m.tier)
+                        from public.league_members m where m.user_id = r.user_id and m.result is not null order by m.week desc limit 1)),
       'weekly_recap:' || v_week
     from public.progress g where g.user_id = r.user_id
     on conflict (user_id, dedupe_key) do nothing;

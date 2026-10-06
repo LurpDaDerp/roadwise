@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(85);
+select plan(87);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -32,6 +32,7 @@ set local role authenticated;
 select pg_temp.as_user(1);
 select throws_ok($$ select public.search_users('av') $$, '22023', 'query must be 3 to 20 letters, digits or underscores', 'a 2-character query is refused');
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('ben')) x), array['ben'], 'A finds ben');
+select is((select x -> 'safety_rating' from jsonb_array_elements(public.search_users('ben')) x), 'null'::jsonb, 'an unranked driver shows no rating in search');
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('ava')) x), null, 'never herself');
 select is(public.get_profile('ben') - 'user_id', '{"clan": null, "level": 1, "ranked": false, "streak": 0, "username": "ben", "league_tier": "bronze", "achievements": [], "relationship": "none", "safety_rating": null, "can_view_stats": false, "can_view_heatmap": false}'::jsonb,
   'a stranger''s public card: no stats, no heat map');
@@ -122,7 +123,8 @@ select throws_ok($$ select public.create_clan('Other', 'gold') $$, '42501', 'you
 select pg_temp.as_user(2);
 select throws_ok($$ select public.create_clan('night owls', 'gold') $$, '23505', 'clan name is taken', 'names are unique case-insensitively');
 select throws_ok($$ select public.preview_clan('ZZZZZZZZ') $$, 'P0002', 'clan not found', 'an unknown code is not found');
-select is(public.preview_clan(lower((select c ->> 'invite_code' from clan))), '{"full": false, "name": "Night Owls", "banner": "navy", "member_count": 1}'::jsonb, 'the preview (case-insensitive code)');
+select is(public.preview_clan(lower((select c ->> 'invite_code' from clan))) - 'id', '{"full": false, "name": "Night Owls", "banner": "navy", "member_count": 1}'::jsonb, 'the preview (case-insensitive code)');
+select is(public.preview_clan((select c ->> 'invite_code' from clan)) ->> 'id', (select c ->> 'id' from clan), 'the preview names the clan id, so it can be reported');
 select is(public.join_clan((select c ->> 'invite_code' from clan)) ->> 'name', 'Night Owls', 'ben joins');
 select is(public.get_my_clan() -> 'clan' -> 'invite_code', 'null'::jsonb, 'a member does not see the invite code');
 select is(public.get_my_clan() -> 'goal', jsonb_build_object('week', (select week from wk), 'clean_miles', 0, 'target_clean_miles', 50), 'the weekly goal: max(50, 25 x members)');

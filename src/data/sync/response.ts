@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DriveBreakdownSchema } from '@/data/sync/payload';
 
 /**
  * Reading what Supabase hands back, and deciding what it means for a queued item.
@@ -119,6 +120,8 @@ export const DisputeResultSchema = z.object({
   rejectReason: z.enum(['quota', 'not_mounted']).nullable(),
   net: z.number().int(),
   delta: z.number().int(),
+  /** The drive's breakdown as the server now stores it (re-scored on acceptance); null for an unscored drive. */
+  breakdown: DriveBreakdownSchema.nullable(),
   progress: z.object({ ...progressBase, levelUp: z.boolean() }),
 });
 export type DisputeResult = z.infer<typeof DisputeResultSchema>;

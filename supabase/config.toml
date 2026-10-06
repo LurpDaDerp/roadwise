@@ -418,3 +418,20 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, email
+# confirmations off, Apple disabled, magic links for diagnostics). `supabase db push` never reads
+# this file, but `supabase config push` after `supabase link` would carry those values to the hosted
+# project; this stanza is what it sends instead. Replace project_id with the production ref.
+[remotes.production]
+project_id = "productionprojectref"
+
+[remotes.production.auth]
+site_url = "https://roadwise.app"
+additional_redirect_urls = ["roadwise://auth/callback"]
+
+[remotes.production.auth.email]
+enable_confirmations = true
+
+[remotes.production.auth.external.apple]
+enabled = true

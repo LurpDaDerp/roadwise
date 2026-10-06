@@ -198,6 +198,9 @@ create table public.devices (
   primary key (user_id, device_id)
 );
 
+-- the token lookups in register_device and the push writers
+create index devices_push_token_idx on public.devices (push_token) where push_token is not null;
+
 -- the first account to register a device claims it; league_eligible = owns at least one claim
 create table public.device_league_claims (
   device_id text primary key check (char_length(device_id) between 1 and 128),

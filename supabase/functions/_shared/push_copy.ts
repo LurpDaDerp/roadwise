@@ -34,6 +34,8 @@ export const PayloadSchemas = {
       drives: z.number().int().min(0),
       week_points: z.number().int(),
       best_drive_net: z.number().int().nullable(),
+      league: z.object({ rank: z.number().int().min(1), tier: z.string(), size: z.number().int().min(0) }).nullable().optional(),
+      last_result: z.object({ week: z.string(), result: z.enum(['promoted', 'stayed', 'demoted']), final_rank: z.number().int().min(1), tier: z.string() }).nullable().optional(),
     })
     .loose(),
   league_result: z
@@ -65,16 +67,26 @@ export function renderPush(kind: PushKind, payload: unknown): PushCopy | null {
   if (kind === 'weekly_recap') {
     const p = PayloadSchemas.weekly_recap.safeParse(payload);
     if (!p.success) return null;
-    const { rating, rating_delta, streak, drives, week_points } = p.data;
+    const { rating, rating_delta, streak, drives, week_points, best_drive_net, league, last_result } = p.data;
     const ratingPart =
       rating === null
         ? 'Not ranked yet.'
         : rating_delta === null || Math.abs(rating_delta) < 0.05
           ? `Safety Rating ${rating.toFixed(1)}.`
           : `Safety Rating ${rating.toFixed(1)} (${rating_delta > 0 ? 'up' : 'down'} ${Math.abs(rating_delta).toFixed(1)}).`;
+    const bestPart = best_drive_net === null || best_drive_net === undefined ? '' : ` Best drive ${best_drive_net >= 0 ? '+' : ''}${best_drive_net}.`;
+    const leaguePart = league
+      ? ` #${league.rank} in ${cap(league.tier)}.`
+      : last_result
+        ? last_result.result === 'promoted'
+          ? ` Last week: promoted from ${cap(last_result.tier)}.`
+          : last_result.result === 'demoted'
+            ? ` Last week: moved down from ${cap(last_result.tier)}.`
+            : ` Last week: #${last_result.final_rank} in ${cap(last_result.tier)}.`
+        : '';
     return {
       title: 'Your week in review',
-      body: `${plural(drives, 'drive', 'drives')}, ${week_points >= 0 ? '+' : ''}${week_points} points. ${ratingPart} Streak ${streak}.`,
+      body: `${plural(drives, 'drive', 'drives')}, ${week_points >= 0 ? '+' : ''}${week_points} points.${bestPart} ${ratingPart} Streak ${streak}.${leaguePart}`,
       url: URLS.weekly_recap,
     };
   }

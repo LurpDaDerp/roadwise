@@ -1,6 +1,7 @@
 // The trip-actions request contract (plan §4): dispute one event, or mark the latest drive as
 // "wasn't driving". Ids are the device's client ids; the user comes from the JWT alone.
 import { z } from 'zod';
+import { DriveBreakdownSchema } from '../_shared/payload.ts';
 
 /** The reason sheet; `not_driving` routes to the whole-drive action. */
 export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'not_driving'] as const;
@@ -42,6 +43,8 @@ export const DisputeResultSchema = z.object({
   quotaLeft: z.number().int().min(0),
   net: z.number().int(),
   delta: z.number().int(),
+  /** The drive's breakdown as now stored (re-scored on acceptance); null for an unscored drive. */
+  breakdown: DriveBreakdownSchema.nullable(),
   progress: z.object({
     points: z.number().int(),
     lifetime: z.number().int().min(0),

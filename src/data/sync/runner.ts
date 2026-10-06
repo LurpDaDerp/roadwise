@@ -24,7 +24,7 @@ import type { QueueItem, TripRow, TripStatus } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
-import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3 } from '@/data/sync/payload';
+import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3, type DriveBreakdownWire } from '@/data/sync/payload';
 import { deviceOwnerIs, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
 import { classifyInvokeError, DisputeResultSchema, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
 import { decodePolyline, encodePolyline } from '@/lib/polyline';
@@ -210,7 +210,12 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
 }
 
 /** A dispute's answer into the event and its drive. */
-export async function applyDisputeResult(tx: Db, action: Extract<TripAction, { action: 'dispute' }>, result: { status: 'accepted' | 'rejected'; rejectReason: string | null; net: number }, now: number): Promise<void> {
+export async function applyDisputeResult(
+  tx: Db,
+  action: Extract<TripAction, { action: 'dispute' }>,
+  result: { status: 'accepted' | 'rejected'; rejectReason: string | null; net: number; breakdown: DriveBreakdownWire | null },
+  now: number
+): Promise<void> {
   const events = createEventsRepo(tx);
   const trips = createTripsRepo(tx);
   const message = result.status === 'accepted' ? null : result.rejectReason === 'quota' ? 'Weekly report limit reached.' : result.rejectReason === 'not_mounted' ? 'The phone was not mounted for this event.' : null;
@@ -222,12 +227,27 @@ export async function applyDisputeResult(tx: Db, action: Extract<TripAction, { a
   const activeCount = remaining.filter((e) => e.status === 'active').length;
   await trips.update(
     action.clientTripId,
-    { points_net: result.net, estimate: 0, clean: trip.status === 'scored' ? (activeCount === 0 ? 1 : 0) : trip.clean, counts_json: JSON.stringify(countEvents(remaining)) },
+    {
+      points_net: result.net,
+      estimate: 0,
+      clean: trip.status === 'scored' ? (activeCount === 0 ? 1 : 0) : trip.clean,
+      counts_json: JSON.stringify(countEvents(remaining)),
+      ...(result.breakdown ? { breakdown_json: JSON.stringify(result.breakdown) } : {}),
+    },
     now,
     tx
   );
 }
 
+  // the server re-scored the drive: every remaining event takes its new penalty (repeat indices
+  // shift when the removed one was the first of its type), so the itemised list sums to the net
+  if (result.breakdown) {
+    const penaltyOf = new Map(result.breakdown.events.map((e) => [e.id, e.penalty]));
+    for (const e of remaining) {
+      const penalty = e.status === 'active' ? (penaltyOf.get(e.id) ?? 0) : 0;
+      if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
+    }
+  }
 export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const { db, supabase } = deps;
   const now = deps.now ?? Date.now;

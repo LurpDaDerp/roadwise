@@ -6,6 +6,18 @@
 -- emptied league group simply closes with fewer members). GoTrue's audit log has no FK, so
 -- purge_auth_audit removes a deleted account's rows afterwards and a daily job keeps 30 days.
 
+-- a deleted account's friend-request notices leave the other users' inboxes with it (the payload
+-- names the sender; the foreign keys cannot reach into jsonb). Fires on the profiles row, which the
+-- auth.users cascade removes.
+create or replace function public.profile_gone() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  delete from public.inbox where kind = 'friend_request' and payload ->> 'from_user_id' = old.id::text;
+  return null;
+end $$;
+create trigger profiles_gone after delete on public.profiles for each row execute function public.profile_gone();
+revoke all on function public.profile_gone() from public, anon, authenticated;
+
 -- export_account(p_user) -> one JSON document of the account's own rows. Nothing about another
 -- person is in it: no other user's id, name or location; friendships and requests are counts,
 -- the clan is this account's own membership and the clan's name.

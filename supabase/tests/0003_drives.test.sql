@@ -151,7 +151,7 @@ select private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000
 select is((select row(status, penalty)::text from public.trip_events where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003'), row('active', 10)::text, 'a rejected dispute leaves the event active');
 delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
 select is((private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
-  'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 3}'::jsonb, 'net', 100))) - 'progress' - 'tripId',
+  'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 3}'::jsonb, 'net', 100))) - 'progress' - 'tripId' - 'breakdown',
   '{"net": 10, "delta": 0, "status": "rejected", "eventId": "a1a1a1a1-0000-4000-8000-000000000003", "quotaLeft": 0, "rejectReason": "quota"}'::jsonb,
   'an accepted decision past the quota is re-counted under the lock and stored rejected');
 delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
