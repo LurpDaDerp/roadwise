@@ -1,8 +1,13 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, useColorScheme } from 'react-native';
-import { useReducedMotion } from 'react-native-reanimated';
+import * as Reanimated from 'react-native-reanimated';
 
 import { tokens, type ColorSet, type Elevation, type HudSet, type TypeScale } from './tokens';
+
+// expo-router's testing library swaps in a Reanimated mock without this hook; fall back to the
+// AccessibilityInfo subscription alone there.
+const useReducedMotion: () => boolean =
+  typeof Reanimated.useReducedMotion === 'function' ? Reanimated.useReducedMotion : () => false;
 
 export type Theme = {
   scheme: 'light' | 'dark';
