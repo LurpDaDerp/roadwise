@@ -101,6 +101,21 @@ export async function releaseDevice(deps: ReleaseDeps): Promise<'released' | 'sk
   }
 }
 
+/**
+ * True while this account's registration from this install is under 6 hours old. Checked before
+ * the push token is read on a plain foreground, so a throttled foreground costs no Expo call (a
+ * new token arrives through the token listener, which forces a registration anyway).
+ */
+export async function registeredRecently(
+  settings: Pick<SettingsRepo, 'get'>,
+  userId: string,
+  deviceId: string,
+  now: number
+): Promise<boolean> {
+  const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
+  return last !== null && last.userId === userId && last.deviceId === deviceId && last.at <= now && now - last.at < REGISTER_INTERVAL_MS;
+}
+
 export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult> {
   const { settings, userId, deviceId } = deps;
   const now = deps.now();

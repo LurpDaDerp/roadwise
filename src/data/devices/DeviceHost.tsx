@@ -19,7 +19,7 @@ import { useSession } from '@/data/supabase/session';
 import { onDeviceSyncRequested } from './events';
 import { getInstallId } from './installId';
 import { createExpoPushPort, easProjectId, readPushToken, type PushPort } from './pushToken';
-import { registerDevice, type Rpc } from './register';
+import { registerDevice, registeredRecently, type Rpc } from './register';
 
 export interface DeviceHostDeps {
   rpc: Rpc;
@@ -91,6 +91,8 @@ export function DeviceHost(props: DeviceHostProps): null {
       if (!live || d.platform === null) return;
       if (!(await ownerHolds())) return;
       deviceId ??= await getInstallId(settings, d.newId);
+      if (!live) return;
+      if (!force && (await registeredRecently(settings, userId, deviceId, now()))) return;
       if (!live) return;
       const pushToken = await readPushToken(d.push, d.projectId, (e) => report(e, 'devices push token'));
       if (!live) return;

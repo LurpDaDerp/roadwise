@@ -195,6 +195,30 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   await h.host.stop({ endOpenTrip: true });
 });
 
+test('a stop of a minute drops the capture to low rate; a screen unlock or pulling away brings full back', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start({ dmsOn: false });
+  const rates = () => h.source.calls.filter((c) => c.startsWith('setCaptureRate'));
+  await feed(h, rows(30, { speedMps: 15 }));
+  await feed(h, rows(59, { speedMps: 0, t0: T0 + 30_000 }));
+  expect(rates()).toEqual([]);
+  await feed(h, rows(3, { speedMps: 0, t0: T0 + 89_000 }));
+  expect(rates()).toEqual(['setCaptureRate:low']);
+  // An unlock at the light may be a pickup: full rate at once, and low again only after another minute.
+  h.source.emit('screen', { locked: false, on: true, ts: clock });
+  await h.host.settled();
+  expect(rates()).toEqual(['setCaptureRate:low', 'setCaptureRate:full']);
+  await feed(h, rows(30, { speedMps: 0, t0: T0 + 92_000 }));
+  expect(rates()).toHaveLength(2);
+  await feed(h, rows(35, { speedMps: 0, t0: T0 + 122_000 }));
+  expect(rates().at(-1)).toBe('setCaptureRate:low');
+  await feed(h, rows(2, { speedMps: 15, t0: T0 + 157_000 }));
+  expect(rates().at(-1)).toBe('setCaptureRate:full');
+  expect(h.errors).toEqual([]);
+  await h.host.stop({ endOpenTrip: true });
+});
+
 test('the background display follows the driver\'s units: km/h with speed and limit converted, read as the drive starts', async () => {
   await createSettingsRepo(db).set('units', 'km');
   const h = build();
