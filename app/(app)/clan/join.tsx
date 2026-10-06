@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { JoinClanScreen } from '@/features/clan/JoinClanScreen';
 
-export default function JoinaclanRoute() {
-  return <PlaceholderScreen title="Join a clan" />;
+export default function JoinClanRoute() {
+  return <JoinClanScreen />;
 }

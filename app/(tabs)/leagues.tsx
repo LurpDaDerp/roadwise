@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { LeaguesScreen } from '@/features/leagues/LeaguesScreen';
 
 export default function LeaguesRoute() {
-  return <PlaceholderScreen title="Leagues" inTabs />;
+  return <LeaguesScreen />;
 }

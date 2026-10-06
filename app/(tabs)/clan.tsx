@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { ClanScreen } from '@/features/clan/ClanScreen';
 
 export default function ClanRoute() {
-  return <PlaceholderScreen title="Clan" inTabs />;
+  return <ClanScreen />;
 }

@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { CreateClanScreen } from '@/features/clan/CreateClanScreen';
 
-export default function CreateaclanRoute() {
-  return <PlaceholderScreen title="Create a clan" />;
+export default function CreateClanRoute() {
+  return <CreateClanScreen />;
 }
