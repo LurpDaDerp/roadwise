@@ -233,6 +233,15 @@ export async function applyDisputeResult(
   if (trip === null) return;
   const remaining = await events.listByTrip(action.clientTripId, tx);
   const activeCount = remaining.filter((e) => e.status === 'active').length;
+  // the server re-scored the drive: every remaining event takes its new penalty (repeat indices
+  // shift when the removed one was the first of its type), so the itemised list sums to the net
+  if (result.breakdown) {
+    const penaltyOf = new Map(result.breakdown.events.map((e) => [e.id, e.penalty]));
+    for (const e of remaining) {
+      const penalty = e.status === 'active' ? (penaltyOf.get(e.id) ?? 0) : 0;
+      if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
+    }
+  }
   await trips.update(
     action.clientTripId,
     {
@@ -247,15 +256,6 @@ export async function applyDisputeResult(
   );
 }
 
-  // the server re-scored the drive: every remaining event takes its new penalty (repeat indices
-  // shift when the removed one was the first of its type), so the itemised list sums to the net
-  if (result.breakdown) {
-    const penaltyOf = new Map(result.breakdown.events.map((e) => [e.id, e.penalty]));
-    for (const e of remaining) {
-      const penalty = e.status === 'active' ? (penaltyOf.get(e.id) ?? 0) : 0;
-      if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
-    }
-  }
 export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const { db, supabase } = deps;
   const now = deps.now ?? Date.now;
