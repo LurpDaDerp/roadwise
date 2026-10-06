@@ -1166,6 +1166,7 @@ export type Database = {
         Args: { p_device_id: string; p_platform: string; p_push_token?: string }
         Returns: Json
       }
+      release_device: { Args: { p_device_id: string }; Returns: undefined }
       release_job_lease: {
         Args: { p_holder: string; p_name: string }
         Returns: undefined
