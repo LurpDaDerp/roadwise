@@ -52,11 +52,6 @@ function makeDeps(
         if (opts.fgAfterRequest) fg = opts.fgAfterRequest;
         return fg;
       },
-      async requestBackgroundPermissionsAsync() {
-        calls.push('location.requestBackground');
-        if (opts.bgAfterRequest) bg = opts.bgAfterRequest;
-        return bg;
-      },
     },
     notifications: {
       async getPermissionsAsync() {
@@ -192,40 +187,6 @@ describe('snapshot', () => {
     expect(s.motion).toBeNull();
     expect(s.batteryOptimization).toBe('unknown');
     expect(s.lowPowerMode).toBeNull();
-  });
-});
-
-describe('requestLocationAlways', () => {
-  it('makes no OS call on iOS before the first completed drive and returns the current access', async () => {
-    const { deps, calls } = makeDeps('ios', { bgAfterRequest: loc() });
-    const access = await createPermissionsAdapter(deps).requestLocationAlways({ firstDriveDone: false });
-    expect(access).toBe('foreground');
-    expect(calls.filter((c) => c.includes('request'))).toEqual([]);
-  });
-
-  it('asks on iOS after the first drive', async () => {
-    const { deps, calls } = makeDeps('ios', { bgAfterRequest: loc() });
-    const access = await createPermissionsAdapter(deps).requestLocationAlways({ firstDriveDone: true });
-    expect(access).toBe('always');
-    expect(calls.filter((c) => c.includes('request'))).toEqual(['location.requestBackground']);
-  });
-
-  it('asks on Android before any drive', async () => {
-    const { deps, calls } = makeDeps('android', { bgAfterRequest: loc() });
-    expect(await createPermissionsAdapter(deps).requestLocationAlways({ firstDriveDone: false })).toBe('always');
-    expect(calls).toContain('location.requestBackground');
-  });
-
-  it('never asks for Always without foreground location first (one prompt per screen)', async () => {
-    const { deps, calls } = makeDeps('android', { fg: loc({ status: 'undetermined' }) });
-    expect(await createPermissionsAdapter(deps).requestLocationAlways({ firstDriveDone: true })).toBe('undetermined');
-    expect(calls.filter((c) => c.includes('request'))).toEqual([]);
-  });
-
-  it('does not re-ask when Always is already granted', async () => {
-    const { deps, calls } = makeDeps('ios', { bg: loc() });
-    expect(await createPermissionsAdapter(deps).requestLocationAlways({ firstDriveDone: true })).toBe('always');
-    expect(calls.filter((c) => c.includes('request'))).toEqual([]);
   });
 });
 

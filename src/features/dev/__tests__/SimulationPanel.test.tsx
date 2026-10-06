@@ -139,7 +139,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
     const sim = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
     const run = sim.run();
     await jest.advanceTimersByTimeAsync(5000);
-    await db.execute("UPDATE trips SET distance_m = distance_m + 1 WHERE client_trip_id = 'real-1'");
+    await db.execute("UPDATE trips SET miles = miles + 1 WHERE client_trip_id = 'real-1'");
     const outcome = await runToEnd(run);
     jest.useRealTimers();
     expect(outcome.before).toEqual(outcome.after);

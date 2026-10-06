@@ -1,4 +1,3 @@
-import { t } from "@/i18n";
 
 import {
   asAlertStyle,
@@ -122,10 +121,10 @@ function decision(
     ts: 1_700_000_000_000,
     voice:
       level === 1
-        ? "alert.easeOff"
+        ? "Ease off"
         : level === 2
-          ? "alert.phoneDown"
-          : "alert.drowsy",
+          ? "Phone down"
+          : "Take a break",
     ...extra,
   };
 }
@@ -154,7 +153,7 @@ describe("alert player", () => {
       expect(r.calls).toEqual([
         "activate:playback",
         `play:2@${TONE_GAIN[2]}`,
-        `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
+        `speak:Phone down@${VOICE_GAIN}`,
         "deactivate",
         "haptic:2",
       ]);
@@ -166,7 +165,7 @@ describe("alert player", () => {
       expect(r.calls).toEqual([
         "activate:playback",
         `play:3@${TONE_GAIN[3]}`,
-        `speak:${t("alert.drowsy")}@${VOICE_GAIN}`,
+        `speak:Take a break@${VOICE_GAIN}`,
         "deactivate",
         "haptic:4",
       ]);
@@ -223,7 +222,7 @@ describe("alert player", () => {
         "deactivate",
         "activate:playback",
         `play:2@${TONE_GAIN[2]}`,
-        `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
+        `speak:Phone down@${VOICE_GAIN}`,
         "deactivate",
       ]);
     });
@@ -237,7 +236,7 @@ describe("alert player", () => {
       expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
       r.flags.voice = true;
       r.flags.style = "vibration";
-      await player.announce("alert.recording");
+      await player.announce("Recording");
       expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
       expect(r.calls.filter((c) => c.startsWith("activate"))).toHaveLength(1);
     });
@@ -491,7 +490,7 @@ describe("alert player", () => {
       expect(r.errors).toEqual([boom]);
       expect(r.calls).toEqual([
         "activate:playback",
-        `speak:${t("alert.phoneDown")}@${VOICE_GAIN}`,
+        `speak:Phone down@${VOICE_GAIN}`,
         "deactivate",
         "haptic:2",
       ]);
@@ -609,7 +608,7 @@ describe("alert player", () => {
         if (skip === "voiceOff") r.flags.voice = false;
         else r.flags.call = true;
         const announcing = [1, 2, 3].map(() =>
-          player.announce("alert.recording"),
+          player.announce("Recording"),
         );
         const stopping = player.stopCurrent();
         await Promise.all([...announcing, stopping]);
@@ -721,7 +720,7 @@ describe("alert player", () => {
       const player = createAlertPlayer(r.deps);
       const first = player.deliver(decision(2));
       const queued = player.deliver(decision(1, { id: "queued" }));
-      const announced = player.announce("alert.recording");
+      const announced = player.announce("Recording");
       await flush();
       r.flags.deliverable = false;
       r.release();
@@ -730,7 +729,7 @@ describe("alert player", () => {
         `play:2@${TONE_GAIN[2]}`,
       ]);
       expect(r.calls.filter((c) => c.startsWith("activate"))).toHaveLength(1);
-      expect(r.calls.some((c) => c.includes(t("alert.recording")))).toBe(false);
+      expect(r.calls.some((c) => c.includes("Recording"))).toBe(false);
       expect(count(r.calls, "deactivate")).toBe(1);
     });
 
@@ -753,15 +752,15 @@ describe("alert player", () => {
     it("speaks the phrase on the L1 session rule and releases", async () => {
       const r = rig();
       const player = createAlertPlayer(r.deps);
-      await player.announce("alert.recording");
+      await player.announce("Recording");
       r.flags.l1Silent = true;
-      await player.announce("alert.recording");
+      await player.announce("Recording");
       expect(r.calls).toEqual([
         "activate:playback",
-        `speak:${t("alert.recording")}@${VOICE_GAIN}`,
+        `speak:Recording@${VOICE_GAIN}`,
         "deactivate",
         "activate:respectSilent",
-        `speak:${t("alert.recording")}@${VOICE_GAIN}`,
+        `speak:Recording@${VOICE_GAIN}`,
         "deactivate",
       ]);
     });
@@ -770,10 +769,10 @@ describe("alert player", () => {
       const r = rig();
       const player = createAlertPlayer(r.deps);
       r.flags.voice = false;
-      await player.announce("alert.recording");
+      await player.announce("Recording");
       r.flags.voice = true;
       r.flags.call = true;
-      await player.announce("alert.recording");
+      await player.announce("Recording");
       expect(r.calls).toEqual([]);
     });
 
@@ -782,7 +781,7 @@ describe("alert player", () => {
         voice: { speak: () => Promise.reject(new Error("tts")) },
       });
       await expect(
-        createAlertPlayer(r.deps).announce("alert.recording"),
+        createAlertPlayer(r.deps).announce("Recording"),
       ).resolves.toBeUndefined();
       expect(r.errors).toHaveLength(1);
       expect(r.calls).toEqual(["activate:playback", "deactivate"]);

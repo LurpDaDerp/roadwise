@@ -103,7 +103,7 @@ test('starts loading, becomes signedOut, then signedIn with profile on auth even
 
   await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
   await act(async () => { mockProfileGate.resolve?.(ava); });
-  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 });
 
 test('reading the stored session can fail without stranding the app on loading', async () => {
@@ -130,14 +130,14 @@ test('stays signed in when the profile row is not readable yet', async () => {
   await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
   expect(profileCalls).toEqual(['u1', 'u1']);
   await act(async () => { mockProfileGate.resolve?.(ava); });
-  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 });
 
 test('does not refetch the profile for the same user on a token refresh', async () => {
   await mount();
   await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
   await act(async () => { mockProfileGate.resolve?.(ava); });
-  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 
   await act(async () => { emit('INITIAL_SESSION', sessionFor('u1')); });
   await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
@@ -145,7 +145,7 @@ test('does not refetch the profile for the same user on a token refresh', async 
 
   // One fetch for the whole lifecycle, and the profile never blinks out.
   expect(profileCalls).toEqual(['u1']);
-  expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+  expect(screen.getByText('signedIn:ava')).toBeTruthy();
 });
 
 test('a superseded load never overwrites newer state', async () => {
@@ -168,7 +168,7 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
   await mount();
   await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
   await act(async () => { mockProfileGate.resolve?.(ava); });
-  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
   // The session ends first; then the pending drive summaries are cancelled.
@@ -194,7 +194,7 @@ test('a hung profile fetch cannot strand the app on loading', async () => {
     await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
     expect(profileCalls).toEqual(['u1', 'u1']);
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+    expect(screen.getByText('signedIn:ava')).toBeTruthy();
   } finally {
     jest.useRealTimers();
   }
@@ -204,7 +204,7 @@ test('a refresh landing after sign-out does not resurrect the profile', async ()
   await mount();
   await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
   await act(async () => { mockProfileGate.resolve?.(ava); });
-  await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 
   await act(async () => { fireEvent.press(screen.getByText('refresh')); });
   expect(profileCalls).toEqual(['u1', 'u1']);
@@ -228,7 +228,7 @@ describe('sign-out stops recording (final review I3)', () => {
     );
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
   }
 
   test('the drive is stopped (ended, finalized, disarmed) first, then the deletes flushed, then the session ends', async () => {
@@ -270,7 +270,7 @@ describe('refreshProfile (M0 T7)', () => {
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
   }
 
   test('a same-user token refresh while a refresh is in flight no longer drops it', async () => {
@@ -278,8 +278,8 @@ describe('refreshProfile (M0 T7)', () => {
     await act(async () => { fireEvent.press(screen.getByText('refresh')); });
     // Token churn for the same driver is not a reason to throw the fresh row away.
     await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
-    await act(async () => { mockProfileGate.resolve?.({ ...ava, display_name: 'Ava Stone' }); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava Stone')).toBeTruthy());
+    await act(async () => { mockProfileGate.resolve?.({ ...ava, username: 'ava_stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
   });
 
   test('overlapping refreshes: an older read landing last never overwrites a newer one', async () => {
@@ -287,9 +287,9 @@ describe('refreshProfile (M0 T7)', () => {
     await act(async () => { fireEvent.press(screen.getByText('refresh')); });
     await act(async () => { fireEvent.press(screen.getByText('refresh')); });
     const [, older, newer] = mockProfileQueue;
-    await act(async () => { newer?.resolve?.({ ...ava, display_name: 'Newer' }); });
+    await act(async () => { newer?.resolve?.({ ...ava, username: 'Newer' }); });
     await waitFor(() => expect(screen.getByText('signedIn:Newer')).toBeTruthy());
-    await act(async () => { older?.resolve?.({ ...ava, display_name: 'Older' }); });
+    await act(async () => { older?.resolve?.({ ...ava, username: 'Older' }); });
     expect(screen.getByText('signedIn:Newer')).toBeTruthy();
   });
 
@@ -301,7 +301,7 @@ describe('refreshProfile (M0 T7)', () => {
     await act(async () => { refresh?.resolve?.(ava); });
     // The previous driver's row never reaches the new driver's screen.
     expect(screen.getByText('signedIn:-')).toBeTruthy();
-    await act(async () => { u2Read?.resolve?.({ id: 'u2', display_name: 'Ben' }); });
+    await act(async () => { u2Read?.resolve?.({ id: 'u2', username: 'Ben' }); });
     await waitFor(() => expect(screen.getByText('signedIn:Ben')).toBeTruthy());
   });
 });
@@ -322,7 +322,7 @@ describe('the profile cache (rev1: I11)', () => {
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.reject?.(new Error('Network request failed')); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
     expect(screen.getByText('source:cache')).toBeTruthy();
   });
 
@@ -336,7 +336,7 @@ describe('the profile cache (rev1: I11)', () => {
     } finally {
       jest.useRealTimers();
     }
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
     expect(screen.getByText('source:cache')).toBeTruthy();
   });
 
@@ -349,7 +349,7 @@ describe('the profile cache (rev1: I11)', () => {
   });
 
   test('a cache is never served to a different user id', async () => {
-    await writeProfileCache(settings(), { ...ava, id: 'u2', display_name: 'Ben' } as never);
+    await writeProfileCache(settings(), { ...ava, id: 'u2', username: 'Ben' } as never);
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.reject?.(new Error('offline')); });
@@ -367,9 +367,9 @@ describe('the profile cache (rev1: I11)', () => {
     // Unlike a server row, a cached one does not end the retries: the next event reads again.
     await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
     expect(profileCalls).toEqual(['u1', 'u1']);
-    expect(screen.getByText('signedIn:Ava')).toBeTruthy();
-    await act(async () => { mockProfileGate.resolve?.({ ...ava, display_name: 'Ava Stone' }); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava Stone')).toBeTruthy());
+    expect(screen.getByText('signedIn:ava')).toBeTruthy();
+    await act(async () => { mockProfileGate.resolve?.({ ...ava, username: 'ava_stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
     expect(screen.getByText('source:network')).toBeTruthy();
   });
 });
@@ -381,7 +381,7 @@ describe('sign-out clears a pending Terms acceptance (T15 r2)', () => {
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('sign out')); });
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());
   });
@@ -398,7 +398,7 @@ describe('sign-out clears a pending Terms acceptance (T15 r2)', () => {
     );
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('sign out')); });
     expect(await settings.get(PENDING_TERMS_KEY)).not.toBeNull();
   });
@@ -422,7 +422,7 @@ describe('registerBeforeSignOut', () => {
     );
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
   }
 
   test('runs after the drive stops and the deletes are sent, before the session ends', async () => {
@@ -489,18 +489,18 @@ describe('fix round 1', () => {
       await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
       // The read is still hanging: no 10 s wait for the cached row.
       await act(async () => { jest.advanceTimersByTime(100); });
-      expect(screen.getByText('signedIn:Ava')).toBeTruthy();
+      expect(screen.getByText('signedIn:ava')).toBeTruthy();
       expect(screen.getByText('source:cache')).toBeTruthy();
     } finally {
       jest.useRealTimers();
     }
-    await act(async () => { mockProfileGate.resolve?.({ ...ava, display_name: 'Ava Stone' }); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava Stone')).toBeTruthy());
+    await act(async () => { mockProfileGate.resolve?.({ ...ava, username: 'ava_stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
     expect(screen.getByText('source:network')).toBeTruthy();
   });
 
   test('a hanging read with only another user’s cache still waits with no profile', async () => {
-    await writeProfileCache(createSettingsRepo(db), { ...ava, id: 'u2', display_name: 'Ben' } as never);
+    await writeProfileCache(createSettingsRepo(db), { ...ava, id: 'u2', username: 'Ben' } as never);
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     expect(screen.getByText('loading:-')).toBeTruthy();
@@ -511,7 +511,7 @@ describe('fix round 1', () => {
     await mount();
     await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
     await act(async () => { mockProfileGate.resolve?.(ava); });
-    await waitFor(() => expect(screen.getByText('signedIn:Ava')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
     await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now(), uid: 'u1' });
     await act(async () => { emit('SIGNED_OUT', null); });
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());

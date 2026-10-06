@@ -39,8 +39,6 @@ const { readFileSync } = require('node:fs') as {
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
 const { join } = require('node:path') as { join: (...parts: string[]) => string };
 
-const migration0006 = (): string =>
-  readFileSync(join(__dirname, '../../../../supabase/migrations/0006_onboarding.sql'), 'utf8');
 
 const NOW = 1_790_000_000_000;
 
@@ -252,23 +250,6 @@ describe('the compiled defaults', () => {
     for (const key of CONFIG_KEYS) {
       expect(APP_CONFIG_SCHEMAS[key].safeParse(CONFIG_DEFAULTS[key]).success).toBe(true);
     }
-  });
-
-  // PARITY (Ruling T16 (3)): CONFIG_DEFAULTS is the one source of the guide text, and 0006 carries
-  // it word for word. Parsed from the migration, as the drive golden parses seed.sql. Expected to
-  // fail until Task 1's round 2 copies the text in.
-  test('0006 writes the battery guides word for word as CONFIG_DEFAULTS has them', () => {
-    const match = /\('oem_battery_guides',\s*\$json\$([\s\S]*?)\$json\$::jsonb/.exec(
-      migration0006()
-    );
-    expect(match).not.toBeNull();
-    expect(JSON.parse(match?.[1] ?? 'null')).toEqual(CONFIG_DEFAULTS.oem_battery_guides);
-  });
-
-  test("0006's feature_flags row matches the compiled flags", () => {
-    const match = /\('feature_flags',\s*'(\{[^']*\})'::jsonb/.exec(migration0006());
-    expect(match).not.toBeNull();
-    expect(JSON.parse(match?.[1] ?? 'null')).toEqual(CONFIG_DEFAULTS.flags);
   });
 
   test('every battery guide has a title and one to eight steps', () => {

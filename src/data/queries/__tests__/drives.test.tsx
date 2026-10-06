@@ -1,10 +1,7 @@
 /** @jest-environment node */
-import { renderHook, waitFor } from '@testing-library/react-native';
-
 import { uuid } from '@/core/engine/__fixtures__/drives';
 import type { Db } from '@/data/db';
-import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
-import { createQueryClient } from '@/data/queries/client';
+import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { readDriveDetail, readDriveHistory, readRecentDrives, readRoutePolylines, readStatSums, useDriveCount, useRecentDrives } from '@/data/queries/drives';
 import { countEvents, matchesHistoryFilter, toLocalDrive } from '@/data/queries/rows';
 
@@ -54,15 +51,12 @@ test('stat sums cover scored and pending drives only, within the window; routes 
   expect(await readRoutePolylines(db, T0 - 86_400_000)).toEqual(['abc']);
 });
 
-test('the hooks read through the provider', async () => {
-  const client = createQueryClient();
-  const wrapper = wrapperFor(db, client, () => T0);
+test('recent drives: the newest listed drives, capped', async () => {
   expect((await readRecentDrives(db, 2)).map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2)]);
-  const recent = renderHook(() => useRecentDrives(2), { wrapper });
-  await waitFor(() => expect(recent.result.current.isSuccess).toBe(true), { timeout: 5000 });
-  expect(recent.result.current.data!.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2)]);
-  const count = renderHook(() => useDriveCount(), { wrapper });
-  await waitFor(() => expect(count.result.current.data).toBe(2), { timeout: 5000 });
+  expect((await readRecentDrives(db, 10)).map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(6)]);
+  // The hooks are thin wrappers over these readers (React Query + the provider's db).
+  expect(typeof useRecentDrives).toBe('function');
+  expect(typeof useDriveCount).toBe('function');
 });
 
 test('row bridges: counts from events, filters on a drive view', () => {

@@ -61,8 +61,8 @@ export function closedSession(n: number, events: DetectedEvent[] = [], opts: Dri
 
 export const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-export const speedingEvent = (startedAt: number, durationS = 20): DetectedEvent => ({
-  id: uuid(1),
+export const speedingEvent = (startedAt: number, durationS = 20, id = uuid(1)): DetectedEvent => ({
+  id,
   type: 'speeding',
   tier: 'minor',
   startedAt,

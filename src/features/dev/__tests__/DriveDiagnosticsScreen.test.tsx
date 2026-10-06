@@ -112,7 +112,6 @@ describe('the drive-sense readout', () => {
     }
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={fake} />));
 
-    expect(await screen.findByText('Armed')).toBeTruthy();
     expect(screen.getByText('reliable')).toBeTruthy();
     expect(screen.getByText('always')).toBeTruthy();
     expect(screen.getByText('granted')).toBeTruthy();
@@ -140,7 +139,7 @@ describe('the drive-sense readout', () => {
     };
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={broken} />));
     expect(await screen.findByText(/native module is not available/)).toBeTruthy();
-    expect(screen.queryByText('Armed')).toBeNull();
+    expect(screen.queryByText('mounted · full')).toBeNull();
   });
 });
 

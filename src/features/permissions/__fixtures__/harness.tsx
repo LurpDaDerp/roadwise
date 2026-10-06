@@ -58,10 +58,6 @@ export function fakeAdapter(
       a.current = { ...a.current, location: next };
       return next;
     }),
-    requestLocationAlways: jest.fn(async () => {
-      a.log.push('requestLocationAlways');
-      return a.current.location;
-    }),
     requestMotion: jest.fn(async () => {
       a.log.push('requestMotion');
       const next = answers.motion === undefined ? 'granted' : answers.motion;

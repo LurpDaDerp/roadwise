@@ -24,11 +24,11 @@ import { restoreDrives } from '@/data/hydrate/restore';
 import { getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
-import { invalidateServer, type MySummary } from '@/data/server/summary';
-import { serverKey } from '@/data/server/useServerQuery';
+import type { MySummary } from '@/data/server/summary';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/sync/runner';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
+import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
@@ -84,6 +84,8 @@ export interface BootstrapDeps {
   /** The DMS bridge (WP8): presence and the per-row hook. `null`: none. */
   createCamera?: ((db: Db, host: () => DriveHost | undefined) => CameraLike) | null;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
+  /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
+  mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
   sessionTimeoutMs?: number;
   /** The driver a handover already knows: the identity stage decides on this uid with no session read. */
   expectedUid?: string;
@@ -214,7 +216,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
 
   enter('identity');
   const identity = await stage('identity', async () => {
-    const supabase: BootSupabase = deps.supabase ?? ((await import('@/data/supabase/client')).supabase as unknown as BootSupabase);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only outside tests
+    const supabase: BootSupabase = deps.supabase ?? ((require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase as unknown as BootSupabase);
     const decide = (uid: string | null) => ensureDeviceOwner(db, uid, { onError });
     if (deps.expectedUid !== undefined) return { supabase, owner: await decide(deps.expectedUid) };
     const sessionMs = deps.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
@@ -238,7 +241,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     return data;
   };
 
-  const newId = deps.newId ?? (await import('@/lib/ids')).newClientTripId;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- expo-crypto, only outside tests
+  const newId = deps.newId ?? (require('@/lib/ids') as typeof import('@/lib/ids')).newClientTripId;
   const source = deps.source ?? nativeDriveSource;
   const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
   const queryClient = deps.queryClient ?? createQueryClient();
@@ -247,7 +251,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   const summaryContext = async (): Promise<{ streak: number; safeMilesEarlierToday: number } | null> => {
     const owner = await readDeviceOwner(db);
     if (owner === null) return null;
-    const cached = queryClient.getQueryData<MySummary>(serverKey(owner, 'summary'));
+    // `serverKey(owner, 'summary')` from src/data/server/useServerQuery.ts, spelled out so a background
+    // launch never loads the Supabase client through that module.
+    const cached = queryClient.getQueryData<MySummary>(['server', owner, 'summary']);
     const streak = cached?.progress.streak ?? 0;
     const today = dayKey(new Date(now()), currentZone());
     return { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, today, now()) };
@@ -315,6 +321,11 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
+    // The optional forgot-to-start reminder follows its stored setting (off by default); WP9's toggle
+    // re-applies it through `applyForgotToStartSetting`.
+    void applyStoredForgotToStartSetting(db, { setForgotToStartReminder: (on) => source.setForgotToStartReminder(on) }).catch((error: unknown) =>
+      onError(error, 'forgot-to-start reminder')
+    );
     const detachCamera = camera?.attach(drive) ?? (() => {});
     const adopt: AdoptedTrip | null = recovery.adopt;
     await drive.boot({ adopt });
@@ -329,7 +340,17 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         onError(error, 'summary notifier');
       }
     }
+    let unmountDiagnostics: () => void = () => {};
+    const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
+    if (mount) {
+      try {
+        unmountDiagnostics = mount(drive, db, (error) => onError(error, 'diagnostics battery'));
+      } catch (error) {
+        onError(error, 'diagnostics battery');
+      }
+    }
     const release = async (): Promise<void> => {
+      unmountDiagnostics();
       detachCamera();
       if (camera !== null) {
         await camera.settled?.();
@@ -344,7 +365,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   const detach = subscribeInvalidation(queryClient);
   // A settled upload or action moved the server's numbers too: the summary header refetches.
   const offServer = onDataChanged((change) => {
-    if (change.source === 'sync') void invalidateServer(queryClient);
+    if (change.source === 'sync') void queryClient.invalidateQueries({ queryKey: ['server'] });
   });
   const isBusy = () => engine.drive.isBusy();
 
@@ -386,7 +407,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     schemaVersion,
     now,
     async refreshConfig() {
-      const seam = deps.appConfig ?? (await import('@/data/supabase/client')).supabase;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only outside tests
+      const seam = deps.appConfig ?? (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase;
       await refreshAppConfig(seam, db, now);
     },
     async restore() {
@@ -418,7 +440,10 @@ function readAppVersion(): string {
 function defaultLimits(db: Db, deps: BootstrapDeps, now: () => number, onError: (error: unknown, context: string) => void): SpeedLimitClient {
   let api: Promise<SpeedLimitApi> | null = null;
   const load = () =>
-    (api ??= (async () => createSupabaseSpeedLimitApi(deps.speedLimitsSupabase ?? (await import('@/data/supabase/client')).supabase))());
+    (api ??= Promise.resolve(
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only outside tests
+      createSupabaseSpeedLimitApi(deps.speedLimitsSupabase ?? (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase)
+    ));
   return createSpeedLimitClient({
     db,
     api: {
@@ -450,6 +475,16 @@ function defaultVoiceEnabled(): boolean {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- the settings cache (WP9)
   const { voicePrefEnabled } = require('@/features/settings/alerts/voicePref') as typeof import('@/features/settings/alerts/voicePref');
   return voicePrefEnabled();
+}
+
+/** The diagnostics battery recorder, only in a diagnostics build (`diagnosticsEnabled()`), loaded only then. */
+function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) => void): () => void {
+  /* eslint-disable @typescript-eslint/no-require-imports -- deferred: the dev screens' modules */
+  const { diagnosticsEnabled } = require('@/features/dev/flags') as typeof import('@/features/dev/flags');
+  if (!diagnosticsEnabled()) return () => {};
+  const { createDriveBatteryRecorder } = require('@/features/dev/battery') as typeof import('@/features/dev/battery');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  return createDriveBatteryRecorder({ host, settings: createSettingsRepo(db), onError });
 }
 
 function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {

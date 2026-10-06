@@ -29,7 +29,6 @@ export interface LocationPort {
   getForegroundPermissionsAsync(): Promise<LocationAnswer>;
   getBackgroundPermissionsAsync(): Promise<LocationAnswer>;
   requestForegroundPermissionsAsync(): Promise<LocationAnswer>;
-  requestBackgroundPermissionsAsync(): Promise<LocationAnswer>;
 }
 
 /** The fields of expo-notifications' `NotificationPermissionsStatus` this module reads. */
@@ -78,12 +77,6 @@ export interface PermissionsAdapter {
   snapshot(): Promise<PermissionSnapshot>;
   requestLocationForeground(): Promise<LocationAccess>;
   /**
-   * Asks for Always. Makes no OS request — only returns the current access — on iOS before the
-   * first completed drive (design §5.3), without foreground location (one prompt per screen:
-   * foreground comes first), or when Always is already granted.
-   */
-  requestLocationAlways(opts: { firstDriveDone: boolean }): Promise<LocationAccess>;
-  /**
    * Through drive-sense `requestMotionPermission()` on both platforms; `unavailable` stays so.
    * null when it could not be asked or checked (no drive-sense, or the request and re-read failed).
    */
@@ -115,8 +108,6 @@ const lazyLocation: LocationPort = {
     (await import('expo-location')).getBackgroundPermissionsAsync(),
   requestForegroundPermissionsAsync: async () =>
     (await import('expo-location')).requestForegroundPermissionsAsync(),
-  requestBackgroundPermissionsAsync: async () =>
-    (await import('expo-location')).requestBackgroundPermissionsAsync(),
 };
 
 const lazyNotifications: NotificationsPort = {
@@ -241,14 +232,6 @@ export function createPermissionsAdapter(
 
     async requestLocationForeground() {
       await deps.location.requestForegroundPermissionsAsync();
-      return locationAccess();
-    },
-
-    async requestLocationAlways({ firstDriveDone }) {
-      const current = await locationAccess();
-      if (current !== 'foreground') return current;
-      if (deps.platform === 'ios' && !firstDriveDone) return current;
-      await deps.location.requestBackgroundPermissionsAsync();
       return locationAccess();
     },
 

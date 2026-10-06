@@ -48,8 +48,9 @@ const response = (clientTripId: string, over: Partial<FinalizeTripResponseV3> = 
   ...over,
 });
 
-async function finalized(clientTripId: string, t0 = T0): Promise<void> {
-  const session = closedSession(1200, [speedingEvent(t0 + 300_000)], { clientTripId, t0 });
+/** A finalized drive whose one speeding event carries the id `eventId` (default: the drive's own number + 500). */
+async function finalized(clientTripId: string, t0 = T0, eventId = uuid(500 + Number(clientTripId.slice(-3)))): Promise<void> {
+  const session = closedSession(1200, [speedingEvent(t0 + 300_000, 20, eventId)], { clientTripId, t0 });
   await finalizeTrip(session, { db, tz: TZ, now: () => t0 + 1_300_000, appVersion: '3', geocode: null });
 }
 
@@ -58,7 +59,7 @@ function runner(supabase: ReturnType<typeof createFakeSupabase>, over: Partial<P
 }
 
 test('posts the queued v3 payload verbatim and writes the server’s answer into the drive', async () => {
-  await finalized(uuid(10));
+  await finalized(uuid(10), T0, uuid(1));
   const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
   const r = runner(supabase);
   await r.start();
@@ -86,6 +87,7 @@ test('mergedInto: the earlier local drive becomes the union and this one is hidd
   });
   const r = runner(supabase);
   await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r.drainOnce();
   const trips = createTripsRepo(db);
   const first = (await trips.get(uuid(10)))!;
@@ -114,6 +116,7 @@ test('a terminal refusal fails the item and the drive for good; a transport fail
   expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))?.status).toBe('failed');
 
   await finalized(uuid(12), T0 + 10_000_000);
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   mode = 'network';
   expect(await r.drainOnce()).toMatchObject({ deferred: 1 });
   const item = (await createQueueRepo(db).byKey(`trip:${uuid(12)}`))!;
@@ -146,7 +149,8 @@ test('nothing is sent without a session, while recording, or under another user;
 });
 
 test('drive actions: a report goes pending, the server’s acceptance removes the event and takes the server’s net; a refusal reads as rejected', async () => {
-  await finalized(uuid(10));
+  await finalized(uuid(10), T0, uuid(1));
+  await db.execute('DELETE FROM sync_queue');
   expect(await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db })).toBe('queued');
   expect(await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db })).toBe('already');
   expect((await createEventsRepo(db).get(uuid(1)))?.dispute_status).toBe('pending');
@@ -165,19 +169,23 @@ test('drive actions: a report goes pending, the server’s acceptance removes th
   expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ points_net: 121, estimate: 0 });
   await r.stop();
 
-  await finalized(uuid(11), T0 + 5_000_000);
-  await reportEvent(uuid(11), uuid(1), 'hazard', { db }).catch(() => {});
+  await finalized(uuid(11), T0 + 5_000_000, uuid(2));
+  await db.execute('DELETE FROM sync_queue');
+  await reportEvent(uuid(11), uuid(2), 'hazard', { db });
   const refusing = createFakeSupabase({ invoke: () => functionsHttpError(400, { code: 'reason_mismatch' }) });
   const r2 = runner(refusing);
   await r2.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r2.drainOnce();
   await r2.stop();
+  expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: expect.stringContaining('reason') });
 });
 
 test('"wasn’t driving": optimistic locally, confirmed by the server, or put back when refused', async () => {
   await finalized(uuid(10));
+  await db.execute('DELETE FROM sync_queue');
   expect(await markNotDriving(uuid(10), { db })).toBe('queued');
+  expect(await markNotDriving(uuid(10), { db })).toBe('already');
   expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', points_net: 0 });
   const refusing = createFakeSupabase({ invoke: () => functionsHttpError(403, { code: 'too_old' }) });
   const r = runner(refusing);
@@ -188,10 +196,10 @@ test('"wasn’t driving": optimistic locally, confirmed by the server, or put ba
   expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: 'too_old' });
   await r.stop();
 
-  expect(await markNotDriving(uuid(10), { db })).toBe('already');
+  // Refused → back to pending, so the user may try again later (the server decides again).
   await db.execute("UPDATE trips SET status = 'scored'");
   await db.execute('DELETE FROM sync_queue');
-  await markNotDriving(uuid(10), { db });
+  expect(await markNotDriving(uuid(10), { db })).toBe('queued');
   const ok = createFakeSupabase({
     invoke: () => invokeOk({ tripId: uuid(77), clientTripId: uuid(10), notDrivingLeft: 1, progress: { points: 0, lifetime: 0, level: 1, streak: 0, atRisk: false, freezes: 2, safetyRating: null, ranked: false } }),
   });
