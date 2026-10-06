@@ -62,7 +62,13 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     // (`audio`, from expo-audio). The usage strings are set by the plugins below.
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
+      // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
+      // targets/live-drive-widget).
+      NSSupportsLiveActivities: true,
     },
+    // Signing for the widget extension target (@bacons/apple-targets reads it). Set
+    // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
+    ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),
   },
   android: {
     package: 'com.lurp.safedrive',
@@ -120,6 +126,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
       { cameraPermission: PERMISSION_COPY.camera, microphonePermission: false, recordAudioAndroid: false },
     ],
     ['expo-splash-screen', { image: './assets/splash.png', imageWidth: 160, resizeMode: 'contain', backgroundColor: '#000814' }],
+    // Apple extension targets from /targets: the Live Activity widget (targets/live-drive-widget).
+    '@bacons/apple-targets',
   ],
   experiments: { typedRoutes: true },
 });
