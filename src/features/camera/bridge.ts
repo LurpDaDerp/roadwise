@@ -39,6 +39,8 @@ export interface CameraBridgeDeps {
   subscribeAppState(fn: () => void): () => void;
   /** battery for the capture policy; null fields when unknown */
   power(): DmsHostPower;
+  /** the car is parked (the Start tap's speed check); the setup refuses otherwise. Omitted: assumed parked. */
+  parked?(): Promise<boolean>;
   /** event ids for the focus detector */
   newId(): string;
   /** removes the stored face profile and setup record (after disposing, on sign-out and account deletion) */
@@ -260,6 +262,7 @@ export function createCameraBridge(deps: CameraBridgeDeps): CameraBridge {
         store: deps.setupStore(uid),
         appActive: deps.appActive,
         power: deps.power,
+        ...(deps.parked !== undefined ? { parked: deps.parked } : {}),
         onChange: (v) => {
           onChange(v);
           if (v.state.step === 'done' || v.state.step === 'failed') release();

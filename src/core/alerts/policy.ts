@@ -38,7 +38,8 @@ export const ALERT_GLOW_MS = 1500;
 
 export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }): AlertDecision {
   const level = ALERT_LEVEL[alert.type];
-  const voice = opts.voiceEnabled ? ALERT_VOICE[alert.type] : null;
+  // Drowsiness is spoken whatever the voice setting (spec: "−50 + spoken 'Take a break'"): a sleepy driver needs words.
+  const voice = opts.voiceEnabled || alert.type === 'drowsy' ? ALERT_VOICE[alert.type] : null;
   const decision: AlertDecision = {
     id: alert.id,
     level,

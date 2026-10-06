@@ -2,13 +2,14 @@
 // glances and drowsiness signs → `DmsFocusSample`s for the focus detector (src/core/detectors/focus.ts), which
 // applies the spec's thresholds (2 s / 4 s above 10 mph, 60 s of closure signs, the 0.85 confidence gate, the
 // turn and low-speed suppressions). This only decides what is a sample and how confident the camera is:
-// - A non-driving glance longer than scoring.focusGlanceS (2.0 s; never a mirror, the cluster or a shoulder
+// - A non-driving glance of at least scoring.focusGlanceS (2.0 s; never a mirror, the cluster or a shoulder
 //   check, which are driving) → kind 'glance'. `q` = the glance's TRACKING share × the calibration factor
 //   (1 calibrated, 0.9 seeded from the setup, else 0.7: an unknown road centre never reaches the 0.85 gate).
 //   `wideTurn` marks a far-lateral glance (a wide head turn), which the detector forgives at low speed.
 // - Each drowsiness episode (F1–F3, one per episode), each nod-off and each minute at fatigue ≥ drowsy →
-//   kind 'drowsiness' with its measured seconds; `lowLight` says the camera was in the dark (the detector
-//   ignores those: no IR on phone cameras).
+//   kind 'drowsiness' with its measured seconds and the same `q` over the episode's frames (× 0 while the eye
+//   baseline is degraded: glare, a part-occluded eye); `lowLight` says the camera was in the dark (the
+//   detector ignores those: no IR on phone cameras).
 // - At most one sample per `take`, oldest first. The queue is bounded at scoring.focusQueueCap (32): it
 //   drops the oldest GLANCE, never a drowsiness sample.
 import type { CameraFocusSample } from '@/core/engine/types';
@@ -34,9 +35,17 @@ export interface FocusGlance {
 }
 
 export interface FocusInfo {
-  /** the share of the glance's frames in TRACKING */
+  /** the share of the episode's frames in TRACKING */
   trackingShare: number;
   calibration: CalibrationState;
+  /** the eye baseline is degraded (health H5): closure signs are not to be trusted */
+  eyesDegraded?: boolean;
+}
+
+/** The camera's confidence for an episode: its TRACKING share × the calibration factor (× 0 with degraded eyes, for closures). */
+export function confidenceOf(info: FocusInfo, closure: boolean): number {
+  const q = Math.max(0, Math.min(1, info.trackingShare)) * calibrationFactor(info.calibration);
+  return closure && info.eyesDegraded === true ? 0 : q;
 }
 
 /** The camera's confidence factor for the calibration state the glance was classified under. */
@@ -61,18 +70,18 @@ export function createFocusQueue(cfg: Pick<DmsConfig, 'scoring' | 'zones'>) {
 
   return {
     glance(g: FocusGlance, info: FocusInfo): void {
-      if (g.shoulderCheck || zoneClass(g.zone, cfg) !== 'non_driving' || !(g.durS > cfg.scoring.focusGlanceS)) return;
+      if (g.shoulderCheck || zoneClass(g.zone, cfg) !== 'non_driving' || !(g.durS >= cfg.scoring.focusGlanceS)) return;
       push({
         kind: 'glance',
         glanceS: g.durS,
-        q: Math.max(0, Math.min(1, info.trackingShare)) * calibrationFactor(info.calibration),
+        q: confidenceOf(info, false),
         endT: g.endT,
         wideTurn: g.zone === 'far_lateral',
         lowLight: false,
       });
     },
-    drowsiness(glanceS: number, endT: number, lowLight: boolean): void {
-      push({ kind: 'drowsiness', glanceS, q: 1, endT, wideTurn: false, lowLight });
+    drowsiness(glanceS: number, endT: number, lowLight: boolean, info: FocusInfo): void {
+      push({ kind: 'drowsiness', glanceS, q: confidenceOf(info, true), endT, wideTurn: false, lowLight });
     },
     /** The oldest sample, or null. */
     take(): DmsFocusSample | null {

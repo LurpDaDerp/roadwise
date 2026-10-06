@@ -143,6 +143,16 @@ test('the camera permission is asked at the start, in context; a refusal ends th
   await ctl.dispose();
 });
 
+test('a moving car (the Start tap’s speed check) refuses the setup before any native call', async () => {
+  const saved: DmsSetupRecord[] = [];
+  const { fake, ctl, store } = makeController(saved);
+  const session = createDmsSetupSession({ controller: ctl, store, appActive: () => true, power: () => POWER, parked: async () => false, now: () => EPOCH0 + fake.now(), schedule: () => () => {} });
+  expect(await session.run()).toEqual({ ok: false, reason: 'driving' });
+  expect(fake.calls).toEqual([]);
+  expect(saved).toEqual([]);
+  await ctl.dispose();
+});
+
 test('a granted prompt lets the setup go on: the camera starts in SETUP; cancel then stops it with nothing stored', async () => {
   const saved: DmsSetupRecord[] = [];
   const { fake, ctl, store } = makeController(saved, null, { permission: 'undetermined', permissionOnRequest: 'granted' });

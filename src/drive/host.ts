@@ -18,6 +18,7 @@ import { scoreDrive, type DriveContext } from '@scoring';
 import { decisionFor } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
+import { dmsPayloadFlags } from '@/core/dms/adapters/flags';
 import { knownSpeed } from '@/core/detectors/common';
 import type { AdoptedTrip, AlertEvent, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip } from '@/core/engine/finalize';
@@ -293,7 +294,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (s === null) return 0;
     const miles = metersToMiles(s.distanceM);
     const bd = scoreDrive(
-      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), dmsOn: s.dmsOn },
+      // The same dmsOn finalize will send (a face on ≥ 80 % of the moving rows), so the estimate never shows a 1.25× the server withholds.
+      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), dmsOn: dmsPayloadFlags({ dmsOn: s.dmsOn, movingRows: s.movingRows, dmsFaceRows: s.dmsFaceRows }).dmsOn },
       pointsCtx
     );
     return bd.scored ? bd.net : 0;

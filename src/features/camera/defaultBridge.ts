@@ -7,6 +7,7 @@ import { createSettingsProfileStore, createSettingsSetupStore } from '@/core/dms
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
+import { isMoving } from '@/drive/policy';
 
 import { createCameraBridge, type CameraBridge } from './bridge';
 import { setCameraBridge } from './runtime';
@@ -15,6 +16,8 @@ export interface DefaultCameraBridgeDeps {
   db: Db;
   appState: AppStateLike & { currentState?: string | null };
   readUid(): Promise<string | null>;
+  /** One speed read (m/s, or null when no fresh fix): the Start tap's probe, so the setup refuses a moving car. */
+  speedProbe?(): Promise<number | null>;
   onError?(e: unknown, ctx: string): void;
 }
 
@@ -89,6 +92,7 @@ export function createDefaultCameraBridge(deps: DefaultCameraBridgeDeps): Camera
       return { batteryLevel: b.level, charging: b.charging, localMinutes: d.getHours() * 60 + d.getMinutes() };
     },
     newId: () => randomUUID(),
+    ...(deps.speedProbe !== undefined ? { parked: async () => !isMoving(await deps.speedProbe!()) } : {}),
     async clearStores() {
       // The stores' own module (light: no native code), so a sign-out never loads the camera.
       await createSettingsProfileStore(settings, '').clear();

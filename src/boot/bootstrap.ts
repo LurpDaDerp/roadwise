@@ -301,7 +301,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     }
     let camera: CameraLike | null = null;
     try {
-      camera = deps.createCamera === undefined ? createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), onError }) : (deps.createCamera?.(db, () => host) ?? null);
+      camera = deps.createCamera === undefined ? createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), speedProbe: deps.speedProbe ?? defaultSpeedProbe, onError }) : (deps.createCamera?.(db, () => host) ?? null);
     } catch (error) {
       onError(error, 'camera');
     }

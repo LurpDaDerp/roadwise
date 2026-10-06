@@ -22,6 +22,7 @@ import {
   LEAGUES_HREF,
   PERMISSIONS_HREF,
 } from '@/features/drives/routes';
+import { DMS_SETTINGS_HREF } from '@/features/camera/routes';
 import { Screen } from '@/ui';
 
 import { HomeView } from './HomeView';
@@ -64,7 +65,10 @@ export function HomeScreen() {
       router.push(DMS_SETUP_HREF);
       return;
     }
-    void dms.setEnabled(!dms.setting.enabled);
+    void dms.setEnabled(!dms.setting.enabled).then((step) => {
+      // The camera permission refused (or no signed-in driver): the DMS settings screen explains and offers Open Settings.
+      if (step === 'permission_denied' || step === 'unavailable') router.push(DMS_SETTINGS_HREF);
+    });
   };
 
   const refreshing = summary.isRefetching || recent.isRefetching;

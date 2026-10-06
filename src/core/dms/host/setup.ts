@@ -8,6 +8,7 @@
 //   stationary car, so the framing check comes from the frames (the face box), not the IMU.
 // - The OS camera prompt is asked at the start if the permission is what keeps the camera off: in context,
 //   once. A refusal ends the setup (`permission`).
+// - A moving car refuses the setup (`driving`): the same last-known-speed check as the Start tap, through `parked`.
 // - `cancel()` and the app leaving the front end it too; nothing of a cancelled setup is stored.
 // - The engine's own alert commands are muted (`alerts: 'shadow'`): nothing sounds while parked in setup.
 import type { FeatureRow } from '@/core/engine/types';
@@ -17,7 +18,7 @@ import type { DmsController, DmsHostPower } from './controller';
 import type { DmsSetupStore } from './profileStore';
 import { initialSetup, setupProgress, stepSetup, type SetupFailure, type SetupState } from './setupMachine';
 
-export type SetupResult = { ok: true; mirrors: number; savedAtMs: number } | { ok: false; reason: SetupFailure | 'permission' | 'cancelled' };
+export type SetupResult = { ok: true; mirrors: number; savedAtMs: number } | { ok: false; reason: SetupFailure | 'permission' | 'cancelled' | 'driving' };
 
 export interface DmsSetupView {
   state: SetupState;
@@ -32,6 +33,8 @@ export interface DmsSetupSessionDeps {
   store: Pick<DmsSetupStore, 'save'>;
   appActive(): boolean;
   power(): DmsHostPower;
+  /** The car is parked (the Start tap's own check: the last known speed below 3 mph). Omitted: assumed parked. */
+  parked?(): Promise<boolean>;
   onChange?(view: DmsSetupView): void;
   now?: () => number;
   /** the tick scheduler (tests inject a manual one) */
@@ -182,6 +185,17 @@ export function createDmsSetupSession(deps: DmsSetupSessionDeps): DmsSetupSessio
       });
       if (cancelled || !appActive) {
         void finish({ ok: false, reason: 'cancelled' });
+        return done;
+      }
+      // Parked only (spec: the calibration is done while parked; the preview too): the same speed check as Start.
+      let parked = true;
+      try {
+        parked = deps.parked === undefined ? true : await deps.parked();
+      } catch {
+        parked = true;
+      }
+      if (!parked) {
+        void finish({ ok: false, reason: 'driving' });
         return done;
       }
       state = initialSetup(now());

@@ -9,6 +9,8 @@ import { useCallback } from 'react';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { enableStep, type EnableStep } from '@/features/camera/dmsSettings';
+import { cameraBridge } from '@/features/camera/runtime';
 
 export const DMS_ENABLED_KEY = 'dms.enabled';
 export const DMS_CALIBRATED_KEY = 'dms.calibratedAt';
@@ -19,7 +21,12 @@ export interface DmsSetting {
   calibrated: boolean;
 }
 
-export function useDmsSetting(): { setting: DmsSetting; setEnabled: (on: boolean) => Promise<void> } {
+/**
+ * Turning DMS on asks for the camera permission first (WP8's `enableStep`, the same path as the settings switch), so a
+ * permission revoked after setup is noticed here rather than at the drive: the chip then stays off and the caller
+ * sends the driver to the DMS settings, which explain. Off is written at once.
+ */
+export function useDmsSetting(): { setting: DmsSetting; setEnabled: (on: boolean) => Promise<EnableStep | 'disabled'> } {
   const db = useDb();
   const qc = useQueryClient();
   const query = useQuery<DmsSetting>({
@@ -46,7 +53,14 @@ export function useDmsSetting(): { setting: DmsSetting; setEnabled: (on: boolean
   return {
     setting: query.data ?? { enabled: false, calibrated: false },
     setEnabled: async (on) => {
-      await mutation.mutateAsync(on);
+      if (!on) {
+        await mutation.mutateAsync(false);
+        return 'disabled';
+      }
+      const permission = (await cameraBridge()?.requestPermission()) ?? 'unavailable';
+      const step = enableStep(permission, query.data?.calibrated ?? false);
+      if (step === 'enabled') await mutation.mutateAsync(true);
+      return step;
     },
   };
 }

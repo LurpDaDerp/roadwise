@@ -148,10 +148,10 @@ describe('2. who imports the DMS lane', () => {
   const REPO = load(['src', 'app', 'packages', 'scripts', 'supabase/functions'], /\.(ts|tsx|js)$/);
   /** The camera bridge (src/features/camera): the controller's owner, the settings and setup screens' hooks. */
   const CAMERA = ['src/features/camera/bridge.ts', 'src/features/camera/defaultBridge.ts', 'src/features/camera/runtime.ts', 'src/features/camera/copy.ts', 'src/features/camera/useDmsSetup.ts', 'src/features/camera/DmsSetupScreen.tsx'];
-  /** The scoring seams: the focus detector (its samples) and the finalizer (the payload flags). */
-  const SEAMS = ['src/core/detectors/focus.ts', 'src/core/engine/finalize.ts'];
+  /** The scoring seams: the focus detector (its samples), the finalizer and the drive host's points estimate (the payload flags). */
+  const SEAMS = ['src/core/detectors/focus.ts', 'src/core/engine/finalize.ts', 'src/drive/host.ts'];
   const ALLOWED = new Set([...CAMERA, ...SEAMS]);
-  test('outside src/core/dms, only the camera bridge and the two scoring seams, each named here', () => {
+  test('outside src/core/dms, only the camera bridge and the scoring seams, each named here', () => {
     const importers = REPO.filter((f) => !f.rel.startsWith('src/core/dms/') && /['"](?:@\/core\/dms|[./]*\/core\/dms)(?:\/[^'"]*)?['"]/.test(code(f.src))).map((f) => f.rel);
     expect(importers.filter((r) => !ALLOWED.has(r))).toEqual([]);
     for (const seam of SEAMS) expect(importers).toContain(seam);

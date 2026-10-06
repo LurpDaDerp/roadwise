@@ -23,5 +23,8 @@ test('harsh driving is the warning tone with a short voice line only when voice 
 test('a phone pickup and drowsiness are urgent (level 3)', () => {
   expect(decisionFor({ id: 'e3', type: 'phone_pickup', tier: 'severe', at }, { voiceEnabled: true })).toMatchObject({ level: 3, voice: 'Phone down', intensity: 4 });
   expect(decisionFor({ id: 'e4', type: 'drowsy', tier: 'severe', at }, { voiceEnabled: true })).toMatchObject({ level: 3, voice: 'Take a break' });
+  // Spoken even with voice alerts off (spec: "−50 + spoken 'Take a break'").
+  expect(decisionFor({ id: 'e4', type: 'drowsy', tier: 'severe', at }, { voiceEnabled: false })).toMatchObject({ level: 3, voice: 'Take a break' });
+  expect(decisionFor({ id: 'e5', type: 'eyes_off', tier: 'minor', at }, { voiceEnabled: false }).voice).toBeUndefined();
   expect(ALERT_GLOW_MS).toBe(1500);
 });

@@ -55,7 +55,7 @@ import type { FeatureRow } from '@/core/engine/types';
 import type { ThermalName } from '../../../../modules/dms-vision/src/constants';
 import type { NativeState, DmsVisionApi, StateReason, Subscription } from '../../../../modules/dms-vision/src/types';
 import { decodeFrameBatch, parseStateEvent, parseStatus } from '../../../../modules/dms-vision/src/wire';
-import { createFocusQueue, type DmsFocusSample } from '../adapters/focus';
+import { createFocusQueue, type DmsFocusSample, type FocusInfo } from '../adapters/focus';
 import type { DmsAlertCommand } from '../engine/alerts';
 import type { CalibrationSeed, CalibrationState } from '../engine/calibration';
 import { parseSetupRecord } from '../engine/setupRecord';
@@ -424,28 +424,39 @@ export function createDmsController(deps: DmsControllerDeps): DmsController {
         // ditto
       }
       if (e.kind === 'glance_end' && 'zone' in e && e.zone !== undefined && e.durS !== undefined) {
-        const from = e.tMs - e.durS * 1000;
-        let n = 0;
-        let tracked = 0;
-        qualities.forEach((q) => {
-          if (q.t >= from && q.t <= e.tMs) {
-            n++;
-            if (q.tracking) tracked++;
-          }
-        });
-        focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, { trackingShare: n > 0 ? tracked / n : 0, calibration: engine.snapshot().calibration });
+        focus.glance({ endT: e.tMs, durS: e.durS, zone: e.zone, shoulderCheck: e.shoulderCheck === true }, focusInfo(e.tMs - e.durS * 1000, e.tMs));
       } else if (e.kind === 'microsleep_nod') {
         // A nod-off is its own drowsiness episode, with no closure episode (T14 r2 R1-m2). Task C2 (U-14): a
         // stop-time one feeds the score per fatigue.stopEventsFeed.
-        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS)), e.tMs, inLowLight());
+        const s = Math.max(0.5, Math.min(EPISODE_MAX_S, e.deepMaxS));
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(s, e.tMs, inLowLight(), focusInfo(e.tMs - s * 1000, e.tMs));
       } else if (e.kind === 'episode_end') {
         // One sample per closure episode that reached F1-F3, with its measured length (T14 r1 m2). Task C2
         // (U-14, rev5 §4.4): a stop-time episode (every F event of it stop-time) per fatigue.stopEventsFeed.
-        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(Math.min(EPISODE_MAX_S, e.durMs / 1000), e.tMs, inLowLight());
+        const s = Math.min(EPISODE_MAX_S, e.durMs / 1000);
+        if (feedsDrowsinessScore(e, cfg.fatigue.stopEventsFeed)) focus.drowsiness(s, e.tMs, inLowLight(), focusInfo(e.tMs - s * 1000, e.tMs));
       } else if (e.kind === 'fatigue_minute' && 'level' in e && (e.level === 'drowsy' || e.level === 'severe')) {
-        focus.drowsiness(60, e.tMs, inLowLight());
+        focus.drowsiness(60, e.tMs, inLowLight(), focusInfo(e.tMs - 60_000, e.tMs));
       }
     }
+  }
+
+  /**
+   * The camera's confidence inputs for an episode over [from, to] (frame clock): its TRACKING share, the
+   * calibration state and the eye-baseline health. The adapter turns them into the sample's `q`, which the focus
+   * detector gates at DMS_MIN_CONFIDENCE for glances and drowsiness alike (spec: "model confidence of 0.85 or higher").
+   */
+  function focusInfo(from: number, to: number): FocusInfo {
+    let n = 0;
+    let tracked = 0;
+    qualities.forEach((q) => {
+      if (q.t >= from && q.t <= to) {
+        n++;
+        if (q.tracking) tracked++;
+      }
+    });
+    const snap = engine?.snapshot() ?? null;
+    return { trackingShare: n > 0 ? tracked / n : 0, calibration: snap?.calibration ?? 'none', eyesDegraded: snap?.health.eyes === 'degraded' };
   }
 
   /** The camera is in the dark (spec: drowsiness detection is off in low light): the engine's LOST-dark frames, or the policy's dark pause. */

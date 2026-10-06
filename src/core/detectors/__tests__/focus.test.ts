@@ -161,8 +161,12 @@ describe('drowsy', () => {
   test('a sign taken in low light is ignored (no IR on phone cameras); so is one below the confidence gate', () => {
     const h = make();
     h.run(0, 9, { speed: mph(45) });
-    h.give(sign(60, 10, { lowLight: true }), sign(60, 10, { q: 0.5 }));
+    h.give(sign(60, 10, { lowLight: true }), sign(60, 10, { q: 0.5 }), sign(60, 10, { q: 0.84 }));
     expect(h.run(10, 10, { speed: mph(45) })).toEqual([]);
+    const ok = make();
+    ok.run(0, 9, { speed: mph(45) });
+    ok.give(sign(60, 10, { q: DMS_MIN_CONFIDENCE }));
+    expect(ok.run(10, 10, { speed: mph(45) })).toHaveLength(1);
   });
   test(`at most one drowsy event per ${DROWSY_COOLDOWN_S} s; signs keep adding up and the next one comes after the cooldown`, () => {
     const h = make();
