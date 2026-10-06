@@ -225,6 +225,13 @@ export type FinalizeTripPayload = z.infer<typeof FinalizeTripPayloadSchema>;
 export const MAX_PAYLOAD_BYTES = 524_288;
 /** The longest drive the server accepts, start to end. */
 export const MAX_DRIVE_MS = 12 * 3_600_000;
+/** Most extra blocks an event may claim (mirrors MAX_UNITS in the scoring package). */
+export const MAX_EVENT_UNITS = 1440;
+/** Slack for an event's end past the drive's end, and for durationS against the wall span. */
+const EVENT_END_SLACK_MS = 2000;
+const DURATION_SLACK_S = 5;
+/** Encoded-polyline characters only (ASCII 63–126), so length in code units is length in bytes. */
+const POLYLINE_PATTERN = /^[\x3F-\x7E]*$/;
 
 const DAY_MS = 86_400_000;
 
@@ -265,9 +272,9 @@ export const PointV3Schema = z
 /** What the detector measured; shown on the summary, re-checked by the server. */
 export const MeasuredV3Schema = z
   .object({
-    speedMph: nonNegative.optional(),
-    limitMph: nonNegative.optional(),
-    peakG: nonNegative.optional(),
+    speedMph: z.number().min(0).max(250).optional(),
+    limitMph: z.number().min(0).max(120).optional(),
+    peakG: z.number().min(0).max(10).optional(),
     mounted: z.boolean().optional(),
   })
   .strict();
@@ -279,11 +286,13 @@ export const PayloadEventV3Schema = z
     type: z.enum(EVENT_TYPES_V3),
     tier: z.enum(TIERS_V3),
     startedAt: epochMs,
-    durationS: nonNegative,
-    units: z.number().int().nonnegative().optional(),
+    durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
+    /** phone_handling: 1..1440. Speeding's blocks are derived from durationS by the scorer. */
+    units: z.number().int().min(0).max(MAX_EVENT_UNITS).optional(),
     stoppedInTraffic: z.boolean().optional(),
     zone: z.enum(['school', 'construction']).nullable().optional(),
-    status: z.enum(['active', 'removed']).optional(),
+    /** Only the server removes an event (an accepted dispute); an upload is always active. */
+    status: z.literal('active').optional(),
     lat: z.number().min(-90).max(90).nullable(),
     lng: z.number().min(-180).max(180).nullable(),
     measured: MeasuredV3Schema,
@@ -292,6 +301,10 @@ export const PayloadEventV3Schema = z
   .refine((e) => TIERS_BY_TYPE[e.type].includes(e.tier), {
     error: 'tier not allowed for this event type',
     path: ['tier'],
+  })
+  .refine((e) => e.type !== 'phone_handling' || e.units === undefined || e.units >= 1, {
+    error: 'phone handling counts at least 1 unit',
+    path: ['units'],
   });
 
 /** `YYYY-MM-DD` that is a real calendar date → its UTC day number, else null. */
@@ -326,13 +339,13 @@ export const FinalizeTripPayloadV3Schema = z
     start: PointV3Schema.nullable(),
     end: PointV3Schema.nullable(),
     /** Google encoded polyline, trimmed on the device (privacy zones + first/last 0.25 mi). ASCII only. */
-    polyline: z.string().max(MAX_POLYLINE_BYTES),
+    polyline: z.string().max(MAX_POLYLINE_BYTES).regex(POLYLINE_PATTERN),
     integrity: z
       .object({
         mockLocation: z.boolean(),
         motionMismatch: z.boolean(),
         validGnssPct: z.number().min(0).max(100),
-        maxSpeedMph: nonNegative,
+        maxSpeedMph: z.number().min(0).max(300),
       })
       .strict(),
     events: z.array(PayloadEventV3Schema).max(MAX_EVENTS),
@@ -341,6 +354,10 @@ export const FinalizeTripPayloadV3Schema = z
   .strict()
   .refine((p) => p.endedAt > p.startedAt, { error: 'endedAt must be after startedAt', path: ['endedAt'] })
   .refine((p) => p.endedAt - p.startedAt <= MAX_DRIVE_MS, { error: 'a drive lasts at most 12 h', path: ['endedAt'] })
+  .refine((p) => Math.abs(p.durationS - (p.endedAt - p.startedAt) / 1000) <= DURATION_SLACK_S, {
+    error: 'durationS must match endedAt − startedAt within 5 s',
+    path: ['durationS'],
+  })
   .refine((p) => p.safeMiles <= p.miles, { error: 'safeMiles exceeds miles', path: ['safeMiles'] })
   .refine((p) => p.nightMiles <= p.miles, { error: 'nightMiles exceeds miles', path: ['nightMiles'] })
   .refine(
@@ -353,6 +370,10 @@ export const FinalizeTripPayloadV3Schema = z
   )
   .refine((p) => p.events.every((e) => e.startedAt >= p.startedAt && e.startedAt <= p.endedAt), {
     error: 'every event must start within the drive',
+    path: ['events'],
+  })
+  .refine((p) => p.events.every((e) => e.startedAt + e.durationS * 1000 <= p.endedAt + EVENT_END_SLACK_MS), {
+    error: 'every event must end by endedAt',
     path: ['events'],
   })
   .refine((p) => new Set(p.events.map((e) => e.id)).size === p.events.length, {

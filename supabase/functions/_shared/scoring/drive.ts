@@ -36,8 +36,8 @@ export interface DriveEvent {
   startedAt: number;
   durationS: number;
   /**
-   * speeding: extra 30-s blocks = floor(durationS / 30) (derived from durationS when absent);
    * phone_handling: 15-s blocks beyond the first 15 s after the pickup (≥1, 1 when absent).
+   * Ignored for speeding: its extra 30-s blocks are always floor(durationS / 30).
    */
   units?: number;
   /** phone_pickup only: base 20 instead of 40. */
@@ -91,12 +91,12 @@ export function speedTier(speedMph: number, limitMph: number, zone?: Zone | null
 
 const isActive = (e: DriveEvent): boolean => e.status !== 'removed';
 
+/** Most blocks an event can count (12 h of 30-s speeding blocks), so any input stays finite. */
+export const MAX_UNITS = 1440;
+
 function units(e: DriveEvent): number {
-  if (e.type === 'speeding') {
-    const u = e.units ?? Math.floor(Math.max(0, e.durationS) / 30);
-    return Math.max(0, Math.floor(u));
-  }
-  if (e.type === 'phone_handling') return Math.max(1, Math.floor(e.units ?? 1));
+  if (e.type === 'speeding') return Math.min(MAX_UNITS, Math.floor(Math.max(0, e.durationS) / 30));
+  if (e.type === 'phone_handling') return clamp(Math.floor(e.units ?? 1), 1, MAX_UNITS);
   return 0;
 }
 
@@ -170,7 +170,7 @@ export interface DriveBreakdown {
   creditedMiles: number;
   /** creditedMiles × 10 (unrounded). */
   milePoints: number;
-  /** 25 iff miles ≥ 2 and zero active events. */
+  /** 25 iff miles ≥ 2, zero active events, creditedMiles > 0 and not a loop repeat. */
   cleanBonus: 0 | 25;
   streakMult: number;
   dmsMult: 1 | 1.25;
@@ -225,7 +225,10 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
     .filter(isActive)
     .slice()
     .sort((x, y) => x.startedAt - y.startedAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
-  const cleanBonus: 0 | 25 = input.miles >= CLEAN_BONUS_MIN_MILES && active.length === 0 ? CLEAN_BONUS : 0;
+  // No bonus once the daily cap is used up or on a repeated loop, so short clean loops can't farm it.
+  const earnsBonus =
+    input.miles >= CLEAN_BONUS_MIN_MILES && active.length === 0 && creditedMiles > 0 && !input.loopRepeat;
+  const cleanBonus: 0 | 25 = earnsBonus ? CLEAN_BONUS : 0;
   const gains = roundTo((milePoints + cleanBonus) * mult);
 
   const seen: Partial<Record<EventType, number>> = {};

@@ -71,7 +71,27 @@ describe('FinalizeTripPayloadV3Schema — accepts', () => {
   test('safeMiles and nightMiles equal to miles', () => expect(ok(mutate((p) => ((p.safeMiles = 12), (p.nightMiles = 12))))).toBe(true));
   test(`exactly ${MAX_EVENTS} events`, () =>
     expect(ok(mutate((p) => (p.events = Array.from({ length: MAX_EVENTS }, (_, i) => event(i)))))).toBe(true));
-  test('a 12 h drive', () => expect(ok(mutate((p) => (p.endedAt = T0 + 12 * 3_600_000)))).toBe(true));
+  test('a 12 h drive', () =>
+    expect(ok(mutate((p) => ((p.endedAt = T0 + 12 * 3_600_000), (p.durationS = 43_200))))).toBe(true));
+  test('durationS within 5 s of the wall span', () => {
+    expect(ok(mutate((p) => (p.durationS = 1195)))).toBe(true);
+    expect(ok(mutate((p) => (p.durationS = 1205)))).toBe(true);
+  });
+  test('an event ending up to 2 s after endedAt', () =>
+    expect(ok(mutate((p) => ((p.events[0].startedAt = T0 + 20 * 60_000 - 1000), (p.events[0].durationS = 3))))).toBe(true));
+  test('bounds at their maximum', () =>
+    expect(
+      ok(
+        mutate((p) => {
+          p.events[0].measured = { speedMph: 250, limitMph: 120, peakG: 10 };
+          p.events[1].units = 1440;
+          p.integrity.maxSpeedMph = 300;
+          p.polyline = '?~'.repeat(10);
+        })
+      )
+    ).toBe(true));
+  test('a phone handling event with 1 unit', () =>
+    expect(ok(mutate((p) => p.events.push(event(9, { type: 'phone_handling', tier: 'moderate', units: 1 }))))).toBe(true));
   test('localDay a day either side of the UTC date (time zones)', () => {
     expect(ok(mutate((p) => (p.localDay = '2026-10-04')))).toBe(true);
     expect(ok(mutate((p) => (p.localDay = '2026-10-06')))).toBe(true);
@@ -117,6 +137,23 @@ describe('FinalizeTripPayloadV3Schema — rejects', () => {
     ['an appVersion over 32 chars', (p) => (p.appVersion = '1'.repeat(33))],
     ['an empty appVersion', (p) => (p.appVersion = '')],
     ['an unknown top-level key', (p) => (p.distanceM = 1)],
+    ['durationS more than 5 s over the wall span', (p) => (p.durationS = 1205.1)],
+    ['durationS more than 5 s under the wall span', (p) => (p.durationS = 1194)],
+    ['an event duration over 12 h', (p) => (p.events[0].durationS = 43_201)],
+    [
+      'an event ending more than 2 s after endedAt',
+      (p) => ((p.events[0].startedAt = T0 + 20 * 60_000 - 1000), (p.events[0].durationS = 3.1)),
+    ],
+    ['units over 1440', (p) => (p.events[1].units = 1441)],
+    ['negative units', (p) => (p.events[1].units = -1)],
+    ['phone handling with 0 units', (p) => p.events.push(event(9, { type: 'phone_handling', tier: 'moderate', units: 0 }))],
+    ['measured speed over 250 mph', (p) => (p.events[0].measured.speedMph = 250.1)],
+    ['measured limit over 120 mph', (p) => (p.events[0].measured.limitMph = 120.1)],
+    ['measured peak over 10 g', (p) => (p.events[0].measured.peakG = 10.1)],
+    ['maxSpeedMph over 300', (p) => (p.integrity.maxSpeedMph = 300.1)],
+    ['a removed status (only the server removes events)', (p) => (p.events[1].status = 'removed')],
+    ['a polyline with non-ASCII characters', (p) => (p.polyline = '_p~iFé')],
+    ['a polyline with characters below "?"', (p) => (p.polyline = '_p~iF ~ps')],
   ])('%s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
 });
 

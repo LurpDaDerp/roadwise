@@ -108,13 +108,21 @@ describe('eventPenalty', () => {
   });
 
   test('speeding adds 25% of base per extra 30-s block', () => {
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', units: 0 }), 0)).toBe(15);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', units: 1 }), 0)).toBe(18.75);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'moderate', units: 2 }), 0)).toBe(60);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 29 }), 0)).toBe(15);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }), 0)).toBe(18.75);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }), 0)).toBe(60);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }), 0)).toBe(150);
   });
 
-  test('speeding without units derives the blocks from durationS', () =>
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }), 0)).toBe(150));
+  test('speeding blocks always come from durationS; a client-sent units is ignored', () => {
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 600, units: 0 }), 0)).toBe(90);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 0, units: 5 }), 0)).toBe(15);
+  });
+
+  test('blocks are capped at 1440 so a huge input stays finite', () => {
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 1e300 }), 0)).toBe(15 * (1 + 0.25 * 1440));
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 1e12 }))).toBe(14_400);
+  });
 
   test('school / construction zone doubles the penalty', () => {
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', zone: 'school' }), 0)).toBe(30);
@@ -228,7 +236,7 @@ describe('scoreDrive — rules', () => {
 
   test('speeding +25% per 30-s block and zone ×2 flow into the drive', () => {
     const b = scoreDrive(
-      drive({ events: [ev({ type: 'speeding', tier: 'moderate', units: 1, zone: 'school' })] }),
+      drive({ events: [ev({ type: 'speeding', tier: 'moderate', durationS: 45, zone: 'school' })] }),
       ctx0
     );
     expect(b.penalties).toBe(100); // 40 × 1.25 × 2
@@ -297,15 +305,25 @@ describe('scoreDrive — rules', () => {
     expect(b.milePoints).toBe(500);
   });
 
-  test('daily cap: nothing beyond 100 mi but the clean bonus still counts', () => {
+  test('daily cap exhausted: no miles credited and no clean bonus either', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10 }), { streak: 0, safeMilesEarlierToday: 120 });
     expect(b.creditedMiles).toBe(0);
-    expect(b.gains).toBe(25);
+    expect(b.cleanBonus).toBe(0);
+    expect(b.gains).toBe(0);
   });
 
-  test('loopRepeat halves credited miles after the cap', () => {
+  test('a partly capped clean drive still earns the clean bonus', () => {
+    const b = scoreDrive(drive({ miles: 10, safeMiles: 10 }), { streak: 0, safeMilesEarlierToday: 95 });
+    expect(b.creditedMiles).toBe(2.5);
+    expect(b.cleanBonus).toBe(25);
+    expect(b.gains).toBe(50);
+  });
+
+  test('loopRepeat halves credited miles after the cap and forfeits the clean bonus', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10, loopRepeat: true }), { streak: 0, safeMilesEarlierToday: 35 });
     expect(b.creditedMiles).toBe(3.75); // (5 + 2.5) × 0.5
+    expect(b.cleanBonus).toBe(0);
+    expect(b.gains).toBe(38); // 37.5 rounds half up
   });
 
   test('multiplier caps at 1.5 and only scales gains', () => {
