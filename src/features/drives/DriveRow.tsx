@@ -38,7 +38,7 @@ function spokenPoints(n: number): string {
 export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPress: () => void; testID?: string }) {
   const t = useTheme();
   const units = useUnits();
-  const points = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
+  const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const state = pointsState(drive);
   const word = pointsWord(state);
   const tally = eventTally(drive.counts);
@@ -73,7 +73,7 @@ export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPres
         backgroundColor: pressed ? t.colors.surfaceRaised : 'transparent',
       })}
     >
-      <RouteSketch points={points} />
+      <RouteSketch runs={runs} />
       <View style={{ flex: 1, gap: 2 }}>
         <Text variant="headline" numberOfLines={1}>
           {formatWhen(drive.startedAt)}

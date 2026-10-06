@@ -27,18 +27,27 @@ export type IntegrityReason = 'spoofed' | 'implausible';
 /** A stored drive with one of these reasons is never a merge target. */
 export const isRefusedReason = (reason: string | null | undefined): boolean => reason === 'spoofed' || reason === 'implausible';
 
-/** The length of the uploaded polyline in miles; 0 for an empty or undecodable one. */
+/** The runs of an uploaded route: encoded polylines joined by single spaces (the device's `encodeRuns`). */
+export const POLYLINE_RUN_SEPARATOR = ' ';
+
+/**
+ * The visible length of the uploaded route in miles: the sum of its runs, each decoded on its own
+ * (a privacy zone mid-route splits the track into runs that are never joined). An empty or
+ * undecodable run counts 0.
+ */
 export function polylineMiles(polyline: string): number {
-  if (polyline === '') return 0;
-  let line: Float64Array;
-  try {
-    line = decodeLine(polyline);
-  } catch {
-    return 0;
-  }
   let m = 0;
-  for (let i = 2; i < line.length; i += 2) {
-    m += distanceM({ lat: line[i - 2], lng: line[i - 1] }, { lat: line[i], lng: line[i + 1] });
+  for (const run of polyline.split(POLYLINE_RUN_SEPARATOR)) {
+    if (run === '') continue;
+    let line: Float64Array;
+    try {
+      line = decodeLine(run);
+    } catch {
+      continue;
+    }
+    for (let i = 2; i < line.length; i += 2) {
+      m += distanceM({ lat: line[i - 2], lng: line[i - 1] }, { lat: line[i], lng: line[i + 1] });
+    }
   }
   return m / M_PER_MILE;
 }

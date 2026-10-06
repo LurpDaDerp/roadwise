@@ -24,7 +24,7 @@ beforeEach(resetMapsCache);
 test('the route is drawn in runs coloured by their worst event, with instant events as dots', async () => {
   await draw(
     <RouteMap
-      points={ROUTE}
+      runs={[ROUTE]}
       events={[event(), event({ id: 's', type: 'speeding', tier: 'severe', durationS: 30, lat: ROUTE[3]!.lat, lng: ROUTE[3]!.lng })]}
       highlighted={null}
     />
@@ -38,11 +38,16 @@ test('the route is drawn in runs coloured by their worst event, with instant eve
 
 test('the highlighted event gets a ring on the map', async () => {
   const e = event();
-  await draw(<RouteMap points={ROUTE} events={[e]} highlighted={e} />);
+  await draw(<RouteMap runs={[ROUTE]} events={[e]} highlighted={e} />);
   expect(screen.getByTestId('map-highlight', H)).toBeOnTheScreen();
 });
 
+test('a route in two visible runs is two polylines, not one line across the privacy cut', async () => {
+  await draw(<RouteMap runs={[ROUTE.slice(0, 10), ROUTE.slice(20)]} events={[]} highlighted={null} />);
+  expect(screen.getAllByTestId('polyline', H)).toHaveLength(2);
+});
+
 test('no route: a plain note instead of an empty map', async () => {
-  await draw(<RouteMap points={[]} events={[]} highlighted={null} />);
+  await draw(<RouteMap runs={[]} events={[]} highlighted={null} />);
   expect(screen.getByTestId('no-route')).toBeOnTheScreen();
 });

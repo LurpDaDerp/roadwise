@@ -7,7 +7,8 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { FinalizeTripPayloadV3Schema } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
-import { decodePolyline } from '@/lib/polyline';
+import { haversineMeters } from '@/lib/geo';
+import { decodeRuns } from '@/lib/polyline';
 
 let db: Db;
 beforeEach(async () => {
@@ -55,7 +56,9 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
   expect(payload.integrity.maxSpeedMph).toBeCloseTo(33.55, 1);
   // The route never shows the first/last 0.25 mi nor the zone around the start.
-  const shown = decodePolyline(payload.polyline);
+  const runs = decodeRuns(payload.polyline);
+  expect(runs).toHaveLength(1); // the zone sits at the start, inside the trimmed end: one visible run
+  const shown = runs.flat();
   expect(shown.length).toBeGreaterThan(2);
   expect(Math.min(...shown.map((p) => p.lng))).toBeGreaterThan(-122.3321 + 402 / 75_000);
   // The trim plan never leaves the phone.
@@ -64,6 +67,30 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
   expect(await createSamplesRepo(db).count(session.clientTripId)).toBe(0);
   const item = await createQueueRepo(db).byKey(`trip:${session.clientTripId}`);
   expect(item?.owner_uid).toBe('user-1');
+});
+
+test('a drive through a mid-route privacy zone uploads both visible runs, so the whole visible distance passes the server miles check', async () => {
+  // 1200 rows x 15 m = 18 km ~ 11.2 mi due east from START; a 300 m zone around the 9 km mark.
+  const session = closedSession(1200, []);
+  const mid = session.track[600]!;
+  await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 's', name: 'School', lat: mid.lat, lng: mid.lng, radiusM: 300 }]);
+  const result = await finalizeTrip(session, deps());
+  const payload = result.payload!;
+  expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+  const runs = decodeRuns(payload.polyline);
+  expect(runs.length).toBeGreaterThanOrEqual(2);
+  // No encoded point inside the zone, and no segment of any run crosses it (west stays west, east stays east).
+  for (const run of runs) {
+    for (const p of run) expect(haversineMeters(p, mid)).toBeGreaterThan(300);
+    for (let i = 1; i < run.length; i += 1) expect(Math.sign(run[i - 1]!.lng - mid.lng)).toBe(Math.sign(run[i]!.lng - mid.lng));
+  }
+  // The server's rule (`finalize_rules.milesExceedRoute`): miles <= visible miles x 1.25 + 4. With only the longer
+  // half (~5.3 mi) an 11.2 mi drive would be refused as implausible; with both runs it is plausible with room to spare.
+  const visibleMiles = runs.reduce((m, run) => m + run.slice(1).reduce((s, p, i) => s + haversineMeters(run[i]!, p), 0), 0) / 1609.344;
+  expect(visibleMiles).toBeGreaterThan(9);
+  expect(payload.miles).toBeLessThanOrEqual(visibleMiles * 1.25 + 4);
+  expect(payload.miles).toBeGreaterThan(Math.max(...runs.map((run) => run.slice(1).reduce((s, p, i) => s + haversineMeters(run[i]!, p), 0))) / 1609.344 * 1.25 + 4);
+  expect(result.trip.polyline).toBe(payload.polyline);
 });
 
 test('a short drive is stored unscored-as-estimate (too_short) and still uploaded; mock rows mark the integrity', async () => {

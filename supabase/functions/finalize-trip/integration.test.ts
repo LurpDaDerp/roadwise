@@ -89,8 +89,10 @@ Deno.test({
       assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId], [TRIP, TRIP_2, r1.tripId]);
       // 15 mi, 14.8 safe, two minor hard brakes (10 + 12.5 → 10 + 13 = 23), streak 0, dms on: 148 × 1.25 = 185 → 162
       assertEquals([r2.breakdown.safeMiles, r2.breakdown.gains, r2.breakdown.penalties, r2.net, r2.streak.before, r2.streak.after], [14.8, 185, 23, 162, 0, 1]);
-      const [trip] = await sql`select miles, points_net, rev, n_hard_brake from public.trips where id = ${r1.tripId}::uuid`;
+      const [trip] = await sql`select miles, points_net, rev, n_hard_brake, polyline from public.trips where id = ${r1.tripId}::uuid`;
       assertEquals([Number(trip.miles), trip.points_net, trip.rev, trip.n_hard_brake], [15, 162, 2, 2]);
+      // the union's route is both drives' runs, space-joined and otherwise untouched: two runs, no line across the stop
+      assertEquals(trip.polyline, `${base.polyline} ${second.polyline}`);
       const [{ points, lifetime }] = await sql`select points, lifetime from public.progress where user_id = ${USER}::uuid`;
       assertEquals([points, lifetime], [162, 162]);
 

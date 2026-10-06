@@ -9,10 +9,12 @@
 // device's trim seed for the drive (`HMAC-SHA256(deviceSecret, clientTripId)`,
 // `src/data/devices/deviceSecret.ts`): the same drive on the same phone always trims the same way,
 // and nobody who sees the upload can recompute the cuts. The plan is never uploaded or logged. The
-// polyline never draws across a hidden gap: only the longest visible run is encoded (the wire
-// carries one polyline).
+// route never draws across a hidden gap: every visible run is encoded on its own and the wire
+// carries them space-joined (`encodeRuns` in `src/lib/polyline.ts`), so the server sees the whole
+// visible distance (its miles-vs-route check) and the maps draw each run apart.
 import { MERGE_DIST_M } from '@scoring';
 
+import { MAX_POLYLINE_RUNS } from '@/data/sync/payload';
 import { haversineMeters, type LatLng } from '@/lib/geo';
 import { encodePolyline, simplify } from '@/lib/polyline';
 
@@ -39,6 +41,11 @@ export const TRIM_JITTER_M = 400;
 export const ZONE_JITTER_MAX = 1.5;
 /** Douglas–Peucker tolerance for the stored polyline; doubled until the polyline fits the cap. */
 export const POLYLINE_EPSILON_M = 10;
+/**
+ * A visible run shorter than this along the track is left off: a zone edge or an end trim could
+ * otherwise leave a two-point stub whose position pins the cut.
+ */
+export const MIN_RUN_M = 50;
 /** Douglas–Peucker runs per chunk of this many points. */
 export const SIMPLIFY_CHUNK = 1000;
 
@@ -125,19 +132,39 @@ export function keptPoints(track: readonly TrackPoint[], zones: readonly Privacy
   });
 }
 
-/** The longest contiguous run of kept indices, as `[from, to)`; `[0, 0)` when nothing is kept. */
-export function longestRun(kept: readonly boolean[]): [number, number] {
-  let best: [number, number] = [0, 0];
+/** Every contiguous run of kept indices, as `[from, to)`, in route order; none when nothing is kept. */
+export function keptRuns(kept: readonly boolean[]): [number, number][] {
+  const runs: [number, number][] = [];
   let start = -1;
   for (let i = 0; i <= kept.length; i += 1) {
     const on = i < kept.length && kept[i] === true;
     if (on && start < 0) start = i;
     if (!on && start >= 0) {
-      if (i - start > best[1] - best[0]) best = [start, i];
+      runs.push([start, i]);
       start = -1;
     }
   }
-  return best;
+  return runs;
+}
+
+/** Metres along `points`. */
+export function pathLengthM(points: readonly LatLng[]): number {
+  let m = 0;
+  for (let i = 1; i < points.length; i += 1) m += haversineMeters(points[i - 1] as LatLng, points[i] as LatLng);
+  return m;
+}
+
+/**
+ * The runs that go on the wire: at least two points and `MIN_RUN_M` long, and no more than
+ * `maxRuns` of them (the shortest go first). Returns the surviving indices into `runs`, in order.
+ */
+export function selectRuns(runs: readonly (readonly LatLng[])[], maxRuns: number): number[] {
+  const long = runs.map((r, i) => ({ i, m: pathLengthM(r) })).filter(({ i, m }) => (runs[i] as readonly LatLng[]).length >= 2 && m >= MIN_RUN_M);
+  long.sort((a, b) => b.m - a.m || a.i - b.i);
+  return long
+    .slice(0, Math.max(0, maxRuns))
+    .map(({ i }) => i)
+    .sort((a, b) => a - b);
 }
 
 /** Douglas–Peucker over chunks sharing their boundary points, so a long track stays cheap. */
@@ -151,14 +178,27 @@ export function simplifyTrack(points: readonly LatLng[], epsilonM: number): LatL
   return out;
 }
 
-/** Simplify at `epsilonM`, doubling the tolerance until the encoding fits in `maxBytes`. */
-export function fitPolyline(points: readonly LatLng[], epsilonM: number, maxBytes: number): string {
-  if (points.length < 2) return '';
-  for (let eps = epsilonM; ; eps *= 2) {
-    const encoded = encodePolyline(simplifyTrack(points, eps));
-    if (encoded.length <= maxBytes) return encoded;
-    if (eps > 1e8) return '';
+/**
+ * Simplify every run at `epsilonM`, doubling the tolerance until the space-joined encoding fits in
+ * `maxBytes`; once every run is down to its two ends, the shortest runs are dropped instead.
+ * Returns the encoded runs, parallel to `runs` ('' for a dropped one).
+ */
+export function fitRuns(runs: readonly (readonly LatLng[])[], epsilonM: number, maxBytes: number): string[] {
+  let live = runs.map((r) => r.length >= 2);
+  const encodedAt = (eps: number): string[] => runs.map((r, i) => (live[i] ? encodePolyline(simplifyTrack(r, eps)) : ''));
+  const fits = (enc: string[]): boolean => enc.filter((e) => e !== '').join(' ').length <= maxBytes;
+  for (let eps = epsilonM; eps <= 1e8; eps *= 2) {
+    const enc = encodedAt(eps);
+    if (fits(enc)) return enc;
   }
+  // Every run is two points now; shed the shortest until what is left fits.
+  const byLength = runs.map((r, i) => ({ i, m: pathLengthM(r) })).sort((a, b) => a.m - b.m || a.i - b.i);
+  for (const { i } of byLength) {
+    live = live.map((on, k) => (k === i ? false : on));
+    const enc = encodedAt(2e8);
+    if (fits(enc)) return enc;
+  }
+  return runs.map(() => '');
 }
 
 /** Index of the last track point at or before `ts`, else the first; -1 on an empty track. */
@@ -180,9 +220,12 @@ export function trackIndexAt(track: readonly TrackPoint[], ts: number): number {
 }
 
 export interface TrimmedRoute {
-  /** The encoded, simplified polyline of the longest visible run; '' when nothing is left. */
-  polyline: string;
-  /** Where an event at `ts` happened, or null inside a hidden region / without a fix. */
+  /**
+   * The encoded, simplified visible runs in route order, each a polyline of its own; none when
+   * nothing is left. The wire carries them space-joined (`encodeRuns`/`RUN_SEPARATOR`).
+   */
+  runs: string[];
+  /** Where an event at `ts` happened, or null inside a hidden region, on a dropped run, or without a fix. */
   locate(ts: number): LatLng | null;
   plan: TrimPlan;
 }
@@ -192,17 +235,32 @@ export const roundCoord5 = (v: number): number => Math.round(v * 1e5) / 1e5;
 /**
  * Trim `track` for upload. `seed` is the device's trim seed for this drive (`deviceTrimSeed`): it
  * fixes the jitter, so the same drive always trims the same way on the phone that recorded it.
+ * Every visible run goes on the wire separately (never a chord across a hidden gap); runs under
+ * `MIN_RUN_M`, beyond `maxRuns` or past `maxBytes` are dropped, shortest first, and an event on a
+ * dropped run is unlocated like one inside a zone.
  */
-export function trimRoute(track: readonly TrackPoint[], zones: readonly PrivacyZone[], maxBytes: number, seed: string): TrimmedRoute {
+export function trimRoute(track: readonly TrackPoint[], zones: readonly PrivacyZone[], maxBytes: number, seed: string, maxRuns: number = MAX_POLYLINE_RUNS): TrimmedRoute {
   const plan = trimPlan(seed, zones);
   const kept = keptPoints(track, zones, plan);
-  const [from, to] = longestRun(kept);
-  const shown = track.slice(from, to).map((p) => ({ lat: p.lat, lng: p.lng }));
+  const spans = keptRuns(kept);
+  const points = spans.map(([from, to]) => track.slice(from, to).map((p) => ({ lat: p.lat, lng: p.lng })));
+  const chosen = selectRuns(points, maxRuns);
+  const encoded = fitRuns(
+    chosen.map((i) => points[i] as LatLng[]),
+    POLYLINE_EPSILON_M,
+    maxBytes
+  );
+  const shown = new Array<boolean>(track.length).fill(false);
+  chosen.forEach((runIndex, k) => {
+    if (encoded[k] === '') return;
+    const [from, to] = spans[runIndex] as [number, number];
+    for (let i = from; i < to; i += 1) shown[i] = true;
+  });
   return {
-    polyline: fitPolyline(shown, POLYLINE_EPSILON_M, maxBytes),
+    runs: encoded.filter((e) => e !== ''),
     locate(ts) {
       const i = trackIndexAt(track, ts);
-      if (i < 0 || kept[i] !== true) return null;
+      if (i < 0 || shown[i] !== true) return null;
       const p = track[i] as TrackPoint;
       return { lat: roundCoord5(p.lat), lng: roundCoord5(p.lng) };
     },

@@ -9,7 +9,7 @@ import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
 import { emitDataChanged } from '@/data/events';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS } from '@/data/sync/runner';
-import { decodePolyline, encodePolyline } from '@/lib/polyline';
+import { encodePolyline, splitRuns } from '@/lib/polyline';
 
 let db: Db;
 beforeEach(async () => {
@@ -244,14 +244,24 @@ test('the runner wakes on the enqueue change event and on foreground', async () 
   }
 });
 
-test('joinPolylines keeps the longer route rather than drawing across the hidden gap', () => {
+test('joinPolylines carries every run of both drives as separate runs, never a line across the hidden gap; over the caps the shortest go first', () => {
   expect(joinPolylines(null, null)).toBeNull();
+  expect(joinPolylines('', null)).toBeNull();
   const one = encodePolyline([{ lat: 47.6, lng: -122.3 }, { lat: 47.61, lng: -122.3 }]);
   const three = encodePolyline([{ lat: 48.6, lng: -122.3 }, { lat: 48.61, lng: -122.3 }, { lat: 48.62, lng: -122.3 }]);
+  const two = encodePolyline([{ lat: 49.6, lng: -122.3 }, { lat: 49.61, lng: -122.3 }]);
   expect(joinPolylines(one, null)).toBe(one);
   expect(joinPolylines(null, three)).toBe(three);
-  expect(decodePolyline(joinPolylines(one, three)!)).toHaveLength(3);
-  expect(decodePolyline(joinPolylines(three, one)!)).toHaveLength(3);
+  // Target's runs first, then the new drive's: each still its own run (the strings are unchanged, so no chord is drawn).
+  expect(joinPolylines(one, three)).toBe(`${one} ${three}`);
+  expect(joinPolylines(`${one} ${two}`, three)).toBe(`${one} ${two} ${three}`);
+  expect(splitRuns(joinPolylines(`${one} ${two}`, three))).toEqual([one, two, three]);
+  // Over the run cap or the byte cap, the shortest runs are dropped and the rest keep their order.
+  const shorter = one.length <= two.length ? one : two;
+  const longer = shorter === one ? two : one;
+  expect(joinPolylines(`${one} ${two}`, three, 16_384, 2)).toBe(`${longer} ${three}`);
+  expect(joinPolylines(`${one} ${two}`, three, three.length + longer.length + 1)).toBe(`${longer} ${three}`);
+  expect(joinPolylines(one, three, three.length)).toBe(three);
 });
 
 test('a reply that lands after the device changed hands writes nothing and releases the item', async () => {

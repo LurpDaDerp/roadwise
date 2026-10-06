@@ -24,6 +24,7 @@ import {
   type PayloadEventV3,
 } from '@/data/sync/payload';
 import { enqueueFinalize } from '@/data/sync/queue';
+import { RUN_SEPARATOR } from '@/lib/polyline';
 import { metersToMiles, mpsToMph } from '@/lib/units';
 import { dayKey } from '@/lib/time';
 
@@ -183,6 +184,8 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // 1. The route and the events on it.
   const zones = await (deps.zones ?? (() => readZones(db)))();
   const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES, await (deps.trimSeed ?? deviceTrimSeed)(id));
+  // Every visible run, space-joined: the server sums them and the maps draw them apart.
+  const polyline = route.runs.join(RUN_SEPARATOR);
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
   const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
@@ -239,7 +242,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     dmsFaceSeen: flags.dmsFaceSeen,
     start: point(session.firstFix),
     end: point(session.lastFix),
-    polyline: route.polyline,
+    polyline,
     integrity,
     events: payloadEvents,
     appVersion: deps.appVersion.slice(0, 32) || 'unknown',
@@ -269,7 +272,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     start_lng: candidate.start?.lng ?? null,
     end_lat: candidate.end?.lat ?? null,
     end_lng: candidate.end?.lng ?? null,
-    polyline: route.polyline === '' ? null : route.polyline,
+    polyline: polyline === '' ? null : polyline,
     from_label: fromLabel,
     to_label: toLabel,
     max_speed_mph: maxSpeedMph,

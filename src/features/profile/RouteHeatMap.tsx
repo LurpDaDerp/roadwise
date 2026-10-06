@@ -2,20 +2,24 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 
 import { loadMaps, regionFor } from '@/features/settings/maps';
-import { decodePolyline } from '@/lib/polyline';
+import { decodeRuns } from '@/lib/polyline';
 import { Text, useTheme } from '@/ui';
 
 import { profileCopy } from './copy';
 
-/** Decoded routes, skipping any that don't decode to a line. */
+/**
+ * Decoded routes, one line per visible run: a route stored as several runs (privacy cuts) becomes
+ * several lines, never one line across the gap. Any run that doesn't decode to a line is skipped.
+ */
 export function decodeRoutes(polylines: readonly string[]): { latitude: number; longitude: number }[][] {
   const out: { latitude: number; longitude: number }[][] = [];
   for (const p of polylines) {
     try {
-      const pts = decodePolyline(p);
-      if (pts.length >= 2) out.push(pts.map((q) => ({ latitude: q.lat, longitude: q.lng })));
+      for (const pts of decodeRuns(p)) {
+        if (pts.length >= 2) out.push(pts.map((q) => ({ latitude: q.lat, longitude: q.lng })));
+      }
     } catch {
-      // A malformed line draws nothing.
+      // A malformed route draws nothing.
     }
   }
   return out;

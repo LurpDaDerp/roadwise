@@ -35,8 +35,15 @@ export const MAX_EVENT_UNITS = 1440;
 /** Slack for an event's end past the drive's end, and for durationS against the wall span. */
 const EVENT_END_SLACK_MS = 2000;
 const DURATION_SLACK_S = 5;
-/** Encoded-polyline characters only (ASCII 63–126), so length in code units is length in bytes. */
-const POLYLINE_PATTERN = /^[\x3F-\x7E]*$/;
+/**
+ * The route: encoded-polyline runs (ASCII 63–126, so length in code units is length in bytes)
+ * joined by single spaces — one run per visible stretch between privacy cuts, never a chord across
+ * one. Empty, or runs with no leading, trailing or doubled space.
+ */
+const POLYLINE_PATTERN = /^(?:[\x3F-\x7E]+(?: [\x3F-\x7E]+)*)?$/;
+/** The server refuses a route in more runs than this (≤ 3 zones give ≤ 4; a re-entered zone a few more). */
+export const MAX_POLYLINE_RUNS = 20;
+const runCount = (s: string): number => (s === '' ? 0 : s.split(' ').length);
 
 const DAY_MS = 86_400_000;
 
@@ -143,8 +150,12 @@ export const FinalizeTripPayloadV3Schema = z
     dmsFaceSeen: z.boolean(),
     start: PointV3Schema.nullable(),
     end: PointV3Schema.nullable(),
-    /** Google encoded polyline, trimmed on the device (privacy zones + first/last 0.25 mi). ASCII only. */
-    polyline: z.string().max(MAX_POLYLINE_BYTES).regex(POLYLINE_PATTERN),
+    /** Google encoded polyline runs, space-joined, trimmed on the device (privacy zones + first/last 0.25 mi). ASCII only. */
+    polyline: z
+      .string()
+      .max(MAX_POLYLINE_BYTES)
+      .regex(POLYLINE_PATTERN)
+      .refine((s) => runCount(s) <= MAX_POLYLINE_RUNS, { message: `at most ${MAX_POLYLINE_RUNS} runs` }),
     integrity: z
       .object({
         mockLocation: z.boolean(),

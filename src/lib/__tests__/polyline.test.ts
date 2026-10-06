@@ -1,5 +1,5 @@
 import type { LatLng } from '@/lib/geo';
-import { decodePolyline, encodePolyline, simplify } from '@/lib/polyline';
+import { decodePolyline, decodeRuns, encodePolyline, encodeRuns, RUN_SEPARATOR, simplify, splitRuns } from '@/lib/polyline';
 
 // Google's documented example for the encoded polyline algorithm format.
 const GOOGLE_POINTS: LatLng[] = [
@@ -43,6 +43,33 @@ describe('encodePolyline / decodePolyline', () => {
   test('an empty list encodes to the empty string and back', () => {
     expect(encodePolyline([])).toBe('');
     expect(decodePolyline('')).toEqual([]);
+  });
+});
+
+describe('encodeRuns / decodeRuns (visible runs, space-joined)', () => {
+  const A: LatLng[] = [{ lat: 47.6, lng: -122.3 }, { lat: 47.61, lng: -122.31 }];
+  const B: LatLng[] = [{ lat: 47.7, lng: -122.4 }, { lat: 47.71, lng: -122.41 }, { lat: 47.72, lng: -122.42 }];
+
+  test('runs are encoded separately and joined by one space, which is outside the polyline alphabet', () => {
+    const s = encodeRuns([A, B]);
+    expect(RUN_SEPARATOR).toBe(' ');
+    expect(s).toBe(`${encodePolyline(A)} ${encodePolyline(B)}`);
+    expect(s.replace(/ /g, '')).toMatch(/^[\x3F-\x7E]+$/);
+    expect(s.split(' ')).toHaveLength(2);
+  });
+
+  test('decoding gives each run back on its own: the second starts from its own absolute point, not from the first run', () => {
+    expect(decodeRuns(encodeRuns([A, B]))).toEqual([A, B]);
+    expect(decodeRuns(encodePolyline(A))).toEqual([A]);
+    expect(decodeRuns('')).toEqual([]);
+    expect(decodeRuns(null)).toEqual([]);
+    expect(splitRuns('a b')).toEqual(['a', 'b']);
+    expect(splitRuns('')).toEqual([]);
+  });
+
+  test('a run with under two points is left off', () => {
+    expect(encodeRuns([A, [A[0]!], []])).toBe(encodePolyline(A));
+    expect(encodeRuns([])).toBe('');
   });
 });
 

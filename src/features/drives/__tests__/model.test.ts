@@ -52,20 +52,48 @@ describe('format', () => {
 
 describe('route', () => {
   test('the sketch fits inside its box', () => {
-    const d = sketchPath(ROUTE, 56, 56, 4)!;
+    const d = sketchPath([ROUTE], 56, 56, 4)!;
     const nums = d.match(/[\d.]+/g)!.map(Number);
     expect(Math.min(...nums)).toBeGreaterThanOrEqual(3.9);
     expect(Math.max(...nums)).toBeLessThanOrEqual(52.1);
-    expect(sketchPath([ROUTE[0]!], 56, 56)).toBeNull();
+    expect(d.match(/M/g)).toHaveLength(1);
+    expect(sketchPath([[ROUTE[0]!]], 56, 56)).toBeNull();
+    expect(sketchPath([], 56, 56)).toBeNull();
+  });
+
+  test('a route in two visible runs is two subpaths: the pen lifts between them, nothing is drawn across the gap', () => {
+    const first = ROUTE.slice(0, 10);
+    const second = ROUTE.slice(20);
+    const d = sketchPath([first, second], 56, 56, 4)!;
+    expect(d.match(/M/g)).toHaveLength(2);
+    // The second subpath starts with M right after the first's last L: no L joins them.
+    expect(d).toMatch(/L[\d.]+ [\d.]+ M[\d.]+ [\d.]+/);
+    // A run too short to draw is skipped, not joined to the next.
+    expect(sketchPath([first, [ROUTE[15]!], second], 56, 56, 4)!.match(/M/g)).toHaveLength(2);
   });
 
   test('a speeding stretch is coloured by its tier; the rest stays clean', () => {
-    const runs = routeRuns(ROUTE, [event({ id: 's', type: 'speeding', tier: 'moderate', durationS: 20, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng })]);
+    const runs = routeRuns([ROUTE], [event({ id: 's', type: 'speeding', tier: 'moderate', durationS: 20, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng })]);
     expect(runs.map((r) => r.tier)).toEqual([null, 'moderate', null]);
   });
 
+  test('coloured stretches never leave their visible run, and no output segment joins one run to the next', () => {
+    const first = ROUTE.slice(0, 10);
+    const second = ROUTE.slice(20);
+    // A long speeding event near the end of the first run would, on one joined line, run on into the second.
+    const runs = routeRuns([first, second], [event({ id: 's', type: 'speeding', tier: 'severe', durationS: 600, lat: first[8]!.lat, lng: first[8]!.lng })]);
+    const onFirst = (p: { lat: number; lng: number }) => first.some((q) => q.lat === p.lat && q.lng === p.lng);
+    for (const run of runs) {
+      // Every stretch lies wholly in one visible run: no segment has an end in each.
+      expect(new Set(run.points.map(onFirst)).size).toBe(1);
+    }
+    expect(runs.filter((r) => r.points.every((p) => !onFirst(p))).every((r) => r.tier === null)).toBe(true); // the second run stays clean
+    expect(runs.some((r) => r.tier === 'severe')).toBe(true);
+    expect(routeRuns([], [])).toEqual([]);
+  });
+
   test('overlapping stretches take the worse tier, and removed events are ignored', () => {
-    const runs = routeRuns(ROUTE, [
+    const runs = routeRuns([ROUTE], [
       event({ id: 's', type: 'speeding', tier: 'minor', durationS: 60, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng }),
       event({ id: 'h', type: 'phone_handling', tier: 'severe', durationS: 5, lat: ROUTE[6]!.lat, lng: ROUTE[6]!.lng }),
       event({ id: 'x', type: 'drowsy', tier: 'severe', durationS: 60, lat: ROUTE[20]!.lat, lng: ROUTE[20]!.lng, disputeStatus: 'accepted' }),

@@ -29,6 +29,18 @@ Deno.test('miles cross-check: miles above polyline × 1.25 + 4 are implausible; 
   assertEquals(integrityReason(payload({ miles: 3.9, safeMiles: 3.9, polyline: '' })), null);
 });
 
+Deno.test('miles cross-check sums every visible run: a 10 mi drive through a mid-route privacy zone (4.5 mi + 4.5 mi) is plausible', () => {
+  const twoRuns = `${lineOfMiles(4.5)} ${lineOfMiles(4.5, 40.9, -74.006)}`;
+  assertEquals(Math.abs(polylineMiles(twoRuns) - 9) < 0.03, true);
+  assertEquals(milesExceedRoute(10, twoRuns), false);
+  assertEquals(integrityReason(payload({ miles: 10, safeMiles: 10, polyline: twoRuns })), null);
+  // Only the longer half would have refused it: 10 > 4.5 x 1.25 + 4.
+  assertEquals(milesExceedRoute(10, lineOfMiles(4.5)), true);
+  // Three runs; a run that does not decode counts nothing, the others still count.
+  assertEquals(Math.abs(polylineMiles(`${lineOfMiles(2)} abc_def ${lineOfMiles(3, 41, -74)}`) - 5) < 0.03, true);
+  assertEquals(polylineMiles(' '), 0);
+});
+
 Deno.test('loop: 402 m and 5 miles are the bounds; a missing end point is never a loop', () => {
   const a = { lat: 40.7128, lng: -74.006 };
   assertEquals(Math.round(distanceM(a, { lat: 40.7128 + 402 / 111_320, lng: -74.006 })), 402);

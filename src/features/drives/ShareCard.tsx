@@ -5,17 +5,18 @@ import { forwardRef, useRef, useState } from 'react';
 import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
-import type { LatLng } from '@/lib/geo';
 import { formatRating } from '@/lib/rating';
 import { formatDistance, type Units } from '@/lib/units';
 import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme, type TypeVariant } from '@/ui';
 
 import { formatDay, formatDuration, signedPoints } from './format';
+import type { Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 
 export type ShareCardData = {
   startedAt: number;
-  points: readonly LatLng[];
+  /** The route's visible runs, each drawn apart (`decodeRoute`). */
+  runs: Runs;
   miles: number;
   durationS: number;
   /** Net points; null when the drive has no score. */
@@ -88,7 +89,7 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
           </CardText>
         </View>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <RouteSketch points={data.points} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />
+          <RouteSketch runs={data.runs} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />
           {data.clean ? (
             <View
               testID="share-clean"

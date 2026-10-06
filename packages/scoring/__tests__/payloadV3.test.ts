@@ -4,6 +4,7 @@ import {
   FinalizeTripPayloadV3Schema,
   FinalizeTripResponseV3Schema,
   MAX_EVENTS,
+  MAX_POLYLINE_RUNS,
   type FinalizeTripPayloadV3,
   type FinalizeTripResponseV3,
   type PayloadEventV3,
@@ -90,6 +91,11 @@ describe('FinalizeTripPayloadV3Schema — accepts', () => {
         })
       )
     ).toBe(true));
+  test('a route in several visible runs: encoded polylines joined by single spaces, up to the run cap', () => {
+    expect(ok(mutate((p) => (p.polyline = '_p~iF~ps|U _ulLnnqC')))).toBe(true);
+    expect(ok(mutate((p) => (p.polyline = Array.from({ length: MAX_POLYLINE_RUNS }, () => '_p~iF~ps|U').join(' '))))).toBe(true);
+    expect(ok(mutate((p) => (p.polyline = '')))).toBe(true);
+  });
   test('a phone handling event with 1 unit', () =>
     expect(ok(mutate((p) => p.events.push(event(9, { type: 'phone_handling', tier: 'moderate', units: 1 }))))).toBe(true));
   test('localDay a day either side of the UTC date (time zones)', () => {
@@ -153,7 +159,12 @@ describe('FinalizeTripPayloadV3Schema — rejects', () => {
     ['maxSpeedMph over 300', (p) => (p.integrity.maxSpeedMph = 300.1)],
     ['a removed status (only the server removes events)', (p) => (p.events[1].status = 'removed')],
     ['a polyline with non-ASCII characters', (p) => (p.polyline = '_p~iFé')],
-    ['a polyline with characters below "?"', (p) => (p.polyline = '_p~iF ~ps')],
+    ['a polyline with characters below "?" (other than the run separator)', (p) => (p.polyline = '_p~iF\t~ps')],
+    ['a route with a doubled space between runs', (p) => (p.polyline = '_p~iF~ps|U  _ulLnnqC')],
+    ['a route with a leading space', (p) => (p.polyline = ' _p~iF~ps|U')],
+    ['a route with a trailing space', (p) => (p.polyline = '_p~iF~ps|U ')],
+    ['a route of only a space', (p) => (p.polyline = ' ')],
+    [`a route in more than ${MAX_POLYLINE_RUNS} runs`, (p) => (p.polyline = Array.from({ length: MAX_POLYLINE_RUNS + 1 }, () => '_p~iF~ps|U').join(' '))],
   ])('%s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
 });
 

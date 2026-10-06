@@ -33,6 +33,30 @@ export function decodePolyline(encoded: string): LatLng[] {
   return points;
 }
 
+/**
+ * A route is one or more *runs* — the visible stretches left after privacy trimming — carried on
+ * the wire as encoded polylines joined by a single space (0x20 is outside the polyline alphabet
+ * 0x3F–0x7E). Each run decodes on its own, so nothing is ever drawn from the end of one run to the
+ * start of the next: that chord would cross the hidden gap.
+ */
+export const RUN_SEPARATOR = ' ';
+
+/** The encoded runs of a route string; '' gives none. Empty runs (a stray space) are skipped. */
+export function splitRuns(encoded: string | null | undefined): string[] {
+  if (!encoded) return [];
+  return encoded.split(RUN_SEPARATOR).filter((r) => r !== '');
+}
+
+/** Runs with fewer than two points are left off (there is nothing to draw). */
+export function encodeRuns(runs: readonly (readonly LatLng[])[]): string {
+  return runs.filter((r) => r.length >= 2).map(encodePolyline).join(RUN_SEPARATOR);
+}
+
+/** Every run of a route string, decoded separately. */
+export function decodeRuns(encoded: string | null | undefined): LatLng[][] {
+  return splitRuns(encoded).map(decodePolyline);
+}
+
 /** Metres from `p` to the segment `a`–`b`, on a flat projection around `a` (plenty at ε ≈ 10 m). */
 function segmentDistanceM(p: LatLng, a: LatLng, b: LatLng): number {
   const k = Math.cos((a.lat * Math.PI) / 180) * M_PER_DEG_LAT;

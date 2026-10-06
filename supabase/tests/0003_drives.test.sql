@@ -106,7 +106,7 @@ create temporary table r2 as select pg_temp.drive('00000000-0000-0000-0000-00000
 select is((select array[r ->> 'mergedInto', r ->> 'tripId'] from r2), array['11111111-1111-4111-8111-111111111111', (select id::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111')],
   'the response says which drive it merged into');
 select is((select row(miles, safe_miles, duration_s, points_net, rev, polyline, scored)::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'),
-  row(15.00, 15.00, 2880, 200, 2, 'longer_route', true)::text, 'the target row now holds the union, with the longer of the two route segments (never a concatenation)');
+  row(15.00, 15.00, 2880, 200, 2, 'poly longer_route', true)::text, 'the target row now holds the union, with both drives'' runs space-joined (two runs, never one line across the stop)');
 select is((select row(merged_into = (select id from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'), scored, points_net, miles)::text from public.trips where client_trip_id = '33333333-3333-4333-8333-333333333333'),
   row(true, false, 0, 3.00)::text, 'the merged-away payload keeps an unscored row pointing at the target');
 select is((select row(points, lifetime, streak, miles_30d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(200, 200, 1, 15.00)::text,

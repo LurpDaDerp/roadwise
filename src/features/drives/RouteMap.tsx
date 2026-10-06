@@ -8,7 +8,7 @@ import { Text, ThemeProvider, tokens, useTheme } from '@/ui';
 
 import { EVENT_ICON, eventName, formatClock, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
-import { regionFor, routeDots, routeRuns } from './route';
+import { allPoints, regionFor, routeDots, routeRuns, type Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 
 export type MapsModule = typeof import('react-native-maps');
@@ -96,23 +96,25 @@ export function highlightCaption(e: LocalDriveEvent): string {
 /**
  * The route map on the summary: a plain base map, the route coloured by the worst event along
  * each stretch (green clean, then yellow, orange, red), instant events as yellow or red dots, a
- * small legend in the corner, and a ring around the event tapped in the breakdown. Static: it
- * never steals the page scroll. Hidden from screen readers — the breakdown lists every event in
- * words, and the caption below says what is circled.
+ * small legend in the corner, and a ring around the event tapped in the breakdown. The route comes
+ * as its visible runs and each is drawn apart: no line joins one run to the next across a privacy
+ * cut. Static: it never steals the page scroll. Hidden from screen readers — the breakdown lists
+ * every event in words, and the caption below says what is circled.
  */
 export function RouteMap({
-  points,
+  runs: visible,
   events,
   highlighted,
   testID = 'route-map',
 }: {
-  points: readonly LatLng[];
+  runs: Runs;
   events: readonly LocalDriveEvent[];
   highlighted: LocalDriveEvent | null;
   testID?: string;
 }) {
   const t = useTheme();
-  const runs = useMemo(() => routeRuns(points, events), [points, events]);
+  const points = useMemo(() => allPoints(visible), [visible]);
+  const runs = useMemo(() => routeRuns(visible, events), [visible, events]);
   const dots = useMemo(() => routeDots(events), [events]);
   const region = useMemo(() => regionFor(points), [points]);
   const maps = loadMaps();
@@ -139,7 +141,7 @@ export function RouteMap({
   } else if (maps === null || region === null) {
     body = (
       <View style={[frame, { alignItems: 'center', justifyContent: 'center' }]} testID="map-unavailable" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <RouteSketch points={points} size={MAP_HEIGHT - 32} strokeWidth={4} background="transparent" />
+        <RouteSketch runs={visible} size={MAP_HEIGHT - 32} strokeWidth={4} background="transparent" />
       </View>
     );
   } else {

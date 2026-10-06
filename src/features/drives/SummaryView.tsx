@@ -186,7 +186,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const { lines, note } = useMemo(() => breakdownLines(drive, events, units), [drive, events, units]);
   const streak = streakLine(drive);
   const party = celebrations(drive);
-  const points = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
+  const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const net = state.kind === 'points' ? state.value : null;
@@ -264,7 +264,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
         </View>
 
         {/* 6. Route map */}
-        <RouteMap points={points} events={events} highlighted={selected} />
+        <RouteMap runs={runs} events={events} highlighted={selected} />
       </ScrollView>
 
       {/* 7. Footer */}
@@ -322,7 +322,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
         onClose={() => setSharing(false)}
         data={{
           startedAt: drive.startedAt,
-          points,
+          runs,
           miles: drive.miles,
           durationS: drive.durationS,
           net,

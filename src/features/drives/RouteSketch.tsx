@@ -2,24 +2,24 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
-import type { LatLng } from '@/lib/geo';
 import { useTheme } from '@/ui';
 
-import { sketchPath } from './route';
+import { sketchPath, type Runs } from './route';
 
 /**
- * A static drawing of the route: one SVG path, no map tiles. Cheap enough for every history row
- * and used again on the share card. Decorative — the row around it says where the drive went.
+ * A static drawing of the route: one SVG path (a subpath per visible run, so the pen lifts across
+ * a privacy cut), no map tiles. Cheap enough for every history row and used again on the share
+ * card. Decorative — the row around it says where the drive went.
  */
 export function RouteSketch({
-  points,
+  runs,
   size = 56,
   stroke,
   strokeWidth = 3,
   background,
   testID,
 }: {
-  points: readonly LatLng[];
+  runs: Runs;
   size?: number;
   stroke?: string;
   strokeWidth?: number;
@@ -28,7 +28,7 @@ export function RouteSketch({
   testID?: string;
 }) {
   const t = useTheme();
-  const d = useMemo(() => sketchPath(points, size, size, strokeWidth + 3), [points, size, strokeWidth]);
+  const d = useMemo(() => sketchPath(runs, size, size, strokeWidth + 3), [runs, size, strokeWidth]);
   const ink = stroke ?? t.colors.accent;
   const start = d ? d.match(/^M([\d.]+) ([\d.]+)/) : null;
 

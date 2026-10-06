@@ -6,19 +6,32 @@
 import type { EventType, Tier } from '@scoring';
 
 import { haversineMeters, type LatLng } from '@/lib/geo';
-import { decodePolyline } from '@/lib/polyline';
+import { decodeRuns } from '@/lib/polyline';
 
 import { worseTier } from './format';
 import type { LocalDriveEvent } from './model';
 
-export function decodeRoute(polyline: string | null): LatLng[] {
+/** A route as its visible runs: each is drawn on its own, never joined to the next. */
+export type Runs = readonly (readonly LatLng[])[];
+
+/**
+ * The visible runs of a stored route (space-joined encoded polylines, `@/lib/polyline`). Each run
+ * is one stretch between privacy cuts; a renderer must never draw from one run to the next. A
+ * malformed route draws nothing.
+ */
+export function decodeRoute(polyline: string | null): LatLng[][] {
   if (!polyline) return [];
   try {
-    return decodePolyline(polyline).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+    return decodeRuns(polyline)
+      .map((run) => run.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)))
+      .filter((run) => run.length >= 2);
   } catch {
     return [];
   }
 }
+
+/** Every point of every run, for framing and bounds only — never for drawing. */
+export const allPoints = (runs: Runs): LatLng[] => runs.flat();
 
 /** Keeps at most `max` points, evenly spaced, always the first and last. */
 export function thin(points: readonly LatLng[], max: number): LatLng[] {
@@ -29,15 +42,20 @@ export function thin(points: readonly LatLng[], max: number): LatLng[] {
 
 /**
  * An SVG path that fits the route inside a `w` × `h` box (with `pad` on every side), keeping its
- * shape: longitude is scaled by cos(latitude) so a route doesn't stretch sideways. Null when there
- * is nothing to draw.
+ * shape: longitude is scaled by cos(latitude) so a route doesn't stretch sideways. Every run is its
+ * own `M…L…` subpath, so the pen lifts between runs and no line crosses a hidden gap. Null when
+ * there is nothing to draw.
  */
-export function sketchPath(points: readonly LatLng[], w: number, h: number, pad = 4, max = 120): string | null {
-  const pts = thin(points, max);
-  if (pts.length < 2) return null;
-  const k = Math.cos((pts[0]!.lat * Math.PI) / 180);
-  const xs = pts.map((p) => p.lng * k);
-  const ys = pts.map((p) => -p.lat);
+export function sketchPath(runs: Runs, w: number, h: number, pad = 4, max = 120): string | null {
+  const drawn = runs.filter((r) => r.length >= 2);
+  const total = drawn.reduce((n, r) => n + r.length, 0);
+  if (total < 2) return null;
+  // Share the point budget across runs by size, at least the two ends each.
+  const thinned = drawn.map((r) => thin(r, Math.max(2, Math.round((max * r.length) / total))));
+  const all = thinned.flat();
+  const k = Math.cos((all[0]!.lat * Math.PI) / 180);
+  const xs = all.map((p) => p.lng * k);
+  const ys = all.map((p) => -p.lat);
   const minX = Math.min(...xs);
   const minY = Math.min(...ys);
   const spanX = Math.max(...xs) - minX;
@@ -47,13 +65,17 @@ export function sketchPath(points: readonly LatLng[], w: number, h: number, pad 
   const scale = Math.min((w - pad * 2) / (spanX || span), (h - pad * 2) / (spanY || span));
   const offX = (w - spanX * scale) / 2;
   const offY = (h - spanY * scale) / 2;
-  return pts
-    .map((_, i) => {
+  const parts: string[] = [];
+  let i = 0;
+  for (const run of thinned) {
+    run.forEach((_, j) => {
       const x = offX + (xs[i]! - minX) * scale;
       const y = offY + (ys[i]! - minY) * scale;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(' ');
+      parts.push(`${j === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`);
+      i += 1;
+    });
+  }
+  return parts.join(' ');
 }
 
 // ── Summary map colouring ───────────────────────────────────────────────────────────────
@@ -78,15 +100,19 @@ export interface RouteDot {
   at: LatLng;
 }
 
-function nearestIndex(points: readonly LatLng[], p: LatLng): number {
-  let best = 0;
+/** The run and point index nearest `p` across every run (runs with under two points are skipped). */
+function nearestIndex(runs: Runs, p: LatLng): { run: number; i: number } {
+  let best = { run: 0, i: 0 };
   let bestD = Infinity;
-  points.forEach((q, i) => {
-    const d = haversineMeters(p, q);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
+  runs.forEach((points, run) => {
+    if (points.length < 2) return;
+    points.forEach((q, i) => {
+      const d = haversineMeters(p, q);
+      if (d < bestD) {
+        bestD = d;
+        best = { run, i };
+      }
+    });
   });
   return best;
 }
@@ -98,32 +124,44 @@ const located = (e: LocalDriveEvent): LatLng | null =>
 const counts = (e: LocalDriveEvent) => !e.removed && e.disputeStatus !== 'accepted';
 
 /**
- * The route split into runs of one colour: each lasting event (speeding, phone handling,
- * drowsiness) colours the stretch from where it began for about as far as its duration covers,
- * and an overlap takes the worse tier.
+ * The route split into stretches of one colour: each lasting event (speeding, phone handling,
+ * drowsiness) colours the visible run it happened on from where it began for about as far as its
+ * duration covers, and an overlap takes the worse tier. A coloured stretch never leaves its run —
+ * the output holds no segment from one visible run to the next.
  */
-export function routeRuns(points: readonly LatLng[], events: readonly LocalDriveEvent[]): RouteRun[] {
-  if (points.length < 2) return [];
-  // One tier per segment (point i → i + 1).
-  const segTier: (Tier | null)[] = points.slice(1).map(() => null);
-  const cum: number[] = [0];
-  for (let i = 1; i < points.length; i++) cum.push(cum[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
+export function routeRuns(visible: Runs, events: readonly LocalDriveEvent[]): RouteRun[] {
+  const drawn = visible.filter((r) => r.length >= 2);
+  if (drawn.length === 0) return [];
+  // One tier per segment (point i → i + 1) of each run.
+  const segTier: (Tier | null)[][] = drawn.map((points) => points.slice(1).map(() => null));
+  const cum: number[][] = drawn.map((points) => {
+    const c: number[] = [0];
+    for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
+    return c;
+  });
 
   for (const e of events) {
     const at = located(e);
     if (!SEGMENT_EVENTS.has(e.type) || at === null || !counts(e)) continue;
-    const i0 = Math.min(nearestIndex(points, at), points.length - 2);
+    const near = nearestIndex(drawn, at);
+    const points = drawn[near.run]!;
+    const tiers = segTier[near.run]!;
+    const c = cum[near.run]!;
+    const i0 = Math.min(near.i, points.length - 2);
     const length = Math.max(MIN_STRETCH_M, e.durationS * ASSUMED_MPS);
-    for (let i = i0; i < segTier.length && (i === i0 || cum[i + 1]! - cum[i0]! <= length); i++) {
-      segTier[i] = worseTier(segTier[i]!, e.tier);
+    for (let i = i0; i < tiers.length && (i === i0 || c[i + 1]! - c[i0]! <= length); i++) {
+      tiers[i] = worseTier(tiers[i]!, e.tier);
     }
   }
 
   const runs: RouteRun[] = [];
-  segTier.forEach((tier, i) => {
-    const last = runs[runs.length - 1];
-    if (last && last.tier === tier) last.points.push(points[i + 1]!);
-    else runs.push({ tier, points: [points[i]!, points[i + 1]!] });
+  drawn.forEach((points, r) => {
+    segTier[r]!.forEach((tier, i) => {
+      const last = runs[runs.length - 1];
+      // A stretch continues only within its own run (i > 0); each run starts a new one.
+      if (i > 0 && last && last.tier === tier) last.points.push(points[i + 1]!);
+      else runs.push({ tier, points: [points[i]!, points[i + 1]!] });
+    });
   });
   return runs;
 }

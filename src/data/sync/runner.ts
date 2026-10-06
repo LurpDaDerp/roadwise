@@ -27,7 +27,8 @@ import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3, type DriveBreakdownWire } from '@/data/sync/payload';
 import { deviceOwnerIs, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
 import { classifyInvokeError, DisputeResultSchema, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
-import { decodePolyline, encodePolyline } from '@/lib/polyline';
+import { MAX_POLYLINE_BYTES, MAX_POLYLINE_RUNS } from '@/data/sync/payload';
+import { RUN_SEPARATOR, splitRuns } from '@/lib/polyline';
 
 export const FINALIZE_FUNCTION = 'finalize-trip';
 export const ACTIONS_FUNCTION = 'trip-actions';
@@ -112,15 +113,22 @@ function parseJson(text: string): unknown {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 /**
- * The route of a merged drive: the longer of the two trimmed polylines. Joining them would draw a
- * straight line across the hidden gap (the trimmed 0.25 mi + the stop + 0.25 mi), an intermediate
- * destination the trimming exists to hide.
+ * The route of a merged drive: every visible run of both drives, in order, still as separate runs.
+ * The runs are never connected — a line from the end of one to the start of the next would cross
+ * the hidden gap (the trimmed 0.25 mi + the stop + 0.25 mi), an intermediate destination the
+ * trimming exists to hide. Over the contract's run or byte cap, the shortest runs go first.
  */
-export function joinPolylines(a: string | null, b: string | null): string | null {
-  const pa = a ? decodePolyline(a) : [];
-  const pb = b ? decodePolyline(b) : [];
-  if (pa.length === 0 && pb.length === 0) return null;
-  return pb.length > pa.length ? encodePolyline(pb) : encodePolyline(pa);
+export function joinPolylines(a: string | null, b: string | null, maxBytes = MAX_POLYLINE_BYTES, maxRuns = MAX_POLYLINE_RUNS): string | null {
+  let runs = [...splitRuns(a), ...splitRuns(b)];
+  const joined = (): string => runs.join(RUN_SEPARATOR);
+  while (runs.length > 0 && (runs.length > maxRuns || joined().length > maxBytes)) {
+    let shortest = 0;
+    runs.forEach((r, i) => {
+      if (r.length < (runs[shortest] as string).length) shortest = i;
+    });
+    runs = runs.filter((_, i) => i !== shortest);
+  }
+  return runs.length === 0 ? null : joined();
 }
 
 const cleanOf = (bd: DriveBreakdown, scored: boolean): 0 | 1 | null => (scored ? (bd.activeEventCount === 0 ? 1 : 0) : null);
