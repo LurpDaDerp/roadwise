@@ -140,7 +140,8 @@ test('start: refuses while moving, without location, before boot, or while busy;
   const started = await ok.host.start({ dmsOn: true });
   expect(started).toEqual({ ok: true, clientTripId: uuid(1) });
   expect(ok.source.calls).toEqual(['startCapture:mounted']);
-  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', dmsOn: true, dmsActive: true, lockedOut: false, points: null, dryRun: false });
+  // dmsActive needs a face tracked by the DMS (no camera bridge here): DMS requested, not yet active.
+  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', dmsOn: true, dmsActive: false, lockedOut: false, points: null, dryRun: false });
   expect(ok.display.log[0]).toBe('start null');
   expect(await ok.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'busy' });
   await ok.host.stop({ endOpenTrip: true });
@@ -258,6 +259,18 @@ test('alerts go to the player as decisions (one speeding chime); a hands-free ca
   expect(h.host.snapshot().callActive).toBe(true);
   await h.host.stop({ endOpenTrip: true });
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
+});
+
+test('an adopted drive (recovery after a restart) shows the driver’s units too', async () => {
+  await createSettingsRepo(db).set('units', 'km');
+  const session = createSession({ clientTripId: uuid(1), startedAt: T0 - 60_000, dmsOn: false });
+  const h = build();
+  await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
+  expect(h.host.snapshot().status).toBe('recording');
+  expect(h.display.log[0]).toBe('start null');
+  await feed(h, rows(5, { speedMps: 15 }));
+  expect(h.display.log.at(-1)).toBe('update 54/56/null km/h');
+  await h.host.stop({ endOpenTrip: true });
 });
 
 test('boot adopts a rebuilt drive and keeps recording it; a sign-out ends an open drive', async () => {

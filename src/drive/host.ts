@@ -57,7 +57,7 @@ export interface DriveState extends EngineSnapshot {
   lastFinalized: LastFinalized;
   /** False when a sound failed during this drive; the drive still records, silently. */
   alertsAvailable: boolean;
-  /** The DMS is running for this drive. */
+  /** DMS is on for this drive AND the camera is tracking the driver's face right now (the driving screen's indicator). */
   dmsActive: boolean;
   /** The local estimate, non-null only while stopped (≤ 5 mph). */
   points: DrivePoints | null;
@@ -75,8 +75,12 @@ export interface DriverPresence {
   lastFaceT: number | null;
 }
 
-/** A face this recent (ms) is a driver in the seat. */
-export const FACE_RECENT_MS = 60_000;
+/**
+ * A face this recent (ms) is a driver in the seat on this row: the DMS tracks at 5–15 fps, so a tracked face is
+ * never older than a second or two. Counted per moving row for the payload's `dmsOn` / `dmsFaceSeen` shares, and
+ * shown as `dmsActive`.
+ */
+export const FACE_RECENT_MS = 3_000;
 
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
@@ -252,7 +256,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       screenLocked,
       lastFinalized,
       alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
-      dmsActive,
+      dmsActive: dmsActive && faceSeen(),
       points,
       dryRun: !persist,
       mode: 'mounted' as const,
@@ -270,6 +274,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       } catch (e) {
         report(e, 'subscriber');
       }
+    }
+  }
+
+  /** The driver's units for this drive's display, read as it starts or is adopted; mph when unreadable. */
+  async function readDisplayUnit(): Promise<void> {
+    try {
+      displayUnit = (await createSettingsRepo(db).get<unknown>(UNITS_KEY)) === 'km' ? 'km/h' : 'mph';
+    } catch (e) {
+      report(e, 'units');
+      displayUnit = 'mph';
     }
   }
 
@@ -478,6 +492,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           } catch (e) {
             report(e, 'context');
           }
+          await readDisplayUnit();
           dmsActive = opts.adopt.session.dmsOn;
           await engine.dispatch({ type: 'adopt', trip: opts.adopt, ts: now() });
         }
@@ -521,12 +536,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           report(e, 'context');
           pointsCtx = { streak: 0, safeMilesEarlierToday: 0 };
         }
-        try {
-          displayUnit = (await createSettingsRepo(db).get<unknown>(UNITS_KEY)) === 'km' ? 'km/h' : 'mph';
-        } catch (e) {
-          report(e, 'units');
-          displayUnit = 'mph';
-        }
+        await readDisplayUnit();
         dmsActive = dmsOn;
         await engine.dispatch({ type: 'start', ts: now(), dmsOn });
         const id = engine.snapshot().clientTripId;
