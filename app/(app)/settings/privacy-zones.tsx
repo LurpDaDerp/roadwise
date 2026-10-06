@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { PrivacyZonesScreen } from '@/features/settings';
 
-export default function PrivacyzonesRoute() {
-  return <PlaceholderScreen title="Privacy zones" />;
+export default function PrivacyZonesRoute() {
+  return <PrivacyZonesScreen />;
 }

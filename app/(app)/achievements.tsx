@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { AchievementsScreen } from '@/features/profile/AchievementsScreen';
 
 export default function AchievementsRoute() {
-  return <PlaceholderScreen title="Achievements" />;
+  return <AchievementsScreen />;
 }

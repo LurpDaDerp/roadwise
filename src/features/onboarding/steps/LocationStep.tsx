@@ -112,7 +112,7 @@ export function LocationStep({ onNext, onBack, deps }: StepProps & { deps?: Perm
   return (
     <StepFrame title={copy.title} onBack={onBack} primary={primary} secondary={secondary} testID="location-step">
       <View style={{ gap: th.space.lg }}>
-        <Card variant="license">
+        <Card>
           <Text variant="body">{copy.body}</Text>
           <Text variant="subhead" tone="muted">
             {copy.promise}

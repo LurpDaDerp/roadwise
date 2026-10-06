@@ -1,61 +1,136 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { Children, type ComponentProps, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
-import { ICON } from '@/features/trips/layout';
-import { Card, ListRow, Text, useTheme } from '@/ui';
+import { Card, Divider, ListRow, Text, useFontScale, useTheme } from '@/ui';
 
-/** A small-caps field label over its group, as H6 prints them. */
-export function FieldLabel({ children }: { children: string }) {
-  return (
-    <Text variant="caption" tone="muted" accessibilityRole="header" style={{ textTransform: 'uppercase', letterSpacing: 1.2 }}>
-      {children}
-    </Text>
-  );
-}
+type IconName = ComponentProps<typeof Ionicons>['name'];
 
-/** A labelled group of rows on one card, ruled between rows. */
-export function Section({ label, children, testID }: { label?: string; children: ReactNode; testID?: string }) {
+/**
+ * The header every screen outside the tabs prints for itself (`app/(app)/_layout.tsx` is a
+ * headerless stack): Back, the screen's title as its heading, and an optional trailing control.
+ * Back is left out when there is nowhere to go (a deep link straight in), so the rotor never meets
+ * a dead control.
+ */
+export function TopBar({ title, trailing, testID }: { title: string; trailing?: ReactNode; testID?: string }) {
   const th = useTheme();
-  const rows = Children.toArray(children).filter(Boolean);
+  const router = useRouter();
+  const canGoBack = router.canGoBack();
   return (
-    <View style={{ gap: th.space.sm }}>
-      {label ? <FieldLabel>{label}</FieldLabel> : null}
-      <Card padded={false} testID={testID}>
-        {rows.map((row, i) => (
-          <View key={i} style={{ borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth, borderTopColor: th.colors.divider }}>
-            {row}
-          </View>
-        ))}
-      </Card>
+    <View testID={testID} style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, minHeight: th.size.touch }}>
+      {canGoBack ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={() => router.back()}
+          hitSlop={th.space.sm}
+          testID="top-bar-back"
+          style={({ pressed }) => ({
+            minWidth: th.size.touch,
+            minHeight: th.size.touch,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginLeft: -th.space.sm,
+            borderRadius: th.radius.pill,
+            backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
+          })}
+        >
+          <Ionicons name="chevron-back" size={th.size.iconLg} color={th.colors.accent} />
+        </Pressable>
+      ) : null}
+      <Text variant="title2" accessibilityRole="header" style={{ flex: 1 }}>
+        {title}
+      </Text>
+      {trailing}
     </View>
   );
 }
 
-/** A row that opens another screen: an icon in the ID blue, its title and what it holds. */
+/** A group of rows on one card, with an optional heading above it and hairlines between rows. */
+export function Section({
+  title,
+  footer,
+  children,
+  testID,
+}: {
+  title?: string;
+  footer?: string;
+  children: ReactNode;
+  testID?: string;
+}) {
+  const th = useTheme();
+  const rows = Children.toArray(children).filter(Boolean);
+  return (
+    <View style={{ gap: th.space.sm }}>
+      {title ? (
+        <Text variant="headline" accessibilityRole="header">
+          {title}
+        </Text>
+      ) : null}
+      <Card padded={false} testID={testID}>
+        {rows.map((row, i) => (
+          <View key={i}>
+            {i > 0 ? <Divider inset={th.space.lg} /> : null}
+            {row}
+          </View>
+        ))}
+      </Card>
+      {footer ? (
+        <Text variant="footnote" tone="muted">
+          {footer}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** A tinted icon in a soft square, the leading mark of a navigation row. */
+export function RowIcon({ name, tone = 'accent' }: { name: IconName; tone?: 'accent' | 'danger' }) {
+  const th = useTheme();
+  const scale = useFontScale();
+  const box = Math.round(32 * Math.min(scale, 1.4));
+  return (
+    <View
+      style={{
+        width: box,
+        height: box,
+        borderRadius: th.radius.sm,
+        borderCurve: 'continuous',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: tone === 'danger' ? th.colors.dangerFaint : th.colors.accentFaint,
+      }}
+    >
+      <Ionicons name={name} size={th.size.icon} color={tone === 'danger' ? th.colors.danger : th.colors.accent} />
+    </View>
+  );
+}
+
+/** A row that opens another screen. */
 export function LinkRow({
   icon,
   title,
   subtitle,
-  hint,
+  trailing,
   onPress,
   testID,
 }: {
-  icon: ComponentProps<typeof Ionicons>['name'];
+  icon: IconName;
   title: string;
   subtitle?: string;
-  hint: string;
+  trailing?: ReactNode;
   onPress: () => void;
   testID?: string;
 }) {
-  const th = useTheme();
   return (
     <ListRow
       testID={testID}
       title={title}
       subtitle={subtitle}
-      leading={<Ionicons name={icon} size={ICON.lg} color={th.colors.accent} />}
-      accessibilityHint={hint}
+      leading={<RowIcon name={icon} />}
+      trailing={trailing}
+      accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       onPress={onPress}
     />
   );

@@ -32,6 +32,7 @@ const V3_ROUTES = [
   '(app)/stats.tsx',
   '(app)/how-points-work.tsx',
   '(app)/u/[username].tsx',
+  '(app)/add/[username].tsx',
   '(app)/friends/index.tsx',
   '(app)/friends/add.tsx',
   '(app)/friends/scan.tsx',

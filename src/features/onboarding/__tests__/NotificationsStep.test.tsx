@@ -1,22 +1,20 @@
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
-import { registerDriveStateSource } from '@/data/devices/driveStateStore';
-import { T0 } from '@/data/queries/__fixtures__/rows';
 import {
   fakeAdapter,
   fakeAppState,
   fakeHost,
-  permissionsWorld,
+  T0,
+  appWorld,
+  clearQueryClients,
   snap,
   type FakeAdapter,
 } from '@/features/permissions/__fixtures__/harness';
-import { clearQueryClients } from '@/features/trips/__fixtures__/render';
-import { LIVE_TYPES, renderLocal, renderPush } from '@/notifications/catalog';
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
-import { NotificationsStep, previewNotifications } from '../steps/NotificationsStep';
+import { NotificationsStep } from '../steps/NotificationsStep';
 
 const mockSession = { session: { user: { id: 'u1' } }, profile: { driving_stage: 'new' } };
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -31,11 +29,8 @@ const press = (el: Parameters<typeof fireEvent.press>[0]) =>
     fireEvent.press(el);
   });
 
-let release: (() => void) | null = null;
 afterEach(() => {
   clearQueryClients();
-  release?.();
-  release = null;
 });
 
 async function renderStep(
@@ -43,7 +38,7 @@ async function renderStep(
   adapter: FakeAdapter,
   log: string[] = adapter.log
 ) {
-  const w = await permissionsWorld();
+  const w = await appWorld();
   const onNext = jest.fn();
   const ensureChannels = jest.fn(async () => {
     log.push('ensureChannels');
@@ -62,39 +57,12 @@ async function renderStep(
   return { ...w, onNext, ensureChannels, requestDeviceSync };
 }
 
-test('the previews are the catalog’s own copy, and only of live types', async () => {
-  const previews = previewNotifications('android');
-  expect(previews.map((p) => p.type)).toEqual(['trip_summary', 'permission_lapsed']);
-  for (const p of previews) expect(LIVE_TYPES).toContain(p.type);
-  const summary = renderLocal('trip_summary', {
-    clientTripId: 'example',
-    distanceM: 5150,
-    roleUnknown: true,
-    scorableIfDriver: false,
-    count: 1,
-  });
-  expect(previews[0]).toMatchObject({ title: summary.title, body: summary.body });
-  const lapse = renderPush('permission_lapsed', { permission: 'location', platform: 'android', deviceId: 'example' });
-  expect(previews[1]).toMatchObject({ title: lapse?.title, body: lapse?.body });
-
+test('the examples are the three pushes v3 sends, worded as the server words them', async () => {
+  expect(copy.previews.map((p) => p.id)).toEqual(['weekly_recap', 'league_result', 'friend_request']);
   await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));
-  expect(await screen.findByText(summary.title)).toBeOnTheScreen();
-  expect(screen.getByText(lapse!.title)).toBeOnTheScreen();
-});
-
-test('the promise is printed only while this phone reports when it is driving', async () => {
-  await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));
-  await screen.findByTestId('notifications-allow');
-  expect(screen.queryByText("We hold them while you're driving.")).toBeNull();
-
-  // Unmount the first tree before its client is cleared: a mounted observer would re-arm a gc
-  // timer on a client no longer tracked, and keep Jest from exiting (T14 review m3).
-  await cleanup();
-  clearQueryClients();
-  release = registerDriveStateSource();
-  await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));
-  expect(await screen.findByText("We hold them while you're driving.")).toBeOnTheScreen();
-  expect(copy.promise).toBe("We hold them while you're driving.");
+  expect(await screen.findByText('Your week in review')).toBeOnTheScreen();
+  expect(screen.getByText('League results are in')).toBeOnTheScreen();
+  expect(screen.getByText('Someone wants to add you as a friend.')).toBeOnTheScreen();
 });
 
 test('Android: the channels exist before the one request; grant → consent → device sync → on', async () => {
@@ -118,7 +86,7 @@ test('iOS: no channels; one request', async () => {
 
 test('a channel failure does not hold the request back', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', notifications: 'undetermined' }));
-  const w = await permissionsWorld();
+  const w = await appWorld();
   const onNext = jest.fn();
   await w.render(
     <NotificationsStep

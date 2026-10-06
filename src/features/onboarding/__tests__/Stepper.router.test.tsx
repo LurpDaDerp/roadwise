@@ -16,25 +16,40 @@ import { useSyncExternalStore } from 'react';
 import { BackHandler, Text } from 'react-native';
 
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
+import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
 import { ThemeProvider } from '@/ui/theme';
 
 import type { FlowContext } from '../flow';
 import { OnboardingStepper, resetSessionPlan } from '../Stepper';
 
-// The permission steps read the phone; this suite is about the stepper's mechanics, so they render
-// the placeholder frame instead.
-jest.mock('../steps/LocationStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { LocationStep: (p: object) => <PlaceholderStep {...p} step="location" /> };
+// Every step renders as a stub: this suite is about the stepper's mechanics, not the steps.
+jest.mock('../steps/UsernameStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { UsernameStep: (p: object) => <StubStep {...p} step="username" /> };
+});
+jest.mock('../steps/LicenseStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { LicenseStep: (p: object) => <StubStep {...p} step="license" /> };
+});
+jest.mock('../steps/HowStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { HowStep: (p: object) => <StubStep {...p} step="how" /> };
 });
 jest.mock('../steps/MotionStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { MotionStep: (p: object) => <PlaceholderStep {...p} step="motion" /> };
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { MotionStep: (p: object) => <StubStep {...p} step="motion" /> };
+});
+jest.mock('../steps/LocationStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { LocationStep: (p: object) => <StubStep {...p} step="location" /> };
 });
 jest.mock('../steps/NotificationsStep', () => {
-  const { PlaceholderStep } = jest.requireActual('../steps/PlaceholderStep');
-  return { NotificationsStep: (p: object) => <PlaceholderStep {...p} step="notifications" /> };
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { NotificationsStep: (p: object) => <StubStep {...p} step="notifications" /> };
+});
+jest.mock('../steps/ClanStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { ClanStep: (p: object) => <StubStep {...p} step="clan" /> };
 });
 
 const ADULT: FlowContext = { platform: 'android', hasUsername: true };

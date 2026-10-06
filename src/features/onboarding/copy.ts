@@ -20,9 +20,56 @@ export const onboardingCopy = {
     notifications: 'Notifications',
     clan: 'Join a clan',
   } satisfies Record<StepId, string>,
-  placeholder: {
-    body: 'Nothing to set up here yet.',
+  username: {
+    title: 'Pick a username',
+    body: 'This is what friends and leagues see. No real names, ever.',
+    label: 'Username',
+    placeholder: 'swift_fox',
+    rules: '3 to 20 letters, numbers or underscores.',
+    checking: 'Checking…',
+    available: (name: string) => `@${name} is free. It's yours if you want it.`,
+    reasons: {
+      length: 'Use 3 to 20 characters.',
+      characters: 'Only letters, numbers and underscores.',
+      reserved: "That one's reserved. Try another.",
+      not_allowed: "That username isn't allowed. Try another.",
+      taken: 'Someone already has that one. Try another.',
+    },
+    checkFailed: "Couldn't check that name. Try again.",
+    claim: 'Claim username',
+  },
+  license: {
+    title: 'Your license',
+    body: 'So we know where you are on the road. You can change it later in Settings.',
+    options: {
+      permit: { title: "Learner's permit", body: 'You drive with a supervising adult.' },
+      intermediate: { title: 'Intermediate', body: 'A provisional or junior license.' },
+      full: { title: 'Full license', body: 'No restrictions.' },
+    },
     continue: 'Continue',
+    saveFailed: "Couldn't save that. Try again.",
+  },
+  how: {
+    title: 'How it works',
+    body: 'Drive safely, earn points, keep your streak going.',
+    rows: [
+      { big: '+10', title: 'Safe miles earn points', body: '10 points for every mile without an event.' },
+      { big: '−', title: 'Events cost points', body: 'Speeding, phone pickups and hard braking take points off.' },
+      { big: '×1.3', title: 'Streaks multiply', body: 'Each good drive grows your streak and boosts what you earn.' },
+    ],
+    continue: 'Got it',
+  },
+  clan: {
+    title: 'Got a clan code?',
+    body: "Join your friends' clan with their 8-character invite code. You can also do this later from the Clan tab.",
+    label: 'Clan code',
+    placeholder: 'ABCD2345',
+    find: 'Find clan',
+    join: (name: string) => `Join ${name}`,
+    skip: 'Skip for now',
+    members: (n: number) => `${n} of 30 drivers`,
+    full: "This clan is full, so you can't join right now.",
+    finishFailed: "Couldn't finish setting up. Check your connection and try again.",
   },
   /** What the permission steps share. */
   permissions: {
@@ -58,15 +105,16 @@ export const onboardingCopy = {
     cantCheck: "We couldn't check motion access on this phone.",
     failed: "Your phone didn't answer. Try again.",
   },
-  /**
-   * The previews are the catalog's own copy, never text written here, so an example can't promise
-   * a notification the app doesn't send.
-   */
+  /** The examples are the server's own push copy (`supabase/functions/_shared/push_copy.ts`). */
   notifications: {
     title: 'Notifications',
-    body: 'RoadWise lets you know when your weekly recap and league results are in, and when a friend adds you.',
+    body: 'Get your Sunday recap, your league results, and a heads-up when a friend adds you.',
     examples: 'Examples',
-    promise: "We hold them while you're driving.",
+    previews: [
+      { id: 'weekly_recap', title: 'Your week in review', body: '4 drives, +312 points. Safety Rating 92.4 (up 1.2). Streak 6.' },
+      { id: 'league_result', title: 'League results are in', body: 'You finished #3 in Silver and moved up to Gold.' },
+      { id: 'friend_request', title: 'New friend request', body: 'Someone wants to add you as a friend.' },
+    ],
     allow: 'Allow notifications',
     notNow: 'Not now',
     continue: 'Continue',

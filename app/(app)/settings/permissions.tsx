@@ -1,5 +1,6 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { PermissionsScreen } from '@/features/permissions';
 
+/** `/settings/permissions`: location (While Using), motion and notifications, each with its fix. */
 export default function PermissionsRoute() {
-  return <PlaceholderScreen title="Permissions" />;
+  return <PermissionsScreen />;
 }

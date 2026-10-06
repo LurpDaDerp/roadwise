@@ -12,7 +12,7 @@ import { AppState, useWindowDimensions, View } from 'react-native';
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
-import { useDb } from '@/data/queries';
+import { useDb } from '@/data/queries/context';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Text, useTheme } from '@/ui';
 

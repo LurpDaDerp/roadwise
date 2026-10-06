@@ -1,10 +1,13 @@
 import type { ComponentType } from 'react';
 
 import type { FlowContext, StepId } from './flow';
+import { ClanStep } from './steps/ClanStep';
+import { HowStep } from './steps/HowStep';
+import { LicenseStep } from './steps/LicenseStep';
 import { LocationStep } from './steps/LocationStep';
 import { MotionStep } from './steps/MotionStep';
 import { NotificationsStep } from './steps/NotificationsStep';
-import { PlaceholderStep } from './steps/PlaceholderStep';
+import { UsernameStep } from './steps/UsernameStep';
 
 /**
  * What the stepper hands every step. A step renders its own `StepFrame` (the position comes from
@@ -18,18 +21,13 @@ export interface StepProps {
   onBack?: () => void;
 }
 
-const placeholder = (step: StepId): ComponentType<StepProps> =>
-  function Placeholder(props: StepProps) {
-    return <PlaceholderStep {...props} step={step} />;
-  };
-
-/** Every step id to the component that renders it. The placeholders are filled in by WP9. */
+/** Every step id to the component that renders it. The last (clan) finishes onboarding itself. */
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
-  username: placeholder('username'),
-  license: placeholder('license'),
-  how: placeholder('how'),
+  username: UsernameStep,
+  license: LicenseStep,
+  how: HowStep,
   motion: MotionStep,
   location: LocationStep,
   notifications: NotificationsStep,
-  clan: placeholder('clan'),
+  clan: ClanStep,
 };

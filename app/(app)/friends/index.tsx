@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { FriendsScreen } from '@/features/friends/FriendsScreen';
 
 export default function FriendsRoute() {
-  return <PlaceholderScreen title="Friends" />;
+  return <FriendsScreen />;
 }

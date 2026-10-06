@@ -2,11 +2,11 @@
  * The route file itself: the `step` param reaches the stepper, and the context (`useFlowContext`)
  * comes from the signed-in profile.
  */
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react-native';
 
-import { createQueryClient, DataProvider } from '@/data/queries';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
+import { DataProvider } from '@/data/queries/context';
+import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
 import { ThemeProvider } from '@/ui/theme';
 
 import OnboardingStepRoute from '../../../../app/(onboarding)/[step]';
@@ -42,12 +42,12 @@ jest.mock('@/data/config/appConfig', () => {
   return { ...actual, useAppConfig: () => mockAppConfig };
 });
 
-let client: ReturnType<typeof createQueryClient>;
+let client: QueryClient;
 afterEach(() => client?.clear());
 
 async function renderRoute() {
   const db = await createTestDb();
-  client = createQueryClient();
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <ThemeProvider>
       <QueryClientProvider client={client}>

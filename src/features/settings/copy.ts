@@ -1,105 +1,155 @@
 /**
- * The settings screens' own words (H1–H4, H7, H11–H14 as scope.md trims them). Each row's hint
- * says where it goes; each consequence is stated before the control that causes it, and only what
- * the app and the server actually do. H6 keeps its own copy in `notifications/copy.ts`.
+ * The settings screens' own words. Plain, short, second person; each consequence is said before
+ * the control that causes it, and only what the app and the server actually do.
  */
+import type { HeatmapVisibility, LicenseStage } from '@/data/server/summary';
+
+export const LICENSE_LABEL: Record<LicenseStage, string> = {
+  permit: "Learner's permit",
+  intermediate: 'Intermediate',
+  full: 'Full license',
+};
+
+export const LICENSE_SHORT: Record<LicenseStage, string> = {
+  permit: 'Permit',
+  intermediate: 'Intermediate',
+  full: 'Full',
+};
+
+export const VISIBILITY_LABEL: Record<HeatmapVisibility, string> = {
+  only_me: 'Only me',
+  clan: 'Clan',
+  friends: 'Friends',
+};
+
+export const VISIBILITY_SEGMENTS = (['only_me', 'clan', 'friends'] as const).map((value) => ({
+  value,
+  label: VISIBILITY_LABEL[value],
+}));
 
 export const settingsCopy = {
   title: 'Settings',
-  back: 'Back',
-  /** Home's avatar, the one way in (scope.md lane C). */
-  entry: {
-    label: 'Profile and settings',
-    hint: 'Opens your profile and the app settings',
-  },
 
   root: {
     driving: 'Driving',
-    app: 'App',
-    account: 'Account',
-    profileHint: 'Edit your name',
-    detection: { title: 'Drive detection', subtitle: 'Record drives on their own', hint: 'Opens drive detection' },
-    alerts: { title: 'Alerts and sounds', subtitle: 'Voice and a test sound', hint: 'Opens alerts and sounds' },
-    camera: { title: 'Camera coaching', subtitle: 'Beta', hint: 'Opens camera coaching' },
-    notifications: { title: 'Notifications', subtitle: 'What RoadWise sends you', hint: 'Opens notification settings' },
-    privacy: { title: 'Privacy and data', subtitle: 'Export or delete your data', hint: 'Opens privacy and data' },
-    help: { title: 'Help and legal', subtitle: 'Questions, terms and privacy', hint: 'Opens help and legal' },
-    signOut: 'Sign out',
-    version: (v: string) => `RoadWise ${v}`,
+    dms: { title: 'Driver monitoring', subtitle: 'Camera coaching (beta)' },
+    alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
+    reminder: {
+      title: 'Forgot-to-start reminder',
+      subtitle: 'A quiet nudge if your phone noticed a car trip you didn’t record. Off by default.',
+    },
+    permissions: { title: 'Permissions', subtitle: 'Location, motion and notifications' },
+    privacy: 'Privacy',
+    zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 3 set`) },
+    heatmap: 'Heat map visibility',
+    heatmapFooter: 'Who can see the map of roads you drive most. Only me is the default.',
+    you: 'You',
+    license: 'License stage',
+    units: 'Units',
+    state: { title: 'US state', subtitle: 'For the state filter on the global board', none: 'Not set' },
+    notifications: { title: 'Notifications', subtitle: 'Weekly recap, leagues, friends' },
+    saveError: "That didn't save. Check your connection and try again.",
   },
 
-  /** Home's own sign-out words are reused for the question (`homeCopy.signOutCheck`). */
-  profile: {
-    title: 'Profile',
-    nameLabel: 'First name',
-    nameHint: 'Shown on your card and to your family',
-    nameEmpty: 'Enter a name',
-    save: 'Save',
-    saved: 'Saved',
-    saveError: "Couldn't save your name. Check your connection and try again.",
-    classLabel: 'Class',
-    className: (name: string) => `Class ${name}`,
-    classLoading: 'Reading your class',
-    classUnread: "Couldn't read your class right now.",
-    /** Said beside the class, so the driver knows where it comes from. */
-    classHow: 'Your class follows the points you earn. Rewards explains how.',
+  states: {
+    title: 'Your state',
+    none: "Don't show a state",
   },
 
   alerts: {
-    title: 'Alerts and sounds',
+    title: 'Alerts',
     voice: {
-      title: 'Voice prompts',
-      on: 'Alerts say a short phrase, such as "Slow down", after the tone.',
+      title: 'Voice alerts',
+      on: 'Alerts say a short phrase, like “Hard brake”, after the tone.',
       off: 'Alerts play a tone only. Nothing is spoken.',
     },
-    /** Stated plainly, so nobody thinks switching voice off silences the safety tones. */
-    tonesStay: 'The warning tones and vibration always play. Only the spoken phrase is switched off.',
+    tonesStay: 'Warning tones always play. This only switches the spoken words.',
     test: {
       label: 'Play a test alert',
-      hint: 'Plays the warning tone, then the voice prompt if it is on',
+      hint: 'Plays the warning tone, then the voice line if it is on',
       playing: 'Playing',
-      busy: "You can test the sound when you're not recording a drive.",
+      busy: 'You can test the sound when you’re not on a drive.',
       failed: "The test alert couldn't play. Check that your phone isn't muted, then try again.",
     },
     saveError: "Couldn't save that setting. Try again.",
   },
 
-  privacy: {
-    title: 'Privacy and data',
-    what: 'RoadWise keeps your drives, scores, rewards and settings on its servers so they follow you to a new phone. Raw GPS traces are removed after 14 days. During a drive, an area about 10 km across is sent to Open-Meteo to check for severe weather.',
+  zones: {
+    title: 'Privacy zones',
+    intro:
+      'Routes inside a zone are hidden on your maps, share cards and heat map. Use them for places like home or school.',
+    local: 'Zones stay on this phone. They’re never uploaded.',
+    trim: 'The first and last quarter mile of every drive is always hidden too.',
+    add: 'Add a zone',
+    max: 'You can set up to 3 zones.',
+    empty: 'No zones yet',
+    emptyBody: 'Add home or school so drives near them stay private.',
+    radius: (m: number) => `${m} m radius`,
+    edit: 'Edit',
+    editTitle: 'Edit zone',
+    newTitle: 'New zone',
+    name: 'Name',
+    namePlaceholder: 'Home, School…',
+    presets: ['Home', 'School'] as const,
+    size: 'Size',
+    smaller: 'Smaller',
+    bigger: 'Bigger',
+    center: 'Center',
+    useLocation: 'Use my current location',
+    locating: 'Finding you',
+    pickOnMap: 'Or tap the map to move the center.',
+    noCenter: 'Set the center with your current location.',
+    centerSet: 'Center set',
+    save: 'Save zone',
+    remove: 'Delete zone',
+    removeTitle: (name: string) => `Delete “${name}”?`,
+    removeBody: 'Routes near this place will show on your maps again.',
+    cancel: 'Cancel',
+    locationDenied: 'Location is off for RoadWise, so we can’t find you. Turn it on in Settings, or tap the map.',
+    locationFailed: "Couldn't get your location. Try again.",
+    problems: {
+      name_empty: 'Give the zone a name.',
+      name_long: 'Keep the name to 20 characters.',
+      radius: 'Pick a size between 200 and 800 m.',
+      center: 'Set the center first.',
+      too_many: 'You can set up to 3 zones.',
+    },
+    saveError: "Couldn't save your zones. Try again.",
+  },
+
+  account: {
+    title: 'Account',
+    signedInAs: (u: string) => `Signed in as @${u}`,
+    signOut: 'Sign out',
+    signingOut: 'Signing out',
     export: {
       title: 'Export my data',
-      body: 'A copy of everything RoadWise keeps about you, in one JSON file.',
+      body: 'A copy of everything RoadWise keeps about you, in one file.',
       action: 'Export my data',
-      hint: 'Prepares your data and opens the share sheet',
       working: 'Preparing your data',
       failed: "Couldn't export your data. Check your connection and try again.",
       offline: "You're offline. Export your data when you're connected.",
-      tooMany: "You've exported your data several times today. Try again tomorrow.",
+      tooMany: "You've exported your data a few times today. Try again tomorrow.",
       saved: 'Your data file is saved.',
-      /** Android: React Native's share sheet can't carry a file, so the system folder picker saves it. */
       androidNote: "You'll choose a folder on your phone to save the file in.",
     },
     delete: {
       title: 'Delete account',
       body: 'Permanently delete your account and everything RoadWise keeps about you.',
-      action: 'Delete account',
-      hint: 'Opens the delete account screen',
     },
   },
 
   deleteAccount: {
     title: 'Delete account',
     heading: 'This deletes your account for good',
-    consequencesLabel: 'What is deleted',
+    consequencesLabel: 'What gets deleted',
     consequences: [
-      'Your profile, drives, scores and trip history',
-      'Your points, streak, badges, challenges and weekly goals',
-      "Your family membership and shared location. If you're the family's last member, the family and its saved places are deleted",
-      'Your notifications, devices and settings on our servers',
-      'Recorded GPS traces stored for your drives',
+      'Your profile, username and drives',
+      'Your points, level, streak, freezes and achievements',
+      'Your league history, friends and clan membership',
+      'Your notification settings and devices on our servers',
     ],
-    exportFirst: 'You can export a copy of your data first.',
+    exportFirst: 'Want a copy first? Export your data before you delete.',
     exportAction: 'Export my data first',
     cannotUndo: "This can't be undone. Signing in again later starts a new, empty account.",
     typeLabel: 'Type DELETE to confirm',
@@ -108,44 +158,20 @@ export const settingsCopy = {
     action: 'Delete my account',
     actionHint: 'Deletes your account and signs you out',
     working: 'Deleting your account',
-    failed: "Couldn't delete your account. Check your connection and try again. Your account wasn't deleted.",
+    failed: "Couldn't delete your account. Check your connection and try again. Nothing was deleted.",
     offline: "You're offline. Delete your account when you're connected.",
-    busy: 'Finish or end the drive in progress first.',
-    /** A 401: the session no longer proves an account. Not a claim that anything was deleted. */
+    busy: 'End your drive first.',
     sessionGone: "You've been signed out. If your account still exists, sign in and try again.",
   },
 
-  help: {
-    title: 'Help and legal',
-    faqLabel: 'Questions',
-    faq: [
-      {
-        q: "My drive didn't record",
-        a: 'Drive detection needs location set to Always and motion access. Open Drive detection in Settings to check each one. You can also start a drive yourself from Home.',
-      },
-      {
-        q: 'How is my score worked out?',
-        a: 'Moments like speeding, phone use and harsh braking take points off a drive, and longer drives count for more. How scoring works, below, explains it in full.',
-      },
-      {
-        q: 'Can I say an alert was wrong?',
-        a: "Yes. Open the drive, tap the moment, and choose This isn't right. A moment your report removes comes off the drive's score.",
-      },
-      {
-        q: 'What if I was a passenger?',
-        a: "Open the drive and choose I was a passenger. A drive you weren't driving isn't scored.",
-      },
-      {
-        q: 'Who can see my drives and location?',
-        a: "Only you see your drives and scores. If you join a family and turn on location sharing, family members see your latest location. You can turn sharing off at any time, and your last location is deleted straight away.",
-      },
-    ],
-    scoring: 'How scoring works',
-    scoringHint: 'Opens the scoring explainer',
-    legalLabel: 'Legal',
-    safetyLabel: 'Safety',
-    /** Printed with the disclaimer word for word (`SAFETY_DISCLAIMER`). */
-    safetyNote: 'Keep your eyes on the road. Never touch your phone while driving. Follow the law where you drive, including where a phone may be mounted.',
-    noDocuments: 'The terms and privacy policy will be linked here once they are published.',
+  blocked: {
+    title: 'Blocked users',
+    intro: 'People you block can’t find you, add you or invite you to a clan, and you won’t see each other on boards.',
+    empty: 'Nobody blocked',
+    emptyBody: 'You can block someone from their profile.',
+    unblock: 'Unblock',
+    unblockLabel: (u: string) => `Unblock ${u}`,
+    loadError: "Couldn't load your blocked list.",
+    retry: 'Try again',
   },
 } as const;

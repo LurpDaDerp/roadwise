@@ -1,5 +1,5 @@
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
+import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
 import { TERMS_VERSION } from '@/features/auth/legal';
 
 import { finishOnboarding, type FinishDeps } from '../finish';
@@ -47,15 +47,15 @@ test('completes onboarding with the license stage and terms version, refreshes, 
 });
 
 test('a link held for this account is opened instead of Home, then cleared', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/drives/t_1' });
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/drives/t-1' });
   const d = deps();
   await finishOnboarding(d, 'permit');
-  expect(d.log.at(-1)).toBe('replace:/drives/t_1');
+  expect(d.log.at(-1)).toBe('replace:/drives/t-1');
   expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
 });
 
 test('a link held for another account is never opened', async () => {
-  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u2', href: '/drives/t_1' });
+  await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u2', href: '/drives/t-1' });
   const d = deps();
   await finishOnboarding(d, 'full');
   expect(d.log.at(-1)).toBe('replace:/(tabs)/home');

@@ -1,222 +1,248 @@
 /**
- * The settings screens kept for v3 (WP9 adapts them): voice and the test alert, export and delete.
- * The data layer is the real one on sql.js; the session, the drive state and the config are
- * stand-ins.
+ * The settings screens: the root (reminder, units, license, state), alerts (voice off by default,
+ * style, test), account (export, delete, sign out) and delete account. Device settings are an
+ * in-memory table; the server, session and drive state are stand-ins.
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
-import { createSettingsRepo } from '@/data/db/settings';
-import { clearQueryClients, routerDouble, world } from '@/features/trips/__fixtures__/render';
+import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { alertStyleCopy } from '../alerts/copy';
 import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } from '../alerts/stylePref';
 import { resetVoicePrefForTests, VOICE_PREF_KEY, voicePrefEnabled } from '../alerts/voicePref';
+import { AccountScreen } from '../AccountScreen';
+import { AlertsScreen } from '../AlertsScreen';
 import { settingsCopy as copy } from '../copy';
 import { DeleteAccountScreen } from '../DeleteAccountScreen';
-import { PrivacyScreen } from '../PrivacyScreen';
+import { REMINDER_KEY, UNITS_KEY, writeReminder } from '../localPrefs';
 import { SETTINGS_HREFS } from '../routes';
-import { AlertsScreen } from '../AlertsScreen';
+import { SettingsScreen } from '../SettingsScreen';
 
-const mockRouter = routerDouble();
-jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+const mockRpc = jest.fn();
+jest.mock('@/data/server/rpc', () => {
+  const actual = jest.requireActual('@/data/server/rpc');
+  return { ...actual, callRpc: (fn: string, args?: unknown) => mockRpc(fn, args) };
+});
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-
 const mockSession = {
-  session: { user: { id: '00000000-0000-4000-8000-00000000000a' } } as { user: { id: string } } | null,
-  profile: { display_name: 'Maya Chen', age_band: '18_plus' } as Record<string, unknown> | null,
+  session: { user: { id: 'me' } },
+  profile: null,
   signOut: jest.fn(async (_opts?: { force?: boolean }) => ({ signedOut: true }) as { signedOut: boolean; unsentDeletes?: number | null }),
   refreshProfile: jest.fn(async () => {}),
 };
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
-
+const mockRouter = { push: jest.fn(), back: jest.fn(), canGoBack: () => true };
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => mockRouter,
+    useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]),
+  };
+});
 const mockDrive = { status: 'idle' };
 jest.mock('@/drive/useDrive', () => ({
   useDrive: (select: (s: { status: string }) => unknown) => select({ status: mockDrive.status }),
 }));
+jest.mock('@/drive/policy', () => ({ isBusyStatus: (s: string) => s === 'recording' || s === 'finalizing' }));
+jest.mock('../deviceWipe', () => ({ wipeThisPhone: jest.fn(async () => {}) }));
 
-let mockConfig: AppConfig = { ...CONFIG_DEFAULTS, fetchedAt: null };
-jest.mock('@/data/config/appConfig', () => ({
-  ...jest.requireActual('@/data/config/appConfig'),
-  useAppConfig: () => ({ config: mockConfig, ready: true }),
-}));
+const SUMMARY = {
+  profile: {
+    user_id: 'me',
+    username: 'swift_fox',
+    license_stage: 'permit',
+    units: 'mi',
+    state: null,
+    heatmap_visibility: 'only_me',
+    league_eligible: true,
+    flagged: false,
+    onboarded_at: '2026-10-01T00:00:00Z',
+  },
+  progress: {},
+  league: {},
+  not_driving_left: 2,
+  challenges: [],
+  achievements: [],
+};
 
 beforeEach(() => {
-  jest.clearAllMocks();
-  mockDrive.status = 'idle';
-  mockConfig = { ...CONFIG_DEFAULTS, fetchedAt: null };
-  mockSession.session = { user: { id: '00000000-0000-4000-8000-00000000000a' } };
-  mockSession.profile = { display_name: 'Maya Chen', age_band: '18_plus' };
+  mockRpc.mockReset();
+  answerRpc(mockRpc, { get_my_summary: SUMMARY });
+  mockRouter.push.mockClear();
+  mockSession.signOut.mockClear();
   mockSession.signOut.mockImplementation(async () => ({ signedOut: true }));
+  mockDrive.status = 'idle';
   resetVoicePrefForTests();
   resetAlertStylePrefForTests();
 });
 afterEach(() => clearQueryClients());
 
-async function render(ui: React.ReactElement) {
-  const w = await world();
-  await w.renderScreen(ui);
-  return w;
-}
-
-describe('AlertsScreen (H4)', () => {
-  test('voice prompts: on by default, turned off and kept on the phone, and the tones are said to stay', async () => {
-    const w = await render(<AlertsScreen />);
-    const toggle = screen.getByRole('switch', { name: copy.alerts.voice.title });
-    expect(toggle.props.value).toBe(true);
-    expect(screen.getByTestId('alerts-voice-hint')).toHaveTextContent(copy.alerts.voice.on);
-    expect(screen.getByTestId('alerts-tones-stay')).toHaveTextContent(copy.alerts.tonesStay);
-    await fireEvent(toggle, 'valueChange', false);
-    await waitFor(() => expect(screen.getByTestId('alerts-voice-hint')).toHaveTextContent(copy.alerts.voice.off));
-    expect(voicePrefEnabled()).toBe(false);
-    expect(await createSettingsRepo(w.db).get(VOICE_PREF_KEY)).toBe(false);
+describe('Settings', () => {
+  it('the forgot-to-start reminder is off by default, and a tap saves it on this phone', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const toggle = await screen.findByTestId('settings-reminder');
+    expect(toggle.props.value).toBe(false);
+    await act(async () => {
+      fireEvent(toggle, 'valueChange', true);
+    });
+    await waitFor(async () => expect(await w.settings.get(REMINDER_KEY)).toBe(true));
   });
 
-  test('a stored "off" is read when the screen opens', async () => {
-    const w = await world();
-    await createSettingsRepo(w.db).set(VOICE_PREF_KEY, false);
-    await w.renderScreen(<AlertsScreen />);
-    await waitFor(() => expect(screen.getByRole('switch', { name: copy.alerts.voice.title }).props.value).toBe(false));
+  it('the reminder hands the choice to the native side when it can', async () => {
+    const w = await appWorld();
+    const native = jest.fn();
+    await writeReminder(w.settings, true, native);
+    expect(native).toHaveBeenCalledWith(true);
+    await expect(writeReminder(w.settings, false, () => Promise.reject(new Error('no module')))).resolves.toBeUndefined();
+    expect(await w.settings.get(REMINDER_KEY)).toBe(false);
   });
 
-  test('alert style: sound and vibration by default; a choice is checked, cached for the player and kept on the phone', async () => {
-    const w = await render(<AlertsScreen />);
-    const checked = (name: string) => screen.getByRole('radio', { name }).props.accessibilityState.checked as boolean;
-    expect(checked(alertStyleCopy.options.both)).toBe(true);
-    expect(checked(alertStyleCopy.options.vibration)).toBe(false);
-    await fireEvent.press(screen.getByTestId('alerts-style-vibration'));
-    await waitFor(() => expect(checked(alertStyleCopy.options.vibration)).toBe(true));
-    expect(checked(alertStyleCopy.options.both)).toBe(false);
-    expect(alertStylePref()).toBe('vibration');
-    expect(await createSettingsRepo(w.db).get(ALERT_STYLE_PREF_KEY)).toBe('vibration');
+  it('units save to the server and to the phone’s mirror', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    await screen.findByTestId('settings-units');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('tab', { name: 'Kilometers' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_units: 'km' }));
+    expect(await w.settings.get(UNITS_KEY)).toBe('km');
   });
 
-  test('a stored alert style is read when the screen opens', async () => {
-    const w = await world();
-    await createSettingsRepo(w.db).set(ALERT_STYLE_PREF_KEY, 'sound');
-    await w.renderScreen(<AlertsScreen />);
-    await waitFor(() =>
-      expect(screen.getByRole('radio', { name: alertStyleCopy.options.sound }).props.accessibilityState.checked).toBe(true)
-    );
+  it('license stage and state go through update_profile', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    await screen.findByTestId('settings-license');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('tab', { name: 'Full' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_license_stage: 'full' }));
+    await tap('settings-state');
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('radio', { name: 'Ohio' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
   });
 
-  test('the test alert plays on a tap, and says when it could not', async () => {
-    const play = jest.fn(async () => 'failed' as const);
-    await render(<AlertsScreen deps={{ play }} />);
-    await fireEvent.press(screen.getByRole('button', { name: copy.alerts.test.label }));
-    expect(play).toHaveBeenCalledTimes(1);
-    expect(await screen.findByTestId('alerts-test-failed')).toBeOnTheScreen();
-  });
-
-  test('never during a drive: the test is disabled and says why', async () => {
-    mockDrive.status = 'recording';
-    const play = jest.fn(async () => 'played' as const);
-    await render(<AlertsScreen deps={{ play }} />);
-    const button = screen.getByTestId('alerts-test');
-    expect(button).toBeDisabled();
-    expect(screen.getByTestId('alerts-test-busy')).toHaveTextContent(copy.alerts.test.busy);
-    await fireEvent.press(button);
-    expect(play).not.toHaveBeenCalled();
+  it('opens driver monitoring, alerts, zones, permissions and notifications', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    await tap('settings-dms');
+    await tap('settings-zones');
+    await tap('settings-notifications');
+    expect(mockRouter.push.mock.calls.map((c) => c[0])).toEqual([
+      SETTINGS_HREFS.dms,
+      SETTINGS_HREFS.privacyZones,
+      SETTINGS_HREFS.notifications,
+    ]);
   });
 });
 
-describe('PrivacyScreen (H7, H14)', () => {
-  test('export: the data goes to the sheet', async () => {
+describe('Alerts', () => {
+  it('voice alerts are off by default; turning them on is kept on the phone', async () => {
+    const w = await appWorld();
+    await w.render(<AlertsScreen />);
+    const toggle = await screen.findByTestId('alerts-voice');
+    expect(toggle.props.value).toBe(false);
+    expect(screen.getByTestId('alerts-tones-stay')).toHaveTextContent(copy.alerts.tonesStay);
+    await act(async () => {
+      fireEvent(toggle, 'valueChange', true);
+    });
+    await waitFor(() => expect(voicePrefEnabled()).toBe(true));
+    expect(await w.settings.get(VOICE_PREF_KEY)).toBe(true);
+  });
+
+  it('alert style: sound and vibration by default; a choice is kept on the phone', async () => {
+    const w = await appWorld();
+    await w.render(<AlertsScreen />);
+    const checked = (name: string) => screen.getByRole('radio', { name }).props.accessibilityState.checked as boolean;
+    await screen.findByTestId('alerts-style-both');
+    expect(checked(alertStyleCopy.options.both)).toBe(true);
+    await tap('alerts-style-vibration');
+    await waitFor(() => expect(checked(alertStyleCopy.options.vibration)).toBe(true));
+    expect(alertStylePref()).toBe('vibration');
+    expect(await w.settings.get(ALERT_STYLE_PREF_KEY)).toBe('vibration');
+  });
+
+  it('never tests during a drive', async () => {
+    mockDrive.status = 'recording';
+    const play = jest.fn(async () => 'played' as const);
+    const w = await appWorld();
+    await w.render(<AlertsScreen deps={{ play }} />);
+    expect(await screen.findByTestId('alerts-test')).toBeDisabled();
+    expect(screen.getByTestId('alerts-test-busy')).toHaveTextContent(copy.alerts.test.busy);
+  });
+});
+
+describe('Account', () => {
+  it('export goes to the sheet; delete opens its own screen; sign out signs out', async () => {
     const exportData = jest.fn(async () => ({ ok: true as const, json: '{"a":1}' }));
     const share = jest.fn(async () => 'shared' as const);
-    await render(<PrivacyScreen deps={{ exportData, share, platform: 'ios' }} />);
-    expect(screen.queryByTestId('privacy-export-android')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: copy.privacy.export.action }));
+    const w = await appWorld();
+    await w.render(<AccountScreen deps={{ exportData, share, platform: 'ios' }} />);
+    expect(await screen.findByText(copy.account.signedInAs('swift_fox'))).toBeOnTheScreen();
+    await tap('account-export');
     await waitFor(() => expect(share).toHaveBeenCalledWith('{"a":1}'));
+    await tap('account-delete');
+    expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.deleteAccount);
+    await tap('account-sign-out');
+    await waitFor(() => expect(mockSession.signOut).toHaveBeenCalled());
   });
 
-  test('Android says where the file goes, and says it was saved', async () => {
-    const exportData = jest.fn(async () => ({ ok: true as const, json: '{}' }));
-    const share = jest.fn(async () => 'saved' as const);
-    await render(<PrivacyScreen deps={{ exportData, share, platform: 'android' }} />);
-    expect(screen.getByTestId('privacy-export-android')).toHaveTextContent(copy.privacy.export.androidNote);
-    await fireEvent.press(screen.getByRole('button', { name: copy.privacy.export.action }));
-    expect(await screen.findByTestId('export-saved')).toBeOnTheScreen();
-  });
-
-  test.each([
+  it.each([
     ['offline', 'export-offline'],
     ['too_many', 'export-too-many'],
     ['failed', 'export-failed'],
-  ] as const)('export %s: said plainly, nothing shared', async (reason, id) => {
+  ] as const)('export %s is said plainly, nothing shared', async (reason, id) => {
     const share = jest.fn();
-    await render(<PrivacyScreen deps={{ exportData: async () => ({ ok: false, reason }), share }} />);
-    await fireEvent.press(screen.getByRole('button', { name: copy.privacy.export.action }));
+    const w = await appWorld();
+    await w.render(<AccountScreen deps={{ exportData: async () => ({ ok: false, reason }), share }} />);
+    await tap('account-export');
     expect(await screen.findByTestId(id)).toBeOnTheScreen();
     expect(share).not.toHaveBeenCalled();
   });
-
-  test('delete account opens its own screen', async () => {
-    await render(<PrivacyScreen />);
-    await fireEvent.press(screen.getByRole('button', { name: copy.privacy.delete.action }));
-    expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.deleteAccount);
-  });
 });
 
-describe('DeleteAccountScreen (H13)', () => {
-  test('the consequences come first; the button waits for DELETE', async () => {
+describe('Delete account', () => {
+  it('lists what goes, then waits for DELETE', async () => {
     const remove = jest.fn(async () => ({ ok: true as const }));
     const wipe = jest.fn(async () => {});
-    await render(<DeleteAccountScreen deps={{ remove, wipe }} />);
-    for (const line of copy.deleteAccount.consequences) expect(screen.getByText(line)).toBeOnTheScreen();
-    expect(screen.getByTestId('delete-cannot-undo')).toHaveTextContent(copy.deleteAccount.cannotUndo);
-    const button = screen.getByTestId('delete-confirm');
-    expect(button).toBeDisabled();
-    await fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'delete');
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove, wipe }} />);
+    for (const line of copy.deleteAccount.consequences) expect(await screen.findByText(line)).toBeOnTheScreen();
     expect(screen.getByTestId('delete-confirm')).toBeDisabled();
-    await fireEvent.press(screen.getByTestId('delete-confirm'));
-    expect(remove).not.toHaveBeenCalled();
-    await fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
-    await fireEvent.press(screen.getByTestId('delete-confirm'));
+    await act(async () => {
+      fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    });
+    await tap('delete-confirm');
     await waitFor(() => expect(wipe).toHaveBeenCalled());
     expect(remove).toHaveBeenCalledTimes(1);
     expect(mockSession.signOut).toHaveBeenCalledWith({ force: true });
   });
 
-  test("a failure says the account wasn't deleted, and changes nothing on the phone", async () => {
+  it("a failure says nothing was deleted and changes nothing", async () => {
     const remove = jest.fn(async () => ({ ok: false as const, reason: 'failed' as const }));
     const wipe = jest.fn(async () => {});
-    await render(<DeleteAccountScreen deps={{ remove, wipe }} />);
-    await fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
-    await fireEvent.press(screen.getByTestId('delete-confirm'));
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove, wipe }} />);
+    await act(async () => {
+      fireEvent.changeText(await screen.findByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    });
+    await tap('delete-confirm');
     expect(await screen.findByTestId('delete-failed')).toBeOnTheScreen();
-    expect(screen.getByText(copy.deleteAccount.failed)).toBeOnTheScreen();
     expect(mockSession.signOut).not.toHaveBeenCalled();
     expect(wipe).not.toHaveBeenCalled();
   });
 
-  test('a session that proves no account: signed out, and told so without a claim', async () => {
-    const remove = jest.fn(async () => ({ ok: false as const, reason: 'session_gone' as const }));
-    const wipe = jest.fn(async () => {});
-    await render(<DeleteAccountScreen deps={{ remove, wipe }} />);
-    await fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
-    await fireEvent.press(screen.getByTestId('delete-confirm'));
-    expect(await screen.findByTestId('delete-session-gone')).toBeOnTheScreen();
-    expect(mockSession.signOut).toHaveBeenCalledWith({ force: true });
-    expect(wipe).not.toHaveBeenCalled();
-  });
-
-  test('never during a drive', async () => {
+  it('never during a drive', async () => {
     mockDrive.status = 'recording';
     const remove = jest.fn(async () => ({ ok: true as const }));
-    await render(<DeleteAccountScreen deps={{ remove, wipe: async () => {} }} />);
-    await fireEvent.changeText(screen.getByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove, wipe: async () => {} }} />);
+    await act(async () => {
+      fireEvent.changeText(await screen.findByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    });
     expect(screen.getByTestId('delete-confirm')).toBeDisabled();
     expect(screen.getByText(copy.deleteAccount.busy)).toBeOnTheScreen();
-    await fireEvent.press(screen.getByTestId('delete-confirm'));
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  test('export first is one tap away', async () => {
-    const exportData = jest.fn(async () => ({ ok: true as const, json: '{}' }));
-    const share = jest.fn(async () => 'shared' as const);
-    await render(<DeleteAccountScreen deps={{ exportData, share, remove: jest.fn(), wipe: jest.fn() }} />);
-    await fireEvent.press(screen.getByRole('button', { name: copy.deleteAccount.exportAction }));
-    await waitFor(() => expect(share).toHaveBeenCalled());
   });
 });

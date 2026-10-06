@@ -1,15 +1,12 @@
-import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Switch, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import type { AlertStyle } from '@/core/alerts/types';
 import { createSettingsRepo } from '@/data/db/settings';
-import { useDb } from '@/data/queries';
+import { useDb } from '@/data/queries/context';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
-import { TOUCH } from '@/features/trips/layout';
-import { TripTopBar } from '@/features/trips/TopBar';
-import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
+import { Banner, Button, Card, Divider, Screen, Text, ToggleRow, useTheme } from '@/ui';
 
 import { alertStyleCopy } from './alerts/copy';
 import {
@@ -19,21 +16,21 @@ import {
   setAlertStylePref,
   subscribeAlertStylePref,
 } from './alerts/stylePref';
-import { loadVoicePref, setVoicePref, subscribeVoicePref, voicePrefEnabled } from './alerts/voicePref';
 import { playTestAlert, type TestAlertOutcome } from './alerts/testAlert';
+import { loadVoicePref, setVoicePref, subscribeVoicePref, voicePrefEnabled } from './alerts/voicePref';
 import { settingsCopy } from './copy';
+import { TopBar } from './parts';
 
 const copy = settingsCopy.alerts;
 
 /**
- * H4 · Alerts and sounds, lean: voice prompts on or off, the alert style (sound and vibration,
- * vibration only, sound only), and a test alert. Alerts are never switched off altogether here
- * (§13.4: safety alerts are not a preference) — only how they reach the driver. The test plays only
- * while no drive is recording, so it can never talk over a real alert, and plays in the chosen style.
+ * `/settings/alerts`: voice alerts on or off (`alerts.voice`, off by default), how alerts reach
+ * the driver (sound, vibration or both), and a test alert. Alerts themselves are never switched
+ * off here: safety alerts are not a preference, only how they arrive. The test plays only while no
+ * drive is recording, so it can never talk over a real alert.
  */
 export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<TestAlertOutcome> } }) {
   const th = useTheme();
-  const router = useRouter();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const busy = useDrive((s) => isBusyStatus(s.status));
@@ -43,7 +40,6 @@ export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<Test
   const [saveFailed, setSaveFailed] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testFailed, setTestFailed] = useState(false);
-  const back = router.canGoBack() ? () => router.back() : null;
 
   useEffect(() => {
     let live = true;
@@ -73,7 +69,6 @@ export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<Test
       setSaving(false);
     }
   };
-  const onVoice = (next: boolean) => save(() => setVoicePref(settings, next));
   const onStyle = (next: AlertStyle) => {
     if (next !== style) void save(() => setAlertStylePref(settings, next));
   };
@@ -87,45 +82,23 @@ export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<Test
     setTestFailed(outcome === 'failed');
   };
 
-  const hint = voice ? copy.voice.on : copy.voice.off;
   return (
     <Screen scroll testID="alerts-screen">
-      <TripTopBar title={copy.title} onBack={back} />
+      <TopBar title={copy.title} />
       {saveFailed ? <Banner testID="alerts-save-error" tone="warning" message={copy.saveError} /> : null}
       <Card padded={false}>
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: th.space.md,
-            paddingVertical: th.space.md,
-            paddingHorizontal: th.space.lg,
-            minHeight: TOUCH + th.space.md,
-          }}
-        >
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="headline">{copy.voice.title}</Text>
-            <Text variant="footnote" tone="muted" testID="alerts-voice-hint">
-              {hint}
-            </Text>
-          </View>
-          <Switch
-            testID="alerts-voice"
-            accessibilityRole="switch"
-            accessibilityLabel={copy.voice.title}
-            accessibilityHint={hint}
-            accessibilityState={{ checked: voice, disabled: saving }}
-            value={voice}
-            disabled={saving}
-            onValueChange={(next) => void onVoice(next)}
-            trackColor={{ true: th.colors.accent, false: th.colors.border }}
-          />
-        </View>
-        <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: th.colors.divider, padding: th.space.lg }}>
-          <Text variant="footnote" tone="muted" testID="alerts-tones-stay">
-            {copy.tonesStay}
-          </Text>
-        </View>
+        <ToggleRow
+          title={copy.voice.title}
+          subtitle={voice ? copy.voice.on : copy.voice.off}
+          value={voice}
+          disabled={saving}
+          onValueChange={(next) => void save(() => setVoicePref(settings, next))}
+          testID="alerts-voice"
+        />
+        <Divider inset={th.space.lg} />
+        <Text variant="footnote" tone="muted" style={{ padding: th.space.lg }} testID="alerts-tones-stay">
+          {copy.tonesStay}
+        </Text>
       </Card>
 
       <Card padded={false}>
@@ -151,17 +124,17 @@ export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<Test
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: th.space.md,
-                  minHeight: TOUCH,
+                  minHeight: th.size.touch,
                   paddingVertical: th.space.sm,
                   paddingHorizontal: th.space.lg,
-                  opacity: pressed ? 0.7 : 1,
+                  backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
                 })}
               >
                 <View
                   style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 10,
+                    width: 22,
+                    height: 22,
+                    borderRadius: 11,
                     borderWidth: 2,
                     borderColor: chosen ? th.colors.accent : th.colors.borderStrong,
                     alignItems: 'center',
@@ -181,11 +154,11 @@ export function AlertsScreen({ deps = {} }: { deps?: { play?: () => Promise<Test
         <Button
           testID="alerts-test"
           label={testing ? copy.test.playing : copy.test.label}
+          icon="play"
           variant="secondary"
           onPress={() => void onTest()}
           loading={testing}
           disabled={busy}
-          accessibilityHint={busy ? copy.test.busy : copy.test.hint}
         />
         {busy ? (
           <Text variant="footnote" tone="muted" testID="alerts-test-busy">

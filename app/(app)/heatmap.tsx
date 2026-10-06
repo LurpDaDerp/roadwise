@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { HeatmapScreen } from '@/features/profile/HeatmapScreen';
 
 export default function HeatmapRoute() {
-  return <PlaceholderScreen title="Heat map" />;
+  return <HeatmapScreen />;
 }

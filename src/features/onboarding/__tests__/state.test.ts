@@ -1,5 +1,5 @@
 import { createSettingsRepo } from '@/data/db/settings';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
+import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
 
 import {
   ONBOARDING_PENDING_HREF_KEY,

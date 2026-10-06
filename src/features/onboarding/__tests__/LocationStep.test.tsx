@@ -1,16 +1,16 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
-import { T0 } from '@/data/queries/__fixtures__/rows';
 import {
   fakeAdapter,
   fakeAppState,
   fakeHost,
-  permissionsWorld,
+  T0,
+  appWorld,
+  clearQueryClients,
   snap,
   type FakeAdapter,
 } from '@/features/permissions/__fixtures__/harness';
-import { clearQueryClients } from '@/features/trips/__fixtures__/render';
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter) {
-  const w = await permissionsWorld();
+  const w = await appWorld();
   const onNext = jest.fn();
   const appState = fakeAppState();
   await w.render(

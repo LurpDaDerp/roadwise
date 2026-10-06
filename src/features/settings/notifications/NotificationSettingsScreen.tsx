@@ -1,27 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { AppState, Pressable, View } from 'react-native';
 
-import { recordPrompt, type NotificationAccess, type PermissionsAdapter } from '@/core/permissions';
-import { createSettingsRepo } from '@/data/db/settings';
-import { useDriveStateReported } from '@/data/devices/driveStateStore';
+import type { NotificationAccess, PermissionsAdapter } from '@/core/permissions';
 import type { AppStateLike } from '@/data/foreground';
-import { useDataSource } from '@/data/queries';
+import { serverKey, useServerQuery } from '@/data/server/useServerQuery';
+import { useSession } from '@/data/supabase/session';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
-import { ICON, TOUCH } from '@/features/trips/layout';
-import { TripTopBar } from '@/features/trips/TopBar';
-import {
-  CATALOG,
-  countsTowardDailyCap,
-  LIVE_TYPES,
-  type Catalog,
-  type NotificationCategory,
-} from '@/notifications/catalog';
-import { Banner, Card, fontFamilies, Screen, Skeleton, Text, useTheme } from '@/ui';
+import { Banner, Card, Divider, Screen, Skeleton, Text, ToggleRow, useTheme } from '@/ui';
 
+import { TopBar } from '../parts';
+import { currentZone, PREFS_KEY, savePrefs, type NotificationPrefs, type PrefsPatch } from './api';
 import { notificationSettingsCopy as copy } from './copy';
-import { useNotificationPrefs, type NotificationPrefsDeps } from './useNotificationPrefs';
 
 /** The OS side: whether RoadWise may notify at all, and the two ways to fix it. */
 export interface OsNotificationsPort {
@@ -30,11 +21,10 @@ export interface OsNotificationsPort {
   openSettings(): Promise<void>;
 }
 
-export interface NotificationSettingsDeps extends NotificationPrefsDeps {
+export interface NotificationSettingsDeps {
   os?: OsNotificationsPort;
   appState?: AppStateLike;
-  /** Tests build both readings of the cap question. */
-  catalog?: Catalog;
+  zone?: () => string;
 }
 
 function adapterPort(adapter: PermissionsAdapter): OsNotificationsPort {
@@ -47,21 +37,6 @@ function adapterPort(adapter: PermissionsAdapter): OsNotificationsPort {
     request: () => adapter.requestNotifications(),
     openSettings: () => adapter.openAppSettings(),
   };
-}
-
-/** The categories H6 shows: those with a live type, in catalog order, each shown once. */
-export function liveCategories(catalog: Catalog = CATALOG): NotificationCategory[] {
-  const out: NotificationCategory[] = [];
-  for (const type of LIVE_TYPES) {
-    const c = catalog[type].category;
-    if (!out.includes(c)) out.push(c);
-  }
-  return out;
-}
-
-/** Every shown category's live types count toward §11.1's cap (so the cap line is true of them all). */
-function allCapped(catalog: Catalog): boolean {
-  return LIVE_TYPES.every((t) => countsTowardDailyCap(t, catalog));
 }
 
 /** `22:00` → `10 PM`, `06:30` → `6:30 AM`. */
@@ -79,8 +54,7 @@ export function stepHour(hhmm: string, dir: -1 | 1): string {
   return `${String((next + 24) % 24).padStart(2, '0')}:00`;
 }
 
-/** `America/Los_Angeles` → `America/Los Angeles`. */
-const zoneLabel = (zone: string): string => zone.replace(/_/g, ' ');
+const KINDS = ['weekly_recap', 'leagues', 'social'] as const;
 
 function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
   const [access, setAccess] = useState<NotificationAccess | null>(null);
@@ -89,7 +63,6 @@ function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
   }, [os]);
   useEffect(() => {
     read();
-    // Back from the phone's Settings: read again. Only while this screen is open.
     const sub = appState.addEventListener('change', (next) => {
       if (next === 'active') read();
     });
@@ -99,115 +72,112 @@ function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
 }
 
 /**
- * H6 · Notifications. The switches for the categories that have a live notification, quiet hours,
- * and what the phone itself allows. Every change saves as it is made (no primary action), and each
- * switch's hint says what it does.
+ * `/settings/notifications`: weekly recap, league results and friend requests, quiet hours, and
+ * what the phone itself allows. Every change saves as it is made and shows as made while it saves;
+ * a failure puts it back and says so.
  */
 export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationSettingsDeps }) {
   const th = useTheme();
-  const router = useRouter();
-  const catalog = deps.catalog ?? CATALOG;
-  const { prefs, zone, save, saving, error, retry } = useNotificationPrefs(deps);
-  const reported = useDriveStateReported();
+  const qc = useQueryClient();
+  const uid = useSession().session?.user.id ?? null;
+  const query = useServerQuery<NotificationPrefs>([...PREFS_KEY], 'get_notification_prefs');
+  const [pending, setPending] = useState<PrefsPatch | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
   const [os] = useState(() => deps.os ?? adapterPort(defaultPermissionsAdapter()));
   const { access, read } = useOsAccess(os, deps.appState ?? AppState);
-  const { db, now } = useDataSource();
-  // A tap, so the request goes straight to the OS (never throttled, Ruling T8 r1); it is still
-  // stamped, as T14's steps do, so a later app-started offer respects the 14-day window.
-  const allow = () =>
-    void os
-      .request()
-      .then(() => recordPrompt(createSettingsRepo(db), 'notifications', now()).catch(() => undefined))
-      .then(read, read);
+  const zone = (deps.zone ?? currentZone)();
 
-  const back = router.canGoBack() ? () => router.back() : null;
-  const categories = liveCategories(catalog);
+  const save = async (patch: PrefsPatch) => {
+    if (pending) return;
+    setPending(patch);
+    setSaveFailed(false);
+    try {
+      const next = await savePrefs(patch, zone);
+      qc.setQueryData(serverKey(uid, ...PREFS_KEY), next);
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const prefs = query.data ? { ...query.data, ...pending } : null;
+  const saving = pending !== null;
 
   let body;
-  if (prefs === null && error === 'load') {
-    body = (
+  if (!prefs) {
+    body = query.isError ? (
       <Banner
         testID="prefs-load-error"
         tone="danger"
         message={copy.loadError}
-        action={{ label: copy.retry, onPress: retry }}
+        action={{ label: copy.retry, onPress: () => void query.refetch() }}
       />
-    );
-  } else if (prefs === null) {
-    body = (
-      <Card padded={false} testID="prefs-loading">
-        {[0, 1].map((i) => (
-          <View key={i} style={{ padding: th.space.lg, gap: th.space.sm }}>
-            <Skeleton width="45%" height={18} />
-            <Skeleton width="80%" height={14} />
-          </View>
-        ))}
+    ) : (
+      <Card testID="prefs-loading">
+        <Skeleton width="45%" height={18} />
+        <Skeleton width="80%" height={14} />
       </Card>
     );
   } else {
-    const quiet = prefs.quiet;
-    const quietOff = quiet.start === quiet.end;
+    const quietOff = prefs.quiet_start === prefs.quiet_end;
     body = (
       <>
         <View style={{ gap: th.space.sm }}>
-          <FieldLabel>{copy.sendLabel}</FieldLabel>
-          <Card padded={false} testID="prefs-categories">
-            {categories.map((c, i) => {
-              const words = copy.categories[c];
-              if (!words) return null;
-              const on = prefs.categories[c];
-              return (
+          <Text variant="headline" accessibilityRole="header">
+            {copy.send}
+          </Text>
+          <Card padded={false} testID="prefs-kinds">
+            {KINDS.map((k, i) => (
+              <View key={k}>
+                {i > 0 ? <Divider inset={th.space.lg} /> : null}
                 <ToggleRow
-                  key={c}
-                  testID={`prefs-category-${c}`}
-                  first={i === 0}
-                  title={words.title}
-                  hint={on ? words.on : words.off}
-                  value={on}
+                  testID={`prefs-${k}`}
+                  title={copy.kinds[k].title}
+                  subtitle={prefs[k] ? copy.kinds[k].on : copy.kinds[k].off}
+                  value={prefs[k]}
                   disabled={saving}
-                  onChange={(next) => void save({ categories: { [c]: next } })}
+                  onValueChange={(next) => void save({ [k]: next })}
                 />
-              );
-            })}
+              </View>
+            ))}
           </Card>
-          {allCapped(catalog) ? (
-            <Text variant="footnote" tone="muted" testID="prefs-cap">
-              {copy.cap}
-            </Text>
-          ) : null}
         </View>
 
         <View style={{ gap: th.space.sm }}>
-          <FieldLabel>{copy.quiet.label}</FieldLabel>
+          <Text variant="headline" accessibilityRole="header">
+            {copy.quiet.title}
+          </Text>
           <Card padded={false} testID="prefs-quiet">
             <ToggleRow
               testID="prefs-quiet-toggle"
-              first
               title={copy.quiet.title}
-              hint={
-                quiet.enabled && !quietOff
-                  ? copy.quiet.on(clockLabel(quiet.start), clockLabel(quiet.end))
-                  : quiet.enabled
+              subtitle={
+                prefs.quiet_enabled && !quietOff
+                  ? copy.quiet.on(clockLabel(prefs.quiet_start), clockLabel(prefs.quiet_end))
+                  : prefs.quiet_enabled
                     ? copy.quiet.same
                     : copy.quiet.off
               }
-              value={quiet.enabled}
+              value={prefs.quiet_enabled}
               disabled={saving}
-              onChange={(next) => void save({ quiet_enabled: next })}
+              onValueChange={(next) => void save({ quiet_enabled: next })}
             />
-            {quiet.enabled ? (
+            {prefs.quiet_enabled ? (
               <>
+                <Divider inset={th.space.lg} />
                 <HourRow
                   testID="prefs-quiet-start"
                   label={copy.quiet.starts}
-                  value={quiet.start}
+                  value={prefs.quiet_start}
                   disabled={saving}
                   onChange={(v) => void save({ quiet_start: v })}
                 />
+                <Divider inset={th.space.lg} />
                 <HourRow
                   testID="prefs-quiet-end"
                   label={copy.quiet.ends}
-                  value={quiet.end}
+                  value={prefs.quiet_end}
                   disabled={saving}
                   onChange={(v) => void save({ quiet_end: v })}
                 />
@@ -215,7 +185,7 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
             ) : null}
           </Card>
           <Text variant="footnote" tone="muted" testID="prefs-zone">
-            {copy.quiet.zone(zoneLabel(zone))}
+            {copy.quiet.zone(zone.replace(/_/g, ' '))}
           </Text>
         </View>
       </>
@@ -224,18 +194,7 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
 
   return (
     <Screen scroll testID="notification-settings">
-      <TripTopBar title={copy.title} onBack={back} />
-      {reported ? (
-        <View
-          testID="prefs-promise"
-          style={{ flexDirection: 'row', gap: th.space.sm, alignItems: 'flex-start' }}
-        >
-          <Ionicons name="car-outline" size={ICON.sm + 4} color={th.colors.accent} />
-          <Text variant="callout" style={{ flex: 1 }}>
-            {copy.promise}
-          </Text>
-        </View>
-      ) : null}
+      <TopBar title={copy.title} />
       {access === 'denied' ? (
         <Banner
           testID="prefs-os-denied"
@@ -248,99 +207,16 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
           testID="prefs-os-undetermined"
           tone="info"
           message={copy.os.undetermined}
-          action={{
-            label: copy.os.allow,
-            onPress: allow,
-          }}
+          action={{ label: copy.os.allow, onPress: () => void os.request().then(read, read) }}
         />
       ) : null}
-      {error === 'save' ? (
-        <Banner
-          testID="prefs-save-error"
-          tone="warning"
-          message={copy.saveError}
-          action={{ label: copy.retry, onPress: retry }}
-        />
-      ) : null}
-      {prefs !== null && error === 'load' ? (
-        <Banner
-          testID="prefs-load-error"
-          tone="danger"
-          message={copy.loadError}
-          action={{ label: copy.retry, onPress: retry }}
-        />
-      ) : null}
+      {saveFailed ? <Banner testID="prefs-save-error" tone="warning" message={copy.saveError} /> : null}
       {body}
     </Screen>
   );
 }
 
-function FieldLabel({ children }: { children: string }) {
-  return (
-    <Text
-      variant="caption"
-      tone="muted"
-      accessibilityRole="header"
-      style={{ textTransform: 'uppercase', letterSpacing: 1.2 }}
-    >
-      {children}
-    </Text>
-  );
-}
-
-function ToggleRow({
-  title,
-  hint,
-  value,
-  disabled,
-  onChange,
-  first,
-  testID,
-}: {
-  title: string;
-  hint: string;
-  value: boolean;
-  disabled: boolean;
-  onChange: (next: boolean) => void;
-  first?: boolean;
-  testID: string;
-}) {
-  const th = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: th.space.md,
-        paddingVertical: th.space.md,
-        paddingHorizontal: th.space.lg,
-        minHeight: TOUCH + th.space.md,
-        borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
-        borderTopColor: th.colors.divider,
-      }}
-    >
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="headline">{title}</Text>
-        <Text variant="footnote" tone="muted" testID={`${testID}-hint`}>
-          {hint}
-        </Text>
-      </View>
-      <Switch
-        testID={testID}
-        accessibilityRole="switch"
-        accessibilityLabel={title}
-        accessibilityHint={hint}
-        accessibilityState={{ checked: value, disabled }}
-        value={value}
-        disabled={disabled}
-        onValueChange={onChange}
-        trackColor={{ true: th.colors.accent, false: th.colors.border }}
-      />
-    </View>
-  );
-}
-
-/** An hour field with earlier/later steps; one adjustable element for a screen reader. */
+/** An hour with earlier/later steps; one adjustable element for a screen reader. */
 function HourRow({
   label,
   value,
@@ -367,10 +243,9 @@ function HourRow({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={() => step(dir)}
-      hitSlop={th.space.xs}
       style={({ pressed }) => ({
-        width: TOUCH,
-        height: TOUCH,
+        width: th.size.touch,
+        height: th.size.touch,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: th.radius.pill,
@@ -378,11 +253,7 @@ function HourRow({
         opacity: disabled ? 0.5 : 1,
       })}
     >
-      <Ionicons
-        name={dir === 1 ? 'chevron-forward' : 'chevron-back'}
-        size={ICON.sm + 4}
-        color={th.colors.accent}
-      />
+      <Ionicons name={dir === 1 ? 'chevron-forward' : 'chevron-back'} size={th.size.icon} color={th.colors.accent} />
     </Pressable>
   );
   return (
@@ -394,25 +265,13 @@ function HourRow({
       accessibilityValue={{ text: shown }}
       accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
       onAccessibilityAction={(e) => step(e.nativeEvent.actionName === 'increment' ? 1 : -1)}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: th.space.sm,
-        paddingVertical: th.space.xs,
-        paddingHorizontal: th.space.lg,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: th.colors.divider,
-      }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, paddingVertical: th.space.xs, paddingHorizontal: th.space.lg }}
     >
       <Text variant="body" style={{ flex: 1 }}>
         {label}
       </Text>
       {button(-1)}
-      <Text
-        testID={`${testID}-value`}
-        variant="headline"
-        style={{ fontFamily: fontFamilies.numerals, minWidth: 84, textAlign: 'center' }}
-      >
+      <Text testID={`${testID}-value`} variant="headline" style={{ minWidth: 84, textAlign: 'center', fontVariant: ['tabular-nums'] }}>
         {shown}
       </Text>
       {button(1)}

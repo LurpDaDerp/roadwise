@@ -1,5 +1,6 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { AddFriendsScreen } from '@/features/friends/AddFriendsScreen';
 
-export default function AddfriendsRoute() {
-  return <PlaceholderScreen title="Add friends" />;
+/** `/friends/add`: search by username, my QR code, and the way to scan one. */
+export default function AddFriendsRoute() {
+  return <AddFriendsScreen />;
 }

@@ -1,32 +1,26 @@
 /**
- * The permission surfaces' test world: the screen harness (real sql.js, the app's QueryClient,
- * theme), a drive host double inside a real drive store, a fake permissions adapter that logs
- * every OS call, and an AppState double the test can bring to the front.
+ * The test world for the screens in this area: an in-memory settings database, a fresh QueryClient
+ * and the theme; a fake permissions adapter that logs every OS call; and an
+ * AppState double the test can bring to the front.
  *
  * Each suite still declares its own `jest.mock`s (Jest hoists them per file): `expo-router`,
- * `@/data/supabase/session` and `@/data/supabase/profile`.
+ * `@/data/supabase/session`, and `@/data/server/rpc` where the screen calls the server.
  */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
-import { DISCLOSURE_AFFIRMED_KEY } from '@/core/permissions';
-import type {
-  Grant,
-  LocationAccess,
-  PermissionSnapshot,
-  PermissionsAdapter,
-  Readiness,
-} from '@/core/permissions';
-import { APP_CONFIG_KEY, type AppConfigRefresher, type StoredAppConfig } from '@/data/config/appConfig';
-import { createSettingsRepo, type TripRow } from '@/data/db';
-import { T0, tripRow } from '@/data/queries/__fixtures__/rows';
-import { DriveContext } from '@/drive/DriveProvider';
-import type { DriveHost, DriveState } from '@/drive/host';
-import { createDriveStore } from '@/drive/store';
-import { world } from '@/features/trips/__fixtures__/render';
+import type { Grant, LocationAccess, PermissionSnapshot, PermissionsAdapter, Readiness } from '@/core/permissions';
+import type { Db, DbResult } from '@/data/db/driver';
+import { createSettingsRepo } from '@/data/db/settings';
+import { DataProvider } from '@/data/queries/context';
+import { ThemeProvider } from '@/ui/theme';
+
+export const T0 = Date.UTC(2026, 9, 5, 15, 0, 0);
 
 export const snap = (over: Partial<PermissionSnapshot> = {}): PermissionSnapshot => ({
   platform: 'android',
-  location: 'always',
+  location: 'foreground',
   precise: true,
   locationCanAskAgain: true,
   motion: 'granted',
@@ -39,22 +33,15 @@ export const snap = (over: Partial<PermissionSnapshot> = {}): PermissionSnapshot
 });
 
 export interface FakeAdapter extends PermissionsAdapter {
-  /** Every call in order: `snapshot`, `requestLocationAlways:firstDriveDone=true`, … */
+  /** Every call in order: `snapshot`, `requestLocationForeground`, … */
   log: string[];
-  /** What the next `snapshot()` returns. */
   current: PermissionSnapshot;
-  /** Make `snapshot()` reject (a read failure). */
   failReads: boolean;
 }
 
 export function fakeAdapter(
   initial: PermissionSnapshot = snap(),
-  answers: {
-    always?: LocationAccess;
-    foreground?: LocationAccess;
-    motion?: Grant | null;
-    readiness?: Readiness;
-  } = {}
+  answers: { foreground?: LocationAccess; motion?: Grant | null; readiness?: Readiness } = {}
 ): FakeAdapter {
   const a: FakeAdapter = {
     log: [],
@@ -71,11 +58,9 @@ export function fakeAdapter(
       a.current = { ...a.current, location: next };
       return next;
     }),
-    requestLocationAlways: jest.fn(async ({ firstDriveDone }: { firstDriveDone: boolean }) => {
-      a.log.push(`requestLocationAlways:firstDriveDone=${firstDriveDone}`);
-      const next = answers.always ?? 'always';
-      a.current = { ...a.current, location: next };
-      return next;
+    requestLocationAlways: jest.fn(async () => {
+      a.log.push('requestLocationAlways');
+      return a.current.location;
     }),
     requestMotion: jest.fn(async () => {
       a.log.push('requestMotion');
@@ -85,6 +70,7 @@ export function fakeAdapter(
     }),
     requestNotifications: jest.fn(async () => {
       a.log.push('requestNotifications');
+      a.current = { ...a.current, notifications: 'granted' };
       return 'granted' as const;
     }),
     openAppSettings: jest.fn(async () => {
@@ -95,52 +81,23 @@ export function fakeAdapter(
     }),
     readiness: jest.fn(async () => {
       a.log.push('readiness');
-      return answers.readiness ?? { allowed: true, armed: true };
+      return answers.readiness ?? { allowed: true, armed: false };
     }),
   };
   return a;
 }
 
 /**
- * A host that answers what these surfaces ask: the driver's auto-record choice, setting it, and
- * the published arming. `status` is deliberately independent of the choice, so a test can show a
- * screen reads `autoDetectEnabled()` and never `status === 'off'` (N-m2).
+ * Kept so step suites can pass "a host" as before; the world no longer mounts a drive. A screen
+ * that reads the drive state mocks `@/drive/useDrive` in its own suite.
  */
-export function fakeHost(opts: { intent?: boolean; status?: DriveState['status']; busy?: boolean } = {}) {
-  let intent = opts.intent ?? false;
-  let busy = opts.busy ?? false;
-  let state = { status: opts.status ?? 'off', autoDetectArmed: false } as DriveState;
-  const listeners = new Set<(s: DriveState) => void>();
-  const publish = (next: Partial<DriveState>) => {
-    state = { ...state, ...next };
-    for (const fn of [...listeners]) fn(state);
-  };
-  const host = {
-    snapshot: () => state,
-    subscribe: (fn: (s: DriveState) => void) => {
-      listeners.add(fn);
-      return () => listeners.delete(fn);
-    },
-    autoDetectEnabled: () => intent,
-    setAutoDetect: jest.fn(async (enabled: boolean) => {
-      intent = enabled;
-    }),
-    isBusy: () => busy,
-    refreshArming: jest.fn(async () => {}),
-  } as unknown as DriveHost;
-  return {
-    host,
-    publish,
-    setBusy(next: boolean) {
-      busy = next;
-    },
-  };
+export function fakeHost() {
+  return { host: null };
 }
 
 export interface FakeAppState {
   currentState: string;
   addEventListener(type: 'change', fn: (s: string) => void): { remove(): void };
-  /** Brings the app to the front: every listener hears `active`. */
   foreground(): void;
   listeners(): number;
 }
@@ -160,53 +117,100 @@ export function fakeAppState(): FakeAppState {
   };
 }
 
-/** A config refresher that never refreshes: the tests read only what they seed. */
-export const noRefresh: AppConfigRefresher = { maybeRefresh: async () => false };
-
-export const drive = (n: number, over: Partial<TripRow> = {}): TripRow =>
-  tripRow({
-    client_trip_id: `trip-${n}`,
-    started_at: T0 + n * 3_600_000,
-    sync_state: 'synced',
-    created_at: T0 + n * 3_600_000,
-    ...over,
-  });
-
-export interface Seed {
-  trips?: readonly TripRow[];
-  settings?: Record<string, unknown>;
-  /** The `auto_detect` flag as the server last said; absent = never fetched (defaults). */
-  autoDetect?: boolean;
-  /**
-   * The signed-in account (`AFFIRMED_UID`, the suites' session) has affirmed the background-location
-   * disclosure (Task 19 r1). Absent: not affirmed, as on a fresh install or after a handover.
-   */
-  affirmed?: boolean;
-}
-
-/** The session uid every permission suite mocks. */
-export const AFFIRMED_UID = 'u1';
-
-export async function permissionsWorld(seed: Seed = {}) {
-  const w = await world({ trips: seed.trips ?? [] });
-  const settings = createSettingsRepo(w.db);
-  for (const [key, value] of Object.entries(seed.settings ?? {})) await settings.set(key, value);
-  if (seed.affirmed === true) {
-    await settings.set(DISCLOSURE_AFFIRMED_KEY, { version: 'pd-1', at: T0, uid: AFFIRMED_UID });
-  }
-  if (seed.autoDetect !== undefined) {
-    const stored: StoredAppConfig = { fetchedAt: T0, flags: { auto_detect: seed.autoDetect }, values: {} };
-    await settings.set(APP_CONFIG_KEY, stored);
-  }
-  return {
-    db: w.db,
-    settings,
-    render(ui: ReactElement, host: DriveHost) {
-      const store = createDriveStore(host, {
-        currentState: 'active',
-        addEventListener: () => ({ remove() {} }),
-      });
-      return w.renderScreen(<DriveContext.Provider value={{ host, store }}>{ui}</DriveContext.Provider>);
+/**
+ * A `Db` that holds only the `settings` table, in memory: every screen in this area reads and
+ * writes device settings and nothing else, so the tests don't depend on the drive tables.
+ */
+export function memoryDb(): Db & { data: Map<string, string> } {
+  const data = new Map<string, string>();
+  const result = (rows: Record<string, unknown>[] = [], changes = 0): DbResult => ({ rows, changes });
+  const db = {
+    data,
+    async execute(sql: string, params: unknown[] = []): Promise<DbResult> {
+      const q = sql.replace(/\s+/g, ' ').trim();
+      if (/^SELECT value_json FROM settings WHERE key = \?$/.test(q)) {
+        const v = data.get(String(params[0]));
+        return result(v === undefined ? [] : [{ value_json: v }]);
+      }
+      if (/^INSERT OR REPLACE INTO settings/.test(q)) {
+        data.set(String(params[0]), String(params[1]));
+        return result([], 1);
+      }
+      if (/^DELETE FROM settings WHERE key = \?$/.test(q)) {
+        return result([], data.delete(String(params[0])) ? 1 : 0);
+      }
+      if (/^SELECT key, value_json FROM settings/.test(q)) {
+        const keys = /WHERE key IN/.test(q) ? params.map(String) : [...data.keys()].sort();
+        return result(keys.filter((k) => data.has(k)).map((k) => ({ key: k, value_json: data.get(k) })));
+      }
+      throw new Error(`memoryDb: unsupported statement: ${q}`);
+    },
+    async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      return fn(db as unknown as Db);
     },
   };
+  return db as unknown as Db & { data: Map<string, string> };
+}
+
+const clients = new Set<QueryClient>();
+
+/** Call from `afterEach`: an unobserved query keeps a gc timer that holds the Jest worker open. */
+export function clearQueryClients(): void {
+  for (const c of clients) c.clear();
+  clients.clear();
+}
+
+export interface AppWorld {
+  db: Db;
+  settings: ReturnType<typeof createSettingsRepo>;
+  client: QueryClient;
+  render(ui: ReactElement, host?: unknown): ReturnType<typeof render>;
+}
+
+/** A database (seeded with `settings`), a query client, and a render inside every provider. */
+export async function appWorld(seed: { settings?: Record<string, unknown> } = {}): Promise<AppWorld> {
+  const db = memoryDb();
+  const settings = createSettingsRepo(db);
+  for (const [k, v] of Object.entries(seed.settings ?? {})) await settings.set(k, v);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { gcTime: Infinity } },
+  });
+  clients.add(client);
+  return {
+    db,
+    settings,
+    client,
+    render(ui) {
+      return render(
+        <ThemeProvider>
+          <QueryClientProvider client={client}>
+            <DataProvider db={db}>{ui}</DataProvider>
+          </QueryClientProvider>
+        </ThemeProvider>
+      );
+    },
+  };
+}
+
+/** Finds, then presses inside one act: never a `waitFor` nested inside `act`. */
+export async function tap(testID: string): Promise<void> {
+  const el = await screen.findByTestId(testID, {}, { timeout: 3000 });
+  await act(async () => {
+    fireEvent.press(el);
+  });
+}
+
+/** The server double the screen suites install: `mockRpc` answers by function name. */
+type RpcArgs = Record<string, unknown> | undefined;
+type RpcAnswer = ((args: RpcArgs) => unknown) | Error | null | boolean | number | string | object;
+export type RpcAnswers = Record<string, RpcAnswer>;
+
+export function answerRpc(mock: jest.Mock, answers: RpcAnswers): void {
+  mock.mockImplementation(async (fn: string, args?: Record<string, unknown>) => {
+    if (!(fn in answers)) return null;
+    const a = answers[fn];
+    if (typeof a === 'function') return (a as (x: unknown) => unknown)(args);
+    if (a instanceof Error) throw a;
+    return a;
+  });
 }

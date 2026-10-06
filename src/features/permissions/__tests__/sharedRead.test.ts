@@ -4,9 +4,8 @@
  */
 import { QueryClient } from '@tanstack/react-query';
 
-import { createSettingsRepo } from '@/data/db';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
-import { fakeAdapter, snap } from '@/features/permissions/__fixtures__/harness';
+import { createSettingsRepo } from '@/data/db/settings';
+import { fakeAdapter, memoryDb as createTestDb, snap } from '@/features/permissions/__fixtures__/harness';
 import { SHARED_READ_MS, sharedPermissionSnapshot } from '@/features/permissions/usePermissionHealth';
 
 jest.mock('@/data/supabase/profile', () => ({ recordConsent: jest.fn() }));

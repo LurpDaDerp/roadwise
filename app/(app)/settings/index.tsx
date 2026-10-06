@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { SettingsScreen } from '@/features/settings';
 
 export default function SettingsRoute() {
-  return <PlaceholderScreen title="Settings" />;
+  return <SettingsScreen />;
 }

@@ -1,5 +1,5 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { BlockedScreen } from '@/features/settings';
 
-export default function BlockedusersRoute() {
-  return <PlaceholderScreen title="Blocked users" />;
+export default function BlockedUsersRoute() {
+  return <BlockedScreen />;
 }

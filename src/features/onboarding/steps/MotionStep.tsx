@@ -109,7 +109,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
   return (
     <StepFrame title={copy.title[ctx.platform]} onBack={onBack} primary={primary} secondary={secondary} testID="motion-step">
       <View style={{ gap: th.space.lg }}>
-        <Card variant="license">
+        <Card>
           <Text variant="body">{copy.body}</Text>
         </Card>
         {phone.status === 'loading' && answer === undefined ? <Skeleton width="70%" height={20} /> : null}

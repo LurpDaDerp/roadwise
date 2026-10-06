@@ -1,11 +1,9 @@
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { recordPrompt, type NotificationAccess, type PermissionPlatform } from '@/core/permissions';
-import { useDriveStateReported } from '@/data/devices/driveStateStore';
+import { recordPrompt, type NotificationAccess } from '@/core/permissions';
 import { requestDeviceSync } from '@/data/devices/events';
 import { markSettingsReturn } from '@/features/permissions/usePermissionHealth';
-import { renderLocal, renderPush, type LiveType } from '@/notifications/catalog';
 import { Card, Text, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
@@ -31,46 +29,18 @@ export interface NotificationsStepDeps extends PermissionStepDeps {
 const defaultEnsureChannels = async () =>
   (await import('@/features/notifications/channels')).ensureAndroidChannels();
 
-export interface NotificationPreview {
-  type: LiveType;
-  title: string;
-  body: string;
-}
-
-/**
- * A8's examples, rendered by the catalog itself — the drive summary as `renderLocal` words it for a
- * single drive whose driver isn't known yet, and a pushed permission lapse as `renderPush` words it
- * — so an example is never a notification the app doesn't send. Live types only.
- */
-export function previewNotifications(platform: PermissionPlatform): NotificationPreview[] {
-  const summary = renderLocal('trip_summary', {
-    clientTripId: 'example',
-    distanceM: 5150,
-    roleUnknown: true,
-    scorableIfDriver: false,
-    count: 1,
-  });
-  const out: NotificationPreview[] = [{ type: 'trip_summary', title: summary.title, body: summary.body }];
-  const lapse = renderPush('permission_lapsed', { permission: 'location', platform, deviceId: 'example' });
-  if (lapse) out.push({ type: 'permission_lapsed', title: lapse.title, body: lapse.body });
-  return out;
-}
-
 const allowed = (a: NotificationAccess | undefined) => a === 'granted' || a === 'provisional';
 
 /**
- * A8 · Notifications. The examples come from the catalog; the promise "We hold them while you're
- * driving." is printed only while this phone reports its drive state to the server (rev1: C1).
- * On Android the channels are created before the prompt, so the system names them from the first
- * moment (rev1: m). One request on the driver's tap; a grant asks the device host to register the
- * push token. A denial still moves on (D12).
+ * Notifications: the three pushes v3 sends, shown as the server words them. On Android the
+ * channels are created before the prompt, so the system names them from the first moment. One
+ * request on the driver's tap; a grant asks the device host to register the push token. A denial
+ * still moves on.
  */
 export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: NotificationsStepDeps }) {
   const th = useTheme();
   const { settings, adapter, appState, now } = useStepDeps(deps);
   const phone = usePhone(adapter, appState);
-  const reported = useDriveStateReported();
-  const previews = previewNotifications(ctx.platform);
 
   const [answer, setAnswer] = useState<NotificationAccess | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -158,8 +128,8 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
       <View style={{ gap: th.space.lg }}>
         <View style={{ gap: th.space.sm }}>
           <FieldLabel>{copy.examples}</FieldLabel>
-          {previews.map((p) => (
-            <Card key={p.type} testID={`notifications-preview-${p.type}`} style={{ gap: th.space.xs }}>
+          {copy.previews.map((p) => (
+            <Card key={p.id} testID={`notifications-preview-${p.id}`} style={{ gap: th.space.xs }}>
               <View
                 style={{
                   paddingBottom: th.space.xs,
@@ -178,11 +148,6 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
             </Card>
           ))}
         </View>
-        {reported ? (
-          <Text variant="headline" testID="notifications-promise">
-            {copy.promise}
-          </Text>
-        ) : null}
         {line ? <StatusLine tone={line.tone}>{line.text}</StatusLine> : null}
         {failed ? (
           <Text variant="callout" tone="danger" accessibilityRole="alert">

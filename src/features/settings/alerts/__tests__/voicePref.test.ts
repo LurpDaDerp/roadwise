@@ -1,5 +1,5 @@
 import { createSettingsRepo } from '@/data/db/settings';
-import { createTestDb } from '@/data/queries/__fixtures__/harness';
+import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
 
 import {
   loadVoicePref,
@@ -12,52 +12,52 @@ import {
 
 afterEach(() => resetVoicePrefForTests());
 
-test('voice is on until the driver turns it off', async () => {
+test('voice is off until the driver turns it on', async () => {
   const settings = createSettingsRepo(await createTestDb());
-  expect(voicePrefEnabled()).toBe(true);
-  await expect(loadVoicePref(settings)).resolves.toBe(true);
-  expect(voicePrefEnabled()).toBe(true);
+  expect(voicePrefEnabled()).toBe(false);
+  await expect(loadVoicePref(settings)).resolves.toBe(false);
+  expect(voicePrefEnabled()).toBe(false);
 });
 
-test('turning voice off is kept on the phone and read back by the next launch', async () => {
+test('turning voice on is kept on the phone and read back by the next launch', async () => {
   const db = await createTestDb();
-  await setVoicePref(createSettingsRepo(db), false);
-  expect(voicePrefEnabled()).toBe(false);
-  await expect(createSettingsRepo(db).get(VOICE_PREF_KEY)).resolves.toBe(false);
+  await setVoicePref(createSettingsRepo(db), true);
+  expect(voicePrefEnabled()).toBe(true);
+  await expect(createSettingsRepo(db).get(VOICE_PREF_KEY)).resolves.toBe(true);
 
   resetVoicePrefForTests();
-  expect(voicePrefEnabled()).toBe(true);
-  await expect(loadVoicePref(createSettingsRepo(db))).resolves.toBe(false);
   expect(voicePrefEnabled()).toBe(false);
+  await expect(loadVoicePref(createSettingsRepo(db))).resolves.toBe(true);
+  expect(voicePrefEnabled()).toBe(true);
 });
 
-test('a stored value that is not a boolean reads as on', async () => {
+test('a stored value that is not a boolean reads as off', async () => {
   const db = await createTestDb();
-  await createSettingsRepo(db).set(VOICE_PREF_KEY, 'no');
-  await expect(loadVoicePref(createSettingsRepo(db))).resolves.toBe(true);
+  await createSettingsRepo(db).set(VOICE_PREF_KEY, 'yes');
+  await expect(loadVoicePref(createSettingsRepo(db))).resolves.toBe(false);
 });
 
 test('a read that fails never rejects and leaves the cached value as it was', async () => {
   const settings = createSettingsRepo(await createTestDb());
-  await setVoicePref(settings, false);
+  await setVoicePref(settings, true);
   const broken = { get: jest.fn(async () => Promise.reject(new Error('disk'))) };
-  await expect(loadVoicePref(broken as never)).resolves.toBe(false);
-  expect(voicePrefEnabled()).toBe(false);
+  await expect(loadVoicePref(broken as never)).resolves.toBe(true);
+  expect(voicePrefEnabled()).toBe(true);
 });
 
 test('a write that fails rejects and leaves the switch where it was', async () => {
   const broken = { set: jest.fn(async () => Promise.reject(new Error('disk'))) };
-  await expect(setVoicePref(broken as never, false)).rejects.toThrow('disk');
-  expect(voicePrefEnabled()).toBe(true);
+  await expect(setVoicePref(broken as never, true)).rejects.toThrow('disk');
+  expect(voicePrefEnabled()).toBe(false);
 });
 
 test('subscribers hear every change', async () => {
   const settings = createSettingsRepo(await createTestDb());
   const heard: boolean[] = [];
   const off = subscribeVoicePref((on) => heard.push(on));
-  await setVoicePref(settings, false);
   await setVoicePref(settings, true);
-  off();
   await setVoicePref(settings, false);
-  expect(heard).toEqual([false, true]);
+  off();
+  await setVoicePref(settings, true);
+  expect(heard).toEqual([true, false]);
 });

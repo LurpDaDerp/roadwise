@@ -1,5 +1,6 @@
 import type { SettingsRepo } from '@/data/db/settings';
 
+import type { LicenseStage } from './finish';
 import { isStepId, type StepId } from './flow';
 
 /**
@@ -15,6 +16,22 @@ export const ONBOARDING_PLAN_KEY = 'onboarding.plan';
  * only to that account (M5 T12 r1): a bare string written by an older build reads as no hold.
  */
 export const ONBOARDING_PENDING_HREF_KEY = 'onboarding.pendingHref';
+/** The license stage picked on the license step, sent with `complete_onboarding` at the end. */
+export const ONBOARDING_LICENSE_KEY = 'onboarding.license';
+
+const STAGES: readonly LicenseStage[] = ['permit', 'intermediate', 'full'];
+
+export const isLicenseStage = (v: unknown): v is LicenseStage =>
+  typeof v === 'string' && (STAGES as readonly string[]).includes(v);
+
+export async function readLicense(settings: Pick<SettingsRepo, 'get'>): Promise<LicenseStage | null> {
+  const v = await settings.get<unknown>(ONBOARDING_LICENSE_KEY);
+  return isLicenseStage(v) ? v : null;
+}
+
+export async function saveLicense(settings: Pick<SettingsRepo, 'set'>, stage: LicenseStage): Promise<void> {
+  await settings.set(ONBOARDING_LICENSE_KEY, stage);
+}
 
 /** The last step shown, or null. A value this build does not know (a retired step) reads as none. */
 export async function readSavedStep(settings: SettingsRepo): Promise<StepId | null> {
@@ -40,4 +57,5 @@ export async function clearOnboardingState(settings: SettingsRepo): Promise<void
   await settings.remove(ONBOARDING_STEP_KEY);
   await settings.remove(ONBOARDING_PLAN_KEY);
   await settings.remove(ONBOARDING_PENDING_HREF_KEY);
+  await settings.remove(ONBOARDING_LICENSE_KEY);
 }

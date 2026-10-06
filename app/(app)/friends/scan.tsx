@@ -1,5 +1,6 @@
-import { PlaceholderScreen } from '@/features/shell/PlaceholderScreen';
+import { ScanScreen } from '@/features/friends/ScanScreen';
 
-export default function ScanQRcodeRoute() {
-  return <PlaceholderScreen title="Scan QR code" />;
+/** `/friends/scan`: reads a friend's `roadwise://add/<username>` code. */
+export default function ScanRoute() {
+  return <ScanScreen />;
 }

@@ -1,7 +1,7 @@
 import { useRouter, type Href } from 'expo-router';
 import { Pressable } from 'react-native';
 
-import type { HealthContext, HealthReport, PermissionSnapshot } from '@/core/permissions';
+import type { PermissionSnapshot } from '@/core/permissions';
 import { Banner, type BannerTone } from '@/ui';
 
 import { permissionsCopy } from './copy';
@@ -9,45 +9,23 @@ import { usePermissionHealth, type PermissionHealthDeps } from './usePermissionH
 
 const copy = permissionsCopy.banner;
 
-/** B2. Also where the permission-lapse push lands. Cast: typed routes are generated at `expo start`. */
-export const PERMISSIONS_HREF = '/permissions' as Href;
+export const PERMISSIONS_HREF = '/settings/permissions' as Href;
 
-/**
- * The banner's words for what the model flagged (`report.showBanner`), most serious first, each
- * naming the true cause: no location stops every drive; approximate location or a lost Always
- * limits what is recorded; lost motion stops drives ending on their own (and, for a driver who
- * wants auto-record, starting on their own — Ruling T8 r1 (3)). Null when there is no banner.
- */
-export function bannerMessage(
-  snapshot: PermissionSnapshot,
-  report: HealthReport,
-  context: HealthContext
-): { message: string; tone: BannerTone } | null {
-  if (!report.showBanner) return null;
-  if (snapshot.location === 'denied') return { message: copy.recordingOff, tone: 'danger' };
-  const alwaysLapsed = report.rows.some(
-    (r) => r.id === 'locationAlways' && r.status === 'attention' && r.reason === 'lapsed'
-  );
-  if (snapshot.precise === false || alwaysLapsed) return { message: copy.locationLimited, tone: 'warning' };
-  if (report.rows.some((r) => r.id === 'autoRecord' && r.reason === 'notAffirmed')) {
-    return { message: copy.autoRecordNeedsOk, tone: 'warning' };
+/** The banner for a reading, or null: only for what stops or spoils a drive. */
+export function bannerMessage(s: PermissionSnapshot): { message: string; tone: BannerTone } | null {
+  if (s.location === 'denied') return { message: copy.locationOff, tone: 'danger' };
+  if ((s.location === 'foreground' || s.location === 'always') && s.precise === false) {
+    return { message: copy.approximate, tone: 'warning' };
   }
-  const autoRecordWanted =
-    context.autoDetectAvailable !== false && context.autoDetectOn && !context.manualByChoice;
-  return { message: autoRecordWanted ? copy.motionAuto : copy.motionManual, tone: 'warning' };
+  return null;
 }
 
-/**
- * Home's calm, persistent "Fix it" banner (product §7.B rule 6). It renders only when the health
- * model raises one (rev1: I12): never for a deliberate manual choice, a withdrawn feature, an
- * iPhone before its first drive, a non-driver, or while the phone cannot be read. Tapping it
- * opens B2.
- */
+/** A calm "fix it" banner for Home; tapping it opens the permission screen. */
 export function PermissionHealthBanner({ deps }: { deps?: PermissionHealthDeps }) {
   const router = useRouter();
   const health = usePermissionHealth(deps);
   if (health.status !== 'ready') return null;
-  const shown = bannerMessage(health.snapshot, health.report, health.context);
+  const shown = bannerMessage(health.snapshot);
   if (shown === null) return null;
   return (
     <Pressable

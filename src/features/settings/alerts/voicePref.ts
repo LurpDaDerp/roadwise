@@ -1,11 +1,11 @@
 /**
- * H4's one switch: whether the in-drive alerts speak (§7.H H4 "voice prompts on/off"). Tones and
- * haptics are never switched off here; only the spoken phrase and the "Recording" announcement.
+ * Voice alerts (spec: "an optional short voice line"; plan §10 `alerts.voice`, default off). Tones
+ * and haptics are never switched off here; only the spoken phrase.
  *
  * The alert player asks `voiceEnabled()` synchronously as each alert plays, so the value lives in a
  * module cache that the launch fills from device settings (`loadVoicePref`, in bootstrap before the
  * player is made) and every change writes through (`setVoicePref`). Until the launch has read it,
- * and whenever the stored value is unreadable, voice is ON: the default is the safer, louder one.
+ * and whenever the stored value is unreadable, voice is OFF, the plan's default.
  *
  * It is device-local (the `settings` table): it describes this phone's speaker, and the handover
  * wipe resets it with every other setting.
@@ -14,7 +14,7 @@ import type { SettingsRepo } from '@/data/db/settings';
 
 export const VOICE_PREF_KEY = 'alerts.voice';
 
-let voiceOn = true;
+let voiceOn = false;
 const listeners = new Set<(on: boolean) => void>();
 
 function apply(on: boolean): void {
@@ -32,9 +32,9 @@ export function voicePrefEnabled(): boolean {
 export async function loadVoicePref(settings: Pick<SettingsRepo, 'get'>): Promise<boolean> {
   try {
     const stored = await settings.get<unknown>(VOICE_PREF_KEY);
-    apply(typeof stored === 'boolean' ? stored : true);
+    apply(typeof stored === 'boolean' ? stored : false);
   } catch {
-    // The launch goes on with what the cache holds (on, unless this process already read "off").
+    // The launch goes on with what the cache holds (off, unless this process already read "on").
   }
   return voiceOn;
 }
@@ -55,6 +55,6 @@ export function subscribeVoicePref(listener: (on: boolean) => void): () => void 
 
 /** Tests only: back to the launch default. */
 export function resetVoicePrefForTests(): void {
-  voiceOn = true;
+  voiceOn = false;
   listeners.clear();
 }

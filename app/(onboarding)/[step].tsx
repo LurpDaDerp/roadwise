@@ -2,7 +2,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useMemo } from 'react';
 
 import { createSettingsRepo } from '@/data/db/settings';
-import { useDb } from '@/data/queries';
+import { useDb } from '@/data/queries/context';
 import { OnboardingStepper } from '@/features/onboarding';
 import { useFlowContext } from '@/features/onboarding/context';
 

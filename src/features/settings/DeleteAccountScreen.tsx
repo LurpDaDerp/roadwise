@@ -1,25 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 
-import { useDb } from '@/data/queries';
+import { useDb } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
-import { ICON } from '@/features/trips/layout';
-import { TripTopBar } from '@/features/trips/TopBar';
 import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 
 import { deleteMyAccount, runAccountDeletion, type DeleteResult } from './api';
 import { settingsCopy } from './copy';
 import { wipeThisPhone } from './deviceWipe';
-import { FieldLabel } from './parts';
-import { ExportMessage, useExport, type PrivacyDeps } from './PrivacyScreen';
+import { ExportMessage, useExport, type ExportDeps } from './exportFlow';
+import { TopBar } from './parts';
 
 const copy = settingsCopy.deleteAccount;
 
-export interface DeleteAccountDeps extends PrivacyDeps {
+export interface DeleteAccountDeps extends ExportDeps {
   remove?: () => Promise<DeleteResult>;
   wipe?: () => Promise<void>;
 }
@@ -32,7 +29,6 @@ export interface DeleteAccountDeps extends PrivacyDeps {
  */
 export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps }) {
   const th = useTheme();
-  const router = useRouter();
   const db = useDb();
   const { signOut } = useSession();
   const busy = useDrive((s) => isBusyStatus(s.status));
@@ -42,7 +38,6 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
   const [typed, setTyped] = useState('');
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<Exclude<DeleteResult, { ok: true }>['reason'] | null>(null);
-  const back = router.canGoBack() ? () => router.back() : null;
   const confirmed = typed.trim() === copy.confirmWord;
 
   const onDelete = async () => {
@@ -61,16 +56,18 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
 
   return (
     <Screen testID="delete-account-screen">
-      <TripTopBar title={copy.title} onBack={back} />
+      <TopBar title={copy.title} />
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: th.space.lg }} showsVerticalScrollIndicator={false}>
         <Text variant="title2" accessibilityRole="header">
           {copy.heading}
         </Text>
         <Card testID="delete-consequences">
-          <FieldLabel>{copy.consequencesLabel}</FieldLabel>
+          <Text variant="headline" accessibilityRole="header">
+            {copy.consequencesLabel}
+          </Text>
           {copy.consequences.map((line) => (
             <View key={line} style={{ flexDirection: 'row', gap: th.space.sm, alignItems: 'flex-start' }}>
-              <Ionicons name="close-circle-outline" size={ICON.md} color={th.colors.danger} accessibilityElementsHidden importantForAccessibility="no" />
+              <Ionicons name="close-circle-outline" size={th.size.icon} color={th.colors.danger} accessibilityElementsHidden importantForAccessibility="no" />
               <Text variant="body" style={{ flex: 1 }}>
                 {line}
               </Text>
@@ -81,12 +78,11 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
           <Text variant="subhead">{copy.exportFirst}</Text>
           <Button
             testID="delete-export"
-            label={exporter.state === 'working' ? settingsCopy.privacy.export.working : copy.exportAction}
+            label={exporter.state === 'working' ? settingsCopy.account.export.working : copy.exportAction}
             variant="secondary"
             size="md"
             onPress={() => void exporter.run()}
             loading={exporter.state === 'working'}
-            accessibilityHint={settingsCopy.privacy.export.hint}
           />
           <ExportMessage state={exporter.state} />
         </View>
@@ -94,7 +90,7 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
           {copy.cannotUndo}
         </Text>
         <View style={{ gap: th.space.xs }}>
-          <FieldLabel>{copy.typeLabel}</FieldLabel>
+          <Text variant="headline">{copy.typeLabel}</Text>
           <TextInput
             testID="delete-confirm-input"
             accessibilityLabel={copy.typeLabel}

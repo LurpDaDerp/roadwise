@@ -45,7 +45,7 @@ export async function playTestAlert(deps: TestAlertDeps = {}): Promise<TestAlert
     level: 2,
     kind: 'speeding',
     ts: (deps.now ?? Date.now)(),
-    voice: 'alert.slowDown',
+    voice: 'Slow down',
     intensity: 2,
   };
   await player.deliver(decision);
