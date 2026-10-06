@@ -7,7 +7,7 @@ import { Stamp } from '@/ui/charts';
 import { tripCopy as copy } from './copy';
 import { qualityCaption } from './format';
 import { TOUCH } from './layout';
-import { HOW_SCORING_WORKS_HREF } from './routes';
+import { HOW_POINTS_WORK_HREF } from './routes';
 
 /**
  * The data-quality grade as a stamp that can be tapped for what it means (§7.D D1: "data-quality
@@ -38,7 +38,7 @@ export function QualityStamp({
       accessibilityRole="button"
       accessibilityLabel={copy.quality.spoken(grade, qualityCaption(grade))}
       accessibilityHint={copy.quality.hint}
-      onPress={() => router.push(HOW_SCORING_WORKS_HREF)}
+      onPress={() => router.push(HOW_POINTS_WORK_HREF)}
       hitSlop={th.space.sm}
       testID={testID}
       style={({ pressed }) => ({

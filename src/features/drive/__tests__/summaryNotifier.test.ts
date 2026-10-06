@@ -25,8 +25,6 @@ import {
   type SummaryNotificationPort,
   type SummaryRequest,
 } from '@/features/drive/summaryNotifier';
-import { createInboxCache } from '@/features/inbox/cache';
-import { inboxRow, iso, lapseRow } from '@/features/inbox/__fixtures__/rows';
 import { handleResponse } from '@/features/notifications/responses';
 import { buildCatalog, NOTIFICATION_CATEGORIES, renderLocal } from '@/notifications/catalog';
 import { LOCAL_SENT_KEY, PREFS_CACHE_KEY } from '@/notifications/keys';
@@ -614,41 +612,6 @@ describe('M4: one copy, H6, quiet hours and the cap (the release gate)', () => {
     n.detach();
   });
 
-  test('the cap counts the server’s pushes from the inbox cache: one local and one push today is the cap', async () => {
-    await createInboxCache(db).replaceAll([
-      lapseRow({ id: '00000000-0000-4000-8000-000000000001', pushed_at: iso(NOW - 60_000) }),
-    ]);
-    const h = stubHost(state());
-    const port = fakePort();
-    const n = attach(h, port);
-    drive(h, 't1', ok('t1'));
-    await n.settled();
-    expect(port.pending()).toHaveLength(1);
-    clock = NOW + 60 * 60_000;
-    drive(h, 't2', ok('t2'));
-    await n.settled();
-    expect(port.pending().map((p) => p.clientTripIds)).toEqual([['t1']]);
-    expect(port.schedule).toHaveBeenCalledTimes(1);
-    n.detach();
-  });
-
-  test('a push from yesterday, or one never pushed, is not today’s', async () => {
-    await createInboxCache(db).replaceAll([
-      lapseRow({ id: '00000000-0000-4000-8000-000000000001', pushed_at: iso(NOW - 86_400_000) }),
-      inboxRow({ id: '00000000-0000-4000-8000-000000000002', pushed_at: null }),
-    ]);
-    const h = stubHost(state());
-    const port = fakePort();
-    const n = attach(h, port);
-    drive(h, 't1', ok('t1'));
-    await n.settled();
-    clock = NOW + 60 * 60_000;
-    drive(h, 't2', ok('t2'));
-    await n.settled();
-    expect(port.schedule).toHaveBeenCalledTimes(2);
-    n.detach();
-  });
-
   test('a batch counts once: the replaced request is uncounted before its replacement is counted', async () => {
     const h = stubHost(state());
     const port = fakePort();
@@ -821,9 +784,9 @@ describe('createExpoSummaryPort', () => {
       } as never,
       { db, navigate, isBusy: () => false, now: () => clock }
     );
-    expect(out).toEqual({ kind: 'navigated', href: '/trips/t1/summary' });
+    expect(out).toEqual({ kind: 'navigated', href: '/drives/t1' });
     expect(navigate).toHaveBeenCalledTimes(1);
-    expect(navigate).toHaveBeenCalledWith('/trips/t1/summary');
+    expect(navigate).toHaveBeenCalledWith('/drives/t1');
   });
 
   test('reads only its own pending requests', async () => {

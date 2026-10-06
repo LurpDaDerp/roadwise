@@ -12,8 +12,6 @@ import { createTestDb, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { T0 } from '@/data/queries/__fixtures__/rows';
 import { NotificationsHost } from '@/features/notifications/NotificationsHost';
 import { PENDING_HREF_KEY } from '@/features/notifications/responses';
-import { PENDING_READ_KEY } from '@/features/inbox/cache';
-import { INBOX_QUERY_KEY, REWARDS_QUERY_KEY } from '@/notifications/keys';
 
 type Listener<T> = (e: T) => void;
 
@@ -22,7 +20,7 @@ const mockReceivedListeners = new Set<Listener<unknown>>();
 let mockLastResponse: unknown = null;
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
-// The inbox cache's module imports the app client; nothing here reaches the server.
+// Nothing here reaches the server.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 jest.mock('expo-notifications', () => ({
@@ -112,10 +110,10 @@ test('at mount it sets up the category and installs the one foreground handler; 
   expect(Notifications.setNotificationHandler).toHaveBeenLastCalledWith(null);
 });
 
-test('exactly one response listener and one received listener per mount, none left after unmount', async () => {
+test('exactly one response listener per mount and no received listener, none left after unmount', async () => {
   const { view } = await mount();
   await waitFor(() => expect(mockResponseListeners.size).toBe(1));
-  expect(mockReceivedListeners.size).toBe(1);
+  expect(mockReceivedListeners.size).toBe(0);
   expect(Notifications.addNotificationResponseReceivedListener).toHaveBeenCalledTimes(1);
 
   await act(async () => view.unmount());
@@ -138,54 +136,29 @@ test('the handler reads the recording signal the host was given', async () => {
 test('a tap navigates once', async () => {
   await mount();
   await act(async () => {
-    for (const l of mockResponseListeners) l(response('/trips/t1/summary'));
+    for (const l of mockResponseListeners) l(response('/drives/t1'));
   });
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/trips/t1/summary'));
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/drives/t1'));
   expect(push).toHaveBeenCalledTimes(1);
 });
 
 test('the tap that launched the app is handled once, even when the listener delivers it too', async () => {
-  const r = response('/permissions');
+  const r = response('/settings/permissions');
   mockLastResponse = r;
   await mount();
   await act(async () => {
     for (const l of mockResponseListeners) l(r);
   });
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/permissions'));
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/settings/permissions'));
   expect(push).toHaveBeenCalledTimes(1);
   expect(Notifications.clearLastNotificationResponse).toHaveBeenCalled();
-});
-
-test('a notification received in the foreground refreshes the inbox and the rewards', async () => {
-  const { client } = await mount();
-  const spy = jest.spyOn(client, 'invalidateQueries');
-  await act(async () => {
-    for (const l of mockReceivedListeners) l({});
-  });
-  expect(spy).toHaveBeenCalledWith({ queryKey: INBOX_QUERY_KEY });
-  expect(spy).toHaveBeenCalledWith({ queryKey: REWARDS_QUERY_KEY });
-  expect(spy).toHaveBeenCalledTimes(2);
-});
-
-test('a tapped push marks its inbox row read and refreshes the inbox (T6 carry)', async () => {
-  const { client } = await mount();
-  const spy = jest.spyOn(client, 'invalidateQueries');
-  const inboxId = '3f1c2a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69';
-  const r = response('/permissions', 'push-1');
-  (r.notification.request.content.data as Record<string, unknown>).inboxId = inboxId;
-  await act(async () => {
-    for (const l of mockResponseListeners) l(r);
-  });
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/permissions'));
-  expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([inboxId]);
-  expect(spy).toHaveBeenCalledWith({ queryKey: INBOX_QUERY_KEY });
 });
 
 test('a tap during a drive waits, then opens when the drive is over', async () => {
   busy = true;
   await mount();
   await act(async () => {
-    for (const l of mockResponseListeners) l(response('/inbox'));
+    for (const l of mockResponseListeners) l(response('/home'));
   });
   await waitFor(async () =>
     expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).not.toBeNull()
@@ -197,13 +170,13 @@ test('a tap during a drive waits, then opens when the drive is over', async () =
   expect(push).not.toHaveBeenCalled();
 
   await act(async () => setBusy(false));
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/inbox'));
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/home'));
   expect(push).toHaveBeenCalledTimes(1);
   expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).toBeNull();
 });
 
 test('a cold-start tap waits for the navigator to be ready', async () => {
-  mockLastResponse = response('/trips');
+  mockLastResponse = response('/drives');
   const { view, Wrapper } = await mount({ ready: false });
   await waitFor(async () =>
     expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).not.toBeNull()
@@ -222,14 +195,14 @@ test('a cold-start tap waits for the navigator to be ready', async () => {
       </Wrapper>
     )
   );
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/trips'));
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/drives'));
   expect(push).toHaveBeenCalledTimes(1);
 });
 
 test('a href held from before (the app was closed mid-drive) is replayed at mount when idle', async () => {
-  await createSettingsRepo(db).set(PENDING_HREF_KEY, { href: '/permissions', at: T0 });
+  await createSettingsRepo(db).set(PENDING_HREF_KEY, { href: '/settings/permissions', at: T0 });
   await mount();
-  await waitFor(() => expect(push).toHaveBeenCalledWith('/permissions'));
+  await waitFor(() => expect(push).toHaveBeenCalledWith('/settings/permissions'));
 });
 
 test('with nothing held, the drive host\'s ticks never touch the database (battery, §3.5)', async () => {

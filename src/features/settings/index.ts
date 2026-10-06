@@ -13,8 +13,5 @@ export {
 export { settingsCopy } from './copy';
 export { DeleteAccountScreen, type DeleteAccountDeps } from './DeleteAccountScreen';
 export { exportFileName, shareExport, type ExportShareOutcome } from './exportShare';
-export { HelpScreen } from './HelpScreen';
 export { PrivacyScreen, type PrivacyDeps } from './PrivacyScreen';
-export { ProfileScreen } from './ProfileScreen';
 export { SETTINGS_HREFS } from './routes';
-export { initialOf, Portrait, SettingsScreen } from './SettingsScreen';

@@ -16,10 +16,9 @@ import {
   routeForResponse,
   type ResponseDeps,
 } from '@/features/notifications/responses';
-import { PENDING_READ_KEY } from '@/features/inbox/cache';
 import { OPENED_TRIPS_KEY } from '@/notifications/keys';
 
-// The inbox cache's module imports the app client; nothing here reaches the server.
+// Nothing here reaches the server.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('expo-notifications', () => ({
   DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
@@ -39,33 +38,33 @@ const response = (data: unknown, actionIdentifier = DEFAULT, identifier = 'n1') 
 
 describe('routeForResponse — the allowlist', () => {
   test.each([
-    ['/trips/abc_DEF-123/summary', '/trips/abc_DEF-123/summary'],
-    [`/trips/${'a'.repeat(64)}/summary`, `/trips/${'a'.repeat(64)}/summary`],
-    ['/trips', '/trips'],
-    ['/permissions', '/permissions'],
-    ['/inbox', '/inbox'],
-    // Anything else lands in the inbox, where every notice is listed.
-    [`/trips/${'a'.repeat(65)}/summary`, '/inbox'],
-    ['/trips/abc/summary?x=1', '/inbox'],
-    ['/trips/abc/summary/', '/inbox'],
-    ['/trips/a.b/summary', '/inbox'],
-    ['/trips/abc', '/inbox'],
-    ['/trips/', '/inbox'],
-    ['/settings', '/inbox'],
-    ['https://evil.example/trips', '/inbox'],
-    ['roadwise://trips', '/inbox'],
-    ['//trips', '/inbox'],
-    ['/trips\n', '/inbox'],
-    ['', '/inbox'],
+    ['/drives/abc_DEF-123', '/drives/abc_DEF-123'],
+    [`/drives/${'a'.repeat(64)}`, `/drives/${'a'.repeat(64)}`],
+    ['/drives', '/drives'],
+    ['/settings/permissions', '/settings/permissions'],
+    ['/home', '/home'],
+    // Anything else lands on Home.
+    [`/drives/${'a'.repeat(65)}`, '/home'],
+    ['/drives/abc?x=1', '/home'],
+    ['/drives/abc/', '/home'],
+    ['/drives/a.b', '/home'],
+    ['/trips/abc', '/home'],
+    ['/trips/', '/home'],
+    ['/settings', '/home'],
+    ['https://evil.example/trips', '/home'],
+    ['roadwise://trips', '/home'],
+    ['//trips', '/home'],
+    ['/trips\n', '/home'],
+    ['', '/home'],
   ])('%j → %s', (url, href) => {
     expect(routeForResponse(response({ url }))?.href).toBe(href);
   });
 
-  test('a notification with no url, or a url that is not a string, goes to the inbox', () => {
-    expect(routeForResponse(response({}))).toEqual({ href: '/inbox' });
-    expect(routeForResponse(response(null))).toEqual({ href: '/inbox' });
-    expect(routeForResponse(response({ url: 42 }))).toEqual({ href: '/inbox' });
-    expect(FALLBACK_HREF).toBe('/inbox');
+  test('a notification with no url, or a url that is not a string, goes Home', () => {
+    expect(routeForResponse(response({}))).toEqual({ href: '/home' });
+    expect(routeForResponse(response(null))).toEqual({ href: '/home' });
+    expect(routeForResponse(response({ url: 42 }))).toEqual({ href: '/home' });
+    expect(FALLBACK_HREF).toBe('/home');
   });
 
   test('a malformed response is null', () => {
@@ -85,45 +84,45 @@ describe('routeForResponse — the allowlist', () => {
   });
 
   test('a summary url names its trip', () => {
-    expect(routeForResponse(response({ url: '/trips/t1/summary' }))).toEqual({
-      href: '/trips/t1/summary',
+    expect(routeForResponse(response({ url: '/drives/t1' }))).toEqual({
+      href: '/drives/t1',
       clientTripId: 't1',
     });
   });
 
   test('an action other than a tap or a role answer (a dismissal) is not routed', () => {
     expect(
-      routeForResponse(response({ url: '/trips' }, 'com.apple.UNNotificationDismissActionIdentifier'))
+      routeForResponse(response({ url: '/drives' }, 'com.apple.UNNotificationDismissActionIdentifier'))
     ).toBeNull();
   });
 
   test('"I drove" and "Passenger" carry the role for the trip in the url', () => {
-    expect(routeForResponse(response({ url: '/trips/t1/summary' }, 'drove'))).toEqual({
-      href: '/trips/t1/summary',
+    expect(routeForResponse(response({ url: '/drives/t1' }, 'drove'))).toEqual({
+      href: '/drives/t1',
       clientTripId: 't1',
       role: 'driver',
     });
-    expect(routeForResponse(response({ url: '/trips/t1/summary' }, 'passenger'))).toEqual({
-      href: '/trips/t1/summary',
+    expect(routeForResponse(response({ url: '/drives/t1' }, 'passenger'))).toEqual({
+      href: '/drives/t1',
       clientTripId: 't1',
       role: 'passenger',
     });
   });
 
   test('a role answer with no single trip to apply it to only opens the url', () => {
-    expect(routeForResponse(response({ url: '/trips' }, 'drove'))).toEqual({ href: '/trips' });
+    expect(routeForResponse(response({ url: '/drives' }, 'drove'))).toEqual({ href: '/drives' });
   });
 
   test("M3's interim drive-summary data still routes (the hand-over before Task 19)", () => {
     expect(routeForResponse(response({ kind: 'driveSummary', clientTripIds: ['t1'] }))).toEqual({
-      href: '/trips/t1/summary',
+      href: '/drives/t1',
       clientTripId: 't1',
     });
     expect(
       routeForResponse(response({ kind: 'driveSummary', clientTripIds: ['t1', 't2'] }))
-    ).toEqual({ href: '/trips' });
+    ).toEqual({ href: '/drives' });
     expect(routeForResponse(response({ kind: 'driveSummary', clientTripIds: ['../x'] }))).toEqual({
-      href: '/inbox',
+      href: '/home',
     });
   });
 });
@@ -160,31 +159,31 @@ describe('handleResponse', () => {
   });
 
   test('a tap opens its route and records the trip as opened', async () => {
-    const out = await handleResponse(response({ url: '/trips/t1/summary' }), deps());
-    expect(out).toEqual({ kind: 'navigated', href: '/trips/t1/summary' });
-    expect(navigate).toHaveBeenCalledWith('/trips/t1/summary');
+    const out = await handleResponse(response({ url: '/drives/t1' }), deps());
+    expect(out).toEqual({ kind: 'navigated', href: '/drives/t1' });
+    expect(navigate).toHaveBeenCalledWith('/drives/t1');
     expect(await createSettingsRepo(db).get(OPENED_TRIPS_KEY)).toEqual(['t1']);
   });
 
   test('"Passenger" writes the role through setTripRole, refreshes the trip and opens its summary', async () => {
-    const out = await handleResponse(response({ url: '/trips/t1/summary' }, 'passenger'), deps());
-    expect(out).toEqual({ kind: 'navigated', href: '/trips/t1/summary', role: 'applied' });
+    const out = await handleResponse(response({ url: '/drives/t1' }, 'passenger'), deps());
+    expect(out).toEqual({ kind: 'navigated', href: '/drives/t1', role: 'applied' });
     const row = await createTripsRepo(db).get('t1');
     expect(row).toMatchObject({ role: 'passenger', role_source: 'manual', status: 'unscored' });
     expect(onTripChanged).toHaveBeenCalledWith('t1');
     expect(dismiss).toHaveBeenCalledWith('n1');
-    expect(navigate).toHaveBeenCalledWith('/trips/t1/summary');
+    expect(navigate).toHaveBeenCalledWith('/drives/t1');
   });
 
   test('"I drove" stores driver', async () => {
-    await handleResponse(response({ url: '/trips/t1/summary' }, 'drove'), deps());
+    await handleResponse(response({ url: '/drives/t1' }, 'drove'), deps());
     expect(await createTripsRepo(db).get('t1')).toMatchObject({ role: 'driver' });
   });
 
   test('a role answer for a trip this phone no longer holds opens the summary, which says what it knows', async () => {
-    const out = await handleResponse(response({ url: '/trips/gone/summary' }, 'drove'), deps());
-    expect(out).toEqual({ kind: 'navigated', href: '/trips/gone/summary', role: 'missing-trip' });
-    expect(navigate).toHaveBeenCalledWith('/trips/gone/summary');
+    const out = await handleResponse(response({ url: '/drives/gone' }, 'drove'), deps());
+    expect(out).toEqual({ kind: 'navigated', href: '/drives/gone', role: 'missing-trip' });
+    expect(navigate).toHaveBeenCalledWith('/drives/gone');
     expect(onTripChanged).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
   });
@@ -194,13 +193,13 @@ describe('handleResponse', () => {
       throw new Error('disk');
     });
     const out = await handleResponse(
-      response({ url: '/trips/t1/summary' }, 'passenger'),
+      response({ url: '/drives/t1' }, 'passenger'),
       deps({ setTripRole })
     );
-    expect(out).toEqual({ kind: 'navigated', href: '/trips/t1/summary', role: 'failed' });
+    expect(out).toEqual({ kind: 'navigated', href: '/drives/t1', role: 'failed' });
     expect(onError).toHaveBeenCalledWith(expect.any(Error), 'notifications.role');
     expect(dismiss).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith('/trips/t1/summary');
+    expect(navigate).toHaveBeenCalledWith('/drives/t1');
   });
 
   test('a malformed response does nothing', async () => {
@@ -210,11 +209,11 @@ describe('handleResponse', () => {
 
   test('while busy the href is held, not navigated; the role is still written', async () => {
     busy = true;
-    const out = await handleResponse(response({ url: '/trips/t1/summary' }, 'passenger'), deps());
-    expect(out).toEqual({ kind: 'deferred', href: '/trips/t1/summary', role: 'applied' });
+    const out = await handleResponse(response({ url: '/drives/t1' }, 'passenger'), deps());
+    expect(out).toEqual({ kind: 'deferred', href: '/drives/t1', role: 'applied' });
     expect(navigate).not.toHaveBeenCalled();
     expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).toEqual({
-      href: '/trips/t1/summary',
+      href: '/drives/t1',
       at: NOW,
     });
     expect(await createTripsRepo(db).get('t1')).toMatchObject({ role: 'passenger' });
@@ -222,20 +221,20 @@ describe('handleResponse', () => {
 
   test('replay navigates once the drive is over, and only once', async () => {
     busy = true;
-    await handleResponse(response({ url: '/permissions' }), deps());
+    await handleResponse(response({ url: '/settings/permissions' }), deps());
     expect(await replayPendingHref(deps())).toEqual({ kind: 'busy' });
     expect(navigate).not.toHaveBeenCalled();
 
     busy = false;
-    expect(await replayPendingHref(deps())).toEqual({ kind: 'navigated', href: '/permissions' });
-    expect(navigate).toHaveBeenCalledWith('/permissions');
+    expect(await replayPendingHref(deps())).toEqual({ kind: 'navigated', href: '/settings/permissions' });
+    expect(navigate).toHaveBeenCalledWith('/settings/permissions');
     expect(await replayPendingHref(deps())).toEqual({ kind: 'none' });
     expect(navigate).toHaveBeenCalledTimes(1);
   });
 
   test('a held href older than its age limit is dropped, not replayed on some later launch', async () => {
     await createSettingsRepo(db).set(PENDING_HREF_KEY, {
-      href: '/inbox',
+      href: '/home',
       at: NOW - PENDING_HREF_MAX_AGE_MS - 1,
     });
     expect(await replayPendingHref(deps())).toEqual({ kind: 'expired' });
@@ -243,66 +242,9 @@ describe('handleResponse', () => {
     expect(await createSettingsRepo(db).get(PENDING_HREF_KEY)).toBeNull();
   });
 
-  describe("a pushed notice's data.inboxId (T6 carry)", () => {
-    const INBOX_ID = '3f1c2a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69';
-
-    test('a tap queues its inbox row as read and says the inbox changed', async () => {
-      const onInboxChanged = jest.fn();
-      await handleResponse(
-        response({ url: '/permissions', inboxId: INBOX_ID }),
-        deps({ onInboxChanged })
-      );
-      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([INBOX_ID]);
-      expect(onInboxChanged).toHaveBeenCalledTimes(1);
-      expect(navigate).toHaveBeenCalledWith('/permissions');
-    });
-
-    test('a tap held during a drive still marks it read', async () => {
-      busy = true;
-      await handleResponse(response({ url: '/permissions', inboxId: INBOX_ID }), deps());
-      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toEqual([INBOX_ID]);
-    });
-
-    test.each([
-      ['not a uuid', 'abc'],
-      ['a number', 7],
-      ['a uuid with more after it', `${INBOX_ID}x`],
-    ])('an inboxId that is %s queues nothing', async (_label, inboxId) => {
-      const onInboxChanged = jest.fn();
-      await handleResponse(response({ url: '/permissions', inboxId }), deps({ onInboxChanged }));
-      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toBeNull();
-      expect(onInboxChanged).not.toHaveBeenCalled();
-      expect(navigate).toHaveBeenCalledWith('/permissions');
-    });
-
-    test('a dismissal marks nothing read', async () => {
-      await handleResponse(
-        response({ url: '/permissions', inboxId: INBOX_ID }, 'com.apple.UNNotificationDismissActionIdentifier'),
-        deps()
-      );
-      expect(await createSettingsRepo(db).get(PENDING_READ_KEY)).toBeNull();
-    });
-
-    test('a failed read write is reported, and the tap still opens its route', async () => {
-      const failing: Db = {
-        execute: async (sql, params) => {
-          if (JSON.stringify(params ?? []).includes(PENDING_READ_KEY)) throw new Error('disk');
-          return db.execute(sql, params);
-        },
-        transaction: (fn) => db.transaction(fn),
-      };
-      await handleResponse(
-        response({ url: '/permissions', inboxId: INBOX_ID }),
-        deps({ db: failing })
-      );
-      expect(onError).toHaveBeenCalledWith(expect.any(Error), 'notifications.inboxRead');
-      expect(navigate).toHaveBeenCalledWith('/permissions');
-    });
-  });
-
   test('a held href is re-checked against the allowlist on replay', async () => {
     await createSettingsRepo(db).set(PENDING_HREF_KEY, { href: '/settings/danger', at: NOW });
-    expect(await replayPendingHref(deps())).toEqual({ kind: 'navigated', href: '/inbox' });
+    expect(await replayPendingHref(deps())).toEqual({ kind: 'navigated', href: '/home' });
     await createSettingsRepo(db).set(PENDING_HREF_KEY, 'garbage');
     expect(await replayPendingHref(deps())).toEqual({ kind: 'expired' });
   });
@@ -325,5 +267,13 @@ describe('recordOpenedTrip', () => {
     await createSettingsRepo(db).set(OPENED_TRIPS_KEY, { not: 'a list' });
     await recordOpenedTrip(db, 'a');
     expect(await createSettingsRepo(db).get(OPENED_TRIPS_KEY)).toEqual(['a']);
+  });
+});
+
+describe('the catalog’s v2 drive urls', () => {
+  test('open the v3 drive summary and history', () => {
+    expect(routeForResponse(response({ url: '/trips/t1/summary' }))).toEqual({ href: '/drives/t1', clientTripId: 't1' });
+    expect(routeForResponse(response({ url: '/trips' }))).toEqual({ href: '/drives' });
+    expect(routeForResponse(response({ url: '/trips/../x/summary' }))).toEqual({ href: '/home' });
   });
 });

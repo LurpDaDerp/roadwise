@@ -2,13 +2,12 @@
  * What a tap on a notification does — for local and pushed notifications alike.
  *
  * `routeForResponse` is pure: it reads the notification's `data.url` and lets through only the
- * four routes a notification may open. Anything else opens the inbox, where every notice is
- * listed; a response that is not shaped like one opens nothing. The role buttons on "Were you
+ * routes a notification may open. Anything else opens Home; a response that is not shaped like one
+ * opens nothing. The role buttons on "Were you
  * driving?" add the answer for the trip the url names.
  *
  * `handleResponse` acts on it: it writes a role answer through `setTripRole` (the same write as the
- * summary's chips), records the trip as opened so the inbox mirror — which arrives only after
- * sync — can be marked read then, and navigates. While a drive is under way (or the navigator is
+ * summary's chips), records the trip as opened, and navigates. While a drive is under way (or the navigator is
  * not mounted yet) it navigates nowhere: the href is held in settings and `replayPendingHref`
  * delivers it once the drive is over.
  */
@@ -30,7 +29,7 @@ export const PENDING_HREF_KEY = 'notifications.pendingHref';
 /** A held tap older than this is dropped (the trip summary's catalog TTL, 12 h). */
 export const PENDING_HREF_MAX_AGE_MS = 12 * 60 * 60_000;
 export const OPENED_TRIPS_MAX = 50;
-export const FALLBACK_HREF = '/inbox';
+export const FALLBACK_HREF = '/home';
 
 const TRIP_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** The one allowlist, shared with onboarding's held link (final review m1). */
@@ -48,22 +47,33 @@ export interface NotificationRoute {
   clientTripId?: string;
 }
 
-/** The url if allowlisted, else the inbox. */
+/** The url if allowlisted, else Home. */
 export function allowHref(url: unknown): string {
   return isAllowedHref(url) ? url : FALLBACK_HREF;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
+/**
+ * The notification catalog still names the v2 drive routes (`/trips/<id>/summary`, `/trips`); they
+ * open the v3 drive summary and history.
+ */
+const LEGACY_SUMMARY = /^\/trips\/([A-Za-z0-9_-]{1,64})\/summary$/;
+function fromLegacy(url: unknown): unknown {
+  if (url === '/trips') return '/drives';
+  const id = typeof url === 'string' ? LEGACY_SUMMARY.exec(url)?.[1] : undefined;
+  return id === undefined ? url : `/drives/${id}`;
+}
+
 function urlOf(data: unknown): string | null {
   if (!isRecord(data)) return FALLBACK_HREF;
-  if (data.url !== undefined) return allowHref(data.url);
+  if (data.url !== undefined) return allowHref(fromLegacy(data.url));
   if (data.kind === LEGACY_SUMMARY_KIND && Array.isArray(data.clientTripIds)) {
     const ids = data.clientTripIds;
     if (ids.length === 0) return null;
-    if (ids.length > 1) return '/trips';
+    if (ids.length > 1) return '/drives';
     const id: unknown = ids[0];
-    return typeof id === 'string' && TRIP_ID.test(id) ? `/trips/${id}/summary` : FALLBACK_HREF;
+    return typeof id === 'string' && TRIP_ID.test(id) ? `/drives/${id}` : FALLBACK_HREF;
   }
   return FALLBACK_HREF;
 }
@@ -102,48 +112,8 @@ export interface ResponseDeps {
   onTripChanged?(clientTripId: string): void | Promise<void>;
   /** Removes the answered notification from the tray. */
   dismiss?(identifier: string): Promise<void>;
-  /** After a pushed notice's inbox row is marked read here, so the bell and the list refresh. */
-  onInboxChanged?(): void | Promise<void>;
   now?(): number;
   onError?(e: unknown, ctx: string): void;
-}
-
-/** A pushed notice names its inbox row (push-sender's `data.inboxId`, a uuid). */
-const INBOX_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function inboxIdOf(response: Notifications.NotificationResponse): string | null {
-  const data: unknown = response.notification.request.content.data;
-  if (!isRecord(data)) return null;
-  const id = data.inboxId;
-  return typeof id === 'string' && INBOX_ID.test(id) ? id : null;
-}
-
-/**
- * Opening a pushed notice reads it (T6 carry, Task 18): its row is marked read on the phone and
- * queued for the server, as a tap in the inbox would. Loaded on first use: the inbox cache's
- * module brings the app client with it, which a local notification's tap never needs.
- */
-async function markInboxRowRead(
-  response: Notifications.NotificationResponse,
-  deps: ResponseDeps,
-  now: number
-): Promise<void> {
-  const inboxId = inboxIdOf(response);
-  if (inboxId === null) return;
-  const report = deps.onError ?? (() => {});
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: see above
-    const { queueInboxRead } = require('@/features/inbox/cache') as typeof import('@/features/inbox/cache');
-    await queueInboxRead(deps.db, [inboxId], now);
-  } catch (e) {
-    report(e, 'notifications.inboxRead');
-    return;
-  }
-  try {
-    await deps.onInboxChanged?.();
-  } catch (e) {
-    report(e, 'notifications.inbox');
-  }
 }
 
 export type RoleOutcome = 'applied' | 'missing-trip' | 'failed';
@@ -209,8 +179,6 @@ export async function handleResponse(
   if (route.role !== undefined && route.clientTripId !== undefined) {
     role = await applyRole(response, route.clientTripId, route.role, deps, now);
   }
-
-  await markInboxRowRead(response, deps, now);
 
   if (route.clientTripId !== undefined) {
     await recordOpenedTrip(deps.db, route.clientTripId).catch((e: unknown) =>

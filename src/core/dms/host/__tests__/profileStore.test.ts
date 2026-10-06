@@ -1,11 +1,9 @@
 // The profile store (plan Privacy 7, rev1 S-M2): the settings table, one key, bound to the uid. A uid
-// mismatch never loads and removes the key; the handover wipe and the u13 purge clear it by construction.
+// mismatch never loads and removes the key; the handover wipe clears it by construction.
 import { DEVICE_TABLES } from '@/boot/device';
-import { KEPT_SETTINGS } from '@/features/onboarding/api';
 import type { DmsProfileV1 } from '../../engine/profile';
 import { createSettingsProfileStore, DMS_PROFILE_KEY } from '../profileStore';
 
-// jest hoists these above the imports: onboarding/api reaches for the Supabase client.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/profile', () => ({ updateOwnProfile: jest.fn(), recordConsent: jest.fn() }));
 jest.mock('@/features/drive/summaryNotifier', () => ({ cancelDriveSummaries: jest.fn() }));
@@ -65,7 +63,6 @@ test('clear removes it', async () => {
   expect(s.map.has('dms.profile')).toBe(false);
 });
 
-test('wiped by construction: DEVICE_TABLES includes settings; KEPT_SETTINGS excludes dms.profile', () => {
+test('wiped by construction: DEVICE_TABLES includes settings', () => {
   expect(DEVICE_TABLES).toContain('settings');
-  expect(KEPT_SETTINGS).not.toContain(DMS_PROFILE_KEY);
 });

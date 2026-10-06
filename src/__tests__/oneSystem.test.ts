@@ -227,6 +227,7 @@ describe('the repository', () => {
     expect(fs.existsSync(path.join(ROOT, 'src', 'features', 'drive', 'DetectionScreen.tsx'))).toBe(false);
     expect(fs.existsSync(path.join(ROOT, 'app', '(app)', 'detection.tsx'))).toBe(false);
     expect(Object.values(files).some((src) => /['"`]\/detection['"`?]/.test(stripComments(src)))).toBe(false);
-    expect(fs.existsSync(path.join(ROOT, 'app', '(app)', 'permissions', 'auto-record.tsx'))).toBe(true);
+    // v3: the auto-record route is gone too.
+    expect(fs.existsSync(path.join(ROOT, 'app', '(app)', 'permissions', 'auto-record.tsx'))).toBe(false);
   });
 });

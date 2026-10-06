@@ -218,7 +218,7 @@ export function DmsDiagnosticsScreen({ createController, createComparator }: { c
       createController={createController}
       createComparator={createComparator}
       cameraBeta={cameraBeta === true}
-      ageBand={ageBandOf(profile?.age_band)}
+      ageBand={ageBandOf((profile as { age_band?: string | null } | null)?.age_band)}
     />
   );
 }

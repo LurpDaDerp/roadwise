@@ -16,8 +16,8 @@ import { ThemeProvider } from '@/ui';
 import { HUD } from '@/ui/drive';
 
 import { hudCopy } from '../hudCopy';
-import { HudRouteScreen, KEEP_AWAKE_TAG, LockoutGate } from '../LockoutGate';
-import { PocketScreen } from '../PocketScreen';
+import { HudScreen } from '../HudScreen';
+import { KEEP_AWAKE_TAG, LockoutGate } from '../LockoutGate';
 
 // ---- a small navigator standing in for expo-router ----------------------------------------------
 // The real router cannot load under this repo's Jest transform list, so the stack is modelled: the
@@ -135,10 +135,8 @@ function Routes() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const path = (require('expo-router') as { usePathname: () => string }).usePathname();
   switch (path) {
-    case '/drive/hud':
-      return <HudRouteScreen />;
-    case '/drive/pocket':
-      return <PocketScreen />;
+    case '/drive':
+      return <HudScreen />;
     case '/drive/start':
       return <Text>pre-drive sheet</Text>;
     case '/trips/t0':
@@ -214,9 +212,8 @@ describe('LockoutGate: the overlay', () => {
     const app = await renderApp(STOPPED, ['/home']);
     await app.push(MOVING);
     expect(screen.getByTestId('hud-screen')).toBeTruthy();
-    // The only controls are the two hold-to-act buttons.
-    expect(screen.getAllByRole('button')).toHaveLength(2);
-    expect(screen.getByTestId('hud-sos')).toBeTruthy();
+    // The only control is the hold-to-act End.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
     expect(screen.getByTestId('hud-end')).toBeTruthy();
     const below = screen.getByText('/home', { includeHiddenElements: true });
     expect(isHiddenFromAccessibility(below)).toBe(true);
@@ -273,12 +270,12 @@ describe('LockoutGate: what it dismisses at the onset', () => {
     expect(screen.getByText('trip detail', { includeHiddenElements: true })).toBeTruthy();
   });
 
-  test('N-I1: lockout begins on /drive/hud — the HUD route survives, no second HUD, and End is there at the next stop', async () => {
-    const app = await renderApp(STOPPED, ['/home', '/drive/hud']);
+  test('N-I1: lockout begins on /drive — the driving screen survives, no second HUD, and End is there at the next stop', async () => {
+    const app = await renderApp(STOPPED, ['/home', '/drive']);
     await app.push(MOVING);
     expect(mockRouter.dismissAll).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
-    expect(path()).toBe('/drive/hud');
+    expect(path()).toBe('/drive');
     expect(screen.getAllByTestId('hud-screen')).toHaveLength(1);
     expect(isHiddenFromAccessibility(screen.getByTestId('hud-screen'))).toBe(false);
     await app.push(STOPPED);
@@ -286,30 +283,14 @@ describe('LockoutGate: what it dismisses at the onset', () => {
     expect(screen.getByRole('button', { name: hudCopy.hud.endLabel })).toBeTruthy();
   });
 
-  test('lockout begins on /drive/pocket: nothing extra', async () => {
-    const app = await renderApp({ ...STOPPED, mode: 'pocket' }, ['/home', '/drive/pocket']);
-    await app.push({ ...MOVING, mode: 'pocket' });
+  test("lockout begins on another drive-group screen: it is replaced by the driving screen", async () => {
+    const app = await renderApp(STOPPED, ['/home', '/drive/start']);
+    await app.push(MOVING);
     expect(mockRouter.dismissAll).not.toHaveBeenCalled();
-    expect(mockRouter.replace).not.toHaveBeenCalled();
-    expect(screen.getByTestId('pocket-screen')).toBeTruthy();
+    expect(mockRouter.replace).toHaveBeenCalledWith('/drive');
+    expect(path()).toBe('/drive');
     expect(screen.queryByTestId('parked-only-card')).toBeNull();
   });
-
-  test.each([
-    ['mounted', '/drive/hud'],
-    ['pocket', '/drive/pocket'],
-    ['auto', '/drive/pocket'],
-  ] as const)(
-    "lockout begins on the pre-drive sheet (%s): it is replaced by the trip's own route",
-    async (mode, to) => {
-      const app = await renderApp({ ...STOPPED, mode }, ['/home', '/drive/start']);
-      await app.push({ ...MOVING, mode });
-      expect(mockRouter.dismissAll).not.toHaveBeenCalled();
-      expect(mockRouter.replace).toHaveBeenCalledWith(to);
-      expect(path()).toBe(to);
-      expect(screen.queryByTestId('parked-only-card')).toBeNull();
-    }
-  );
 
   test('staying locked out does not dismiss again on each row', async () => {
     const app = await renderApp(STOPPED, ['/home', '/trips/t0']);
@@ -378,38 +359,8 @@ test('the overlay HUD is the ink-black HUD world, and a tap on End ends nothing'
   expect(app.host.end).not.toHaveBeenCalled();
 });
 
-describe('ruling U2 m2: the pocket rule wins on the HUD route', () => {
-  test.each(['pocket', 'auto'] as const)(
-    'a %s trip with the HUD open shows the pocket screen at speed, and the HUD again at the stop',
-    async (mode) => {
-      const app = await renderApp({ ...STOPPED, mode }, ['/home', '/drive/hud']);
-      expect(screen.getByTestId('hud-screen')).toBeTruthy();
-      await app.push({ ...MOVING, mode });
-      expect(screen.queryByTestId('hud-screen')).toBeNull();
-      expect(screen.getByTestId('pocket-screen')).toBeTruthy();
-      expect(screen.queryByTestId('parked-only-card')).toBeNull();
-      expect(screen.queryByRole('button')).toBeNull();
-      expect(path()).toBe('/drive/hud');
-      expect(mockRouter.dismissAll).not.toHaveBeenCalled();
-      expect(mockRouter.replace).not.toHaveBeenCalled();
-      await app.push({ ...STOPPED, mode });
-      expect(screen.getByTestId('hud-screen')).toBeTruthy();
-    }
-  );
-
-  test('a mounted trip keeps the HUD at speed', async () => {
-    const app = await renderApp(STOPPED, ['/home', '/drive/hud']);
-    await app.push(MOVING);
-    expect(screen.getByTestId('hud-screen')).toBeTruthy();
-    expect(screen.queryByTestId('pocket-screen')).toBeNull();
-  });
-
-  test('a passenger on a pocket trip (never locked out) keeps the HUD they opened', async () => {
-    const app = await renderApp({ ...STOPPED, mode: 'pocket', role: 'passenger' }, [
-      '/home',
-      '/drive/hud',
-    ]);
-    await app.push({ ...MOVING, mode: 'pocket', role: 'passenger', lockedOut: false });
-    expect(screen.getByTestId('hud-screen')).toBeTruthy();
-  });
+test('a mounted trip keeps the HUD at speed on the driving screen', async () => {
+  const app = await renderApp(STOPPED, ['/home', '/drive']);
+  await app.push(MOVING);
+  expect(screen.getByTestId('hud-screen')).toBeTruthy();
 });

@@ -14,25 +14,24 @@ test('the router and the onboarding hold read the very same list', () => {
 });
 
 test.each([
-  ['/trips/abc_123/summary', true],
-  ['/trips', true],
-  ['/permissions', true],
-  ['/inbox', true],
-  ['/rewards', true],
-  ['/rewards/goal', true],
-  ['/rewards/challenges', true],
-  ['/rewards/badges', true],
-  // F9 and F10 are gone (scope.md lane C addition): neither their screens nor an invite link.
-  ['/rewards/invite', false],
+  ['/drives/abc_123', true],
+  ['/drives', true],
+  ['/settings/permissions', true],
+  ['/home', true],
+  ['/leagues', true],
+  ['/friends', true],
+  // v2 routes are gone.
+  ['/rewards', false],
+  ['/inbox', false],
+  ['/trips', false],
   ['/join/ABCD2345', false],
-  ['/rewards/share', false],
-  ['/rewards/', false],
-  ['/rewards/goal?x=1', false],
+  ['/leagues/', false],
+  ['/friends?x=1', false],
   ['/settings', false],
-  ['/trips/abc/summary?x=1', false],
-  ['https://evil.example/inbox', false],
+  ['/drives/abc?x=1', false],
+  ['https://evil.example/home', false],
 ])('%s → %s, in both', (url, allowed) => {
   expect(isAllowedHref(url)).toBe(allowed);
   expect(pendingHrefFor(url)).toBe(allowed ? url : null);
-  expect(allowHref(url)).toBe(allowed ? url : '/inbox');
+  expect(allowHref(url)).toBe(allowed ? url : '/home');
 });

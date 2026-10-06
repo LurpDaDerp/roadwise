@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { STOPPED_PANEL_CLEAR_MPS } from '@/core/engine/machine';
@@ -23,7 +23,6 @@ import {
   StatusHalo,
 } from '@/ui/drive';
 
-import { deviceEmergencyNumber, emergencyTelUrl } from './emergency';
 import { bannerOf, EventBanner } from './EventBanner';
 import { HAZARD_BAR_PT, HazardBar } from './HazardBar';
 import { DRIVE_ROUTES, driveHref, hudCopy } from './hudCopy';
@@ -34,7 +33,7 @@ import { useWeatherHazard } from './weather';
 export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 /** A cached position older than this says little about where the car is now. */
 const POSITION_MAX_AGE_MS = 60 * 60_000;
-/** The bottom bar's height: SOS, the timer and End, with room for a hold. */
+/** The bottom bar's height: the timer and End, with room for a hold. */
 const BOTTOM_BAR_PT = 88;
 /** The End button's footprint, kept when there is no drive to end, so nothing shifts. */
 const END_SLOT_PT = 128;
@@ -254,9 +253,9 @@ export type HudScreenProps = {
 
 /**
  * C3, the mounted drive HUD. Top: the weather hazard bar, empty unless there is one. Centre: the
- * status halo with the speed inside it and the limit sign with it. Bottom: SOS at the left, the
- * trip timer in the middle, End at the right — the two controls are hold-to-act, so they stay
- * live at speed (a knock cannot fire them), and nothing else on the screen takes a touch. Over
+ * status halo with the speed inside it and the limit sign with it. Bottom: the trip timer in the
+ * middle, End at the right — hold-to-act, so it stays live at speed (a knock cannot fire it), and
+ * nothing else on the screen takes a touch. Over
  * it all, for a few seconds at a time, the event banner. Ink-black in every light; the night
  * palette by the sun. Portrait and landscape.
  *
@@ -284,9 +283,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const actions = useStoppedActions();
   const hazard = useWeatherHazard(recording);
 
-  const onSos = useCallback(() => {
-    Linking.openURL(emergencyTelUrl(deviceEmergencyNumber())).catch(() => {});
-  }, []);
   const onEnd = useCallback(() => {
     if (!overlay) {
       actions.onEnd();
@@ -333,16 +329,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <Gauges recording={recording} night={night} ring={ring} />
       </View>
       <View style={styles.bottom}>
-        <HoldButton
-          testID="hud-sos"
-          shape="circle"
-          label={hudCopy.hud.sos}
-          accessibilityLabel={hudCopy.hud.sosLabel}
-          accessibilityHint={hudCopy.hud.sosHint}
-          face={p.sos}
-          ink={p.sosInk}
-          onHold={onSos}
-        />
+        <View style={styles.endSlot} />
         <Timer night={night} />
         {tripOpen ? (
           <HoldButton

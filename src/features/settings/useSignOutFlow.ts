@@ -2,14 +2,22 @@ import { useState } from 'react';
 import { Alert } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
-import { homeCopy } from '@/features/home/copy';
 
-/**
- * Asks before a sign-out acts, only when the flush left deletes unsent: Home's own question and
- * words (`homeCopy.signOutCheck`), so the two ways out of the account ask the same thing.
- */
+export const signOutCheckCopy = {
+  title: 'Sign out?',
+  unsentDeletes: (n: number) =>
+    n === 1
+      ? "1 deleted drive hasn't reached the server yet. If you sign out now, it may come back. Sign out anyway?"
+      : `${n} deleted drives haven't reached the server yet. If you sign out now, they may come back. Sign out anyway?`,
+  unknown:
+    "We couldn't check whether your deleted drives reached the server. If any didn't, they may come back. Sign out anyway?",
+  cancel: 'Cancel',
+  confirm: 'Sign out',
+} as const;
+
+/** Asks before a sign-out acts, only when the flush left deletes unsent. */
 export function confirmUnsentSignOut(message: string): Promise<boolean> {
-  const c = homeCopy.signOutCheck;
+  const c = signOutCheckCopy;
   return new Promise((resolve) => {
     Alert.alert(
       c.title,
@@ -37,7 +45,7 @@ export function useSignOutFlow(confirm: (message: string) => Promise<boolean> = 
     try {
       const outcome = await signOut();
       if (outcome.signedOut) return;
-      const c = homeCopy.signOutCheck;
+      const c = signOutCheckCopy;
       const message = outcome.unsentDeletes === null ? c.unknown : c.unsentDeletes(outcome.unsentDeletes);
       if (await confirm(message)) await signOut({ force: true });
     } catch {

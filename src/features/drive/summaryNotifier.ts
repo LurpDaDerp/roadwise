@@ -37,10 +37,9 @@ import { readConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
-import { toTripSummary } from '@/data/queries/rows';
+import { toTripSummary, unscoredReasonOf } from '@/data/queries/rows';
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
 import { isBusyStatus, isDrivingStatus } from '@/drive/policy';
-import { countServerPushesToday, scorableIfDriver } from '@/features/inbox/viewModel';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
 import { deviceZone } from '@/lib/deviceZone';
 import { renderLocal, type Catalog, type LocalCopy, type TripSummaryFacts } from '@/notifications/catalog';
@@ -136,6 +135,11 @@ async function factsFor(db: Db, clientTripId: string): Promise<TripSummaryFacts>
   };
 }
 
+/** The scoring gate re-run with role `driver` (ruling T4 I2). */
+function scorableIfDriver(trip: ReturnType<typeof toTripSummary>): boolean {
+  return unscoredReasonOf({ ...trip, role: 'driver', scored: false }) === null;
+}
+
 export function createSummaryDelivery(
   db: Db,
   opts: { zone?: () => string; /** Tests build both readings of the cap question. */ catalog?: Catalog } = {}
@@ -160,12 +164,8 @@ export function createSummaryDelivery(
       const tz = zone();
       const prefs = await readCachedPrefs(settings, (await readConfig(db)).notification_defaults);
       const { today, byDay } = await readLocalCounts(settings, tz, now);
-      // The server's half, from the inbox cache, never the screen's hook, which is 0 until its
-      // query resolves (T6 review m3). Required here: the inbox cache's module loads the app client.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred, see above
-      const { createInboxCache } = require('@/features/inbox/cache') as typeof import('@/features/inbox/cache');
-      const rows = await createInboxCache(db).list();
-      const serverPushedToday = countServerPushesToday(rows, tz, now, opts.catalog);
+      // v3 has no inbox cache on the phone, so the server's pushes are not counted here.
+      const serverPushedToday = 0;
       return localDeliveryPlan({
         type: 'trip_summary',
         endedAt,

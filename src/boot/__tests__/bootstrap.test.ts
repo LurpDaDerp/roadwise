@@ -162,7 +162,6 @@ function deps(over: Partial<BootstrapDeps> = {}) {
     // Neither the diagnostics recorder, the summary notifier nor the family poster is the subject here.
     mountDiagnostics: null,
     attachSummaryNotifier: null,
-    attachFamilyLocation: null,
     appConfig,
     tz: TZ,
     now: () => NOW,
@@ -236,21 +235,6 @@ test('the cache is wired to the change event, and stop() detaches everything', a
   queryClient.clear();
 });
 
-
-test('the family location poster is attached to this launch, and stop() detaches it', async () => {
-  const detach = jest.fn();
-  const attachFamilyLocation = jest.fn(() => ({ detach }));
-  const { bootstrapDeps, appState, driveSense } = deps({ attachFamilyLocation });
-  runtime = await bootstrapApp(bootstrapDeps);
-  expect(attachFamilyLocation).toHaveBeenCalledTimes(1);
-  expect(attachFamilyLocation).toHaveBeenCalledWith(
-    expect.objectContaining({ db, source: driveSense, drive: runtime.drive, appState })
-  );
-  expect(detach).not.toHaveBeenCalled();
-  await runtime.stop();
-  runtime = null;
-  expect(detach).toHaveBeenCalledTimes(1);
-});
 
 /**
  * The device owner `uid` affirmed the background-location disclosure (Task 19 r1): the host arms
@@ -1527,24 +1511,6 @@ describe('final re-review n4, n5', () => {
     expect(elapsed).toBeLessThan(3_000);
     runtime.queryClient.clear();
     runtime = null;
-  });
-});
-
-describe('ruling T12 (1): the launch reads the cached age band', () => {
-  test("an under-13 account's cached profile keeps a launch disarmed; an adult's arms", async () => {
-    await migrate(db);
-    const settings = createSettingsRepo(db);
-    await affirm('user-1');
-    await settings.set('drive.autoDetect', true);
-    await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: 'u13' } });
-    runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
-    expect(runtime.drive.snapshot()).toMatchObject({ status: 'off', autoDetectArmed: false });
-    await runtime.stop();
-    runtime.queryClient.clear();
-
-    await settings.set('profile.cache', { userId: 'user-1', profile: { id: 'user-1', age_band: '18_plus' } });
-    runtime = await bootstrapApp(deps({ supabase: createFakeSupabase({ uid: 'user-1' }) }).bootstrapDeps);
-    expect(runtime.drive.snapshot()).toMatchObject({ status: 'armed', autoDetectArmed: true });
   });
 });
 

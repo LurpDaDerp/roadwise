@@ -1,13 +1,12 @@
 /**
- * The settings screens (lane C): the root's rows and where each goes, the profile edit, voice and
- * the test alert, export and delete, and help and legal. The data layer is the real one on sql.js;
- * the session, the drive state, the config and the rewards server are stand-ins.
+ * The settings screens kept for v3 (WP9 adapts them): voice and the test alert, export and delete.
+ * The data layer is the real one on sql.js; the session, the drive state and the config are
+ * stand-ins.
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
-import { homeCopy } from '@/features/home/copy';
 import { clearQueryClients, routerDouble, world } from '@/features/trips/__fixtures__/render';
 
 import { alertStyleCopy } from '../alerts/copy';
@@ -15,11 +14,8 @@ import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } fro
 import { resetVoicePrefForTests, VOICE_PREF_KEY, voicePrefEnabled } from '../alerts/voicePref';
 import { settingsCopy as copy } from '../copy';
 import { DeleteAccountScreen } from '../DeleteAccountScreen';
-import { HelpScreen } from '../HelpScreen';
 import { PrivacyScreen } from '../PrivacyScreen';
-import { ProfileScreen } from '../ProfileScreen';
 import { SETTINGS_HREFS } from '../routes';
-import { SettingsScreen } from '../SettingsScreen';
 import { AlertsScreen } from '../AlertsScreen';
 
 const mockRouter = routerDouble();
@@ -45,18 +41,6 @@ jest.mock('@/data/config/appConfig', () => ({
   useAppConfig: () => ({ config: mockConfig, ready: true }),
 }));
 
-jest.mock('@/features/rewards/api', () => {
-  const actual = jest.requireActual<typeof import('@/features/rewards/api')>('@/features/rewards/api');
-  const rows = jest.requireActual<typeof import('@/features/rewards/__fixtures__/rows')>('@/features/rewards/__fixtures__/rows');
-  return {
-    ...actual,
-    defaultRewardsApi: {
-      ...actual.defaultRewardsApi,
-      fetchSnapshot: jest.fn(async () => rows.snapshot({ progress: rows.progressRow({ xp: 2000, level: 2 }) })),
-    },
-  };
-});
-
 beforeEach(() => {
   jest.clearAllMocks();
   mockDrive.status = 'idle';
@@ -74,88 +58,6 @@ async function render(ui: React.ReactElement) {
   await w.renderScreen(ui);
   return w;
 }
-
-describe('SettingsScreen (H2)', () => {
-  test('every row names where it goes, and opens it', async () => {
-    await render(<SettingsScreen />);
-    expect(await screen.findByText('Class Steady')).toBeOnTheScreen();
-    const rows: [string, string][] = [
-      ['settings-profile-row', SETTINGS_HREFS.profile as string],
-      ['settings-detection', '/permissions/auto-record'],
-      ['settings-alerts', SETTINGS_HREFS.alerts as string],
-      ['settings-notifications', '/settings/notifications'],
-      ['settings-privacy', SETTINGS_HREFS.privacy as string],
-      ['settings-help', SETTINGS_HREFS.help as string],
-    ];
-    for (const [id, href] of rows) {
-      const row = screen.getByTestId(id);
-      expect(row.props.accessibilityRole).toBe('button');
-      expect(row.props.accessibilityHint).toBeTruthy();
-      await fireEvent.press(row);
-      expect(mockRouter.push).toHaveBeenLastCalledWith(href);
-    }
-    expect(screen.getByText('Maya Chen')).toBeOnTheScreen();
-  });
-
-  test('camera coaching is offered only with the beta on and an adult account', async () => {
-    await render(<SettingsScreen />);
-    expect(screen.queryByTestId('settings-camera')).toBeNull();
-    clearQueryClients();
-    mockConfig = { ...CONFIG_DEFAULTS, fetchedAt: 1, flags: { ...CONFIG_DEFAULTS.flags, camera_beta: true } };
-    await render(<SettingsScreen />);
-    await fireEvent.press(screen.getByTestId('settings-camera'));
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/camera');
-    clearQueryClients();
-    mockSession.profile = { display_name: 'Sam', age_band: '13_17' };
-    await render(<SettingsScreen />);
-    expect(screen.queryByTestId('settings-camera')).toBeNull();
-  });
-
-  test('sign out: the existing flow, with its consequence stated before the press', async () => {
-    await render(<SettingsScreen />);
-    const button = screen.getByRole('button', { name: copy.root.signOut });
-    expect(button.props.accessibilityHint).toBe(homeCopy.signOutWarning);
-    expect(screen.getByText(homeCopy.signOutWarning)).toBeOnTheScreen();
-    await fireEvent.press(button);
-    expect(mockSession.signOut).toHaveBeenCalledWith();
-  });
-
-  test('no name yet: the card says New driver, and the portrait is a glyph', async () => {
-    mockSession.profile = { display_name: '', age_band: '18_plus' };
-    await render(<SettingsScreen />);
-    expect(screen.getByText(homeCopy.card.noName)).toBeOnTheScreen();
-  });
-});
-
-describe('ProfileScreen (H1)', () => {
-  test('edits the first name through the one profile write path, then says so', async () => {
-    const update = jest.fn(async () => ({}));
-    await render(<ProfileScreen deps={{ update }} />);
-    expect(await screen.findByTestId('profile-class')).toHaveTextContent('Class Steady');
-    const save = screen.getByTestId('profile-save');
-    expect(save).toBeDisabled();
-    await fireEvent.changeText(screen.getByLabelText(copy.profile.nameLabel), '  Maya Chen  ');
-    // the same name, only spaced: nothing to save
-    expect(screen.getByTestId('profile-save')).toBeDisabled();
-    await fireEvent.changeText(screen.getByLabelText(copy.profile.nameLabel), 'Mae');
-    await fireEvent.press(screen.getByTestId('profile-save'));
-    await waitFor(() => expect(screen.getByTestId('profile-name-note')).toHaveTextContent(copy.profile.saved));
-    expect(update).toHaveBeenCalledWith('00000000-0000-4000-8000-00000000000a', { display_name: 'Mae' });
-    expect(mockSession.refreshProfile).toHaveBeenCalled();
-  });
-
-  test('an empty name is refused on the spot; a failed save says so', async () => {
-    const update = jest.fn(async () => Promise.reject(new Error('offline')));
-    await render(<ProfileScreen deps={{ update }} />);
-    await fireEvent.changeText(screen.getByLabelText(copy.profile.nameLabel), '   ');
-    await fireEvent.press(screen.getByTestId('profile-save'));
-    await waitFor(() => expect(screen.getByTestId('profile-name-note')).toHaveTextContent(copy.profile.nameEmpty));
-    expect(update).not.toHaveBeenCalled();
-    await fireEvent.changeText(screen.getByLabelText(copy.profile.nameLabel), 'Mae');
-    await fireEvent.press(screen.getByTestId('profile-save'));
-    expect(await screen.findByTestId('profile-save-error')).toBeOnTheScreen();
-  });
-});
 
 describe('AlertsScreen (H4)', () => {
   test('voice prompts: on by default, turned off and kept on the phone, and the tones are said to stay', async () => {
@@ -316,34 +218,5 @@ describe('DeleteAccountScreen (H13)', () => {
     await render(<DeleteAccountScreen deps={{ exportData, share, remove: jest.fn(), wipe: jest.fn() }} />);
     await fireEvent.press(screen.getByRole('button', { name: copy.deleteAccount.exportAction }));
     await waitFor(() => expect(share).toHaveBeenCalled());
-  });
-});
-
-describe('HelpScreen (H11, H12)', () => {
-  test('the FAQ, the scoring explainer, and the safety disclaimer word for word', async () => {
-    await render(<HelpScreen />);
-    for (const item of copy.help.faq) expect(screen.getByText(item.q)).toBeOnTheScreen();
-    expect(screen.getByText('RoadWise is a coaching aid and may miss or misreport events.')).toBeOnTheScreen();
-    await fireEvent.press(screen.getByRole('button', { name: copy.help.scoring }));
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/insights/how-scoring-works');
-  });
-
-  test('no published documents: no dead links, and it says they will come', async () => {
-    await render(<HelpScreen />);
-    expect(screen.queryByRole('link')).toBeNull();
-    expect(screen.getByTestId('help-no-docs')).toHaveTextContent(copy.help.noDocuments);
-  });
-
-  test('published documents open in the browser', async () => {
-    mockConfig = {
-      ...CONFIG_DEFAULTS,
-      fetchedAt: 1,
-      onboarding: { tos_version: '1', privacy_version: '1' },
-      legal_urls: { terms: 'https://roadwise.example/terms', privacy: 'https://roadwise.example/privacy' },
-    };
-    const open = jest.fn(async () => undefined);
-    await render(<HelpScreen open={open} />);
-    await fireEvent.press(screen.getByRole('link', { name: 'Privacy Policy' }));
-    expect(open).toHaveBeenCalledWith('https://roadwise.example/privacy');
   });
 });

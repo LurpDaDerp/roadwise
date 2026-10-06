@@ -5,18 +5,15 @@
  * auth gate can import it without loading expo-notifications.
  */
 
-export const SUMMARY_HREF = /^\/trips\/([A-Za-z0-9_-]{1,64})\/summary$/;
+export const SUMMARY_HREF = /^\/drives\/([A-Za-z0-9_-]{1,64})$/;
 
 export const ALLOWED_HREFS: readonly RegExp[] = [
   SUMMARY_HREF,
-  /^\/trips$/,
-  /^\/permissions$/,
-  /^\/inbox$/,
-  // The rewards notifications' screens (M5).
-  /^\/rewards$/,
-  /^\/rewards\/goal$/,
-  /^\/rewards\/challenges$/,
-  /^\/rewards\/badges$/,
+  /^\/drives$/,
+  /^\/home$/,
+  /^\/leagues$/,
+  /^\/friends$/,
+  /^\/settings\/permissions$/,
 ];
 
 /** Whether `url` is exactly one of the allowlisted routes. */

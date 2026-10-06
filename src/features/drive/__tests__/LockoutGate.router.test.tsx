@@ -14,8 +14,9 @@ import { DriveProvider } from '@/drive/DriveProvider';
 import type { DriveHost, DriveState } from '@/drive/host';
 import { ThemeProvider } from '@/ui';
 
-import { DRIVE_ROUTES, driveHref } from '../hudCopy';
-import { HudRouteScreen, LockoutGate } from '../LockoutGate';
+import { DRIVE_SCREEN, driveHref } from '../hudCopy';
+import { HudScreen } from '../HudScreen';
+import { LockoutGate } from '../LockoutGate';
 
 jest.mock('expo-keep-awake', () => ({
   activateKeepAwakeAsync: jest.fn(async () => {}),
@@ -107,8 +108,7 @@ function routes(host: DriveHost) {
     ),
     home: () => <Text>home</Text>,
     'drive/_layout': () => <Stack screenOptions={{ headerShown: false }} />,
-    'drive/hud': () => <HudRouteScreen />,
-    'drive/pocket': () => <Text>pocket</Text>,
+    'drive/index': () => <HudScreen />,
   };
 }
 
@@ -117,7 +117,7 @@ beforeAll(() => {
 });
 
 describe('LockoutGate under the real router', () => {
-  test('a mounted drive on the HUD, pushed over Home, keeps its HUD through the lockout', async () => {
+  test('a drive on the driving screen, pushed over Home, keeps its HUD through the lockout', async () => {
     const drive = fakeHost(state());
     // RNTL 14 renders asynchronously: `renderRouter` hands back the render's promise with the
     // router readers attached to it, so it is awaited and then read.
@@ -126,23 +126,23 @@ describe('LockoutGate under the real router', () => {
     expect(app.getPathname()).toBe('/home');
     const { router } = jest.requireActual<typeof import('expo-router')>('expo-router');
     await act(async () => {
-      router.push(driveHref(DRIVE_ROUTES.hud));
+      router.push(driveHref(DRIVE_SCREEN));
     });
-    expect(app.getPathname()).toBe('/drive/hud');
+    expect(app.getPathname()).toBe('/drive');
     expect(screen.getByTestId('hud-screen')).toBeTruthy();
 
     await drive.push(MOVING);
 
     // The navigator still shows the HUD route: nothing dismissed the drive modal (review N-I1),
     // and the gate laid no second HUD over the route that already is one.
-    expect(app.getPathname()).toBe('/drive/hud');
+    expect(app.getPathname()).toBe('/drive');
     expect(screen.getAllByTestId('hud-screen')).toHaveLength(1);
     expect(screen.queryByText('home')).toBeNull();
     expect(screen.getByTestId('hud-end')).toBeTruthy();
 
     // And at the next stop the HUD is still the route, its End still there.
     await drive.push({ speedMps: 0, lockedOut: false, stoppedPanel: true, stationarySinceTs: T + 60_000 });
-    expect(app.getPathname()).toBe('/drive/hud');
+    expect(app.getPathname()).toBe('/drive');
     expect(screen.getAllByTestId('hud-screen')).toHaveLength(1);
     expect(screen.getByTestId('hud-end')).toBeTruthy();
   });

@@ -23,7 +23,8 @@ export function CameraSettingsScreen({ deps }: { deps?: CameraBetaDeps }) {
   const th = useTheme();
   const router = useRouter();
   const { profile } = useSession();
-  const beta = useCameraBeta(profile?.age_band ?? null, deps);
+  // v3 profiles carry no age band (WP8 removes the age gate); read loosely meanwhile.
+  const beta = useCameraBeta((profile as { age_band?: string | null } | null)?.age_band ?? null, deps);
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const [side, setSide] = useState<'left' | 'right'>('left');

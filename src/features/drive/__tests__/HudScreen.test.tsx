@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { AppState, Linking, StyleSheet } from 'react-native';
+import { AppState, StyleSheet } from 'react-native';
 
 import type { AlertDecision, AlertKind, AlertLevel } from '@/core/alerts/types';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -410,14 +410,14 @@ describe('HudScreen: the weather hazard bar (Open-Meteo)', () => {
   });
 });
 
-describe('HudScreen: touch policy — two hold-to-act controls, nothing else', () => {
-  test('while moving the only controls are SOS and End; a tap on either does nothing', async () => {
+describe('HudScreen: touch policy — one hold-to-act control, nothing else', () => {
+  test('while moving the only control is End, and a tap on it does nothing; there is no SOS', async () => {
     const h = await renderHud({ lockedOut: true });
-    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.queryByTestId('hud-sos')).toBeNull();
     expect(screen.queryByTestId('hud-tap-area')).toBeNull();
     expect(screen.queryByTestId('hud-touch-shield')).toBeNull();
     await fireEvent.press(screen.getByTestId('hud-end'));
-    await fireEvent.press(screen.getByTestId('hud-sos'));
     await act(() => jest.advanceTimersByTime(5000));
     expect(h.host.end).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
@@ -440,44 +440,16 @@ describe('HudScreen: touch policy — two hold-to-act controls, nothing else', (
     expect(h.host.end).not.toHaveBeenCalled();
   });
 
-  test('a 2 s hold on SOS opens the dialer with the region’s emergency number', async () => {
-    const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
-    jest
-      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
-      .mockReturnValue({ locale: 'en-GB' } as Intl.ResolvedDateTimeFormatOptions);
-    const h = await renderHud({ lockedOut: true });
-    await hold('hud-sos');
-    expect(open).toHaveBeenCalledWith('tel:112');
-    expect(h.host.end).not.toHaveBeenCalled();
-    jest.restoreAllMocks();
-  });
-
-  test('SOS defaults to 911 when the region is unknown, and a refused dialer is silent', async () => {
-    const open = jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('no dialer'));
-    jest
-      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
-      .mockReturnValue({ locale: 'en' } as Intl.ResolvedDateTimeFormatOptions);
+  test('End names itself and its hold for a screen reader', async () => {
     await renderHud();
-    await hold('hud-sos');
-    await act(async () => {});
-    expect(open).toHaveBeenCalledWith('tel:911');
-    jest.restoreAllMocks();
-  });
-
-  test('the SOS and End buttons name themselves and their hold for a screen reader', async () => {
-    await renderHud();
-    const sos = screen.getByRole('button', { name: hudCopy.hud.sosLabel });
-    expect(sos).toHaveProp('accessibilityHint', hudCopy.hud.sosHint);
     const end = screen.getByRole('button', { name: hudCopy.hud.endLabel });
     expect(end).toHaveProp('accessibilityHint', hudCopy.hud.endHint);
-    expect(screen.getByText(hudCopy.hud.sos)).toBeTruthy();
     expect(screen.getByText(hudCopy.hud.end)).toBeTruthy();
   });
 
-  test('with no drive open there is no End, and SOS is still there', async () => {
+  test('with no drive open there is no End', async () => {
     await renderHud({ status: 'armed', clientTripId: null, lockedOut: false, startedAt: null });
     expect(screen.queryByTestId('hud-end')).toBeNull();
-    expect(screen.getByTestId('hud-sos')).toBeTruthy();
     expect(screen.queryByTestId('hud-timer')).toBeNull();
   });
 

@@ -2,11 +2,7 @@ import { assessHealth, type HealthContext, type PermissionSnapshot } from '@/cor
 import { CONFIG_DEFAULTS } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
-import { parseDisclosureReason } from '@/features/permissions/BackgroundDisclosure';
-import { guideFor, vendorOf } from '@/features/permissions/oemGuides';
 import { bannerMessage } from '@/features/permissions/PermissionHealthBanner';
-import { readinessMessage } from '@/features/permissions/PermissionHealthScreen';
-import { offerDue, type OfferInput } from '@/features/permissions/PermissionPromptsHost';
 import {
   completedDrives,
   flushPendingDisclosureConsent,
@@ -83,93 +79,9 @@ describe('the Home banner', () => {
   });
 });
 
-describe('Run a test says exactly what readiness found', () => {
-  test('armed only when armed', () => {
-    expect(readinessMessage({ allowed: true, armed: true })).toBe('Auto-record is armed on this phone right now.');
-  });
-  test('allowed but not armed', () => {
-    expect(readinessMessage({ allowed: true, armed: false })).toBe(
-      'Auto-record isn’t armed right now, though this phone allows it.'
-    );
-  });
-  test('not allowed', () => {
-    expect(readinessMessage({ allowed: false, armed: false })).toMatch(/^Auto-record isn’t armed\. This phone doesn’t allow it yet/);
-  });
-  test("couldn't check when readiness cannot say", () => {
-    expect(readinessMessage({ allowed: false, armed: null })).toBe('We couldn’t check auto-record on this phone.');
-  });
-  test('never a detection promise', () => {
-    for (const r of [
-      { allowed: true, armed: true },
-      { allowed: true, armed: false },
-      { allowed: false, armed: false },
-      { allowed: false, armed: null },
-    ]) {
-      expect(readinessMessage(r)).not.toMatch(/will be detected|detects your drives|drives will/i);
-    }
-  });
-});
-
-describe('the post-drive offers', () => {
-  const offer = (over: Partial<OfferInput> = {}) =>
-    offerDue({
-      platform: 'ios',
-      driver: true,
-      autoDetectAvailable: true,
-      completedDrives: 1,
-      offers: {},
-      manualByChoice: false,
-      canPromptAlways: true,
-      location: 'foreground',
-      ...over,
-    });
-
-  test.each([
-    ['iOS after the first drive', {}, 'first-drive'],
-    ['iOS before any drive', { completedDrives: 0 }, null],
-    ['iOS first offer made, second drive', { completedDrives: 2, offers: { 'first-drive': 1 } }, null],
-    ['iOS third drive, once more', { completedDrives: 3, offers: { 'first-drive': 1 } }, 'third-drive'],
-    ['iOS both made', { completedDrives: 7, offers: { 'first-drive': 1, 'third-drive': 2 } }, null],
-    ['Android first drive: none (A6 asked)', { platform: 'android' as const }, null],
-    ['Android third drive', { platform: 'android' as const, completedDrives: 3 }, 'third-drive'],
-    ['Android third offer made', { platform: 'android' as const, completedDrives: 5, offers: { 'third-drive': 1 } }, null],
-    ['manual by choice', { completedDrives: 3, manualByChoice: true }, null],
-    ['inside the 14-day window', { completedDrives: 3, canPromptAlways: false }, null],
-    ['already Always', { location: 'always' as const }, null],
-    ['location denied', { location: 'denied' as const }, null],
-    ['location not read yet (cheap pre-check)', { location: null }, 'first-drive'],
-    ['non-driver', { driver: false }, null],
-    ['auto-record withdrawn by the server', { autoDetectAvailable: false }, null],
-  ] as const)('%s', (_name, over, expected) => {
-    expect(offer(over)).toBe(expected);
-  });
-});
-
 test('completed drives count the driver’s own trips only', () => {
   expect(completedDrives([{ role: 'driver' }, { role: 'unknown' }, { role: 'passenger' }, { role: 'other' }])).toBe(2);
   expect(completedDrives([])).toBe(0);
-});
-
-describe('OEM battery guides', () => {
-  const guides = CONFIG_DEFAULTS.oem_battery_guides;
-  test.each([
-    ['samsung', 'samsung'],
-    ['Samsung', 'samsung'],
-    ['Xiaomi', 'xiaomi'],
-    ['Redmi', 'xiaomi'],
-    ['POCO', 'xiaomi'],
-    ['OnePlus', 'oneplus'],
-    ['Google', 'google'],
-    ['motorola', null],
-    ['', null],
-    [null, null],
-  ] as const)('%s → %s', (maker, vendor) => {
-    expect(vendorOf(maker)).toBe(vendor);
-    expect(guideFor(maker, guides)).toBe(vendor ? guides[vendor] : guides.default);
-  });
-  test('a vendor with no guide in config falls back to the general guide', () => {
-    expect(guideFor('Samsung', { default: guides.default })).toBe(guides.default);
-  });
 });
 
 describe('the Settings-return acknowledgement', () => {
@@ -265,10 +177,3 @@ describe('the background-location consent', () => {
   });
 });
 
-test('route reasons: known values pass; anything else is a repair', () => {
-  expect(parseDisclosureReason('first-drive')).toBe('first-drive');
-  expect(parseDisclosureReason(['third-drive'])).toBe('third-drive');
-  expect(parseDisclosureReason('onboarding')).toBe('onboarding');
-  expect(parseDisclosureReason('nonsense')).toBe('repair');
-  expect(parseDisclosureReason(undefined)).toBe('repair');
-});

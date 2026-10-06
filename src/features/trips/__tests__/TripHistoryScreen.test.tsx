@@ -68,7 +68,7 @@ describe('the list', () => {
     await open({ trips: [drive('a', 0)] });
     await press(screen.getByTestId('history-a'));
     expect(mockRouter.push).toHaveBeenLastCalledWith({
-      pathname: '/(app)/trips/[clientTripId]/summary',
+      pathname: '/(app)/drives/[clientTripId]',
       params: { clientTripId: 'a' },
     });
   });

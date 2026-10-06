@@ -255,7 +255,7 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const host = useDriveHost();
-  const { profile, session } = useSession();
+  const { session } = useSession();
   const userId = session?.user.id ?? null;
   const { config } = useAppConfig(deps.appConfig);
   const trips = useTrips();
@@ -303,7 +303,8 @@ export function usePermissionHealth(deps: PermissionHealthDeps = {}): Permission
   if (read === null || tripList === undefined) return { status: 'loading', refresh };
 
   const context: HealthContext = {
-    drives: profile?.driving_stage !== 'non_driver',
+    // v3 has no non-driver accounts.
+    drives: true,
     autoDetectOn: host.autoDetectEnabled(),
     autoDetectAvailable: config.flags.auto_detect,
     firstDriveDone: completedDrives(tripList) > 0,

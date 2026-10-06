@@ -5,7 +5,6 @@
  * are shaped so a localisation pass can lift them into it without touching a component. Voice
  * (§7.0, §9.10): second person, supportive, plain words, never a code in primary text.
  */
-import { pointsText } from '@/features/rewards/copy/common';
 
 export const tripCopy = {
   summaryTitle: 'Drive summary',
@@ -83,8 +82,6 @@ export const tripCopy = {
     counts: 'On your record',
     provisional: 'Confirmed when the day closes.',
     /** M5 (§10.1): a day earns, not a drive — so the points shown are the day's, and say so. */
-    settled: (label: string, points: number) => `${label} · +${pointsText(points)}`,
-    settledSpoken: (label: string, points: number) => `${label}, ${pointsText(points)} for the day`,
     forTheDay: 'Points are for the whole day, not just this drive.',
     /** A confirmed day below a good day that still earned a bonus (phone-free, camera). */
     confirmedDay: 'Day confirmed',

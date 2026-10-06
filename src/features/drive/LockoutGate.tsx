@@ -6,16 +6,13 @@ import { BackHandler, StyleSheet, View } from 'react-native';
 import { tripRecords } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
 
-import { DRIVE_GROUP_PREFIX, DRIVE_ROUTES, driveHref } from './hudCopy';
+import { DRIVE_GROUP_PREFIX, DRIVE_SCREEN, driveHref } from './hudCopy';
 import { HudScreen } from './HudScreen';
 import { ParkedOnlyCard } from './ParkedOnlyCard';
-import { PocketScreen } from './PocketScreen';
 
 /** The keep-awake tag the gate holds for a mounted trip. */
 export const KEEP_AWAKE_TAG = 'roadwise-mounted-drive';
 
-const HUD_ROUTE = DRIVE_ROUTES.hud;
-const POCKET_ROUTE = DRIVE_ROUTES.pocket;
 
 /** A recorded trip, whatever its screen: rows are being kept (`recording`) or may resume (`ending`). */
 
@@ -25,8 +22,8 @@ const POCKET_ROUTE = DRIVE_ROUTES.pocket;
  * It always renders its children. While a driver's trip is locked out (`lockedOut`) and the route is
  * not already a drive screen, it lays the lockout surface over them — `HudScreen` for a mounted trip,
  * `ParkedOnlyCard` for a pocket or auto-detected one — and hides the app below from assistive tech
- * and from touch. On `/drive/hud` or `/drive/pocket` the route already is the lockout surface, so it
- * adds nothing (no second HUD).
+ * and from touch. On `/drive` the route already is the lockout surface, so it adds nothing (no
+ * second HUD).
  *
  * At the onset it clears what the overlay cannot cover:
  * - **RN Modals** (dispute sheet, delete sheet) close themselves through `useLockout()` (rev1: I12).
@@ -51,8 +48,7 @@ export function LockoutGate({ children }: { children: ReactNode }) {
     status: s.status,
   }));
 
-  const onDriveScreen = pathname === HUD_ROUTE || pathname === POCKET_ROUTE;
-  const tripRoute: string = mode === 'mounted' ? HUD_ROUTE : POCKET_ROUTE;
+  const onDriveScreen = pathname === DRIVE_SCREEN;
 
   // The onset, once per lockout: the ref makes a later route change (or the dismissal itself)
   // re-run the effect without acting again.
@@ -61,13 +57,13 @@ export function LockoutGate({ children }: { children: ReactNode }) {
     const began = lockedOut && !wasLocked.current;
     wasLocked.current = lockedOut;
     if (!began) return;
-    if (pathname === HUD_ROUTE || pathname === POCKET_ROUTE) return;
+    if (pathname === DRIVE_SCREEN) return;
     if (pathname.startsWith(DRIVE_GROUP_PREFIX)) {
-      router.replace(driveHref(tripRoute));
+      router.replace(driveHref(DRIVE_SCREEN));
       return;
     }
     if (router.canDismiss()) router.dismissAll();
-  }, [lockedOut, pathname, tripRoute, router]);
+  }, [lockedOut, pathname, router]);
 
   // Through `ending` too: a driver who pulls away after a long stop must find the HUD still lit.
   const keepAwake = mode === 'mounted' && tripRecords(status);
@@ -106,18 +102,6 @@ export function LockoutGate({ children }: { children: ReactNode }) {
       ) : null}
     </View>
   );
-}
-
-/**
- * What the `/drive/hud` route shows (ruling U2 m2, safety). The banner's *Open HUD* may open the
- * HUD on a pocket or auto-detected trip without changing its mode; the moment that trip is locked
- * out (a driver above the lockout speed, SR2) the pocket rule wins and the route shows the pocket
- * screen instead — never the mounted HUD at speed on a trip the engine treats as pocket. Back at a
- * stop the HUD returns. A mounted trip, and a passenger (never locked out), keep the HUD.
- */
-export function HudRouteScreen() {
-  const pocketAtSpeed = useDrive((s) => s.mode !== 'mounted' && s.lockedOut);
-  return pocketAtSpeed ? <PocketScreen /> : <HudScreen />;
 }
 
 const styles = StyleSheet.create({

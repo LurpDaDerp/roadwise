@@ -1,20 +1,15 @@
 import type { Href } from 'expo-router';
 
-/**
- * Where the settings screens live — the one module for these routes. Casts: typed routes are
- * generated at `expo start`, and the camera screen is lane B's (`app/(app)/settings/camera.tsx`).
- */
+/** Where the settings screens live — the one module for these routes. */
 export const SETTINGS_HREFS = {
   root: '/settings' as Href,
-  profile: '/settings/profile' as Href,
+  account: '/settings/account' as Href,
   alerts: '/settings/alerts' as Href,
-  camera: '/settings/camera' as Href,
+  dms: '/settings/dms' as Href,
   notifications: '/settings/notifications' as Href,
-  privacy: '/settings/privacy' as Href,
+  privacyZones: '/settings/privacy-zones' as Href,
   deleteAccount: '/settings/delete-account' as Href,
-  help: '/settings/help' as Href,
-  /** The existing auto-record screen (M4), the drive detection setting. */
-  detection: '/permissions/auto-record' as Href,
-  /** The scoring explainer (E4), linked from Help. */
-  scoring: '/insights/how-scoring-works' as Href,
+  blocked: '/settings/blocked' as Href,
+  permissions: '/settings/permissions' as Href,
+  howPointsWork: '/how-points-work' as Href,
 } as const;
