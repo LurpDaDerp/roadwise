@@ -1,88 +1,98 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 
 import { HoldButton } from '@/ui/drive/HoldButton';
-import { HOLD_TO_ACT_MS } from '@/ui/drive/hudTokens';
+import { HOLD_TO_END_MS, HUD_MIN_TARGET_PT } from '@/ui/drive/hudTokens';
+
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn(async () => {}),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+}));
 
 const onHold = jest.fn();
 
-function renderButton(holdMs?: number) {
+function renderButton(props: { disabled?: boolean } = {}) {
   return render(
     <HoldButton
       testID="hold"
-      shape="circle"
-      label="SOS"
-      accessibilityLabel="Emergency call"
-      accessibilityHint="Hold for two seconds"
-      face="#FF7070"
-      ink="#000814"
-      holdMs={holdMs}
+      label="End"
+      accessibilityLabel="End drive"
+      face="#001D3D"
+      ink="#F3F6FB"
+      ring="#F3F6FB"
+      track="#003566"
       onHold={onHold}
+      {...props}
     />
   );
 }
 
 beforeEach(() => {
   jest.useFakeTimers();
-  onHold.mockClear();
+  jest.clearAllMocks();
 });
 afterEach(() => jest.useRealTimers());
 
-test('a hold of exactly the threshold acts once; one millisecond less does nothing', async () => {
+test('the hold is 0.5 s', () => {
+  expect(HOLD_TO_END_MS).toBe(500);
+});
+
+test('a full hold acts once, with one haptic tick, as the ring closes', async () => {
   await renderButton();
   const b = screen.getByTestId('hold');
   await fireEvent(b, 'pressIn');
-  await act(() => jest.advanceTimersByTime(HOLD_TO_ACT_MS - 1));
+  await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS - 1));
+  expect(onHold).not.toHaveBeenCalled();
+  expect(Haptics.impactAsync).not.toHaveBeenCalled();
+  await act(() => jest.advanceTimersByTime(1));
+  expect(onHold).toHaveBeenCalledTimes(1);
+  expect(Haptics.impactAsync).toHaveBeenCalledTimes(1);
+  await act(() => jest.advanceTimersByTime(5000));
+  expect(onHold).toHaveBeenCalledTimes(1);
+});
+
+test('letting go early cancels: nothing fires, and the next hold starts from empty', async () => {
+  await renderButton();
+  const b = screen.getByTestId('hold');
+  await fireEvent(b, 'pressIn');
+  await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS - 100));
+  await fireEvent(b, 'pressOut');
+  await act(() => jest.advanceTimersByTime(5000));
+  expect(onHold).not.toHaveBeenCalled();
+  expect(Haptics.impactAsync).not.toHaveBeenCalled();
+
+  await fireEvent(b, 'pressIn');
+  await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS - 1));
   expect(onHold).not.toHaveBeenCalled();
   await act(() => jest.advanceTimersByTime(1));
   expect(onHold).toHaveBeenCalledTimes(1);
-  // Holding on past the threshold does not fire again.
-  await act(() => jest.advanceTimersByTime(5000));
-  expect(onHold).toHaveBeenCalledTimes(1);
-  await fireEvent(b, 'pressOut');
-  expect(HOLD_TO_ACT_MS).toBe(2000);
 });
 
-test('a plain tap does nothing', async () => {
-  await renderButton();
-  await fireEvent.press(screen.getByTestId('hold'));
-  await act(() => jest.advanceTimersByTime(5000));
+test('disabled: a hold does nothing', async () => {
+  await renderButton({ disabled: true });
+  await fireEvent(screen.getByTestId('hold'), 'pressIn');
+  await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS * 2));
   expect(onHold).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'End drive' })).toBeDisabled();
 });
 
-test('a hold released early does nothing, and two short holds do not add up', async () => {
-  await renderButton();
-  const b = screen.getByTestId('hold');
-  await fireEvent(b, 'pressIn');
-  await act(() => jest.advanceTimersByTime(1500));
-  await fireEvent(b, 'pressOut');
-  await act(() => jest.advanceTimersByTime(1000));
-  await fireEvent(b, 'pressIn');
-  await act(() => jest.advanceTimersByTime(1500));
-  await fireEvent(b, 'pressOut');
-  await act(() => jest.advanceTimersByTime(5000));
-  expect(onHold).not.toHaveBeenCalled();
-});
-
-test('unmounting mid-hold drops the hold', async () => {
+test('unmounting mid-hold fires nothing', async () => {
   const { unmount } = await renderButton();
   await fireEvent(screen.getByTestId('hold'), 'pressIn');
-  await act(() => jest.advanceTimersByTime(1000));
-  await unmount();
-  await act(() => jest.advanceTimersByTime(5000));
+  await act(() => unmount());
+  await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS * 2));
   expect(onHold).not.toHaveBeenCalled();
 });
 
-test('the threshold can be set per button', async () => {
-  await renderButton(500);
-  await fireEvent(screen.getByTestId('hold'), 'pressIn');
-  await act(() => jest.advanceTimersByTime(500));
+test('a screen reader activate acts straight away', async () => {
+  await renderButton();
+  await fireEvent(screen.getByTestId('hold'), 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
   expect(onHold).toHaveBeenCalledTimes(1);
 });
 
-test('it is a button with its label and hint, and a fill that starts empty', async () => {
+test('the target is at least the in-car 64 pt', async () => {
   await renderButton();
-  const b = screen.getByRole('button', { name: 'Emergency call' });
-  expect(b).toHaveProp('accessibilityHint', 'Hold for two seconds');
-  expect(screen.getByText('SOS')).toBeTruthy();
-  expect(screen.getByTestId('hold-fill')).toBeTruthy();
+  const style = screen.getByTestId('hold').props.style as { width: number; height: number };
+  expect(style.width).toBeGreaterThanOrEqual(HUD_MIN_TARGET_PT);
+  expect(style.height).toBeGreaterThanOrEqual(HUD_MIN_TARGET_PT);
 });

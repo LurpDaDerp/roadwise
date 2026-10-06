@@ -1,109 +1,52 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { usePathname, useRouter } from 'expo-router';
-import { type ReactNode, useEffect, useRef } from 'react';
-import { BackHandler, StyleSheet, View } from 'react-native';
+import { type ReactNode, useEffect } from 'react';
+import { BackHandler } from 'react-native';
 
-import { tripRecords } from '@/drive/policy';
 import { useDrive } from '@/drive/useDrive';
 
-import { DRIVE_GROUP_PREFIX, DRIVE_SCREEN, driveHref } from './hudCopy';
-import { HudScreen } from './HudScreen';
-import { ParkedOnlyCard } from './ParkedOnlyCard';
+import { DRIVE_HREF, DRIVE_SCREEN } from './hudCopy';
 
-/** The keep-awake tag the gate holds for a mounted trip. */
-export const KEEP_AWAKE_TAG = 'roadwise-mounted-drive';
-
-
-/** A recorded trip, whatever its screen: rows are being kept (`recording`) or may resume (`ending`). */
+/** The keep-awake tag held while a drive records. */
+export const KEEP_AWAKE_TAG = 'roadwise-drive';
 
 /**
- * The driving lockout (design §3.4, SR2, SR7, SR8), wrapped around the root `Stack` (H2).
+ * The drive's hold on the app, wrapped around the root `Stack`. It renders its children unchanged
+ * and, while a drive records:
+ * - keeps the screen awake, whatever route shows;
+ * - swallows Android back on the driving screen, so a drive is left only through hold-to-end;
+ * - while the car moves (`lockedOut`), brings the driving screen back if another route is on top
+ *   of it (a notification tap mid-drive): nothing but End takes a touch while moving.
  *
- * It always renders its children. While a driver's trip is locked out (`lockedOut`) and the route is
- * not already a drive screen, it lays the lockout surface over them — `HudScreen` for a mounted trip,
- * `ParkedOnlyCard` for a pocket or auto-detected one — and hides the app below from assistive tech
- * and from touch. On `/drive` the route already is the lockout surface, so it adds nothing (no
- * second HUD).
- *
- * At the onset it clears what the overlay cannot cover:
- * - **RN Modals** (dispute sheet, delete sheet) close themselves through `useLockout()` (rev1: I12).
- * - **Routed screens above the app** are dismissed with `router.dismissAll()` — but never from a
- *   drive route: the drive group is itself a full-screen modal, and dismissing it would take the HUD
- *   and its stopped panel away mid-drive (review N-I1). The pre-drive sheet (or any other drive
- *   screen) is instead replaced by the trip's own screen.
- *
- * It also owns two things for the whole trip, whatever route shows:
- * - **Keep-awake** while a mounted trip records (rev1: I11), so a HUD route leaving the stack can
- *   never let the screen lock — which the mounted app-switch rule would otherwise have to judge.
- * - **Android back** is swallowed while a trip records (rev1: I11).
- *
- * It never brings RoadWise to the foreground (E1 review M6): it acts only on what is already shown.
+ * It never brings RoadWise to the foreground: it acts only on what is already shown.
  */
 export function LockoutGate({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { lockedOut, mode, status } = useDrive((s) => ({
-    lockedOut: s.lockedOut,
-    mode: s.mode,
-    status: s.status,
+  const { recording, lockedOut } = useDrive((s) => ({
+    recording: s.status === 'recording',
+    lockedOut: s.status === 'recording' && s.lockedOut,
   }));
-
   const onDriveScreen = pathname === DRIVE_SCREEN;
 
-  // The onset, once per lockout: the ref makes a later route change (or the dismissal itself)
-  // re-run the effect without acting again.
-  const wasLocked = useRef(false);
   useEffect(() => {
-    const began = lockedOut && !wasLocked.current;
-    wasLocked.current = lockedOut;
-    if (!began) return;
-    if (pathname === DRIVE_SCREEN) return;
-    if (pathname.startsWith(DRIVE_GROUP_PREFIX)) {
-      router.replace(driveHref(DRIVE_SCREEN));
-      return;
-    }
-    if (router.canDismiss()) router.dismissAll();
-  }, [lockedOut, pathname, router]);
+    if (lockedOut && !onDriveScreen) router.dismissTo(DRIVE_HREF);
+  }, [lockedOut, onDriveScreen, router]);
 
-  // Through `ending` too: a driver who pulls away after a long stop must find the HUD still lit.
-  const keepAwake = mode === 'mounted' && tripRecords(status);
   useEffect(() => {
-    if (!keepAwake) return;
+    if (!recording) return;
     void activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
     return () => {
       void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {});
     };
-  }, [keepAwake]);
+  }, [recording]);
 
-  const blockBack = tripRecords(status);
+  const blockBack = recording && onDriveScreen;
   useEffect(() => {
     if (!blockBack) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
     return () => sub.remove();
   }, [blockBack]);
 
-  const covered = lockedOut && !onDriveScreen;
-
-  return (
-    <View style={styles.root}>
-      <View
-        testID="lockout-underlay"
-        style={styles.root}
-        pointerEvents={covered ? 'none' : 'auto'}
-        accessibilityElementsHidden={covered}
-        importantForAccessibility={covered ? 'no-hide-descendants' : 'auto'}
-      >
-        {children}
-      </View>
-      {covered ? (
-        <View style={StyleSheet.absoluteFill}>
-          {mode === 'mounted' ? <HudScreen overlay /> : <ParkedOnlyCard />}
-        </View>
-      ) : null}
-    </View>
-  );
+  return <>{children}</>;
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1 },
-});

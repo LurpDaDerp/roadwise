@@ -41,6 +41,7 @@ const mockRouter = {
   push: jest.fn(),
   canDismiss: jest.fn(() => false),
   dismissAll: jest.fn(),
+  dismissTo: jest.fn(),
 };
 jest.mock('expo-router', () => {
   const Stack = ({ screenOptions, children }: { screenOptions?: unknown; children?: ReactNode }) => {
@@ -257,7 +258,7 @@ describe('the root layout', () => {
     });
   });
 
-  test('renders the lockout overlay over the app when a mounted drive locks out', async () => {
+  test('a drive that locks out while another route shows brings the driving screen back', async () => {
     const { queryClient } = await renderReady({
       status: 'recording',
       clientTripId: 't1',
@@ -267,14 +268,13 @@ describe('the root layout', () => {
       speedMps: 13,
       lockedOut: true,
     });
-    expect(screen.getByTestId('hud-screen')).toBeTruthy();
-    expect(screen.getByTestId('lockout-underlay', { includeHiddenElements: true }).props.pointerEvents).toBe('none');
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith('/drive');
     queryClient.clear();
   });
 
-  test('no drive, no overlay', async () => {
+  test('no drive, no trip back to the driving screen', async () => {
     await renderReady();
-    expect(screen.queryByTestId('hud-screen')).toBeNull();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('sets no notification handler of its own: the notification host installs the only one (Task 18)', async () => {

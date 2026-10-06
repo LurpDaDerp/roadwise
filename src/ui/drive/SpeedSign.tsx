@@ -1,92 +1,54 @@
 import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { LimitSample } from '@/core/engine/types';
 import { t } from '@/i18n';
 
 import { fontFamilies } from '../fonts';
-import { hudLimitMph } from './hudSelectors';
-import { hudPalette, SIGN_HEIGHT_PT, SIGN_NUMERAL_PT, SIGN_WIDTH_PT } from './hudTokens';
+import { type HudPalette, SIGN_DIAMETER_PT, SIGN_NUMERAL_PT, SIGN_RING_PT } from './hudTokens';
 
 export type SpeedSignProps = {
-  /** The snapshot's `limit`, as the engine matched it. The sign decides whether it may show it. */
-  limit: LimitSample | null;
-  /** The snapshot's `speedKnown`: without a current fix the limit is the last road's, so "—". */
-  speedKnown: boolean;
-  night: boolean;
+  /** The limit from `useDriveLive`; null (unknown, low-confidence or a poor fix) prints "—". */
+  limitMph: number | null;
+  palette: HudPalette;
 };
 
-const LEGEND_PT = 15;
-
 /**
- * Zone 2 of the HUD (C3): the limit on the shape drivers already read without thinking — a
- * white regulatory sign with an inset black rule, SPEED over LIMIT over the number. An unknown or
- * unconfident limit keeps the sign and prints "—" (§13.2: a wrong limit shown confidently is
- * worse than none). The gate is `hudLimitMph`; this component never prints a limit it didn't pass.
- * A sign graphic, so its legend holds its size under Dynamic Type like a real sign would.
+ * The limit on a round sign — a white face inside a red ring — next to the speed. An unknown limit
+ * keeps the sign and prints "—": a wrong limit shown confidently is worse than none. A sign graphic,
+ * so its numeral holds its size under Dynamic Type like a real sign would.
  */
-function SpeedSignView({ limit, speedKnown, night }: SpeedSignProps) {
-  const p = hudPalette(night);
-  const mph = hudLimitMph(limit, speedKnown);
-  const label = mph === null ? 'Speed limit unknown' : `Speed limit ${mph} miles per hour`;
-
+function SpeedSignView({ limitMph, palette: p }: SpeedSignProps) {
+  const label = limitMph === null ? 'Speed limit unknown' : `Speed limit ${limitMph}`;
   return (
     <View
       testID="hud-limit"
       accessible
       accessibilityRole="text"
       accessibilityLabel={label}
-      style={[styles.face, { backgroundColor: p.signFace }]}
+      style={[styles.face, { backgroundColor: p.signFace, borderColor: p.signRing }]}
     >
-      <View style={[styles.rule, { borderColor: p.signInk }]}>
-        <Text allowFontScaling={false} style={[styles.legend, { color: p.signInk }]}>
-          SPEED
-        </Text>
-        <Text allowFontScaling={false} style={[styles.legend, { color: p.signInk }]}>
-          LIMIT
-        </Text>
-        <Text
-          testID="hud-limit-value"
-          allowFontScaling={false}
-          numberOfLines={1}
-          style={[styles.value, { color: p.signInk }]}
-        >
-          {mph === null ? t('common.unknown') : String(mph)}
-        </Text>
-      </View>
+      <Text
+        testID="hud-limit-value"
+        allowFontScaling={false}
+        numberOfLines={1}
+        style={[styles.value, { color: p.signInk }]}
+      >
+        {limitMph === null ? t('common.unknown') : String(limitMph)}
+      </Text>
     </View>
   );
 }
 
-/** Re-renders only when the printed value or the palette changes, not per snapshot object. */
-export function speedSignPropsEqual(a: SpeedSignProps, b: SpeedSignProps): boolean {
-  return (
-    a.night === b.night && hudLimitMph(a.limit, a.speedKnown) === hudLimitMph(b.limit, b.speedKnown)
-  );
-}
-
-export const SpeedSign = memo(SpeedSignView, speedSignPropsEqual);
+export const SpeedSign = memo(SpeedSignView);
 
 const styles = StyleSheet.create({
   face: {
-    width: SIGN_WIDTH_PT,
-    height: SIGN_HEIGHT_PT,
-    borderRadius: 10,
-    padding: 4,
-  },
-  rule: {
-    flex: 1,
-    borderWidth: 3,
-    borderRadius: 7,
+    width: SIGN_DIAMETER_PT,
+    height: SIGN_DIAMETER_PT,
+    borderRadius: SIGN_DIAMETER_PT / 2,
+    borderWidth: SIGN_RING_PT,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 4,
-  },
-  legend: {
-    fontFamily: fontFamilies.fieldBold,
-    fontSize: LEGEND_PT,
-    lineHeight: LEGEND_PT + 2,
-    letterSpacing: 0.5,
   },
   value: {
     fontFamily: fontFamilies.numeralsBold,

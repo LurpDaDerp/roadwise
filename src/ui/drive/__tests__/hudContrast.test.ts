@@ -1,16 +1,14 @@
 import { contrastRatio, relativeLuminance } from '@/ui/contrast';
 import {
-  HALO_MAX_PT,
-  HALO_MIN_PT,
-  haloColor,
-  haloSize,
   HUD,
   HUD_CONTRAST_PAIRS,
   HUD_LIT_KEYS,
   type HudPalette,
+  hudLabelScale,
   SPEED_NUMERAL_MAX_PT,
   SPEED_NUMERAL_MIN_PT,
   speedNumeralPt,
+  tierColor,
 } from '@/ui/drive/hudTokens';
 
 const palettes: [string, HudPalette][] = [
@@ -19,70 +17,53 @@ const palettes: [string, HudPalette][] = [
 ];
 
 describe.each(palettes)('the %s HUD palette', (_name, p) => {
-  test('sits on ink-black', () => {
-    expect(p.ground).toBe('#000814');
+  test('sits on true black', () => {
+    expect(p.ground).toBe('#000000');
   });
 
   test.each(HUD_CONTRAST_PAIRS)('%s on %s holds at least 7:1', (fg, bg) => {
     expect(contrastRatio(p[fg], p[bg])).toBeGreaterThanOrEqual(7);
   });
 
-  test('the SOS face stands off the ground as a control (≥ 3:1) as well as printing at 7:1', () => {
-    expect(contrastRatio(p.sos, p.ground)).toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(p.sosInk, p.sos)).toBeGreaterThanOrEqual(7);
+  test('black print on every tier colour holds 7:1 (the alert chip)', () => {
+    for (const tier of ['minor', 'moderate', 'severe'] as const) {
+      expect(contrastRatio(p.ground, tierColor(p, tier))).toBeGreaterThanOrEqual(7);
+    }
   });
 
-  test('the halo colours are three distinct hues, each ≥ 7:1 on the ground', () => {
-    const set = new Set([p.calm, p.attention, p.critical]);
-    expect(set.size).toBe(3);
-    expect(haloColor(p, 'calm')).toBe(p.calm);
-    expect(haloColor(p, 'attention')).toBe(p.attention);
-    expect(haloColor(p, 'critical')).toBe(p.critical);
+  test('the sign ring stands off the sign face as a graphic (≥ 3:1)', () => {
+    expect(contrastRatio(p.signRing, p.signFace)).toBeGreaterThanOrEqual(3);
+  });
+
+  test('the three tiers are distinct and get darker-warmer from minor to severe', () => {
+    expect(new Set([p.minor, p.moderate, p.severe]).size).toBe(3);
+    expect(relativeLuminance(p.minor)).toBeGreaterThan(relativeLuminance(p.moderate));
+    expect(relativeLuminance(p.moderate)).toBeGreaterThan(relativeLuminance(p.severe));
   });
 });
 
-test('every colour in both palettes is covered by at least one checked pair', () => {
-  const checked = new Set(HUD_CONTRAST_PAIRS.flat());
+test('every colour in both palettes is covered by at least one check', () => {
+  const checked = new Set<string>([...HUD_CONTRAST_PAIRS.flat(), 'signRing']);
   for (const key of Object.keys(HUD.day)) expect(checked).toContain(key);
 });
 
-test('night mode has no pure white anywhere (§13.2)', () => {
+test('night mode has no pure white and dims every lit colour', () => {
   for (const value of Object.values(HUD.night)) expect(value.toUpperCase()).not.toBe('#FFFFFF');
-});
-
-test('night mode reduces luminance on every lit colour and red-shifts the numerals', () => {
   for (const key of HUD_LIT_KEYS) {
     expect(relativeLuminance(HUD.night[key])).toBeLessThan(relativeLuminance(HUD.day[key]));
   }
-  const hex = HUD.night.ink.replace('#', '');
-  const [r, , b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  expect(r).toBeGreaterThan(b!);
 });
 
-test('the day palette is the app palette: ink-black, school-bus yellow, navy chrome, soft red', () => {
-  expect(HUD.day.ground).toBe('#000814');
-  expect(HUD.day.attention).toBe('#FFC300');
-  expect(HUD.day.chrome).toBe('#001D3D');
-  expect(HUD.day.chromeEdge).toBe('#003566');
-  expect(HUD.day.signFace).toBe('#FFFFFF');
-  // The critical and SOS reds are soft: lighter than a pure red, so black print reads on them.
-  expect(relativeLuminance(HUD.day.critical)).toBeGreaterThan(relativeLuminance('#FF0000'));
+test('the speed numerals follow the short side within their bounds', () => {
+  expect(speedNumeralPt(390)).toBe(133);
+  expect(speedNumeralPt(100)).toBe(SPEED_NUMERAL_MIN_PT);
+  expect(speedNumeralPt(1000)).toBe(SPEED_NUMERAL_MAX_PT);
+  expect(speedNumeralPt(Number.NaN)).toBe(SPEED_NUMERAL_MIN_PT);
 });
 
-describe('sizing', () => {
-  test('the numerals follow the halo between their bounds', () => {
-    expect(speedNumeralPt(200)).toBe(80);
-    expect(speedNumeralPt(100)).toBe(SPEED_NUMERAL_MIN_PT);
-    expect(speedNumeralPt(400)).toBe(SPEED_NUMERAL_MAX_PT);
-  });
-
-  test('the halo takes the room it has, within its bounds', () => {
-    // A 390 × 844 phone in portrait, after the bars and insets: the width is the limit.
-    expect(haloSize(358, 600, false)).toBe(HALO_MAX_PT);
-    // A landscape mount: the height is the limit, the sign beside it costs no height.
-    expect(haloSize(750, 209, true)).toBe(209);
-    // Never below the minimum, whatever the room.
-    expect(haloSize(100, 100, true)).toBe(HALO_MIN_PT);
-    expect(haloSize(Number.NaN, 300, false)).toBe(HALO_MIN_PT);
-  });
+test('small HUD labels follow Dynamic Type between 1x and 2x', () => {
+  expect(hudLabelScale(0.8)).toBe(1);
+  expect(hudLabelScale(1.5)).toBe(1.5);
+  expect(hudLabelScale(3)).toBe(2);
+  expect(hudLabelScale(Number.NaN)).toBe(1);
 });

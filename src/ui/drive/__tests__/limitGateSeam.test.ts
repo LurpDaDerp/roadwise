@@ -1,16 +1,17 @@
-// The cross-seam test (Ruling U1-I1): the HUD's limit sign shows a limit exactly when the app acts
-// on it — alerts and scores in full. Inputs are the speed-limit matcher's real outputs, built by
-// running `matchLimit` on candidate sets that produce each routine confidence band, then turned
-// into a `LimitSample` the way the device client does (`client.ts` `toSample`, plus its
-// truncated-tile cap). If either gate drifts from the other, a row of this table fails.
-import { alertableFor, limitActionable, limitConfidence } from '@/core/detectors/common';
+// The cross-seam test: the driving screen's limit sign shows a limit exactly when the app acts on
+// it. The sign prints `useDriveLive().limitMph`, which the engine computes with `limitMphFor` (the
+// row's fix and the matched limit); the speeding detector records events against exactly the same
+// limits. Inputs are the speed-limit matcher's real outputs, built by running `matchLimit` on
+// candidate sets that produce each routine confidence band, then turned into a `LimitSample` the way
+// the device client does (`client.ts` `toSample`, plus its truncated-tile cap). If either side
+// drifts from the other, a row of this table fails.
+import { limitActionable, limitMphFor } from '@/core/detectors/common';
 import { createSpeedingDetector } from '@/core/detectors/speeding';
-import { counterIds, ctx, drive, mph, seq } from '@/core/detectors/__fixtures__/rows';
+import { counterIds, ctx, drive, mph, row, seq } from '@/core/detectors/__fixtures__/rows';
 import type { LimitSample } from '@/core/engine/types';
 import { TRUNCATED_CONFIDENCE_CAP } from '@/core/speedLimits/client';
 import { type Candidate, type MatchResult, matchLimit } from '@/core/speedLimits/match';
 import { mphToMps } from '@/lib/units';
-import { hudLimitMph, hudSpeeding } from '@/ui/drive/hudSelectors';
 
 const COURSE = 90;
 
@@ -116,44 +117,42 @@ const TABLE: Row[] = [
     shown: false,
   },
   {
-    // The matcher never produces `statutory` (R17); the type allows it, so the seam must hold.
+    // The matcher never produces `statutory`; the type allows it, and v3's gate (`limitActionable`)
+    // treats a confident one like any known limit, so both sides must agree on that too.
     name: 'statutory default at a confident match',
     sample: { ...osmNear, source: 'statutory' },
     match: 0.95,
     source: 'statutory',
-    shown: false,
+    shown: true,
   },
   { name: 'unknown (no road)', sample: matched(), match: 0, source: 'unknown', shown: false },
 ];
 
-/** Does the real speeding detector alert on a sustained, clear speeding episode under `l`? */
-function detectorAlerts(l: LimitSample): boolean {
+/** Does the real speeding detector record a sustained, clear speeding episode under `l`? */
+function detectorRecords(l: LimitSample): boolean {
   if (l.limitMps === null) return false;
   const over = l.limitMps + mph(15);
   const rows = seq([12, { speed: over, hAcc: 5, speedAcc: 0.5 }]);
   const { all } = drive(createSpeedingDetector(counterIds()), rows, l, ctx());
-  return all.some((e) => e.category === 'speeding' && e.alertable);
+  return all.some((e) => e.type === 'speeding');
 }
 
-describe('limit sign ⇔ alertable, over the matcher’s real outputs (Ruling U1-I1)', () => {
+describe('limit sign ⇔ speeding is recorded, over the matcher’s real outputs', () => {
   test.each(TABLE)('$name', ({ sample, match, source, shown }) => {
     // The input is what the matcher and client really produce.
     expect(sample.source).toBe(source);
     expect(sample.matchConfidence).toBeCloseTo(match, 10);
 
-    const signShown = hudLimitMph(sample, true) !== null;
-    const q = limitConfidence(sample);
-    const alertable = q !== null && alertableFor('scored', q);
-
+    const signShown = limitMphFor(row({ hAcc: 5 }), sample) !== null;
     expect(signShown).toBe(shown);
-    expect(signShown).toBe(alertable);
     expect(signShown).toBe(limitActionable(sample));
-    // End to end through the real detector: an alert fires exactly where the sign is drawn.
-    expect(detectorAlerts(sample)).toBe(signShown);
+    // End to end through the real detector: an event is recorded exactly where the sign is drawn.
+    expect(detectorRecords(sample)).toBe(signShown);
   });
 
-  test.each(TABLE)('$name: the readout turns red only where the app would alert', ({ sample }) => {
-    const fast = (sample.limitMps ?? mph(35)) + mph(15);
-    expect(hudSpeeding(fast, true, sample)).toBe(limitActionable(sample));
+  test('a poor fix shows "—" even on a confident limit', () => {
+    expect(limitMphFor(row({ hAcc: 30 }), osmNear)).toBeNull();
+    expect(limitMphFor(row({ gnssValid: false }), osmNear)).toBeNull();
+    expect(limitMphFor(row({ hAcc: 5 }), osmNear)).toBe(35);
   });
 });

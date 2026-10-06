@@ -1,68 +1,51 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { STOPPED_PANEL_CLEAR_MPS } from '@/core/engine/machine';
-import type { DriveHost, DriveState } from '@/drive/host';
-import { isBusyStatus, isIdleStatus } from '@/drive/policy';
-import { useDrive, useDriveHost } from '@/drive/useDrive';
+import { useDriveControls, useDriveLive } from '@/drive/useDrive';
+import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { sunIsDown } from '@/lib/time';
-import { tokens } from '@/ui';
 import {
-  type HaloLevel,
-  haloLevel,
-  haloSize,
+  DIM_AFTER_MS,
+  DIM_SCRIM_OPACITY,
+  EdgeGlow,
   HoldButton,
+  type HudPalette,
   hudPalette,
-  overLimitMps,
   SpeedReadout,
   SpeedSign,
   speedNumeralPt,
-  StatusHalo,
+  tierColor,
 } from '@/ui/drive';
 
-import { bannerOf, EventBanner } from './EventBanner';
-import { HAZARD_BAR_PT, HazardBar } from './HazardBar';
-import { DRIVE_ROUTES, driveHref, hudCopy } from './hudCopy';
-import { tripMinutes, TripTimer } from './TripTimer';
-import { useWeatherHazard } from './weather';
+import { EventBanner, useAlertFlash } from './EventBanner';
+import { hudCopy } from './hudCopy';
+import { StoppedPoints } from './StoppedPoints';
+import { WeatherBanner } from './WeatherBanner';
 
 /** How often the HUD re-reads the sun (the night palette follows sunset within a few minutes). */
 export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 /** A cached position older than this says little about where the car is now. */
 const POSITION_MAX_AGE_MS = 60 * 60_000;
-/** The bottom bar's height: the timer and End, with room for a hold. */
-const BOTTOM_BAR_PT = 88;
-/** The End button's footprint, kept when there is no drive to end, so nothing shifts. */
-const END_SLOT_PT = 128;
 
 /**
- * The whole screen goes dark-adapted at night, judged by the sun at the phone's last known position
- * (`sunIsDown`, civil twilight), starting from the host's clock-based night on the first paint.
- * The position is the OS's cached fix — reading it starts no GPS and
- * costs no battery beyond the drive's own capture. With no cached fix the host's own night rule
- * (the detectors' clock-based night) decides, so the HUD never guesses a location.
- *
- * Re-checked every few minutes while the HUD is on screen; nothing runs when it is not.
+ * Night, judged by the sun at the phone's last known position (the OS's cached fix: no GPS of its
+ * own). With no cached fix the day palette stays. Re-checked every few minutes while on screen.
  */
-function useHudNight(host: Pick<DriveHost, 'detectorContext'>): boolean {
-  // The first paint already has an answer — the host's synchronous clock-based night — so a HUD
-  // mounting in a dark cabin never flashes the day palette while the position is read (review m1).
-  const [night, setNight] = useState(() => host.detectorContext().night);
+function useHudNight(): boolean {
+  const [night, setNight] = useState(false);
   useEffect(() => {
-    const fallback = () => host.detectorContext().night;
     let live = true;
     const check = async () => {
-      let next: boolean;
       try {
         const pos = await Location.getLastKnownPositionAsync({ maxAge: POSITION_MAX_AGE_MS });
-        next = pos ? sunIsDown(new Date(), pos.coords.latitude, pos.coords.longitude) : fallback();
+        if (live && pos) setNight(sunIsDown(new Date(), pos.coords.latitude, pos.coords.longitude));
       } catch {
-        next = fallback();
+        // No position: keep what we have.
       }
-      if (live) setNight(next);
     };
     void check();
     const timer = setInterval(() => void check(), HUD_NIGHT_RECHECK_MS);
@@ -70,298 +53,188 @@ function useHudNight(host: Pick<DriveHost, 'detectorContext'>): boolean {
       live = false;
       clearInterval(timer);
     };
-  }, [host]);
+  }, []);
   return night;
 }
 
 /**
- * `finalizing` → the end screen (C8). Only a screen that watched a drive of its own go by routes:
- * a close can reach React already batched to `armed` (finalize → armed inside one host task), so
- * reaching idle after a drive counts too, while a HUD opened with no drive never claims one ended.
+ * The screen dims after `DIM_AFTER_MS` without a touch; any touch undims it (and re-arms the
+ * timer). It never dims while `hold` is true (an alert is showing). One timer, re-armed per touch;
+ * a touch on an undimmed screen changes no state, so it re-renders nothing.
  */
-export function useEndOfDriveRouting(enabled: boolean): void {
-  const router = useRouter();
-  const status = useDrive((s) => s.status);
-  const sawDrive = useRef(false);
-  const routed = useRef(false);
+export function useDimmer(hold: boolean): { dimmed: boolean; wake: () => void } {
+  const [idle, setIdle] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arm = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setIdle(true), DIM_AFTER_MS);
+  }, []);
+  const wake = useCallback(() => {
+    setIdle(false);
+    arm();
+  }, [arm]);
   useEffect(() => {
-    if (!enabled || routed.current) return;
-    if (status === 'finalizing' || (isIdleStatus(status) && sawDrive.current)) {
-      routed.current = true;
-      router.replace(driveHref(DRIVE_ROUTES.end));
-      return;
-    }
-    if (isBusyStatus(status)) sawDrive.current = true;
-  }, [enabled, status, router]);
+    arm();
+    return () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    };
+  }, [arm]);
+  return { dimmed: idle && !hold, wake };
 }
 
-/**
- * Whether a tap may bring up the drive controls on a screen that is not already showing them (the
- * pocket screen, C4c): the drive is open, the lockout is off, the speed is not stale after an
- * adopt, and the car is not known to be rolling. An ordinary start in a garage (no fix yet)
- * qualifies — the driver can still end a drive begun by mistake — while a tunnel at speed does
- * not: the lockout holds at the last known speed (SR2).
- */
-export function mayRevealControls(
-  s: Pick<
-    DriveState,
-    'status' | 'lockedOut' | 'awaitingSpeedAfterResume' | 'speedKnown' | 'speedMps'
-  >
-): boolean {
-  if (s.status !== 'recording' && s.status !== 'ending') return false;
-  if (s.lockedOut || s.awaitingSpeedAfterResume) return false;
-  return !s.speedKnown || s.speedMps <= STOPPED_PANEL_CLEAR_MPS;
-}
-
-/**
- * The stopped panel's visibility for one screen (the pocket screen). The engine's own C6 signal
- * (`stoppedPanel`, or the gap window) shows it where `auto` is set; a tap can ask for it whenever
- * `mayRevealControls` holds, and the ask lapses the moment that stops holding, so stopping again
- * later needs a new tap.
- */
-export function useStoppedPanel(auto: boolean): { visible: boolean; reveal: () => void } {
-  // Booleans only, so a row that changes nothing here re-renders nothing (review m3).
-  const { allowed, engineSays } = useDrive((d) => ({
-    allowed: mayRevealControls(d),
-    engineSays: d.stoppedPanel || (d.status === 'ending' && !d.lockedOut),
-  }));
-  const [asked, setAsked] = useState(false);
-  // The ask lapses as soon as it is no longer allowed (adjusting state while rendering, not in an
-  // effect, so the panel never shows for a frame after the car moves off).
-  const [wasAllowed, setWasAllowed] = useState(allowed);
-  if (allowed !== wasAllowed) {
-    setWasAllowed(allowed);
-    if (!allowed) setAsked(false);
-  }
-  const reveal = useCallback(() => {
-    if (allowed) setAsked(true);
-  }, [allowed]);
-  return { visible: (auto && engineSays) || (asked && allowed), reveal };
-}
-
-/** Drive actions for a routed drive screen: End goes to the end screen first, then ends. */
-export function useStoppedActions() {
-  const host = useDriveHost();
-  const router = useRouter();
-  return useMemo(
-    () => ({
-      // The end screen captures the trip id as it mounts, so it opens while the trip is still set.
-      onEnd: () => {
-        router.replace(driveHref(DRIVE_ROUTES.end));
-        void host.end();
-      },
-      onMuteForDrive: () => void host.muteForDrive(),
-      onSetPassenger: (passenger: boolean) => void host.setPassenger(passenger),
-    }),
-    [host, router]
-  );
-}
-
-/**
- * The halo's level for a snapshot: the speed against the shown limit, the alert now showing, and
- * the age of the last harsh event on the row clock. A primitive, so a row that changes the number
- * but not the level re-renders nothing here.
- */
-export function haloLevelOf(
-  s: Pick<
-    DriveState,
-    'speedMps' | 'speedKnown' | 'limit' | 'activeAlert' | 'harshEvent' | 'lastRowTs'
-  >
-): HaloLevel {
-  return haloLevel({
-    overMps: overLimitMps(s.speedMps, s.speedKnown, s.limit),
-    alertLevel: s.activeAlert?.level ?? null,
-    harshAgeMs:
-      s.harshEvent != null && s.lastRowTs !== null ? s.lastRowTs - s.harshEvent.ts : null,
-  });
-}
-
-/** The only part of the HUD that reads the 1 Hz speed for display; memoised on what it shows. */
-const Speed = memo(function Speed({
-  level,
-  night,
-  size,
-}: {
-  level: HaloLevel;
-  night: boolean;
-  size: number;
-}) {
-  const speedMps = useDrive((s) => s.speedMps);
-  const speedKnown = useDrive((s) => s.speedKnown);
-  const limit = useDrive((s) => s.limit);
+const DmsDot = memo(function DmsDot({ palette: p, top, right }: { palette: HudPalette; top: number; right: number }) {
   return (
-    <SpeedReadout
-      speedMps={speedMps}
-      speedKnown={speedKnown}
-      limit={limit}
-      level={level}
-      night={night}
-      size={size}
-    />
+    <View testID="hud-dms" accessible accessibilityLabel={hudCopy.dms} style={[styles.dms, { top, right }]}>
+      <Ionicons name="videocam" size={18} color={p.inkMuted} />
+    </View>
   );
-});
-
-const Limit = memo(function Limit({ night }: { night: boolean }) {
-  const limit = useDrive((s) => s.limit);
-  const speedKnown = useDrive((s) => s.speedKnown);
-  return <SpeedSign limit={limit} speedKnown={speedKnown} night={night} />;
-});
-
-/**
- * The centre zone: the halo with the speed inside and the limit sign beside (landscape) or under
- * (portrait) it. It reads the snapshot only as a halo level, so a row that changes the number but
- * not the level re-renders the readout and nothing else.
- */
-const Gauges = memo(function Gauges({
-  recording,
-  night,
-  ring,
-}: {
-  recording: boolean;
-  night: boolean;
-  ring: number;
-}) {
-  const level = useDrive(haloLevelOf);
-  return (
-    <>
-      <StatusHalo level={level} size={ring} recording={recording} night={night}>
-        <Speed level={level} night={night} size={speedNumeralPt(ring)} />
-      </StatusHalo>
-      <Limit night={night} />
-    </>
-  );
-});
-
-const Timer = memo(function Timer({ night }: { night: boolean }) {
-  const minutes = useDrive(tripMinutes);
-  return <TripTimer minutes={minutes} night={night} />;
-});
-
-const Banner = memo(function Banner({ night }: { night: boolean }) {
-  const banner = useDrive(bannerOf);
-  return banner ? <EventBanner event={banner} night={night} /> : null;
 });
 
 export type HudScreenProps = {
   /**
-   * Drawn by the lockout gate over another route rather than as the `/drive/hud` route: it never
-   * routes at the end of the drive on its own, and its End pushes the end screen like the
-   * in-progress banner does.
+   * Drawn without a route of its own (the diagnostics simulation): it never navigates, at the end
+   * of the drive or after End.
    */
   overlay?: boolean;
 };
 
 /**
- * C3, the mounted drive HUD. Top: the weather hazard bar, empty unless there is one. Centre: the
- * status halo with the speed inside it and the limit sign with it. Bottom: the trip timer in the
- * middle, End at the right — hold-to-act, so it stays live at speed (a knock cannot fire it), and
- * nothing else on the screen takes a touch. Over
- * it all, for a few seconds at a time, the event banner. Ink-black in every light; the night
- * palette by the sun. Portrait and landscape.
+ * The driving screen (spec "Driving screen"): built to be glanced at, not watched.
  *
- * Nothing here runs on a timer but the sun check and the weather refresh: the banner, the halo's
- * harsh-event window and the trip minutes all follow the row clock in the snapshot, each through
- * a selector that re-renders only when its answer changes.
+ * - Centre: the speed, large, next to a round limit sign ("—" when the limit is unknown).
+ * - Edge: a static glow in the speeding tier's colour while speeding; for 1.5 s after an event, a
+ *   glow in that event's tier colour with an icon and one or two words at the top. No overlay.
+ * - Top: the weather line, only while an alert covers the area. A small camera mark while the DMS
+ *   runs.
+ * - Stopped only: the points total and the change since the last stop.
+ * - Bottom: hold-to-end — the only control, live at any speed. Every other touch only undims.
+ * - After 10 s without a touch a dark scrim dims everything (the speed stays faintly readable);
+ *   never while an alert glow shows.
  *
- * Every value passes through U1's components raw, so the one limit gate (`limitActionable` with
- * `speedKnown`) decides what the sign may say. No text beyond three words while moving (SR3), and
- * failure is silent: lost GPS is "—", never words (SR9); no weather is an empty bar.
+ * It re-renders only when `useDriveLive` publishes (≤ 1 Hz) or the alert/dim state flips; every
+ * part is memoised on primitives. Motion runs on the UI thread and only while stopped (the points)
+ * or under the driver's finger (the End ring).
  */
 export function HudScreen({ overlay = false }: HudScreenProps) {
-  const host = useDriveHost();
+  const live = useDriveLive();
+  const controls = useDriveControls();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
-  const landscape = width > height;
-
-  const status = useDrive((s) => s.status);
-  const night = useHudNight(host);
-  const recording = status === 'recording';
-  const tripOpen = recording || status === 'ending';
-
-  useEndOfDriveRouting(!overlay);
-  const actions = useStoppedActions();
-  const hazard = useWeatherHazard(recording);
-
-  const onEnd = useCallback(() => {
-    if (!overlay) {
-      actions.onEnd();
-      return;
-    }
-    // The overlay lies over another route, not on one of its own: like the in-progress banner it
-    // pushes the end screen (which captures the trip as it mounts), then ends the drive.
-    router.push(driveHref(DRIVE_ROUTES.end));
-    void host.end();
-  }, [overlay, actions, router, host]);
-
+  const night = useHudNight();
   const p = hudPalette(night);
-  const pad = {
-    top: insets.top + tokens.space.sm,
-    bottom: insets.bottom + tokens.space.md,
-    left: insets.left + tokens.space.lg,
-    right: insets.right + tokens.space.lg,
-  };
-  const ring = haloSize(
-    width - pad.left - pad.right,
-    height - pad.top - pad.bottom - HAZARD_BAR_PT - BOTTOM_BAR_PT,
-    landscape
+
+  const alert = useAlertFlash(live.lastAlert);
+  const { dimmed, wake } = useDimmer(alert !== null);
+
+  // Where the drive goes once it is over: its summary, fresh, or Home when there was none.
+  const lastTripId = useRef<string | null>(live.clientTripId);
+  useEffect(() => {
+    if (live.clientTripId !== null) lastTripId.current = live.clientTripId;
+  }, [live.clientTripId]);
+  const navigated = useRef(false);
+  const leave = useCallback(
+    (clientTripId: string | null) => {
+      if (overlay || navigated.current) return;
+      navigated.current = true;
+      router.replace(clientTripId ? driveSummaryHref(clientTripId, true) : HOME_HREF);
+    },
+    [overlay, router]
   );
 
+  const [ending, setEnding] = useState(false);
+  const onEnd = useCallback(async () => {
+    if (ending) return;
+    setEnding(true);
+    try {
+      const done = await controls.end();
+      leave(done?.clientTripId ?? lastTripId.current);
+    } catch {
+      setEnding(false);
+    }
+  }, [ending, controls, leave]);
+
+  // A drive that ends without the button (the auto-end safety net) still lands on its summary.
+  const sawRecording = useRef(false);
+  useEffect(() => {
+    if (live.status === 'recording') sawRecording.current = true;
+    else if (live.status === 'idle' && sawRecording.current && !ending) leave(lastTripId.current);
+  }, [live.status, ending, leave]);
+
+  const speeding = live.speedingTier !== null;
+  const glow = alert !== null ? tierColor(p, alert.tier) : speeding ? tierColor(p, live.speedingTier!) : null;
+  const speedColor = speeding ? tierColor(p, live.speedingTier!) : p.ink;
+  const numeral = speedNumeralPt(Math.min(width, height));
+  const busy = ending || live.status === 'finalizing';
+
   return (
-    <View
-      testID="hud-screen"
-      style={[
-        styles.root,
-        {
-          backgroundColor: p.ground,
-          paddingTop: pad.top,
-          paddingBottom: pad.bottom,
-          paddingLeft: pad.left,
-          paddingRight: pad.right,
-        },
-      ]}
-    >
-      <HazardBar hazard={hazard} night={night} />
+    <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
       <View
-        testID={landscape ? 'hud-layout-landscape' : 'hud-layout-portrait'}
-        style={[styles.centre, landscape ? styles.centreLandscape : styles.centrePortrait]}
+        style={[
+          styles.frame,
+          {
+            paddingTop: insets.top + 12,
+            paddingBottom: insets.bottom + 16,
+            paddingLeft: insets.left + 16,
+            paddingRight: insets.right + 16,
+          },
+        ]}
       >
-        <Gauges recording={recording} night={night} ring={ring} />
-      </View>
-      <View style={styles.bottom}>
-        <View style={styles.endSlot} />
-        <Timer night={night} />
-        {tripOpen ? (
+        <View style={styles.top}>
+          {alert !== null ? (
+            <EventBanner alert={alert} palette={p} />
+          ) : live.weatherAlert !== null ? (
+            <WeatherBanner label={live.weatherAlert} palette={p} />
+          ) : null}
+        </View>
+
+        <View style={styles.centre}>
+          <View style={styles.gauges}>
+            <SpeedReadout mph={live.speedMph} color={speedColor} unitColor={p.inkMuted} size={numeral} speeding={speeding} />
+            <SpeedSign limitMph={live.limitMph} palette={p} />
+          </View>
+          {live.points !== null ? (
+            <StoppedPoints total={live.points.total} change={live.points.sinceLastStop} palette={p} />
+          ) : null}
+        </View>
+
+        <View style={styles.bottom}>
           <HoldButton
             testID="hud-end"
-            shape="pill"
-            label={hudCopy.hud.end}
-            accessibilityLabel={hudCopy.hud.endLabel}
-            accessibilityHint={hudCopy.hud.endHint}
+            label={busy ? hudCopy.ending : hudCopy.end}
+            accessibilityLabel={hudCopy.endLabel}
+            accessibilityHint={hudCopy.endHint}
             face={p.chrome}
-            edge={p.chromeEdge}
             ink={p.ink}
-            onHold={onEnd}
+            ring={p.ink}
+            track={p.chromeEdge}
+            disabled={busy}
+            onHold={() => void onEnd()}
           />
-        ) : (
-          <View style={styles.endSlot} />
-        )}
+        </View>
       </View>
-      <Banner night={night} />
+
+      {live.dmsActive ? <DmsDot palette={p} top={insets.top + 8} right={insets.right + 12} /> : null}
+
+      {dimmed ? (
+        <View
+          testID="hud-dim"
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: p.ground, opacity: DIM_SCRIM_OPACITY }]}
+        />
+      ) : null}
+      {/* Above the scrim: a speeding glow is a safety cue, not decoration. */}
+      <EdgeGlow color={glow} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  centrePortrait: { flexDirection: 'column', gap: tokens.space.lg },
-  centreLandscape: { flexDirection: 'row', gap: tokens.space.xl },
-  bottom: {
-    height: BOTTOM_BAR_PT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  endSlot: { width: END_SLOT_PT },
+  frame: { flex: 1 },
+  top: { minHeight: 56, alignItems: 'center', justifyContent: 'center' },
+  centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 },
+  gauges: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
+  bottom: { alignItems: 'center', justifyContent: 'center' },
+  dms: { position: 'absolute', padding: 8 },
 });
