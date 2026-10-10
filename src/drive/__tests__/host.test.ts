@@ -103,7 +103,7 @@ function build(over: Partial<Parameters<typeof createDriveHost>[0]> = {}) {
     now: () => clock,
     tz: () => TZ,
     newId: () => uuid((ids += 1)),
-    appVersion: '3.0.0',
+    appVersion: '2.0.0',
     speedProbe: async () => 0,
     permissions: async () => ({ location: 'granted' }),
     context: async () => ({ streak: 4, safeMilesEarlierToday: 0 }),

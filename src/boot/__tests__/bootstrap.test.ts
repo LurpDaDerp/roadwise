@@ -58,7 +58,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       appState,
       now: () => clock,
       tz: TZ,
-      appVersion: '3.0.0',
+      appVersion: '2.0.0',
       permissions: async () => ({ location: 'granted' as const }),
       speedProbe: async () => 0,
       attachSummaryNotifier: null,

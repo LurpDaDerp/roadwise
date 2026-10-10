@@ -54,7 +54,7 @@ const valid = (): FinalizeTripPayloadV3 => ({
     }),
     event(3, { type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true, lat: null, lng: null, measured: { mounted: false } }),
   ],
-  appVersion: '3.0.0',
+  appVersion: '2.0.0',
 });
 
 const ok = (p: unknown) => FinalizeTripPayloadV3Schema.safeParse(p).success;

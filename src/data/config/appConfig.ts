@@ -76,7 +76,7 @@ export interface AppConfig extends ConfigValues {
 
 /** What a device that has never fetched reads; `min_app_version` equals 0001_core.sql's seed. */
 export const CONFIG_DEFAULTS: Omit<AppConfig, 'fetchedAt'> = {
-  min_app_version: '3.0.0',
+  min_app_version: '2.0.0',
   onboarding: { tos_version: '2026-09-21', privacy_version: '2026-09-21' },
   legal_urls: {},
   store_urls: {},

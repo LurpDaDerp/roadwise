@@ -67,7 +67,7 @@ export function payload(over: Partial<FinalizeTripPayloadV3> = {}): FinalizeTrip
         measured: { peakG: 0.42 },
       },
     ],
-    appVersion: '3.0.0',
+    appVersion: '2.0.0',
     ...over,
   };
 }

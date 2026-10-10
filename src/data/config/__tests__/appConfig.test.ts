@@ -54,7 +54,7 @@ function fakeSupabase(reply: { data: unknown; error: unknown }) {
 }
 
 /** The public row `0001_core.sql` seeds, as PostgREST returns it. */
-const SEEDED = [{ key: 'min_app_version', value: '3.0.0' }];
+const SEEDED = [{ key: 'min_app_version', value: '2.0.0' }];
 
 test('the app Supabase client satisfies the seam', () => {
   const asSeam = (client: SupabaseClient<Database>): AppConfigSupabase => client;
@@ -70,7 +70,7 @@ test('a refresh reads the public config once and stores the rows it knows', asyn
   expect(calls).toEqual([{ table: APP_CONFIG_TABLE, columns: 'key,value' }]);
   expect(await createSettingsRepo(db).get(APP_CONFIG_KEY)).toEqual({
     fetchedAt: NOW,
-    values: { min_app_version: '3.0.0' },
+    values: { min_app_version: '2.0.0' },
   });
 });
 
@@ -123,7 +123,7 @@ const refreshWith = (rows: unknown[], at = NOW) =>
 describe('the compiled defaults', () => {
   test('match the seed', () => {
     expect(CONFIG_DEFAULTS).toEqual({
-      min_app_version: '3.0.0',
+      min_app_version: '2.0.0',
       onboarding: { tos_version: '2026-09-21', privacy_version: '2026-09-21' },
       legal_urls: {},
       store_urls: {},
@@ -225,7 +225,7 @@ describe('readConfig', () => {
   test('a row the server stops sending goes back to its default at the next refresh', async () => {
     await refreshWith([{ key: 'min_app_version', value: '3.3.0' }]);
     await refreshWith([], NOW + 1);
-    expect((await readConfig(db)).min_app_version).toBe('3.0.0');
+    expect((await readConfig(db)).min_app_version).toBe('2.0.0');
   });
 
   test('a stored value from an older build, or tampered with, is re-checked on read', async () => {

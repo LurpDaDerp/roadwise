@@ -21,7 +21,7 @@ const deps = (over: Partial<Parameters<typeof finalizeTrip>[1]> = {}) => ({
   db,
   tz: TZ,
   now: () => T0 + 1_000_000,
-  appVersion: '3.0.0',
+  appVersion: '2.0.0',
   geocode: null,
   trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
   ...over,
@@ -51,7 +51,7 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
 
   const payload = result.payload!;
   expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
-  expect(payload).toMatchObject({ v: 3, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '3.0.0' });
+  expect(payload).toMatchObject({ v: 3, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0' });
   expect(payload).not.toHaveProperty('dmsOn');
   expect(payload).not.toHaveProperty('dmsFaceSeen');
   expect(payload.start).toEqual({ lat: 47.6062, lng: -122.3321 });

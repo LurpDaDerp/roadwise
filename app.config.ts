@@ -39,7 +39,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
   name: 'RoadWise',
   slug: 'SafeDriveApp',
   scheme: 'roadwise',
-  version: '3.0.0',
+  version: '2.0.0',
   // Not locked at the app level: the root Stack pins every screen to portrait and only the drive
   // HUD route opts into landscape, for a phone mounted sideways on the dash (plan rev1: I17).
   orientation: 'default',

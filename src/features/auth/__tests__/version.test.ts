@@ -101,10 +101,10 @@ describe('the stored minimum', () => {
     await expect(readServerMinAppVersion(db)).resolves.toBeUndefined();
     await store({ fetchedAt: 1, flags: {}, values: { min_app_version: '2.x' } });
     await expect(readServerMinAppVersion(db)).resolves.toBeUndefined();
-    await store({ flags: {}, values: { min_app_version: '3.0.0' } }); // never fetched
+    await store({ flags: {}, values: { min_app_version: '2.0.0' } }); // never fetched
     await expect(readServerMinAppVersion(db)).resolves.toBeUndefined();
-    await store({ fetchedAt: 1, flags: {}, values: { min_app_version: '3.0.0' } });
-    await expect(readServerMinAppVersion(db)).resolves.toBe('3.0.0');
+    await store({ fetchedAt: 1, flags: {}, values: { min_app_version: '2.0.0' } });
+    await expect(readServerMinAppVersion(db)).resolves.toBe('2.0.0');
   });
 
   test('a never-fetched config is unknown, not the compiled default (T16 m3)', async () => {
