@@ -201,7 +201,7 @@ describe('what friends and clanmates see', () => {
       if (fn === 'get_member_stats')
         return {
           miles: 200, durationS: 20000, nightMiles: 0, drives: 10, cleanDrives: 9, speeding: 1, pickups: 0,
-          handlingS: 0, hardBrake: 2, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0,
+          handlingS: 0, hardBrake: 2, hardAccel: 0, hardCorner: 0,
         };
       return null;
     });

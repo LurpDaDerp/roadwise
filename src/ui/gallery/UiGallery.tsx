@@ -95,7 +95,6 @@ function Swatch({ color, label }: { color: string; label: string }) {
 
 function Body() {
   const t = useTheme();
-  const [dms, setDms] = useState(true);
   const [filter, setFilter] = useState<'clean' | 'negative' | null>('clean');
   const [board, setBoard] = useState<'friends' | 'league' | 'global'>('friends');
   const [points, setPoints] = useState(1240);
@@ -158,7 +157,6 @@ function Body() {
 
       <Section title="Chips and segments">
         <Row>
-          <Chip label={dms ? 'DMS on' : 'DMS off'} icon="eye" role="switch" selected={dms} onPress={() => setDms(!dms)} />
           <Chip label="Clean" selected={filter === 'clean'} onPress={() => setFilter(filter === 'clean' ? null : 'clean')} />
           <Chip
             label="Negative"

@@ -20,7 +20,6 @@ import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
-import { cameraBridge } from '@/features/camera/runtime';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost } from '@/features/notifications';
@@ -120,10 +119,7 @@ export default function RootLayout() {
     let live = true;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        void runtime.drive
-          .sessionEnded()
-          .then(() => cameraBridge()?.sessionEnded())
-          .catch(() => {});
+        void runtime.drive.sessionEnded().catch(() => {});
         return;
       }
       if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;

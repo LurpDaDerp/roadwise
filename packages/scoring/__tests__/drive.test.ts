@@ -19,7 +19,7 @@ const ev = (p: Partial<DriveEvent> & Pick<DriveEvent, 'type' | 'tier'>): DriveEv
   return { id: `e${seq}`, startedAt: 1_000_000 + seq * 1000, durationS: 0, ...p };
 };
 const ctx0 = { streak: 0, safeMilesEarlierToday: 0 };
-const drive = (p: Partial<DriveInput>): DriveInput => ({ miles: 10, safeMiles: 10, events: [], dmsOn: false, ...p });
+const drive = (p: Partial<DriveInput>): DriveInput => ({ miles: 10, safeMiles: 10, events: [], ...p });
 
 describe('speedTolerance — T(L) for every row of the spec table', () => {
   test.each([
@@ -78,9 +78,6 @@ describe('basePenalty', () => {
     ['hard_corner', 'minor', 10],
     ['hard_corner', 'severe', 25],
     ['phone_pickup', 'severe', 40],
-    ['eyes_off', 'minor', 20],
-    ['eyes_off', 'severe', 40],
-    ['drowsy', 'severe', 50],
   ] as const)('%s %s → %i', (type, tier, points) => expect(basePenalty(ev({ type, tier }))).toBe(points));
 
   test('phone pickup while stopped in traffic is 20', () =>
@@ -164,9 +161,9 @@ describe('nextMultiplier', () => {
 });
 
 describe('scoreDrive — spec examples', () => {
-  test('12 mi, 11.8 safe, 1 hard brake, streak 10, DMS on → +167', () => {
+  test('12 mi, 11.8 safe, 1 hard brake, streak 10 → +132', () => {
     const b = scoreDrive(
-      drive({ miles: 12, safeMiles: 11.8, dmsOn: true, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
+      drive({ miles: 12, safeMiles: 11.8, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
     );
     expect(b).toMatchObject({
@@ -175,12 +172,10 @@ describe('scoreDrive — spec examples', () => {
       milePoints: 118,
       cleanBonus: 0,
       streakMult: 1.2,
-      dmsMult: 1.25,
-      mult: 1.5,
-      gains: 177,
+      gains: 142,
       shortScale: 1,
       penalties: 10,
-      net: 167,
+      net: 132,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
@@ -205,7 +200,7 @@ describe('scoreDrive — spec examples', () => {
   test('3 mi clean, streak 4 → +59', () => {
     const b = scoreDrive(drive({ miles: 3, safeMiles: 3 }), { streak: 4, safeMilesEarlierToday: 0 });
     expect(b.cleanBonus).toBe(25);
-    expect(b.mult).toBe(1.08);
+    expect(b.streakMult).toBe(1.08);
     expect(b.gains).toBe(59);
     expect(b.net).toBe(59);
   });
@@ -326,16 +321,15 @@ describe('scoreDrive — rules', () => {
     expect(b.gains).toBe(38); // 37.5 rounds half up
   });
 
-  test('multiplier caps at 1.5 and only scales gains', () => {
+  test('multiplier caps at 1.30 and only scales gains', () => {
     const b = scoreDrive(
-      drive({ miles: 10, safeMiles: 9, dmsOn: true, events: [ev({ type: 'hard_brake', tier: 'severe' })] }),
+      drive({ miles: 10, safeMiles: 9, events: [ev({ type: 'hard_brake', tier: 'severe' })] }),
       { streak: 30, safeMilesEarlierToday: 0 }
     );
     expect(b.streakMult).toBe(1.3);
-    expect(b.mult).toBe(1.5);
-    expect(b.gains).toBe(135);
+    expect(b.gains).toBe(117);
     expect(b.penalties).toBe(25);
-    expect(b.net).toBe(110);
+    expect(b.net).toBe(92);
   });
 
   test('safeMiles is clamped into [0, miles]', () => {

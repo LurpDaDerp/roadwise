@@ -5,7 +5,6 @@
 // adds: `ts` is a non-negative integer epoch ms, because the upload contract accepts only whole
 // milliseconds.
 import { z } from 'zod';
-import { MOTION_ROW_FIELDS } from '../../../src/core/engine/types';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
   DriveDisplayState,
@@ -57,21 +56,6 @@ export const ROW_DECIMALS = {
   handlingScore: 3,
 } as const satisfies Record<Exclude<NumericRowKey, 'ts'>, number>;
 
-/**
- * The DMS motion fields (Task C0, design rev4 §2.1.1). Optional: rows from before the update and from
- * an older native build parse without them, and consumers read absent as "no evidence". Numbers are
- * kept to 1e-3 like the other accelerometer-derived fields; `accRms` and gravity may be null (IMU
- * absent), which is kept. `MOTION_ROW_FIELDS` (M1) is the one list; finalize strips them.
- */
-export { MOTION_ROW_FIELDS };
-export const MOTION_ROW_DECIMALS = {
-  aLonMean: 3,
-  accRms: 3,
-  gravX: 3,
-  gravY: 3,
-  gravZ: 3,
-} as const;
-
 type NumericRowKey = { [K in keyof FeatureRow]-?: FeatureRow[K] extends number ? K : never }[keyof FeatureRow];
 
 const POW10 = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000] as const;
@@ -87,12 +71,11 @@ export function roundTo(x: number, decimals: number): number {
   return r === 0 ? 0 : r;
 }
 
-/** Every `FeatureRow` key: the 21 of the contract and the optional motion fields (C0). */
+/** Every `FeatureRow` key: the 21 of the contract. */
 const ROW_KEYS: ReadonlySet<string> = new Set<string>([
   'ts', 'lat', 'lng', 'hAcc', 'speed', 'speedAcc', 'course', 'alt', 'gnssValid',
   'aLonMax', 'aLonMin', 'aLatMax', 'aLatMin', 'yawRateMax', 'jerkMax',
   'gravityStability', 'orientationDelta', 'handlingScore', 'locked', 'screenOn', 'appForeground',
-  ...MOTION_ROW_FIELDS,
 ]);
 
 /**
@@ -141,10 +124,6 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   if (mock !== undefined) row.mock = mock;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
-  }
-  for (const key of Object.keys(MOTION_ROW_DECIMALS) as (keyof typeof MOTION_ROW_DECIMALS)[]) {
-    const x = row[key];
-    if (typeof x === 'number') row[key] = roundTo(x, MOTION_ROW_DECIMALS[key]);
   }
   return row;
 }

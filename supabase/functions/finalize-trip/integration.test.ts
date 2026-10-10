@@ -44,7 +44,6 @@ Deno.test({
       startedAt: started,
       endedAt: started + 30 * 60_000,
       localDay,
-      dmsFaceSeen: false,
       events: [{ ...payload().events[0], startedAt: started + 10 * 60_000 }],
     });
     try {
@@ -55,8 +54,8 @@ Deno.test({
       const first = await handleFinalizeTrip(post('finalize-trip', base), deps);
       assertEquals(first.status, 200);
       const r1 = await first.json();
-      // a fresh user: streak 0, DMS on → 118 × 1.25 = 147.5 → 148, minus the minor hard brake
-      assertEquals([r1.scored, r1.net, r1.streak.after, r1.progress.points, r1.achievements, r1.league.placed], [true, 138, 1, 138, ['first_drive'], true]);
+      // a fresh user: streak 0 → 118, minus the minor hard brake
+      assertEquals([r1.scored, r1.net, r1.streak.after, r1.progress.points, r1.achievements, r1.league.placed], [true, 108, 1, 108, ['first_drive'], true]);
       assertEquals(r1.clientTripId, TRIP);
 
       // 2. replay: byte-identical stored response, nothing applied twice
@@ -76,8 +75,6 @@ Deno.test({
         localDay,
         miles: 3,
         safeMiles: 3,
-        dmsOn: false,
-        dmsFaceSeen: false,
         start: { lat: 40.7311, lng: -73.9358 },
         end: { lat: 40.75, lng: -73.95 },
         polyline: lineOfMiles(3, 40.7311, -73.9358),
@@ -87,23 +84,23 @@ Deno.test({
       assertEquals(merged.status, 200);
       const r2 = await merged.json();
       assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId], [TRIP, TRIP_2, r1.tripId]);
-      // 15 mi, 14.8 safe, two minor hard brakes (10 + 12.5 → 10 + 13 = 23), streak 0, dms on: 148 × 1.25 = 185 → 162
-      assertEquals([r2.breakdown.safeMiles, r2.breakdown.gains, r2.breakdown.penalties, r2.net, r2.streak.before, r2.streak.after], [14.8, 185, 23, 162, 0, 1]);
+      // 15 mi, 14.8 safe, two minor hard brakes (10 + 12.5 → 10 + 13 = 23), streak 0: 148 → 125
+      assertEquals([r2.breakdown.safeMiles, r2.breakdown.gains, r2.breakdown.penalties, r2.net, r2.streak.before, r2.streak.after], [14.8, 148, 23, 125, 0, 1]);
       const [trip] = await sql`select miles, points_net, rev, n_hard_brake, polyline from public.trips where id = ${r1.tripId}::uuid`;
-      assertEquals([Number(trip.miles), trip.points_net, trip.rev, trip.n_hard_brake], [15, 162, 2, 2]);
+      assertEquals([Number(trip.miles), trip.points_net, trip.rev, trip.n_hard_brake], [15, 125, 2, 2]);
       // the union's route is both drives' runs, space-joined and otherwise untouched: two runs, no line across the stop
       assertEquals(trip.polyline, `${base.polyline} ${second.polyline}`);
       const [{ points, lifetime }] = await sql`select points, lifetime from public.progress where user_id = ${USER}::uuid`;
-      assertEquals([points, lifetime], [162, 162]);
+      assertEquals([points, lifetime], [125, 125]);
 
       // 4. dispute the first hard brake as a hazard: accepted, re-scored, +13 credited (the repeat multiplier moves to the other brake)
       const dispute = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals(dispute.status, 200);
       const d = await dispute.json();
-      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 175, 13, 175, 2]);
+      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 138, 13, 138, 2]);
       // the itemised list the device shows now sums to the net: one hard brake left at its first-of-type penalty
       assertEquals(d.breakdown.events, [{ id: EVENT_B, penalty: 10 }]);
-      assertEquals([d.breakdown.net, d.breakdown.penalties], [175, 10]);
+      assertEquals([d.breakdown.net, d.breakdown.penalties], [138, 10]);
       const twice = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals([twice.status, (await twice.json()).code], [409, 'already_disputed']);
       const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);

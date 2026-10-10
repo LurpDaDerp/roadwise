@@ -7,11 +7,6 @@ export const HARD_BRAKE_G = { minor: 0.4, severe: 0.55 } as const;
 export const HARD_ACCEL_G = { minor: 0.35, severe: 0.5 } as const;
 /** Hard cornering (sideways force), in g. */
 export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
-/** Gaze off road this long (s) above `EYES_OFF_MIN_MPH` is an eyes-off event. */
-export const EYES_OFF_S = { minor: 2, severe: 4 } as const;
-export const EYES_OFF_MIN_MPH = 10;
-/** Sustained eye-closure signs for this long (s) is a drowsiness event. */
-export const DROWSY_S = 60;
 /** Phone pickups count only while moving above this speed. */
 export const PHONE_MIN_MPH = 5;
 /** Continuous time above the threshold before speeding is an incident (3 s when severe). */
@@ -38,8 +33,6 @@ export const NOT_DRIVING_PER_MONTH = 2;
 export const DISPUTE_AUTO_PER_WEEK = 3;
 /** Freezes held at most. */
 export const MAX_FREEZES = 3;
-/** DMS flags only at this model confidence or higher. */
-export const DMS_MIN_CONFIDENCE = 0.85;
 
 /** Weekly league tiers, lowest first. */
 export const LEAGUE_TIERS = ['bronze', 'silver', 'gold', 'platinum', 'diamond'] as const;

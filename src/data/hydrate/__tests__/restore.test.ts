@@ -25,8 +25,6 @@ const serverDrive = (n: number, over: Record<string, unknown> = {}) => ({
   safeMiles: 4.5,
   nightMiles: 0,
   durationS: 600,
-  dmsOn: false,
-  dmsFaceSeen: false,
   polyline: '_p~iF~ps|U',
   scored: true,
   reason: null,

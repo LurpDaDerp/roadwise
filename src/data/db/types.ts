@@ -39,8 +39,6 @@ export interface TripRow {
   safe_miles: number;
   night_miles: number;
   duration_s: number;
-  dms_on: Flag;
-  dms_face_seen: Flag;
   start_lat: number | null;
   start_lng: number | null;
   end_lat: number | null;

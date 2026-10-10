@@ -167,8 +167,6 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
           safe_miles: target.safe_miles + mine.safe_miles,
           night_miles: target.night_miles + mine.night_miles,
           duration_s: target.duration_s + mine.duration_s,
-          dms_on: target.dms_on === 1 || mine.dms_on === 1 ? 1 : 0,
-          dms_face_seen: target.dms_face_seen === 1 || mine.dms_face_seen === 1 ? 1 : 0,
           max_speed_mph: Math.max(target.max_speed_mph, mine.max_speed_mph),
           polyline: joinPolylines(target.polyline, mine.polyline),
           status,

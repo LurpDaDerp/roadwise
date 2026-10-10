@@ -32,7 +32,6 @@ import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/syn
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
-import { createDefaultCameraBridge } from '@/features/camera/defaultBridge';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
@@ -85,8 +84,6 @@ export interface BootstrapDeps {
   /** One speed read on the Start tap. Default: `currentSpeedMps` (expo-location). */
   speedProbe?: () => Promise<number | null>;
   voiceEnabled?: () => boolean;
-  /** The DMS bridge (WP8): presence and the per-row hook. `null`: none. */
-  createCamera?: ((db: Db, host: () => DriveHost | undefined) => CameraLike) | null;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
   /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
   mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
@@ -99,17 +96,6 @@ export interface BootstrapDeps {
   tz?: string;
   appVersion?: string;
   onError?: (error: unknown, context: string) => void;
-}
-
-/** What the launch needs of the camera bridge. */
-export interface CameraLike {
-  presence(): { lastFaceT: number | null } | null;
-  /** The DMS's eyes-off / drowsiness detector for a drive (joins `createDetectors(newId, extra)`). */
-  detectors(): import('@/core/engine/types').Detector[];
-  onRow(row: import('@/core/engine/types').FeatureRow, motion: import('@/core/engine/motionEvidence').MotionEvidence | null): void;
-  attach(host: DriveHost): () => void;
-  dispose(): Promise<void>;
-  settled?(): Promise<void>;
 }
 
 export interface AppRuntime {
@@ -301,12 +287,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       alertsAvailable = false;
       player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
     }
-    let camera: CameraLike | null = null;
-    try {
-      camera = deps.createCamera === undefined ? createDefaultCameraBridge({ db, appState, readUid: () => readDeviceOwner(db), speedProbe: deps.speedProbe ?? defaultSpeedProbe, onError }) : (deps.createCamera?.(db, () => host) ?? null);
-    } catch (error) {
-      onError(error, 'camera');
-    }
     const display = deps.display === undefined ? createDriveDisplay(nativeDisplaySinks(), { now, platform: Platform.OS, onError: (e) => onError(e, 'display') }) : deps.display;
     const drive = createDriveHost({
       db,
@@ -322,9 +302,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       speedProbe: deps.speedProbe ?? defaultSpeedProbe,
       context: summaryContext,
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
-      presence: camera === null ? undefined : () => camera.presence(),
-      extraDetectors: camera === null ? undefined : () => camera.detectors(),
-      onRow: camera === null ? undefined : (row, motion) => camera.onRow(row, motion),
       appState,
       alertsAvailable,
       signedOut: identity.owner === 'signed-out',
@@ -336,7 +313,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     void applyStoredForgotToStartSetting(db, { setForgotToStartReminder: (on) => source.setForgotToStartReminder(on) }).catch((error: unknown) =>
       onError(error, 'forgot-to-start reminder')
     );
-    const detachCamera = camera?.attach(drive) ?? (() => {});
     const adopt: AdoptedTrip | null = recovery.adopt;
     await drive.boot({ adopt });
     if (!drive.isBusy()) limits.resetTrip();
@@ -361,11 +337,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     }
     const release = async (): Promise<void> => {
       unmountDiagnostics();
-      detachCamera();
-      if (camera !== null) {
-        await camera.settled?.();
-        await camera.dispose();
-      }
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
     };

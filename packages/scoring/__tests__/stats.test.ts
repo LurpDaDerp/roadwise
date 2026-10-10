@@ -10,8 +10,6 @@ describe('statColor — spec thresholds (green ≤ bound inclusive, red strictly
     ['hard_accel', 2, 2.01, 6, 6.01],
     ['hard_corner', 2, 2.01, 6, 6.01],
     ['handling', 0, 0.01, 0.5, 0.51],
-    ['eyes_off', 1, 1.01, 3, 3.01],
-    ['drowsy', 0, 0.01, 0.5, 0.51],
   ] as const)('%s', (id, g, y1, y2, r) => {
     expect(statColor(id, g)).toBe('green');
     expect(statColor(id, y1)).toBe('yellow');
@@ -45,8 +43,6 @@ const sums: StatSums = {
   hardBrake: 4,
   hardAccel: 2,
   hardCorner: 1,
-  eyesOff: 2,
-  drowsy: 0,
 };
 
 describe('statsFrom', () => {
@@ -62,8 +58,6 @@ describe('statsFrom', () => {
     expect(st.hard_accel).toMatchObject({ value: 1, color: 'green' });
     expect(st.hard_corner).toMatchObject({ value: 0.5, color: 'green' });
     expect(st.handling).toMatchObject({ value: 0.5, total: 1, unit: 'min_per_h', color: 'yellow' });
-    expect(st.eyes_off).toMatchObject({ value: 1, color: 'green' });
-    expect(st.drowsy).toMatchObject({ value: 0, color: 'green' });
     expect(st.miles).toMatchObject({ value: 200, total: 200, unit: 'mi', color: null });
     expect(st.duration).toMatchObject({ value: 2, total: 2, unit: 'h', color: null });
     expect(st.night_miles).toMatchObject({ value: 20, total: 20, unit: 'mi', color: null });

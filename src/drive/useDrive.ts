@@ -32,14 +32,14 @@ export function useDriveHost(): DriveHost {
 
 export interface DriveControls {
   /** Start Drive. Only from a user tap in the foreground; refuses (`moving`) at ≥ 3 mph. */
-  start(opts: { dmsOn: boolean }): Promise<StartResult>;
+  start(): Promise<StartResult>;
   /** End the drive; resolves once it is finalized. Navigation is the caller's job. */
   end(): Promise<{ clientTripId: string } | null>;
 }
 
 export function useDriveControls(): DriveControls {
   const host = useDriveHost();
-  return useMemo(() => ({ start: (opts) => host.start(opts), end: () => host.end() }), [host]);
+  return useMemo(() => ({ start: () => host.start(), end: () => host.end() }), [host]);
 }
 
 export interface DriveLive {
@@ -55,7 +55,6 @@ export interface DriveLive {
   /** Non-null only while stopped (≤ 5 mph). */
   points: { total: number; sinceLastStop: number } | null;
   startedAt: number | null;
-  dmsActive: boolean;
 }
 
 const selectLive = (s: DriveState) => ({
@@ -69,7 +68,6 @@ const selectLive = (s: DriveState) => ({
   lastAlert: s.lastAlert,
   points: s.points,
   startedAt: s.startedAt,
-  dmsActive: s.dmsActive,
 });
 
 /** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */
@@ -88,7 +86,7 @@ export function useDriveLive(): DriveLive {
 }
 
 /** A stable callback to start a drive, for Home's button. */
-export function useStartDrive(): (opts: { dmsOn: boolean }) => Promise<StartResult> {
+export function useStartDrive(): () => Promise<StartResult> {
   const host = useDriveHost();
-  return useCallback((opts: { dmsOn: boolean }) => host.start(opts), [host]);
+  return useCallback(() => host.start(), [host]);
 }

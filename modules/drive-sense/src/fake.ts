@@ -73,7 +73,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let driveDisplay: DriveDisplayState | null = null;
   let forgotToStartReminder = false;
   let forgottenDrive: ForgottenDrive | null = null;
-  /** DMS calib T12: the capture's own activity subscription (best effort), and a forced failure of it. */
+  /** The capture's own activity subscription (best effort), and a forced failure of it. */
   let captureFeed = false;
   let captureSubscribeFails = false;
   let queue: DriveSenseRow[] = [];
@@ -127,7 +127,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         return Promise.reject(driveSenseError('E_PERMISSION', 'startCapture needs location permission'));
       }
       if (!state.capturing) {
-        // DMS calib T12 (WK-m1): a new capture subscribes to the activity feed when motion is granted,
+        // WK-m1: a new capture subscribes to the activity feed when motion is granted,
         // best effort: a failed subscription never rejects the start nor stops the capture.
         captureFeed = state.motion === 'granted' && !captureSubscribeFails;
       }
@@ -138,7 +138,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     stopCapture() {
       command('stopCapture');
-      // DMS calib T12: the capture's feed ends with it; the notification goes with the service.
+      // The capture's feed ends with it; the notification goes with the service.
       captureFeed = false;
       driveDisplay = null;
       state = { ...state, capturing: false, mode: null, rate: null, captureStartedAt: null };

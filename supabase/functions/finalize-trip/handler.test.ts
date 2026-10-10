@@ -35,19 +35,19 @@ const post = (body: unknown, token = 'good', init: RequestInit = {}) =>
 
 const envelopeOf = (h: ReturnType<typeof harness>): ApplyDriveEnvelope => h.fake.calls.find((c) => c.fn === 'applyDrive')!.args as ApplyDriveEnvelope;
 
-Deno.test('happy path: the spec example scores 177 − 10 = 167 inside one transaction and the stored response is returned', async () => {
+Deno.test('happy path: the spec example scores 142 − 10 = 132 inside one transaction and the stored response is returned', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   const body = await res.json();
-  assertEquals([body.net, body.scored, body.clientTripId], [167, true, TRIP]);
+  assertEquals([body.net, body.scored, body.clientTripId], [132, true, TRIP]);
   assertEquals(h.fake.transactions, { opened: 1, failed: 0 });
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'applyDrive']);
   assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
   assertEquals(h.fake.calls[1].args, { userId: USER, key: UPLOAD_LIMIT_KEY, window: '1 day', max: MAX_UPLOADS_PER_DAY });
   const e = envelopeOf(h);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 167]);
-  assertEquals(e.breakdown.gains, 177);
+  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 132]);
+  assertEquals(e.breakdown.gains, 142);
   assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 10 }]);
   assertEquals(e.streak, { before: { streak: 10 }, after: { streak: 11, atRisk: false, freezes: 2, cleanRun: 0 }, outcome: 'grew', freezeEarned: false });
   // the uploaded event goes in active whatever the device said, with its position and measurements
@@ -73,8 +73,8 @@ Deno.test('merge: the union is scored with the target context and streak; the re
   const e = envelopeOf(h);
   assertEquals(e.mergeInto, '99999999-9999-4999-8999-999999999999');
   assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT_2, 'removed'], [EVENT, 'active']]);
-  // 15 miles, 14.8 safe, streak 4 (the target's snapshot), dms on (either): (148 × 1.08 × 1.25) → 199.8 → 200, minus 10
-  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.dmsMult, e.breakdown.gains, e.net], [14.8, 1.08, 1.25, 200, 190]);
+  // 15 miles, 14.8 safe, streak 4 (the target's snapshot): 148 × 1.08 → 159.84 → 160, minus 10
+  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.gains, e.net], [14.8, 1.08, 160, 150]);
   assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 10 }]);
   assertEquals(e.streak.before, { streak: 4 });
   assertEquals(e.streak.after, { streak: 5, atRisk: false, freezes: 1, cleanRun: 0 });

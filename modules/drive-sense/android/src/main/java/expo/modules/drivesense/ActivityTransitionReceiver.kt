@@ -19,7 +19,7 @@ import com.google.android.gms.location.DetectedActivity
  * built in [ActivityTransitions].
  *
  * v3: it never starts a capture (plan §1 decision 4). It is subscribed for exactly two reasons:
- * - during a capture (DMS calib T12), so a walk can end the drive — mapped `activity` events;
+ * - during a capture, so a walk can end the drive — mapped `activity` events;
  * - while the forgot-to-start reminder is on ([ForgotToStartReminder]) — an IN_VEHICLE period with
  *   no capture posts a quiet notification after its EXIT, never while in the vehicle.
  *

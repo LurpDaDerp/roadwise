@@ -1,6 +1,6 @@
 /** @jest-environment node */
 // `parseRow` is the only gate between what native emits and M1's engine (R2's row contract).
-import { MOTION_ROW_FIELDS, parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
+import { parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
 import { sampleRows } from '../scripts/sampleRows';
 
@@ -157,55 +157,14 @@ test('returns a fresh object, not the payload', () => {
   expect(parsed).not.toBe(raw);
 });
 
-// DMS calibration and stops, Task C0: the six optional motion fields (design rev4 §2.1.1, rev5 §4.3).
-describe('the optional motion fields (C0)', () => {
-  const withMotion = {
-    ...good,
-    frameAligned: true,
-    aLonMean: -0.0312345,
-    accRms: 0.1234567,
-    gravX: 0.0012345,
-    gravY: -0.7071234,
-    gravZ: -0.7071067,
-  };
-
-  test('an old row without them still parses, and gains none of them (S-OLDROW)', () => {
-    const r = parseRow(good);
-    expect(r).toEqual(good);
-    for (const k of MOTION_ROW_FIELDS) expect(k in r!).toBe(false);
-  });
-
-  test('present, they are kept and rounded to 1e-3', () => {
-    expect(parseRow(withMotion)).toEqual({
-      ...good,
-      frameAligned: true,
-      aLonMean: -0.031,
-      accRms: 0.123,
-      gravX: 0.001,
-      gravY: -0.707,
-      gravZ: -0.707,
-    });
-  });
-
-  test('accRms and gravity may be null (IMU absent); frameAligned and aLonMean may not', () => {
-    const absent = { ...good, frameAligned: false, aLonMean: 0, accRms: null, gravX: null, gravY: null, gravZ: null };
-    expect(parseRow(absent)).toEqual(absent);
-    expect(parseRow({ ...absent, frameAligned: null })).toBeNull();
-    expect(parseRow({ ...absent, aLonMean: null })).toBeNull();
-  });
-
-  test.each([
-    ['frameAligned', 'yes'],
-    ['aLonMean', Number.NaN],
-    ['accRms', Number.POSITIVE_INFINITY],
-    ['gravX', '0.1'],
-  ])('rejects %s = %p', (key, value) => {
-    expect(parseRow({ ...withMotion, [key]: value })).toBeNull();
-  });
-
-  test('the list of motion fields is the six the design names', () => {
-    expect([...MOTION_ROW_FIELDS].sort()).toEqual(['aLonMean', 'accRms', 'frameAligned', 'gravX', 'gravY', 'gravZ']);
-  });
+// A row from an older native build still carries the six retired motion fields: they are unknown
+// keys now, so they are stripped and counted, and the row is kept.
+test('a row with the retired motion fields parses, without them', () => {
+  resetUnknownRowKeys();
+  const old = { ...good, frameAligned: true, aLonMean: -0.031, accRms: 0.123, gravX: null, gravY: -0.707, gravZ: -0.707 };
+  expect(parseRow(old)).toEqual(good);
+  expect(unknownRowKeys()).toBe(6);
+  resetUnknownRowKeys();
 });
 
 // v3 (plan §6): `mock` rides on the row payload beside the FeatureRow keys.

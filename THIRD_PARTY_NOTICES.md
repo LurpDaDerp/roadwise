@@ -1,7 +1,7 @@
 # Third-party notices: the RoadWise app
 
 This lists the open-source software and data that ship inside the RoadWise app binaries, and their licences.
-- The native camera module's prior art, its pinned native libraries and the map data sources are described in more detail in [`THIRD_PARTY.md`](THIRD_PARTY.md). That file stays the record for `modules/dms-vision` and `supabase/data`.
+- The pinned native libraries and the map data sources are described in more detail in [`THIRD_PARTY.md`](THIRD_PARTY.md). That file stays the record for `supabase/data`.
 - Versions are those in `package.json` and the native pins on 2026-09-26.
 - Regenerate the npm table when dependencies change: read `license` from each `node_modules/<dep>/package.json` for the runtime dependencies.
 
@@ -9,21 +9,16 @@ This lists the open-source software and data that ship inside the RoadWise app b
 
 | Component | Version | Licence | Ships in |
 |---|---|---|---|
-| MediaPipe Tasks Vision (`MediaPipeTasksVision`, `com.google.mediapipe:tasks-vision`) | 0.10.35 | Apache-2.0 | every build (camera beta) |
-| MediaPipe Face Landmarker model (`face_landmarker.task`) | bundled | Apache-2.0 | every build (camera beta) |
-| ONNX Runtime (`onnxruntime-objc`, `com.microsoft.onnxruntime:onnxruntime-android`) | 1.30.0 | MIT | **development builds only** (see below) |
-| AndroidX CameraX (`androidx.camera:*`) | 1.4.2 | Apache-2.0 | Android |
+| AndroidX CameraX (`androidx.camera:*`) | 1.6.0 | Apache-2.0 | Android (`expo-camera`, friend QR codes) |
 | Google Play services location (`com.google.android.gms:play-services-location`) | 21.3.0 | Android SDK License (Google Play services terms) | Android (`modules/drive-sense`) |
 | Expo Modules Core | SDK 57 | MIT | every build |
-
-**ONNX Runtime is development-only.** ONNX Runtime and the project's own gaze network (`gaze_direct.onnx`) are linked only when `DMS_GAZE_NET=1`, which only the `development` EAS profile sets. The iOS podspec refuses `DMS_GAZE_NET=1` in a production profile, so preview and production binaries don't contain ONNX Runtime. It needs no notice in a store build, but it is listed here for the development builds that are distributed internally.
 
 ## JavaScript dependencies (runtime)
 
 All MIT unless noted:
 
 - **React and React Native:** `react` 19.2.3, `react-dom` 19.2.3, `react-native` 0.86.3.
-- **Expo SDK 57:** `expo`, `expo-apple-authentication`, `expo-asset`, `expo-audio`, `expo-auth-session`, `expo-battery`, `expo-constants`, `expo-crypto`, `expo-dev-client`, `expo-device`, `expo-file-system`, `expo-font`, `expo-haptics`, `expo-image`, `expo-keep-awake`, `expo-linear-gradient`, `expo-linking`, `expo-location`, `expo-network`, `expo-notifications`, `expo-router`, `expo-secure-store`, `expo-speech`, `expo-splash-screen`, `expo-sqlite`, `expo-status-bar`, `expo-system-ui`, `expo-updates`, `expo-web-browser`, `@expo/ui`, and `@expo/vector-icons` (which bundles the Ionicons font, MIT).
+- **Expo SDK 57:** `expo`, `expo-apple-authentication`, `expo-asset`, `expo-audio`, `expo-auth-session`, `expo-battery`, `expo-camera`, `expo-constants`, `expo-crypto`, `expo-dev-client`, `expo-device`, `expo-file-system`, `expo-font`, `expo-haptics`, `expo-image`, `expo-keep-awake`, `expo-linear-gradient`, `expo-linking`, `expo-location`, `expo-network`, `expo-notifications`, `expo-router`, `expo-secure-store`, `expo-speech`, `expo-splash-screen`, `expo-sqlite`, `expo-status-bar`, `expo-system-ui`, `expo-updates`, `expo-web-browser`, `@expo/ui`, and `@expo/vector-icons` (which bundles the Ionicons font, MIT).
 - **Navigation, gesture and animation:** `react-native-screens`, `react-native-safe-area-context`, `react-native-gesture-handler`, `react-native-reanimated`, `react-native-worklets`.
 - **Graphics and maps:**
   - `react-native-svg`

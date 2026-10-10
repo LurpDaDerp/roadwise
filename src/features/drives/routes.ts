@@ -10,7 +10,6 @@ export const DRIVE_HREF: Href = '/drive';
 export const DRIVE_HISTORY_HREF: Href = '/(app)/drives';
 export const ALL_STATS_HREF: Href = '/(app)/stats';
 export const HOW_POINTS_WORK_HREF: Href = '/(app)/how-points-work';
-export const DMS_SETUP_HREF: Href = '/(app)/settings/dms-setup';
 export const PERMISSIONS_HREF: Href = '/(app)/settings/permissions';
 
 /** A drive's summary; `fresh` right after the drive ends plays the reveal. */

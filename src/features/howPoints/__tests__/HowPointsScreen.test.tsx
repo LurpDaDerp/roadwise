@@ -13,7 +13,8 @@ test('the explainer, the penalty list and every rule section are on the page', a
   for (const id of ['points', 'penalties', 'multipliers', 'cap', 'streaks', 'levels', 'rating', 'leagues', 'mistakes']) {
     expect(screen.getByTestId(`rules-${id}`)).toBeOnTheScreen();
   }
-  expect(screen.getByText('Together they top out at ×1.50.')).toBeOnTheScreen();
+  expect(screen.getByText('Each drive in your streak adds 0.02 to your multiplier, up to ×1.30 at a 15-drive streak.')).toBeOnTheScreen();
+  expect(screen.queryByText(/DMS|driver monitoring/i)).toBeNull();
   expect(screen.getByText(/From 40 to 100 mi they earn half/)).toBeOnTheScreen();
   expect(screen.getByText('−40 (−20 when stopped in traffic)')).toBeOnTheScreen();
   await press(screen.getByLabelText('Back'));

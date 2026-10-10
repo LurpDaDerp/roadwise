@@ -34,7 +34,7 @@ begin
     'payload', jsonb_build_object('clientTripId', gen_random_uuid(), 'startedAt', floor(extract(epoch from p_started) * 1000)::bigint,
       'endedAt', floor(extract(epoch from p_started + interval '20 minutes') * 1000)::bigint, 'tz', 'America/New_York',
       'localDay', to_char(p_started at time zone 'America/New_York', 'YYYY-MM-DD'), 'miles', p_miles, 'safeMiles', p_miles, 'nightMiles', 0, 'durationS', 1200,
-      'dmsOn', false, 'dmsFaceSeen', false, 'end', null, 'polyline', '', 'appVersion', '3.0.0'),
+      'end', null, 'polyline', '', 'appVersion', '3.0.0'),
     'scored', true, 'reason', null, 'net', p_net, 'breakdown', jsonb_build_object('net', p_net, 'ratingPenalty', 0, 'events', v_bd), 'events', v_ev,
     'streak', jsonb_build_object('before', jsonb_build_object('streak', v_streak), 'after', jsonb_build_object('streak', v_streak + 1, 'atRisk', false, 'freezes', v_freezes, 'cleanRun', 0), 'outcome', 'grew', 'freezeEarned', false),
     'isLoop', false, 'loopRepeat', false, 'safeMilesEarlierToday', 0, 'scoringVersion', 3));

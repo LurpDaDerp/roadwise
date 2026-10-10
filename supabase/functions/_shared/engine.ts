@@ -18,7 +18,7 @@ const Num = z.coerce.number();
 /** A stored event as `private.trip_events_json` returns it: a `DriveEvent` plus where and what was measured. */
 export const StoredEventSchema = z.object({
   id: Uuid,
-  type: z.enum(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy']),
+  type: z.enum(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling']),
   tier: z.enum(['minor', 'moderate', 'severe']),
   startedAt: Num,
   durationS: Num,
@@ -53,8 +53,6 @@ export const MergeTargetSchema = z.object({
   safeMiles: Num,
   nightMiles: Num,
   durationS: Num,
-  dmsOn: z.boolean(),
-  dmsFaceSeen: z.boolean(),
   polyline: z.string(),
   events: z.array(StoredEventSchema),
   isLoop: z.boolean(),
@@ -95,7 +93,6 @@ export const DisputeContextSchema = z.object({
       input: z.object({
         miles: Num,
         safeMiles: Num,
-        dmsOn: z.boolean(),
         loopRepeat: z.boolean(),
         events: z.array(StoredEventSchema),
       }),
@@ -130,8 +127,6 @@ export interface ApplyDriveEnvelope {
     safeMiles: number;
     nightMiles: number;
     durationS: number;
-    dmsOn: boolean;
-    dmsFaceSeen: boolean;
     end: { lat: number; lng: number } | null;
     polyline: string;
     appVersion: string;

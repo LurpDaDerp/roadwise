@@ -383,7 +383,7 @@ class CaptureService : Service() {
     watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
     handler.postDelayed(minute, MINUTE_MS)
-    // DMS calib T12 (WK-m1): the walking feed during every capture (JS start, sticky restart), best
+    // WK-m1: the walking feed during every capture (JS start, sticky restart), best
     // effort: a failure is logged and swallowed and the capture runs on.
     ActivityTransitions.sync(this)
     // The forgot-to-start reminder: this vehicle period is being recorded.
@@ -442,7 +442,7 @@ class CaptureService : Service() {
     captureStartedAt = null
     display = null
     if (clearOpen) prefs.captureOpen = false
-    // DMS calib T12: the capture's walking feed ends with it, unless the reminder keeps it.
+    // The capture's walking feed ends with it, unless the reminder keeps it.
     ActivityTransitions.sync(this)
     main.post {
       try {

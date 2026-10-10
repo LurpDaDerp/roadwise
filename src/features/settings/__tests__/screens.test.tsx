@@ -167,14 +167,15 @@ describe('Settings', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
   });
 
-  it('opens driver monitoring, alerts, zones, permissions and notifications', async () => {
+  it('opens alerts, zones and notifications, and has no driver monitoring entry', async () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);
-    await tap('settings-dms');
+    expect(screen.queryByTestId('settings-dms')).toBeNull();
+    await tap('settings-alerts');
     await tap('settings-zones');
     await tap('settings-notifications');
     expect(mockRouter.push.mock.calls.map((c) => c[0])).toEqual([
-      SETTINGS_HREFS.dms,
+      SETTINGS_HREFS.alerts,
       SETTINGS_HREFS.privacyZones,
       SETTINGS_HREFS.notifications,
     ]);

@@ -30,7 +30,7 @@ export interface Expectation {
   absent?: true;
 }
 
-const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy'] as const;
+const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling'] as const;
 const TIERS = ['minor', 'moderate', 'severe'] as const;
 
 /** Annotated with the engine's own types, so a field added to `FeatureRow` and forgotten here fails `tsc`. */
@@ -57,12 +57,6 @@ export const featureRowSchema: z.ZodType<FeatureRow> = z.strictObject({
   screenOn: z.boolean(),
   appForeground: z.boolean(),
   mock: z.boolean().optional(),
-  frameAligned: z.boolean().optional(),
-  aLonMean: z.number().optional(),
-  accRms: z.number().nullable().optional(),
-  gravX: z.number().nullable().optional(),
-  gravY: z.number().nullable().optional(),
-  gravZ: z.number().nullable().optional(),
 });
 
 export const limitEntrySchema: z.ZodType<LimitEntry> = z.strictObject({

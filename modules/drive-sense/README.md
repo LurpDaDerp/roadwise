@@ -136,7 +136,7 @@ above, so these mappings decide whether walking can end a trip.
   or no flag at all). So `automotive && stationary` (a red light) is `automotive`. An update equal
   in type and confidence to the previous one is not re-emitted.
 - **Android** (Activity Recognition Transitions API, which carries no confidence): the module
-  subscribes to IN_VEHICLE, WALKING and RUNNING, ENTER and EXIT (DMS calib T12). ON_FOOT is not
+  subscribes to IN_VEHICLE, WALKING and RUNNING, ENTER and EXIT (during every capture). ON_FOOT is not
   subscribed: the Transitions API supports IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only
   (WALKING and RUNNING are ON_FOOT's sub-activities), and a request naming an unsupported type
   fails whole.
@@ -151,7 +151,7 @@ above, so these mappings decide whether walking can end a trip.
   | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` (live only) |
 
   `exit: true` marks the END of a walk: the host never treats it as a walk (the walk confirmation,
-  DMS calib T13, times a walk from its ENTER to its EXIT or an IN_VEHICLE). iOS never sets `exit`.
+  T13, times a walk from its ENTER to its EXIT or an IN_VEHICLE). iOS never sets `exit`.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). `TransitionStore` keeps the same mapped entries (ENTER
@@ -193,7 +193,6 @@ the row. The encodings:
 | fewer than `MIN_IMU_SAMPLES` (10) IMU samples in the second, or IMU stopped (`low` rate) | **IMU absent**: `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `yawRateMax`, `jerkMax`, `gravityStability`, `orientationDelta`, `handlingScore` all `0` (M1's `finalize.ts` reads "IMU present" from the six extremes) |
 | IMU present, frame not aligned | `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `jerkMax` are `0`; `yawRateMax`, `gravityStability`, `orientationDelta`, `handlingScore` are computed |
 | `locked` / `screenOn` / `appForeground` | the phone state at the end of the second (§5) |
-| **DMS motion evidence** (DMS calibration and stops, Task C0) | six more keys, always emitted by this build: `frameAligned` (bool: the frame aligned this second), `aLonMean` (g: the mean of the second's smoothed longitudinal values; `0` when not aligned), `accRms` (g: RMS of \|ua\| over the second, frame-free), `gravX`/`gravY`/`gravZ` (the second's mean gravity direction, unit vector, device frame). **IMU absent:** `frameAligned = false`, `aLonMean = 0`, `accRms` and `gravX/Y/Z` = JSON **null** (a key with null, never a dropped key). They are **optional** in `parseRow`: rows persisted before the update and rows from an older native binary parse without them, and every consumer reads an absent field as "no evidence". They are DMS-only: M1's `finalize.ts` strips them before the trace and its digest (`MOTION_ROW_FIELDS`), so the uploaded digest is unchanged. Kept to 1e-3 (`MOTION_ROW_DECIMALS`). |
 | **`mock`** (v3, plan §6; spec "Integrity · GPS spoofing") | a boolean beside the `FeatureRow` keys: the window's fix came from a mock location provider — Android `Location.isMock()` (API 31+) / `isFromMockProvider()` (before); iOS 15+ `sourceInformation?.isSimulatedBySoftware` (false below 15). `false` when the window has no fix. It is **not** a `FeatureRow` field: native adds it at the emit site, never in the row struct's own map, so the self-test rows (§8) keep exactly the contract's keys; `parseRow` splits it off, validates it as a boolean (a wrong type rejects the row), and returns it on `DriveSenseRow.mock`. Optional on the wire: rows from older builds parse without it, and a consumer reads absent as "not known to be mocked". |
 
 Units: g for accelerations, g/s for jerk, rad/s for yaw rate, rad for `orientationDelta`,
@@ -466,12 +465,6 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 
 **9. Carry** `hTail ←` the last ≤ 4 of the window, `lastImuT ← tₙ₋₁`, the phone flags onto the row.
 
-**10. DMS motion evidence** (Task C0; IMU present):
-- `frameAligned = aligned` (after steps 5–7, i.e. whether step 8 ran);
-- `aLonMean = (Σᵢ lonᵢ) / n` over the same smoothed `lonᵢ` step 8 computes, or `0` when not aligned;
-- `accRms = √(Σᵢ |uaᵢ|² / n)` over the raw `uaᵢ` (frame-free, no smoothing);
-- `gravX/Y/Z = gMean` (step 3).
-
 ### Constants (`src/extract/constants.ts`)
 
 | Name | Value | Use |
@@ -549,8 +542,7 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `phone-pickup` | pickup → `handlingScore ≥ 0.6`, orientation reset, extremes 0 |
 | `mount-shift` | slow sag in the mount → gravity-deviation reset in second 10 |
 | `no-imu` | IMU-absent encoding and every GNSS encoding of §4 |
-| `unaligned-start` | frame-free fields populated, frame-dependent fields 0 (and `frameAligned` false, `aLonMean` 0) |
-| `lon-bias` | a −0.03 g longitudinal accelerometer bias on a GNSS cruise: `aLonMean ≈ −0.03`, speed unchanged (DMS C0) |
+| `unaligned-start` | frame-free fields populated, frame-dependent fields 0 |
 | `gravity-filter` | the Android filter on raw accel + gyro, with a re-seeding gap between batches and a re-seed in the middle of the last batch straight into a 0.25 g acceleration (pins the gate-window reset: a port that keeps stale magnitudes fails) |
 | `android-raw` | Android units and sign in, rows out: the conversion, the filter and the extractor together (a port that skips `/ G_MPS2` or the sign fails it) |
 

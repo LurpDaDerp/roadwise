@@ -22,8 +22,6 @@ const ICON: Record<EventType, keyof typeof Ionicons.glyphMap> = {
   hard_corner: 'return-up-forward',
   phone_pickup: 'phone-portrait',
   phone_handling: 'phone-portrait',
-  eyes_off: 'eye',
-  drowsy: 'cafe',
 };
 
 const keyOf = (a: HudAlert | null): string | null => (a === null ? null : `${a.type}:${a.at}`);

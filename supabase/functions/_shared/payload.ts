@@ -54,8 +54,6 @@ export const EVENT_TYPES_V3 = [
   'hard_corner',
   'phone_pickup',
   'phone_handling',
-  'eyes_off',
-  'drowsy',
 ] as const;
 export const TIERS_V3 = ['minor', 'moderate', 'severe'] as const;
 
@@ -65,10 +63,8 @@ export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES_V3)[number], readonly (ty
   hard_brake: ['minor', 'severe'],
   hard_accel: ['minor', 'severe'],
   hard_corner: ['minor', 'severe'],
-  eyes_off: ['minor', 'severe'],
   phone_pickup: ['severe'],
   phone_handling: ['moderate', 'severe'],
-  drowsy: ['severe'],
 };
 
 const roundedTo4dp = (v: number): boolean => Number(v.toFixed(4)) === v;
@@ -146,8 +142,6 @@ export const FinalizeTripPayloadV3Schema = z
     safeMiles: nonNegative,
     nightMiles: nonNegative,
     durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
-    dmsOn: z.boolean(),
-    dmsFaceSeen: z.boolean(),
     start: PointV3Schema.nullable(),
     end: PointV3Schema.nullable(),
     /** Google encoded polyline runs, space-joined, trimmed on the device (privacy zones + first/last 0.25 mi). ASCII only. */
@@ -206,8 +200,6 @@ export const DriveBreakdownSchema = z.object({
   milePoints: nonNegative,
   cleanBonus: z.union([z.literal(0), z.literal(25)]),
   streakMult: z.number().min(1),
-  dmsMult: z.union([z.literal(1), z.literal(1.25)]),
-  mult: z.number().min(1),
   gains: z.number().int().nonnegative(),
   shortScale: z.number().min(0).max(1),
   events: z.array(z.object({ id: z.string(), penalty: z.number().int().nonnegative() })),

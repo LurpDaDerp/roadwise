@@ -32,7 +32,6 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
-    dms: { title: 'Driver monitoring', subtitle: 'Camera alerts for eyes off the road and drowsiness' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     reminder: {
       title: 'Forgot-to-start reminder',

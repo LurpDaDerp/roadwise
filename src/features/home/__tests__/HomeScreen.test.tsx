@@ -9,8 +9,6 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useFocusEffect: j
 
 const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRefetching: false, refetch: jest.fn() });
 const mockStart = jest.fn();
-const mockSetEnabled = jest.fn(async () => undefined);
-let mockDms = { enabled: false, calibrated: true };
 
 jest.mock('@/data/queries', () => ({
   useDataSource: () => ({ now: () => Date.now() }),
@@ -29,21 +27,18 @@ jest.mock('@/features/drive/DriveInProgressBanner', () => {
   return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
 });
 jest.mock('@/drive/forgottenDrive', () => ({ useForgottenDriveNotice: () => null }));
-jest.mock('../useDmsSetting', () => ({ useDmsSetting: () => ({ setting: mockDms, setEnabled: mockSetEnabled }) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockDms = { enabled: false, calibrated: true };
   mockRecording = false;
 });
 
-test('a successful start opens the driving screen with the DMS choice', async () => {
-  mockDms = { enabled: true, calibrated: true };
+test('a successful start opens the driving screen', async () => {
   mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
   await draw(<HomeScreen />);
   await press(screen.getByTestId('start-drive'));
   await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
-  expect(mockStart).toHaveBeenCalledWith({ dmsOn: true });
+  expect(mockStart).toHaveBeenCalledWith();
 });
 
 test('moving: nothing is recorded and Home says to pull over', async () => {
@@ -54,21 +49,9 @@ test('moving: nothing is recorded and Home says to pull over', async () => {
   expect(mockRouter.push).not.toHaveBeenCalled();
 });
 
-test('the DMS chip toggles the setting once calibrated, and opens setup before that', async () => {
-  await draw(<HomeScreen />);
-  await press(screen.getByTestId('dms-chip'));
-  expect(mockSetEnabled).toHaveBeenCalledWith(true);
-
-  mockDms = { enabled: false, calibrated: false };
-  await draw(<HomeScreen />);
-  await press(screen.getAllByTestId('dms-chip').at(-1)!);
-  expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/dms-setup');
-});
-
 test('while a drive is recording, the in-progress strip replaces Start', async () => {
   mockRecording = true;
   await draw(<HomeScreen />);
   expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
   expect(screen.queryByTestId('start-drive')).toBeNull();
-  expect(screen.queryByTestId('dms-chip')).toBeNull();
 });

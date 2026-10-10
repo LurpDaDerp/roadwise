@@ -14,9 +14,7 @@ export type EventType =
   | 'hard_accel'
   | 'hard_corner'
   | 'phone_pickup'
-  | 'phone_handling'
-  | 'eyes_off'
-  | 'drowsy';
+  | 'phone_handling';
 
 /** Colour: minor = yellow, moderate = orange, severe = red. */
 export type Tier = 'minor' | 'moderate' | 'severe';
@@ -28,8 +26,8 @@ export interface DriveEvent {
   id: string;
   type: EventType;
   /**
-   * speeding: minor | moderate | severe; harsh and eyes_off: minor | severe; phone_pickup: severe;
-   * phone_handling: moderate (≤30 s) | severe (>30 s); drowsy: severe.
+   * speeding: minor | moderate | severe; harsh: minor | severe; phone_pickup: severe;
+   * phone_handling: moderate (≤30 s) | severe (>30 s).
    */
   tier: Tier;
   /** epoch ms */
@@ -54,11 +52,9 @@ export const BASE_PENALTY = {
   hard_brake: { minor: 10, severe: 25 },
   hard_accel: { minor: 15, severe: 30 },
   hard_corner: { minor: 10, severe: 25 },
-  eyes_off: { minor: 20, severe: 40 },
   phone_pickup: 40,
   phone_pickup_stopped: 20,
   phone_handling_per_unit: 10,
-  drowsy: 50,
 } as const;
 
 /** Points per credited safe mile, and the clean-drive bonus (from `CLEAN_BONUS_MIN_MILES`). */
@@ -70,8 +66,6 @@ export const DAILY_FULL_MILES = 40;
 export const DAILY_HALF_MILES = 100;
 export const STREAK_STEP = 0.02;
 export const STREAK_MULT_CAP = 1.3;
-export const DMS_MULT = 1.25;
-export const MULT_CAP = 1.5;
 
 /** T(L): tolerance over the posted limit, mph. Fixed at 3 in a school or construction zone. */
 export function speedTolerance(limitMph: number, zone?: Zone | null): number {
@@ -109,14 +103,11 @@ export function basePenalty(e: DriveEvent): number {
     case 'hard_brake':
     case 'hard_accel':
     case 'hard_corner':
-    case 'eyes_off':
       return BASE_PENALTY[e.type][severe ? 'severe' : 'minor'];
     case 'phone_pickup':
       return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup;
     case 'phone_handling':
       return BASE_PENALTY.phone_handling_per_unit * units(e);
-    case 'drowsy':
-      return BASE_PENALTY.drowsy;
   }
 }
 
@@ -151,7 +142,6 @@ export interface DriveInput {
   miles: number;
   safeMiles: number;
   events: DriveEvent[];
-  dmsOn: boolean;
   /** Repeats a recent short loop → credited miles halved. */
   loopRepeat?: boolean;
 }
@@ -172,11 +162,9 @@ export interface DriveBreakdown {
   milePoints: number;
   /** 25 iff miles ≥ 2, zero active events, creditedMiles > 0 and not a loop repeat. */
   cleanBonus: 0 | 25;
+  /** M_gain: the streak multiplier, 1 + 0.02 × streak capped at 1.30. Scales gains only. */
   streakMult: number;
-  dmsMult: 1 | 1.25;
-  /** min(1.5, streakMult × dmsMult) */
-  mult: number;
-  /** round((milePoints + cleanBonus) × mult) */
+  /** round((milePoints + cleanBonus) × streakMult) */
   gains: number;
   /** min(1, 0.5 + miles / 6) */
   shortScale: number;
@@ -193,10 +181,8 @@ export interface DriveBreakdown {
 /** Score one drive. Deterministic; does not mutate its input. */
 export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown {
   const streakMult = nextMultiplier(ctx.streak);
-  const dmsMult: 1 | 1.25 = input.dmsOn ? DMS_MULT : 1;
-  const mult = Math.min(MULT_CAP, roundTo(streakMult * dmsMult, 4));
   const shortScale = Math.min(1, 0.5 + Math.max(0, input.miles) / 6);
-  const base = { streakMult, dmsMult, mult, shortScale };
+  const base = { streakMult, shortScale };
 
   if (!(input.miles >= MIN_SCORED_MILES)) {
     return {
@@ -229,7 +215,7 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   const earnsBonus =
     input.miles >= CLEAN_BONUS_MIN_MILES && active.length === 0 && creditedMiles > 0 && !input.loopRepeat;
   const cleanBonus: 0 | 25 = earnsBonus ? CLEAN_BONUS : 0;
-  const gains = roundTo((milePoints + cleanBonus) * mult);
+  const gains = roundTo((milePoints + cleanBonus) * streakMult);
 
   const seen: Partial<Record<EventType, number>> = {};
   let penalties = 0;

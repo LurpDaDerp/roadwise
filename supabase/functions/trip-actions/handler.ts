@@ -1,7 +1,7 @@
 // trip-actions: what a user may do to a stored drive (plan §4 "Edge functions", "Not driving",
 // "Disputes"): `dispute { clientTripId, eventId, reason }` and `not_driving { clientTripId }`.
 //
-// The SQL owns every rule (latest drive only, 24 h, 2 a month, no DMS face, 7 days, 3 auto-accepts
+// The SQL owns every rule (latest drive only, 24 h, 2 a month, 7 days, 3 auto-accepts
 // a week, the mounted test, "already disputed"); this function maps the request to one engine
 // transaction, re-scores an accepted dispute with the shared scorer from the stored input and
 // context (streak never re-evaluated), and turns the writers' fixed refusals into codes the device
@@ -45,7 +45,6 @@ export const REFUSALS: Record<string, { status: number; code: string }> = {
   'only your latest drive can be marked': { status: 403, code: 'not_latest' },
   'the drive is older than 24 hours': { status: 403, code: 'too_old' },
   'the drive is older than 7 days': { status: 403, code: 'too_old' },
-  'the camera saw a driver on this drive': { status: 403, code: 'face_seen' },
   'no uses left this month': { status: 403, code: 'no_uses_left' },
   'that reason does not apply to this event': { status: 400, code: 'reason_mismatch' },
 };
@@ -104,7 +103,6 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
           {
             miles: d.rescore.input.miles,
             safeMiles: d.rescore.input.safeMiles,
-            dmsOn: d.rescore.input.dmsOn,
             loopRepeat: d.rescore.input.loopRepeat,
             events: d.rescore.input.events as DriveEvent[],
           },

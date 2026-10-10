@@ -26,8 +26,7 @@ export function googleServicesFile(
 export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
   motion: "RoadWise uses motion to detect hard braking and when you've stopped driving.",
-  camera:
-    'RoadWise uses the camera for optional driver monitoring (DMS) and scanning friend QR codes — video never leaves your phone.',
+  camera: 'RoadWise uses the camera only to scan friend QR codes — video never leaves your phone.',
 } as const;
 
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
@@ -48,8 +47,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: 'automatic',
   updates: { url: `https://u.expo.dev/${EAS_PROJECT_ID}` },
   // The fingerprint of the native project, not the app version (C0 round 1, review-C0 C0-I1): the row
-  // contract changed in native code (the DMS motion fields), and under appVersion a later OTA from an
-  // older commit would reach a new binary whose rows the old bundle's parser rejects. Each native state
+  // contract changes with native code, and under appVersion a later OTA from an older commit could
+  // reach a new binary whose rows the old bundle's parser rejects. Each native state
   // is its own runtime, so an update only ever reaches binaries built from the same native code.
   runtimeVersion: { policy: 'fingerprint' },
   ios: {
@@ -127,7 +126,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
         isAndroidMotionActivityEnabled: true,
       },
     ],
-    // DMS and friend QR codes. No microphone, on either platform.
+    // Friend QR codes. No microphone, on either platform.
     [
       'expo-camera',
       { cameraPermission: PERMISSION_COPY.camera, microphonePermission: false, recordAudioAndroid: false },

@@ -35,7 +35,6 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
             tz: opts.tz,
             local_day: dayKey(new Date(session.startedAt), opts.tz),
             status: 'recording',
-            dms_on: session.dmsOn ? 1 : 0,
           },
           stamp,
           tx
@@ -45,15 +44,7 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
       const fresh = session.pending.filter((row) => row.ts > since);
       if (fresh.length > 0) await samples.appendMany(id, fresh.map((row) => ({ ts: row.ts, row })), tx);
       const last = session.lastRowTs;
-      await trips.update(
-        id,
-        {
-          ...(last !== null && last > since ? { checkpoint_ts: Math.round(last) } : {}),
-          dms_face_seen: session.dmsFaceSeen ? 1 : 0,
-        },
-        stamp,
-        tx
-      );
+      await trips.update(id, last !== null && last > since ? { checkpoint_ts: Math.round(last) } : {}, stamp, tx);
     });
   }
 

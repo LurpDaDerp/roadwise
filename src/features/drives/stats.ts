@@ -16,8 +16,6 @@ export const STAT_LABEL: Record<StatId, string> = {
   hard_accel: 'Hard acceleration',
   hard_corner: 'Hard cornering',
   handling: 'Phone handling',
-  eyes_off: 'Eyes off road',
-  drowsy: 'Drowsiness',
   miles: 'Miles',
   duration: 'Time on the road',
   night_miles: 'Night miles',
@@ -29,8 +27,6 @@ export const STAT_HINT: Partial<Record<StatId, string>> = {
   harsh: 'Braking, acceleration and cornering',
   clean: 'Drives with zero events',
   handling: 'Time spent holding your phone',
-  eyes_off: 'Driver monitoring only',
-  drowsy: 'Driver monitoring only',
 };
 
 export const EMPTY_SUMS: StatSums = {
@@ -45,8 +41,6 @@ export const EMPTY_SUMS: StatSums = {
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
-  eyesOff: 0,
-  drowsy: 0,
 };
 
 const rateUnit = (unit: Stat['unit'], units: Units): string => {
@@ -151,6 +145,6 @@ export type StatGroup = { title: string; ids: StatId[] };
 /** All stats, in the spec table's order, in three groups. */
 export const STAT_GROUPS: StatGroup[] = [
   { title: 'Headline', ids: ['speeding', 'pickups', 'harsh', 'clean'] },
-  { title: 'In detail', ids: ['hard_brake', 'hard_accel', 'hard_corner', 'handling', 'eyes_off', 'drowsy'] },
+  { title: 'In detail', ids: ['hard_brake', 'hard_accel', 'hard_corner', 'handling'] },
   { title: 'On the road', ids: ['miles', 'duration', 'night_miles'] },
 ];

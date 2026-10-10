@@ -26,7 +26,7 @@ const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
 
 test('the breakdown is collapsed by default and expands in place', async () => {
   await draw(<SummaryView {...props()} />);
-  expect(screen.getByLabelText('Points earned: +167 points')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Points earned: +132 points')).toBeOnTheScreen();
   const toggle = screen.getByTestId('breakdown-toggle');
   expect(toggle).toBeCollapsed();
   expect(screen.queryByTestId('breakdown')).toBeNull();
@@ -35,7 +35,7 @@ test('the breakdown is collapsed by default and expands in place', async () => {
   expect(screen.getByTestId('breakdown-toggle')).toBeExpanded();
   const list = screen.getByTestId('breakdown');
   expect(within(list).getByText('Safe miles: 11.8 mi × 10')).toBeOnTheScreen();
-  expect(within(list).getByText('Multiplier: streak ×1.20 · DMS ×1.25 → ×1.50 (cap)')).toBeOnTheScreen();
+  expect(within(list).getByText('Multiplier: streak ×1.20')).toBeOnTheScreen();
   expect(within(list).getByText('Hard brake · Minor')).toBeOnTheScreen();
   expect(within(list).getByText('Net total')).toBeOnTheScreen();
 
@@ -152,7 +152,7 @@ describe("Wasn't driving", () => {
     expect(screen.getByTestId('not-driving')).toHaveTextContent("Wasn't driving (1 left this month)");
     await press(screen.getByTestId('not-driving'));
     expect(screen.getByTestId('not-driving-left')).toHaveTextContent(/You have 1 left\./);
-    expect(screen.getByText(/The 167 points from this drive come off/)).toBeOnTheScreen();
+    expect(screen.getByText(/The 132 points from this drive come off/)).toBeOnTheScreen();
     await press(screen.getByTestId('not-driving-confirm'));
     expect(p.onNotDriving).toHaveBeenCalled();
   });
@@ -162,12 +162,10 @@ describe("Wasn't driving", () => {
     expect(screen.getByTestId('not-driving')).toBeDisabled();
   });
 
-  test('offered only on the latest drive, within 24 h, and never when DMS saw a face', async () => {
+  test('offered only on the latest drive, within 24 h', async () => {
     await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
     expect(screen.queryByTestId('not-driving')).toBeNull();
     await draw(<SummaryView {...props({ now: NOW + DAY })} />);
-    expect(screen.queryByTestId('not-driving')).toBeNull();
-    await draw(<SummaryView {...props({ drive: { ...drive(), dmsFaceSeen: true } as ReturnType<typeof drive> })} />);
     expect(screen.queryByTestId('not-driving')).toBeNull();
   });
 
@@ -192,7 +190,7 @@ test('Share previews the card without any speed and shares the image', async () 
   await draw(<SummaryView {...props()} />);
   await press(screen.getByTestId('share'));
   const card = screen.getByTestId('share-card');
-  expect(within(card).getByTestId('share-points')).toHaveTextContent('+167');
+  expect(within(card).getByTestId('share-points')).toHaveTextContent('+132');
   expect(within(card).queryByText(/mph/)).toBeNull();
   // A fixed-size image: its text never follows Dynamic Type.
   expect(within(card).getByTestId('share-points')).toHaveProp('allowFontScaling', false);

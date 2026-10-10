@@ -22,8 +22,7 @@ export interface RebuildDeps {
 export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDeps): Promise<AdoptedTrip | null> {
   const stored = await createSamplesRepo(db).range(trip.client_trip_id, 0, Number.MAX_SAFE_INTEGER);
   if (stored.length === 0) return null;
-  const session = createSession({ clientTripId: trip.client_trip_id, startedAt: trip.started_at, dmsOn: trip.dms_on === 1 });
-  session.dmsFaceSeen = trip.dms_face_seen === 1;
+  const session = createSession({ clientTripId: trip.client_trip_id, startedAt: trip.started_at });
   const detectors = deps.createDetectors();
   const ctx: DetectorContext = { tripStartedAt: trip.started_at, callActive: false, lockReliable: false, lockLagged: false };
   for (const sample of stored) {
@@ -37,7 +36,7 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     const limit = (await deps.limits.lookup(row.lat, row.lng, row.course)) ?? UNKNOWN_LIMIT;
     const closed = detectors.push(row, limit, ctx);
     session.events.push(...closed);
-    appendRow(session, row, detectors.unsafe(), false);
+    appendRow(session, row, detectors.unsafe());
   }
   // Every replayed row is already durable.
   session.pending = [];

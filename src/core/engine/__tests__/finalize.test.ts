@@ -51,7 +51,9 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
 
   const payload = result.payload!;
   expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
-  expect(payload).toMatchObject({ v: 3, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', dmsOn: false, appVersion: '3.0.0' });
+  expect(payload).toMatchObject({ v: 3, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '3.0.0' });
+  expect(payload).not.toHaveProperty('dmsOn');
+  expect(payload).not.toHaveProperty('dmsFaceSeen');
   expect(payload.start).toEqual({ lat: 47.6062, lng: -122.3321 });
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
   expect(payload.integrity.maxSpeedMph).toBeCloseTo(33.55, 1);

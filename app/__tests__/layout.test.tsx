@@ -140,10 +140,6 @@ jest.mock('@/data/queries', () => ({
 jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
-// The camera bridge the runtime set, if any: a session end tells it after the drive host.
-const mockCamera: { bridge: { sessionEnded: jest.Mock } | null } = { bridge: null };
-jest.mock('@/features/camera/runtime', () => ({ cameraBridge: () => mockCamera.bridge }));
-
 // eslint-disable-next-line import/first -- after the mocks it depends on
 import RootLayout from '../_layout';
 
@@ -170,13 +166,11 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     stoppedSinceTs: null,
     distanceM: 0,
     lockedOut: false,
-    dmsOn: false,
     lastAlert: null,
     callActive: false,
     screenLocked: false,
     lastFinalized: null,
     alertsAvailable: true,
-    dmsActive: false,
     points: null,
     dryRun: false,
     mode: 'mounted',
@@ -224,7 +218,6 @@ beforeEach(() => {
   mockController.state = { status: 'booting', runtime: null, error: null, generation: 0 };
   mockOwner.uid = null;
   mockOwner.hasData = false;
-  mockCamera.bridge = null;
 });
 
 async function renderReady(drive: Partial<DriveState> = {}) {
@@ -363,33 +356,14 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     expect(host.resumeAfterSignIn).not.toHaveBeenCalled();
   });
 
-  test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends the session through the host, then the camera', async () => {
+  test('SIGNED_OUT (the driver\'s, or a revoked or expired session) ends the session through the host', async () => {
     const { host } = await renderReady();
-    const log: string[] = [];
-    host.sessionEnded.mockImplementation(async () => {
-      log.push('host');
-    });
-    mockCamera.bridge = {
-      sessionEnded: jest.fn(async () => {
-        log.push('camera');
-      }),
-    };
     await act(async () => {
       mockAuth.listener?.('SIGNED_OUT', null);
       await settle();
     });
     expect(host.sessionEnded).toHaveBeenCalledTimes(1);
-    expect(log).toEqual(['host', 'camera']);
     expect(host.signedInAgain).not.toHaveBeenCalled();
-  });
-
-  test('SIGNED_OUT with no camera running still ends the session through the host', async () => {
-    const { host } = await renderReady();
-    await act(async () => {
-      mockAuth.listener?.('SIGNED_OUT', null);
-      await settle();
-    });
-    expect(host.sessionEnded).toHaveBeenCalledTimes(1);
   });
 
   test('no owner recorded: a SIGNED_IN counts only on a device with no drive data (r2-M1)', async () => {

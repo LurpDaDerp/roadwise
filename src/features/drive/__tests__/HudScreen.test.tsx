@@ -48,7 +48,6 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     weatherAlert: null,
     points: null,
     startedAt: T,
-    dmsActive: false,
     ...over,
   };
 }
@@ -299,7 +298,7 @@ describe('dimming', () => {
   test('never dims while an alert glow is showing', async () => {
     const h = await renderHud();
     await act(() => jest.advanceTimersByTime(DIM_AFTER_MS - 500));
-    await h.update({ lastAlert: { type: 'eyes_off', tier: 'minor', at: T + 9000 } });
+    await h.update({ lastAlert: { type: 'hard_corner', tier: 'minor', at: T + 9000 } });
     await act(() => jest.advanceTimersByTime(1000));
     expect(screen.getByTestId('hud-alert')).toBeTruthy();
     expect(screen.queryByTestId('hud-dim')).toBeNull();
@@ -309,14 +308,7 @@ describe('dimming', () => {
   });
 });
 
-test('the DMS mark shows only while the DMS runs', async () => {
-  const h = await renderHud();
-  expect(screen.queryByTestId('hud-dms')).toBeNull();
-  await h.update({ dmsActive: true });
-  expect(screen.getByLabelText(hudCopy.dms)).toBeTruthy();
-});
-
 test('End is the only control on the screen', async () => {
-  await renderHud({ weatherAlert: 'Dense fog', points: { total: 5, sinceLastStop: 0 }, stopped: true, dmsActive: true });
+  await renderHud({ weatherAlert: 'Dense fog', points: { total: 5, sinceLastStop: 0 }, stopped: true });
   expect(screen.getAllByRole('button')).toHaveLength(1);
 });

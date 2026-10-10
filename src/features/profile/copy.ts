@@ -26,7 +26,7 @@ export const profileCopy = {
     requests: (n: number) => (n === 1 ? '1 request' : `${n} requests`),
     heatmap: { title: 'Heat map', subtitle: 'The roads you drive most' },
     how: { title: 'How points work', subtitle: 'Miles, events, streaks and levels' },
-    settings: { title: 'Settings', subtitle: 'Driver monitoring, privacy, alerts' },
+    settings: { title: 'Settings', subtitle: 'Privacy, alerts, notifications' },
     account: { title: 'Account', subtitle: 'Sign out, export or delete' },
     blocked: { title: 'Blocked users', subtitle: 'See and unblock' },
   },

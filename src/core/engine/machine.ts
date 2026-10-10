@@ -36,7 +36,7 @@ export const HANDLING_ALERT_MS = 15_000;
 export const STILL_GRAVITY_MIN = 0.95;
 export const STILL_IMU_MAX_G = 0.05;
 
-/** A row with no fix on a phone that is not moving (the DMS's row context reads it). */
+/** A row with no fix on a phone that is not moving. */
 export function stillWithoutFix(row: FeatureRow): boolean {
   return (
     !row.gnssValid &&
@@ -127,7 +127,6 @@ export function createEngine(deps: EngineDeps): Engine {
       stoppedSinceTs: status === 'recording' ? stoppedSinceTs : null,
       distanceM: session?.distanceM ?? 0,
       lockedOut: status === 'recording' && (lastKnownSpeedMps ?? 0) > STOPPED_MPS,
-      dmsOn: session?.dmsOn ?? false,
       lastAlert,
     });
   }
@@ -188,7 +187,7 @@ export function createEngine(deps: EngineDeps): Engine {
       s.events.push(e);
       // The instant events are told as they close (the row after the peak). Speeding and phone
       // episodes were already told while open, below.
-      if (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner' || e.type === 'eyes_off' || e.type === 'drowsy') {
+      if (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner') {
         alert(e.id, e.type, e.tier, row.ts);
       }
     }
@@ -207,13 +206,7 @@ export function createEngine(deps: EngineDeps): Engine {
         alert(phone.id, 'phone_handling', 'moderate', row.ts);
       }
     }
-    let faceSeen = false;
-    try {
-      faceSeen = deps.faceSeen?.() === true;
-    } catch (err) {
-      deps.onError?.(err);
-    }
-    appendRow(s, row, det.unsafe(), faceSeen);
+    appendRow(s, row, det.unsafe());
     maybePrefetch(row, s.distanceM);
 
     const speed = knownSpeed(row);
@@ -274,10 +267,10 @@ export function createEngine(deps: EngineDeps): Engine {
 
   // --- events -----------------------------------------------------------------------------------
 
-  async function start(ts: number, dmsOn: boolean): Promise<void> {
+  async function start(ts: number): Promise<void> {
     if (status !== 'idle') return;
     const made = deps.createDetectors();
-    session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts), dmsOn });
+    session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts) });
     suite = made;
     setStatus('recording');
     // The trip row exists from the first second: a process death before the first checkpoint
@@ -304,7 +297,7 @@ export function createEngine(deps: EngineDeps): Engine {
   async function reduce(e: EngineEvent): Promise<void> {
     switch (e.type) {
       case 'start':
-        await start(e.ts, e.dmsOn);
+        await start(e.ts);
         return;
       case 'adopt':
         adopt(e.trip);

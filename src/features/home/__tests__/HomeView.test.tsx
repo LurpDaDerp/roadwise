@@ -15,8 +15,6 @@ const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   recent: [drive({ clientTripId: 'a' }), drive({ clientTripId: 'b', startedAt: NOW - 86_400_000 })],
   week: sums({ miles: 50, drives: 4, cleanDrives: 2, speeding: 3, pickups: 0, hardBrake: 1, hardAccel: 0 }),
   month: sums({ miles: 200, drives: 20, cleanDrives: 18, speeding: 2, pickups: 1, hardBrake: 4, hardAccel: 2 }),
-  dmsOn: false,
-  onToggleDms: jest.fn(),
   starting: false,
   refusal: null,
   onStart: jest.fn(),
@@ -105,14 +103,12 @@ describe('first run', () => {
 });
 
 describe('Start drive', () => {
-  test('starts from the gold button; the DMS chip is a switch', async () => {
-    const p = props({ dmsOn: true });
+  test('starts from the gold button, with no DMS chip beside it', async () => {
+    const p = props();
     await draw(<HomeView {...p} />);
     await press(screen.getByTestId('start-drive'));
     expect(p.onStart).toHaveBeenCalled();
-    expect(screen.getByTestId('dms-chip')).toBeChecked();
-    await press(screen.getByTestId('dms-chip'));
-    expect(p.onToggleDms).toHaveBeenCalled();
+    expect(screen.queryByTestId('dms-chip')).toBeNull();
   });
 
   test('refused while moving: "Pull over to start a drive"', async () => {

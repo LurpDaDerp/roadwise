@@ -16,8 +16,6 @@ export interface DriveCounts {
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
-  eyesOff: number;
-  drowsy: number;
 }
 
 export const EMPTY_COUNTS: DriveCounts = Object.freeze({
@@ -27,8 +25,6 @@ export const EMPTY_COUNTS: DriveCounts = Object.freeze({
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
-  eyesOff: 0,
-  drowsy: 0,
 });
 
 export interface LocalDrive {
@@ -48,9 +44,6 @@ export interface LocalDrive {
   estimate: boolean;
   clean: boolean | null;
   counts: DriveCounts;
-  dmsOn: boolean;
-  /** The DMS saw a face in the driver's seat: "Wasn't driving" is refused for this drive. */
-  dmsFaceSeen: boolean;
   result: FinalizeTripResponseV3 | null;
   reason: string | null;
   mergedInto: string | null;
@@ -101,12 +94,6 @@ export function countEvents(
         break;
       case 'hard_corner':
         c.hardCorner += 1;
-        break;
-      case 'eyes_off':
-        c.eyesOff += 1;
-        break;
-      case 'drowsy':
-        c.drowsy += 1;
         break;
     }
   }
@@ -163,8 +150,6 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     estimate: row.estimate === 1,
     clean: row.clean === null ? null : row.clean === 1,
     counts: parseCounts(row.counts_json),
-    dmsOn: row.dms_on === 1,
-    dmsFaceSeen: row.dms_face_seen === 1,
     result: parseResult(row.result_json),
     reason: row.reason,
     mergedInto: row.merged_into,
@@ -232,8 +217,6 @@ export const EMPTY_SUMS: StatSums = Object.freeze({
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
-  eyesOff: 0,
-  drowsy: 0,
 });
 
 /** `StatSums` over scored, non-not_driving drives started at or after `sinceMs` (null: all time). */
@@ -252,8 +235,6 @@ export function sumStats(drives: readonly LocalDrive[], sinceMs: number | null):
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
     out.hardCorner += d.counts.hardCorner;
-    out.eyesOff += d.counts.eyesOff;
-    out.drowsy += d.counts.drowsy;
   }
   return out;
 }

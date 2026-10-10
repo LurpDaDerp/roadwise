@@ -117,14 +117,9 @@ function decision(
   return {
     id: `d${level}`,
     level,
-    kind: level === 1 ? "speeding" : level === 2 ? "phone_pickup" : "drowsy",
+    kind: level === 1 ? "speeding" : "phone_pickup",
     ts: 1_700_000_000_000,
-    voice:
-      level === 1
-        ? "Ease off"
-        : level === 2
-          ? "Phone down"
-          : "Take a break",
+    voice: level === 1 ? "Ease off" : "Phone down",
     ...extra,
   };
 }
@@ -165,7 +160,7 @@ describe("alert player", () => {
       expect(r.calls).toEqual([
         "activate:playback",
         `play:3@${TONE_GAIN[3]}`,
-        `speak:Take a break@${VOICE_GAIN}`,
+        `speak:Phone down@${VOICE_GAIN}`,
         "deactivate",
         "haptic:4",
       ]);

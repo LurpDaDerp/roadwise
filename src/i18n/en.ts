@@ -27,8 +27,6 @@ export const en = {
   'alert.easeOff': 'Ease off',
   'alert.slowDown': 'Slow down',
   'alert.phoneDown': 'Phone down',
-  'alert.eyesUp': 'Eyes up',
-  'alert.drowsy': 'Take a break',
   // The one in-drive phrase over 3 words: the break suggestion is an L1 nudge, never urgent.
   'alert.takeABreak': 'Take a break soon',
   // Spoken at drive start (product spec §8.4) and the dim label on the pocket screen (C4).

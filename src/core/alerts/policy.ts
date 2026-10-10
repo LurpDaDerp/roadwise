@@ -1,7 +1,6 @@
 // What each v3 event sounds like (product spec v3 "Driving screen"): a distinct tone per category,
 // an optional short voice line, and a haptic. Speeding gets the soft chime once per episode (the
-// edge glow carries the tier); harsh driving the warning tone; a phone pickup and drowsiness the
-// urgent one.
+// edge glow carries the tier); harsh driving the warning tone; a phone pickup the urgent one.
 import type { EventType, Tier } from '@scoring';
 
 import type { AlertEvent } from '@/core/engine/engine.types';
@@ -15,8 +14,6 @@ export const ALERT_LEVEL: Readonly<Record<EventType, AlertLevel>> = {
   hard_corner: 2,
   phone_pickup: 3,
   phone_handling: 2,
-  eyes_off: 2,
-  drowsy: 3,
 };
 
 /** The voice line, ≤ 3 words; none for the speeding chime (the glow says it). */
@@ -27,8 +24,6 @@ export const ALERT_VOICE: Readonly<Record<EventType, string | null>> = {
   hard_corner: 'Hard corner',
   phone_pickup: 'Phone down',
   phone_handling: 'Phone down',
-  eyes_off: 'Eyes up',
-  drowsy: 'Take a break',
 };
 
 export const ALERT_INTENSITY: Readonly<Record<AlertLevel, HapticIntensity>> = { 1: 1, 2: 2, 3: 4 };
@@ -38,8 +33,7 @@ export const ALERT_GLOW_MS = 1500;
 
 export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }): AlertDecision {
   const level = ALERT_LEVEL[alert.type];
-  // Drowsiness is spoken whatever the voice setting (spec: "−50 + spoken 'Take a break'"): a sleepy driver needs words.
-  const voice = opts.voiceEnabled || alert.type === 'drowsy' ? ALERT_VOICE[alert.type] : null;
+  const voice = opts.voiceEnabled ? ALERT_VOICE[alert.type] : null;
   const decision: AlertDecision = {
     id: alert.id,
     level,

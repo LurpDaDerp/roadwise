@@ -61,7 +61,6 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       appVersion: '3.0.0',
       permissions: async () => ({ location: 'granted' as const }),
       speedProbe: async () => 0,
-      createCamera: null,
       attachSummaryNotifier: null,
       mountDiagnostics: null,
       mayDrain: () => false,
@@ -74,7 +73,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(3);
+  expect(rt.schemaVersion).toBe(4);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
@@ -154,10 +153,10 @@ test('a launch signed out, then the owner signs in: Start Drive works without a 
   d.supabase.setUid(null);
   const rt = await bootstrapApp(d.deps);
   expect(rt.owner).toBe('signed-out');
-  expect(await rt.drive.start({ dmsOn: false })).toEqual({ ok: false, reason: 'error' });
+  expect(await rt.drive.start()).toEqual({ ok: false, reason: 'error' });
   // What the root layout does on SIGNED_IN for the device owner (or an empty device).
   await rt.drive.signedInAgain();
-  const started = await rt.drive.start({ dmsOn: false });
+  const started = await rt.drive.start();
   expect(started).toEqual({ ok: true, clientTripId: uuid(7) });
   await rt.stop({ endOpenTrip: true });
 });

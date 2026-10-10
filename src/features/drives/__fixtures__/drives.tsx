@@ -29,17 +29,15 @@ export function result(over: Partial<FinalizeTripResponseV3> = {}): FinalizeTrip
       milePoints: 118,
       cleanBonus: 0,
       streakMult: 1.2,
-      dmsMult: 1.25,
-      mult: 1.5,
-      gains: 177,
+      gains: 142,
       shortScale: 1,
       events: [{ id: 'e1', penalty: 10 }],
       penalties: 10,
-      net: 167,
+      net: 132,
       ratingPenalty: 10,
       activeEventCount: 1,
     },
-    net: 167,
+    net: 132,
     streak: { before: 10, after: 11, outcome: 'grew', nextMult: 1.22, atRisk: false, freezes: 2, freezeEarned: false },
     progress: { points: 1240, lifetime: 1500, level: 4, levelUp: false, safetyRating: 92.4, ranked: true },
     achievements: [],
@@ -50,9 +48,7 @@ export function result(over: Partial<FinalizeTripResponseV3> = {}): FinalizeTrip
 }
 
 export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
-  // `dmsFaceSeen` is being added to LocalDrive by WP6; the assertion keeps this compiling either side.
   return {
-    dmsFaceSeen: false,
     clientTripId: 'a1',
     startedAt: NOW - 2 * HOUR,
     endedAt: NOW - 2 * HOUR + 24 * 60_000,
@@ -63,11 +59,10 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     toLabel: 'School',
     polyline: encodePolyline(ROUTE),
     status: 'scored',
-    pointsNet: 167,
+    pointsNet: 132,
     estimate: false,
     clean: false,
-    counts: { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 },
-    dmsOn: true,
+    counts: { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0 },
     result: result(),
     reason: null,
     mergedInto: null,
@@ -108,8 +103,6 @@ export function sums(over: Partial<StatSums> = {}): StatSums {
     hardBrake: 2,
     hardAccel: 1,
     hardCorner: 0,
-    eyesOff: 0,
-    drowsy: 0,
     ...over,
   };
 }

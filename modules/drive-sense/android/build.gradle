@@ -15,8 +15,7 @@
 //                                                          here could only disagree with it.
 //
 // compileSdk / minSdk / targetSdk / the Kotlin version come from expo-module-gradle-plugin,
-// which reads the root project's Expo SDK 57 extras - the same proven form as
-// modules/dms-vision/android/build.gradle.
+// which reads the root project's Expo SDK 57 extras.
 
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'

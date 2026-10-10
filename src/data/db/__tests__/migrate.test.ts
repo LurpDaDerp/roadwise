@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = ['schema_version', 'trips', 'trip_events', 'samples', 'sync_queue', 'speed_limit_tiles', 'settings'];
 const INDEXES = ['idx_trips_started_at', 'idx_trips_local_day', 'idx_trip_events_client_trip_id', 'idx_sync_queue_due'];
@@ -26,11 +26,11 @@ test('creates every v3 table and index, and nothing of v2', async () => {
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (3)', async () => {
+test('records the schema version it reached (4)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(3);
+  expect(CURRENT_SCHEMA_VERSION).toBe(4);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 3 }]);
+  expect(rows).toEqual([{ version: 4 }]);
 });
 
 test('is idempotent', async () => {
@@ -39,7 +39,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 3 }]);
+  expect(rows).toEqual([{ version: 4 }]);
 });
 
 test('the v3 trips table carries the v3 columns', async () => {
@@ -50,6 +50,8 @@ test('the v3 trips table carries the v3 columns', async () => {
   }
   expect(cols).not.toContain('role');
   expect(cols).not.toContain('score');
+  expect(cols).not.toContain('dms_on');
+  expect(cols).not.toContain('dms_face_seen');
   const events = await columns(db, 'trip_events');
   for (const c of ['type', 'tier', 'units', 'stopped_in_traffic', 'penalty', 'dispute_status']) expect(events).toContain(c);
 });
@@ -61,11 +63,36 @@ test('a v2 development database steps up to v3: the trip tables are replaced, se
   await db.execute("INSERT INTO settings (key, value_json) VALUES ('units', '\"mi\"')");
   await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('old', 1, 'UTC', 'recording', 1, 1)");
 
-  await expect(migrate(db)).resolves.toBe(3);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT * FROM trips')).rows).toEqual([]);
   expect((await db.execute("SELECT value_json FROM settings WHERE key = 'units'")).rows).toEqual([{ value_json: '"mi"' }]);
   expect(await columns(db, 'trips')).toContain('points_net');
+});
+
+test('a v3 database steps up to v4: the DMS columns, events and settings go, everything else survives', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3]) await db.execute(statement);
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (3)');
+  await db.execute(
+    "INSERT INTO trips (client_trip_id, started_at, tz, status, miles, dms_on, dms_face_seen, created_at, updated_at) VALUES ('t1', 1, 'UTC', 'scored', 4.5, 1, 1, 1, 1)"
+  );
+  for (const [id, type] of [['e1', 'speeding'], ['e2', 'eyes_off'], ['e3', 'drowsy'], ['e4', 'hard_brake']]) {
+    await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at) VALUES (?, 't1', ?, 'minor', 1)", [id, type]);
+  }
+  for (const key of ['dms.enabled', 'dms.calibratedAt', 'dms.profile', 'dms.setup', 'units']) {
+    await db.execute("INSERT INTO settings (key, value_json) VALUES (?, 'true')", [key]);
+  }
+
+  await expect(migrate(db)).resolves.toBe(4);
+
+  const cols = await columns(db, 'trips');
+  expect(cols).not.toContain('dms_on');
+  expect(cols).not.toContain('dms_face_seen');
+  expect((await db.execute('SELECT client_trip_id, miles FROM trips')).rows).toEqual([{ client_trip_id: 't1', miles: 4.5 }]);
+  expect((await db.execute('SELECT id FROM trip_events ORDER BY id')).rows).toEqual([{ id: 'e1' }, { id: 'e4' }]);
+  expect((await db.execute('SELECT key FROM settings')).rows).toEqual([{ key: 'units' }]);
+  expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
 test('rejects a trip status outside the allowed set', async () => {

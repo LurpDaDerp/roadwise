@@ -2,7 +2,7 @@
  * What the drive summary derives from a drive before anything is drawn: the points state, the
  * itemized breakdown, the streak line, the celebration row and the report reasons. Pure.
  */
-import { ACHIEVEMENTS, MULT_CAP, type EventType } from '@scoring';
+import { ACHIEVEMENTS, STREAK_MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -76,12 +76,10 @@ export type BreakdownLine =
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** "streak ×1.20 · DMS ×1.25 → ×1.50 (cap)". */
-export function multiplierText(streakMult: number, dmsMult: number, mult: number): string {
-  const parts = [`streak ${formatMultiplier(streakMult)}`];
-  if (dmsMult > 1) parts.push(`DMS ${formatMultiplier(dmsMult)}`);
-  const capped = mult >= MULT_CAP - 1e-9;
-  return `${parts.join(' · ')} → ${formatMultiplier(mult)}${capped ? ' (cap)' : ''}`;
+/** "streak ×1.20", or "streak ×1.30 (cap)" at the streak cap. */
+export function multiplierText(streakMult: number): string {
+  const capped = streakMult >= STREAK_MULT_CAP - 1e-9;
+  return `streak ${formatMultiplier(streakMult)}${capped ? ' (cap)' : ''}`;
 }
 
 /** An accepted report took this event off: it no longer counts anywhere. */
@@ -122,7 +120,7 @@ export function breakdownLines(
     lines.push({
       kind: 'mult',
       key: 'mult',
-      label: `Multiplier: ${multiplierText(b.streakMult, b.dmsMult, b.mult)}`,
+      label: `Multiplier: ${multiplierText(b.streakMult)}`,
       value: `= ${signedPoints(b.gains)}`,
       tone: 'gain',
     });
@@ -244,15 +242,13 @@ export const NOT_DRIVING_WINDOW_MS = 24 * 3_600_000;
 
 /**
  * Whether to offer "Wasn't driving" on this drive. The server allows it only on the latest drive,
- * within 24 h of its end, and never when DMS saw a face in the driver's seat; offering it anywhere
- * else would only bounce back.
+ * within 24 h of its end; offering it anywhere else would only bounce back.
  */
 export function canMarkNotDriving(d: LocalDrive, latestClientTripId: string | null, now: number): boolean {
   const open = d.status === 'scored' || d.status === 'pending' || d.status === 'unscored' || d.status === 'failed';
   if (!open || latestClientTripId !== d.clientTripId) return false;
   if (now - (d.endedAt ?? d.startedAt) > NOT_DRIVING_WINDOW_MS) return false;
-  if (notDrivingRefusal(d) !== null) return false;
-  return d.dmsFaceSeen !== true;
+  return notDrivingRefusal(d) === null;
 }
 
 /**
@@ -262,7 +258,6 @@ export function canMarkNotDriving(d: LocalDrive, latestClientTripId: string | nu
 export const NOT_DRIVING_REFUSALS: Readonly<Record<string, string>> = {
   not_latest: 'Only your newest drive can be marked as not driving.',
   too_old: 'This drive is more than 24 hours old, so it can’t be marked.',
-  face_seen: 'The camera saw a driver on this drive, so it stays on your record.',
   no_uses_left: 'You’ve used both “Wasn’t driving” marks this month.',
   already_marked: 'This drive was already marked as not driving.',
 };

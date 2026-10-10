@@ -96,7 +96,7 @@ describe('route', () => {
     const runs = routeRuns([ROUTE], [
       event({ id: 's', type: 'speeding', tier: 'minor', durationS: 60, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng }),
       event({ id: 'h', type: 'phone_handling', tier: 'severe', durationS: 5, lat: ROUTE[6]!.lat, lng: ROUTE[6]!.lng }),
-      event({ id: 'x', type: 'drowsy', tier: 'severe', durationS: 60, lat: ROUTE[20]!.lat, lng: ROUTE[20]!.lng, disputeStatus: 'accepted' }),
+      event({ id: 'x', type: 'speeding', tier: 'severe', durationS: 60, lat: ROUTE[20]!.lat, lng: ROUTE[20]!.lng, disputeStatus: 'accepted' }),
     ]);
     expect(runs.some((r) => r.tier === 'severe')).toBe(true);
     expect(runs.some((r) => r.tier === 'minor')).toBe(true);
@@ -137,25 +137,25 @@ describe('stats', () => {
 
 describe('summary', () => {
   test('points state follows the drive status', () => {
-    expect(pointsState(drive())).toEqual({ kind: 'points', value: 167, estimate: false });
+    expect(pointsState(drive())).toEqual({ kind: 'points', value: 132, estimate: false });
     expect(pointsState(drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }))).toEqual({ kind: 'points', value: 40, estimate: true });
     expect(pointsState(drive({ status: 'unscored', reason: 'too_short' })).kind).toBe('too_short');
     expect(pointsState(drive({ status: 'unscored', reason: 'spoofed' })).kind).toBe('not_scored');
     expect(pointsState(drive({ status: 'merged', mergedInto: 'z' }))).toEqual({ kind: 'merged', into: 'z' });
   });
 
-  test('the multiplier line names each part and the cap', () => {
-    expect(multiplierText(1.2, 1.25, 1.5)).toBe('streak ×1.20 · DMS ×1.25 → ×1.50 (cap)');
-    expect(multiplierText(1.08, 1, 1.08)).toBe('streak ×1.08 → ×1.08');
+  test('the multiplier line names the streak multiplier and its cap', () => {
+    expect(multiplierText(1.2)).toBe('streak ×1.20');
+    expect(multiplierText(1.3)).toBe('streak ×1.30 (cap)');
   });
 
   test('the breakdown itemizes miles, multiplier, each event and the net', () => {
     const { lines, note } = breakdownLines(drive(), [event()]);
     expect(lines.map((l) => [l.label, l.value])).toEqual([
       ['Safe miles: 11.8 mi × 10', '+118'],
-      ['Multiplier: streak ×1.20 · DMS ×1.25 → ×1.50 (cap)', '= +177'],
+      ['Multiplier: streak ×1.20', '= +142'],
       ['Hard brake · Minor', '−10'],
-      ['Net total', '+167'],
+      ['Net total', '+132'],
     ]);
     expect(note).toBeNull();
   });

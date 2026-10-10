@@ -25,8 +25,6 @@ export type HomeViewProps = {
   recent: readonly LocalDrive[] | undefined;
   week: StatSums | undefined;
   month: StatSums | undefined;
-  dmsOn: boolean;
-  onToggleDms: () => void;
   starting: boolean;
   refusal: StartRefusal | null;
   onStart: () => void;
@@ -98,8 +96,6 @@ export function HomeView(p: HomeViewProps) {
       </ScrollView>
       {p.recording ? null : (
         <StartDriveBar
-          dmsOn={p.dmsOn}
-          onToggleDms={p.onToggleDms}
           onStart={p.onStart}
           starting={p.starting}
           refusal={p.refusal}

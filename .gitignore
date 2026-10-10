@@ -37,9 +37,11 @@ supabase/data/downloads/
 .agent/
 .impeccable/
 .claude/
+CLAUDE.md
 .superpowers/
 PRODUCT.md
 DESIGN.md
+/product spec v3.md
 docs/
 
 # os / editor

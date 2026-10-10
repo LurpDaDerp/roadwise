@@ -32,7 +32,7 @@ export interface MotionActivity {
   /** epoch ms, integer */
   ts: number;
   /**
-   * DMS calib T12 (README §3): Android only, the END of a walking or running transition (EXIT). Live
+   * README §3: Android only, the END of a walking or running transition (EXIT). Live
    * `activity` events only; never in `queryMotionHistory`. An exit is never a walk: the host times a
    * walk from its ENTER to its EXIT (or to an IN_VEHICLE).
    */
@@ -287,7 +287,7 @@ export interface FakeControls {
   readonly forgotToStartReminder: boolean;
   /** What `checkForgottenDrive` resolves to while motion is granted (null by default). */
   setForgottenDrive(d: ForgottenDrive | null): void;
-  // ——— DMS calib T12: the native activity feed (README §3) ———
+  // ——— the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is
    * subscribed by a capture and the capture runs. Returns whether it was delivered.

@@ -47,23 +47,7 @@ export interface FeatureRow {
    * the key lack it, and absent reads as "not mock" (plan §6; WP7 adds it natively).
    */
   mock?: boolean;
-  // ——— DMS motion evidence (design rev4 §2.1.1) ———
-  // Optional: rows from an older native build lack them, and every consumer treats an absent field
-  // as "no evidence". They never leave the device.
-  /** the forward frame was aligned this second (absent: false) */
-  frameAligned?: boolean;
-  /** the mean of the second's smoothed longitudinal acceleration, g; 0 when unaligned (absent: 0) */
-  aLonMean?: number;
-  /** the RMS of |user acceleration| over the second, g, frame-free; null with the IMU absent */
-  accRms?: number | null;
-  /** the second's mean gravity direction, unit vector, device frame; null with the IMU absent */
-  gravX?: number | null;
-  gravY?: number | null;
-  gravZ?: number | null;
 }
-
-/** The DMS-only row fields. Never uploaded (nothing is: v3 uploads no rows at all). */
-export const MOTION_ROW_FIELDS = ['frameAligned', 'aLonMean', 'accRms', 'gravX', 'gravY', 'gravZ'] as const satisfies readonly (keyof FeatureRow)[];
 
 /** The speed limit the map layer believes applies to a row. */
 export interface LimitSample {
@@ -72,16 +56,6 @@ export interface LimitSample {
   /** 0..1 */
   matchConfidence: number;
   parallelRoads: boolean;
-}
-
-/** A camera focus episode, delivered on the row it ended (the DMS's seam; WP8 owns its detector). */
-export interface CameraFocusSample {
-  /** seconds the eyes were off the forward zone, or the length of the drowsiness episode */
-  glanceS: number;
-  kind: 'glance' | 'drowsiness';
-  /** camera confidence, 0..1 */
-  q: number;
-  correctedWithinGrace?: boolean;
 }
 
 export interface DetectorContext {
@@ -96,7 +70,6 @@ export interface DetectorContext {
   lockReliable: boolean;
   /** The lock signal arrives late (iOS with a passcode, ~10 s): unlock evidence is held back. */
   lockLagged: boolean;
-  cameraFocus?: CameraFocusSample | null;
 }
 
 /** What the detector measured; shown on the summary and sent with the event (plan §3). */

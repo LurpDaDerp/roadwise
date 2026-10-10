@@ -259,7 +259,7 @@ export function createSimulation(opts: SimulationOptions): Simulation {
       const first = trace.rows[0]?.ts ?? 0;
       fake.loadTrace(trace.rows.map((r) => ({ ...r, ts: wall0 + ROW_MS + (r.ts - first) })));
       await created.boot();
-      const started = await created.start({ dmsOn: false });
+      const started = await created.start();
       if (!started.ok) refuse(`starts: ${started.reason}`);
       void player.announce('Recording');
       await created.settled();

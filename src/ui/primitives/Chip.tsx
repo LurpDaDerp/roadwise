@@ -12,8 +12,8 @@ export type ChipProps = {
   /** Drawn before the label. When selected and no icon is given, a check is drawn instead. */
   icon?: IconName;
   /**
-   * `switch` for an on/off setting such as the DMS chip next to Start Drive (VoiceOver says
-   * "on"/"off"); `button` (default) for a filter chip (VoiceOver says "selected").
+   * `switch` for an on/off setting (VoiceOver says "on"/"off"); `button` (default) for a filter
+   * chip (VoiceOver says "selected").
    */
   role?: 'button' | 'switch';
   disabled?: boolean;

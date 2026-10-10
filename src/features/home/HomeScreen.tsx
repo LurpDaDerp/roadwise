@@ -1,7 +1,6 @@
 /**
  * Home wired to its data: the server summary for the header and challenges, local drives for
- * the first-run gate, stats and recent drives, the DMS setting for the chip, and the drive
- * controls for Start.
+ * the first-run gate, stats and recent drives, and the drive controls for Start.
  */
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -14,7 +13,6 @@ import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
 import {
   ALL_STATS_HREF,
-  DMS_SETUP_HREF,
   DRIVE_HISTORY_HREF,
   DRIVE_HREF,
   driveSummaryHref,
@@ -22,12 +20,10 @@ import {
   LEAGUES_HREF,
   PERMISSIONS_HREF,
 } from '@/features/drives/routes';
-import { DMS_SETTINGS_HREF } from '@/features/camera/routes';
 import { Screen } from '@/ui';
 
 import { HomeView } from './HomeView';
 import type { StartRefusal } from './StartDrive';
-import { useDmsSetting } from './useDmsSetting';
 
 export function HomeScreen() {
   const router = useRouter();
@@ -37,7 +33,6 @@ export function HomeScreen() {
   const recent = useRecentDrives(5);
   const week = useStatSums(sinceDays(now(), 7));
   const month = useStatSums(sinceDays(now(), 30));
-  const dms = useDmsSetting();
   const { start } = useDriveControls();
   const forgotten = useForgottenDriveNotice();
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick.
@@ -50,7 +45,7 @@ export function HomeScreen() {
     setStarting(true);
     setRefusal(null);
     try {
-      const res = await start({ dmsOn: dms.setting.enabled });
+      const res = await start();
       if (res.ok) router.push(DRIVE_HREF);
       else setRefusal(res.reason);
     } catch {
@@ -58,17 +53,6 @@ export function HomeScreen() {
     } finally {
       setStarting(false);
     }
-  };
-
-  const onToggleDms = () => {
-    if (!dms.setting.calibrated) {
-      router.push(DMS_SETUP_HREF);
-      return;
-    }
-    void dms.setEnabled(!dms.setting.enabled).then((step) => {
-      // The camera permission refused (or no signed-in driver): the DMS settings screen explains and offers Open Settings.
-      if (step === 'permission_denied' || step === 'unavailable') router.push(DMS_SETTINGS_HREF);
-    });
   };
 
   const refreshing = summary.isRefetching || recent.isRefetching;
@@ -84,8 +68,6 @@ export function HomeScreen() {
         recent={recent.data}
         week={week.data}
         month={month.data}
-        dmsOn={dms.setting.enabled}
-        onToggleDms={onToggleDms}
         starting={starting}
         refusal={refusal}
         onStart={() => void onStart()}

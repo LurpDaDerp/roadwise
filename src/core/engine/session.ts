@@ -17,7 +17,6 @@ export const IMU_ACTIVE_MIN = 0.03;
 export interface SessionStart {
   clientTripId: string;
   startedAt: number;
-  dmsOn: boolean;
 }
 
 export function createSession(start: SessionStart): TripSession {
@@ -26,9 +25,6 @@ export function createSession(start: SessionStart): TripSession {
     startedAt: start.startedAt,
     endedAt: null,
     endCause: null,
-    dmsOn: start.dmsOn,
-    dmsFaceSeen: false,
-    dmsFaceRows: 0,
     lastRowTs: null,
     rowsCount: 0,
     validGnssRows: 0,
@@ -57,13 +53,12 @@ const imuActive = (row: FeatureRow): boolean =>
 
 /**
  * Append one row the machine has accepted. `unsafe`: a speeding or phone episode is active on this
- * row (its distance is not safe miles). `faceSeen`: the DMS sees the driver now.
+ * row (its distance is not safe miles).
  */
-export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean, faceSeen = false): void {
+export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean): void {
   session.rowsCount += 1;
   session.lastRowTs = row.ts;
   session.pending.push(row);
-  if (faceSeen) session.dmsFaceSeen = true;
   if (row.mock === true) session.mockRows += 1;
   const speed = knownSpeed(row);
   if (speed !== null) {
@@ -71,7 +66,6 @@ export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean
     if (speed >= PHONE_MIN_MPH * MPS_PER_MPH) {
       session.movingRows += 1;
       if (imuActive(row)) session.imuActiveRows += 1;
-      if (faceSeen) session.dmsFaceRows += 1;
     }
   }
   if (!row.gnssValid || !Number.isFinite(row.lat) || !Number.isFinite(row.lng)) return;

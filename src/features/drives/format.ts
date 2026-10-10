@@ -52,7 +52,7 @@ export function spokenDuration(seconds: number): string {
   return m === 0 ? part(h, 'hour') : `${part(h, 'hour')} ${part(m, 'minute')}`;
 }
 
-/** "+167", "−44", "0". */
+/** "+132", "−44", "0". */
 export const signedPoints = (n: number): string => formatPointsValue(n, true);
 
 /** "Home → School", with "Start" / "End" for a missing label. */
@@ -72,8 +72,6 @@ export const EVENT_LABEL: Record<EventType, string> = {
   hard_corner: 'Hard cornering',
   phone_pickup: 'Phone pickup',
   phone_handling: 'Phone handling',
-  eyes_off: 'Eyes off road',
-  drowsy: 'Drowsiness',
 };
 
 export const EVENT_ICON: Record<EventType, IconName> = {
@@ -83,8 +81,6 @@ export const EVENT_ICON: Record<EventType, IconName> = {
   hard_corner: 'return-down-forward-outline',
   phone_pickup: 'phone-portrait-outline',
   phone_handling: 'phone-portrait-outline',
-  eyes_off: 'eye-off-outline',
-  drowsy: 'moon-outline',
 };
 
 /** Tier → design-system signal (minor yellow, moderate orange, severe red). */
@@ -93,7 +89,7 @@ export const TIER_SIGNAL: Record<Tier, Signal> = { minor: 'minor', moderate: 'mo
 export const TIER_WORD: Record<Tier, string> = { minor: 'Minor', moderate: 'Moderate', severe: 'Severe' };
 
 /** Types with one tier only say their name; the rest add "minor" / "severe". */
-const SINGLE_TIER: ReadonlySet<EventType> = new Set<EventType>(['phone_pickup', 'drowsy']);
+const SINGLE_TIER: ReadonlySet<EventType> = new Set<EventType>(['phone_pickup']);
 
 /** "Hard brake · Severe", "Phone pickup". */
 export function eventName(type: EventType, tier: Tier): string {

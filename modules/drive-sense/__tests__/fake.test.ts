@@ -92,7 +92,7 @@ describe('rows only while capturing (review I5)', () => {
   });
 });
 
-describe('the activity feed during every capture (DMS calib T12, WK-m1; NC-W4)', () => {
+describe('the activity feed during every capture (WK-m1; NC-W4)', () => {
   const walk = (ts: number, exit?: true) => ({ type: 'walking' as const, confidence: 'high' as const, ts, ...(exit ? { exit } : {}) });
 
   test('a capture subscribes: activity reaches JS while capturing, and stops with the capture', async () => {

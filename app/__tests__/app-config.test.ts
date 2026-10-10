@@ -122,7 +122,7 @@ describe('permissions (v3)', () => {
     expect(build().android?.permissions).not.toContain('android.permission.RECEIVE_BOOT_COMPLETED');
   });
 
-  test('the camera is for DMS and QR codes, with no microphone', () => {
+  test('the camera is for QR codes only, with no microphone', () => {
     expect(plugin('expo-camera')).toEqual({
       cameraPermission: PERMISSION_COPY.camera,
       microphonePermission: false,
@@ -132,7 +132,7 @@ describe('permissions (v3)', () => {
 
   test('the strings are plain and mention nothing v3 removed', () => {
     const words = Object.values(PERMISSION_COPY).join(' ').toLowerCase();
-    for (const word of ['family', 'automatically', 'always', 'background', 'closed']) {
+    for (const word of ['family', 'automatically', 'always', 'background', 'closed', 'driver monitoring', 'dms']) {
       expect(words).not.toContain(word);
     }
   });

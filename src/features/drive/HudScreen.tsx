@@ -1,7 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -14,7 +13,6 @@ import {
   DIM_SCRIM_OPACITY,
   EdgeGlow,
   HoldButton,
-  type HudPalette,
   hudPalette,
   SpeedReadout,
   SpeedSign,
@@ -84,14 +82,6 @@ export function useDimmer(hold: boolean): { dimmed: boolean; wake: () => void } 
   return { dimmed: idle && !hold, wake };
 }
 
-const DmsDot = memo(function DmsDot({ palette: p, top, right }: { palette: HudPalette; top: number; right: number }) {
-  return (
-    <View testID="hud-dms" accessible accessibilityLabel={hudCopy.dms} style={[styles.dms, { top, right }]}>
-      <Ionicons name="videocam" size={18} color={p.inkMuted} />
-    </View>
-  );
-});
-
 export type HudScreenProps = {
   /**
    * Drawn without a route of its own (the diagnostics simulation): it never navigates, at the end
@@ -106,8 +96,7 @@ export type HudScreenProps = {
  * - Centre: the speed, large, next to a round limit sign ("—" when the limit is unknown).
  * - Edge: a static glow in the speeding tier's colour while speeding; for 1.5 s after an event, a
  *   glow in that event's tier colour with an icon and one or two words at the top. No overlay.
- * - Top: the weather line, only while an alert covers the area. A small camera mark while the DMS
- *   runs.
+ * - Top: the weather line, only while an alert covers the area.
  * - Stopped only: the points total and the change since the last stop.
  * - Bottom: hold-to-end — the only control, live at any speed. Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything (the speed stays faintly readable);
@@ -240,8 +229,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         </View>
       </View>
 
-      {live.dmsActive ? <DmsDot palette={p} top={insets.top + 8} right={insets.right + 12} /> : null}
-
       {dimmed ? (
         <View
           testID="hud-dim"
@@ -262,6 +249,5 @@ const styles = StyleSheet.create({
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 },
   gauges: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
   bottom: { alignItems: 'center', justifyContent: 'center' },
-  dms: { position: 'absolute', padding: 8 },
   note: { fontFamily: fontFamilies.fieldBold, fontSize: 26, lineHeight: 32 },
 });

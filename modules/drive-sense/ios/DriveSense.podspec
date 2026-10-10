@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   s.homepage       = 'https://github.com/LurpDaDerp/RoadCash'
   s.platforms      = { :ios => '15.1' }
   # Swift-only pod: CocoaPods aborts `pod install` for a pod with Swift sources and no declared
-  # Swift version. Same pin as modules/dms-vision/ios/DmsVision.podspec.
+  # Swift version.
   s.swift_version  = '5.9'
   s.source         = { git: '' }
   s.static_framework = true

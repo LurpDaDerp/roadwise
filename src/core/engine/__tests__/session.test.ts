@@ -1,7 +1,7 @@
 import { mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import { appendRow, closeSession, createSession, durationSOf, GNSS_JUMP_MPS } from '@/core/engine/session';
 
-const start = () => createSession({ clientTripId: 't1', startedAt: T0, dmsOn: false });
+const start = () => createSession({ clientTripId: 't1', startedAt: T0 });
 
 /** Rows heading east at `mps` from a Seattle corner; the position is integrated from the speed. */
 function eastward(n: number, mps: number, over: (i: number) => Partial<ReturnType<typeof row>> = () => ({})) {
@@ -12,7 +12,7 @@ function eastward(n: number, mps: number, over: (i: number) => Partial<ReturnTyp
 test('distance integrates consecutive valid fixes; safe and night distance follow their flags', () => {
   const s = start();
   const rows = eastward(11, 10);
-  rows.forEach((r, i) => appendRow(s, r, i >= 6, false));
+  rows.forEach((r, i) => appendRow(s, r, i >= 6));
   expect(s.rowsCount).toBe(11);
   expect(s.validGnssRows).toBe(11);
   expect(s.distanceM).toBeCloseTo(100, 0);
@@ -27,10 +27,10 @@ test('distance integrates consecutive valid fixes; safe and night distance follo
 });
 
 test('night distance counts metres driven after sunset at the car’s position', () => {
-  const s = createSession({ clientTripId: 't1', startedAt: T0 + 8 * 3_600_000, dmsOn: false });
+  const s = createSession({ clientTripId: 't1', startedAt: T0 + 8 * 3_600_000 });
   // 22:13 PST: dark.
   const rows = eastward(11, 10).map((r, i) => ({ ...r, ts: T0 + 8 * 3_600_000 + i * 1000 }));
-  rows.forEach((r) => appendRow(s, r, false, false));
+  rows.forEach((r) => appendRow(s, r, false));
   expect(s.nightDistanceM).toBeCloseTo(100, 0);
 });
 
@@ -46,14 +46,13 @@ test('a GNSS jump is skipped, an invalid fix adds nothing, a mock row is counted
   expect(GNSS_JUMP_MPS).toBe(100);
 });
 
-test('moving rows and IMU activity feed the motion-mismatch heuristic; pending rows and the face flag accumulate', () => {
+test('moving rows and IMU activity feed the motion-mismatch heuristic; pending rows accumulate', () => {
   const s = start();
   const rows = seq([3, { speed: mph(30), aLonMax: 0.05 }], [3, { speed: mph(30), aLonMax: 0, aLonMin: 0 }], [2, { speed: 0 }]);
-  rows.forEach((r, i) => appendRow(s, r, false, i === 4));
+  rows.forEach((r) => appendRow(s, r, false));
   expect(s.movingRows).toBe(6);
   expect(s.imuActiveRows).toBe(3);
   expect(s.pending).toHaveLength(8);
-  expect(s.dmsFaceSeen).toBe(true);
 });
 
 test('closeSession stamps the end (never before the start) and the cause; the open session is untouched', () => {

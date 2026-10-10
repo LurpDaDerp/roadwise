@@ -10,7 +10,8 @@
  * - a statement per array entry — drivers prepare one statement at a time.
  *
  * Versions 1 and 2 are the v2 app's (never shipped to users). Version 3 drops the v2 trip tables
- * and creates the v3 ones; `settings` and `speed_limit_tiles` survive untouched.
+ * and creates the v3 ones; `settings` and `speed_limit_tiles` survive untouched. Version 4 removes
+ * what the in-app driver monitoring (DMS) left behind.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -163,4 +164,15 @@ export const SCHEMA_V3: readonly string[] = [
   'CREATE INDEX idx_trips_local_day ON trips (local_day)',
   'CREATE INDEX idx_trip_events_client_trip_id ON trip_events (client_trip_id)',
   'CREATE INDEX idx_sync_queue_due ON sync_queue (status, next_attempt_at)',
+];
+
+/**
+ * V4 — the in-app driver monitoring (DMS) is gone: its two trip columns, its event types and its
+ * settings (the on/off switch, the calibration time, the face profile and the setup record).
+ */
+export const SCHEMA_V4: readonly string[] = [
+  'ALTER TABLE trips DROP COLUMN dms_on',
+  'ALTER TABLE trips DROP COLUMN dms_face_seen',
+  "DELETE FROM trip_events WHERE type IN ('eyes_off', 'drowsy')",
+  "DELETE FROM settings WHERE key IN ('dms.enabled', 'dms.calibratedAt', 'dms.profile', 'dms.setup')",
 ];

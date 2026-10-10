@@ -10,8 +10,6 @@
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
 import { scoreDrive, type DriveBreakdown, type DriveContext, type DriveEvent } from '@scoring';
 
-import { dmsPayloadFlags } from '@/core/dms/adapters/flags';
-
 import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
@@ -174,11 +172,11 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
       trip: existing,
       events: await events.listByTrip(id),
       payload: null,
-      breakdown: existing.breakdown_json ? (JSON.parse(existing.breakdown_json) as DriveBreakdown) : scoreDrive({ miles: 0, safeMiles: 0, events: [], dmsOn: false }, { streak: 0, safeMilesEarlierToday: 0 }),
+      breakdown: existing.breakdown_json ? (JSON.parse(existing.breakdown_json) as DriveBreakdown) : scoreDrive({ miles: 0, safeMiles: 0, events: [] }, { streak: 0, safeMilesEarlierToday: 0 }),
     };
   }
   if (existing === null) {
-    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording', dms_on: session.dmsOn ? 1 : 0 }, now());
+    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording' }, now());
   }
 
   // 1. The route and the events on it.
@@ -218,8 +216,6 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const durationS = round3(durationSOf({ startedAt, endedAt }));
   const maxSpeedMph = round3(clamp(mpsToMph(finite(session.maxSpeedMps)), 0, MAX_SPEED));
   const validGnssPct = session.rowsCount > 0 ? round3(clamp((session.validGnssRows * 100) / session.rowsCount, 0, 100)) : 0;
-  // The DMS flags are shares of the moving time (plan §3; `@/core/dms`): DMS on with the camera covered claims nothing.
-  const flags = dmsPayloadFlags({ dmsOn: session.dmsOn, movingRows: session.movingRows, dmsFaceRows: session.dmsFaceRows });
   const integrity = {
     mockLocation: session.mockRows > 0,
     motionMismatch: session.movingRows >= 60 && session.imuActiveRows < 0.05 * session.movingRows,
@@ -238,8 +234,6 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     safeMiles,
     nightMiles,
     durationS,
-    dmsOn: flags.dmsOn,
-    dmsFaceSeen: flags.dmsFaceSeen,
     start: point(session.firstFix),
     end: point(session.lastFix),
     polyline,
@@ -253,7 +247,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const streak = (await deps.context?.().catch(() => null))?.streak ?? 0;
   const ctx: DriveContext = { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, localDay, startedAt) };
   const driveEvents: DriveEvent[] = cleaned.map(({ measured: _m, ...e }) => e);
-  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dmsOn: flags.dmsOn }, ctx);
+  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents }, ctx);
   const penaltyOf = new Map(breakdown.events.map((e) => [e.id, e.penalty]));
   const counts = countEvents(cleaned);
 
@@ -266,8 +260,6 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     safe_miles: safeMiles,
     night_miles: nightMiles,
     duration_s: durationS,
-    dms_on: flags.dmsOn ? 1 : 0,
-    dms_face_seen: flags.dmsFaceSeen ? 1 : 0,
     start_lat: candidate.start?.lat ?? null,
     start_lng: candidate.start?.lng ?? null,
     end_lat: candidate.end?.lat ?? null,

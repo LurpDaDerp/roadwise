@@ -98,7 +98,6 @@ export function buildScoringInput(
         miles: merge.miles + p.miles,
         safeMiles: merge.safeMiles + p.safeMiles,
         events: events as DriveEvent[],
-        dmsOn: merge.dmsOn || p.dmsOn,
         loopRepeat: merge.loopRepeat,
       },
       ctx: { streak: merge.streak.streak, safeMilesEarlierToday: merge.safeMilesEarlierToday },
@@ -112,7 +111,7 @@ export function buildScoringInput(
   const isLoop = isLoopDrive(p.start, p.end, p.miles);
   const loopRepeat = isLoop && loopDrivesToday >= 2;
   return {
-    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], dmsOn: p.dmsOn, loopRepeat },
+    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat },
     ctx: { streak: streakNow.streak, safeMilesEarlierToday },
     streak: streakNow,
     events,
@@ -192,8 +191,6 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           safeMiles: p.safeMiles,
           nightMiles: p.nightMiles,
           durationS: Math.round(p.durationS),
-          dmsOn: p.dmsOn,
-          dmsFaceSeen: p.dmsFaceSeen,
           end: p.end,
           polyline: p.polyline,
           appVersion: p.appVersion,

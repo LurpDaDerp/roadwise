@@ -9,13 +9,12 @@ export { createSpeedingDetector, type SpeedingDetector } from './speeding';
 
 /**
  * Every detector behind one `push`/`flush`. `push` returns the events that closed on that row;
- * `flush` closes whatever is still open at trip end. The DMS's eyes-off and drowsiness detector
- * (WP8) joins through `extra`.
+ * `flush` closes whatever is still open at trip end.
  */
-export function createDetectors(newId: () => string, extra: readonly Detector[] = []): DetectorSuite {
+export function createDetectors(newId: () => string): DetectorSuite {
   const speeding = createSpeedingDetector(newId);
   const phone = createPhoneUseDetector(newId);
-  const detectors: Detector[] = [speeding, createHarshDetector(newId), phone, ...extra];
+  const detectors: Detector[] = [speeding, createHarshDetector(newId), phone];
   return {
     push: (row, limit, ctx) => detectors.flatMap((d) => d.push(row, limit, ctx)),
     flush: () => detectors.flatMap((d) => d.flush()),

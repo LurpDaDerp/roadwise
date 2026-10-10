@@ -27,7 +27,6 @@ test('insert applies the defaults and stamps created_at/updated_at', async () =>
     points_net: null,
     clean: null,
     counts_json: null,
-    dms_on: 0,
     created_at: T0,
     updated_at: T0,
   });

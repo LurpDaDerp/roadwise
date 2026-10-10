@@ -56,8 +56,8 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   const h = harness();
   await feed(h, [row({}, 0)]);
   expect(h.engine.snapshot().status).toBe('idle');
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: true });
-  expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'id1', startedAt: T0, dmsOn: true });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
+  expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'id1', startedAt: T0 });
   await feed(h, seq([5, { speed: mph(30) }]));
   expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, limitMph: 35, lockedOut: true, stopped: false });
   await h.engine.dispatch({ type: 'end', ts: T0 + 5000 });
@@ -69,13 +69,13 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   expect(h.checkpoints[0]).toMatchObject({ clientTripId: 'id1', rowsCount: 0, pending: [] });
   expect(h.snapshots.map((s) => s.status)).toEqual(expect.arrayContaining(['recording', 'finalizing', 'idle']));
   // A second start is a new drive with a fresh id; the old one changes nothing.
-  await h.engine.dispatch({ type: 'start', ts: T0 + 6000, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 + 6000 });
   expect(h.engine.snapshot().clientTripId).toBe('id2');
 });
 
 test('stopped at or below 2 mph for 300 s ends the drive where it stopped; a row ≤ 5 mph is "stopped" for the points', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, seq([5, { speed: mph(30) }]));
   const stopAt = T0 + 5000;
   await feed(h, seq([AUTO_END_STOPPED_S - 1, (i) => ({ speed: mph(1), ts: stopAt + (i - 5) * 1000 })]));
@@ -87,7 +87,7 @@ test('stopped at or below 2 mph for 300 s ends the drive where it stopped; a row
 
 test('a tick past the deadline ends a stopped drive even with no row; a walking report ends a slow drive at once', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, seq([3, { speed: mph(1) }]));
   await h.engine.dispatch({ type: 'tick', ts: T0 + 100_000 });
   expect(h.engine.snapshot().status).toBe('recording');
@@ -96,7 +96,7 @@ test('a tick past the deadline ends a stopped drive even with no row; a walking 
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 1000 });
 
   const w = harness();
-  await w.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await w.engine.dispatch({ type: 'start', ts: T0 });
   await feed(w, seq([3, { speed: mph(40) }]));
   await w.engine.dispatch({ type: 'walking', ts: T0 + 3000 });
   expect(w.engine.snapshot().status).toBe('recording'); // a misfire at 40 mph is ignored
@@ -107,7 +107,7 @@ test('a tick past the deadline ends a stopped drive even with no row; a walking 
 
 test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, after(10, { speed: mph(47) }));
   await feed(h, seq([10, (i) => ({ speed: mph(30), ts: T0 + 41_000 + i * 1000 })]));
   expect(h.alerts.filter((a) => a.type === 'speeding')).toHaveLength(1);
@@ -133,7 +133,7 @@ test('alerts: one chime per speeding episode, the pickup and the 15-s handling a
 
 test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint keeps them for the next', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   h.checkpoints.length = 0;
   h.checkpointFails = 1;
   await feed(h, seq([CHECKPOINT_ROWS, { speed: mph(30) }]));
@@ -148,7 +148,7 @@ test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint
 
 test('a fix lost while moving, then a still phone with no sky: the stop clock starts after 30 s still and the drive ends', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, seq([10, { speed: mph(8) }]));
   const still = (i: number) => ({ ts: T0 + 10_000 + i * 1000, gnssValid: false, speed: -1, gravityStability: 0.99, aLonMax: 0.01, aLonMin: -0.01, aLatMax: 0.01, aLatMin: -0.01, yawRateMax: 0.01, jerkMax: 0.01 });
   await feed(h, seq([29, still]));
@@ -160,7 +160,7 @@ test('a fix lost while moving, then a still phone with no sky: the stop clock st
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 10_000 });
   // A phone that is moving (carried) with no fix does not count as still.
   const m = harness();
-  await m.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await m.engine.dispatch({ type: 'start', ts: T0 });
   await feed(m, seq([10, { speed: mph(8) }]));
   await feed(m, seq([60, (i) => ({ ...still(i), handlingScore: 0.5 })]));
   expect(m.engine.snapshot().stoppedSinceTs).toBeNull();
@@ -168,7 +168,7 @@ test('a fix lost while moving, then a still phone with no sky: the stop clock st
 
 test('walking is accepted whatever the last speed once the last fix is over 60 s old', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, seq([5, { speed: mph(8) }]));
   await h.engine.dispatch({ type: 'walking', ts: T0 + 30_000 });
   expect(h.engine.snapshot().status).toBe('recording');
@@ -180,7 +180,7 @@ test('walking is accepted whatever the last speed once the last fix is over 60 s
 test('a finalizer that throws is reported and the engine is idle again for the next drive', async () => {
   const h = harness();
   h.finalizeFails = true;
-  await h.engine.dispatch({ type: 'start', ts: T0, dmsOn: false });
+  await h.engine.dispatch({ type: 'start', ts: T0 });
   await feed(h, seq([2, { speed: mph(30) }]));
   await h.engine.dispatch({ type: 'end', ts: T0 + 2000 });
   expect(h.engine.snapshot().status).toBe('idle');
@@ -204,9 +204,6 @@ function createDetectorsSession(): TripSession {
     startedAt: T0,
     endedAt: null,
     endCause: null,
-    dmsOn: false,
-    dmsFaceSeen: false,
-    dmsFaceRows: 0,
     lastRowTs: null,
     rowsCount: 0,
     validGnssRows: 0,

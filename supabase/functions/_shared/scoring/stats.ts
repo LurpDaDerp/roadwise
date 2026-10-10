@@ -14,8 +14,6 @@ export interface StatSums {
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
-  eyesOff: number;
-  drowsy: number;
 }
 
 export type StatId =
@@ -27,8 +25,6 @@ export type StatId =
   | 'hard_accel'
   | 'hard_corner'
   | 'handling'
-  | 'eyes_off'
-  | 'drowsy'
   | 'miles'
   | 'duration'
   | 'night_miles';
@@ -61,8 +57,6 @@ export const STAT_THRESHOLDS: Partial<Record<StatId, { green: number; red: numbe
   hard_accel: { green: 2, red: 6 },
   hard_corner: { green: 2, red: 6 },
   handling: { green: 0, red: 0.5 },
-  eyes_off: { green: 1, red: 3 },
-  drowsy: { green: 0, red: 0.5 },
 };
 
 export function statColor(id: StatId, value: number | null): StatColor | null {
@@ -90,8 +84,6 @@ export function statsFrom(s: StatSums): Stat[] {
     ['hard_accel', per100(s.hardAccel), s.hardAccel, 'per_100_mi'],
     ['hard_corner', per100(s.hardCorner), s.hardCorner, 'per_100_mi'],
     ['handling', s.durationS > 0 ? roundTo((s.handlingS * 60) / s.durationS, 2) : null, handlingMin, 'min_per_h'],
-    ['eyes_off', per100(s.eyesOff), s.eyesOff, 'per_100_mi'],
-    ['drowsy', per100(s.drowsy), s.drowsy, 'per_100_mi'],
     ['miles', roundTo(s.miles, 2), roundTo(s.miles, 2), 'mi'],
     ['duration', hours, hours, 'h'],
     ['night_miles', roundTo(s.nightMiles, 2), roundTo(s.nightMiles, 2), 'mi'],

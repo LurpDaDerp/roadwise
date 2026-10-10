@@ -126,31 +126,30 @@ async function feed(h: { host: DriveHost; source: ReturnType<typeof createFakeDr
 
 test('start: refuses while moving, without location, before boot, or while busy; otherwise starts the capture and the drive', async () => {
   const h = build({ speedProbe: async () => 2 });
-  expect(await h.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'error' });
+  expect(await h.host.start()).toEqual({ ok: false, reason: 'error' });
   await h.host.boot();
-  expect(await h.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'moving' });
+  expect(await h.host.start()).toEqual({ ok: false, reason: 'moving' });
   expect(h.source.calls).toEqual([]);
 
   const denied = build({ permissions: async () => ({ location: 'denied' }) });
   await denied.host.boot();
-  expect(await denied.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'permission' });
+  expect(await denied.host.start()).toEqual({ ok: false, reason: 'permission' });
 
   const ok = build();
   await ok.host.boot();
-  const started = await ok.host.start({ dmsOn: true });
+  const started = await ok.host.start();
   expect(started).toEqual({ ok: true, clientTripId: uuid(1) });
   expect(ok.source.calls).toEqual(['startCapture:mounted']);
-  // dmsActive needs a face tracked by the DMS (no camera bridge here): DMS requested, not yet active.
-  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', dmsOn: true, dmsActive: false, lockedOut: false, points: null, dryRun: false });
+  expect(ok.host.snapshot()).toMatchObject({ status: 'recording', lockedOut: false, points: null, dryRun: false });
   expect(ok.display.log[0]).toBe('start null');
-  expect(await ok.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'busy' });
+  expect(await ok.host.start()).toEqual({ ok: false, reason: 'busy' });
   await ok.host.stop({ endOpenTrip: true });
 });
 
 test('a drive: rows publish at most once each, the display updates on change, points show only while stopped, end finalizes and queues', async () => {
   const h = build();
   await h.host.boot();
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   const published: DriveState[] = [];
   h.host.subscribe((s) => published.push(s));
   const list = rows(120, { speedMps: 15 });
@@ -172,7 +171,7 @@ test('a drive: rows publish at most once each, the display updates on change, po
   expect(h.source.calls.at(-1)).toBe('stopCapture');
   expect(h.display.log.at(-1)).toBe('end');
   const trip = (await createTripsRepo(db).get(uuid(1)))!;
-  expect(trip).toMatchObject({ status: 'pending', estimate: 1, dms_on: 0 });
+  expect(trip).toMatchObject({ status: 'pending', estimate: 1 });
   expect(trip.miles).toBeCloseTo(1.1, 1);
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   expect(h.errors).toEqual([]);
@@ -182,7 +181,7 @@ test('a drive: rows publish at most once each, the display updates on change, po
 test('points clear the moment the stop is no longer confirmed, even with the fix lost while pulling away', async () => {
   const h = build();
   await h.host.boot();
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   await feed(h, rows(60, { speedMps: 15 }));
   await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
   expect(h.host.snapshot().points).not.toBeNull();
@@ -199,7 +198,7 @@ test('the background display follows the driver\'s units: km/h with speed and li
   await createSettingsRepo(db).set('units', 'km');
   const h = build();
   await h.host.boot();
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   expect(h.display.log[0]).toBe('start null');
   await feed(h, rows(5, { speedMps: 15 }));
   // 15 m/s = 33.6 mph = 54 km/h; the 35 mph limit reads 56 km/h.
@@ -209,7 +208,7 @@ test('the background display follows the driver\'s units: km/h with speed and li
   await createSettingsRepo(db).set('units', 'mi');
   const m = build();
   await m.host.boot();
-  await m.host.start({ dmsOn: false });
+  await m.host.start();
   await feed(m, rows(5, { speedMps: 15, t0: T0 + 100_000 }));
   expect(m.display.log.at(-1)).toBe('update 34/35/null');
   await m.host.stop({ endOpenTrip: true });
@@ -218,7 +217,7 @@ test('the background display follows the driver\'s units: km/h with speed and li
 test('auto-end: 300 s stopped ends the drive where it stopped (the one timer covers a lost fix); walking ends a slow drive', async () => {
   const h = build();
   await h.host.boot();
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   await feed(h, rows(60, { speedMps: 15 }));
   await feed(h, rows(5, { speedMps: 0, t0: T0 + 60_000 }));
   expect(h.host.snapshot().stoppedSinceTs).toBe(T0 + 60_000);
@@ -230,7 +229,7 @@ test('auto-end: 300 s stopped ends the drive where it stopped (the one timer cov
   const trip = (await createTripsRepo(db).get(uuid(1)))!;
   expect(trip.ended_at).toBe(T0 + 60_000);
 
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   await feed(h, rows(40, { speedMps: 15, t0: clock }));
   h.source.emit('activity', { type: 'walking', confidence: 'high', ts: clock });
   await h.host.settled();
@@ -246,7 +245,7 @@ test('auto-end: 300 s stopped ends the drive where it stopped (the one timer cov
 test('alerts go to the player as decisions (one speeding chime); a hands-free call suppresses phone events', async () => {
   const h = build();
   await h.host.boot();
-  await h.host.start({ dmsOn: false });
+  await h.host.start();
   await feed(h, rows(40, { speedMps: 15 }));
   await feed(h, rows(10, { speedMps: 22, t0: T0 + 40_000 })); // 49 mph on a 35: moderate
   await feed(h, rows(10, { speedMps: 15, t0: T0 + 50_000 }));
@@ -263,7 +262,7 @@ test('alerts go to the player as decisions (one speeding chime); a hands-free ca
 
 test('an adopted drive (recovery after a restart) shows the driver’s units too', async () => {
   await createSettingsRepo(db).set('units', 'km');
-  const session = createSession({ clientTripId: uuid(1), startedAt: T0 - 60_000, dmsOn: false });
+  const session = createSession({ clientTripId: uuid(1), startedAt: T0 - 60_000 });
   const h = build();
   await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
   expect(h.host.snapshot().status).toBe('recording');
@@ -275,7 +274,7 @@ test('an adopted drive (recovery after a restart) shows the driver’s units too
 
 test('boot adopts a rebuilt drive and keeps recording it; a sign-out ends an open drive', async () => {
   const h = build();
-  const session = createSession({ clientTripId: uuid(9), startedAt: T0 - 60_000, dmsOn: false });
+  const session = createSession({ clientTripId: uuid(9), startedAt: T0 - 60_000 });
   await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
   expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(9) });
   expect(h.source.calls).toEqual(['startCapture:mounted']);
@@ -285,7 +284,7 @@ test('boot adopts a rebuilt drive and keeps recording it; a sign-out ends an ope
   expect(h.host.signedIn()).toBe(true); // the sign-out is still settling
   h.host.signOutCompleted();
   expect(h.host.signedIn()).toBe(false);
-  expect(await h.host.start({ dmsOn: false })).toEqual({ ok: false, reason: 'error' });
+  expect(await h.host.start()).toEqual({ ok: false, reason: 'error' });
   await h.host.resumeAfterSignIn();
   expect(h.host.signedIn()).toBe(true);
   await h.host.stop({ endOpenTrip: false });

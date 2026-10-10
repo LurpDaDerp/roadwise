@@ -1,10 +1,10 @@
 -- 0003_drives + 0008_engine: the drive engine. One happy path, idempotency, the merge and its
--- exact revert, "wasn't driving" (latest only, 24 h, 2 a month, DMS face, flagging), disputes
+-- exact revert, "wasn't driving" (latest only, 24 h, 2 a month, flagging), disputes
 -- (type match, 3-a-week quota, mounted rule, delta credit), the rating, the client reads.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(85);
+select plan(84);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -43,7 +43,7 @@ begin
     'payload', jsonb_build_object('clientTripId', p_client, 'startedAt', floor(extract(epoch from p_started) * 1000)::bigint,
       'endedAt', floor(extract(epoch from p_started + make_interval(mins => p_minutes)) * 1000)::bigint, 'tz', 'America/New_York',
       'localDay', to_char(p_started at time zone 'America/New_York', 'YYYY-MM-DD'), 'miles', p_miles, 'safeMiles', p_miles, 'nightMiles', 0,
-      'durationS', p_minutes * 60, 'dmsOn', false, 'dmsFaceSeen', coalesce((p_extra ->> 'face')::boolean, false),
+      'durationS', p_minutes * 60,
       'end', jsonb_build_object('lat', 47.61, 'lng', -122.31), 'polyline', coalesce(p_extra ->> 'polyline', 'poly'), 'appVersion', '3.0.0'),
     'scored', coalesce((p_extra ->> 'scored')::boolean, true), 'reason', p_extra ->> 'reason', 'net', p_net,
     'breakdown', jsonb_build_object('scored', true, 'net', p_net, 'ratingPenalty', coalesce((p_extra ->> 'ratingPenalty')::int, 0), 'events', v_bd),
@@ -183,10 +183,7 @@ select is((select row(not_driving, points_net, not_driving_at = now())::text fro
 select is((select sum(amount)::int from public.points_ledger where trip_id = (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444')), 0, 'its ledger nets to zero');
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444') $$,
   '42501', 'already marked as not driving', 'marking twice is refused');
-select pg_temp.drive('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555', pg_temp.t0() + interval '80 minutes', 10, 2, 20, '[]', null, '{"face": true}');
-select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555') $$,
-  '42501', 'the camera saw a driver on this drive', 'refused when DMS saw a face');
-update public.trips set dms_face_seen = false where client_trip_id = '55555555-5555-4555-8555-555555555555';
+select pg_temp.drive('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555', pg_temp.t0() + interval '80 minutes', 10, 2, 20, '[]');
 select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555') $$, 'the second use this month');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666', pg_temp.t0() + interval '100 minutes', 10, 2, 20, '[]');
 select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666') $$,
@@ -242,7 +239,7 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '77777777-7777-4777
   '[{"id":"b1b1b1b1-0000-4000-8000-000000000001","type":"phone_pickup","tier":"severe","penalty":40}]', null, '{"ratingPenalty": 40}');
 select is((select row(miles_30d, clean_miles_30d, rating_penalty_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
   row(29.00, 17.00, 40.00, 86.2, true)::text, '29 miles: ranked; R = 40/29*100 = 138 -> 86.2; clean miles exclude the drives with events');
-select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "drowsy": 0, "eyesOff": 0, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2}'::jsonb,
+select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2}'::jsonb,
   'stat sums cover the kept scored drives only');
 update public.trips set started_at = started_at - interval '32 days', ended_at = ended_at - interval '32 days' where client_trip_id = '77777777-7777-4777-8777-777777777777';
 update public.progress set rating_updated_at = now() - interval '21 hours' where user_id = '00000000-0000-0000-0000-000000000001';

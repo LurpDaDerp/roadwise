@@ -9,11 +9,9 @@ import {
   DAILY_FULL_MILES,
   DAILY_HALF_MILES,
   DISPUTE_AUTO_PER_WEEK,
-  DMS_MULT,
   LEVEL_STEP,
   MAX_FREEZES,
   MIN_SCORED_MILES,
-  MULT_CAP,
   NOT_DRIVING_PER_MONTH,
   POINTS_PER_MILE,
   RANKED_MIN_MILES,
@@ -47,8 +45,6 @@ export const PENALTIES: PenaltyRow[] = [
   { event: 'Hard cornering', penalty: `−${BASE_PENALTY.hard_corner.minor} · severe −${BASE_PENALTY.hard_corner.severe}` },
   { event: 'Phone pickup', penalty: `−${BASE_PENALTY.phone_pickup} (−${BASE_PENALTY.phone_pickup_stopped} when stopped in traffic)` },
   { event: 'Phone handling', penalty: `−${BASE_PENALTY.phone_handling_per_unit} for every extra 15 s` },
-  { event: 'Eyes off road (DMS)', penalty: `−${BASE_PENALTY.eyes_off.minor} · severe −${BASE_PENALTY.eyes_off.severe}` },
-  { event: 'Drowsiness (DMS)', penalty: `−${BASE_PENALTY.drowsy}` },
 ];
 
 export type RuleSection = { id: string; title: string; icon: IconName; points: string[] };
@@ -69,13 +65,11 @@ export const RULES: RuleSection[] = [
   },
   {
     id: 'multipliers',
-    title: 'Multipliers',
+    title: 'Streak multiplier',
     icon: 'flash-outline',
     points: [
       `Each drive in your streak adds ${STREAK_STEP} to your multiplier, up to ${x(STREAK_MULT_CAP)} at a ${streakCapDrives}-drive streak.`,
-      `Driving with DMS (driver monitoring) on gives ${x(DMS_MULT)}.`,
-      `Together they top out at ${x(MULT_CAP)}.`,
-      'Multipliers only boost what you earn. Penalties never get bigger because of your streak.',
+      'The multiplier only boosts what you earn. Penalties never get bigger because of your streak.',
     ],
   },
   {

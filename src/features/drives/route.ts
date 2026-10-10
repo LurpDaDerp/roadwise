@@ -81,7 +81,7 @@ export function sketchPath(runs: Runs, w: number, h: number, pad = 4, max = 120)
 // ── Summary map colouring ───────────────────────────────────────────────────────────────
 
 /** Events that last along the road; the rest are instants drawn as dots. */
-export const SEGMENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['speeding', 'phone_handling', 'drowsy']);
+export const SEGMENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['speeding', 'phone_handling']);
 
 /** Rough road speed used to turn a duration into a stretch of route (≈ 30 mph). */
 const ASSUMED_MPS = 13.4;
@@ -124,8 +124,8 @@ const located = (e: LocalDriveEvent): LatLng | null =>
 const counts = (e: LocalDriveEvent) => !e.removed && e.disputeStatus !== 'accepted';
 
 /**
- * The route split into stretches of one colour: each lasting event (speeding, phone handling,
- * drowsiness) colours the visible run it happened on from where it began for about as far as its
+ * The route split into stretches of one colour: each lasting event (speeding, phone handling)
+ * colours the visible run it happened on from where it began for about as far as its
  * duration covers, and an overlap takes the worse tier. A coloured stretch never leaves its run —
  * the output holds no segment from one visible run to the next.
  */

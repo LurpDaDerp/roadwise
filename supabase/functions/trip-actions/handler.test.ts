@@ -23,13 +23,12 @@ const disputeAccepted: DisputeContext = {
   status: 'accepted',
   rejectReason: null,
   scored: true,
-  oldNet: 167,
+  oldNet: 119,
   quotaLeft: 3,
   rescore: {
     input: {
       miles: 12,
       safeMiles: 11.8,
-      dmsOn: true,
       loopRepeat: false,
       events: [
         { id: EVENT, type: 'hard_brake', tier: 'minor', startedAt: STARTED_AT, durationS: 2, units: null, stoppedInTraffic: null, zone: null, status: 'removed', lat: null, lng: null, measured: {}, penalty: 10 },
@@ -47,9 +46,9 @@ const disputeResult = (e: ApplyDisputeEnvelope) => ({
   rejectReason: e.rejectReason ?? null,
   quotaLeft: e.status === 'accepted' ? 2 : 0,
   breakdown: e.breakdown ?? null,
-  net: e.net ?? 167,
-  delta: (e.net ?? 167) - 167,
-  progress: { points: 177, lifetime: 177, level: 1, levelUp: false, safetyRating: 92, ranked: false },
+  net: e.net ?? 119,
+  delta: (e.net ?? 119) - 119,
+  progress: { points: 132, lifetime: 142, level: 1, levelUp: false, safetyRating: 92, ranked: false },
 });
 
 function harness(script: FakeEngineScript = {}, auth: 'good' | 'bad' = 'good') {
@@ -87,12 +86,12 @@ Deno.test('dispute accepted: the stored input is re-scored with the event remove
   assertEquals([body.action, body.status, body.quotaLeft, body.clientTripId], ['dispute', 'accepted', 2, TRIP]);
   const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
   assertEquals([e.user, e.tripId, e.eventId, e.reason, e.status], [USER, TRIP_ID, EVENT, 'hazard', 'accepted']);
-  // one minor hard brake left of two: 177 − 10
-  assertEquals(e.net, 167);
+  // one minor hard brake left of two: 142 − 10
+  assertEquals(e.net, 132);
   assertEquals(e.breakdown?.events, [{ id: EVENT_2, penalty: 10 }]);
   assertEquals(e.breakdown?.streakMult, 1.2);
   assertEquals(body.breakdown.events, [{ id: EVENT_2, penalty: 10 }]);
-  assertEquals(body.breakdown.net, 167);
+  assertEquals(body.breakdown.net, 132);
 });
 
 Deno.test('dispute rejected: recorded without a re-score; the reason comes back', async () => {
@@ -111,7 +110,6 @@ Deno.test("the writers' fixed refusals become codes; everything else maps as usu
     [new PgError('42501', 'already marked as not driving'), 409, 'already_marked'],
     [new PgError('42501', 'only your latest drive can be marked'), 403, 'not_latest'],
     [new PgError('42501', 'the drive is older than 24 hours'), 403, 'too_old'],
-    [new PgError('42501', 'the camera saw a driver on this drive'), 403, 'face_seen'],
     [new PgError('42501', 'no uses left this month'), 403, 'no_uses_left'],
     [new PgError('42501', 'already disputed'), 409, 'already_disputed'],
     [new PgError('22023', 'that reason does not apply to this event'), 400, 'reason_mismatch'],

@@ -80,9 +80,9 @@ describe('Chip', () => {
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  test('the DMS chip is a switch that reports on/off', async () => {
-    await wrap(<Chip label="DMS" role="switch" selected={false} onPress={() => {}} />);
-    expect(screen.getByRole('switch', { name: 'DMS' })).not.toBeChecked();
+  test('a switch chip reports on/off', async () => {
+    await wrap(<Chip label="Reduce motion" role="switch" selected={false} onPress={() => {}} />);
+    expect(screen.getByRole('switch', { name: 'Reduce motion' })).not.toBeChecked();
   });
 });
 

@@ -48,7 +48,6 @@ export const VECTOR_NAMES = [
   'mount-shift',
   'no-imu',
   'unaligned-start',
-  'lon-bias',
   'gravity-filter',
   'android-raw',
 ] as const;
@@ -56,7 +55,7 @@ export const VECTOR_NAMES = [
 /** Read and validate every vector file (throws on a malformed one, naming it). */
 export function loadVectors(): GoldenVector[] {
   // The gate is spelled out here as build-time constants, so a production bundle folds it to
-  // `false` and Metro drops every require inside it: the ~348 KB of vectors never ship (review m3).
+  // `false` and Metro drops every require inside it: the ~324 KB of vectors never ship (review m3).
   if (__DEV__ || process.env.EXPO_PUBLIC_DIAGNOSTICS === '1') {
     const files: Record<(typeof VECTOR_NAMES)[number], () => unknown> = {
       cruise: () => require('../../../modules/drive-sense/assets/vectors/cruise.json'),
@@ -67,7 +66,6 @@ export function loadVectors(): GoldenVector[] {
       'mount-shift': () => require('../../../modules/drive-sense/assets/vectors/mount-shift.json'),
       'no-imu': () => require('../../../modules/drive-sense/assets/vectors/no-imu.json'),
       'unaligned-start': () => require('../../../modules/drive-sense/assets/vectors/unaligned-start.json'),
-      'lon-bias': () => require('../../../modules/drive-sense/assets/vectors/lon-bias.json'),
       'gravity-filter': () => require('../../../modules/drive-sense/assets/vectors/gravity-filter.json'),
       'android-raw': () => require('../../../modules/drive-sense/assets/vectors/android-raw.json'),
     };

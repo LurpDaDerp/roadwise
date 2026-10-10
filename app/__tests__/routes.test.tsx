@@ -41,8 +41,6 @@ const V3_ROUTES = [
   '(app)/heatmap.tsx',
   '(app)/achievements.tsx',
   '(app)/settings/index.tsx',
-  '(app)/settings/dms.tsx',
-  '(app)/settings/dms-setup.tsx',
   '(app)/settings/privacy-zones.tsx',
   '(app)/settings/notifications.tsx',
   '(app)/settings/alerts.tsx',
@@ -68,6 +66,8 @@ const REMOVED = [
   'drive/hud.tsx',
   'drive/pocket.tsx',
   'drive/end.tsx',
+  '(app)/settings/dms.tsx',
+  '(app)/settings/dms-setup.tsx',
 ];
 
 test.each(V3_ROUTES)('%s exists', (file) => expect(exists(file)).toBe(true));

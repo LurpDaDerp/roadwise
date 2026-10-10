@@ -36,14 +36,6 @@ export interface TripSession {
   /** epoch ms where driving stopped; null while open. */
   endedAt: number | null;
   endCause: EndCause | null;
-  dmsOn: boolean;
-  /** The DMS saw a face in the driver's seat at some point of the drive. */
-  dmsFaceSeen: boolean;
-  /**
-   * Moving rows (≥ 5 mph) on which the DMS tracked a face in the driver's seat. With `movingRows` it gives the
-   * payload's `dmsOn` (≥ 80 % of the moving time) and `dmsFaceSeen` (≥ 50 %): `@/core/dms` `dmsPayloadFlags`.
-   */
-  dmsFaceRows: number;
   lastRowTs: number | null;
   rowsCount: number;
   validGnssRows: number;
@@ -99,7 +91,6 @@ export interface EngineSnapshot {
   distanceM: number;
   /** Recording at a last known speed above 5 mph: the UI shows only the End control. */
   lockedOut: boolean;
-  dmsOn: boolean;
   lastAlert: AlertEvent | null;
 }
 
@@ -117,8 +108,6 @@ export interface EngineDeps {
   createDetectors(): DetectorSuite;
   /** The per-row detector context minus `tripStartedAt`, which the engine knows. */
   ctx(): Omit<DetectorContext, 'tripStartedAt'>;
-  /** The DMS sees a face in the driver's seat right now (where a DMS runs). */
-  faceSeen?(): boolean;
   onAlert(alert: AlertEvent): void;
   /** Every `CHECKPOINT_ROWS` rows and before finalize. Owns persistence; a rejection leaves the rows pending. */
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
@@ -135,7 +124,7 @@ export interface AdoptedTrip {
 }
 
 export type EngineEvent =
-  | { type: 'start'; ts: number; dmsOn: boolean }
+  | { type: 'start'; ts: number }
   | { type: 'row'; row: FeatureRow }
   /** The OS says the driver is walking: the drive ends where it last stopped. */
   | { type: 'walking'; ts: number }

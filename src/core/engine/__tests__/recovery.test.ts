@@ -16,7 +16,7 @@ beforeEach(async () => {
 
 async function recording(id: string, n: number, t0 = T0): Promise<void> {
   const trips = createTripsRepo(db);
-  await trips.insert({ client_trip_id: id, started_at: t0, tz: TZ, status: 'recording', dms_on: 1 }, t0);
+  await trips.insert({ client_trip_id: id, started_at: t0, tz: TZ, status: 'recording' }, t0);
   if (n > 0) {
     await createSamplesRepo(db).appendMany(id, rows(n, { t0 }).map((r) => ({ ts: r.ts, row: r })));
     await trips.checkpoint(id, t0 + (n - 1) * 1000);
@@ -33,7 +33,7 @@ test('rebuildFromSamples replays the durable rows into a session with no pending
   await recording(uuid(1), 100);
   const trip = (await createTripsRepo(db).get(uuid(1)))!;
   const rebuilt = (await rebuildFromSamples(db, trip, base()))!;
-  expect(rebuilt.session).toMatchObject({ clientTripId: uuid(1), dmsOn: true, rowsCount: 100, lastRowTs: T0 + 99_000, pending: [], checkpointTs: T0 + 99_000 });
+  expect(rebuilt.session).toMatchObject({ clientTripId: uuid(1), rowsCount: 100, lastRowTs: T0 + 99_000, pending: [], checkpointTs: T0 + 99_000 });
   expect(rebuilt.session.distanceM).toBeCloseTo(1485, 0);
   await recording(uuid(2), 0);
   expect(await rebuildFromSamples(db, (await createTripsRepo(db).get(uuid(2)))!, base())).toBeNull();

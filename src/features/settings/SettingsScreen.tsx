@@ -151,7 +151,6 @@ export function SettingsScreen({ deps = {} }: { deps?: { adapter?: PermissionsAd
         />
       ) : null}
       <Section title={copy.driving}>
-        <LinkRow icon="eye-outline" title={copy.dms.title} subtitle={copy.dms.subtitle} onPress={() => router.push(SETTINGS_HREFS.dms)} testID="settings-dms" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <ToggleRow title={copy.reminder.title} subtitle={copy.reminder.subtitle} value={reminder} onValueChange={(v) => void onReminder(v)} testID="settings-reminder" />
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />

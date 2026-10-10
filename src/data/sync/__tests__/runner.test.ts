@@ -31,8 +31,6 @@ const response = (clientTripId: string, over: Partial<FinalizeTripResponseV3> = 
     milePoints: 110,
     cleanBonus: 0,
     streakMult: 1.1,
-    dmsMult: 1,
-    mult: 1.1,
     gains: 121,
     shortScale: 1,
     events: [{ id: uuid(1), penalty: 15 }],

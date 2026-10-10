@@ -154,11 +154,6 @@ struct ExtractedRow {
   var aLonMax, aLonMin, aLatMax, aLatMin, yawRateMax, jerkMax: Double
   var gravityStability, orientationDelta, handlingScore: Double
   var locked, screenOn, appForeground: Bool
-  // DMS motion evidence (Task C0; README §4): no IMU → false / 0 / nil.
-  var frameAligned: Bool = false
-  var aLonMean: Double = 0
-  var accRms: Double? = nil
-  var gravX, gravY, gravZ: Double?
 
   /// Every number finite (the bridge contract; JSONSerialization would also trap on NaN).
   var firstNonFiniteField: String? {
@@ -167,18 +162,12 @@ struct ExtractedRow {
       ("course", course), ("alt", alt), ("aLonMax", aLonMax), ("aLonMin", aLonMin),
       ("aLatMax", aLatMax), ("aLatMin", aLatMin), ("yawRateMax", yawRateMax), ("jerkMax", jerkMax),
       ("gravityStability", gravityStability), ("orientationDelta", orientationDelta),
-      ("handlingScore", handlingScore), ("aLonMean", aLonMean),
+      ("handlingScore", handlingScore),
     ]
-    if let bad = numbers.first(where: { !$0.1.isFinite }) { return bad.0 }
-    let optionals: [(String, Double?)] = [("accRms", accRms), ("gravX", gravX), ("gravY", gravY), ("gravZ", gravZ)]
-    for (name, value) in optionals {
-      if let v = value, !v.isFinite { return name } // accRms, gravX…: nil is fine, NaN is not
-    }
-    return nil
+    return numbers.first { !$0.1.isFinite }?.0
   }
 
-  /// The `row` payload: exactly the 27 `FeatureRow` keys (JS validates strictly); a nil optional is
-  /// JSON null (NSNull), never a dropped key.
+  /// The `row` payload: exactly the 21 `FeatureRow` keys (JS validates strictly).
   var payload: [String: Any] {
     return [
       "ts": NSNumber(value: ts),
@@ -188,11 +177,6 @@ struct ExtractedRow {
       "yawRateMax": yawRateMax, "jerkMax": jerkMax, "gravityStability": gravityStability,
       "orientationDelta": orientationDelta, "handlingScore": handlingScore,
       "locked": locked, "screenOn": screenOn, "appForeground": appForeground,
-      "frameAligned": frameAligned, "aLonMean": aLonMean,
-      "accRms": accRms.map { $0 as Any } ?? NSNull(),
-      "gravX": gravX.map { $0 as Any } ?? NSNull(),
-      "gravY": gravY.map { $0 as Any } ?? NSNull(),
-      "gravZ": gravZ.map { $0 as Any } ?? NSNull(),
     ]
   }
 }

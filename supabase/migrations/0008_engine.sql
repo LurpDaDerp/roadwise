@@ -138,7 +138,7 @@ begin
       'endedAt', floor(extract(epoch from t.ended_at) * 1000)::bigint,
       'tz', t.tz, 'localDay', t.local_day,
       'miles', t.miles, 'safeMiles', t.safe_miles, 'nightMiles', t.night_miles, 'durationS', t.duration_s,
-      'dmsOn', t.dms_on, 'dmsFaceSeen', t.dms_face_seen, 'polyline', t.polyline,
+      'polyline', t.polyline,
       'events', private.trip_events_json(t.id),
       'isLoop', t.is_loop, 'loopRepeat', t.loop_repeat,
       'safeMilesEarlierToday', t.safe_miles_earlier_today,
@@ -184,12 +184,12 @@ declare
   v_week text;
   v_local_day date;
   v_tz text;
-  v_miles numeric; v_safe numeric; v_night numeric; v_dur int; v_dms boolean; v_face boolean; v_poly text;
+  v_miles numeric; v_safe numeric; v_night numeric; v_dur int; v_poly text;
   v_rev int := 1;
   v_snap jsonb;
   v_level_before int;
   v_level_after int;
-  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_eo int; v_dr int;
+  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int;
   v_clean boolean;
   v_after jsonb;
   v_league jsonb;
@@ -226,7 +226,7 @@ begin
   v_ended := to_timestamp((pl ->> 'endedAt')::bigint / 1000.0);
   v_local_day := (pl ->> 'localDay')::date;
   v_miles := (pl ->> 'miles')::numeric; v_safe := (pl ->> 'safeMiles')::numeric; v_night := (pl ->> 'nightMiles')::numeric;
-  v_dur := (pl ->> 'durationS')::int; v_dms := coalesce((pl ->> 'dmsOn')::boolean, false); v_face := coalesce((pl ->> 'dmsFaceSeen')::boolean, false);
+  v_dur := (pl ->> 'durationS')::int;
   v_poly := coalesce(pl ->> 'polyline', '');
   if v_miles is null or v_safe is null or v_night is null or v_dur is null or v_started is null or v_ended is null
      or v_miles not between 0 and 1000 or v_safe not between 0 and v_miles or v_night not between 0 and v_miles
@@ -268,7 +268,7 @@ begin
     v_local_day := tgt.local_day;
     v_tz := tgt.tz;
     v_miles := tgt.miles + v_miles; v_safe := tgt.safe_miles + v_safe; v_night := tgt.night_miles + v_night;
-    v_dur := tgt.duration_s + v_dur; v_dms := tgt.dms_on or v_dms; v_face := tgt.dms_face_seen or v_face;
+    v_dur := tgt.duration_s + v_dur;
     -- the route is a list of visible runs (encoded polylines joined by single spaces, each decoded
     -- on its own): the union carries both drives' runs, target first. They are never joined into
     -- one line - that would draw a chord across the stop the trimming hides. Over the column limit
@@ -288,26 +288,26 @@ begin
   v_level_before := (v_snap ->> 'level')::int;
 
   -- the trip row first (counts follow once the events are stored)
-  v_n := 0; v_sp := 0; v_pk := 0; v_hs := 0; v_hb := 0; v_ha := 0; v_hc := 0; v_eo := 0; v_dr := 0;
+  v_n := 0; v_sp := 0; v_pk := 0; v_hs := 0; v_hb := 0; v_ha := 0; v_hc := 0;
   v_clean := false;
   if v_merge is null then
     insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s,
-        dms_on, dms_face_seen, polyline, scored, reason, is_loop, loop_repeat, safe_miles_earlier_today, points_net, breakdown, rating_penalty,
-        n_events, n_speeding, n_pickup, handling_s, n_hard_brake, n_hard_accel, n_hard_corner, n_eyes_off, n_drowsy, clean, streak_before,
+        polyline, scored, reason, is_loop, loop_repeat, safe_miles_earlier_today, points_net, breakdown, rating_penalty,
+        n_events, n_speeding, n_pickup, handling_s, n_hard_brake, n_hard_accel, n_hard_corner, clean, streak_before,
         progress_before, rev, scoring_version, app_version)
       values (v_user, v_client, v_started, v_ended, v_local_day, v_week, v_tz, v_miles, v_safe, v_night, v_dur,
-        v_dms, v_face, v_poly, v_scored, v_reason, coalesce((p ->> 'isLoop')::boolean, false), coalesce((p ->> 'loopRepeat')::boolean, false),
+        v_poly, v_scored, v_reason, coalesce((p ->> 'isLoop')::boolean, false), coalesce((p ->> 'loopRepeat')::boolean, false),
         coalesce((p ->> 'safeMilesEarlierToday')::numeric, 0), v_net, bd, coalesce((bd ->> 'ratingPenalty')::int, 0),
-        v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr, v_clean, coalesce((st -> 'before' ->> 'streak')::int, 0),
+        v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_clean, coalesce((st -> 'before' ->> 'streak')::int, 0),
         v_snap, 1, coalesce((p ->> 'scoringVersion')::int, 3), left(pl ->> 'appVersion', 32))
       returning id into v_trip;
   else
     update public.trips set ended_at = v_ended, miles = v_miles, safe_miles = v_safe, night_miles = v_night, duration_s = v_dur,
-        dms_on = v_dms, dms_face_seen = v_face, polyline = v_poly, scored = v_scored, reason = v_reason,
+        polyline = v_poly, scored = v_scored, reason = v_reason,
         loop_repeat = coalesce((p ->> 'loopRepeat')::boolean, loop_repeat), points_net = v_net, breakdown = bd,
         rating_penalty = coalesce((bd ->> 'ratingPenalty')::int, 0),
         n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha, n_hard_corner = v_hc,
-        n_eyes_off = v_eo, n_drowsy = v_dr, clean = v_clean, streak_before = coalesce((st -> 'before' ->> 'streak')::int, 0),
+        clean = v_clean, streak_before = coalesce((st -> 'before' ->> 'streak')::int, 0),
         progress_before = v_snap, rev = v_rev, scoring_version = coalesce((p ->> 'scoringVersion')::int, scoring_version)
       where id = v_trip;
   end if;
@@ -316,7 +316,7 @@ begin
   -- `removed` only if it already was (removal happens in apply_dispute alone), whatever the input says.
   for e in select x from jsonb_array_elements(ev) x loop
     if (e ->> 'id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-       or e ->> 'type' not in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy')
+       or e ->> 'type' not in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling')
        or e ->> 'tier' not in ('minor', 'moderate', 'severe') or (e ->> 'startedAt')::numeric is null or (e ->> 'durationS')::numeric is null then
       raise exception 'event needs id, type, tier, startedAt and durationS' using errcode = 'invalid_parameter_value';
     end if;
@@ -343,25 +343,25 @@ begin
   select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
          least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
          count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
-         count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type = 'eyes_off'), count(*) filter (where x.type = 'drowsy')
-    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr
+         count(*) filter (where x.type = 'hard_corner')
+    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc
     from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
   if v_scored and coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
     raise exception 'events do not match the breakdown' using errcode = 'invalid_parameter_value';
   end if;
   v_clean := v_scored and v_n = 0;
   update public.trips set n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha,
-      n_hard_corner = v_hc, n_eyes_off = v_eo, n_drowsy = v_dr, clean = v_clean
+      n_hard_corner = v_hc, clean = v_clean
     where id = v_trip;
 
   -- the merged-away payload keeps its own row (unscored, pointing at the target)
   if v_merge is not null then
     insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s,
-        dms_on, dms_face_seen, polyline, scored, merged_into, app_version)
+        polyline, scored, merged_into, app_version)
       values (v_user, v_client, to_timestamp((pl ->> 'startedAt')::bigint / 1000.0), v_ended, (pl ->> 'localDay')::date,
         private.league_week(to_timestamp((pl ->> 'startedAt')::bigint / 1000.0)), pl ->> 'tz',
         (pl ->> 'miles')::numeric, (pl ->> 'safeMiles')::numeric, (pl ->> 'nightMiles')::numeric, (pl ->> 'durationS')::int,
-        coalesce((pl ->> 'dmsOn')::boolean, false), coalesce((pl ->> 'dmsFaceSeen')::boolean, false), coalesce(pl ->> 'polyline', ''),
+        coalesce(pl ->> 'polyline', ''),
         false, v_trip, left(pl ->> 'appVersion', 32));
   end if;
 
@@ -420,7 +420,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- "Wasn't driving": the latest drive only, within 24 h, 2 per UTC month, never when DMS saw a face
+-- "Wasn't driving": the latest drive only, within 24 h, 2 per UTC month
 -- ---------------------------------------------------------------------------
 create or replace function private.revert_latest_not_driving(p_user uuid, p_client_trip_id uuid) returns jsonb
 language plpgsql volatile set search_path = public as $$
@@ -451,9 +451,6 @@ begin
   end if;
   if t.ended_at < now() - interval '24 hours' then
     raise exception 'the drive is older than 24 hours' using errcode = 'insufficient_privilege';
-  end if;
-  if t.dms_face_seen then
-    raise exception 'the camera saw a driver on this drive' using errcode = 'insufficient_privilege';
   end if;
   v_left := private.not_driving_left(p_user);
   if v_left <= 0 then
@@ -539,7 +536,7 @@ begin
     'status', v_status, 'rejectReason', v_why, 'scored', t.scored, 'oldNet', t.points_net,
     'quotaLeft', case when p_reason in ('hazard', 'wrong_limit') then greatest(0, 3 - v_used) else null end,
     'rescore', case when v_status = 'accepted' and t.scored then jsonb_build_object(
-      'input', jsonb_build_object('miles', t.miles, 'safeMiles', t.safe_miles, 'dmsOn', t.dms_on, 'loopRepeat', t.loop_repeat,
+      'input', jsonb_build_object('miles', t.miles, 'safeMiles', t.safe_miles, 'loopRepeat', t.loop_repeat,
         'events', (select jsonb_agg(case when x ->> 'id' = p_event_id::text then x || '{"status":"removed"}'::jsonb else x end)
                    from jsonb_array_elements(private.trip_events_json(t.id)) x)),
       'ctx', jsonb_build_object('streak', t.streak_before, 'safeMilesEarlierToday', t.safe_miles_earlier_today)) else null end);
@@ -562,7 +559,7 @@ declare
   v_delta int := 0;
   t public.trips%rowtype;
   e public.trip_events%rowtype;
-  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_eo int; v_dr int;
+  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int;
   v_why text := p ->> 'rejectReason';
   v_used int;
   v_left int;
@@ -615,8 +612,8 @@ begin
     select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
            least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
            count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
-           count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type = 'eyes_off'), count(*) filter (where x.type = 'drowsy')
-      into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_eo, v_dr
+           count(*) filter (where x.type = 'hard_corner')
+      into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc
       from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
     -- a breakdown scored over a different set of active events (another dispute landed in between): retry
     if coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
@@ -626,7 +623,7 @@ begin
       where x.trip_id = v_trip;
     update public.trips set points_net = v_net, breakdown = bd, rating_penalty = coalesce((bd ->> 'ratingPenalty')::int, rating_penalty),
         n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha, n_hard_corner = v_hc,
-        n_eyes_off = v_eo, n_drowsy = v_dr, clean = (v_n = 0)
+        clean = (v_n = 0)
       where id = v_trip;
     if v_delta <> 0 or greatest(0, v_net) <> greatest(0, v_old) then
       insert into public.points_ledger (user_id, key, amount, kind, trip_id, league_week)

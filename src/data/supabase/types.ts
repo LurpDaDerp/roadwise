@@ -896,8 +896,6 @@ export type Database = {
           clean: boolean
           client_trip_id: string
           created_at: string
-          dms_face_seen: boolean
-          dms_on: boolean
           duration_s: number
           ended_at: string
           handling_s: number
@@ -908,9 +906,7 @@ export type Database = {
           loop_repeat: boolean
           merged_into: string | null
           miles: number
-          n_drowsy: number
           n_events: number
-          n_eyes_off: number
           n_hard_accel: number
           n_hard_brake: number
           n_hard_corner: number
@@ -942,8 +938,6 @@ export type Database = {
           clean?: boolean
           client_trip_id: string
           created_at?: string
-          dms_face_seen?: boolean
-          dms_on?: boolean
           duration_s: number
           ended_at: string
           handling_s?: number
@@ -954,9 +948,7 @@ export type Database = {
           loop_repeat?: boolean
           merged_into?: string | null
           miles: number
-          n_drowsy?: number
           n_events?: number
-          n_eyes_off?: number
           n_hard_accel?: number
           n_hard_brake?: number
           n_hard_corner?: number
@@ -988,8 +980,6 @@ export type Database = {
           clean?: boolean
           client_trip_id?: string
           created_at?: string
-          dms_face_seen?: boolean
-          dms_on?: boolean
           duration_s?: number
           ended_at?: string
           handling_s?: number
@@ -1000,9 +990,7 @@ export type Database = {
           loop_repeat?: boolean
           merged_into?: string | null
           miles?: number
-          n_drowsy?: number
           n_events?: number
-          n_eyes_off?: number
           n_hard_accel?: number
           n_hard_brake?: number
           n_hard_corner?: number

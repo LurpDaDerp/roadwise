@@ -18,14 +18,12 @@ import { scoreDrive, type DriveContext } from '@scoring';
 import { decisionFor } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
-import { dmsPayloadFlags } from '@/core/dms/adapters/flags';
 import { knownSpeed } from '@/core/detectors/common';
 import type { AdoptedTrip, AlertEvent, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
 import { finalizeTrip } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
-import { createMotionEvidence, type MotionEvidence, type MotionEvidenceSource } from '@/core/engine/motionEvidence';
 import { createRecorder } from '@/core/engine/recorder';
-import type { Detector, FeatureRow } from '@/core/engine/types';
+import type { FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import type { Db, TripStatus } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -58,8 +56,6 @@ export interface DriveState extends EngineSnapshot {
   lastFinalized: LastFinalized;
   /** False when a sound failed during this drive; the drive still records, silently. */
   alertsAvailable: boolean;
-  /** DMS is on for this drive AND the camera is tracking the driver's face right now (the driving screen's indicator). */
-  dmsActive: boolean;
   /** The local estimate, non-null only while stopped (≤ 5 mph). */
   points: DrivePoints | null;
   /** A `persistence: 'none'` host (the diagnostics simulation): nothing is stored. */
@@ -71,23 +67,11 @@ export interface DriveState extends EngineSnapshot {
 
 export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: 'moving' | 'permission' | 'busy' | 'error' };
 
-/** The part of the DMS controller's `presence()` the host reads: the frame clock of the last face. */
-export interface DriverPresence {
-  lastFaceT: number | null;
-}
-
-/**
- * A face this recent (ms) is a driver in the seat on this row: the DMS tracks at 5–15 fps, so a tracked face is
- * never older than a second or two. Counted per moving row for the payload's `dmsOn` / `dmsFaceSeen` shares, and
- * shown as `dmsActive`.
- */
-export const FACE_RECENT_MS = 3_000;
-
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
   boot(opts?: { adopt?: AdoptedTrip | null }): Promise<void>;
   /** The user's Start Drive tap. Refuses at ≥ 3 mph, without location, while busy, or signed out. */
-  start(opts: { dmsOn: boolean }): Promise<StartResult>;
+  start(): Promise<StartResult>;
   /** The hold-to-end. Resolves once the drive is finalized; null when none was open. */
   end(): Promise<{ clientTripId: string } | null>;
   stop(opts: { endOpenTrip: boolean }): Promise<void>;
@@ -98,8 +82,6 @@ export interface DriveHost {
   settled(): Promise<void>;
   snapshot(): DriveState;
   subscribe(fn: (s: DriveState) => void): () => void;
-  /** The shared motion evidence of the latest row (the DMS reads it). */
-  motionEvidence(): MotionEvidence | null;
   signedIn(): boolean;
   /** Sign-out: an open drive is ended and finalized under the current owner. */
   suspendForSignOut(): Promise<void>;
@@ -128,14 +110,7 @@ export interface DriveHostDeps {
   speedProbe?: () => Promise<number | null>;
   /** The cached summary context for the points estimate; null when nothing is cached. */
   context?: () => Promise<DriveContext | null>;
-  /** The driver-seat presence, from the DMS controller while it runs. */
-  presence?: () => DriverPresence | null;
-  /** Extra detectors for each drive (the DMS's eyes-off/drowsiness detector). */
-  extraDetectors?: () => Detector[];
-  /** Told every 1 Hz row with its motion evidence, before the engine sees it (the DMS). */
-  onRow?: (row: FeatureRow, motion: MotionEvidence | null) => void;
   voiceEnabled?: () => boolean;
-  motionEvidence?: () => MotionEvidenceSource;
   appState?: AppStateLike;
   scheduler?: Scheduler;
   alertsAvailable?: boolean;
@@ -177,7 +152,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let soundFailedThisDrive = false;
   let signedOut = deps.signedOut === true;
   let signingOut = false;
-  let dmsActive = false;
   let points: DrivePoints | null = null;
   /** The driver's units, read as the drive starts; every display call of the drive uses it. */
   let displayUnit: DisplayUnit = 'mph';
@@ -187,22 +161,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let startTripPending = false;
   let finalizedPending = false;
   let prevStatus: EngineStatus = 'idle';
-  const motion = (deps.motionEvidence ?? createMotionEvidence)();
-  let lastMotion: MotionEvidence | null = null;
-  let motionTripId: string | null = null;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
   const listeners = new Set<(s: DriveState) => void>();
-
-  function faceSeen(): boolean {
-    try {
-      const p = deps.presence?.() ?? null;
-      return p !== null && p.lastFaceT !== null && now() - p.lastFaceT <= FACE_RECENT_MS;
-    } catch (e) {
-      report(e, 'presence');
-      return false;
-    }
-  }
 
   // --- engine wiring -------------------------------------------------------------------------------
 
@@ -236,9 +197,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         if (persist) limits.prefetch(lat, lng, course);
       },
     },
-    createDetectors: () => createDetectors(newId, deps.extraDetectors?.() ?? []),
+    createDetectors: () => createDetectors(newId),
     ctx: () => detectorContext(lockSignal, callActive),
-    faceSeen,
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
@@ -257,7 +217,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       screenLocked,
       lastFinalized,
       alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
-      dmsActive: dmsActive && faceSeen(),
       points,
       dryRun: !persist,
       mode: 'mounted' as const,
@@ -293,11 +252,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const s = engine.session();
     if (s === null) return 0;
     const miles = metersToMiles(s.distanceM);
-    const bd = scoreDrive(
-      // The same dmsOn finalize will send (a face on ≥ 80 % of the moving rows), so the estimate never shows a 1.25× the server withholds.
-      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), dmsOn: dmsPayloadFlags({ dmsOn: s.dmsOn, movingRows: s.movingRows, dmsFaceRows: s.dmsFaceRows }).dmsOn },
-      pointsCtx
-    );
+    const bd = scoreDrive({ miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e) }, pointsCtx);
     return bd.scored ? bd.net : 0;
   }
 
@@ -352,7 +307,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (closed) {
       limits.resetTrip();
       startTripPending = false;
-      dmsActive = false;
       deps.display?.end();
     }
     publish();
@@ -413,19 +367,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- native events -------------------------------------------------------------------------------
 
   async function onRow(row: FeatureRow): Promise<void> {
-    const before = engine.snapshot();
-    if (before.clientTripId !== motionTripId) {
-      motion.reset();
-      motionTripId = before.clientTripId;
-    }
-    lastMotion = motion.onRow(row, { mounted: true });
-    if (deps.onRow) {
-      try {
-        deps.onRow(row, lastMotion);
-      } catch (e) {
-        report(e, 'row hook');
-      }
-    }
     screenLocked = row.locked;
     if (startTripPending && row.gnssValid) {
       startTripPending = false;
@@ -495,14 +436,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             report(e, 'context');
           }
           await readDisplayUnit();
-          dmsActive = opts.adopt.session.dmsOn;
           await engine.dispatch({ type: 'adopt', trip: opts.adopt, ts: now() });
         }
         attachNative();
       }, 'boot');
     },
 
-    async start({ dmsOn }) {
+    async start() {
       if (!booted || signedOut) return { ok: false, reason: 'error' };
       if (isBusyStatus(engine.snapshot().status)) return { ok: false, reason: 'busy' };
       try {
@@ -539,8 +479,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           pointsCtx = { streak: 0, safeMilesEarlierToday: 0 };
         }
         await readDisplayUnit();
-        dmsActive = dmsOn;
-        await engine.dispatch({ type: 'start', ts: now(), dmsOn });
+        await engine.dispatch({ type: 'start', ts: now() });
         const id = engine.snapshot().clientTripId;
         if (id === null) return;
         try {
@@ -602,7 +541,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         listeners.delete(fn);
       };
     },
-    motionEvidence: () => lastMotion,
     signedIn: () => !signedOut || signingOut,
 
     async suspendForSignOut() {

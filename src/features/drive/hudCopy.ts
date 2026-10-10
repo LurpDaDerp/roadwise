@@ -22,15 +22,12 @@ export const hudCopy = {
     hard_corner: 'Sharp turn',
     phone_pickup: 'Phone',
     phone_handling: 'Phone',
-    eyes_off: 'Eyes up',
-    drowsy: 'Take a break',
   } satisfies Record<EventType, string>,
   weatherLabel: (words: string) => `Weather alert: ${words}`,
   points: {
     unit: 'pts',
     label: (total: string, change: string) => `${total} points, ${change} since your last stop`,
   },
-  dms: 'Driver monitoring on',
   banner: {
     title: 'Drive in progress',
     action: 'Back to drive',

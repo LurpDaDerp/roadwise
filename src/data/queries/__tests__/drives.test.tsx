@@ -11,7 +11,7 @@ let db: Db;
 beforeEach(async () => {
   db = await createTestDb();
   await seedTrips(db, [
-    { client_trip_id: uuid(1), started_at: T0 - 1000, tz: 'UTC', status: 'scored', miles: 10, duration_s: 600, points_net: 120, estimate: 0, clean: 1, counts_json: JSON.stringify({ speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 }), polyline: 'abc' },
+    { client_trip_id: uuid(1), started_at: T0 - 1000, tz: 'UTC', status: 'scored', miles: 10, duration_s: 600, points_net: 120, estimate: 0, clean: 1, counts_json: JSON.stringify({ speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0 }), polyline: 'abc' },
     { client_trip_id: uuid(2), started_at: T0 - 2000, tz: 'UTC', status: 'pending', miles: 4, duration_s: 300, points_net: -20, estimate: 1, clean: 0, counts_json: JSON.stringify({ speeding: 1, pickups: 1, handlingS: 20 }), night_miles: 1 },
     { client_trip_id: uuid(3), started_at: T0 - 3000, tz: 'UTC', status: 'merged', merged_into: uuid(1) },
     { client_trip_id: uuid(4), started_at: T0 - 4000, tz: 'UTC', status: 'not_driving', points_net: 0, miles: 3 },
@@ -60,12 +60,12 @@ test('recent drives: the newest listed drives, capped', async () => {
 });
 
 test('row bridges: counts from events, filters on a drive view', () => {
-  expect(countEvents([{ type: 'phone_handling', durationS: 30 }, { type: 'hard_brake', status: 'removed' }, { type: 'drowsy' }])).toMatchObject({ handlingS: 30, hardBrake: 0, drowsy: 1 });
+  expect(countEvents([{ type: 'phone_handling', durationS: 30 }, { type: 'hard_brake', status: 'removed' }, { type: 'hard_corner' }])).toMatchObject({ handlingS: 30, hardBrake: 0, hardCorner: 1 });
   const d = toLocalDrive({
-    client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, safe_miles: 1, night_miles: 0, duration_s: 1, dms_on: 1, dms_face_seen: 0,
+    client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, safe_miles: 1, night_miles: 0, duration_s: 1,
     start_lat: null, start_lng: null, end_lat: null, end_lng: null, polyline: null, from_label: 'Home', to_label: null, max_speed_mph: 0, integrity_json: null,
     status: 'failed', points_net: null, estimate: 1, breakdown_json: null, clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null, created_at: 1, updated_at: 1,
   });
-  expect(d).toMatchObject({ dmsOn: true, fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });
+  expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });
   expect(matchesHistoryFilter(d, 'all')).toBe(false);
 });
