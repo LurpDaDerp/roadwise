@@ -29,6 +29,9 @@ import { invalidateAfterDrive } from '@/data/server/invalidate';
 import type { MySummary } from '@/data/server/summary';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/sync/runner';
+import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
+import { setActiveDashcam } from '@/dashcam/registry';
+import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
@@ -85,6 +88,11 @@ export interface BootstrapDeps {
   speedProbe?: () => Promise<number | null>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
+  /**
+   * The DashPal dashcam runtime (plan §7). Default: `createDashcamRuntime` over the process BLE
+   * transport, which is only created once a dashcam is paired or setup runs. `null`: none.
+   */
+  createDashcam?: ((args: { db: Db; player: AlertPlayer; host: () => DriveHost | undefined; appState: ForegroundAppState; now: () => number; newId: () => string; onError: (error: unknown, context: string) => void }) => DashcamRuntime) | null;
   /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
   mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
   sessionTimeoutMs?: number;
@@ -107,6 +115,8 @@ export interface AppRuntime {
   profile: LaunchProfile;
   /** The interrupted drive the host continued, or null. */
   adopted: string | null;
+  /** The DashPal dashcam runtime, or null where none was built. */
+  dashcam: DashcamRuntime | null;
   recovery: RecoveryResult;
   owner: DeviceOwnerOutcome;
   schemaVersion: number;
@@ -253,8 +263,16 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     const today = dayKey(new Date(now()), currentZone());
     return { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, today, now()) };
   };
+  // Crash recovery finalizes with the drive's stored DashPal facts too (plan §7.7).
   const finalizeDeps = (session: Readonly<TripSession>) =>
-    finalizeTrip(session, { db, tz: currentZone(), now, appVersion, context: async () => (await summaryContext()) ?? null });
+    finalizeTrip(session, {
+      db,
+      tz: currentZone(),
+      now,
+      appVersion,
+      context: async () => (await summaryContext()) ?? null,
+      ...dashcamFinalizeDeps(db),
+    });
 
   enter('recover');
   const recovery = await stage('recover', () =>
@@ -278,15 +296,32 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   enter('engine');
   const engine = await stage('engine', async () => {
     let host: DriveHost | undefined;
+    let dashcam: DashcamRuntime | null = null;
     let player: AlertPlayer;
     let alertsAvailable = true;
+    const inputs = playerInputs(() => host);
+    // A sound failing during a DashPal item also tells the dashcam (ALERT_ACK(0): its buzzer).
+    const onUnavailable = inputs.onUnavailable;
+    inputs.onUnavailable = () => {
+      onUnavailable();
+      dashcam?.playerUnavailable();
+    };
     try {
-      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(playerInputs(() => host));
+      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(inputs);
     } catch (error) {
       onError(new Error(`alert sound could not be loaded (${error instanceof Error ? error.name : typeof error})`), 'alert ports');
       alertsAvailable = false;
       player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
     }
+    const makeDashcam = deps.createDashcam === undefined ? defaultDashcam : deps.createDashcam;
+    if (makeDashcam) {
+      try {
+        dashcam = makeDashcam({ db, player, host: () => host, appState, now, newId, onError: (error, context) => onError(error, `dashcam ${context}`) });
+      } catch (error) {
+        onError(error, 'dashcam');
+      }
+    }
+    const dc = dashcam;
     const display = deps.display === undefined ? createDriveDisplay(nativeDisplaySinks(), { now, platform: Platform.OS, onError: (e) => onError(e, 'display') }) : deps.display;
     const drive = createDriveHost({
       db,
@@ -305,9 +340,19 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       appState,
       alertsAvailable,
       signedOut: identity.owner === 'signed-out',
+      dashcam: dc
+        ? {
+            row: (row, drive) => dc.row(row, drive),
+            adopt: (id) => dc.adopt(id),
+            estimateOn: (id) => dc.estimateOn(id),
+            beforeFinalize: (id, o) => dc.beforeFinalize(id, o),
+            continuousAlertActive: () => dc.continuousAlertActive(),
+          }
+        : undefined,
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
+    setActiveDashcam(dc);
     // The optional forgot-to-start reminder follows its stored setting (off by default); WP9's toggle
     // re-applies it through `applyForgotToStartSetting`.
     void applyStoredForgotToStartSetting(db, { setForgotToStartReminder: (on) => source.setForgotToStartReminder(on) }).catch((error: unknown) =>
@@ -339,8 +384,14 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       unmountDiagnostics();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
+      if (dc) {
+        // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
+        await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));
+        dc.dispose();
+        setActiveDashcam(null);
+      }
     };
-    return { drive, adopted: adopt?.session.clientTripId ?? null, release };
+    return { drive, adopted: adopt?.session.clientTripId ?? null, release, dashcam: dc };
   });
 
   const detach = subscribeInvalidation(queryClient);
@@ -384,6 +435,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     limits,
     profile,
     adopted: engine.adopted,
+    dashcam: engine.dashcam,
     recovery,
     owner: identity.owner,
     schemaVersion,
@@ -474,6 +526,32 @@ function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; sett
   return attachSummaryNotifier(host);
 }
 
+/**
+ * The DashPal runtime over the process transport (created only when a dashcam is paired or setup
+ * runs, so nothing touches Bluetooth for a driver without one).
+ */
+function defaultDashcam(args: { db: Db; player: AlertPlayer; host: () => DriveHost | undefined; appState: ForegroundAppState; now: () => number; newId: () => string; onError: (error: unknown, context: string) => void }): DashcamRuntime {
+  return createDashcamRuntime({
+    db: args.db,
+    player: args.player,
+    transport: () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
+      const { getDashcamTransport } = require('@/dashcam/transport') as typeof import('@/dashcam/transport');
+      return getDashcamTransport();
+    },
+    host: () => {
+      const s = args.host()?.snapshot();
+      return { recording: s?.status === 'recording', playerAvailable: s?.alertsAvailable ?? false, callActive: s?.callActive ?? false };
+    },
+    styleAllowsSound: () => alertStylePref() !== 'vibration',
+    platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    appState: args.appState,
+    now: args.now,
+    newId: args.newId,
+    onError: args.onError,
+  });
+}
+
 /** The alert player over the device ports. A port that will not load rejects; the drive then records without sound. */
 function defaultPlayer(onError: (error: unknown, context: string) => void, db: Db): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
   return async (inputs) => {
@@ -503,8 +581,8 @@ export interface ForegroundJobs {
 
 /**
  * The work that runs only while the driver has the app open, each on a transition to `active`:
- * the restore (once per launch while the device holds no drives), the public config (daily) and
- * the expired-tile purge.
+ * the restore (once per launch while the device holds no drives), the public config (daily), the
+ * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily).
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
   const onError = deps.onError ?? warn;
@@ -530,10 +608,20 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     },
     foreground
   );
+  // DashPal events no drive claimed are kept a week, then pruned (plan §7.5).
+  const stopPrune = runWhenForeground(
+    'dashcam.prune',
+    APP_CONFIG_INTERVAL_MS,
+    async () => {
+      await runtime.dashcam?.pruneUnattached();
+    },
+    foreground
+  );
   return {
     async stop() {
       stopRestore();
       stopConfig();
+      stopPrune();
     },
     async runNow() {
       try {

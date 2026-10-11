@@ -178,8 +178,12 @@ export interface DashcamLink {
   // app side
   setPaired(paired: PairedDashcam | null): void;
   tick(now?: number): void;
-  /** One drive row (host row hook): the context for STATE, coverage, a tick. */
-  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): void;
+  /**
+   * One drive row (host row hook): the context for STATE, a tick, and this row's coverage (written
+   * to the drive; returned so the caller can keep the drive's totals). Null: nothing counted (no
+   * dashcam paired, not recording, a dry run).
+   */
+  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): { moving: boolean; covered: boolean } | null;
   /** Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive. */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
@@ -778,7 +782,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const now = deps.now();
       lastRow = { row, at: now };
       tick(now);
-      if (!paired || !drive.recording || drive.dryRun || drive.clientTripId === null) return;
+      if (!paired || !drive.recording || drive.dryRun || drive.clientTripId === null) return null;
       const s = session;
       const speed = knownSpeed(row);
       const moving = speed !== null && speed >= MOVING_MPS;
@@ -796,6 +800,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       coverageChain = coverageChain
         .then(() => store.addCoverage(tripId, moving ? 1 : 0, covered ? 1 : 0, syncedAt))
         .catch((e: unknown) => report(e, 'coverage'));
+      return { moving, covered };
     },
 
     async beforeFinalize(clientTripId, opts = {}) {

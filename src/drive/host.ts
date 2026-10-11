@@ -25,6 +25,7 @@ import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
 import type { FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
 import type { Db, TripStatus } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
@@ -94,6 +95,23 @@ export interface DriveHost {
   reportAlertsAvailable(): void;
 }
 
+/**
+ * The DashPal dashcam, as the host drives it (plan §7.7; `src/dashcam/runtime.ts`). Every hook is
+ * optional work beside the drive: a failure never stops a row, an alert or a finalize.
+ */
+export interface DriveHostDashcam {
+  /** Every drive row: the dashcam's context (STATE, its tick) and this drive's coverage. */
+  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): void;
+  /** A drive continued after a relaunch: its coverage totals are reloaded. */
+  adopt(clientTripId: string): Promise<void>;
+  /** The stopped-points estimate: a DashPal drive so far. */
+  estimateOn(clientTripId: string | null): boolean;
+  /** Drive end: wait ≤ 3 s for the phone to catch up to the dashcam, then stamp the sync time. */
+  beforeFinalize(clientTripId: string, opts: { dryRun: boolean }): Promise<void>;
+  /** A DashPal continuous alert is active: phone alerts are then haptic + visual only. */
+  continuousAlertActive(): boolean;
+}
+
 export interface DriveHostDeps {
   db: Db;
   source: DriveSource;
@@ -117,6 +135,8 @@ export interface DriveHostDeps {
   signedOut?: boolean;
   /** `none`: a dry run (a simulation) — no checkpoint, finalize or change event. */
   persistence?: 'full' | 'none';
+  /** The DashPal dashcam (none: no hooks). */
+  dashcam?: DriveHostDashcam;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -171,12 +191,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!persist) return;
     const id = session.clientTripId;
     try {
+      // The phone catches up to the dashcam (≤ 3 s) before the drive's facts are read.
+      try {
+        await deps.dashcam?.beforeFinalize(id, { dryRun: !persist });
+      } catch (e) {
+        report(e, 'dashcam');
+      }
       const result = await finalizeTrip(session, {
         db,
         tz: tz(),
         now,
         appVersion: deps.appVersion,
         context: async () => (await deps.context?.()) ?? null,
+        ...dashcamFinalizeDeps(db),
       });
       lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, pointsNet: result.trip.points_net, at: now() };
       finalizedPending = true;
@@ -201,6 +228,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     ctx: () => detectorContext(lockSignal, callActive),
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
+      // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
+      if (dashcamAlertActive()) decision.silent = true;
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     },
     onCheckpoint: (session) => (persist ? recorder.onCheckpoint(session) : Promise.resolve()),
@@ -247,12 +276,36 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /** The local estimate for the drive so far, computed once per stop. */
+  function dashcamAlertActive(): boolean {
+    try {
+      return deps.dashcam?.continuousAlertActive() ?? false;
+    } catch (e) {
+      report(e, 'dashcam');
+      return false;
+    }
+  }
+
+  /**
+   * The local estimate for the drive so far, computed once per stop. A DashPal drive so far counts
+   * its bonus; DashPal deductions are not estimated (they are decided at the end).
+   */
   function estimateNow(): number {
     const s = engine.session();
     if (s === null) return 0;
     const miles = metersToMiles(s.distanceM);
-    const bd = scoreDrive({ miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e) }, pointsCtx);
+    let dashcamOn = false;
+    try {
+      dashcamOn = deps.dashcam?.estimateOn(s.clientTripId) ?? false;
+    } catch (e) {
+      report(e, 'dashcam');
+    }
+    // `dashcam` joins the scoring input with the DashPal scoring work; spread so this compiles
+    // before and after that field exists.
+    const dashcamInput: Record<string, unknown> = dashcamOn ? { dashcam: true } : {};
+    const bd = scoreDrive(
+      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), ...dashcamInput },
+      pointsCtx
+    );
     return bd.scored ? bd.net : 0;
   }
 
@@ -373,6 +426,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (persist) limits.startTrip(row.lat, row.lng, row.course);
     }
     await engine.dispatch({ type: 'row', row });
+    if (deps.dashcam) {
+      const snap = engine.snapshot();
+      try {
+        deps.dashcam.row(row, { clientTripId: snap.clientTripId, recording: snap.status === 'recording', dryRun: !persist });
+      } catch (e) {
+        report(e, 'dashcam');
+      }
+    }
   }
 
   function attachNative(): void {
@@ -437,6 +498,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           }
           await readDisplayUnit();
           await engine.dispatch({ type: 'adopt', trip: opts.adopt, ts: now() });
+          await deps.dashcam?.adopt(opts.adopt.session.clientTripId).catch((e: unknown) => report(e, 'dashcam'));
         }
         attachNative();
       }, 'boot');

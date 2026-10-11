@@ -289,3 +289,75 @@ test('boot adopts a rebuilt drive and keeps recording it; a sign-out ends an ope
   expect(h.host.signedIn()).toBe(true);
   await h.host.stop({ endOpenTrip: false });
 });
+
+describe('the DashPal hooks (plan §7.7)', () => {
+  function fakeDashcam() {
+    const log: string[] = [];
+    let continuous = false;
+    let on = false;
+    return {
+      log,
+      setContinuous: (v: boolean) => (continuous = v),
+      setOn: (v: boolean) => (on = v),
+      hooks: {
+        row: (_row: unknown, d: { clientTripId: string | null; recording: boolean; dryRun: boolean }) => log.push(`row:${d.recording}:${d.clientTripId}:${d.dryRun}`),
+        adopt: async (id: string) => void log.push(`adopt:${id}`),
+        estimateOn: (id: string | null) => {
+          log.push(`estimate:${id}`);
+          return on;
+        },
+        beforeFinalize: async (id: string, o: { dryRun: boolean }) => void log.push(`beforeFinalize:${id}:${o.dryRun}`),
+        continuousAlertActive: () => continuous,
+      },
+    };
+  }
+
+  test('every row reaches the dashcam with the drive; the drive end waits for it before finalizing; a phone alert during a DashPal continuous alert is haptic + visual only', async () => {
+    const dc = fakeDashcam();
+    const h = build({ dashcam: dc.hooks });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(40, { speedMps: 15 }));
+    expect(dc.log.filter((l) => l.startsWith('row:'))).toHaveLength(40);
+    expect(dc.log[0]).toBe(`row:true:${uuid(1)}:false`);
+    dc.setContinuous(true);
+    await feed(h, rows(10, { speedMps: 22, t0: T0 + 40_000 }));
+    expect(h.player.delivered.map((d) => [d.kind, d.silent ?? false])).toEqual([['speeding', true]]);
+    // The stopped estimate asks whether this is a DashPal drive so far.
+    await feed(h, rows(5, { speedMps: 0, t0: T0 + 50_000 }));
+    expect(dc.log).toContain(`estimate:${uuid(1)}`);
+    await h.host.end();
+    expect(dc.log.at(-1)).toBe(`beforeFinalize:${uuid(1)}:false`);
+    expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('pending');
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a failing hook never stops the drive', async () => {
+    const h = build({
+      dashcam: {
+        row: () => {
+          throw new Error('row boom');
+        },
+        adopt: async () => {},
+        estimateOn: () => {
+          throw new Error('estimate boom');
+        },
+        beforeFinalize: async () => {
+          throw new Error('finalize boom');
+        },
+        continuousAlertActive: () => {
+          throw new Error('alert boom');
+        },
+      },
+    });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(40, { speedMps: 15 }));
+    await feed(h, rows(10, { speedMps: 22, t0: T0 + 40_000 }));
+    await feed(h, rows(5, { speedMps: 0, t0: T0 + 50_000 }));
+    await h.host.end();
+    expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('pending');
+    expect(h.player.delivered.map((d) => d.kind)).toEqual(['speeding']);
+    expect(h.errors.some((e) => e.includes('boom'))).toBe(true);
+  });
+});

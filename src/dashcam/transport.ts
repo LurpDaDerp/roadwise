@@ -294,7 +294,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   function armConnect(delayMs: number): void {
     cancelRetry();
     if (!tgt || halted || !isStarted || conn !== 'down') return;
-    if (bt !== 'on' && bt !== 'unknown') return;
+    // iOS refuses a connect before the central is powered on (API misuse: the request is dropped),
+    // so it waits for the state event; Android reads its state at start.
+    if (bt !== 'on' && !(platform === 'android' && bt === 'unknown')) return;
     if (delayMs <= 0) {
       connect();
       return;
