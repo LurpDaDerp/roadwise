@@ -13,7 +13,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { bootstrapApp, type BootSupabase } from '@/boot/bootstrap';
+import { bootstrapApp, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { activeDashcam } from '@/dashcam/registry';
 
 import type { DashcamTripFacts } from '../facts';
@@ -153,5 +153,27 @@ test('createDashcam: null builds none', async () => {
   const rt = await bootstrapApp(deps({ createDashcam: null }).deps);
   expect(rt.dashcam).toBeNull();
   expect(activeDashcam()).toBeNull();
+  await rt.stop();
+});
+
+test('row 32: the foreground jobs prune DashPal events no drive claimed after 7 days, and keep the rest', async () => {
+  const rt = await bootstrapApp(deps().deps);
+  const store = createDashcamStore(db);
+  await store.ensureBoot(CAM, 1, 0);
+  const put = (seq: number, receivedAtMs: number) =>
+    store.insertEvent({
+      dashcamId: CAM, bootKey: 1, seq, id: `00000000-0000-4000-8000-0000000000${10 + seq}`, ev: 3, name: 'LONG_GLANCE', tier: 2, audible: true, detail: 0,
+      tMs: 1, durDs: 1, value: 0, atMs: null, startedAtMs: null, receivedAtMs,
+    });
+  const DAY = 24 * 60 * 60_000;
+  await put(0, clock - 8 * DAY); // outside a drive, 8 days old: pruned
+  await put(1, clock - 6 * DAY); // outside a drive, 6 days old: kept
+  await put(2, clock - 30 * DAY); // claimed by a drive: kept
+  await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: clock - 30 * DAY, tz: TZ, status: 'scored' }, clock);
+  await db.execute('UPDATE dashcam_events SET client_trip_id = ? WHERE seq = 2', [uuid(9)]);
+  const jobs = await startForegroundJobs(rt, { appState: createFakeAppState('active'), onError: () => {} });
+  for (let i = 0; i < 50; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  expect((await db.execute('SELECT seq FROM dashcam_events ORDER BY seq')).rows).toEqual([{ seq: 1 }, { seq: 2 }]);
+  await jobs.stop();
   await rt.stop();
 });

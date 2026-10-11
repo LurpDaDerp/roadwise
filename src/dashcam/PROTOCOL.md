@@ -2,6 +2,8 @@
 
 The authoritative copy is the firmware's `docs/BLE_PROTOCOL.md` (repo `deployment-stack`). This file repeats it for readers of the app. The codec is `protocol.ts`; the golden vectors are `__fixtures__/ble_vectors.json`, byte-identical to the firmware's `tests/ble_vectors.json`.
 
+Codec rules both sides share (firmware doc §3): a receiver checks, in this order, length < 2 (`short`), a type that is not of this direction (`type`), a version other than 1 (`version`), a length below the type's v1 length (`short`); it accepts longer frames and ignores trailing and reserved bytes; a sender never sends more than 20 bytes. A TX read returns an empty value: it exists so an iOS read can start pairing during setup.
+
 ## Protocol
 
 ### 1 GATT and advertising
