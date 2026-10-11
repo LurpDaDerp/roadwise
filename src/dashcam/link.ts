@@ -517,10 +517,13 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       s.rttMs = null;
       s.announcedNext = 0;
     }
-    // An offset sample when the HELLO answers a request within 1 s.
+    // An offset sample when the HELLO answers a request within 1 s. Its error can be the whole
+    // round trip (`receive − uptime` carries all of the way back), a TIME_PING's at most half of
+    // its round trip; samples are ranked by the round trip a ping with the same error bound would
+    // have, so the HELLO's counts double and a ping over the same link replaces it.
     let sample: { offset: number; rtt: number } | null = null;
     if (s.helloRequestAt !== null && now - s.helloRequestAt <= HELLO_OFFSET_MAX_MS && now >= s.helloRequestAt) {
-      sample = { offset: now - h.uptimeMs, rtt: now - s.helloRequestAt };
+      sample = { offset: now - h.uptimeMs, rtt: 2 * (now - s.helloRequestAt) };
     }
     s.helloRequestAt = null;
     s.helloRetryAt = null;

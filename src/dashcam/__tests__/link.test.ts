@@ -499,6 +499,28 @@ test('row 15: the offset error is within RTT/2 of the truth; the best (lowest-RT
   expect((await r.store.getBoot(CAM, 9))?.rttMs).toBe(8);
 });
 
+test('row 15: a timely HELLO gives a first offset, but a TIME_PING over the same asymmetric link (30 ms down, 10 ms up) replaces it: the error stays within RTT/2 (found by the cross-repo e2e)', async () => {
+  const r = rig();
+  const truth = T0 - UP;
+  r.link.linkUp(info());
+  // COMMAND 7 takes 10 ms out, HELLO 30 ms back: the HELLO sample is off by 30 ms.
+  r.clock.t += 10;
+  const helloUptime = r.clock.t - truth;
+  r.clock.t += 30;
+  r.rx({ type: 'HELLO', bootId: 9, nextSeq: 0, oldestSeq: 0, uptimeMs: helloUptime });
+  await r.settle();
+  expect((await r.store.getBoot(CAM, 9))?.offsetMs).toBe(truth + 30);
+  const p = r.sent('TIME_PING').at(-1)!;
+  r.clock.t += 10;
+  const echoUptime = r.clock.t - truth;
+  r.clock.t += 30;
+  r.rx({ type: 'TIME_ECHO', reqId: p.reqId, uptimeMs: echoUptime });
+  await r.settle();
+  const boot = await r.store.getBoot(CAM, 9);
+  expect(boot?.rttMs).toBe(40);
+  expect(boot!.offsetMs! - truth).toBe(10);
+});
+
 // ——— STATE: lease and context (§3.2, §3.7) ———
 
 describe('STATE (§3.2, §3.7)', () => {
