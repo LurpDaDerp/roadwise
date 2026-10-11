@@ -639,7 +639,9 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
 
     infoRead(info) {
       firmware = `dms-core ${info.fwMajor}.${info.fwMinor}`;
-      if (!paired) return false;
+      // No pairing read yet (the runtime is still loading): the transport already checked the INFO
+      // against its target; the link takes the link-up once it knows its pairing (a re-attach).
+      if (!paired) return true;
       if (info.dashcamId !== paired.dashcamId) {
         self.needsRepair('wrong_dashcam');
         return false;

@@ -522,8 +522,18 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       if (halted && repairCause) {
         next.needsRepair(repairCause);
       } else if (conn === 'up' && linkInfo) {
-        next.linkUp(linkInfo);
-        flush();
+        // The link decides on the INFO it never saw (its pairing may differ), then takes the link.
+        if (next.infoRead(linkInfo)) {
+          next.linkUp(linkInfo);
+          flush();
+        } else {
+          halted = true;
+          const id = tgt?.peripheralId;
+          conn = 'down';
+          linkInfo = null;
+          buffer.length = 0;
+          if (id) api.disconnect(id, true).catch((e: unknown) => report(e, 'disconnect (attach)'));
+        }
       } else if (conn === 'connecting' || conn === 'setting_up') {
         next.connecting();
       }

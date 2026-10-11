@@ -265,6 +265,9 @@ test('a screen that created the transport before the settings were read: the alr
   await rt.ready;
   await flush();
   expect(rt.state().link.lifecycle).toBe('connected');
+  // …without dropping and re-making the connection.
+  expect(ble.calls.filter((c) => c.startsWith('connect'))).toHaveLength(1);
+  expect(ble.calls.filter((c) => c.startsWith('disconnect'))).toHaveLength(0);
   expect(ble.writes.some((w) => decodeRx(w.bytes).ok && (decodeRx(w.bytes) as { frame: { type: string } }).frame.type === 'COMMAND')).toBe(true);
   rt.dispose();
 });
