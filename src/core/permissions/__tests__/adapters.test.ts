@@ -5,6 +5,7 @@ import {
   type LocationAnswer,
   type NotificationAnswer,
   type PermissionsAdapterDeps,
+  type RadioState,
 } from '../adapters';
 import type { DriveSensePort } from '../driveSensePort';
 import type { PermissionPlatform } from '../types';
@@ -309,5 +310,78 @@ describe('readiness', () => {
     };
     const f = makeDeps('ios', { driveSense: failing });
     expect(await createPermissionsAdapter(f.deps).readiness()).toEqual({ allowed: false });
+  });
+});
+
+// DashPal (plan §7.9, §10 row 22): Bluetooth is asked only on the driver's DashPal tap, and a read
+// never prompts — on iOS it never even creates the BLE manager.
+describe('Bluetooth (DashPal)', () => {
+  function bt(platform: PermissionPlatform, o: { radio?: RadioState | null; started?: RadioState; level?: number; checks?: Record<string, boolean>; answers?: Record<string, string> } = {}) {
+    const { deps, calls } = makeDeps(platform);
+    const full: PermissionsAdapterDeps = {
+      ...deps,
+      bluetooth: {
+        radio: async () => {
+          calls.push('bt.radio');
+          return o.radio === undefined ? null : o.radio;
+        },
+        startRadio: async () => {
+          calls.push('bt.startRadio');
+          return o.started ?? 'on';
+        },
+      },
+      androidPermissions: {
+        check: async (p) => {
+          calls.push(`check:${p}`);
+          return o.checks?.[p] ?? false;
+        },
+        requestMultiple: async (ps) => {
+          calls.push(`request:${ps.join(',')}`);
+          return Object.fromEntries(ps.map((p) => [p, o.answers?.[p] ?? 'granted']));
+        },
+      },
+      androidApiLevel: () => o.level ?? 34,
+    };
+    return { adapter: createPermissionsAdapter(full), calls };
+  }
+
+  it('iOS read: never creates the manager — undetermined before it exists; then the radio state', async () => {
+    const a = bt('ios');
+    expect(await a.adapter.bluetooth()).toBe('undetermined');
+    expect(a.calls).toEqual(['bt.radio']);
+    expect(await bt('ios', { radio: 'unauthorized' }).adapter.bluetooth()).toBe('denied');
+    expect(await bt('ios', { radio: 'off' }).adapter.bluetooth()).toBe('off');
+    expect(await bt('ios', { radio: 'on' }).adapter.bluetooth()).toBe('granted');
+    expect(await bt('ios', { radio: 'unsupported' }).adapter.bluetooth()).toBe('unavailable');
+  });
+
+  it('iOS request: creates the manager and answers from its first settled state', async () => {
+    const a = bt('ios', { started: 'unauthorized' });
+    expect(await a.adapter.requestBluetooth()).toBe('denied');
+    expect(a.calls).toEqual(['bt.startRadio']);
+    expect(await bt('ios', { started: 'on' }).adapter.requestBluetooth()).toBe('granted');
+  });
+
+  it('Android 12+: Nearby devices (scan + connect); a refusal is denied; granted then reads the radio', async () => {
+    const a = bt('android', { level: 31, started: 'off' });
+    expect(await a.adapter.requestBluetooth()).toBe('off');
+    expect(a.calls).toEqual(['request:android.permission.BLUETOOTH_SCAN,android.permission.BLUETOOTH_CONNECT', 'bt.startRadio']);
+    const refused = bt('android', { level: 33, answers: { 'android.permission.BLUETOOTH_CONNECT': 'never_ask_again' } });
+    expect(await refused.adapter.requestBluetooth()).toBe('denied');
+    expect(refused.calls).not.toContain('bt.startRadio');
+  });
+
+  it('Android 11 and below: fine location (scans need it there)', async () => {
+    const a = bt('android', { level: 30 });
+    expect(await a.adapter.requestBluetooth()).toBe('granted');
+    expect(a.calls[0]).toBe('request:android.permission.ACCESS_FINE_LOCATION');
+  });
+
+  it('Android read: not granted is undetermined with no prompt and no radio; granted reads the radio', async () => {
+    const no = bt('android', { level: 34 });
+    expect(await no.adapter.bluetooth()).toBe('undetermined');
+    expect(no.calls.some((c) => c.startsWith('request') || c.startsWith('bt.'))).toBe(false);
+    const yes = bt('android', { level: 34, checks: { 'android.permission.BLUETOOTH_SCAN': true, 'android.permission.BLUETOOTH_CONNECT': true }, started: 'on' });
+    expect(await yes.adapter.bluetooth()).toBe('granted');
   });
 });

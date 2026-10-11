@@ -9,9 +9,13 @@ export {
 } from './policy';
 export { createDriveSenseResolver, resolveDriveSense } from './driveSensePort';
 export type { DriveSenseLoaders, DriveSensePort } from './driveSensePort';
-export { createPermissionsAdapter, IGNORE_BATTERY_OPTIMIZATION_SETTINGS } from './adapters';
+export { ANDROID_BT_PERMISSIONS, ANDROID_FINE_LOCATION, createPermissionsAdapter, IGNORE_BATTERY_OPTIMIZATION_SETTINGS } from './adapters';
 export type {
+  AndroidPermissionsPort,
   BatteryPort,
+  BluetoothAccess,
+  BluetoothPort,
+  RadioState,
   LinkingPort,
   LocationAnswer,
   LocationPort,

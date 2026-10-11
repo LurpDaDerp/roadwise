@@ -5,7 +5,7 @@
 // return to foreground) — no polling, no timers, no listeners (design §3.5).
 //
 // Callers still apply the one prompt policy (`canPrompt` / `recordPrompt`) around every request.
-import { Linking, Platform } from 'react-native';
+import { Linking, PermissionsAndroid, Platform } from 'react-native';
 
 import { resolveDriveSense, type DriveSensePort } from './driveSensePort';
 import type {
@@ -57,6 +57,33 @@ export interface LinkingPort {
   sendIntent(action: string): Promise<void>;
 }
 
+/**
+ * The Bluetooth radio as the DashPal BLE manager reports it (`src/dashcam/bluetoothPort.ts`; no
+ * ble-manager import here). `radio()` never creates the iOS manager, so it never prompts: null when
+ * there is none yet. `startRadio()` creates it (iOS: that is the permission prompt, the first time)
+ * and resolves with the first state that is not unknown/resetting.
+ */
+export type RadioState = 'unknown' | 'resetting' | 'unsupported' | 'unauthorized' | 'off' | 'on' | 'turning_on' | 'turning_off';
+export interface BluetoothPort {
+  radio(): Promise<RadioState | null>;
+  startRadio(): Promise<RadioState>;
+}
+
+/** Android's runtime permission calls, narrowed (React Native's `PermissionsAndroid`). */
+export interface AndroidPermissionsPort {
+  check(permission: string): Promise<boolean>;
+  requestMultiple(permissions: string[]): Promise<Record<string, string>>;
+}
+
+/**
+ * Bluetooth for DashPal: `granted` (allowed, radio on), `off` (allowed, radio off), `denied`,
+ * `undetermined` (never asked, or not readable without asking), `unavailable` (no Bluetooth LE).
+ */
+export type BluetoothAccess = 'granted' | 'off' | 'denied' | 'undetermined' | 'unavailable';
+
+export const ANDROID_BT_PERMISSIONS = ['android.permission.BLUETOOTH_SCAN', 'android.permission.BLUETOOTH_CONNECT'] as const;
+export const ANDROID_FINE_LOCATION = 'android.permission.ACCESS_FINE_LOCATION';
+
 export interface PermissionsAdapterDeps {
   platform: PermissionPlatform;
   location: LocationPort;
@@ -65,6 +92,12 @@ export interface PermissionsAdapterDeps {
   linking: LinkingPort;
   driveSense: () => Promise<DriveSensePort | null>;
   now: () => number;
+  /** Default: the DashPal transport's radio, loaded on first use. */
+  bluetooth?: BluetoothPort;
+  /** Default: React Native's `PermissionsAndroid`. */
+  androidPermissions?: AndroidPermissionsPort;
+  /** Default: `Platform.Version` on Android. */
+  androidApiLevel?: () => number;
 }
 
 export interface Readiness {
@@ -87,6 +120,14 @@ export interface PermissionsAdapter {
   /** Android's battery-optimisation list; the app's Settings page where that is unavailable. */
   openBatterySettings(): Promise<void>;
   readiness(): Promise<Readiness>;
+  /** A read, never a prompt (iOS: `undetermined` until the DashPal manager exists). */
+  bluetooth(): Promise<BluetoothAccess>;
+  /**
+   * DashPal only, on the driver's tap (never asked of anyone without a DashPal): iOS creates the
+   * BLE manager and reads its first state; Android 12+ asks Nearby devices (scan + connect),
+   * Android 11 and below fine location (Bluetooth scans need it there).
+   */
+  requestBluetooth(): Promise<BluetoothAccess>;
 }
 
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
@@ -125,6 +166,24 @@ const rnLinking: LinkingPort = {
   sendIntent: (action) => Linking.sendIntent(action),
 };
 
+const lazyBluetooth: BluetoothPort = {
+  radio: async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
+    const { dashpalRadio } = require('@/dashcam/bluetoothPort') as typeof import('@/dashcam/bluetoothPort');
+    return dashpalRadio.radio();
+  },
+  startRadio: async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
+    const { dashpalRadio } = require('@/dashcam/bluetoothPort') as typeof import('@/dashcam/bluetoothPort');
+    return dashpalRadio.startRadio();
+  },
+};
+
+const rnAndroidPermissions: AndroidPermissionsPort = {
+  check: (permission) => PermissionsAndroid.check(permission as never),
+  requestMultiple: async (permissions) => (await PermissionsAndroid.requestMultiple(permissions as never)) as Record<string, string>,
+};
+
 function defaultDeps(): PermissionsAdapterDeps {
   return {
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
@@ -134,7 +193,30 @@ function defaultDeps(): PermissionsAdapterDeps {
     linking: rnLinking,
     driveSense: resolveDriveSense,
     now: () => Date.now(),
+    bluetooth: lazyBluetooth,
+    androidPermissions: rnAndroidPermissions,
+    androidApiLevel: () => (typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version) || 0),
   };
+}
+
+/** The radio's state as access, once the OS permission itself is known to be granted. */
+function fromRadio(state: RadioState | null): BluetoothAccess {
+  switch (state) {
+    case null:
+    case 'unknown':
+    case 'resetting':
+      return 'undetermined';
+    case 'unauthorized':
+      return 'denied';
+    case 'unsupported':
+      return 'unavailable';
+    case 'on':
+    case 'turning_on':
+      return 'granted';
+    case 'off':
+    case 'turning_off':
+      return 'off';
+  }
 }
 
 // ——— mapping ———
@@ -276,5 +358,34 @@ export function createPermissionsAdapter(
         return { allowed: false };
       }
     },
+
+    async bluetooth() {
+      const radio = deps.bluetooth ?? lazyBluetooth;
+      if (deps.platform === 'ios') return fromRadio(await radio.radio());
+      if (!(await androidBluetoothGranted())) return 'undetermined';
+      // Android: reading the radio shows no prompt.
+      return fromRadio(await radio.startRadio());
+    },
+
+    async requestBluetooth() {
+      const radio = deps.bluetooth ?? lazyBluetooth;
+      if (deps.platform === 'ios') return fromRadio(await radio.startRadio());
+      const perms = deps.androidPermissions ?? rnAndroidPermissions;
+      const needed = androidBluetoothPermissions();
+      const answers = await perms.requestMultiple([...needed]);
+      if (!needed.every((p) => answers[p] === 'granted')) return 'denied';
+      return fromRadio(await radio.startRadio());
+    },
   };
+
+  function androidBluetoothPermissions(): readonly string[] {
+    const level = (deps.androidApiLevel ?? (() => 31))();
+    return level >= 31 ? ANDROID_BT_PERMISSIONS : [ANDROID_FINE_LOCATION];
+  }
+
+  async function androidBluetoothGranted(): Promise<boolean> {
+    const perms = deps.androidPermissions ?? rnAndroidPermissions;
+    for (const p of androidBluetoothPermissions()) if (!(await perms.check(p))) return false;
+    return true;
+  }
 }

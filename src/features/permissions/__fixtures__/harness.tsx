@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
-import type { Grant, LocationAccess, PermissionSnapshot, PermissionsAdapter, Readiness } from '@/core/permissions';
+import type { BluetoothAccess, Grant, LocationAccess, PermissionSnapshot, PermissionsAdapter, Readiness } from '@/core/permissions';
 import type { Db, DbResult } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
@@ -37,16 +37,28 @@ export interface FakeAdapter extends PermissionsAdapter {
   log: string[];
   current: PermissionSnapshot;
   failReads: boolean;
+  /** What `bluetooth()` reads now; `requestBluetooth()` moves it to `answers.bluetooth` (default granted). */
+  bt: BluetoothAccess;
 }
 
 export function fakeAdapter(
   initial: PermissionSnapshot = snap(),
-  answers: { foreground?: LocationAccess; motion?: Grant | null; readiness?: Readiness } = {}
+  answers: { foreground?: LocationAccess; motion?: Grant | null; readiness?: Readiness; bluetooth?: BluetoothAccess; bluetoothNow?: BluetoothAccess } = {}
 ): FakeAdapter {
   const a: FakeAdapter = {
     log: [],
     current: initial,
     failReads: false,
+    bt: answers.bluetoothNow ?? 'undetermined',
+    bluetooth: jest.fn(async () => {
+      a.log.push('bluetooth');
+      return a.bt;
+    }),
+    requestBluetooth: jest.fn(async () => {
+      a.log.push('requestBluetooth');
+      a.bt = answers.bluetooth ?? 'granted';
+      return a.bt;
+    }),
     snapshot: jest.fn(async () => {
       a.log.push('snapshot');
       if (a.failReads) throw new Error('read failed');
